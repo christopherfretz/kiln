@@ -8,7 +8,7 @@
 //@ requires: clang>=22
 //@ strict-diags
 //@ diag: 61:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 60:42 note "placement new would change type of storage from 'int' to 'int[3]'"
+//@ diag: 60:42 note "placement new would change type of storage from 'int' to 'int[2]'"
 //@ diag: 61:15 note "in call to 'decayed()'"
 //@ diag: 63:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 62:51 note "placement new would change type of storage from 'long' to 'int'"
@@ -57,8 +57,8 @@ struct S { int a, b; constexpr S(int x) : a(x), b(x + 1) {} };
 struct B { int v = 1; };
 struct D : B { int w = 2; };
 
-constexpr int decayed() { int a[3] = {}; new (a) int[3]{1, 2, 3}; return a[2]; }
-static_assert(decayed() == 3);
+constexpr int decayed() { int a[3] = {}; new (a + 1) int[2]{1, 2}; return a[2]; }
+static_assert(decayed() == 2);
 constexpr int other_type() { long x = 0; int *p = new (&x) int(1); return *p; }
 static_assert(other_type() == 1);
 constexpr int via_void() { S s(1); void *v = &s; new (v) int(2); return s.a; }

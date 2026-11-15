@@ -2,8 +2,8 @@
 // placement 'operator new' of <new> may be evaluated (clang 22's
 // VisitCXXNewExpr); an alignment argument, a user placement allocation
 // function (even a constexpr one) are not supported in a constant
-// expression, and an array placement new into std::allocator<T> storage,
-// whose objects are elements of T, would change the type of the storage.
+// expression, and an array placement new into std::allocator<T> storage
+// past its first element would change the type of the storage.
 // constexpr-placement-ok.cpp holds the valid forms.
 //@ expect: compile-fail
 //@ requires: clang>=22
@@ -16,7 +16,7 @@
 //@ diag: 35:3 note "this placement new expression is not supported in constant expressions "
 //@ diag: 38:15 note "in call to 'user_placement()'"
 //@ diag: 48:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 43:12 note "placement new would change type of storage from 'int' to 'int[4]'"
+//@ diag: 43:12 note "placement new would change type of storage from 'int' to 'int[3]'"
 //@ diag: 48:15 note "in call to 'array_into_allocator()'"
 #include <memory>
 #include <new>
@@ -40,9 +40,9 @@ static_assert(user_placement() == 1);
 constexpr int array_into_allocator() {
   std::allocator<int> al;
   int *p = al.allocate(4);
-  int *q = ::new (p) int[4]{1, 2, 3, 4};
-  int s = q[3];
+  int *q = ::new (p + 1) int[3]{1, 2, 3};
+  int s = q[2];
   al.deallocate(p, 4);
   return s;
 }
-static_assert(array_into_allocator() == 4);
+static_assert(array_into_allocator() == 3);

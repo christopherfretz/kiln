@@ -281,7 +281,14 @@ compound literals) are WP-1276's.
 - **C23 `va_start(ap, ...)`** (C23 7.16.1.4): a second argument that is
   an integer constant expression of value 0 skips the last-parameter
   check (clang `BuiltinVAStart`; <stdarg.h> passes `0`). Test:
-  `tests/c/c23/va-start-no-named-parameter.c`.
+  `tests/c/c23/va-start-no-named-parameter.c`. C++26 takes the same
+  form ([cstdarg.syn] refers to C23, P3348R4; GCC 16, not clang 22):
+  <stdarg.h> defines the variadic `va_start` and
+  `__STDC_VERSION_STDARG_H__` 202311L at C++26 too, and the check is
+  skipped for a `0` spelled in a system macro (a user-written
+  `__builtin_va_start(ap, 0)` still warns, as in clang). Tests:
+  `cstdarg.syn/va-start-one-argument-cxx26-run.cpp`,
+  `cstdarg.syn/va-start-cxx23-no-version-macro.cpp` (WP-1464).
 - **`[[noreturn]]` on a later declaration** is valid in C; the
   [dcl.attr.noreturn]/1 first-declaration error is C++'s only
   (`check_noreturn_on_first_decl`, standard spelling only).
@@ -5018,7 +5025,15 @@ diagnostics and IR.
     refers to `e`). A tuple-like type's holding variables are
     `constexpr` too, so each `get` call is constant-evaluated at the
     declaration. `constinit` is recorded on `e` (`record_constinit`)
-    and checked like any `constinit` variable. `static constexpr`,
+    and checked like any `constinit` variable. A holding variable of a
+    `constexpr` or `constinit` declaration must itself be constant-
+    initialized ([dcl.struct.bind]/7 declares it with S): a `get` that is
+    not `constexpr` is the variable's "constexpr variable 'x' must be
+    initialized by a constant expression" (or the `constinit` error),
+    checked only once `e` has a value (an `e` that is not constant was
+    already diagnosed, or is an expansion-statement attempt that is
+    abandoned). GCC 16 checks this; clang 22 does not (kiln follows the
+    standard; `p2686-tuple-get-not-constexpr.cpp`, WP-1464). `static constexpr`,
     block scope, namespace scope, templates and the P1061 pack form
     compose unchanged. Tests: `dcl.struct.bind/p2686-*.cpp`,
     `dcl.struct.bind/specifiers-constexpr.cpp` (c++23).
@@ -5107,6 +5122,13 @@ diagnostics and IR.
     - The holding variable's initialization runs in a
       `FrameKind::BindingInit` frame, whose note is `in implicit
       initialization of binding declaration 'a'`.
+  - **Vectors and complex** (GNU extension, clang
+    `checkVectorDecomposition`/`checkComplexDecomposition`,
+    `decompose_simple`, WP-1464): a GNU or ext vector of N elements binds
+    `e[i]` (a vector-component subscript), a `_Complex T` binds
+    `__real e` and `__imag e`; each of the element type with `e`'s cv.
+    Another count is the usual "binds to N elements" error. Tests:
+    `dcl.struct.bind/gnu-vector-complex-{run,count}.cpp`.
   - **Classes** (`decomposable_class`, `decompose_members`): the bindings
     are `e.mi` (a `MemberExpr`) for the non-static data members of the
     one class in the hierarchy that has any. The member's type gets
@@ -10782,10 +10804,23 @@ not supported yet`.
      glvalue that is not constexpr-referenceable but whose value is
      constant (before C++26, or a non-`constexpr` for-range-declaration).
   A non-`constexpr` for-range-declaration never tries Automatic: by the
-  wording its `__range` is then not `constexpr` at all, and kiln keeps
-  rejecting a `__range` that is not a constant expression
-  (`iterating-neg.cpp`). When all attempts fail, the first attempt's
-  diagnostics are emitted. Tests:
+  draft's wording (CWG3140, [stmt.expand]/5.2) its `__range`, `__begin`
+  and `__iter` are then not `constexpr` at all, so after the attempts
+  above fail it tries
+  4. `RangeBind::Runtime` (WP-1464): an automatic `decltype(auto)
+     __range = (init)` and plain `auto __begin`/`__end`/`__iter`, whose
+     temporaries are lifetime-extended at run time. N must still be a
+     constant: `expansion_runtime_size` evaluates `__end - __begin`
+     (contiguous) or counts `__begin + i != __end` from their
+     initializers, which with P2280 unknown references (C++23 and
+     later) succeeds on a range whose size, not value, is constant
+     (`std::span<int, 3>`, a member array). A range whose size is not
+     constant keeps the first attempt's error (`iterating-neg.cpp`).
+     Test: `iterating-runtime-range-run.cpp` (GCC oracle). Deviation: the
+     static `Copy` attempt is still tried first, so a range whose copy
+     is constant uses the copy (P1306R5's semantics) even where the
+     draft evaluates the original at run time.
+  When all attempts fail, the first attempt's diagnostics are emitted. Tests:
   `tests/conformance/stmt.expand/constexpr-range-automatic{,-run,-neg}.cpp`
   (`skip(clang)`: clang 22 has no expansion statements and neither it nor
   GCC 16 implements P2686's automatic references).
@@ -10837,11 +10872,12 @@ not supported yet`.
     constant expression" at the statement holding it (§7.4a). An untaken
     jump, or a loop wholly inside the statement expression, evaluates
     normally. GCC 16.1 evaluates the jumps; kiln follows clang.
-  - *Iterating range.* `__range` is `static constexpr` (P1306R5), so a
-    statement-expression jump in the range is "constexpr variable
-    '__range' must be initialized by a constant expression" plus the
-    statement-expression note. GCC 16.1 accepts it with a non-constexpr
-    range (CWG3131, which clang's branch does not implement).
+  - *Iterating range.* With a non-`constexpr` for-range-declaration the
+    range falls back to `RangeBind::Runtime` (CWG3131, CWG3140), so a
+    statement-expression jump in it is valid, as in GCC 16.1 (WP-1464;
+    before, `__range` was always `static constexpr` and this was
+    "constexpr variable '__range' must be initialized by a constant
+    expression").
   - Tests: `tests/conformance/stmt.expand/header-jump-{run,errors,cfg,consteval,consteval-neg}.cpp`.
 - **N = 0.** No block is built, so a body that is ill-formed for every
   element is never instantiated.

@@ -110,11 +110,23 @@ enum RangeBind {
     /// last resort for a glvalue that is neither, such as an enclosing
     /// function's local named in a lambda).
     Copy,
+    /// The iterating form of a for-range-declaration that is not
+    /// `constexpr`, when no constant range can be declared: the working
+    /// draft's `decltype(auto) range = (init); auto begin = begin-expr;`
+    /// (CWG3140), automatic and not `constexpr`, as are the elements'
+    /// `__iter`; N is counted on `begin-expr` and `end-expr`, which name
+    /// `range`, a reference of unknown referent (P2280).
+    Runtime,
 }
 
 impl RangeBind {
     fn by_ref(self) -> bool {
         self != Self::Copy
+    }
+
+    /// Whether the implicit variables have automatic storage duration.
+    fn automatic(self) -> bool {
+        matches!(self, Self::Automatic | Self::Runtime)
     }
 }
 
@@ -212,14 +224,17 @@ impl Sema<'_, '_> {
 
     /// An implicit `constexpr` variable of an iterating expansion
     /// statement ([stmt.expand]/5.2), not found by lookup: `static`
-    /// unless `automatic` ([`RangeBind::Automatic`]).
-    fn expansion_var(&mut self, name: &str, ty: QualType, automatic: bool, loc: Loc) -> DeclId {
+    /// unless `bind` is automatic, and not `constexpr` for
+    /// [`RangeBind::Runtime`].
+    fn expansion_var(&mut self, name: &str, ty: QualType, bind: RangeBind, loc: Loc) -> DeclId {
         let sym = self.intern(name);
         let mut h = DeclHead::new(self.ctx, DeclName::ident(sym), loc);
         h.flags = h.flags.with(DeclFlags::IMPLICIT);
-        let storage = if automatic { VarStorage::None } else { VarStorage::Static };
-        let spec =
-            VarSpec::new().with_storage(storage).with_constexpr(true).with_init_style(InitStyle::C);
+        let storage = if bind.automatic() { VarStorage::None } else { VarStorage::Static };
+        let spec = VarSpec::new()
+            .with_storage(storage)
+            .with_constexpr(bind != RangeBind::Runtime)
+            .with_init_style(InitStyle::C);
         self.builder().var(h, ty, spec, None)
     }
 
@@ -256,9 +271,20 @@ impl Sema<'_, '_> {
         let glvalue = self.ast.exprs.get(e).value_category().is_glvalue();
         let first = if glvalue { RangeBind::Static } else { RangeBind::Copy };
         let (r, stash) = attempt(self, first);
-        if r.is_some() || !glvalue {
+        if r.is_some() {
             self.release(stash, Vec::new());
             return r;
+        }
+        if !glvalue {
+            if !constexpr_decl {
+                let (r3, stash3) = attempt(self, RangeBind::Runtime);
+                if r3.is_some() {
+                    self.release(stash3, Vec::new());
+                    return r3;
+                }
+            }
+            self.release(stash, Vec::new());
+            return None;
         }
         if constexpr_decl && self.std >= kiln_lex::Std::Cxx26 {
             let (r2, stash2) = attempt(self, RangeBind::Automatic);
@@ -268,8 +294,19 @@ impl Sema<'_, '_> {
             }
         }
         let (r2, stash2) = attempt(self, RangeBind::Copy);
-        self.release(if r2.is_some() { stash2 } else { stash }, Vec::new());
-        r2
+        if r2.is_some() {
+            self.release(stash2, Vec::new());
+            return r2;
+        }
+        if !constexpr_decl {
+            let (r3, stash3) = attempt(self, RangeBind::Runtime);
+            if r3.is_some() {
+                self.release(stash3, Vec::new());
+                return r3;
+            }
+        }
+        self.release(stash, Vec::new());
+        None
     }
 
     /// The iterating form ([stmt.expand]/5.2): the prelude
@@ -293,14 +330,34 @@ impl Sema<'_, '_> {
         let cauto = self.ast.types.qualify(auto, Quals::CONST);
         let (range, bind) = self.expansion_fallback(e, constexpr_decl, |s, bind| {
             let ty = if bind.by_ref() { rref } else { auto };
-            let automatic = bind == RangeBind::Automatic;
-            let v = s.expansion_var("__range", ty, automatic, range_loc);
-            s.init_expansion_var(v, e, range_loc, DiagId::sema_for_range_deduction_failure)
-                .then_some((v, bind))
+            let v = s.expansion_var("__range", ty, bind, range_loc);
+            if !s.init_expansion_var(v, e, range_loc, DiagId::sema_for_range_deduction_failure) {
+                return None;
+            }
+            if bind != RangeBind::Runtime {
+                return Some((v, bind));
+            }
+            // The runtime form must count now, so that a failed count
+            // falls back to the first attempt's diagnostics.
+            let begin = s.expansion_var("__begin", auto, bind, colon);
+            let end = s.expansion_var("__end", auto, bind, colon);
+            let br = s.build_decl_ref(v, colon);
+            let er = s.build_decl_ref(v, colon);
+            if !s.expansion_begin_end(br, er, s.ety(e), (begin, end), colon) {
+                return None;
+            }
+            s.expansion_runtime_size(begin, end, colon)?;
+            Some((v, bind))
         })?;
-        let automatic = bind == RangeBind::Automatic;
-        let begin = self.expansion_var("__begin", cauto, automatic, colon);
-        let end = self.expansion_var("__end", cauto, automatic, colon);
+        if bind == RangeBind::Runtime {
+            // [class.temporary]/7 (P2718R0, as for a range-based `for`):
+            // the range's temporaries persist with it; extended only once
+            // this attempt has won (`e` is shared by every attempt).
+            self.extend_init_temporaries(range);
+        }
+        let vt = if bind == RangeBind::Runtime { auto } else { cauto };
+        let begin = self.expansion_var("__begin", vt, bind, colon);
+        let end = self.expansion_var("__end", vt, bind, colon);
         let br = self.build_decl_ref(range, colon);
         let er = self.build_decl_ref(range, colon);
         if !self.expansion_begin_end(br, er, range_ty, (begin, end), colon) {
@@ -313,9 +370,14 @@ impl Sema<'_, '_> {
             self.act_on_decl_stmt(&[range], range_loc),
             self.act_on_decl_stmt(&[begin, end], colon),
         ];
-        let fast = self.expansion_size_difference(begin, end, colon);
+        let fast = if bind == RangeBind::Runtime {
+            self.expansion_runtime_size(begin, end, colon)
+        } else {
+            self.expansion_size_difference(begin, end, colon)
+        };
         if fast.is_none()
-            && let Some(one) = self.expansion_count_elements(begin, end, automatic, colon)
+            && bind != RangeBind::Runtime
+            && let Some(one) = self.expansion_count_elements(begin, end, bind, colon)
         {
             return match one {
                 OnePass::Elements(elems) => Some((prelude, elems)),
@@ -328,7 +390,7 @@ impl Sema<'_, '_> {
         };
         let mut elems = Vec::new();
         for i in 0..n {
-            let iter = self.expansion_iter(begin, i, automatic, colon)?;
+            let iter = self.expansion_iter(begin, i, bind, colon)?;
             let ds = self.act_on_decl_stmt(&[iter], colon);
             elems.push((Some(ds), self.expansion_deref(iter, colon)?));
         }
@@ -342,15 +404,19 @@ impl Sema<'_, '_> {
         &mut self,
         begin: DeclId,
         i: u64,
-        automatic: bool,
+        bind: RangeBind,
         colon: Loc,
     ) -> Option<DeclId> {
         let cauto = {
             let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
-            self.ast.types.qualify(auto, Quals::CONST)
+            if bind == RangeBind::Runtime {
+                auto
+            } else {
+                self.ast.types.qualify(auto, Quals::CONST)
+            }
         };
         let pd = QualType::unqual(self.target.ptrdiff_t);
-        let iter = self.expansion_var("__iter", cauto, automatic, colon);
+        let iter = self.expansion_var("__iter", cauto, bind, colon);
         let b = self.build_decl_ref(begin, colon);
         let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
         let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
@@ -385,7 +451,7 @@ impl Sema<'_, '_> {
         &mut self,
         begin: DeclId,
         end: DeclId,
-        automatic: bool,
+        bind: RangeBind,
         colon: Loc,
     ) -> Option<OnePass> {
         let (r, stash) = self.capturing(|s| {
@@ -394,7 +460,7 @@ impl Sema<'_, '_> {
             }
             let mut elems = Vec::new();
             for i in 0..MAX_ITERATING {
-                let iter = s.expansion_iter(begin, i, automatic, colon)?;
+                let iter = s.expansion_iter(begin, i, bind, colon)?;
                 if i > 0 && !s.expansion_more(iter, end, colon)? {
                     return Some(OnePass::Elements(elems));
                 }
@@ -505,6 +571,57 @@ impl Sema<'_, '_> {
         }
         let n = self.eval_int(d, EvalContext::new(EvalKind::Other, colon)).ok()?;
         u64::try_from(n).ok()
+    }
+
+    /// N of the runtime iterating form ([`RangeBind::Runtime`], CWG3140):
+    /// counted on the initializers of `begin` and `end` (`begin-expr`
+    /// and `end-expr`, which name the non-constexpr reference `range`, a
+    /// reference of unknown referent in a constant expression, P2280):
+    /// `end-expr - begin-expr` for a contiguous iterator, else the first
+    /// `i` for which `begin-expr + i != end-expr` is false. `None`, with
+    /// nothing diagnosed, when that is not a constant expression.
+    fn expansion_runtime_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+        let b = self.ast.decls.var(begin).and_then(|x| x.init)?;
+        let e = self.ast.decls.var(end).and_then(|x| x.init)?;
+        let (r, stash) = self.capturing(|s| {
+            let (bt, et) = (s.ety(b), s.ety(e));
+            let contiguous = s.ast.types.same_unqualified(bt, et)
+                && match s.ast.types.pointee(bt) {
+                    Some(p) if s.ast.types.is_pointer(bt) => {
+                        crate::target::is_complete_object(&s.ast, p)
+                    }
+                    _ => s.is_lib_contiguous_iterator(bt),
+                };
+            if contiguous {
+                let d = s.act_on_binary(BinaryOp::Sub, e, b, colon);
+                if s.is_err_expr(d) || !s.ast.types.is_integral(s.ety(d)) {
+                    return None;
+                }
+                let n = s.eval_int(d, EvalContext::new(EvalKind::Other, colon)).ok()?;
+                return u64::try_from(n).ok();
+            }
+            let pd = QualType::unqual(s.target.ptrdiff_t);
+            for i in 0..MAX_ITERATING {
+                let it = if i == 0 {
+                    b
+                } else {
+                    let lit = s.builder().int_literal(pd, i, Radix::Decimal, colon);
+                    s.act_on_binary(BinaryOp::Add, b, lit, colon)
+                };
+                let ne = s.act_on_binary(BinaryOp::NE, it, e, colon);
+                if s.is_err_expr(ne) {
+                    return None;
+                }
+                let c = conv::contextually_convert_to_bool(s, ne).ok()?;
+                if s.eval_int(c, EvalContext::new(EvalKind::Other, colon)).ok()? == 0 {
+                    return Some(i);
+                }
+            }
+            None
+        });
+        let ok = r.is_some() && !self.stash_has_error(&stash);
+        self.release(stash, Vec::new());
+        r.filter(|_| ok)
     }
 
     /// Whether class type `t` is one of the standard library's

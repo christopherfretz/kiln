@@ -8041,7 +8041,7 @@ impl Sema<'_, '_> {
     /// evaluated, and its value is not made usable in constant
     /// expressions; destruction is not checked. Whether `v` is `constinit`
     /// and its initializer was found to be a constant initializer.
-    fn check_constinit(&mut self, v: DeclId) -> bool {
+    pub(crate) fn check_constinit(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
             return false;

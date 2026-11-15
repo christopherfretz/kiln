@@ -4,13 +4,13 @@
 // expansion-init-list element, destructuring or iterating initializer)
 // needs an enclosing loop (or switch, for break). It is diagnosed at the
 // keyword, also in a template definition. A lambda in the header starts a
-// new function. An outer expansion statement does count as the loop. An
-// iterating range is a constexpr variable (P1306R5 [stmt.expand]/5.2), so a
-// break in it is not a constant expression (GCC 16.1 accepts it: CWG3131,
-// see spec/sema.md §7.6a). clang 22 has no P1306; GCC 16.1 and clang's
-// P1306 branch give the same accept/reject verdicts and the same
-// locations. header-jump-cfg.cpp has the valid jumps' flow. WP-1081;
-// spec/sema.md §7.6a.
+// new function. An outer expansion statement does count as the loop. A
+// break in an iterating range is valid: the range is then not a constant
+// expression, so it is declared without constexpr (CWG3131/CWG3140, as GCC
+// 16.1; WP-1464), its size still counted at compile time. clang 22 has no
+// P1306; GCC 16.1 and clang's P1306 branch give the same verdicts and
+// locations for the rest. header-jump-cfg.cpp has the valid jumps' flow.
+// WP-1081; spec/sema.md §7.6a.
 //@ expect: compile-fail
 //@ strict-diags
 //@ requires: clang>=23
@@ -26,8 +26,8 @@
 //@ diag: 59:32 error "'continue' statement not in loop statement"
 //@ diag: 64:36 error "'break' statement not in loop or switch statement"
 //@ diag: 65:26 error "'continue' statement not in loop statement"
-//@ diag: 77:28 error "constexpr variable '__range' must be initialized by a constant expression"
-//@ diag: 77:31 note "this use of statement expressions is not supported in a constant expression"
+// (Before WP-1464, line 77 was "constexpr variable '__range' must be
+// initialized by a constant expression".)
 struct P { int a, b; };
 struct Arr {
   int v[2];
@@ -71,7 +71,7 @@ void nested() {
     template for (auto x : ({ break; P{1, 2}; })) {}
   }
 }
-// Iterating: valid jump, but the range must be a constant expression.
+// Iterating: a valid jump; the range is not constexpr (CWG3140).
 void iterating() {
   for (;;) {
     template for (auto x : ({ break; Arr{1, 2}; })) {}

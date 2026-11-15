@@ -2368,9 +2368,15 @@ impl Sema<'_, '_> {
         // C23 7.16.1.4: `va_start(ap, ...)` needs no parameter name, and
         // <stdarg.h> passes `0`; clang `BuiltinVAStart` skips the check for
         // a second argument that is an integer constant expression of
-        // value 0 in C23 (WP-1311).
-        if self.is_c()
-            && self.c_at_least(kiln_lex::CStd::C23)
+        // value 0 in C23 (WP-1311). C++26 [cstdarg.syn] adopts the same
+        // `va_start(ap, ...)` and kiln's <stdarg.h> expands it the same
+        // way (clang 22 has no C++26 one-argument form); in C++ only that
+        // `0`, spelled in the system macro, skips the check, so a `0`
+        // written by the user still warns as in clang (WP-1464).
+        if (self.is_c() && self.c_at_least(kiln_lex::CStd::C23)
+            || !self.is_c()
+                && self.std >= kiln_lex::Std::Cxx26
+                && self.diags.sm().is_in_system_macro(self.begin_loc(args[1])))
             && self.ast.types.is_integral(self.ast.exprs.get(args[1]).ty())
             && self.fold_int(args[1]) == Some(0)
         {
