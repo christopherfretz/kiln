@@ -464,7 +464,15 @@ members only through `&X::f` to a member pointer; templates via
 the lambdas of their signatures, spec/sema-lambda.md §3.5, WP-1143), and
 only those whose kind of member the target can point to. Then: if any
 non-template matches, drop templates (`prefer_non_templates`); else keep the most specialized (`PartialOrderKind::Address`);
-then the most constrained (WP-073). Still tied: "address of overloaded
+then the most constrained (WP-073). Among non-templates, when any has a
+trailing requires-clause, those whose constraints are not satisfied are
+dropped, then any that another is more partial-ordering-constrained than
+([over.over]/5, CWG2918: both members of the same class or both
+non-members, same parameter-type-lists, [temp.constr.order]). A
+template-id naming one specialization of each of several templates keeps
+the most specialized (`most_specialized_spec`). WP-1465,
+`over.over/cwg2918-constraints.cpp`, `cwg2918-errors.cpp`,
+`cwg2918-ambiguous-after-deduction.cpp`. Still tied: "address of overloaded
 function 'a' is ambiguous" + "candidate function [with T = int]" each. No
 match: "address of overloaded function 'u' does not match required type
 'void (long)'" + per candidate "candidate function has type mismatch at 1st

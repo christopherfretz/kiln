@@ -20,6 +20,7 @@ use kiln_diag::DiagId;
 use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator, DeclaratorContext};
 use crate::templ::args::ConvertedArgs;
+use crate::templ::ctad::GuideOrigin;
 use crate::templ::subst::Substituter;
 use crate::type_diff::DiffArgs as _;
 
@@ -106,16 +107,26 @@ impl Sema<'_, '_> {
         let trapped = self.sfinae_errors();
         let held = self.sfinae_warnings();
         let access = self.friend_template_access_ctx(spec);
+        // An implicit guide's context is the class template's pattern: a
+        // check accepted there only because the class may turn out to
+        // derive from the naming class is not replayed in the pattern's
+        // instantiations (they check the constructor itself).
+        let guide = access.is_some() && self.ctor_guide_class(spec).is_some();
         // A member template of a class template specialization numbers
         // in its own templated function (`S<int>::f`), not the pattern's.
         let own = self.templated_function(tmpl).unwrap_or(pattern);
         let site = self.begin_signature_mangling(tmpl, own);
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = access;
+            let saved = if guide { s.requires_access_replay.replace(false) } else { None };
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.function_spec_signature(pattern, spec)
+            let r = sub.function_spec_signature(pattern, spec);
+            if guide {
+                s.requires_access_replay = saved;
+            }
+            r
         });
         self.end_signature_mangling(site);
         let captured = self.sfinae_errors() > trapped;
@@ -144,8 +155,55 @@ impl Sema<'_, '_> {
     /// its lexical context as the owner and the templated declaration as
     /// the current context (`FinishTemplateArgumentDeduction`). `None`
     /// (the specialization's semantic context) for any other template.
+    ///
+    /// The implicit deduction guide formed from a constructor (or
+    /// constructor template) names what the constructor names, so its
+    /// signature is substituted with the class's access, as the
+    /// constructor's declaration is ([over.match.class.deduct]/1.1,
+    /// [class.access.general]/7: the parameter types of a member
+    /// function are in its class's scope; `C(T, typename Base<T>::type)`
+    /// with a protected `type` deduces). A user-declared guide keeps its
+    /// own scope.
     fn friend_template_access_ctx(&self, spec: DeclId) -> Option<DeclId> {
+        if let Some(c) = self.ctor_guide_class(spec) {
+            return Some(c);
+        }
         self.friend_decl_of(spec).map(|_| spec)
+    }
+
+    /// For a specialization `spec` of an implicit deduction guide formed
+    /// from a constructor or constructor template (directly, or through
+    /// an alias template or an inherited constructor), the class
+    /// template's pattern the guide returns.
+    fn ctor_guide_class(&self, spec: DeclId) -> Option<DeclId> {
+        if self.kind_of(spec) != DeclKind::CXXDeductionGuide {
+            return None;
+        }
+        let tmpl = self.ast.spec_info(spec)?.1.template;
+        match self.ctad_guide_kind(spec, Some(tmpl))? {
+            Some(GuideOrigin::Ctor | GuideOrigin::CtorTemplate) => {}
+            _ => return None,
+        }
+        let pattern = self.pattern_of(tmpl)?;
+        let ret = self.ast.types.proto(self.ast.decls.get(pattern).ty()?)?.ret();
+        let t = &self.ast.types;
+        let mut cur = ret;
+        for _ in 0..64 {
+            match t.view(cur.ty()) {
+                TypeView::InjectedClassName { pattern, .. } => return Some(pattern),
+                TypeView::TemplateSpecialization { name, .. } => {
+                    let ct = t.template_decl(name)?;
+                    return self.pattern_of(ct);
+                }
+                _ => {}
+            }
+            let next = t.desugar_once(cur);
+            if next == cur {
+                return None;
+            }
+            cur = next;
+        }
+        None
     }
 
     /// Substitutes the explicit-specifier [`Self::get_function_spec_signature`]

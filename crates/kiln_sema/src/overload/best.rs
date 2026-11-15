@@ -468,7 +468,7 @@ impl Sema<'_, '_> {
     /// non-object parameter types (`f2`'s in reverse order when
     /// `reversed`), and for two implicit object member functions the same
     /// cv- and ref-qualifiers.
-    fn same_param_type_lists(&mut self, f1: DeclId, f2: DeclId, reversed: bool) -> bool {
+    pub(crate) fn same_param_type_lists(&mut self, f1: DeclId, f2: DeclId, reversed: bool) -> bool {
         let (mut p1, mut p2) = (Vec::new(), Vec::new());
         let v1 = self.fn_param_types(f1, &mut p1);
         let v2 = self.fn_param_types(f2, &mut p2);

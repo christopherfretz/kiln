@@ -1919,7 +1919,9 @@ impl Sema<'_, '_> {
         }
         let mut seen = vec![self.ast.first(r)];
         let mut work = vec![r];
-        let mut found: Option<(QualType, DeducedArgs)> = None;
+        // Every base that would be a valid deduced `A`; the walk does not
+        // go below one, since the bases of a match can never win.
+        let mut found: Vec<(DeclId, DeducedArgs)> = Vec::new();
         while let Some(c) = work.pop() {
             let Some(def) = self.ast.definition(c) else { continue };
             let bases: Vec<QualType> =
@@ -1933,20 +1935,31 @@ impl Sema<'_, '_> {
                 seen.push(first);
                 let mut trial = orig.clone();
                 if self.deduce_template_id(name, args, b, &mut trial, level) == Tdk::Success {
-                    let cb = self.ast.types.canonical(b);
-                    match &found {
-                        Some((prev, _)) if *prev != cb => {
-                            return Some(Tdk::MiscellaneousDeductionFailure);
-                        }
-                        Some(_) => {}
-                        None => found = Some((cb, trial)),
-                    }
+                    found.push((first, trial));
                 } else {
                     work.push(br);
                 }
             }
         }
-        let (_, trial) = found?;
+        // CWG2303 ([temp.deduct.call]/4.3): a match `B` is no candidate
+        // when another match is derived from it (`struct C : A<int,int>,
+        // A<int>`, where `A<int,int>` derives from `A<int>`, deduces
+        // `A<int,int>`); more than one remaining fails (/5). A match
+        // reached through two paths is one class (`seen`), so a virtual
+        // or a repeated (ambiguous) base is one candidate: access and
+        // ambiguity are the conversion's, not deduction's.
+        if found.len() > 1 {
+            let classes: Vec<DeclId> = found.iter().map(|f| f.0).collect();
+            let mut keep = found.into_iter().filter(|&(b, _)| {
+                !classes.iter().any(|&c| c != b && crate::conv::bases::is_derived_from(self, c, b))
+            });
+            let one = keep.next();
+            if keep.next().is_some() {
+                return Some(Tdk::MiscellaneousDeductionFailure);
+            }
+            found = one.into_iter().collect();
+        }
+        let (_, trial) = found.pop()?;
         *d = trial;
         Some(Tdk::Success)
     }

@@ -105,7 +105,8 @@ impl Sema<'_, '_> {
         let direct: Vec<(DeclId, DeclId)> =
             cands.into_iter().filter(|&(d, _)| self.address_matches(d, fnty)).collect();
         let templates = self.address_template_candidates(x, target);
-        Self::prefer_non_templates(direct, templates)
+        let loc = self.ast.exprs.get(x).loc();
+        self.prefer_non_templates(direct, templates, loc)
     }
 
     /// [over.over]/5: the matching non-templates when there are any,
@@ -114,11 +115,67 @@ impl Sema<'_, '_> {
     /// every candidate, then `EliminateAllTemplateMatches`), and the
     /// deduction substitutes their signatures, numbering the lambdas in
     /// them (spec/sema-lambda.md §3.5, WP-1143): callers compute both.
+    ///
+    /// Before that (CWG2918), the non-templates whose constraints are not
+    /// satisfied are eliminated (a specialization's were checked by its
+    /// deduction, [temp.deduct.general]/5), and of the rest one is
+    /// eliminated when another is more partial-ordering-constrained
+    /// ([temp.constr.order]/7: the same non-object parameter-type-lists,
+    /// direct members of the same class, the same object parameter
+    /// type). `loc` is where satisfaction is checked.
     fn prefer_non_templates(
-        direct: Vec<(DeclId, DeclId)>,
+        &mut self,
+        mut direct: Vec<(DeclId, DeclId)>,
         templates: Vec<(DeclId, DeclId)>,
+        loc: Loc,
     ) -> Vec<(DeclId, DeclId)> {
+        // Fast path: no constrained candidate, nothing to eliminate.
+        if direct.iter().any(|&(d, _)| self.ast.templates.trailing_requires.get(d).is_some()) {
+            direct.retain(|&(d, _)| self.function_constraints_satisfied(d, loc));
+            if direct.len() > 1 {
+                let fs: Vec<DeclId> = direct.iter().map(|&(d, _)| d).collect();
+                let beaten: Vec<bool> = fs
+                    .iter()
+                    .map(|&f0| fs.iter().any(|&f| f != f0 && self.more_po_constrained(f, f0)))
+                    .collect();
+                let mut i = 0;
+                direct.retain(|_| {
+                    i += 1;
+                    !beaten[i - 1]
+                });
+            }
+        }
         if direct.is_empty() { templates } else { direct }
+    }
+
+    /// Whether the constraints of non-template function `f` are
+    /// satisfied (none counts as satisfied).
+    pub(crate) fn function_constraints_satisfied(&mut self, f: DeclId, loc: Loc) -> bool {
+        match self.check_function_constraints(f, loc) {
+            Some(sat) => self.sat_ok(sat),
+            None => true,
+        }
+    }
+
+    /// [temp.constr.order]/7 (CWG2918): non-template `f1` is more
+    /// partial-ordering-constrained than `f2`.
+    fn more_po_constrained(&mut self, f1: DeclId, f2: DeclId) -> bool {
+        let r1: Vec<ExprId> =
+            self.ast.templates.trailing_requires.get(f1).copied().into_iter().collect();
+        let r2: Vec<ExprId> =
+            self.ast.templates.trailing_requires.get(f2).copied().into_iter().collect();
+        if r1.is_empty() && r2.is_empty() {
+            return false;
+        }
+        let member = |s: &Self, f: DeclId| s.kind_of(f) != DeclKind::Function;
+        if member(self, f1) != member(self, f2)
+            || (member(self, f1)
+                && self.ast.decls.get(f1).ctx().map(|c| self.ast.first(c))
+                    != self.ast.decls.get(f2).ctx().map(|c| self.ast.first(c)))
+        {
+            return false;
+        }
+        self.same_param_type_lists(f1, f2, false) && self.more_constrained(f1, &r1, f2, &r2)
     }
 
     /// Whether the implicit member overload set `x` has a static member
@@ -361,7 +418,7 @@ impl Sema<'_, '_> {
             self.matching_candidates(cands.clone(), target)
         };
         let templates = self.template_candidates(cands, explicit, loc, target);
-        Self::prefer_non_templates(found, templates)
+        self.prefer_non_templates(found, templates, loc)
     }
 
     /// The function an expression of overloaded-function type `e`
@@ -387,7 +444,8 @@ impl Sema<'_, '_> {
         let (ule, _) = self.overload_operand(e)?;
         let direct = self.address_candidates(ule, target);
         let templates = self.address_template_candidates(ule, target);
-        match Self::prefer_non_templates(direct, templates).as_slice() {
+        let loc = self.ast.exprs.get(ule).loc();
+        match self.prefer_non_templates(direct, templates, loc).as_slice() {
             [(d, _)] => Some(*d),
             _ => None,
         }
@@ -417,7 +475,7 @@ impl Sema<'_, '_> {
             return (None, false);
         }
         let loc = self.ast.exprs.get(ule).loc();
-        let mut found = None;
+        let mut found = Vec::new();
         for (d, f) in self.ule_candidates(ule) {
             // A template-id names only templates: a non-template found
             // with them is not a candidate (clang's template-name lookup
@@ -426,13 +484,35 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
-            if found.is_some() {
-                return (None, true);
-            }
-            found = Some((spec, f));
+            found.push((spec, f, d));
         }
-        let any = found.is_some();
-        (found, any)
+        let any = !found.is_empty();
+        (self.most_specialized_spec(&found), any)
+    }
+
+    /// Of the specializations `found` (specialization, found
+    /// declaration, template) a template-id names without a target, the
+    /// one whose template is more specialized than every other's
+    /// ([over.over]/5; with constraints, [temp.func.order]/6.2: `&f<X>`
+    /// of `template<Class T> f(T)` and `template<Empty T> f(T)` names the
+    /// second). The function types are ordered ([temp.deduct.partial]/3.3).
+    fn most_specialized_spec(
+        &mut self,
+        found: &[(DeclId, DeclId, DeclId)],
+    ) -> Option<(DeclId, DeclId)> {
+        if found.len() < 2 {
+            return found.first().map(|&(s, f, _)| (s, f));
+        }
+        let n = found
+            .iter()
+            .filter_map(|&(s, _, _)| self.ast.types.proto(self.ast.decls.get(s).ty()?))
+            .map(|p| p.num_params() as usize)
+            .max()
+            .unwrap_or(0);
+        let i = (0..found.len()).find(|&i| {
+            (0..found.len()).all(|j| i == j || self.more_specialized(found[i].2, found[j].2, n))
+        })?;
+        Some((found[i].0, found[i].1))
     }
 
     /// Of `keys`, the numbers a resolution of the template-id `ule` gave,
@@ -530,7 +610,7 @@ impl Sema<'_, '_> {
         let cands: Vec<(DeclId, DeclId)> =
             m.decls.iter().copied().zip(m.found.iter().copied()).collect();
         let loc = self.ast.exprs.get(x).loc();
-        let mut found = None;
+        let mut found = Vec::new();
         for (d, f) in cands {
             if self.kind_of(d) != DeclKind::FunctionTemplate
                 || self.ast.decls.get(d).has(DeclFlags::INVALID)
@@ -538,12 +618,9 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
-            if found.is_some() {
-                return None;
-            }
-            found = Some((spec, f));
+            found.push((spec, f, d));
         }
-        found
+        self.most_specialized_spec(&found)
     }
 
     /// `e`, a function template-id not called: the `DeclRefExpr` naming
@@ -838,7 +915,8 @@ impl Sema<'_, '_> {
             // beats it, and of several the more specialized.
             let direct = self.address_candidates(ule, target);
             let templates = self.address_template_candidates(ule, target);
-            let matches = Self::prefer_non_templates(direct, templates);
+            let loc = self.ast.exprs.get(ule).loc();
+            let matches = self.prefer_non_templates(direct, templates, loc);
             if let [(d, f)] = matches[..] {
                 let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
                 let nns = self.ast.templates.expr_nns.get(ule).copied();

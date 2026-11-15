@@ -4632,8 +4632,14 @@ match, so a mismatch neither tries the bases nor instantiates `X<A, B>`
 (clang's `isSimpleTemplateIdType` in `getTDF`; WP-787, Boost.Proto
 `template_arity`,
 `tests/conformance/temp.deduct.call/pointer-to-pointer-no-derived-class-deduction.cpp`).
-The success must be unique; otherwise the
-result is `MiscellaneousDeductionFailure` (clang). The template of `A` (or
+The search does not descend below a base that matches. Of the bases
+that match, one that another match is derived from is dropped (CWG2303,
+[temp.deduct.call]/5: the most derived wins, so `B<0>` beats `B<1>` when
+`B<0>` derives from `B<1>`, for the reference and the pointer forms).
+More than one survivor (unrelated bases) is
+`MiscellaneousDeductionFailure` (clang) (WP-1465,
+`tests/conformance/temp.deduct.call/cwg2303-most-derived-base.cpp`,
+`cwg2303-unrelated-bases.cpp`). The template of `A` (or
 of a base) is the class template it is a specialization of: alias
 template sugar is looked through ([temp.alias]/2; clang's
 `getLastTemplateSpecType`), so a base written `A<T>` with
@@ -4898,6 +4904,27 @@ function declarator's `(` (a non-static data member gets "not allowed in
 non-static struct member" instead, which clang checks first).
 Tests: `dcl.spec.auto/member-pointer-placeholder-run.cpp`,
 `dcl.spec.auto/member-pointer-placeholder-diags.cpp`.
+
+The walk also descends array declarators (CWG2397,
+[dcl.type.auto.deduct]/2.1, WP-1465): `auto (*p)[1] = &v;`, `auto
+(&r)[2] = arr;`, `Int auto (*ip)[1]`, `new auto(&v)`, a range-for
+`auto (&row)[2]`, a non-type parameter `auto (*P)[1]` and a static data
+member deduce through it, also in templates (`auto (*pa)[K]`). A bound
+must equal the initializer's ([temp.deduct.type]/8), else "variable 'p'
+with type 'auto (*)[1]' has incompatible initializer"; `decltype(auto)
+(*q)[1]` is "cannot form array of 'decltype(auto)'"; `auto y[2] = v;`
+deduces against the decayed initializer and fails; GNU's `auto x[2] =
+{1, 2}` is not implemented. An initializer that names an overload set of
+non-templates (`auto p = f;`, `auto p = &X::g;`) deduces from the members
+whose constraints are satisfied, which must all give the same type
+([temp.deduct.call]/6, CWG2918); a set with a template, explicit template
+arguments or `decltype(auto)` is incompatible
+(`deduce_from_overload_set`). Tests:
+`dcl.spec.auto/placeholder-in-array-declarator.cpp`,
+`placeholder-in-array-declarator-fail.cpp`,
+`over.over/cwg2918-constraints.cpp`. A non-type parameter of dependent
+type matched against an array bound deduces its type as `std::size_t`
+([temp.deduct.type]/20 example, `deduce_bound`).
 
 **Positions that forbid a placeholder** ([dcl.spec.auto.general]/2-6,
 [expr.prim.req.general]/4; clang `err_auto_not_allowed` from
@@ -5173,6 +5200,17 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+Access in an implicit guide (from a constructor or constructor template)
+is checked as in the class ([over.match.class.deduct]/1: the guide's
+signature is the constructor's), so a parameter naming a private or
+protected member type is accessible; `friend_template_access_ctx` maps
+such a guide to its class (`ctor_guide_class`). A user-declared guide
+keeps its own scope. A protected base member named through a dependent
+base is checked again when the class itself is instantiated; the
+speculative check during the guide's substitution is not recorded for
+replay (WP-1465,
+`tests/conformance/over.match.class.deduct/implicit-guide-access*.cpp`,
+`p2582-inherited-guide-access.cpp`).
 When a non-list argument has already been diagnosed (a `RecoveryExpr` or
 an error type, such as a variable whose own deduction failed), nothing is
 deduced and no further error is emitted. clang likewise deduces nothing
