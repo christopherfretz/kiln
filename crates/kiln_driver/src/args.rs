@@ -403,12 +403,14 @@ pub struct LinkOpt {
 /// How a compile-only run reports an unused [`LinkOpt`], as clang does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkOptKind {
-    /// `<opt>: 'linker' input unused` (`-l`, `-Wl,`).
+    /// `<opt>: 'linker' input unused` (`-l`, `-Wl,`, `-r`).
     Input,
     /// `argument unused during compilation: '<opt>'` (`-L`, `-fuse-ld=`,
-    /// `-shared`, `-rdynamic`, `-pie`, `-no-pie`).
+    /// `-shared`, `-rdynamic`, `-pie`, `-no-pie`, `-nostartfiles`,
+    /// `-nolibc`, `-static-pie`, `-static-libgcc`, `-static-libstdc++`,
+    /// `-shared-libgcc`; WP-1453).
     Option,
-    /// Nothing (`-static`, `-nostdlib`).
+    /// Nothing (`-static`, `-nostdlib`, `-nodefaultlibs`, `-nostdlib++`).
     Silent,
     /// The value of `-Xlinker <arg>` (`arg` is the value): passed as
     /// `-Xlinker <arg>`, unused as `-Xlinker <arg>: 'linker' input unused`.
@@ -417,17 +419,37 @@ pub enum LinkOptKind {
     /// `-rpath <dir>`, unused as `-rpath <dir>: 'linker' input unused`
     /// (WP-1288).
     Rpath,
+    /// The value of `-z <arg>` (separate only, as clang's): passed as
+    /// `-z <arg>`, unused as `-z <arg>: 'linker' input unused` (WP-1453).
+    Z,
+    /// The symbol of `-u <sym>` / `-u<sym>`: passed as `-u <sym>`, unused
+    /// as `argument unused during compilation: '-u <sym>'` (WP-1453).
+    Undefined,
+    /// The script of `-T <file>` / `-T<file>`: passed as `-T <file>`,
+    /// unused as `argument unused during compilation: '-T <file>'`
+    /// (WP-1453).
+    Script,
 }
 
 impl LinkOptKind {
     /// The option spelled before `arg` on the link line and in the unused
-    /// warning: `-Xlinker`, `-rpath`, or none.
+    /// warning: `-Xlinker`, `-rpath`, `-z`, `-u`, `-T`, or none.
     pub fn separate(self) -> Option<&'static str> {
         match self {
             Self::Xlinker => Some("-Xlinker"),
             Self::Rpath => Some("-rpath"),
+            Self::Z => Some("-z"),
+            Self::Undefined => Some("-u"),
+            Self::Script => Some("-T"),
             Self::Input | Self::Option | Self::Silent => None,
         }
+    }
+
+    /// Whether clang counts it as a linker input: warned `'linker' input
+    /// unused` when compiling, and enough on its own to run the link
+    /// step (`clang++ -Wl,--version`).
+    pub fn is_input(self) -> bool {
+        matches!(self, Self::Input | Self::Xlinker | Self::Rpath | Self::Z)
     }
 }
 
@@ -1144,6 +1166,23 @@ impl Args {
                 });
                 continue;
             }
+            // `-z <arg>` (separate only), `-u <sym>` and `-T <file>`
+            // (joined or separate), as clang's: to the link step
+            // (WP-1453).
+            if let Some(kind) = separate_link_opt(arg) {
+                let value = if let Some(v) = arg.get(2..).filter(|v| !v.is_empty()) {
+                    v.to_owned()
+                } else {
+                    let Some(next) = argv.get(i) else {
+                        a.errors.push(ArgError::MissingValue(arg.to_owned()));
+                        continue;
+                    };
+                    i += 1;
+                    next.clone()
+                };
+                a.link.push(LinkOpt { pos: a.inputs.len(), arg: value, kind });
+                continue;
+            }
             // `-rpath <dir>` (separate only, as clang): to the link step.
             // `-Xassembler <arg>`: one assembler option.
             if arg == "-rpath" || arg == "-Xassembler" {
@@ -1541,11 +1580,19 @@ impl Args {
             "-mno-omit-leaf-frame-pointer" => self.omit_leaf_frame_pointer = Some(false),
             "-fstrict-aliasing" => self.strict_aliasing = Some(true),
             "-fno-strict-aliasing" => self.strict_aliasing = Some(false),
-            "-static" | "-nostdlib" | "-shared" | "-rdynamic" | "-pie" | "-no-pie" => {
-                let kind = if matches!(arg, "-static" | "-nostdlib") {
-                    LinkOptKind::Silent
-                } else {
-                    LinkOptKind::Option
+            // The link-mode options (WP-1453): the linking clang++ gets
+            // them as written, so the start files and default libraries
+            // are clang's. A compile-only run warns about them as clang
+            // does ([`LinkOptKind`]).
+            "-static" | "-nostdlib" | "-nodefaultlibs" | "-nostdlib++" | "-shared"
+            | "-rdynamic" | "-pie" | "-no-pie" | "-nostartfiles" | "-nolibc" | "-static-pie"
+            | "-static-libgcc" | "-static-libstdc++" | "-shared-libgcc" | "-r" => {
+                let kind = match arg {
+                    "-static" | "-nostdlib" | "-nodefaultlibs" | "-nostdlib++" => {
+                        LinkOptKind::Silent
+                    }
+                    "-r" => LinkOptKind::Input,
+                    _ => LinkOptKind::Option,
                 };
                 self.link.push(LinkOpt { pos: self.inputs.len(), arg: arg.to_owned(), kind });
             }
@@ -2125,6 +2172,24 @@ impl VerifyRaw {
     }
 }
 
+/// The link option `arg` starts, if it is `-z` (separate only), `-u` or
+/// `-T` (joined or separate), as in clang's option table. The longer
+/// options sharing a prefix are not these: `-undef` (not supported by
+/// kiln) and clang's `-Tbss`, `-Tdata`, `-Ttext` (not supported) stay
+/// unknown arguments.
+fn separate_link_opt(arg: &str) -> Option<LinkOptKind> {
+    if arg == "-z" {
+        return Some(LinkOptKind::Z);
+    }
+    if arg.starts_with("-u") && arg != "-undef" {
+        return Some(LinkOptKind::Undefined);
+    }
+    if arg.starts_with("-T") && !["-Tbss", "-Tdata", "-Ttext"].iter().any(|p| arg.starts_with(p)) {
+        return Some(LinkOptKind::Script);
+    }
+    None
+}
+
 pub(crate) enum Valued<'a> {
     Joined(&'a str),
     Next,
@@ -2385,6 +2450,48 @@ mod tests {
             parse("-fcontract-evaluation-semantic=assume a.cpp").errors,
             [ArgError::UnsupportedValue("-fcontract-evaluation-semantic=".into(), "assume".into())]
         );
+    }
+
+    /// WP-1453 (spec/driver.md "Link options"): the link-mode options
+    /// and `-z`/`-u`/`-T` are link options in command-line order, with
+    /// clang's compile-only kind; the longer options sharing a prefix
+    /// are not.
+    #[test]
+    fn link_mode_options() {
+        use LinkOptKind as K;
+        let a = parse(
+            "-nodefaultlibs -nostdlib++ a.o -nostartfiles -nolibc -static-pie -static-libgcc \
+             -static-libstdc++ -shared-libgcc -r -z now -ufoo -u bar -Tx.ld -T y.ld b.o",
+        );
+        assert_eq!(a.errors, []);
+        let link: Vec<_> = a.link.iter().map(|l| (l.pos, l.arg.as_str(), l.kind)).collect();
+        assert_eq!(
+            link,
+            [
+                (0, "-nodefaultlibs", K::Silent),
+                (0, "-nostdlib++", K::Silent),
+                (1, "-nostartfiles", K::Option),
+                (1, "-nolibc", K::Option),
+                (1, "-static-pie", K::Option),
+                (1, "-static-libgcc", K::Option),
+                (1, "-static-libstdc++", K::Option),
+                (1, "-shared-libgcc", K::Option),
+                (1, "-r", K::Input),
+                (1, "now", K::Z),
+                (1, "foo", K::Undefined),
+                (1, "bar", K::Undefined),
+                (1, "x.ld", K::Script),
+                (1, "y.ld", K::Script),
+            ]
+        );
+        assert!(K::Z.is_input() && K::Input.is_input() && !K::Undefined.is_input());
+        assert_eq!(parse("a.o -z").errors, [ArgError::MissingValue("-z".into())]);
+        assert_eq!(parse("a.o -u").errors, [ArgError::MissingValue("-u".into())]);
+        assert_eq!(parse("a.o -T").errors, [ArgError::MissingValue("-T".into())]);
+        // clang: `-z` is separate only; `-undef`, `-Ttext` are other options.
+        for o in ["-znow", "-undef", "-Ttext=0", "-Tbss", "-Tdata", "-symbolic"] {
+            assert_eq!(parse(&format!("{o} a.o")).errors, [ArgError::Unknown(o.into())]);
+        }
     }
 
     #[test]
