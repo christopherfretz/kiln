@@ -7767,9 +7767,12 @@ impl Sema<'_, '_> {
             }
         }
         // A member overload set deduces in `deduce_auto` (a member
-        // template-id naming one static specialization, WP-788).
+        // template-id naming one static specialization, WP-788), and so
+        // does a set of named functions (CWG2918).
         let overload = items.iter().flatten().copied().find(|&e| {
-            self.ast.exprs.get(e).ty() == QualType::OVERLOAD && self.member_overload(e).is_none()
+            self.ast.exprs.get(e).ty() == QualType::OVERLOAD
+                && self.member_overload(e).is_none()
+                && self.overload_operand(e).is_none()
         });
         let paren_braces = self.auto_paren_braces(init, direct);
         let fail = match (overload, paren_braces) {

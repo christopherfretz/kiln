@@ -355,7 +355,7 @@ impl Sema<'_, '_> {
 
     /// [`Self::deduce_from`] for an initializer of type `ety`, an lvalue
     /// if `lvalue`, below a top-level placeholder.
-    fn deduce_from_parts(
+    pub(crate) fn deduce_from_parts(
         &mut self,
         declared: QualType,
         ety: QualType,
@@ -446,9 +446,10 @@ impl Sema<'_, '_> {
                     self.ast.types.qualify(r, p.quals())
                 });
             }
-            v @ (TypeView::Pointer(_) | TypeView::MemberPointer { .. } | TypeView::Function(_)) => {
-                v
-            }
+            v @ (TypeView::Pointer(_)
+            | TypeView::MemberPointer { .. }
+            | TypeView::Function(_)
+            | TypeView::ConstantArray(_)) => v,
             _ => t.canonical_view(p),
         };
         match view {
@@ -508,6 +509,22 @@ impl Sema<'_, '_> {
                 })
             }
             TypeView::Function(pf) => self.deduce_match_function(pf, a),
+            // `auto (*p)[1] = &v;`: an array matches an array of the same
+            // bound, the element recursing ([temp.deduct.type]/8 `T[i]`;
+            // the cv of either is its element's, [basic.type.qualifier]/3).
+            TypeView::ConstantArray(pa) => {
+                let TypeView::ConstantArray(aa) = t.canonical_view(a) else { return None };
+                if pa.size != aa.size {
+                    return None;
+                }
+                let inner = self.deduce_match(pa.elem, aa.elem)?;
+                Some(self.ast.types.constant_array(inner, pa.size, pa.size_expr))
+            }
+            TypeView::IncompleteArray(pe) => {
+                let TypeView::IncompleteArray(ae) = t.canonical_view(a) else { return None };
+                let inner = self.deduce_match(pe, ae)?;
+                Some(self.ast.types.incomplete_array(inner))
+            }
             _ => None,
         }
     }

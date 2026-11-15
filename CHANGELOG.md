@@ -149,6 +149,16 @@ Planned as 1.3.0.
   `-frange-for-ext-temps` and `-fno-range-for-ext-temps` (GCC's) turn
   P2718R0's range-for extension on before C++23 or off from it, and
   `__cpp_range_based_for` follows them.
+- Template argument deduction found running GCC's C++ testsuite
+  (WP-1465): of several base classes a call argument's class could
+  deduce from, the most derived wins (CWG2303); an implicit deduction
+  guide checks access as its class does, so a constructor naming a
+  private member type deduces ([over.match.class.deduct]); taking the
+  address of, or deducing `auto` from, an overload set drops members
+  whose constraints are not satisfied and keeps the more constrained
+  (CWG2918); `auto` deduces through array declarators (`auto (*p)[1] =
+  &v;`, CWG2397); `template<class T, T n> void f(int (&)[n])` deduces
+  `T` as `std::size_t` from the bound ([temp.deduct.type]/20).
 - C++26 forms found running GCC's C++ testsuite (WP-1464): the C23
   one-argument `va_start(ap)` and `__STDC_VERSION_STDARG_H__` at C++26
   (P3348R4); an array placement new at the first element of an array

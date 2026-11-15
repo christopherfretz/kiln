@@ -14,7 +14,7 @@
 //! ill-formed, but `auto (*)()` and `C auto` constraints are not).
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::types::{ArgView, AutoKeyword, TemplateArg, TypeKind, TypeView};
+use kiln_ast::types::{ArgView, AutoKeyword, ExprOperand, TemplateArg, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -135,6 +135,74 @@ impl Sema<'_, '_> {
         self.deduce_from_function_lvalue(declared, fty).ok_or(AutoFail::Incompatible(e))
     }
 
+    /// [`Self::deduce_auto`] from `e`, an overload set of non-template
+    /// functions (`&X<true>::f`, possibly without `&`): a trial deduction
+    /// from each member whose constraints are satisfied; when every
+    /// successful one deduces the same type, that is the result
+    /// ([temp.deduct.call]/6 as amended by CWG2918), and [over.over]
+    /// then selects the function for it at the initialization. `None`
+    /// when `e` is no unresolved overload set; a set with a function
+    /// template is a non-deduced context, so deduction fails.
+    fn deduce_from_overload_set(
+        &mut self,
+        declared: QualType,
+        e: ExprId,
+    ) -> Option<Result<QualType, AutoFail>> {
+        let (ule, addr) = self.overload_operand(e)?;
+        let fail = Some(Err(AutoFail::Incompatible(e)));
+        if self.ast.templates.expr_targs.get(ule).is_some()
+            || self.placeholder_keyword(declared) == Some(AutoKeyword::DecltypeAuto)
+        {
+            return fail;
+        }
+        let cands = self.ule_candidates(ule);
+        if cands.iter().any(|&(d, _)| {
+            !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
+                || !self.ast.pass_object_size_params(d).is_empty()
+        }) {
+            return fail;
+        }
+        let loc = self.ast.exprs.get(ule).loc();
+        let top = self.undeduced_keyword(declared).is_some();
+        let mut out: Option<QualType> = None;
+        for (d, _) in cands {
+            if !self.function_constraints_satisfied(d, loc) {
+                continue;
+            }
+            let Some(fty) = self.ast.decls.get(d).ty() else { return Some(Err(AutoFail::Error)) };
+            // The argument's type: a pointer to member for `&C::f` of an
+            // implicit object member, a pointer for `&f`, else the
+            // function lvalue (which decays against a non-reference P).
+            let (a, lvalue) = if self.is_implicit_object_member(d) {
+                let Some(c) = self.ast.decls.get(d).ctx() else { continue };
+                if !addr {
+                    continue;
+                }
+                (self.ast.types.member_pointer(fty, self.tag_type(c).ty()), false)
+            } else if addr {
+                (self.ast.types.pointer_to(fty), false)
+            } else {
+                (fty, true)
+            };
+            let t = if top {
+                let base = if lvalue { self.ast.types.pointer_to(a) } else { a };
+                let q = declared.quals();
+                if q.is_empty() { base } else { self.ast.types.qualify(base, q) }
+            } else {
+                let Some(t) = self.deduce_from_parts(declared, a, lvalue) else { continue };
+                t
+            };
+            match out {
+                None => out = Some(t),
+                Some(p) if !self.ast.types.same_type(p, t) => {
+                    return Some(Err(AutoFail::Incompatible(e)));
+                }
+                Some(_) => {}
+            }
+        }
+        Some(out.ok_or(AutoFail::Incompatible(e)))
+    }
+
     /// The type deduced for a variable declared with type `declared`
     /// containing a placeholder from initializer `init`
     /// ([dcl.type.auto.deduct]/2-4). `init` holds the initializer's
@@ -178,6 +246,9 @@ impl Sema<'_, '_> {
                 };
                 if let Some(x) = self.member_overload(e) {
                     return self.deduce_from_member_set(declared, e, x);
+                }
+                if let Some(r) = self.deduce_from_overload_set(declared, e) {
+                    return r;
                 }
                 self.deduce_from(declared, e).ok_or(AutoFail::Incompatible(e))
             }
@@ -407,8 +478,12 @@ impl Sema<'_, '_> {
                 | (
                     TypeView::MemberPointer { pointee: p, .. },
                     TypeView::MemberPointer { pointee: x, .. },
-                ) => (d, a) = (p, x),
+                )
+                | (TypeView::IncompleteArray(p), TypeView::IncompleteArray(x)) => (d, a) = (p, x),
                 (TypeView::Function(p), TypeView::Function(x)) => (d, a) = (p.ret(), x.ret()),
+                (TypeView::ConstantArray(p), TypeView::ConstantArray(x)) => {
+                    (d, a) = (p.elem, x.elem);
+                }
                 (TypeView::RValueRef(p), TypeView::LValueRef(_)) => {
                     let TypeView::Auto { keyword, deduced: None, .. } =
                         self.ast.types.canonical_view(p)
@@ -495,6 +570,13 @@ impl Sema<'_, '_> {
             TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
             TypeView::MemberPointer { pointee, .. } => Some(pointee),
             TypeView::Function(f) => Some(f.ret()),
+            // An array's element (`auto (*p)[1] = &v;`,
+            // [dcl.type.auto.deduct]/2.1: every occurrence in the declared
+            // type is replaced).
+            TypeView::ConstantArray(a) => Some(a.elem),
+            TypeView::IncompleteArray(e)
+            | TypeView::DependentSizedArray { elem: e, .. }
+            | TypeView::VariableArray { elem: e, .. } => Some(e),
             _ => None,
         }
     }
@@ -583,6 +665,8 @@ impl Sema<'_, '_> {
             | TypeView::RValueRef(_)
             | TypeView::MemberPointer { .. }
             | TypeView::Function(_)
+            | TypeView::ConstantArray(_)
+            | TypeView::IncompleteArray(_)
             | TypeView::Paren(_)) => (v, declared.quals()),
             _ => (t.canonical_view(declared), t.canonical(declared).quals()),
         };
@@ -613,6 +697,21 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) => {
                 let inner = self.replace_placeholder(p, with);
                 self.ast.types.rvalue_ref_to(inner)
+            }
+            // The bound as written stays (sugar).
+            TypeView::ConstantArray(a) => {
+                let inner = self.replace_placeholder(a.elem, with);
+                self.ast.types.constant_array(inner, a.size, a.size_expr)
+            }
+            TypeView::IncompleteArray(e) => {
+                let inner = self.replace_placeholder(e, with);
+                self.ast.types.incomplete_array(inner)
+            }
+            // Canonical here: the bound's profile names its expression.
+            TypeView::DependentSizedArray { elem, size: ExprOperand::Profile(p) } => {
+                let Some(e) = self.ast.types.profile_expr(p) else { return declared };
+                let inner = self.replace_placeholder(elem, with);
+                self.ast.types.dependent_sized_array(inner, e, p)
             }
             _ => return declared,
         };

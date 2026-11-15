@@ -1178,6 +1178,10 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
+            if let Some(t) = self.bound_value_type(params, j, depth, &d) {
+                d.args[j] = TemplateArg::ty(t);
+                continue;
+            }
             if is_pack(self, p) {
                 // [temp.arg.explicit]/4: a trailing pack not otherwise
                 // deduced is deduced as empty.
@@ -2178,6 +2182,37 @@ impl Sema<'_, '_> {
             return OverloadArg::NotASet;
         }
         OverloadArg::Set(OverloadSetArg { ule: e, addr, member_form })
+    }
+
+    /// The type of the value deduced for a non-type parameter whose type
+    /// is the still undeduced type parameter `params[j]`: only an array
+    /// bound deduces such a value, and its type is `std::size_t`
+    /// ([temp.deduct.type]/20, its example `template<class T, T i> void
+    /// f(int (&)[i])`). Taken after every argument, so a deduction of `T`
+    /// from another argument wins (clang `DeducedFromArrayBound`).
+    fn bound_value_type(
+        &self,
+        params: &[DeclId],
+        j: usize,
+        depth: u16,
+        d: &DeducedArgs,
+    ) -> Option<QualType> {
+        if self.kind_of(params[j]) != DeclKind::TemplateTypeParm {
+            return None;
+        }
+        let t = &self.ast.types;
+        params.iter().zip(&d.args).skip(j + 1).find_map(|(&q, a)| {
+            let ArgView::Value { ty, .. } = a.view() else { return None };
+            let pt = self.ast.decls.get(q).ty()?;
+            match t.canonical_view(pt) {
+                TypeView::CanonTemplateTypeParm { depth: pd, index, .. }
+                    if pd as u16 == depth && index as usize == j =>
+                {
+                    Some(ty)
+                }
+                _ => None,
+            }
+        })
     }
 
     /// The overload set a function template-id resolved early
