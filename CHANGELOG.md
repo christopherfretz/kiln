@@ -92,6 +92,13 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- A regression from 1.1.0, present in 1.2.0 and 1.2.1 (WP-1455): an
+  out-of-line constructor whose parameter names an enclosing class of
+  its own class, `O::I::R::R(I::R &&) {}`, was rejected with "use of
+  undeclared identifier 'I'" and, for a protected or private `I`, an
+  access error. The names after the constructor's `(` are now looked
+  up in the scope of its class, as the parameters are. Found building
+  LLVM's DWARFLinker.
 - Debug info (WP-1445): an explicitly specialized member function's
   declaration is at the specialization, and a class with a const member
   of class type is `DIFlagNonTrivial`, as in clang.

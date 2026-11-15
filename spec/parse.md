@@ -913,6 +913,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     declaration specifiers"). The decl-specifier check
     (`at_special_declarator`) and the declarator-id
     (`names_constructor`) use the same rule (`ctor_params_follow`).
+    For `C::C(` the names after `(` are looked up with the scope of the
+    qualifier's class entered, as the parameter-declaration-clause will
+    be ([basic.scope.class]/1, [basic.lookup.unqual]/3; clang enters the
+    declarator scope in `isConstructorDeclarator`): in
+    `O::I::R::R(I::R &&)` the name `I` is found through the enclosing
+    classes of `R`, so the declarator is a constructor and no access
+    check of `O::I` runs outside the member's context (WP-1455).
   - an attribute-specifier-seq right after the declarator-id
     (`declarator-id attribute-specifier-seq(opt)`, [dcl.decl.general]/4),
     for every kind of declarator-id: an identifier or qualified-id
