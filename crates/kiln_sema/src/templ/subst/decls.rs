@@ -1563,7 +1563,7 @@ impl Substituter<'_, '_, '_> {
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
             let outer = std::mem::replace(&mut self.sema.in_typedef_instantiation, true);
-            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], 0, Loc::INVALID);
+            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], 0, Loc::INVALID, Loc::INVALID);
             self.sema.in_typedef_instantiation = outer;
             self.sema.infer_gsl_instantiated_typedef(d, a);
             if failed {

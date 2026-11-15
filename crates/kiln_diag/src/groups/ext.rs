@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+C23ArrayPointerQualifiers = "c23-array-pointer-qualifiers" [];
 Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
 Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
 Cxx23AttributeExtensions = "c++23-attribute-extensions" [];

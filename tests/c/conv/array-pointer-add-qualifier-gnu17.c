@@ -7,8 +7,10 @@
 // making this a constraint violation; clang 19 and 22 accept it silently
 // there too (their canonical array type carries its element's
 // qualifiers), GCC 16.1 warns under -pedantic. kiln follows clang in
-// every C mode. Found building an open-source image codec. WP-1427.
-//@ args: -std=gnu17 -pedantic-errors -Wall
+// every C mode, and warns as GCC does only under -pedantic
+// (array-pointer-qualifiers-pedantic-gnu17.c, WP-1435). Found building an
+// open-source image codec. WP-1427.
+//@ args: -std=gnu17 -Wall
 //@ expect: compile-ok
 //@ strict-diags
 typedef unsigned int Buckets[256];

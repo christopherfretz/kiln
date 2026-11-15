@@ -160,6 +160,7 @@ impl Sema<'_, '_> {
                 warn(self, DiagId::sema_c_ordered_comparison_function_pointers);
             }
             if c_assign::compatible_pointees(self, lpe, rpe) {
+                c_assign::pre_c23_array_qualifiers(self, lpe, rpe, loc);
                 // C17 6.5.8p2: compatible object types, qualifiers aside;
                 // before C11 both complete or both incomplete (clang
                 // `ext_typecheck_compare_complete_incomplete_pointers`,
@@ -345,6 +346,7 @@ impl Sema<'_, '_> {
         };
         let (lu, ru) = (unqual(self, lpe), unqual(self, rpe));
         let ty = if c_assign::compatible(self, lu, ru) {
+            c_assign::pre_c23_array_qualifiers(self, lpe, rpe, loc);
             let comp = self.c_composite(lu, ru);
             let comp = self.ast.types.qualify(comp, lq | rq);
             self.ast.types.pointer_to(comp)

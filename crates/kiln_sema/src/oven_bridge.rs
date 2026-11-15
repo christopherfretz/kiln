@@ -855,12 +855,24 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         } else {
             kiln_diag::DiagId::sema_expr_not_ice
         };
+        let at = self.c_not_ice_at(c, at);
         let d = self.not_ice_diag(id, at);
         // C: clang's integer-constant-expression check gives no
         // evaluation notes (WP-1312).
         let d = if self.is_c() { d } else { Self::with_failure_notes(d, f) };
         self.emit(d);
         folded
+    }
+
+    /// Where a failed integer constant expression `e`, otherwise reported
+    /// at `at`, is reported in C: at its first operand that may not appear
+    /// in one, as clang's `CheckICE` locates it
+    /// ([`c_assign::c_not_ice_operand`]; WP-1435).
+    pub(crate) fn c_not_ice_at(&self, e: ExprId, at: Loc) -> Loc {
+        if !self.is_c() {
+            return at;
+        }
+        crate::conv::c_assign::c_not_ice_operand(self, e).map_or(at, |x| self.begin_loc(x))
     }
 
     /// `id` (`sema_expr_not_ice` or `sema_expr_not_ice_folded`) at `at`:

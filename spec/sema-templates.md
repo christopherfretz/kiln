@@ -9139,7 +9139,32 @@ explicit specialization errors remain. The blockers are:
   - in class scope, redeclaring a typedef-name with the same type is
     `sema_redefinition` ([dcl.typedef]/4, CWG56/424);
   - an invalid typedef member of a class template is not instantiated
-    (`templ/class.rs`).
+    (`templ/class.rs`);
+  - C++ only (C17 6.2.3 keeps tags apart): with no typedef-name of the
+    name in the scope, a class or enumeration of the scope (also one a
+    friend declared, or one a using-declaration of the scope names) is
+    the previous declaration ([dcl.typedef]/5-6, [class.name]/2,
+    [basic.scope.scope]/4; `decl.rs` `check_typedef_of_tag`). A typedef
+    or alias-declaration naming another type is
+    `sema_redefinition_different_typedef` with kind "typedef" and the
+    class's own type, printed qualified (clang `getTypeDeclType`), noted
+    at the declaration lookup found; the same type (`typedef struct S
+    S;`, also in class scope) is valid and chains to nothing. A dependent
+    type on either side (a member or local class of a template is
+    dependent) is not checked, at the definition or at instantiation. An
+    alias template is `sema_redefinition_different_kind`, reported at its
+    `using` (as for any alias template conflict; the note for a previous
+    alias template is at its `using` too). The invalid typedef is ignored
+    by lookup when the class is also found (clang `resolveKind`: an
+    invalid declaration counts only when it is the only one), so the name
+    still denotes the class. The reverse order is `kind_conflict.rs`
+    `diagnose_tag_typedef_conflict`. Tests:
+    `dcl.typedef/typedef-after-class-same-name{,-ok}.cpp` (WP-1435);
+  - after "typedef 'X' cannot be referenced with the 'struct' specifier"
+    the class declared in its place is invalid and hidden, and its
+    incomplete-type errors (member access, variable, `sizeof`) are not
+    reported (clang's declarator is invalid; `incomplete_note`). Test:
+    `dcl.type.elab/tag-reference-typedef-recovery.cpp` (WP-1435).
 - `expr.rs` `builtin_unary`: `*e` on a type-dependent operand that is not
   of an overloadable type (`T (&a)[N]`) builds a dependent unary
   expression, as clang's `CheckIndirectionOperand` does, instead of

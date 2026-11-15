@@ -6,8 +6,10 @@
 // this in every C mode, as clang's assignment check does. clang 19 and 22
 // still warn "pointer type mismatch" and give `void *` here (their
 // checkConditionalObjectPointersCompatibility reads the qualifiers of the
-// non-canonical pointee). WP-1427.
-//@ args: -std=gnu17 -pedantic-errors -Wall
+// non-canonical pointee). Under -pedantic kiln also warns before C23 that
+// the pointed-to types are incompatible there (C17 6.7.3p10,
+// array-pointer-qualifiers-pedantic-gnu17.c, WP-1435). WP-1427.
+//@ args: -std=gnu17 -Wall
 //@ expect: compile-ok
 //@ strict-diags
 //@ xfail(clang): clang 19 and 22 warn -Wpointer-type-mismatch for pointers to differently qualified arrays in ?: (C23 6.5.15p6, 6.7.3p9 make them compatible)

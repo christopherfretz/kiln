@@ -4155,6 +4155,16 @@ impl Sema<'_, '_> {
             }
             return msg;
         }
+        // A class declared invalid by an elaborated-type-specifier that
+        // named a typedef or template ("typedef 'X' cannot be referenced
+        // with the 'struct' specifier"): clang's declarator, and so every
+        // use of the type, is invalid, and nothing more is reported.
+        if self.ast.decls.get(rec).has(DeclFlags::INVALID)
+            && self.ast.decls.get(rec).misc().friend() == FriendKind::Undeclared
+        {
+            self.inst.suppress_next_error.set(true);
+            return msg;
+        }
         if self.inst.undefined_diagnosed.get() == Some(rec) {
             self.inst.undefined_diagnosed.set(None);
             self.inst.suppress_next_error.set(true);
@@ -4245,6 +4255,59 @@ impl Sema<'_, '_> {
         Some(p)
     }
 
+    /// A typedef or alias-declaration of `name` at `loc` (`using_loc`: an
+    /// alias template's `using`, where clang reports it) whose scope
+    /// declares `p`, not a typedef-name it may redeclare: clang's
+    /// "redefinition of 'X' as different kind of symbol" ([basic.scope.scope]/4).
+    fn diag_typedef_different_kind(
+        &mut self,
+        p: DeclId,
+        name: Symbol,
+        using_loc: Option<Loc>,
+        loc: Loc,
+    ) {
+        let msg = self
+            .diag(DiagId::sema_redefinition_different_kind, using_loc.unwrap_or(loc))
+            .arg(sym_str(self, name));
+        let msg = if self.kind_of(p) == DeclKind::TypeAliasTemplate {
+            msg.with_note(self.diag(DiagId::note_previous_definition, self.conflict_loc(p)))
+        } else {
+            self.note_prev(msg, p, true)
+        };
+        self.emit(msg);
+    }
+
+    /// A typedef or alias-declaration at `loc` of type `underlying` naming
+    /// `tag`, a class or enumeration of the same name and scope
+    /// ([dcl.typedef]/5-6, [class.name]/2: the typedef-name may only
+    /// denote that class again, as in `typedef struct S S;`). A dependent
+    /// type on either side is not checked, nor at instantiation (clang
+    /// `isIncompatibleTypedef` at the definition only; a member of a
+    /// template is dependent there).
+    /// False after "typedef redefinition with different types", whose
+    /// kind is always "typedef" since the previous declaration is the tag.
+    fn check_typedef_of_tag(&mut self, tag: DeclId, underlying: QualType, loc: Loc) -> bool {
+        // The class's own type, printed qualified (clang
+        // `getTypeDeclType`).
+        let tag_ty = self.ast.types.canonical(self.tag_type(tag));
+        let t = &self.ast.types;
+        if t.is_dependent(tag_ty)
+            || t.is_dependent(underlying)
+            || t.same_type(tag_ty, underlying)
+            || self.inst.stack.in_instantiation_record()
+        {
+            return true;
+        }
+        let msg = self
+            .diag(DiagId::sema_redefinition_different_typedef, loc)
+            .arg("0")
+            .arg(self.ty_arg(underlying))
+            .arg(format!("'{}'", self.decl_ty_str(tag_ty)));
+        let msg = self.note_prev(msg, tag, true);
+        self.emit(msg);
+        false
+    }
+
     /// `typedef T name;` or `using name = T;` ([dcl.typedef]).
     #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     fn act_on_typedef(
@@ -4263,17 +4326,35 @@ impl Sema<'_, '_> {
         // An earlier redefinition that was diagnosed is not the previous
         // declaration (as in clang, which does not chain invalid
         // redeclarations): the later one is compared with the valid one.
-        let prev = {
-            let found: Vec<DeclId> = match d.qualifier {
-                Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
-                None => self.lookup_current_scope(name),
-            };
-            found.into_iter().rev().find(|&p| {
-                let n = self.ast.decls.get(p);
-                let invalid_typedef = matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias)
-                    && n.has(DeclFlags::INVALID);
-                !is_tag_kind(n.kind()) && !invalid_typedef
+        let found: Vec<DeclId> = match d.qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary).decls,
+            None => self.lookup_current_scope(name),
+        };
+        let prev = found.iter().rev().copied().find(|&p| {
+            let n = self.ast.decls.get(p);
+            let invalid_typedef = matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias)
+                && n.has(DeclFlags::INVALID);
+            !is_tag_kind(n.kind()) && !invalid_typedef
+        });
+        // C++ [basic.scope.scope]/4, [dcl.typedef]/5-6: a class or
+        // enumeration of the scope, with no other declaration of the name
+        // there, is the previous declaration (clang's ordinary redeclaration
+        // lookup finds tags in C++, a friend's class not yet declared in the
+        // namespace too; C17 6.2.3 keeps them apart).
+        // A using-declaration of the scope that names a class counts as
+        // that class ([namespace.udecl]/1: clang's lookup sees its target).
+        let prev_tag = if prev.is_none() && !self.is_c() {
+            found.iter().rev().copied().find(|&p| is_tag_kind(self.kind_of(p))).or_else(|| {
+                let shadows =
+                    if d.qualifier.is_none() { self.current_scope_shadows(name) } else { vec![] };
+                shadows
+                    .into_iter()
+                    .rev()
+                    .map(|s| self.ast.strip_shadow(s))
+                    .find(|&t| is_tag_kind(self.kind_of(t)))
             })
+        } else {
+            None
         };
         // `typedef struct { } T;`: T names the class for linkage purposes
         // ([dcl.typedef]/9).
@@ -4312,6 +4393,11 @@ impl Sema<'_, '_> {
         };
         let mut invalid = heads_differ;
         let prev = if heads_differ { None } else { alias_template_prev.or(prev) };
+        // An alias template's `using` keyword (the declaration spec's
+        // location, [`Sema::act_on_alias_decl`]), where clang reports its
+        // conflicts.
+        let alias_using =
+            (alias && self.templ.cur.is_some() && ds.loc.is_valid()).then_some(ds.loc);
         if let Some(p) = prev {
             let pk = self.ast.decls.get(p).kind();
             if matches!(pk, DeclKind::Typedef | DeclKind::TypeAlias)
@@ -4328,11 +4414,15 @@ impl Sema<'_, '_> {
                     None => invalid = true,
                 }
             } else {
-                let msg = self
-                    .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
-                    .arg(sym_str(self, name));
-                let msg = self.note_prev(msg, p, true);
-                self.emit(msg);
+                self.diag_typedef_different_kind(p, name, alias_using, d.name_loc());
+            }
+        } else if let Some(tag) = prev_tag {
+            if alias_using.is_some() {
+                // An alias template is not a type (clang
+                // `ActOnAliasDeclaration`).
+                self.diag_typedef_different_kind(tag, name, alias_using, d.name_loc());
+            } else {
+                invalid = !self.check_typedef_of_tag(tag, underlying, d.name_loc());
             }
         }
         let kind = if alias { DeclKind::TypeAlias } else { DeclKind::Typedef };
@@ -4445,8 +4535,10 @@ impl Sema<'_, '_> {
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
-    /// the type-id starts (invalid when not written). The first `own` of
-    /// `attrs` follow the name; the rest are the type-id's.
+    /// the type-id starts and `using_loc` the `using` keyword (each
+    /// invalid when not written). The first `own` of `attrs` follow the
+    /// name; the rest are the type-id's.
+    #[allow(clippy::too_many_arguments, reason = "the parsed alias-declaration's parts")]
     pub fn act_on_alias_decl(
         &mut self,
         name: Symbol,
@@ -4455,6 +4547,7 @@ impl Sema<'_, '_> {
         attrs: &[AttrId],
         own: usize,
         type_loc: Loc,
+        using_loc: Loc,
     ) -> DeclId {
         if let Some(id) = self.pending_alias_vla.take() {
             self.error(id, name_loc);
@@ -4463,7 +4556,9 @@ impl Sema<'_, '_> {
         self.check_template_param_shadow(name, name_loc);
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
-        let ds = DeclSpec::new(name_loc);
+        // The spec's location is the `using` keyword: an alias template's
+        // conflicts are reported there ([`Sema::act_on_typedef`]).
+        let ds = DeclSpec::new(if using_loc.is_valid() { using_loc } else { name_loc });
         let _ = self.take_template_head(None);
         let _ = self.check_template_in_local_class(false, Loc::INVALID);
         // The type-id's attributes modify its type; then those after the
@@ -10919,8 +11014,11 @@ impl Sema<'_, '_> {
                 Err(mut f) => {
                     failed = true;
                     let at = Self::fold_lone_invalid(&mut f, cloc);
+                    let at = self.c_not_ice_at(c, at);
                     let d = self.diag(DiagId::sema_static_assert_not_ice, at);
-                    let d = Self::with_failure_notes(d, f);
+                    // C: an integer constant expression, without
+                    // evaluation notes (clang `CheckICE`, WP-1435).
+                    let d = if self.is_c() { d } else { Self::with_failure_notes(d, f) };
                     self.emit(d);
                 }
             }

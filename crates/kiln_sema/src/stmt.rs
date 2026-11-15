@@ -1276,6 +1276,7 @@ impl Sema<'_, '_> {
                 // `VerifyIntegerConstantExpression`, no evaluation notes;
                 // WP-1312).
                 let d = if self.is_c() {
+                    let at = self.c_not_ice_at(e, at);
                     self.not_ice_diag(DiagId::sema_expr_not_ice, at)
                 } else {
                     let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
