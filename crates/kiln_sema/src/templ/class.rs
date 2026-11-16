@@ -1772,6 +1772,17 @@ impl Sema<'_, '_> {
             if !self.inst.deferred_inits.contains(&v) {
                 self.record_ref_var_inst(v);
             }
+            // A `constexpr` member before C++17 is not inline: an
+            // odr-use needs its out-of-line definition too (WP-1517).
+            if odr && self.inst.member_defs.contains(&v) {
+                self.instantiate_static_member_def(v, loc);
+                if self.inst.member_defs.contains(&v)
+                    && !self.is_var_spec(v)
+                    && self.inst.quiet_pending.insert(v)
+                {
+                    self.queue_instantiation(v, loc);
+                }
+            }
         } else if deferred {
             // clang `DoMarkVarDeclReferenced`: an inline static data
             // member that cannot be constant is queued like any other
@@ -1947,6 +1958,9 @@ impl Sema<'_, '_> {
         let spec_bits = pspec
             .with_storage(kiln_ast::decl::VarStorage::None)
             .with_inline(vspec.is_inline())
+            .with_inline_implied(
+                vspec.is_inline() && (!pspec.is_inline() || pspec.is_inline_implied()),
+            )
             .with_constexpr(vspec.is_constexpr());
         let mut h = kiln_ast::DeclHead::new(spec, pn.name(), pn.loc());
         h.lexical = Some(lexical);
@@ -2025,8 +2039,14 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
-        if inline {
-            self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_inline(true));
+        // Inline as the pattern is: an explicitly `inline` one, or a
+        // `constexpr` one from C++17 only ([dcl.constexpr]/1, WP-1517).
+        let pspec = self.ast.decls.var(pattern).map(|x| x.spec).unwrap_or_default();
+        if inline && pspec.is_inline() {
+            let bits = kiln_ast::decl::VarSpec::new()
+                .with_inline(true)
+                .with_inline_implied(pspec.is_inline_implied());
+            self.ast.decls.mark_var(v, bits);
         }
         // The member was declared without its initializer: it takes the
         // pattern's form now (`static constexpr E e{X::v};` is direct-list-

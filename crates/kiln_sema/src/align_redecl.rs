@@ -263,6 +263,37 @@ impl Sema<'_, '_> {
         let is_def = self.ast.decls.get(d).kind() == DeclKind::Var && self.is_var_definition(d);
         self.merge_aligned_redecl(d, own, is_def);
         self.check_alignas_underalignment(d, own);
+        self.drop_linkage_attrs_after_member_def(d, own);
+    }
+
+    /// clang `checkNewAttributesAfterDef` for the attributes that change
+    /// a definition's emission (`weak`, `used`, `retain`): on the
+    /// redundant out-of-class redeclaration of a `constexpr` static data
+    /// member defined in its class (C++17, [depr.static.constexpr]) they
+    /// come after the definition and are ignored with a warning (WP-1517;
+    /// the other attributes and other redeclarations are not checked).
+    fn drop_linkage_attrs_after_member_def(&mut self, d: DeclId, own: &mut Vec<AttrId>) {
+        if self.ast.decls.get(d).kind() != DeclKind::Var
+            || !self.redundant_constexpr_member_redecl(d)
+        {
+            return;
+        }
+        let def = self.ast.first(d);
+        let mut i = 0;
+        while i < own.len() {
+            let node = *self.ast.attrs.get(own[i]);
+            let checked = matches!(node.kind, AttrKind::WEAK | AttrKind::USED | AttrKind::RETAIN);
+            if checked && self.find_attr(def, node.kind).is_none() {
+                let prev =
+                    self.diag(DiagId::note_previous_definition, self.ast.decls.get(def).loc());
+                let msg =
+                    self.diag(DiagId::sema_attribute_precede_definition, node.loc).with_note(prev);
+                self.emit(msg);
+                own.remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// clang `CheckAlignasUnderalignment` ([dcl.align]/5): `d` (with its

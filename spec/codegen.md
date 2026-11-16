@@ -2721,7 +2721,29 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   - An out-of-line definition takes the in-class initializer
     (`getAnyInitializer`).
   - A const member with an in-class initializer, odr-used but never
-    defined out of line, is an `available_externally constant`.
+    defined out of line, is an `available_externally constant` (also a
+    `constexpr` one before C++17, and a member of a class with internal
+    linkage: the symbol is never defined privately).
+  - Linkage (clang `getInlineVariableDefinitionKind`, WP-1517): a
+    `constexpr` member is inline only from C++17 ([dcl.constexpr]/1;
+    `VarSpec::is_inline_implied` marks `inline` that is implied, not
+    written). Before C++17 its out-of-class definition is a strong
+    `external` definition, emitted even when unused, as for any
+    non-inline member (`static const int n = 3; const int A::n;` in
+    every mode). From C++17 an inline member defined in its class is
+    `linkonce_odr` in its own COMDAT, emitted when used; when its first
+    declaration is not declared `inline` and it has a redundant
+    out-of-class redeclaration ([depr.static.constexpr], `constexpr int
+    A::n;`, not a definition: `Sema::redundant_constexpr_member_redecl`)
+    it is `Strong` (`Cg::var_strong_inline`): `weak_odr` in its COMDAT
+    and always emitted (internal linkage stays `internal`, also
+    emitted). Template instantiations keep their instantiation linkage
+    (§7h). Visibility (`-fvisibility=hidden`, a hidden class) applies
+    on top, linkage unchanged. `weak`/`used`/`retain` on the redundant
+    redeclaration come after the definition and are dropped with a
+    warning (clang `checkNewAttributesAfterDef`). Tests:
+    `tests/conformance/class.static.data/ir-constexpr-member-linkage-*`,
+    `constexpr-member-def-cxx14-two-units-run.cpp`.
   - Naming a static member through `.` evaluates the object and is
     ignored. This holds for a static member function used as a value,
     not called (`std::sort(b, e, arr.less)`, `int (*p)(int) = o.f;`):

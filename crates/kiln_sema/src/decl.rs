@@ -7019,11 +7019,32 @@ impl Sema<'_, '_> {
                 .is_some_and(|c| self.kind_of(c) == DeclKind::TranslationUnit)
     }
 
+    /// Whether `v`, without an initializer and outside its class,
+    /// redeclares a static data member whose in-class declaration is
+    /// `inline` and `constexpr` ([depr.static.constexpr]).
+    pub(crate) fn redundant_constexpr_member_redecl(&self, v: DeclId) -> bool {
+        let first = self.ast.first(v);
+        first != v
+            && self.ast.decls.var(v).is_some_and(|x| x.init.is_none())
+            && self.is_in_class_static(first)
+            && self
+                .ast
+                .decls
+                .var(first)
+                .is_some_and(|x| x.spec.is_inline() && x.spec.is_constexpr())
+    }
+
     pub(crate) fn is_var_definition(&self, v: DeclId) -> bool {
         // [basic.def]/2.4: a static data member declared in its class is
         // a definition only when inline (constexpr implies inline).
         if self.is_in_class_static(v) {
             return self.ast.decls.var(v).is_some_and(|x| x.spec.is_inline());
+        }
+        // [basic.def]/2.5: nor is a redeclaration outside its class of a
+        // static data member defined in its class with `constexpr` (C++17;
+        // [depr.static.constexpr]; clang `isThisDeclarationADefinition`).
+        if self.redundant_constexpr_member_redecl(v) {
+            return false;
         }
         // [temp.expl.spec]/14: an explicit specialization of a static data
         // member without an initializer is a declaration.
@@ -8544,6 +8565,7 @@ impl Sema<'_, '_> {
             && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
             && !self.is_in_class_static(v)
             && !self.ast.is_member_spec_declaration(v)
+            && !self.redundant_constexpr_member_redecl(v)
             && !self.is_var_definition(v);
         if bad {
             self.error(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());

@@ -99,7 +99,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 37;
+pub(crate) const IMAGE_VERSION: u32 = 38;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -958,8 +958,8 @@ fn init_kind_of(k: u8) -> CtorInitKind {
 }
 
 /// Variable specifier bits carried: storage (none, static, extern), the
-/// initialization style, `constexpr`, `constinit`, `inline`, NRVO and
-/// range-`for` variables. Thread-local storage is not carried yet.
+/// initialization style, `constexpr`, `constinit`, `inline` (and whether
+/// it is implied), NRVO and range-`for` variables. Thread-local storage is not carried yet.
 fn var_spec(bits: u32) -> Option<VarSpec> {
     let storage = match bits & 7 {
         0 => VarStorage::None,
@@ -983,7 +983,9 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
         .with_nrvo(bit(10))
         // A handler's exception variable (WP-1343).
         .with_exception_var(bit(11))
-        .with_cxx_for_range(bit(12));
+        .with_cxx_for_range(bit(12))
+        // `inline` implied, not written (WP-1517).
+        .with_inline_implied(bit(13));
     (spec.bits() == bits & !specinit::INIT_SECT).then_some(spec)
 }
 

@@ -201,10 +201,12 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 invalid = true;
             }
-            // [dcl.constexpr]/1: a constexpr static data member is
-            // implicitly inline.
-            if spec.is_constexpr() && !self.inst.deferring_init {
-                spec = spec.with_inline(true);
+            // [dcl.constexpr]/1 (C++17, P0386): a constexpr static data
+            // member is implicitly inline. Before C++17 the in-class
+            // declaration is not a definition ([class.static.data]/3 in
+            // N4140): the out-of-class one is, a strong one (WP-1517).
+            if spec.is_constexpr() && !spec.is_inline() && self.implies_inline_static() {
+                spec = spec.with_inline(true).with_inline_implied(true);
             }
             // A class or enumeration of the same name is hidden
             // ([basic.scope.hiding]/2).
@@ -300,11 +302,18 @@ impl Sema<'_, '_> {
                     } else {
                         prev_ok = Some(p);
                         let pspec = self.ast.decls.var(p).map(|x| x.spec).unwrap_or_default();
-                        if pspec.is_inline() {
-                            spec = spec.with_inline(true);
-                        }
                         if pspec.is_constexpr() {
                             spec = spec.with_constexpr(true);
+                        }
+                        // Inherited, or implied by `constexpr` from C++17
+                        // (an explicit specialization of a member whose
+                        // in-class declaration is not inline yet): not
+                        // written here unless `inline` is (clang
+                        // `isInlineSpecified`, WP-1517).
+                        let implied = pspec.is_inline()
+                            || (spec.is_constexpr() && self.implies_inline_static());
+                        if implied && !spec.is_inline() {
+                            spec = spec.with_inline(true).with_inline_implied(true);
                         }
                     }
                 }
@@ -348,6 +357,14 @@ impl Sema<'_, '_> {
             self.initializing = Some(v);
         }
         v
+    }
+
+    /// Whether `constexpr` makes a static data member inline here
+    /// ([dcl.constexpr]/1 from C++17); not while a template's member is
+    /// declared with its initializer deferred (it becomes inline with
+    /// the initializer, [`Self::instantiate_static_member_init`]).
+    fn implies_inline_static(&self) -> bool {
+        self.std >= kiln_lex::Std::Cxx17 && !self.inst.deferring_init
     }
 
     /// Whether static data member `v` is declared inside its class (not
