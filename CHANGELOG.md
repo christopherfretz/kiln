@@ -576,6 +576,14 @@ Planned as 1.3.0.
   argument added to an out-of-line member function of a class template;
   an empty pack initializing an array of unknown bound; and a class
   named as complete inside an instantiation its own definition triggers.
+- A copy or move of a prvalue of the same class is elided again, as in
+  clang: `B b(1)` with constructors `B(...)` and `B(const B&)` (and
+  `B{1}`, `new B(1)`, `B(1)` as a cast) no longer runs the copy
+  constructor at run time or in constant evaluation. A virtual base is
+  now destroyed when a temporary in its own member-initializer throws
+  from its destructor. `-fno-elide-constructors` (and
+  `-felide-constructors`) are accepted from C++17, where they turn off
+  NRVO and these copies; before C++17 the flag is rejected.
 
 ## [1.2.1] - 2026-11-14
 

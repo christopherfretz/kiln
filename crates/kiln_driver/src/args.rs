@@ -697,6 +697,11 @@ pub struct Args {
     /// the allocation function ([expr.new]/8; on by default from C++11).
     /// Off, the allocation function is passed `SIZE_MAX`, as clang does.
     pub new_bound_check: Option<bool>,
+    /// `-fno-elide-constructors` (false) / `-felide-constructors` (true),
+    /// the last one: optional copy elision (NRVO, elidable copies of a
+    /// temporary). Off is rejected before C++17, where it would also
+    /// require the copies of every temporary (spec/driver.md).
+    pub elide_constructors: Option<bool>,
     /// `-fmodules-prune-interval=<seconds>` (the last one): how often the
     /// module cache is checked for unused entries (clang's default, 7
     /// days, when absent; 0 disables pruning; spec/driver.md "Module
@@ -1590,6 +1595,8 @@ impl Args {
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-fkiln-new-bound-check" => self.new_bound_check = Some(true),
             "-fno-kiln-new-bound-check" => self.new_bound_check = Some(false),
+            "-felide-constructors" => self.elide_constructors = Some(true),
+            "-fno-elide-constructors" => self.elide_constructors = Some(false),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),

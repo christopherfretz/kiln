@@ -1,0 +1,7 @@
+nrvo 1 0 1 2
+nrvo-two-returns 1 0 1 2
+prvalue-return 1 0 0 1
+nested-prvalue 1 0 0 1
+prvalue-argument 1 0 0 1
+udc-copy 1 1 0 2
+new-from-call 1 0 1 2

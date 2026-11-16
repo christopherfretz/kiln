@@ -962,6 +962,18 @@ impl Compiler<'_> {
             }
         }
         let zeroing = ast.exprs.construct_info(e).zeroing;
+        // clang `RecordExprEvaluator::VisitCXXConstructExpr`: an elidable
+        // copy of a materialized temporary evaluates the temporary's
+        // initializer in place (`Ast::elidable_copy_source`), as codegen
+        // emits it.
+        if !zeroing
+            && let Some(src) = ast.elidable_copy_source(e)
+            && ast.exprs.get(src).kind() == ExprKind::MaterializeTemporaryExpr
+        {
+            let inner = ast.exprs.operand(src);
+            self.init_inner(inner, p, ty);
+            return;
+        }
         let trivial = ast.is_trivial_default_construction(e);
         if zeroing {
             // [dcl.init.general]/9.1.2: zero-initialized first.

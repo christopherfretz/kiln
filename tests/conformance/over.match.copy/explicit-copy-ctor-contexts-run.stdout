@@ -1,0 +1,12 @@
+sb-array-copy 0 2
+sb-array-paren 2 0
+sb-hidden-copy 1 0
+sb-hidden-paren 1 0
+paren-aggr 0 2
+arg 0 1
+return 0 1
+throw-catch 0 2
+dmi 0 1
+var-copy 0 1
+var-direct 1 0
+var-brace 1 0

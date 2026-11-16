@@ -1131,7 +1131,20 @@ impl Cg<'_> {
                     let v = self.byte_offset(this.v, off);
                     let ty = self.record_ty(base);
                     let dest = Addr { v, ty, align: min_align(this.align, off) };
-                    self.emit_agg_into(ci.init, dest, true)?;
+                    // As for a non-virtual base (WP-1458): once the
+                    // virtual base is constructed, a throwing destructor
+                    // of a temporary of its initializer destroys it
+                    // ([except.ctor]/3; complete-object constructor only).
+                    if self.opts.exceptions
+                        && ast.exprs.get(ci.init).kind() == ExprKind::ExprWithCleanups
+                        && self.has_nontrivial_dtor(base)
+                    {
+                        let c = Cleanup::BaseOfThis { base, offset: off, virt: true };
+                        self.f.cl.pending_guard = Some((v, c));
+                    }
+                    let r = self.emit_agg_into(ci.init, dest, true);
+                    self.f.cl.pending_guard = None;
+                    r?;
                     self.push_base_eh_dtor(base, off, true);
                 }
                 CtorInitKind::Delegating => {
@@ -1883,6 +1896,16 @@ impl Cg<'_> {
                     }
                 }
             }
+        }
+        // clang `EmitCXXConstructExpr`: an elidable copy constructs its
+        // source temporary in the destination instead (`Ast::
+        // elidable_copy_source`); the destination owns its destruction and
+        // keeps its overlap (a `[[no_unique_address]]` member: clang elides
+        // there too).
+        if self.opts.elide_constructors
+            && let Some(src) = ast.elidable_copy_source(e)
+        {
+            return self.emit_agg_into(src, dest, overlap);
         }
         let fd = *ast.decls.function(ctor).expect("Sema: a ctor is a function");
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
