@@ -111,6 +111,21 @@ pub struct ConceptState {
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
+    /// While a concept's constraint is checked with a parameter mapping
+    /// whose substitution failed for some parameters (§8.3): the concept
+    /// and the failed parameters, one bit per index. An atom naming one is
+    /// not satisfied ([temp.constr.atomic]/3). Transient, empty at a
+    /// snapshot point.
+    #[snap(skip)]
+    pub(crate) poisoned: Vec<(DeclId, u64)>,
+    /// While a lambda call operator's constraint is substituted: the
+    /// lambdas (pattern and substituted) whose init-captures it names as
+    /// the variables they declare, not as captures of the closure (P2036;
+    /// clang types `f` in `requires requires { f(a); }` as the variable,
+    /// without the call operator's `const`). Transient, empty at a
+    /// snapshot point.
+    #[snap(skip)]
+    pub(crate) lambda_constraint: Vec<kiln_ast::ids::LambdaId>,
     /// Counters.
     pub counters: SatCounters,
 }

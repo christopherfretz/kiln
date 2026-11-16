@@ -64,6 +64,19 @@ impl Sema<'_, '_> {
         style: InitStyle,
         actual_ctor: bool,
     ) -> Selected {
+        let (set, out) = self.ctor_overload(class, args, style, actual_ctor);
+        self.selected_of(set, out)
+    }
+
+    /// The resolved candidate set of [`Sema::resolve_ctor_ex`], kept for
+    /// its notes (the caller ends it).
+    pub(crate) fn ctor_overload(
+        &mut self,
+        class: DeclId,
+        args: &[ExprId],
+        style: InitStyle,
+        actual_ctor: bool,
+    ) -> (OverloadCandidateSet, OvlOutcome) {
         let c = self.class_def(class);
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
         // [over.match.copy]: converting constructors only, the argument
@@ -143,7 +156,7 @@ impl Sema<'_, '_> {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
         let out = self.resolve_set(&mut set);
-        self.selected_of(set, out)
+        (set, out)
     }
 
     /// The converting constructors of class `c` ([class.conv.ctor]; clang

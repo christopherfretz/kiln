@@ -635,8 +635,11 @@ impl Sema<'_, '_> {
             }
             // A dependent base ([temp.dep.type]/1) is checked at
             // instantiation (WP-070a); lookup does not look into it
-            // ([temp.dep.general]/4).
-            if self.is_dependent_type(s.ty) {
+            // ([temp.dep.general]/4). So is a pack expansion whose
+            // pattern names a pack only in its sugar (`alias<Ts, 1>...`
+            // of an alias template that ignores its parameter;
+            // [temp.variadic]/5): it expands to one base per element.
+            if self.is_dependent_type(s.ty) || s.pack_expansion && self.has_unexpanded_pack(s.ty) {
                 kept.push((out.len() as u32, si));
                 out.push(BaseSpec {
                     ty: s.ty,

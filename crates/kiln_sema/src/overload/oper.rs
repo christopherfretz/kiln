@@ -630,6 +630,16 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 None
             }
+            // clang `DiagnoseTwoPhaseOperatorLookup`: a non-member operator
+            // declared after the template's definition, not found by
+            // argument-dependent lookup, is named (and not called).
+            OvlOutcome::NoViable
+                if matches!(form, OperForm::Unary(_) | OperForm::Binary(_))
+                    && form != OperForm::Binary(BinaryOp::Comma)
+                    && self.two_phase_operator(DeclName::operator(op), &ops, loc) =>
+            {
+                None
+            }
             OvlOutcome::NoViable => match form {
                 OperForm::Binary(BinaryOp::Comma) | OperForm::Unary(_) => {
                     self.end_set(set);

@@ -4923,7 +4923,15 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     own with the class's arguments), so the requires-clauses also need
     the same arguments at every enclosing parameter they name
     (`kept_constraints_levels_agree`): `requires C<T>` in `B<int>`
-    and in its base `A<int *>` do not correspond (WP-1500). The return
+    and in its base `A<int *>` do not correspond (WP-1500). When the
+    levels differ, the requires-clauses are compared once more after
+    substituting each side's enclosing arguments (`correspond_substituted`
+    through `cmp_constraints_of`, clang's
+    `AreConstraintExpressionsEqual`): `requires C<T>` in `B<int>` and
+    `requires C<int>` in its base correspond, and so do they in either
+    direction and with a constrained partial specialization as the base
+    (`namespace.udecl/hide-corresponding-after-substitution.cpp`,
+    WP-1509). The return
     type takes no part, for templates either (`M& operator=(int)` hides a
     using-declared `B& operator=(int)`; clang 19 also hides a template
     differing only in its return type, gcc does not). Otherwise the two
@@ -9614,6 +9622,27 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
 - **"only special member functions may be defaulted"**: clang adds
   "and comparison operators" only from C++20. Test:
   `dcl.fct.def.default/default-not-special-cxx17.cpp`.
+
+### 5.33 GCC's C++ testsuite follow-ups (WP-1509)
+
+- **A cast selecting a deleted converting constructor** (`decltype(A(1))`
+  with `A(int) = delete`, [dcl.fct.def.delete]/2): "functional-style cast
+  from 'int' to 'A' uses deleted function" with a note per viable
+  candidate in clang's display order (the deleted one first, "candidate
+  constructor has been explicitly deleted"); the candidate set is
+  rebuilt for the notes (`ctor_overload`). In a SFINAE context it is a
+  substitution failure. Test:
+  `dcl.fct.def.delete/cast-deleted-converting-ctor.cpp`.
+- **A base-specifier pack expansion whose pattern names its pack only in
+  sugar** (`as_base<Es, 1>...` of an alias template that ignores `Es`,
+  [temp.variadic]/5): kept as a dependent base and expanded at
+  instantiation, one base per element. Test:
+  `temp.variadic/p5-base-pack-expansion-alias-sugar.cpp`.
+- **Instantiating an initializer** strips an immediate invocation's
+  `ConstantExpr` with the cleanups (clang `TransformInitializer`), so
+  `S e[2];` with a consteval default constructor is default-initialized
+  again rather than converted from the pattern's array construction.
+  Test: `expr.const.imm/consteval-default-ctor-array-in-template-run.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

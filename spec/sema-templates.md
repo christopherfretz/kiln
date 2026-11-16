@@ -1529,6 +1529,20 @@ template's namespace, so the partial specialization never matched
 Other stored sets (class members, block-scope declarations) still take
 the earlier path.
 
+When steps 1-3 find no function for a call, or no viable one for a
+non-assignment, non-comma operator, an ordinary lookup from the
+instantiated context outward (namespaces; a class that declares the name
+stops it quietly) that finds a function the call can use is clang's
+`DiagnoseTwoPhaseLookup`: "call to function 'f' that is neither visible
+in the template definition nor found by argument-dependent lookup", with
+the note "'f' should be declared prior to the call site" plus the one
+associated namespace ("or in namespace 'N'"), "or in an associated
+namespace of one of its arguments", or nothing (`std` and names with
+`__` are never suggested). A call then resolves against that function
+(clang's recovery); an operator does not (`two_phase_call`,
+`two_phase_operator`; `temp.dep.candidate/operator-definition-lookup-errors.cpp`,
+WP-1509).
+
 *Operators (WP-1496).* A dependent unary, binary or compound-assignment
 operator expression built in a template (`act_on_unary`, `act_on_binary`)
 records the unqualified lookup of its operator name, and for `==`, `!=`,
@@ -1897,6 +1911,19 @@ it the head was matched against the primary and diagnosed as "requires
 clause differs". libstdc++ ranges:6380 (`chunk_view<_Vp>::_Iterator`).
 Tests: `temp.spec.partial.member/libstdcxx-out-of-line-member-of-constrained-partial-same-args.cpp`,
 `temp.mem.class/libstdcxx-constrained-partial-spec-member-def.cpp`.
+The matching compares the whole template-head (parameter kinds,
+type-constraints and requires-clause, `head_signatures_equivalent`), so
+of two partial specializations with the same arguments
+(`template<C T> struct A<T*>` and `template<class T> struct A<T*>`) the
+head picks one (`partial_for_entered_head`); a head equivalent to none
+of them names none ("does not refer into a class, class template or
+class template partial specialization"). Inside such an out-of-line
+member, `B<T>` with the primary's own arguments is the enclosing
+partial specialization, the current instantiation
+(`enclosing_own_args_partial`). Tests:
+`temp.spec.partial.member/current-instantiation-of-constrained-partial.cpp`,
+`temp.spec.partial.member/out-of-line-member-head-matches-no-partial.cpp`.
+WP-1509.
 
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
@@ -6652,7 +6679,9 @@ sets (the same packs, [temp.constr.fold]/2: "an equivalent unexpanded
 pack") and `a.pattern` subsumes `b.pattern`. So `(C<Ts> && ...)` is
 subsumed by `(D<Ts> && ...)` when `D` subsumes `C`
 ([temp.constr.fold] Example). The positional comparison of
-[temp.constr.order]/4 compares packs by index. Tests
+[temp.constr.order]/4 compares packs by index, and a mapping argument
+`Ts...` (bare or as a one-element pack) compares as the parameter `Ts`
+itself (test `temp.arg.template/constrained-pack-parameter-subsumption.cpp`). Tests
 `temp.constr.fold/p1-fold-expanded-subsumption.cpp` (clang 19 and 22
 agree), `temp.constr.fold/p1-fold-expanded-subsumption-concepts.cpp`
 (`requires: clang>=22`; clang 19 keeps concept folds atomic), and for
@@ -6716,6 +6745,28 @@ whose head the notes name. It evaluates:
 
 - **Atomic.** Substitute `args` into `mapping` and then into `expr`,
   under `ConstraintSubstitution` (SFINAE).
+  - A concept-id atom (`A42b<Tc, Tc&>`, kept unexpanded by the
+    normalization) whose argument substitution fails is not a failed
+    atom as a whole: [temp.constr.normal]/1.4 substitutes the arguments
+    into the parameter mappings of the concept's atoms, so only atoms
+    whose mapping names a failed parameter are ill-formed
+    ([temp.constr.atomic]/3: not satisfied). `sat_concept_id_partial`
+    substitutes each argument alone (type and template arguments, no
+    packs, at most 64), and when some fail checks the concept with
+    those arguments null and the failed parameters recorded in
+    `ConceptState::poisoned`; `sat_atom` answers an atom that uses a
+    poisoned parameter (or whose use is unknown) as not satisfied
+    without substituting it, and a nested concept-id atom passes the
+    poison on per argument. The first failure is the
+    "substituted constraint expression is ill-formed" note. Tests:
+    `temp.constr.normal/concept-id-unused-argument-substitution-failure.cpp`,
+    `temp.constr.normal/type-constraint-unused-argument-substitution-failure.cpp`.
+    WP-1509.
+  - A lambda call operator's constraint names the lambda's
+    init-captures as the variables they declare (P2036), not as
+    captures of the closure: no `const` of the call operator
+    (`ConceptState::lambda_constraint`, checked by `try_capture_var`).
+    WP-1509.
   - Names in the atom that substitution looks up again (unresolved
     callees, §5.4) are looked up from the constrained entity's
     definition context, not from the point of the check: for an entity
@@ -6901,6 +6952,17 @@ Its requirements are processed **in order**, each under
 
 A `requires`-expression outside any template whose requirement is
 ill-formed is a hard error ([expr.prim.req.general]/5, clang).
+
+A substituted simple or compound requirement that names a bound member
+function (`t.*pmf` or `p->*pmf` for a pointer to member function, not
+called) is ill-formed ([expr.mptr.oper]/6: it can only be a call's
+operand), so the requirement is not satisfied; a call through it, and a
+pointer to data member, are fine. An elaborated-type-specifier `struct
+Y` that declares a class inside a requirement-body declares it in the
+nearest enclosing namespace ([basic.scope.pdecl]/7.2), not in the
+requires-expression's parameter scope. Tests:
+`expr.prim.req.general/bound-member-function-substitution-failure.cpp`,
+`basic.scope.pdecl/elaborated-type-in-requires-expression.cpp`. WP-1509.
 
 A parameter pack in the parameter list (`requires(T... t, U u)`) is
 expanded like a function parameter pack (§7.2): one parameter per

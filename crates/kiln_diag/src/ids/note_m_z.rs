@@ -46,6 +46,7 @@ note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its d
 note_non_literal_user_provided_dtor = Note (1) "{0} is not literal because it has a user-provided destructor";
 note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
 note_non_template_in_template_id_found = Note (0) "non-template declaration found by name lookup";
+note_not_found_by_two_phase_lookup = Note (3) "'{0}' should be declared prior to the call site{1:| or in an associated namespace of one of its arguments| or in {2}}";
 note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
 note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
 note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";

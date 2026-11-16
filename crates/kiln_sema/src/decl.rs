@@ -9237,7 +9237,13 @@ impl Sema<'_, '_> {
         let mut ctx = self.ctx;
         for _ in 0..256 {
             let k = self.ast.decls.get(ctx).kind();
-            if matches!(k, DeclKind::CXXRecord | DeclKind::Enum) {
+            // The parameter scope of a requires-expression is neither a
+            // namespace nor a block scope: `t.template f<struct S>()` in
+            // a concept declares `S` in the enclosing namespace, not
+            // dependent (clang 22 and GCC 16.1 accept the concept).
+            if matches!(k, DeclKind::CXXRecord | DeclKind::Enum)
+                || (k == DeclKind::RequiresExprBody && use_ == TagUse::Reference)
+            {
                 match self.ast.decls.get(ctx).ctx() {
                     Some(c) => ctx = c,
                     None => break,

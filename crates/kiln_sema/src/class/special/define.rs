@@ -1258,8 +1258,27 @@ impl Sema<'_, '_> {
                 };
                 if let Some(d) = deleted_as {
                     let Some(mk) = mk else {
-                        // todo(WP-068a): clang notes every candidate here.
-                        self.unsupported("a cast calling a deleted constructor", loc);
+                        // clang `OR_Deleted` of a cast's constructor
+                        // overload (`FK_ConstructorOverloadFailed`):
+                        // every viable candidate is noted, the deleted
+                        // best among them.
+                        let (set, _) = self.ctor_overload(
+                            class,
+                            call.args,
+                            crate::class::ctor_select::InitStyle::Direct,
+                            false,
+                        );
+                        let mut order: Vec<u32> = (0..u32::try_from(set.cands.len())
+                            .unwrap_or(u32::MAX))
+                            .filter(|&c| set.cand(c).viable)
+                            .collect();
+                        order.sort_by(|&a, &b| self.compare_for_display(&set, a, b));
+                        let mut d = d;
+                        for c in order {
+                            d = d.with_note(self.ovl_note(&set, c));
+                        }
+                        self.end_set(set);
+                        self.emit(d);
                         return None;
                     };
                     let implicit = if self.ast.decls.get(m).has(DeclFlags::IMPLICIT) {

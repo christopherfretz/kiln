@@ -538,7 +538,12 @@ impl Sema<'_, '_> {
     }
 
     /// clang `CompareOverloadCandidatesForDisplay` as an ordering.
-    fn compare_for_display(&self, set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
+    pub(crate) fn compare_for_display(
+        &self,
+        set: &OverloadCandidateSet,
+        a: u32,
+        b: u32,
+    ) -> Ordering {
         let (l, r) = (set.cand(a), set.cand(b));
         match (l.viable, r.viable) {
             (true, false) => return Ordering::Less,

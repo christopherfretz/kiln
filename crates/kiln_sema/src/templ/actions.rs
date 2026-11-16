@@ -428,10 +428,17 @@ impl Sema<'_, '_> {
         {
             let canonical = self.ast.types.canonical_args(args);
             let t = self.ast.first(tmpl);
-            if let Some(i) = self.ast.templates.find_partial(t, canonical)
-                && let Some(p) = self.ast.templates.partial(i)
-            {
-                let p = p.partial;
+            // A template-head equivalent to no partial specialization's
+            // with these arguments names none of them (clang
+            // `err_template_qualified_declarator_no_match`).
+            let by_head = self.partial_for_entered_head(tmpl, canonical);
+            if let Some(p) = by_head.or_else(|| {
+                if self.entered_head(tmpl).is_some() {
+                    return None;
+                }
+                let i = self.ast.templates.find_partial(t, canonical)?;
+                Some(self.ast.templates.partial(i)?.partial)
+            }) {
                 return Some((self.ast.definition(p).unwrap_or(p), n));
             }
             self.templ.unmatched_qualifier = Some((tmpl, n));
@@ -462,11 +469,29 @@ impl Sema<'_, '_> {
         let own = params.len() == written.len()
             && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
         let pat = if own {
-            self.own_args_partial(tmpl, args, &list).unwrap_or(self.pattern_of(tmpl)?)
+            match self.own_args_partial(tmpl, args, info.params) {
+                Some(p) => p,
+                // Inside an out-of-line member of a partial specialization
+                // with the primary's own arguments (`template<C T> int
+                // B<T>::f() { B<T>::I i; }`): `B<T>` names that partial
+                // specialization, the current instantiation there.
+                None => self
+                    .enclosing_own_args_partial(tmpl, args)
+                    .map_or_else(|| self.pattern_of(tmpl), Some)?,
+            }
         } else {
             let canonical = self.ast.types.canonical_args(args);
-            let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
-            self.ast.templates.partial(i)?.partial
+            match self.partial_for_entered_head(tmpl, canonical) {
+                Some(p) => p,
+                // An out-of-line member's head equivalent to none of the
+                // partial specializations with these arguments: none is
+                // named ([`Self::partial_for_entered_head`]).
+                None if self.entered_head(tmpl).is_some() => return None,
+                None => {
+                    let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
+                    self.ast.templates.partial(i)?.partial
+                }
+            }
         };
         if !self.templ.entering_context
             && !self.encloses(pat, self.ctx)
@@ -483,32 +508,69 @@ impl Sema<'_, '_> {
     /// The partial specialization `X<P...>` of `tmpl` with the primary's
     /// own arguments, more constrained than the primary
     /// ([temp.spec.partial.general]/9), that the out-of-line member
-    /// declaration being entered names: its template head's
-    /// requires-clause is the partial specialization's and not the
-    /// primary's (`primary`, clang's `findPartialSpecialization` by
-    /// arguments and template parameters). libstdc++ ranges:6380
-    /// `template<view _Vp> requires forward_range<_Vp> template<bool>
-    /// class chunk_view<_Vp>::_Iterator`.
+    /// declaration being entered names: its template head is the
+    /// partial specialization's and not the primary's (`primary`,
+    /// clang's `findPartialSpecialization` by arguments and template
+    /// parameters; [`Self::partial_for_entered_head`]). libstdc++
+    /// ranges:6380 `template<view _Vp> requires forward_range<_Vp>
+    /// template<bool> class chunk_view<_Vp>::_Iterator`.
     fn own_args_partial(
         &self,
         tmpl: DeclId,
         args: ArgListId,
-        primary: &kiln_ast::templates::TemplateParamList,
+        primary: TemplateParamListId,
     ) -> Option<DeclId> {
+        let canonical = self.ast.types.canonical_args(args);
+        let partial = self.partial_for_entered_head(tmpl, canonical)?;
+        let head = self.entered_head(tmpl)?;
+        (!self.head_signatures_equivalent(head, primary)).then_some(partial)
+    }
+
+    /// The partial specialization of `tmpl` with canonical arguments of
+    /// `args` whose definition (or the declarator scope of one of its
+    /// members) encloses the current context.
+    fn enclosing_own_args_partial(&self, tmpl: DeclId, args: ArgListId) -> Option<DeclId> {
+        let canonical = self.ast.types.canonical_args(args);
+        let t = self.ast.first(tmpl);
+        let first = self.ast.templates.find_partial(t, canonical)?;
+        let rows = self.ast.templates.partials_of(t);
+        std::iter::once(first).chain(rows.iter().copied()).find_map(|r| {
+            let p = self.ast.templates.partial(r)?;
+            let d = self.ast.definition(p.partial).unwrap_or(p.partial);
+            (p.canonical == canonical
+                && (self.encloses(d, self.ctx) || self.in_declarator_scope_of(d)))
+            .then_some(p.partial)
+        })
+    }
+
+    /// The template-head of the out-of-line member declaration being
+    /// entered that belongs to class template `tmpl`'s level.
+    fn entered_head(&self, tmpl: DeclId) -> Option<TemplateParamListId> {
         if !self.templ.entering_context {
             return None;
         }
-        let canonical = self.ast.types.canonical_args(args);
-        let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
-        let partial = self.ast.templates.partial(i)?.partial;
-        let (_, ps) = self.ast.partial_spec_info(partial)?;
-        let plist = *self.ast.templates.param_list(ps.params);
         let depth = self.template_param_depth(self.head_template(tmpl));
-        let head = self.templ.heads.iter().rev().find(|h| !h.taken && h.depth == depth)?;
-        let hlist = *self.ast.templates.param_list(head.list?);
-        (self.opt_exprs_equivalent(hlist.requires, plist.requires)
-            && !self.opt_exprs_equivalent(hlist.requires, primary.requires))
-        .then_some(partial)
+        self.templ.heads.iter().rev().find(|h| !h.taken && h.depth == depth)?.list
+    }
+
+    /// The partial specialization of `tmpl` with canonical arguments
+    /// `canonical` that the out-of-line member declaration being entered
+    /// names ([temp.spec.partial.member]/1): the one whose template-head
+    /// is equivalent to the declaration's, its type-constraints and
+    /// requires-clause included ([temp.over.link]/6-7). Two partial
+    /// specializations may share their arguments and differ in their
+    /// constraints only (`template<C T> struct A<T*>` and
+    /// `template<class T> struct A<T*>`).
+    fn partial_for_entered_head(&self, tmpl: DeclId, canonical: ArgListId) -> Option<DeclId> {
+        let head = self.entered_head(tmpl)?;
+        let t = self.ast.first(tmpl);
+        let first = self.ast.templates.find_partial(t, canonical)?;
+        let rows = self.ast.templates.partials_of(t);
+        std::iter::once(first).chain(rows.iter().copied()).find_map(|r| {
+            let p = self.ast.templates.partial(r)?;
+            (p.canonical == canonical && self.head_signatures_equivalent(head, p.params))
+                .then_some(p.partial)
+        })
     }
 
     /// Whether the class scope of pattern `pat` was entered for the rest

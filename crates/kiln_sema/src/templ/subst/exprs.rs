@@ -2872,7 +2872,10 @@ impl Substituter<'_, '_, '_> {
     /// materialization, temporary bindings and an implicit conversion.
     pub(crate) fn peel_initializer(&self, mut init: ExprId) -> ExprId {
         let ex = &self.sema.ast.exprs;
-        if ex.get(init).kind() == ExprKind::ExprWithCleanups {
+        // clang `TransformInitializer` strips a `FullExpr`: the
+        // cleanups, or the `ConstantExpr` of an immediate invocation (a
+        // consteval default constructor of `S e[2];`).
+        while matches!(ex.get(init).kind(), ExprKind::ExprWithCleanups | ExprKind::ConstantExpr) {
             init = ex.operand(init);
         }
         if ex.get(init).kind() == ExprKind::MaterializeTemporaryExpr {

@@ -764,6 +764,23 @@ Planned as 1.3.0.
   C++20 and C++23 too, as clang does; copying a union whose member was
   destroyed (or one with no active member) is accepted in C++23 as in
   C++26, and the copy keeps the member ended.
+- More concepts code found running GCC's C++ testsuite is handled. A
+  concept-id argument that fails to substitute makes only the atomic
+  constraints that use its parameter unsatisfied, as in clang 22
+  (`C<T, T&>` with `void` can still be satisfied through an operand that
+  does not use the second argument), and `t.*pmf` naming a member
+  function as a simple requirement is a substitution failure of that
+  requirement, not an error. These are accepted now: an out-of-line
+  member of a constrained partial
+  specialization (matched by its whole template head), a
+  using-declaration hidden by a member that corresponds only after
+  substitution, a template template parameter constrained by `C<Ts...>`
+  for an argument with the same constraint, an alias-sugared base pack
+  expansion and a consteval default constructor in an instantiated
+  array. A cast to a deleted converting constructor gets clang's
+  candidate notes, and a call or operator that only finds a function
+  declared after the template is clang's "neither visible in the
+  template definition nor found by argument-dependent lookup" error.
 
 - Template argument deduction and class template argument deduction
   found running GCC's C++ testsuite: with `-fclang-compat=22` the

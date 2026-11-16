@@ -73,6 +73,7 @@ sema_noreturn_non_function = Error (0) "'_Noreturn' can only appear on functions
 sema_not_a_template = Error (1) "{0} is not a template";
 sema_not_assignable = Error (0) "expression is not assignable";
 sema_not_contextually_convertible_to_bool = Error (1) "value of type {0} is not contextually convertible to 'bool'";
+sema_not_found_by_two_phase_lookup = Error (1) "call to function '{0}' that is neither visible in the template definition nor found by argument-dependent lookup";
 sema_not_tag_in_scope = Error (3) "no {0:struct|interface|union|class|enum} named '{1}' in {2}";
 sema_nothrow_conflicts_exc_spec = Warning [IgnoredAttributes] (0) "'nothrow' attribute conflicts with exception specification; attribute ignored";
 sema_nttp_bad_type = Error (1) "a non-type template parameter cannot have type {0}";

@@ -78,6 +78,14 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The parameters of depth `level` template argument `a` names
+    /// (uncached); `None` when the walk cannot tell.
+    pub(crate) fn used_template_params_in_arg(&self, a: TemplateArg, level: u16) -> Option<u64> {
+        let mut u =
+            Used { level: u32::from(level), mask: 0, lambdas: Vec::new(), locals: Vec::new() };
+        self.used_in_arg(a, &mut u, 0).map(|()| u.mask)
+    }
+
     fn used_decl(&self, d: DeclId, u: &mut Used) -> Option<()> {
         match self.ast.template_parm(d) {
             Some(i) => u.mark(u32::from(i.depth), u32::from(i.index)),

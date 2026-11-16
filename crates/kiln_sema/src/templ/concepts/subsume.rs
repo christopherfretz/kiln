@@ -241,14 +241,22 @@ impl Sema<'_, '_> {
     ) -> bool {
         let t = &self.ast.types;
         let (xa, xb) = (t.args(a), t.args(b));
-        let parm = |x: kiln_ast::types::TemplateArg| match x.view() {
-            kiln_ast::types::ArgView::Type(q) => match t.canonical_view(q) {
+        // A pack parameter maps to `Pack([T...])` or `T...`: compare `T`.
+        let parm = |x: kiln_ast::types::TemplateArg| {
+            let x = match x.view() {
+                kiln_ast::types::ArgView::Pack(l) if t.args(l).len() == 1 => t.args(l)[0],
+                _ => x,
+            };
+            let kiln_ast::types::ArgView::Type(mut q) = x.view() else { return None };
+            if let kiln_ast::types::TypeView::PackExpansion { pattern, .. } = t.canonical_view(q) {
+                q = pattern;
+            }
+            match t.canonical_view(q) {
                 kiln_ast::types::TypeView::CanonTemplateTypeParm { index, pack, .. } => {
                     Some((index, pack))
                 }
                 _ => None,
-            },
-            _ => None,
+            }
         };
         xa.len() == xb.len()
             && xa.iter().zip(xb).all(|(x, y)| {

@@ -287,6 +287,11 @@ impl Sema<'_, '_> {
         if owner.is_none() && !self.has_local_storage(d) {
             return Captured::NotNeeded;
         }
+        // An init-capture named in its call operator's constraint is the
+        // variable (P2036; `ConceptState::lambda_constraint`).
+        if owner.is_some_and(|(l, _)| self.inst.concepts.lambda_constraint.contains(&l)) {
+            return Captured::NotNeeded;
+        }
         let Some(home) = self.ast.decls.get(d).ctx() else { return Captured::NotNeeded };
         let (chain, start) = match self.capture_chain(d, loc, top, home, owner, build) {
             Ok(x) => x,

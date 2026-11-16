@@ -976,9 +976,42 @@ impl Sema<'_, '_> {
     /// template arguments).
     pub(crate) fn member_hides_using_target(&mut self, own: DeclId, target: DeclId) -> bool {
         let is_t = |me: &Self, x| me.kind_of(x) == DeclKind::FunctionTemplate;
-        is_t(self, own) == is_t(self, target)
-            && self.signatures_correspond(target, own, true)
+        if is_t(self, own) != is_t(self, target) {
+            return false;
+        }
+        if self.signatures_correspond(target, own, true)
             && self.kept_constraints_levels_agree(own, target)
+        {
+            return true;
+        }
+        self.correspond_substituted(own, target)
+    }
+
+    /// For [`Self::member_hides_using_target`]: whether `own` and `target`
+    /// correspond with the kept (pattern) constraints of each compared as
+    /// substituted with its class's arguments ([temp.over.link]/5-7, clang
+    /// `AreConstraintExpressionsEqual`): `requires C<T>` of `B<int>`
+    /// corresponds to `requires C<int>` of a non-template base, and to
+    /// `requires C<T>` of the partial specialization `A<T*>` matched by
+    /// `A<int*>`. False when neither keeps its pattern's constraints.
+    fn correspond_substituted(&mut self, own: DeclId, target: DeclId) -> bool {
+        let mut cmp = kiln_source::fx::FxHashMap::default();
+        for d in [own, target] {
+            if let Some((pt, outer)) = self.kept_constraints(d) {
+                let m = self.cmp_constraints_of(d, pt, outer);
+                cmp.extend(m);
+            }
+        }
+        if cmp.is_empty() {
+            return false;
+        }
+        for (&k, &v) in &self.friend_cmp_constraints {
+            cmp.entry(k).or_insert(v);
+        }
+        let saved = std::mem::replace(&mut self.friend_cmp_constraints, cmp);
+        let ok = self.signatures_correspond(target, own, true);
+        self.friend_cmp_constraints = saved;
+        ok
     }
 
     /// For [`Self::member_hides_using_target`]: whether the enclosing
