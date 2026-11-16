@@ -108,9 +108,8 @@ enum RangeBind {
     /// `constexpr` variables too: one with static storage duration could
     /// not point into it ([expr.const.init]/4).
     Automatic,
-    /// Destructuring only: `static constexpr auto`, a copy of the range
-    /// (a prvalue, or the last resort for a glvalue that is neither,
-    /// such as an enclosing function's local named in a lambda).
+    /// Destructuring only: `static constexpr auto`, a copy of a prvalue
+    /// range (a glvalue is never copied, WP-1499).
     Copy,
     /// The iterating form of a for-range-declaration that is not
     /// `constexpr`: [stmt.expand]/5.2's `decltype(auto) range = (init);
@@ -240,6 +239,43 @@ impl Sema<'_, '_> {
         self.builder().var(h, ty, spec, None)
     }
 
+    /// Whether `d` is the error of a use of an enclosing function's
+    /// local that cannot be captured (`err_lambda_impcap` and kin).
+    fn is_capture_error(d: &kiln_diag::Diag) -> bool {
+        matches!(
+            d.id(),
+            Some(
+                DiagId::sema_lambda_impcap
+                    | DiagId::sema_lambda_capture_anonymous_var
+                    | DiagId::sema_reference_to_local_in_enclosing
+            )
+        )
+    }
+
+    /// The diagnostics `stash` of a failed implicit declaration
+    /// initialized from range `e`: when `e` names a local of an enclosing
+    /// function that the lambda could not capture (its capture error in
+    /// `stash` or already emitted), only the capture errors and the
+    /// non-errors; else `stash` unchanged.
+    fn drop_after_capture_error(
+        &mut self,
+        stash: Vec<kiln_diag::Diag>,
+        e: ExprId,
+    ) -> Vec<kiln_diag::Diag> {
+        if !stash.iter().any(Self::is_capture_error) && !self.names_uncaptured_local(e) {
+            return stash;
+        }
+        stash
+            .into_iter()
+            .filter(|d| {
+                Self::is_capture_error(d)
+                    || d.id().is_some_and(|id| {
+                        self.diags.severity_at(id, d.loc()) < kiln_diag::Severity::Error
+                    })
+            })
+            .collect()
+    }
+
     /// Initializes implicit variable `v` from `e` (deducing its type);
     /// false after an error.
     fn init_expansion_var(&mut self, v: DeclId, e: ExprId, loc: Loc, id: DiagId) -> bool {
@@ -256,8 +292,7 @@ impl Sema<'_, '_> {
     /// ([`RangeBind::Static`]), then, at C++26, automatic
     /// ([`RangeBind::Automatic`], P2686R5: the `constexpr` reference
     /// [stmt.expand]/5.3 declares, to a local of this function). When
-    /// neither binds, a copy is the last resort, its diagnostics
-    /// replacing the first attempt's only if it succeeds.
+    /// neither binds, the first attempt's diagnostics are emitted.
     fn expansion_fallback<T>(
         &mut self,
         e: ExprId,
@@ -286,11 +321,14 @@ impl Sema<'_, '_> {
                 return r2;
             }
         }
-        let (r2, stash2) = attempt(self, RangeBind::Copy);
-        if r2.is_some() {
-            self.release(stash2, Vec::new());
-            return r2;
-        }
+        // A glvalue is never copied: [stmt.expand]/5.3 binds it by
+        // `constexpr auto&&`, so a reference to an object that is not
+        // constexpr-referenceable (an automatic variable before C++26,
+        // or one that is not usable in constant expressions) is ill-formed
+        // even when the destructuring is empty (CWG3048; GCC 16.1 agrees).
+        // A local the lambda did not capture is diagnosed once, by the
+        // capture error.
+        let stash = self.drop_after_capture_error(stash, e);
         self.release(stash, Vec::new());
         None
     }
@@ -330,6 +368,17 @@ impl Sema<'_, '_> {
             s.init_expansion_var(range, e, range_loc, DiagId::sema_for_range_deduction_failure)
         });
         let ok = ok && !self.stash_has_error(&stash);
+        if !ok {
+            // A local of an enclosing function the lambda did not
+            // capture: one error for one mistake. `__range` is invalid,
+            // and its failed constant initialization is not diagnosed
+            // again ("constexpr variable '__range' must be initialized by
+            // a constant expression").
+            let stash = self.drop_after_capture_error(stash, e);
+            self.ast.decls.set_flags(range, DeclFlags::INVALID);
+            self.release(stash, Vec::new());
+            return None;
+        }
         self.release(stash, Vec::new());
         if !ok {
             return None;
@@ -356,6 +405,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let diff = self.expansion_difference_type(begin, colon)?;
+        if !self.expansion_increment(begin, colon) {
+            return None;
+        }
         let prelude = vec![
             self.act_on_decl_stmt(&[range], range_loc),
             self.act_on_decl_stmt(&[begin], colon),
@@ -435,6 +487,23 @@ impl Sema<'_, '_> {
             t
         };
         Some(t)
+    }
+
+    /// `++b` ([stmt.expand]/5.2): N is counted by `for (auto b =
+    /// begin-expr; b != e; ++b)`, so the iterator must be incrementable
+    /// as a non-const lvalue of `begin`'s type even though kiln counts
+    /// with `begin + i` (GCC 16.1 checks it too). Built unevaluated on an
+    /// implicit variable that is never declared; false after "cannot
+    /// increment value of type" (or the overload error) is diagnosed.
+    fn expansion_increment(&mut self, begin: DeclId, colon: Loc) -> bool {
+        let Some(bt) = self.ast.decls.get(begin).ty() else { return false };
+        let bt = self.ast.types.unqualified(bt);
+        let b = self.expansion_var("__b", bt, RangeBind::Runtime, colon);
+        self.enter_unevaluated();
+        let r = self.build_decl_ref(b, colon);
+        let inc = self.act_on_unary(UnaryOp::PreInc, r, colon);
+        self.exit_unevaluated();
+        !self.is_err_expr(inc)
     }
 
     /// `decltype(begin - begin){i}` ([stmt.expand]/5.2), `i` a prvalue

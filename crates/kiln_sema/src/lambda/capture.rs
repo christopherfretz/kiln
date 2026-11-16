@@ -711,6 +711,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether `e` (parentheses and implicit casts looked through) names
+    /// a local of an enclosing function that the lambdas in between
+    /// cannot capture: its use is (or will be) `err_lambda_impcap`, so a
+    /// declaration initialized from it is not diagnosed again
+    /// (`expansion.rs`). A probe: nothing is captured or diagnosed.
+    pub(crate) fn names_uncaptured_local(&mut self, e: ExprId) -> bool {
+        let e = self.ignore_paren_imp_casts(e);
+        if self.lambdas.is_empty() || self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return false;
+        }
+        let d = self.ast.exprs.decl(e);
+        if !self.may_need_capture(d) {
+            return false;
+        }
+        let loc = self.eloc(e);
+        let (r, _) = self.capturing(|s| {
+            s.try_capture_var(d, loc, TryCapture::Implicit, None, Loc::INVALID, false)
+        });
+        matches!(r, Captured::Failed)
+    }
+
     /// A use `e` of variable `d` in a dependent context (a generic
     /// lambda's body, or a lambda in a template): when `d` is a local of
     /// an enclosing function that might be usable in constant
@@ -1635,46 +1656,72 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A use of the variably modified type `q` in a lambda body, whatever
+    /// syntax produced it (a typedef, `decltype`, `typeof` / `__typeof__`
+    /// of any expression, a type-id naming such a type): each of its
+    /// variable length array bounds (through pointers, references and
+    /// arrays) that was built before a lambda between here and the
+    /// enclosing function started (so evaluated outside it, where its
+    /// array type was declared) is captured by that lambda
+    /// ([`CaptureKind::VlaBound`]). A bound written inside the lambda is
+    /// evaluated there and is not captured.
     pub(crate) fn note_vla_type_use(&mut self, q: QualType) {
+        use kiln_ast::types::{TypeFlags, TypeView};
         if self.lambdas.is_empty()
-            || !self.ast.types.qflags(q).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+            || !self.ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED)
         {
             return;
         }
-        // Where the type's bounds were evaluated: a typedef's, or the
-        // variable's of `decltype(v)`.
-        let decl = match self.ast.types.view(q.ty()) {
-            kiln_ast::types::TypeView::Typedef { decl, .. } => decl,
-            kiln_ast::types::TypeView::Decltype { expr, .. } => {
-                let x = self.ignore_parens(expr);
-                if self.ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
-                    return;
+        let star = self.ast.types.vla_star_bound;
+        let mut sizes = Vec::new();
+        let mut t = q;
+        for _ in 0..64 {
+            if !self.ast.types.qflags(t).contains(TypeFlags::VARIABLY_MODIFIED) {
+                break;
+            }
+            match self.ast.types.canonical_view(t) {
+                TypeView::VariableArray { elem, size } => {
+                    if Some(size) != star {
+                        sizes.push(size);
+                    }
+                    t = elem;
                 }
-                self.ast.exprs.decl(x)
+                TypeView::ConstantArray(a) => t = a.elem,
+                TypeView::IncompleteArray(e)
+                | TypeView::Pointer(e)
+                | TypeView::LValueRef(e)
+                | TypeView::RValueRef(e) => t = e,
+                _ => break,
             }
-            _ => return,
-        };
-        let Some(home) = self.ast.decls.get(decl).ctx() else { return };
-        let mut c = self.ctx;
-        for _ in 0..4096 {
-            if c == home {
-                return;
+        }
+        for size in sizes {
+            let mut c = self.ctx;
+            for _ in 0..4096 {
+                let Some(l) = self.lambda_of_call_op(c) else { break };
+                let Some(s) = self.lambda_scope_mut(l) else { break };
+                // Built after the lambda started: evaluated in its body (or
+                // a nested lambda's), so neither it nor an enclosing one
+                // captures it.
+                if size.index() as usize > s.first_expr {
+                    break;
+                }
+                if !s.vla_bounds.contains(&size) {
+                    s.vla_bounds.push(size);
+                }
+                let Some(p) = self.lambda_parent(l) else { break };
+                c = p;
             }
-            let Some(l) = self.lambda_of_call_op(c) else { return };
-            let Some(s) = self.lambda_scope_mut(l) else { return };
-            s.vla_types.push(q);
-            let Some(p) = self.lambda_parent(l) else { return };
-            c = p;
         }
     }
 
     /// The variable length array bounds lambda `id` captures (clang
     /// `captureVariablyModifiedType`, GNU extension): those of the types
     /// of its captured variables (a VLA or a pointer or reference to one,
-    /// by reference; a pointer to one by copy) and of `extra`, through
-    /// pointers, references and arrays, each once, with the location of
-    /// the capture that brought it. A `[*]` bound is never captured.
-    fn vla_bound_captures(&self, id: LambdaId, extra: &[QualType]) -> Vec<(ExprId, Loc)> {
+    /// by reference; a pointer to one by copy), through pointers,
+    /// references and arrays, and the bounds `extra`, each once, with the
+    /// location of the capture that brought it. A `[*]` bound is never
+    /// captured.
+    fn vla_bound_captures(&self, id: LambdaId, extra: &[ExprId]) -> Vec<(ExprId, Loc)> {
         let data = self.ast.exprs.lambdas.get(id);
         let mut out: Vec<(ExprId, Loc)> = Vec::new();
         let star = self.ast.types.vla_star_bound;
@@ -1709,8 +1756,10 @@ impl Sema<'_, '_> {
             }
         }
         let at = if data.default_loc.is_valid() { data.default_loc } else { data.lbracket };
-        for &t in extra {
-            walk(t, at, &mut out);
+        for &size in extra {
+            if !out.iter().any(|&(b, _)| b == size) {
+                out.push((size, at));
+            }
         }
         out
     }
@@ -1725,9 +1774,9 @@ impl Sema<'_, '_> {
         id: LambdaId,
         closure: DeclId,
         cap_tys: &[QualType],
-        vla_types: &[QualType],
+        vla_bounds: &[ExprId],
     ) {
-        let bounds = self.vla_bound_captures(id, vla_types);
+        let bounds = self.vla_bound_captures(id, vla_bounds);
         let mut cap_tys = cap_tys.to_vec();
         for &(_, loc) in &bounds {
             let c = LambdaCapture {

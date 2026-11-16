@@ -699,6 +699,18 @@ Planned as 1.3.0.
   selected, access-checked and considered by `noexcept`. A `static_cast`
   to a pointer from a non-pointer (a member pointer to `void*`
   included) has clang's "cannot cast from type ... to pointer type".
+- Variable length arrays and expansion statements (WP-1499): a variable
+  length array of arrays of class objects (`S a[n][3]`) is constructed
+  and destroyed like a flat one, also on unwinding; a lambda captures the
+  bounds of every variably modified type its body uses (`typeof`, casts,
+  local declarations), not only those it names; in C a bound that reads a
+  `const` object makes a variable length array, folded to a constant
+  array with clang's `-Wgnu-folding-constant` where one is needed. An
+  iterating expansion statement checks the iterator's `++`, `!=` and `*`
+  and needs both member `begin` and `end`; an uncaptured range in a lambda
+  is one error, not two; and a destructuring expansion statement binds its
+  range by reference instead of copying it, so a non-constant range is
+  rejected as GCC does.
 
 ## [1.2.1] - 2026-11-14
 

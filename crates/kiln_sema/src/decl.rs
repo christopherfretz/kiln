@@ -1982,6 +1982,21 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return None;
                 }
+                // C17 6.6p6: a bound that reads an object (a `const int`)
+                // is no integer constant expression, so the array is a
+                // variable length one, folded back to a constant array
+                // where one is needed (`-Wgnu-folding-constant`, clang
+                // `VerifyIntegerConstantExpression` in C). A type-name
+                // outside a function keeps the value (WP-1499).
+                let type_name_outside =
+                    d.ctx == DeclaratorContext::TypeName && !self.in_local_scope();
+                if self.is_c()
+                    && !type_name_outside
+                    && conv::c_assign::c_not_ice_operand(self, c).is_some()
+                {
+                    let f = kiln_oven::EvalFailure::silent(kiln_oven::FailKind::NotConstant);
+                    return self.folded_array_bound(c, d, loc, f);
+                }
                 u64::try_from(v).ok().map(Ok)
             }
             Err(f) => self.folded_array_bound(c, d, loc, f),
@@ -2140,8 +2155,8 @@ impl Sema<'_, '_> {
     /// clang `CheckVariableDeclarationType` for a variable length array:
     /// one with static or thread storage duration has its bound folded
     /// (`TryToFixInvalidVariablyModifiedType`, after the warning
-    /// [`Self::folded_array_bound`] gave) or is an error, as is one with
-    /// `extern` linkage. An automatic one with an initializer has its
+    /// [`Self::folded_array_bound`] gave) or is an error, and so does one
+    /// with `extern` linkage. An automatic one with an initializer has its
     /// bound folded the same way when it folds (clang and GCC accept
     /// `const R a = {12}; char c[a.r] = "...";`); one that does not fold
     /// is rejected with its initializer ([`Self::reject_vla_init`]).
@@ -2167,19 +2182,23 @@ impl Sema<'_, '_> {
             return ty;
         };
         let at = d.name.map_or(d.loc, |(_, l)| l);
-        if spec.storage() == VarStorage::Extern {
-            self.error(DiagId::sema_vla_extern_linkage, at);
-            return QualType::ERROR;
-        }
-        if automatic {
+        let extern_ = spec.storage() == VarStorage::Extern;
+        if automatic && !extern_ {
             return ty;
         }
+        // An `extern` one folds as a static one does (clang tries the fix
+        // for any variable with linkage, WP-1499).
         let folded = self
             .fold_rvalue_int(size)
             .filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
             .and_then(|v| u64::try_from(v).ok());
         let Some(n) = folded else {
-            self.error(DiagId::sema_vla_static_storage, at);
+            let id = if extern_ {
+                DiagId::sema_vla_extern_linkage
+            } else {
+                DiagId::sema_vla_static_storage
+            };
+            self.error(id, at);
             return QualType::ERROR;
         };
         self.error(DiagId::sema_vla_folded_to_constant, at);
@@ -7235,6 +7254,9 @@ impl Sema<'_, '_> {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
         let ty = self.check_vla_var(ty, spec, d);
+        // A variably modified local in a lambda uses the bounds of its
+        // type, which the lambda captures (WP-1499).
+        self.note_vla_type_use(ty);
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }

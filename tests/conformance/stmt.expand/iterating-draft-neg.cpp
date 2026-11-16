@@ -22,9 +22,9 @@
 //@ diag: 59:11 note "capture 'c' by reference"
 //@ diag: 59:11 note "default capture by value"
 //@ diag: 59:11 note "default capture by reference"
-//@ diag: 61:37 error "constexpr variable '__range' must be initialized by a constant expression"
-//@ diag: 61:37 note "reference to 'c' is not a constant expression"
-//@ diag: 58:25 note "address of non-static constexpr variable 'c' may differ on each invocation of the enclosing function; add 'static' to give it a constant address"
+// The capture error is the only error at 61:37: the hidden `__range` is
+// marked invalid rather than diagnosed again for its failed constant
+// initialization (one error for one mistake).
 struct NB {
   int e[2];
   const int *begin() const { return e; }

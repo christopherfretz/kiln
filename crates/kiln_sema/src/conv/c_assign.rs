@@ -362,7 +362,8 @@ pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
 /// not a builtin, a compound literal, a string or a statement expression.
 /// The operand of `sizeof` or `_Alignof` is not looked into; the indices
 /// of `offsetof` are. `None` when there is none (the caller keeps its
-/// location).
+/// location). An array bound that evaluated but has such an operand is
+/// a variable length array in C (`Sema::array_bound`, WP-1499).
 pub(crate) fn c_not_ice_operand(s: &Sema<'_, '_>, e: ExprId) -> Option<ExprId> {
     let mut stack = vec![e];
     let mut kids = Vec::new();
@@ -375,7 +376,14 @@ pub(crate) fn c_not_ice_operand(s: &Sema<'_, '_>, e: ExprId) -> Option<ExprId> {
         let n = s.ast.exprs.get(x);
         let bad = match n.kind() {
             ExprKind::UnaryExprOrTypeTraitExpr => continue,
-            ExprKind::DeclRefExpr => s.kind_of(s.ast.exprs.decl(x)) != DeclKind::EnumConstant,
+            // A C23 `constexpr` object is a named constant (C23 6.6p7); a
+            // function designator reads no object (a builtin's callee; a
+            // call of another function is reported at the call, first).
+            ExprKind::DeclRefExpr => {
+                let d = s.ast.exprs.decl(x);
+                !matches!(s.kind_of(d), DeclKind::EnumConstant | DeclKind::Function)
+                    && !s.is_constexpr_var(d)
+            }
             ExprKind::UnaryOperator => matches!(
                 s.ast.exprs.unary_op(x),
                 UnaryOp::Deref

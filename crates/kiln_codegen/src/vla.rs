@@ -153,14 +153,9 @@ impl Cg<'_> {
             elem = e;
         }
         // A class element type: `init` is the default construction of the
-        // elements (a braced or other initializer is rejected by Sema).
-        let needs = init.is_some() || self.destructed_class(elem).is_some();
-        if needs && !matches!(self.ast.types.canonical_view(elem), TypeView::Record(_)) {
-            return err(
-                loc,
-                "variable length arrays of arrays of class objects are not supported yet",
-            );
-        }
+        // elements; Sema rejects every other initializer of a variable
+        // length array in C++ ("variable-sized object may not be
+        // initialized", as clang 22 at every `-std=`).
         if init.is_some_and(|i| ast.exprs.get(i).kind() != ExprKind::CXXConstructExpr) {
             return err(loc, "this initializer of a variable length array is not supported yet");
         }
@@ -214,15 +209,29 @@ impl Cg<'_> {
         self.auto_var_init_vla(d, q, addr)?;
         // clang `EmitCXXAggrConstructorCall` with the run-time element
         // count, then the `emitDestroy` of the whole array (from the end,
-        // an empty array checked first) as the variable's cleanup.
-        let elem_size = self.alloc_size(ty);
+        // an empty array checked first) as the variable's cleanup. An
+        // element that is itself an array of class objects (`S a[n][3]`)
+        // is flattened, as clang's `emitArrayLength` does: the loop runs
+        // over `n * 3` objects of the base class type.
+        if init.is_none() && self.destructed_class(elem).is_none() {
+            return Ok(());
+        }
+        let mut base = elem;
+        let mut count = count;
+        while let TypeView::ConstantArray(a) = self.ast.types.canonical_view(base) {
+            let k = self.i64c(i128::from(a.size));
+            count = self.bin(BinOp::Mul, Flags::NUW, count, k);
+            base = a.elem;
+        }
+        let bty = self.mty(base);
+        let elem_size = self.alloc_size(bty);
         let elem_align = crate::func::min_align(align, elem_size);
         if let Some(i) = init {
-            self.construct_array_n(i, v, ty, elem_align, count, false, false)?;
+            self.construct_array_n(i, v, bty, elem_align, count, false, false)?;
         }
-        if let Some(record) = self.destructed_class(elem) {
-            let end = self.gep(ty, v, vec![count], true);
-            let c = Cleanup::PartialArray { begin: v, end, elem: ty, record };
+        if let Some(record) = self.destructed_class(base) {
+            let end = self.gep(bty, v, vec![count], true);
+            let c = Cleanup::PartialArray { begin: v, end, elem: bty, record };
             self.push_cleanup_kind(c, true, true);
         }
         Ok(())

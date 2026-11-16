@@ -6980,6 +6980,7 @@ impl Sema<'_, '_> {
         }
         let r = self.build_explicit_cast(style, ty, e, loc, rparen);
         self.note_cast_written_type(r, ty);
+        self.note_vla_type_use(ty);
         // A named cast ends at its `)` (clang `CXXNamedCastExpr::
         // getEndLoc`; coverage regions measure it, WP-1003).
         if matches!(

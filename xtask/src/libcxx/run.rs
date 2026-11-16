@@ -685,10 +685,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
         "missing \"'…' is deprecated\" on the C++17-deprecated adaptor typedefs (argument_type, result_type, …); no WP yet",
     ),
     (
-        "libcxx/depr/depr.rel_ops/rel_ops.depr_in_cxx20.verify.cpp",
-        "missing \"'rel_ops' is deprecated\" on a use of the deprecated namespace; no WP yet",
-    ),
-    (
         "libcxx/input.output/iostream.format/print.fun/nonnull.verify.cpp",
         "missing -Wnonnull 'null passed to a callee that requires a non-null argument'; WP-433",
     ),
@@ -715,10 +711,6 @@ const M5_TRIAGED: &[(&str, &str)] = &[
     (
         "libcxx/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/allocate_vocabulary.attributes.verify.cpp",
         "missing alloc_align 'requested alignment is not a power of 2' on a constant argument; no WP yet",
-    ),
-    (
-        "std/utilities/variant/variant.hash/hash.depr.verify.cpp",
-        "prints 'std::hash<std::monostate>' where clang prints 'std::hash<monostate>' (template-argument type printing); WP-432",
     ),
 ];
 

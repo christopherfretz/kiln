@@ -45,6 +45,7 @@ static_assert(sum_ptr() == 90);
 // `!=` is false from index 2 on although `end - begin` is 5.
 struct Odd {
   int i;
+  constexpr Odd& operator++() { ++i; return *this; }
   constexpr Odd operator+(long n) const { return {i + int(n)}; }
   constexpr long operator-(Odd o) const { return i - o.i; }
   constexpr bool operator!=(Odd o) const { return i < 2 && i != o.i; }

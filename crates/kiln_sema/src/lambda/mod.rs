@@ -274,11 +274,16 @@ pub(crate) struct LambdaScope {
     /// lambda-expression is invalid (`BuildLambdaExpr`), so no warning
     /// about it follows.
     pub(crate) capture_failed: bool,
-    /// Variably modified types declared outside this lambda that its body
-    /// names other than through a captured variable (`sizeof(A)` of a
-    /// block-scope `typedef int A[n];`): their bounds are captured with
-    /// the captured variables' at the `}` ([`CaptureKind::VlaBound`]).
-    pub(crate) vla_types: Vec<QualType>,
+    /// Variable length array bounds evaluated outside this lambda that
+    /// its body uses other than through a captured variable's type
+    /// (`sizeof(A)` of a block-scope `typedef int A[n];`, `typeof(a)`):
+    /// captured with the captured variables' at the `}`
+    /// ([`CaptureKind::VlaBound`], `Sema::note_vla_type_use`).
+    pub(crate) vla_bounds: Vec<ExprId>,
+    /// The number of expressions when the lambda started: an expression
+    /// with a higher index (a variable length array bound written in the
+    /// body) was built inside it ([`Sema::note_vla_type_use`]).
+    pub(crate) first_expr: usize,
 }
 
 impl Sema<'_, '_> {
@@ -346,7 +351,8 @@ impl Sema<'_, '_> {
             shadowing: Vec::new(),
             saved_dependent_depth,
             capture_failed: false,
-            vla_types: Vec::new(),
+            vla_bounds: Vec::new(),
+            first_expr: self.ast.exprs.len(),
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
@@ -1080,7 +1086,7 @@ impl Sema<'_, '_> {
         if !top.shadowing.is_empty() {
             self.diagnose_shadowing_lambda_decls(id, &top.shadowing);
         }
-        self.finish_captures(id, closure, &top.cap_tys, &top.vla_types);
+        self.finish_captures(id, closure, &top.cap_tys, &top.vla_bounds);
         self.check_contract_only_captures(&top.contract_caps);
         if let Some(f) = top.call_op {
             self.add_function_pointer_conversion(id, closure, f, top.explicit_constexpr);

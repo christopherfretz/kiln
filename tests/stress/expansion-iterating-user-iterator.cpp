@@ -14,7 +14,7 @@
 //@ oven: 28 evaluations<=30005 steps<=61000
 struct It {
   const int *p;
-  constexpr It operator+(long n) const { return {p + n}; }
+  constexpr It operator+(long n) const { return {p + n}; } constexpr It &operator++() { ++p; return *this; }
   constexpr bool operator!=(It o) const { return p != o.p; }
   constexpr long operator-(It o) const { return p - o.p; }
   constexpr const int &operator*() const { return *p; }
