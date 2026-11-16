@@ -855,6 +855,17 @@ Planned as 1.3.0.
   linkage for these members (`linkonce_odr`, dropped when unused).
   Reported from linking kiln objects with mortar.
 
+- Reflection fixes found running GCC's C++ testsuite (WP-1515, WP-1521).
+  `std::meta::extract<int>(^^b)` of a block-scope constexpr variable gives
+  its constant, also through a template argument, and `extract` of a
+  reflected reference local works; a local whose lifetime ended in the
+  same evaluation is still rejected, also by `constant_of`. `^^B::S`
+  reflects the member `S` where it is not a type, `^^N::template T` and
+  `^^T::template N` reflect a template, and `template` before a name that
+  is not a template is rejected. `namespace A = [: r :];`, `~typename
+  [: r :]()` and `typename [: r :]<args>::member` are accepted. A dependent
+  namespace alias splice is reported as not supported yet.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

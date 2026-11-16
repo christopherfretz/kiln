@@ -31,7 +31,8 @@ super::meta_family! {
         IsExplicitObjectParameter = ("is_explicit_object_parameter", "i", Stable, 476);
         /// A later redeclaration can add a default argument.
         HasDefaultArgument = ("has_default_argument", "i", PointDependent, 476);
-        /// The IS's `has_ellipsis_parameter`, under GCC 16.1's name.
+        /// The working draft's [meta.syn] name (and GCC 16.1's) for
+        /// P3096's `has_ellipsis_parameter`.
         IsVarargFunction = ("is_vararg_function", "i", Stable, 476);
         IsPublic = ("is_public", "i", Stable, 476);
         IsProtected = ("is_protected", "i", Stable, 476);

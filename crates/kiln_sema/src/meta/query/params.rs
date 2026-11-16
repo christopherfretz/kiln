@@ -1,6 +1,7 @@
 //! P3096's function-parameter queries: `variable_of`, `return_type_of`,
 //! `is_explicit_object_parameter`, `has_default_argument` and
-//! `has_ellipsis_parameter` (GCC 16.1's `is_vararg_function`). A
+//! `is_vararg_function` (the working draft's [meta.syn] name, GCC 16.1's
+//! too, for the paper's `has_ellipsis_parameter`). A
 //! parameter reflection is `Reflectee::FnParam(function, index)`, which
 //! `parameters_of` (WP-478) builds; `^^p` of a parameter name reflects
 //! the parameter *variable* (a `Decl` of the `ParmVar`) instead.
@@ -38,7 +39,7 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// `has_ellipsis_parameter` (`is_vararg_function`): a function or
+    /// `is_vararg_function` (P3096's `has_ellipsis_parameter`): a function or
     /// function type whose parameter list ends in `...`.
     pub(super) fn is_vararg_function(&self, x: Reflectee) -> bool {
         let t = match x {

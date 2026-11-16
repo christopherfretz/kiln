@@ -47,9 +47,9 @@ sema_specialization_not_primary_template = Error (2) "cannot reference member of
 // [expr.prim.id.qual]/2 (WP-474)
 sema_splice_declarative_scope = Error (0) "a splice-scope-specifier cannot be used in a declarative nested-name-specifier";
 // [namespace.udir]/1 (WP-474)
-sema_splice_dependent_namespace = Error (0) "the splice-specifier of a using-directive cannot be dependent";
+sema_splice_dependent_namespace = Error (1) "the splice-specifier of a {0} cannot be dependent";
 // [namespace.udir]/1 (WP-474)
-sema_splice_global_namespace = Error (0) "the splice-specifier of a using-directive cannot designate the global namespace";
+sema_splice_global_namespace = Error (1) "the splice-specifier of a {0} cannot designate the global namespace";
 // [expr.prim.splice]/2.1.4 (WP-781)
 sema_splice_intervening_lambda = Error (1) "cannot splice local entity '{0}' for which there is an intervening lambda expression";
 // [expr.prim.splice]/2.7, [temp.names]/3: a splice designating a

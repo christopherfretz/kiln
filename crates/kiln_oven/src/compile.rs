@@ -1099,6 +1099,14 @@ pub(crate) struct Compiler<'a> {
     pub max: u32,
     locals: FxHashMap<DeclId, Local>,
     mem_vars: FxHashSet<DeclId>,
+    /// The block-scope reference variables whose reflection the body
+    /// takes (`^^r`): each also gets a frame object holding its
+    /// referent's address, made with its block and ended with it, so
+    /// `extract` finds it ([`Oven::meta_ref_local`]; spec/oven.md
+    /// "Reflected locals"), with the register of that object once its
+    /// scope made it (`u32::MAX` before). Empty for a body that reflects
+    /// no reference.
+    refl_refs: FxHashMap<DeclId, u32>,
     /// The parameters the function contract assertions name, paired with
     /// the definition's, when they were written on another declaration.
     contract_aliases: Vec<(DeclId, DeclId)>,
@@ -1223,6 +1231,7 @@ impl<'a> Compiler<'a> {
             max: 0,
             locals: FxHashMap::default(),
             mem_vars: FxHashSet::default(),
+            refl_refs: FxHashMap::default(),
             contract_aliases: Vec::new(),
             pending: Vec::new(),
             rmw_loc: None,
@@ -1682,6 +1691,8 @@ const STMT_EXPR_UNSUPPORTED: &str =
 struct Scan<'x> {
     ast: &'x kiln_ast::Ast,
     mem: &'x mut FxHashSet<DeclId>,
+    /// The reflected block-scope references ([`Compiler::refl_refs`]).
+    refl: &'x mut FxHashMap<DeclId, u32>,
     cur: Option<DeclId>,
     temps: bool,
 }
@@ -1886,12 +1897,16 @@ impl Scan<'_> {
                 }
             }
             // A reflected local lives in memory: `extract` reads it there
-            // (spec/reflection-values.md §2).
+            // (spec/reflection-values.md §2); a reflected block-scope
+            // reference gets an object holding its referent's address.
             ExprKind::CXXReflectExpr => {
                 if let kiln_ast::reflect::Reflectee::Decl(d) = ast.exprs.reflect_operand(e)
                     && matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
                 {
                     self.mem.insert(d);
+                    if ast.decls.get(d).kind() == DeclKind::Var && is_reference_var(ast, d) {
+                        self.refl.insert(d, u32::MAX);
+                    }
                 }
             }
             ExprKind::CompoundAssignOperator => {
@@ -2128,7 +2143,13 @@ struct CaseTarget {
 impl Compiler<'_> {
     fn scan(&mut self, body: StmtId, params: &[DeclId]) {
         let ast = self.b.ast();
-        let mut s = Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
+        let mut s = Scan {
+            ast,
+            mem: &mut self.mem_vars,
+            refl: &mut self.refl_refs,
+            cur: None,
+            temps: false,
+        };
         s.stmt(body);
         self.has_temps = s.temps;
         let _ = params;
@@ -2152,7 +2173,13 @@ impl Compiler<'_> {
             .iter::<StmtId>(l)
             .filter(|&s| checks.evaluation_checks(ast.stmts.contract_kind(s), structor))
             .collect();
-        let mut s = Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
+        let mut s = Scan {
+            ast,
+            mem: &mut self.mem_vars,
+            refl: &mut self.refl_refs,
+            cur: None,
+            temps: false,
+        };
         for &c in &list {
             s.stmt(c);
         }
@@ -2254,8 +2281,9 @@ impl Compiler<'_> {
     /// Whether local `d` of type `ty` lives in memory.
     fn needs_mem(&self, d: DeclId, ty: OTy) -> bool {
         if is_reference_var(self.b.ast(), d) {
-            // A register holding the referent's address.
-            return false;
+            // A register holding the referent's address; a reflected one
+            // also an object holding it ([`Self::refl_refs`]).
+            return self.refl_refs.contains_key(&d);
         }
         if self.o.types.is_aggregate(ty) || self.mem_vars.contains(&d) {
             return true;
@@ -2309,6 +2337,9 @@ impl Compiler<'_> {
             let p = self.reg();
             self.alloc_var(p, ty, d, is_const);
             self.locals.insert(d, Local::Mem(p));
+            if let Some(slot) = self.refl_refs.get_mut(&d) {
+                *slot = p;
+            }
         }
         self.scopes.push(Some(mark));
     }
@@ -3395,6 +3426,19 @@ impl Compiler<'_> {
                 self.ref_chk(r, n.ty().unwrap_or(QualType::INT), init);
                 self.end_extended(&ext);
                 self.next = m;
+            }
+            if let Some(&slot) = self.refl_refs.get(&d) {
+                // The object `open_scope` made for it (ended with its
+                // block), or one made here (a condition variable).
+                let ty = self.ty(n.ty().unwrap_or(QualType::INT));
+                let p = if slot == u32::MAX {
+                    let p = self.reg();
+                    self.alloc_var(p, ty, d, false);
+                    p
+                } else {
+                    slot
+                };
+                self.emit(Op::InitStore, 0, &[p, r, ty.0]);
             }
             self.locals.insert(d, Local::Mem(r));
             return;

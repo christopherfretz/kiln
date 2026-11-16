@@ -273,6 +273,28 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
   "instantiated from a function parameter pack" exclusion is in the
   variable bullet only. kiln says true, `identifier_of` is `b`
   (g++.dg/reflect `has_identifier1.C` line 211 fails under kiln).
+- `extract` of a block-scope variable usable in constant expressions
+  whose lifetime did not begin within the evaluation (a `constexpr` or
+  constant-initialized `const int` local of an enclosing function, of a
+  function the evaluation is not running, reached directly or through a
+  template argument), WP-1521. By value, `extract` is
+  `extract-value<U>(constant_of(r))` ([meta.reflection.extract]/12), and
+  `constant_of` asks only that `[: R :]` be a valid splice-expression:
+  the variable's constant, whatever its storage duration (kiln once
+  applied the reference rule here and rejected it). By reference,
+  *extract-ref* /5.3 accepts a variable usable in constant expressions
+  too; the reference designates the variable's object, whose address is
+  not a permitted result of a constexpr reference or pointer outside the
+  function ([expr.const]; clang's "address of non-static constexpr
+  variable" note). A local whose lifetime began in this evaluation is
+  read live, or, once its block ended, fails (`extract`: the lifetime
+  note; `constant_of`: "read of variable 'x' outside its lifetime",
+  [meta.reflection.queries] `constant_of`'s example); see spec/oven.md
+  "Reflected locals" for how the Oven tells them apart. A structured
+  binding is extracted by value through `constant_of` as well (GCC 16.1
+  rejects it; the text decides). GCC 16.1 agrees on the rest. Tests:
+  `meta.reflection.extract/local-constant.cpp`, `local-constant-neg.cpp`,
+  `local-constant-binding.cpp`.
 - `extract` of a reference variable whose lifetime began within the
   evaluation (a reference parameter or a reference local of a consteval
   function, reflected in its body), WP-1489. `^^r` there represents a
@@ -300,13 +322,15 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
   whose lifetime began within the evaluation", and the type rules are
   those of a local (`extract<long &>` of an `int &`, or dropping a
   const, is a mismatch). Tests: `meta.reflection.extract/reference-param.cpp`,
-  `reference-param-neg.cpp`. A reference **local** is still rejected:
-  its register (`compile.rs`, `is_reference_var`) is reused once its
-  block ends, so the Oven needs a record of `(decl, register, pc range
-  of its block)` in `Func` (or, as for reflected non-reference locals,
-  a memory slot holding the pointer for a reflected reference local
-  only) to find it without a stale read: WP-1505 remainder, pinned by
-  `meta.reflection.extract/reference-local-xfail.cpp`.
+  `reference-param-neg.cpp`. A reference **local** is accepted too
+  (WP-1515): its register is reused once its block ends, so a reference
+  whose reflection its function takes gets a frame object holding the
+  referent's address, made with its block and ended with it
+  (spec/oven.md "Reflected locals"; `Oven::meta_ref_local`); a function
+  that reflects no reference local is compiled as before. A reflection
+  that escaped the block (or the frame) is rejected with the same note
+  and a "declared here" note at the variable. Tests:
+  `meta.reflection.extract/reference-local.cpp`, `reference-local-neg.cpp`.
 - No longer a deviation: a closure type at namespace or class scope has
   no linkage in GCC 16.1 either (`linkage-storage.cpp`).
 

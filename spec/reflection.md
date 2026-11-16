@@ -1026,6 +1026,9 @@ position's operand).
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression; a class or alias template without arguments in a type is a deduced class type placeholder ([dcl.type.splice]/2, [dcl.type.class.deduct]; WP-1489) | implemented (`temp.names/splice-*.cpp`, `dcl.type.splice/ctad-placeholder.cpp`; spec/landed/reflection/WP-482.md) |
   | base, mem-initializer, using-enum | `[typename] [: r :] [< args >]` as a base-specifier's or mem-initializer-id's class, `using enum [: r :];` ([class.derived.general]/1, [class.base.init]/2, [enum.udecl]/1) | a class (an enumeration for `using enum`, else "'T' is not an enumerated type") | implemented (`dcl.type.splice/base-meminit-using-enum.cpp`, WP-1489) |
   | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
+  | namespace alias | `namespace A = [: r :];` | a namespace (or the target of an alias) other than the global namespace ([namespace.alias]/1-2) | implemented (`namespace.alias/splice-alias*.cpp`, WP-1515) |
+  | destructor | `x.~typename [: r :]()`, `p->~typename [: r :]()` | the type of the object expression: a computed-type-specifier names a destructor as `~decltype(x)` does ([class.dtor], [expr.prim.id.dtor]/2) | implemented (`dcl.type.splice/destructor-typename-splice*.cpp`, WP-1515) |
+  | specialization scope | `typename [: r :] < args > :: name` | after `typename` the `<` opens the splice's template arguments without `template` ([temp.names]/3); the specialization is the first component of the nested-name-specifier | implemented (`dcl.type.splice/typename-splice-specialization-scope.cpp`, WP-1515) |
 
   A misfit gets "splice in a {position} position does not designate a
   {kinds}" (`sema_splice_not_type`, `_not_expression`, `_not_member`,
@@ -1126,6 +1129,16 @@ position's operand).
   costs one instantiation, as expected.
 - **NTTPs.** A substituted `info` template argument is rebuilt as the
   `CXXReflectExpr` of the same entity (implemented).
+- **Reflection-name before type-id** ([expr.reflect]/5, /6; WP-1505,
+  WP-1515). An operand that matches `^^ reflection-name` is looked up as
+  a name first, so a (qualified) name lookup finds through a
+  using-declarator is ill-formed (/5.1) even when it is a type-name or a
+  function (`^^B::S` with `using A::S;` in `B`): the parser's
+  `reflect_lookahead` returns `UsingName` for a final name nothing
+  continues as a type-id (`Sema::names_using_declarator`), and
+  `act_on_reflect_name` reports it. `^^nns template name` is the
+  reflection-name form too (the lookahead never takes the type-id path
+  for it), and `name` must denote a template (/2).
 - **Locals across a lambda** (`splice_local.rs`; WP-781). `^^x` naming
   a variable declared by an init-capture ([expr.reflect]/7.1.1) or a
   local entity for which a lambda scope intervenes between its

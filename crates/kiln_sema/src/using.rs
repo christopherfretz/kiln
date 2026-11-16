@@ -1276,6 +1276,18 @@ impl Sema<'_, '_> {
             return None;
         };
         self.act_on_namespace_name_use(t, target_loc);
+        self.act_on_namespace_alias_to(name, name_loc, t)
+    }
+
+    /// `namespace name = t;` for the namespace (or alias) `t` the
+    /// qualified-namespace-specifier denotes or the splice-specifier
+    /// designates ([namespace.alias]/1, /4).
+    pub fn act_on_namespace_alias_to(
+        &mut self,
+        name: Symbol,
+        name_loc: Loc,
+        t: DeclId,
+    ) -> Option<DeclId> {
         // [temp.local]/6 (WP-1042).
         self.check_template_param_shadow(name, name_loc);
         let ns = self.ast.resolve_alias(t);

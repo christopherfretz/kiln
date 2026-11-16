@@ -1550,7 +1550,22 @@ impl Parser<'_, '_> {
         ctx: Option<DeclaratorContext>,
     ) -> Option<QualType> {
         self.bump();
-        if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
+        if self.at_splice() && self.typename_splice_scope_end().is_some() {
+            // `typename [: r :] < args > :: name`: after `typename` the
+            // `<` opens the splice's template arguments ([temp.names]/3)
+            // without `template`, and the specialization is the scope
+            // of the qualified name (the pending first component).
+            let loc = self.loc();
+            let (e, _) = self.parse_splice_specifier().unzip();
+            let ty = e.and_then(|e| {
+                self.parse_template_arg_list()
+                    .and_then(|(args, _, r)| self.s.act_on_splice_template_type(e, &args, loc, r))
+            });
+            if self.at(Punct::ColonColon) {
+                let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
+                self.set_decltype_scope(qual, loc);
+            }
+        } else if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
             return self.parse_splice_type();
         }
         let Ok(qual) = self.parse_nested_name_nns() else {

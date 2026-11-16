@@ -4475,6 +4475,49 @@ Specified in **`spec/reflection.md`** §3:
 
 The VM half is `vm/meta.rs`; the op tables are in `meta/`.
 
+**Reflected locals (WP-1482, WP-1505, WP-1515).** `extract` of a
+reflected automatic variable reads it only while its lifetime, begun in
+a frame of the running evaluation, lasts ([meta.reflection.extract]):
+- A non-reference local or parameter whose reflection the body takes
+  (`^^x`, found by the compiler's scan of the body) is built in memory, a
+  frame object of origin `Origin::Var(d)`; `Oven::meta_local` finds the
+  innermost live one whose frame belongs to the running evaluation.
+- A reference parameter: its register holds the referent's address for
+  the whole activation (`ParamInfo::is_ref`); `Oven::meta_ref_param`
+  reads it from the innermost live frame of the evaluation.
+- A block-scope reference: its register is reused once its block ends,
+  so the register cannot be found from the reflection. Only a reference
+  whose reflection its function takes (`^^r` in the body; the scan
+  records it in `Compiler::refl_refs`) gets a frame object of its own
+  reference type (a pointer-sized `TyKind::Ptr` object, `Origin::Var(r)`),
+  allocated by the `ScopeEnter` of its block like a memory local and
+  ended with it, into which the declaration `InitStore`s the referent's
+  address after binding the register. `Oven::meta_ref_local` finds that
+  object as `meta_local` does and loads the address. Once the block has
+  ended (a reflection that escaped it) or the frame returned there is no
+  live object: `extract` fails with "is not a variable of static storage
+  duration, nor one whose lifetime began within the evaluation" and a
+  "declared here" note at the variable.
+
+- A local not found live is told apart by `Oven::meta_local_ended`
+  (WP-1521): a dead frame object of `Origin::Var(d)` whose frame serial
+  is at least that of the evaluation's first frame (`run.entry`) means
+  the lifetime began in this evaluation and ended; `extract` and
+  `constant_of` then fail ("outside its lifetime"). Otherwise the
+  variable belongs to an enclosing function or an earlier evaluation,
+  and a variable usable in constant expressions gives its constant
+  initializer (sema; never memory). The record is the dead slot itself,
+  so it is lost when the slot is reused after the frame quarantine, or
+  when the call that made it was a memo hit; both make an escaped
+  reflection of a constant local read that constant (as GCC 16.1 does
+  on a cached call), never a stale object. Only `extract`/`constant_of`
+  of a local not found live scans the slots: nothing on the hot path.
+
+Nothing is added for a function that reflects no reference local: its
+scan leaves `refl_refs` empty, so its frames, registers and instructions
+are those of before; the register still names the referent for every
+other use of the reference.
+
 ### Undefined behaviour checks — Landed (WP-948, WP-1018)
 [expr.const]/10 makes every core undefined behaviour disqualify an
 expression, so each class below is one structural check, never a

@@ -691,19 +691,28 @@ impl Sema<'_, '_> {
     /// ([namespace.udir]/1): `e` designates a namespace or namespace
     /// alias other than the global namespace, and is not dependent.
     /// `None` when invalid (diagnosed).
-    pub fn act_on_splice_namespace(&mut self, e: ExprId) -> Option<DeclId> {
+    pub fn act_on_splice_namespace(&mut self, e: ExprId, what: &str) -> Option<DeclId> {
         match self.splice_entity(e) {
             Spliced::Error => None,
             // [namespace.udir]/1: the splice-specifier shall not be
             // dependent and shall not designate the global namespace.
             Spliced::Dependent => {
-                self.error(DiagId::sema_splice_dependent_namespace, self.begin_loc(e));
+                // A using-directive's may not be dependent ([namespace.udir]/1);
+                // a namespace alias's may ([temp.dep.namespace]), which
+                // kiln does not instantiate yet.
+                let d = if what == "namespace alias" {
+                    self.diag(DiagId::parse_unsupported, self.begin_loc(e))
+                        .arg("a namespace alias of a dependent splice-specifier")
+                } else {
+                    self.diag(DiagId::sema_splice_dependent_namespace, self.begin_loc(e)).arg(what)
+                };
+                self.emit(d);
                 None
             }
-            Spliced::Entity(Reflectee::Namespace(ns)) => self.splice_nominated(e, ns),
+            Spliced::Entity(Reflectee::Namespace(ns)) => self.splice_nominated(e, ns, what),
             Spliced::Entity(Reflectee::NamespaceAlias(a)) => {
                 let ns = self.ast.resolve_alias(a);
-                self.splice_nominated(e, ns)
+                self.splice_nominated(e, ns, what)
             }
             Spliced::Entity(_) => {
                 let at = self.begin_loc(e);
@@ -713,10 +722,11 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn splice_nominated(&mut self, e: ExprId, ns: DeclId) -> Option<DeclId> {
+    fn splice_nominated(&mut self, e: ExprId, ns: DeclId, what: &str) -> Option<DeclId> {
         let ns = self.ast.first(ns);
         if ns == self.ast.first(self.ast.tu) {
-            self.error(DiagId::sema_splice_global_namespace, self.begin_loc(e));
+            let d = self.diag(DiagId::sema_splice_global_namespace, self.begin_loc(e));
+            self.emit(d.arg(what));
             return None;
         }
         Some(ns)

@@ -479,6 +479,22 @@ impl Sema<'_, '_> {
         self.recover(info, &[], loc)
     }
 
+    /// `^^nns template name` where `name` does not denote a template
+    /// ([expr.reflect]/2): clang's error for `template` before a
+    /// non-template, at the name.
+    pub fn reflect_template_kw_non_template(
+        &mut self,
+        name: Symbol,
+        name_loc: Loc,
+        loc: Loc,
+    ) -> ExprId {
+        let text = crate::decl::sym_str(self, name);
+        let d = self.diag(DiagId::sema_template_kw_refers_to_non_template, name_loc).arg(text);
+        self.emit(d);
+        let info = self.meta_info_type();
+        self.recover(info, &[], loc)
+    }
+
     /// The namespace or class `name ::` names in `ctx` (the current scope
     /// when `None`), for the parser's bare-template-name lookahead: plain
     /// namespaces, namespace aliases and classes only.
@@ -512,6 +528,19 @@ impl Sema<'_, '_> {
                     | DeclKind::TemplateTemplateParm
             )
         })
+    }
+
+    /// Whether lookup of `name` in `ctx` (the current scope when `None`)
+    /// finds a declaration that replaced a using-declarator: then `^^`
+    /// of the reflection-name is ill-formed even when the name is a
+    /// type-name ([expr.reflect]/5.1 comes before the type-id form, /6),
+    /// so the parser does not take the type-id path for it.
+    pub fn names_using_declarator(&self, name: Symbol, ctx: Option<DeclId>) -> bool {
+        let found = match ctx {
+            Some(c) => self.lookup_qualified(c, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        found.found.iter().any(|&f| self.ast.strip_shadow(f) != f)
     }
 
     /// The pattern class of the class template `name` in `ctx` (the
