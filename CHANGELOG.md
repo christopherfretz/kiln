@@ -752,6 +752,19 @@ Planned as 1.3.0.
   identifiers exactly where clang 22 reverts them (`-Wkeyword-compat`), so
   `int __is_convertible;` as a member is rejected as clang and GCC do.
 
+- The Oven tells union members apart through more pointers (WP-1508): the
+  member a pointer designates survives pointer arithmetic and a store to
+  memory (an array of pointers, a class member, a lambda capture, a
+  reference member), and the address of a subobject reached through a
+  member (`&u.s.k`, `&u.arr[1]`, `(&u.s)->k`, a base of a member) names
+  that member at each union level, so reading through it while another
+  member is active is rejected as clang does. Subtracting pointers to two
+  members of one union is rejected ("subtracted pointers are not elements
+  of the same array"); destroying an inactive union member is rejected in
+  C++20 and C++23 too, as clang does; copying a union whose member was
+  destroyed (or one with no active member) is accepted in C++23 as in
+  C++26, and the copy keeps the member ended.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

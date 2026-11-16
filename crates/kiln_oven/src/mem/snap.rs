@@ -186,7 +186,7 @@ impl Memory {
         let unions: FxHashMap<UKey, u32> = at("Memory.unions", r.get())?;
         let union_alts: FxHashMap<UKey, u64> = at("Memory.union_alts", r.get())?;
         let union_epoch: u64 = at("Memory.union_epoch", r.get())?;
-        let vtags: Vec<OTy> = at("Memory.vtags", r.get())?;
+        let vtags: Vec<u64> = at("Memory.vtags", r.get())?;
         let vspill: FxHashMap<u64, OTy> = at("Memory.vspill", r.get())?;
         let tu_arena_peak: u64 = at("Memory.tu_arena_peak", r.get())?;
         let serial: u32 = at("Memory.serial", r.get())?;
@@ -194,7 +194,10 @@ impl Memory {
             return Err(r.invalid::<Memory>(why));
         }
         if vtags.len() > usize::from(PTR_SPILL - PTR_TAGGED)
-            || vtags.iter().chain(vspill.values()).any(|t| t.0 as usize >= ntypes)
+            || vtags
+                .iter()
+                .any(|&t| (t as u32).checked_sub(1).is_some_and(|t| t as usize >= ntypes))
+            || vspill.values().any(|t| t.0 as usize >= ntypes)
         {
             return Err(r.invalid::<Memory>("void pointer tags out of range"));
         }
@@ -262,8 +265,8 @@ impl Memory {
         .field::<FxHashMap<UKey, u32>>("unions")
         .field::<FxHashMap<UKey, u64>>("union_alts")
         .field::<u64>("union_epoch")
-        .field::<Vec<OTy>>("vtags")
-        .skip("vtag_ix", "FxHashMap<OTy, u8>")
+        .field::<Vec<u64>>("vtags")
+        .skip("vtag_ix", "FxHashMap<u64, u8>")
         .field::<FxHashMap<u64, OTy>>("vspill")
         .field::<u64>("tu_arena_peak")
         .field::<u32>("serial")
@@ -280,8 +283,8 @@ impl Memory {
             .field::<FxHashMap<UKey, u32>>("unions")
             .field::<FxHashMap<UKey, u64>>("union_alts")
             .field::<u64>("union_epoch")
-            .field::<Vec<OTy>>("vtags")
-            .skip::<FxHashMap<OTy, u8>>("vtag_ix")
+            .field::<Vec<u64>>("vtags")
+            .skip::<FxHashMap<u64, u8>>("vtag_ix")
             .field::<FxHashMap<u64, OTy>>("vspill")
             .field::<u64>("tu_arena_peak")
             .field::<u32>("serial");

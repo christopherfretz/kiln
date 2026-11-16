@@ -341,6 +341,11 @@ impl DynKind {
     }
 }
 
+// An object header and an undo record keep their size: the union member
+// designators (WP-1494, WP-1508) live in the pointer register's upper word
+// and in the granule's existing pointer mark byte.
+const _: () = assert!(size_of::<Alloc>() == 36 && size_of::<Undo>() == 32);
+
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Alloc {
     pub base: u32,
@@ -798,15 +803,18 @@ pub(crate) struct Memory {
     /// [`Memory::union_epoch`] it holds at (`u64::MAX`: none): a member
     /// access checks the same union's member again and again (WP-760).
     active_memo: Cell<(UKey, u32, u64)>,
-    /// The designated types of the `void *` values stored to memory
-    /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
-    /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
-    /// copied mark stays valid) and at most `PTR_SPILL - PTR_TAGGED`
-    /// long.
-    vtags: Vec<OTy>,
-    vtag_ix: FxHashMap<OTy, u8>,
+    /// The register tag bits (`v >> 64`) of the pointers stored to
+    /// memory with any, interned: the `void *` designated type
+    /// (`kbc::VOID_TAG`, a type + 1, low half) and the union member
+    /// designator (`vm/udesig.rs`, high half; never in static memory).
+    /// Pointer mark `PTR_TAGGED + i` is `vtags[i]`. Append-only for the
+    /// translation unit (a rolled-back or copied mark stays valid) and at
+    /// most `PTR_SPILL - PTR_TAGGED` long.
+    vtags: Vec<u64>,
+    vtag_ix: FxHashMap<u64, u8>,
     /// The designated types of the `void *` values stored once
-    /// [`Memory::vtags`] is full (mark [`PTR_SPILL`]), keyed by granule
+    /// [`Memory::vtags`] is full (mark [`PTR_SPILL`]; a union member
+    /// designator is not kept there), keyed by granule
     /// (`sp << 62 | granule`, as [`Trial`]'s `seen`): no cap on distinct
     /// types (spec/oven.md "Construction"). An entry is meaningful while
     /// its granule's mark is [`PTR_SPILL`]; one whose granule was since
@@ -913,42 +921,66 @@ impl Memory {
     }
 
     /// The pointer mark of a pointer about to be stored at `abs` of space
-    /// `sp` with register tag bits `tag` (`v >> 64`, `kbc::VOID_TAG`: a
-    /// type + 1, or 0): 1 when untagged, else the tag's interned mark, or
-    /// [`PTR_SPILL`] once every mark is taken, the tag then going to
-    /// [`Memory::vspill`]. The caller logged the granule under the open
-    /// checkpoints (its old spilled tag with it), so this is not logged
-    /// again.
+    /// `sp` with register tag bits `tag` (`v >> 64`: the `void *` tag,
+    /// `kbc::VOID_TAG`, a type + 1 or 0, in the low half; the union member
+    /// designator, `vm/udesig.rs`, in the high half): 1 when untagged,
+    /// else the tag's interned mark, or [`PTR_SPILL`] once every mark is
+    /// taken, the `void *` tag then going to [`Memory::vspill`] (the
+    /// designator is dropped: the pointer is then checked by offset and
+    /// type). The caller logged the granule under the open checkpoints
+    /// (its old spilled tag with it), so this is not logged again.
     #[inline]
-    pub fn set_void_tag(&mut self, sp: Sp, abs: u64, tag: u32) -> u8 {
-        let Some(t) = tag.checked_sub(1).map(OTy) else { return 1 };
-        if let Some(&m) = self.vtag_ix.get(&t) {
+    pub fn set_void_tag(&mut self, sp: Sp, abs: u64, tag: u64) -> u8 {
+        if tag == 0 {
+            return 1;
+        }
+        if let Some(&m) = self.vtag_ix.get(&tag) {
             return m;
         }
         let m = self.vtags.len() + usize::from(PTR_TAGGED);
         if m < usize::from(PTR_SPILL) {
-            self.vtags.push(t);
-            self.vtag_ix.insert(t, m as u8);
+            self.vtags.push(tag);
+            self.vtag_ix.insert(tag, m as u8);
             return m as u8;
         }
+        let Some(t) = (tag as u32).checked_sub(1).map(OTy) else { return 1 };
         self.vspill.insert(vkey(sp, abs / GRAN), t);
         PTR_SPILL
     }
 
-    /// The register tag bits (a type + 1, or 0) of the pointer stored at
-    /// `abs` of space `sp`.
+    /// The register tag bits (see [`Memory::set_void_tag`]; 0: none) of
+    /// the pointer stored at `abs` of space `sp`.
     #[inline]
-    pub fn void_tag(&self, sp: Sp, abs: u64) -> u32 {
+    pub fn void_tag(&self, sp: Sp, abs: u64) -> u64 {
         match self.space(sp).ptr_mark(abs) {
             0 | 1 => 0,
-            PTR_SPILL => self.spilled(sp, abs / GRAN),
-            m => self.vtags[usize::from(m - PTR_TAGGED)].0 + 1,
+            PTR_SPILL => u64::from(self.spilled(sp, abs / GRAN)),
+            m => self.vtags[usize::from(m - PTR_TAGGED)],
         }
     }
 
     /// The spilled tag of granule `g` of `sp` (a type + 1, or 0).
     fn spilled(&self, sp: Sp, g: u64) -> u32 {
         self.vspill.get(&vkey(sp, g)).map_or(0, |t| t.0 + 1)
+    }
+
+    /// Drops the union member designators (`vm/udesig.rs`) from the
+    /// pointer marks of the `n` granules from granule `g` of the static
+    /// space, just copied there from another space: a snapshot keeps
+    /// static memory but not the designator table.
+    #[cold]
+    fn strip_static_desigs(&mut self, g: u64, n: u64) {
+        for i in g..g + n {
+            let m = self.stat.ptr[i as usize];
+            if m < PTR_TAGGED || m == PTR_SPILL {
+                continue;
+            }
+            let tag = self.vtags[usize::from(m - PTR_TAGGED)];
+            if tag >> 32 != 0 {
+                let mark = self.set_void_tag(Sp::Static, i * GRAN, u64::from(tag as u32));
+                self.stat.ptr[i as usize] = mark;
+            }
+        }
     }
 
     /// Copies the spilled tags among `n` granules from granule `sg` of
@@ -980,8 +1012,8 @@ impl Memory {
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
-            + self.vtags.capacity() * size_of::<OTy>()
-            + self.vtag_ix.capacity() * (size_of::<(OTy, u8)>() + 1)
+            + self.vtags.capacity() * size_of::<u64>()
+            + self.vtag_ix.capacity() * (size_of::<(u64, u8)>() + 1)
             + self.vspill.capacity() * (size_of::<(u64, OTy)>() + 1)
             + self.trial.footprint()
     }
@@ -1661,6 +1693,9 @@ impl Memory {
             let (sg, dg) = ((src / GRAN) as usize, (dst / GRAN) as usize);
             d.ptr[dg..dg + n as usize].copy_from_slice(&s.ptr[sg..sg + n as usize]);
             self.copy_spilled(dst_sp, dst / GRAN, src_sp, src / GRAN, n);
+            if dst_sp == Sp::Static {
+                self.strip_static_desigs(dst / GRAN, n);
+            }
         }
     }
 
@@ -2875,7 +2910,7 @@ mod tests {
     fn put_tagged(m: &mut Memory, p: u64, tag: u32) {
         let (sp, abs, _) = m.check(p, 8, true).unwrap();
         m.trial_write(p, 8).unwrap();
-        let mark = m.set_void_tag(sp, abs, tag);
+        let mark = m.set_void_tag(sp, abs, u64::from(tag));
         let s = m.space_mut(sp);
         s.write(abs, 8, 1);
         s.set_init(abs, 8, true);
@@ -2884,7 +2919,7 @@ mod tests {
 
     fn tag_at(m: &Memory, p: u64) -> u32 {
         let (sp, abs, _) = m.check(p, 8, false).unwrap();
-        m.void_tag(sp, abs)
+        m.void_tag(sp, abs) as u32
     }
 
     /// spec/oven.md "Construction" (WP-387, WP-395): `void *` tags

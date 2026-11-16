@@ -1318,7 +1318,9 @@ impl Oven {
                     return Err(self.uninit(b, field, t, loc));
                 }
                 // A `void *` keeps the designated type of its tag.
-                let v = sp.read(abs, info.size) | u128::from(self.mem.void_tag(st, abs)) << 64;
+                // (Not its union member designator, `vm/udesig.rs`.)
+                let tag = self.mem.void_tag(st, abs) as u32;
+                let v = sp.read(abs, info.size) | u128::from(tag) << 64;
                 let sc = self.scalar_of(b, t, v, loc)?;
                 let id =
                     b.consts().push_scalar(sc).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
@@ -2093,7 +2095,7 @@ impl Oven {
     fn put_thawed_ptr(&mut self, abs: u64, v: u128) {
         let mark = match (v as u64, (v >> 64) as u32) {
             (0, _) => 0,
-            (_, tag) => self.mem.set_void_tag(crate::mem::Sp::Static, abs, tag),
+            (_, tag) => self.mem.set_void_tag(crate::mem::Sp::Static, abs, u64::from(tag)),
         };
         self.mem.stat.write(abs, 8, u128::from(v as u64));
         self.mem.stat.set_ptr_mark(abs, 8, mark);

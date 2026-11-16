@@ -192,8 +192,9 @@ fault counts and trap ids unchanged.
   current evaluation; the *static* space holds globals and thawed constants
   and persists for the TU. Each space keeps the bytes, a per-byte
   initialized bitmap and a per-8-byte-granule pointer mark byte (0: no
-  pointer; 1: a pointer; `mem::PTR_TAGGED` (2) and up: a `void *` and
-  its designator tag, below and "Construction"); unions
+  pointer; 1: a pointer; `mem::PTR_TAGGED` (2) and up: a pointer with
+  a `void *` designator type or a union member designator path, below,
+  "Construction" and "Union member designators"); unions
   keep their active member in a side map keyed by (allocation, offset,
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
@@ -2680,42 +2681,120 @@ and element lifetimes are the existing per-byte bitmap
 `tests/conformance/class.union/constexpr-member-destroyed-cxx26.cpp`,
 `tests/conformance/class.union/constexpr-placement-array-element-cxx26.cpp`).
 
-**Union member designators** (WP-1494, `vm/udesig.rs`). A pointer is an
-allocation and an offset, so two members of one union that hold an
-object of the same type at the same offset (`union { int a; int b; }`,
-`union { S s; S arr[2]; }`; `Types::union_member_shared`) cannot be
-told apart by it, while the glvalue `u.b` designates `b` all the same
-([basic.life]/7, [expr.const]/10.9). The compiler tags the address of
-such a member (`member()` with `Access::Addr`: `VoidCast` aux
-`kbc::UNION_DESIG | idx << 4`, `[dst, p, union type]`) with an interned
-(union type, member index) pair (`Oven::udesig`, append-only per TU) in
-bits 96..128 of the pointer register; bits 64..96 stay the `void *`
-designator type. The tag travels with the register: copies, calls,
-returns, a reference bound to the member, a field projection through it
-(`Field` aux 2 keeps the register), a conversion to `void *` and back.
-Three operations read it:
+**Union member designators** (WP-1494, WP-1508, `compile/udesig.rs`,
+`vm/udesig.rs`). A pointer is an allocation and an offset, so two
+members of one union that can hold an object of the same type at the
+same offset (`union { int a; int b; }`, `union { S s; S arr[2]; }`,
+`union { S s; int arr[2]; }` for `&u.s.k`) cannot be told apart by it,
+while the glvalue `u.b` designates `b` all the same ([basic.life]/7,
+[expr.const]/10.9).
+
+*Compile time.* The address of a glvalue formed by a member access
+chain (`member()`, an element access of an array member and a
+derived-to-base conversion, each with `Access::Addr`;
+`Compiler::tag_union_chain`) is tagged at each union level of the chain
+whose member another member of that union could confuse: the chain
+(`u.s.k`, `u.arr[i]`, `(&u.s)->k`, `n.o.u.s.k`, `u.d` converted to a
+base) is walked outward from the glvalue, collecting the offsets the
+glvalue's object can have inside each level's object (an array step
+multiplies them by its element count; past 64 the level is tagged
+without looking), and a union level is ambiguous when another
+non-bit-field member has, at one of them, a subobject of the glvalue's
+type or of the type of one of its scalar subobjects at that scalar's
+offset (`Types::has_subobject`; a member or base the pointer reaches
+later, `p->k` of `const S *p = &u.s`, may be one the other member holds
+too; past 256 scalars or 1024 pairs the level is tagged). A member that
+holds no data (an empty class) never is. Each ambiguous level emits `VoidCast`
+aux `kbc::UNION_DESIG | idx << 4`, `[dst, p, union type]`. A chain
+stops at a variable, a call, a reference member, a virtual base and a
+pointer dereference other than `(&x)->m`; a pointer from there has the
+tags its value carries.
+
+*Representation.* The tag is an interned path of (union type, member
+index) levels, outermost first, in bits 96..128 of the pointer register
+(`Oven::udesig`: a trie, tag `i + 1` is `(parent tag, union type,
+member)`, append-only per TU; `UnionDesigs::extend` returns the parent
+when the path names that union type already, so a path has one level
+per union type). Bits 64..96 stay the `void *` designator type. No
+pointer value, frame slot, object header or allocation grows: the
+register was already 128 bits wide, and a stored pointer keeps its tag
+in the granule's pointer mark byte that a `void *` tag used
+(`Memory::vtags` interns the full upper 64 bits, `void *` tag and
+designator together; the mark byte and `Undo::Gran` are unchanged).
+The 253 interned upper words are shared with the `void *` tags; a
+pointer stored past them (`PTR_SPILL`) keeps its `void *` tag in
+`Memory::vspill` and drops its designator, and so does a pointer stored
+to static memory (a `constexpr` variable, a thawed constant, a copy into
+one: `Memory::strip_static_desigs`), whose marks a PCH snapshot keeps
+while `Oven::udesig` is rebuilt. A pointer without a tag is checked by
+offset and type as before (WP-233's `union_alts`).
+
+*Propagation.* The tag travels with the register (copies, calls,
+returns, a reference bound to the member, a conversion to `void *` and
+back, a member or base projection: `Field` or's the designator bits
+in), through pointer arithmetic (`PtrAdd`: no arithmetic leaves the
+designated member's subobject in a constant expression, and a pointer
+one past its end keeps the tag) and through memory (`store_desig` marks
+the granule, a load restores it: an array of pointers, a class member, a
+lambda capture, a reference member).
+
+*Readers.*
 - a load or store through the pointer (`load_desig`/`store_desig`):
   `Oven::desig_check` runs only on `slow_access`, the side path of an
   allocation holding unions (`HAS_UNION`), and only when the tag is
-  nonzero. A member not (possibly) active is "read of member 'b' of
-  union with active member 'a'", or "read of object outside its
-  lifetime" when it is the union's ended member;
+  nonzero, before the access's own union walk. Walking from the
+  allocation's root, a union whose type the path names must have that
+  member (possibly) active: otherwise "read of member 'b' of union with
+  active member 'a'", or "read of object outside its lifetime" when it
+  is the union's ended member. A union the path does not name is passed
+  by its active member, as the access's own walk does;
 - a placement new or `std::construct_at` (`place_walk`): the tagged
   member is the constructed one, not another of the same type;
 - an explicit destruction (`end_life`): the tagged member is the one
-  ended (and recorded `UNION_ENDED`).
-Every other operation reads the low 64 bits, and a store of the pointer
-to memory keeps no tag (the pointer mark byte has no room): such a
-pointer, and one formed by pointer arithmetic, is checked by offset and
-type as before (WP-233's `union_alts`). Untagged pointers pay nothing:
-the tag test is on paths that already handle a union. Pointer equality
-compares addresses (`&u.a == &u.b` is true). A common-initial-sequence
-read through an inactive standard-layout member is rejected in a
-constant expression as clang and GCC do ([class.mem.general]/26 permits
-it at run time only; [expr.const]/10.9)
-(`tests/conformance/class.union/constexpr-same-type-member-designated.cpp`;
-xfail `constexpr-same-type-member-designator-lost.cpp`, WP-1494
-remainder: the tag is lost through pointer arithmetic and memory).
+  ended (and recorded `UNION_ENDED`); an untagged one is checked by the
+  union walk. Destroying a member that is not active is "destruction of
+  member 'i' of union with active member 'm'" in every language mode, as
+  clang says (before WP-1508, C++20 and C++23 accepted it);
+- a pointer subtraction (`PtrSub`, `Oven::desig_apart`): two pointers
+  into one union object whose paths name different members of it are not
+  elements of one array ([expr.add]/5), "subtracted pointers are not
+  elements of the same array", as clang says (GCC 16.1 accepts).
+Pointer equality and the relational operators compare addresses
+([expr.eq]: `&u.a == &u.b` is true; [expr.rel]/5: `&u.a < &u.b` is false,
+as the operands compare equal), as clang and GCC do. A
+common-initial-sequence read through an inactive standard-layout member
+is rejected in a constant expression as clang and GCC do
+([class.mem.general]/26 permits it at run time only; [expr.const]/10.9).
+Untagged pointers pay nothing: `PtrAdd` and `Field` or in the
+designator bits without a branch, and every tag test is on a path that
+already handles a union or a fault
+(`tests/conformance/class.union/constexpr-same-type-member-designated.cpp`,
+`constexpr-member-designator-propagated.cpp`,
+`constexpr-member-designator-chain.cpp`,
+`constexpr-member-designator-pointer-ops.cpp`,
+`constexpr-destroy-inactive-member*.cpp`).
+
+**Copying a union with an ended or no active member** (WP-1508). The
+implicitly-defined copy constructor and copy assignment operator of a
+union copy its object representation ([class.copy.ctor]/15,
+[class.copy.assign]/13); neither is an lvalue-to-rvalue conversion of a
+member, so [expr.const]/10.9 (an lvalue-to-rvalue conversion of an
+object outside its lifetime) and /10.8 (of an inactive union member) do
+not apply, and the copy of a union with no active member, or whose
+member an explicit destruction ended, is a constant expression. The
+copy keeps the state: its member stays ended (a read of it is "read of
+object outside its lifetime", a read of another member "read of member
+'i' of union with active member 'm'"), or it has no active member. In
+C++26 an ended member's bytes stay live, and the copy copies the union's
+entry; before C++26 they are outside their lifetime, so `copy_obj`
+accepts a source whose dead bytes all lie in union subobjects
+(`Oven::dead_only_in_unions`) and ends the same bytes in the
+destination (`Oven::copy_dead_runs`). A class that holds such a union
+copies it memberwise ([class.copy.ctor]/14) and is accepted too; clang
+22 rejects that one ("subobject 'm' is not initialized", its trivial
+copy reads the whole class), GCC 16.1 accepts it. Clang 22 and GCC 16.1
+both accept the union copies
+(`tests/conformance/class.union/constexpr-union-copy-ended-member*.cpp`).
 
 An explicit destruction of a non-union class object whose union members'
 bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,

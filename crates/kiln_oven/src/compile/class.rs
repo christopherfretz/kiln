@@ -110,7 +110,7 @@ impl Compiler<'_> {
     /// The offset of the base subobject reached from class `from` along
     /// cast `e`'s base path up to its first virtual base, the class
     /// there, and the rest of the path (from that virtual base on).
-    fn path_offset(&mut self, e: ExprId, from: OTy) -> (u64, OTy, Vec<QualType>) {
+    pub(super) fn path_offset(&mut self, e: ExprId, from: OTy) -> (u64, OTy, Vec<QualType>) {
         let ast = self.ast();
         let Some(path) = ast.exprs.cast_path(e) else { return (0, from, Vec::new()) };
         let specs: Vec<(QualType, bool)> = ast
