@@ -220,7 +220,8 @@ impl Sema<'_, '_> {
         let r = self.ast.types.pointee_sugared(ty)?;
         let ec = self.ast.types.as_record(et)?;
         let rc = self.ast.types.as_record(r)?;
-        match self.class_relation(style, et, ec, r, rc, loc) {
+        let at = self.expr_loc(e);
+        match self.class_relation(style, et, ec, r, rc, loc, at) {
             Ok(Some((ck, path))) => Some(self.typed_cast(style, ck, e, r, vk, path, loc, rparen)),
             Ok(None) => None,
             Err(v) => {
@@ -253,6 +254,7 @@ impl Sema<'_, '_> {
     /// ([expr.static.cast]/2, /11). `Ok(None)` when unrelated; an
     /// ambiguous base is diagnosed (the caller treats the error as a
     /// failed cast); `Err(v)` a downcast through virtual base `v`.
+    #[allow(clippy::too_many_arguments, reason = "the cast's parts")]
     fn class_relation(
         &mut self,
         style: CastStyle,
@@ -261,6 +263,7 @@ impl Sema<'_, '_> {
         to: QualType,
         tc: kiln_ast::DeclId,
         loc: Loc,
+        operand: Loc,
     ) -> Result<Option<(CastKind, Option<ListId>)>, kiln_ast::DeclId> {
         let (fu, tu) = (conv::strip_cv(self, from), conv::strip_cv(self, to));
         // The relation is only known for complete classes: a class
@@ -276,11 +279,16 @@ impl Sema<'_, '_> {
                 return Ok(Some((CastKind::DerivedToBase, Some(path_list(self, &p)))));
             }
             BaseSearch::Ambiguous(paths) => {
+                // clang: the derived glvalue with the referent's
+                // qualifiers, at the operand (WP-1487).
                 let shown = ambiguous_paths_string(self, from, &paths);
+                let quals = self.ast.types.effective_quals(to);
+                let fq = self.ast.types.qualify(fu, quals);
+                let tq = self.ast.types.qualify(tu, quals);
                 let msg = self
-                    .diag(DiagId::sema_ambiguous_derived_to_base, loc)
-                    .arg(self.ty_arg(fu))
-                    .arg(self.ty_arg(tu))
+                    .diag(DiagId::sema_ambiguous_derived_to_base, operand)
+                    .arg(self.ty_arg(fq))
+                    .arg(self.ty_arg(tq))
                     .arg(shown);
                 self.emit(msg);
                 return Ok(None);

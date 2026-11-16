@@ -1219,6 +1219,18 @@ preprocessing continues.
 `pp_file_not_found` is a fatal error, as in clang. The driver stops after
 it through kiln_diag's fatal handling; the core itself carries on.
 
+Too many arguments to a function-like macro (WP-1487, clang
+`GenerateNewArgTokens`): when the brackets are balanced and the extra
+separators lie inside braces, the arguments are regrouped, each one
+that absorbed a separator wrapped in empty-span `(` `)`; if that gives
+the parameter count, the error carries the note "parentheses are
+required around macro argument containing braced initializer list" at
+the macro name and the invocation proceeds with the regrouped
+arguments. If a regrouped argument would start with `{`, the note is
+"cannot use initializer list at the beginning of a macro argument" and
+the invocation is dropped, as for any other count mismatch
+(`expand.rs` `regroup_braced_args`).
+
 ## Performance obligations
 
 - **Token buffers are recycled.** Expansion token buffers come from

@@ -532,6 +532,18 @@ fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptV
         b(get("sized-deallocation") == "-fsized-deallocation"),
         Compat::All,
     ));
+    // WP-1487: clang `AlignedAllocation` and `NewAlignOverride` (the
+    // value written, 0 when none), which follow `SizedDeallocation`.
+    v.push((
+        "aligned allocation",
+        b(get("aligned-allocation") == "-faligned-allocation"),
+        Compat::All,
+    ));
+    v.push((
+        "maximum alignment guaranteed by '::operator new(size_t)'",
+        OptVal::Value(get("new-alignment").trim_start_matches("-fnew-alignment=").to_owned()),
+        Compat::All,
+    ));
     v.push(("C++26 reflection", b(get("reflection") == "-freflection"), Compat::All));
     v.push((
         "reflection mangling",

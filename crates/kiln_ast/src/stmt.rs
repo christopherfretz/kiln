@@ -126,6 +126,57 @@ impl ContractSemantic {
     }
 }
 
+/// Where function contract assertions are checked (GCC 16.1's
+/// `-fcontracts-client-check=none|pre|all` and
+/// `-fcontracts-definition-check=on|off`; spec/contracts.md §6.1,
+/// WP-1485): `client` at each direct call of a function other than a
+/// constructor or destructor, in the caller (`Pre`: the preconditions;
+/// `All`: the postconditions too), `definition` in the called function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ContractChecks {
+    /// The kinds checked by the caller.
+    pub client: ClientCheck,
+    /// Whether the called function checks its own pre- and postconditions.
+    pub definition: bool,
+}
+
+impl Default for ContractChecks {
+    fn default() -> Self {
+        ContractChecks { client: ClientCheck::None, definition: true }
+    }
+}
+
+impl ContractChecks {
+    /// Whether a caller checks the assertions of kind `k` (`Pre` or
+    /// `Post`) of a function it calls directly.
+    pub fn client_checks(self, k: ContractKind) -> bool {
+        match self.client {
+            ClientCheck::None => false,
+            ClientCheck::Pre => k == ContractKind::Pre,
+            ClientCheck::All => true,
+        }
+    }
+
+    /// Whether a constant evaluation checks the assertions of kind `k` of
+    /// a function it calls (`structor`: a constructor or destructor, never
+    /// checked by the caller): where either side checks them at run time
+    /// (spec/contracts.md §6.4).
+    pub fn evaluation_checks(self, k: ContractKind, structor: bool) -> bool {
+        self.definition || (!structor && self.client_checks(k))
+    }
+}
+
+/// The `-fcontracts-client-check=` value ([`ContractChecks::client`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClientCheck {
+    /// No caller-side checks (GCC's default).
+    None,
+    /// The preconditions.
+    Pre,
+    /// The preconditions and the postconditions.
+    All,
+}
+
 /// Where a contract assertion is and what it says, for the
 /// `contract_violation` object codegen builds (spec/contracts.md §6.3):
 /// the `const char *` values point to frozen string literal objects.

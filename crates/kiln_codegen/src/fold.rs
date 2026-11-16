@@ -488,6 +488,14 @@ impl Collect<'_> {
                                 self.stmt(c);
                             }
                         }
+                    } else if ast.contract_semantic.checks()
+                        && let Some(&l) = ast.decls.cold.contracts.get(d)
+                    {
+                        // WP-1485: a declaration's own assertions, which a
+                        // caller checks under -fcontracts-client-check=.
+                        for c in ast.lists.iter::<StmtId>(l) {
+                            self.stmt(c);
+                        }
                     }
                 }
                 DeclKind::Var if !is_local(ast, d) => self.var(d, true),

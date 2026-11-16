@@ -84,8 +84,9 @@ modification time and the block checksum) or "newer"
 `cross_version`). The language options are those of the module-file
 fingerprint (spec/modules.md §11.4), named as clang names them: the
 standard levels, `char8_t keyword`, GNU extensions, exceptions, RTTI,
-freestanding, signed char, short enum types, sized deallocation, C++26
-reflection, the
+freestanding, signed char, short enum types, sized deallocation,
+aligned allocation, the maximum alignment guaranteed by
+`::operator new(size_t)`, C++26 reflection, the
 reflection mangling, and the optimization level.
 
 A consumer reads the record as a stream (WP-1401): the text whole, then
@@ -126,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 24)
+u32 FORMAT_VERSION                      little-endian (now 25)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```

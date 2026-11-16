@@ -37,10 +37,17 @@ LANGUAGE:
   -f[no-]reflection       C++26 static reflection (P2996; on by default
                           at -std=c++26)
   -f[no-]contracts        Contracts (P2900; on by default at -std=c++26;
-                          also links libstdc++exp, as g++)
+                          also links libstdc++exp, as g++; kiln++
+                          links it at -std=c++26 without the flag)
   -fcontract-evaluation-semantic=<semantic>
                           Contract evaluation semantic (P2900): ignore,
                           observe, enforce (default) or quick_enforce
+  -fcontracts-client-check=<none|pre|all>
+                          Also check preconditions (pre) or pre- and
+                          postconditions (all) in the caller
+  -fcontracts-definition-check=<on|off>
+                          Check pre- and postconditions in the function
+                          itself (default on)
   -fclang-compat=<major>
                           [kiln] The clang release whose behaviour to
                           reproduce: 19 or 22 (default 22)
@@ -53,6 +60,12 @@ LANGUAGE:
   -f[no-]builtin          Treat library functions as builtins (default on)
   -fno-builtin-<function> Do not treat <function> as a builtin
   -ffreestanding          Freestanding implementation (implies -fno-builtin)
+  -f[no-]aligned-allocation, -f[no-]aligned-new
+                          Aligned allocation for over-aligned types
+                          (default on at C++17 and later)
+  -faligned-new=<N>, -fnew-alignment=<N>
+                          The alignment ::operator new(size_t) guarantees
+  -f[no-]check-new        Test every new-expression's allocation for null
   -f[no-]coro-aligned-allocation
                           Aligned allocation for coroutine frames
   -f[no-]short-enums      Give an enumeration without a fixed underlying
@@ -410,6 +423,9 @@ mod tests {
             "script" => "x.ld",
             "symbol" => "foo",
             "seconds" => "604800",
+            "N" => "16",
+            "none|pre|all" => "pre",
+            "on|off" => "off",
             _ => panic!("{form}: no sample value for <{ph}>; add one to `sample`"),
         }
     }
@@ -487,6 +503,11 @@ mod tests {
             "-fkiln-pch-validate=content",
             "-f[no-]contracts",
             "-fcontract-evaluation-semantic=<semantic>",
+            "-fcontracts-client-check=<none|pre|all>",
+            "-fcontracts-definition-check=<on|off>",
+            "-f[no-]check-new",
+            "-faligned-new=<N>",
+            "-fnew-alignment=<N>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",
             "-fkiln-backend=<backend>",

@@ -65,6 +65,9 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     fn consteval_only_values(&self) -> bool {
         self.sema.reflection
     }
+    fn contract_checks(&self) -> kiln_ast::stmt::ContractChecks {
+        self.sema.contract_checks
+    }
 
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
         // Write-once: a re-evaluation of the same initializer (a fold,

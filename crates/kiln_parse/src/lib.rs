@@ -100,6 +100,8 @@ pub struct ParseOptions {
     pub freestanding: bool,
     /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
     pub sized_deallocation: bool,
+    /// Aligned allocation ([`kiln_sema::Sema::aligned_allocation`]).
+    pub aligned_allocation: bool,
     /// `-f[no-]short-enums` ([`kiln_sema::Sema::short_enums`]).
     pub short_enums: bool,
     /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
@@ -132,6 +134,9 @@ pub struct ParseOptions {
     /// `-fcontract-evaluation-semantic=` ([`kiln_ast::Ast::contract_semantic`];
     /// spec/contracts.md §6).
     pub contract_semantic: kiln_ast::stmt::ContractSemantic,
+    /// `-fcontracts-client-check=`, `-fcontracts-definition-check=`
+    /// ([`kiln_sema::Sema::contract_checks`]).
+    pub contract_checks: kiln_ast::stmt::ContractChecks,
     /// `-f[no-]contracts` ([`kiln_sema::Sema::contracts`]; `None`: by
     /// `std`).
     pub contracts: Option<bool>,
@@ -185,6 +190,7 @@ impl Default for ParseOptions {
             no_builtin_fns: Vec::new(),
             freestanding: false,
             sized_deallocation: true,
+            aligned_allocation: true,
             short_enums: false,
             char8: None,
             math_errno: true,
@@ -199,6 +205,7 @@ impl Default for ParseOptions {
             permissive: false,
             range_for_ext_temps: None,
             contract_semantic: kiln_ast::stmt::ContractSemantic::Enforce,
+            contract_checks: kiln_ast::stmt::ContractChecks::default(),
             contracts: None,
             full_deduction: false,
             full_redecl_scan: false,
@@ -373,6 +380,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.freestanding = opts.freestanding;
     s.contracts = opts.contracts;
     s.sized_deallocation = opts.sized_deallocation;
+    s.aligned_allocation = opts.aligned_allocation;
     s.short_enums = opts.short_enums;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
@@ -388,6 +396,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
     s.ast.contract_semantic = opts.contract_semantic;
+    s.contract_checks = opts.contract_checks;
     s.ast.lang_c = opts.c.is_some();
     s.ast.freestanding = opts.freestanding;
     s.full_deduction = opts.full_deduction;

@@ -764,7 +764,8 @@ The fingerprint is a list of (key, flag spelling) pairs for the options
 that change what the unit means or its ABI, each resolved to its
 effective value: `-std=`, the target triple, `-f[no-]exceptions`,
 `-f[no-]rtti`, the signedness of `char`, `-f[no-]char8_t`,
-`-f[no-]sized-deallocation`, `-ffreestanding`, `-f[no-]short-enums`
+`-f[no-]sized-deallocation`, `-f[no-]aligned-allocation` and
+`-fnew-alignment=` (WP-1485), `-ffreestanding`, `-f[no-]short-enums`
 (WP-1461), `-f[no-]reflection`,
 `-fkiln-reflection-mangling=` and `-fclang-compat=`. Options a unit is
 isolated from (`-D`, `-I`, warnings) or that only affect the object file

@@ -27,6 +27,8 @@ drv_hod_not_found = Error (1) "-fkiln-backend=hod: no hod executable found (sear
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
 // WP-1331: clang `warn_drv_input_file_unused` (`'assembler'`: a `.s` under `-S`, `-E`, `-fsyntax-only`, `-M`).
 drv_input_unused = Warning [UnusedCommandLineArgument] (2) "{0}: '{1}' input unused";
+// WP-1487: clang `err_fe_invalid_alignment` (`-fnew-alignment=`, `-faligned-new=`).
+drv_invalid_alignment = Error (2) "invalid value '{1}' in '{0}'; alignment must be a power of 2";
 // WP-811: a driver option spelled like a warning (`-Wframe-larger-than=N`);
 // WP-813: `-fpatchable-function-entry=` with a malformed value.
 drv_invalid_argument_to_option = Error (2) "invalid argument '{0}' to -{1}";

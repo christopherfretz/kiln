@@ -263,6 +263,8 @@ impl Job<'_> {
         cfg.pthread = p.pthread;
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation_for(&self.std);
+        cfg.aligned_allocation = p.aligned_allocation;
+        cfg.new_alignment = p.new_alignment;
         cfg.kiln_version = crate::version::triple();
         cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
@@ -690,6 +692,15 @@ impl Job<'_> {
                     "-fno-sized-deallocation",
                 ),
             ),
+            (
+                "aligned-allocation",
+                on(
+                    p.aligned_allocation_for(&self.std),
+                    "-faligned-allocation",
+                    "-fno-aligned-allocation",
+                ),
+            ),
+            ("new-alignment", format!("-fnew-alignment={}", p.new_alignment.unwrap_or(0))),
             ("freestanding", on(p.freestanding.unwrap_or(false), "-ffreestanding", "-fhosted")),
             ("short-enums", on(p.short_enums, "-fshort-enums", "-fno-short-enums")),
             ("reflection", on(p.reflection_for(&self.std), "-freflection", "-fno-reflection")),

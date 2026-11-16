@@ -202,12 +202,14 @@ fn pointer_conversion(
             cast_to(s, CastKind::DerivedToBase, e, to, Some(list))
         }
         BaseSearch::Ambiguous(paths) => {
+            // clang `CheckPointerConversion`: the pointee types as written
+            // ('const F'), at the operand (WP-1487).
             let shown = ambiguous_paths_string(s, fp, &paths);
-            let (fa, ta) = (s.ty_arg(strip_cv(s, fp)), s.ty_arg(strip_cv(s, tp)));
-            return Err(ConvError::new(
-                DiagId::sema_ambiguous_derived_to_base,
-                vec![fa, ta, shown],
-            ));
+            let (fa, ta) = (s.ty_arg(fp), s.ty_arg(tp));
+            let mut err =
+                ConvError::new(DiagId::sema_ambiguous_derived_to_base, vec![fa, ta, shown]);
+            err.at = Some(s.expr_loc(e));
+            return Err(err);
         }
         BaseSearch::NotDerived => cast_to(s, CastKind::BitCast, e, to, None),
     })
@@ -235,11 +237,11 @@ fn derived_to_base(
         }
         BaseSearch::Ambiguous(paths) => {
             let shown = ambiguous_paths_string(s, from, &paths);
-            let (fa, ta) = (s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, to)));
-            return Err(ConvError::new(
-                DiagId::sema_ambiguous_derived_to_base,
-                vec![fa, ta, shown],
-            ));
+            let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
+            let mut err =
+                ConvError::new(DiagId::sema_ambiguous_derived_to_base, vec![fa, ta, shown]);
+            err.at = Some(s.expr_loc(e));
+            return Err(err);
         }
         BaseSearch::NotDerived => e,
     })

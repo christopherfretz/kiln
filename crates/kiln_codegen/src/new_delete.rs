@@ -211,7 +211,7 @@ impl Cg<'_> {
         if let Some(af) = self.alloc_fn(d).filter(|a| a.replaceable && a.is_new) {
             extra.push(Attr::AllocSize(0, None));
             ret.push(Attr::Flag(AttrKind::NoAlias));
-            if !af.nothrow_t && !self.opts.null_pointer_is_valid {
+            if !af.nothrow_t && !self.opts.null_pointer_is_valid && !self.opts.check_new {
                 ret.push(Attr::Flag(AttrKind::NonNull));
             }
         } else if let Some(a) = self.fn_alloc_size(d) {
@@ -304,7 +304,7 @@ impl Cg<'_> {
             f.push(Attr::Flag(AttrKind::NoBuiltin));
             if af.is_new {
                 f.push(Attr::AllocSize(0, None));
-                if !af.nothrow_t && !self.opts.null_pointer_is_valid {
+                if !af.nothrow_t && !self.opts.null_pointer_is_valid && !self.opts.check_new {
                     r.push(Attr::Flag(AttrKind::NonNull));
                 }
             }
@@ -758,10 +758,11 @@ impl Cg<'_> {
             (p, align)
         };
 
-        // The null check (an allocation function that may return null).
-        let null_check = !af.reserved
-            && nothrow
-            && !(af.replaceable && af.is_new && !af.nothrow_t)
+        // The null check (an allocation function that may return null;
+        // under `-fcheck-new` any, the reserved placement form included,
+        // clang `CXXNewExpr::shouldNullCheckAllocation`).
+        let null_check = (self.opts.check_new
+            || (!af.reserved && nothrow && !(af.replaceable && af.is_new && !af.nothrow_t)))
             // Default-initializing a class is a (possibly trivial)
             // constructor call in clang's AST, so it counts as an
             // initializer (`CXXNewExpr::hasInitializer`).

@@ -183,6 +183,7 @@ impl LangStd {
             std: self.lex,
             c: self.c,
             gnu: self.gnu,
+            aligned_allocation: self.lex >= kiln_lex::Std::Cxx17,
             ..kiln_parse::ParseOptions::default()
         }
     }

@@ -113,6 +113,18 @@ pub struct CodegenOptions {
     /// function ([expr.new]/8, C++11 and later; the default). Off (C++98)
     /// the allocation function is passed `SIZE_MAX`, as clang does.
     pub bad_array_new_length: bool,
+    /// `-fcheck-new` (WP-1487, clang `LangOptions::CheckNew`): every
+    /// new-expression with an initializer (or of class type) checks the
+    /// allocation function's result for null before initializing, the
+    /// reserved placement form included, and a replaceable `operator new`
+    /// loses its implicit `nonnull` result ([expr.new]/15 extended to
+    /// every allocation function).
+    pub check_new: bool,
+    /// `-fcontracts-client-check=`, `-fcontracts-definition-check=`
+    /// (spec/contracts.md §6.3, WP-1485): the caller checks the pre- (and
+    /// post-) conditions of a function it calls directly; the called
+    /// function checks its own unless `definition` is off.
+    pub contract_checks: kiln_ast::stmt::ContractChecks,
     /// Optional copy elision is performed (`-felide-constructors`, the
     /// default): NRVO and the elidable copies of
     /// `Ast::elidable_copy_source`. Off (`-fno-elide-constructors`, C++17
@@ -754,6 +766,8 @@ impl Default for CodegenOptions {
             c: None,
             exceptions: true,
             bad_array_new_length: true,
+            check_new: false,
+            contract_checks: kiln_ast::stmt::ContractChecks::default(),
             elide_constructors: true,
             dynamic_exception_specs: false,
             rtti: true,

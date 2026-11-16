@@ -113,14 +113,25 @@ Planned as 1.3.0.
   share one common-initial-sequence rule with `__is_layout_compatible`,
   which now also accepts members that are both `[[no_unique_address]]`
   (CWG2759, as GCC; clang answers false).
+- GCC 16.1's contract flags (WP-1485): `-fcontracts-client-check=none|pre|all`
+  makes the caller check the preconditions (and with `all` the
+  postconditions) of each function it calls directly, and
+  `-fcontracts-definition-check=off` drops a function's own checks of its
+  preconditions and postconditions; `contract_assert` is unaffected
+  ([spec/contracts.md](spec/contracts.md) §6.1). No ABI change.
+- `-fcheck-new`, `-faligned-new[=N]`, `-fno-aligned-new` and
+  `-fnew-alignment=N` (WP-1485), as clang and GCC: a null check after
+  each allocation, and the threshold above which `new` calls the
+  aligned allocation functions. The default output is unchanged.
+- GCC's `__builtin_exit`, `__builtin__Exit` and `__builtin__exit` (WP-1485),
+  calls of the library functions; never constant expressions.
 
 ### Changed
 
-- The PCH snapshot format is 15 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448, WP-1449, WP-1456,
-  WP-1463 and WP-1461; new
-  diagnostics, options and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
-  it is not misread, as [spec/pch.md](spec/pch.md) describes.
+- The PCH snapshot format changed several times since 1.2.0 (new
+  diagnostics, options and AST data changed the schema; the current
+  version is in [spec/pch.md](spec/pch.md)). Rebuild a PCH built by
+  kiln 1.2.0; until then it is not misread, as the spec describes.
 - `__is_trivially_copyable`, `__is_trivial`, `__is_pod` and
   `__builtin_is_implicit_lifetime` (and with them
   `std::is_trivially_copyable`, `std::is_trivial`, `__builtin_bit_cast`,
@@ -132,6 +143,18 @@ Planned as 1.3.0.
   each differ from the standard on some of these classes
   (docs/status/deviations.md). Argument passing, debug info and the
   `__has_trivial_*` traits are unchanged.
+
+- Default change: at C++26 and later (`-std=c++26`, `gnu++26`, `c++2c`,
+  `gnu++2c`) kiln++ links `libstdc++exp` when it links against
+  libstdc++ and the GCC installation has `libstdc++exp.a` (WP-1485),
+  without `-fcontracts`. The archive holds the parts of libstdc++ whose
+  ABI is not frozen (the default contract-violation handler,
+  `<stacktrace>`, `std::text_encoding::environment`, `<debugging>`, the
+  Filesystem TS); only referenced members are linked, so other programs
+  link to the same binary. g++ 16.1 does not add it at a plain
+  `-std=c++26`. `-nostdlib++`, or an installation without the archive,
+  leaves the link line as before; below C++26 it is still added only
+  with `-f[no-]contracts`.
 
 ### Fixed
 
@@ -149,6 +172,12 @@ Planned as 1.3.0.
   `va_start` arguments, discarded as before, now warn `-Wvarargs` unless
   they name the last parameter, as in GCC. `cargo xtask gxx-dg` lifts
   kiln's and clang's error limit.
+- Found running GCC's C++ testsuite (WP-1485, WP-1487): a postcondition
+  of a templated function with a deduced return type is accepted
+  ([dcl.contract.res]/2); the ambiguous derived-to-base conversion error
+  is reported at the operand and names the types as clang does; a
+  braced list in a function-like macro argument is diagnosed with
+  clang's notes and recovered from.
 - Reflection, found running GCC's C++ testsuite (WP-1482): a range
   argument of `reflect_constant_array`, `define_static_array`,
   `substitute` and the other range-taking metafunctions is iterated once

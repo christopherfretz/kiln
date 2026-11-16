@@ -5795,6 +5795,10 @@ pub mod builtin {
             "b.",
             N | T,
         ),
+        // WP-1485.
+        row(EXIT, "__builtin_exit", "vi", N | R | F),
+        row(UEXIT, "__builtin__Exit", "vi", N | R | F),
+        row(LEXIT, "__builtin__exit", "vi", N | R | F),
         // WP-1057.
         row(READCYCLECOUNTER, "__builtin_readcyclecounter", "ULLi", N),
         // WP-774.
@@ -5973,6 +5977,20 @@ pub mod builtin {
     /// [meta.member]/2): whether an `S` object is pointer-interconvertible
     /// with its member `m` ([basic.compound]/5). Kiln-private id.
     pub const IS_POINTER_INTERCONVERTIBLE_WITH_CLASS: u32 = 2461;
+    // ---- WP-1485 (GCC's process-exit builtins; clang 22 has none).
+    /// `void __builtin_exit(int)` (GCC `BUILT_IN_EXIT`, `nothrow`,
+    /// `noreturn`): a call of the library `exit`. Never a constant
+    /// expression. Like the other GCC-only builtins kiln declares
+    /// ([`CLEAR_PADDING`]), it is recognized in every dialect and at every
+    /// `-fclang-compat` level while `__has_builtin` answers clang's 0.
+    /// Kiln-private id.
+    pub const EXIT: u32 = 2462;
+    /// `void __builtin__Exit(int)` (GCC `BUILT_IN__EXIT2`): the library
+    /// `_Exit`, as [`EXIT`].
+    pub const UEXIT: u32 = 2463;
+    /// `void __builtin__exit(int)` (GCC `BUILT_IN__EXIT`): the POSIX
+    /// `_exit`, as [`EXIT`].
+    pub const LEXIT: u32 = 2464;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[

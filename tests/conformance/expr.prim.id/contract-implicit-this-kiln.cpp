@@ -2,13 +2,16 @@
 // wording and GCC 16.1 does not: `sizeof(b)` is not potentially evaluated,
 // so no `(*this).b` is formed (Example 1 of the paragraph: OK; GCC rejects
 // it); a lambda in the predicate that names a member through its captured
-// `this` makes that transformation in the predicate (GCC accepts it).
+// `this` makes that transformation in the predicate (GCC accepts it);
+// `this->b` in such a lambda forms no transformation and is fine
+// (spec/contracts.md §9).
 //@ expect: compile-fail
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
-//@ diag: 13:30 error "a precondition of a constructor cannot access a member through an implicit 'this'; write 'this->' explicitly"
+//@ diag: 15:30 error "a precondition of a constructor cannot access a member through an implicit 'this'; write 'this->' explicitly"
 struct C {
   bool b;
   C() pre(sizeof(b) > 0) {}
   C(int) pre([this] { return b; }()) {}
+  C(long) pre([this] { return this->b; }()) {}
 };

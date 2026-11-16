@@ -418,6 +418,18 @@ pub struct Sema<'a, 'sm> {
     /// deallocation lookup never prefers a sized one
     /// ([`Sema::usual_delete`]).
     pub sized_deallocation: bool,
+    /// Aligned allocation (clang `LangOptions::AlignedAllocation`, on from
+    /// C++17; `-f[no-]aligned-allocation`, `-f[no-]aligned-new`; WP-1487):
+    /// off, the `std::align_val_t` global allocation and deallocation
+    /// functions are not declared implicitly and no new- or
+    /// delete-expression passes an alignment ([expr.new]/19,
+    /// [expr.delete]/10 are C++17 rules).
+    pub aligned_allocation: bool,
+    /// `-fcontracts-client-check=`, `-fcontracts-definition-check=`
+    /// (spec/contracts.md §6.1, WP-1485): which function contract
+    /// assertions a constant evaluation checks (`ContractChecks::
+    /// evaluation_checks`, through the Oven bridge).
+    pub contract_checks: kiln_ast::stmt::ContractChecks,
     /// `-f[no-]short-enums` (clang `LangOptions::ShortEnums`, default
     /// off): every enumeration without a fixed underlying type is laid
     /// out as a `packed` one (WP-1461).
@@ -1449,6 +1461,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu_lib_builtins: false,
             no_builtin: false,
             sized_deallocation: true,
+            aligned_allocation: true,
+            contract_checks: kiln_ast::stmt::ContractChecks::default(),
             short_enums: false,
             char8: None,
             no_builtin_fns: Vec::new(),

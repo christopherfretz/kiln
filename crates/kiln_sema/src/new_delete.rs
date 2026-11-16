@@ -120,16 +120,22 @@ impl Sema<'_, '_> {
         self.global_ops.align_val_t = Some(al);
         let size = self.size_type();
         let vp = self.ast.types.pointer_to(QualType::VOID);
+        // The aligned ones only with aligned allocation (WP-1487), the
+        // sized ones only with `-fsized-deallocation` (clang
+        // `DeclareGlobalNewDelete`).
+        let aligned = self.aligned_allocation;
         for op in [O::New, O::ArrayNew] {
             self.declare_global_op(op, vp, &[size], ExcSpec::None);
-            self.declare_global_op(op, vp, &[size, al], ExcSpec::None);
+            if aligned {
+                self.declare_global_op(op, vp, &[size, al], ExcSpec::None);
+            }
         }
-        // The sized ones only with `-fsized-deallocation` (clang
-        // `DeclareGlobalNewDelete`).
         let n = if self.sized_deallocation { 4 } else { 2 };
         for op in [O::Delete, O::ArrayDelete] {
             for params in [&[vp][..], &[vp, al], &[vp, size], &[vp, size, al]].into_iter().take(n) {
-                self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
+                if aligned || !params.contains(&al) {
+                    self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
+                }
             }
         }
         let end = self.ast.decls.next_id();
@@ -486,7 +492,8 @@ impl Sema<'_, '_> {
         }
         let (size, align) = crate::target::size_align(&self.ast, elem, &self.abi).unwrap_or((1, 1));
         let _ = size;
-        let mut pass_align = align > self.abi.default_new_align;
+        // WP-1487: only with aligned allocation (C++17, or the flags).
+        let mut pass_align = self.aligned_allocation && align > self.abi.default_new_align;
         // Class element types: constructors (WP-067b) and array cookies
         // (WP-076) are not supported yet.
         let class_unsupported = self.new_class_unsupported(elem, array_form, &init, tid.loc);
@@ -1896,8 +1903,9 @@ impl Sema<'_, '_> {
 
     /// The type is over-aligned for `operator new` ([basic.align]/3).
     fn over_aligned(&self, ty: QualType) -> bool {
-        crate::target::size_align(&self.ast, ty, &self.abi)
-            .is_some_and(|(_, a)| a > self.abi.default_new_align)
+        self.aligned_allocation
+            && crate::target::size_align(&self.ast, ty, &self.abi)
+                .is_some_and(|(_, a)| a > self.abi.default_new_align)
     }
 
     /// [expr.new]/28: a placement new-expression whose matching
@@ -2226,7 +2234,7 @@ impl Sema<'_, '_> {
         } else {
             1
         };
-        let aligned = align > self.abi.default_new_align;
+        let aligned = self.aligned_allocation && align > self.abi.default_new_align;
         // [expr.delete]/6: the destructor is invoked. A `delete[]` needs
         // to know first (it decides the size below); a single-object
         // delete chooses the deallocation function first (clang
@@ -2496,7 +2504,7 @@ impl Sema<'_, '_> {
         self.declare_global_new_delete();
         let ty = self.tag_type(class);
         let align = self.complete_class_align(ty);
-        let aligned = align > self.abi.default_new_align;
+        let aligned = self.aligned_allocation && align > self.abi.default_new_align;
         let found = self.alloc_fns(ty, OverloadedOperator::Delete, false, loc);
         let usual = if self.global_ops.seen_type_aware {
             self.typed_usual_delete(&found, ty, aligned, true, true, (loc, diagnose)).ok()??

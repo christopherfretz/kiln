@@ -203,6 +203,9 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::NANSF16
         | id::NANSF128
         | id::ABORT
+        | id::EXIT
+        | id::UEXIT
+        | id::LEXIT
         | id::BCMP
         | id::WMEMCPY
         | id::WMEMMOVE

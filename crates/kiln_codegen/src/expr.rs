@@ -3931,6 +3931,18 @@ impl Cg<'_> {
             self.target_feature_call_check(e, d);
         }
         let vals = self.emit_call_args_for(&sig, &args, direct)?;
+        // WP-1485: -fcontracts-client-check= (spec/contracts.md §6.3).
+        let mut dest = dest;
+        let client = match direct.and_then(|d| self.client_checked(d)) {
+            Some(d) => {
+                if dest.is_none() && self.is_aggregate(sig.ret) && self.client_post_names_result(d)
+                {
+                    dest = Some(self.temp(sig.ret));
+                }
+                Some(self.emit_client_pre(d, None, &vals)?)
+            }
+            None => None,
+        };
         let mut ret_extra = Vec::new();
         if let Some(d) = direct {
             self.psabi_call_check(e, d, &args, false);
@@ -3964,6 +3976,9 @@ impl Cg<'_> {
         }
         if noreturn {
             self.finish_noreturn_call(from, fid, Some(e))?;
+        }
+        if let Some(b) = client {
+            self.emit_client_post(b, r, dest)?;
         }
         Ok(r)
     }
