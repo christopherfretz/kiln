@@ -108,6 +108,24 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         kiln_abi::ensure_layout(&mut s.ast, record, &s.abi)
     }
 
+    fn member_layout(
+        &mut self,
+        s1: QualType,
+        s2: QualType,
+        m1: DeclId,
+        m2: Option<DeclId>,
+    ) -> bool {
+        let s = &*self.sema;
+        match m2 {
+            Some(m2) => {
+                kiln_abi::layout::compat::corresponding_member(&s.ast, &s.abi, s1, s2, m1, m2)
+            }
+            None => {
+                kiln_abi::layout::compat::pointer_interconvertible_member(&s.ast, &s.abi, s1, m1)
+            }
+        }
+    }
+
     fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
         let s = &*self.sema;
         crate::target::size_align(&s.ast, ty, &s.abi)

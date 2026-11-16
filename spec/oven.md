@@ -1279,6 +1279,13 @@ literal is one instruction and one step, not an interpreted loop.
   `constexpr void *p = __builtin_malloc(4);` is "constexpr variable 'p'
   must be initialized by a constant expression", as in clang 19 and 22
   (`ext.gnu.builtins/library-fwd-constexpr.cpp`).
+- **Member layout (WP-1472):** `__builtin_is_corresponding_member` and
+  `__builtin_is_pointer_interconvertible_with_class` ask
+  `SemaBridge::member_layout` (spec/abi.md §3.4). Operands written
+  `&C::m` are answered when the call compiles; others run `bi::MEMBER_LAYOUT`
+  (sub 0 corresponding, 1 interconvertible) on the interned member
+  pointer values and the static classes of their types. Null and pointers
+  to member functions are false.
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline

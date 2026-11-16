@@ -365,7 +365,9 @@ impl Sema<'_, '_> {
     /// `__is_layout_compatible(T, U)` ([basic.types.general]/11, clang 19
     /// `BTT_IsLayoutCompatible`): each operand other than `void` or an
     /// array of unknown bound must be complete ("incomplete type 'X'
-    /// where a complete type is required" where it is written).
+    /// where a complete type is required" where it is written). The
+    /// rule is `kiln_abi::layout::compat` (WP-1472), shared with
+    /// `__builtin_is_corresponding_member`.
     pub(super) fn eval_layout_compatible(
         &mut self,
         a: (QualType, Loc),
@@ -385,121 +387,31 @@ impl Sema<'_, '_> {
             }
             self.trait_incomplete(DiagId::sema_incomplete_type_required, at, q);
         }
-        self.layout_compatible(a.0, b.0, 0)
+        for q in [a.0, b.0] {
+            self.ensure_record_layout(q);
+        }
+        kiln_abi::layout::compat::layout_compatible(&self.ast, &self.abi, a.0, b.0)
     }
 
-    /// clang's `isLayoutCompatible(QualType, QualType)`.
-    fn layout_compatible(&self, a: QualType, b: QualType, depth: usize) -> bool {
-        if depth > MAX_DEPTH {
-            return false;
+    /// Lays out (and caches) the complete class of `q`, if any, with the
+    /// classes it contains, so that `kiln_abi::layout::compat` reads
+    /// cached layouts.
+    pub(crate) fn ensure_record_layout(&mut self, q: QualType) {
+        let mut q = q;
+        while let Some(e) = self.array_element_type(q) {
+            q = e;
         }
-        if self.same_unqualified(a, b, depth) {
-            return true;
-        }
-        let tys = &self.ast.types;
-        let a = tys.canonical(a).without_quals();
-        let b = tys.canonical(b).without_quals();
-        match (tys.canonical_view(a), tys.canonical_view(b)) {
-            (TypeView::Enum(x), TypeView::Enum(y)) => {
-                let int_ty = |e: DeclId| {
-                    let first = self.ast.first(e);
-                    let def = self.ast.definition(first).unwrap_or(first);
-                    let data = self.ast.decls.enumeration(def)?;
-                    let complete =
-                        data.flags & kiln_ast::decl::EnumData::COMPLETE != 0 || data.is_fixed();
-                    complete.then_some(data.int_type).flatten()
-                };
-                match (int_ty(x), int_ty(y)) {
-                    (Some(p), Some(q)) => tys.same_type(p, q),
-                    _ => false,
-                }
-            }
-            (TypeView::Record(x), TypeView::Record(y)) => {
-                self.is_standard_layout_type(a)
-                    && self.is_standard_layout_type(b)
-                    && self.records_layout_compatible(x, y, depth + 1)
-            }
-            _ => false,
+        if let Some(r) = self.ast.types.as_record(q) {
+            let _ = kiln_abi::ensure_layout(&mut self.ast, r, &self.abi);
         }
     }
 
-    /// clang's `isLayoutCompatible(RecordDecl, RecordDecl)`: two structs
-    /// with layout-compatible bases and fields in order, or two unions
-    /// whose members pair up in any order.
-    fn records_layout_compatible(&self, x: DeclId, y: DeclId, depth: usize) -> bool {
-        let (x, y) = (self.class_def(x), self.class_def(y));
-        if self.is_union(x) != self.is_union(y) {
-            return false;
-        }
-        let fx = self.fields_of(x);
-        let fy = self.fields_of(y);
-        if self.is_union(x) {
-            let mut unmatched = fy;
-            for f in fx {
-                let Some(i) = unmatched
-                    .iter()
-                    .position(|&g| self.fields_layout_compatible(f, g, true, depth))
-                else {
-                    return false;
-                };
-                unmatched.remove(i);
-            }
-            return unmatched.is_empty();
-        }
-        // clang 19 compares the fields of the classes that declare them
-        // (`getStandardLayoutBaseWithFields`, [class.mem.general]/26).
-        let fx = self.fields_of(self.standard_layout_base_with_fields(x, depth));
-        let fy = self.fields_of(self.standard_layout_base_with_fields(y, depth));
-        fx.len() == fy.len()
-            && fx.iter().zip(&fy).all(|(&f, &g)| self.fields_layout_compatible(f, g, false, depth))
-    }
-
-    /// clang's `isLayoutCompatible(FieldDecl, FieldDecl)`.
-    /// `a` and `b` are the same type once every qualifier, including
-    /// those an array carries on its element, is dropped (clang's
-    /// `getCanonicalType().getUnqualifiedType()` comparison).
-    fn same_unqualified(&self, a: QualType, b: QualType, depth: usize) -> bool {
-        let tys = &self.ast.types;
-        match (tys.canonical_view(a), tys.canonical_view(b)) {
-            (TypeView::ConstantArray(_), TypeView::ConstantArray(_))
-            | (TypeView::IncompleteArray(_), TypeView::IncompleteArray(_)) => {
-                depth <= MAX_DEPTH
-                    && tys.array_size(a) == tys.array_size(b)
-                    && match (self.array_element(a), self.array_element(b)) {
-                        (Some(x), Some(y)) => self.same_unqualified(x, y, depth + 1),
-                        _ => false,
-                    }
-            }
-            _ => tys.same_type(tys.canonical(a).without_quals(), tys.canonical(b).without_quals()),
-        }
-    }
-
-    /// The immediate element type of the array type `q`.
-    fn array_element(&self, q: QualType) -> Option<QualType> {
+    fn array_element_type(&self, q: QualType) -> Option<QualType> {
         match self.ast.types.canonical_view(q) {
             TypeView::ConstantArray(a) => Some(a.elem),
             TypeView::IncompleteArray(e) => Some(e),
             _ => None,
         }
-    }
-
-    /// clang's `CXXRecordDecl::getStandardLayoutBaseWithFields`: the
-    /// class among `d` and its bases that declares the non-static data
-    /// members (`d` itself when none does).
-    fn standard_layout_base_with_fields(&self, d: DeclId, depth: usize) -> DeclId {
-        if !self.fields_of(d).is_empty() || depth > MAX_DEPTH {
-            return d;
-        }
-        for b in self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty).collect::<Vec<_>>() {
-            if let Some(r) = self.defined_record(b) {
-                let r = self.class_def(r);
-                let w = self.standard_layout_base_with_fields(r, depth + 1);
-                if !self.fields_of(w).is_empty() {
-                    return w;
-                }
-            }
-        }
-        d
     }
 
     /// `[[no_unique_address]]` written on the field `f`.
@@ -510,30 +422,6 @@ impl Sema<'_, '_> {
                 .lists
                 .iter::<AttrId>(self.ast.attrs.of_decl(f))
                 .any(|a| self.ast.attrs.get(a).kind == AttrKind::NO_UNIQUE_ADDRESS)
-    }
-
-    fn fields_layout_compatible(&self, f: DeclId, g: DeclId, in_union: bool, depth: usize) -> bool {
-        let ty = |d: DeclId| self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-        if !self.layout_compatible(ty(f), ty(g), depth) {
-            return false;
-        }
-        let data = |d: DeclId| self.ast.decls.field(d).copied();
-        let (Some(df), Some(dg)) = (data(f), data(g)) else { return false };
-        match (df.bit_width, dg.bit_width) {
-            (None, None) => {}
-            (Some(w), Some(v)) => {
-                if crate::conv::eval_width(self, w) != crate::conv::eval_width(self, v) {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-        if df.no_unique_address() || dg.no_unique_address() || self.has_nua(f) || self.has_nua(g) {
-            return false;
-        }
-        in_union
-            || kiln_abi::layout::decl_max_align(&self.ast, f, &self.abi)
-                == kiln_abi::layout::decl_max_align(&self.ast, g, &self.abi)
     }
 
     /// `__is_pointer_interconvertible_base_of(Base, Derived)`

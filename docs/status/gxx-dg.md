@@ -156,6 +156,8 @@ WP-1466 fixed the parser clusters 2, 3, 8, 9, 21, 22 and 30 (re-run of their 61 
 
 WP-1467 (after this run) fixed most of clusters 4, 6, 12, 13, 14, 18, 26, 27 and 28: 108 of their 167 cases now pass; left are SFINAE access and deletion checks, pre-C++17 elidable copies in `noexcept`, `V a{{}}` with an initializer-list constructor, explicit-instantiation ordering and two-phase operator lookup.
 
+WP-1472 added GCC's `__builtin_is_corresponding_member` / `__builtin_is_pointer_interconvertible_with_class` and fixed clusters 16 and 25 (`g++.dg/cpp2a` + `g++.dg/cpp23`: 3267 → 3296 of 4371 cases pass); clusters 19 and 24 and `lambda-scope10` have xfail repros (row WP-1497).
+
 1. **Deduction from a base class that is ambiguous** (60 cases, 22 tests).
    `struct C : A<int,int>, A<int> {}; template<class... T> void f(const A<T...>&); f(C{});`
    deduces `A<int,int>` (CWG2303: the most derived candidate wins). The

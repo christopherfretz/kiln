@@ -571,7 +571,12 @@ instantiation-dependent ([temp.dep.expr]/3;
 specialization that is not an odr-use and has no capture still gets the
 type a capture-default would give it ([expr.prim.id.unqual]/3).
 `this` in the body is the captured `this` or the address of the
-`*this` copy.
+`*this` copy. Likewise (WP-1472) `this` written or implied in a lambda
+whose innermost `*this`-capturing enclosing lambda has a dependent
+explicit object parameter not known to be const is type-dependent
+(`build_this`), so a member `x` of the copy and `decltype((x))` are
+re-formed in each specialization: `const int&` when the object
+parameter refers to a const closure (clang 22 and GCC 16.1 agree).
 
 ## 5. Generic lambdas
 

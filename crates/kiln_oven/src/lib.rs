@@ -306,6 +306,22 @@ pub trait SemaBridge {
     /// The layout of a complete record (via `kiln_abi`); `None` while the
     /// class is incomplete (no definition, or still being defined).
     fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout>;
+    /// `__builtin_is_corresponding_member` (`m2` is `Some`: whether the
+    /// data members `m1` of class `s1` and `m2` of class `s2` correspond,
+    /// [meta.member]/4) or `__builtin_is_pointer_interconvertible_with_class`
+    /// (`m2` is `None`: whether an `s1` object is pointer-interconvertible
+    /// with its member `m1`, [meta.member]/2); `kiln_abi::layout::compat`
+    /// (WP-1472). The default is false.
+    fn member_layout(
+        &mut self,
+        s1: QualType,
+        s2: QualType,
+        m1: DeclId,
+        m2: Option<DeclId>,
+    ) -> bool {
+        let _ = (s1, s2, m1, m2);
+        false
+    }
     /// `(size, align)` in bytes of a type the Oven has no value model
     /// for (a vector type: spec/oven.md "Interface"), via `kiln_abi`, so
     /// `sizeof`/`alignof` agree with layout. The default is unknown

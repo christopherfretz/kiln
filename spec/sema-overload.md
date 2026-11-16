@@ -208,6 +208,14 @@ lookup found members uses `(*this)` when available; with no `this`, a
 non-static winner is "call to non-static member function without an object
 argument".
 
+A UME with a member function template whose explicit object expression is
+type-dependent (its type is the current instantiation: a parameter `O o`,
+a capture `[o]`, `p->` with `O *p`) is not resolved by the call: it
+becomes a dependent member access keeping its template arguments
+(`dependent_object_member_overload`, [temp.dep.expr]/5, clang's
+`UnresolvedMemberExpr` with a dependent base), so `o.f<int>()` on a const
+`o` in a member that is never instantiated is not an error (WP-1472).
+
 A template-id naming member function templates and called without an
 object expression (`get<I>()` found in a class, `B::get<I>()` qualified,
 also inside `B`) is an `UnresolvedLookupExpr` until the call

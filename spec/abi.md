@@ -229,6 +229,43 @@ Bit-field bits number little-endian, the only byte order kiln targets.
 An object over 16 MiB (`MAX_PADDING_MASK_BYTES`) gets `None`. Class
 masks are memoized for each call.
 
+### 3.4 Layout compatibility (`layout::compat`, WP-1472)
+
+One computation of the common initial sequence ([class.mem.general]/23)
+serves `__is_layout_compatible`, GCC's `__builtin_is_corresponding_member`
+and `__builtin_is_pointer_interconvertible_with_class` (sema, the Oven
+through `SemaBridge::member_layout`, codegen's folding bridge and its
+run-time lowering). Callers lay the classes out first (`ensure_layout`).
+- `layout_compatible(a, b)` ([basic.types.general]/11): the same type
+  ignoring cv (array elements included); enums with the same underlying
+  type; standard-layout unions whose members pair in any order (same
+  type, same width, no `[[no_unique_address]]`); standard-layout structs
+  whose common initial sequence covers every member of both.
+- The sequence pairs the members of the class that declares the
+  members (`base_with_fields`) in declaration order while both are
+  layout-compatible, have the same bit-field width (or none), are both
+  or neither `[[no_unique_address]]` (CWG2759), have the same alignment
+  (`decl_max_align` raises a type's) and sit at the same offset (GCC
+  16.1; the text alone continues past differently placed members of
+  layout-compatible types of different alignment). An unnamed bit-field
+  is a member and ends it on a mismatch. clang 19/22 exclude any
+  `[[no_unique_address]]` member; kiln follows the text and GCC.
+- `corresponding_member(s1, s2, m1, m2)` ([meta.member]/4): both classes
+  standard-layout structs and `m1`/`m2` the same position in the
+  sequence; a member of an anonymous struct (`IndirectField`) is looked
+  up in the corresponding pair of anonymous structs (GCC). A member of
+  an anonymous union is false (GCC 16.1 says "sorry").
+- `pointer_interconvertible_member(s, m)` ([meta.member]/2,
+  [basic.compound]/5): any member of a union; the first member (unnamed
+  bit-fields skipped) of a standard-layout struct, a member of its base
+  when that base declares the members; through anonymous members
+  transitively.
+- Run time (`corresponding_offsets`, `interconvertible_member_of_type`):
+  codegen lowers pointer-interconvertible to `mp == 0` (Itanium data
+  member pointers are byte offsets) when the class can have such a
+  member of that type, else false; corresponding to `m1 == m2` and `m1`
+  one of the sequence's offsets. Pointers to member functions are false.
+
 ## 4. Class properties
 - **POD for the purpose of layout** (Itanium §1.1: the C++03 POD
   definition, clang `isPOD`). A class is *not* POD if any of these holds:

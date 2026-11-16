@@ -658,6 +658,15 @@ impl Oven {
             self.bi_ptr_align(b, aux >> 8, a as u64, bb, OTy(t1))
         } else if aux & 0xff == crate::kbc::bi::MSG_CHARS {
             self.bi_msg_chars(a, bb as u64, OTy(t1)).map(|()| a)
+        } else if aux & 0xff == crate::kbc::bi::MEMBER_LAYOUT {
+            let member = |v: u128| self.mp.get(v).filter(|e| !e.func).map(|e| e.member);
+            let (s1, s2) = (self.types.info(OTy(t1)).q, self.types.info(OTy(t2)).q);
+            let r = match (member(a), member(bb), aux >> 8) {
+                (Some(m1), _, 1) => b.member_layout(s1, s1, m1, None),
+                (Some(m1), Some(m2), _) => b.member_layout(s1, s2, m1, Some(m2)),
+                _ => false,
+            };
+            Ok(u128::from(r))
         } else if aux & 0xff == crate::kbc::bi::UNCAUGHT {
             Ok(self.exc.uncaught() as u128)
         } else if aux & 0xff == crate::kbc::bi::LIFETIME {

@@ -4,10 +4,11 @@
 //! become one `Op::Builtin` evaluated natively by the VM.
 
 use kiln_ast::consts::FloatKind;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::decl::builtin as id;
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::types::TypeView;
-use kiln_ast::{Ast, ExprId, QualType};
+use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use super::{Compiler, float_code, int_of, is_vla, skip_parens};
@@ -387,8 +388,7 @@ impl Compiler<'_> {
             let n = ast.exprs.get(m);
             match n.kind() {
                 ExprKind::MemberExpr
-                    if ast.decls.get(ast.exprs.decl(m)).kind()
-                        == kiln_ast::decl::DeclKind::Field =>
+                    if ast.decls.get(ast.exprs.decl(m)).kind() == DeclKind::Field =>
                 {
                     let base = skip_parens(ast, ast.exprs.operand(m));
                     steps.push(m);
@@ -401,7 +401,7 @@ impl Compiler<'_> {
                     m = base;
                 }
                 ExprKind::DeclRefExpr
-                    if ast.decls.get(ast.exprs.decl(m)).kind() == kiln_ast::decl::DeclKind::Var =>
+                    if ast.decls.get(ast.exprs.decl(m)).kind() == DeclKind::Var =>
                 {
                     break;
                 }
@@ -624,7 +624,7 @@ impl Compiler<'_> {
                 }
                 let d = exprs.decl(r);
                 let n = ast.decls.get(d);
-                let local = n.kind() == kiln_ast::decl::DeclKind::Var
+                let local = n.kind() == DeclKind::Var
                     && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function());
                 let v = ast.decls.var(d)?;
                 let ty = n.ty()?;
@@ -666,7 +666,7 @@ impl Compiler<'_> {
             return None;
         }
         let d = exprs.decl(c);
-        if ast.decls.get(d).kind() != kiln_ast::decl::DeclKind::Function {
+        if ast.decls.get(d).kind() != DeclKind::Function {
             return None;
         }
         let attr = ast.redecls_of(d).find_map(|r| {
@@ -758,6 +758,23 @@ impl Compiler<'_> {
 
     /// Lowers call `e` of builtin `bid` into a fresh register; `None` for
     /// a builtin evaluated as an ordinary call.
+    /// The data member `x` names when it is `&C::m` (in parentheses).
+    fn named_member(&self, x: ExprId) -> Option<DeclId> {
+        let ast = self.b.ast();
+        let x = skip_parens(ast, x);
+        if ast.exprs.get(x).kind() != ExprKind::UnaryOperator
+            || ast.exprs.unary_op(x) != kiln_ast::expr::UnaryOp::AddrOf
+        {
+            return None;
+        }
+        let d = skip_parens(ast, ast.exprs.operand(x));
+        if ast.exprs.get(d).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let m = ast.exprs.decl(d);
+        matches!(ast.decls.get(m).kind(), DeclKind::Field | DeclKind::IndirectField).then_some(m)
+    }
+
     pub(super) fn builtin_call(&mut self, e: ExprId, bid: u32, args: &[ExprId]) -> Option<u32> {
         let begin = self.begin(e);
         let dst = self.reg();
@@ -994,6 +1011,43 @@ impl Compiler<'_> {
                 }
             }
             id::LAUNDER => self.rv_into(arg(0)?, dst),
+            // WP-1472: the member pointer types' classes, statically; a
+            // pointer to member function is false.
+            id::IS_CORRESPONDING_MEMBER | id::IS_POINTER_INTERCONVERTIBLE_WITH_CLASS => {
+                let n = if bid == id::IS_CORRESPONDING_MEMBER { 2 } else { 1 };
+                let mut classes = [QualType::BOOL; 2];
+                let mut named = [None; 2];
+                let mut func = false;
+                for i in 0..n {
+                    let x = arg(i)?;
+                    let t = self.b.ast().exprs.get(x).ty();
+                    let tc = &self.b.ast().types;
+                    let TypeView::MemberPointer { pointee, class } = tc.canonical_view(t) else {
+                        return None;
+                    };
+                    func |= tc.is_function(pointee);
+                    classes[i] = QualType::new(class, 0);
+                    named[i] = self.named_member(x);
+                }
+                let c2 = classes[n - 1];
+                if func {
+                    self.konst(dst, 0);
+                } else if let (Some(a), true) = (named[0], named[..n].iter().all(Option::is_some)) {
+                    // `&C::m` operands are answered here: a member reached
+                    // through an anonymous union holding an anonymous struct
+                    // has no run-time member pointer value (`mp_intern`).
+                    let r = self.b.member_layout(classes[0], c2, a, named[1]);
+                    self.konst(dst, u128::from(r));
+                } else {
+                    let mut regs = [0u32; 2];
+                    for (i, r) in regs.iter_mut().enumerate().take(n) {
+                        *r = self.rv(arg(i)?);
+                    }
+                    let (a, b) = (regs[0], regs[n - 1]);
+                    let (ta, tb) = (self.ty(classes[0]).0, self.ty(c2).0);
+                    op(self, bi::MEMBER_LAYOUT, 2 - n as u32, [a, b, b], [ta, tb], begin);
+                }
+            }
             id::IS_STRING_LITERAL => {
                 let p = self.rv(arg(0)?);
                 op(self, bi::STRING_LIT, 0, [p, p, p], [0, 0], begin);

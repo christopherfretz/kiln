@@ -1496,6 +1496,11 @@ impl Cg<'_> {
             // [ptr.launder]: the pointer itself (no `llvm.launder.invariant.group`
             // without `-fstrict-vtable-pointers`).
             id::LAUNDER => self.emit_scalar(a0)?,
+            // WP-1472: GCC's member builtins at run time
+            // (`Cg::emit_member_layout`).
+            id::IS_CORRESPONDING_MEMBER | id::IS_POINTER_INTERCONVERTIBLE_WITH_CLASS => {
+                self.emit_member_layout(b, &args)?
+            }
             // clang `BI__builtin_unpredictable`: the operand; the branch
             // or `switch` on the call carries the `!unpredictable` hint
             // (`Cg::mark_unpredictable`).
@@ -2209,5 +2214,67 @@ impl Cg<'_> {
         let loc = self.loc_of(e);
         let r = self.emit_new_delete_call(f, &vals, &tys, loc)?;
         Ok((b == id::OPERATOR_NEW).then_some(r))
+    }
+}
+
+impl Cg<'_> {
+    /// `__builtin_is_corresponding_member(m1, m2)` and
+    /// `__builtin_is_pointer_interconvertible_with_class(m)` with operands
+    /// not known until run time (WP-1472). A data member pointer is its
+    /// member's offset (null `-1`), and the members that answer true are
+    /// known from the static types (`kiln_abi::layout::compat`):
+    /// corresponding members sit at the same offset, so the first is
+    /// `m1 == m2 && (m1 == o1 || ...)` over their offsets in `S1`; every
+    /// member pointer-interconvertible with its class is at offset 0, so
+    /// the second is `m == 0` when one of type `M` exists. A pointer to
+    /// member function, or no candidate, is false (the operands are still
+    /// evaluated). As GCC 16.1 lowers them.
+    fn emit_member_layout(&mut self, b: u32, args: &[ExprId]) -> R<V> {
+        use kiln_abi::layout::compat;
+        let mut vals = Vec::with_capacity(args.len());
+        let mut parts = Vec::with_capacity(args.len());
+        for &a in args {
+            let q = self.ast.exprs.get(a).ty();
+            match self.ast.types.canonical_view(q) {
+                kiln_ast::types::TypeView::MemberPointer { pointee, class }
+                    if !self.ast.types.is_function(pointee) =>
+                {
+                    parts.push((QualType::new(class, 0), pointee));
+                    vals.push(self.emit_scalar(a)?);
+                }
+                _ => {
+                    self.emit_ignored(a)?;
+                }
+            }
+        }
+        let f = V::C(self.m.const_bool(false));
+        if parts.len() != args.len() {
+            return Ok(f);
+        }
+        if b == id::IS_POINTER_INTERCONVERTIBLE_WITH_CLASS {
+            let (s, t) = parts[0];
+            if !compat::interconvertible_member_of_type(self.ast, self.target, s, t) {
+                return Ok(f);
+            }
+            let zero = V::C(self.m.const_int(LTy::I64, 0));
+            return Ok(self.icmp(IntPredicate::Eq, vals[0], zero));
+        }
+        let ((s1, t1), (s2, t2)) = (parts[0], parts[1]);
+        let offsets = compat::corresponding_offsets(self.ast, self.target, s1, s2, t1, t2);
+        if offsets.is_empty() {
+            return Ok(f);
+        }
+        let mut any: Option<V> = None;
+        for o in offsets {
+            let c = V::C(self.m.const_int(LTy::I64, i128::from(o)));
+            let eq = self.icmp(IntPredicate::Eq, vals[0], c);
+            any = Some(match any {
+                Some(x) => self.bin(BinOp::Or, Flags::NONE, x, eq),
+                None => eq,
+            });
+        }
+        let any = any.unwrap_or(f);
+        let same = self.icmp(IntPredicate::Eq, vals[0], vals[1]);
+        Ok(self.bin(BinOp::And, Flags::NONE, same, any))
     }
 }

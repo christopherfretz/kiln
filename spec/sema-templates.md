@@ -6856,13 +6856,23 @@ headers. They are implemented in M3 because they cost one row each:
 - `__is_bitwise_cloneable(T)`: false for `void`, incomplete and dependent
   types; arrays use their element; classes need every field to be;
   every other type (references, functions) is true.
-- `__is_layout_compatible(T,U)` ([basic.types.general]/11): same type
-  ignoring cv (array elements included); enums with the same underlying
-  type; standard-layout structs whose fields, taken from the class that
-  declares them (`getStandardLayoutBaseWithFields`), match pairwise in
-  type, bit-field width, alignment and no `[[no_unique_address]]`;
-  unions match fields in any order. Incomplete operands other than `void`
-  and `T[]` are "incomplete type 'X' where a complete type is required".
+- `__is_layout_compatible(T,U)` ([basic.types.general]/11): the shared
+  rule of spec/abi.md §3.4 (`kiln_abi::layout::compat`, WP-1472): same
+  type ignoring cv, enums with the same underlying type, standard-layout
+  structs whose common initial sequence is all of both, unions matching
+  members in any order. Both-`[[no_unique_address]]` members match
+  (CWG2759, GCC 16.1; clang 19/22 answer false). Incomplete operands
+  other than `void` and `T[]` are "incomplete type 'X' where a complete
+  type is required".
+- GCC's `__builtin_is_corresponding_member(m1, m2)` and
+  `__builtin_is_pointer_interconvertible_with_class(m)` (WP-1472; what
+  libstdc++'s `std::is_corresponding_member` /
+  `std::is_pointer_interconvertible_with_class` and their feature-test
+  macros need): GCC-only `__has_builtin` rows, `bool`, constant when the
+  operands are. Each argument decays and must be a pointer to member
+  (`sema_builtin_member_pointer_arg`, "argument to 'X' is not a pointer
+  to member (was 'T')"); its class must be complete. The answer is
+  spec/abi.md §3.4 on the classes of the member pointer types.
 - `__is_pointer_interconvertible_base_of(B,D)` ([meta.rel]/5): non-union
   classes; the same class (cv ignored) is true, else `D` must be complete
   and standard-layout with `B` as a base.

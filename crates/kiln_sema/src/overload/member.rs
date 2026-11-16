@@ -46,6 +46,38 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// [temp.dep.expr]/5: the overloaded member access `e` (a set with a
+    /// member function template) of an explicit object that is
+    /// type-dependent, such as one whose type is the current
+    /// instantiation (a capture `[o] { o.f<int>(); }` or a parameter
+    /// `O o`), called: the call is resolved at instantiation, as clang's
+    /// `UnresolvedMemberExpr` with a dependent base, so a set that is not
+    /// viable in the template definition is not an error until then
+    /// (WP-1472). The access becomes a dependent member access keeping its
+    /// template arguments. `None` leaves `e` to the call.
+    pub(crate) fn dependent_object_member_overload(&mut self, e: ExprId) -> Option<ExprId> {
+        let x = self.member_overload(e)?;
+        let m = self.ovl.members.get(&x)?;
+        if m.implicit
+            || !self.expr_is_type_dependent(m.base)
+            || !m.decls.iter().any(|&d| self.kind_of(d) == DeclKind::FunctionTemplate)
+        {
+            return None;
+        }
+        let m = self.ovl.members.remove(&x)?;
+        let loc = self.ast.exprs.get(x).loc();
+        let base = if m.arrow { self.arrow_chain_object(m.base) } else { m.base };
+        Some(self.builder().dependent_member(
+            Some(base),
+            m.arrow,
+            m.name,
+            false,
+            m.nns,
+            m.targs,
+            loc,
+        ))
+    }
+
     /// The overloaded member access `e` names (through parentheses).
     pub(crate) fn member_overload(&self, e: ExprId) -> Option<ExprId> {
         if self.ast.exprs.get(e).ty() != QualType::OVERLOAD {

@@ -1034,6 +1034,7 @@ impl Sema<'_, '_> {
     /// converts and checks them and decides the call's type. Returns the
     /// call, or a recovery expression after a diagnostic.
     #[allow(clippy::too_many_arguments, reason = "one per part of the call")]
+    #[allow(clippy::too_many_lines, reason = "one arm per custom-checked builtin")]
     pub(crate) fn builtin_custom_call(
         &mut self,
         callee: ExprId,
@@ -1101,6 +1102,9 @@ impl Sema<'_, '_> {
             builtin::START_LIFETIME => self.builtin_start_lifetime(args, rparen),
             builtin::CLEAR_PADDING => self.builtin_clear_padding(args, rparen),
             builtin::IS_STRING_LITERAL => self.builtin_is_string_literal(args, rparen),
+            builtin::IS_CORRESPONDING_MEMBER | builtin::IS_POINTER_INTERCONVERTIBLE_WITH_CLASS => {
+                self.builtin_member_layout(id, args, rparen)
+            }
             builtin::ASSUME_ALIGNED => self.builtin_assume_aligned(callee, args, rparen),
             builtin::COMPLEX => self.builtin_complex(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
@@ -2313,6 +2317,58 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::BOOL))
+    }
+
+    /// `__builtin_is_corresponding_member(m1, m2)` and
+    /// `__builtin_is_pointer_interconvertible_with_class(m)` (GCC,
+    /// WP-1472; [meta.member]): `n` arguments, each a pointer to member
+    /// (data or function; a function member answers false) of a complete
+    /// class. Wrong counts are clang's call-arity errors, a non-member
+    /// pointer `sema_builtin_member_pointer_arg`, an incomplete class
+    /// "incomplete type ... where a complete type is required" (GCC:
+    /// "needs two arguments", "argument is not pointer to member",
+    /// "invalid use of incomplete type"). The answer is the Oven's
+    /// (`bi::MEMBER_LAYOUT`) or codegen's.
+    fn builtin_member_layout(
+        &mut self,
+        id: u32,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let n = if id == builtin::IS_CORRESPONDING_MEMBER { 2 } else { 1 };
+        if !self.builtin_arg_count(args, n, rparen) {
+            return None;
+        }
+        let name = builtin::info(id).map_or("", |i| i.name);
+        let mut out = Vec::with_capacity(n);
+        for &arg in args {
+            let a = conv::decay(self, arg);
+            let t = self.ety(a);
+            if t == QualType::ERROR {
+                return None;
+            }
+            let at = self.expr_loc(a);
+            let kiln_ast::types::TypeView::MemberPointer { class, .. } =
+                self.ast.types.canonical_view(t)
+            else {
+                let msg = self
+                    .diag(DiagId::sema_builtin_member_pointer_arg, at)
+                    .arg(name)
+                    .arg(self.ty_arg(t));
+                self.emit(msg);
+                return None;
+            };
+            let class = QualType::new(class, 0);
+            if !self.require_complete(class, at) {
+                let msg =
+                    self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(class));
+                self.emit(self.incomplete_note(msg, class));
+                return None;
+            }
+            self.ensure_record_layout(class);
+            out.push(a);
+        }
+        Some((out, QualType::BOOL))
     }
 
     /// `__builtin_va_start(ap, last)` ([cstdarg.syn]/1, C 7.16.1.4; clang's

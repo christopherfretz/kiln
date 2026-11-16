@@ -593,6 +593,12 @@ pub(crate) mod bi {
     /// then copies into the result object (WP-1140; spec/oven.md "Valued
     /// immediate invocations").
     pub const THAW_OBJ: u32 = 37;
+    /// `__builtin_is_corresponding_member(a, b)` (sub 0) or
+    /// `__builtin_is_pointer_interconvertible_with_class(a)` (sub 1; GCC,
+    /// WP-1472) on the data member pointer values `a`/`b` of the classes
+    /// `t1`/`t2` (the member pointer types' classes): false for a null
+    /// value, else `SemaBridge::member_layout` on the designated members.
+    pub const MEMBER_LAYOUT: u32 = 45;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
