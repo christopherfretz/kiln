@@ -168,6 +168,8 @@ sema_template_nontype_parm_different_type = Error (2) "template non-type paramet
 sema_template_outside_namespace_or_class = Error (0) "templates can only be declared in namespace or class scope";
 sema_template_param_default_friend_template = Error (0) "default template argument not permitted on a friend template";
 sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";
+// ----- WP-1500 (clang `err_template_parameter_default_template_member`)
+sema_template_param_default_template_member = Error (0) "cannot add a default template argument to the definition of a member of a class template";
 sema_template_param_different_kind = Error (1) "template parameter has a different kind in template {0:|template parameter }redeclaration";
 sema_template_param_list_different_arity = Error (2) "{0:too few|too many} template parameters in template {1:|template parameter }redeclaration";
 sema_template_param_missing_default = Error (0) "template parameter missing a default argument";
@@ -179,6 +181,8 @@ sema_template_params_for_non_template = Error (1) "template parameter list match
 sema_template_qualified_declarator_no_match = Error (1) "nested name specifier '{0}' for declaration does not refer into a class, class template or class template partial specialization";
 sema_template_recursion_depth = Fatal (1) "recursive template instantiation exceeded maximum depth of {0}";
 sema_template_requires_args = Error (2) "use of {0} {1} requires template arguments";
+// ----- WP-1500 (clang `err_template_spec_default_arg`, an explicit specialization)
+sema_template_spec_default_arg = Error (1) "default argument not permitted on an explicit specialization of function '{0}'";
 sema_template_spec_extra_headers = WarningError [ExtraneousTemplateHead] (0) "extraneous template parameter list in template specialization";
 // clang 19's `warn_template_spec_extra_headers`: a plain warning in no group (clang 22 made it the default-error `-Wextraneous-template-head`); chosen by sema from its compat level, not a `_19` mirror (the kind and group differ).
 sema_template_spec_extra_headers_clang19 = Warning (0) "extraneous template parameter list in template specialization";

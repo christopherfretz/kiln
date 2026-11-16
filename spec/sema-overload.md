@@ -1186,6 +1186,13 @@ added default make a constructor a default, copy or move constructor
 {default|copy|move} constructor"; [dcl.fct.default]/4, /6; clang
 `MergeCXXFunctionDecl`; `check_added_default_args`, WP-1470, tests
 `dcl.fct.default/added-default-arg-*.cpp`).
+An explicit specialization of a function template, or of a member
+function (template) of an implicitly instantiated class template
+specialization, may not add a default argument either: "default
+argument not permitted on an explicit specialization of function 'f'"
+at each such parameter ([dcl.fct.default]/4, [temp.expl.spec]; clang
+`err_template_spec_default_arg`; `check_spec_default_args`, WP-1500,
+tests `temp.expl.spec/default-arg-*.cpp`).
 A friend function declaration with a default argument must be a
 definition and the only declaration of the function in the translation
 unit ([dcl.fct.default]/4; clang `ActOnFriendFunctionDecl`,
@@ -1445,9 +1452,15 @@ Where the code differs from (or details) the design above:
   conversion function (`conversion_function_call`), and the `after`
   sequence. A deleted conversion function reports
   `sema_conv_deleted_ctor` naming the initialized type (the non-reference
-  target, cv kept). clang's CWG2327 workaround is kept: in an
+  target, cv kept). clang's CWG2327 workaround is kept, from C++17 on
+  (clang's `CPlusPlus17`): in an
   initialization by constructor, a conversion function yielding the class
   itself initializes the object directly (`best.rs`, `construct.rs`).
+  Before C++17 only the constructors are candidates, so a copy
+  constructor reached through `operator const T&` and a move constructor
+  through `operator T` are ambiguous ([over.best.ics]/4 does not apply to
+  a direct-initialization; WP-1500,
+  `over.match.ctor/conversion-ambiguous-cxx14.cpp`).
   `add_elision_candidates` (`class/ctor_select.rs`) adds the source's
   conversion functions *and conversion function templates*
   (`conversion_functions_all`; clang `AddTemplateConversionCandidate` with

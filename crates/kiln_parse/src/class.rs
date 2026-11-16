@@ -905,7 +905,11 @@ impl Parser<'_, '_> {
                     self.emit(d);
                 } else {
                     let l = self.bump().span.lo;
-                    self.s.error(DiagId::parse_default_special_members, l);
+                    let d = self
+                        .s
+                        .diag(DiagId::parse_default_special_members, l)
+                        .arg(u8::from(self.std >= kiln_lex::Std::Cxx20));
+                    self.emit(d);
                 }
                 return None;
             }

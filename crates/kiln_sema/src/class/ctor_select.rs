@@ -133,8 +133,12 @@ impl Sema<'_, '_> {
             // clang `AddTemplateOverloadCandidate` without `AllowExplicit`).
             self.add_ctor_candidates_ex(&mut set, c, opts, false, style == InitStyle::Copy);
         }
+        // C++17 only, as clang (`ResolveConstructorOverload`'s
+        // `CPlusPlus17`): before it, the copy or move constructor is
+        // called on the converted value.
         if let [arg] = args
             && !actual_ctor
+            && self.std >= kiln_lex::Std::Cxx17
         {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
@@ -194,8 +198,8 @@ impl Sema<'_, '_> {
         found
     }
 
-    /// clang's workaround for C++17 guaranteed copy elision (CWG2327):
-    /// when class `c` is initialized by constructor from one expression
+    /// clang's workaround for C++17 guaranteed copy elision (CWG2327),
+    /// from C++17 on: when class `c` is initialized by constructor from one expression
     /// of class type, that class's conversion functions yielding the
     /// prvalue `cv T` are candidates too (explicit ones only in a
     /// direct-initialization), and one that wins initializes the object

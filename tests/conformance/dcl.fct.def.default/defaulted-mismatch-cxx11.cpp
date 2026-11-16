@@ -5,7 +5,7 @@
 // C++11 a constexpr member function is implicitly const). Found running
 // GCC's C++ testsuite.
 //@ std: c++11
-//@ args: -Wno-constexpr-not-const
+//@ diag: 27:25 warning "'constexpr' non-static member function will not be implicitly 'const' in C++14; add 'const' to avoid a change in behavior"
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 20:22 error "the parameter for an explicitly-defaulted copy constructor may not be volatile"

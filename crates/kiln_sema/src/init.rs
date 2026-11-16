@@ -1421,7 +1421,34 @@ impl Sema<'_, '_> {
             self.uninit_reference_member(f, fty, at);
             return self.recover(fty, &[], at);
         }
-        self.filler(fty, at)
+        self.with_omitted_init(OmittedInit::Field(f), |s| s.filler(fty, at))
+    }
+
+    /// Runs `f`, the value-initialization of the element `o` that has no
+    /// initializer; each error it emits takes clang's
+    /// `note_in_omitted_aggregate_initializer` (spec/sema.md §6).
+    pub(crate) fn with_omitted_init<R>(
+        &mut self,
+        o: OmittedInit,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.omitted_inits.push(o);
+        let r = f(self);
+        self.omitted_inits.pop();
+        r
+    }
+
+    /// The note for `o`: an array element and the trailing elements of an
+    /// array new at the list's `}`, a field at the field.
+    pub(crate) fn omitted_init_note(&self, o: OmittedInit) -> Diag {
+        let id = DiagId::note_in_omitted_aggregate_initializer;
+        match o {
+            OmittedInit::Element(i, at) => self.diag(id, at).arg(0u8).arg(i.to_string()),
+            OmittedInit::Field(f) => {
+                self.diag(id, self.ast.decls.get(f).loc()).arg(2u8).arg(self.decl_arg(f))
+            }
+            OmittedInit::Trailing(at) => self.diag(id, at).arg(1u8).arg(String::new()),
+        }
     }
 
     /// Parenthesized aggregate initialization ([dcl.init.general]/16.5,
@@ -2983,17 +3010,21 @@ impl Sema<'_, '_> {
         // (clang `FillInEmptyInitializations`).
         let hole = slots.iter().any(Option::is_none);
         // An updater's holes and filler keep the base's value.
-        let fill = |s: &mut Self| {
-            if sub.update { s.builder().no_init(elem) } else { s.filler(elem, rbrace) }
+        let fill = |s: &mut Self, index: usize| {
+            if sub.update {
+                return s.builder().no_init(elem);
+            }
+            s.with_omitted_init(OmittedInit::Element(index, rbrace), |s| s.filler(elem, rbrace))
         };
         for slot in slots {
             let e = match slot {
                 Some(e) => e,
-                None => fill(self),
+                None => fill(self, inits.len()),
             };
             inits.push(e);
         }
-        let filler = if hole || (inits.len() as u64) < n { Some(fill(self)) } else { None };
+        let filler =
+            if hole || (inits.len() as u64) < n { Some(fill(self, inits.len())) } else { None };
         let lty = if bound.is_none() {
             let complete = self.ast.types.constant_array(elem, n, None);
             let q = self.ast.types.effective_quals(ty);
@@ -3383,4 +3414,16 @@ struct Sub {
     /// (`.m = 1` under brace elision): the clause is not designated
     /// within it.
     direct: bool,
+}
+
+/// An element initialized without an initializer, for clang's
+/// `note_in_omitted_aggregate_initializer` ([`Sema::with_omitted_init`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OmittedInit {
+    /// Array element `.0` of the list closed at `.1`.
+    Element(usize, Loc),
+    /// A field with no initializer and no default member initializer.
+    Field(DeclId),
+    /// The trailing elements of a runtime-sized array new (list end).
+    Trailing(Loc),
 }

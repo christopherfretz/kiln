@@ -82,7 +82,7 @@
 //! | `cleanup`, `cleanup_saved`, `cleanup_marks` | transient | the cleanups of the full-expression being built |
 //! | `delayed_access`, `delayed_access_depth`, `delayed_deprecations`, `depr_points`, `depr_init`, `exempt_next_delay` | transient | open access and deprecation delay points |
 //! | `explicit_conv`, `cast_ignores_base_access`, `speculative_friend`, `replaying_access`, `requires_access_replay`, `access_ctx`, `oper_override`, `arith_warning` | transient | set around one conversion or access check |
-//! | `trailing_notes`, `diag_capture`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
+//! | `trailing_notes`, `omitted_inits`, `diag_capture`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
 //! | `nc_strict_only`, `pending_alias_vla`, `reverse_using_shadows`, `declarator_int_recovery`, `declarator_field`, `declarator_distant_exc`, `pattern_member_access`, `base_annotation_packs`, `friend_tag`, `friend_class_template`, `extraneous_tag_head`, `nested_tag`, `inst_enable_if`, `declspec_nulls` | transient | handed from one action to the next within a declaration |
 //! | `image_texprs`, `bmi` | transient | declaration-image and carried-constant recording (module files): a snapshot is not taken with them on |
 //!
@@ -176,7 +176,7 @@ macro_rules! sema_fields {
                 delayed_access_depth, delayed_deprecations, depr_points, depr_init,
                 exempt_next_delay, explicit_conv, cast_ignores_base_access, speculative_friend,
                 replaying_access, requires_access_replay, access_ctx, oper_override, arith_warning,
-                trailing_notes, diag_capture, delayed_typos, typo_delay, open_specs,
+                trailing_notes, omitted_inits, diag_capture, delayed_typos, typo_delay, open_specs,
                 spec_failures, spec_exempt, nc_strict_only, pending_alias_vla,
                 reverse_using_shadows, declarator_int_recovery, declarator_field,
                 declarator_distant_exc, pattern_member_access, base_annotation_packs, friend_tag,

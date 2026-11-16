@@ -179,7 +179,11 @@ impl Sema<'_, '_> {
                 if let Some(x) = self.normalize_concept_fold(e, ctx, depth) {
                     return x;
                 }
-                if let Some(x) = self.normalize_fold_expanded(e, ctx, depth) {
+                // C++26 only (clang's `CPlusPlus26`): before it a fold is
+                // an atomic constraint, so two folds are incomparable.
+                if self.std >= kiln_lex::Std::Cxx26
+                    && let Some(x) = self.normalize_fold_expanded(e, ctx, depth)
+                {
                     return x;
                 }
             }

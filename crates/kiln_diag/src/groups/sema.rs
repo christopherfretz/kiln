@@ -28,6 +28,7 @@ CompareDistinctPointerTypes = "compare-distinct-pointer-types" [];
 ConditionalTypeMismatch = "conditional-type-mismatch" [];
 ConditionalUninitialized = "conditional-uninitialized" [];
 ConstantLogicalOperand = "constant-logical-operand" [];
+ConstexprNotConst = "constexpr-not-const" [];
 CoroNonAlignedAllocationFunction = "coro-non-aligned-allocation-function" [];
 CoroTypeAwareAllocationFunction = "coro-type-aware-allocation-function" [];
 CoveredSwitchDefault = "covered-switch-default" [];

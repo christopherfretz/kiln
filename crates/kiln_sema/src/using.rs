@@ -951,10 +951,75 @@ impl Sema<'_, '_> {
     /// for templates either (clang's `UseMemberUsingDeclRules`; gcc
     /// compares template return types): `M& operator=(int)` hides a
     /// using-declared `B& operator=(int)`. In an instantiated class the
-    /// comparison is between the instantiated declarations.
+    /// comparison is between the instantiated declarations. A member of
+    /// a class template specialization keeps its pattern's
+    /// requires-clause: clauses equivalent as written correspond only
+    /// when the enclosing levels they name have the same arguments
+    /// (`requires C<T>` of `A<T*>` and of `B<T>` differ in `B<int>`;
+    /// clang `AreConstraintExpressionsEqual` with each declaration's
+    /// template arguments).
     pub(crate) fn member_hides_using_target(&mut self, own: DeclId, target: DeclId) -> bool {
         let is_t = |me: &Self, x| me.kind_of(x) == DeclKind::FunctionTemplate;
-        is_t(self, own) == is_t(self, target) && self.signatures_correspond(target, own, true)
+        is_t(self, own) == is_t(self, target)
+            && self.signatures_correspond(target, own, true)
+            && self.kept_constraints_levels_agree(own, target)
+    }
+
+    /// For [`Self::member_hides_using_target`]: whether the enclosing
+    /// levels the kept (pattern) constraints of `a` and `b` name have the
+    /// same arguments; true when neither keeps its pattern's.
+    fn kept_constraints_levels_agree(&mut self, a: DeclId, b: DeclId) -> bool {
+        let (Some((pa, la)), Some((pb, lb))) = (self.kept_constraints(a), self.kept_constraints(b))
+        else {
+            return true;
+        };
+        // A templated non-template member's constraint is its trailing
+        // requires-clause alone.
+        let own = |me: &Self, x| {
+            let mut v = me.associated_constraints(x);
+            if me.ast.template_info(x).is_none() {
+                v.extend(me.ast.templates.trailing_requires.get(x).copied());
+            }
+            v
+        };
+        let mut exprs = own(self, pa);
+        exprs.extend(own(self, pb));
+        for d in 0..la.levels.len().max(lb.levels.len()) {
+            let Ok(level) = u16::try_from(d) else { break };
+            let mut mask = 0u64;
+            for &e in &exprs {
+                mask |= self.used_template_params(e, level).unwrap_or(u64::MAX);
+            }
+            if mask == 0 {
+                continue;
+            }
+            let args = |l: &crate::templ::args::MultiLevelArgs| {
+                l.levels.get(d).map_or(kiln_ast::ids::ArgListId::EMPTY, |x| x.args)
+            };
+            let (x, y) = (args(&la), args(&lb));
+            let t = &self.ast.types;
+            let (x, y) = (t.args(t.canonical_args(x)), t.args(t.canonical_args(y)));
+            let differ = (0..x.len().max(y.len()))
+                .any(|i| (i >= 64 || mask & (1 << i) != 0) && x.get(i) != y.get(i));
+            if differ {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The constraints member `d` of a class template specialization
+    /// keeps and the levels they are checked with: its
+    /// `member_constraints` entry, or, while it is being declared in an
+    /// instantiated class (before that entry is recorded), its own with
+    /// the class's arguments.
+    fn kept_constraints(&self, d: DeclId) -> Option<(DeclId, crate::templ::args::MultiLevelArgs)> {
+        if let Some(k) = self.inst.concepts.member_constraints.get(&d) {
+            return Some(k.clone());
+        }
+        let ctx = self.ast.decls.get(d).ctx()?;
+        (self.kind_of(ctx) == DeclKind::CXXRecord).then_some(())?;
+        Some((d, self.spec_args(ctx)?.1))
     }
 
     /// Checks a new declaration `d` named `name` against the using-shadows

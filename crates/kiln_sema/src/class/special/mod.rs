@@ -419,7 +419,10 @@ impl Sema<'_, '_> {
             if op.is_some_and(is_comparison) {
                 self.defaulted_comparison(f, loc);
             } else {
-                self.error(DiagId::sema_default_not_special, loc);
+                let d = self
+                    .diag(DiagId::sema_default_not_special, loc)
+                    .arg(u8::from(self.std >= kiln_lex::Std::Cxx20));
+                self.emit(d);
             }
             return;
         };

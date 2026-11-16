@@ -328,6 +328,17 @@ impl Sema<'_, '_> {
         // An explicit object member function takes no cv-/ref-qualifiers
         // ([dcl.fct]/6): reported and dropped as for any other.
         let ty = if xobj_member { self.drop_invalid_fn_quals(ty, d, true, ds.loc) } else { ty };
+        // C++11 [dcl.constexpr]/8: a constexpr conversion function or
+        // `operator=` is implicitly const too.
+        let ty = if self.std < kiln_lex::Std::Cxx14
+            && ds.constexpr.is_some()
+            && !xobj
+            && matches!(shape, Shape::Conv(_) | Shape::Assign)
+        {
+            self.cxx11_constexpr_const(ty, d, None)
+        } else {
+            ty
+        };
         let class_ty = self.class_type(class);
         let canon = self.ast.types.canonical(class_ty).ty();
         let name = match shape {

@@ -4910,7 +4910,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     `IsOverload` with `UseMemberUsingDeclRules`): the same
     parameter-type-list, the same cv- and ref-qualifiers of a
     non-static member, equivalent trailing requires-clauses and, for
-    templates, equivalent template heads ([temp.over.link]/6). The return
+    templates, equivalent template heads ([temp.over.link]/6). In a class
+    template specialization each member keeps its pattern's constraints
+    (`member_constraints`, or, while the member is being declared, its
+    own with the class's arguments), so the requires-clauses also need
+    the same arguments at every enclosing parameter they name
+    (`kept_constraints_levels_agree`): `requires C<T>` in `B<int>`
+    and in its base `A<int *>` do not correspond (WP-1500). The return
     type takes no part, for templates either (`M& operator=(int)` hides a
     using-declared `B& operator=(int)`; clang 19 also hides a template
     differing only in its return type, gcc does not). Otherwise the two
@@ -9565,6 +9571,43 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   return type cannot be overloaded" (`check_guide_redeclaration`). Test:
   `temp.deduct.guide/guide-redeclaration-errors.cpp`.
 
+### 5.32 GCC's C++ testsuite follow-ups (WP-1500, WP-1501)
+- **C++11 implicit `const`** ([dcl.constexpr]/8 in C++11, removed by
+  N3652): a `constexpr` non-static member function other than a
+  constructor or destructor (conversion functions and `operator=`
+  included) gets a `const` `this` in its type before C++14, and
+  `-Wconstexpr-not-const` (on by default) warns at the name with a
+  " const" fix-it after the `)`; not in an instantiation, not for a
+  static member defined out of line (`cxx11_constexpr_const`, from
+  `act_on_function` and `act_on_special_declarator`). Tests:
+  `dcl.constexpr/constexpr-not-const-*.cpp`.
+- **Parenthesized array new before C++20** ([expr.new]/23, P0960):
+  `new T[n](a, b)` is "array 'new' cannot have initialization arguments"
+  at the new-expression, also in a template definition; `()` stays
+  valid. From C++20 a constant bound with fewer arguments needs no
+  default constructor beyond them (no filler for the tail). Tests:
+  `expr.new/paren-array-init-*.cpp`.
+- **Default template arguments on out-of-line members** ([temp.param]/12):
+  a head of the definition of a member of a class template outside its
+  class (the heads matched to the qualifier and the member template's
+  own) may not have one: "cannot add a default template argument to the
+  definition of a member of a class template" at the parameter, and the
+  default is dropped from the redeclaration checks
+  (`reject_member_template_defaults`). Tests:
+  `temp.param/default-arg-out-of-line-member*.cpp`.
+- **The injected-class-name as an incomplete base**: `struct N : B {}`
+  nested in class template `B` names the current instantiation, which is
+  incomplete ("base class has incomplete type", as for `B<T>` written
+  out). Tests: `class.derived/injected-class-name-base*.cpp`.
+- **CWG1430 location**: the error for a pack expansion reaching a
+  non-pack alias template parameter through a template template
+  parameter is at the expansion as written (its location is recorded in
+  the written-locations table, §5.8 of spec/sema-templates.md). Test:
+  `temp.alias/cwg1430-template-template-parameter.cpp`.
+- **"only special member functions may be defaulted"**: clang adds
+  "and comparison operators" only from C++20. Test:
+  `dcl.fct.def.default/default-not-special-cxx17.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - an invalid element (WP-408): an expression standing for clang's
@@ -9846,8 +9889,18 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
       nested aggregate, or in an omitted array element) is "reference
       member of type 'int &' uninitialized" with "uninitialized
       reference member is here" ([dcl.init.aggr]/5; clang
-      `err_init_reference_member_uninitialized`; WP-1470). clang's extra
-      "in implicit initialization of ..." note is not printed yet.
+      `err_init_reference_member_uninitialized`; WP-1470).
+    - an error while value-initializing an element without an
+      initializer (a field, an array element, the trailing elements of
+      a runtime-sized array new) carries clang's "in implicit
+      initialization of {field 'x'|array element N|trailing array
+      elements in runtime-sized array new} ..." note, one per enclosing
+      omitted element, innermost first: the field's at the field, the
+      others at the list's `}` (`note_in_omitted_aggregate_initializer`;
+      `Sema::with_omitted_init` keeps `(kind, element)` entries that
+      `emit` turns into notes only when an error fires). The destructor
+      checks of the list take none (WP-1500,
+      `dcl.init.aggr/omitted-init-*.cpp`).
     - a parenthesized expression list initializes an aggregate or an
       array only from C++20 (P0960): before it a class gets the ordinary
       constructor errors and an array "array initializer must be an

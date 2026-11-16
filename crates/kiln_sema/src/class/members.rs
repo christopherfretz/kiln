@@ -557,6 +557,23 @@ impl Sema<'_, '_> {
         self.attach_bases_annotated(r, specs, &[])
     }
 
+    /// The class template pattern whose injected-class-name type `ty`
+    /// is (through sugar).
+    fn injected_pattern(&self, ty: QualType) -> Option<DeclId> {
+        let mut q = ty;
+        for _ in 0..16 {
+            if let TypeView::InjectedClassName { pattern, .. } = self.ast.types.view(q.ty()) {
+                return Some(pattern);
+            }
+            let n = self.ast.types.desugar_once(q);
+            if n == q {
+                return None;
+            }
+            q = n;
+        }
+        None
+    }
+
     /// Diagnoses dependent base `ty` (at `loc`) of `r` that names the
     /// current instantiation of a class still being defined (`struct C :
     /// B<U>` nested in `B<U>`), which is incomplete (clang
@@ -565,7 +582,15 @@ impl Sema<'_, '_> {
         if !self.is_dependent_type(ty) {
             return false;
         }
-        let Some(cur) = self.friend_current_instantiation(ty) else { return false };
+        // The injected-class-name written alone (`struct N : B {}` in
+        // `B<U>`) names the pattern too ([temp.local]/1).
+        let Some(cur) = self
+            .injected_pattern(ty)
+            .map(|p| self.ast.definition(p).unwrap_or(p))
+            .or_else(|| self.friend_current_instantiation(ty))
+        else {
+            return false;
+        };
         if !self.defining.contains(&cur) {
             return false;
         }

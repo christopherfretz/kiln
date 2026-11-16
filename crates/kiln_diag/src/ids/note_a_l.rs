@@ -166,6 +166,8 @@ note_in_binding_decl_init = Note (1) "in implicit initialization of binding decl
 note_in_declaration_of_implicit_special_member = Note (2) "while declaring the implicit {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} for {1}";
 note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
 note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
+// ----- WP-1500 (clang `note_in_omitted_aggregate_initializer`)
+note_in_omitted_aggregate_initializer = Note (2) "in implicit initialization of {0:array element {1} with omitted initializer|trailing array elements in runtime-sized array new|field {1} with omitted initializer}";
 note_include_header_or_declare = Note (2) "include the header <{0}> or explicitly provide a declaration for '{1}'";
 note_indirect_goto_target = Note (1) "possible target of {0:indirect|asm} goto statement";
 note_indirection_through_null = Note (0) "consider using __builtin_trap() or qualifying pointer with 'volatile'";

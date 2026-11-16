@@ -18,7 +18,7 @@ use kiln_ast::names::{DeclName, DeclNameKind};
 use kiln_diag::DiagId;
 
 use crate::Sema;
-use crate::declspec::{DeclSpec, Declarator, DeclaratorContext};
+use crate::declspec::{DeclSpec, Declarator, DeclaratorContext, DefaultArg};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::ctad::GuideOrigin;
 use crate::templ::subst::Substituter;
@@ -1022,6 +1022,13 @@ impl Sema<'_, '_> {
             self.emit(e);
             return None;
         }
+        let prev = match info.kind {
+            SpecKind::ExplicitSpecialization => Some(s),
+            _ => self.pattern_of(self.inst_template(info.template)),
+        };
+        if let Some(prev) = prev {
+            self.check_spec_default_args(prev, d, info.template);
+        }
         if !self.check_spec_exc_spec(s, ty, name_loc, crate::except::missing_exc_spec_fixit_loc(d))
         {
             return None;
@@ -1039,6 +1046,31 @@ impl Sema<'_, '_> {
             self.drop_pattern_annotations(s);
         }
         Some(self.declare_explicit_spec(s, ds, d, ty, fspec, name_loc))
+    }
+
+    /// [dcl.fct.default]/4 with [temp.expl.spec]: a default argument
+    /// the declaration `prev` before an explicit specialization `d` of
+    /// function `named` does not have is "not permitted" there, at each
+    /// such parameter (clang `MergeCXXFunctionDecl`'s
+    /// `err_template_spec_default_arg`). A default `prev` has is left to
+    /// the redefinition check.
+    fn check_spec_default_args(&mut self, prev: DeclId, d: &Declarator, named: DeclId) {
+        let Some(params) = d.function_params() else { return };
+        if params.iter().all(|p| p.default_arg == DefaultArg::None) {
+            return;
+        }
+        let olds = self.param_decls(prev);
+        for (i, p) in params.iter().enumerate() {
+            if p.default_arg == DefaultArg::None
+                || olds.get(i).is_some_and(|&o| self.param_has_default(o))
+            {
+                continue;
+            }
+            let at = p.name.map_or(p.loc, |(_, l)| l);
+            let name = self.decl_name_str(self.ast.decls.get(named).name());
+            let e = self.diag(DiagId::sema_template_spec_default_arg, at).arg(name);
+            self.emit(e);
+        }
     }
 
     /// `[extern] template R f<args>(params);` for specialization `m.spec`
@@ -1486,6 +1518,7 @@ impl Sema<'_, '_> {
             self.emit(self.diag(id, name_loc).arg(sel));
             return None;
         }
+        self.check_spec_default_args(m, d, m);
         let fspec = self.explicit_spec_fnspec(ds, ty, m);
         // [dcl.constexpr]/1: the member's declarations agree on
         // `constexpr`/`consteval` (clang merges the specialization with

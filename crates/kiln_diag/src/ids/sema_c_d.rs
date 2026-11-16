@@ -180,6 +180,8 @@ sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable a
 sema_constexpr_non_literal_param = Error (4) "{0:constexpr|consteval} {1:function|constructor}'s {2} parameter type {3} is not a literal type";
 sema_constexpr_non_literal_return = Error (2) "{0:constexpr|consteval} function's return type {1} is not a literal type";
 sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be constexpr; did you intend to make it static?";
+// ----- WP-1500 (clang `warn_cxx14_compat_constexpr_not_const`)
+sema_constexpr_not_const = Warning [ConstexprNotConst] (0) "'constexpr' non-static member function will not be implicitly 'const' in C++14; add 'const' to avoid a change in behavior";
 sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
 // [dcl.constexpr]/1: a constexpr variable declaration shall be a definition (clang err_invalid_constexpr_var_decl).
 sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declaration must be a definition";
@@ -342,7 +344,7 @@ sema_default_init_const = Error (1) "default initialization of an object of cons
 sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
 sema_default_member_init_not_yet_parsed = Error (2) "default member initializer for {1} needed within definition of enclosing class {0} outside of member functions";
 sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
-sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
+sema_default_not_special = Error (1) "only special member functions {0:|and comparison operators }may be defaulted";
 sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";
 sema_defaulted_cmp_cannot_deduce_undeduced_auto = Error (2) "return type of defaulted 'operator<=>' cannot be deduced because three-way comparison for {0:|member |base class }{1} has a deduced return type and is not yet defined";
 sema_defaulted_cmp_constexpr_mismatch = Error (2) "defaulted definition of {0:equality|three-way|equality|relational} comparison operator cannot be declared {1:constexpr|consteval} because it invokes a non-constexpr comparison function";
