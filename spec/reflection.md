@@ -199,6 +199,20 @@ the IS equality ([expr.eq]):
 
 The value family (`extract`, `reflect_constant*`, P3491 `define_static_*`, `refl_bytes`) is specified in spec/reflection-values.md (WP-479).
 
+**Naming a declaration in `^^`** (WP-1521): the operand of a
+reflect-expression references the declaration it names, as any other
+id-expression does, without odr-using it (`Sema::mark_reflected`,
+`crates/kiln_sema/src/reflect_operand.rs`): the declaration gets the
+referenced flag, and a variable or parameter is counted as read for
+`-Wunused-but-set-variable`. So `-Wunused-variable` and its siblings stay
+quiet for an entity whose only use is its reflection, whatever is done
+with the reflection later (queried, used for its type, spliced, passed as
+a template argument); GCC 16.1 behaves the same. A file-scope variable
+with internal linkage that is referenced and has a reflection is also
+exempt from `-Wunneeded-internal-declaration`
+(`Sema::unused_file_scope_kind`). An entity that is never named still
+warns, also when a metafunction such as `members_of` reaches it.
+
 **Reading a variable through a reflection** (WP-638; [temp.inst]/5 and /8,
 [meta.reflection.extract]): reading a variable through a reflection
 instantiates its definition as an odr-use would. `extract`, `constant_of`

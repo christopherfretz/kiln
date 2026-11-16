@@ -156,6 +156,15 @@ impl Sema<'_, '_> {
         if referenced && self.might_be_constant_var(first) {
             return None;
         }
+        // So is a referenced variable that has a reflection (`^^v`): what
+        // the program does with the reflection cannot be seen here, and
+        // GCC 16.1 gives no unused-entity warning for it.
+        if referenced {
+            let entity = self.entity_decl(first);
+            if self.ast.reflections.find(kiln_ast::reflect::Reflectee::Decl(entity)).is_some() {
+                return None;
+            }
+        }
         if let Some(t) = template {
             // A variable template any specialization of which is used (or
             // referenced and possibly constant), or explicitly specialized.
