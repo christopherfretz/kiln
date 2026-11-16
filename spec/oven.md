@@ -2114,7 +2114,15 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   an object that is visible outside that expression") and that a `T`
   object can live at `p`: the most-derived object at that offset of the
   allocation's type must be `T` or contain a `T` subobject there, else
-  "placement new would change type of storage from 'U' to 'T'". `stat`
+  "placement new would change type of storage from 'U' to 'T'". An
+  array `T[n]` placed at the first element of an inactive union member
+  of type `T[n]` (searched through arrays, every union member and struct
+  fields, `fitting_array_at`, after the active members) creates that
+  member, which becomes active ([intro.object]/2, P2747R2; the
+  [class.union.general]/6 note; WP-1483, found running GCC's C++
+  testsuite: GCC 16.1 agrees, clang 22 rejects with "construction of
+  subobject of member 'arr' of union with no active member";
+  `expr.const/constexpr-union-array-placement{,-invalid}-cxx26.cpp`). `stat`
   is the static pointee type of the placement argument before its
   conversion to `void *` (`bi::DYN` when it was `void *` already). As in
   clang 22's `HandlePlacementNew`, the designated object is the `stat`
@@ -4005,7 +4013,10 @@ value (a class as `{4}`).
 
 ### Unknown references — Landed (WP-357)
 P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;
-`SemaBridge::cxx23()`): naming a reference variable that is not usable
+`SemaBridge::cxx23()`; in every mode for the implicit variables of an
+expansion statement, `SemaBridge::expansion_var`, which also makes them
+P2686 constexpr-referenceable, `expansion_referenceable`, WP-1483, as the
+statement is C++26-only): naming a reference variable that is not usable
 in constant expressions (a parameter of a function outside its call, an
 `extern` reference, a reference whose initializer is not constant) is
 constant; the reference binds to "an unspecified object of the referenced
@@ -4064,6 +4075,22 @@ footprint flat over 10 000 evaluations). Once a definition gives it an
 initializer, the next resolution is a fresh one (the old object stays, at
 most one per variable, since a frozen result may still point to it)
 (`expr.const/p2280-provisional-global.cpp`).
+
+*Per mode* (WP-1483, measured). kiln follows clang 22, which applies
+P2280 from C++23 only; GCC 16.1 applies parts of it in every mode:
+- `r.size()` on a reference parameter to a class whose `size` reads no
+  state, `len(a)` passing an array reference on, a member call reading
+  no state: clang 22 and kiln reject before C++23 and accept from C++23;
+  GCC accepts in every mode.
+- `&r == &r`: clang 22 and kiln accept from C++23; GCC rejects in every
+  mode.
+- `sizeof` of an array reference, `typeid` of a non-polymorphic one: all
+  three accept in every mode. `typeid` of a polymorphic reference,
+  reading a member through the reference, `this` in a non-constexpr
+  member, `p == p` for a pointer parameter: all three reject in every
+  mode.
+P2280R4 was adopted as a defect report, so neither split is wrong by the
+text; kiln keeps clang 22's (from C++23) for compatibility.
 
 ### Label addresses — Landed (WP-444)
 GNU `&&l` (clang's `AddrLabelExpr` lvalue base: an object of unknown

@@ -135,6 +135,20 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Expansion statements and related checks, found running GCC's C++
+  testsuite (WP-1483): an iterating `template for` follows the working
+  draft's [stmt.expand]/5.2. Its range and iterator are `constexpr`
+  exactly when the loop variable is, so a non-`constexpr` loop over a
+  run-time object sees the object itself. An iterator without `-` is
+  rejected, and the first error in the range stops the statement. An
+  array placement new into an inactive union array member makes that
+  member active. A pack index of class type is converted to `size_t`. A
+  name-independent `_` may follow a member function, a parameter or a
+  function named `_`. A member `get` that cannot be called is reported
+  once per structured binding declaration. In C23 and C++26, extra
+  `va_start` arguments, discarded as before, now warn `-Wvarargs` unless
+  they name the last parameter, as in GCC. `cargo xtask gxx-dg` lifts
+  kiln's and clang's error limit.
 - Reflection, found running GCC's C++ testsuite (WP-1482): a range
   argument of `reflect_constant_array`, `define_static_array`,
   `substitute` and the other range-taking metafunctions is iterated once

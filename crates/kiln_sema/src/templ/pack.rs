@@ -783,8 +783,7 @@ impl Substituter<'_, '_, '_> {
         at: Loc,
     ) -> SubstResult<usize> {
         use kiln_oven::{EvalContext, EvalKind};
-        let c = crate::conv::decay(self.sema, index);
-        let c = self.sema.act_on_full_expr(c);
+        let c = self.sema.pack_index_operand(index).ok_or(SubstFail)?;
         let loc = self.sema.begin_loc(index);
         // clang checks the index as a converted constant expression of
         // the array-size kind ("array size is not a constant expression").

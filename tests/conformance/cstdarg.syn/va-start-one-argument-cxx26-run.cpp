@@ -3,13 +3,15 @@
 //@ oracle: gcc
 //@ xfail(clang): clang 22's <stdarg.h> has no C++26 one-argument va_start
 //@ stdout: 10 45 3 202311
+//@ diag: 32:16 warning "second argument to 'va_start' is not the last non-variadic parameter"
 // [cstdarg.syn] (C++26, P3348R4: C++26 refers to C23): `va_start(ap, ...)`
 // takes the va_list alone; arguments after it are neither expanded nor
 // evaluated (C23 7.16.1.4), so they need not name the last parameter, and
 // a function whose parameter list is just `...` can walk its arguments.
 // <stdarg.h> defines __STDC_VERSION_STDARG_H__ as 202311L (C23 7.16/1).
-// No -Wvarargs warning (on by default): the `0` kiln's header passes is
-// not the user's. GCC also warns about the ignored tokens; kiln does not.
+// No -Wvarargs warning for `va_start(ap)`; ignored tokens that are not
+// the last parameter's name warn, as in GCC 16.1 (WP-1483).
+//@ requires: clang>=22
 // Found running GCC's C++ testsuite.
 #include <stdarg.h>
 extern "C" int printf(const char *, ...);

@@ -12,8 +12,8 @@
 // not a constant expression is fine when its size is (range is a
 // reference of unknown referent there, P2280): a std::array returned by a
 // non-constexpr function, a function parameter, a class whose begin/end
-// ignore the object. Kiln keeps P1306R5's constant range whenever one can
-// be declared and falls back to this form. Found running GCC's C++
+// ignore the object. This is the only form of such a statement (WP-1483:
+// no P1306R5 constant copy is tried first). Found running GCC's C++
 // testsuite.
 #include <array>
 extern "C" int printf(const char *, ...);

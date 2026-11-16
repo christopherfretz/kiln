@@ -918,8 +918,12 @@ impl Sema<'_, '_> {
         let idx = TemplateArg::expr(lit, None);
         let targs = self.ast.types.arg_list(&[idx]);
         // An empty lookup is not recovered (clang `DiagnoseEmptyLookup`
-        // in `BuildRecoveryCallExpr`); a failed overload resolution is.
-        let mut recoverable = true;
+        // in `BuildRecoveryCallExpr`); a failed overload resolution of
+        // `get<i>(e)` is (a `RecoveryExpr`), and the next binding is tried.
+        // A failed member call `e.get<i>()` is not: clang's
+        // `BuildCallToMemberFunction` returns an invalid expression and
+        // `checkTupleLikeDecomposition` stops, so it is reported once.
+        let mut recoverable = !member_get;
         let call = if member_get {
             // clang looks `get` up at the decomposition's location
             // (`LookupResult MemberGet(S, GetDN, Src->getLocation())`),

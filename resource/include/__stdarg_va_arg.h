@@ -13,8 +13,10 @@
     (defined(__cplusplus) && __cplusplus > 202302L)
 /* C23 7.16.1.4 and C++26 [cstdarg.syn] (kiln): va_start(ap, ...) needs no
  * parameter name, and arguments after the first are neither expanded nor
- * evaluated. */
-#define va_start(ap, ...) __builtin_va_start(ap, 0)
+ * evaluated: only their spelling reaches the builtin, which warns
+ * (-Wvarargs) unless it is the last named parameter. */
+#define va_start(ap, ...)                                                      \
+  __builtin_va_start(ap, 0 __VA_OPT__(, #__VA_ARGS__))
 #else
 /* Versions before C23 do require the second parameter. */
 #define va_start(ap, param) __builtin_va_start(ap, param)

@@ -2,19 +2,21 @@
 // whose iterator is a user class, so N is counted by evaluating
 // `begin + i != end` per element rather than by `end - begin` (the pointer
 // and standard library fast path). The count and the elements share one
-// `static constexpr auto __iter = begin + i;` per element (spec/sema.md
-// §7.6a, WP-467): line 26's evaluations are N+3 `__begin`/`__end`/`__iter`
+// `constexpr auto __iter = begin + decltype(begin - begin){i};` per
+// element (spec/sema.md §7.6a, WP-467, WP-1483: the working draft needs
+// `-`): line 28's evaluations are N+3 `__begin`/`__end`/`__iter`
 // initializations, N+1 count tests and N element initializations, each a
 // few steps; a count that re-evaluates `begin + i` doubles its steps.
 // docs/status/perf-history.md "WP-467" records wall time and peak memory.
 //@ expect: compile-ok
 //@ strict-diags
 //@ requires: clang>=23
-//@ oven: 26 evaluations<=30005 steps<=61000
+//@ oven: 28 evaluations<=30005 steps<=61000
 struct It {
   const int *p;
   constexpr It operator+(long n) const { return {p + n}; }
   constexpr bool operator!=(It o) const { return p != o.p; }
+  constexpr long operator-(It o) const { return p - o.p; }
   constexpr const int &operator*() const { return *p; }
 };
 struct R {

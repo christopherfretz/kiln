@@ -1663,13 +1663,39 @@ impl Sema<'_, '_> {
     /// size is not a constant expression"), before the pack's length is
     /// known. False after that diagnostic. A type pack index
     /// ([dcl.type.pack.index]) is checked only at instantiation, as clang.
+    /// The full-expression a pack index is evaluated as: [expr.prim.pack.index]
+    /// makes it a converted constant expression of type `std::size_t`, so
+    /// an index of class type goes through its conversion function (found
+    /// running GCC's C++ testsuite). `None` after a diagnosed failure.
+    pub(crate) fn pack_index_operand(&mut self, index: ExprId) -> Option<ExprId> {
+        let c = crate::conv::decay(self, index);
+        let ty = self.ast.exprs.get(c).ty();
+        let c = if self.ast.types.as_record(ty).is_some() {
+            let size_t = self.size_type();
+            let ctx = crate::conv::ConvCtx::Initialization;
+            let Ok(c) = crate::conv::implicit_convert(self, c, size_t, ctx) else {
+                // clang `CheckConvertedConstantExpression`'s wording.
+                let at = self.begin_loc(index);
+                let msg = self
+                    .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                    .arg(self.ty_arg(ty))
+                    .arg(self.ty_arg(size_t));
+                self.emit(msg);
+                return None;
+            };
+            c
+        } else {
+            c
+        };
+        Some(self.act_on_full_expr(c))
+    }
+
     fn pack_index_may_be_constant(&mut self, index: ExprId) -> bool {
         if !self.in_template() || self.expr_is_value_dependent(index) {
             return true;
         }
         let at = self.begin_loc(index);
-        let c = crate::conv::decay(self, index);
-        let c = self.act_on_full_expr(c);
+        let Some(c) = self.pack_index_operand(index) else { return false };
         let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at);
         match self.eval_int(c, ctx) {
             Ok(_) => true,

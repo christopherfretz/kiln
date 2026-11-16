@@ -723,6 +723,17 @@ const LINK_FLAGS: &[&str] = &["-lm"];
 /// How the report header shows `--gcc-toolchain=<the GCC oracle's prefix>`.
 const TOOLCHAIN_NOTE: &str = "--gcc-toolchain=<GCC oracle's prefix>";
 
+/// The flag that lifts a compiler's error limit, led before every command
+/// line: GCC has none, so an expected `dg-error` after a clang-style
+/// compiler's 20th error would be lost (`-ferror-limit=0` for kiln and
+/// clang; nothing for GCC).
+fn unlimited_errors(role: Role) -> Option<&'static str> {
+    match role {
+        Role::Kiln | Role::Clang => Some("-ferror-limit=0"),
+        Role::Gcc => None,
+    }
+}
+
 /// A `dg-shouldfail` case's verdict from its plain one: a failing run is
 /// its pass, a clean run is `wrong`.
 fn should_fail(v: Verdict) -> Verdict {
@@ -862,6 +873,9 @@ fn resolve_tools(
         build_kiln_with(root, &target, "gxx-dg", opts.profile)?
     };
     let mut tools = vec![Tool::new_for(Role::Kiln, kiln, kiln_env, scratch, "probe.cc")?];
+    if let Some(f) = unlimited_errors(Role::Kiln) {
+        tools[0].lead_with(f.to_owned());
+    }
     let mut toolchain = None;
     if opts.oracles.contains(&Role::Gcc) {
         let (gxx, explicit) = if let Some(g) = &opts.gcc {
@@ -887,6 +901,9 @@ fn resolve_tools(
     if opts.oracles.contains(&Role::Clang) {
         let mut clang =
             Tool::new_for(Role::Clang, opts.clang.clone(), Vec::new(), scratch, "probe.cc")?;
+        if let Some(f) = unlimited_errors(Role::Clang) {
+            clang.lead_with(f.to_owned());
+        }
         if let Some(tc) = &toolchain {
             clang.lead_noted(format!("--gcc-toolchain={}", tc.display()), TOOLCHAIN_NOTE);
         }
@@ -1477,6 +1494,14 @@ pub fn dropped_flags(units: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_limit_lifted() {
+        // GCC has no error limit; kiln and clang stop after 20 by default.
+        assert_eq!(unlimited_errors(Role::Kiln), Some("-ferror-limit=0"));
+        assert_eq!(unlimited_errors(Role::Clang), Some("-ferror-limit=0"));
+        assert_eq!(unlimited_errors(Role::Gcc), None);
+    }
 
     #[test]
     fn dropped_flag_list() {

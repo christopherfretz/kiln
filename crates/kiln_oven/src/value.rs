@@ -785,7 +785,7 @@ impl Oven {
         let Some(v) = self.run.object else { return false };
         let ast = b.ast();
         let ctx = ast.decls.get(d).ctx();
-        b.cxx26()
+        (b.cxx26() || b.expansion_referenceable(v))
             && is_local_var(ast, v)
             && ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
             && ctx.is_some_and(|c| ast.decls.get(c).kind().is_function())
@@ -1576,7 +1576,7 @@ impl Oven {
                     p
                 } else {
                     let mut p = self.resolve_var(b, g, d, top);
-                    if b.cxx23() {
+                    if b.cxx23() || b.expansion_var(d) {
                         p = self.bind_unknown(b, d, p);
                     }
                     match ty {

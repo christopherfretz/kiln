@@ -90,32 +90,34 @@ enum ExpansionSource {
 /// declaration statement (an iterating form's `iter`), and the element.
 type Element = (Option<StmtId>, ExprId);
 
-/// How a `constexpr` expansion statement's range (the iterating form's
-/// `__range`, the destructuring form's `auto&& [__u...]`) is declared
-/// ([`Sema::expansion_fallback`]).
+/// How an expansion statement's range is declared: the iterating form's
+/// `__range` ([`Sema::expansion_iterating`]: [`RangeBind::Automatic`] or
+/// [`RangeBind::Runtime`], as the working draft says), or a `constexpr`
+/// destructuring form's `auto&& [__u...]` ([`Sema::expansion_fallback`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum RangeBind {
-    /// `static constexpr auto&&`: a reference to an object with static
-    /// storage duration or to a static lifetime-extended temporary.
+    /// Destructuring only: `static constexpr auto&&`, a reference to an
+    /// object with static storage duration or to a static
+    /// lifetime-extended temporary.
     Static,
-    /// `constexpr auto&&` with automatic storage duration, as
-    /// [stmt.expand]/5 declares it: a reference to an automatic object
-    /// of the same function, constexpr-referenceable by P2686R5
-    /// ([expr.const.init]/2; C++26). The iterating form's `__begin`,
-    /// `__end` and `__iter` are then automatic `constexpr` variables
-    /// too: one with static storage duration could not point into it
-    /// ([expr.const.init]/4).
+    /// `constexpr` with automatic storage duration, as [stmt.expand]/5
+    /// declares it for a `constexpr` for-range-declaration: a reference
+    /// to an automatic object of the same function is
+    /// constexpr-referenceable by P2686R5 ([expr.const.init]/2). The
+    /// iterating form's `__begin`, `__end` and `__iter` are automatic
+    /// `constexpr` variables too: one with static storage duration could
+    /// not point into it ([expr.const.init]/4).
     Automatic,
-    /// `static constexpr auto`: a copy of the range (a prvalue, or the
-    /// last resort for a glvalue that is neither, such as an enclosing
-    /// function's local named in a lambda).
+    /// Destructuring only: `static constexpr auto`, a copy of the range
+    /// (a prvalue, or the last resort for a glvalue that is neither,
+    /// such as an enclosing function's local named in a lambda).
     Copy,
     /// The iterating form of a for-range-declaration that is not
-    /// `constexpr`, when no constant range can be declared: the working
-    /// draft's `decltype(auto) range = (init); auto begin = begin-expr;`
-    /// (CWG3140), automatic and not `constexpr`, as are the elements'
-    /// `__iter`; N is counted on `begin-expr` and `end-expr`, which name
-    /// `range`, a reference of unknown referent (P2280).
+    /// `constexpr`: [stmt.expand]/5.2's `decltype(auto) range = (init);
+    /// auto begin = begin-expr;`, automatic and not `constexpr`, as are
+    /// the elements' `__iter`; N is counted on `begin-expr` and
+    /// `end-expr`, which name `range`, a reference of unknown referent
+    /// (P2280).
     Runtime,
 }
 
@@ -245,22 +247,20 @@ impl Sema<'_, '_> {
             && !self.ast.decls.get(v).has(DeclFlags::INVALID)
     }
 
-    /// The `constexpr` range variable over `e`, built by `f(bind)`
-    /// (spec/sema.md "Expansion statements"): a prvalue initializes a
-    /// `static` object ([`RangeBind::Copy`]: `auto`, which is const, so
-    /// its value is usable in constant expressions; a non-const
-    /// lifetime-extended temporary is not). A glvalue is bound by
-    /// reference: `static` first ([`RangeBind::Static`]), then, at
-    /// C++26 and when the for-range-declaration is `constexpr`
-    /// (`constexpr_decl`), automatic ([`RangeBind::Automatic`], P2686R5:
-    /// the `constexpr` reference [stmt.expand]/5 declares then, to a
-    /// local of this function). When neither binds, a copy is the last
-    /// resort, its diagnostics replacing the first attempt's only if it
-    /// succeeds.
+    /// The `constexpr` declaration of a destructuring expansion
+    /// statement over `e`, built by `f(bind)` (spec/sema.md "Expansion
+    /// statements"): a prvalue initializes a `static` object
+    /// ([`RangeBind::Copy`]: `auto`, which is const, so its value is
+    /// usable in constant expressions; a non-const lifetime-extended
+    /// temporary is not). A glvalue is bound by reference: `static` first
+    /// ([`RangeBind::Static`]), then, at C++26, automatic
+    /// ([`RangeBind::Automatic`], P2686R5: the `constexpr` reference
+    /// [stmt.expand]/5.3 declares, to a local of this function). When
+    /// neither binds, a copy is the last resort, its diagnostics
+    /// replacing the first attempt's only if it succeeds.
     fn expansion_fallback<T>(
         &mut self,
         e: ExprId,
-        constexpr_decl: bool,
         f: impl Fn(&mut Self, RangeBind) -> Option<T>,
     ) -> Option<T> {
         let attempt = |s: &mut Self, bind: RangeBind| {
@@ -276,17 +276,10 @@ impl Sema<'_, '_> {
             return r;
         }
         if !glvalue {
-            if !constexpr_decl {
-                let (r3, stash3) = attempt(self, RangeBind::Runtime);
-                if r3.is_some() {
-                    self.release(stash3, Vec::new());
-                    return r3;
-                }
-            }
             self.release(stash, Vec::new());
             return None;
         }
-        if constexpr_decl && self.std >= kiln_lex::Std::Cxx26 {
+        if self.std >= kiln_lex::Std::Cxx26 {
             let (r2, stash2) = attempt(self, RangeBind::Automatic);
             if r2.is_some() {
                 self.release(stash2, Vec::new());
@@ -298,24 +291,22 @@ impl Sema<'_, '_> {
             self.release(stash2, Vec::new());
             return r2;
         }
-        if !constexpr_decl {
-            let (r3, stash3) = attempt(self, RangeBind::Runtime);
-            if r3.is_some() {
-                self.release(stash3, Vec::new());
-                return r3;
-            }
-        }
         self.release(stash, Vec::new());
         None
     }
 
-    /// The iterating form ([stmt.expand]/5.2): the prelude
-    /// `static constexpr auto&& range = init;` (or automatic, or `auto`,
-    /// see [`Sema::expansion_fallback`]) and
-    /// `static constexpr auto begin = begin-expr, end = end-expr;`, then
-    /// per element `static constexpr auto iter = begin + i;` and the
-    /// element `*iter` (none `static` when the range is automatic, which
-    /// needs a `constexpr` for-range-declaration, `constexpr_decl`). The
+    /// The iterating form ([stmt.expand]/5.2), as the working draft
+    /// declares it, in one path (spec/sema.md "Iterating expansion
+    /// statements"): `constexpr_opt decltype(auto) range = (init);` and
+    /// `constexpr_opt auto begin = begin-expr;`, automatic, `constexpr`
+    /// exactly when the for-range-declaration is (`constexpr_decl`); per
+    /// element `constexpr_opt auto iter = begin + i;` and the element
+    /// `*iter`. N is counted on `begin-expr` and `end-expr` as a constant
+    /// expression: on the `constexpr` variables `__begin` and `__end`
+    /// when they are (`__end` is not part of the rewrite: it is built
+    /// only to count, and never declared in the prelude), else on their
+    /// initializers ([`Sema::expansion_runtime_size`]). These implicit
+    /// variables follow C++26 in every mode (`Sema::expansion_vars`). The
     /// prelude and the elements.
     fn expansion_iterating(
         &mut self,
@@ -323,74 +314,68 @@ impl Sema<'_, '_> {
         constexpr_decl: bool,
         colon: Loc,
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+        let bind = if constexpr_decl { RangeBind::Automatic } else { RangeBind::Runtime };
         let range_loc = self.begin_loc(e);
         let range_ty = self.ety(e);
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
-        let rref = self.ast.types.rvalue_ref_to(auto);
-        let cauto = self.ast.types.qualify(auto, Quals::CONST);
-        let (range, bind) = self.expansion_fallback(e, constexpr_decl, |s, bind| {
-            let ty = if bind.by_ref() { rref } else { auto };
-            let v = s.expansion_var("__range", ty, bind, range_loc);
-            if !s.init_expansion_var(v, e, range_loc, DiagId::sema_for_range_deduction_failure) {
-                return None;
-            }
-            if bind != RangeBind::Runtime {
-                return Some((v, bind));
-            }
-            // The runtime form must count now, so that a failed count
-            // falls back to the first attempt's diagnostics.
-            let begin = s.expansion_var("__begin", auto, bind, colon);
-            let end = s.expansion_var("__end", auto, bind, colon);
-            let br = s.build_decl_ref(v, colon);
-            let er = s.build_decl_ref(v, colon);
-            if !s.expansion_begin_end(br, er, s.ety(e), (begin, end), colon) {
-                return None;
-            }
-            s.expansion_runtime_size(begin, end, colon)?;
-            Some((v, bind))
-        })?;
-        if bind == RangeBind::Runtime {
-            // [class.temporary]/7 (P2718R0, as for a range-based `for`):
-            // the range's temporaries persist with it; extended only once
-            // this attempt has won (`e` is shared by every attempt).
+        // `decltype(auto) range = (init);`: a reference for a glvalue
+        // (which `auto&&` deduces alike), an object for a prvalue.
+        let glvalue = self.ast.exprs.get(e).value_category().is_glvalue();
+        let ty = if glvalue { self.ast.types.rvalue_ref_to(auto) } else { auto };
+        let range = self.expansion_var("__range", ty, bind, range_loc);
+        self.expansion_vars.push(range);
+        // A `constexpr` range that is not constant-initialized is
+        // diagnosed and not marked invalid: stop there too.
+        let (ok, stash) = self.capturing(|s| {
+            s.init_expansion_var(range, e, range_loc, DiagId::sema_for_range_deduction_failure)
+        });
+        let ok = ok && !self.stash_has_error(&stash);
+        self.release(stash, Vec::new());
+        if !ok {
+            return None;
+        }
+        if bind == RangeBind::Runtime && glvalue {
+            // [class.temporary]/9: the expansion-initializer's temporaries
+            // persist for the lifetime of the reference it initializes,
+            // "if any": a prvalue initializes the object `range` itself,
+            // and its temporaries end with the declaration. (A `constexpr`
+            // range's are part of its constant initialization.)
             self.extend_init_temporaries(range);
         }
-        let vt = if bind == RangeBind::Runtime { auto } else { cauto };
+        let vt = if constexpr_decl { self.ast.types.qualify(auto, Quals::CONST) } else { auto };
         let begin = self.expansion_var("__begin", vt, bind, colon);
         let end = self.expansion_var("__end", vt, bind, colon);
+        self.expansion_vars.extend([begin, end]);
         let br = self.build_decl_ref(range, colon);
         let er = self.build_decl_ref(range, colon);
-        if !self.expansion_begin_end(br, er, range_ty, (begin, end), colon) {
+        let (ok, stash) =
+            self.capturing(|s| s.expansion_begin_end(br, er, range_ty, (begin, end), colon));
+        let ok = ok && !self.stash_has_error(&stash);
+        self.release(stash, Vec::new());
+        if !ok || [begin, end].iter().any(|&v| self.ast.decls.get(v).has(DeclFlags::INVALID)) {
             return None;
         }
-        if [begin, end].iter().any(|&v| self.ast.decls.get(v).has(DeclFlags::INVALID)) {
-            return None;
-        }
+        let diff = self.expansion_difference_type(begin, colon)?;
         let prelude = vec![
             self.act_on_decl_stmt(&[range], range_loc),
-            self.act_on_decl_stmt(&[begin, end], colon),
+            self.act_on_decl_stmt(&[begin], colon),
         ];
-        let fast = if bind == RangeBind::Runtime {
-            self.expansion_runtime_size(begin, end, colon)
+        let n = if bind == RangeBind::Runtime {
+            self.expansion_runtime_size(begin, end, diff, colon)?
+        } else if let Some(n) = self.expansion_size_difference(begin, end, colon) {
+            n
         } else {
-            self.expansion_size_difference(begin, end, colon)
-        };
-        if fast.is_none()
-            && bind != RangeBind::Runtime
-            && let Some(one) = self.expansion_count_elements(begin, end, bind, colon)
-        {
-            return match one {
-                OnePass::Elements(elems) => Some((prelude, elems)),
-                OnePass::Capped => None,
-            };
-        }
-        let n = match fast {
-            Some(n) => n,
-            None => self.expansion_size(begin, end, colon)?,
+            if let Some(one) = self.expansion_count_elements(begin, end, bind, diff, colon) {
+                return match one {
+                    OnePass::Elements(elems) => Some((prelude, elems)),
+                    OnePass::Capped => None,
+                };
+            }
+            self.expansion_size(begin, end, diff, colon)?
         };
         let mut elems = Vec::new();
         for i in 0..n {
-            let iter = self.expansion_iter(begin, i, bind, colon)?;
+            let iter = self.expansion_iter(begin, i, bind, diff, colon)?;
             let ds = self.act_on_decl_stmt(&[iter], colon);
             elems.push((Some(ds), self.expansion_deref(iter, colon)?));
         }
@@ -405,6 +390,7 @@ impl Sema<'_, '_> {
         begin: DeclId,
         i: u64,
         bind: RangeBind,
+        diff: QualType,
         colon: Loc,
     ) -> Option<DeclId> {
         let cauto = {
@@ -415,10 +401,10 @@ impl Sema<'_, '_> {
                 self.ast.types.qualify(auto, Quals::CONST)
             }
         };
-        let pd = QualType::unqual(self.target.ptrdiff_t);
         let iter = self.expansion_var("__iter", cauto, bind, colon);
+        self.expansion_vars.push(iter);
         let b = self.build_decl_ref(begin, colon);
-        let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+        let lit = self.expansion_index(diff, i, colon);
         let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
         (!self.is_err_expr(add)
             && self.init_expansion_var(
@@ -428,6 +414,42 @@ impl Sema<'_, '_> {
                 DiagId::sema_for_range_iter_deduction_failure,
             ))
         .then_some(iter)
+    }
+
+    /// `decltype(begin - begin)` ([stmt.expand]/5.2): the type of each
+    /// element's index `i`, so `begin - begin` must be well-formed (an
+    /// unevaluated operand). `None` after it is diagnosed.
+    fn expansion_difference_type(&mut self, begin: DeclId, colon: Loc) -> Option<QualType> {
+        self.enter_unevaluated();
+        let l = self.build_decl_ref(begin, colon);
+        let r = self.build_decl_ref(begin, colon);
+        let d = self.act_on_binary(BinaryOp::Sub, l, r, colon);
+        self.exit_unevaluated();
+        if self.is_err_expr(d) {
+            return None;
+        }
+        let t = self.ety(d);
+        let t = if self.ast.exprs.get(d).value_category().is_glvalue() {
+            self.ast.types.lvalue_ref_to(t)
+        } else {
+            t
+        };
+        Some(t)
+    }
+
+    /// `decltype(begin - begin){i}` ([stmt.expand]/5.2), `i` a prvalue
+    /// of type `std::ptrdiff_t`: the literal itself when the difference
+    /// type is `std::ptrdiff_t` (the language's and the standard
+    /// library's iterators), else a list-initialization of `diff`.
+    fn expansion_index(&mut self, diff: QualType, i: u64, colon: Loc) -> ExprId {
+        let pd = QualType::unqual(self.target.ptrdiff_t);
+        let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+        if self.ast.types.canonical(diff) == self.ast.types.canonical(pd) {
+            return lit;
+        }
+        let item = crate::init::InitItem { designator: Vec::new(), value: InitValue::Expr(lit) };
+        let l = InitList { items: vec![item], lbrace: colon, rbrace: colon };
+        self.act_on_list_cast(diff, &l, colon)
     }
 
     /// Element expression `*__iter`; `None` after an error.
@@ -452,6 +474,7 @@ impl Sema<'_, '_> {
         begin: DeclId,
         end: DeclId,
         bind: RangeBind,
+        diff: QualType,
         colon: Loc,
     ) -> Option<OnePass> {
         let (r, stash) = self.capturing(|s| {
@@ -460,7 +483,7 @@ impl Sema<'_, '_> {
             }
             let mut elems = Vec::new();
             for i in 0..MAX_ITERATING {
-                let iter = s.expansion_iter(begin, i, bind, colon)?;
+                let iter = s.expansion_iter(begin, i, bind, diff, colon)?;
                 if i > 0 && !s.expansion_more(iter, end, colon)? {
                     return Some(OnePass::Elements(elems));
                 }
@@ -503,14 +526,19 @@ impl Sema<'_, '_> {
     /// ([`Sema::expansion_size_difference`], tried first by the caller);
     /// this count runs only when the one-pass
     /// [`Sema::expansion_count_elements`] fails, to diagnose.
-    fn expansion_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
-        let pd = QualType::unqual(self.target.ptrdiff_t);
+    fn expansion_size(
+        &mut self,
+        begin: DeclId,
+        end: DeclId,
+        diff: QualType,
+        colon: Loc,
+    ) -> Option<u64> {
         for i in 0..MAX_ITERATING {
             let b = self.build_decl_ref(begin, colon);
             let it = if i == 0 {
                 b
             } else {
-                let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
+                let lit = self.expansion_index(diff, i, colon);
                 self.act_on_binary(BinaryOp::Add, b, lit, colon)
             };
             let e = self.build_decl_ref(end, colon);
@@ -573,55 +601,81 @@ impl Sema<'_, '_> {
         u64::try_from(n).ok()
     }
 
-    /// N of the runtime iterating form ([`RangeBind::Runtime`], CWG3140):
-    /// counted on the initializers of `begin` and `end` (`begin-expr`
-    /// and `end-expr`, which name the non-constexpr reference `range`, a
-    /// reference of unknown referent in a constant expression, P2280):
-    /// `end-expr - begin-expr` for a contiguous iterator, else the first
-    /// `i` for which `begin-expr + i != end-expr` is false. `None`, with
-    /// nothing diagnosed, when that is not a constant expression.
-    fn expansion_runtime_size(&mut self, begin: DeclId, end: DeclId, colon: Loc) -> Option<u64> {
+    /// N of the iterating form with a for-range-declaration that is not
+    /// `constexpr` ([`RangeBind::Runtime`], [stmt.expand]/5.2): the
+    /// working draft's `[&] consteval { auto b = begin-expr; auto e =
+    /// end-expr; for (; b != e; ++b) ++result; ... }()`, counted on the
+    /// initializers of `__begin` and `__end`, which name the non-constexpr
+    /// `__range`, a reference of unknown referent (P2280, in every mode
+    /// for this variable). A contiguous iterator counts in one
+    /// evaluation of `end-expr - begin-expr` when that is a non-negative
+    /// constant (silently, as [`Sema::expansion_size_difference`]); else
+    /// the first `i` for which `begin-expr + i != end-expr` is false,
+    /// each a constant expression, capped at 2^20. A test that is not a
+    /// constant expression is `sema_expansion_size_not_constant` with
+    /// the evaluator's notes (why `begin-expr` or `end-expr` is not one).
+    fn expansion_runtime_size(
+        &mut self,
+        begin: DeclId,
+        end: DeclId,
+        diff: QualType,
+        colon: Loc,
+    ) -> Option<u64> {
         let b = self.ast.decls.var(begin).and_then(|x| x.init)?;
         let e = self.ast.decls.var(end).and_then(|x| x.init)?;
-        let (r, stash) = self.capturing(|s| {
-            let (bt, et) = (s.ety(b), s.ety(e));
-            let contiguous = s.ast.types.same_unqualified(bt, et)
-                && match s.ast.types.pointee(bt) {
-                    Some(p) if s.ast.types.is_pointer(bt) => {
-                        crate::target::is_complete_object(&s.ast, p)
-                    }
-                    _ => s.is_lib_contiguous_iterator(bt),
-                };
-            if contiguous {
+        let (bt, et) = (self.ety(b), self.ety(e));
+        let contiguous = self.ast.types.same_unqualified(bt, et)
+            && match self.ast.types.pointee(bt) {
+                Some(p) if self.ast.types.is_pointer(bt) => {
+                    crate::target::is_complete_object(&self.ast, p)
+                }
+                _ => self.is_lib_contiguous_iterator(bt),
+            };
+        if contiguous {
+            let (r, stash) = self.capturing(|s| {
                 let d = s.act_on_binary(BinaryOp::Sub, e, b, colon);
                 if s.is_err_expr(d) || !s.ast.types.is_integral(s.ety(d)) {
                     return None;
                 }
                 let n = s.eval_int(d, EvalContext::new(EvalKind::Other, colon)).ok()?;
-                return u64::try_from(n).ok();
+                u64::try_from(n).ok()
+            });
+            if r.is_some() && !self.stash_has_error(&stash) {
+                self.release(stash, Vec::new());
+                return r;
             }
-            let pd = QualType::unqual(s.target.ptrdiff_t);
-            for i in 0..MAX_ITERATING {
-                let it = if i == 0 {
-                    b
-                } else {
-                    let lit = s.builder().int_literal(pd, i, Radix::Decimal, colon);
-                    s.act_on_binary(BinaryOp::Add, b, lit, colon)
-                };
-                let ne = s.act_on_binary(BinaryOp::NE, it, e, colon);
-                if s.is_err_expr(ne) {
+        }
+        for i in 0..MAX_ITERATING {
+            let it = if i == 0 {
+                b
+            } else {
+                let lit = self.expansion_index(diff, i, colon);
+                self.act_on_binary(BinaryOp::Add, b, lit, colon)
+            };
+            let ne = self.act_on_binary(BinaryOp::NE, it, e, colon);
+            if self.is_err_expr(ne) {
+                return None;
+            }
+            let c = match conv::contextually_convert_to_bool(self, ne) {
+                Ok(c) => c,
+                Err(err) => {
+                    self.emit_conv_error(err, colon);
                     return None;
                 }
-                let c = conv::contextually_convert_to_bool(s, ne).ok()?;
-                if s.eval_int(c, EvalContext::new(EvalKind::Other, colon)).ok()? == 0 {
-                    return Some(i);
+            };
+            match self.eval_int(c, EvalContext::new(EvalKind::Other, colon)) {
+                Ok(0) => return Some(i),
+                Ok(_) => {}
+                Err(f) => {
+                    let d = self.diag(DiagId::sema_expansion_size_not_constant, colon);
+                    let d = Self::with_failure_notes(d, f);
+                    self.emit(d);
+                    return None;
                 }
             }
-            None
-        });
-        let ok = r.is_some() && !self.stash_has_error(&stash);
-        self.release(stash, Vec::new());
-        r.filter(|_| ok)
+        }
+        self.error(DiagId::sema_expansion_size_not_constant, colon);
+        None
     }
 
     /// Whether class type `t` is one of the standard library's
@@ -672,7 +726,7 @@ impl Sema<'_, '_> {
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
         let (v, prelude, elems) = if constexpr {
             // Each attempt's bindings stay out of the enclosing scope.
-            self.expansion_fallback(e, true, |s, bind| {
+            self.expansion_fallback(e, |s, bind| {
                 s.push_scope(ScopeKind::Block);
                 let r = s.expansion_decomp(e, Some(bind), colon);
                 s.pop_scope();
@@ -876,6 +930,23 @@ impl Substituter<'_, '_, '_> {
     /// ([stmt.expand]/3-5): classifies it, declares its prelude, and
     /// instantiates the pattern per element.
     fn expand_expansion(
+        &mut self,
+        init: Option<StmtId>,
+        src: ExpansionSource,
+        data: &ExpansionData,
+        depth: u16,
+        loc: Loc,
+    ) -> SubstResult<StmtId> {
+        // The implicit variables of this statement (and of the
+        // statements nested in its elements) are known while it expands.
+        let mark = self.sema.expansion_vars.len();
+        let r = self.expand_expansion_in(init, src, data, depth, loc);
+        self.sema.expansion_vars.truncate(mark);
+        r
+    }
+
+    /// [`Substituter::expand_expansion`], its implicit variables noted.
+    fn expand_expansion_in(
         &mut self,
         init: Option<StmtId>,
         src: ExpansionSource,
