@@ -42,6 +42,8 @@
 //! | `contract_violated`, `msg_chars`, `subst_binds` | transient | the last evaluation's outputs and inputs, reset |
 //! | `regs`, `scratch`, `inner` | transient | registers and reused buffers, reset |
 //! | `umemo` | rebuilt | the union-path memo, a cache refilled on demand |
+//! | `udesig` | rebuilt | union member designators, interned on demand (tags live in registers only) |
+//! | `cdtors` | rebuilt | running constructors and destructors (empty between evaluations) |
 //! | `stats` | reset | `-fconstexpr-stats`/`-fconstexpr-report` records: reporting only (the consumer reports its own evaluations) |
 //!
 //! Validated on read (an error, never a panic or a later out-of-range
@@ -263,6 +265,8 @@ impl Oven {
             frame,
             mem,
             umemo: _,
+            udesig: _,
+            cdtors: _,
             regs: _,
             stack: _,
             cleanups: _,

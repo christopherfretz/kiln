@@ -18,7 +18,9 @@ use crate::kbc::{
     ADDR_INT_TAG, Op, addr_int, addr_int_disp, addr_int_pack, ak, cce, cmp, is_addr_int, new_aux,
     ptr_add_aux,
 };
-use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags, synth_idx};
+use crate::mem::{
+    Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, UNION_ENDED, flags, synth_idx,
+};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
 use crate::{Oven, SemaBridge};
@@ -30,6 +32,7 @@ mod life;
 mod meta;
 #[cfg(feature = "op-stats")]
 mod opstats;
+pub(crate) mod udesig;
 pub(crate) mod umemo;
 mod virt;
 mod wide;
@@ -176,6 +179,11 @@ impl RunState {
             + self.overflows.capacity() * size_of::<(u32, i128)>()
     }
 }
+
+/// [`Fault::CdtorSibling`] operations ([class.cdtor]/4-6).
+pub(crate) const CDTOR_CALL: u8 = 0;
+pub(crate) const CDTOR_TYPEID: u8 = 1;
+pub(crate) const CDTOR_DYNAMIC_CAST: u8 = 2;
 
 /// An activation.
 #[derive(Clone, Copy, Debug)]
@@ -392,6 +400,17 @@ pub(crate) enum Fault {
     Bi(BiFault),
     /// A virtual call whose final overrider is pure ([class.abstract]/6).
     PureVirtual(DeclId),
+    /// A virtual call, `typeid` or `dynamic_cast` (`op`, `virt::CDTOR_*`)
+    /// on a subobject of class `stat` that is outside the `x` object whose
+    /// constructor or destructor (`dtor`; function `decl`) is running but
+    /// within the object `x` is a base of ([class.cdtor]/4-6).
+    CdtorSibling {
+        op: u8,
+        stat: OTy,
+        x: OTy,
+        dtor: bool,
+        decl: Option<DeclId>,
+    },
     /// `delete` of a base class subobject whose class has no virtual
     /// destructor ([expr.delete]/3).
     DeleteNonVirtual {
@@ -1098,8 +1117,9 @@ impl Oven {
                             _ => reg!(0) = 0,
                         }
                     } else if aux == 2 {
-                        // A dereference check: the pointer itself.
-                        reg!(0) = u128::from(raw);
+                        // A dereference check: the pointer itself, with
+                        // its union member designator (`vm/udesig.rs`).
+                        reg!(0) = reg!(1);
                     } else {
                         let p = Ptr::decode(raw);
                         if p.past {
@@ -1116,7 +1136,7 @@ impl Oven {
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
-                    match self.load(raw, ty, aux) {
+                    match self.load_desig(raw, udesig::desig_of(reg!(1)), ty, aux) {
                         Ok(v) => reg!(0) = v,
                         Err(f) => fail!(f),
                     }
@@ -1131,7 +1151,7 @@ impl Oven {
                     let r = if op == Op::InitStore && is_addr_int(v) && aux != 0 {
                         self.store_addr_int(raw, ty, v)
                     } else {
-                        self.store(raw, ty, v, k, init)
+                        self.store_desig(raw, udesig::desig_of(reg!(0)), ty, v, k, init)
                     };
                     if let Err(f) = r {
                         fail!(f);
@@ -1162,7 +1182,8 @@ impl Oven {
                     pc += 4;
                 }
                 Op::EndLife => {
-                    if let Err(f) = self.end_life(reg!(0) as u64, OTy(arg!(1) as u32), aux) {
+                    let (raw, desig) = (reg!(0) as u64, udesig::desig_of(reg!(0)));
+                    if let Err(f) = self.end_life(raw, desig, OTy(arg!(1) as u32), aux) {
                         fail!(f);
                     }
                     pc += 3;
@@ -1722,10 +1743,12 @@ impl Oven {
                 };
                 let stat = stat.checked_sub(1).map(OTy);
                 if aux & new_aux::BOUND == 0 {
-                    if let Err(f) = self.placement(reg!(0) as u64, ty, stat, aux) {
+                    let desig = udesig::desig_of(reg!(0));
+                    if let Err(f) = self.placement(reg!(0) as u64, desig, ty, stat, aux) {
                         fail!(f);
                     }
-                    reg!(0) = u128::from(reg!(0) as u64);
+                    // The new object keeps the member designator.
+                    reg!(0) = udesig::with_desig(u128::from(reg!(0) as u64), desig);
                 }
                 pc += 6;
             }
@@ -1934,7 +1957,7 @@ impl Oven {
                     self.type_info(q, ti)
                 } else {
                     let (raw, cls) = (reg!(1) as u64, OTy(arg!(3) as u32));
-                    match self.type_info_dyn(b.ast(), raw, cls, ti) {
+                    match self.type_info_dyn(b, raw, cls, ti) {
                         Ok(r) => r,
                         Err(Fault::UnknownDynamic { .. })
                             if let Some(q) = self.declared_dynamic_type(raw, cls) =>
@@ -2060,13 +2083,24 @@ impl Oven {
             Op::VoidCast if aux == crate::kbc::VOID_TAG => {
                 let raw = reg!(1) as u64;
                 let tag = if raw == 0 { 0 } else { u128::from(arg!(2) as u32) + 1 };
-                reg!(0) = u128::from(raw) | tag << 64;
+                // A union member designator (`vm/udesig.rs`) stays.
+                reg!(0) =
+                    udesig::with_desig(u128::from(raw) | tag << 64, udesig::desig_of(reg!(1)));
+                pc += 4;
+            }
+            Op::VoidCast if aux & 0xF == crate::kbc::UNION_DESIG => {
+                let v = reg!(1);
+                let t =
+                    if v as u64 == 0 { 0 } else { self.udesig.tag(OTy(arg!(2) as u32), aux >> 4) };
+                reg!(0) = udesig::with_desig(v, t);
                 pc += 4;
             }
             Op::VoidCast => {
                 let (raw, tag) = (reg!(1) as u64, (reg!(1) >> 64) as u32);
                 match self.void_cast(raw, tag, OTy(arg!(2) as u32)) {
-                    Ok(()) => reg!(0) = u128::from(raw),
+                    Ok(()) => {
+                        reg!(0) = udesig::with_desig(u128::from(raw), udesig::desig_of(reg!(1)));
+                    }
                     Err(f) => fail!(f),
                 }
                 pc += 4;
@@ -2314,6 +2348,9 @@ impl Oven {
             memo,
             serial,
         });
+        if self.funcs[callee as usize].structor {
+            self.cdtor_enter(serial);
+        }
         if self.hooks.calls {
             self.hook_call_enter(b, callee);
         }
@@ -3196,9 +3233,9 @@ impl Oven {
                             // diagnosed by `union_path`), else the first one
                             // holding the byte.
                             let active =
-                                self.mem.unions.get(&Ptr::union_key(raw, base, u)).copied().filter(
-                                    |&i| self.types.reaches(Walk::Mutable, u, rel, ty, reach, i),
-                                );
+                                self.mem.active(Ptr::union_key(raw, base, u)).filter(|&i| {
+                                    self.types.reaches(Walk::Mutable, u, rel, ty, reach, i)
+                                });
                             let f = match active {
                                 Some(i) => fields.get(i as usize),
                                 None if reach != 0 => fields.get(reach.trailing_zeros() as usize),
@@ -3276,7 +3313,7 @@ impl Oven {
                     };
                     // A union's active member, else the first holding the byte.
                     let active = union
-                        .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
+                        .then(|| self.mem.active(Ptr::union_key(raw, base, t)))
                         .flatten()
                         .and_then(|i| self.types.fields(t).get(i as usize))
                         .filter(|f| contains(f));
@@ -3368,7 +3405,7 @@ impl Oven {
                         rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
                     };
                     let active = union
-                        .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
+                        .then(|| self.mem.active(Ptr::union_key(raw, base, t)))
                         .flatten()
                         .and_then(|i| self.types.fields(t).get(i as usize))
                         .filter(|f| contains(f));
@@ -3588,7 +3625,7 @@ impl Oven {
                         let rel = target - base;
                         let fields = self.types.fields(u);
                         let key = Ptr::union_key(raw, base, u);
-                        let active = self.mem.unions.get(&key).copied();
+                        let active = self.mem.active(key);
                         let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
                         let alt = alt_members(alts, fields.len() as u32, active);
                         let Some(i) = active
@@ -3596,7 +3633,7 @@ impl Oven {
                             .chain(alt)
                             .find(|&i| self.types.reaches(Walk::Union, u, rel, ty, reach, i))
                         else {
-                            self.union_fault(u, rel, ty, k, active)?;
+                            self.union_fault(raw, key, rel, ty, k, active)?;
                             return Ok(None);
                         };
                         by_active &= active == Some(i);
@@ -3642,19 +3679,33 @@ impl Oven {
         }
     }
 
-    /// The fault of an access `k` of the `ty` object at byte `rel` of union
-    /// `u` that no (possibly) active member holds: the member that would
-    /// hold it, when there is one.
+    /// The fault of an access `k` of the `ty` object at `raw`, byte `rel`
+    /// of union `key` (of type `key.ty`), that no (possibly) active member
+    /// holds: the member that would hold it, when there is one. A member
+    /// whose lifetime an explicit destruction ended ([`UNION_ENDED`]) is
+    /// named as the active one, as clang does, and an access of it (or of
+    /// its subobject) is to an object outside its lifetime ([basic.life]/7).
     #[cold]
     fn union_fault(
         &self,
-        u: OTy,
+        raw: u64,
+        key: crate::mem::UKey,
         rel: u64,
         ty: OTy,
         k: u32,
-        active: Option<u32>,
+        mut active: Option<u32>,
     ) -> Result<(), Fault> {
+        let u = key.ty;
         let fields = self.types.fields(u);
+        if active.is_none()
+            && let Some(e) = self.mem.ended_member(key)
+            && let Some(fe) = fields.get(e as usize)
+        {
+            if self.types.union_member_reaches(Walk::Union, rel, ty, fe) {
+                return Err(Fault::Mem { f: MemFault::Lifetime, ak: k, ty, p: raw });
+            }
+            active = Some(e);
+        }
         let reach =
             |f: &crate::ty::FieldInfo| self.types.union_member_reaches(Walk::Union, rel, ty, f);
         let contains = |f: &crate::ty::FieldInfo| {
@@ -3677,7 +3728,7 @@ impl Oven {
     /// `mutable` members it may not read (outlined from the hot path; not
     /// `#[cold]`, since union-backed storage takes it on every access).
     #[inline(never)]
-    fn slow_access(&self, a: &Alloc, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+    fn slow_access(&self, a: &Alloc, raw: u64, desig: u32, ty: OTy, k: u32) -> Result<(), Fault> {
         let fl = a.flags;
         // A write is checked in an object that is not `const`: the one
         // `Oven::has_constant_destruction` destroys, whose `mutable`
@@ -3691,6 +3742,9 @@ impl Oven {
             && !self.union_memo_hit(a.ty, raw, ty)
         {
             self.union_path_miss(a.ty, raw, ty, k)?;
+        }
+        if desig != 0 {
+            self.desig_check(raw, desig, ty, k)?;
         }
         Ok(())
     }
@@ -3721,13 +3775,21 @@ impl Oven {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn load(&self, raw: u64, ty: OTy, k: u32) -> Result<u128, Fault> {
+        self.load_desig(raw, 0, ty, k)
+    }
+
+    /// [`Oven::load`] through a pointer with union member designator
+    /// `desig` (0: none; `vm/udesig.rs`), checked with the unions only.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn load_desig(&self, raw: u64, desig: u32, ty: OTy, k: u32) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a, raw, ty, k)?;
+            self.slow_access(a, raw, desig, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
@@ -3755,6 +3817,20 @@ impl Oven {
         k: u32,
         init: bool,
     ) -> Result<(), Fault> {
+        self.store_desig(raw, 0, ty, v, k, init)
+    }
+
+    /// [`Oven::store`] through a pointer with union member designator
+    /// `desig` (0: none; `vm/udesig.rs`), checked with the unions only.
+    pub(crate) fn store_desig(
+        &mut self,
+        raw: u64,
+        desig: u32,
+        ty: OTy,
+        v: u128,
+        k: u32,
+        init: bool,
+    ) -> Result<(), Fault> {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
@@ -3775,11 +3851,15 @@ impl Oven {
         self.mem.trial_write(raw, len).map_err(fault)?;
         if has_union {
             self.union_path_in(aty, raw, ty, k)?;
+            if desig != 0 && !init {
+                self.desig_check(raw, desig, ty, k)?;
+            }
         }
-        // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`).
+        // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`),
+        // not its union member designator (`vm/udesig.rs`).
         let mark = if !is_ptr {
             0
-        } else if v >> 64 == 0 {
+        } else if (v >> 64) as u32 == 0 {
             1
         } else {
             self.mem.set_void_tag(st, abs, (v >> 64) as u32)
@@ -3821,7 +3901,7 @@ impl Oven {
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a, raw, ty, k)?;
+            self.slow_access(a, raw, 0, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, n) {
@@ -4017,7 +4097,7 @@ impl Oven {
             }
             TyKind::Record { union, first, count, .. } => {
                 let fields = if union {
-                    let &i = self.mem.unions.get(&Ptr::union_key(raw, off, t))?;
+                    let i = self.mem.active(Ptr::union_key(raw, off, t))?;
                     let f = self.types.fields[(first + i) as usize];
                     if self.cxx_year >= 2026
                         && f.width.is_none()
@@ -4179,7 +4259,7 @@ impl Oven {
             return Err(fault(f));
         }
         if a.flags & flags::HAS_UNION != 0 {
-            self.place_in_unions(raw, a.ty, ty, false)?;
+            self.place_in_unions(raw, 0, a.ty, ty, false)?;
         }
         if size != 0 && self.mem.ended(raw, size) {
             self.mem.set_lifetime(raw, size, true).map_err(fault)?;
@@ -4201,7 +4281,14 @@ impl Oven {
         Ok(())
     }
 
-    fn placement(&mut self, raw: u64, ty: OTy, stat: Option<OTy>, aux: u32) -> Result<(), Fault> {
+    fn placement(
+        &mut self,
+        raw: u64,
+        desig: u32,
+        ty: OTy,
+        stat: Option<OTy>,
+        aux: u32,
+    ) -> Result<(), Fault> {
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (sp, _, a) = self.mem.check_storage(raw, 0, true).map_err(fault)?;
         let (sp, a) = (sp, *a);
@@ -4246,7 +4333,7 @@ impl Oven {
         let owns = self.element_type(a.ty, off) == Some(target);
         let size = if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
-            self.place_in_unions(raw, a.ty, ty, true)?;
+            self.place_in_unions(raw, desig, a.ty, ty, true)?;
         }
         self.mem.set_lifetime(raw, size, true).map_err(fault)?;
         if size == 0 && self.types.size(ty) > 0 {
@@ -4374,20 +4461,28 @@ impl Oven {
     /// A walk that succeeds and changes nothing is remembered ([`umemo`],
     /// WP-760): while the active members stay as they are, the same
     /// construction again would do nothing.
+    ///
+    /// `desig` (a pointer's union member designator, `vm/udesig.rs`): the
+    /// member it names is the constructed one, not another member of the
+    /// same type at the same offset. Such a walk is not remembered.
     fn place_in_unions(
         &mut self,
         raw: u64,
+        desig: u32,
         root: OTy,
         ty: OTy,
         implicit: bool,
     ) -> Result<(), Fault> {
+        let desig = self.desig(desig);
         let p = Ptr::decode(raw);
         let akey = Ptr::alloc_key(raw);
         let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
-        if self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
+        if desig.is_none() && self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
             return Ok(());
         }
-        if let Some(cover) = self.place_walk(raw, root, ty, implicit)? {
+        if let Some(cover) = self.place_walk(raw, desig, root, ty, implicit)?
+            && desig.is_none()
+        {
             self.umemo.put(umemo::Walk::Place, akey, root, ty, cover, stamp);
         }
         Ok(())
@@ -4405,6 +4500,7 @@ impl Oven {
     fn place_walk(
         &mut self,
         raw: u64,
+        desig: Option<(OTy, u32)>,
         root: OTy,
         ty: OTy,
         implicit: bool,
@@ -4452,11 +4548,11 @@ impl Oven {
                     let fields = self.types.fields(t);
                     let reach = |i: u32| self.types.reaches(Walk::Place, u, rel, ty, reach, i);
                     let key = Ptr::union_key(raw, base, t);
-                    let active = self.mem.unions.get(&key).copied();
+                    let active = self.mem.active(key);
                     let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
                     let n = fields.len().min(64) as u32;
                     // The members that are the constructed object.
-                    let direct: u64 = (0..n)
+                    let mut direct: u64 = (0..n)
                         .filter(|&i| {
                             let f = fields[i as usize];
                             f.width.is_none()
@@ -4466,7 +4562,7 @@ impl Oven {
                         .fold(0, |m, i| m | 1 << i);
                     // C++26: the array members of whose elements the
                     // object is one (the `inplace_vector` pattern, WP-743).
-                    let arrs: u64 = if self.cxx_year >= 2026 {
+                    let mut arrs: u64 = if self.cxx_year >= 2026 {
                         (0..n)
                             .filter(|&i| {
                                 let f = fields[i as usize];
@@ -4479,8 +4575,31 @@ impl Oven {
                         0
                     };
                     // The (possibly) active member holding it.
-                    let held =
+                    let mut held =
                         active.into_iter().chain(alt_members(alts, n, active)).find(|&i| reach(i));
+                    // A pointer designating one of the members that are
+                    // the object constructs that one (`vm/udesig.rs`).
+                    if let Some((du, di)) = desig
+                        && du == t
+                        && di < n
+                        && direct & 1 << di != 0
+                    {
+                        direct = 1 << di;
+                        arrs = 0;
+                        if active != Some(di) {
+                            held = None;
+                        }
+                    } else if desig.is_none() && direct != 0 && arrs != 0 {
+                        // An untagged pointer that may name a member or an
+                        // element of an array member of the same type at
+                        // the same offset (`&u.arr[0]` with `union { int
+                        // x; int arr[2]; }`) names the element: the address
+                        // of the member itself carries its designator. The
+                        // element's construction activates the array and
+                        // ends the active member (WP-1494; never both).
+                        direct = 0;
+                        held = held.filter(|&i| arrs & 1 << i != 0);
+                    }
                     match held {
                         None if direct == 0 && arrs != 0 && implicit => {
                             // [class.union.general] (P3726R2): constructing
@@ -4599,7 +4718,7 @@ impl Oven {
 
     /// `Op::EndLife`: an explicit destruction of the `ty` object at `raw`
     /// (aux 1: check that its lifetime has not ended; aux 2: end it).
-    fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
+    fn end_life(&mut self, raw: u64, desig: u32, ty: OTy, aux: u32) -> Result<(), Fault> {
         if aux & 8 != 0 {
             // aux 16: an empty base, recorded by identity (WP-401).
             let n = if aux & 16 != 0 { 0 } else { self.types.copy_size(ty) };
@@ -4634,6 +4753,9 @@ impl Oven {
             }
             if a.flags & flags::HAS_UNION != 0 {
                 self.union_path_in(a.ty, raw, ty, ak::MEMBER_CALL)?;
+                if desig != 0 {
+                    self.desig_check(raw, desig, ty, ak::MEMBER_CALL)?;
+                }
             }
             return self.member_call_life(raw, ty);
         }
@@ -4666,17 +4788,28 @@ impl Oven {
         }
         if aux & 2 != 0 {
             if self.cxx_year >= 2026
-                && let Some((uoff, ut)) = self.union_of_member(raw, ty)
+                && let Some((uoff, ut, i)) = self.union_of_member(raw, desig, ty)
             {
                 // C++26 ([class.union.general], P3726R2): destroying the
                 // active member of a union leaves the union within its
                 // lifetime with no active member, its storage as its
                 // trivial default constructor leaves it (spec/oven.md
-                // "Unions").
+                // "Unions"). The entry keeps the ended member
+                // (`UNION_ENDED`): a later access of it is to an object
+                // outside its lifetime, which a union that never had an
+                // active member is not ([basic.life]/7, clang's wording).
+                // When the pointer named several members that may be
+                // active (`union_alts`) and designates none of them
+                // (`vm/udesig.rs`), which one ended is unknown: none is
+                // recorded.
+                let key = Ptr::union_key(raw, uoff, ut);
+                let known =
+                    !self.mem.union_alts.contains_key(&key) || self.desig(desig) == Some((ut, i));
+                let ended = known.then_some(i | UNION_ENDED);
                 let at = Ptr::with_off(raw, uoff, false);
                 self.mem.trial_write(at, self.types.size(ut)).map_err(fault)?;
                 self.activate(raw, uoff, ut, 0);
-                self.mem.union_put(Ptr::union_key(raw, uoff, ut), None);
+                self.mem.union_put(key, ended);
                 return Ok(());
             }
             self.mem.set_lifetime(raw, size, false).map_err(fault)?;
@@ -4695,8 +4828,12 @@ impl Oven {
     }
 
     /// The union (its offset in `raw`'s allocation and type) of which the
-    /// `ty` object at `raw` is the (possibly) active member, if any.
-    fn union_of_member(&self, raw: u64, ty: OTy) -> Option<(u64, OTy)> {
+    /// `ty` object at `raw` is the (possibly) active member, if any, and
+    /// that member's index.
+    /// A pointer's member designator `desig` (`vm/udesig.rs`) picks that
+    /// member among those that may be active.
+    fn union_of_member(&self, raw: u64, desig: u32, ty: OTy) -> Option<(u64, OTy, u32)> {
+        let desig = self.desig(desig);
         let p = Ptr::decode(raw);
         let a = self.alloc_any(p)?;
         if a.flags & flags::HAS_UNION == 0 {
@@ -4730,10 +4867,14 @@ impl Oven {
                         let key = Ptr::union_key(raw, base, u);
                         let fields = self.types.fields(u);
                         let n = fields.len().min(64) as u32;
-                        let i = (0..n).find(|&i| {
+                        let ok = |i: u32| {
                             self.mem.may_be_active(key, i)
                                 && self.types.reaches(Walk::Union, u, rel, ty, reach, i)
-                        })?;
+                        };
+                        let i = desig
+                            .filter(|&(du, di)| du == u && ok(di))
+                            .map(|d| d.1)
+                            .or_else(|| (0..n).find(|&i| ok(i)))?;
                         let f = fields[i as usize];
                         // With a member of an array member at the same
                         // offset possibly active too (an element was
@@ -4744,7 +4885,7 @@ impl Oven {
                             && f.offset == rel
                             && self.types.same_unqualified(f.ty, ty)
                         {
-                            return Some((base, u));
+                            return Some((base, u, i));
                         }
                         base += f.offset;
                         t = f.ty;
@@ -4953,7 +5094,7 @@ impl Oven {
         if self.mem.may_be_active(key, idx) {
             return Ok(());
         }
-        let active = self.mem.unions.get(&key).copied();
+        let mut active = self.mem.active(key);
         if active.is_none()
             && matches!(self.mem.check(raw, self.types.size(uty), false), Err(MemFault::Lifetime))
         {
@@ -4963,6 +5104,17 @@ impl Oven {
         }
         let fields = self.types.fields(uty);
         let Some(f) = fields.get(idx as usize) else { return Ok(()) };
+        if active.is_none()
+            && let Some(e) = self.mem.ended_member(key)
+        {
+            // The member whose lifetime an explicit destruction ended
+            // (`UNION_ENDED`): it is outside its lifetime, and clang names
+            // it as the active member when another is accessed.
+            if e == idx {
+                return Err(Fault::Mem { f: MemFault::Lifetime, ak: k, ty: f.ty, p: raw });
+            }
+            active = Some(e);
+        }
         Err(Fault::Union {
             ak: k,
             field: f.decl,

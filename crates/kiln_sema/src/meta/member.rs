@@ -43,15 +43,15 @@ const SPECIAL_ORDER: [SpecialKind; 6] = [
     SpecialKind::Dtor,
 ];
 
-/// The declarations [meta.reflection.member.queries] never lists: no
-/// entity (an access or using declaration, a `static_assert`, a friend),
-/// or one a query reaches another way (an enumerator, a parameter).
 /// A block of declarations inside a namespace definition whose members
 /// are the namespace's: a linkage specification or an export block.
 fn is_nested_block(k: DeclKind) -> bool {
     matches!(k, DeclKind::LinkageSpec | DeclKind::Export)
 }
 
+/// The declarations [meta.reflection.member.queries] never lists: no
+/// entity (an access or using declaration, a `static_assert`, a friend),
+/// or one a query reaches another way (an enumerator, a parameter).
 fn never_a_member(k: DeclKind) -> bool {
     use DeclKind as K;
     matches!(

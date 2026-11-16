@@ -1,11 +1,14 @@
 // [basic.life]/7.1, [class.union.general]/2, [expr.const]/10.9: after
 // std::destroy_at ends the lifetime of a union's active member, a read of
 // it through a glvalue of a similar type (`const int *const &` bound to an
-// `int *`) is rejected. Not strict: kiln's note says the union has no
-// active member where clang says "read of object outside its lifetime"
-// (spec/oven.md "Unions", destruction of a union member).
+// `int *`) is a read of an object outside its lifetime: the union keeps
+// the ended member (spec/oven.md "C++26 union lifetime").
 //@ expect: compile-fail
-//@ diag: 30:15 error "static assertion expression is not an integral constant expression"
+//@ strict-diags
+//@ diag: 32:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 20:71 note "read of object outside its lifetime is not allowed in a constant expression"
+//@ diag: 29:10 note "in call to 'is_null<int>(u.r.p)'"
+//@ diag: 32:15 note "in call to 'destroyed()'"
 using size_t = decltype(sizeof 0);
 inline void *operator new(size_t, void *p) noexcept { return p; }
 namespace std {
@@ -25,6 +28,5 @@ constexpr bool destroyed() {
   std::destroy_at(&u.r);
   return is_null(u.r.p);
 }
-// The read of `p` in is_null (line 17) is the fault; the call is in
-// destroyed() above.
+// The read of `p` in is_null (line 20) is the fault.
 static_assert(destroyed());

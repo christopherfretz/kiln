@@ -69,6 +69,11 @@ pub(crate) const LABEL_DIFF_SLOT: u32 = FN_SLOT - 2;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
+/// The bit of a [`Memory::unions`] value marking the member it names as
+/// ended: the union's last active member, whose lifetime an explicit
+/// destruction ended (spec/oven.md "C++26 union lifetime").
+pub(crate) const UNION_ENDED: u32 = 1 << 31;
+
 /// The first pointer mark of a tagged `void *` ([`Memory::set_void_tag`]).
 pub(crate) const PTR_TAGGED: u8 = 2;
 /// The pointer mark of a tagged `void *` whose type did not fit the
@@ -770,7 +775,11 @@ pub(crate) struct Memory {
     pub ctx: u32,
     /// Active member of each union subobject with one: key the
     /// subobject ([`UKey`]), value the field index. Every change to it or
-    /// to [`Memory::union_alts`] bumps [`Memory::union_epoch`].
+    /// to [`Memory::union_alts`] bumps [`Memory::union_epoch`]. A value
+    /// with [`UNION_ENDED`] set names the last active member, whose
+    /// lifetime an explicit destruction ended while the union stays
+    /// within its own (C++26; [`Memory::active`] reads it as no active
+    /// member, [`Memory::ended_member`] names it).
     pub unions: FxHashMap<UKey, u32>,
     /// The members that may equally be the active one of a union whose
     /// member a placement new constructed through a pointer that names
@@ -2312,6 +2321,19 @@ impl Memory {
         if self.unions.insert(key, v) != Some(v) {
             self.union_epoch += 1;
         }
+    }
+
+    /// The active member of union `key`, if any (an ended member,
+    /// [`UNION_ENDED`], is none).
+    pub fn active(&self, key: UKey) -> Option<u32> {
+        self.unions.get(&key).copied().filter(|&i| i & UNION_ENDED == 0)
+    }
+
+    /// The member of union `key` that was active until an explicit
+    /// destruction ended its lifetime ([`UNION_ENDED`]), if that is the
+    /// union's state.
+    pub fn ended_member(&self, key: UKey) -> Option<u32> {
+        self.unions.get(&key).copied().filter(|&i| i & UNION_ENDED != 0).map(|i| i & !UNION_ENDED)
     }
 
     /// Whether field `idx` is (or may be, [`Memory::union_alts`]) the

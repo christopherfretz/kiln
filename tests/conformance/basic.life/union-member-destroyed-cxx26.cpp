@@ -2,17 +2,18 @@
 // active member of a union ends that member's lifetime but not the
 // union's, which is left with no active member: it may be destroyed
 // explicitly, or get a new member by construction or by assignment, and
-// destroying the member again is destroying a member of a union with no
-// active member. A member destroyed as an element of an active array
-// ends only that element's lifetime (spec/oven.md "Unions").
+// destroying the member again is destroying an object outside its
+// lifetime ([basic.life]/7; clang's wording). A member destroyed as an
+// element of an active array ends only that element's lifetime
+// (spec/oven.md "Unions").
 //@ skip(clang): clang 22 does not implement P3726 (union lifetime)
 //@ std: c++26
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 58:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 20:58 note "destruction of member 's' of union with no active member is not allowed in a constant expression"
-//@ diag: 57:89 note "in call to 'destroy_at<S>(&u.s)'"
-//@ diag: 58:15 note "in call to 'destroy_twice()'"
+//@ diag: 59:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 21:58 note "destruction of object outside its lifetime is not allowed in a constant expression"
+//@ diag: 58:89 note "in call to 'destroy_at<S>(&u.s)'"
+//@ diag: 59:15 note "in call to 'destroy_twice()'"
 using size_t = decltype(sizeof(0));
 void *operator new(size_t, void *p) noexcept { return p; }
 namespace std {

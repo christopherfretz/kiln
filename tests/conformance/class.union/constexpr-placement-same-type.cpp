@@ -1,9 +1,9 @@
 // [class.union.general]/6, [expr.const]/5.10: after a placement new of
 // one of two union members of one type at one offset, reading the other
-// is not constant.
+// is not constant: `&s.b` designates `b` (WP-1494, spec/oven.md "Union
+// member designators").
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): a pointer is an allocation and an offset without clang's designator; either member of one type at one offset may be the constructed one (Memory::union_alts, WP-233 deviation)
 //@ diag: 20:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 19:78 note "read of member 'a' of union with active member 'b' is not allowed in a constant expression"
 //@ diag: 20:15 note "in call to 'read_other()'"
