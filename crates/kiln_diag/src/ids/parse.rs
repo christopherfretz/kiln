@@ -193,6 +193,7 @@ parse_requires_expr_expected_type_constraint = Error (0) "expected concept name 
 // [temp.names]/1, [expr.prim.splice] (WP-830): a splice used as a whole
 // template-argument must be parenthesized or prefixed with `typename`/`template`.
 parse_splice_template_arg_unparenthesized = Error (0) "unparenthesized splice expression cannot be used as a template argument";
+parse_static_inline_explicit_inst_ignored = Warning [StaticInlineExplicitInstantiation] (1) "ignoring '{0:static|inline}' keyword on explicit template instantiation";
 parse_static_lambda_captures = Error (0) "a static lambda cannot have any captures";
 parse_static_mutable_lambda = Error (0) "lambda cannot be both mutable and static";
 parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";

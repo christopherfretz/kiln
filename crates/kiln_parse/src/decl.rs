@@ -322,6 +322,11 @@ impl Parser<'_, '_> {
             (_, Some(Kw::Extern)) if self.kw_of(self.peek(1)) == Some(Kw::Template) => {
                 self.parse_template_declaration(DeclaratorContext::File);
             }
+            (_, Some(k @ (Kw::Static | Kw::Inline)))
+                if !self.s.is_c() && self.kw_of(self.peek(1)) == Some(Kw::Template) =>
+            {
+                self.parse_gnu_static_inline_template(k);
+            }
             (_, Some(Kw::Export)) if self.std >= Std::Cxx20 => {
                 self.parse_export_declaration();
             }
@@ -2035,6 +2040,92 @@ impl Parser<'_, '_> {
         true
     }
 
+    /// GNU `static template ...;` / `inline template ...;` (GCC:
+    /// instantiate without the vtable or the static data members, or as
+    /// inline): clang 22 ignores the keyword with
+    /// -Wstatic-inline-explicit-instantiation and so does kiln (spec/parse.md
+    /// §4 "GNU extensions: `static template`"). At `k`, before `template`.
+    fn parse_gnu_static_inline_template(&mut self, k: Kw) {
+        let at = self.bump().span.lo;
+        let d = self
+            .s
+            .diag(DiagId::parse_static_inline_explicit_inst_ignored, at)
+            .arg(u8::from(k == Kw::Inline));
+        self.emit(d);
+        self.parse_template_declaration(DeclaratorContext::File);
+    }
+
+    /// `class-key nested-name-specifier template simple-template-id`
+    /// ([dcl.type.elab]/1), at `template` after the qualifier `q`. A
+    /// dependent qualifier names a dependent template specialization
+    /// (`friend class T::template B<int>;`, resolved at instantiation as
+    /// `typename T::template B<int>`); a class template found in a
+    /// non-dependent one is the same as without `template`: `template` is
+    /// consumed and false returned, so the class-key's template-id path
+    /// goes on at the name. A name that is no template is clang's
+    /// "'X' following the 'template' keyword does not refer to a
+    /// template"; no argument list after the name is [temp.names]/6's.
+    fn parse_tag_template_kw(
+        &mut self,
+        ds: &mut DeclSpec,
+        q: kiln_sema::using::Qualifier,
+        keyword: TagKeyword,
+        kw_loc: Loc,
+    ) -> bool {
+        let next = self.tok_at(self.pos() + 1);
+        let Some(n) = self.ident_of(next) else {
+            self.bump();
+            self.error_here(DiagId::parse_expected_unqualified_id);
+            ds.invalid = true;
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return true;
+        };
+        let name_loc = next.span.lo;
+        if !self.peek_is(2, Punct::Less) {
+            self.bump();
+            self.bump();
+            self.s.diag_missing_template_arg_list(name_loc);
+            ds.invalid = true;
+            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+            return true;
+        }
+        if self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_class(q.ctx) {
+            let ty = self.parse_qualified_type_rest(q, keyword);
+            self.s.note_tag_keyword_loc(name_loc, kw_loc);
+            ds.dependent_tag_name = Some(name_loc);
+            if ty.is_none() {
+                ds.invalid = true;
+            }
+            if let Err(e) =
+                ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), kw_loc)
+            {
+                ds.invalid = true;
+                self.spec_error(&e, kw_loc);
+            }
+            return true;
+        }
+        let class = self.s.classify_name(n, Some(q.ctx));
+        self.bump();
+        if matches!(class, NameClass::TypeTemplate(t)
+            if self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate)
+        {
+            return false;
+        }
+        self.bump();
+        let text = self.s.ast.symbols().as_str(n).to_owned();
+        let mut d =
+            self.s.diag(DiagId::sema_template_kw_refers_to_non_template, name_loc).arg(text);
+        if let NameClass::Type(_, decl) | NameClass::Value(decl) = class {
+            let at = self.s.ast.decls.get(decl).loc();
+            d = d.with_note(self.s.diag(DiagId::note_declared_non_template, at));
+        }
+        self.emit(d);
+        let _ = self.parse_template_arg_list();
+        ds.invalid = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
+        true
+    }
+
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
     /// `class-key T::X` with a dependent qualifier ([dcl.type.elab],
@@ -2344,6 +2435,15 @@ impl Parser<'_, '_> {
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
             && self.parse_ttp_elaborated(ds, kw_loc, ctx)
+        {
+            return;
+        }
+        // [dcl.type.elab]/1: `class-key nested-name-specifier template
+        // simple-template-id`.
+        if let Some(q) = qual
+            && keyword != TagKeyword::Enum
+            && self.at_kw(Kw::Template)
+            && self.parse_tag_template_kw(ds, q, keyword, kw_loc)
         {
             return;
         }

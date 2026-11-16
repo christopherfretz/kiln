@@ -278,24 +278,6 @@ impl Sema<'_, '_> {
                 sloc,
             );
         }
-        // `friend R T::f();`, `friend C (T::fn)();` with `T` a template
-        // parameter (or a dependent alias): nothing to match before
-        // instantiation, and kiln matches none then yet (WP-1466
-        // follow-up); accepted, befriending nothing, as for a dependent
-        // special member above.
-        if let Some(q) = d.qualifier
-            && self.kind_of(q) != DeclKind::ClassTemplate
-            && self.is_dependent_ctx(q)
-        {
-            let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
-            self.templ.cur = None;
-            let fd = self.builder().friend(
-                record,
-                d.name_loc(),
-                FriendTarget::Type { ty, owned_tag: None },
-            );
-            return Some(fd);
-        }
         let op_d = self.operator_declarator(d);
         let d = op_d.as_ref().unwrap_or(d);
         if self.unsupported_declarator(ds, d) {
@@ -493,9 +475,8 @@ impl Sema<'_, '_> {
                 _ => self.function_templates_in(&found),
             };
             if !candidates.is_empty() {
-                target = Some(
-                    self.match_function_spec_in(&candidates, None, name, ty, false, sloc)?.spec,
-                );
+                target =
+                    self.match_function_spec_quiet(&candidates, name, ty, sloc).map(|m| m.spec);
             }
         }
         let Some(target) = target else {
@@ -504,6 +485,7 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_friend_def_no_match, at)
                 .arg(fname)
                 .arg(self.qualifier_desc(def));
+            let msg = self.with_friend_candidate_notes(msg, &found, ty);
             self.emit(msg);
             return None;
         };
@@ -514,6 +496,61 @@ impl Sema<'_, '_> {
         let first = self.ast.first(target);
         self.push_friend(first);
         Some(fd)
+    }
+
+    /// clang's notes on "friend declaration of 'X' does not match any
+    /// declaration in 'C'" ([class.friend]/4): one per function `found`
+    /// by the name in the class, why its type differs from `want`
+    /// (`HandleFunctionTypeMismatch`), then one per function template
+    /// ("candidate template ignored: failed template argument
+    /// deduction").
+    pub(crate) fn with_friend_candidate_notes(
+        &self,
+        mut msg: kiln_diag::Diag,
+        found: &[DeclId],
+        want: QualType,
+    ) -> kiln_diag::Diag {
+        use crate::class::special::SpecialKind;
+        let mut templates = Vec::new();
+        for &c in found {
+            // Not an invalid declaration, nor a friend redeclaration.
+            let decl = self.ast.decls.get(c);
+            if decl.has(kiln_ast::decl::DeclFlags::INVALID)
+                || self.ast.decls.lexical_ctx(c).is_some_and(|l| Some(l) != decl.ctx())
+            {
+                continue;
+            }
+            let kind = self.kind_of(c);
+            if kind == DeclKind::FunctionTemplate {
+                templates.push(self.templated_function(c).unwrap_or(c));
+                continue;
+            }
+            if !kind.is_function() {
+                continue;
+            }
+            if self.ast.described_template(c).is_some() {
+                templates.push(c);
+                continue;
+            }
+            let implicit = self.ast.decls.get(c).has(kiln_ast::decl::DeclFlags::IMPLICIT);
+            let what = match (kind, implicit) {
+                (DeclKind::CXXConstructor, true) => match self.special_kind_of(c) {
+                    Some(SpecialKind::DefaultCtor) => {
+                        "constructor (the implicit default constructor)"
+                    }
+                    Some(SpecialKind::MoveCtor) => "constructor (the implicit move constructor)",
+                    _ => "constructor (the implicit copy constructor)",
+                },
+                (DeclKind::CXXConstructor, false) => "constructor",
+                _ => "function",
+            };
+            msg = msg.with_note(self.mismatch_note_as(c, want, what));
+        }
+        for f in templates {
+            let at = self.ast.decls.get(f).loc();
+            msg = msg.with_note(self.diag(DiagId::note_ovl_candidate_bad_deduction, at));
+        }
+        msg
     }
 
     /// `friend T;`, `friend class X;` and `template<class U> friend class

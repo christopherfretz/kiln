@@ -625,6 +625,13 @@ name of:
 
 At block scope `T::x * y;` is still an expression.
 
+In those decl-specifier contexts a dependent qualified name followed by
+`operator` (an operator-function-id or conversion-function-id as the
+declarator-id: `T::type operator+(int);`) is a type, as one followed by an
+identifier is (`at_template_type_name`, WP-1495). A conversion-type-id
+is a type-only context too (`operator T::type();`); clang 22 still asks
+for `typename` there, and kiln follows the standard.
+
 If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.

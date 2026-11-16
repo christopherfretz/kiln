@@ -1779,9 +1779,13 @@ impl Parser<'_, '_> {
                     return true;
                 }
                 let next = self.tok_at(end);
-                // `T::m x`, `T::m const x`: no expression continues so.
+                // `T::m x`, `T::m const x`, `T::m operator+(int)` (an
+                // operator-function-id or conversion-function-id as the
+                // declarator-id): no expression continues so.
                 if self.ident_of(next).is_some()
-                    || self.kw_of(next).is_some_and(crate::decl::is_decl_specifier_kw)
+                    || self
+                        .kw_of(next)
+                        .is_some_and(|k| k == Kw::Operator || crate::decl::is_decl_specifier_kw(k))
                 {
                     return true;
                 }

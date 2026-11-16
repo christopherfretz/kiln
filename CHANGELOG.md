@@ -638,6 +638,22 @@ Planned as 1.3.0.
   a base named by a typedef; a defaulted `operator=` matching a
   `noexcept` pointer to member; and the signature of a function template
   befriended by a later redeclaration has the friend's access.
+- Valid code found running GCC's C++ testsuite is accepted (WP-1495):
+  a dependent qualified type before `operator` in a member declaration
+  (`T::type operator+(int);`); an out-of-line constructor of a class
+  template whose parameter has a member typedef type
+  (`foo<C, T>::foo(bar) {}`); `class N::template X<T>` in an
+  elaborated-type-specifier; a friend function with a dependent
+  qualifier (`friend R T::f();`), which now befriends the member at
+  instantiation; the default base access from the class-key of the
+  definition (`class A; struct A : B {};` derives publicly); C++11
+  keywords used as identifiers in C++98 (`struct static_assert;`); and
+  C++98 access declarations with a template-id in the qualifier. GNU
+  `static template` and `inline template` explicit instantiations are
+  accepted with clang's `-Wstatic-inline-explicit-instantiation`
+  warning, a friend constructor or destructor that matches nothing gets
+  clang's candidate notes, and `-C`/`-CC` without `-E` is clang's error
+  instead of feeding comments to the parser.
 
 ## [1.2.1] - 2026-11-14
 

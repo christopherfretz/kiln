@@ -733,11 +733,14 @@ impl Sema<'_, '_> {
     }
 
     /// The access a base-specifier of `r` grants ([class.access.base]/2):
-    /// as written, else `private` for a `class` and `public` otherwise.
+    /// as written, else `private` for a `class` and `public` otherwise,
+    /// by the class-key of the definition (`class A; struct A : B {};`
+    /// derives publicly).
     pub(crate) fn base_access(&self, r: DeclId, written: Access) -> Access {
         match written {
             Access::None => {
-                if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Class) {
+                let def = self.ast.definition(r).unwrap_or(r);
+                if self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Class) {
                     Access::Private
                 } else {
                     Access::Public

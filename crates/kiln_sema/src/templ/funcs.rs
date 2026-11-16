@@ -704,6 +704,37 @@ impl Sema<'_, '_> {
         self.match_function_spec_noted(templates, explicit, name, ty, inst, loc, true)
     }
 
+    /// [`Self::match_function_spec_in`] without explicit template
+    /// arguments, saying nothing when no template matches (a qualified
+    /// friend declaration then reports that it matches nothing,
+    /// [temp.friend]/1); an ambiguity is diagnosed as there.
+    pub(crate) fn match_function_spec_quiet(
+        &mut self,
+        templates: &[DeclId],
+        name: DeclName,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<SpecMatch> {
+        let suppress = self.clang_compat >= 22 && !self.inst.suppress_access.replace(true);
+        let mut matches = Vec::new();
+        for &ft in templates {
+            if let Ok(s) = self.deduce_decl(ft, None, ty, loc) {
+                let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
+                if self.same_ignoring_exc_spec(sty, ty) {
+                    matches.push(SpecMatch { spec: s, template: ft });
+                }
+            }
+        }
+        if suppress {
+            self.inst.suppress_access.set(false);
+        }
+        match matches.len() {
+            0 => None,
+            1 => matches.pop(),
+            _ => self.match_function_spec_in(templates, None, name, ty, false, loc),
+        }
+    }
+
     /// How a candidate of an ambiguous explicit instantiation or
     /// specialization is named: a conversion function template
     /// specialization by its own name (`X::operator char *<char>`, clang),

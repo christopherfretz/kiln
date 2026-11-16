@@ -5,9 +5,8 @@
 //@ expect: compile-ok
 //@ std: c++17
 //@ strict-diags
-//@ diag: 13:1 warning "ignoring 'static' keyword on explicit template instantiation"
-//@ diag: 14:1 warning "ignoring 'inline' keyword on explicit template instantiation"
-//@ xfail(kiln): WP-1495, GNU 'static template' / 'inline template' explicit instantiations are not parsed
+//@ diag: 12:1 warning "ignoring 'static' keyword on explicit template instantiation"
+//@ diag: 13:1 warning "ignoring 'inline' keyword on explicit template instantiation"
 template<class T> struct A { static T t; };
 template<class T> T A<T>::t = 0;
 static template struct A<int>;

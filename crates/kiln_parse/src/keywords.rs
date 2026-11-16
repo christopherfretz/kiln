@@ -375,6 +375,24 @@ impl Keywords {
 pub const C_TYPE_TRAITS: [TypeTrait; 3] =
     [TypeTrait::IsDestructible, TypeTrait::IsNothrowDestructible, TypeTrait::IsBitwiseCloneable];
 
+/// The keywords new in C++11 other than `nullptr` (which
+/// [`Keywords::with_std`] drops): before C++11 they are ordinary
+/// identifiers in C++ (clang's `KEYCXX11`; `struct static_assert;` is
+/// valid C++98; spec/parse.md §1). C keeps its own set ([`for_c`]).
+///
+/// [`for_c`]: Keywords::for_c
+pub const CXX11_KEYWORDS: [&str; 9] = [
+    "alignas",
+    "alignof",
+    "char16_t",
+    "char32_t",
+    "constexpr",
+    "decltype",
+    "noexcept",
+    "static_assert",
+    "thread_local",
+];
+
 /// The keywords new in C++20 other than `char8_t`: before C++20 they are
 /// ordinary identifiers (clang's `CXX20_KEYWORD` and `COROUTINES_KEYWORD`
 /// in TokenKinds.def, `KEYCXX20` / `KEYCOROUTINES`; spec/parse.md §1).

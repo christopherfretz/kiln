@@ -21,5 +21,6 @@ GnuConditionalOmittedOperand = "gnu-conditional-omitted-operand" [];
 GnuLabelAsValue = "gnu-label-as-value" [];
 IgnoredPragmas = "ignored-pragmas" [];
 MissingTemplateArgListAfterTemplateKw = "missing-template-arg-list-after-template-kw" [];
+StaticInlineExplicitInstantiation = "static-inline-explicit-instantiation" [];
 UnknownAttributes = "unknown-attributes" [];
 VexingParse = "vexing-parse" [];

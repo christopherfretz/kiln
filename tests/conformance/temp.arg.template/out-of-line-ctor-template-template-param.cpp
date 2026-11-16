@@ -6,7 +6,6 @@
 //@ expect: compile-ok
 //@ std: c++17
 //@ strict-diags
-//@ xfail(kiln): WP-1495, 'foo<C, T>::foo(' with a template template parameter is not taken as a constructor declarator
 template<typename T> struct B { typedef int bar; };
 template<template<typename> class C, typename T> class foo {
   typedef typename C<T>::bar bar;
