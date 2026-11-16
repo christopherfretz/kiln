@@ -600,6 +600,7 @@ impl Sema<'_, '_> {
         d.params =
             self.ast.template_info(ft).map(|i| self.ast.templates.param_list(i.params).params);
         d.nttp_types = true;
+        d.aggregate = self.templ.ctad_origin.get(&ft) == Some(&super::ctad::GuideOrigin::Aggregate);
         let name_loc = self.ast.decls.get(templated).loc();
         // The warnings the phases before the specialization is formed
         // hold back (§5.7): kept with it on success, else dropped.
@@ -1275,50 +1276,68 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        stat_step!("nondep");
         let sugared = self.ast.types.arg_list(&d.args);
         // [temp.deduct.call]/10 (CWG1391): an argument that does not
         // convert to its non-dependent P fails deduction before the
-        // function type is substituted (and before the constraints are
-        // checked, as clang 19 does), so a later parameter's
+        // function type is substituted, so a later parameter's
         // substitution (libc++ `shared_ptr(nullptr_t, D, enable_if_t<
         // __well_formed_deleter<D, nullptr_t>>)` for an `int*`
         // argument) is not instantiated (clang `CheckNonDependent`).
+        // [temp.deduct.general]/5 (CWG2369): the associated constraints
+        // are checked once the deduced and explicit arguments are known,
+        // before the function type is substituted. clang 22 checks them
+        // between two passes over the non-dependent parameters: first
+        // the conversions that cannot use a user-defined conversion,
+        // then the constraints, then the rest, so an unsatisfied
+        // constraint stops a conversion through a converting
+        // constructor or a conversion function template that would be
+        // a hard error (spec/sema-templates.md §6.1). clang 19 checks
+        // all conversions, then substitutes, then checks the
+        // constraints (below).
+        stat_step!("nondep");
+        let early = self.clang_compat >= 22;
+        let mut deferred = false;
         for &(i, p) in &nondeduced {
-            let o = arg_opts.get(i).copied().unwrap_or(IcsOptions::NONE);
-            // A function template-id argument of a candidate: clang
-            // resolves it here once and the candidate reuses the
-            // sequence (spec/sema-lambda.md §3.5).
-            // One still an overload set is resolved by the conversion.
-            let tid = args[i]
-                .expr
-                .filter(|_| o.contains(IcsOptions::CANDIDATE_ARG))
-                .and_then(|e| self.template_id_arg(e).map(|set| (e, set)));
-            if let Some((e, false)) = tid
-                && self.mismatched_template_id(e, p).is_none()
-            {
-                self.rerun_template_id_resolution(e, p);
+            if early && self.nondep_may_use_udc(&args[i], p) {
+                deferred = true;
+                continue;
             }
-            let tid = tid.map(|t| t.0);
-            let x = self.try_implicit_conversion(&args[i], p, o);
-            if let Some(e) = tid {
-                self.ovl.nondep_ics.push((e, x));
-            }
+            let x = self.nondep_conversion(&args[i], p, arg_opts.get(i).copied());
             if x.is_bad() {
+                // clang then reports the first bad conversion of all.
+                let mut bad = (i, x);
+                for &(k, q) in nondeduced.iter().take_while(|&&(k, _)| k < i) {
+                    if deferred && self.nondep_may_use_udc(&args[k], q) {
+                        let y = self.nondep_conversion(&args[k], q, arg_opts.get(k).copied());
+                        if y.is_bad() {
+                            bad = (k, y);
+                            break;
+                        }
+                    }
+                }
                 let mut f = DeductionFailure::new(Tdk::NonDependentConversionFailure, d);
                 f.args = Some(sugared);
-                f.bad = Some((i, x));
+                f.bad = Some(bad);
                 return Err(f);
             }
         }
-        // clang 22 (CWG2369): the associated constraints are checked
-        // before the deduced arguments are substituted into the function
-        // type, so a candidate failing both reports the constraints
-        // (spec/sema-templates.md §6.1).
         stat_step!("constraints");
-        let early = self.clang_compat >= 22;
         if early {
             self.deduced_constraints(ft, depth, &d, sugared, loc)?;
+        }
+        if deferred {
+            for &(i, p) in &nondeduced {
+                if !self.nondep_may_use_udc(&args[i], p) {
+                    continue;
+                }
+                let x = self.nondep_conversion(&args[i], p, arg_opts.get(i).copied());
+                if x.is_bad() {
+                    let mut f = DeductionFailure::new(Tdk::NonDependentConversionFailure, d);
+                    f.args = Some(sugared);
+                    f.bad = Some((i, x));
+                    return Err(f);
+                }
+            }
         }
         stat_step!("signature");
         // §6.1 step 4: the specialization, its signature substituted.
@@ -1439,6 +1458,98 @@ impl Sema<'_, '_> {
     /// context (clang's `hasDeducibleTemplateParameters`): only such a
     /// parameter's argument is an original call argument checked by
     /// [temp.deduct.call]/4. Probed by deducing `p` from itself.
+    /// The implicit conversion of a call argument to its non-dependent
+    /// parameter type `p` (CWG1391). A function template-id argument of
+    /// a candidate is resolved here once and the candidate reuses the
+    /// sequence (spec/sema-lambda.md §3.5); one still an overload set is
+    /// resolved by the conversion.
+    fn nondep_conversion(
+        &mut self,
+        a: &ArgInfo,
+        p: QualType,
+        o: Option<IcsOptions>,
+    ) -> crate::overload::Ics {
+        let o = o.unwrap_or(IcsOptions::NONE);
+        let tid = a
+            .expr
+            .filter(|_| o.contains(IcsOptions::CANDIDATE_ARG))
+            .and_then(|e| self.template_id_arg(e).map(|set| (e, set)));
+        if let Some((e, false)) = tid
+            && self.mismatched_template_id(e, p).is_none()
+        {
+            self.rerun_template_id_resolution(e, p);
+        }
+        let x = self.try_implicit_conversion(a, p, o);
+        if let Some((e, _)) = tid {
+            self.ovl.nondep_ics.push((e, x));
+        }
+        x
+    }
+
+    /// Whether converting `a` to the non-dependent parameter type `p`
+    /// may use a user-defined conversion, which clang 22 checks after
+    /// the associated constraints (CWG2369, `CheckNonDependentConversions`'
+    /// second pass). As GCC's `conversion_may_instantiate_p` (the PR99599
+    /// heuristic), through references and then through one level of
+    /// pointers on both sides: the target is a defined class with a
+    /// constructor other than a copy or move constructor that can take
+    /// one argument (explicit and template ones count), or the source is
+    /// a class with a visible conversion function. A class without
+    /// converting constructors (`struct bar_tag {}`, one whose only
+    /// user-declared constructor is the default one) is checked first.
+    fn nondep_may_use_udc(&self, a: &ArgInfo, p: QualType) -> bool {
+        let t = &self.ast.types;
+        let (mut to, mut from) = (self.non_reference(p), self.non_reference(a.ty));
+        if t.is_pointer(to) && t.is_pointer(from) {
+            to = t.pointee(to).unwrap_or(to);
+            from = t.pointee(from).unwrap_or(from);
+        }
+        t.as_record(to).is_some_and(|r| self.has_converting_ctor(r))
+            || (t.as_record(from).is_some() && crate::conv::has_conversion_functions(self, from))
+    }
+
+    /// Whether the definition of class `r` has a constructor, own or
+    /// inherited, that is not a copy or move constructor and is callable
+    /// with one argument ([class.conv.ctor]; explicit ones included).
+    fn has_converting_ctor(&self, r: DeclId) -> bool {
+        let Some(def) = self.ast.definition(r) else { return false };
+        let one_arg = |fd: DeclId| {
+            let mut f = fd;
+            if self.kind_of(f) == DeclKind::ConstructorUsingShadow {
+                let Some(x) = self.ast.using_target(f) else { return false };
+                f = x;
+            }
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                let Some(x) = self.pattern_of(f) else { return false };
+                f = x;
+            }
+            let Some(fun) = self.ast.decls.function(f) else { return false };
+            let first = self.ast.lists.iter::<DeclId>(fun.params).next();
+            let variadic = self
+                .ast
+                .decls
+                .get(f)
+                .ty()
+                .and_then(|q| self.ast.types.proto(q))
+                .is_some_and(kiln_ast::types::FuncProto::variadic);
+            let Some(first) = first else { return variadic };
+            if self.fn_min_args(f) > 1 {
+                return false;
+            }
+            // [class.copy.ctor]/1-3: the first parameter is (a reference
+            // to) cv `def`.
+            let first = self.ast.decls.get(first).ty().map(|q| self.non_reference(q));
+            !first.is_some_and(|q| {
+                self.ast
+                    .types
+                    .as_record(self.ast.types.canonical(q))
+                    .is_some_and(|c| self.ast.first(c) == self.ast.first(def))
+            })
+        };
+        self.ast.constructors(def).iter().any(one_arg)
+            || self.ctor_shadows(def).into_iter().any(one_arg)
+    }
+
     /// [temp.deduct.general]/5: the associated constraints of `ft`
     /// ([temp.constr.decl]/3) with the deduced arguments `sugared`.
     fn deduced_constraints(

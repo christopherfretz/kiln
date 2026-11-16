@@ -1,10 +1,11 @@
 // [class.virtual], [class.derived]: a chain of 400 classes, each deriving
 // from the previous one, below a class with a virtual destructor. Every
 // class is polymorphic and gets a vtable; nothing bounds the length of a
-// single-inheritance chain. Found running kiln's compile-time benches.
+// single-inheritance chain. Found running kiln's compile-time benches:
+// kiln refused chains deeper than 256 ("cannot lay out the vtable:
+// TooComplex"), and its builder was quadratic per class in the depth.
 //@ expect: run
 //@ strict-diags
-//@ xfail(kiln): WP-1511: vtable builder runs out of fuel (TooComplex) on a single-inheritance chain of about 300 classes
 struct C { virtual ~C() {} };
 #define K(n, b) struct n : b {};
 #define K10(p, b) K(p##0, b) K(p##1, p##0) K(p##2, p##1) K(p##3, p##2) K(p##4, p##3) \

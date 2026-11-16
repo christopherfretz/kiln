@@ -26,6 +26,10 @@ use crate::templ::subst::Substituter;
 /// the recursion).
 const MAX_NOTE_DEPTH: u32 = 64;
 
+/// What a constraint substitution gives: `f`'s result and the SFINAE
+/// frame's outcome (the first error, if one was kept).
+type SubstOutcome<R> = (Option<R>, Result<(), Option<Diag>>);
+
 impl Sema<'_, '_> {
     /// The associated constraints of template `tmpl` in order
     /// ([temp.constr.decl]/3, as clang 19 orders them): each template
@@ -304,6 +308,17 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// Whether template-heads `a` and `b` have equivalent associated
+    /// constraints ([temp.over.link]/6-7).
+    pub(crate) fn head_signatures_equivalent(
+        &self,
+        a: kiln_ast::ids::TemplateParamListId,
+        b: kiln_ast::ids::TemplateParamListId,
+    ) -> bool {
+        let (x, y) = (self.head_signature(a), self.head_signature(b));
+        x.len() == y.len() && x.iter().zip(&y).all(|(&p, &q)| self.exprs_equivalent(p, q))
+    }
+
     /// The associated constraints of template-head `head`
     /// ([temp.constr.decl]/3), in order.
     fn head_signature(&self, head: kiln_ast::ids::TemplateParamListId) -> Vec<ExprId> {
@@ -466,6 +481,25 @@ impl Sema<'_, '_> {
         levels: &MultiLevelArgs,
         recs: &mut Vec<SatRecord>,
     ) -> bool {
+        if let Some(&(c, mask)) = self.inst.concepts.poisoned.last()
+            && c == entity
+        {
+            // An atom of a concept checked with a partly failed parameter
+            // mapping: one naming a failed parameter is not satisfied
+            // (its substitution failed, [temp.constr.atomic]/3; the
+            // failure's note is the concept-id's); a concept-id passes
+            // the mapping on argument by argument.
+            if self.is_concept_id_atom(e) {
+                if let Some(ok) = self.sat_concept_id_partial(entity, e, levels, None, recs) {
+                    return ok;
+                }
+            } else {
+                let level = self.template_param_depth(c);
+                if self.used_template_params(e, level).is_none_or(|u| u & mask != 0) {
+                    return false;
+                }
+            }
+        }
         let key: Option<AtomKey> = (!self.levels_dependent(levels)).then(|| {
             let args =
                 levels.levels.iter().map(|l| self.ast.types.canonical_args(l.args)).collect();
@@ -565,46 +599,7 @@ impl Sema<'_, '_> {
             return false;
         }
         let loc = self.begin_loc(e);
-        let (params_of, this_ty) = self.constraint_function_scope(entity);
-        let pairs = self.constraint_context_pairs(entity);
-        if let Some(t) = this_ty {
-            self.nsdmi_this.push((entity, t));
-        }
-        let access =
-            self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
-        let run = |s: &mut Self| {
-            let saved = s.access_ctx;
-            s.access_ctx = access.or(saved);
-            let r = s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
-                let mut sub = Substituter::new(s, levels);
-                sub.map_contexts(&pairs);
-                if let Some(f) = params_of {
-                    sub.seed_function_params(f).ok()?;
-                }
-                sub.seed_init_captures(entity);
-                sub.expr(e).ok()
-            });
-            s.access_ctx = saved;
-            r
-        };
-        // The names of a concept or a namespace-scope template's
-        // constraints are looked up again from where they were written,
-        // not from where satisfaction is checked ([temp.point]/1,
-        // [temp.dep.candidate]): `swap(a, b)` in libc++'s
-        // `ranges::__swap` concepts must find the deleted poison pill, not
-        // `std::swap`, when checked from namespace `std`. A function's are
-        // looked up there too, but from the function itself (its access).
-        let r = match self.ast.decls.get(entity).ctx() {
-            Some(c)
-                if this_ty.is_none() && self.kind_of(c) == kiln_ast::decl::DeclKind::Namespace =>
-            {
-                self.in_inst_context(self.constrained_function(entity).unwrap_or(c), run)
-            }
-            _ => run(self),
-        };
-        if this_ty.is_some() {
-            self.nsdmi_this.pop();
-        }
+        let r = self.constraint_subst(entity, levels, loc, |sub| sub.expr(e).ok());
         let Some((r, st)) = r else {
             return false;
         };
@@ -621,6 +616,9 @@ impl Sema<'_, '_> {
                 {
                     self.emit(d.clone());
                     return false;
+                }
+                if let Some(ok) = self.sat_concept_id_partial(entity, e, levels, Some(loc), recs) {
+                    return ok;
                 }
                 let at = first.as_ref().map_or(loc, Diag::loc);
                 let level = self.diags.clang_compat();
@@ -672,6 +670,183 @@ impl Sema<'_, '_> {
                 false
             }
         }
+    }
+
+    /// Whether atom `e` is a concept-id of a concept (not of a concept
+    /// template parameter).
+    fn is_concept_id_atom(&self, e: ExprId) -> bool {
+        let x = self.ignore_paren_imp_casts(e);
+        let n = *self.ast.exprs.get(x);
+        n.kind() == ExprKind::ConceptSpecializationExpr
+            && DeclId::from_raw(n.a()).is_some_and(|c| {
+                self.kind_of(self.ast.first(c)) == kiln_ast::decl::DeclKind::Concept
+            })
+    }
+
+    /// The atom `e`, a concept-id `C<A...>` of `entity`'s constraints,
+    /// whose arguments do not all substitute ([temp.constr.normal]/1.4,
+    /// [temp.constr.atomic]/3). The normal form of the concept-id is
+    /// `C`'s constraint with `A...` substituted into the parameter
+    /// mapping of each atom, which holds only the parameters that atom
+    /// names ([temp.constr.atomic]/1), so a failed argument makes only
+    /// the atoms naming its parameter unsatisfied: `Void<T> || A42<U>`
+    /// with `U := void&` is satisfied by its left operand (clang 22 and
+    /// GCC 16.1 check the mapping atom by atom as well). Each argument is
+    /// substituted on its own (one naming a parameter that already failed
+    /// fails too, unsubstituted), then `C`'s constraint is checked with
+    /// the failed parameters marked. On failure the substitution note
+    /// comes first, then the notes of the other false atoms, as clang's.
+    /// `None` when no argument fails on its own, or the concept-id has a
+    /// form this does not cover (a pack, a non-type parameter, defaulted
+    /// arguments): the caller keeps the whole-atom answer. Only reached
+    /// after a substitution failure, so the satisfied path is unchanged.
+    fn sat_concept_id_partial(
+        &mut self,
+        entity: DeclId,
+        e: ExprId,
+        levels: &MultiLevelArgs,
+        loc: Option<Loc>,
+        recs: &mut Vec<SatRecord>,
+    ) -> Option<bool> {
+        use kiln_ast::decl::DeclKind;
+        if !self.is_concept_id_atom(e) {
+            return None;
+        }
+        let x = self.ignore_paren_imp_casts(e);
+        let n = *self.ast.exprs.get(x);
+        let c = self.ast.first(DeclId::from_raw(n.a())?);
+        let written: Vec<TemplateArg> = self.ast.types.args(ArgListId::from_raw(n.b())?).to_vec();
+        let params = self.template_params(c).clone();
+        if params.len() != written.len()
+            || written.len() > 64
+            || params.iter().any(|&p| {
+                self.kind_of(p) == DeclKind::NonTypeTemplateParm
+                    || self.ast.template_parm(p).is_some_and(|i| i.pack)
+            })
+            || written.iter().any(|&a| self.is_pack_expansion_arg(a))
+        {
+            return None;
+        }
+        let ce = self.ast.template_info(c).and_then(|i| i.constraint)?;
+        let at = loc.unwrap_or_else(|| self.begin_loc(e));
+        let outer = self.inst.concepts.poisoned.last().copied().filter(|&(p, _)| p == entity);
+        let outer_level = outer.map(|(p, _)| self.template_param_depth(p));
+        let mut mask = 0u64;
+        let mut first: Option<Diag> = None;
+        let mut args = Vec::with_capacity(written.len());
+        for (i, &a) in written.iter().enumerate() {
+            if let (Some((_, m)), Some(level)) = (outer, outer_level)
+                && self.used_template_params_in_arg(a, level).is_none_or(|u| u & m != 0)
+            {
+                mask |= 1 << i;
+                args.push(TemplateArg::NULL);
+                continue;
+            }
+            let one = self.ast.types.arg_list(&[a]);
+            let r = self.constraint_subst(entity, levels, at, |sub| sub.args(one, at).ok());
+            match r {
+                Some((Some(l), Ok(()))) if self.ast.types.args(l).len() == 1 => {
+                    args.push(self.ast.types.args(l)[0]);
+                }
+                Some((_, st)) => {
+                    if first.is_none() {
+                        first = st.err().flatten();
+                    }
+                    mask |= 1 << i;
+                    args.push(TemplateArg::NULL);
+                }
+                None => return Some(false),
+            }
+        }
+        if mask == 0 {
+            return None;
+        }
+        let depth = self.template_param_depth(c);
+        let c_levels = self.prior_levels(c, depth, &args);
+        let shown = self.ast.types.arg_list(&args);
+        self.inst.concepts.poisoned.push((c, mask));
+        let s = self.satisfy(c, &[ce], &c_levels, shown, at);
+        self.inst.concepts.poisoned.pop();
+        if s.ok {
+            return Some(true);
+        }
+        if let Some(d) = first {
+            let level = self.diags.clang_compat();
+            recs.push(SatRecord {
+                id: DiagId::note_substituted_constraint_ill_formed,
+                loc: d.loc(),
+                select: false,
+                args: vec![format!(": {}", d.message_at(level))],
+                nested: None,
+            });
+        }
+        recs.extend(s.records);
+        Some(false)
+    }
+
+    /// Runs `f` on a [`Substituter`] for the constraints of `entity`
+    /// under `levels`, in a SFINAE frame (the setup an atom's substitution
+    /// needs: the function parameters and `this` a trailing
+    /// requires-clause may name, the specialization's context pairs, the
+    /// lookup context and access of the template).
+    fn constraint_subst<R>(
+        &mut self,
+        entity: DeclId,
+        levels: &MultiLevelArgs,
+        loc: Loc,
+        f: impl FnOnce(&mut Substituter<'_, '_, '_>) -> Option<R>,
+    ) -> Option<SubstOutcome<R>> {
+        let (params_of, this_ty) = self.constraint_function_scope(entity);
+        let pairs = self.constraint_context_pairs(entity);
+        if let Some(t) = this_ty {
+            self.nsdmi_this.push((entity, t));
+        }
+        let access =
+            self.inst.concepts.partial_access.filter(|&(p, _)| p == entity).map(|(_, c)| c);
+        let lambdas: Vec<_> = self
+            .constraint_lambda_captures(entity)
+            .into_iter()
+            .flat_map(|(p, n)| [p, n])
+            .filter_map(|f| self.lambda_of_call_op(f))
+            .collect();
+        let pushed = lambdas.len();
+        self.inst.concepts.lambda_constraint.extend(lambdas);
+        let run = |s: &mut Self| {
+            let saved = s.access_ctx;
+            s.access_ctx = access.or(saved);
+            let r = s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
+                let mut sub = Substituter::new(s, levels);
+                sub.map_contexts(&pairs);
+                if let Some(f) = params_of {
+                    sub.seed_function_params(f).ok()?;
+                }
+                sub.seed_init_captures(entity);
+                f(&mut sub)
+            });
+            s.access_ctx = saved;
+            r
+        };
+        // The names of a concept or a namespace-scope template's
+        // constraints are looked up again from where they were written,
+        // not from where satisfaction is checked ([temp.point]/1,
+        // [temp.dep.candidate]): `swap(a, b)` in libc++'s
+        // `ranges::__swap` concepts must find the deleted poison pill, not
+        // `std::swap`, when checked from namespace `std`. A function's are
+        // looked up there too, but from the function itself (its access).
+        let r = match self.ast.decls.get(entity).ctx() {
+            Some(c)
+                if this_ty.is_none() && self.kind_of(c) == kiln_ast::decl::DeclKind::Namespace =>
+            {
+                self.in_inst_context(self.constrained_function(entity).unwrap_or(c), run)
+            }
+            _ => run(self),
+        };
+        let kept = self.inst.concepts.lambda_constraint.len() - pushed;
+        self.inst.concepts.lambda_constraint.truncate(kept);
+        if this_ty.is_some() {
+            self.nsdmi_this.pop();
+        }
+        r
     }
 
     /// True if substituting `levels` leaves template parameters behind: a

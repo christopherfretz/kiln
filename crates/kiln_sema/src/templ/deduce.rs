@@ -189,6 +189,12 @@ pub struct DeducedArgs {
     pub nttp_types: bool,
     /// See `nttp_types`.
     pub nttp_mismatch: Option<(QualType, QualType)>,
+    /// Deducing the aggregate deduction candidate ([over.match.class.
+    /// deduct]/1.8): the trailing pack may correspond to fewer clauses
+    /// than an earlier deduction of its pack has elements, so a shorter
+    /// deduction that agrees with that pack's prefix keeps it (clang
+    /// `checkDeducedTemplateArguments`, `AggregateCandidateDeduction`).
+    pub aggregate: bool,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -211,6 +217,7 @@ impl DeducedArgs {
             self_deduce: false,
             params: None,
             nttp_types: false,
+            aggregate: false,
             nttp_mismatch: None,
             loc: Loc::INVALID,
         }
@@ -638,6 +645,12 @@ impl Sema<'_, '_> {
         let (pv, av) = (self.ast.types.args(pl).to_vec(), self.ast.types.args(al).to_vec());
         if pv.len() <= av.len() && pv.iter().zip(&av).all(|(&x, &y)| self.same_deduced(x, y)) {
             d.args[i] = a;
+            return Tdk::Success;
+        }
+        if d.aggregate
+            && av.len() < pv.len()
+            && pv.iter().zip(&av).all(|(&x, &y)| self.same_deduced(x, y))
+        {
             return Tdk::Success;
         }
         d.info.param = Some(index);
@@ -1987,10 +2000,18 @@ impl Sema<'_, '_> {
                     ArgView::Pack(l) => self.ast.types.args(l).first().copied().unwrap_or(x),
                     _ => x,
                 };
-                let kind = match first.view() {
-                    ArgView::Type(_) | ArgView::Pack(_) => 0,
-                    ArgView::Template(_) => 2,
-                    _ => 1,
+                let kind = match (x.view(), y.view()) {
+                    // Packs of different lengths (clang tweaks the note).
+                    (ArgView::Pack(a), ArgView::Pack(b))
+                        if self.ast.types.args(a).len() != self.ast.types.args(b).len() =>
+                    {
+                        3
+                    }
+                    _ => match first.view() {
+                        ArgView::Type(_) | ArgView::Pack(_) => 0,
+                        ArgView::Template(_) => 2,
+                        _ => 1,
+                    },
                 };
                 Some(
                     self.diag(DiagId::note_deduced_conflicting, loc)

@@ -349,7 +349,6 @@ pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
         // `-std=c++98` for C++ (clang 19/22 `Clang::ConstructJob`).
         let s = if cplusplus { "c++98" } else { "c89" };
         let std = LangStd::parse(s).unwrap_or_else(|| LangStd::default_for(cplusplus));
-        elide_check(args, cplusplus, std, "-ansi")?;
         return Ok(std);
     }
     let Some(s) = &args.std else { return Ok(LangStd::default_for(cplusplus)) };
@@ -386,24 +385,7 @@ pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
                 .arg(if cplusplus { "C++" } else { "C" }),
         ));
     }
-    elide_check(args, cplusplus, std, &format!("-std={s}"))?;
     Ok(std)
-}
-
-/// `-fno-elide-constructors` before C++17 (`spelled`: the standard's
-/// option): kiln builds no copy of a temporary there (the C++17 model of
-/// guaranteed elision), so the copies the flag requires cannot be emitted
-/// and accepting it would change behaviour silently. From C++17 it turns
-/// off NRVO and the elidable copies, as in clang (spec/driver.md).
-fn elide_check(args: &Args, cplusplus: bool, std: LangStd, spelled: &str) -> Result<(), Box<Diag>> {
-    if cplusplus && args.elide_constructors == Some(false) && std.lex < kiln_lex::Std::Cxx17 {
-        return Err(Box::new(
-            Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID)
-                .arg("-fno-elide-constructors")
-                .arg(spelled),
-        ));
-    }
-    Ok(())
 }
 
 /// Writes `text` to `path` (`-` is standard output).

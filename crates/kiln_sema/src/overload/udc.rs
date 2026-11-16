@@ -150,6 +150,16 @@ impl Sema<'_, '_> {
             let ty = self.ety(x);
             return Ok(self.materialize_temporary(x, ty, !rvalue));
         }
+        // The temporary's copy into a class object (C++11/14) takes no
+        // second user-defined conversion ([`Sema::check_temp_copy`]).
+        let class_temp = !self.ast.types.is_reference(to)
+            && self.ast.exprs.get(x).value_category() == ValueCategory::PRValue
+            && self.ast.types.as_record(to).is_some()
+            && self.ast.types.same_unqualified(self.ety(x), to);
+        if class_temp && self.std < kiln_lex::Std::Cxx17 {
+            self.check_temp_copy(x, to, ctx, at, DeletedAs::Call);
+            return Ok(x);
+        }
         conv::implicit_convert(self, x, to, ctx)
     }
 

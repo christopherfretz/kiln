@@ -356,19 +356,37 @@ impl Sema<'_, '_> {
         &mut self,
         x: DeclId,
     ) -> kiln_source::fx::FxHashMap<ExprId, ExprId> {
+        let Some((pt, outer)) = self.inst.concepts.member_constraints.get(&x).cloned() else {
+            return kiln_source::fx::FxHashMap::default();
+        };
+        self.cmp_constraints_of(x, pt, outer)
+    }
+
+    /// [`Self::member_cmp_constraints`] for member `x` whose kept
+    /// constraints are those of `pt` with the class's levels `outer`; a
+    /// non-template member's are its trailing requires-clause.
+    pub(crate) fn cmp_constraints_of(
+        &mut self,
+        x: DeclId,
+        pt: DeclId,
+        outer: crate::templ::args::MultiLevelArgs,
+    ) -> kiln_source::fx::FxHashMap<ExprId, ExprId> {
         use crate::templ::args::LevelMode;
         let mut m = kiln_source::fx::FxHashMap::default();
-        let Some((pt, outer)) = self.inst.concepts.member_constraints.get(&x).cloned() else {
-            return m;
-        };
         let Some(ctx) = self.ast.decls.get(x).ctx() else { return m };
-        let cs = self.associated_constraints(pt);
+        let is_template = self.ast.template_info(pt).is_some();
+        let mut cs = self.associated_constraints(pt);
+        if !is_template {
+            cs.extend(self.ast.templates.trailing_requires.get(pt).copied());
+        }
         let mut levels = outer;
-        levels.push(kiln_ast::ids::ArgListId::EMPTY, pt, LevelMode::Retain);
+        if is_template {
+            levels.push(kiln_ast::ids::ArgListId::EMPTY, pt, LevelMode::Retain);
+        }
         let pairs = self.inst_context_pairs(ctx);
         let loc = self.ast.decls.get(x).loc();
-        let fparams: Vec<DeclId> = self
-            .templated_function(pt)
+        let func = if is_template { self.templated_function(pt) } else { Some(pt) };
+        let fparams: Vec<DeclId> = func
             .filter(|&f| self.ast.templates.trailing_requires.contains(f))
             .and_then(|f| self.ast.decls.function(f))
             .map(|f| self.ast.lists.iter::<DeclId>(f.params).collect())

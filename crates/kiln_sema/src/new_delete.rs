@@ -1985,6 +1985,36 @@ impl Sema<'_, '_> {
         self.emit(msg.with_note(note));
     }
 
+    /// Whether `( v )` of an array new of `elem` is one string literal
+    /// that can initialize it (C++20).
+    fn paren_string_literal(&self, elem: QualType, v: &[ExprId]) -> bool {
+        v.len() == 1
+            && self.std >= kiln_lex::Std::Cxx20
+            && self
+                .string_lit_of(v[0])
+                .is_some_and(|s| self.string_init_compat(elem, s) == crate::init::StringInit::Ok)
+    }
+
+    /// `new char[N]("foo")` (C++20): the literal initializes the array;
+    /// with `unbounded`, its length is the bound.
+    fn new_paren_string_init(
+        &mut self,
+        t: QualType,
+        v: Vec<ExprId>,
+        l: Loc,
+        r: Loc,
+        at: Loc,
+        unbounded: bool,
+    ) -> Result<(Option<ExprId>, Option<u64>), ()> {
+        let e = self.perform_init(t, Initializer::Paren(v, l, r), at, false);
+        if self.is_err_expr(e) {
+            return Err(());
+        }
+        let completed =
+            if unbounded { self.ast.types.array_size(self.ast.exprs.get(e).ty()) } else { None };
+        Ok((Some(e), completed))
+    }
+
     /// The semantic initializer of a new-expression ([expr.new]/23) and,
     /// for `new T[]{...}`, the bound the initializer gives.
     fn new_initializer(
@@ -2024,8 +2054,15 @@ impl Sema<'_, '_> {
             NewInit::Paren(v, l, r) => {
                 if array_form {
                     let t = array_ty(self);
+                    // `new char[]("foo")`: a string literal initializes
+                    // the array ([dcl.init.general]/16.3, [dcl.init.string];
+                    // C++20 P1975), its length completing the bound.
+                    let unbounded = matches!(first, Some((None, _)));
+                    if self.paren_string_literal(elem, &v) {
+                        return self.new_paren_string_init(t, v, l, r, at, unbounded);
+                    }
                     if !v.is_empty() {
-                        return self.new_paren_array_init(elem, t, &v, first, l, r);
+                        return self.new_paren_array_init(elem, t, &v, first, at, r);
                     }
                     return match self.new_class_default(elem, t, true, at) {
                         Some(Ok(e)) => Ok((Some(e), None)),
@@ -2118,20 +2155,25 @@ impl Sema<'_, '_> {
 
     /// `new T[n](args...)`: a parenthesized aggregate initialization of the
     /// array (P0960). Like clang's `TryOrBuildParenListInitialization` for
-    /// a new-expression, the `CXXParenListInitExpr` of a runtime or
-    /// omitted bound always carries an array filler (the bound may exceed
-    /// the arguments); with no written bound its length completes the
-    /// array type.
+    /// a new-expression, the `CXXParenListInitExpr` of a runtime bound
+    /// always carries an array filler (the bound may exceed the
+    /// arguments). With no written bound its length completes the array
+    /// type and no element is left to value-initialize
+    /// ([dcl.init.general]/16.5: as many elements as arguments), so a
+    /// class element gets no filler (clang 22 adds one and rejects
+    /// `new C[](8, 9)` for a class without a default constructor, GCC
+    /// accepts); a non-class element keeps clang's filler. `at` is the allocated
+    /// type, where clang reports an element's initialization.
     fn new_paren_array_init(
         &mut self,
         elem: QualType,
         t: QualType,
         args: &[ExprId],
         first: Option<(Option<ExprId>, Loc)>,
-        l: Loc,
+        at: Loc,
         r: Loc,
     ) -> Result<(Option<ExprId>, Option<u64>), ()> {
-        let e = self.paren_aggregate_init(t, args, l, r);
+        let e = self.paren_aggregate_init(t, args, at, r);
         if self.is_err_expr(e) || self.ast.exprs.get(e).kind() != ExprKind::CXXParenListInitExpr {
             return Err(());
         }
@@ -2139,19 +2181,23 @@ impl Sema<'_, '_> {
         // A constant bound's missing elements already have their filler;
         // with one the arguments meet, no element is value-initialized
         // (`new C[2](8, 9)` without a default constructor is valid).
-        let runtime_bound = self.ast.types.array_size(t).is_none();
+        // With an omitted bound a class element gets no filler (it would
+        // demand a default constructor); a non-class element keeps
+        // clang's `ImplicitValueInitExpr` filler, which costs nothing.
+        let omitted = matches!(first, Some((None, _)));
+        let class_elem = self.ast.types.as_record(self.base_element(elem)).is_some();
+        let runtime_bound = self.ast.types.array_size(t).is_none() && !(omitted && class_elem);
         let e = if runtime_bound && self.ast.exprs.paren_list_filler(e).is_none() {
             let inits: Vec<ExprId> = {
                 let l = self.ast.exprs.paren_list_inits(e);
                 self.ast.lists.iter(l).collect()
             };
-            let filler = self.paren_value_init(elem, l);
-            self.builder().paren_list_init(ety, &inits, Some(filler), l, r)
+            let filler = self.paren_value_init(elem, at);
+            self.builder().paren_list_init(ety, &inits, Some(filler), at, r)
         } else {
             e
         };
-        let completed =
-            if matches!(first, Some((None, _))) { self.ast.types.array_size(ety) } else { None };
+        let completed = if omitted { self.ast.types.array_size(ety) } else { None };
         Ok((Some(e), completed))
     }
 

@@ -247,6 +247,23 @@ impl Sema<'_, '_> {
         Ics::Bad(b)
     }
 
+    /// "explicit ... is not a candidate" at `loc` for candidate `f` (of
+    /// template `t`); for an `explicit(expr)` specifier clang
+    /// names the value it evaluated to.
+    fn explicit_note(
+        &self,
+        loc: kiln_source::Loc,
+        which: u8,
+        t: Option<kiln_ast::DeclId>,
+        f: kiln_ast::DeclId,
+    ) -> Diag {
+        let pattern = t.and_then(|t| self.pattern_of(t)).unwrap_or(f);
+        let expr = [f, pattern, self.pattern_of(f).unwrap_or(f)]
+            .iter()
+            .any(|d| self.ast.decls.cold.explicit_expr.get(*d).is_some());
+        self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which).arg(u8::from(expr))
+    }
+
     /// The note for candidate `c` of `set` (clang `NoteFunctionCandidate`).
     pub(crate) fn ovl_note(&mut self, set: &OverloadCandidateSet, c: u32) -> Diag {
         let cand = set.cand(c);
@@ -334,7 +351,7 @@ impl Sema<'_, '_> {
                 // At the first declaration, which carries the
                 // explicit-specifier (clang `DiagnoseFailedExplicitSpec`).
                 let loc = self.ast.decls.get(self.ast.first(f)).loc();
-                return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
+                return self.explicit_note(loc, which, cand.template, f);
             }
             CandidateFailure::IllegalCtor => {
                 let which = u8::from(cand.template.is_some());
@@ -521,7 +538,12 @@ impl Sema<'_, '_> {
     }
 
     /// clang `CompareOverloadCandidatesForDisplay` as an ordering.
-    fn compare_for_display(&self, set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
+    pub(crate) fn compare_for_display(
+        &self,
+        set: &OverloadCandidateSet,
+        a: u32,
+        b: u32,
+    ) -> Ordering {
         let (l, r) = (set.cand(a), set.cand(b));
         match (l.viable, r.viable) {
             (true, false) => return Ordering::Less,

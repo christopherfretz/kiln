@@ -3867,6 +3867,9 @@ impl Oven {
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
+        if !init && matches!(a.origin, Origin::Var(_)) && self.unbegun_write(st, abs, len, a, raw) {
+            return Err(fault(MemFault::Uninit));
+        }
         if !init && a.flags & flags::CONST_PATH != 0 {
             self.const_path(raw, ty, k)?;
         }
@@ -3900,6 +3903,22 @@ impl Oven {
         sp.set_init(abs, len, true);
         sp.set_ptr_mark(abs, len, mark);
         Ok(())
+    }
+
+    /// Whether an assignment (not an initialization) to `len` bytes at
+    /// `abs` writes a subobject of the object under construction whose
+    /// lifetime has not begun: none of its bytes is initialized yet and
+    /// no constructor or destructor of an object in it is running
+    /// ([basic.life]/1, /7; [expr.const]/10.8). clang initializes the
+    /// subobjects in order, so `int a[2] = {a[1] = 5, 1};` is
+    /// "assignment to object outside its lifetime" and the variable is
+    /// initialized dynamically (WP-1503).
+    #[cold]
+    fn unbegun_write(&self, sp: Sp, abs: u64, len: u64, a: &Alloc, raw: u64) -> bool {
+        let Origin::Var(d) = a.origin else { return false };
+        self.run.object == Some(d)
+            && !self.mem.space(sp).any_init(abs, len)
+            && self.unbegun_init_object(a, raw)
     }
 
     /// `Op::InitStore` aux 1 of an address an integer holds
@@ -4072,6 +4091,13 @@ impl Oven {
             self.mem.check(dst, size, true).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         if !init && let Some(f) = write_fault(ds, a, ty) {
             return Err(Fault::Mem { f, ak: k, ty, p: dst });
+        }
+        if !init
+            && size != 0
+            && matches!(a.origin, Origin::Var(_))
+            && self.unbegun_write(ds, da, size, a, dst)
+        {
+            return Err(Fault::Mem { f: MemFault::Uninit, ak: k, ty, p: dst });
         }
         if !init && a.flags & flags::CONST_PATH != 0 {
             self.const_path(dst, ty, k)?;

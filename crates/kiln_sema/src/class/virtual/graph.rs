@@ -21,7 +21,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 pub const MAX_SUBOBJECTS: usize = u16::MAX as usize + 1;
 
 /// Recursion bound for walks over the base-class graph.
-const MAX_DEPTH: usize = 1024;
+const MAX_DEPTH: usize = 4096;
 
 /// One base-specifier of a class: its position in the base list, the
 /// base class (first declaration) and whether it is virtual.

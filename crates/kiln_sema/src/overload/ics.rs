@@ -1113,7 +1113,14 @@ impl Sema<'_, '_> {
                         }
                     } else {
                         *pos += 1;
-                        if self.try_implicit_conversion(&a, ety, opts).is_bad() {
+                        // A string literal initializing a character array
+                        // element of a compatible type (checked above) is
+                        // not a conversion the sequence models; its length
+                        // is checked by the initialization, not here
+                        // (clang's verify-only `CheckStringInit`).
+                        let string =
+                            self.ast.types.is_array(ety) && self.string_lit_of(e).is_some();
+                        if !string && self.try_implicit_conversion(&a, ety, opts).is_bad() {
                             return Some(false);
                         }
                     }

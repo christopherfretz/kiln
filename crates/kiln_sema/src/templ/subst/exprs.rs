@@ -837,6 +837,14 @@ impl Substituter<'_, '_, '_> {
                     // An operator function template-id too (`T::template
                     // operator-<double>`, [temp.names]/1).
                     let t = self.member_template_named_dn(nns, name, loc)?;
+                    // `C<T>::template v<A>`: the variable template's name
+                    // is access-checked as the parser checks `C::v<A>`.
+                    if self.sema.kind_of(t) == DeclKind::VarTemplate
+                        && let Some(id) = name.as_ident()
+                    {
+                        let ctx = self.nns_context(nns, begin)?;
+                        self.sema.check_var_template_name_access(id, ctx, t, loc);
+                    }
                     let l = self.args(l, loc)?;
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
@@ -1070,7 +1078,8 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_convert_vector(o, ty, loc, end))
             }
             ExprKind::CXXUnresolvedConstructExpr => {
-                let ty = self.ty(n.ty(), loc)?;
+                let written = self.sema.ast.exprs.unresolved_construct_type(e);
+                let ty = self.ty(written, loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
                 if n.aux() != 0 && self.invalid_class_braced_cast(ty, loc) {
                     return Err(SubstFail);
@@ -2871,7 +2880,10 @@ impl Substituter<'_, '_, '_> {
     /// materialization, temporary bindings and an implicit conversion.
     pub(crate) fn peel_initializer(&self, mut init: ExprId) -> ExprId {
         let ex = &self.sema.ast.exprs;
-        if ex.get(init).kind() == ExprKind::ExprWithCleanups {
+        // clang `TransformInitializer` strips a `FullExpr`: the
+        // cleanups, or the `ConstantExpr` of an immediate invocation (a
+        // consteval default constructor of `S e[2];`).
+        while matches!(ex.get(init).kind(), ExprKind::ExprWithCleanups | ExprKind::ConstantExpr) {
             init = ex.operand(init);
         }
         if ex.get(init).kind() == ExprKind::MaterializeTemporaryExpr {

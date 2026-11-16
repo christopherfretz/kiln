@@ -1265,6 +1265,11 @@ pub struct Sema<'a, 'sm> {
     /// `noexcept` sees it ([except.spec]/6, [`Sema::can_throw`]). Empty
     /// from C++17 on.
     pub(crate) elided_ctors: kiln_source::fx::FxHashMap<ExprId, DeclId>,
+    /// The next [`Sema::check_elided_ctor`] checks the copy of the
+    /// temporary of a copy-initialization by user-defined conversion
+    /// (the second step, C++11/14 [dcl.init]/17.6.3): its argument takes
+    /// no user-defined conversion ([over.best.ics]/4).
+    pub(crate) temp_copy_second_step: bool,
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
@@ -1707,6 +1712,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             oper_lookups: kiln_source::fx::FxHashMap::default(),
             oper_override: None,
             elided_ctors: kiln_source::fx::FxHashMap::default(),
+            temp_copy_second_step: false,
             friend_tag: None,
             extraneous_tag_head: None,
             nested_tag: false,

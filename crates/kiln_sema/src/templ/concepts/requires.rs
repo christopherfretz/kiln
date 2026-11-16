@@ -362,11 +362,21 @@ impl Substituter<'_, '_, '_> {
         // An expression of overloaded-function type with no target
         // (`&X::operator()` naming a template) is invalid
         // ([over.over]/1; clang's `CheckPlaceholderExpr` on the
-        // requirement).
+        // requirement). So is a bound member function that is not
+        // called (`t.*pmf`, `t.f`, [expr.mptr.oper]/6, [expr.ref]/7.3.2):
+        // the requirement is not satisfied, a substitution failure, not
+        // the error at the end of a full-expression.
         let checked = |s: &mut Self| {
             let x = s.expr(e).ok()?;
             let dependent = s.sema.ast.exprs.get(x).deps().intersects(ExprDeps::TYPE_VALUE_INST);
-            (dependent || !s.sema.check_overload_use(x)).then_some(x)
+            if dependent {
+                return Some(x);
+            }
+            if s.sema.ast.exprs.get(x).ty() == QualType::BOUND_MEMBER {
+                s.sema.diagnose_bound_member(x);
+                return None;
+            }
+            (!s.sema.check_overload_use(x)).then_some(x)
         };
         match self.sfinae(body, loc, checked) {
             Some((Some(x), Ok(()))) => Some(x),

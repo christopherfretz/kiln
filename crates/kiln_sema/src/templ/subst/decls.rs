@@ -1948,15 +1948,31 @@ impl Substituter<'_, '_, '_> {
             None => sf.class,
         };
         let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+        if let Some(h) = sf.head {
+            // Its head keeps the pattern's parameters: equivalence does
+            // not look at their depth.
+            return Ok(Some(
+                self.sema.befriend_special_template(record, class, sf.kind, ty, h, loc),
+            ));
+        }
         Ok(self.sema.befriend_special_member(record, class, sf.kind, ty, loc))
     }
 
     /// A friend declaration of the pattern ([temp.friend]).
     pub(crate) fn friend_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
         let loc = self.sema.ast.decls.get(d).loc();
-        if let Some(fs) = self.sema.friend_specs.get(&d).cloned() {
+        if let Some(mut fs) = self.sema.friend_specs.get(&d).cloned() {
             // `friend bool operator==<>(const X&, const X&);`
             // ([temp.friend]/1.3).
+            // `friend void Q<T>::f<int>(int);`: the member templates found
+            // in the dependent `Q<T>` are those of the instantiated class
+            // (`Q<int>::f`), whose specialization is the friend, not one of
+            // the pattern's template.
+            for t in &mut fs.templates {
+                if self.sema.declaring_class(*t).is_some_and(|c| self.sema.in_dependent_class(c)) {
+                    *t = self.find_instantiated_decl(*t, loc)?;
+                }
+            }
             let ty = self.ty(fs.ty, loc)?;
             let args = fs
                 .args

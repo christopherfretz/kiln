@@ -175,6 +175,11 @@ pub(crate) struct CtorCall<'a> {
     /// diagnosed at `DiagSites::access`, the variable or argument (clang
     /// `SK_UserConversion`'s `Kind.getLocation()`).
     pub udc: bool,
+    /// The copy of the temporary in the second step of a C++11/14
+    /// copy-initialization ([`Sema::check_temp_copy`]): with no viable
+    /// constructor, clang's "no viable constructor copying ..." with this
+    /// entity kind (0 a variable, 1 a parameter, 3 a returned object).
+    pub temp_copy: Option<u8>,
 }
 
 impl<'a> CtorCall<'a> {
@@ -190,6 +195,7 @@ impl<'a> CtorCall<'a> {
             reject_explicit: false,
             direct: false,
             udc: false,
+            temp_copy: None,
         }
     }
 }
@@ -629,7 +635,7 @@ impl Sema<'_, '_> {
         walked: &mut FxHashSet<DeclId>,
         depth: usize,
     ) -> Option<u32> {
-        if depth > 1024 {
+        if depth > 4096 {
             return None;
         }
         for (i, b) in self.indexed_bases(r) {
@@ -1258,8 +1264,28 @@ impl Sema<'_, '_> {
                 };
                 if let Some(d) = deleted_as {
                     let Some(mk) = mk else {
-                        // todo(WP-068a): clang notes every candidate here.
-                        self.unsupported("a cast calling a deleted constructor", loc);
+                        // clang `OR_Deleted` of a cast's constructor
+                        // overload (`FK_ConstructorOverloadFailed`):
+                        // every viable candidate is noted, the deleted
+                        // best among them.
+                        let (set, _) = self.ctor_overload(
+                            class,
+                            call.args,
+                            crate::class::ctor_select::InitStyle::Direct,
+                            false,
+                            false,
+                        );
+                        let mut order: Vec<u32> = (0..u32::try_from(set.cands.len())
+                            .unwrap_or(u32::MAX))
+                            .filter(|&c| set.cand(c).viable)
+                            .collect();
+                        order.sort_by(|&a, &b| self.compare_for_display(&set, a, b));
+                        let mut d = d;
+                        for c in order {
+                            d = d.with_note(self.ovl_note(&set, c));
+                        }
+                        self.end_set(set);
+                        self.emit(d);
                         return None;
                     };
                     let implicit = if self.ast.decls.get(m).has(DeclFlags::IMPLICIT) {
@@ -1318,6 +1344,8 @@ impl Sema<'_, '_> {
                     DeletedAs::Conversion(n) => (true, n, None),
                     DeletedAs::Return => (true, None, None),
                     DeletedAs::Cast(_, c) => (false, None, Some(c)),
+                    // clang `PrintInitLocationNote` for a parameter.
+                    DeletedAs::Param(n) => (false, Some(n), None),
                     _ => (false, None, None),
                 };
                 let msg = if let Some(c) = cast
@@ -1340,6 +1368,10 @@ impl Sema<'_, '_> {
                         DiagId::sema_no_viable_conversion
                     };
                     self.diag(id, sites.deleted).diff_args(self, from, ty)
+                } else if let Some(entity) = call.temp_copy.filter(|_| !ambiguous) {
+                    self.diag(DiagId::sema_temp_copy_no_viable, sites.deleted)
+                        .arg(entity)
+                        .arg(self.ty_arg(named))
                 } else {
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_ctor

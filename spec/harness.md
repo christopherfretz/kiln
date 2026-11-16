@@ -1679,7 +1679,17 @@ The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
 separate manual or periodic gate, and its contract is `spec/libcxx.md`.
 Neither is the libstdc++ header status (`cargo xtask libstdcxx`), which is
 informational (exit status non-zero only on tool errors); its contract is
-`spec/libstdcxx.md`.
+`spec/libstdcxx.md`. Rules that act only before C++17 (the second step of
+a C++14 copy-initialization, pre-C++17 copy elision) are gated by its two
+lowest levels, run by hand before landing such a rule:
+`cargo xtask libstdcxx --std c++14 --clang clang++-22 -j 4` and the same
+with `--std c++11` (about 10 s each once kiln is built, WP-1513). At both
+levels every header but `<coroutine>` (which needs `-fcoroutines` before
+C++20, and the reference rejects too) is accepted. The libc++ gate has no
+`-std` option: its feature set (`xtask/src/libcxx/features.rs`: the
+`c++26` feature and the `std-at-least-*` list), the `-std=` flag of
+`run.rs` and the report's flags are fixed at C++26, and the M3 gate's
+recorded results are C++26 results.
 
 The M8 OSS build harness (`scripts/oss/`) needs the network and is not part
 of `ci`; its contract is spec/landed/harness/WP-666.md. It builds each

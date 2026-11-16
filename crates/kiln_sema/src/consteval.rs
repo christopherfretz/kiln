@@ -267,6 +267,22 @@ impl Sema<'_, '_> {
         self.cleanup_marks.push(self.cleanup);
     }
 
+    /// Enters a constant-expression ([expr.const]): manifestly
+    /// constant-evaluated and potentially evaluated even inside an
+    /// unevaluated operand (`sizeof(f<(T(), 0)>())`, [expr.context]/1;
+    /// clang's `ConstantEvaluated` context). Returns the unevaluated depth
+    /// for [`Sema::exit_constant_expression`].
+    pub fn enter_constant_expression(&mut self) -> u32 {
+        self.enter_constant_evaluated();
+        std::mem::take(&mut self.unevaluated)
+    }
+
+    /// Leaves a context entered with [`Sema::enter_constant_expression`].
+    pub fn exit_constant_expression(&mut self, e: Option<ExprId>, unevaluated: u32) {
+        self.unevaluated = unevaluated;
+        self.exit_constant_evaluated(e);
+    }
+
     /// Whether the expression being built is in a context entered with
     /// [`Sema::enter_constant_evaluated`].
     pub(crate) fn in_constant_evaluated(&self) -> bool {

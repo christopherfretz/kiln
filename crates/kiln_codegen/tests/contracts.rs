@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use kiln_abi::{Arch, Target};
-use kiln_ast::stmt::ContractSemantic;
+use kiln_ast::stmt::{ClientCheck, ContractChecks, ContractSemantic};
 use kiln_codegen::{CodegenOptions, emit};
 use kiln_diag::{DiagEngine, DiagOptions, Level, MemorySink};
 use kiln_parse::{ConstexprLimits, ParseOptions, parse_tu};
@@ -20,12 +20,24 @@ fn lower(src: &str, semantic: ContractSemantic) -> Result<String, String> {
 
 /// [`lower`], with or without kiln's default violation handler.
 fn lower_with(src: &str, semantic: ContractSemantic, default: bool) -> Result<String, String> {
+    lower_for(src, semantic, default, Arch::AArch64, ContractChecks::default())
+}
+
+/// [`lower_with`] for target `arch` with the caller- and callee-side
+/// checks `checks` (`-fcontracts-client-check=`, `-fcontracts-definition-check=`).
+fn lower_for(
+    src: &str,
+    semantic: ContractSemantic,
+    default: bool,
+    arch: Arch,
+    checks: ContractChecks,
+) -> Result<String, String> {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
-    let target = Target::for_arch(Arch::AArch64);
+    let target = Target::for_arch(arch);
     let opts = ParseOptions { contract_semantic: semantic, ..ParseOptions::default() };
     let mut tu =
         parse_tu(&sm, &interner, file, &engine, target.clone(), &opts, ConstexprLimits::default());
@@ -35,6 +47,7 @@ fn lower_with(src: &str, semantic: ContractSemantic, default: bool) -> Result<St
     let cg = CodegenOptions {
         source_filename: "t.cpp".to_owned(),
         contract_default_handler: default,
+        contract_checks: checks,
         ..CodegenOptions::default()
     };
     emit(&mut tu.ast, &mut tu.oven, &target, &cg).map(|m| m.to_string()).map_err(|e| e.msg)
@@ -294,4 +307,38 @@ fn coroutine_return_slot_outside_the_frame_under_a_result_postcondition() {
     }
     let ir = lower(&src, ContractSemantic::Ignore).expect("lowers");
     assert!(allocas(&ir, "_Z1cv").0.is_empty(), "nothing reads it under ignore: {ir}");
+}
+
+// -fcontracts-client-check=all -fcontracts-definition-check=off with
+// `_Complex` arguments and results (WP-1504 item 1): the caller binds
+// each parameter to its argument and the result name to the returned
+// value, whatever registers the target ABI passes them in, and checks
+// before and after the call; the callee checks nothing.
+#[test]
+fn client_checks_of_complex_arguments_and_results() {
+    const SRC: &str = "_Complex double f(_Complex double z, _Complex float w)\n\
+                       pre(__real__ z > 0) pre(__imag__ w > 0) post(r: __imag__ r > 0);\n\
+                       _Complex double f(_Complex double z, _Complex float w) { return z; }\n\
+                       double g(_Complex double z, _Complex float w) { return __real__ f(z, w); }\n";
+    let checks = ContractChecks { client: ClientCheck::All, definition: false };
+    for arch in [Arch::AArch64, Arch::X86_64] {
+        let ir = lower_for(SRC, ContractSemantic::Observe, true, arch, checks).expect("lowers");
+        let call = match arch {
+            Arch::X86_64 => "call noundef { double, double } @_Z1fCdCf(double noundef %",
+            Arch::AArch64 => {
+                "call noundef { double, double } @_Z1fCdCf([2 x double] noundef alignstack(8) %"
+            }
+        };
+        in_order(
+            body(&ir, "_Z1gCdCf"),
+            &[
+                &format!("call void {HANDLER}(ptr @.contract"),
+                &format!("call void {HANDLER}(ptr @.contract"),
+                call,
+                &format!("call void {HANDLER}(ptr @.contract"),
+                "ret double",
+            ],
+        );
+        assert!(!body(&ir, "_Z1fCdCf").contains(HANDLER), "{arch:?}: {ir}");
+    }
 }

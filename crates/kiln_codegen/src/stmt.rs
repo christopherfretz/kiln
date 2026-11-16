@@ -515,6 +515,13 @@ impl Cg<'_> {
                 | ExprKind::ExprWithCleanups
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr => e = self.sub(e),
+                // The elided copy of the result before C++17.
+                ExprKind::CXXConstructExpr if self.opts.elide_constructors => {
+                    match ast.elidable_copy_source(e) {
+                        Some(x) => e = x,
+                        None => break,
+                    }
+                }
                 _ => break,
             }
         }

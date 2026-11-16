@@ -160,6 +160,10 @@ Planned as 1.3.0.
   leaves the link line as before; below C++26 it is still added only
   with `-f[no-]contracts`.
 
+- `-fno-elide-constructors` is accepted before C++17 (WP-1503): the
+  copies C++98 to C++14 allow to be elided are now built, and the flag
+  makes them, as clang does. By default they are still elided.
+
 ### Fixed
 
 - Expansion statements and related checks, found running GCC's C++
@@ -764,6 +768,71 @@ Planned as 1.3.0.
   C++20 and C++23 too, as clang does; copying a union whose member was
   destroyed (or one with no active member) is accepted in C++23 as in
   C++26, and the copy keeps the member ended.
+- More concepts code found running GCC's C++ testsuite is handled. A
+  concept-id argument that fails to substitute makes only the atomic
+  constraints that use its parameter unsatisfied, as in clang 22
+  (`C<T, T&>` with `void` can still be satisfied through an operand that
+  does not use the second argument), and `t.*pmf` naming a member
+  function as a simple requirement is a substitution failure of that
+  requirement, not an error. These are accepted now: an out-of-line
+  member of a constrained partial
+  specialization (matched by its whole template head), a
+  using-declaration hidden by a member that corresponds only after
+  substitution, a template template parameter constrained by `C<Ts...>`
+  for an argument with the same constraint, an alias-sugared base pack
+  expansion and a consteval default constructor in an instantiated
+  array. A cast to a deleted converting constructor gets clang's
+  candidate notes, and a call or operator that only finds a function
+  declared after the template is clang's "neither visible in the
+  template definition nor found by argument-dependent lookup" error.
+
+- Template argument deduction and class template argument deduction
+  found running GCC's C++ testsuite: with `-fclang-compat=22` the
+  associated constraints are checked before the non-dependent conversions
+  that may use a user-defined conversion (CWG2369, in clang 22's order); an
+  aggregate deduction candidate skips a pack that is not trailing;
+  copy-initialization CTAD considers only guides callable with one
+  argument, and a guide whose `explicit(b)` depends on a template
+  parameter is resolved per deduction; `auto(x)` with a dependent operand,
+  `new char[]("abc")` (C++20) and `new char[]{"abc"}`, function parameter
+  packs of function type (`T... f(int)`), constant expressions such as
+  template arguments inside `sizeof` and `decltype`, dependent functional
+  casts to a reference type, and, in C++11, implicit `const` on a
+  constexpr member function with a trailing return type and classes with
+  default member initializers not being aggregates. Candidate notes name
+  an implicit copy or move assignment operator, report "packs of
+  different lengths" and the value of an `explicit(b)` guide, and alias
+  guides print no `<null expr>` default arguments.
+
+- Found running GCC's C++ testsuite (WP-1503, WP-1504, WP-1511): a
+  single-inheritance chain of any depth gets its vtables (the builder
+  ran out of fuel past about 250 classes, and virtual-base walks stopped
+  at depth 256); `static int a[10] = {a[3] = 5}` is initialized
+  dynamically as clang does instead of being folded to a constant that
+  dropped the store; copy-initialization with an explicit copy
+  constructor reports an array structured binding at clang's location,
+  naming the array type, and adds the parameter note for a function
+  argument; `-fcontracts-client-check=pre|all` compiles calls with
+  `_Complex` arguments or results and checks the allocation and
+  deallocation functions of new- and delete-expressions, as GCC 16.1
+  does.
+
+- More invalid code is rejected, found running GCC's C++ testsuite
+  (WP-1513). A friend declaration of a constructor, destructor or
+  conversion function template of a class template befriends it, also
+  through a precompiled header or a module, so access through it is no
+  longer denied. A static data member defined out of its class template
+  keeps its access, and naming a private variable or function template
+  through a template-id is checked. Before C++17 a copy-initialization by
+  user-defined conversion checks the copy from the temporary, so the old
+  `auto_ptr` idiom is rejected as clang does. Before C++20 a defaulted
+  `==` or `!=` warns that it is a C++20 extension and a defaulted
+  relational operator is rejected. `new C[](8, 9)` no longer needs a
+  default constructor, and an element of a parenthesized array new is
+  diagnosed at the allocated type. An access declaration whose qualifier
+  is a template-id is parsed in every mode, and a using-declaration that
+  names a constructor is rejected before C++11. `cargo xtask libstdcxx`
+  takes `--std c++11` and `--std c++14`.
 
 ## [1.2.1] - 2026-11-14
 

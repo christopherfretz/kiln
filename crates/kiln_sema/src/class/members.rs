@@ -635,8 +635,11 @@ impl Sema<'_, '_> {
             }
             // A dependent base ([temp.dep.type]/1) is checked at
             // instantiation (WP-070a); lookup does not look into it
-            // ([temp.dep.general]/4).
-            if self.is_dependent_type(s.ty) {
+            // ([temp.dep.general]/4). So is a pack expansion whose
+            // pattern names a pack only in its sugar (`alias<Ts, 1>...`
+            // of an alias template that ignores its parameter;
+            // [temp.variadic]/5): it expands to one base per element.
+            if self.is_dependent_type(s.ty) || s.pack_expansion && self.has_unexpanded_pack(s.ty) {
                 kept.push((out.len() as u32, si));
                 out.push(BaseSpec {
                     ty: s.ty,
@@ -1047,6 +1050,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let fd = self.ast.decls.field(f).copied();
+            // C++11 [dcl.init.aggr]/1: an aggregate has no default member
+            // initializers (N3653 lifted it in C++14; clang
+            // `setHasInClassInitializer`).
+            if self.std < kiln_lex::Std::Cxx14 && self.field_has_nsdmi(f) {
+                bits = bits.without(DefinitionBits::AGGREGATE);
+            }
             // [class.prop]/3.6 names bit-fields too: an unnamed one in a
             // class whose base has fields (CWG1813; clang checks
             // `HasBasesWithFields` before skipping it).

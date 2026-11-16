@@ -360,6 +360,14 @@ impl Cg<'_> {
         {
             ret_align = Some(n as u64);
         }
+        // GCC 16.1 checks the allocation and deallocation function a
+        // new- or delete-expression calls in the caller too, the cleanup
+        // of a new-expression included (spec/codegen.md, "Caller-side
+        // contract checks").
+        let client = match self.client_checked(d) {
+            Some(d) => Some(self.emit_client_pre(d, None, vals)?),
+            None => None,
+        };
         let (ret, params) = self.sig_attrs(&sig, vals.len(), false);
         let mut fa = Vec::new();
         if af.replaceable {
@@ -402,6 +410,9 @@ impl Cg<'_> {
         );
         if af.replaceable && af.is_new {
             self.alloc_align_assume(d, vals, r);
+        }
+        if let Some(b) = client {
+            self.emit_client_post(b, (rty != LTy::VOID).then_some(r), None)?;
         }
         Ok(r)
     }
@@ -587,16 +598,16 @@ impl Cg<'_> {
                 Some(l) => crate::expr::agg_init_parts(ast, l).0,
                 None => vec![i],
             };
+            // A string literal initializing the array ([dcl.init.string]):
+            // its length is the minimum (clang `isStringLiteralInit`).
             if lits.len() == 1
                 && t.is_array(ast.exprs.get(i).ty())
                 && self.strip_to_string_literal(lits[0])
             {
-                return err(
-                    loc,
-                    "new of an array initialized from a string literal is not supported yet",
-                );
-            }
-            if ile.is_some() {
+                if let TypeView::ConstantArray(a) = t.canonical_view(ast.exprs.get(i).ty()) {
+                    min_elems = a.size;
+                }
+            } else if ile.is_some() {
                 min_elems = lits.len() as u64;
             }
         }
@@ -1137,6 +1148,31 @@ impl Cg<'_> {
         let mut cur_align = align;
         let mut n_init: u64 = 0;
         let mut init = Some(init0);
+        // A string literal: its elements are copied, the rest zeroed
+        // (clang `EmitNewArrayInitializer`, `isStringLiteralInit`).
+        if self.strip_to_string_literal(init0)
+            && let TypeView::ConstantArray(a) = t.canonical_view(ast.exprs.get(init0).ty())
+        {
+            let q = ast.exprs.get(init0).ty();
+            let lv = LV {
+                addr: Addr { v: begin, ty: self.mty(q), align },
+                q,
+                bf: None,
+                vidx: None,
+                tb: Tb::Type,
+            };
+            self.init_to_lvalue(init0, lv, false)?;
+            let len = self.i64c(i128::from(a.size));
+            let cur = self.gep(base_ty, begin, vec![len], true);
+            if self.cint(num).is_some_and(|(_, c, _)| c as u64 == a.size) {
+                return Ok(());
+            }
+            let s = self.i64c(i128::from(esize.wrapping_mul(a.size)));
+            let rem = self.bin(BinOp::Sub, Flags::NONE, size, s);
+            let at = min_align(align, esize.wrapping_mul(a.size));
+            self.memset_v(Addr { v: cur, ty: base_ty, align: at }, 0, rem, false);
+            return Ok(());
+        }
         // clang `EmitNewArrayInitializer`: the explicit elements of a braced
         // or parenthesized list, then its array filler.
         if matches!(

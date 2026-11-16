@@ -121,7 +121,14 @@ impl Sema<'_, '_> {
         let skip = usize::from(explicit_obj);
         let nparams = params.len().saturating_sub(skip);
         let nargs = set.args.len();
-        let min = self.fn_min_args(f).saturating_sub(skip);
+        let mut min = self.fn_min_args(f).saturating_sub(skip);
+        // The aggregate deduction candidate's trailing pack may have been
+        // deduced longer than the clauses it takes (`DeducedArgs::
+        // aggregate`): the parameters past the arguments are not required
+        // (clang `AddOverloadCandidate`, `AggregateCandidateDeduction`).
+        if self.templ.ctad_origin.get(&found) == Some(&crate::templ::ctad::GuideOrigin::Aggregate) {
+            min = min.min(nargs);
+        }
         let start = u32::try_from(set.ics.len()).unwrap_or(u32::MAX);
         cand.ics = start..start;
         if nargs > nparams && !variadic {

@@ -191,14 +191,14 @@ impl Parser<'_, '_> {
     /// manifestly constant-evaluated (an immediate function context,
     /// [expr.const]/16).
     pub fn parse_constant_expr(&mut self) -> PExpr {
-        self.s.enter_constant_evaluated();
+        let unevaluated = self.s.enter_constant_expression();
         // clang 19's `ActOnConstantExpression` corrects the delayed typos
         // of a constant-expression (a template argument) at once, with no
         // filter (WP-408).
         let typos = self.begin_typo_correction();
         let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
         self.correct_typos(typos, r.is_some());
-        self.s.exit_constant_evaluated(r);
+        self.s.exit_constant_expression(r, unevaluated);
         r
     }
 
@@ -2197,6 +2197,9 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_loc: Option<Loc>,
     ) -> ExprId {
+        if let (NameClass::VarTemplate(d), Some(q)) = (class, qual) {
+            self.s.check_var_template_name_access(name, q.ctx, d, nl);
+        }
         let res = self.parse_template_id_rest(class, name, nl);
         let r_angle = self.prev_lo();
         match res {

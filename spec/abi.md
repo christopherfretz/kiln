@@ -690,11 +690,40 @@ points, thunks and method indices are clang's.
   - `method_thunks` lists, for each overrider declared in the class, the
     thunks to emit (clang `Thunks`; empty for construction vtables).
   - `Thunk.this_class` is the class of `Thunk.method`.
-- **Bounds.** Every walk is iterative and bounded. The following answer
-  `TooComplex` and never panic:
-  - a dynamic chain deeper than 256;
+- **Bounds.** Every walk is bounded. The following answer `TooComplex`
+  and never panic:
+  - a dynamic chain deeper than 4096 (`MAX_DYNAMIC_DEPTH`: the builders
+    recurse once per level, as clang's do, on kiln's 1 GiB stack);
   - more than `MAX_SUBOBJECTS` base paths;
-  - more than 2^26 builder steps.
+  - more than 2^26 builder steps in one query (a vtable group, a
+    construction group or a VTT; `Classes::refuel`). Every recursive
+    walk ticks once per call, and the final-overrider collection once
+    per class visited and once per method an overrider replaces
+    eagerly. The steps are linear in the depth of a single-inheritance
+    chain (about 6 per level and class, WP-1503), so the budget bounds
+    what multiplies: virtual-inheritance lattices, whose subobject and
+    construction-group walks grow with the number of paths.
+- **Per-class and per-method memos** (`Classes`, WP-1503; each a fact of
+  its key alone, so the order of the queries changes no answer):
+  - `all_overridden(m)`: the methods `m` overrides transitively (clang
+    `ComputeAllOverriddenMethods`), deduplicated with a set;
+  - `paths_to(derived, base)`: the `paths(derived)` entries of class
+    `base`, through an index built once per class (the this- and
+    return-adjustment searches no longer scan every subobject);
+  - `find_nearest_overridden` answers from the first direct override when
+    it is declared in the last primary base (the chain case) and from
+    `all_overridden` otherwise; `add_methods` keeps its primary bases in a
+    set beside the list.
+  - The final-overrider map (`overriders.rs` `OvMap`) of a subtree nothing
+    was merged into (a single-inheritance chain) replaces only the
+    entries of the methods an overrider directly overrides; an entry
+    naming an overrider whose own entry was replaced later forwards to
+    it, resolved once (`OvMap::materialize`) before a merge and before
+    the map is read. clang's eager walk over every transitively
+    overridden method is quadratic in the depth; maps with merges
+    (multiple or virtual bases) still replace eagerly.
+  None of this is stored on `ClassInfo`: a class without virtual
+  functions has the same record as before.
   `Incomplete` covers a missing definition, a missing override-list
   entry, no unique final overrider, and an unknown subobject.
 - **Dump** (`-fdump-vtable-layouts`; byte-identical to clang 19 for each

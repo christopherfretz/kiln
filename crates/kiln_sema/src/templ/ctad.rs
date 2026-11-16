@@ -1136,11 +1136,13 @@ impl Sema<'_, '_> {
             if cur < nb && bases[cur].1 {
                 // A pack expansion element: when trailing, its parameter
                 // pack takes every remaining clause ([over.match.class.
-                // deduct]/1.7). clang forms no candidate otherwise.
-                if cur + 1 != total
-                    || !braced
-                    || items[*pos..].iter().any(|i| !i.designator.is_empty())
-                {
+                // deduct]/1.7). One that is not trailing corresponds to
+                // no clause (/1.8: its pack is deduced empty).
+                if cur + 1 != total {
+                    cur += 1;
+                    continue;
+                }
+                if !braced || items[*pos..].iter().any(|i| !i.designator.is_empty()) {
                     return None;
                 }
                 let pack = self.ast.types.pack_expansion(bases[cur].0, None);
@@ -1598,8 +1600,35 @@ impl Sema<'_, '_> {
             for (&o, nw) in cparams.iter().zip(gps2) {
                 s.locals.insert(o, DeclOrPack::Decl(nw));
             }
-            let trailing = s.sema.ast.templates.trailing_requires.get(f).copied();
-            let req = ctad_guide_requires(&mut s, [gl.requires, trailing], loc)?;
+            // A guide template declared in a class template and
+            // instantiated with it keeps the pattern's constraints, with
+            // the enclosing specialization's levels (`member_constraints`,
+            // [temp.constr.decl]/3; `requires C<Z>` naming the outer
+            // class's parameter): those levels, then the new arguments.
+            let member = s.sema.inst.concepts.member_constraints.get(&g).cloned();
+            let req = match member {
+                Some((pat, outer)) if pat != g => {
+                    let cs = s.sema.associated_constraints(pat);
+                    let mut lv = outer;
+                    lv.push(sl, g, LevelMode::Substitute);
+                    let locals = s.locals.clone();
+                    let mut s2 = Substituter::new(s.sema, &lv);
+                    s2.locals = locals;
+                    let mut conj: Option<ExprId> = None;
+                    for c in cs {
+                        let e = s2.expr(c)?;
+                        conj = Some(match conj {
+                            Some(l) => s2.sema.act_on_binary(BinaryOp::LAnd, l, e, loc),
+                            None => e,
+                        });
+                    }
+                    conj
+                }
+                _ => {
+                    let trailing = s.sema.ast.templates.trailing_requires.get(f).copied();
+                    ctad_guide_requires(&mut s, [gl.requires, trailing], loc)?
+                }
+            };
             Ok::<_, SubstFail>((nf, req, cc.map(|_| nret)))
         })();
         self.ast.templates.dependent_depth = saved;
@@ -1893,20 +1922,52 @@ impl Sema<'_, '_> {
         if self.ast.decls.get(pattern).has(DeclFlags::INVALID) {
             return;
         }
-        if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() {
+        // [over.match.copy]: copy-initialization from one expression takes
+        // the converting guides only; one that cannot be called with one
+        // argument is neither checked nor noted (clang
+        // `DeduceTemplateSpecializationFromInitializer`).
+        if how == CtadInit::Copy {
+            let n = self.param_decls(pattern).len();
+            let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
+            let variadic = self.ast.types.proto(ty).is_some_and(FuncProto::variadic);
+            if self.fn_min_args(pattern) > 1 || (n == 0 && !variadic) {
+                return;
+            }
+        }
+        // A value-dependent `explicit(b)` of a guide template is resolved
+        // with the deduced arguments: the specialization, not the pattern,
+        // says whether copy-initialization may use it (clang
+        // `ExplicitSpecifier::isExplicit` is false while unresolved).
+        let pending = template.is_some()
+            && self.ast.decls.cold.explicit_expr.get(pattern).is_some_and(|&e| {
+                let x = self.ast.exprs.get(e);
+                x.is_value_dependent() || x.is_type_dependent()
+            });
+        if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() && !pending {
             self.add_explicit_guide(set, pattern, g, template);
             return;
         }
         match template {
-            Some(ft) => self.add_template_candidate(
-                set,
-                ft,
-                g,
-                None,
-                CandidateKind::Function,
-                IcsOptions::NONE,
-                loc,
-            ),
+            Some(ft) => {
+                let n = set.cands.len();
+                self.add_template_candidate(
+                    set,
+                    ft,
+                    g,
+                    None,
+                    CandidateKind::Function,
+                    IcsOptions::NONE,
+                    loc,
+                );
+                if how == CtadInit::Copy && pending {
+                    for c in &mut set.cands[n..] {
+                        if c.viable && self.fn_spec(c.func()).is_explicit() {
+                            c.viable = false;
+                            c.failure = CandidateFailure::Explicit;
+                        }
+                    }
+                }
+            }
             None => {
                 self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE);
             }
@@ -2184,9 +2245,18 @@ impl Sema<'_, '_> {
         if let Some((alias, ret)) = deducible {
             let n = self.decl_name_str(self.ast.decls.get(alias).name());
             let r = self.ty_str(ret);
+            // The source guide's own constraints come first, conjoined
+            // (clang `buildAssociatedConstraints`).
+            let own = self
+                .ast
+                .templates
+                .trailing_requires
+                .get(pattern)
+                .map(|&c| format!("{} && ", self.expr_text_as_written(c)))
+                .unwrap_or_default();
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
-                format_args!("requires __is_deducible({n}, {r}) "),
+                format_args!("requires {own}__is_deducible({n}, {r}) "),
             );
         }
         if self.fn_spec(pattern).is_explicit() {
@@ -2202,6 +2272,7 @@ impl Sema<'_, '_> {
         let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
         let fd = self.ast.decls.function(pattern)?;
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
+        let alias = self.templ.ctad_alias.contains_key(&g);
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 out.push_str(", ");
@@ -2224,10 +2295,14 @@ impl Sema<'_, '_> {
                 &ph,
                 &mut out,
             );
-            // clang's placeholder for an inherited default argument.
-            if self.ast.decls.param(*p).is_some_and(|d| {
-                d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0
-            }) {
+            // clang's placeholder for an inherited default argument; an
+            // alias template's guide prints none (its parameters are
+            // substituted without them).
+            if !alias
+                && self.ast.decls.param(*p).is_some_and(|d| {
+                    d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0
+                })
+            {
                 out.push_str(" = <null expr>");
             }
         }

@@ -68,6 +68,9 @@ pub(crate) struct SpecialFriend {
     /// (none: `class`, instantiated with the enclosing template when it
     /// is templated).
     pub(crate) nns: Option<kiln_ast::ids::NnsId>,
+    /// The friend's own template head (`template<class U> friend
+    /// Z<T>::Z(U);`): it names a member template ([temp.friend]/1).
+    pub(crate) head: Option<TemplateParamListId>,
 }
 
 impl Sema<'_, '_> {
@@ -301,15 +304,7 @@ impl Sema<'_, '_> {
             )
             && let Some(class) = d.qualifier
         {
-            return self.declare_special_member_friend(
-                ds,
-                base,
-                d,
-                record,
-                class,
-                head.is_some(),
-                sloc,
-            );
+            return self.declare_special_member_friend(ds, base, d, record, class, head, sloc);
         }
         let op_d = self.operator_declarator(d);
         let d = op_d.as_ref().unwrap_or(d);
@@ -433,7 +428,9 @@ impl Sema<'_, '_> {
     /// A templated or dependent class, or a dependent type, cannot be
     /// matched in the template definition: the friend keeps its type and
     /// a [`SpecialFriend`] entry, matched in each specialization
-    /// (WP-1507). A friend template (`templated`) still befriends nothing.
+    /// (WP-1507). A friend template (`head`, `template<class U> friend
+    /// Z::Z(U);`) befriends the member template whose head and type are
+    /// equivalent ([temp.friend]/1, [temp.over.link]/6; WP-1513).
     #[allow(clippy::too_many_arguments, reason = "the friend's parts as declare_friend has them")]
     fn declare_special_member_friend(
         &mut self,
@@ -442,7 +439,7 @@ impl Sema<'_, '_> {
         d: &Declarator,
         record: DeclId,
         class: DeclId,
-        templated: bool,
+        head: Option<TemplateParamListId>,
         sloc: Loc,
     ) -> Option<DeclId> {
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
@@ -475,22 +472,23 @@ impl Sema<'_, '_> {
         // when the parameters line up) is matched in each specialization.
         let templated_class =
             self.kind_of(class) == DeclKind::CXXRecord && self.in_dependent_class(class);
-        if templated
-            || templated_class
-            || self.is_dependent_ctx(class)
-            || self.ast.types.is_dependent(ty)
+        let concrete = !templated_class && !self.is_dependent_ctx(class);
+        if let Some(h) = head
+            && concrete
         {
-            if templated {
-                let fd =
-                    self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
-                return Some(fd);
-            }
+            return Some(self.befriend_special_template(record, class, kind, ty, h, at));
+        }
+        if head.is_some() || !concrete || self.ast.types.is_dependent(ty) {
             // A member of the current instantiation (`friend M::M(T);`
             // for a member class `M`) also befriends the pattern's member,
             // for the access checks in the template definition.
-            let pattern = (self.kind_of(class) == DeclKind::CXXRecord)
-                .then(|| self.match_special_member(class, kind, ty, at, false).ok())
-                .flatten();
+            let pattern = if self.kind_of(class) != DeclKind::CXXRecord {
+                None
+            } else if let Some(h) = head {
+                self.match_special_template(class, kind, ty, h)
+            } else {
+                self.match_special_member(class, kind, ty, at, false).ok()
+            };
             let target =
                 pattern.map_or(FriendTarget::Type { ty, owned_tag: None }, FriendTarget::Decl);
             let fd = self.builder().friend(record, at, target);
@@ -499,7 +497,7 @@ impl Sema<'_, '_> {
                 self.push_friend(first);
             }
             let nns = d.qualifier_nns;
-            self.special_friends.insert(fd, SpecialFriend { kind, ty, class, nns });
+            self.special_friends.insert(fd, SpecialFriend { kind, ty, class, nns, head });
             return Some(fd);
         }
         self.befriend_special_member(record, class, kind, ty, at)
@@ -542,6 +540,65 @@ impl Sema<'_, '_> {
         let msg = self.with_friend_candidate_notes(msg, &found, ty);
         self.emit(msg);
         None
+    }
+
+    /// `template<class U> friend Z::Z(U);` in `record`: befriends the
+    /// member template of `class` of kind `kind` whose head is
+    /// equivalent to `head` and whose type is `ty` ([temp.friend]/1),
+    /// so every specialization of it. None matching befriends nothing.
+    /// Also each specialization's match of a [`SpecialFriend`] with a
+    /// head.
+    pub(crate) fn befriend_special_template(
+        &mut self,
+        record: DeclId,
+        class: DeclId,
+        kind: SpecialFriendKind,
+        ty: QualType,
+        head: TemplateParamListId,
+        at: Loc,
+    ) -> DeclId {
+        let Some(t) = self.match_special_template(class, kind, ty, head) else {
+            return self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
+        };
+        let fd = self.builder().friend(record, at, FriendTarget::Decl(t));
+        let first = self.ast.first(t);
+        self.push_friend(first);
+        fd
+    }
+
+    /// The member template of `class` of kind `kind` with a head
+    /// equivalent to `head` and type `ty` ([temp.over.link]/6).
+    fn match_special_template(
+        &mut self,
+        class: DeclId,
+        kind: SpecialFriendKind,
+        ty: QualType,
+        head: TemplateParamListId,
+    ) -> Option<DeclId> {
+        let def = self.ast.definition(class).unwrap_or(class);
+        let canon = self.ast.types.canonical(self.class_type(def)).ty();
+        let candidates = match kind {
+            SpecialFriendKind::Conversion => self.conversion_templates_of(def),
+            SpecialFriendKind::Ctor | SpecialFriendKind::Dtor => {
+                let name = if kind == SpecialFriendKind::Ctor {
+                    self.ast.names.constructor(canon)
+                } else {
+                    self.ast.names.destructor(canon)
+                };
+                let found: Vec<DeclId> = self.ast.lookup_local(def, name).iter().collect();
+                self.function_templates_in(&found)
+            }
+        };
+        candidates.into_iter().find(|&t| {
+            let own = self.ast.template_info(t).map(|i| i.params);
+            let pty = self.pattern_of(t).and_then(|p| self.ast.decls.get(p).ty());
+            match (own, pty) {
+                (Some(own), Some(pty)) => {
+                    self.heads_equivalent(own, head) && self.same_ignoring_exc_spec(pty, ty)
+                }
+                _ => false,
+            }
+        })
     }
 
     /// The special member `kind` of `class` of type `ty`

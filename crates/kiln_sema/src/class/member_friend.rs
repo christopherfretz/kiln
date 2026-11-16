@@ -13,7 +13,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
-use kiln_ast::names::DeclName;
+use kiln_ast::names::{DeclName, DeclNameKind};
 use kiln_ast::types::{Nns, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -22,7 +22,7 @@ use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
-use crate::declspec::{DeclSpec, Declarator};
+use crate::declspec::{DeclSpec, Declarator, SpecialName};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::deduce::{DeducedArgs, Tdk};
 use crate::templ::stack::FrameKind;
@@ -241,12 +241,24 @@ impl Sema<'_, '_> {
         record: DeclId,
     ) -> Option<DeclId> {
         let nns = d.qualifier_nns?;
-        let (name, _) = d.name?;
-        // A definition (ill-formed, [class.friend]/6) and the special
-        // names take the ordinary path.
-        if d.special.is_some() || self.templ.fn_def_next {
+        // A definition (ill-formed, [class.friend]/6) and the operator
+        // names take the ordinary path. A constructor, destructor or
+        // conversion function (`template<class U> friend X<U>::X(U);`)
+        // is matched by its kind of name and its type (WP-1513).
+        let special = match d.special {
+            None => None,
+            Some((
+                s @ (SpecialName::Constructor(_)
+                | SpecialName::Destructor(_)
+                | SpecialName::Conversion(_)),
+                _,
+            )) => Some(s),
+            Some(_) => return None,
+        };
+        if self.templ.fn_def_next {
             return None;
         }
+        let ident = if special.is_some() { None } else { Some(d.name?.0) };
         let (template, args, path) = self.member_friend_shape(nns)?;
         let (depth, params, written) = self.member_friend_head(&args)?;
         // `template<class T> friend void A<T>::f(C auto);`: the invented
@@ -261,9 +273,30 @@ impl Sema<'_, '_> {
         if !self.ast.types.is_function(ty) {
             return None;
         }
+        // A special member's type as the member's own (a constructor's
+        // and destructor's return `void`), and a name of its kind: any
+        // constructor of the specialization has that name.
+        let (ty, name) = match (special, ident) {
+            (Some(SpecialName::Conversion(t)), _) => {
+                let c = self.ast.types.canonical(t);
+                (self.rebuild_fn_type(ty, t, None, false), self.ast.names.conversion(c))
+            }
+            (Some(s), _) => {
+                let p = self.pattern_of(template)?;
+                let canon = self.ast.types.canonical(self.class_type(p)).ty();
+                if matches!(s, SpecialName::Constructor(_)) {
+                    let ty = self.rebuild_fn_type(ty, QualType::VOID, None, true);
+                    (ty, self.ast.names.constructor(canon))
+                } else {
+                    let ty = self.rebuild_fn_type(ty, QualType::VOID, Some(&[]), true);
+                    (ty, self.ast.names.destructor(canon))
+                }
+            }
+            (None, Some(n)) => (ty, d.fn_decl_name(n)),
+            (None, None) => return None,
+        };
         let at = d.name_loc();
         let fd = self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
-        let name = d.fn_decl_name(name);
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, true, at) {
             self.ast.decls.set_flags(fd, DeclFlags::INVALID);
             return Some(fd);
@@ -295,7 +328,11 @@ impl Sema<'_, '_> {
             args,
             path,
         };
-        self.warn_unsupported_friend(nns, record, at);
+        // clang rejects a special member here ("friends can only be
+        // classes or functions"), so it has no warning to match.
+        if special.is_none() {
+            self.warn_unsupported_friend(nns, record, at);
+        }
         self.register_member_friend(fd, mf);
         Some(fd)
     }
@@ -502,8 +539,14 @@ impl Sema<'_, '_> {
     ) -> Grant {
         let Some(mf) = self.member_friends.by_friend.get(&fd).cloned() else { return Grant::No };
         let n = self.ast.decls.get(e);
+        // A constructor, destructor or conversion function friend names
+        // the member of its kind; the type decides which.
+        let special = matches!(
+            mf.name.kind(),
+            DeclNameKind::Constructor | DeclNameKind::Destructor | DeclNameKind::Conversion
+        );
         if mf.fn_ty.is_some() != n.kind().is_function()
-            || n.name() != mf.name
+            || (n.name() != mf.name && !(special && n.name().kind() == mf.name.kind()))
             || !mf.path.iter().rev().eq(path.iter())
         {
             return Grant::No;
@@ -567,7 +610,12 @@ impl Sema<'_, '_> {
                 }
             }
             let Ok(t) = Substituter::new(s, &levels).ty(fty, loc) else { return Grant::No };
-            if e_ty.is_none_or(|et| s.ast.types.canonical(et) != s.ast.types.canonical(t)) {
+            // A special member's exception specification may be implicit
+            // ([except.spec]/8).
+            if e_ty.is_none_or(|et| {
+                s.ast.types.canonical(et) != s.ast.types.canonical(t)
+                    && !(special && s.same_ignoring_exc_spec(et, t))
+            }) {
                 return Grant::No;
             }
             // The constraints of a friend still in a class template's

@@ -15,10 +15,15 @@ use super::VTableError;
 use crate::layout::{Layouter, MAX_SUBOBJECTS, props};
 
 /// The deepest chain of dynamic classes the builders accept (they
-/// recurse once per level, as clang does).
-pub(crate) const MAX_DYNAMIC_DEPTH: usize = 256;
+/// recurse once per level, as clang does; kiln runs on a large stack,
+/// spec/abi.md §8.5 "Bounds").
+pub(crate) const MAX_DYNAMIC_DEPTH: usize = 4096;
 
-/// The builder steps one [`Classes`] session may take.
+/// The builder steps one query may take ([`Classes::refuel`]): every
+/// walk of the builders ticks, so this bounds the work of one vtable
+/// group, construction group or VTT. A single-inheritance chain of
+/// depth `n` takes about `6n` steps per class; virtual-inheritance
+/// lattices, whose subobject walks multiply, are what it guards.
 const FUEL: u64 = 1 << 26;
 
 /// What the vtable builders need of one class.
@@ -85,6 +90,12 @@ pub(crate) struct Classes<'a> {
     paths: FxHashMap<DeclId, Rc<Vec<PathEntry>>>,
     /// `getVirtualBaseOffsetOffset` per class.
     pub vbase_offset_offsets: FxHashMap<DeclId, Rc<Vec<(DeclId, i64)>>>,
+    /// [`all_overridden`] per method, for the methods the builders ask
+    /// about (each is the method's own fact, so the order of the
+    /// questions does not matter).
+    overridden: FxHashMap<DeclId, Rc<[DeclId]>>,
+    /// Per class, its [`Self::paths`] indices by base class.
+    path_index: FxHashMap<DeclId, Rc<FxHashMap<DeclId, Vec<u32>>>>,
     /// Remaining builder steps before [`VTableError::TooComplex`].
     fuel: u64,
 }
@@ -96,6 +107,8 @@ impl<'a> Classes<'a> {
             infos: FxHashMap::default(),
             paths: FxHashMap::default(),
             vbase_offset_offsets: FxHashMap::default(),
+            overridden: FxHashMap::default(),
+            path_index: FxHashMap::default(),
             fuel: FUEL,
         }
     }
@@ -245,6 +258,44 @@ impl<'a> Classes<'a> {
         self.paths.insert(derived, Rc::clone(&out));
         Ok(out)
     }
+
+    /// The entries of [`Self::paths`]`(derived)` whose class is `base`,
+    /// in path order (an index built once per class, so a lookup does
+    /// not scan every subobject).
+    pub fn paths_to(
+        &mut self,
+        derived: DeclId,
+        base: DeclId,
+    ) -> Result<Vec<PathEntry>, VTableError> {
+        let derived = self.ast().first(derived);
+        let paths = self.paths(derived)?;
+        let index = if let Some(i) = self.path_index.get(&derived) {
+            Rc::clone(i)
+        } else {
+            let mut i: FxHashMap<DeclId, Vec<u32>> = FxHashMap::default();
+            for (k, e) in paths.iter().enumerate() {
+                i.entry(e.class).or_default().push(u32::try_from(k).unwrap_or(u32::MAX));
+            }
+            let i = Rc::new(i);
+            self.path_index.insert(derived, Rc::clone(&i));
+            i
+        };
+        Ok(index
+            .get(&base)
+            .map(|ks| ks.iter().filter_map(|&k| paths.get(k as usize).copied()).collect())
+            .unwrap_or_default())
+    }
+
+    /// [`all_overridden`] of `m`, memoized per method.
+    pub fn all_overridden(&mut self, m: DeclId) -> Rc<[DeclId]> {
+        let m = self.ast().first(m);
+        if let Some(r) = self.overridden.get(&m) {
+            return Rc::clone(r);
+        }
+        let r: Rc<[DeclId]> = all_overridden(self.ast(), m).into();
+        self.overridden.insert(m, Rc::clone(&r));
+        r
+    }
 }
 
 /// The direct dynamic bases of `c`.
@@ -314,10 +365,11 @@ pub(crate) fn overridden(ast: &Ast, m: DeclId) -> Vec<DeclId> {
 /// directly or indirectly.
 pub(crate) fn all_overridden(ast: &Ast, m: DeclId) -> Vec<DeclId> {
     let mut out: Vec<DeclId> = Vec::new();
+    let mut seen: FxHashSet<DeclId> = FxHashSet::default();
     let mut stack = overridden(ast, m);
     stack.reverse();
     while let Some(o) = stack.pop() {
-        if out.contains(&o) {
+        if !seen.insert(o) {
             continue;
         }
         out.push(o);

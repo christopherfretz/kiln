@@ -1422,8 +1422,10 @@ pub fn implicit_convert(
         let at = s.begin_loc(e);
         if prvalue && s.ast.types.same_unqualified(from, to) {
             // C++11/14: an elidable copy of the temporary.
-            if matches!(ctx, ConvCtx::Return | ConvCtx::Argument | ConvCtx::Initialization) {
-                s.check_elided_ctor(e, to, ctx, at, crate::class::DeletedAs::Call);
+            if matches!(ctx, ConvCtx::Return | ConvCtx::Argument | ConvCtx::Initialization)
+                && let Some(x) = s.check_elided_ctor(e, to, ctx, at, crate::class::DeletedAs::Call)
+            {
+                return Ok(x);
             }
             return Ok(e);
         }

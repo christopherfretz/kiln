@@ -714,7 +714,8 @@ impl Sema<'_, '_> {
     /// clang's `BuildCXXTypeConstructExpr` diagnostics at `loc`: `auto`
     /// before C++23 and `decltype(auto)` are not allowed here, the
     /// initializer must be one expression and not a braced list. A
-    /// type-dependent operand keeps `ty` (deduced at instantiation).
+    /// type-dependent operand gives a dependent `auto` (deduced at
+    /// instantiation).
     pub(crate) fn auto_cast_type(
         &mut self,
         ty: QualType,
@@ -787,7 +788,10 @@ impl Sema<'_, '_> {
             return QualType::ERROR;
         }
         if self.expr_is_type_dependent(e) {
-            return ty;
+            // A dependent `auto` (clang's `AutoType` deduced as dependent):
+            // the cast is type-dependent and deduced again at
+            // instantiation ([temp.dep.expr]/3).
+            return self.dependent_auto(ty);
         }
         let deduced = if self.ast.exprs.get(e).ty() == QualType::OVERLOAD {
             None

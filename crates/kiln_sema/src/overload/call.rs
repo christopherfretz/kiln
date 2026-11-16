@@ -9,7 +9,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use super::{
@@ -81,6 +81,135 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// clang `DiagnoseTwoPhaseLookup`: the unqualified callee `name` of
+    /// a dependent call found nothing at instantiation, neither where the
+    /// template was defined nor by argument-dependent lookup
+    /// ([temp.dep.candidate]/1), but a lookup from the instantiated
+    /// context finds a function declared later in an enclosing namespace
+    /// that the call could use: that is an error, and the call is
+    /// resolved against it (clang's recovery). The callee, or `None` when
+    /// there is no such function (the caller reports the name as
+    /// undeclared).
+    fn two_phase_call(
+        &mut self,
+        ule: ExprId,
+        name: DeclName,
+        args: &[ExprId],
+        braced: &[Option<InitList>],
+    ) -> Option<ExprId> {
+        let decls = self.two_phase_decls(name)?;
+        let loc = self.ast.exprs.get(ule).loc();
+        let targs = self.ast.templates.expr_targs.get(ule).copied();
+        let retry = self.builder().unresolved_lookup(name, &decls, false, None, targs, loc);
+        let (r, stash) = self.capturing(|s| s.resolve_unresolved_call(retry, args, braced));
+        let f = r.filter(|_| !self.stash_has_error(&stash)).and_then(|e| {
+            let k = self.ast.exprs.get(e).kind();
+            (k == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(e))
+        })?;
+        let msg = self
+            .diag(DiagId::sema_not_found_by_two_phase_lookup, loc)
+            .arg(self.decl_name_str(name))
+            .with_note(self.two_phase_note(name, f, args));
+        self.emit(msg);
+        self.release(stash, vec![]);
+        r
+    }
+
+    /// [`Self::two_phase_call`] for operator `name` with operands `args`
+    /// at `loc` (clang `DiagnoseTwoPhaseOperatorLookup`, which does not
+    /// recover): whether it was diagnosed.
+    pub(crate) fn two_phase_operator(&mut self, name: DeclName, args: &[ExprId], loc: Loc) -> bool {
+        let Some(mut decls) = self.two_phase_decls(name) else { return false };
+        // A sole candidate resolves without an arity check (the call
+        // makes it): keep the operators that take this many operands.
+        let mut ps = Vec::new();
+        decls.retain(|&d| {
+            let f = self.templated_function(d).unwrap_or(d);
+            ps.clear();
+            let variadic = self.fn_param_types(f, &mut ps);
+            self.fn_min_args(f) <= args.len() && (variadic || args.len() <= ps.len())
+        });
+        if decls.is_empty() {
+            return false;
+        }
+        let retry = self.builder().unresolved_lookup(name, &decls, false, None, None, loc);
+        let (r, stash) = self.capturing(|s| s.resolve_unresolved_call(retry, args, &[]));
+        let Some(f) = r.filter(|_| !self.stash_has_error(&stash)).and_then(|e| {
+            let k = self.ast.exprs.get(e).kind();
+            (k == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(e))
+        }) else {
+            return false;
+        };
+        let msg = self
+            .diag(DiagId::sema_not_found_by_two_phase_lookup, loc)
+            .arg(self.decl_name_str(name))
+            .with_note(self.two_phase_note(name, f, args));
+        self.emit(msg);
+        true
+    }
+
+    /// The functions named `name` that an ordinary lookup from the
+    /// current (instantiated) context finds in an enclosing namespace
+    /// (clang `DiagnoseTwoPhaseLookup`'s walk: a class scope that
+    /// declares the name stops it, quietly). Only in an instantiation.
+    pub(crate) fn two_phase_decls(&self, name: DeclName) -> Option<Vec<DeclId>> {
+        if self.inst.stack.is_empty() {
+            return None;
+        }
+        let mut cur = Some(self.ctx);
+        while let Some(dc) = cur {
+            let kind = self.kind_of(dc);
+            if matches!(kind, DeclKind::Namespace | DeclKind::TranslationUnit | DeclKind::CXXRecord)
+            {
+                let found = self.lookup_qualified_dn(dc, name, crate::lookup::LookupKind::Ordinary);
+                if !found.is_empty() {
+                    let fns: Vec<DeclId> = found
+                        .decls
+                        .iter()
+                        .copied()
+                        .filter(|&d| {
+                            matches!(
+                                self.kind_of(d),
+                                DeclKind::Function | DeclKind::FunctionTemplate
+                            )
+                        })
+                        .collect();
+                    return (kind != DeclKind::CXXRecord && !fns.is_empty()).then_some(fns);
+                }
+            }
+            cur = self.ast.decls.get(dc).ctx();
+        }
+        None
+    }
+
+    /// clang `note_not_found_by_two_phase_lookup` at function `f`: the
+    /// namespaces argument-dependent lookup searched for `args`, other
+    /// than `std` and names with `__` in them, are suggested.
+    pub(crate) fn two_phase_note(&self, name: DeclName, f: DeclId, args: &[ExprId]) -> Diag {
+        let mut assoc = super::adl::AssocSet::default();
+        for &a in args {
+            self.assoc_arg(a, &mut assoc);
+        }
+        let suggested: Vec<DeclId> = assoc
+            .namespaces
+            .iter()
+            .copied()
+            .filter(|&ns| {
+                let q = self.qualified_decl_name(ns);
+                self.kind_of(ns) != DeclKind::Namespace
+                    || (q != "std" && !q.starts_with("std::") && !q.contains("__"))
+            })
+            .collect();
+        let at = self.ast.decls.get(f).loc();
+        let d =
+            self.diag(DiagId::note_not_found_by_two_phase_lookup, at).arg(self.decl_name_str(name));
+        match suggested.as_slice() {
+            [] => d.arg(0u8).arg(String::new()),
+            [ns] => d.arg(2u8).arg(self.qualifier_desc(*ns)),
+            _ => d.arg(1u8).arg(String::new()),
+        }
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "lookup, ADL, the one-candidate path and the candidate set meet here"
@@ -138,6 +267,12 @@ impl Sema<'_, '_> {
             && self.diagnose_member_found_in_class(name, n.loc(), false).is_some()
         {
             return None;
+        }
+        if cands.is_empty()
+            && adl
+            && let Some(r) = self.two_phase_call(ule, name, args, braced)
+        {
+            return Some(r);
         }
         if cands.is_empty() {
             self.diagnose_undeclared_call_name(name, n.loc());

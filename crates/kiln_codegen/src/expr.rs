@@ -4537,6 +4537,14 @@ impl Cg<'_> {
     /// clang `GetNumNonZeroBytesInInit`.
     fn non_zero_bytes(&mut self, e: ExprId) -> u64 {
         let ast = self.ast;
+        // clang strips one `MaterializeTemporaryExpr`, then parentheses and
+        // no-op casts (`IgnoreParenNoopCasts`), but not a full-expression:
+        // an initializer with cleanups counts as all non-zero, so
+        // `static X a[10] = {a[3] = {5}};` is not zeroed by a `memset`
+        // first (WP-1503).
+        if ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
+            return self.size_align(ast.exprs.get(e).ty()).0;
+        }
         let e = self.strip_noop(e);
         if self.is_simple_zero(e) {
             return 0;

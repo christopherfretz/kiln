@@ -1163,7 +1163,8 @@ impl Mangler<'_, '_> {
                 // records `DEPENDENT`, which the canonical type keeps),
                 // without the pattern's <abi-tags>: clang mangles the
                 // `ClassTemplateDecl` (`NS0_15drop_while_viewE_`).
-                match ast.types.view(node.ty().ty()) {
+                let written = ast.exprs.unresolved_construct_type(expr);
+                match ast.types.view(written.ty()) {
                     TypeView::DeducedTemplateSpecialization { name, deduced }
                         if deduced.is_none_or(|d| d == QualType::DEPENDENT) =>
                     {
@@ -1172,7 +1173,7 @@ impl Mangler<'_, '_> {
                         self.template_name(name);
                         self.untagged = saved;
                     }
-                    _ => self.ty(node.ty()),
+                    _ => self.ty(written),
                 }
                 let wrap = !list && args.len() != 1;
                 if wrap {

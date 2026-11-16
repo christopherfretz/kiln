@@ -406,11 +406,13 @@ to its result object, made a temporary when the call has none); the
 caller's own bindings are restored after the call. The predicates are
 then emitted exactly as in the callee, as below. The constant-folding
 prepass also scans the assertions of a declaration that has no
-definition in the unit. *Gaps:* a `_Complex` argument or result named
-by a caller-side check is "cannot compile ... yet"; an implicit call
-that is not a call expression (a conversion function used by a
-conversion, an operator inside a built-in rewrite) is not checked by
-the caller.
+definition in the unit. The calls a new- or delete-expression makes
+to its allocation and deallocation functions are checked too
+(`emit_new_delete_call`); which implicit calls are checked, against
+GCC 16.1, is the table in spec/codegen.md, "Caller-side contract
+checks". *Gap:* a function template specialization whose definition
+is not instantiated in the unit has no assertions there, so its
+callers do not check them.
 
 - Preconditions are evaluated in order at function entry, after the
   parameters are initialised and before the body (and before a

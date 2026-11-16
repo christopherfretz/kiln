@@ -3,9 +3,8 @@
 // into the return slot (one move, two destructions) and the copy of a
 // temporary made by a user-defined conversion for a copy constructor
 // (CWG2327) is made; guaranteed elision of prvalues ([dcl.init.general]/
-// 16.6.1, [stmt.return]) is unaffected. Before C++17 the flag is rejected
-// (kiln builds no copies of temporaries there; spec/driver.md). Found
-// running GCC's C++ testsuite. Matches clang 19 and 22 and GCC 16.1.
+// 16.6.1, [stmt.return]) is unaffected (before C++17: the
+// elidable-copy-counts tests). Found running GCC's C++ testsuite. Matches clang 19 and 22 and GCC 16.1.
 //@ expect: run
 //@ std: c++17
 //@ args: -fno-elide-constructors
