@@ -9,7 +9,7 @@
 //@ diag: 31:7 note "declared here"
 //@ diag: 36:28 error "constexpr variable 'lr' must be initialized by a constant expression"
 //@ diag: 36:28 note "reference to 'q' is not a constant expression"
-//@ diag: 35:15 note "declared here"
+//@ diag: 35:15 note "address of non-static constexpr variable 'q' may differ on each invocation of the enclosing function; add 'static' to give it a constant address"
 //@ diag: 37:24 error "constexpr variable 'gp' must be initialized by a constant expression"
 //@ diag: 37:24 note "pointer to 'k' is not a constant expression"
 //@ diag: 29:32 note "declared here"

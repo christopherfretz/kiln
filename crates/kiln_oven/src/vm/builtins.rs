@@ -1130,7 +1130,10 @@ impl Oven {
             return false;
         }
         let Ok((ds, da, d_alloc)) = self.mem.check(dst, n, true) else { return false };
-        if d_alloc.flags & flags::HAS_UNION != 0 || write_fault(ds, d_alloc, t).is_some() {
+        // A const member is checked element-wise (`Oven::const_path`).
+        if d_alloc.flags & (flags::HAS_UNION | flags::CONST_PATH) != 0
+            || write_fault(ds, d_alloc, t).is_some()
+        {
             return false;
         }
         // A refused trial write: the element-wise copy reports it.

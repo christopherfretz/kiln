@@ -498,6 +498,24 @@ Planned as 1.3.0.
   member never instantiated. In a lambda capturing `*this` with a deduced
   explicit object parameter, a member of the copy is const when the
   closure object is (`decltype((x))` is `const int&`) (WP-1472).
+- Constant evaluation, from GCC's C++ testsuite (WP-1468): modifying a
+  const member, a const array element, a const subobject reached through
+  a base or union member, a const temporary or a `new const T` object
+  (by assignment, `++`, compound assignment or `memcpy`) is now an error,
+  while the object's own constructor and destructor and `mutable`
+  members may still write; an aggregate initializer that reads a later
+  element of the same aggregate is an error; before C++26 a constexpr
+  local whose value points to itself is rejected, with clang's "may
+  differ on each invocation" note. Valid code that was rejected now
+  compiles: a variable template specialization whose initializer binds
+  a temporary, an out-of-class definition of a static constexpr array
+  member with a dependent bound, `this` in a union member's default
+  initializer, a block-scope `extern` declaration in a constexpr
+  function (CWG2552) and a value-initialized vector in a constant
+  initializer. A constexpr function calling a `<cmath>` builtin the
+  constant evaluator computes exactly (`sqrt`, `fma`, the rounding,
+  remainder and exponent families) is no longer reported as never
+  constant before C++23.
 
 ## [1.2.1] - 2026-11-14
 

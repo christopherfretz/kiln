@@ -1151,7 +1151,9 @@ impl Oven {
                 Op::Alloc => {
                     let ty = OTy(arg!(1) as u32);
                     let info = self.types.info(ty);
-                    let fl = aux as u8 | if info.has_union { flags::HAS_UNION } else { 0 };
+                    let fl = aux as u16
+                        | if info.has_union { flags::HAS_UNION } else { 0 }
+                        | if info.has_const { flags::CONST_SUB } else { 0 };
                     let origin = self.origins[arg!(2)];
                     match self.mem.alloc(ty, info.size, fl, origin) {
                         Ok(p) => reg!(0) = u128::from(p),
@@ -1740,7 +1742,14 @@ impl Oven {
                 if reg!(0) != 0
                     && let Ok(a) = self.mem.alloc_of(p)
                 {
-                    let fl = a.flags | flags::CONST;
+                    // A class with `mutable` members stays writable there
+                    // ([dcl.stc]/10): its other writes take `const_path`.
+                    let c = if self.types.info(a.ty).has_mutable {
+                        flags::CONST_MUT
+                    } else {
+                        flags::CONST
+                    };
+                    let fl = a.flags | c;
                     self.mem.set_flags(p, fl);
                 }
                 pc += 2;
@@ -2155,7 +2164,7 @@ impl Oven {
         if c.this != 0
             && let Ok(a) = self.mem.alloc_of(p)
         {
-            let fl = a.flags & !flags::CONST;
+            let fl = a.flags & !(flags::CONST | flags::CONST_MUT);
             self.mem.set_flags(p, fl);
         }
         let cur = self.stack.last().map_or(0, |f| f.func);
@@ -2421,7 +2430,8 @@ impl Oven {
         let info = *self.types.info(ty);
         let fl = fl
             | if info.has_union { flags::HAS_UNION } else { 0 }
-            | if info.has_volatile || aux & new_aux::VOLATILE != 0 { flags::VOLATILE } else { 0 };
+            | if info.has_volatile || aux & new_aux::VOLATILE != 0 { flags::VOLATILE } else { 0 }
+            | if info.has_const { flags::CONST_SUB } else { 0 };
         let raw = self.mem.heap_alloc(ty, info.size, fl, origin).map_err(|f| match f {
             MemFault::Speculative => Fault::Mem { f, ak: ak::INIT, ty, p: 0 },
             _ => Fault::Memory,
@@ -3231,27 +3241,9 @@ impl Oven {
         let p = Ptr::decode(raw);
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let key = Ptr::alloc_key(raw);
-        // Whether a constructor or destructor is running for the object of
-        // class `t` at offset `b` of this allocation. The class matters: a
-        // base subobject at offset 0 shares its complete object's offset
-        // but not its type, and no two live subobjects of one class share
-        // an address ([intro.object]/9), so the pair is the object's
-        // identity (WP-1101). An empty base is not in `Types::fields`, so
-        // the walk never enters one. Asked only at a volatile record, so
-        // a non-volatile path never scans the stack.
-        let structor = |b: u64, t: OTy| {
-            self.stack.iter().any(|fr| {
-                let f = &self.funcs[fr.func as usize];
-                let (Some(r), Some(cls)) = (f.this_reg.filter(|_| f.structor), f.this_ty) else {
-                    return false;
-                };
-                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
-                cls == t
-                    && this != 0
-                    && Ptr::alloc_key(this) == key
-                    && u64::from(Ptr::decode(this).off) == b
-            })
-        };
+        // Asked only at a volatile record, so a non-volatile path never
+        // scans the stack.
+        let structor = |b: u64, t: OTy| self.structor_running(key, b, t);
         let mut vol = match a.origin {
             Origin::Var(d) => self.volatile_decls.contains(&d),
             Origin::Temp(e) | Origin::Heap(e, _) => self.volatile_exprs.contains(&e),
@@ -3306,6 +3298,133 @@ impl Oven {
             }
         }
         if vol { Err(Fault::Volatile { ak: k, member, p: raw }) } else { Ok(()) }
+    }
+
+    /// Whether a constructor or destructor is running for the object of
+    /// class `t` at offset `b` of the allocation `key`
+    /// ([`Ptr::alloc_key`]). The class matters: a base subobject at
+    /// offset 0 shares its complete object's offset but not its type, and
+    /// no two live subobjects of one class share an address
+    /// ([intro.object]/9), so the pair is the object's identity
+    /// (WP-1101). An empty base is not in `Types::fields`, so the walks
+    /// never enter one.
+    fn structor_running(&self, key: u64, b: u64, t: OTy) -> bool {
+        self.stack.iter().any(|fr| {
+            let f = &self.funcs[fr.func as usize];
+            let (Some(r), Some(cls)) = (f.this_reg.filter(|_| f.structor), f.this_ty) else {
+                return false;
+            };
+            let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+            cls == t
+                && this != 0
+                && Ptr::alloc_key(this) == key
+                && u64::from(Ptr::decode(this).off) == b
+        })
+    }
+
+    /// [dcl.type.cv]/4: a write `k` of the object of type `ty` at `raw`,
+    /// in an allocation marked [`flags::CONST_PATH`], must not modify a
+    /// const object: a subobject of a const member on the path from the
+    /// allocation root (or, with [`flags::CONST_MUT`], of the root
+    /// itself), unless a `mutable` member lies below it on the path
+    /// ([dcl.stc]/10) or a constructor or destructor of a record on the
+    /// path below it is running ([class.ctor.general]/5, [class.dtor]/5:
+    /// const semantics apply from the end of the construction to the
+    /// start of the destruction). A whole-object write of a class
+    /// holding a const member (a byte copy) modifies that member. The
+    /// walk is uncached and scans the stack only at a const record:
+    /// only allocations with the bits take it (WP-1468).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn const_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let Some(a) = self.alloc_any(p) else { return Ok(()) };
+        let key = Ptr::alloc_key(raw);
+        let mut konst = a.flags & flags::CONST_MUT != 0;
+        let (mut t, mut base) = (a.ty, 0u64);
+        let target = u64::from(p.off);
+        let fault = Err(Fault::Mem { f: MemFault::Const(ty), ak: k, ty, p: raw });
+        loop {
+            let record = matches!(self.types.kind(t), TyKind::Record { .. });
+            if konst && record && self.structor_running(key, base, t) {
+                konst = false;
+            }
+            if base == target && self.types.same_object(t, ty) {
+                break;
+            }
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem).max(1);
+                    let i = (target - base) / es;
+                    if i >= n {
+                        break;
+                    }
+                    base += i * es;
+                    t = elem;
+                }
+                TyKind::Record { union, .. } => {
+                    let rel = target - base;
+                    let contains = |f: &&crate::ty::FieldInfo| {
+                        rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
+                    };
+                    let active = union
+                        .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
+                        .flatten()
+                        .and_then(|i| self.types.fields(t).get(i as usize))
+                        .filter(|f| contains(f));
+                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(|f| contains(f)))
+                    else {
+                        break;
+                    };
+                    if f.mutable {
+                        konst = false;
+                    } else if f.konst {
+                        konst = true;
+                    }
+                    if f.width.is_some() {
+                        break;
+                    }
+                    base += f.offset;
+                    t = f.ty;
+                }
+                _ => break,
+            }
+        }
+        if konst {
+            return fault;
+        }
+        // A whole-object write (a byte copy) of a class holding a const
+        // member whose construction is complete.
+        if self.types.info(ty).has_const
+            && k != ak::INIT
+            && let Some(m) = self.const_member(key, target, ty)
+        {
+            return Err(Fault::Mem { f: MemFault::Const(m), ak: k, ty: m, p: raw });
+        }
+        Ok(())
+    }
+
+    /// The type of the first const member subobject of the `t` object at
+    /// offset `b` of allocation `key` that no running constructor or
+    /// destructor makes modifiable ([`Oven::const_path`]).
+    fn const_member(&self, key: u64, b: u64, t: OTy) -> Option<OTy> {
+        let info = self.types.info(t);
+        if !info.has_const {
+            return None;
+        }
+        match info.kind {
+            TyKind::Array { elem, n } if n > 0 => self.const_member(key, b, elem),
+            TyKind::Record { .. } => {
+                if self.structor_running(key, b, t) {
+                    return None;
+                }
+                let fields = self.types.fields(t);
+                fields.iter().filter(|f| !f.mutable).find_map(|f| {
+                    if f.konst { Some(f.ty) } else { self.const_member(key, b + f.offset, f.ty) }
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The first `mutable` member a read of a whole object of type `t`
@@ -3591,6 +3710,9 @@ impl Oven {
         if w && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
+        if w && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(raw, ty, k)?;
+        }
         Ok((st, abs, a))
     }
 
@@ -3640,6 +3762,9 @@ impl Oven {
         let (st, abs, a) = self.mem.check(raw, len, true).map_err(fault)?;
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
+        }
+        if !init && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(raw, ty, k)?;
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
         let aty = a.ty;
@@ -3752,6 +3877,9 @@ impl Oven {
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
+        if !init && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(raw, ty, k)?;
+        }
         let has_union = a.flags & flags::HAS_UNION != 0;
         let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
@@ -3825,6 +3953,9 @@ impl Oven {
             self.mem.check(dst, size, true).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         if !init && let Some(f) = write_fault(ds, a, ty) {
             return Err(Fault::Mem { f, ak: k, ty, p: dst });
+        }
+        if !init && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(dst, ty, k)?;
         }
         if !init && a.flags & flags::VOLATILE != 0 && ds != Sp::Static {
             self.volatile_path(dst, ty, k)?;

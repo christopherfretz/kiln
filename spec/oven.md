@@ -255,13 +255,31 @@ fault counts and trap ids unchanged.
   inactive union member path ([expr.const]/5.10); then, for reads,
   uninitialized bytes ([expr.const]/5.11) and representation compatibility
   (pointer bytes read as a pointer only).
+  An array initialized from a list zero-fills only the elements after the
+  listed ones, after those are initialized (WP-1468), so a listed
+  element that reads a later element of its own aggregate
+  ([dcl.init.aggr]/7, `int a[3] = {a[1], 2};`) reads an object whose
+  lifetime has not begun, as clang reports it.
   A local is kept in a register only when the compile-time pre-scan
   (`Scan`) sees no address of it; a glvalue cast that drops `const`
   (`const_cast<int&>(c) = 2`, `(int&)c`) counts as one, so the write
   reaches the const allocation and faults (WP-465;
   `expr.const/5.8/modify-const-cast-away.cpp`). Const is a flag of the
-  allocation: a const member of a non-const object written through a
-  cast (`*(int*)&s.m = 3`) is not detected yet.
+  allocation (`CONST`, whole object). Const *subobjects* (WP-1468,
+  [dcl.type.cv]/4, [expr.const]/5.16): an allocation whose type holds a
+  const member (`TyInfo::has_const`) gets `CONST_SUB`; a constructed const
+  class object with `mutable` members gets `CONST_MUT` instead of `CONST`
+  (`Op::MakeConst`; a destructor clears both). Only a write to an
+  allocation with one of these flags takes the cold `Oven::const_path`:
+  it walks from the root to the target (union: active member) with a
+  "const" bit that starts at `CONST_MUT`, is set by a `const` field
+  (`FieldInfo::konst`), cleared by a `mutable` one, and cleared at a
+  record whose constructor or destructor is running ([class.ctor]/5,
+  [class.dtor]/5); a write of a whole object (assignment, `memcpy`) also
+  faults when the object contains a non-mutable const member outside a
+  running structor. Writes to other allocations test one flag word, as
+  before. Const temporaries (lifetime-extended or not) and `new const T`
+  of class type are made const after initialization, like const locals.
 - **Freeze/thaw**: a successful result is frozen into the AST's
   `ConstStore` (scalars inline; aggregates as a byte image with pointer
   relocations, padding and active union members; pointers as
@@ -712,7 +730,16 @@ fault counts and trap ids unchanged.
   object of automatic storage duration (a static allocation whose origin
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
-  reference; clang `note_constexpr_non_global`), with "declared here".
+  reference; clang `note_constexpr_non_global`), with "declared here"
+  (for a `constexpr` local, clang's `note_constexpr_not_static`: "address
+  of non-static constexpr variable '…' may differ on each invocation of
+  the enclosing function; add 'static' to give it a constant address").
+  This includes the local variable being initialized itself
+  (`constexpr S s{&s};` in a function, WP-1468): its own address is a
+  pointer to it, not a self-reference exempt from the rule. `&x + 1`
+  designates no subobject ("pointer to 'x'", not "subobject of").
+  The walk visits only the pointer granules the per-granule pointer marks
+  name, so its cost is linear in the number of pointers in the result.
   At C++26 (P2686R5 [expr.const.init]/2, WP-467) the pointer is frozen as
   `PtrBase::Decl(local)` instead when it is constexpr-referenceable from
   the variable being initialized (`Oven::referenceable_from_object`:

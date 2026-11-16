@@ -264,36 +264,50 @@ pub(crate) enum Origin {
 }
 
 pub(crate) mod flags {
-    pub const CONST: u8 = 1;
-    pub const EXTERNAL: u8 = 2;
-    pub const HAS_UNION: u8 = 4;
+    pub const CONST: u16 = 1;
+    pub const EXTERNAL: u16 = 2;
+    pub const HAS_UNION: u16 = 4;
     /// A global whose initializer is being evaluated (a self-reference
     /// reads an object outside its lifetime).
-    pub const RESOLVING: u8 = 8;
+    pub const RESOLVING: u16 = 8;
     /// A heap allocation made by an array form (`new[]`, `allocate`).
-    pub const ARRAY_NEW: u8 = 16;
+    pub const ARRAY_NEW: u16 = 16;
     /// A static object whose lifetime began outside the evaluation, with
     /// `mutable` subobjects: reads of them are diagnosed
     /// ([expr.const]/5.9, `Oven::mutable_path`).
-    pub const MUTABLE_OUTSIDE: u8 = 32;
+    pub const MUTABLE_OUTSIDE: u16 = 32;
     /// A frame or heap object that is volatile, or holds a volatile
     /// member subobject: its accesses take `Oven::mutable_path`, which
     /// diagnoses one of a volatile (sub)object ([expr.const]/10.8,
     /// `Oven::volatile_path`, WP-1019). It shares its bit with
     /// [`MUTABLE_OUTSIDE`], which only static objects carry, so every
     /// fast path's existing bit test covers it.
-    pub const VOLATILE: u8 = MUTABLE_OUTSIDE;
+    pub const VOLATILE: u16 = MUTABLE_OUTSIDE;
     /// A heap allocation made by `std::allocator<T>::allocate`: storage
     /// for `T[n]` whose elements are outside their lifetime until
     /// constructed (`Space::life`, spec/oven.md "Transient allocation").
-    pub const STD_ALLOC: u8 = 64;
+    pub const STD_ALLOC: u16 = 64;
     /// A frame or `new` object one of whose subobjects' lifetime an
     /// explicit destruction ended: `Space::life` is kept for its bytes
     /// from then on (`Memory::set_lifetime`; spec/oven.md "Object
     /// lifetime outside `std::allocator` storage").
-    pub const LIFE: u8 = 128;
+    pub const LIFE: u16 = 128;
     /// Storage whose bytes' lifetime [`Memory::check`] consults.
-    pub const TRACKED: u8 = STD_ALLOC | LIFE;
+    pub const TRACKED: u16 = STD_ALLOC | LIFE;
+    /// An object holding a const member subobject
+    /// ([`crate::ty::TyInfo::has_const`]): its writes take
+    /// `Oven::const_path`, which refuses one reaching a const subobject
+    /// whose construction completed and whose destruction has not begun
+    /// ([dcl.type.cv]/4, [class.ctor.general]/5; WP-1468). Only writes
+    /// test it: reads and objects without const members pay nothing.
+    pub const CONST_SUB: u16 = 256;
+    /// A const complete object with `mutable` members, once constructed:
+    /// not [`CONST`] (its `mutable` members stay modifiable,
+    /// [dcl.stc]/10), but its writes take `Oven::const_path` with the
+    /// object itself const (WP-1468).
+    pub const CONST_MUT: u16 = 512;
+    /// The bits whose writes take `Oven::const_path`.
+    pub const CONST_PATH: u16 = CONST_SUB | CONST_MUT;
 }
 
 /// How a heap object was allocated, and how one is deallocated (clang's
@@ -311,7 +325,7 @@ pub(crate) enum DynKind {
 
 impl DynKind {
     /// The kind of an allocation with flags `fl`.
-    pub fn of(fl: u8) -> DynKind {
+    pub fn of(fl: u16) -> DynKind {
         if fl & flags::STD_ALLOC != 0 {
             DynKind::Std
         } else if fl & flags::ARRAY_NEW != 0 {
@@ -328,7 +342,7 @@ pub(crate) struct Alloc {
     pub size: u32,
     pub generation: u16,
     pub live: bool,
-    pub flags: u8,
+    pub flags: u16,
     pub ty: OTy,
     pub origin: Origin,
     /// Frame objects: serial of the call frame that created it (0: none);
@@ -1096,7 +1110,7 @@ impl Memory {
     }
 
     /// Allocates a frame object of `size` bytes.
-    pub fn alloc(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> Result<u64, MemFault> {
+    pub fn alloc(&mut self, ty: OTy, size: u64, fl: u16, origin: Origin) -> Result<u64, MemFault> {
         let base = self.frame.top;
         let end = base + size.max(1).next_multiple_of(GRAN);
         if end + self.heap.top + self.refl > self.limit || end > u64::from(u32::MAX) {
@@ -1142,7 +1156,7 @@ impl Memory {
     /// stays stale); under a checkpoint it only grows the space, so a
     /// static object made since the checkpoint is fresh (its base is at
     /// or above the checkpoint's static top).
-    pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
+    pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u16, origin: Origin) -> u64 {
         self.alloc_static_in(ty, size, fl, origin, 0)
     }
 
@@ -1151,7 +1165,7 @@ impl Memory {
         &mut self,
         ty: OTy,
         size: u64,
-        fl: u8,
+        fl: u16,
         origin: Origin,
         frame: u32,
     ) -> u64 {
@@ -1208,7 +1222,7 @@ impl Memory {
     /// slot (spec/oven.md "Unknown references"). [`Memory::check_storage`]
     /// rejects every access before the base is used. A size over 4 GiB is
     /// clamped: pointer offsets are 32 bits.
-    pub fn alloc_unbacked(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
+    pub fn alloc_unbacked(&mut self, ty: OTy, size: u64, fl: u16, origin: Origin) -> u64 {
         debug_assert!(fl & flags::EXTERNAL != 0);
         let a = Alloc {
             base: UNBACKED,
@@ -1498,7 +1512,7 @@ impl Memory {
     /// read of a [`LAX_READ`] object).
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn check_plain(&self, raw: u64, len: u64, refuse: u8) -> Option<(Sp, u64, &Alloc)> {
+    fn check_plain(&self, raw: u64, len: u64, refuse: u16) -> Option<(Sp, u64, &Alloc)> {
         let slot = ((raw >> SLOT_SHIFT) & SLOT_MASK) as u32;
         let (sp, a) = if slot & STATIC_BIT != 0 {
             if slot == FN_SLOT {
@@ -1661,7 +1675,7 @@ impl Memory {
         &mut self,
         ty: OTy,
         size: u64,
-        fl: u8,
+        fl: u16,
         origin: Origin,
     ) -> Result<u64, MemFault> {
         let n = size.max(1).next_multiple_of(GRAN);
@@ -2032,7 +2046,7 @@ enum Undo {
     /// A union's alternative active members ([`Memory::union_alts`]).
     UnionAlts(UKey, Option<u64>),
     /// An allocation's flags.
-    Flags { sp: Sp, idx: u32, old: u8 },
+    Flags { sp: Sp, idx: u32, old: u16 },
     /// A frame object [`Memory::kill`] ended.
     Kill(u32),
     /// A heap slot (reused, or freed).
@@ -2328,7 +2342,7 @@ impl Memory {
     }
 
     /// Sets the flags of `p`'s allocation, logged under a checkpoint.
-    pub fn set_flags(&mut self, p: Ptr, fl: u8) {
+    pub fn set_flags(&mut self, p: Ptr, fl: u16) {
         if self.in_trial()
             && let Some(cp) = self.trial.cps.last().copied()
             && let Some(a) = self.alloc_any(p)

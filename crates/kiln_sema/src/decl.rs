@@ -7243,11 +7243,11 @@ impl Sema<'_, '_> {
             return ty;
         }
         let pty = self.ast.decls.get(self.ast.latest(prev)).ty().unwrap_or(QualType::ERROR);
-        if t.array_size(pty).is_some() && self.redecl_var_types_compatible(pty, ty) {
-            pty
-        } else {
-            ty
-        }
+        // A value-dependent bound counts too: `template<int N> constexpr
+        // int C<N>::a[];` declares `const int[N]` (WP-1468).
+        let bounded = t.array_size(pty).is_some()
+            || matches!(t.canonical_view(pty), TypeView::DependentSizedArray { .. });
+        if bounded && self.redecl_var_types_compatible(pty, ty) { pty } else { ty }
     }
 
     /// [basic.def]/5, [dcl.init.general]/7: a variable with an initializer

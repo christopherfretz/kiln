@@ -7353,6 +7353,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     the temporaries of `template<class T> constexpr T v = q().d;` live
     until the conversion to `T` is done
     (`temp.inst/variable-template-dependent-type-temporary-member.cpp`).
+    When that operand is a temporary the pattern's variable extends, the
+    materialization is stripped too (as clang does), so each
+    specialization binds and extends a temporary of its own
+    (`template<class> constexpr const int &v = 1;`, WP-1468;
+    `temp.inst/var-template-own-temporary.cpp`).
 
   Elsewhere (a return statement, a constexpr function body, an
   automatic variable, a static-storage variable whose initializer does
@@ -9040,6 +9045,12 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     frame, fails such a call with `Fault::Quiet`), so a failure inside a
     callee, an undefined callee, `new` and `__builtin_is_constant_evaluated`
     are never reported;
+  - a call of a `<cmath>` builtin the Oven evaluates exactly
+    (`builtin::p0533_base`: P0533's rounding, remainder, exponent and
+    `nextafter` families, `fma`, `sqrt`) is opaque and silent at every
+    `-std` (WP-1468, as GCC; clang reports it before C++23, since it does
+    not evaluate them); a transcendental builtin (`sin`, `exp`, ...),
+    which the Oven never evaluates, follows clang's table;
   - reportable: a call of a non-constexpr function (with `declared
     here`), a read of a non-const global, a `throw` before C++26 (from
     C++26 a throw is a constant subexpression, P3068), an overflow, and
