@@ -328,6 +328,22 @@ fn argument_errors() {
     ));
     let o = kiln(&["-E", "-std=c11", "-"], "");
     assert_eq!(o.stderr, "error: invalid argument '-std=c11' not allowed with 'C++'\n");
+    // `-fno-elide-constructors` before C++17 needs every copy of a
+    // temporary, which kiln does not build: rejected, never ignored.
+    let o = kiln(&["-fsyntax-only", "-std=c++14", "-fno-elide-constructors", "-"], "");
+    assert_eq!(
+        o.stderr,
+        "error: invalid argument '-fno-elide-constructors' not allowed with '-std=c++14'\n"
+    );
+    let o = kiln(&["-fsyntax-only", "-ansi", "-fno-elide-constructors", "-"], "");
+    assert_eq!(
+        o.stderr,
+        "error: invalid argument '-fno-elide-constructors' not allowed with '-ansi'\n"
+    );
+    let o = kiln(&["-fsyntax-only", "-std=c++17", "-fno-elide-constructors", "-"], "");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    let o = kiln(&["-fsyntax-only", "-std=c++14", "-felide-constructors", "-"], "");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
     let o = kiln(&["-emit-llvm", "-"], "");
     assert_eq!(
         (o.code, o.stderr.as_str()),

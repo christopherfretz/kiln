@@ -543,6 +543,7 @@ impl CodegenJob<'_> {
             // UBSan's `shift-base` depends on the language (WP-675).
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
+            opts.elide_constructors = a.elide_constructors.unwrap_or(true);
             opts.bad_array_new_length = job.std.cplusplus
                 && job.std.lex >= kiln_lex::Std::Cxx11
                 && a.new_bound_check.unwrap_or(true);

@@ -2951,6 +2951,14 @@ destruction, static temporaries). Virtual dispatch, `dynamic_cast` and
 `typeid` are WP-077's, virtual bases WP-388's ("Virtual bases" below);
 builtins are WP-088's.
 
+**Elidable copies** (WP-1484). A construction that codegen elides
+(`Ast::elidable_copy_source`, spec/codegen.md "Elidable copies") whose
+argument is a `MaterializeTemporaryExpr` evaluates the temporary's
+initializer into the object instead (clang
+`RecordExprEvaluator::VisitCXXConstructExpr`), whatever
+`-fno-elide-constructors` says, so `constexpr B b(1);` with `B(...)` and a
+counting `B(const B&)` makes no copy, as at run time.
+
 **Object model.** A class object is one allocation of its record type;
 `ty.rs` lays a record out as its direct non-virtual base subobjects
 (`Field::base`, in declaration order, before the members), then its

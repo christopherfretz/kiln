@@ -5863,7 +5863,7 @@ impl Compiler<'_> {
         self.next = m;
     }
 
-    fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
+    pub(super) fn init_inner(&mut self, e: ExprId, p: u32, ty: OTy) {
         let n = self.node(e);
         // An object of an invalid class (diagnosed, [class.mem]; its
         // layout is a placeholder) is never constructed: the evaluation

@@ -5760,8 +5760,9 @@ impl Cg<'_> {
         // NRVO: the variable lives in the return slot (clang
         // `EmitAutoVarAlloca`), with a flag telling its cleanup whether
         // the return happened.
-        let nrvo_slot =
-            self.f.ret_slot.filter(|_| v.spec.is_nrvo() && ast.types.as_record(q).is_some());
+        let nrvo_slot = self.f.ret_slot.filter(|_| {
+            self.opts.elide_constructors && v.spec.is_nrvo() && ast.types.as_record(q).is_some()
+        });
         let mut lifetime = None;
         let (addr, flag) = if let Some(slot) = nrvo_slot {
             let addr = Addr { v: slot.v, ty, align: slot.align };

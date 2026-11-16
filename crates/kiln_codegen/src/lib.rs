@@ -113,6 +113,13 @@ pub struct CodegenOptions {
     /// function ([expr.new]/8, C++11 and later; the default). Off (C++98)
     /// the allocation function is passed `SIZE_MAX`, as clang does.
     pub bad_array_new_length: bool,
+    /// Optional copy elision is performed (`-felide-constructors`, the
+    /// default): NRVO and the elidable copies of
+    /// `Ast::elidable_copy_source`. Off (`-fno-elide-constructors`, C++17
+    /// and later only: the driver rejects it before C++17) a named return
+    /// value is copied or moved into the return slot and those copies are
+    /// made, as clang does; guaranteed elision is not affected.
+    pub elide_constructors: bool,
     /// Dynamic exception specifications are run-time filters (C++98 to
     /// C++14, [except.spec] and [except.unexpected] of those editions):
     /// a function defined with `throw(A, B)` or `throw()` gets a filter
@@ -747,6 +754,7 @@ impl Default for CodegenOptions {
             c: None,
             exceptions: true,
             bad_array_new_length: true,
+            elide_constructors: true,
             dynamic_exception_specs: false,
             rtti: true,
             ident: String::new(),

@@ -532,10 +532,9 @@ impl Cg<'_> {
             rv = Some(self.sub(e));
         }
         self.dbg_count_return(rv);
-        let nrvo = ast
-            .stmts
-            .return_nrvo(s)
-            .filter(|&v| ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo()));
+        let nrvo = ast.stmts.return_nrvo(s).filter(|&v| {
+            self.opts.elide_constructors && ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
+        });
         if let Some(v) = nrvo {
             if let Some(&flag) = self.f.nrvo_flags.get(&v) {
                 let t = V::C(self.m.const_bool(true));

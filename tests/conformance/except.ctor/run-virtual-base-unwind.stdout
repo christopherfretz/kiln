@@ -1,0 +1,6 @@
+V1 M ~V1 caught 1
+V2 W ~V2 caught 3
+V3 ~T ~V3 caught 2
+V4 ~T ~V4 caught 2
+V5 ~T ~V5 caught 2
+V6 M ~X terminate

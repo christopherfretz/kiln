@@ -2677,6 +2677,26 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
     enclosing automatic scope.
   - Locals of class type get destructor cleanups. NRVO uses an `nrvo`
     flag, as clang does.
+- **Elidable copies** (clang `CXXConstructExpr::isElidable`, WP-1484):
+  a complete-object construction by a non-template copy or move
+  constructor whose one real argument is a temporary of the same class
+  (`Ast::elidable_copy_source`: through `MaterializeTemporaryExpr`,
+  `CXXBindTemporaryExpr`, no-op casts and parentheses, a prvalue that is
+  not a derived-to-base conversion, member access, `.*`/`->*` or opaque
+  value) is not emitted: the temporary is constructed in the destination,
+  which owns its destruction (no temporary cleanup), keeping the
+  destination's overlap. From C++17 this is the copy-constructor
+  parameter reached through a user-defined conversion (`T x(a)` with
+  `T(...)`, a converting constructor template, an initializer-list
+  constructor or a conversion function; the CWG2327 practice of clang and
+  GCC, which the working draft does not yet permit); C++14
+  [class.copy]/31.3 permits it. A base-class initializer (not a complete
+  object) copies, as clang does (GCC 16.1 elides there too). The Oven
+  elides the same copies when the argument is a `MaterializeTemporaryExpr`
+  (clang's constant evaluator), so a counting copy constructor agrees at
+  compile time and run time. `-fno-elide-constructors`
+  (`CodegenOptions::elide_constructors`, C++17 and later) turns these
+  and NRVO off; the Oven is unaffected, as in clang.
 - **Arrays of classes** (`EmitCXXAggrConstructorCall`): an
   `arrayctor.loop` with a `phi`, one element at a time, and an
   `arraydestroy` loop on cleanup. Variable-length arrays of classes
@@ -4414,8 +4434,9 @@ object and the cleanup depths `(base, top)` it covers. When
 guard's range, it pushes the guard's object as an EH-only
 `Cleanup::Guard` around the call; shared cleanup code (several branches)
 applies only flagged guards.
-- `end_scope_guarded(scope, obj)`: an aggregate variable, member or base
-  initialized by a full-expression (`guard_init` → `pending_guard`, taken
+- `end_scope_guarded(scope, obj)`: an aggregate variable, member, base or
+  virtual base (complete-object constructor only, WP-1484) initialized by
+  a full-expression (`guard_init` → `pending_guard`, taken
   by the `ExprWithCleanups` arm of `agg_visit`), an array element of an
   init-list filler loop, a constructor loop (`construct_array_n`) and the
   lifetime-extended temporaries deactivated in the scope
@@ -4430,6 +4451,9 @@ applies only flagged guards.
   the IR of code without throwing destructors, and all `-fno-exceptions`
   IR, is unchanged.
 Tests: `except.ctor/run-temporary-dtor-throws-after-init.cpp`,
+`except.ctor/run-virtual-base-unwind.cpp`,
+`dcl.fct.def.coroutine/param-copy-dtor-throws-run.cpp` (the frame's
+parameter copies: already destroyed in order, as clang does),
 `except.ctor/run-return-dtor-throws.cpp`,
 `expr.delete/run-dtor-throws-still-deallocates.cpp`,
 `class.temporary/run-extended-temporary-destroyed-when-later-dtor-throws.cpp`,

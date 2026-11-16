@@ -1113,6 +1113,95 @@ impl Ast {
             && self.decls.function(self.exprs.constructor(e)).is_some_and(|f| f.spec.is_trivial())
     }
 
+    /// The source of an elidable copy (clang `CXXConstructExpr::isElidable`):
+    /// when `e` is a complete-object `CXXConstructExpr` /
+    /// `CXXTemporaryObjectExpr` calling a non-template copy or move
+    /// constructor with one real argument (the rest default arguments)
+    /// that is a temporary of the same class (through
+    /// `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, no-op casts and
+    /// parentheses, a prvalue that is not a derived-to-base conversion, a
+    /// member access, a `.*`/`->*` or an opaque value; clang
+    /// `Expr::isTemporaryObject`), the argument expression. The copy is
+    /// then omitted and the temporary constructed in its place: C++14
+    /// [class.copy]/31.3, and from C++17 the CWG2327 practice of clang and
+    /// GCC for `T x(a)` where `a` reaches `T`'s copy constructor through a
+    /// user-defined conversion (`T(...)`, a converting constructor, a
+    /// conversion function). Codegen omits the copy unless
+    /// `-fno-elide-constructors`; the Oven always does, as clang's
+    /// constant evaluator does (spec/codegen.md "Elidable copies").
+    pub fn elidable_copy_source(&self, e: ExprId) -> Option<ExprId> {
+        use crate::types::TypeView;
+        let n = self.exprs.get(e);
+        if !matches!(n.kind(), ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr)
+            || self.exprs.construct_info(e).kind != crate::expr::ConstructionKind::Complete
+        {
+            return None;
+        }
+        let mut args = self.lists.iter(self.exprs.construct_args(e));
+        let arg = args.next()?;
+        if !args.all(|a| self.exprs.get(a).kind() == ExprKind::CXXDefaultArgExpr) {
+            return None;
+        }
+        let ctor = self.exprs.constructor(e);
+        let class = self.first(self.decls.get(ctor).ctx()?);
+        let fd = self.decls.function(ctor)?;
+        if fd.templ.get().is_some_and(|(k, _)| {
+            matches!(
+                k,
+                crate::decl::TemplLinkKind::Pattern | crate::decl::TemplLinkKind::Specialization
+            )
+        }) {
+            return None;
+        }
+        let proto = self.types.proto(self.decls.get(ctor).ty()?)?;
+        let &p0 = self.types.params(proto).first()?;
+        let (TypeView::LValueRef(referred) | TypeView::RValueRef(referred)) =
+            self.types.canonical_view(p0)
+        else {
+            return None;
+        };
+        if self.types.as_record(referred).is_none_or(|r| self.first(r) != class) {
+            return None;
+        }
+        // clang `skipTemporaryBindingsNoOpCastsAndParens`.
+        let mut x = arg;
+        loop {
+            let k = self.exprs.get(x).kind();
+            x = match k {
+                ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ParenExpr => self.exprs.operand(x),
+                ExprKind::ImplicitCastExpr
+                    if self.exprs.cast_kind(x) == crate::expr::CastKind::NoOp =>
+                {
+                    self.exprs.operand(x)
+                }
+                _ => break,
+            };
+        }
+        let xn = self.exprs.get(x);
+        if xn.value_category() != crate::expr::ValueCategory::PRValue
+            || self.types.as_record(xn.ty()).is_none_or(|r| self.first(r) != class)
+        {
+            return None;
+        }
+        match xn.kind() {
+            ExprKind::MemberExpr | ExprKind::OpaqueValueExpr => return None,
+            ExprKind::ImplicitCastExpr
+                if matches!(
+                    self.exprs.cast_kind(x),
+                    crate::expr::CastKind::DerivedToBase
+                        | crate::expr::CastKind::UncheckedDerivedToBase
+                ) =>
+            {
+                return None;
+            }
+            ExprKind::BinaryOperator if self.exprs.binary_op(x).is_ptr_mem() => return None,
+            _ => {}
+        }
+        Some(arg)
+    }
+
     /// The constructors of class `record` declared so far (a table read:
     /// never declares implicit constructors), in order of first
     /// declaration; templates included.
