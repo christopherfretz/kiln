@@ -175,6 +175,11 @@ pub(crate) struct CtorCall<'a> {
     /// diagnosed at `DiagSites::access`, the variable or argument (clang
     /// `SK_UserConversion`'s `Kind.getLocation()`).
     pub udc: bool,
+    /// The copy of the temporary in the second step of a C++11/14
+    /// copy-initialization ([`Sema::check_temp_copy`]): with no viable
+    /// constructor, clang's "no viable constructor copying ..." with this
+    /// entity kind (0 a variable, 1 a parameter, 3 a returned object).
+    pub temp_copy: Option<u8>,
 }
 
 impl<'a> CtorCall<'a> {
@@ -190,6 +195,7 @@ impl<'a> CtorCall<'a> {
             reject_explicit: false,
             direct: false,
             udc: false,
+            temp_copy: None,
         }
     }
 }
@@ -1267,6 +1273,7 @@ impl Sema<'_, '_> {
                             call.args,
                             crate::class::ctor_select::InitStyle::Direct,
                             false,
+                            false,
                         );
                         let mut order: Vec<u32> = (0..u32::try_from(set.cands.len())
                             .unwrap_or(u32::MAX))
@@ -1361,6 +1368,10 @@ impl Sema<'_, '_> {
                         DiagId::sema_no_viable_conversion
                     };
                     self.diag(id, sites.deleted).diff_args(self, from, ty)
+                } else if let Some(entity) = call.temp_copy.filter(|_| !ambiguous) {
+                    self.diag(DiagId::sema_temp_copy_no_viable, sites.deleted)
+                        .arg(entity)
+                        .arg(self.ty_arg(named))
                 } else {
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_ctor

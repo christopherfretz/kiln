@@ -807,14 +807,31 @@ impl Sema<'_, '_> {
                 )
             })
             .collect();
-        if decls.len() < 2 || decls.len() != found.decls.len() {
+        if decls.len() != found.decls.len() {
             return e;
         }
-        let n = *self.ast.exprs.get(e);
-        let nns = self.ast.templates.expr_nns.get(e).copied();
-        let targs = self.ast.templates.expr_targs.get(e).copied();
-        let dep = self.overload_set_is_dependent(&decls);
-        self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
+        let r = if decls.len() < 2 {
+            e
+        } else {
+            let n = *self.ast.exprs.get(e);
+            let nns = self.ast.templates.expr_nns.get(e).copied();
+            let targs = self.ast.templates.expr_targs.get(e).copied();
+            let dep = self.overload_set_is_dependent(&decls);
+            self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
+        };
+        // A qualified member template-id (`C::f<int>`) keeps its naming
+        // class, so the call or address resolving it checks the access
+        // of the template it selects ([class.access]/4, clang's
+        // `UnresolvedLookupExpr::getNamingClass`), as for `C::f`.
+        if qualifier.is_some()
+            && let Some(naming) = found.naming
+            && found.found.len() == decls.len()
+            && self.ast.unresolved_decls(r) == decls
+        {
+            let found = found.found.clone();
+            self.ovl.ule_found.insert(r, crate::overload::UleFound { found, naming: Some(naming) });
+        }
+        r
     }
 
     /// True if the unqualified `name`, followed by `<`, is assumed to name

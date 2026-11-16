@@ -367,6 +367,12 @@ impl Sema<'_, '_> {
                     || qk == DeclKind::CXXRecord
                         && self.ast.decls.get(q.ctx).name().as_ident() == Some(n)
             });
+        // Inheriting constructors are C++11 ([namespace.udecl]/3; clang
+        // `err_using_decl_constructor`).
+        if inheriting && self.std < kiln_lex::Std::Cxx11 {
+            self.error(DiagId::sema_using_decl_constructor, name_loc);
+            return None;
+        }
         if self.is_dependent_ctx(q.ctx)
             || self
                 .ast

@@ -1488,11 +1488,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     before any `{` or `(` (but `operator()`) (`A::f;`, `T::m;`,
     `A::B::f;`, `A::operator int;`; `at_access_declaration`, scanned only
     after a name followed by `::`; clang's tentative parse in
-    `ParseCXXClassMemberDeclaration`, WP-1466). Before C++11 a name
-    followed by `<` starts the scan too and template arguments in the
-    qualifier are skipped (`I<T>::B::f;`, WP-1495); from C++11, where the
-    form is an error anyway, `B<T>::f;` is not recognised, so the hot
-    member path skips no template argument list. C++98
+    `ParseCXXClassMemberDeclaration`, WP-1466). A name followed by `<`
+    starts the scan too and template arguments in the qualifier are
+    skipped (`I<T>::B::f;`, WP-1495; from C++11 too since WP-1513, so
+    `B<T>::f;` gets clang's error rather than a parse error: a member
+    whose type is a template-id costs one argument-list skip). C++98
     [class.access.dcl] made them deprecated (`access declarations are
     deprecated; use using declarations instead`, `-Wdeprecated`); from
     C++11 they are ill-formed (`ISO C++11 does not allow access
@@ -1500,6 +1500,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     unqualified-id, both as clang 22 (GCC 16.1 warns in every mode). Each
     is then parsed as the using-declaration it means
     (`parse_using_declaration`), so access to the member is adjusted.
+    Before C++11 one naming a constructor (`B::B;`, `D<T>::D;`) gets no
+    warning, only sema's `using declaration cannot refer to a
+    constructor`, which a C++98 `using B::B;` gets too (clang
+    `ActOnUsingDeclaration`; WP-1513, `namespace.udecl/using-constructor-cxx98.cpp`).
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
   - No decl-specifiers and no special declarator: a name followed by

@@ -9941,6 +9941,11 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
       array only from C++20 (P0960): before it a class gets the ordinary
       constructor errors and an array "array initializer must be an
       initializer list" (WP-1470, `dcl.init.general/paren-aggregate-*.cpp`).
+      In `new T[n](args)` the elements' errors are at the allocated type,
+      and an omitted bound (`new C[](8, 9)`) has as many elements as
+      arguments, none value-initialized (clang 22 rejects that when `C`
+      has no default constructor; WP-1513,
+      `expr.new/paren-array-init-{error-location,omitted-bound-run}.cpp`).
   - In templates (spec/ast.md §5.6, spec/sema-templates.md §5.4), the
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the

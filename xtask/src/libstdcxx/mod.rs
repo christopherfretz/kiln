@@ -26,7 +26,7 @@ with kiln and with clang++-19 as the reference, and reports per-header status.
 Informational: the exit status is non-zero only when the tool itself fails.
 Contract: spec/libstdcxx.md.
 
-  --std <std>            c++26 (default), c++23, c++20 or c++17
+  --std <std>            c++26 (default), c++23, c++20, c++17, c++14 or c++11
   --headers <dir>        the libstdc++ include directory to enumerate (default:
                          the newest /usr/include/c++/<version>, or with
                          --gcc-toolchain the newest <dir>/include/c++/<version>)
@@ -48,7 +48,7 @@ Contract: spec/libstdcxx.md.
 ";
 
 /// The standards `--std` accepts.
-pub const STDS: &[&str] = &["c++26", "c++23", "c++20", "c++17"];
+pub const STDS: &[&str] = &["c++26", "c++23", "c++20", "c++17", "c++14", "c++11"];
 
 /// Where Debian installs libstdc++'s headers, one directory per GCC version.
 pub const SYSTEM_CXX_INCLUDE: &str = "/usr/include/c++";

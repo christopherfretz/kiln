@@ -79,6 +79,7 @@ sema_ext_adl_only_template_id = ExtWarn [Cxx20Extensions] (0) "use of function t
 sema_ext_alias_template_ctad = ExtWarn [Cxx20Extensions] (0) "class template argument deduction for alias templates is a C++20 extension";
 sema_ext_decomp_decl_spec = ExtWarn [Cxx20Extensions] (1) "structured binding declaration declared {0} is a C++20 extension";
 sema_ext_decomp_decl_spec_19 = ExtWarn [Cxx20Extensions] (1) "decomposition declaration declared {0} is a C++20 extension";
+sema_ext_defaulted_comparison = ExtWarn [Cxx20Extensions] (0) "defaulted comparison operators are a C++20 extension";
 sema_ext_placeholder_var = ExtWarn [Cxx26Extensions] (0) "placeholder variables are a C++2c extension";
 sema_ext_vector_component_exceeds_length = Error (1) "vector component access exceeds type {0}";
 sema_ext_vector_component_name_illegal = Error (1) "illegal vector component name '{0}'";

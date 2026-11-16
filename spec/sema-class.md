@@ -165,10 +165,28 @@ A match in the pattern itself (a member class of the current
 instantiation, `friend M::M(T);`) is also befriended in the pattern, for
 the access checks of the template definition (WP-1507,
 `class.friend/dependent-special-member-friend-{run,denied,pch-run,module-run}.cpp`;
-clang befriends none of these and reports no mismatch). A friend template
-(`template<class U> friend X<U>::X(U);`, which clang 22 rejects and GCC
-accepts) is accepted and grants nothing (an xfail repro,
-`class.friend/friend-constructor-template-of-class-template-run.cpp`). A friend function (not a
+clang befriends none of these and reports no mismatch). A friend
+template naming a constructor template or conversion function template
+(`template<class U> friend Z::Z(U);`, `template<class U> friend
+Z::operator U*();`, [temp.friend]/1) befriends the member template of the
+same kind whose head is equivalent (`heads_equivalent`) and whose
+pattern's type is the friend's (`befriend_special_template`), so every
+specialization of it, and no non-template member; none matching
+befriends nothing, silently. In a templated class the `SpecialFriend`
+entry also keeps the friend's head and each specialization matches the
+substituted type in the instantiated class (its head is the pattern's:
+equivalence does not compare depths). A friend of every specialization
+(`template<class U> friend X<U>::X(U);`, `X<U>::~X()`, `X<U>::operator
+int()`, [temp.friend]/5; clang 22 rejects it, GCC accepts) is a
+`MemberFriend` with a name of the member's kind: any constructor (or the
+destructor, or a conversion function) of a specialization matches by
+name and then by the substituted type, ignoring the exception
+specification; no `-Wunsupported-friend` is given, as clang has none for
+it (WP-1513,
+`class.friend/{friend-special-member-template,dependent-special-member-template-friend}-{run,denied}.cpp`,
+`friend-constructor-template-of-class-template-run.cpp`,
+`friend-constructor-of-every-specialization-denied.cpp`,
+`special-member-template-friend-{pch,module}-run.cpp`). A friend function (not a
 constructor, destructor or conversion function) with a dependent
 qualifier that is not a class template (`friend R T::f();`,
 `friend bool T::operator==(const T &) const;`) is deferred like a
@@ -1165,7 +1183,12 @@ Tests: `class.default.ctor/variadic-and-default-arg-not-trivial.cpp`,
 `act_on_defaulted(f, loc)` / `act_on_deleted(f, loc, msg)` (C++26 message in
 the cold map). Defaultable: special members and comparison operators
 (defaulted comparisons, [class.compare], are §4.12's); else `only special
-member functions and comparison operators may be defaulted`. An `= default`
+member functions and comparison operators may be defaulted`. Before
+C++20 only `==` and `!=` are defaultable comparisons, with clang's
+`defaulted comparison operators are a C++20 extension` at `default`
+(`-Wc++20-extensions`); a relational operator gets `only special member
+functions may be defaulted` (clang `getDefaultedFunctionKind`; WP-1513,
+`class.compare.default/defaulted-comparison-cxx20-extension.cpp`). An `= default`
 written in the class body is a definition there and so implicitly inline
 ([class.mfct]/1; clang `setImplicitlyInline`; the dump prints
 `implicit-inline`); one written out of class is not. Explicitly defaulted on its first

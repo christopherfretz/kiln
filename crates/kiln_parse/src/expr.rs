@@ -2197,6 +2197,9 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_loc: Option<Loc>,
     ) -> ExprId {
+        if let (NameClass::VarTemplate(d), Some(q)) = (class, qual) {
+            self.s.check_var_template_name_access(name, q.ctx, d, nl);
+        }
         let res = self.parse_template_id_rest(class, name, nl);
         let r_angle = self.prev_lo();
         match res {

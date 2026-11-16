@@ -837,6 +837,14 @@ impl Substituter<'_, '_, '_> {
                     // An operator function template-id too (`T::template
                     // operator-<double>`, [temp.names]/1).
                     let t = self.member_template_named_dn(nns, name, loc)?;
+                    // `C<T>::template v<A>`: the variable template's name
+                    // is access-checked as the parser checks `C::v<A>`.
+                    if self.sema.kind_of(t) == DeclKind::VarTemplate
+                        && let Some(id) = name.as_ident()
+                    {
+                        let ctx = self.nns_context(nns, begin)?;
+                        self.sema.check_var_template_name_access(id, ctx, t, loc);
+                    }
                     let l = self.args(l, loc)?;
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);

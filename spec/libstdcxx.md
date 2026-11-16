@@ -18,7 +18,7 @@ cargo xtask libstdcxx [options]
 
 | Option | Meaning |
 |---|---|
-| `--std <std>` | `c++26` (default), `c++23`, `c++20` or `c++17`. Each standard has its own region of the report. |
+| `--std <std>` | `c++26` (default), `c++23`, `c++20`, `c++17`, `c++14` or `c++11`. Each standard has its own region of the report. The two levels before C++17 gate the rules that act only there (C++14 copy-initialization, `auto_ptr`; WP-1513). |
 | `--headers <dir>` | The libstdc++ include directory to enumerate. Default: the newest `/usr/include/c++/<version>` whose name is dot-separated numbers, compared numerically (Debian's `libstdc++-N-dev` layout; `v1`, libc++'s, never matches). Both compilers still find their headers through their own `-stdlib=libstdc++` search (`spec/driver.md` "Header search"); the option only chooses what to enumerate. |
 | `--gcc-toolchain <dir>` | Passed to both compilers as `--gcc-toolchain=<dir>` (spec/driver.md "Toolchain"), so they take libstdc++ from that GCC installation; the default `--headers` becomes the newest `<dir>/include/c++/<version>`. For GCC 16.1: `--gcc-toolchain $KILN_GCC16_ROOT/usr/local` (docs/VALIDATION.md "GCC 16.1 header sweep"; WP-525). |
 | `--profile <p>` | The cargo profile the implicit build uses: `debug`, `harness` (default) or `release` (`spec/libcxx.md` "Build profiles"). |

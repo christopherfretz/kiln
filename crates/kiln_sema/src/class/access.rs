@@ -209,14 +209,31 @@ impl Sema<'_, '_> {
                 // instantiated: decided then (clang's `MightInstantiateTo`
                 // making the check dependent).
                 k if k.is_function() => {
-                    ec.functions.contains(&f)
-                        || self.ast.spec_info(f).is_some_and(|(_, s)| {
-                            let t = Some(self.ast.first(s.template));
-                            ec.functions.iter().any(|&g| {
-                                self.ast.described_template(self.ast.first(g)).is_some()
-                                    && self.friend_template_of(g) == t
-                            })
+                    if ec.functions.contains(&f) {
+                        return true;
+                    }
+                    if self.ast.spec_info(f).is_some_and(|(_, s)| {
+                        let t = Some(self.ast.first(s.template));
+                        ec.functions.iter().any(|&g| {
+                            self.ast.described_template(self.ast.first(g)).is_some()
+                                && self.friend_template_of(g) == t
                         })
+                    }) {
+                        return true;
+                    }
+                    // A befriended member of a class template
+                    // specialization (`friend void Q<int>::f(int);`) when
+                    // the context is the member's pattern: decided in each
+                    // instantiation of the pattern, where only the
+                    // befriended one passes (clang's `MightInstantiateTo`).
+                    let spec = self.ast.instantiated_from(f).is_some_and(|p| {
+                        let p = self.ast.first(p);
+                        ec.functions.contains(&p)
+                    });
+                    if spec {
+                        self.speculative_friend.set(true);
+                    }
+                    spec
                 }
                 // Likewise a befriended class template specialization
                 // (`friend struct X<int>;`, or `X<T>` once its class is
@@ -566,6 +583,19 @@ impl Sema<'_, '_> {
     ) {
         self.check_name_access_as(name, qualifier, d, loc, LookupKind::Ordinary);
         self.diagnose_type_name_use(d, loc);
+    }
+
+    /// The access check of a qualified variable template name `C::v`
+    /// before its `<args>` ([class.access]/4: the template name, not the
+    /// specialization the template-id names), at `loc`.
+    pub fn check_var_template_name_access(
+        &mut self,
+        name: Symbol,
+        qualifier: DeclId,
+        d: DeclId,
+        loc: Loc,
+    ) {
+        self.check_name_access_as(name, Some(qualifier), d, loc, LookupKind::Ordinary);
     }
 
     /// [`Sema::check_type_name_access`] for a name `d` found by a lookup

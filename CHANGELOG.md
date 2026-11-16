@@ -817,6 +817,23 @@ Planned as 1.3.0.
   deallocation functions of new- and delete-expressions, as GCC 16.1
   does.
 
+- More invalid code is rejected, found running GCC's C++ testsuite
+  (WP-1513). A friend declaration of a constructor, destructor or
+  conversion function template of a class template befriends it, also
+  through a precompiled header or a module, so access through it is no
+  longer denied. A static data member defined out of its class template
+  keeps its access, and naming a private variable or function template
+  through a template-id is checked. Before C++17 a copy-initialization by
+  user-defined conversion checks the copy from the temporary, so the old
+  `auto_ptr` idiom is rejected as clang does. Before C++20 a defaulted
+  `==` or `!=` warns that it is a C++20 extension and a defaulted
+  relational operator is rejected. `new C[](8, 9)` no longer needs a
+  default constructor, and an element of a parenthesized array new is
+  diagnosed at the allocated type. An access declaration whose qualifier
+  is a template-id is parsed in every mode, and a using-declaration that
+  names a constructor is rejected before C++11. `cargo xtask libstdcxx`
+  takes `--std c++11` and `--std c++14`.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

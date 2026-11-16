@@ -286,6 +286,8 @@ WP-1470 fixed clusters 2 to 10 (an uninitialized reference member in aggregate i
 
 WP-1500 fixed the follow-ups (`-Wconstexpr-not-const` and the C++11 implicit `const`, `new int[2](1, 2)` before C++20, conversion-function ambiguity in C++11/14 direct-init, fold constraints atomic before C++26, default arguments on out-of-line members of class templates and on explicit specializations, using-declaration hiding that needs the requires-clauses' class arguments to match, an injected-class-name as an incomplete base, and clang's omitted-initializer note): the 113 cases go 92 → 99 and the 111 cases go 91 → 94. Most of the rest are cases clang also accepts or reports elsewhere; `operator!` lookup (lookup/operator-1, -2) and the `auto_ptr` rvalue binding are left.
 
+WP-1513 fixed the access of a class template's static data member once its definition is instantiated (it had no access, so later uses through `V<T>::x` went unchecked), access of qualified member template-ids, the C++14 second step of copy-initialization (no user-defined conversion in the temporary's copy: `auto_ptr`), friend constructor and conversion function templates and friends of every specialization's constructor, the C++20-extension warning for defaulted `==`/`!=`, access declarations with a template-id qualifier from C++11 and constructor using-declarations before C++11: the 113 cases stay at 99 (the rest are verdict cases clang also accepts), the 111 cases go 100 → 102, the parser subset stays at 138 of 177.
+
 The largest group (130 cases, 61 tests) expects any error at all
 (`dg-error ""`). It is mixed: mostly old-deja programs that are invalid
 in many small ways (missing `typename`, a bad friend, a nested class in an

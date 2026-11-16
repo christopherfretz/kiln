@@ -263,6 +263,7 @@ impl Sema<'_, '_> {
         entity_at: Loc,
         deleted_as: DeletedAs,
     ) -> Option<ExprId> {
+        let second_step = std::mem::take(&mut self.temp_copy_second_step);
         // Also in an unevaluated operand (clang builds the elidable
         // `CXXConstructExpr` there too): its access and deletion are
         // checked, and `noexcept` sees it.
@@ -286,8 +287,14 @@ impl Sema<'_, '_> {
         };
         let entity = self.ctor_entity.map_or(InitEntity::Var, |(x, _)| x);
         let style = if direct { InitStyle::Direct } else { InitStyle::Copy };
-        let sel = self.resolve_ctor(class, std::slice::from_ref(&e), style);
-        let call = CtorCall::new(std::slice::from_ref(&e));
+        let sel =
+            self.resolve_ctor_opts(class, std::slice::from_ref(&e), style, false, second_step);
+        let temp_copy = second_step.then_some(match ctx {
+            ConvCtx::Argument => 1,
+            ConvCtx::Return => 3,
+            _ => 0,
+        });
+        let call = CtorCall { temp_copy, ..CtorCall::new(std::slice::from_ref(&e)) };
         let loc = if direct { entity_at } else { at };
         if let Selected::Found(c) | Selected::Deleted(c) = sel {
             let _ = self.elided_ctors.insert(e, c);
@@ -347,7 +354,43 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(self.ety(e)).is_some() {
             return None;
         }
-        self.construct_converted(e, to, ctx, at, deleted_as)
+        let copy_as = if matches!(deleted_as, DeletedAs::Return) {
+            DeletedAs::Return
+        } else {
+            DeletedAs::Call
+        };
+        let x = self.construct_converted(e, to, ctx, at, deleted_as)?;
+        self.check_temp_copy(x, to, ctx, at, copy_as);
+        Some(x)
+    }
+
+    /// Before C++17, the copy that initializes the object of a
+    /// copy-initialization by user-defined conversion from the temporary
+    /// `x` the conversion made ([dcl.init]/17.6.3 in C++14: "the result
+    /// ... is then used to direct-initialize"): checked as an elidable
+    /// copy whose argument takes no user-defined conversion, so the
+    /// temporary does not bind a copy constructor's non-const reference
+    /// nor reach a constructor through a second conversion (the old
+    /// `auto_ptr` idiom, [over.best.ics]/4).
+    pub(crate) fn check_temp_copy(
+        &mut self,
+        x: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        at: Loc,
+        deleted_as: DeletedAs,
+    ) {
+        if self.std >= kiln_lex::Std::Cxx17
+            || self.is_err_expr(x)
+            || !matches!(ctx, ConvCtx::Return | ConvCtx::Argument | ConvCtx::Initialization)
+        {
+            return;
+        }
+        // Checked only: the copy of this second step is not built (the
+        // elidable copy node `check_elided_ctor` returns is dropped).
+        self.temp_copy_second_step = true;
+        let _ = self.check_elided_ctor(x, to, ctx, at, deleted_as);
+        self.temp_copy_second_step = false;
     }
 
     /// [`Sema::convert_to_class`] for any source `e` (a class source of

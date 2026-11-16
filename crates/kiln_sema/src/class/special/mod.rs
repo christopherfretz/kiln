@@ -416,7 +416,22 @@ impl Sema<'_, '_> {
                 self.ast.decls.mark_function(f, FnSpec::new().with_defaulted(Defaulted::Explicit));
                 return;
             }
-            if op.is_some_and(is_comparison) {
+            // clang `getDefaultedFunctionKind`: before C++20 only `==`
+            // and `!=` may be defaulted (`<=>` does not exist), and
+            // `SetDeclDefaulted` warns that it is an extension.
+            let pre20 = self.std < kiln_lex::Std::Cxx20;
+            let eq = matches!(
+                op,
+                Some(
+                    kiln_ast::names::OverloadedOperator::EqualEqual
+                        | kiln_ast::names::OverloadedOperator::ExclaimEqual
+                )
+            );
+            if op.is_some_and(is_comparison) && (eq || !pre20) {
+                if pre20 {
+                    let d = self.diag(DiagId::sema_ext_defaulted_comparison, loc);
+                    self.emit(d);
+                }
                 self.defaulted_comparison(f, loc);
             } else {
                 let d = self

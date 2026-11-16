@@ -1965,6 +1965,13 @@ impl Sema<'_, '_> {
         let d = self.builder().var(h, ty, spec_bits, Some(v));
         self.ast.templates.dependent_depth = depth;
         self.ast.templates.set_instantiated_from(d, pdef);
+        // A redeclaration of a member keeps its access ([class.access]/1,
+        // as an out-of-line definition does, `set_member_access`): as the
+        // member's latest declaration it is what a later qualified lookup
+        // of `C<int>::m` finds, and without an access every later use
+        // was accessible.
+        let access = self.ast.decls.get(v).misc().access();
+        self.ast.decls.set_access(d, access);
         // A `constinit` definition stays the initializing declaration
         // that has `constinit` ([dcl.constinit]/1).
         if let Some(&at) = self.constinit_locs.get(&pdef) {

@@ -1297,21 +1297,21 @@ impl Parser<'_, '_> {
     /// `ParseCXXClassMemberDeclaration`). Returns the index of the
     /// unqualified-id. Only `name ::` pairs are walked, with no template
     /// argument skipped, so a member whose type is qualified
-    /// (`std::vector<int> v;`) costs a few token peeks. Before C++11, where
-    /// the form is valid (deprecated), a template-id in the qualifier
-    /// (`I<T>::B::f;`) is walked too; from C++11 on it is not recognised.
+    /// (`std::vector<int> v;`) costs a few token peeks. A template-id in
+    /// the qualifier (`I<T>::B::f;`) is walked too, its arguments skipped:
+    /// deprecated before C++11, and from C++11 on the error clang gives
+    /// rather than a parse error (WP-1513).
     fn at_access_declaration(&self) -> Option<usize> {
-        let cxx98 = self.std < kiln_lex::Std::Cxx11;
         if self.s.is_c()
             || self.ident().is_none()
-            || !(self.peek_is(1, Punct::ColonColon) || cxx98 && self.peek_is(1, Punct::Less))
+            || !(self.peek_is(1, Punct::ColonColon) || self.peek_is(1, Punct::Less))
         {
             return None;
         }
         let mut i = self.pos();
         while self.ident_of(self.tok_at(i)).is_some() {
             let mut j = i + 1;
-            if cxx98 && Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
                 match self.skip_template_args(j) {
                     Some((close, false)) => j = close + 1,
                     _ => return None,
@@ -1356,17 +1356,43 @@ impl Parser<'_, '_> {
     /// ([depr.access.dcl]). Reported
     /// at the unqualified-id as clang does, and recovered as the
     /// using-declaration it means ([namespace.udecl]).
+    /// A constructor named so (`B::B;`, [class.qual]/2) is, before
+    /// C++11, only sema's "using declaration cannot refer to a
+    /// constructor" (clang `ActOnUsingDeclaration` returns before its
+    /// deprecation warning).
     fn parse_access_declaration(&mut self, loc: Loc, name: usize) {
         let at = self.tok_at(name).span.lo;
-        let id = if self.std >= kiln_lex::Std::Cxx11 {
-            DiagId::parse_access_decl
-        } else {
-            DiagId::parse_access_decl_deprecated
-        };
-        let d = self.s.diag(id, at);
-        self.emit(d);
+        let cxx11 = self.std >= kiln_lex::Std::Cxx11;
+        if cxx11 || !self.access_declaration_names_ctor(name) {
+            let id = if cxx11 {
+                DiagId::parse_access_decl
+            } else {
+                DiagId::parse_access_decl_deprecated
+            };
+            let d = self.s.diag(id, at);
+            self.emit(d);
+        }
         self.trace(|_| "access_decl".to_owned());
         self.parse_using_declaration(loc, false);
+    }
+
+    /// Whether the unqualified-id at token `name` of an access declaration
+    /// spells the qualifier's last component (`D<T>::D;`).
+    fn access_declaration_names_ctor(&self, name: usize) -> bool {
+        let (mut i, mut last) = (self.pos(), None);
+        while i < name {
+            let Some(id) = self.ident_of(self.tok_at(i)) else { return false };
+            let mut j = i + 1;
+            if Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return false,
+                }
+            }
+            last = Some(id);
+            i = j + 1;
+        }
+        last.is_some() && last == self.ident_of(self.tok_at(name))
     }
 
     /// The part of a member-declarator after the declarator itself, up to

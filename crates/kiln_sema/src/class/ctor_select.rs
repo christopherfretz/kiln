@@ -64,11 +64,28 @@ impl Sema<'_, '_> {
         style: InitStyle,
         actual_ctor: bool,
     ) -> Selected {
-        let (set, out) = self.ctor_overload(class, args, style, actual_ctor);
+        self.resolve_ctor_opts(class, args, style, actual_ctor, false)
+    }
+
+    /// [`Sema::resolve_ctor_ex`]; `no_udc` gives the argument no
+    /// user-defined conversion, for the copy of the temporary in the
+    /// second step of a C++11/14 copy-initialization by user-defined
+    /// conversion ([over.best.ics]/4 there: "13.3.1.3 when the argument is
+    /// the temporary in the second step of a class copy-initialization";
+    /// clang's `SuppressUserConversions` for the final copy).
+    pub(crate) fn resolve_ctor_opts(
+        &mut self,
+        class: DeclId,
+        args: &[ExprId],
+        style: InitStyle,
+        actual_ctor: bool,
+        no_udc: bool,
+    ) -> Selected {
+        let (set, out) = self.ctor_overload(class, args, style, actual_ctor, no_udc);
         self.selected_of(set, out)
     }
 
-    /// The resolved candidate set of [`Sema::resolve_ctor_ex`], kept for
+    /// The resolved candidate set of [`Sema::resolve_ctor_opts`], kept for
     /// its notes (the caller ends it).
     pub(crate) fn ctor_overload(
         &mut self,
@@ -76,6 +93,7 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         style: InitStyle,
         actual_ctor: bool,
+        no_udc: bool,
     ) -> (OverloadCandidateSet, OvlOutcome) {
         let c = self.class_def(class);
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
@@ -95,8 +113,14 @@ impl Sema<'_, '_> {
                 }),
                 _ => false,
             };
-            let opts = if same_or_derived { IcsOptions::NONE } else { IcsOptions::SUPPRESS_UDC };
+            let opts = if same_or_derived && !no_udc {
+                IcsOptions::NONE
+            } else {
+                IcsOptions::SUPPRESS_UDC
+            };
             (SetKind::CopyInit, opts, same_or_derived)
+        } else if no_udc {
+            (SetKind::Normal, IcsOptions::SUPPRESS_UDC, true)
         } else {
             (SetKind::Normal, IcsOptions::NONE, true)
         };
