@@ -366,6 +366,11 @@ impl Substituter<'_, '_, '_> {
         self.class_attrs(v, d);
         if self.sema.kind_of(v) == DeclKind::Var {
             self.sema.inst.deferred_inits.insert(v);
+            // A `constexpr` member before C++17 is not inline: its
+            // definition is the pattern's out-of-line one (WP-1517).
+            if !self.sema.ast.decls.var(d).is_some_and(|x| x.spec.is_inline()) {
+                self.sema.inst.member_defs.insert(v);
+            }
         }
         Ok(v)
     }

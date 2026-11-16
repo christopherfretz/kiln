@@ -1663,7 +1663,49 @@ impl<'a> Cg<'a> {
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
 
+    /// clang `getInlineVariableDefinitionKind` → `Strong`: an inline
+    /// static data member whose first declaration is not declared
+    /// `inline` (it is inline because it is `constexpr`, C++17) and that
+    /// has a redeclaration at namespace scope, `constexpr` and not
+    /// declared `inline` ([depr.static.constexpr]: the redundant
+    /// `constexpr int A::n;`). Its definition is `weak_odr` and emitted
+    /// even when unused, so a unit built as C++14, which refers to the
+    /// member without defining it, links (WP-1517).
+    pub(crate) fn var_strong_inline(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let spec = |r: DeclId| ast.decls.var(r).map(|x| x.spec).unwrap_or_default();
+        let written = |r: DeclId| spec(r).is_inline() && !spec(r).is_inline_implied();
+        let record =
+            |c: DeclId| ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record;
+        if !self.var_is_inline(d)
+            || written(first)
+            || !ast.decls.get(first).ctx().is_some_and(record)
+        {
+            return false;
+        }
+        let constexpr_first = spec(first).is_constexpr();
+        ast.redecls_of(d).any(|r| {
+            let file = ast.decls.lexical_ctx(r).is_some_and(|l| {
+                matches!(
+                    ast.decls.get(l).kind(),
+                    DeclKind::Namespace
+                        | DeclKind::TranslationUnit
+                        | DeclKind::LinkageSpec
+                        | DeclKind::Export
+                )
+            });
+            file && !written(r) && (spec(r).is_constexpr() || constexpr_first)
+        })
+    }
+
     pub(crate) fn discardable_var(&self, d: DeclId) -> bool {
+        // clang `DeclMustBeEmitted`: a `Strong` inline variable is
+        // emitted where it is defined, internal or not.
+        if self.var_strong_inline(d) && self.var_instantiation_linkage(self.ast.first(d)).is_none()
+        {
+            return false;
+        }
         if mangle::is_internal_symbol(self.ast, d) {
             return true;
         }
@@ -3462,12 +3504,24 @@ impl<'a> Cg<'a> {
         if ast.redecls_of(first).count() > 1 || self.var_is_inline(first) {
             return Ok(());
         }
+        // A specialization of a member variable template that has an
+        // out-of-class definition (`template<class T> constexpr int
+        // V::n;` before C++17) is defined by it (WP-1517).
+        if let Some((_, info)) = ast.spec_info(first)
+            && ast.redecls_of(info.from).any(|r| {
+                ast.decls.lexical_ctx(r).is_some_and(|l| {
+                    ast.decls.get(l).kind().payload() != kiln_ast::decl::PayloadClass::Record
+                })
+            })
+        {
+            return Ok(());
+        }
         if !ast.types.effective_quals(ty).is_const() || has_mutable(ast, ty) {
             return Ok(());
         }
-        if mangle::has_internal_linkage(ast, first) {
-            return Ok(());
-        }
+        // A member of a class with internal linkage too (clang: its
+        // odr-use without a definition is ill-formed, no diagnostic
+        // required, and fails to link either way; WP-1517).
         let Some(init) = ast.decls.var(first).and_then(|v| v.init) else { return Ok(()) };
         let Some(c) = self.folds.get(init) else { return Ok(()) };
         let c = self.const_value(c, ty, Some(init), true)?;
@@ -3633,6 +3687,7 @@ impl<'a> Cg<'a> {
             && ast.redecls_of(d).all(|r| ast.decls.var(r).is_some_and(|v| v.init.is_none()))
             && !self.var_is_tls(d);
         let sanitizer = self.global_sanitizer(d, g, needs_init);
+        let strong_inline = inline && instantiated.is_none() && self.var_strong_inline(d);
         let gv = self.m.global_mut(g);
         gv.is_constant = constant && !common;
         gv.align = Some(align);
@@ -3650,7 +3705,10 @@ impl<'a> Cg<'a> {
             gv.dso_local = true;
             gv.comdat = comdat;
         } else if inline {
-            gv.linkage = instantiated.unwrap_or(Linkage::LinkOnceOdr);
+            // clang `GVA_StrongODR` for the redundantly redeclared
+            // `constexpr` member ([`Self::var_strong_inline`]).
+            let plain = if strong_inline { Linkage::WeakOdr } else { Linkage::LinkOnceOdr };
+            gv.linkage = instantiated.unwrap_or(plain);
             gv.dso_local = true;
             gv.comdat = comdat;
         } else if selectany {

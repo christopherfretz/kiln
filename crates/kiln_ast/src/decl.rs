@@ -952,7 +952,8 @@ pub enum InitStyle {
 }
 
 /// `VarData.spec`: `storage(3) tls(2) init_style(2) constexpr(1)
-/// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)`.
+/// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)
+/// inline_implied(1)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct VarSpec(u32);
 
@@ -1010,12 +1011,14 @@ impl VarSpec {
     /// the `Call` init style of a default-initialized class variable
     /// (set over `C` only, with its `CXXConstructExpr`), `ParenList` (set
     /// over `Call` once the parenthesized initializer turns out to
-    /// initialize an aggregate), and `inline` and any init style (an
+    /// initialize an aggregate), and `inline` (with `inline_implied`) and
+    /// any init style (an
     /// instantiated static data member becomes inline with its deferred
     /// initializer and takes its form, [temp.inst]/4),
     /// and `cxx_for_range` (a for-range-declaration is known as one after
     /// it is declared, clang `ActOnCXXForRangeDecl`).
-    pub const LATE: VarSpec = VarSpec((1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
+    pub const LATE: VarSpec =
+        VarSpec((1 << 13) | (1 << 12) | (1 << 10) | (1 << 9) | (1 << 6) | (1 << 5));
 }
 
 bit_accessors!(VarSpec:
@@ -1023,7 +1026,8 @@ bit_accessors!(VarSpec:
     is_constexpr / with_constexpr = 7;
     /// `constinit`.
     is_constinit / with_constinit = 8;
-    /// `inline` (written or implied by `constexpr` static members).
+    /// `inline` (written, or implied by `constexpr` on a static data
+    /// member from C++17: [`Self::is_inline_implied`]).
     is_inline / with_inline = 9;
     /// NRVO candidate ([class.copy.elision]); set after the body.
     is_nrvo / with_nrvo = 10;
@@ -1031,6 +1035,12 @@ bit_accessors!(VarSpec:
     is_exception_var / with_exception_var = 11;
     /// A range-based-for implicit variable.
     is_cxx_for_range / with_cxx_for_range = 12;
+    /// `inline` is set but not written on this declaration: implied by
+    /// `constexpr` on a static data member from C++17 ([dcl.constexpr]/1)
+    /// or inherited from an earlier declaration (clang
+    /// `!isInlineSpecified()`; codegen's `weak_odr` rule for a redundant
+    /// out-of-class redeclaration, spec/codegen.md "Static data members").
+    is_inline_implied / with_inline_implied = 13;
 );
 
 /// The state of a variable's constant evaluation (spec/ast.md §9.2), 4

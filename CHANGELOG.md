@@ -840,6 +840,21 @@ Planned as 1.3.0.
   `-Wunused-variable`, `-Wunused-but-set-variable` or, at file scope,
   `-Wunneeded-internal-declaration`. Reported by a user.
 
+- The linkage of a `constexpr` static data member now matches clang and
+  GCC. Before C++17 the member is not inline: its out-of-class
+  definition (`constexpr int A::n;`) is a strong external definition,
+  emitted even when unused, so two units that both define it fail to
+  link, and a unit that uses the member without that definition refers
+  to the external symbol instead of defining a private copy. From C++17
+  the redundant out-of-class redeclaration makes the member `weak_odr`
+  and always emitted, so a C++14 unit can link against it. The
+  redeclaration is no longer a redefinition in C++17 (a second one is
+  accepted), `-Wdeprecated-redundant-constexpr-static-def` no longer
+  fires before C++17, and `alignas` on the out-of-class definition no
+  longer errors. Objects built by earlier versions have the weaker
+  linkage for these members (`linkonce_odr`, dropped when unused).
+  Reported from linking kiln objects with mortar.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.
