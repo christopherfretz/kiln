@@ -5,7 +5,6 @@
 //@ expect: compile-ok
 //@ args: -pedantic-errors
 //@ strict-diags
-//@ xfail(kiln): WP-1495, the pedantic group holds only group-less extensions, so ignoring -Wpedantic leaves -Wzero-length-array an error
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 struct Z {

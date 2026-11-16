@@ -470,13 +470,14 @@ impl Sema<'_, '_> {
                 return None;
             }
             self.release(stash, Vec::new());
-            let Some(bound) = self.ast.types.array_size(range_ty) else {
-                self.unsupported("range-based for over a variable length array", range_loc);
-                return None;
+            let count = match self.ast.types.array_size(range_ty) {
+                Some(bound) => {
+                    let pd = QualType::unqual(self.target.ptrdiff_t);
+                    self.builder().int_literal(pd, bound, Radix::Decimal, range_loc)
+                }
+                None => self.vla_range_count(range_ty, colon)?,
             };
-            let pd = QualType::unqual(self.target.ptrdiff_t);
-            let lit = self.builder().int_literal(pd, bound, Radix::Decimal, range_loc);
-            let end = self.act_on_binary(BinaryOp::Add, end_range, lit, colon);
+            let end = self.act_on_binary(BinaryOp::Add, end_range, count, colon);
             if self.is_err_expr(end) {
                 return None;
             }

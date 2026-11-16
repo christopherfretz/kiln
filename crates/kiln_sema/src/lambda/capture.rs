@@ -12,7 +12,7 @@
 //! `}` ([`Sema::finish_captures`]).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, InitStyle, VarSpec};
-use kiln_ast::expr::{ExprDeps, UnaryOp};
+use kiln_ast::expr::{ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
 use kiln_ast::names::DeclName;
@@ -319,6 +319,7 @@ impl Sema<'_, '_> {
         for (j, &l) in chain.iter().enumerate().rev() {
             let explicit = j == 0 && top == Some(l);
             let data = self.ast.exprs.lambdas.get(l);
+            let init_at = if explicit { loc } else { data.default_loc };
             let by_ref = if explicit {
                 kind == TryCapture::ExplicitByRef
             } else {
@@ -341,7 +342,7 @@ impl Sema<'_, '_> {
                     rf = self.ast.types.qualify(rf, Quals::CONST);
                 }
                 if build && !invalid {
-                    invalid = self.check_by_copy_capture(d, cap, loc);
+                    invalid = self.check_by_copy_capture(d, cap, loc, init_at);
                 }
             }
             if invalid && let Some(s) = self.lambda_scope_mut(l) {
@@ -386,11 +387,23 @@ impl Sema<'_, '_> {
     /// clang `captureInLambda` for a by-copy capture of `d` as a member
     /// of type `cap` at `loc` ([expr.prim.lambda.capture]/10: the member
     /// is an object of that type, so the type is complete, sized and not
-    /// abstract; [basic.types.general]/5, [class.abstract]/3). A dependent
-    /// type is checked as the lambda is instantiated. True after an error.
-    fn check_by_copy_capture(&mut self, d: DeclId, cap: QualType, loc: Loc) -> bool {
+    /// abstract; [basic.types.general]/5, [class.abstract]/3), and not a
+    /// variable length array, diagnosed at `init_at`. A dependent type is
+    /// checked as the lambda is instantiated. True after an error.
+    fn check_by_copy_capture(&mut self, d: DeclId, cap: QualType, loc: Loc, init_at: Loc) -> bool {
         if self.ast.types.is_dependent(cap) || cap == QualType::ERROR {
             return false;
+        }
+        // A variable length array (GNU extension) cannot be copied into a
+        // member: clang's `BuildCaptureInit` initializes the member from
+        // the array, at the capture (an implicit one at the
+        // capture-default), which C forbids for a VLA.
+        if matches!(
+            self.ast.types.canonical_view(cap),
+            kiln_ast::types::TypeView::VariableArray { .. }
+        ) {
+            self.error(DiagId::sema_vla_no_init, init_at);
+            return true;
         }
         // `RequireCompleteSizedType`: an SVE vector has no size (a closure
         // member of it would be a sizeless field).
@@ -1571,12 +1584,160 @@ impl Sema<'_, '_> {
         self.lambda_body_this(id, outer_this)
     }
 
+    /// `sizeof`/`alignof` of the type `q` in a lambda body (clang
+    /// `CreateUnaryExprOrTypeTraitExpr`): when `q` names a variably
+    /// modified typedef declared outside the lambda, each lambda between
+    /// here and the typedef's function captures its bounds.
+    /// The operand `e` (of type `ty`) of a `sizeof` in a lambda: when
+    /// `ty` is variably modified the operand is potentially evaluated
+    /// (clang `CreateUnaryExprOrTypeTraitExpr`'s
+    /// `TransformToPotentiallyEvaluated`, [expr.sizeof] GNU extension),
+    /// so each enclosing variable it names, outside nested unevaluated
+    /// operands and lambdas, is an odr-use the lambdas capture, and their
+    /// array bounds with them ([`Sema::vla_bound_captures`]).
+    pub(crate) fn capture_vla_operand(&mut self, e: ExprId, ty: QualType) {
+        if self.lambdas.is_empty()
+            || self.unevaluated != 0
+            || !self.ast.types.qflags(ty).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+        {
+            return;
+        }
+        self.note_vla_type_use(ty);
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::CXXTypeidExpr
+                | ExprKind::LambdaExpr => continue,
+                ExprKind::DeclRefExpr => {
+                    let d = self.ast.exprs.decl(x);
+                    if self.may_need_capture(d) {
+                        self.ast.exprs.clear_unevaluated_non_odr_use(x);
+                        let loc = self.eloc(x);
+                        let _ = self.try_capture_var(
+                            d,
+                            loc,
+                            TryCapture::Implicit,
+                            None,
+                            Loc::INVALID,
+                            true,
+                        );
+                    }
+                }
+                _ => {}
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+    }
+
+    pub(crate) fn note_vla_type_use(&mut self, q: QualType) {
+        if self.lambdas.is_empty()
+            || !self.ast.types.qflags(q).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+        {
+            return;
+        }
+        // Where the type's bounds were evaluated: a typedef's, or the
+        // variable's of `decltype(v)`.
+        let decl = match self.ast.types.view(q.ty()) {
+            kiln_ast::types::TypeView::Typedef { decl, .. } => decl,
+            kiln_ast::types::TypeView::Decltype { expr, .. } => {
+                let x = self.ignore_parens(expr);
+                if self.ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
+                    return;
+                }
+                self.ast.exprs.decl(x)
+            }
+            _ => return,
+        };
+        let Some(home) = self.ast.decls.get(decl).ctx() else { return };
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            if c == home {
+                return;
+            }
+            let Some(l) = self.lambda_of_call_op(c) else { return };
+            let Some(s) = self.lambda_scope_mut(l) else { return };
+            s.vla_types.push(q);
+            let Some(p) = self.lambda_parent(l) else { return };
+            c = p;
+        }
+    }
+
+    /// The variable length array bounds lambda `id` captures (clang
+    /// `captureVariablyModifiedType`, GNU extension): those of the types
+    /// of its captured variables (a VLA or a pointer or reference to one,
+    /// by reference; a pointer to one by copy) and of `extra`, through
+    /// pointers, references and arrays, each once, with the location of
+    /// the capture that brought it. A `[*]` bound is never captured.
+    fn vla_bound_captures(&self, id: LambdaId, extra: &[QualType]) -> Vec<(ExprId, Loc)> {
+        let data = self.ast.exprs.lambdas.get(id);
+        let mut out: Vec<(ExprId, Loc)> = Vec::new();
+        let star = self.ast.types.vla_star_bound;
+        let walk = |mut q: QualType, loc: Loc, out: &mut Vec<(ExprId, Loc)>| {
+            for _ in 0..64 {
+                if !self.ast.types.qflags(q).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+                {
+                    return;
+                }
+                match self.ast.types.canonical_view(q) {
+                    kiln_ast::types::TypeView::VariableArray { elem, size } => {
+                        if Some(size) != star && !out.iter().any(|&(b, _)| b == size) {
+                            out.push((size, loc));
+                        }
+                        q = elem;
+                    }
+                    kiln_ast::types::TypeView::ConstantArray(a) => q = a.elem,
+                    kiln_ast::types::TypeView::IncompleteArray(e)
+                    | kiln_ast::types::TypeView::Pointer(e)
+                    | kiln_ast::types::TypeView::LValueRef(e)
+                    | kiln_ast::types::TypeView::RValueRef(e) => q = e,
+                    _ => return,
+                }
+            }
+        };
+        for c in &data.captures {
+            if !matches!(c.kind, CaptureKind::ByCopy | CaptureKind::ByRef) {
+                continue;
+            }
+            if let Some(t) = c.var.and_then(|v| self.ast.decls.get(v).ty()) {
+                walk(t, c.loc, &mut out);
+            }
+        }
+        let at = if data.default_loc.is_valid() { data.default_loc } else { data.lbracket };
+        for &t in extra {
+            walk(t, at, &mut out);
+        }
+        out
+    }
+
     /// At the `}` of lambda `id` (the enclosing context restored): the
     /// closure's unnamed members, one per capture in order
     /// ([expr.prim.lambda.capture]/10-12), and their initializers
     /// ([expr.prim.lambda.capture]/15), and clang's deprecation of an
     /// implicit `this` capture by `[=]`.
-    pub(crate) fn finish_captures(&mut self, id: LambdaId, closure: DeclId, cap_tys: &[QualType]) {
+    pub(crate) fn finish_captures(
+        &mut self,
+        id: LambdaId,
+        closure: DeclId,
+        cap_tys: &[QualType],
+        vla_types: &[QualType],
+    ) {
+        let bounds = self.vla_bound_captures(id, vla_types);
+        let mut cap_tys = cap_tys.to_vec();
+        for &(_, loc) in &bounds {
+            let c = LambdaCapture {
+                kind: CaptureKind::VlaBound,
+                var: None,
+                field: None,
+                loc,
+                ellipsis: Loc::INVALID,
+                implicit: true,
+                init: false,
+            };
+            self.ast.exprs.lambdas.get_mut(id).captures.push(c);
+            cap_tys.push(self.size_type());
+        }
         let data = self.ast.exprs.lambdas.get(id);
         if data.default != CaptureDefault::None || !data.captures.is_empty() {
             self.ast.decls.set_definition_bits(closure, DefinitionBits::LAMBDA_CAPTURES);
@@ -1585,6 +1746,7 @@ impl Sema<'_, '_> {
             return;
         }
         let caps = data.captures.clone();
+        let mut bounds = bounds.into_iter().map(|(b, _)| b);
         let (default, default_loc) = (data.default, data.default_loc);
         let mut inits = Vec::with_capacity(caps.len());
         for (i, c) in caps.iter().enumerate() {
@@ -1615,6 +1777,9 @@ impl Sema<'_, '_> {
                         self.init_subobject_from(ty, obj, InitEntity::Field(field), at).ok()
                     }
                 }
+                // The bound expression itself: codegen copies the value
+                // computed where the array type was declared.
+                CaptureKind::VlaBound => bounds.next(),
                 _ if c.init => c.var.and_then(|v| self.ast.decls.var(v).and_then(|x| x.init)),
                 _ => c.var.and_then(|v| {
                     let r = self.build_decl_ref_extra(v, at, None);

@@ -516,6 +516,19 @@ Planned as 1.3.0.
   constant evaluator computes exactly (`sqrt`, `fma`, the rounding,
   remainder and exponent families) is no longer reported as never
   constant before C++23.
+- Variable length arrays (GNU extension), found running GCC's C++ testsuite
+  (WP-1469): a lambda that captures one by reference, names a typedef or
+  `decltype` of one, or takes `sizeof` of one captures its bounds as hidden
+  members, so the body sees the size the array was created with;
+  range-based `for` over a VLA; VLAs of class objects with constructors and
+  destructors (cleanup on scope exit and on a throw); an explicit cast to a
+  variably modified type evaluates its bounds, also under `sizeof`; an
+  initialized VLA whose bound folds becomes a constant array
+  (`-Wgnu-folding-constant`), as in clang. `-Wvla-cxx-extension` is an
+  extension warning, so `-pedantic-errors` makes it an error, and
+  `-Wpedantic` includes every off-by-default extension, so
+  `-Wno-error=pedantic` and `#pragma GCC diagnostic ignored "-Wpedantic"`
+  reach `-Wc99-extensions` and `-Wzero-length-array`.
 
 ## [1.2.1] - 2026-11-14
 

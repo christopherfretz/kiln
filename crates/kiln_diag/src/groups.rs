@@ -66,8 +66,8 @@ impl Group {
     }
 
     /// True if `id` is a member of this group (directly, through a
-    /// subgroup, or as a group-less extension of `pedantic`), with clang
-    /// 19's group tree.
+    /// subgroup, or as an extension of `pedantic`: a group-less one or an
+    /// off-by-default one), with clang 19's group tree.
     pub fn contains(self, id: DiagId) -> bool {
         self.contains_at(id, 19)
     }
@@ -75,7 +75,14 @@ impl Group {
     /// [`Self::contains`] with the group tree of clang `compat`
     /// ([`Self::compat_subgroups`]).
     pub fn contains_at(self, id: DiagId, compat: u32) -> bool {
-        if self == Group::Pedantic && id.group().is_none() && id.class() == DiagClass::Extension {
+        // clang-tblgen's `InferPedantic`: every off-by-default extension
+        // (`Extension`, not `ExtWarn`) is in `pedantic` whatever its own
+        // group (`-Wno-error=pedantic` downgrades `-Wc99-extensions`), and
+        // so is a group-less extension.
+        if self == Group::Pedantic
+            && id.class() == DiagClass::Extension
+            && (id.group().is_none() || id.kind() == crate::ids::DiagKind::Extension)
+        {
             return true;
         }
         match id.group() {

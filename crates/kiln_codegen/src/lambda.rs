@@ -19,6 +19,7 @@ impl Cg<'_> {
     pub(crate) fn lambda_prolog(&mut self, l: LambdaId, closure: V) -> R<()> {
         let ast = self.ast;
         self.f.closure = Some((closure, l));
+        self.load_vla_bound_captures(l)?;
         let data = ast.exprs.lambdas.get(l);
         let Some(c) = data.this_capture() else { return Ok(()) };
         let Some(field) = c.field else { return Ok(()) };

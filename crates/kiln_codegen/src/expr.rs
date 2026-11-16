@@ -884,9 +884,9 @@ impl Cg<'_> {
         let s = ast.exprs.operand(e);
         let sq = ast.exprs.get(s).ty();
         let ck = ast.exprs.cast_kind(e);
-        // clang `EmitExplicitCastExprType`: a cast to a variably modified
-        // type (`(int (*)[n])p`) evaluates its bounds first.
-        if n.kind() == ExprKind::CStyleCastExpr {
+        // clang `EmitExplicitCastExprType`: an explicit cast to a variably
+        // modified type (`(int (*)[n])p`) evaluates its bounds first.
+        if n.kind() != ExprKind::ImplicitCastExpr {
             self.emit_vla_bounds(q)?;
         }
         Ok(Some(match ck {
@@ -4872,16 +4872,29 @@ impl Cg<'_> {
                 let l = ast.exprs.lambda(e);
                 let inits: Vec<ExprId> =
                     l.inits.map(|x| ast.lists.iter::<ExprId>(x).collect()).unwrap_or_default();
-                let fields: Vec<DeclId> = l.captures.iter().filter_map(|c| c.field).collect();
+                let fields: Vec<(DeclId, bool)> = l
+                    .captures
+                    .iter()
+                    .filter_map(|c| {
+                        c.field.map(|f| (f, c.kind == kiln_ast::lambda::CaptureKind::VlaBound))
+                    })
+                    .collect();
                 let rty = self.record_ty(l.closure);
                 let base = Addr { v: dest.v, ty: rty, align: dest.align };
                 // [except.ctor]/3: an initialized capture is destroyed if a
                 // later one throws (`pushDestroyAndDeferDeactivation`).
                 let deferred = self.f.cl.deferred.len();
-                for (f, init) in fields.into_iter().zip(inits) {
+                for ((f, vla), init) in fields.into_iter().zip(inits) {
                     let fq = ast.decls.get(f).ty().expect("Sema: a capture has a type");
                     let lv = self.field_lvalue_init(base, f, fq)?;
-                    if self.referee(fq).is_some() {
+                    if vla {
+                        // clang `EmitLambdaVLACapture`: the bound's value,
+                        // computed where its array type was declared.
+                        let v = self.vla_bound_value(init)?;
+                        let t = self.lty(fq);
+                        let v = self.int_cast(v, t, false);
+                        self.store(v, lv.addr.v, lv.addr.align, false);
+                    } else if self.referee(fq).is_some() {
                         // clang `EmitInitializationToLValue` on a
                         // reference: bind, then store the address.
                         let p = self.emit_ref_binding(init)?;

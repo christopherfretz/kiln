@@ -3836,7 +3836,22 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   aligned to the element alignment (at least 16 on x86-64, clang's large
   array alignment). Each non-constant dimension gets an `__vla_expr` `i64`
   slot and store (debug-info shadow, as clang). VLA elements of class type
-  needing construction or destruction are an M3 "not supported yet" error.
+  (WP-1469): a default construction (`CXXConstructExpr` init) runs
+  `construct_array_n` with the run-time element count (clang
+  `EmitCXXAggrConstructorCall`, partial destruction on a throw), and a
+  destructor pushes `Cleanup::PartialArray` over `[begin, begin+count)`
+  as a normal and EH cleanup (clang `emitDestroy`, the empty array
+  checked first). A VLA of arrays of class objects, or any other
+  initializer, is still a "not supported yet" error.
+- **Lambdas** (WP-1469, clang `captureVariablyModifiedType`): the
+  `CaptureKind::VlaBound` closure members are initialized with
+  `vla_bound_value` (the cached bound of the enclosing function), and the
+  call operator's prologue (`load_vla_bound_captures`) loads each into
+  `Fx::vla_sizes`, so `sizeof` and subscripts in the body use it.
+- **Explicit casts** (WP-1469, clang `EmitExplicitCastExprType`): every
+  explicit cast to a variably modified type, C-style or C++ form,
+  evaluates the type's bounds before its operand, also under `sizeof`
+  and `*` (`pointer_with_alignment`).
 - **Uses.** Array-to-pointer decay of a VLA emits no GEP; a subscript
   through a decayed VLA uses the pointer's alignment, and one whose result
   is itself a VLA scales the index by the element count (`mul nsw`).

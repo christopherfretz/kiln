@@ -160,8 +160,11 @@ adds or drops) are chosen by the emitting crate from its own level
 `Group` is generated from the table in `src/groups/*.rs` (§2.4):
 `Variant = "clang-name" [Subgroup, ...];`. A group's members are the ids
 naming it, the members of its subgroups (transitively), and, for
-`pedantic` only, every `Extension`/`ExtWarn` id without a group (clang
-places those in `-Wpedantic`). `display_group` is the id's group, or
+`pedantic` only, every `Extension`/`ExtWarn` id without a group and
+every `Extension` (off-by-default) id whatever its group (clang-tblgen's
+`InferPedantic`; WP-1469: `-Wno-error=pedantic` reaches
+`-Wc99-extensions`, `#pragma GCC diagnostic ignored "-Wpedantic"`
+reaches `-Wzero-length-array`). `display_group` is the id's group, or
 `pedantic` for a groupless extension; it is what `[-W...]` and JSON
 `"group"` show.
 
@@ -1139,7 +1142,7 @@ diagnostic differently (`... within a module purview`), the corpus test is
 | D9 | Selects are index-based (`{0:a\|b}`); there is no `%plural`. | Callers pass the index. |
 | D10 | `-WX` is accepted as `-Werror`. | MSVC-style alias some build systems pass. |
 | D11 | JSON is kiln's own schema (with `option`, `fixits`, severity `fatal`), not clang's SARIF. | Built for the test harness. |
-| D12 | `pedantic` contains exactly the groupless extensions. | clang's `-Wpedantic` also has named subgroups kiln does not have yet. |
+| D12 | `pedantic` contains the groupless extensions and the off-by-default (`Extension`) ones (§2.4). | clang's `-Wpedantic` also has named subgroups kiln does not have yet. |
 | D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
 | D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln (harness tests encode the known cases with `dup(clang)`, §7.4.1). | Engine deduplication; no libc++ test is known to depend on it. |
 | D15 | A `-verify` report lists at most 10000 missing occurrences per level (§11.5). | Bounds the output of a count like `4000000000`. |
