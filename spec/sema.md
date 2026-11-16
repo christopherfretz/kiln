@@ -6917,6 +6917,12 @@ and aggregate element types.
   is hidden from ordinary lookup, so `int std;` stays valid, until the
   program's first `namespace std {` reopens it (`implicit_std`, WP-958).
   The nothrow forms exist only if the program (`<new>`) declares them.
+  With aligned allocation off (`-fno-aligned-allocation`, and before
+  C++17 without `-faligned-allocation`; `Sema::aligned_allocation`,
+  WP-1485, clang's `AlignedAllocation`) the `align_val_t` forms are not
+  declared and no new- or delete-expression passes an alignment: a type
+  with new-extended alignment uses the plain forms. The threshold is
+  `TargetInfo::default_new_align`, which `-fnew-alignment=N` overrides.
 - **User declarations** of a global `operator new`/`delete`
   (`act_on_global_new_delete_decl`) redeclare a matching implicit one; a
   deallocation function without an exception specification is

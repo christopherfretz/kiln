@@ -311,7 +311,11 @@ impl Sema<'_, '_> {
             return QualType::ERROR;
         }
         if self.contains_undeduced_auto(ret) {
-            if !definition {
+            // [dcl.contract.res]/2 constrains non-templated functions only:
+            // a templated one (an abbreviated function template, a member
+            // of a class template) deduces its type on instantiation
+            // (WP-1485; found running GCC's C++ testsuite).
+            if !definition && !self.in_template() {
                 self.error(DiagId::sema_contract_result_deduced, loc);
                 return QualType::ERROR;
             }

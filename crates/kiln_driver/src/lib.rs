@@ -169,6 +169,9 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::InvalidInt(a, v) => {
             Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(a).arg(v)
         }
+        ArgError::InvalidAlignment(a, v) => {
+            Diag::new(DiagId::drv_invalid_alignment, Span::INVALID).arg(a).arg(v)
+        }
         ArgError::InvalidFlagValue(a, v) => {
             Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
         }

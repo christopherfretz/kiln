@@ -1,5 +1,6 @@
 //! Contract assertions at run time (P2900; spec/contracts.md §6.3): the
-//! callee-side checks GCC 16.1 emits, the constant
+//! callee-side checks GCC 16.1 emits (and its caller-side checks under
+//! `-fcontracts-client-check=`), the constant
 //! `std::contracts::contract_violation` objects in libstdc++'s layout,
 //! and the default violation handler of a translation unit built against
 //! a stdlib that ships none.
@@ -11,6 +12,7 @@ use kiln_llvm::{
 };
 
 use crate::fir::{Op, V};
+use crate::func::{Addr, CallArg};
 use crate::module::{Cg, R, err};
 
 /// `void handle_contract_violation(const std::contracts::contract_violation&)`.
@@ -61,6 +63,7 @@ impl Cg<'_> {
     /// takes the return slot's address after the body).
     pub(crate) fn post_names_result(&self, d: DeclId) -> bool {
         self.ast.contract_semantic.checks()
+            && self.opts.contract_checks.definition
             && self
                 .contracts_of(d, ContractKind::Post)
                 .into_iter()
@@ -71,7 +74,7 @@ impl Cg<'_> {
     /// (and `this`, the VTT, a lambda's captures) and before the body or
     /// a constructor's mem-initializers ([dcl.contract.func]/1).
     pub(crate) fn emit_preconditions(&mut self, d: DeclId) -> R<()> {
-        if !self.ast.contract_semantic.checks() {
+        if !self.ast.contract_semantic.checks() || !self.opts.contract_checks.definition {
             return Ok(());
         }
         // Written on another declaration: its parameters are `d`'s.
@@ -98,7 +101,10 @@ impl Cg<'_> {
     /// `get_return_object()` initialised (P2900R14 §3.5.2,
     /// [dcl.fct.def.coroutine]/7, spec/contracts.md §6.2).
     pub(crate) fn emit_postconditions(&mut self, d: DeclId) -> R<()> {
-        if !self.ast.contract_semantic.checks() || self.f.fir.cur().is_none() {
+        if !self.ast.contract_semantic.checks()
+            || !self.opts.contract_checks.definition
+            || self.f.fir.cur().is_none()
+        {
             return Ok(());
         }
         for s in self.contracts_of(d, ContractKind::Post) {
@@ -111,6 +117,183 @@ impl Cg<'_> {
             self.emit_contract_check(s)?;
         }
         Ok(())
+    }
+
+    /// The function whose assertions a direct call of `d` checks in the
+    /// caller (`-fcontracts-client-check=`, spec/contracts.md §6.3):
+    /// `Some(d)` when `d` has function contract assertions and is not a
+    /// constructor or destructor (GCC 16.1 checks neither in the caller).
+    pub(crate) fn client_checked(&self, d: DeclId) -> Option<DeclId> {
+        use kiln_ast::decl::DeclKind;
+        let checks = self.opts.contract_checks;
+        (checks.client_checks(ContractKind::Pre)
+            && self.ast.contract_semantic.checks()
+            && !matches!(
+                self.ast.decls.get(d).kind(),
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor
+            )
+            && self.ast.function_contracts(d).is_some())
+        .then_some(d)
+    }
+
+    /// The caller-side preconditions of a direct call of `d` (see
+    /// [`Self::client_checked`]), after the arguments `vals` are evaluated
+    /// and before the call: each parameter of `d` (and of the declaration
+    /// its assertions are written on) denotes its argument (a scalar in
+    /// a temporary, an aggregate in its argument temporary) and `this`
+    /// the object argument `this_arg` (of class `cls`). Returns the
+    /// bindings for [`Self::emit_client_post`].
+    pub(crate) fn emit_client_pre(
+        &mut self,
+        d: DeclId,
+        this_arg: Option<(V, DeclId)>,
+        vals: &[CallArg],
+    ) -> R<ClientBinding> {
+        let ast = self.ast;
+        let params = |f: DeclId| -> Vec<DeclId> {
+            ast.decls
+                .function(f)
+                .map(|x| ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default()
+        };
+        let mut addrs = Vec::new();
+        for (&p, val) in params(d).iter().zip(vals) {
+            let pq = ast.decls.get(p).ty().expect("param type");
+            let a = match *val {
+                CallArg::Scalar(v) => {
+                    let mt = self.mty(pq);
+                    let (_, align) = self.size_align(pq);
+                    let a = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
+                    self.store_scalar(v, a, pq);
+                    a
+                }
+                CallArg::Agg(a) => a,
+                CallArg::Complex(..) => {
+                    return err(
+                        Some(ast.decls.get(p).loc()),
+                        "cannot compile a caller-side contract check of a _Complex argument yet",
+                    );
+                }
+            };
+            addrs.push(a);
+        }
+        let mut saved = Vec::new();
+        let first = ast.contract_first(d);
+        let mut owners = vec![d];
+        if first != d {
+            owners.push(first);
+        }
+        for o in owners {
+            for (&p, &a) in params(o).iter().zip(&addrs) {
+                saved.push((p, self.f.locals.insert(p, a)));
+            }
+        }
+        let this = (self.f.this, self.f.this_class);
+        if let Some((v, cls)) = this_arg {
+            self.f.this = Some(v);
+            self.f.this_class = Some(cls);
+        }
+        let b = ClientBinding { d, saved, this };
+        let t = self.client_terminate_scope(d);
+        for s in self.contracts_of(d, ContractKind::Pre) {
+            self.emit_contract_check(s)?;
+        }
+        if t {
+            self.pop_terminate();
+        }
+        Ok(b)
+    }
+
+    /// The caller-side postconditions of the call [`Self::emit_client_pre`]
+    /// bound `b` for (under `-fcontracts-client-check=all`), on its normal
+    /// return: the result name denotes the scalar result `r` (in a
+    /// temporary) or the aggregate result object `dest`; then the
+    /// caller's own bindings are restored.
+    pub(crate) fn emit_client_post(
+        &mut self,
+        b: ClientBinding,
+        r: Option<V>,
+        dest: Option<Addr>,
+    ) -> R<()> {
+        let ast = self.ast;
+        let mut res = Vec::new();
+        if self.opts.contract_checks.client_checks(ContractKind::Post) && self.f.fir.cur().is_some()
+        {
+            let rq = ast
+                .decls
+                .get(b.d)
+                .ty()
+                .and_then(|t| ast.types.proto(t))
+                .map(kiln_ast::types::FuncProto::ret);
+            let mut slot = None;
+            let t = self.client_terminate_scope(b.d);
+            for s in self.contracts_of(b.d, ContractKind::Post) {
+                if let Some(n) = ast.stmts.contract_result_name(s) {
+                    if slot.is_none() {
+                        slot = match (r, dest, rq) {
+                            (Some(v), _, Some(rq)) => {
+                                let lt = self.lty(rq);
+                                let (_, align) = self.size_align(rq);
+                                let a = Addr { v: self.f.fir.alloca(lt, align), ty: lt, align };
+                                self.store_scalar(v, a, rq);
+                                Some(a)
+                            }
+                            (None, Some(a), _) => Some(a),
+                            _ => {
+                                return err(
+                                    Some(ast.stmts.get(s).loc()),
+                                    "cannot compile a caller-side postcondition of this result yet",
+                                );
+                            }
+                        };
+                    }
+                    if let Some(a) = slot {
+                        res.push((n, self.f.locals.insert(n, a)));
+                    }
+                }
+                self.emit_contract_check(s)?;
+            }
+            if t {
+                self.pop_terminate();
+            }
+        }
+        for (k, old) in res.into_iter().rev().chain(b.saved.into_iter().rev()) {
+            match old {
+                Some(a) => self.f.locals.insert(k, a),
+                None => self.f.locals.remove(&k),
+            };
+        }
+        (self.f.this, self.f.this_class) = b.this;
+        Ok(())
+    }
+
+    /// Opens a terminate scope around the caller-side checks of a callee
+    /// `d` with a non-throwing exception specification and says whether
+    /// it did: an exception the violation handler throws there leaves the
+    /// function as if from its body ([basic.contract.eval], [except.spec]).
+    fn client_terminate_scope(&mut self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let nothrow = ast
+            .decls
+            .get(d)
+            .ty()
+            .and_then(|t| ast.types.proto(t))
+            .is_some_and(|p| ast.types.exc_spec(p).is_nothrow());
+        let t = nothrow && self.opts.exceptions;
+        if t {
+            self.push_terminate();
+        }
+        t
+    }
+
+    /// Whether the caller-side postconditions of `d` name the result (the
+    /// call then needs an aggregate result object to bind it to).
+    pub(crate) fn client_post_names_result(&self, d: DeclId) -> bool {
+        self.opts.contract_checks.client_checks(ContractKind::Post)
+            && self
+                .contracts_of(d, ContractKind::Post)
+                .into_iter()
+                .any(|s| self.ast.stmts.contract_result_name(s).is_some())
     }
 
     /// One contract assertion `s` under the translation unit's semantic
@@ -390,6 +573,14 @@ impl Cg<'_> {
         })();
         r.map(|_| ()).map_err(|e| ir_err(&e))
     }
+}
+
+/// The caller's bindings a caller-side check replaced
+/// ([`Cg::emit_client_pre`]), restored by [`Cg::emit_client_post`].
+pub(crate) struct ClientBinding {
+    d: DeclId,
+    saved: Vec<(DeclId, Option<Addr>)>,
+    this: (Option<V>, Option<DeclId>),
 }
 
 fn ir_err(e: &kiln_llvm::IrError) -> crate::CodegenError {

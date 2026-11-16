@@ -1118,6 +1118,10 @@ impl Compiler<'_> {
             id::UNREACHABLE
             | id::TRAP
             | id::ABORT
+            // WP-1485: nor GCC's `exit` family (clang has none).
+            | id::EXIT
+            | id::UEXIT
+            | id::LEXIT
             | id::STRRCHR
             | id::STRPBRK
             | id::STRSTR

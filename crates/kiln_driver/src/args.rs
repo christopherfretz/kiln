@@ -320,6 +320,17 @@ pub struct PredefArgs {
     pub threadsafe_statics: Option<bool>,
     /// `-f[no-]sized-deallocation`.
     pub sized_deallocation: Option<bool>,
+    /// The last of `-f[no-]aligned-allocation`, `-f[no-]aligned-new` and
+    /// `-faligned-new=N` (WP-1487): whether a new-expression of an
+    /// over-aligned type calls the `std::align_val_t` allocation
+    /// functions ([expr.new]/19). `None`: on from C++17
+    /// ([`PredefArgs::aligned_allocation_for`]).
+    pub aligned_allocation: Option<bool>,
+    /// The last `-fnew-alignment=N` or `-faligned-new=N` with `N > 1`
+    /// (clang `NewAlignOverride`): the alignment `::operator new(size_t)`
+    /// guarantees, `__STDCPP_DEFAULT_NEW_ALIGNMENT__`, in place of the
+    /// target's. `None` keeps the target's.
+    pub new_alignment: Option<u64>,
     /// `-f[no-]short-enums` (last wins): an enumeration without a fixed
     /// underlying type takes the smallest integer type that holds its
     /// values, as with `__attribute__((packed))` (WP-1461).
@@ -370,6 +381,14 @@ impl PredefArgs {
     /// a delete-expression; WP-1460).
     pub fn sized_deallocation_for(&self, std: &crate::toolchain::LangStd) -> bool {
         self.sized_deallocation.unwrap_or(std.lex >= kiln_lex::Std::Cxx14)
+    }
+
+    /// Aligned allocation ([expr.new]/19, P0035): the last
+    /// `-f[no-]aligned-allocation` / `-f[no-]aligned-new` /
+    /// `-faligned-new=N`, else on from C++17 (clang
+    /// `LangOptions::AlignedAllocation`; GCC's `-faligned-new` default).
+    pub fn aligned_allocation_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        self.aligned_allocation.unwrap_or(std.lex >= kiln_lex::Std::Cxx17)
     }
 
     /// Whether contracts are on for an input in `std` (GCC 16.1's
@@ -518,6 +537,9 @@ pub enum ArgError {
     InvalidStdlib(String),
     /// An option with a bad integer value: `(argument, value)`.
     InvalidInt(String, String),
+    /// An alignment option whose value is not a power of two:
+    /// `(argument, value)` (clang `err_fe_invalid_alignment`).
+    InvalidAlignment(String, String),
     /// A flag with a value outside its set: `(argument, value)`
     /// ("invalid value '{v}' in '{arg}'").
     InvalidFlagValue(String, String),
@@ -622,6 +644,10 @@ pub struct Args {
     /// (GCC's spelling; P2900 evaluation semantics, spec/contracts.md §6).
     /// `None` is the default, enforce.
     pub contract_semantic: Option<kiln_ast::stmt::ContractSemantic>,
+    /// `-fcontracts-client-check=none|pre|all` and
+    /// `-fcontracts-definition-check=on|off` (GCC 16.1's; where function
+    /// contract assertions are checked, spec/contracts.md §6.1, WP-1485).
+    pub contract_checks: kiln_ast::stmt::ContractChecks,
     /// `-fkiln-cfg-max-elems=N`: the element cap of one body's graph
     /// (spec/sema.md §7.5).
     pub cfg_max_elems: Option<usize>,
@@ -697,6 +723,12 @@ pub struct Args {
     /// the allocation function ([expr.new]/8; on by default from C++11).
     /// Off, the allocation function is passed `SIZE_MAX`, as clang does.
     pub new_bound_check: Option<bool>,
+    /// The last of `-fcheck-new` / `-fno-check-new` (GCC, clang; WP-1487):
+    /// every allocation function may return null, so a new-expression
+    /// checks the result before initializing the object and yields null
+    /// then ([expr.new]/15 for all allocation functions; clang
+    /// `LangOptions::CheckNew`). Code generation only.
+    pub check_new: bool,
     /// `-fno-elide-constructors` (false) / `-felide-constructors` (true),
     /// the last one: optional copy elision (NRVO, elidable copies of a
     /// temporary). Off is rejected before C++17, where it would also
@@ -1595,6 +1627,8 @@ impl Args {
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-fkiln-new-bound-check" => self.new_bound_check = Some(true),
             "-fno-kiln-new-bound-check" => self.new_bound_check = Some(false),
+            "-fcheck-new" => self.check_new = true,
+            "-fno-check-new" => self.check_new = false,
             "-felide-constructors" => self.elide_constructors = Some(true),
             "-fno-elide-constructors" => self.elide_constructors = Some(false),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
@@ -1941,20 +1975,28 @@ impl Args {
     /// are accepted, the other values are unsupported; the optimization
     /// knobs are not supported by kiln.
     fn contract_semantic_flag(&mut self, arg: &str) -> bool {
-        for (opt, ours, theirs) in [
-            ("-fcontracts-client-check=", "none", &["pre", "all"][..]),
-            ("-fcontracts-definition-check=", "on", &["off"][..]),
-        ] {
-            if let Some(v) = arg.strip_prefix(opt) {
-                if v != ours {
-                    self.errors.push(if theirs.contains(&v) {
-                        ArgError::UnsupportedByKiln(arg.to_owned())
-                    } else {
-                        ArgError::UnsupportedValue(opt.to_owned(), v.to_owned())
-                    });
-                }
-                return true;
+        use kiln_ast::stmt::ClientCheck;
+        if let Some(v) = arg.strip_prefix("-fcontracts-client-check=") {
+            match v {
+                "none" => self.contract_checks.client = ClientCheck::None,
+                "pre" => self.contract_checks.client = ClientCheck::Pre,
+                "all" => self.contract_checks.client = ClientCheck::All,
+                _ => self.errors.push(ArgError::UnsupportedValue(
+                    "-fcontracts-client-check=".to_owned(),
+                    v.to_owned(),
+                )),
             }
+            return true;
+        }
+        if let Some(v) = arg.strip_prefix("-fcontracts-definition-check=") {
+            match v {
+                "on" | "off" => self.contract_checks.definition = v == "on",
+                _ => self.errors.push(ArgError::UnsupportedValue(
+                    "-fcontracts-definition-check=".to_owned(),
+                    v.to_owned(),
+                )),
+            }
+            return true;
         }
         if let Some(knob) = arg.strip_prefix("-f").map(|f| f.strip_prefix("no-").unwrap_or(f))
             && matches!(
@@ -2107,6 +2149,43 @@ impl Args {
         v
     }
 
+    /// `-fnew-alignment=N` (clang) and `-faligned-new=N` (GCC, which
+    /// clang 22 also accepts) (WP-1487). `N` is 0 or a power of two
+    /// below 2^32 (clang `err_fe_invalid_alignment`). `-fnew-alignment=N`
+    /// sets the alignment `::operator new(size_t)` guarantees (0: the
+    /// target's) and leaves aligned allocation alone; `-faligned-new=N`
+    /// also turns aligned allocation on, with GCC's meaning of 0 (off,
+    /// as `-fno-aligned-new`; clang 22 takes it as on with the target's
+    /// alignment) and 1 (on with the target's alignment; clang 22 takes
+    /// it as an alignment of 1).
+    fn new_alignment_flag(&mut self, arg: &str) -> bool {
+        let (gcc, v) = if let Some(v) = arg.strip_prefix("-fnew-alignment=") {
+            (false, v)
+        } else if let Some(v) = arg.strip_prefix("-faligned-new=") {
+            (true, v)
+        } else {
+            return false;
+        };
+        let Ok(n) = v.parse::<u32>() else {
+            self.errors.push(ArgError::InvalidInt(arg.to_owned(), v.to_owned()));
+            return true;
+        };
+        if n != 0 && !n.is_power_of_two() {
+            self.errors.push(ArgError::InvalidAlignment(arg.to_owned(), v.to_owned()));
+            return true;
+        }
+        let p = &mut self.predef;
+        if gcc {
+            p.aligned_allocation = Some(n != 0);
+            if n > 1 {
+                p.new_alignment = Some(u64::from(n));
+            }
+        } else {
+            p.new_alignment = (n != 0).then_some(u64::from(n));
+        }
+        true
+    }
+
     /// Flags that change predefined macros.
     fn predef_flag(&mut self, arg: &str) -> bool {
         if let Some(name) = arg.strip_prefix("-fno-builtin-")
@@ -2122,6 +2201,9 @@ impl Args {
                     .errors
                     .push(ArgError::UnsupportedValue("-fclang-compat=".to_owned(), v.to_owned())),
             }
+            return true;
+        }
+        if self.new_alignment_flag(arg) {
             return true;
         }
         if matches!(
@@ -2169,6 +2251,8 @@ impl Args {
             "-pthread" => p.pthread = true,
             "-fthreadsafe-statics" => p.threadsafe_statics = Some(true),
             "-fno-threadsafe-statics" => p.threadsafe_statics = Some(false),
+            "-faligned-allocation" | "-faligned-new" => p.aligned_allocation = Some(true),
+            "-fno-aligned-allocation" | "-fno-aligned-new" => p.aligned_allocation = Some(false),
             "-fsized-deallocation" => p.sized_deallocation = Some(true),
             "-fno-sized-deallocation" => p.sized_deallocation = Some(false),
             "-fshort-enums" => p.short_enums = true,
@@ -2506,6 +2590,27 @@ mod tests {
     }
 
     #[test]
+    fn aligned_new_flags() {
+        let p = |s| {
+            let a = parse(s);
+            (a.predef.aligned_allocation, a.predef.new_alignment, a.errors)
+        };
+        assert_eq!(p("a.cpp"), (None, None, vec![]));
+        assert_eq!(p("-faligned-new=32 a.cpp"), (Some(true), Some(32), vec![]));
+        // GCC: 0 turns aligned new off, 1 keeps the default threshold.
+        assert_eq!(p("-faligned-new=0 a.cpp").0, Some(false));
+        assert_eq!(p("-faligned-new=1 a.cpp"), (Some(true), None, vec![]));
+        assert_eq!(p("-fnew-alignment=8 -fnew-alignment=0 a.cpp").1, None);
+        assert_eq!(p("-faligned-new -fno-aligned-allocation a.cpp").0, Some(false));
+        assert_eq!(
+            p("-fnew-alignment=12 a.cpp").2,
+            [ArgError::InvalidAlignment("-fnew-alignment=12".into(), "12".into())]
+        );
+        let a = parse("-fcheck-new a.cpp");
+        assert!(a.check_new && !parse("-fcheck-new -fno-check-new a.cpp").check_new);
+    }
+
+    #[test]
     fn outline_atomics_last_wins() {
         assert_eq!(parse("a.cpp").outline_atomics, None);
         assert_eq!(parse("-mno-outline-atomics a.cpp").outline_atomics, Some(false));
@@ -2549,6 +2654,7 @@ mod tests {
     #[test]
     fn contracts_flags() {
         use crate::toolchain::LangStd;
+        use kiln_ast::stmt::{ClientCheck, ContractChecks};
         let (c23, c26, c11) = (
             LangStd::parse("c++23").unwrap(),
             LangStd::parse("c++26").unwrap(),
@@ -2562,13 +2668,31 @@ mod tests {
         assert!(a.predef.contracts_flag && a.errors.is_empty());
         let a = parse("-fcontracts -fno-contracts a.cpp");
         assert!(!a.predef.contracts_for(&c26) && a.predef.contracts_flag);
-        for ok in ["-fcontracts-client-check=none", "-fcontracts-definition-check=on"] {
-            assert_eq!(parse(&format!("{ok} a.cpp")).errors, [], "{ok}");
+        assert_eq!(parse("a.cpp").contract_checks, ContractChecks::default());
+        for (ok, client, definition) in [
+            ("-fcontracts-client-check=none", ClientCheck::None, true),
+            ("-fcontracts-client-check=pre", ClientCheck::Pre, true),
+            ("-fcontracts-client-check=all", ClientCheck::All, true),
+            ("-fcontracts-client-check=all -fcontracts-client-check=none", ClientCheck::None, true),
+            ("-fcontracts-definition-check=off", ClientCheck::None, false),
+            (
+                "-fcontracts-definition-check=off -fcontracts-definition-check=on",
+                ClientCheck::None,
+                true,
+            ),
+        ] {
+            let a = parse(&format!("{ok} a.cpp"));
+            assert_eq!(
+                (a.contract_checks, a.errors),
+                (ContractChecks { client, definition }, vec![]),
+                "{ok}"
+            );
         }
+        assert_eq!(
+            parse("-fcontracts-definition-check=no a.cpp").errors,
+            [ArgError::UnsupportedValue("-fcontracts-definition-check=".into(), "no".into())]
+        );
         for no in [
-            "-fcontracts-client-check=all",
-            "-fcontracts-client-check=pre",
-            "-fcontracts-definition-check=off",
             "-fcontract-checks-outlined",
             "-fno-contract-checks-outlined",
             "-fcontract-disable-optimized-checks",

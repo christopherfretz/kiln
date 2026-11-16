@@ -353,6 +353,7 @@ impl CodegenJob<'_> {
             no_builtin_fns: a.no_builtin_fns(),
             freestanding: a.predef.freestanding.unwrap_or(false),
             sized_deallocation: a.predef.sized_deallocation_for(&job.std),
+            aligned_allocation: a.predef.aligned_allocation_for(&job.std),
             short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
@@ -365,6 +366,7 @@ impl CodegenJob<'_> {
             permissive: a.permissive,
             range_for_ext_temps: a.range_for_ext_temps,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
+            contract_checks: a.contract_checks,
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
             record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),
             record_image: a.bmi_image
@@ -400,6 +402,8 @@ impl CodegenJob<'_> {
         if let Some(signed) = a.predef.char_signed {
             target.types.char_signed = signed;
         }
+        // WP-1487: `-fnew-alignment=N` / `-faligned-new=N`.
+        target.default_new_align = a.predef.new_alignment.unwrap_or(target.default_new_align);
         // WP-813: the flags this target rejects end the `-cc1` job.
         let x86 = !job.toolchain.target.is_aarch64();
         let target_errors = a.codegen.target_errors(x86);
@@ -547,6 +551,8 @@ impl CodegenJob<'_> {
             opts.bad_array_new_length = job.std.cplusplus
                 && job.std.lex >= kiln_lex::Std::Cxx11
                 && a.new_bound_check.unwrap_or(true);
+            opts.check_new = a.check_new;
+            opts.contract_checks = a.contract_checks;
             // WP-1032: the ignorelists the driver validated.
             opts.ignorelist = a.sanitize.ignorelist(
                 opts.sanitize.kinds,
@@ -1712,14 +1718,23 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
 
 /// Whether the link adds `-lstdc++exp` after the inputs, where GCC 16.1's
 /// `g++` puts it (right before the `-lstdc++` the linking clang++ adds):
-/// as `g++`, when `-fcontracts` or `-fno-contracts` was given; only for
-/// the C++ driver with libstdc++, without `-nostdlib`, `-nodefaultlibs` or
-/// `-nostdlib++`, and only when the selected GCC installation has the
-/// archive (spec/driver.md "Link options"). It holds libstdc++'s default
-/// `handle_contract_violation` (spec/contracts.md §6.3); as a static
-/// archive it adds nothing to a program that does not reference it.
+/// at C++26 and later (`-std=c++26`, `gnu++26`, `c++2c`, `gnu++2c`), and
+/// below it when `-fcontracts` or `-fno-contracts` was given, as `g++`
+/// does; only for the C++ driver with libstdc++, without `-nostdlib`,
+/// `-nodefaultlibs` or `-nostdlib++`, and only when the selected GCC
+/// installation has the archive (spec/driver.md "Link options"). The
+/// archive holds the parts of libstdc++ whose ABI is not frozen (the
+/// default `handle_contract_violation`, spec/contracts.md §6.3,
+/// `<stacktrace>`, `std::text_encoding::environment`, `<debugging>`, the
+/// Filesystem TS); as a static archive it adds nothing to a program that
+/// references none of them. g++ 16.1 does not add it at a plain
+/// `-std=c++26`; kiln deliberately does.
 fn links_libstdcxx_exp(args: &Args, tc: &Toolchain) -> bool {
-    args.predef.contracts_flag
+    let cxx26 = || {
+        input_std(args, crate::args::Lang::Cxx)
+            .is_ok_and(|s| s.cplusplus && s.lex >= kiln_lex::Std::Cxx26)
+    };
+    (args.predef.contracts_flag || cxx26())
         && args.mode != DriverMode::Gcc
         && args.stdlib.unwrap_or_default() == StdLib::LibStdCxx
         && !args
@@ -2474,6 +2489,31 @@ mod tests {
         let c = Args::parse_as("kiln", &["-fcontracts".to_owned(), "a.o".to_owned()]);
         let cmd = link_command(&c, &tc, &[(0, "a.o".to_owned())]);
         assert_eq!(cmd.args, ["--driver-mode=gcc", "a.o", "-o", "a.out"]);
+        // WP-1485 item 10: at C++26 and later without the flag, once.
+        for std in ["-std=c++26", "-std=gnu++26", "-std=c++2c", "-std=gnu++2c"] {
+            assert_eq!(link(&[std, "a.o"]), ["a.o", "-lstdc++exp", "-o", "a.out"]);
+        }
+        assert_eq!(
+            link(&["-std=c++26", "-fcontracts", "a.o"]),
+            ["a.o", "-lstdc++exp", "-o", "a.out"]
+        );
+        assert_eq!(link(&["-std=c++23", "a.o"]), ["a.o", "-o", "a.out"]);
+        assert_eq!(
+            link(&["-std=c++23", "-fcontracts", "a.o"]),
+            ["a.o", "-lstdc++exp", "-o", "a.out"]
+        );
+        for off in ["-nostdlib", "-nodefaultlibs", "-nostdlib++"] {
+            assert_eq!(link(&["-std=c++26", off, "a.o"]), [off, "a.o", "-o", "a.out"]);
+        }
+        assert_eq!(
+            link(&["-std=c++26", "-stdlib=libc++", "a.o"]),
+            ["-stdlib=libc++", "a.o", "-o", "a.out"]
+        );
+        let c = Args::parse_as("kiln", &["-std=c23".to_owned(), "a.o".to_owned()]);
+        let cmd = link_command(&c, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["--driver-mode=gcc", "a.o", "-o", "a.out"]);
+        std::fs::remove_file(lib64.join("libstdc++exp.a")).unwrap();
+        assert_eq!(link(&["-std=c++26", "a.o"]), ["a.o", "-o", "a.out"]);
         temp.remove();
     }
 

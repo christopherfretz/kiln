@@ -93,6 +93,13 @@ pub struct PredefConfig {
     pub threadsafe_statics: bool,
     /// `-fsized-deallocation` (default on).
     pub sized_deallocation: bool,
+    /// Aligned allocation (`-f[no-]aligned-allocation`, `-f[no-]aligned-new`,
+    /// `-faligned-new=N`; WP-1487): `__cpp_aligned_new`. `None` keeps the
+    /// standard's (C++17 and later).
+    pub aligned_allocation: Option<bool>,
+    /// `-fnew-alignment=N` / `-faligned-new=N` (WP-1487):
+    /// `__STDCPP_DEFAULT_NEW_ALIGNMENT__` in place of the target's.
+    pub new_alignment: Option<u64>,
     /// kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`,
     /// `__KILN_PATCH__`).
     pub kiln_version: (u32, u32, u32),
@@ -189,6 +196,8 @@ impl PredefConfig {
             pthread: false,
             threadsafe_statics: true,
             sized_deallocation: true,
+            aligned_allocation: None,
+            new_alignment: None,
             kiln_version: (0, 0, 0),
             version_macro: None,
             clang_compat: ClangCompat::Clang22,
@@ -639,6 +648,30 @@ fn apply_range_for_ext_temps(m: &mut BTreeMap<String, String>, on: Option<bool>)
     }
 }
 
+/// `-fno-sized-deallocation`; and (WP-1487) as clang, `__cpp_aligned_new`
+/// follows aligned allocation in every C++ mode, and the default new
+/// alignment follows `-fnew-alignment=` whether or not it is on.
+fn apply_new_delete(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
+    if !cfg.sized_deallocation {
+        m.remove("__cpp_sized_deallocation");
+    }
+    match cfg.aligned_allocation {
+        Some(false) => {
+            m.remove("__cpp_aligned_new");
+        }
+        Some(true) if !m.contains_key("__cpp_aligned_new") => {
+            set(m, "__cpp_aligned_new", "201606L");
+        }
+        _ => {}
+    }
+    if let Some(n) = cfg.new_alignment
+        && let Some(old) = m.get("__STDCPP_DEFAULT_NEW_ALIGNMENT__")
+    {
+        let suffix = old.trim_start_matches(|c: char| c.is_ascii_digit()).to_owned();
+        set(m, "__STDCPP_DEFAULT_NEW_ALIGNMENT__", &format!("{n}{suffix}"));
+    }
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -700,9 +733,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.threadsafe_statics {
             m.remove("__cpp_threadsafe_static_init");
         }
-        if !cfg.sized_deallocation {
-            m.remove("__cpp_sized_deallocation");
-        }
+        apply_new_delete(m, cfg);
         apply_contracts(m, cfg.contracts, cfg.range_for_ext_temps);
         apply_std_keyed(m, cfg.reflection);
         apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);

@@ -1083,6 +1083,12 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   may return null: when there is an initializer, the result is compared
   with `null` and initialization runs in a not-null block, joined by a `phi`
   of the result and `null`.
+  With `-fcheck-new` (`CodegenOptions::check_new`, WP-1485; clang's
+  `CheckNew`, which GCC 16.1 shares) every allocation function's result
+  is tested the same way, the reserved placement form included, and the
+  replaceable `operator new` gets no `nonnull` on its declaration or its
+  calls; without an initializer and with a non-class type there is still
+  no test.
 - **Cleanup emulation.** clang pushes an EH cleanup that frees the memory
   if initialization throws. kiln has no EH yet: when the initializer
   cannot throw, the cleanup is never used, but clang's -O0 IR still shows
@@ -3336,6 +3342,17 @@ A constant whose union holds an array member with unconstructed elements
 (spec/oven.md "C++26 union lifetime") is emitted with those elements as
 zero bytes, like any byte not covered by the constant's image. Test:
 `tests/conformance/obj.lifetime/start-lifetime-run.cpp`.
+
+**Process exit (WP-1485).** GCC's `__builtin_exit(int)`,
+`__builtin__Exit(int)` and `__builtin__exit(int)` (`nothrow`, `noreturn`;
+clang 22 has none of them) are calls of the library `exit`, `_Exit` and
+`_exit`. Like kiln's other GCC-only builtins (`__builtin_clear_padding`,
+`__builtin_start_lifetime`, `__builtin_is_corresponding_member`) they are
+declared in every dialect and at every `-fclang-compat` level, and
+`__has_builtin` answers clang's 0 for them. A call is never a constant
+expression ("subexpression not valid in a constant expression", as for
+`__builtin_abort`). `tests/conformance/ext.gnu.builtins/run-builtin-exit*.cpp`,
+`builtin-exit-constexpr.cpp`.
 
 **Clearing padding (WP-774).** `__builtin_clear_padding(p)` (GCC; clang
 has no such builtin, LLVM issue 64830) zeroes the padding bits of `*p`

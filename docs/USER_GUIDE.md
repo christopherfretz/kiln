@@ -174,13 +174,30 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   (GCC's spelling) selects the semantic for the translation unit. The
   default is `enforce`. A violation calls your own
   `handle_contract_violation` or the default one: libstdc++ 16's (in
-  `libstdc++exp.a`, which kiln++ links, as `g++` does, when `-fcontracts`
-  or `-fno-contracts` is given and the GCC installation has it), or, with
-  libc++ and older libstdc++, the one from kiln's `<contracts>`. GCC's
-  `-fcontracts-client-check=none` and `-fcontracts-definition-check=on`
-  (kiln checks in the called function) are accepted; their other values,
-  `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks` and
+  `libstdc++exp.a`, which kiln++ links when the GCC installation has it,
+  at C++26 always and in earlier modes, as `g++` does, when `-fcontracts`
+  or `-fno-contracts` is given; unlike g++, which needs the flag even at
+  C++26; the same archive holds `<stacktrace>` and the other parts of
+  libstdc++ whose ABI is not frozen, and `-nostdlib++` turns it off), or, with
+  libc++ and older libstdc++, the one from kiln's `<contracts>`. By
+  default a function checks its own preconditions and postconditions.
+  GCC's `-fcontracts-client-check=pre` (or `all`) also checks the
+  preconditions (or both kinds) at each direct call, in the caller, and
+  `-fcontracts-definition-check=off` stops the function checking its
+  own. Neither changes any symbol, and a PCH may be used with other
+  values. `-fcontract-checks-outlined`,
+  `-fcontract-disable-optimized-checks` and
   `-fcontracts-conservative-ipa` are not supported.
+- **Allocation flags** (clang's and GCC's): `-fcheck-new` makes every
+  new-expression test the allocation's result for null before it
+  constructs the object. `-fno-aligned-new` (or
+  `-fno-aligned-allocation`) stops over-aligned types from using the
+  `std::align_val_t` forms of `operator new`; aligned allocation is on
+  by default from C++17 and `-faligned-new` turns it on earlier.
+  `-fnew-alignment=N` (or GCC's `-faligned-new=N`) sets the alignment
+  plain `operator new` guarantees, which decides which types count as
+  over-aligned. A PCH must be built with the same aligned-allocation
+  flags as its users; `-fcheck-new` may differ.
 - **Erroneous behaviour** (P2795) at C++26: an automatic variable of at
   most 4096 bytes that has no initializer is zero-filled at its
   declaration, so reading it gives zero instead of an indeterminate

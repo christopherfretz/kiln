@@ -156,6 +156,7 @@ note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '
 note_sme_use_preserves_za = Note (0) "add '__arm_preserves(\"za\")' to the callee if it preserves ZA";
 note_specialized_decl = Note (0) "attempt to specialize declaration here";
 note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
+note_suggest_parens_for_macro = Note (0) "parentheses are required around macro argument containing braced initializer list";
 note_surrounding_namespace_ends_here = Note (0) "surrounding namespace with visibility attribute ends here";
 note_surrounding_namespace_starts_here = Note (0) "surrounding namespace with visibility attribute starts here";
 note_switch_conversion = Note (2) "conversion to {0:integral|enumeration} type {1}";

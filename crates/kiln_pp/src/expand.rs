@@ -320,6 +320,50 @@ impl Preprocessor<'_, '_> {
         }
     }
 
+    /// Too many arguments to `def` (at `at`): the error, and clang's
+    /// `GenerateNewArgTokens` recovery. Commas of braced lists split the
+    /// arguments; parenthesized, they may be what was meant, so when that
+    /// gives the right count `toks` and `bounds` are regrouped and the
+    /// result is true.
+    fn regroup_too_many(
+        &mut self,
+        name: &PpTok,
+        def: &MacroDef,
+        at: Span,
+        toks: &mut Vec<PpTok>,
+        bounds: &mut Vec<usize>,
+    ) -> bool {
+        let d = Diag::new(DiagId::pp_macro_args_mismatch, at);
+        let d = self.note_macro(d.arg(1), def);
+        match regroup_braced_args(toks, def.params.len()) {
+            Ok(fixed) => {
+                let n = Diag::new(DiagId::note_suggest_parens_for_macro, name.tok.span);
+                self.emit(d.with_note(n));
+                bounds.clear();
+                let mut start = 0;
+                for (i, t) in fixed.iter().enumerate() {
+                    if t.is_eof() {
+                        bounds.push(start);
+                        start = i + 1;
+                    }
+                }
+                toks.clear();
+                toks.extend_from_slice(&fixed);
+                true
+            }
+            Err(init_list) => {
+                let d = if init_list {
+                    let id = DiagId::note_init_list_at_beginning_of_macro_argument;
+                    d.with_note(Diag::new(id, name.tok.span))
+                } else {
+                    d
+                };
+                self.emit(d);
+                false
+            }
+        }
+    }
+
     /// Reads the arguments of a function-like macro invocation; the next
     /// token is the `(` (clang `ReadMacroCallArgumentList`). Returns the
     /// arguments and the `)`, or the token to return instead (`None`: the
@@ -393,9 +437,11 @@ impl Preprocessor<'_, '_> {
             pp.emit(pp.note_macro(d, def));
         };
         if !def.variadic && actuals > nparams {
-            mismatch(self, 1, too_many_at.unwrap_or(name.tok.span));
-            self.give_buf(toks);
-            return Err(None);
+            let at = too_many_at.unwrap_or(name.tok.span);
+            if !self.regroup_too_many(name, def, at, &mut toks, &mut bounds) {
+                self.give_buf(toks);
+                return Err(None);
+            }
         }
         let mut elided = false;
         if actuals < nparams {
@@ -1366,5 +1412,79 @@ impl Preprocessor<'_, '_> {
             return (false, Some(cur));
         }
         (kiln_diag::Group::is_known_name(&name[2..]), Some(cur))
+    }
+}
+
+/// clang `GenerateNewArgTokens`: the arguments `toks` (each ending with
+/// an `Eof`) regrouped so that a separator inside braces is a comma
+/// again, each argument that absorbed one wrapped in empty-span
+/// parentheses. `Ok` when that gives `nparams` arguments and at least one
+/// was wrapped; `Err(true)` when a wrapped argument would start with `{`
+/// (parentheses cannot help it).
+fn regroup_braced_args(toks: &[PpTok], nparams: usize) -> Result<Vec<PpTok>, bool> {
+    let mut stack = Vec::new();
+    for t in toks {
+        match t.kind() {
+            TokKind::Punct(p @ (Punct::LParen | Punct::LBrace)) => stack.push(p),
+            TokKind::Punct(Punct::RParen) if stack.pop() != Some(Punct::LParen) => {
+                return Err(false);
+            }
+            TokKind::Punct(Punct::RBrace) if stack.pop() != Some(Punct::LBrace) => {
+                return Err(false);
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Err(false);
+    }
+    let punct = |p: Punct, at: Loc| {
+        PpTok::new(Token {
+            kind: TokKind::Punct(p),
+            span: Span::empty(at),
+            flags: TokFlags::empty(),
+        })
+    };
+    let (mut out, mut braces, mut start, mut absorbed) = (Vec::new(), 0u32, 0, false);
+    let (mut args, mut wrapped, mut init_list) = (0, false, false);
+    let mut cur: Vec<PpTok> = Vec::new();
+    for (i, t) in toks.iter().enumerate() {
+        match t.kind() {
+            TokKind::Punct(Punct::LBrace) => braces += 1,
+            TokKind::Punct(Punct::RBrace) => braces -= 1,
+            TokKind::Eof if braces != 0 => {
+                // The separator was a comma (its `Eof` is at the comma).
+                let lo = t.tok.span.lo;
+                let mut c = punct(Punct::Comma, lo);
+                c.tok.span = Span::new(lo, lo.with_offset(1));
+                cur.push(c);
+                absorbed = true;
+                continue;
+            }
+            TokKind::Eof => {
+                args += 1;
+                if absorbed {
+                    init_list |= toks[start].is_punct(Punct::LBrace);
+                    let end = cur.last().map_or(t.tok.span.lo, |l| l.tok.span.hi);
+                    out.push(punct(Punct::LParen, toks[start].tok.span.lo));
+                    out.append(&mut cur);
+                    out.push(punct(Punct::RParen, end));
+                    wrapped = true;
+                } else {
+                    out.append(&mut cur);
+                }
+                out.push(*t);
+                start = i + 1;
+                absorbed = false;
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(*t);
+    }
+    match (wrapped, init_list) {
+        (_, true) => Err(true),
+        (true, false) if args == nparams => Ok(out),
+        _ => Err(false),
     }
 }

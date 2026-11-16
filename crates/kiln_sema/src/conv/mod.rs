@@ -1141,11 +1141,16 @@ fn bind_reference(
             Ok(raw_cast(s, CastKind::DerivedToBase, x, target, out_vk, Some(list)))
         }
         BaseSearch::Ambiguous(paths) => {
+            // clang: the derived glvalue with the reference's qualifiers,
+            // at the initializer (WP-1487).
             let shown = bases::ambiguous_paths_string(s, from, &paths);
-            Err(ConvError::new(
+            let qd = s.ast.types.qualify(strip_cv(s, from), rq);
+            let mut err = ConvError::new(
                 DiagId::sema_ambiguous_derived_to_base,
-                vec![s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, referee)), shown],
-            ))
+                vec![s.ty_arg(qd), s.ty_arg(target), shown],
+            );
+            err.at = Some(s.expr_loc(e));
+            Err(err)
         }
     }
 }

@@ -325,6 +325,12 @@ pub trait SemaBridge {
     fn consteval_only_values(&self) -> bool {
         false
     }
+    /// Where function contract assertions are checked (spec/contracts.md
+    /// §6.4, WP-1485): a constant evaluation checks a kind wherever run
+    /// time would. The default checks every kind in the called function.
+    fn contract_checks(&self) -> kiln_ast::stmt::ContractChecks {
+        kiln_ast::stmt::ContractChecks::default()
+    }
     /// The layout of a complete record (via `kiln_abi`); `None` while the
     /// class is incomplete (no definition, or still being defined).
     fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout>;

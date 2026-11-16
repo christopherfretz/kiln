@@ -170,6 +170,7 @@ note_include_header_or_declare = Note (2) "include the header <{0}> or explicitl
 note_indirect_goto_target = Note (1) "possible target of {0:indirect|asm} goto statement";
 note_indirection_through_null = Note (0) "consider using __builtin_trap() or qualifying pointer with 'volatile'";
 note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
+note_init_list_at_beginning_of_macro_argument = Note (0) "cannot use initializer list at the beginning of a macro argument";
 note_init_list_narrowing_silence = Note (0) "insert an explicit cast to silence this issue";
 note_init_previous = Note (0) "previous initialization is here";
 note_init_previous_side_effects = Note (0) "previous initialization with side effects is here (side effects will not occur at run time)";

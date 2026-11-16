@@ -2141,7 +2141,16 @@ impl Compiler<'_> {
         let Some(l) = ast.function_contracts(def).filter(|_| ast.contract_semantic.checks()) else {
             return Vec::new();
         };
-        let list: Vec<StmtId> = ast.lists.iter::<StmtId>(l).collect();
+        // WP-1485: a kind neither side checks at run time is not checked
+        // here either (-fcontracts-definition-check=off).
+        let checks = self.b.contract_checks();
+        let structor =
+            matches!(ast.decls.get(def).kind(), DeclKind::CXXConstructor | DeclKind::CXXDestructor);
+        let list: Vec<StmtId> = ast
+            .lists
+            .iter::<StmtId>(l)
+            .filter(|&s| checks.evaluation_checks(ast.stmts.contract_kind(s), structor))
+            .collect();
         let mut s = Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
         for &c in &list {
             s.stmt(c);

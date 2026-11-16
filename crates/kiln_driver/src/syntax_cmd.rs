@@ -333,6 +333,8 @@ impl SyntaxJob<'_> {
             return None;
         };
         target.types.char_signed = a.predef.char_signed.unwrap_or(target.types.char_signed);
+        // WP-1487: `-fnew-alignment=N` / `-faligned-new=N`.
+        target.default_new_align = a.predef.new_alignment.unwrap_or(target.default_new_align);
         // WP-630: `cx16` makes 128-bit atomics lock-free (clang
         // `X86TargetInfo::setMaxAtomicWidth`).
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
@@ -365,6 +367,7 @@ impl SyntaxJob<'_> {
             no_builtin_fns: a.no_builtin_fns(),
             freestanding: a.predef.freestanding.unwrap_or(false),
             sized_deallocation: a.predef.sized_deallocation_for(&job.std),
+            aligned_allocation: a.predef.aligned_allocation_for(&job.std),
             short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
@@ -379,6 +382,7 @@ impl SyntaxJob<'_> {
             permissive: a.permissive,
             range_for_ext_temps: a.range_for_ext_temps,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
+            contract_checks: a.contract_checks,
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,

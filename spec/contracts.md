@@ -316,17 +316,54 @@ are `-fcontracts`, `-fcontract-evaluation-semantic=`,
 `-fcontracts-client-check=`, `-fcontracts-definition-check=`,
 `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`,
 `-fcontracts-conservative-ipa` and `-fpreview=inclusiveincontracts`;
-kiln accepts `-fcontracts` (§1), `-fcontracts-client-check=none` and
-`-fcontracts-definition-check=on` (GCC's defaults: the checks are in the
-called function, as kiln's always are) and diagnoses the other values
-and `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`
-and `-fcontracts-conservative-ipa` as not supported (WP-1463; a
-caller-side check and the outlining are code generation choices kiln
-has not implemented; `-fpreview=inclusiveincontracts` is a D option);
+kiln accepts `-fcontracts` (§1), `-fcontracts-client-check=` and
+`-fcontracts-definition-check=` (below) and diagnoses
+`-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`
+and `-fcontracts-conservative-ipa` as not supported (WP-1463; the
+outlining is a code generation choice kiln has not implemented;
+`-fpreview=inclusiveincontracts` is a D option);
 it has no semantic attribute (it warns that attributes on a
 function-contract-specifier are ignored) and no contract labels. A
 per-assertion form (labels, P3400) is post-C++26 work; the `aux` slots
 stay reserved for it.
+
+**Where function contract assertions are checked (WP-1485).** GCC
+16.1's two flags, as its behaviour on small programs shows (its
+documentation says no more than the values), the last of each wins,
+and any other value is "unsupported argument" (`Args::contract_checks`,
+`kiln_ast::stmt::ContractChecks`):
+
+- `-fcontracts-definition-check=on|off` (default `on`): whether a
+  function evaluates its own preconditions and postconditions (§6.3).
+  `off` leaves them out of its definition, in code generation and in
+  constant evaluation (§6.4). `contract_assert` is not affected.
+- `-fcontracts-client-check=none|pre|all` (default `none`): `pre` makes
+  the caller evaluate the preconditions of each function it calls
+  directly, at the call, after the arguments are evaluated and before
+  the call; `all` also makes it evaluate the postconditions after the
+  call returns normally, with the result name bound to the call's
+  result. A constructor or destructor is never checked by the caller,
+  nor is a call through a pointer to function or member function (the
+  callee is not known). The assertions are those of the declaration the
+  call names (the caller-visible one); the `contract_violation` is the
+  callee's own (its source location, its `__PRETTY_FUNCTION__`). A
+  virtual function has no function contract assertions in C++26
+  ([dcl.contract.func]/6), so no virtual call is affected. The
+  caller-side checks of a function with a non-throwing exception
+  specification run inside a terminate scope: an exception the
+  violation handler throws calls `std::terminate`, as if it left the
+  function itself (GCC 16.1 does the same).
+- Both on (`client-check=pre|all` with the default `definition-check=on`):
+  a direct call evaluates the checked kinds twice, once on each side,
+  as GCC does ([basic.contract.eval]/6 allows repetition).
+- ABI: no symbol changes on either side; the caller's object gains only
+  references to the handler (and `std::terminate`), exactly as a body
+  with a `contract_assert` does (GCC 16.1 also emits a local
+  `__tu_terminate_wrapper`; kiln calls `std::terminate` directly).
+  Translation units compiled with different settings therefore link
+  and each check runs where its own unit says: a caller with
+  `client-check=none` calling a definition compiled with
+  `definition-check=off` checks nothing.
 
 ### 6.2 Today (WP-707)
 
@@ -355,6 +392,25 @@ stay reserved for it.
   (`Ast::contract_param_aliases`).
 
 ### 6.3 Codegen (callee side, as GCC)
+
+The callee-side checks below are left out under
+`-fcontracts-definition-check=off`. The caller-side checks of
+`-fcontracts-client-check=` (§6.1) are emitted at each direct call
+(`emit_call_inner`, and `emit_method_call` for a member function;
+`Cg::client_checked`, `emit_client_pre`, `emit_client_post`): each
+parameter of the called declaration (and of the one its assertions are
+written on) is bound to its argument (a scalar spilled to a temporary,
+an aggregate's argument temporary), `this` to the object argument, and
+the result name to the result (a scalar spilled to a temporary, a class
+to its result object, made a temporary when the call has none); the
+caller's own bindings are restored after the call. The predicates are
+then emitted exactly as in the callee, as below. The constant-folding
+prepass also scans the assertions of a declaration that has no
+definition in the unit. *Gaps:* a `_Complex` argument or result named
+by a caller-side check is "cannot compile ... yet"; an implicit call
+that is not a call expression (a conversion function used by a
+conversion, an operator inside a built-in rewrite) is not checked by
+the caller.
 
 - Preconditions are evaluated in order at function entry, after the
   parameters are initialised and before the body (and before a
@@ -461,6 +517,17 @@ stay reserved for it.
   budgets as the rest of the evaluation; a predicate's side effects are
   allowed only on objects whose lifetime began in the evaluation (the
   usual rule). A postcondition reads the result object in place.
+- A function's preconditions (postconditions) are checked where some
+  side checks them at run time: `-fcontracts-definition-check=on`, or
+  `-fcontracts-client-check=pre|all` (`all`) and the function is not a
+  constructor or destructor (`ContractChecks::evaluation_checks`, via
+  `SemaBridge::contract_checks`; WP-1485). The Oven decides per
+  function, not per call, so a call through a pointer is checked too;
+  [basic.contract.eval]/2 makes the choice implementation-defined for
+  each evaluation, so either is conforming. GCC 16.1 rejects such a
+  constant evaluation with `client-check=all` and
+  `definition-check=off` ("call to non-constexpr function", its
+  caller-side wrapper is not `constexpr`), a GCC bug.
 - Code: the predicates are compiled once, into the function's own
   bytecode (`kiln_oven/src/compile.rs` `scan_contracts`,
   `contract_check`, `check_posts`): preconditions after the parameter
@@ -677,6 +744,31 @@ Decisions:
   specialization starts at the implicit declaration deduction or class
   instantiation made, so the contract rules start at the first
   *written* declaration (`Ast::contract_first`).
+- **A member named through a lambda's captured `this` in a
+  constructor's precondition (WP-1485).** kiln rejects
+  `C() pre([this] { return m > 0; }())`; GCC 16.1 accepts it. The
+  working draft decides it in two steps. (a) [expr.prim.id.general]/2:
+  an id-expression that denotes a non-static member of the current
+  class, potentially evaluated, "is transformed into a class member
+  access expression using `(*this)` as the object expression. If this
+  transformation occurs in the predicate of a precondition assertion of
+  a constructor of X or a postcondition assertion of a destructor of
+  X, the expression is ill-formed." (b) [expr.prim.lambda.closure]: the
+  lambda's compound-statement yields the body of the function call
+  operator, "but for purposes of name lookup, determining the type and
+  value of `this` and transforming id-expressions referring to
+  non-static class members into class member access expressions using
+  `(*this)`, the compound-statement is considered in the context of the
+  lambda-expression". The lambda-expression is part of the predicate,
+  so the transformation of `m` is considered to occur in the
+  predicate, with X the constructor's class (the current class of the
+  lambda's body is the enclosing class, [expr.prim.this]). Nothing in
+  either paragraph limits (a) to id-expressions written directly in the
+  predicate, and the rule's purpose (a precondition must not read
+  members of an object whose lifetime has not begun without saying
+  `this->` explicitly) applies equally to a lambda called there. An
+  explicit `this->m` in the lambda is fine, as in the predicate itself
+  (`expr.prim.id/contract-implicit-this-kiln.cpp`, no oracle).
 - **Error recovery.** The postcondition-parameter const rule does not
   invalidate the parameter: a body that uses it is still analysed and a
   constant evaluation under `ignore` does not report a spurious

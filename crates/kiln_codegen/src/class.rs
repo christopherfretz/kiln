@@ -2199,12 +2199,28 @@ impl Cg<'_> {
             let mut sig = self.call_sig(fty, false, &arg_tys);
             let (extra, nr) = self.call_extra(md, fty, &mut sig);
             let vals = self.emit_call_args_for(&sig, args, Some(md))?;
+            let mut dest = dest;
+            let client = match self.client_checked(md) {
+                Some(d) => {
+                    if dest.is_none()
+                        && self.is_aggregate(sig.ret)
+                        && self.client_post_names_result(d)
+                    {
+                        dest = Some(self.temp(sig.ret));
+                    }
+                    Some(self.emit_client_pre(d, None, &vals)?)
+                }
+                None => None,
+            };
             self.arm_musttail(e);
             let callee = V::C(Value::func(f));
             let from = self.f.calls.len();
             let r = self.call_vals(&sig, callee, Some(f), None, &vals, args, dest, &extra)?;
             if nr {
                 self.finish_noreturn_call(from, Some(f), Some(e))?;
+            }
+            if let Some(b) = client {
+                self.emit_client_post(b, r, dest)?;
             }
             return Ok(r);
         }
@@ -2330,6 +2346,18 @@ impl Cg<'_> {
             Some(v) => v,
             None => self.emit_call_args_for(&sig, args, Some(md))?,
         };
+        // WP-1485: -fcontracts-client-check= (spec/contracts.md §6.3).
+        let mut dest = dest;
+        let client = match self.client_checked(md) {
+            Some(d) => {
+                if dest.is_none() && self.is_aggregate(sig.ret) && self.client_post_names_result(d)
+                {
+                    dest = Some(self.temp(sig.ret));
+                }
+                Some(self.emit_client_pre(d, Some((this.v, crd)), &vals)?)
+            }
+            None => None,
+        };
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
         let callee = V::C(Value::func(f));
@@ -2347,6 +2375,9 @@ impl Cg<'_> {
         }
         if nr {
             self.finish_noreturn_call(from, Some(f), Some(e))?;
+        }
+        if let Some(b) = client {
+            self.emit_client_post(b, r, dest)?;
         }
         Ok(r)
     }
