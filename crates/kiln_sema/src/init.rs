@@ -821,7 +821,8 @@ impl Sema<'_, '_> {
     /// (`settled` if no argument is dependent or erroneous) that is
     /// ill-formed: `()` value-initializes and an array of unknown bound is
     /// incomplete ([dcl.init.general]/16.4, `T t(f<A>()...)` with an empty
-    /// pack), and a parenthesized expression list initializes an array
+    /// pack; a complete array is value-initialized), and a non-empty
+    /// parenthesized expression list initializes an array
     /// (other than from a string literal) only from C++20
     /// ([dcl.init.general]/16.5, P0960; clang `FK_ArrayNeedsInitList`).
     fn paren_init_rejected(&mut self, ty: QualType, v: &[ExprId], settled: bool, loc: Loc) -> bool {
@@ -833,7 +834,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return true;
         }
-        if self.std >= kiln_lex::Std::Cxx20
+        if v.is_empty()
+            || self.std >= kiln_lex::Std::Cxx20
             || !settled
             || !self.ast.types.is_array(ty)
             || (v.len() == 1 && self.string_lit_of(v[0]).is_some())

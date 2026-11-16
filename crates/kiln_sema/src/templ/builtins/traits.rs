@@ -1103,9 +1103,12 @@ impl Sema<'_, '_> {
     /// `__is_pod` ([depr.meta.types]/4: `is_trivial_v<T> &&
     /// is_standard_layout_v<T>`). The legacy `__has_trivial_*` and
     /// `__has_nothrow_*` shortcuts and the `va_arg` warning keep clang's
-    /// [`Sema::is_pod_type`].
+    /// [`Sema::is_pod_type`]. C++98 has no deleted functions: a class
+    /// whose implicit default constructor could not be defined (a
+    /// `const` member) is still a POD there (C++98 [class]/4), so the
+    /// class bits decide, as in clang.
     fn is_pod_trait(&mut self, q: QualType) -> bool {
-        if self.defined_record(self.base_element(q)).is_none() {
+        if self.std < kiln_lex::Std::Cxx11 || self.defined_record(self.base_element(q)).is_none() {
             return self.is_pod_type(q);
         }
         self.is_trivial_type(q) && self.is_standard_layout_type(q)

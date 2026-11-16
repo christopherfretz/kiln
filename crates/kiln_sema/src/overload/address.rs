@@ -508,10 +508,15 @@ impl Sema<'_, '_> {
 
     /// Of the specializations `found` (specialization, found
     /// declaration, template) a template-id names without a target, the
-    /// one whose template is more specialized than every other's
-    /// ([over.over]/5; with constraints, [temp.func.order]/6.2: `&f<X>`
-    /// of `template<Class T> f(T)` and `template<Empty T> f(T)` names the
-    /// second). The function types are ordered ([temp.deduct.partial]/3.3).
+    /// one more constrained than every other (CWG2918; clang's
+    /// `ResolveSingleFunctionTemplateSpecialization` keeps a second match
+    /// only through `getMoreConstrainedFunction`): `&f<X>` of
+    /// `template<Class T> f(T)` and `template<Empty T> f(T)` names the
+    /// second, by [temp.func.order]/6.2 once the function types are
+    /// ordered ([temp.deduct.partial]/3.3). Two specializations whose
+    /// parameter-type-lists differ are never ordered: `&f<int>` of
+    /// `template<class T> T f(T)` and `template<class T> T* f(T*)` is
+    /// ambiguous, though the second template is more specialized.
     fn most_specialized_spec(
         &mut self,
         found: &[(DeclId, DeclId, DeclId)],
@@ -526,7 +531,11 @@ impl Sema<'_, '_> {
             .max()
             .unwrap_or(0);
         let i = (0..found.len()).find(|&i| {
-            (0..found.len()).all(|j| i == j || self.more_specialized(found[i].2, found[j].2, n))
+            (0..found.len()).all(|j| {
+                i == j
+                    || self.same_param_type_lists(found[i].0, found[j].0, false)
+                        && self.more_specialized(found[i].2, found[j].2, n)
+            })
         })?;
         Some((found[i].0, found[i].1))
     }

@@ -1289,13 +1289,26 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// [class.friend]/6: no storage class in a friend declaration (clang
+    /// [class.friend]/6: no storage class (and [dcl.fct.spec]/3: no
+    /// `explicit`) in a friend declaration (clang
     /// `DeclSpec::Finish`, `err_friend_decl_spec`): reported at the
     /// storage class, or `thread_local` after it (`'static thread_local'
     /// is invalid in friend declarations`), and dropped, the declaration
     /// otherwise proceeding as written.
     fn reject_friend_storage(&mut self, ds: &mut DeclSpec, thread: &str) {
-        if ds.friend.is_none() || ds.storage.is_none() && ds.thread_local.is_none() {
+        if ds.friend.is_none() {
+            return;
+        }
+        // [dcl.fct.spec]/3: `explicit` only in a constructor or conversion
+        // function declaration inside its class, never a friend's (clang
+        // `DeclSpec::Finish`, `err_friend_decl_spec`): reported at the
+        // specifier and dropped, as clang does.
+        if let Some(l) = ds.explicit.take() {
+            ds.explicit_expr = None;
+            let d = self.s.diag(DiagId::parse_friend_decl_spec, l).arg("explicit");
+            self.emit(d);
+        }
+        if ds.storage.is_none() && ds.thread_local.is_none() {
             return;
         }
         let mut name = ds.storage.map(|(s, _)| s.spelling().to_owned()).unwrap_or_default();

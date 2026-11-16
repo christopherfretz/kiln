@@ -237,7 +237,7 @@ fn parse_secs(flag: &str, v: &str) -> Result<Duration, String> {
 }
 
 /// `K/N` with 1 <= K <= N.
-fn parse_shard(v: &str) -> Result<(usize, usize), String> {
+pub(crate) fn parse_shard(v: &str) -> Result<(usize, usize), String> {
     v.split_once('/')
         .and_then(|(k, n)| Some((k.parse::<usize>().ok()?, n.parse::<usize>().ok()?)))
         .filter(|&(k, n)| k >= 1 && k <= n)
@@ -248,7 +248,7 @@ fn parse_shard(v: &str) -> Result<(usize, usize), String> {
 /// index is `k - 1` modulo `n`. Round robin, so neighbouring directories
 /// (which cost alike) spread over every shard, and the shards of one
 /// selection are disjoint and cover it.
-fn shard_of<T>(tests: Vec<T>, (k, n): (usize, usize)) -> Vec<T> {
+pub(crate) fn shard_of<T>(tests: Vec<T>, (k, n): (usize, usize)) -> Vec<T> {
     tests.into_iter().enumerate().filter(|(i, _)| i % n == k - 1).map(|(_, t)| t).collect()
 }
 

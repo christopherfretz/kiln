@@ -483,7 +483,10 @@ dropped, then any that another is more partial-ordering-constrained than
 ([over.over]/5, CWG2918: both members of the same class or both
 non-members, same parameter-type-lists, [temp.constr.order]). A
 template-id naming one specialization of each of several templates keeps
-the most specialized (`most_specialized_spec`). WP-1465,
+the one more constrained than every other, which needs the same
+parameter-type-lists (`most_specialized_spec`; clang's
+`getMoreConstrainedFunction`): `&g<int>` of `g(T)` and `g(T*)` is
+ambiguous (WP-1473, `over.over/template-id-address-same-parameters.cpp`). WP-1465,
 `over.over/cwg2918-constraints.cpp`, `cwg2918-errors.cpp`,
 `cwg2918-ambiguous-after-deduction.cpp`. Still tied: "address of overloaded
 function 'a' is ambiguous" + "candidate function [with T = int]" each. No

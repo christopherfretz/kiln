@@ -14,10 +14,17 @@ name: sweep
 #                  control on the same runner (a failure under both is the
 #                  project's or the runner's, not kiln's)
 #   oss-summary    scripts/oss/oss-report.py over every project's report
+#   gxx-dg K/N     GCC 16.1's C++ testsuite (WP-1473; spec/harness.md "The
+#                  g++.dg runner"), `cargo xtask gxx-dg --shard K/N` with
+#                  GCC 16.1 and clang 22 as oracles, one TSV each
+#   gxx-dg-summary merges the shards (scripts/gxx-dg-compare.py merge)
 # It never gates a merge: no pull_request or merge_group trigger, and it is
 # not a required check. Start it by pushing a `sweep/<name>` branch or with
 # workflow_dispatch (from main). A newer push of the same ref cancels the
-# older run.
+# older run. The g++.dg jobs are opt-in: the `gxx` input of a dispatch, or a
+# push of a `sweep/gxx-<name>` branch, which runs the build and the g++.dg
+# jobs only (no libc++, no OSS); any other `sweep/` push runs libc++ and OSS
+# as before and no g++.dg job.
 on:
   workflow_dispatch:
     inputs:
@@ -33,6 +40,10 @@ on:
         description: also build the OSS projects with clang 19 (the control)
         type: boolean
         default: true
+      gxx:
+        description: run GCC 16.1's C++ testsuite (g++.dg; opt-in)
+        type: boolean
+        default: false
   push:
     branches: ["sweep/**"]
 permissions:
@@ -80,7 +91,7 @@ jobs:
   libcxx:
     name: libcxx ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [build]
-    if: ${{ github.event_name == 'push' || inputs.libcxx }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.libcxx }}
     runs-on: ubuntu-24.04
     container: gcc:16.1.0-trixie
     timeout-minutes: 240
@@ -147,7 +158,7 @@ jobs:
   # summary's --expect both read these outputs.
   oss-matrix:
     name: oss matrix
-    if: ${{ github.event_name == 'push' || inputs.oss }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.oss }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -175,7 +186,7 @@ jobs:
   oss:
     name: oss ${{ matrix.project }} ${{ matrix.compiler }}
     needs: [build, oss-matrix]
-    if: ${{ github.event_name == 'push' || inputs.oss }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.oss }}
     runs-on: ubuntu-24.04
     container:
       image: gcc:16.1.0-trixie
@@ -277,3 +288,78 @@ jobs:
           python3 scripts/oss/oss-report.py --root oss --expect "$OSS_COMPILERS" $OSS_PROJECTS | tee oss-summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with: { name: oss-summary, path: oss-summary.md }
+
+  # GCC 16.1's C++ testsuite (g++.dg with its torture directory,
+  # c-c++-common, g++.old-deja; spec/harness.md "The g++.dg runner",
+  # docs/status/gxx-dg.md) through the build job's kiln++, with the image's
+  # GCC 16.1 (KILN_GCC; kiln and clang get its libstdc++ through
+  # --gcc-toolchain) and the action's clang 22 as oracles, the runner's
+  # default limits (2 GiB per step, 60 s compile, 10 s run). Shards are
+  # taken over tests (round robin; about 14,200 cases each); S is the
+  # list's length and gxx-dg-summary's --expect, sized so that a shard stays
+  # well under 90 minutes (the whole suite took 99 min at -j 4 on the
+  # aarch64 development host).
+  gxx-dg:
+    name: gxx-dg ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: [build]
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.gxx }}
+    runs-on: ubuntu-24.04
+    container: gcc:16.1.0-trixie
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: ci-x86_64 }
+      - uses: actions/download-artifact@v4
+        with: { name: kiln-dist, path: "${{ runner.temp }}/dist" }
+      - name: install kiln and fetch GCC's tests
+        run: |
+          mkdir -p /opt/kiln gxx-out
+          tar -xJf "$RUNNER_TEMP"/dist/kiln-*-linux-gnu.tar.xz -C /opt/kiln --strip-components=1
+          /opt/kiln/bin/kiln++ --version | head -1
+          "$KILN_GCC" --version | head -1
+          clang++-22 --version | head -1
+          scripts/fetch-gcc-tests.sh
+      - name: cargo xtask gxx-dg --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: |
+          /usr/bin/time -v cargo xtask gxx-dg -j 4 --compiler /opt/kiln/bin/kiln++ \
+            --shard ${{ matrix.shard }}/${{ strategy.job-total }} \
+            --tsv "gxx-out/gxx-dg-${{ matrix.shard }}.tsv" \
+            --summary "gxx-out/gxx-dg-${{ matrix.shard }}.md" 2>&1 | tee "gxx-out/gxx-dg-${{ matrix.shard }}.log"
+      # A workspace-relative path (see the libcxx job).
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gxx-dg-${{ matrix.shard }}
+          path: gxx-out/
+          if-no-files-found: error
+
+  gxx-dg-summary:
+    name: gxx-dg summary
+    needs: [gxx-dg]
+    if: ${{ !cancelled() && needs.gxx-dg.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: gxx-dg-*, path: results, merge-multiple: true }
+      # --expect: a shard that timed out or never ran uploads no TSV, and
+      # the merge then fails instead of reporting a smaller suite.
+      - name: merge the shards
+        run: |
+          ls results
+          python3 -I scripts/gxx-dg-compare.py merge --expect 4 --out gxx-dg-x86_64.tsv \
+            $(find results -name 'gxx-dg-*.tsv' ! -name '*.partial.tsv' | sort)
+          python3 -I scripts/gxx-dg-compare.py summary gxx-dg-x86_64.tsv \
+            --label "GCC 16.1 C++ testsuite, x86_64" | tee gxx-dg-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gxx-dg-summary
+          path: |
+            gxx-dg-x86_64.tsv
+            gxx-dg-summary.md

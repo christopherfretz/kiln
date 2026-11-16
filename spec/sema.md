@@ -9614,9 +9614,26 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   included) gets a `const` `this` in its type before C++14, and
   `-Wconstexpr-not-const` (on by default) warns at the name with a
   " const" fix-it after the `)`; not in an instantiation, not for a
-  static member defined out of line (`cxx11_constexpr_const`, from
+  static member function or member function template defined out of
+  line (`cxx11_constexpr_const`, from
   `act_on_function` and `act_on_special_declarator`). Tests:
-  `dcl.constexpr/constexpr-not-const-*.cpp`.
+  `dcl.constexpr/constexpr-not-const-*.cpp`,
+  `dcl.constexpr/cxx11-static-member-template-out-of-line.cpp`.
+- **In-class `constexpr` static data members before C++17** (C++11
+  [class.static.data]/3): without a brace-or-equal-initializer, "constexpr
+  variable declaration must be a definition" (clang says "declaration of
+  constexpr static data member 'i' requires an initializer"; a new
+  diagnostic id waits for the next PCH format bump) and the member is
+  invalid (`constexpr_decl_not_definition`; not while an
+  instantiation defers the initializer). Test:
+  `class.static.data/constexpr-member-requires-init-cxx11.cpp` (WP-1473).
+- **Qualified names of a sibling class** ([expr.prim.id.general]/3):
+  `C::m` in a member function of `B` is an implicit member access only
+  when `C` is `B` or a base of `B`; otherwise `m` is named without an
+  object ("call to non-static member function without an object
+  argument", "invalid use of non-static data member"), valid only in an
+  unevaluated operand or `&C::m` (`qualifier_not_this_class`). Test:
+  `expr.prim.id/qualified-member-of-sibling-class.cpp` (WP-1473).
 - **Parenthesized array new before C++20** ([expr.new]/23, P0960):
   `new T[n](a, b)` is "array 'new' cannot have initialization arguments"
   at the new-expression, also in a template definition; `()` stays

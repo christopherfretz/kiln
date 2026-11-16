@@ -449,7 +449,10 @@ impl Sema<'_, '_> {
         qualified: bool,
         loc: Loc,
     ) {
-        if self.inst.stack.len() != self.templ.explicit_depth {
+        // In C++98 clang reports these as its off-by-default
+        // `-Wc++11-compat` warnings (`warn_explicit_instantiation_*_0x`),
+        // which kiln does not have: nothing is reported.
+        if self.inst.stack.len() != self.templ.explicit_depth || self.std < kiln_lex::Std::Cxx11 {
             return;
         }
         let cur = self.ast.redecl_context(self.ctx);

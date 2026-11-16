@@ -554,13 +554,34 @@ jobs:
   and lists each one without a report as "no report (infrastructure)",
   never leaving it out. A release candidate's sweep needs every pair
   reported.
+- `gxx-dg K/4` (opt-in, WP-1473): GCC 16.1's C++ testsuite
+  (spec/harness.md "The g++.dg runner", docs/status/gxx-dg.md "x86-64")
+  through the `build` job's kiln++ (`--compiler /opt/kiln/bin/kiln++`),
+  with the image's GCC 16.1 (`KILN_GCC`, whose libstdc++ kiln and clang
+  build against) and the `kiln-ci` action's clang 22 as oracles, at the
+  runner's default limits and `-j 4`, split by `cargo xtask gxx-dg --shard
+  K/4` (about 14,200 cases each); each shard uploads its TSV, summary and
+  log as artifact `gxx-dg-K`.
+- `gxx-dg summary`: `scripts/gxx-dg-compare.py merge --expect 4` joins the
+  shard TSVs into `gxx-dg-x86_64.tsv` (a missing shard fails the job
+  rather than shrinking the suite) and `summary` writes the headline,
+  classes and buckets; artifact `gxx-dg-summary`. Compare it with an
+  aarch64 run at the same commit by `scripts/gxx-dg-compare.py compare`.
+
+The g++.dg jobs run only when asked: a dispatch with the `gxx` input
+(default false), or a push of a `sweep/gxx-<name>` branch, which runs
+`build` and the g++.dg jobs and none of the libc++ and OSS jobs (their
+conditions exclude `sweep/gxx-` refs). Any other `sweep/` push, and a
+dispatch with the default inputs, runs exactly what it ran before
+(`ci_tests::sweep_never_gates` checks the conditions).
 
 Run it before a release (docs/STABILITY.md), and after a change to ABI
 lowering, calling conventions or the driver's target defaults: push the
 release candidate's commit to a `sweep/<name>` branch (`git push origin
 <sha>:refs/heads/sweep/rc-<version>`), or start it from the Actions tab
 (workflow_dispatch, which can skip the libc++ part, the OSS part or the
-clang control). A newer push of the same branch cancels the older run.
+clang control, and add the g++.dg jobs). A `sweep/gxx-<name>` branch runs
+the g++.dg suite alone. A newer push of the same branch cancels the older run.
 Wall time is about the slowest OSS job's: gRPC, about 2 h 20 min under
 either compiler, inside the 355-minute job limit. Compare the libc++ summary with
 the aarch64 numbers (`scripts/libcxx-results.py --baseline <aarch64

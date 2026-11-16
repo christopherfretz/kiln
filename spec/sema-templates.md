@@ -5927,6 +5927,9 @@ The `SpecKind` transitions are those of §4.5.
   An lvalue of type `B` designating the base subobject
   (`static_cast<const B &>(d)`) binds by identity and is accepted
   (WP-561; `temp.arg.nontype/reference-derived-to-base{,-clang22}.cpp`).
+  A floating-integral second conversion is not allowed either: a class
+  whose conversion function returns `double` is no argument for an `int`
+  parameter (WP-1473, `temp.arg.nontype/cce-no-floating-integral-conversion.cpp`).
   The
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
@@ -7119,7 +7122,7 @@ assignment rules' compatibility. It is an integer constant expression.
 | `__is_trivial(T)` | complete; scalar, a trivial class ([class.prop]/2 by eligible members, spec/sema-class.md §4.7.3), or an array of those | `cls.trivial` |
 | `__is_trivially_copyable(T)` | complete; [basic.types.general]/9, a class by [class.prop]/1 (spec/sema-class.md §4.7.3) | `cls.trivially_copyable` |
 | `__is_standard_layout(T)` | complete; [basic.types.general]/9 | `cls.standard_layout` |
-| `__is_pod(T)` | complete; trivial and standard-layout ([depr.meta.types]/4) | `cls` |
+| `__is_pod(T)` | complete; trivial and standard-layout ([depr.meta.types]/4); in C++98 the class bits (C++98 [class]/4: no deleted default constructor makes it non-trivial, `class.prop/pod-const-members-cxx98-run.cpp`) | `cls` |
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
 | `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |

@@ -2541,7 +2541,9 @@ impl Sema<'_, '_> {
         let params = self.ast.types.params(&p).to_vec();
         if let Some(dname) = out_of_line {
             let cands = self.prev_candidates_dn(dname, d.qualifier);
-            let static_prev = cands.into_iter().any(|x| {
+            // A member function template's pattern too (`template <class>
+            // constexpr bool A::g() {...}` for a static `g`).
+            let static_prev = cands.into_iter().map(|x| self.templated_or_self(x)).any(|x| {
                 self.kind_of(x) == DeclKind::CXXMethod
                     && self.fn_spec(x).storage() == FnStorage::Static
                     && self.fn_params(x).is_some_and(|(qs, _)| {
@@ -8575,10 +8577,29 @@ impl Sema<'_, '_> {
     /// [dcl.constexpr]/1: a constexpr variable declaration shall be a
     /// definition (`extern constexpr int m;`); clang
     /// `ActOnUninitializedDecl` reports it first and stops. An in-class
-    /// static data member is inline, so a definition (C++17). Whether `v`
-    /// was diagnosed (and marked invalid).
+    /// static data member is inline, so a definition (C++17). Before
+    /// C++17 an in-class `constexpr` static data member is not a
+    /// definition, and C++11 [class.static.data]/3 requires its
+    /// brace-or-equal-initializer instead (clang
+    /// `err_constexpr_static_mem_var_requires_init`). Whether `v` was
+    /// diagnosed (and marked invalid).
     fn constexpr_decl_not_definition(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
+        if vn.kind() == DeclKind::Var
+            && !vn.has(DeclFlags::INVALID)
+            && self.std < kiln_lex::Std::Cxx17
+            && !self.inst.deferring_init
+            && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr() && x.init.is_none())
+            && self.is_in_class_static(v)
+            && !self.ast.is_member_spec_declaration(v)
+        {
+            // clang words it "declaration of constexpr static data member
+            // requires an initializer"; a new id would change the PCH schema.
+            let msg = self.diag(DiagId::sema_constexpr_var_decl_not_definition, vn.loc());
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return true;
+        }
         let bad = vn.kind() == DeclKind::Var
             && !vn.has(DeclFlags::INVALID)
             && self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())

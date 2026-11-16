@@ -873,7 +873,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `thread_local` with the combined name when both appear: `'static
   thread_local'`), and both are dropped, so the friend declaration goes
   on (`reject_friend_storage`, WP-293;
-  `class.friend/friend-storage-class.cpp`). The parser records where each
+  `class.friend/friend-storage-class.cpp`). `explicit` is reported the
+  same way and dropped ([dcl.fct.spec]/3, WP-1473;
+  `class.friend/friend-explicit-and-destructor-template.cpp`, which also
+  covers a friend destructor template, "destructor cannot be declared as
+  a template", [class.dtor]/1, in sema). The parser records where each
   cv-qualifier was first written (`DeclSpec::cv_locs`); a friend type
   declaration (no declarator: `friend const T;`, or an element of a
   friend-type-specifier-list) reports each of `const`, `volatile`,

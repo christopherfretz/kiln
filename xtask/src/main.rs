@@ -900,6 +900,48 @@ mod ci_tests {
             );
         };
 
+        // The g++.dg jobs are opt-in (WP-1473): the `gxx` dispatch input
+        // (default false) or a `sweep/gxx-*` push, which in turn starts no
+        // libc++ or OSS job; every other `sweep/` push runs those as before.
+        assert!(
+            on.contains("      gxx:\n") && on.contains("        default: false\n"),
+            "sweep.yml has no `gxx` dispatch input defaulting to false"
+        );
+        let gxx_push = "startsWith(github.ref, 'refs/heads/sweep/gxx-')";
+        for (name, input) in [("libcxx", "libcxx"), ("oss-matrix", "oss"), ("oss", "oss")] {
+            has(
+                &job(name),
+                name,
+                &format!(
+                    "if: ${{{{ (github.event_name == 'push' && !{gxx_push}) || inputs.{input} }}}}"
+                ),
+            );
+        }
+        let gxx = job("gxx-dg");
+        has(
+            &gxx,
+            "gxx-dg",
+            &format!("if: ${{{{ (github.event_name == 'push' && {gxx_push}) || inputs.gxx }}}}"),
+        );
+        assert!(gxx.contains("cargo xtask gxx-dg") && gxx.contains("--shard ${{ matrix.shard }}/"));
+        let gxx_summary = job("gxx-dg-summary");
+        has(
+            &gxx_summary,
+            "gxx-dg-summary",
+            "if: ${{ !cancelled() && needs.gxx-dg.result != 'skipped' }}",
+        );
+        // The merge expects exactly the matrix's shard count.
+        let shards = gxx
+            .lines()
+            .find_map(|l| l.strip_prefix("shard: [")?.strip_suffix(']'))
+            .expect("gxx-dg has a shard list")
+            .split(',')
+            .count();
+        assert!(
+            gxx_summary.contains(&format!("scripts/gxx-dg-compare.py merge --expect {shards} ")),
+            "gxx-dg-summary's merge --expect is not the {shards} shards of gxx-dg"
+        );
+
         // The one source: projects.toml's sweep rows and the control rule.
         let matrix = job("oss-matrix");
         has(&matrix, "oss-matrix", "projects: ${{ steps.lists.outputs.projects }}");
