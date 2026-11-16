@@ -167,7 +167,7 @@ pub use declspec::{
     NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
-pub use expansion::{ExpansionHead, ExpansionInit};
+pub use expansion::{ExpansionHead, ExpansionInit, ExpansionInitMark};
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};

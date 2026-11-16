@@ -4631,12 +4631,16 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// The initializer form the current token starts, if any.
+    /// The initializer form the current token starts, if any. Before
+    /// C++11 a `{` starts none (clang `ParseDeclarationAfterDeclarator`
+    /// takes a braced-init-list only in C++11): the declaration ends
+    /// there with "expected ';' at end of declaration" and the braces are
+    /// skipped (`S b[n]{};` at `-std=c++98`, WP-1512).
     fn init_style_here(&self) -> Option<InitStyle> {
         match Self::punct_of(self.tok()) {
             Some(Punct::Equal) => Some(InitStyle::C),
             Some(Punct::LParen) => Some(InitStyle::Call),
-            Some(Punct::LBrace) => Some(InitStyle::List),
+            Some(Punct::LBrace) if self.s.is_c() || self.std >= Std::Cxx11 => Some(InitStyle::List),
             _ => None,
         }
     }

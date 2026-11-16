@@ -1006,6 +1006,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 
   The parser peeks at `=`, `(` or `{` to set `init_style` *before* the
   declaration exists, because Sema needs it to create the `VarDecl`.
+  Before C++11 a `{` sets none (clang's `ParseDeclarationAfterDeclarator`
+  takes a braced-init-list only in C++11): the `;` is missing ("expected
+  ';' at end of declaration" after the declarator) and `SkipMalformedDecl`
+  skips the braces and the `;` (`int x{};`, `S b[n]{};` at `-std=c++98`;
+  WP-1512, `tests/conformance/dcl.array/vla-initializer-cxx98.cpp`).
   Sema builds the type from the last chunk outwards ([dcl.meaning]).
   - A `(` after the declarator-id is a parameter list or a direct
     initializer by `is_cxx_function_declarator` (only where a direct

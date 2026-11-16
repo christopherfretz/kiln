@@ -1986,14 +1986,10 @@ impl Sema<'_, '_> {
                 // is no integer constant expression, so the array is a
                 // variable length one, folded back to a constant array
                 // where one is needed (`-Wgnu-folding-constant`, clang
-                // `VerifyIntegerConstantExpression` in C). A type-name
-                // outside a function keeps the value (WP-1499).
-                let type_name_outside =
-                    d.ctx == DeclaratorContext::TypeName && !self.in_local_scope();
-                if self.is_c()
-                    && !type_name_outside
-                    && conv::c_assign::c_not_ice_operand(self, c).is_some()
-                {
+                // `VerifyIntegerConstantExpression` in C). A type-name is
+                // one at file scope too (WP-1512: `sizeof(int[m])` is then
+                // no constant, as in clang).
+                if self.is_c() && conv::c_assign::c_not_ice_operand(self, c).is_some() {
                     let f = kiln_oven::EvalFailure::silent(kiln_oven::FailKind::NotConstant);
                     return self.folded_array_bound(c, d, loc, f);
                 }
@@ -2019,9 +2015,13 @@ impl Sema<'_, '_> {
         c: ExprId,
         d: &Declarator,
         loc: Loc,
-        mut f: kiln_oven::EvalFailure,
+        f: kiln_oven::EvalFailure,
     ) -> Option<Result<u64, ExprId>> {
         let at = d.name.map_or(d.loc, |(_, l)| l);
+        // In C a type-name is variably modified at file scope too (C17
+        // 6.7.6.2p2 restricts declarations, not types): `sizeof(int[m])`
+        // is no constant and a compound literal folds its bound
+        // (`Sema::act_on_compound_literal`; clang 22, WP-1512).
         let local = matches!(
             d.ctx,
             DeclaratorContext::Block
@@ -2029,6 +2029,7 @@ impl Sema<'_, '_> {
                 | DeclaratorContext::Condition
                 | DeclaratorContext::TypeName
         ) && self.in_local_scope()
+            || self.is_c() && d.ctx == DeclaratorContext::TypeName
             // C17 6.7.6.2p2: a parameter may be variably modified; clang
             // accepts one in C++ too (after `-Wvla-cxx-extension`).
             || d.ctx == DeclaratorContext::Prototype && !self.in_template();
@@ -2038,8 +2039,7 @@ impl Sema<'_, '_> {
                 self.emit(self.diag(self.vla_ext_id(), loc));
                 return Some(Err(c));
             }
-            let wloc = Self::fold_lone_invalid(&mut f, loc);
-            let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+            let w = self.vla_ext_warning(f, loc);
             self.emit(w);
             return Some(Err(c));
         }
@@ -2061,8 +2061,7 @@ impl Sema<'_, '_> {
             }
             return None;
         };
-        let wloc = Self::fold_lone_invalid(&mut f, loc);
-        let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+        let w = self.vla_ext_warning(f, loc);
         self.emit(w);
         if alias {
             self.pending_alias_vla = Some(DiagId::sema_vla_folded_to_constant);
@@ -2083,15 +2082,8 @@ impl Sema<'_, '_> {
     /// declarator chunk outside the bound is an array (an array of one is
     /// one too) or a variably modified type otherwise ([dcl.array]/1: the
     /// bound is a converted constant expression).
-    fn vla_at_file_scope(
-        &mut self,
-        d: &Declarator,
-        loc: Loc,
-        at: Loc,
-        mut f: kiln_oven::EvalFailure,
-    ) {
-        let wloc = Self::fold_lone_invalid(&mut f, loc);
-        let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+    fn vla_at_file_scope(&mut self, d: &Declarator, loc: Loc, at: Loc, f: kiln_oven::EvalFailure) {
+        let w = self.vla_ext_warning(f, loc);
         self.emit(w);
         let pos = d
             .chunks
@@ -2114,10 +2106,7 @@ impl Sema<'_, '_> {
             let c = self.act_on_constant_full_expr(c);
             let w = match self.eval_int(c, EvalContext::new(EvalKind::Other, bl)) {
                 Ok(_) => self.diag(self.vla_ext_id(), *l),
-                Err(mut f) => {
-                    let wloc = Self::fold_lone_invalid(&mut f, bl);
-                    Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f)
-                }
+                Err(f) => self.vla_ext_warning(f, bl),
             };
             self.emit(w);
         }
@@ -2150,6 +2139,20 @@ impl Sema<'_, '_> {
             };
         }
         if self.gnu { DiagId::sema_vla_cxx_extension_gnu } else { DiagId::sema_vla_cxx_extension }
+    }
+
+    /// The variable length array warning for a bound that failed with
+    /// `f` (diagnosed at `loc`), with the evaluation's notes. Before
+    /// C++11 clang's integral-constant-expression check (`CheckICE`)
+    /// has no notes and reports at the offending subexpression, which
+    /// is where the first note points (WP-1512).
+    fn vla_ext_warning(&self, mut f: kiln_oven::EvalFailure, loc: Loc) -> kiln_diag::Diag {
+        if !self.is_c() && self.std < kiln_lex::Std::Cxx11 {
+            let at = f.notes.first().map_or(loc, |n| n.loc);
+            return self.diag(self.vla_ext_id(), at);
+        }
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f)
     }
 
     /// clang `CheckVariableDeclarationType` for a variable length array:
@@ -2208,7 +2211,7 @@ impl Sema<'_, '_> {
     /// The array type `q` with each variable length dimension folded to a
     /// constant one (clang `TryToFixInvalidVariablyModifiedType` over
     /// arrays), or `None` when one does not fold.
-    fn fold_vla_dims(&mut self, q: QualType, depth: u32) -> Option<QualType> {
+    pub(crate) fn fold_vla_dims(&mut self, q: QualType, depth: u32) -> Option<QualType> {
         if depth > 64 || !self.ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
             return (depth <= 64).then_some(q);
         }
@@ -2231,12 +2234,28 @@ impl Sema<'_, '_> {
 
     /// clang `FK_VariableLengthArrayHasInitializer`: a variable length
     /// array cannot be initialized ("variable-sized object may not be
-    /// initialized", at the bound). True (and `v` invalid) if rejected.
+    /// initialized"): a braced-init-list at the bound (`CheckInitList`),
+    /// a single expression (`= e`, `(e)`) at the declarator's name (the
+    /// initialization kind's location; WP-1512). A parenthesized list
+    /// of another length is a parenthesized aggregate initialization
+    /// from C++20, at the bound like a braced one; before, it is no
+    /// single initializer and goes on to the array checks ("array
+    /// initializer must be an initializer list"). True (and `v`
+    /// invalid) if rejected.
     fn reject_vla_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
         let TypeView::VariableArray { size, .. } = self.ast.types.canonical_view(ty) else {
             return false;
         };
-        let at = self.begin_loc(size);
+        let at = match init {
+            Initializer::List(_) => self.begin_loc(size),
+            Initializer::Paren(es, ..) if es.len() != 1 => {
+                if self.std < kiln_lex::Std::Cxx20 {
+                    return false;
+                }
+                self.begin_loc(size)
+            }
+            Initializer::Expr(_) | Initializer::Paren(..) => self.ast.decls.get(v).loc(),
+        };
         self.error(DiagId::sema_vla_no_init, at);
         self.ast.decls.set_flags(v, DeclFlags::INVALID);
         self.discard_initializer(init);

@@ -840,6 +840,22 @@ Planned as 1.3.0.
   `-Wunused-variable`, `-Wunused-but-set-variable` or, at file scope,
   `-Wunneeded-internal-declaration`. Reported by a user.
 
+- Expansion statements and variable length arrays, found running GCC's
+  C++ testsuite (WP-1512). A generic lambda that odr-uses an uncaptured
+  local as the range of a `template for` is rejected when it is
+  instantiated (it used to fail in code generation), while reading the
+  value needs no capture. A non-`constexpr` `operator++` of an iterating
+  expansion statement's iterator is rejected. The destructuring form
+  binds a prvalue range with `constexpr auto&&`, as the working draft
+  says, instead of copying it. Initializers of C++ variable length arrays
+  are diagnosed where clang 22 diagnoses them, and before C++11 a `{`
+  after a declarator is the error "expected ';' at end of declaration".
+  In C, `sizeof(int[m])` with a file-scope `const int m` is no longer a
+  constant, and a compound literal of such a type is folded with
+  `-Wgnu-folding-constant` or rejected, as clang does. `cargo xtask test
+  --compiler clang++-N` compares against clang N's output when no
+  `--oracle` is given.
+
 - The linkage of a `constexpr` static data member now matches clang and
   GCC. Before C++17 the member is not inline: its out-of-class
   definition (`constexpr int A::n;`) is a strong external definition,

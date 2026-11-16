@@ -245,6 +245,7 @@ sema_type_defined_in_param_type = Error (1) "{0} cannot be defined in a paramete
 sema_type_defined_in_result_type = Error (1) "{0} cannot be defined in the result type of a function";
 sema_type_defined_in_type_specifier = Error (1) "{0} cannot be defined in a type specifier";
 sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
+sema_typecheck_compound_literal_vla = Error (0) "compound literal cannot be of variable-length array type";
 sema_typecheck_decl_incomplete_type = Error (1) "variable has incomplete type {0}";
 sema_typecheck_expect_scalar_operand = Error (1) "operand of type {0} where arithmetic or pointer type is required";
 sema_typecheck_incomplete_array_needs_initializer = Error (0) "definition of variable with array type needs an explicit size or an initializer";

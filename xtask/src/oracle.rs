@@ -275,6 +275,21 @@ impl Oracle {
     pub fn libcxx_include(self) -> PathBuf {
         self.llvm_dir().join("include").join("c++").join("v1")
     }
+
+    /// The release that `xtask test` compares a compiler under test with
+    /// when no `--oracle` is given (`spec/harness.md` "Oracle toolchain",
+    /// WP-1512): a clang under test whose major is a [`SUPPORTED`]
+    /// release is compared with that release's `clang++-N` (and kiln, as
+    /// an oracle or its linker, gets its `/usr/lib/llvm-N`), as the CI
+    /// self-check (`clang++-N` against oracle N) and the seed-corpus unit
+    /// test (`clang++-19` against `clang++-19`) run it; any other compiler
+    /// keeps `self`, the `KILN_ORACLE` release.
+    pub fn following(self, clang_under_test: Option<[u32; 3]>) -> Self {
+        match clang_under_test {
+            Some([major, ..]) if SUPPORTED.contains(&major) => Self { version: major },
+            _ => self,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +305,18 @@ mod tests {
         assert_eq!(gcc_install_prefix(distro), Some(PathBuf::from("/usr")));
         assert_eq!(gcc_install_prefix("programs: =/x\n"), None);
         assert_eq!(gcc_install_prefix("install: /a/b\n"), None);
+    }
+
+    #[test]
+    fn the_oracle_follows_a_clang_under_test() {
+        let o22 = Oracle { version: 22 };
+        let o19 = Oracle { version: 19 };
+        assert_eq!(o22.following(Some([19, 1, 7])).clang(), "clang++-19");
+        assert_eq!(o19.following(Some([22, 1, 8])).clang(), "clang++-22");
+        assert_eq!(o22.following(Some([22, 1, 8])), o22);
+        // kiln, GCC, or a clang release the harness has no tools for.
+        assert_eq!(o22.following(None), o22);
+        assert_eq!(o19.following(Some([20, 0, 0])), o19);
     }
 
     #[test]

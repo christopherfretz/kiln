@@ -282,6 +282,27 @@ crate test that compares kiln with clang 19's IR or objects names
 `requires: clang>=N` compares with the oracle's `--version`, so it follows
 the release without further configuration.
 
+**The oracle follows a clang under test (WP-1512).** Without `--oracle`,
+`xtask test --compiler clang++-M` (any clang whose `--version` major M is
+a supported release, 19 or 22) is compared with `clang++-M`, and release
+M's `/usr/lib/llvm-M` is the toolchain, whatever `KILN_ORACLE` says
+(`Oracle::following`, called in `test::execute` after the compiler is
+identified). That is how every hosted lane already runs: the `ci`
+self-check is `--compiler clang++-N` against oracle N, and the clang 19
+lane is not a corpus step at all but the `xtask` unit test
+`seed_corpus_passes_with_clang` (`xtask/src/test/tests.rs`: compiler
+`clang++-19`, oracle `clang++-19`, toolchain 19, over `tests/c`,
+`tests/conformance`, the hand-written `tests/differential` and
+`tests/stress`), run by the `unit xtask` job. Until WP-1512 a local
+`--compiler clang++-19` was compared with the `KILN_ORACLE` default,
+clang 22: every IR test (whose expectation is the oracle's module) and
+every `requires: clang<22` twin then failed or skipped where the hosted
+lane passes. With the rule, `requires: clang>=X` / `clang<X` are met or
+not by the one release in play, so a version-bound test and its `-19`
+twin are each checked by the lane of their release. An explicit
+`--oracle` (or a caller's fixed toolchain, as the unit tests set) is kept
+as given; kiln and GCC under test keep the `KILN_ORACLE` release.
+
 **Two-oracle policy (WP-355).** The goldens, `//@ diag:` directives and
 the IR-diff baseline are clang 22's, and the corpus is green under BOTH
 releases: `cargo xtask ci` (oracle 22) and `KILN_ORACLE=19 cargo xtask ci
@@ -2201,6 +2222,8 @@ or infrastructure error. Parse errors name their line.
   `-lstdc++exp` last), `pass-clang-warning-flags.cpp` and
   `skip-flags-gcc-rejects.cpp` (the flag probe), asserted by
   `gcc_as_the_compiler_under_test`.
+- the oracle follows a clang under test (WP-1512):
+  `the_oracle_follows_a_clang_under_test` (oracle.rs).
 - clang oracle without crash reproducers (WP-1264):
   `clang_oracle_crash_is_retried_once` (tests.rs) checks every compile of
   the fake clang oracle carries `-fno-crash-diagnostics`.

@@ -11,7 +11,7 @@
 //! becoming the element (spec/sema-templates.md §5.5).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec, VarStorage};
-use kiln_ast::expr::{BinaryOp, ExprKind, Radix, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, NonOdrUse, Radix, UnaryOp};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{ExpansionData, ExpansionForm, StmtKind};
@@ -107,10 +107,10 @@ enum RangeBind {
     /// iterating form's `__begin`, `__end` and `__iter` are automatic
     /// `constexpr` variables too: one with static storage duration could
     /// not point into it ([expr.const.init]/4).
+    /// A `constexpr` destructuring form over a prvalue binds its
+    /// lifetime-extended temporary this way too (WP-1512; the range is
+    /// never copied).
     Automatic,
-    /// Destructuring only: `static constexpr auto`, a copy of a prvalue
-    /// range (a glvalue is never copied, WP-1499).
-    Copy,
     /// The iterating form of a for-range-declaration that is not
     /// `constexpr`: [stmt.expand]/5.2's `decltype(auto) range = (init);
     /// auto begin = begin-expr;`, automatic and not `constexpr`, as are
@@ -121,17 +121,88 @@ enum RangeBind {
 }
 
 impl RangeBind {
-    fn by_ref(self) -> bool {
-        self != Self::Copy
-    }
-
     /// Whether the implicit variables have automatic storage duration.
     fn automatic(self) -> bool {
         matches!(self, Self::Automatic | Self::Runtime)
     }
 }
 
+/// Where the uses an expansion statement's initializer names start
+/// ([`Sema::expansion_init_mark`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ExpansionInitMark {
+    pending: usize,
+    potential: usize,
+}
+
 impl Sema<'_, '_> {
+    /// The start of an expansion-initializer or expansion-init-list
+    /// (before it is parsed or substituted).
+    pub fn expansion_init_mark(&self) -> ExpansionInitMark {
+        ExpansionInitMark { pending: self.pending_odr.len(), potential: self.potential_caps.len() }
+    }
+
+    /// The end of an expansion statement's expansion-initializer (or
+    /// expansion-init-list) begun at `mark` ([basic.def.odr]/5,
+    /// [expr.prim.lambda.capture]/7-8, [stmt.expand]/5). It is no
+    /// full-expression of its own: whether a variable named in it is
+    /// odr-used depends on the form and the for-range-declaration, both
+    /// decided per expansion (`auto&& __range = b` binds a reference and
+    /// odr-uses `b`; an element `b.x` copied into `int e` does not), so
+    /// the uses are decided by the full-expressions of the declarations
+    /// the expansion builds: the pending odr-uses noted since `mark` are
+    /// dropped here and noted again where the expression is used
+    /// ([`Sema::note_expansion_uses`]), one element at a time. In a
+    /// template, the potential captures are resolved as those of an
+    /// instantiation-dependent full-expression: a lambda with a
+    /// capture-default captures them now (its closure is complete before
+    /// any expansion), and a use no lambda can capture waits for the
+    /// expansion, whose odr-uses are diagnosed then (`capture_chain`).
+    pub fn act_on_expansion_initializer_captures(&mut self, mark: ExpansionInitMark) {
+        self.pending_odr.truncate(mark.pending);
+        if self.potential_caps.len() > mark.potential && self.in_template() {
+            let caps = self.potential_caps.split_off(mark.potential);
+            let none = crate::expr::ConstantCandidates::new(Vec::new());
+            self.resolve_potential_capture_list(caps, true, &none);
+        }
+    }
+
+    /// The variables expression `e` names, potentially evaluated, as
+    /// pending odr-uses of the full-expression being built: `e` is an
+    /// expansion-initializer or an element, used by an implicit or
+    /// element declaration of an expansion statement after its own uses
+    /// were dropped ([`Sema::act_on_expansion_initializer_captures`]).
+    /// Lambdas and unevaluated operands are not entered (their uses were
+    /// decided where they were built).
+    pub(crate) fn note_expansion_uses(&mut self, e: ExprId) {
+        if self.unevaluated > 0 || self.in_template() {
+            return;
+        }
+        let mut stack = self.take_walk_stack(e);
+        while let Some(x) = stack.pop() {
+            let ex = &self.ast.exprs;
+            match ex.get(x).kind() {
+                ExprKind::DeclRefExpr => {
+                    let d = ex.decl(x);
+                    if ex.non_odr_use(x) == NonOdrUse::None
+                        && matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+                    {
+                        self.pending_odr.push(x);
+                    }
+                }
+                ExprKind::LambdaExpr
+                | ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::RequiresExpr
+                | ExprKind::ConceptSpecializationExpr => {}
+                ExprKind::CXXTypeidExpr if !ex.typeid_potentially_evaluated(x) => {}
+                _ => ex.children_into(x, &self.ast.lists, &mut stack),
+            }
+        }
+        self.put_walk_stack(stack);
+    }
+
     /// `template for ( init-statement_opt for-range-declaration :
     /// expansion-initializer )` ([stmt.expand]/1): opens the synthetic
     /// template level and declares the for-range-declaration in it,
@@ -285,10 +356,13 @@ impl Sema<'_, '_> {
 
     /// The `constexpr` declaration of a destructuring expansion
     /// statement over `e`, built by `f(bind)` (spec/sema.md "Expansion
-    /// statements"): a prvalue initializes a `static` object
-    /// ([`RangeBind::Copy`]: `auto`, which is const, so its value is
-    /// usable in constant expressions; a non-const lifetime-extended
-    /// temporary is not). A glvalue is bound by reference: `static` first
+    /// statements"), always by reference ([stmt.expand]/5.3 declares
+    /// `constexpr auto&& [u...] = e`): a prvalue's temporary is bound by
+    /// the automatic `constexpr` reference ([`RangeBind::Automatic`], in
+    /// every mode; a reference to an automatic temporary is a constant
+    /// expression only by P2686R5, and the temporary is not const, so an
+    /// element that reads it is no constant expression: WP-1512, where it
+    /// was copied into a `static constexpr auto`). A glvalue: `static` first
     /// ([`RangeBind::Static`]), then, at C++26, automatic
     /// ([`RangeBind::Automatic`], P2686R5: the `constexpr` reference
     /// [stmt.expand]/5.3 declares, to a local of this function). When
@@ -304,7 +378,7 @@ impl Sema<'_, '_> {
             (r, stash)
         };
         let glvalue = self.ast.exprs.get(e).value_category().is_glvalue();
-        let first = if glvalue { RangeBind::Static } else { RangeBind::Copy };
+        let first = if glvalue { RangeBind::Static } else { RangeBind::Automatic };
         let (r, stash) = attempt(self, first);
         if r.is_some() {
             self.release(stash, Vec::new());
@@ -365,6 +439,7 @@ impl Sema<'_, '_> {
         // A `constexpr` range that is not constant-initialized is
         // diagnosed and not marked invalid: stop there too.
         let (ok, stash) = self.capturing(|s| {
+            s.note_expansion_uses(e);
             s.init_expansion_var(range, e, range_loc, DiagId::sema_for_range_deduction_failure)
         });
         let ok = ok && !self.stash_has_error(&stash);
@@ -405,9 +480,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let diff = self.expansion_difference_type(begin, colon)?;
-        if !self.expansion_increment(begin, colon) {
-            return None;
-        }
+        let inc = self.expansion_increment(begin, colon).ok()?;
         let prelude = vec![
             self.act_on_decl_stmt(&[range], range_loc),
             self.act_on_decl_stmt(&[begin], colon),
@@ -419,12 +492,16 @@ impl Sema<'_, '_> {
         } else {
             if let Some(one) = self.expansion_count_elements(begin, end, bind, diff, colon) {
                 return match one {
-                    OnePass::Elements(elems) => Some((prelude, elems)),
+                    OnePass::Elements(elems) => {
+                        self.expansion_increment_constant(inc, elems.len() as u64, colon)?;
+                        Some((prelude, elems))
+                    }
                     OnePass::Capped => None,
                 };
             }
             self.expansion_size(begin, end, diff, colon)?
         };
+        self.expansion_increment_constant(inc, n, colon)?;
         let mut elems = Vec::new();
         for i in 0..n {
             let iter = self.expansion_iter(begin, i, bind, diff, colon)?;
@@ -493,17 +570,60 @@ impl Sema<'_, '_> {
     /// begin-expr; b != e; ++b)`, so the iterator must be incrementable
     /// as a non-const lvalue of `begin`'s type even though kiln counts
     /// with `begin + i` (GCC 16.1 checks it too). Built unevaluated on an
-    /// implicit variable that is never declared; false after "cannot
-    /// increment value of type" (or the overload error) is diagnosed.
-    fn expansion_increment(&mut self, begin: DeclId, colon: Loc) -> bool {
-        let Some(bt) = self.ast.decls.get(begin).ty() else { return false };
+    /// implicit variable that is never declared; `Err` after "cannot
+    /// increment value of type" (or the overload error) is diagnosed,
+    /// else the `operator++` it calls when that is not `constexpr`
+    /// ([`Sema::expansion_increment_constant`]).
+    fn expansion_increment(&mut self, begin: DeclId, colon: Loc) -> Result<Option<DeclId>, ()> {
+        let bt = self.ast.decls.get(begin).ty().ok_or(())?;
         let bt = self.ast.types.unqualified(bt);
         let b = self.expansion_var("__b", bt, RangeBind::Runtime, colon);
         self.enter_unevaluated();
         let r = self.build_decl_ref(b, colon);
         let inc = self.act_on_unary(UnaryOp::PreInc, r, colon);
         self.exit_unevaluated();
-        !self.is_err_expr(inc)
+        if self.is_err_expr(inc) {
+            return Err(());
+        }
+        if self.ast.exprs.get(inc).kind() != ExprKind::CXXOperatorCallExpr {
+            return Ok(None);
+        }
+        let f = self.callee_decl(inc).ok_or(())?;
+        let f = self.ast.latest(f);
+        let non_constexpr = self
+            .ast
+            .decls
+            .function(f)
+            .is_some_and(|fd| fd.spec.constexpr_kind() == kiln_ast::decl::ConstexprKind::None);
+        Ok(non_constexpr.then_some(f))
+    }
+
+    /// The count's `++b` is evaluated in the consteval lambda of
+    /// [stmt.expand]/5.2 once per element, so with N > 0 a non-constexpr
+    /// `operator++` `inc` makes the expansion size no constant
+    /// expression: `sema_expansion_size_not_constant` with the
+    /// evaluator's notes for a call of a non-constexpr function ("non-
+    /// constexpr function 'operator++' cannot be used in a constant
+    /// expression", "declared here"), as for a non-constexpr `begin`.
+    /// GCC 16.1 rejects it too ("call to non-'constexpr' function").
+    /// `None` after that error.
+    fn expansion_increment_constant(
+        &mut self,
+        inc: Option<DeclId>,
+        n: u64,
+        colon: Loc,
+    ) -> Option<()> {
+        let Some(f) = inc.filter(|_| n > 0) else { return Some(()) };
+        let name = self.decl_name(f);
+        let floc = self.ast.decls.get(f).loc();
+        let note = self.diag(DiagId::note_constexpr_invalid_function, colon).arg(name);
+        let decl = self.diag(DiagId::note_declared_at, floc);
+        let d = self
+            .diag(DiagId::sema_expansion_size_not_constant, colon)
+            .with_note(note)
+            .with_note(decl);
+        self.emit(d);
+        None
     }
 
     /// `decltype(begin - begin){i}` ([stmt.expand]/5.2), `i` a prvalue
@@ -815,7 +935,7 @@ impl Sema<'_, '_> {
     }
 
     /// `auto&& [__u...] = e;`, or for a `constexpr` one (`bind` given)
-    /// `[static] constexpr auto[&&] [__u...] = e;` as `bind` says: the
+    /// `[static] constexpr auto&& [__u...] = e;` as `bind` says: the
     /// decomposition, its declaration and its bindings.
     fn expansion_decomp(
         &mut self,
@@ -823,7 +943,6 @@ impl Sema<'_, '_> {
         bind: Option<RangeBind>,
         colon: Loc,
     ) -> Option<(DeclId, Vec<StmtId>, Vec<Element>)> {
-        let by_ref = bind.is_none_or(RangeBind::by_ref);
         let mut ds = DeclSpec::new(colon);
         let _ = ds.set_base(TypeSpecKind::Auto, None, colon);
         if let Some(bind) = bind {
@@ -833,9 +952,7 @@ impl Sema<'_, '_> {
             }
         }
         let mut d = Declarator::new(DeclaratorContext::Block, colon);
-        if by_ref {
-            d.chunks.push(Chunk::RRef { loc: colon });
-        }
+        d.chunks.push(Chunk::RRef { loc: colon });
         let ids = vec![BindingId {
             name: self.intern("__u"),
             loc: colon,
@@ -846,12 +963,13 @@ impl Sema<'_, '_> {
         d.decomp = Some(dc.clone());
         d.init_style = Some(InitStyle::C);
         let auto = self.type_from_declspec_at(&ds, colon);
-        let ty = if by_ref { self.ast.types.rvalue_ref_to(auto) } else { auto };
+        let ty = self.ast.types.rvalue_ref_to(auto);
         let v = self.declare_decomposition(&ds, ty, &d, &dc, false);
         // `e` was parsed (or substituted) long before this declaration,
         // whose full-expression it ends: its temporaries are this
         // initializer's cleanups, as for a shared subexpression.
         self.note_shared_temporaries(e);
+        self.note_expansion_uses(e);
         self.act_on_init(v, Initializer::Expr(e));
         if self.ast.decls.get(v).has(DeclFlags::INVALID) {
             return None;
@@ -883,6 +1001,7 @@ impl Substituter<'_, '_, '_> {
         let r = (|| {
             let init = data.init.map(|x| self.stmt(x));
             let exprs: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(data.exprs).collect();
+            let mark = self.sema.expansion_init_mark();
             let src = if let Some(e) = data.range_init {
                 // [class.temporary]/9: a lifetime-extending context, as
                 // when parsed.
@@ -898,6 +1017,8 @@ impl Substituter<'_, '_, '_> {
                 let _ = self.sema.end_for_range_init(collect);
                 ExpansionSource::List(l?)
             };
+            // Its uses are decided per expansion, as when parsed.
+            self.sema.act_on_expansion_initializer_captures(mark);
             if expand {
                 return self.expand_expansion(init, src, &data, depth, loc);
             }
@@ -986,6 +1107,7 @@ impl Substituter<'_, '_, '_> {
             // declaration's full-expression (the temporaries then
             // extended to the declared variable, CWG3043).
             let elem = x.elem;
+            self.sema.note_expansion_uses(elem);
             self.sema.note_shared_temporaries(elem);
             self.sema.note_deferred_invocations(elem);
             return Ok(elem);
