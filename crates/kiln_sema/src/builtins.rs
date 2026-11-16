@@ -2379,6 +2379,73 @@ impl Sema<'_, '_> {
     /// as written; one that is not the last named parameter, or that
     /// names a parameter of reference or promotable type, gets a
     /// `-Wvarargs` warning (undefined behavior, [cstdarg.syn]/1).
+    /// Where the discarded arguments of a one-argument `va_start(ap, ...)`
+    /// begin: the system macro passes them stringized, so the string is
+    /// spelled at the macro use. When that use is written in a file as
+    /// `va_start(ap, x...)`, the first token after the first top-level
+    /// comma, where clang and GCC point; otherwise the use.
+    fn va_start_discarded_loc(&self, string_at: Loc) -> Loc {
+        let sm = self.diags.sm();
+        let at = sm.expansion_loc(string_at);
+        let Some((file, off)) = sm.offset_of(at) else { return at };
+        let text = sm.text(file).as_bytes();
+        let mut i = off as usize;
+        while i < text.len() && (text[i].is_ascii_alphanumeric() || text[i] == b'_') {
+            i += 1;
+        }
+        while i < text.len() && text[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if text.get(i) != Some(&b'(') {
+            return at;
+        }
+        let mut depth = 0u32;
+        while i < text.len() {
+            match text[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return at;
+                    }
+                }
+                b',' if depth == 1 => {
+                    i += 1;
+                    while i < text.len() && text[i].is_ascii_whitespace() {
+                        i += 1;
+                    }
+                    return u32::try_from(i).map_or(at, |o| sm.loc(file, o));
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        at
+    }
+
+    /// C23 7.16.1.4 and C++26 [cstdarg.syn]: `va_start(ap, ...)`
+    /// discards its arguments after the first; kiln's <stdarg.h> passes
+    /// their spelling as a third argument, a string literal, so that only
+    /// it is compared (`#__VA_ARGS__`: the tokens are never parsed). The
+    /// trimmed spelling and where it begins; `None` for a user's
+    /// three-argument call, still an arity error.
+    fn va_start_discarded(&self, args: &[ExprId]) -> Option<(String, Loc)> {
+        let one_arg = self.is_c() && self.c_at_least(kiln_lex::CStd::C23)
+            || !self.is_c() && self.std >= kiln_lex::Std::Cxx26;
+        let &[_, _, t] = args else { return None };
+        if !one_arg || !self.diags.sm().is_in_system_macro(self.begin_loc(t)) {
+            return None;
+        }
+        let inner = self.ignore_paren_imp_casts(t);
+        self.string_lit_of(inner).map(|lit| {
+            let sid = self.ast.exprs.string_lit(lit);
+            let b = self.ast.strings.bytes(sid);
+            let b = b.strip_suffix(&[0]).unwrap_or(b);
+            let at = self.va_start_discarded_loc(self.begin_loc(t));
+            (String::from_utf8_lossy(b).trim().to_owned(), at)
+        })
+    }
+
     fn builtin_va_start(
         &mut self,
         callee: ExprId,
@@ -2396,7 +2463,8 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_va_start_wrong_abi, at);
             return None;
         }
-        if !self.builtin_arg_count(args, 2, rparen) {
+        let discarded = self.va_start_discarded(args);
+        if discarded.is_none() && !self.builtin_arg_count(args, 2, rparen) {
             return None;
         }
         let pt = self.builtin_va_list_param();
@@ -2429,6 +2497,28 @@ impl Sema<'_, '_> {
         // way (clang 22 has no C++26 one-argument form); in C++ only that
         // `0`, spelled in the system macro, skips the check, so a `0`
         // written by the user still warns as in clang (WP-1464).
+        // The spelling of the discarded arguments: clang 22 warns (C23)
+        // when the second argument is not the last named parameter, GCC
+        // 16.1 (C23, C++26) also when there are more; kiln warns in both
+        // cases, with clang's `-Wvarargs` warning, at the first discarded
+        // argument, and
+        // otherwise accepts them as the text does (clang 22 rejects a
+        // third argument as "too many arguments").
+        if let Some((text, at)) = discarded {
+            let last = self
+                .ast
+                .decls
+                .function(f)
+                .and_then(|x| self.ast.lists.iter::<DeclId>(x.params).last());
+            let named = last.and_then(|p| self.ast.decls.get(p).name().as_ident());
+            let ok = text.is_empty()
+                || named.is_some_and(|n| self.ast.symbols().as_str(n) == text.as_str());
+            if !ok {
+                let msg = self.diag(DiagId::sema_va_start_not_last_named_param, at);
+                self.emit(msg);
+            }
+            return Some((vec![ap, args[1]], QualType::VOID));
+        }
         if (self.is_c() && self.c_at_least(kiln_lex::CStd::C23)
             || !self.is_c()
                 && self.std >= kiln_lex::Std::Cxx26

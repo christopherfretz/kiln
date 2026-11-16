@@ -293,6 +293,28 @@ pub trait SemaBridge {
     fn cxx23(&self) -> bool {
         self.cxx_year() >= 2023
     }
+    /// Whether variable `d` is an implicit variable of an expansion
+    /// statement being expanded (its `__range`, `__begin`, `__end` and
+    /// `__iter`; [stmt.expand]/5.2): a C++26 construct (an extension
+    /// before C++26), so their constant evaluation follows C++26 in
+    /// every language mode: `__range` is a reference of unknown referent
+    /// (P2280), and the automatic objects of the function are
+    /// constexpr-referenceable from their initializing declarations
+    /// (P2686R5). Consulted only where a reference variable is first
+    /// resolved or a pointer frozen, and only below the mode that has
+    /// the rule. The default is none.
+    fn expansion_var(&self, d: DeclId) -> bool {
+        let _ = d;
+        false
+    }
+    /// [`SemaBridge::expansion_var`], or an expansion statement's
+    /// for-range-declaration being initialized from its element
+    /// (`for-range-declaration = *iter;`, [stmt.expand]/5): automatic
+    /// objects are constexpr-referenceable from its initializing
+    /// declaration in every mode (P2686R5). The default is none.
+    fn expansion_referenceable(&self, d: DeclId) -> bool {
+        self.expansion_var(d)
+    }
     /// Whether the P4101R1 consteval-only value model is in force (C++26
     /// with reflection; spec/reflection-repr.md §6): a constant
     /// expression's value may then point to, refer to or name an

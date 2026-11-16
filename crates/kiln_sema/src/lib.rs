@@ -337,6 +337,10 @@ pub struct Sema<'a, 'sm> {
     /// lifetime ([class.temporary]/8, CWG3043): the lifetime check
     /// (`check_var_lifetime`) has nothing to diagnose.
     pub(crate) expansion_element_init: bool,
+    /// The variables of the expansion statements being expanded
+    /// ([`kiln_oven::SemaBridge::expansion_var`]): C++26 rules for their
+    /// constant initialization in every mode. Empty at rest.
+    pub(crate) expansion_vars: Vec<DeclId>,
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
@@ -1430,6 +1434,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             lax_vector_conversions: LaxVectorConversions::All,
             range_lifetime_extension: false,
             expansion_element_init: false,
+            expansion_vars: Vec::new(),
             gnu: false,
             gnu89_inline: false,
             c: None,

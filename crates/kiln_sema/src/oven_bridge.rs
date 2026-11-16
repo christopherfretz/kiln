@@ -54,6 +54,14 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         }
     }
 
+    fn expansion_var(&self, d: DeclId) -> bool {
+        self.sema.expansion_vars.contains(&d)
+    }
+
+    fn expansion_referenceable(&self, d: DeclId) -> bool {
+        self.sema.expansion_element_init || self.expansion_var(d)
+    }
+
     fn consteval_only_values(&self) -> bool {
         self.sema.reflection
     }

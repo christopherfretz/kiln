@@ -1357,7 +1357,9 @@ clang (`--clang`, default `clang++-22`, which also makes kiln's flags start
 with `-fclang-compat=22`) run only the cases kiln does not pass
 (`--oracles-on fail`, the default; `all` runs them on every case), through
 the same judge; GCC with `-fdiagnostics-plain-output` and `LC_ALL=C`, as
-GCC's testsuite runs it. When the GCC oracle runs, kiln and clang build
+GCC's testsuite runs it. kiln and clang get `-ferror-limit=0`: GCC has
+no error limit, and an expected error after clang's default 20th would be
+lost. When the GCC oracle runs, kiln and clang build
 against its libstdc++ (`--gcc-toolchain=<its prefix>`: the headers the tests
 were written for, `<meta>` among them) and every link adds that library
 directory as run path (`-Wl,-rpath,...`), as GCC's own install does; the

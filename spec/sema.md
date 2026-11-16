@@ -10882,15 +10882,51 @@ not supported yet`.
     immediate invocation ends within it: `extend_init_temporaries` does
     not enter a `ConstantExpr`. Test: `element-immediate-invocation-run.cpp`
     (GCC oracle).
-  - *iterating* (`range_for.rs` `expansion_iterable`): not an array, and
-    member `begin`/`end` are found or ADL finds viable candidates;
-    `constexpr` `__range`, `__begin`; element i is `*(__begin + i)`
-    through a per-element `constexpr auto __iter = __begin + i`. All three
-    are `static` unless the range is bound by automatic reference (see
-    "Binding a constexpr range" below), when they are automatic.
+  - *iterating* (`range_for.rs` `expansion_iterable`; WP-1483,
+    `expansion_iterating`): not an array, and member `begin`/`end` are
+    found or ADL finds viable candidates. One path, the working draft's
+    [stmt.expand]/5.2: the prelude declares `constexpr_opt decltype(auto)
+    __range = (init);` (`auto&&` for a glvalue initializer, `auto` for a
+    prvalue) and `constexpr_opt auto __begin = begin-expr;`, both
+    automatic, and element i is `{ constexpr_opt auto __iter = __begin +
+    decltype(__begin - __begin){i}; for-range-declaration = *__iter;
+    compound-statement }`. `constexpr` is present exactly when the
+    for-range-declaration has it; nothing is `static`
+    (`RangeBind::Automatic` when it is, `RangeBind::Runtime` when not).
+    `decltype(__begin - __begin)` is resolved once
+    (`expansion_difference_type`, unevaluated); an iterator without `-`
+    is "invalid operands to binary expression" at the range, and an index
+    whose type is not `std::ptrdiff_t` is the braced cast
+    `D{i}` (`expansion_index`). `__end` is built for counting only (the
+    draft's consteval lambda declares its own `e`) and is not in the
+    prelude. A `__range` or `begin`/`end` call that fails stops the
+    statement (captured, `stash_has_error`), so no element is built
+    after the first error. *Implicit variables in constant evaluation*:
+    `__range`, `__begin`, `__end` and `__iter` (`Sema::expansion_vars`,
+    a stack truncated after each instantiation) get C++26 rules in every
+    mode through `SemaBridge::expansion_var` /
+    `expansion_referenceable`: P2280 unknown references (`bind_unknown`)
+    and P2686 constexpr-referenceability (`referenceable_from_object`);
+    they are consulted only on those cold paths. *Temporaries*: by
+    [class.temporary]/9 the initializer's temporaries persist for the
+    lifetime of the reference it initializes, "if any": a glvalue range
+    without `constexpr` extends them (`extend_init_temporaries`); a prvalue
+    initializes `__range` itself and its temporaries end with that
+    declaration. GCC 16.1 extends them for a prvalue too (its
+    expansion-stmt38 expects that); kiln follows the text.
     N is the first i for which `__begin + i != __end` is false
     ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
-    i` is what each element uses). *Fast path* (WP-454,
+    i` is what each element uses; deviation: kiln does not check that
+    the iterator has `++`, GCC 16.1 does). Without `constexpr`, N is still a
+    constant: `expansion_runtime_size` evaluates `__end - __begin`
+    (contiguous) or counts `__begin + D{i} != __end` from their
+    initializers, so a range whose size, not value, is constant works
+    (`std::span<int, 3>`, a member array, a run-time `Arr<int, 3>`
+    object); a range whose `begin` reads its value is
+    `sema_expansion_size_not_constant` with the failure notes
+    (`iterating-neg.cpp`; GCC 16.1 rejects the same, its expansion-stmt35).
+    Tests: `iterating-draft-run.cpp`, `iterating-runtime-range-run.cpp`
+    (GCC oracle). *Fast path* (WP-454,
     `expansion_size_difference`): when `__begin` and `__end` have the same
     type and it is (a) a pointer to a complete object type, or (b) a
     specialization of libc++'s `std::__wrap_iter`, `std::__bounded_iter`
@@ -10958,11 +10994,8 @@ not supported yet`.
     copy. A dependent temporary is rebuilt per instantiation
     (`shared-pattern-temporaries-run.cpp`, GCC oracle, run time and
     constant evaluation).
-    The iterating form's `__range` is `static constexpr` or a
-    `constexpr` reference to a glvalue (Automatic, below), so its
-    temporaries are part of its constant initialization and never
-    observable at run time.
-- **Binding a constexpr range** (`expansion_fallback`, `RangeBind`).
+- **Binding a constexpr destructuring range** (`expansion_fallback`,
+  `RangeBind`; the iterating form does not use it since WP-1483).
   A prvalue initializer is bound by value (`RangeBind::Copy`, `static
   constexpr auto`, const, so its value is usable in constant expressions;
   a lifetime-extended temporary would not be). A glvalue is bound by
@@ -10974,31 +11007,13 @@ not supported yet`.
   2. `RangeBind::Automatic` (C++26, and only when the
      for-range-declaration is `constexpr`; P2686R5, WP-1122): a non-static
      `constexpr auto&&` (the draft's [stmt.expand]/5 wording, `constexpr`
-     only when the for-range-declaration is), with `__begin`, `__end` and
-     each `__iter` automatic too, so a range naming a `constexpr` local
+     only when the for-range-declaration is), so a range naming a `constexpr` local
      (or a parameter-scope automatic object constexpr-referenceable from
      the statement, §4.9) is bound by reference, not copied: element
      addresses are the local's, and a non-copyable range works;
   3. `RangeBind::Copy`, `static constexpr auto`: the fallback for a
      glvalue that is not constexpr-referenceable but whose value is
      constant (before C++26, or a non-`constexpr` for-range-declaration).
-  A non-`constexpr` for-range-declaration never tries Automatic: by the
-  draft's wording (CWG3140, [stmt.expand]/5.2) its `__range`, `__begin`
-  and `__iter` are then not `constexpr` at all, so after the attempts
-  above fail it tries
-  4. `RangeBind::Runtime` (WP-1464): an automatic `decltype(auto)
-     __range = (init)` and plain `auto __begin`/`__end`/`__iter`, whose
-     temporaries are lifetime-extended at run time. N must still be a
-     constant: `expansion_runtime_size` evaluates `__end - __begin`
-     (contiguous) or counts `__begin + i != __end` from their
-     initializers, which with P2280 unknown references (C++23 and
-     later) succeeds on a range whose size, not value, is constant
-     (`std::span<int, 3>`, a member array). A range whose size is not
-     constant keeps the first attempt's error (`iterating-neg.cpp`).
-     Test: `iterating-runtime-range-run.cpp` (GCC oracle). Deviation: the
-     static `Copy` attempt is still tried first, so a range whose copy
-     is constant uses the copy (P1306R5's semantics) even where the
-     draft evaluates the original at run time.
   When all attempts fail, the first attempt's diagnostics are emitted. Tests:
   `tests/conformance/stmt.expand/constexpr-range-automatic{,-run,-neg}.cpp`
   (`skip(clang)`: clang 22 has no expansion statements and neither it nor
@@ -11052,7 +11067,7 @@ not supported yet`.
     jump, or a loop wholly inside the statement expression, evaluates
     normally. GCC 16.1 evaluates the jumps; kiln follows clang.
   - *Iterating range.* With a non-`constexpr` for-range-declaration the
-    range falls back to `RangeBind::Runtime` (CWG3131, CWG3140), so a
+    range is `RangeBind::Runtime` (CWG3131, CWG3140), so a
     statement-expression jump in it is valid, as in GCC 16.1 (WP-1464;
     before, `__range` was always `static constexpr` and this was
     "constexpr variable '__range' must be initialized by a constant

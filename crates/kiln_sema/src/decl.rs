@@ -6365,7 +6365,9 @@ impl Sema<'_, '_> {
             }
         }
         // [basic.scope.scope]/5 (P2169): a non-static data member `_` is
-        // name-independent and conflicts with no earlier one.
+        // name-independent and conflicts with no earlier declaration of
+        // the class (/6: a member function or a static data member `_`
+        // too; clang 22 still reports those as duplicates).
         let independent = name.is_some_and(|n| self.is_placeholder_name(n));
         // A class or enumeration of the same name is hidden, not
         // redeclared ([basic.scope.hiding]/2; clang `CheckFieldDecl`):
@@ -6374,7 +6376,7 @@ impl Sema<'_, '_> {
             && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
             && !is_tag_kind(self.kind_of(prev))
         {
-            if independent && self.kind_of(prev) == DeclKind::Field {
+            if independent {
                 self.diagnose_placeholder_redecl(d.name_loc());
             } else {
                 let note =
@@ -7067,8 +7069,9 @@ impl Sema<'_, '_> {
     /// Whether variable `name` declared by `d` with `spec` is
     /// name-independent, and its earlier declaration in its scope: a
     /// block-scope variable `_` of automatic storage duration
-    /// ([basic.scope.scope]/5, P2169) conflicts with no earlier variable
-    /// or binding of its scope.
+    /// ([basic.scope.scope]/5, P2169) conflicts with no earlier
+    /// declaration of its scope ([basic.scope.scope]/6: "unless B is
+    /// name-independent"), a variable, a binding or a function alike.
     fn var_prev_local(
         &mut self,
         spec: VarSpec,
@@ -7082,9 +7085,7 @@ impl Sema<'_, '_> {
             && self.is_placeholder_name(name);
         let local =
             self.find_prev(name, d.qualifier).map(|p| self.valid_prev_var(p, name, d.qualifier));
-        if independent
-            && local.is_some_and(|p| matches!(self.kind_of(p), DeclKind::Var | DeclKind::Binding))
-        {
+        if independent && local.is_some() {
             self.diagnose_placeholder_redecl(d.name_loc());
             return (true, None);
         }

@@ -4217,10 +4217,15 @@ impl Oven {
         // at the first element of an array object (the `int *` that
         // `std::allocator<int>::allocate(3)` returns designates an
         // element of an `int[3]`).
+        // The array object may be a member of a union, active or not
+        // ([intro.object]/2: an array exactly overlaying the member,
+        // of its type, becomes that member; [class.union.general]/6's
+        // note: placement new changes the active member).
         let target = match self.types.kind(ty) {
             TyKind::Array { .. } if !self.placement_fits(target, ty) => self
                 .outermost_at(a.ty, off)
                 .filter(|&o| self.placement_fits(o, ty))
+                .or_else(|| self.fitting_array_at(a.ty, off, ty))
                 .unwrap_or(target),
             _ => target,
         };
@@ -4278,6 +4283,37 @@ impl Oven {
             t
         };
         extent(s) >= extent(t) && base(s) == base(t)
+    }
+
+    /// An array subobject of a `t` beginning at offset `off` that an
+    /// array placement new of a `ty` fits ([`Oven::placement_fits`]),
+    /// outermost first, looking into every member of a union (the
+    /// member need not be active: the placement new makes it so, through
+    /// [`Oven::place_in_unions`]). Only the array placement path calls
+    /// this, after the common cases failed.
+    fn fitting_array_at(&self, t: OTy, off: u64, ty: OTy) -> Option<OTy> {
+        match self.types.kind(t) {
+            TyKind::Array { elem, n } => {
+                if off == 0 && self.placement_fits(t, ty) {
+                    return Some(t);
+                }
+                let es = self.types.size(elem);
+                if es == 0 || off / es >= n {
+                    return None;
+                }
+                self.fitting_array_at(elem, off % es, ty)
+            }
+            TyKind::Record { union: true, .. } => self.types.fields(t).iter().find_map(|f| {
+                let inside =
+                    f.width.is_none() && off >= f.offset && off < f.offset + self.types.size(f.ty);
+                if inside { self.fitting_array_at(f.ty, off - f.offset, ty) } else { None }
+            }),
+            TyKind::Record { .. } => {
+                let f = self.types.field_at(t, off)?;
+                self.fitting_array_at(f.ty, off - f.offset, ty)
+            }
+            _ => None,
+        }
     }
 
     /// The type of the complete object or array element at offset `off`
