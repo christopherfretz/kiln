@@ -1572,7 +1572,8 @@ int main() {\n\
 /// their wrappers, the other calls them; each is built once by kiln and
 /// once by `clang++-19` (both pairings), linked and run, and the output
 /// must equal the all-clang program's. Runs only on an x86-64 host, each
-/// AVX level only when the CPU has it.
+/// AVX level only when the CPU has it; it prints the levels it ran and the
+/// ones it skipped (run with `--nocapture` to see them).
 #[test]
 fn x86_avx_abi_interop() {
     #[cfg(target_arch = "x86_64")]
@@ -1588,6 +1589,17 @@ fn x86_avx_abi_interop() {
         if std::arch::is_x86_feature_detected!("avx512f") {
             levels.push(&["-mavx512f"]);
         }
+        // Say which levels ran: a host without AVX-512 (or AVX2) runs fewer
+        // and must not look like full coverage.
+        let ran: Vec<&str> =
+            levels.iter().map(|l| l.first().copied().unwrap_or("baseline")).collect();
+        let skipped: Vec<&str> =
+            ["-mavx", "-mavx2", "-mavx512f"].into_iter().filter(|f| !ran.contains(f)).collect();
+        eprintln!(
+            "x86_avx_abi_interop: ran {}; skipped (CPU lacks them) {}",
+            ran.join(" "),
+            if skipped.is_empty() { "none".to_string() } else { skipped.join(" ") }
+        );
         let d = scratch("avxabi");
         std::fs::write(d.join("lib.cpp"), format!("{AVX_ABI_DECLS}{AVX_ABI_LIB}")).unwrap();
         std::fs::write(d.join("main.cpp"), format!("{AVX_ABI_DECLS}{AVX_ABI_MAIN}")).unwrap();

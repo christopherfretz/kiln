@@ -1117,11 +1117,19 @@ family, and the `nonnull` attribute spellings.
      `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
      Extension that is off by default (`sema_vla_cxx_extension_gnu`;
      `-Wall` enables it, `vla-cxx-extension` being in `all`, WP-230).
-     `check_vla_var` then handles the variable: `extern` is an error
-     ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
-     bound (`fold_rvalue_int`) to a constant array with the
-     -Wgnu-folding-constant ExtWarn at the name, or is an error ("cannot
-     have 'static' storage duration"). An automatic VLA variable with
+     `check_vla_var` then handles the variable: `extern`,
+     `static` and `thread_local` fold the bound (`fold_rvalue_int`) to a
+     constant array with the -Wgnu-folding-constant ExtWarn at the name,
+     or are an error ("cannot have 'extern' linkage", "cannot have
+     'static' storage duration"; the `extern` fold is WP-1499). In C a
+     bound that evaluates but is no integer constant expression in C's
+     sense (C17 6.6p6, `conv::c_assign::c_not_ice_operand`: it reads an object
+     such as a `const int`; a C23 `constexpr` object is a named
+     constant) is a VLA too (WP-1499, clang `VerifyIntegerConstantExpression`
+     in C), so it warns `-Wvla` at the bound and is folded the same way
+     at file scope, in a structure member, for a static or `extern`
+     local and for a local with an initializer; a type-name outside a
+     function keeps the constant. An automatic VLA variable with
      an initializer whose bounds all fold is given the folded constant
      array type with the same ExtWarn at the name (clang
      `TryToFixInvalidVariablyModifiedType` for an initialized variable,
@@ -1139,11 +1147,20 @@ family, and the `nonnull` attribute spellings.
      repeats it), and `sizeof(T[n])` warns once (clang twice).
    - VLA bounds in lambdas (WP-1469, clang `captureVariablyModifiedType`):
      when a lambda captures (by reference) a variable whose type is
-     variably modified, or names a variably modified typedef of an
-     enclosing scope in `sizeof`/`alignof`
-     (`Sema::note_vla_type_use`), each array bound of that type
-     becomes a capture of kind `CaptureKind::VlaBound` after the
-     ordinary captures: no variable, a hidden `size_t` closure member
+     variably modified, or uses a variably modified type
+     (`Sema::note_vla_type_use`: the operand of `sizeof`/`alignof`, the
+     type of a local declared in the body, the target type of a cast),
+     each array bound of that type becomes a capture of kind
+     `CaptureKind::VlaBound`. The bounds are found from the canonical
+     type, not from its spelling (WP-1499): `typeof`/`__typeof__`, a
+     typedef, an element type `a[0]`, a pointer or reference to an
+     array all reach the same `VariableArray` nodes. A bound is captured
+     by each lambda, from the innermost outward, that the bound
+     expression was built before (`LambdaScope::first_expr`, the
+     expression count when the lambda started): a bound written inside
+     the lambda, as in `sizeof(int[n])`, is evaluated there, and only
+     the variables it names are captured. The captures come after the
+     ordinary ones: no variable, a hidden `size_t` closure member
      whose initializer is the bound expression itself (codegen reuses
      the value computed when the type was elaborated, never evaluating
      the bound again). The BMI image does not encode such a lambda
@@ -5465,7 +5482,15 @@ the initializer, or after default initialization, and before the
     (`'int *'` for an `int[3]`, `'void (*)(int)'` for a function), and
     `const_cast<void>` is `const_cast to 'void', which is not a
     reference, pointer-to-object, or pointer-to-data-member` (WP-327;
-    test `expr.static.cast/bad-cast-decayed-operand.cpp`). From C++20 a
+    test `expr.static.cast/bad-cast-decayed-operand.cpp`). For a
+    `static_cast`, a C-style or a functional cast (not in C), a pointer
+    target from an operand that is not a pointer is instead `cannot cast
+    from type 'F' to pointer type 'T'`, and a pointer-to-member target
+    from one that is not a pointer to member `cannot cast from type 'F'
+    to member pointer type 'T'` (clang's `TryStaticPointerDowncast` /
+    `TryStaticMemberPointerUpcast` messages, which stand when the
+    reinterpret_cast step does not apply; `(void *)&S::x`; WP-1496, test
+    `expr.static.cast/pointer-from-non-pointer.cpp`). From C++20 a
     `static_cast` to an array type direct-initializes it from `(e)`
     ([expr.static.cast]/4, a parenthesized aggregate initialization); when that initialization fails its
     diagnostics are dropped for the generic message
@@ -9874,6 +9899,13 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   one, /3.5 value-initializes it first, as clang does): the backing array
   is `const E[0]` and `size()` is 0 in a run and in a constant expression.
   Tests: `tests/conformance/dcl.init.list/empty-initializer-list-no-default-ctor{,-run}.cpp`.
+  A `std::initializer_list` specialization is never aggregate-initialized
+  from a braced list, even when the library declares it with public data
+  members (an aggregate; `is_list_aggregate`): `V a{{}}` with an
+  initializer-list constructor passes a list of one value-initialized
+  element, not an initializer_list aggregate-initialized from the inner
+  `{}` with size 0 (WP-1496,
+  `dcl.init.list/initializer-list-ctor-inner-empty-braces-{run,errors}.cpp`).
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
   the single element is not reference-related, a temporary of the
   referenced type is list-initialized with the reference's own kind
@@ -10928,8 +10960,12 @@ not supported yet`.
     not enter a `ConstantExpr`. Test: `element-immediate-invocation-run.cpp`
     (GCC oracle).
   - *iterating* (`range_for.rs` `expansion_iterable`; WP-1483,
-    `expansion_iterating`): not an array, and member `begin`/`end` are
-    found or ADL finds viable candidates. One path, the working draft's
+    `expansion_iterating`): not an array, and either the searches for
+    member `begin` and `end` EACH find a declaration (the member form of
+    [stmt.ranged]/1.3.2, P0962), or ADL finds viable `begin` and `end`
+    candidates. A class with only a member `begin` (or only `end`) and no
+    such candidates is destructured (WP-1499; GCC 16.1 agrees;
+    `iterating-requirements.cpp`). One path, the working draft's
     [stmt.expand]/5.2: the prelude declares `constexpr_opt decltype(auto)
     __range = (init);` (`auto&&` for a glvalue initializer, `auto` for a
     prvalue) and `constexpr_opt auto __begin = begin-expr;`, both
@@ -10961,8 +10997,19 @@ not supported yet`.
     expansion-stmt38 expects that); kiln follows the text.
     N is the first i for which `__begin + i != __end` is false
     ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
-    i` is what each element uses; deviation: kiln does not check that
-    the iterator has `++`, GCC 16.1 does). Without `constexpr`, N is still a
+    i` is what each element uses). Every expression the paragraph names
+    must be valid: begin-expr and end-expr, `begin - begin` (above), `++b`
+    on a non-const lvalue of `__begin`'s type (`expansion_increment`,
+    unevaluated on an undeclared implicit variable, WP-1499: "cannot
+    increment value of type"), `begin + i`, `b != e` and `*iter`, each
+    diagnosed at the range's `:` when missing, and N a constant
+    (`iterating-requirements{,-neg}.cpp`, GCC oracle). *Capture errors*:
+    when `__range`'s initialization fails and the range names a local of
+    an enclosing function the lambda cannot capture
+    (`names_uncaptured_local`, `lambda/capture.rs`), only the capture
+    error is emitted and `__range` is marked invalid (one error for one
+    mistake; the destructuring form does the same for its `[__u...]`;
+    `capture-neg.cpp`). Without `constexpr`, N is still a
     constant: `expansion_runtime_size` evaluates `__end - __begin`
     (contiguous) or counts `__begin + D{i} != __end` from their
     initializers, so a range whose size, not value, is constant works
@@ -11043,7 +11090,9 @@ not supported yet`.
   `RangeBind`; the iterating form does not use it since WP-1483).
   A prvalue initializer is bound by value (`RangeBind::Copy`, `static
   constexpr auto`, const, so its value is usable in constant expressions;
-  a lifetime-extended temporary would not be). A glvalue is bound by
+  a lifetime-extended temporary would not be; deviation: the working
+  draft's `constexpr auto&&` binds the temporary, which GCC 16.1 rejects
+  as not a constant expression). A glvalue is bound by
   reference, trying in order, each attempt in a block scope of its own
   with its diagnostics captured (a failed constant initialization does not
   mark the variable INVALID, so failure is `stash_has_error`):
@@ -11056,9 +11105,11 @@ not supported yet`.
      (or a parameter-scope automatic object constexpr-referenceable from
      the statement, §4.9) is bound by reference, not copied: element
      addresses are the local's, and a non-copyable range works;
-  3. `RangeBind::Copy`, `static constexpr auto`: the fallback for a
-     glvalue that is not constexpr-referenceable but whose value is
-     constant (before C++26, or a non-`constexpr` for-range-declaration).
+  A glvalue is never copied (WP-1499; until then a third attempt,
+  `static constexpr auto`, accepted an automatic range before C++26, also
+  an empty one, which CWG3048 and GCC 16.1 reject): a reference to an
+  object that is not constexpr-referenceable is ill-formed
+  (`destructuring-glvalue-neg.cpp`).
   When all attempts fail, the first attempt's diagnostics are emitted. Tests:
   `tests/conformance/stmt.expand/constexpr-range-automatic{,-run,-neg}.cpp`
   (`skip(clang)`: clang 22 has no expansion statements and neither it nor

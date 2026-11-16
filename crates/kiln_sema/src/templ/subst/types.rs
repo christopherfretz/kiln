@@ -24,9 +24,27 @@ impl Substituter<'_, '_, '_> {
     /// `decltype(e)` with `e` substituted (clang `TransformDecltypeType`).
     pub(crate) fn decltype_ty(&mut self, expr: ExprId, loc: Loc) -> SubstResult<QualType> {
         self.sema.enter_decltype();
+        let mark = self.sema.ast.exprs.len();
         let e = self.expr(expr);
         self.sema.exit_decltype(e.ok());
         let e = e?;
+        // [temp.deduct.general]/8, [dcl.fct.def.delete]/2: a deleted
+        // function the substituted operand names (`decltype(void(T::f))`)
+        // is a use, so a substitution failure here, not an error after
+        // the match is made (the pending use waits for no call).
+        // So is a non-static member named without an object
+        // (`decltype(sizeof(C::f))`), which otherwise waits for the end
+        // of the full-expression.
+        if self.sema.inst.stack.is_sfinae()
+            && (self.sema.special.has_pending() || !self.sema.member_refs.is_empty())
+        {
+            let trapped = self.sema.sfinae_errors();
+            self.sema.flush_pending_deleted_in(&[e]);
+            self.sema.flush_member_refs_since(mark);
+            if self.sema.sfinae_errors() > trapped {
+                return Err(SubstFail);
+            }
+        }
         self.sema.act_on_decltype(e, loc, loc).ok_or(SubstFail)
     }
 

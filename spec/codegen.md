@@ -3878,8 +3878,13 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   `EmitCXXAggrConstructorCall`, partial destruction on a throw), and a
   destructor pushes `Cleanup::PartialArray` over `[begin, begin+count)`
   as a normal and EH cleanup (clang `emitDestroy`, the empty array
-  checked first). A VLA of arrays of class objects, or any other
-  initializer, is still a "not supported yet" error.
+  checked first). A VLA of arrays of class objects, `S a[n][3]`
+  (WP-1499), is constructed and destroyed the same way: the constant
+  inner dimensions are multiplied into the run-time count and the loop
+  runs over the base class type (clang `emitArrayLength` flattening).
+  Sema rejects every other VLA initializer in C++ as clang 22 does
+  ("variable-sized object may not be initialized", at every `-std=`), so
+  the "not supported yet" error in codegen is unreachable from C++.
 - **Lambdas** (WP-1469, clang `captureVariablyModifiedType`): the
   `CaptureKind::VlaBound` closure members are initialized with
   `vla_bound_value` (the cached bound of the enclosing function), and the

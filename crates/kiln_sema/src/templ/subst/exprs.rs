@@ -457,18 +457,21 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(o);
                 self.sema.address_operand = saved;
                 let o = o?;
-                Ok(self.sema.act_on_unary(op, o, loc))
+                self.sema.oper_override = self.sema.oper_rebuild_set(e);
+                let r = self.sema.act_on_unary(op, o, loc);
+                self.sema.oper_override = None;
+                Ok(r)
             }
             ExprKind::BinaryOperator => {
                 let op = ex(self).binary_op(e);
                 let [l, r] = ex(self).operands(e);
-                self.binary(op, l, r, loc)
+                self.binary(e, op, l, r, loc)
             }
             ExprKind::CompoundAssignOperator => {
                 let op = ex(self).binary_op(e);
                 let l = ExprId::new(n.a());
                 let r = ex(self).compound_assign(e).rhs;
-                self.binary(op, l, r, loc)
+                self.binary(e, op, l, r, loc)
             }
             ExprKind::ConditionalOperator => {
                 let c = ExprId::new(n.a());
@@ -603,14 +606,24 @@ impl Substituter<'_, '_, '_> {
                     (OO::Arrow, &[a]) => self.sema.rebuild_operator_arrow(a, loc).ok_or(SubstFail),
                     (_, &[a]) | (OO::PlusPlus | OO::MinusMinus, &[a, _]) => {
                         match unary_of(op, args.len() == 2) {
-                            Some(u) => Ok(self.sema.act_on_unary(u, a, loc)),
+                            Some(u) => {
+                                self.sema.oper_override = self.sema.oper_rebuild_set(e);
+                                let r = self.sema.act_on_unary(u, a, loc);
+                                self.sema.oper_override = None;
+                                Ok(r)
+                            }
                             None => self.unimplemented("this overloaded operator", loc),
                         }
                     }
                     // Every binary operator function, `->*` and `,`
                     // included, names a built-in binary operator.
                     (_, &[l, r]) => match binary_of(op) {
-                        Some(b) => Ok(self.sema.act_on_binary(b, l, r, loc)),
+                        Some(b) => {
+                            self.sema.oper_override = self.sema.oper_rebuild_set(e);
+                            let x = self.sema.act_on_binary(b, l, r, loc);
+                            self.sema.oper_override = None;
+                            Ok(x)
+                        }
                         None => self.unimplemented("this overloaded operator", loc),
                     },
                     // Not reached by a resolved call: `new`/`delete`
@@ -2471,14 +2484,27 @@ impl Substituter<'_, '_, '_> {
     /// A binary operator of the pattern. A braced right operand
     /// (`x = {...}`, [expr.assign]/8) is assigned again from the
     /// rebuilt list ([`crate::Sema::act_on_assign_list`]).
-    fn binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> SubstResult<ExprId> {
+    /// The binary operator expression `e` of the pattern rebuilt from its
+    /// substituted operands, with the non-member candidates of its
+    /// definition ([`Sema::oper_rebuild_set`]).
+    fn binary(
+        &mut self,
+        e: ExprId,
+        op: BinaryOp,
+        l: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) -> SubstResult<ExprId> {
         let l = self.expr(l)?;
         if op.is_assignment() && self.sema.ast.exprs.get(r).kind() == ExprKind::InitListExpr {
             let il = self.init_list(r)?;
             return Ok(self.sema.act_on_assign_list(op, l, &il, loc));
         }
         let r = self.expr(r)?;
-        Ok(self.sema.act_on_binary(op, l, r, loc))
+        self.sema.oper_override = self.sema.oper_rebuild_set(e);
+        let x = self.sema.act_on_binary(op, l, r, loc);
+        self.sema.oper_override = None;
+        Ok(x)
     }
 
     /// A braced-init-list of the pattern. A semantic list built from a

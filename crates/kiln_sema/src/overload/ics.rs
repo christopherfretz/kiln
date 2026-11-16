@@ -1834,6 +1834,11 @@ impl Sema<'_, '_> {
             // A using-declaration names a base's conversion function in
             // this class ([namespace.udecl]/1): found as its shadow, whose
             // access is the using-declaration's ([namespace.udecl]/19).
+            // One a member of the class hides ([namespace.udecl]/14):
+            // not a member.
+            if self.ast.decls.hidden_shadow(found).is_some() {
+                continue;
+            }
             let m = self.ast.strip_shadow(found);
             let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
                 match self.templated_function(m) {
@@ -1862,10 +1867,23 @@ impl Sema<'_, '_> {
     /// C++23; clang `TryObjectArgumentInitialization`), else the implicit
     /// object parameter's binding.
     fn conv_object_ics(&mut self, a: &ArgInfo, f: DeclId) -> Ics {
-        match self.explicit_object_param_type(f) {
-            Some(p) => self.try_implicit_conversion(a, p, IcsOptions::SUPPRESS_UDC),
-            None => self.object_ics(a, f),
+        if let Some(p) = self.explicit_object_param_type(f) {
+            return self.try_implicit_conversion(a, p, IcsOptions::SUPPRESS_UDC);
         }
+        let mut ics = self.object_ics(a, f);
+        // [over.match.funcs.general]/5: a conversion function is a
+        // member of the class of the implied object argument for
+        // the type of its implicit object parameter, so a base's
+        // `operator bool` does not rank worse than the derived
+        // class's own `operator void*` (clang's `ActingContext`).
+        // The derived-to-base adjustment of the object is still
+        // made when the call is built.
+        if let Ics::Standard(s) = &mut ics
+            && s.second == SecondStep::DerivedToBase
+        {
+            s.second = SecondStep::Identity;
+        }
+        ics
     }
 
     /// [class.conv.fct]/1, [over.ics.user]/4: a conversion function never

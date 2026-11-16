@@ -81,7 +81,7 @@
 //! | `agg_error_mark`, `agg_excess`, `agg_list_end`, `designator_pending`, `init_entity`, `init_var`, `ctor_entity`, `ctor_diag_ty`, `list_param_note`, `list_ctor_active`, `ref_temp_note`, `mem_inits`, `initializing` | transient | the initialization being checked |
 //! | `cleanup`, `cleanup_saved`, `cleanup_marks` | transient | the cleanups of the full-expression being built |
 //! | `delayed_access`, `delayed_access_depth`, `delayed_deprecations`, `depr_points`, `depr_init`, `exempt_next_delay` | transient | open access and deprecation delay points |
-//! | `explicit_conv`, `cast_ignores_base_access`, `speculative_friend`, `replaying_access`, `requires_access_replay`, `access_ctx`, `arith_warning` | transient | set around one conversion or access check |
+//! | `explicit_conv`, `cast_ignores_base_access`, `speculative_friend`, `replaying_access`, `requires_access_replay`, `access_ctx`, `oper_override`, `arith_warning` | transient | set around one conversion or access check |
 //! | `trailing_notes`, `diag_capture`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
 //! | `nc_strict_only`, `pending_alias_vla`, `reverse_using_shadows`, `declarator_int_recovery`, `declarator_field`, `declarator_distant_exc`, `pattern_member_access`, `base_annotation_packs`, `friend_tag`, `friend_class_template`, `extraneous_tag_head`, `nested_tag`, `inst_enable_if`, `declspec_nulls` | transient | handed from one action to the next within a declaration |
 //! | `image_texprs`, `bmi` | transient | declaration-image and carried-constant recording (module files): a snapshot is not taken with them on |
@@ -144,7 +144,8 @@ macro_rules! sema_fields {
                 undefined_used_seen, typo_count, typo_exprs, dropped_typos, cond_typo_at,
                 pending_cond_typo, expr_errors, delete_cxx26, unparsed_exc, delayed_exc_equiv,
                 unparsed_default_args, uninstantiated_exc, dyn_exc_rparen, implicit_exc_dtors,
-                uninstantiated_annots, annot_of_attr, member_refs, declarator_type_invalid,
+                uninstantiated_annots, annot_of_attr, member_refs, oper_lookups, elided_ctors,
+                declarator_type_invalid,
                 declspec_restrict_error, friend_specs, member_friends, inherited_defaults,
                 inherited_aligned, inh_ctors, inh_ctor_base, anon_namespaces, has_contracts,
                 post_param_diagnosed, post_param_pattern_locs, friend_pattern_prev, templ, inst,
@@ -174,7 +175,7 @@ macro_rules! sema_fields {
                 initializing, cleanup, cleanup_saved, cleanup_marks, delayed_access,
                 delayed_access_depth, delayed_deprecations, depr_points, depr_init,
                 exempt_next_delay, explicit_conv, cast_ignores_base_access, speculative_friend,
-                replaying_access, requires_access_replay, access_ctx, arith_warning,
+                replaying_access, requires_access_replay, access_ctx, oper_override, arith_warning,
                 trailing_notes, diag_capture, delayed_typos, typo_delay, open_specs,
                 spec_failures, spec_exempt, nc_strict_only, pending_alias_vla,
                 reverse_using_shadows, declarator_int_recovery, declarator_field,

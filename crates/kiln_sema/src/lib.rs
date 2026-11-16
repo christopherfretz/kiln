@@ -1235,6 +1235,27 @@ pub struct Sema<'a, 'sm> {
     /// they appear in (spec/sema-class.md §2.5/§2.6): `&C::m` forms a
     /// pointer to member, anything else needs an object.
     pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, class::MemberRef>,
+    /// The non-member operator functions the unqualified lookup of a
+    /// dependent operator expression's operator name found at the
+    /// template's definition ([temp.dep.candidate], [over.match.oper]/3.2;
+    /// clang's `UnresolvedLookupExpr` callee): its instantiation adds only
+    /// argument-dependent lookup. Each `(declaration, found)`.
+    pub(crate) oper_lookups: kiln_source::fx::FxHashMap<ExprId, Box<[(DeclId, DeclId)]>>,
+    /// The non-member candidates of the operator expression being rebuilt
+    /// by a substitution ([`Sema::oper_lookups`], or the operator
+    /// function a non-dependent expression selected at the definition),
+    /// taken by the next [`Sema::oper_set`] instead of an unqualified
+    /// lookup in the instantiation's context; `true` when
+    /// argument-dependent lookup is added.
+    pub(crate) oper_override: Option<overload::oper::OperRebuild>,
+    /// Before C++17: the copy or move constructor of the elidable copy of
+    /// a prvalue of class type that initializes an object of its class
+    /// ([class.copy.elision]/1.3 of C++14), keyed by the prvalue. The copy
+    /// is not built (the prvalue initializes the object, as codegen
+    /// elides it); it is checked when the initialization is, and
+    /// `noexcept` sees it ([except.spec]/6, [`Sema::can_throw`]). Empty
+    /// from C++17 on.
+    pub(crate) elided_ctors: kiln_source::fx::FxHashMap<ExprId, DeclId>,
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
@@ -1668,6 +1689,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             annot_of_attr: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
+            oper_lookups: kiln_source::fx::FxHashMap::default(),
+            oper_override: None,
+            elided_ctors: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             extraneous_tag_head: None,
             nested_tag: false,

@@ -4,7 +4,6 @@
 // `noexcept(false)` copy constructor makes the expression potentially
 // throwing. Found running GCC's C++ testsuite (WP-1467).
 //@ std: c++14
-//@ xfail(kiln): WP-1496, sema builds no CXXConstructExpr for the elidable pre-C++17 copy of a prvalue, so noexcept sees no copy constructor
 struct A {
   A() noexcept {}
   A(const A &) noexcept(false) {}

@@ -235,6 +235,16 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Self::is_aggregate`] for list-initialization: a
+    /// `std::initializer_list<E>` that happens to be an aggregate (a
+    /// library without private members) is still built from a backing
+    /// array ([dcl.init.list]/3.6, as clang and GCC do): `V a{{}}` passes a
+    /// list of one value-initialized element, not an empty one.
+    pub(crate) fn is_list_aggregate(&mut self, t: QualType) -> bool {
+        self.is_aggregate(t)
+            && (self.ast.types.as_record(t).is_none() || self.initializer_list_element(t).is_none())
+    }
+
     /// Whether `ty` is a class whose definition is invalid (its
     /// instantiation failed, [temp.inst]/2): clang initializes no object
     /// of it and says nothing more (the failure was diagnosed).
@@ -281,7 +291,9 @@ impl Sema<'_, '_> {
             // Whether it is an aggregate needs its definition.
             self.instantiate_for_init(r, at);
         }
-        if self.is_error_type(ty) || self.ast.types.as_record(ty).is_none() || self.is_aggregate(ty)
+        if self.is_error_type(ty)
+            || self.ast.types.as_record(ty).is_none()
+            || self.is_list_aggregate(ty)
         {
             return None;
         }
@@ -1863,7 +1875,7 @@ impl Sema<'_, '_> {
         if let Some(e) = self.braced_string_init(ty, l, entity) {
             return e;
         }
-        if self.is_aggregate(ty) {
+        if self.is_list_aggregate(ty) {
             // [dcl.init.list]/3.2: an aggregate class initialized from a
             // single element of the same or a derived class type is
             // initialized from that element.

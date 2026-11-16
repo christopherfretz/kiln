@@ -274,6 +274,16 @@ out-of-line member templates instantiated later included, get access
 nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
 `class X` naming the injected-class-name is the injected type `X<P...>`
 anywhere inside the template, not only in a friend declaration.
+In a member of a class template, a private (or protected, not through a
+derived class) member of a specialization of the same template, or of a
+specialization of a partial specialization of it, named in the pattern is
+accepted there as possibly accessible (clang's `MightInstantiateTo`) and
+re-checked in each instantiation, where only the specialization being
+instantiated has access (`might_instantiate_to`, `dependent_access`;
+WP-1496, sema-templates.md §5.7). Where substitution checks access
+(partial specialization matching, a function template's signature, a
+default template argument), the context is the substituted entity's, not
+the use's (sema-templates.md §4.4, §5.7).
 The lookup of an unqualified `friend class X;` searches the class scopes,
 base classes included, before stopping at the innermost enclosing namespace
 ([dcl.type.elab]/4): a class found by class member lookup is the friend
@@ -2241,9 +2251,23 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   class (ignoring cv) initializes the object directly; no copy or move
   `CXXConstructExpr` is formed. Before C++17 the copy is only elidable
   ([class.copy.elision]/1.3): the move (or copy) constructor it would call
-  is still resolved and checked for deletion and access in evaluated
+  is still resolved and checked for deletion and access in
   copy-initializations, returns and arguments (`check_elided_ctor`), and
   then dropped (WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`).
+  Unevaluated operands are checked too, as clang builds the elidable
+  `CXXConstructExpr` there, and the selected constructor is recorded
+  against the prvalue (`Sema::elided_ctors`, empty from C++17 on) so
+  that `noexcept` and the implicit exception specifications see it
+  ([except.spec]/6; `can_throw`; WP-1496,
+  `class.copy.elision/elidable-ctor-unevaluated-cxx14.cpp`,
+  `expr.unary.noexcept/cxx14-elidable-copy.cpp`). The copy itself is
+  still not built, so `-fno-elide-constructors` stays rejected before
+  C++17 (spec/driver.md): building it means wrapping the prvalue in the
+  `CXXConstructExpr` that `check_elided_ctor` forms (over a
+  `MaterializeTemporaryExpr`) at its two call sites, and checking that
+  `Ast::elidable_copy_source` elides every such shape in codegen and the
+  Oven (returns, arguments, `throw`, mem-initializers, the conditional
+  operator's arms) so default IR stays unchanged.
 - **No elision into a base or delegating target** (CWG2403; clang
   `RequireActualConstructor`, WP-158): a prvalue initializing a base
   subobject (a mem-initializer, or an aggregate's base element, whose

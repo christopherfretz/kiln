@@ -293,10 +293,12 @@ impl Sema<'_, '_> {
                 if same_class(self, r, naming) {
                     return true;
                 }
+                dependent |= self.might_instantiate_to(r, naming);
                 continue;
             }
             if !self.derived_inclusive(r, naming) {
-                dependent |= self.has_dependent_bases_in(r, 0);
+                dependent |=
+                    self.has_dependent_bases_in(r, 0) || self.might_instantiate_to(r, naming);
                 continue;
             }
             match t.object {
@@ -327,6 +329,20 @@ impl Sema<'_, '_> {
             return true;
         }
         friend
+    }
+
+    /// Whether the templated class `r` (a class template's pattern or a
+    /// partial specialization) may instantiate to the specialization
+    /// `naming` of the same template (clang's `MightInstantiateTo`):
+    /// `A<int>`'s private members named in `A<T>` are accessible in the
+    /// instantiation `A<int>`, so the check waits for it.
+    fn might_instantiate_to(&self, r: DeclId, naming: DeclId) -> bool {
+        self.ast.spec_info(naming).is_some()
+            && (self.ast.described_template(self.ast.first(r)).is_some()
+                || self.ast.partial_spec_info(r).is_some())
+            && self
+                .friend_template_of(r)
+                .is_some_and(|t| self.friend_template_of(naming) == Some(t))
     }
 
     /// Whether class `c` or a (non-dependent) base of it, transitively,

@@ -74,10 +74,13 @@ an XPASS is the cue to drop its row.
 |---|---:|---|---|
 | `-Wnonnull` "null passed to a callee that requires a non-null argument" | 5 | WP-433 | `nonnull.verify` in specialized.algorithms, mem.res, print.fun, basic.string, string.view |
 | `-Wthread-safety` | 2 | none yet | `thread_safety.verify` in thread.shared_mutex, thread.shared_timed_mutex |
-| "'…' is deprecated" on `rel_ops` and the C++17 adaptor typedefs | 2 | none yet | `rel_ops.depr_in_cxx20`, `typedefs.depr_in_cxx17` |
+| "'…' is deprecated" on the C++17 adaptor typedefs | 1 | none yet | `typedefs.depr_in_cxx17` |
 | `alloc_align` "requested alignment is not a power of 2" | 1 | none yet | `allocate_vocabulary.attributes.verify` |
 | wording: the constraint note prints the substituted expression | 1 | none yet | `libcxx/algorithms/cpp17_iterator_concepts.verify` |
-| wording: `std::hash<std::monostate>` printed qualified | 1 | WP-432 | `variant.hash/hash.depr.verify` |
+
+WP-1499 removed `rel_ops.depr_in_cxx20` and `variant.hash/hash.depr.verify`,
+which pass now (XPASS on a run of the twelve ledgered tests with the libc++ 22
+headers, 14 s); the other ten still fail as described.
 
 ## Regressions fixed in WP-980
 

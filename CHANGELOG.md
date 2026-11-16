@@ -681,6 +681,36 @@ Planned as 1.3.0.
   `__builtin_is_pointer_interconvertible_with_class` /
   `__builtin_is_corresponding_member` on a member of an anonymous struct
   in a union.
+- Valid code found running GCC's C++ testsuite is accepted (WP-1496):
+  access during partial-specialization matching and template argument
+  deduction is checked in the template's context (a failure in a
+  function template's signature is a substitution failure), and a
+  default template argument's access in its template's context;
+  `V a{{}}` with an `initializer_list` constructor gives a list of one
+  element; a deleted or undefined function template named in `decltype`
+  is no longer diagnosed before overload resolution selects it; a friend
+  function template defined in a class template is found whichever
+  specialization defines it; a base class's conversion function no
+  longer ranks worse than the derived class's own (`bool(y)`); an
+  operator in a template finds the non-member operators visible at its
+  definition, plus argument-dependent lookup at instantiation, and a
+  non-dependent one keeps the function selected at definition; before
+  C++17 the elidable copy or move constructor of a temporary is
+  selected, access-checked and considered by `noexcept`. A `static_cast`
+  to a pointer from a non-pointer (a member pointer to `void*`
+  included) has clang's "cannot cast from type ... to pointer type".
+- Variable length arrays and expansion statements (WP-1499): a variable
+  length array of arrays of class objects (`S a[n][3]`) is constructed
+  and destroyed like a flat one, also on unwinding; a lambda captures the
+  bounds of every variably modified type its body uses (`typeof`, casts,
+  local declarations), not only those it names; in C a bound that reads a
+  `const` object makes a variable length array, folded to a constant
+  array with clang's `-Wgnu-folding-constant` where one is needed. An
+  iterating expansion statement checks the iterator's `++`, `!=` and `*`
+  and needs both member `begin` and `end`; an uncaptured range in a lambda
+  is one error, not two; and a destructuring expansion statement binds its
+  range by reference instead of copying it, so a non-constant range is
+  rejected as GCC does.
 
 ## [1.2.1] - 2026-11-14
 

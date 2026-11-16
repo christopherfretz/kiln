@@ -1786,6 +1786,11 @@ impl Sema<'_, '_> {
             // then in the template's scope (clang 19 and 22: `f() + f()`
             // calls `f<UlvE_>` and `f<UlvE0_>`; WP-1062).
             let saved = self.act_on_start_template_param_default();
+            // Its access checks are made in the template's context now,
+            // not delayed to the declaration that uses the default
+            // ([temp.param]/12; clang's `ContextRAII` in
+            // `SubstDefaultTemplateArgument` pushes an undelayed state).
+            let delayed = std::mem::take(&mut self.delayed_access_depth);
             let r = self
                 .in_template_context(tmpl, |s| {
                     let mut sub = Substituter::new(s, &args);
@@ -1794,6 +1799,7 @@ impl Sema<'_, '_> {
                     sub.template_arg(def, at)
                 })
                 .map_err(|_| ());
+            self.delayed_access_depth = delayed;
             self.act_on_end_template_param_default(saved);
             if checking.is_none() {
                 let r = r.and_then(|a| self.check_template_arg(tmpl, depth, p, a, at, prior));

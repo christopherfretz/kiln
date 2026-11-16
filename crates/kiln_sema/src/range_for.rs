@@ -682,9 +682,13 @@ impl Sema<'_, '_> {
     }
 
     /// Whether `range` is expansion-iterable ([stmt.expand]/3, P1306R5):
-    /// not an array, and either a class with a member `begin` or `end`
-    /// (the member form), or `begin(range)` and `end(range)` each have a
-    /// viable candidate found by argument-dependent lookup (silently).
+    /// not an array, and either begin-expr and end-expr are the member
+    /// form, which [stmt.ranged]/1.3.2 takes only when the searches for
+    /// `begin` and `end` in the class EACH find a declaration (P0962), or
+    /// `begin(range)` and `end(range)` each have a viable candidate found
+    /// by argument-dependent lookup (silently). A class with only a
+    /// member `begin` (or only `end`) and no such candidates is therefore
+    /// destructured, as GCC 16.1 does.
     pub(crate) fn expansion_iterable(&mut self, range: ExprId, colon: Loc) -> bool {
         let ty = self.non_reference(self.ety(range));
         if self.ast.types.is_array(ty) {
@@ -694,11 +698,12 @@ impl Sema<'_, '_> {
             && self.kind_of(rec) == DeclKind::CXXRecord
         {
             let class = self.ast.definition(rec).unwrap_or(rec);
-            for name in ["begin", "end"] {
-                let sym = self.intern(name);
-                if !self.lookup_in_class(class, sym, LookupKind::Ordinary).decls.is_empty() {
-                    return true;
-                }
+            let found = |s: &mut Self, name: &str| {
+                let sym = s.intern(name);
+                !s.lookup_in_class(class, sym, LookupKind::Ordinary).decls.is_empty()
+            };
+            if found(self, "begin") && found(self, "end") {
+                return true;
             }
         }
         let ((b, e), _) = self.capturing(|s| {

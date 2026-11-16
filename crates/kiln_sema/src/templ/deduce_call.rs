@@ -212,7 +212,15 @@ impl Sema<'_, '_> {
             self.set_frame_args(a);
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let mark = self.ast.exprs.len();
         let r = f(self);
+        // A non-static member named without an object in the substituted
+        // signature (`decltype(sizeof(C::f))`) is a substitution failure
+        // ([temp.deduct.general]/8), not an error at the end of the
+        // enclosing full-expression.
+        if !self.member_refs.is_empty() {
+            self.flush_member_refs_since(mark);
+        }
         let mut st = self.inst.sfinae.borrow_mut().pop().unwrap_or_default();
         self.pop_inst_frame();
         held.append(&mut st.warnings);

@@ -1529,6 +1529,29 @@ template's namespace, so the partial specialization never matched
 Other stored sets (class members, block-scope declarations) still take
 the earlier path.
 
+*Operators (WP-1496).* A dependent unary, binary or compound-assignment
+operator expression built in a template (`act_on_unary`, `act_on_binary`)
+records the unqualified lookup of its operator name, and for `==`, `!=`,
+`<`, `>`, `<=`, `>=` that of its rewritten forms' names too
+([over.match.oper]/3.4), at the definition (`Sema::oper_lookups`, keyed by
+the dependent expression; `=`, `[]`, `()` and `->` have no non-member
+candidates and record nothing). When the substituter rebuilds the
+expression it passes that set to `oper_set` (`Sema::oper_override`) in
+place of a new unqualified lookup, and ADL runs on the instantiated
+operand types ([temp.dep.candidate]/1, clang's `UnresolvedLookupExpr`
+callee of a `CXXOperatorCallExpr`). An operator expression that was
+already resolved at the definition (a `CXXOperatorCallExpr` whose
+operands became dependent only through an enclosing level) reuses its
+callee: a member function needs no other set, a non-member keeps the
+function (or its template) found then. A non-dependent operator
+expression records nothing and does no extra lookup. An operator
+declared after the definition in a namespace that is not associated
+with the operands is therefore not a candidate
+(`tests/conformance/temp.dep.candidate/operator-definition-lookup-run.cpp`);
+kiln then says "invalid operands" where clang names the operator that
+is "neither visible in the template definition nor found by
+argument-dependent lookup" (a remainder).
+
 Kiln, like clang, does not model the lookup scope at each point of
 instantiation. Namespace contents are append-only, so ADL at instantiation
 sees every declaration made up to that moment. Pending instantiations run
@@ -1682,7 +1705,15 @@ silently (`diag = None`) at those sites. S3O lists them.
    A partial whose shape mismatches `A` is skipped without deduction. The
    shapes are computed when the partial is declared.
 3. For each partial `p` that remains:
-   - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2);
+   - deduce `p.params` from `(p.args, A)` with `deduce_args` (§6.2),
+     with the access context set to `p` (`Sema::access_ctx`): the access
+     checks of the substitution are those of `p`'s context
+     ([temp.spec.partial.match]/2, [temp.deduct.general]/8), so a partial
+     specialization that is a member of a class, or that a friend
+     template declaration of the class names, sees its private names,
+     and the context naming the specialization gives nothing (a friend
+     of the class using `H<C>` gets the primary; WP-1496,
+     `tests/conformance/temp.spec.partial.match/access-in-partial-specialization-context.cpp`);
    - check each deduced template template argument against its
      parameter ([temp.arg.template]/3, §3.2 rules, in the SFINAE frame):
      a mismatch fails the deduction, as clang's
@@ -2605,6 +2636,21 @@ reports a dropped statement, part or declaration lookup.
   `willHaveBody`), rather than left a declaration whose use is "function
   'pow' with deduced return type cannot be used before it is defined"
   (WP-792; `temp.friend/friend-template-body-names-own-specialization.cpp`).
+- A friend function template declared first elsewhere (by another class
+  template specialization's friend declaration, or at namespace scope)
+  and defined in a class template specialization is one template whose
+  definition is that class's ([temp.inject]/1, [temp.friend]/1): the
+  link to the pattern template is set on the entity's first declaration
+  (through which its specializations are found) as well as on the
+  defining redeclaration, and the enclosing argument levels are those of
+  the class whose redeclaration carries the same link
+  (`inst_lexical_class`). A specialization formed before the definition
+  existed (a requires-expression or call that found no body) is
+  instantiated from the definition once there is one: its recorded
+  pattern is replaced when it is instantiated
+  (`instantiate_function_definition_inner`). (WP-1496,
+  `temp.friend/friend-template-defined-by-other-specialization.cpp`,
+  `.../friend-template-defined-by-two-specializations.cpp`.)
 - A friend function declared (unqualified) in a templated class
   redeclares nothing when the template is defined: it is not linked
   to an earlier declaration of the same name, nor checked against an
@@ -4068,6 +4114,40 @@ impl Sema<'_, '_> {
     pub fn with_sfinae<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Option<Diagnostic>);
 }
 ```
+
+**Checks made at the end of a full-expression** (WP-1496). A deleted
+function named in an unevaluated operand ([dcl.fct.def.delete]/2: only
+when overload resolution selects it) and a member named without an
+object (`C::x` for a non-static member function, [expr.prim.id]/3) are
+recorded while the operand is built and decided at the end of the
+full-expression (`special.pending_deleted`, `member_refs`). In a
+substitution the enclosing full-expression is not the substitution's, so
+`decltype` substitution (`decltype_ty`) and every SFINAE-held step
+(`in_sfinae_held`) flush the ones recorded since they started
+(`flush_pending_deleted_in`, `flush_member_refs_since`, by `ExprId`
+mark) inside the SFINAE frame: `decltype(void(T::template g<0>))` with a
+deleted explicit specialization, or `decltype(sizeof(C::x))`, is a
+substitution failure, not a hard error at the outer full-expression
+(`tests/conformance/dcl.fct.def.delete/unevaluated-use-in-substitution.cpp`).
+
+**Access context** (WP-1496). Access checks during a substitution are
+made in the substituted entity's context ([temp.deduct.general]/8): a
+partial specialization's (§4.4), a function template's signature
+(`in_template_context` plus the friend-template access context of
+§4.8), and a default template argument's in its template's context
+([temp.param]/12): `default_template_arg_in` sets aside the delay
+points of the declaration that required the substitution (clang's
+`ContextRAII` in `SubstDefaultTemplateArgument` pushes an undelayed
+state; alias template substitution keeps them, so its checks stay
+delayed and carry no instantiation note), so a default argument naming a private
+member is an error even when used in a member declaration of a friend of
+the class (`tests/conformance/temp.param/default-arg-access-context-errors.cpp`).
+A check in a member of a class template that passed only because the
+pattern class may instantiate to the naming specialization
+(`might_instantiate_to`, clang's `MightInstantiateTo`) is redone in each
+instantiation (`dependent_access`): `B<long>::f` naming `B<int>`'s private
+member is an error at its instantiation
+(`tests/conformance/class.access/pattern-access-other-specialization.cpp`).
 
 **What SFINAE mode does** (clang `SFINAETrap` +
 `Sema::EmitCurrentDiagnostic`):

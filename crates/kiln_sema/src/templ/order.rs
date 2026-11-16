@@ -93,7 +93,15 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
-            if let Some(args) = self.deduce_partial(p.partial, i, &as_, canonical, who, poi) {
+            // [temp.spec.partial.match]/2, [temp.deduct.general]/8: the
+            // access checks of matching are part of the substitution, made
+            // from the partial specialization (a member of a class sees
+            // its private names; a friend of the class naming the
+            // specialization gives nothing).
+            let saved = self.access_ctx.replace(p.partial);
+            let deduced = self.deduce_partial(p.partial, i, &as_, canonical, who, poi);
+            self.access_ctx = saved;
+            if let Some(args) = deduced {
                 matched.push(PartialMatch { partial: p.partial, index: i, args });
             }
             if self.inst.fatal {

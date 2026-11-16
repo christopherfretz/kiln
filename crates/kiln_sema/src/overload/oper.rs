@@ -141,6 +141,17 @@ pub(crate) fn rewritten_of(op: OO) -> Option<OO> {
     }
 }
 
+/// The non-member candidates (declaration, found declaration) an
+/// instantiation rebuilding an operator expression uses, and whether
+/// argument-dependent lookup is added ([`Sema::oper_rebuild_set`]).
+pub(crate) type OperRebuild = (Box<[(DeclId, DeclId)]>, bool);
+
+/// Operators whose candidates include non-member functions found by
+/// unqualified lookup ([over.match.oper]/3.2: not `=`, `[]`, `()`, `->`).
+fn has_nonmember_candidates(op: OO) -> bool {
+    !matches!(op, OO::Equal | OO::Subscript | OO::Call | OO::Arrow)
+}
+
 /// Candidates named `op` have synthesized reversed forms.
 pub(crate) fn allows_reversed(op: OO) -> bool {
     matches!(op, OO::EqualEqual | OO::Spaceship)
@@ -241,6 +252,54 @@ impl Sema<'_, '_> {
         self.ast.types.as_record(t).is_some() || self.ast.types.as_enum(t).is_some()
     }
 
+    /// [temp.dep.candidate], [over.match.oper]/3.2: the dependent
+    /// operator expression `e` (operator `op`) keeps the non-member
+    /// operator functions unqualified lookup finds here, at the
+    /// definition; its instantiation adds argument-dependent lookup only
+    /// ([`Sema::oper_lookups`]). A dependent expression rebuilt by a
+    /// substitution keeps the set of the one it was rebuilt from.
+    pub(crate) fn note_dependent_oper(&mut self, e: ExprId, op: Option<OO>) {
+        let rebuilt = self.oper_override.take();
+        let Some(op) = op.filter(|&o| has_nonmember_candidates(o)) else { return };
+        if let Some((fns, _)) = rebuilt {
+            self.oper_lookups.insert(e, fns);
+            return;
+        }
+        let mut fns: Vec<(DeclId, DeclId)> = Vec::new();
+        for name in [Some(op), rewritten_of(op)].into_iter().flatten() {
+            let found = self.lookup_operator_name(DeclName::operator(name));
+            for (&d, &f) in found.decls.iter().zip(found.found.iter()) {
+                let first = self.ast.first(d);
+                if !fns.iter().any(|&(o, _)| self.ast.first(o) == first) {
+                    fns.push((d, f));
+                }
+            }
+        }
+        self.oper_lookups.insert(e, fns.into_boxed_slice());
+    }
+
+    /// The non-member candidates a substitution rebuilding the operator
+    /// expression `e` of a pattern uses ([`Sema::oper_override`]): the
+    /// definition's lookup plus argument-dependent lookup for a dependent
+    /// one; for one the definition resolved (`CXXOperatorCallExpr`), only
+    /// the function it selected and no lookup at all, so that a later
+    /// declaration does not change it ([temp.res.general]/6, [temp.nondep]).
+    /// `None`: nothing recorded (look up as before).
+    pub(crate) fn oper_rebuild_set(&self, e: ExprId) -> Option<OperRebuild> {
+        if let Some(f) = self.oper_lookups.get(&e) {
+            return Some((f.clone(), true));
+        }
+        if self.ast.exprs.get(e).kind() != ExprKind::CXXOperatorCallExpr {
+            return None;
+        }
+        let d = self.callee_decl(e)?;
+        if self.kind_of(d) == DeclKind::CXXMethod {
+            return Some((Box::default(), false));
+        }
+        let d = self.ast.spec_info(d).map_or(d, |(_, s)| s.template);
+        Some((Box::new([(d, d)]), false))
+    }
+
     /// Builds and resolves the candidate set of operator `op` (`form`)
     /// applied to `ops` (`nargs` of them written; `brs` the braced
     /// operands): [over.match.oper]/3. With `!overloadable`, only the
@@ -264,6 +323,9 @@ impl Sema<'_, '_> {
             form,
             OperForm::Subscript | OperForm::Call | OperForm::Binary(BinaryOp::Assign)
         );
+        // An instantiation rebuilding an operator expression: the
+        // definition's non-member candidates ([temp.dep.candidate]).
+        let rebuilt = self.oper_override.take();
         let a0 = ops[0];
         let extra =
             if rewrites && matches!(form, OperForm::Binary(_)) { rewritten_of(op) } else { None };
@@ -290,6 +352,8 @@ impl Sema<'_, '_> {
             for name in [Some(op), extra].into_iter().flatten() {
                 let dn = DeclName::operator(name);
                 let found: Vec<(DeclId, DeclId)> = if let Some(c) = &captured {
+                    c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
+                } else if let Some((c, _)) = &rebuilt {
                     c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
                 } else {
                     let found = self.lookup_operator_name(dn);
@@ -324,8 +388,9 @@ impl Sema<'_, '_> {
                     self.add_member_opers(&mut set, x, ops, Rewrite::DifferentReversed, loc);
                 }
             }
-            // /3.2: argument-dependent lookup (not for `=`, `[]`, `()`).
-            if !member_only {
+            // /3.2: argument-dependent lookup (not for `=`, `[]`, `()`;
+            // not again for an expression the definition resolved).
+            if !member_only && rebuilt.as_ref().is_none_or(|r| r.1) {
                 let adl_args: Vec<ExprId> = ops[..nargs]
                     .iter()
                     .zip(brs)
