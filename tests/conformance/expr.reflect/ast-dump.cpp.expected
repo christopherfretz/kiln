@@ -1,6 +1,6 @@
 Dumping test:
 FunctionDecl consteval test 'void (int)' implicit-inline
-|-ParmVarDecl p 'int'
+|-ParmVarDecl referenced p 'int'
 `-CompoundStmt
   |-DeclStmt
   | `-VarDecl used rs 'std::meta::info[12]' cinit

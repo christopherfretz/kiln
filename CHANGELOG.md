@@ -834,6 +834,12 @@ Planned as 1.3.0.
   names a constructor is rejected before C++11. `cargo xtask libstdcxx`
   takes `--std c++11` and `--std c++14`.
 
+- A variable, parameter or structured binding whose only use is its
+  reflection (`^^v`, for example as a template argument of a template
+  that only queries it or uses its type) no longer gets
+  `-Wunused-variable`, `-Wunused-but-set-variable` or, at file scope,
+  `-Wunneeded-internal-declaration`. Reported by a user.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

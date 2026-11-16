@@ -380,9 +380,26 @@ impl Sema<'_, '_> {
             }
             DeclKind::CXXConstructor => self.reflect_overload_set(name_loc, loc),
             _ => match self.reflectee_of_decl(d) {
-                Some(r) => self.make_reflect_expr(r, loc, end),
+                Some(r) => {
+                    self.mark_reflected(d);
+                    self.make_reflect_expr(r, loc, end)
+                }
                 None => self.reflect_bad_operand(name_loc, loc),
             },
+        }
+    }
+
+    /// `^^d` names `d` as any other id-expression does: the declaration
+    /// is referenced (not odr-used), so a variable, parameter or
+    /// structured binding whose only use is its reflection gets no
+    /// `-Wunused-*` warning, and the reflection counts as a use for
+    /// `-Wunused-but-set-variable` (GCC 16.1 warns for none of them;
+    /// what a metafunction or splice later does with the reflection
+    /// cannot be seen from here).
+    fn mark_reflected(&mut self, d: DeclId) {
+        self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
+        if matches!(self.ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar) {
+            self.count_var_ref(d);
         }
     }
 
