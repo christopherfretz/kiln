@@ -5083,7 +5083,12 @@ impl Parser<'_, '_> {
     /// functions have none ([class.ctor.general]/1, [class.dtor]/1,
     /// [class.conv.fct]/1).
     fn group_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
-        let untyped = !ds.has_type_specifier() && is_untyped_special(d);
+        // A constructor name `C::C` ([class.qual]/2) whose parameter had
+        // an error (`X<T>::X(nosuch) {}`: the lookahead could not take it
+        // for a constructor) is typed as one, so the invalid declaration
+        // reports nothing more: one error for one mistake.
+        let untyped = !ds.has_type_specifier()
+            && (is_untyped_special(d) || self.ctor_name_with_invalid_param(d));
         if untyped && is_deduction_guide(d) {
             self.s.plain_auto_type()
         } else if untyped {
@@ -5097,6 +5102,15 @@ impl Parser<'_, '_> {
             let t = self.s.type_from_declspec_at(ds, d.name_loc());
             self.s.rebuild_in_current_instantiation(t, d)
         }
+    }
+
+    /// Whether function declarator `d` is `C::C(...)` (its name the
+    /// qualifier's class name, so a constructor name, [class.qual]/2)
+    /// with a parameter whose error was already reported.
+    fn ctor_name_with_invalid_param(&self, d: &Declarator) -> bool {
+        let (Some(q), Some((n, _))) = (d.qualifier, d.name) else { return false };
+        self.s.ast.decls.get(q).name().as_ident() == Some(n)
+            && d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid))
     }
 
     /// A virt-specifier-seq after function declarator `d` outside a

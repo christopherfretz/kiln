@@ -724,6 +724,18 @@ Planned as 1.3.0.
   `const` in C++14 (`-Wconstexpr-not-const`); errors in an implicit
   member or element initializer carry clang's "in implicit
   initialization of ..." note.
+- A class template's friend constructor, destructor or conversion function
+  whose class or type depends on the template (`friend Z<T>::Z(typename
+  T::t);`) is matched again in each specialization and befriends that
+  member, or is diagnosed there when no member matches. A precompiled
+  header or module keeps these friends. `friend void A::f(int);` naming a
+  specialization of a member function template befriends it, and is
+  rejected when the template is inaccessible. A friend class declared by a
+  local class names a class in the innermost enclosing block scope
+  ([class.friend]/11), as GCC does. `X<T>::X(nosuch)` is one error, the
+  column of a friend's qualifier points at the qualifier, and a member of a
+  class template with dependent bases named through its own class in C++98
+  is reported as "no member named".
 
 ## [1.2.1] - 2026-11-14
 

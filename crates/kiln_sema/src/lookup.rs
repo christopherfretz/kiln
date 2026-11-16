@@ -418,22 +418,26 @@ impl Sema<'_, '_> {
         name: Symbol,
         kind: LookupKind,
     ) -> Option<Found> {
+        // A hidden friend class of a local class ([class.friend]/11) is
+        // found by no lookup; the recovery tag only by a tag lookup.
+        let hidden = |d: DeclId| self.is_elab_only_local(d) || self.is_hidden_local_friend(d);
         let hit = match kind {
-            LookupKind::Tag => s.find(name, Ns::Tag),
+            LookupKind::Tag => s
+                .locals
+                .iter()
+                .rev()
+                .find(|e| e.0 == name && e.2 == Ns::Tag && !self.is_hidden_local_friend(e.1))
+                .map(|e| e.1),
             LookupKind::Ordinary => s.find(name, Ns::Ordinary).or_else(|| {
                 s.locals
                     .iter()
                     .rev()
-                    .find(|e| e.0 == name && e.2 == Ns::Tag && !self.is_elab_only_local(e.1))
+                    .find(|e| e.0 == name && e.2 == Ns::Tag && !hidden(e.1))
                     .map(|e| e.1)
             }),
             LookupKind::All => {
-                let v: Vec<DeclId> = s
-                    .locals
-                    .iter()
-                    .filter(|e| e.0 == name && !self.is_elab_only_local(e.1))
-                    .map(|e| e.1)
-                    .collect();
+                let v: Vec<DeclId> =
+                    s.locals.iter().filter(|e| e.0 == name && !hidden(e.1)).map(|e| e.1).collect();
                 let found = self.filter(v, kind);
                 return (!found.is_empty()).then_some(found);
             }
@@ -442,9 +446,7 @@ impl Sema<'_, '_> {
                 .iter()
                 .rev()
                 .find(|(n, d, _)| {
-                    *n == name
-                        && !self.is_elab_only_local(*d)
-                        && self.accept(self.ast.strip_shadow(*d), kind)
+                    *n == name && !hidden(*d) && self.accept(self.ast.strip_shadow(*d), kind)
                 })
                 .map(|e| e.1),
         };
@@ -454,7 +456,7 @@ impl Sema<'_, '_> {
         if kind != LookupKind::Tag
             && self.is_invalid_typedef_name(hit)
             && let Some(t) = s.find(name, Ns::Tag)
-            && !self.is_elab_only_local(t)
+            && !hidden(t)
         {
             hit = t;
         }

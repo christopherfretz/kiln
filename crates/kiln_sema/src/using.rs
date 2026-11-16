@@ -378,6 +378,22 @@ impl Sema<'_, '_> {
             // dependent base is not derived from itself: that waits too.
             || self.ast.first(q.ctx) == self.ast.first(class) && self.has_dependent_bases(class)
         {
+            // The current instantiation is looked up now all the same
+            // ([temp.dep.type]/1, clang `LookupQualifiedName`): a name it
+            // does not declare (dependent bases aside) is "no member
+            // named" at the definition, and the declaration is dropped.
+            if !inheriting
+                && self.ast.first(q.ctx) == self.ast.first(class)
+                && self.has_dependent_bases(class)
+                && self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty()
+            {
+                let msg = self
+                    .diag(DiagId::sema_no_member, name_loc)
+                    .arg(self.decl_name_str(name))
+                    .arg(self.qualifier_desc(q.ctx));
+                self.emit(msg);
+                return None;
+            }
             return self.dependent_class_using(class, q, name, name_loc, inheriting);
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
