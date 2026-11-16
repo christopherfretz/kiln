@@ -5329,6 +5329,8 @@ impl Parser<'_, '_> {
                     let mut diag = self.s.diag(id, l);
                     if is_function {
                         diag = diag.arg(if k == Kw::Delete { "delete" } else { "default" });
+                    } else if k == Kw::Default {
+                        diag = diag.arg(u8::from(self.std >= Std::Cxx20));
                     }
                     self.emit(diag);
                     if k == Kw::Delete {

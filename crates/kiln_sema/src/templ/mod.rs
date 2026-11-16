@@ -1287,6 +1287,7 @@ impl Sema<'_, '_> {
         }
         let check_empty = self.checks_member_spec_headers();
         let mut it = open.iter().copied().peekable();
+        let mut member_of_template = false;
         for slot in self.scope_slots(qualifier) {
             match slot {
                 ScopeSlot::Params(expected) => {
@@ -1299,7 +1300,9 @@ impl Sema<'_, '_> {
                         && !self.templ.heads[i].invented
                     {
                         let _ = self.check_template_heads_match(list, expected);
+                        self.reject_member_template_defaults(list);
                     }
+                    member_of_template = true;
                 }
                 ScopeSlot::Empty(class) if check_empty => {
                     let Some(&i) = it.peek() else { break };
@@ -1333,8 +1336,31 @@ impl Sema<'_, '_> {
             self.templ.heads[i].taken = true;
         }
         let list = self.templ.heads[innermost].list;
+        // The member's own head too (`template<class T> template<class U
+        // = int> void A<T>::g()`).
+        if member_of_template
+            && let Some(l) = list
+            && !self.templ.heads[innermost].invented
+        {
+            self.reject_member_template_defaults(l);
+        }
         self.templ.cur = list;
         list
+    }
+
+    /// [temp.param]/12: no default template argument in a head of the
+    /// definition of a member of a class template outside its class
+    /// (clang's `err_template_parameter_default_template_member`, at the
+    /// parameter, `TPC_ClassTemplateMember`). The default is dropped from
+    /// the redeclaration checks, as clang removes it.
+    fn reject_member_template_defaults(&mut self, list: TemplateParamListId) {
+        let l = *self.ast.templates.param_list(list);
+        for p in self.ast.lists.iter::<DeclId>(l.params) {
+            if self.templ.default_locs.remove(&p).is_some() {
+                let at = self.ast.decls.get(p).loc();
+                self.error(DiagId::sema_template_param_default_template_member, at);
+            }
+        }
     }
 
     /// The `template` keyword of the outermost untaken written head

@@ -1203,6 +1203,25 @@ impl Sema<'_, '_> {
         let _ = r;
         // Read by the alias template check of this template-id only.
         let ttp_expansion = std::mem::take(&mut self.templ.ttp_written_expansion);
+        // CWG1430: where a pack expansion argument of a template template
+        // parameter's template-id was written, for the error its
+        // substitution by an alias template reports (§5.8).
+        if self.inst.stack.is_empty()
+            && self.templ.arg_locs_depth == 0
+            && matches!(
+                self.ast.types.template_name_view(name),
+                TemplateName::TemplateTemplateParm { .. }
+            )
+        {
+            for (i, &a) in args.iter().enumerate() {
+                if let ArgView::Type(t) = a.view()
+                    && self.is_pack_expansion_arg(a)
+                    && let Some(&at) = self.templ.arg_locs.get(i)
+                {
+                    self.note_written_loc(WrittenKey::Type(t.without_quals()), at);
+                }
+            }
+        }
         let res = self.template_id(name, args, l, ttp_expansion);
         // A dependent or instantiation-dependent specialization: where written (§5.8).
         if let Ok(TemplateIdRef::Type(t)) = res

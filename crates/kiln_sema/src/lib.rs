@@ -883,6 +883,12 @@ pub struct Sema<'a, 'sm> {
     /// operator whose built-in fallback fails, spec/sema-overload.md
     /// §6.2): set and cleared around the fallback.
     pub(crate) trailing_notes: std::cell::RefCell<Vec<Diag>>,
+    /// The elements without an initializer whose value-initialization is
+    /// being checked, innermost last: each error emitted meanwhile takes
+    /// clang's `note_in_omitted_aggregate_initializer` for each, innermost
+    /// first ([`Sema::with_omitted_init`]). Built into notes only when an
+    /// error fires.
+    pub(crate) omitted_inits: Vec<init::OmittedInit>,
     /// The errors [`Sema::emit`] was given, whether it printed, captured
     /// (a SFINAE context, a held-back typo) or suppressed them: what
     /// proves a failed instantiation step was diagnosed
@@ -1603,6 +1609,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             spare_oven: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
+            omitted_inits: Vec::new(),
             failures: std::cell::Cell::new(0),
             extensions_silenced: std::cell::Cell::new(0),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -1814,6 +1821,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 || self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error
         }) {
             self.failures.set(self.failures.get() + 1);
+            for &o in self.omitted_inits.iter().rev() {
+                d = d.with_note(self.omitted_init_note(o));
+            }
         }
         // The overload candidates' notes go with the error they explain,
         // also when a range-based `for` holds it back.

@@ -2486,6 +2486,58 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// C++11 [dcl.constexpr]/8: "A constexpr specifier for a non-static
+    /// member function that is not a constructor declares that member
+    /// function to be const" (removed by C++14, N3652). `ty` gains the
+    /// `const`, with clang's `-Wconstexpr-not-const` at the name and a
+    /// fix-it inserting ` const` after the `)`; an out-of-line definition
+    /// of a static member function keeps its type (clang
+    /// `CheckFunctionDeclaration`, which looks at the redeclared function):
+    /// `out_of_line` names it for that lookup.
+    pub(crate) fn cxx11_constexpr_const(
+        &mut self,
+        ty: QualType,
+        d: &Declarator,
+        out_of_line: Option<DeclName>,
+    ) -> QualType {
+        if matches!(d.special, Some((SpecialName::Constructor(_) | SpecialName::Destructor(_), _)))
+        {
+            return ty;
+        }
+        let Some(Chunk::Function { rparen, .. }) = d.chunks.first() else { return ty };
+        let rparen = *rparen;
+        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        let info = p.info();
+        if info.this_quals().is_const() {
+            return ty;
+        }
+        let params = self.ast.types.params(&p).to_vec();
+        if let Some(dname) = out_of_line {
+            let cands = self.prev_candidates_dn(dname, d.qualifier);
+            let static_prev = cands.into_iter().any(|x| {
+                self.kind_of(x) == DeclKind::CXXMethod
+                    && self.fn_spec(x).storage() == FnStorage::Static
+                    && self.fn_params(x).is_some_and(|(qs, _)| {
+                        qs.len() == params.len()
+                            && qs.iter().zip(&params).all(|(&a, &b)| self.ast.types.same_type(a, b))
+                    })
+            });
+            if static_prev {
+                return ty;
+            }
+        }
+        if self.inst.stack.is_empty() {
+            let at = self.token_end(rparen).unwrap_or(rparen);
+            let w = self
+                .diag(DiagId::sema_constexpr_not_const, d.name_loc())
+                .fixit(FixIt::insert(at, " const"));
+            self.emit(w);
+        }
+        let exc = self.ast.types.exc_spec(&p);
+        let info = info.with_this_quals(info.this_quals() | Quals::CONST);
+        self.ast.types.function(p.ret(), &params, info, exc)
+    }
+
     pub(crate) fn drop_invalid_fn_quals(
         &mut self,
         ty: QualType,
@@ -4826,6 +4878,17 @@ impl Sema<'_, '_> {
                 self.with_basic_noexcept(ty)
             }
             _ => ty,
+        };
+        let ty = if self.std < kiln_lex::Std::Cxx14
+            && method
+            && ds.constexpr.is_some()
+            && !friend
+            && !explicit_object
+            && spec.storage() != FnStorage::Static
+        {
+            self.cxx11_constexpr_const(ty, d, (!in_class).then(|| d.fn_decl_name(name)))
+        } else {
+            ty
         };
         if let Some(l) = ds.inline {
             // [dcl.inline]/5: not on a block-scope function declaration

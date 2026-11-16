@@ -10,6 +10,8 @@ sema_need_header_before_typeid_19 = Error (0) "you need to include <typeinfo> be
 // ----- WP-558 (clang `err_attribute_bad_neon_vector_size`)
 sema_neon_vector_bad_size = Error (0) "Neon vector size must be 64 or 128 bits";
 sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::' because it has no members";
+// ----- WP-1500 (a parenthesized array new initializer before C++20, P0960)
+sema_new_array_init_args = Error (0) "array 'new' cannot have initialization arguments";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
 // ----- WP-1135 (clang `err_auto_new_deduction_failure`)

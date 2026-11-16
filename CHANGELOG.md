@@ -711,6 +711,19 @@ Planned as 1.3.0.
   is one error, not two; and a destructuring expansion statement binds its
   range by reference instead of copying it, so a non-constant range is
   rejected as GCC does.
+- Invalid code found running GCC's C++ testsuite is now rejected as
+  clang 22 rejects it: `new T[n](args)` before C++20; a default
+  argument on an out-of-line member of a class template or on an
+  explicit specialization; a direct-initialization at C++11/14 that two
+  conversion functions make ambiguous; a pack-expansion fold constraint
+  before C++26 (atomic there, so neither declaration is more
+  constrained); a member that would hide a using-declared base member
+  whose requires-clause names different class arguments; and a class
+  template's injected-class-name as its own (incomplete) base. C++11
+  mode warns that a `constexpr` member function will not be implicitly
+  `const` in C++14 (`-Wconstexpr-not-const`); errors in an implicit
+  member or element initializer carry clang's "in implicit
+  initialization of ..." note.
 
 ## [1.2.1] - 2026-11-14
 

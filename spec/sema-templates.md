@@ -6491,7 +6491,11 @@ Hash-consing therefore makes identical atoms the **same `NormId`**.
 constraints, built under the `ConstraintNormalization` frame.
 
 **Fold expanded constraints** ([temp.constr.fold], P2963R3, WP-771;
-`normalize_fold_expanded`). A `&&`/`||` fold whose pattern names
+`normalize_fold_expanded`). C++26 only, as clang 19 and 22
+(`CPlusPlus26`): before C++26 a fold is an atomic constraint, so two
+folds over different concepts are incomparable and a call both accept is
+ambiguous (WP-1500, `temp.constr.fold/fold-atomic-before-cxx26.cpp`).
+A `&&`/`||` fold whose pattern names
 unexpanded type or non-type template parameter packs (no concept
 template parameter pack) normalizes to `Fold { and, pattern, packs }`:
 the pattern's normal form and the set of packs it expands (each

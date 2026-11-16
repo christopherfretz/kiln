@@ -581,6 +581,7 @@ impl Substituter<'_, '_, '_> {
                         .args(args)
                         .iter()
                         .any(|&a| self.sema.is_pack_expansion_arg(a));
+                let pattern_args = args;
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
                 let mut v = self.sema.ast.types.args(args).to_vec();
@@ -593,7 +594,35 @@ impl Substituter<'_, '_, '_> {
                     &mut self.sema.templ.ttp_written_expansion,
                     written_expansion,
                 );
+                // The written arguments' locations, for CWG1430's error at
+                // the pack expansion (recorded by `act_template_id`).
+                let saved_locs = written_expansion.then(|| {
+                    let locs: Vec<Loc> = self
+                        .sema
+                        .ast
+                        .types
+                        .args(pattern_args)
+                        .iter()
+                        .map(|&a| match a.view() {
+                            ArgView::Type(t) if self.sema.is_pack_expansion_arg(a) => {
+                                self.written(WrittenKey::Type(t.without_quals()), l)
+                            }
+                            _ => l,
+                        })
+                        .collect();
+                    let depth = self.sema.inst.stack.len();
+                    let t = &mut self.sema.templ;
+                    (
+                        std::mem::replace(&mut t.arg_locs, locs),
+                        std::mem::replace(&mut t.arg_locs_depth, depth),
+                        t.r_angle.take(),
+                    )
+                });
                 let r = self.sema.act_template_id(name, &v, l, l);
+                if let Some((locs, depth, r_angle)) = saved_locs {
+                    let t = &mut self.sema.templ;
+                    (t.arg_locs, t.arg_locs_depth, t.r_angle) = (locs, depth, r_angle);
+                }
                 self.sema.templ.ttp_written_expansion = saved_exp;
                 self.sema.subst_template_id = saved;
                 match r {

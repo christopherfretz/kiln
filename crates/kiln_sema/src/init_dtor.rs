@@ -15,7 +15,10 @@ impl Sema<'_, '_> {
     /// array element of array type has no destructor of its own) is
     /// referenced at `loc`: "temporary of type 'D' has private
     /// destructor" when inaccessible. True when it is deleted, which
-    /// makes the initializer list invalid (clang's early return).
+    /// makes the initializer list invalid (clang's early return). The
+    /// check is the list's, not part of an omitted element's
+    /// value-initialization: its error takes no "in implicit
+    /// initialization of ..." note ([`Sema::with_omitted_init`]).
     pub(crate) fn check_element_dtor(&mut self, ty: QualType, loc: Loc) -> bool {
         if self.is_dependent_type(ty) || self.ast.types.is_array(ty) {
             return false;
@@ -25,8 +28,10 @@ impl Sema<'_, '_> {
         if flags.contains(DeclFlags::INVALID) || flags.contains(DeclFlags::DEPENDENT_CTX) {
             return false;
         }
-        let Some(dtor) = self.check_temporary_dtor(class, ty, loc) else { return false };
-        self.is_deleted_fn(dtor)
+        let omitted = std::mem::take(&mut self.omitted_inits);
+        let dtor = self.check_temporary_dtor(class, ty, loc);
+        self.omitted_inits = omitted;
+        dtor.is_some_and(|d| self.is_deleted_fn(d))
     }
 
     /// [`Sema::check_element_dtor`] of a member of type `ty`: its base

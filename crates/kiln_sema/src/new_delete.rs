@@ -351,7 +351,10 @@ impl Sema<'_, '_> {
                 .intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
         });
         if kids_dep || self.is_dependent_type(tid.base) {
-            if d.invalid || self.is_error_type(tid.base) {
+            if d.invalid
+                || self.is_error_type(tid.base)
+                || self.new_array_args_rejected(&init, !arrays.is_empty(), loc)
+            {
                 return self.recover_err(&kids, loc);
             }
             // The later bounds are part of the allocated type.
@@ -450,6 +453,13 @@ impl Sema<'_, '_> {
                 }
                 None => self.ast.types.incomplete_array(elem),
             };
+        }
+        if self.new_array_args_rejected(
+            &init,
+            !arrays.is_empty() || self.ast.types.is_array(elem),
+            loc,
+        ) {
+            return self.recover_err(&kids, loc);
         }
         if self.is_dependent_type(elem) {
             let first = arrays.first().copied();
@@ -2089,11 +2099,29 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [expr.new]/23 with [dcl.init.general]/16.5: before C++20 (P0960) an
+    /// array new-expression (`array`: a written bound, or an array type
+    /// named by a non-dependent type-id) takes only `()` or a braced list,
+    /// also in a template definition: clang's `isLegalArrayNewInitializer`,
+    /// "array 'new' cannot have initialization arguments" at the
+    /// expression's start `loc`. True if reported.
+    fn new_array_args_rejected(&mut self, init: &NewInit, array: bool, loc: Loc) -> bool {
+        if self.std >= kiln_lex::Std::Cxx20
+            || !array
+            || !matches!(init, NewInit::Paren(v, ..) if !v.is_empty())
+        {
+            return false;
+        }
+        self.error(DiagId::sema_new_array_init_args, loc);
+        true
+    }
+
     /// `new T[n](args...)`: a parenthesized aggregate initialization of the
     /// array (P0960). Like clang's `TryOrBuildParenListInitialization` for
-    /// a new-expression, the `CXXParenListInitExpr` always carries an array
-    /// filler (a runtime bound may exceed the arguments); with no written
-    /// bound its length completes the array type.
+    /// a new-expression, the `CXXParenListInitExpr` of a runtime or
+    /// omitted bound always carries an array filler (the bound may exceed
+    /// the arguments); with no written bound its length completes the
+    /// array type.
     fn new_paren_array_init(
         &mut self,
         elem: QualType,
@@ -2108,7 +2136,11 @@ impl Sema<'_, '_> {
             return Err(());
         }
         let ety = self.ast.exprs.get(e).ty();
-        let e = if self.ast.exprs.paren_list_filler(e).is_none() {
+        // A constant bound's missing elements already have their filler;
+        // with one the arguments meet, no element is value-initialized
+        // (`new C[2](8, 9)` without a default constructor is valid).
+        let runtime_bound = self.ast.types.array_size(t).is_none();
+        let e = if runtime_bound && self.ast.exprs.paren_list_filler(e).is_none() {
             let inits: Vec<ExprId> = {
                 let l = self.ast.exprs.paren_list_inits(e);
                 self.ast.lists.iter(l).collect()
@@ -2148,7 +2180,9 @@ impl Sema<'_, '_> {
             return e;
         }
         let elem = self.ast.types.element(n.ty()).unwrap_or(QualType::ERROR);
-        let filler = self.filler(elem, rbrace);
+        let filler = self.with_omitted_init(crate::init::OmittedInit::Trailing(rbrace), |s| {
+            s.filler(elem, rbrace)
+        });
         self.builder().init_list(
             n.ty(),
             &inits,
