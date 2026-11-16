@@ -354,6 +354,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         }
         if let Some(c) = lex_opts.c {
             kw.for_c(s.ast.symbols(), c, s.gnu);
+        } else if !cxx11 {
+            for k in crate::keywords::CXX11_KEYWORDS {
+                kw.remove(s.ast.symbols(), k);
+            }
         }
         s.set_std(std);
         let sm = src.source_manager();

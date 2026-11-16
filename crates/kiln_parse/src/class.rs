@@ -1293,17 +1293,33 @@ impl Parser<'_, '_> {
     /// `ParseCXXClassMemberDeclaration`). Returns the index of the
     /// unqualified-id. Only `name ::` pairs are walked, with no template
     /// argument skipped, so a member whose type is qualified
-    /// (`std::vector<int> v;`) costs a few token peeks; a template-id in
-    /// the qualifier (`B<T>::f;`) is not recognised.
+    /// (`std::vector<int> v;`) costs a few token peeks. Before C++11, where
+    /// the form is valid (deprecated), a template-id in the qualifier
+    /// (`I<T>::B::f;`) is walked too; from C++11 on it is not recognised.
     fn at_access_declaration(&self) -> Option<usize> {
-        if self.s.is_c() || self.ident().is_none() || !self.peek_is(1, Punct::ColonColon) {
+        let cxx98 = self.std < kiln_lex::Std::Cxx11;
+        if self.s.is_c()
+            || self.ident().is_none()
+            || !(self.peek_is(1, Punct::ColonColon) || cxx98 && self.peek_is(1, Punct::Less))
+        {
             return None;
         }
         let mut i = self.pos();
-        while self.ident_of(self.tok_at(i)).is_some()
-            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
-        {
-            i += 2;
+        while self.ident_of(self.tok_at(i)).is_some() {
+            let mut j = i + 1;
+            if cxx98 && Self::punct_of(self.tok_at(j)) == Some(Punct::Less) {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return None,
+                }
+            }
+            if Self::punct_of(self.tok_at(j)) != Some(Punct::ColonColon) {
+                break;
+            }
+            i = j + 1;
+        }
+        if i == self.pos() {
+            return None;
         }
         if self.ident_of(self.tok_at(i)).is_some() {
             return (Self::punct_of(self.tok_at(i + 1)) == Some(Punct::Semi)).then_some(i);
@@ -2169,6 +2185,13 @@ impl Parser<'_, '_> {
         // `C<T>::C(T::type) {}`); not after an unqualified friend's
         // name (`friend C(T::fn)();`).
         if matches!(class, NameClass::Dependent) && !friend {
+            return true;
+        }
+        // A name the lookahead finds nowhere after a qualifier whose class
+        // it could not enter (`X<C, T>::X(bar) {}`, `bar` a member typedef
+        // of the class template's pattern; the qualifier is still the
+        // template here) is a member type it cannot see.
+        if opaque && matches!(class, NameClass::Undeclared) {
             return true;
         }
         if self.ident_of(self.tok_at(end - 1)).is_none() {

@@ -141,13 +141,29 @@ a non-template member of `A` with the same type (ignoring the exception
 specification) is befriended, else a specialization of a constructor or
 conversion function template deduced from the type ([temp.deduct.decl]).
 The befriended member must be accessible ([class.friend]/9). No match is
-`friend declaration of 'A' does not match any declaration in 'A'` (for a
-template candidate kiln's `no function template matches function template
-specialization` instead, without clang's per-candidate notes). When the
+`friend declaration of 'A' does not match any declaration in 'A'`, with a
+note per candidate as clang gives (`with_friend_candidate_notes`, WP-1495):
+the type mismatch note of an out-of-line definition
+(`mismatch_note_as`), an implicit member named by its kind (`candidate
+constructor (the implicit copy constructor) not viable: ...`), and
+function templates last as `candidate template ignored: failed template
+argument deduction`; invalid declarations and friend redeclarations are
+skipped. A non-special friend function of a non-dependent class that
+matches nothing gets the same notes (`act_on_function`, not for a friend
+template, as in clang). When the
 class or the type is dependent, or the friend is a template
 (`template<class U> friend X<U>::X(U);`, which clang 22 rejects and GCC
-accepts), the friend is accepted and grants nothing until a later row
-matches it per specialization. Tests: `class.friend/friend-special-member*.cpp`.
+accepts), the friend constructor is accepted and grants nothing until a
+later row matches it per specialization. A friend function (not a
+constructor, destructor or conversion function) with a dependent
+qualifier that is not a class template (`friend R T::f();`,
+`friend bool T::operator==(const T &) const;`) is deferred like a
+friend of a class template's member: at instantiation the substituted
+qualifier's member with that type is befriended, and no match is the
+out-of-line no-match error then (WP-1495;
+`temp.friend/dependent-qualifier-friend-function*.cpp`). Tests:
+`class.friend/friend-special-member*.cpp`,
+`class.friend/friend-no-match-candidate-notes.cpp`.
 
 Friend functions of a local class ([class.friend]/11, WP-280, WP-290;
 `local_friend.rs`): an unqualified friend function must redeclare a function

@@ -756,8 +756,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     a variable (WP-421, `tests/conformance/lex.key/nullptr-cxx98.cpp`).
     The other C++11 keywords (`constexpr`, `decltype`, `noexcept`,
     `static_assert`, `thread_local`, `alignas`, `alignof`, `char16_t`,
-    `char32_t`) stay keywords in every mode, where clang makes them
-    identifiers before C++11 too (a follow-up).
+    `char32_t`; `keywords::CXX11_KEYWORDS`, removed in `Parser::new` in
+    C++ only, since C23 has some of them) are identifiers before C++11
+    too, as in clang: `struct static_assert;` is valid C++98 (WP-1495).
+    Their reserved spellings (`_Static_assert`, `__decltype`, ...) stay.
   - The C++20 keywords `concept`, `consteval`, `constinit`, `co_await`,
     `co_return`, `co_yield` and `requires` (clang `CXX20_KEYWORD` /
     `COROUTINES_KEYWORD`, `KEYCXX20` / `KEYCOROUTINES` in TokenKinds.def;
@@ -920,6 +922,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `O::I::R::R(I::R &&)` the name `I` is found through the enclosing
     classes of `R`, so the declarator is a constructor and no access
     check of `O::I` runs outside the member's context (WP-1455).
+    When the qualifier's class could not be entered (a class template:
+    `template<class C, class T> foo<C, T>::foo(bar) {}`, `bar` a member
+    typedef of the pattern), a name found nowhere is taken as that
+    class's member type, so the declarator is a constructor (WP-1495).
     In a friend declaration an unqualified name after a dependent
     qualifier in the parentheses is not taken as a type (clang's
     `ImplicitTypenameContext::No`): `friend C(T::fn)();` declares a
@@ -1213,6 +1219,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A malformed braced initializer without `=` (`T x{…}`) is skipped
     through its `}` and the declaration continues, as clang's
     `ParseBraceInitializer` does.
+- **GNU extensions: `static template` / `inline template`**
+  (`parse_external_declaration_inner`, WP-1495): GCC's explicit
+  instantiation with `static` or `inline` before `template` (instantiate
+  without the vtable and static data members, or as inline) at namespace
+  scope in C++. As in clang 22 the keyword is ignored with `ignoring
+  'static|inline' keyword on explicit template instantiation`
+  (`parse_static_inline_explicit_inst_ignored`, a warning in
+  `-Wstatic-inline-explicit-instantiation`) and the rest is parsed as a
+  template-declaration, so `static template<class T> void f(T);` is
+  still an ordinary template.
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
     declaration, definition or friend, decided by the next token, as in
@@ -1238,6 +1254,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     nullability keywords are not parsed there. spec/sema.md §4.1.1 says
     which class types may then carry a nullability qualifier
     (`tests/conformance/dcl.type.class/nullability-on-classes-*.cpp`).
+  - `class-key nested-name-specifier template simple-template-id`
+    ([dcl.type.elab]/1; `parse_tag_template_kw`, WP-1495): after a
+    dependent qualifier the name is a dependent template-id type
+    (`friend class T::template X<int>;`); after a non-dependent one that
+    names a class template it is that class template's specialization;
+    a name that is not a template is `'X' following the 'template'
+    keyword does not refer to a template` with a `declared as a
+    non-template here` note, and a name with no `<` is
+    the missing template argument list error. `enum` takes no `template`.
   - After `template<>`, a class-key with a name `Q::identifier` whose
     qualifier is a typedef or alias of a class template specialization
     (`at_spec_member_tag_decl`) declares an explicit specialization
@@ -1434,9 +1459,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `name ::`, then an identifier and `;`, or `operator` up to a `;`
     before any `{` or `(` (but `operator()`) (`A::f;`, `T::m;`,
     `A::B::f;`, `A::operator int;`; `at_access_declaration`, scanned only
-    after a name followed by `::`, with no template argument skipped, so
-    `B<T>::f;` is not one; clang's tentative parse in
-    `ParseCXXClassMemberDeclaration`, WP-1466). C++98
+    after a name followed by `::`; clang's tentative parse in
+    `ParseCXXClassMemberDeclaration`, WP-1466). Before C++11 a name
+    followed by `<` starts the scan too and template arguments in the
+    qualifier are skipped (`I<T>::B::f;`, WP-1495); from C++11, where the
+    form is an error anyway, `B<T>::f;` is not recognised, so the hot
+    member path skips no template argument list. C++98
     [class.access.dcl] made them deprecated (`access declarations are
     deprecated; use using declarations instead`, `-Wdeprecated`); from
     C++11 they are ill-formed (`ISO C++11 does not allow access

@@ -5,7 +5,6 @@
 //@ expect: compile-ok
 //@ std: c++20
 //@ strict-diags
-//@ xfail(kiln): WP-1495, implicit typename not applied before 'operator' in a member-declaration
 template<class A> struct l { A::ab operator[](int); };
 struct M { typedef int ab; };
 l<M> x;

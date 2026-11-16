@@ -78,7 +78,7 @@ LANGUAGE:
                           C++26 removed (P2864) with a warning
 
 PREPROCESSOR:
-  -C, -CC                 Keep comments (-CC: also in macro expansions)
+  -C, -CC                 With -E, keep comments (-CC: also in macros)
   -D <macro>[=<value>]    Define <macro> (to 1, or to <value>)
   -dD, -dI, -dM           With -E: also print the #defines (-dD) or the
                           #includes (-dI); print only the macro table (-dM)
@@ -463,6 +463,10 @@ mod tests {
         for (forms, _) in &entries {
             for form in forms {
                 for mut argv in expand(form) {
+                    // `-C`/`-CC` are only allowed with `-E`, as in clang.
+                    if matches!(argv[0].as_str(), "-C" | "-CC") {
+                        argv.push("-E".to_owned());
+                    }
                     argv.push("t.cpp".to_owned());
                     let a = Args::parse(&argv);
                     assert_eq!(a.errors, [], "{argv:?} (from `{form}`)");

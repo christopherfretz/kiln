@@ -4722,6 +4722,10 @@ impl Sema<'_, '_> {
         let method = self.kind_of(ctx) == DeclKind::CXXRecord;
         let ctx = if method { self.ast.definition(ctx).unwrap_or(ctx) } else { ctx };
         let in_class = method && d.qualifier.is_none() && !friend;
+        // `friend bool T::operator==(const T&) const;`, `friend int
+        // B<T>::f() const;`: a member of a dependent class, matched (and
+        // its qualifiers and operator arity checked) at instantiation.
+        let dep_member_friend = friend && d.qualifier.is_some() && self.is_dependent_ctx(ctx);
         let mut spec = FnSpec::new();
         let block = self.in_local_scope();
         let mut invalid_decl = false;
@@ -4784,7 +4788,7 @@ impl Sema<'_, '_> {
             self.explicit_object_member(ds, params, false, false)
         });
         let fn_chunk = matches!(d.chunks.first(), Some(Chunk::Function { .. }));
-        let ty = if (!method || explicit_object) && fn_chunk {
+        let ty = if (!method && !dep_member_friend || explicit_object) && fn_chunk {
             self.drop_invalid_fn_quals(ty, d, method, ds.loc)
         } else if in_class && spec.storage() == FnStorage::Static {
             self.check_static_method_quals(ty, d, ds.loc)
@@ -4979,7 +4983,11 @@ impl Sema<'_, '_> {
         // A specifier that is neither the current instantiation nor one
         // of its partial specializations (`C<T>::` inside `V<X, T>`)
         // resolves to the class template itself: deferred the same way.
-        let template_qualifier = self.kind_of(ctx) == DeclKind::ClassTemplate;
+        // So is a template parameter or a dependent typedef (`friend int
+        // T::f();`, [temp.friend]/1): the member is found, and becomes the
+        // friend, at instantiation.
+        let template_qualifier = self.kind_of(ctx) == DeclKind::ClassTemplate
+            || friend && d.qualifier.is_some() && self.is_dependent_ctx(ctx);
         let deferred_method_friend = !deferred_friend
             && self.defers_method_friend(
                 friend && (method || template_qualifier),
@@ -5250,6 +5258,15 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(fname.clone())
                 .arg(self.qualifier_desc(ctx));
+            // A friend template matches by equivalence, not deduction:
+            // no candidates are noted (clang).
+            let found: Vec<DeclId> =
+                if self.kind_of(ctx) == DeclKind::CXXRecord && new_fn.head.is_none() {
+                    self.ast.lookup_local(ctx, dname).iter().collect()
+                } else {
+                    Vec::new()
+                };
+            let msg = self.with_friend_candidate_notes(msg, &found, ty);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(o) = other_kind_member {
@@ -5830,6 +5847,7 @@ impl Sema<'_, '_> {
                     self.ast.decls.set_flags(f, DeclFlags::INVALID);
                 }
             } else if !global_new_delete
+                && !dep_member_friend
                 && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_operator_decl(f)
             {

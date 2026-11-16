@@ -6,7 +6,6 @@
 //@ expect: compile-ok
 //@ std: c++17
 //@ strict-diags
-//@ xfail(kiln): WP-1495, 'template' after the nested-name-specifier of an elaborated-type-specifier is not parsed
 template<typename T> struct A { template<typename U> struct W {}; };
 void g() {
   struct A<int>::W<int> w;

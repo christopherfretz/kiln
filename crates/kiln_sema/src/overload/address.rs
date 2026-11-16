@@ -1343,18 +1343,24 @@ impl Sema<'_, '_> {
     /// count, then the first differing parameter, then the return type,
     /// then the exception specification; otherwise plain.
     fn mismatch_note(&self, d: DeclId, want: QualType) -> Diag {
+        self.mismatch_note_as(d, want, "function")
+    }
+
+    /// [`Self::mismatch_note`] for a candidate of kind `kind` ("function",
+    /// "constructor (the implicit copy constructor)", ...).
+    pub(crate) fn mismatch_note_as(&self, d: DeclId, want: QualType, kind: &str) -> Diag {
         let loc = self.ast.decls.get(d).loc();
         let t = &self.ast.types;
         let has = self.ast.decls.get(d).ty().map(|x| t.canonical(x));
         let (Some(hp), Some(wp)) = (has.and_then(|h| t.proto(h)).copied(), t.proto(want).copied())
         else {
-            return self.plain_candidate_note(d);
+            return self.plain_candidate_note_as(d, kind);
         };
         let (hs, ws) = (t.params(&hp), t.params(&wp));
         if hs.len() != ws.len() {
             return self
                 .diag(DiagId::note_ovl_candidate_fn_arity, loc)
-                .arg("function")
+                .arg(kind)
                 .arg(ws.len().to_string())
                 .arg(hs.len().to_string());
         }
@@ -1362,7 +1368,7 @@ impl Sema<'_, '_> {
             if !t.same_unqualified(h, w) {
                 return self
                     .diag(DiagId::note_ovl_candidate_fn_param, loc)
-                    .arg("function")
+                    .arg(kind)
                     .arg(crate::expr::ordinal(i + 1))
                     .arg(self.ty_arg(w))
                     .arg(self.ty_arg(h));
@@ -1371,14 +1377,23 @@ impl Sema<'_, '_> {
         if !t.same_type(hp.ret(), wp.ret()) {
             return self
                 .diag(DiagId::note_ovl_candidate_fn_return, loc)
-                .arg("function")
+                .arg(kind)
                 .arg(self.ty_arg(wp.ret()))
                 .arg(self.ty_arg(hp.ret()));
         }
         if t.exc_spec(&hp).is_nothrow() != t.exc_spec(&wp).is_nothrow() {
-            return self.diag(DiagId::note_ovl_candidate_fn_noexcept, loc).arg("function");
+            return self.diag(DiagId::note_ovl_candidate_fn_noexcept, loc).arg(kind);
         }
-        self.plain_candidate_note(d)
+        self.plain_candidate_note_as(d, kind)
+    }
+
+    /// "candidate `kind`" at `d` ([`Self::plain_candidate_note`] for a
+    /// function).
+    fn plain_candidate_note_as(&self, d: DeclId, kind: &str) -> Diag {
+        if kind == "function" {
+            return self.plain_candidate_note(d);
+        }
+        self.diag(DiagId::note_ovl_candidate, self.ast.decls.get(d).loc()).arg(kind)
     }
 
     /// The one non-template function or static member function (and its

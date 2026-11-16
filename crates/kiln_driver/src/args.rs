@@ -1382,6 +1382,13 @@ impl Args {
         if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
             a.action = Action::Precompile;
         }
+        // `-C`/`-CC` shape `-E` output only; clang rejects them otherwise
+        // (`-M` and `-fsyntax-only` included), and kiln would hand the kept
+        // comments to the parser.
+        if a.action != Action::Preprocess && (a.print.comments || a.print.macro_comments) {
+            let flag = if a.print.comments { "-C" } else { "-CC" };
+            a.errors.push(ArgError::OnlyAllowedWith(flag.to_owned(), "-E".to_owned()));
+        }
         a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a.errors.extend(a.unknown_at_compat_19());
@@ -3148,6 +3155,15 @@ mod tests {
         assert_eq!(a.deps.targets, [("t".into(), false), ("q".into(), true)]);
         assert!(a.deps.phony && a.print.no_line_markers && a.print.comments && a.print.macros_only);
         assert_eq!(a.inputs[0].path, "-");
+    }
+
+    #[test]
+    fn keep_comments_only_with_e() {
+        assert!(parse("-E -C -CC x.cpp").errors.is_empty());
+        let only_e = |f: &str| vec![ArgError::OnlyAllowedWith(f.to_owned(), "-E".to_owned())];
+        assert_eq!(parse("-fsyntax-only -C x.cpp").errors, only_e("-C"));
+        assert_eq!(parse("-c -CC x.cpp").errors, only_e("-CC"));
+        assert_eq!(parse("-M -C x.cpp").errors, only_e("-C"));
     }
 
     #[test]
