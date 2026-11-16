@@ -4811,6 +4811,13 @@ impl Compiler<'_> {
                     _ => self.trap(e, REINTERPRET_CONV),
                 }
             }
+            // [expr.const]/10.15: the conversions of a reinterpret_cast; clang
+            // fails a C-style one between member pointers as an invalid
+            // subexpression (its member pointer evaluator has no case for
+            // the kind), so the error moves to the cast without a note.
+            CastKind::ReinterpretMemberPointer => {
+                self.trap(e, "subexpression not valid in a constant expression");
+            }
             CastKind::LValueToRValueBitCast => self.bit_cast(e, dst, None),
             CastKind::IntegralToPointer | CastKind::PointerToIntegral => {
                 // clang notes the cast before evaluating its operand.

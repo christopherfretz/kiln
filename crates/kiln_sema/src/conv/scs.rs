@@ -170,6 +170,11 @@ pub struct StandardConversion {
     /// A list-initialization sequence converting to an array
     /// ([over.ics.rank]/3.1.2; clang's `InitializerListContainerType`).
     pub list_array: Option<ListArray>,
+    /// The deprecated conversion of a string literal to a pointer to
+    /// non-const ([depr.string], C++03 [conv.array]/2; clang's
+    /// `DeprecatedStringLiteralToCharPtr`): array-to-pointer, then a
+    /// qualification step dropping the `const`.
+    pub deprecated_string: bool,
 }
 
 /// The array a list-initialization sequence converts to: its element
@@ -217,6 +222,7 @@ impl StandardConversion {
             rb,
             std_init_list: false,
             list_array: None,
+            deprecated_string: false,
         }
     }
 }
@@ -335,7 +341,54 @@ pub fn standard_conversion(
     let n = *s.ast.exprs.get(e);
     let bw = bit_field_width(s, e);
     let npc = is_null_pointer_constant(s, e);
-    standard_conversion_from(s, n.ty(), n.value_category(), npc, bw, to, ctx)
+    let r = standard_conversion_from(s, n.ty(), n.value_category(), npc, bw, to, ctx);
+    if r.is_some()
+        || matches!(
+            ctx,
+            ConvCtx::Comparison | ConvCtx::Condition | ConvCtx::Cast | ConvCtx::CStyleCast
+        )
+    {
+        return r;
+    }
+    deprecated_string_conversion(s, e, to)
+}
+
+/// The deprecated conversion of string literal `e` (possibly
+/// parenthesized) to `to` ([depr.string]; clang
+/// `IsStringLiteralToNonConstPointerConversion`): an ordinary literal to
+/// a pointer to unqualified plain `char`, a wide one to a pointer to
+/// unqualified `wchar_t`. C++ only (a C literal is not `const`).
+pub fn deprecated_string_conversion(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+) -> Option<StandardConversion> {
+    use kiln_ast::expr::{ExprKind, StringKind};
+    if s.is_c() || !s.ast.types.is_pointer(to) {
+        return None;
+    }
+    let lit = s.ignore_parens(e);
+    if s.ast.exprs.get(lit).kind() != ExprKind::StringLiteral
+        || !matches!(s.ast.exprs.string_kind(lit), StringKind::Ordinary | StringKind::Wide)
+    {
+        return None;
+    }
+    let pointee = s.ast.types.canonical(s.ast.types.pointee(to)?);
+    if !pointee.quals().is_empty() {
+        return None;
+    }
+    let from = s.ety(e);
+    let cur = array_decayed(s, from);
+    let elem = s.ast.types.canonical(s.ast.types.pointee(cur)?).without_quals();
+    if elem != pointee.without_quals() {
+        return None;
+    }
+    let mut scs = StandardConversion::identity(from, to, RefBinding::NONE);
+    scs.first = FirstStep::ArrayToPointer;
+    scs.third = ThirdStep::Qualification;
+    scs.to_types = [cur, cur, to];
+    scs.deprecated_string = true;
+    Some(scs)
 }
 
 /// [`standard_conversion`] from an expression described by its type,
@@ -404,6 +457,7 @@ fn standard_conversion_non_atomic(
         rb: RefBinding::NONE,
         std_init_list: false,
         list_array: None,
+        deprecated_string: false,
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.

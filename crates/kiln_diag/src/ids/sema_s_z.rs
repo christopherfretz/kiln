@@ -399,6 +399,9 @@ sema_vm_func_decl = Error (0) "function declaration cannot have variably modifie
 sema_void_only_param = Error (0) "'void' must be the first and only parameter if specified";
 sema_void_var = Error (1) "variable has incomplete type {0}";
 sema_weak_identifier_undeclared = Warning (1) "weak identifier '{0}' never declared";
+// C++11 removed the string literal to `char*` conversion; clang keeps it
+// as an extension (`ext_deprecated_string_literal_conversion`).
+sema_writable_string_conversion = ExtWarn [WritableStrings] (1) "ISO C++11 does not allow conversion from string literal to {0}";
 sema_x86_builtin_32_bit_only = Error (0) "this builtin is only available on 32-bit targets";
 sema_x86_invalid_rounding = Error (0) "invalid rounding argument";
 sema_x86_invalid_scale = Error (0) "scale argument must be 1, 2, 4, or 8";

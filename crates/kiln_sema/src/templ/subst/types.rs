@@ -965,14 +965,25 @@ impl Substituter<'_, '_, '_> {
         name: kiln_source::symbol::Symbol,
         loc: Loc,
     ) -> SubstResult<DeclId> {
+        self.member_template_named_dn(n, kiln_ast::names::DeclName::ident(name), loc)
+    }
+
+    /// [`Self::member_template_named`] for any name: `T::template
+    /// operator-<double>` names an operator function template.
+    pub(crate) fn member_template_named_dn(
+        &mut self,
+        n: kiln_ast::ids::NnsId,
+        name: kiln_ast::names::DeclName,
+        loc: Loc,
+    ) -> SubstResult<DeclId> {
         let no_kw = std::mem::take(&mut self.dtor_template_name);
         let ctx = self.nns_context(n, loc)?;
-        let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
+        let found = self.sema.lookup_qualified_dn(ctx, name, LookupKind::Ordinary);
         let Some(&d) = found.decls.first() else {
             let d = self
                 .sema
                 .diag(DiagId::sema_no_member, loc)
-                .arg(crate::decl::sym_str(self.sema, name))
+                .arg(self.sema.decl_name_str(name))
                 .arg(self.ctx_arg(ctx));
             self.sema.emit(d);
             return Err(SubstFail);
@@ -1010,7 +1021,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             DiagId::sema_template_kw_refers_to_non_template
         };
-        let d = self.sema.diag(id, loc).arg(crate::decl::sym_str(self.sema, name)).with_note(note);
+        let d = self.sema.diag(id, loc).arg(self.sema.decl_name_str(name)).with_note(note);
         self.sema.emit(d);
         Err(SubstFail)
     }

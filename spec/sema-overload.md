@@ -1538,7 +1538,13 @@ Where the code differs from (or details) the design above:
   Gap: this is not [over.ics.rank], so `B *` to `A *` does not beat
   `B *` to `void *`. A placement `operator delete` template matches
   when deduction against `void(void*, P...)` from the allocation
-  function's parameters succeeds ([expr.new]/28, WP-713). The allocation function, the matching deallocation
+  function's parameters succeeds ([expr.new]/28, WP-713). The default
+  arguments of the allocation function's parameters past the written
+  placement arguments are part of the placement list stored on the
+  `CXXNewExpr` (also for `new A` with no new-placement, clang's
+  placement arguments), so the matching placement deallocation function
+  is called with them; template substitution drops them again
+  (WP-1467, test `expr.new/placement-delete-default-args-run.cpp`). The allocation function, the matching deallocation
   function of a new-expression and the deallocation function of a
   delete-expression are odr-used at the expression's location, so a member
   of a class template specialization is instantiated there ([temp.inst]/11;

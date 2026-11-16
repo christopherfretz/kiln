@@ -944,6 +944,7 @@ impl Cg<'_> {
             }
             CastKind::NoOp
             | CastKind::BitCast
+            | CastKind::ReinterpretMemberPointer
             | CastKind::LValueBitCast
             | CastKind::AtomicToNonAtomic
             | CastKind::NonAtomicToAtomic

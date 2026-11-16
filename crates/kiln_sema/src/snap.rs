@@ -40,6 +40,7 @@
 //! | `target`, `abi` | configuration | the target (`--target`, `-march`), [`Sema::for_target`] |
 //! | `exceptions` | configuration | `-f[no-]exceptions` |
 //! | `rtti` | configuration | `-f[no-]rtti` |
+//! | `access_control` | configuration | `-f[no-]access-control` |
 //! | `reflection` | configuration | `-freflection` |
 //! | `coro_aligned_allocation` | configuration | `-fcoro-aligned-allocation` |
 //! | `lax_vector_conversions` | configuration | `-flax-vector-conversions=` |
@@ -147,7 +148,7 @@ macro_rules! sema_fields {
                 post_param_diagnosed, post_param_pattern_locs, friend_pattern_prev, templ, inst,
                 abstract_noted, srcloc, meta_names, meta_members, lambda_packs, lambda_mangle,
                 size_t_sugar, signed_size_t_sugar, ptrdiff_t_sugar, modules],
-            configuration: [target, abi, exceptions, rtti, reflection, coro_aligned_allocation,
+            configuration: [target, abi, exceptions, rtti, access_control, reflection, coro_aligned_allocation,
                 lax_vector_conversions, range_lifetime_extension, gnu, gnu89_inline, c,
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
                 target_features, target_attr_features,

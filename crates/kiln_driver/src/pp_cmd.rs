@@ -669,6 +669,10 @@ impl Job<'_> {
             ("target", format!("--target={}", self.toolchain.target.triple)),
             ("exceptions", on(p.exceptions.unwrap_or(true), "-fexceptions", "-fno-exceptions")),
             ("rtti", on(p.rtti.unwrap_or(true), "-frtti", "-fno-rtti")),
+            (
+                "access-control",
+                on(p.access_control.unwrap_or(true), "-faccess-control", "-fno-access-control"),
+            ),
             ("char", on(char_signed, "-fsigned-char", "-funsigned-char")),
             (
                 "char8_t",

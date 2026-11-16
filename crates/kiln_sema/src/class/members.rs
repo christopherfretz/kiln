@@ -951,6 +951,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let fd = self.ast.decls.field(f).copied();
+            // [class.prop]/3.6 names bit-fields too: an unnamed one in a
+            // class whose base has fields (CWG1813; clang checks
+            // `HasBasesWithFields` before skipping it).
+            if bases_with_fields {
+                not_sl(&mut bits);
+            }
             let unnamed_bf = fd.is_some_and(|x| x.bit_width.is_some())
                 && self.ast.decls.get(f).name().is_empty();
             if unnamed_bf {
@@ -969,9 +975,6 @@ impl Sema<'_, '_> {
             }
             if fd.is_some_and(|x| x.flags & kiln_ast::decl::FieldData::MUTABLE != 0) {
                 bits = bits.without(DefinitionBits::STRUCTURAL);
-            }
-            if bases_with_fields {
-                not_sl(&mut bits);
             }
             let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             if self.ast.types.is_reference(fty) {

@@ -46,6 +46,7 @@ LANGUAGE:
                           reproduce: 19 or 22 (default 22)
   -f[no-]exceptions       C++ exceptions (default on)
   -f[no-]rtti             Run-time type information (default on)
+  -f[no-]access-control   C++ access checking (default on)
   -f[no-]char8_t          The char8_t type (default on at C++20 and later)
   -fsigned-char, -funsigned-char
                           The signedness of plain char

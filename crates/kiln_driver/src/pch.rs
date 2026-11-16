@@ -513,6 +513,7 @@ fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptV
     v.push(("GNU extensions", b(std.gnu), Compat::All));
     v.push(("exception handling", b(get("exceptions") == "-fexceptions"), Compat::All));
     v.push(("run-time type information", b(get("rtti") == "-frtti"), Compat::All));
+    v.push(("C++ access control", b(get("access-control") != "-fno-access-control"), Compat::All));
     v.push((
         "freestanding implementation",
         b(get("freestanding") == "-ffreestanding"),

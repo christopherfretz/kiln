@@ -4574,6 +4574,15 @@ impl Sema<'_, '_> {
         matches!(self.ast.types.canonical_view(t), TypeView::MemberPointer { .. })
     }
 
+    /// For a pointer-to-member type `t`, whether it points to a member
+    /// function (`Some(true)`) or a data member (`Some(false)`).
+    fn member_pointer_to_fn(&self, t: QualType) -> Option<bool> {
+        match self.ast.types.canonical_view(t) {
+            TypeView::MemberPointer { pointee, .. } => Some(self.ast.types.is_function(pointee)),
+            _ => None,
+        }
+    }
+
     /// A comparison with a pointer-to-member operand (`l` and `r` already
     /// decayed), clang's `CheckCompareOperands` order: only `==` and `!=`
     /// are defined ([expr.rel]/2 does not cover member pointers, so `<`
@@ -7185,7 +7194,9 @@ impl Sema<'_, '_> {
         if style.allows_const() {
             let x = conv::decay(self, e);
             let xt = self.ety(x);
-            if style == CastStyle::Const && !self.ast.types.is_pointer(to) {
+            // [expr.const.cast]/3: pointers and pointers to data members.
+            let data_mp = |s: &Self, q| s.member_pointer_to_fn(q) == Some(false);
+            if style == CastStyle::Const && !self.ast.types.is_pointer(to) && !data_mp(self, to) {
                 let msg = self
                     .diag(DiagId::sema_bad_const_cast_dest, loc)
                     .arg(style.select())
@@ -7193,8 +7204,8 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover(ty, &[e], loc);
             }
-            if self.ast.types.is_pointer(to)
-                && self.ast.types.is_pointer(xt)
+            if ((self.ast.types.is_pointer(to) && self.ast.types.is_pointer(xt))
+                || (data_mp(self, to) && data_mp(self, xt)))
                 && self.similar_pointers(xt, to)
             {
                 self.mark_explicit(x, e);
@@ -7525,6 +7536,34 @@ impl Sema<'_, '_> {
                 return Err(());
             }
             return Ok(Some(CastKind::BitCast));
+        }
+        // [expr.reinterpret.cast]/10: a pointer to member of `X` of type
+        // `T1` to a pointer to member of `Y` of type `T2` when both are
+        // function types or both object types; the bits are kept, so a
+        // null member pointer stays null (clang `TryReinterpretCast`,
+        // `CK_ReinterpretMemberPointer`; the Itanium ABI gives every data
+        // member pointer one size and every member function pointer one).
+        if let (Some(ff), Some(tf)) =
+            (self.member_pointer_to_fn(from), self.member_pointer_to_fn(to))
+        {
+            if ff != tf {
+                return Ok(None);
+            }
+            if style == CastStyle::Reinterpret
+                && matches!(
+                    conv::casts_away_constness(self, from, to),
+                    conv::CastAway::Similar | conv::CastAway::SimilarKind
+                )
+            {
+                let msg = self
+                    .diag(DiagId::sema_bad_cast_qualifiers_away, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(from))
+                    .arg(self.ty_arg(to));
+                self.emit(msg);
+                return Err(());
+            }
+            return Ok(Some(CastKind::ReinterpretMemberPointer));
         }
         if tp && self.is_integral_or_enum(from) {
             return Ok(Some(CastKind::IntegralToPointer));

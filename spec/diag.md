@@ -336,8 +336,11 @@ groups to Remark/Ignored; `-Reverything` maps every remark.
    remark: `r` = Warning.
 4. If the id is an extension and not user-mapped: `r = max(r, ext)`,
    where `ext` is Error under `-pedantic-errors`, Warning under
-   `-pedantic`, else Ignored. (`-Wno-error=G` does not set `user`, so
-   `-pedantic-errors -Wno-error=extra-tokens` still errors.)
+   `-pedantic`, else Ignored. (`-Wno-error=G` does not set `user`; at
+   clang compat 22 its `no_werror` makes `ext` Warning for the id, so
+   `-pedantic-errors -Wno-error=extra-tokens` warns as clang 22 does,
+   while at compat 19 it still errors, as clang 19 does; WP-1467, test
+   `depr.string/no-error-overrides-pedantic-errors.cpp`.)
 5. If `r` is Ignored, stop.
 6. Under `-w`: Ignored if `r` is Warning, or if `r` ≥ Error and the id is
    not an error by default. Hard errors and `DefaultError` warnings

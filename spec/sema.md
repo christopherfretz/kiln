@@ -1423,7 +1423,12 @@ Redeclaration and linkage rules:
   keeps the earlier silent recovery. Test:
   `dcl.fct.default/invalid-default-arg-still-callable.cpp`.
 - **`register`** ([dcl.stc]/1; removed in C++17 by P0001R1, clang's
-  `ext_register_storage_class`). `register` is `ISO C++17 does not allow
+  `ext_register_storage_class`). In C++11 and C++14 it is `'register'
+  storage class specifier is deprecated and incompatible with C++17`
+  (`sema_deprecated_register`, -Wdeprecated-register, on by default; in
+  -Wdeprecated and -Wregister), in C++98 nothing; the sites are the same
+  (`register_storage_diag`, WP-1467, tests `dcl.stc/register-*.cpp`). In
+  C++17 `register` is `ISO C++17 does not allow
   'register' storage class specifier` (`sema_register_storage_class`,
   -Wregister, an error by default) at the specifier on a parameter
   (`act_on_param_declarator`, before the type is checked; lambda and
@@ -4857,7 +4862,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     (`check_using_shadow_conflict`, from ordinary member declarators and
     from special-member ones: `operator=`, conversion functions); one
     declared before it keeps the shadow from being made
-    (`introduce_shadow`). In an instantiated class template
+    (`introduce_shadow`). The implicitly-declared copy or move
+    assignment operator, declared lazily, hides the class's not yet
+    hidden `operator=` shadows it corresponds to when it is declared
+    (`declare_implicit`; clang declares it before building the shadow),
+    so `struct A : B { using B::operator=; }` with a `B::operator=(const
+    A&)` is not ambiguous for `a = a` (WP-1467, test
+    `namespace.udecl/using-assignment-hidden-by-implicit.cpp`). In an instantiated class template
     specialization the using-declaration and the members are redone in
     declaration order, so the comparison is between the instantiated
     declarations (`D&` and `Map&` agree once `D` is `Map<T>`; the

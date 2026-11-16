@@ -299,6 +299,8 @@ pub struct PredefArgs {
     pub exceptions: Option<bool>,
     /// `-f[no-]rtti`.
     pub rtti: Option<bool>,
+    /// `-f[no-]access-control`.
+    pub access_control: Option<bool>,
     /// `-f[no-]char8_t`.
     pub char8_t: Option<bool>,
     /// `-fsigned-char` / `-funsigned-char` (and their `-fno-` inverses,
@@ -2142,6 +2144,8 @@ impl Args {
             }
             "-frtti" => p.rtti = Some(true),
             "-fno-rtti" => p.rtti = Some(false),
+            "-faccess-control" => p.access_control = Some(true),
+            "-fno-access-control" => p.access_control = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),
             "-fno-char8_t" => p.char8_t = Some(false),
             "-fsigned-char" | "-fno-unsigned-char" => p.char_signed = Some(true),

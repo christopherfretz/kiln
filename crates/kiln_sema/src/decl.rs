@@ -2233,11 +2233,7 @@ impl Sema<'_, '_> {
             }
         } else {
             match ds.storage {
-                Some((StorageSpec::Register, loc)) => {
-                    if !self.is_c() {
-                        self.emit(self.diag(DiagId::sema_register_storage_class, loc));
-                    }
-                }
+                Some((StorageSpec::Register, loc)) => self.register_storage_diag(loc),
                 Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
                 None => {}
             }
@@ -6580,9 +6576,7 @@ impl Sema<'_, '_> {
                 // extension (an error by default, `-Wregister`), silently
                 // for a GNU register variable (`asm("reg")`).
                 if d.asm_label.is_none() {
-                    if !self.is_c() {
-                        self.emit(self.diag(DiagId::sema_register_storage_class, loc));
-                    }
+                    self.register_storage_diag(loc);
                     if self.register_at_file_scope(ds, d) {
                         self.error(DiagId::sema_illegal_storage_class_on_var, d.name_loc());
                     }
@@ -14111,4 +14105,22 @@ fn auto_init_items(
 /// declarator `d` (clang points its qualifier errors there).
 pub(crate) fn first_fn_qual_loc(d: &Declarator) -> Option<Loc> {
     d.fn_qual_locs.iter().flatten().min().copied()
+}
+
+impl Sema<'_, '_> {
+    /// The `register` storage class specifier at `loc` in C++ ([dcl.stc];
+    /// clang `ActOnVariableDeclarator`): removed in C++17, accepted as an
+    /// extension that is an error by default (`-Wregister`); deprecated in
+    /// C++11 and C++14 (`-Wdeprecated-register`, a warning); valid before.
+    fn register_storage_diag(&mut self, loc: Loc) {
+        if self.is_c() || self.std < kiln_lex::Std::Cxx11 {
+            return;
+        }
+        let id = if self.std >= kiln_lex::Std::Cxx17 {
+            DiagId::sema_register_storage_class
+        } else {
+            DiagId::sema_deprecated_register
+        };
+        self.emit(self.diag(id, loc));
+    }
 }

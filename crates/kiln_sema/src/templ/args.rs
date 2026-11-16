@@ -1394,7 +1394,11 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Err(());
         }
-        let narrowed = if t.is_integral(pty) && int_like(cty) {
+        // C++98 has no converted constant expressions: an argument
+        // converts as an initialization, narrowing allowed ([temp.arg.nontype]/5
+        // in C++03; clang checks narrowing only since C++11).
+        let cxx11 = self.std >= kiln_lex::Std::Cxx11;
+        let narrowed = if cxx11 && t.is_integral(pty) && int_like(cty) {
             self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw))
         } else {
             None
@@ -1410,7 +1414,7 @@ impl Sema<'_, '_> {
         // follows it narrows from the conversion function's result
         // (`Z<CI{}>` with `operator int` to `bool`; clang
         // `getNarrowingKind` on `ICS.UserDefined.After`).
-        if self.ast.types.as_record(cty).is_some() && self.ast.types.is_integral(pty) {
+        if cxx11 && self.ast.types.as_record(cty).is_some() && self.ast.types.is_integral(pty) {
             let from = self.ignore_paren_imp_casts(c);
             let t = &self.ast.types;
             let fty = conv::strip_cv(self, self.ast.exprs.get(from).ty());

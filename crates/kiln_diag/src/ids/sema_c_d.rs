@@ -386,6 +386,13 @@ sema_deprecated_copy_with_user_provided_dtor = WarningOff [DeprecatedCopyWithUse
 // -fclang-compat=22 only (clang 19 has it DefaultIgnore).
 sema_deprecated_literal_operator_id = Warning [DeprecatedLiteralOperator] (1) "identifier '{0}' preceded by whitespace in a literal operator declaration is deprecated";
 sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
+// clang `warn_deprecated_register`: C++11 and C++14 ([depr.register] of
+// C++11; WP-1467)
+sema_deprecated_register = Warning [DeprecatedRegister] (0) "'register' storage class specifier is deprecated and incompatible with C++17";
+// [depr.string]: C++98's deprecated conversion of a narrow or wide
+// string literal to a pointer to non-const (clang
+// `warn_deprecated_string_literal_conversion`).
+sema_deprecated_string_literal_conversion = Warning [Cxx11CompatDeprecatedWritableStr] (1) "conversion from string literal to {0} is deprecated";
 sema_deprecated_this_capture = Warning [DeprecatedThisCapture] (0) "implicit capture of 'this' with a capture default of '=' is deprecated";
 // WP-432: [depr.volatile.type] (C++20): clang `warn_deprecated_simple_assign_volatile`,
 // `warn_deprecated_volatile_structured_binding`,
