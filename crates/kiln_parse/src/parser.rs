@@ -874,10 +874,22 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         }
     }
 
+    /// Reverts the revertible trait keyword `s`, the current token, to an
+    /// identifier for the rest of the translation unit (clang
+    /// `TryKeywordIdentFallback(true)`, with its warning).
+    pub(crate) fn revert_trait_keyword(&mut self, s: Symbol) {
+        let d = self
+            .s
+            .diag(DiagId::parse_keyword_as_ident, self.loc())
+            .arg(self.spelling_of(&self.tok()));
+        self.emit(d);
+        self.kw.revert_trait(s);
+    }
+
     /// The identifier (not a keyword) `t` is.
     pub(crate) fn ident_of(&self, t: Token) -> Option<Symbol> {
         match t.kind {
-            TokKind::Identifier(s) if self.kw.get(s).is_none() => Some(s),
+            TokKind::Identifier(s) if self.kw.is_ident(s) => Some(s),
             _ => None,
         }
     }

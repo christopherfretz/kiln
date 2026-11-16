@@ -385,6 +385,15 @@ impl Sema<'_, '_> {
             );
         }
         let t = match self.ast.reflections.get(cls) {
+            // A type alias is not a class type, whatever it names (/8.1:
+            // `class_type` must represent one; `^^A` represents the
+            // alias).
+            Reflectee::Type(t) if self.is_alias_type(t) => {
+                return fail(
+                    loc,
+                    format!("'{}' is a type alias, not a class type", self.reflection_str(cls)),
+                );
+            }
             Reflectee::Type(t) => Some(self.ast.types.canonical(t)),
             _ => None,
         };

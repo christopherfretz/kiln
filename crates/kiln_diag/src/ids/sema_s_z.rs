@@ -52,6 +52,9 @@ sema_splice_dependent_namespace = Error (0) "the splice-specifier of a using-dir
 sema_splice_global_namespace = Error (0) "the splice-specifier of a using-directive cannot designate the global namespace";
 // [expr.prim.splice]/2.1.4 (WP-781)
 sema_splice_intervening_lambda = Error (1) "cannot splice local entity '{0}' for which there is an intervening lambda expression";
+// [expr.prim.splice]/2.7, [temp.names]/3: a splice designating a
+// template needs `template` (WP-1505); GCC 16.1 pedwarns too
+sema_splice_missing_template_kw = ExtWarn [MissingTemplateKeyword] (0) "missing 'template' keyword before a splice-specifier that designates a template";
 sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_not_expression = Error (0) "splice in an expression position does not designate a variable, function, enumerator, value or object";

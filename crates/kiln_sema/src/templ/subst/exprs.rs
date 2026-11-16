@@ -1188,11 +1188,17 @@ impl Substituter<'_, '_, '_> {
                     }
                     return Ok(self.sema.act_on_splice_template_expr(op, &v, loc, end));
                 }
+                let kw = ex(self).splice_template_kw(e);
                 Ok(match base {
-                    None => self.sema.act_on_splice_expr(op, loc, end),
+                    None => self.sema.act_on_splice_expr(op, kw, loc, end),
                     Some((b, arrow)) => {
                         let b = self.expr(b)?;
-                        self.sema.act_on_member_splice(b, op, loc, end, loc, arrow)
+                        if kw {
+                            self.sema
+                                .act_on_member_template_splice(b, op, None, loc, end, loc, arrow)
+                        } else {
+                            self.sema.act_on_member_splice(b, op, loc, end, loc, arrow)
+                        }
                     }
                 })
             }

@@ -6,6 +6,7 @@
 //! cannot diverge. The traits with no `__trait` builtin are the engine's
 //! library delegation (`traits/library.rs`).
 
+use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::ReflectionId;
 use kiln_ast::consts::{PtrBase, Scalar};
@@ -58,6 +59,11 @@ enum Shape {
     /// A range form whose `reflection_range` argument is not read yet.
     Range,
     TypeOrder,
+    /// `is_applicable_type`, `is_nothrow_applicable_type`,
+    /// `apply_result` (P1317): `std::NAME<F, get<I>(declval<Tuple>())...>`
+    /// for `NAME` `is_invocable`, `is_nothrow_invocable` or
+    /// `invoke_result`, when `Tuple` is *tuple-like*.
+    Apply(&'static str),
 }
 
 /// A quiet engine answer: a value, or a type the caller reflects once
@@ -228,6 +234,9 @@ fn shape(op: TraitOp) -> (Shape, usize) {
         O::InvokeResultN => (S::LibType("invoke_result"), 1),
         O::CommonTypeN => (S::LibType("common_type"), 0),
         O::CommonReferenceN => (S::LibType("common_reference"), 0),
+        O::IsApplicableType => (S::Apply("is_invocable"), 2),
+        O::IsNothrowApplicableType => (S::Apply("is_nothrow_invocable"), 2),
+        O::ApplyResult => (S::Apply("invoke_result"), 2),
     }
 }
 
@@ -638,8 +647,84 @@ impl Sema<'_, '_> {
                 let t = self.library_trait_type(name, &targs, loc)?;
                 return Ok(Answer::Type(t));
             }
+            Shape::Apply(name) => return self.eval_apply(name, tys[0], tys[1], loc),
             Shape::Range | Shape::TypeOrder => return Err(none),
         }))
+    }
+
+    /// [`Shape::Apply`]: P1317's `is_applicable<Fn, Tuple>` is
+    /// `is_invocable<Fn, decltype(get<I>(declval<Tuple>()))...>` when
+    /// `Tuple` is *tuple-like* ([tuple.like]: `remove_cvref_t<Tuple>` a
+    /// specialization of `array`, `complex`, `pair`, `tuple` or
+    /// `ranges::subrange`), else false; `apply_result` then has no
+    /// `type`. `get` gives the element through `Tuple`'s cv and value
+    /// category (`const E&`, `E&&`, a reference `E` collapsing), a
+    /// `subrange`'s by value; there is no `volatile` `get`.
+    fn eval_apply(
+        &mut self,
+        name: &'static str,
+        f: QualType,
+        tuple: QualType,
+        loc: Loc,
+    ) -> Result<Answer, LibFailure> {
+        use UnaryTransformKind as K;
+        let none = LibFailure::NoMember;
+        let not_applicable = || {
+            if name == "invoke_result" { Err(none) } else { Ok(Answer::Out(MetaOut::Scalar(0))) }
+        };
+        let lvalue = self.ast.types.canonical_kind(tuple) == kiln_ast::types::TypeKind::LValueRef;
+        let base = self.apply_unary_transform(K::RemoveReference, tuple, loc).ok_or(none)?;
+        let quals = self.ast.types.effective_quals(base);
+        let base = self.apply_unary_transform(K::RemoveCv, base, loc).ok_or(none)?;
+        let Some(rec) = self.ast.types.as_record(base) else { return not_applicable() };
+        let Some(tmpl) = self.ast.spec_info(rec).map(|(_, s)| s.template) else {
+            return not_applicable();
+        };
+        let named = |s: &Self, d: DeclId, n: &str| {
+            s.ast.decls.get(d).name().as_ident().is_some_and(|x| s.ast.symbols().as_str(x) == n)
+        };
+        // `std::ranges::subrange`, through inline namespaces.
+        let mut ns = self.ast.decls.get(tmpl).ctx();
+        while let Some(n) = ns.filter(|&n| {
+            self.ast.decls.namespace(n).is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+        }) {
+            ns = self.ast.decls.get(n).ctx();
+        }
+        let subrange = named(self, tmpl, "subrange")
+            && ns.is_some_and(|n| self.ast.is_std_named(self.ast.redecl_context(n), "ranges"));
+        if !subrange
+            && !["array", "complex", "pair", "tuple"].iter().any(|n| self.ast.is_std_named(tmpl, n))
+        {
+            return not_applicable();
+        }
+        if quals.contains(Quals::VOLATILE) && !subrange {
+            return not_applicable();
+        }
+        let n = self.library_trait_value("tuple_size", &[TemplateArg::ty(base)], loc)?;
+        let n = usize::try_from(n).ok().filter(|&n| n < MAX_RANGE as usize).ok_or(none)?;
+        let mut targs = Vec::with_capacity(n + 1);
+        targs.push(TemplateArg::ty(f));
+        for i in 0..n {
+            let ia = [self.size_t_arg(i as u64), TemplateArg::ty(base)];
+            let e = self.library_trait_type("tuple_element", &ia, loc)?;
+            let e = if subrange {
+                e
+            } else {
+                let e = if quals.contains(Quals::CONST) {
+                    self.add_quals_transform(e, Quals::CONST)
+                } else {
+                    e
+                };
+                let k = if lvalue { K::AddLvalueReference } else { K::AddRvalueReference };
+                self.apply_unary_transform(k, e, loc).ok_or(none)?
+            };
+            targs.push(TemplateArg::ty(e));
+        }
+        if name == "invoke_result" {
+            return Ok(Answer::Type(self.library_trait_type(name, &targs, loc)?));
+        }
+        let v = self.library_trait_value(name, &targs, loc)?;
+        Ok(Answer::Out(MetaOut::Scalar(u128::from(v != 0))))
     }
 
     /// The argument a copy/move trait of `t` implies: `const T&` or

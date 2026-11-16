@@ -133,8 +133,9 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   it, as in GCC 16.1. Tests:
   `meta.reflection.member.queries/members-of-undeduced-placeholder.cpp`,
   `expr.reflect/reflect-auto-var-own-initializer-neg.cpp`.
-- **`has_ellipsis_parameter`** (P3096) is the row `is_vararg_function`,
-  which is GCC 16.1's name. `<meta>` (WP-484) spells both.
+- **`is_vararg_function`** is the working draft's name ([meta.syn],
+  [meta.reflection.queries]) for P3096's `has_ellipsis_parameter`; GCC
+  16.1 uses it too. kiln has no row for the paper's old name.
 
 ## 2. Purity and cost
 - **Stable rows.** Every row is `Stable` except four. A `Stable` row
@@ -289,19 +290,44 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
   at the call, inside the evaluation. So `consteval int f(int &r) {
   return extract<int>(^^r); }` called from a constant evaluation with a
   live `int` is a constant expression with that `int`'s value. GCC 16.1
-  rejects it (`reflect_constant failed`). kiln rejects it too ("not a
-  variable of static storage duration, nor one whose lifetime began
-  within the evaluation"): the Oven keeps a reference local in a
-  register, so `Oven::meta_local` has no slot to find it by
-  (`compile.rs`, a reflected local is memory-backed only when it is not
-  a reference). The text decides for accepting it; the fix (a reflected
-  reference local or parameter memory-backed, holding the pointer) is
-  WP-1489's remainder, pinned by
+  rejects it (`reflect_constant failed`). The text decides: kiln accepts
+  it for a reference **parameter** (WP-1505): the caller bound the
+  reference and the parameter's register holds the referent's address
+  for the whole activation (`ParamInfo::is_ref`), so
+  `Oven::meta_ref_param` finds it in the innermost live frame of the
+  running evaluation with nothing added to a frame; once that frame has
+  returned it is "not a variable of static storage duration, nor one
+  whose lifetime began within the evaluation", and the type rules are
+  those of a local (`extract<long &>` of an `int &`, or dropping a
+  const, is a mismatch). Tests: `meta.reflection.extract/reference-param.cpp`,
+  `reference-param-neg.cpp`. A reference **local** is still rejected:
+  its register (`compile.rs`, `is_reference_var`) is reused once its
+  block ends, so the Oven needs a record of `(decl, register, pc range
+  of its block)` in `Func` (or, as for reflected non-reference locals,
+  a memory slot holding the pointer for a reflected reference local
+  only) to find it without a stale read: WP-1505 remainder, pinned by
   `meta.reflection.extract/reference-local-xfail.cpp`.
 - No longer a deviation: a closure type at namespace or class scope has
   no linkage in GCC 16.1 either (`linkage-storage.cpp`).
 
 ## 6. Status
+**[meta.syn] coverage (WP-1505).** Every `consteval` function the working
+draft's [meta.syn] declares in `std::meta` has a row, under the
+draft's name. Checked against the synopsis as of 2026-11 (237 names):
+- Missing before WP-1505, added: `is_applicable_type`,
+  `is_nothrow_applicable_type`, `apply_result` (P1317;
+  spec/reflection-traits.md §5). libstdc++ 16.1's `<meta>` does not
+  declare them (nor does it define `std::is_applicable`), so the test
+  header `kiln_meta_traits.h` declares them; a later `<meta>` that
+  declares them as intrinsics (`consteval bool is_applicable_type(info,
+  info);`) reaches the rows by name.
+- Under another name: none. P3096's `has_ellipsis_parameter` is
+  `is_vararg_function` in the draft (§1).
+- Declared by libstdc++ 16.1's `<meta>` as library code over the
+  intrinsics, not rows (`gcc16_meta_names.txt`): `define_static_array`,
+  `define_static_object`, `define_static_string`, `is_string_literal`
+  and the `access_context` members.
+
 Every row in §1–§4 is implemented, apart from the §3 gaps.
 `parameters_of` (WP-478) and `template_of` / `template_arguments_of`
 (WP-482) are specified elsewhere. No test in

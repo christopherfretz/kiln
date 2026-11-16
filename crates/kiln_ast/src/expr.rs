@@ -2739,6 +2739,13 @@ impl ExprArena {
         self.cold.splice_args.get(e).copied()
     }
 
+    /// Whether a `CXXSpliceExpr` was written after `template`
+    /// (`template [: r :]`, with or without template arguments).
+    pub fn splice_template_kw(&self, e: ExprId) -> bool {
+        let n = self.expect_kind(e, ExprKind::CXXSpliceExpr);
+        n.aux & 2 != 0
+    }
+
     /// The object expression of a member `CXXSpliceExpr` and whether it
     /// was written with `->`; `None` for an expression splice.
     pub fn splice_base(&self, e: ExprId) -> Option<(ExprId, bool)> {

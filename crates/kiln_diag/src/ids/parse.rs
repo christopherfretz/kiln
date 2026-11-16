@@ -138,6 +138,9 @@ parse_gnu_old_style_field_designator = ExtWarn [GnuDesignator] (0) "use of GNU o
 parse_incomplete_array_member_init = Error (0) "array bound cannot be deduced from a default member initializer";
 parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
 parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{0}' declaration specifier";
+// clang `ext_keyword_as_ident`: a revertible trait keyword reverted to an
+// identifier (spec/parse.md §1; WP-1505)
+parse_keyword_as_ident = Warning [KeywordCompat] (1) "keyword '{0}' will be made available as an identifier for the remainder of the translation unit";
 parse_lambda_decl_specifier_repeated = Error (1) "{0} cannot appear multiple times in a lambda declarator";
 parse_literal_operator_string_not_empty = Error (0) "string literal after 'operator' must be '\"\"'";
 parse_literal_operator_string_prefix = Error (0) "string literal after 'operator' cannot have an encoding prefix";

@@ -117,7 +117,7 @@ impl Sema<'_, '_> {
 
     /// Whether type reflection `t` is a type alias (a typedef name or an
     /// alias template specialization).
-    pub(super) fn is_alias_type(&self, t: QualType) -> bool {
+    pub(in crate::meta) fn is_alias_type(&self, t: QualType) -> bool {
         t.quals_bits() == 0
             && matches!(
                 self.ast.types.view(t.ty()),

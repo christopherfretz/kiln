@@ -126,6 +126,10 @@ consteval __kiln_size_t tuple_size(info type);
 consteval info tuple_element(__kiln_size_t index, info type);
 consteval __kiln_size_t variant_size(info type);
 consteval info variant_alternative(__kiln_size_t index, info type);
+// P1317 ([meta.syn]; not in libstdc++ 16.1's <meta> yet)
+consteval bool is_applicable_type(info fn, info tuple);
+consteval bool is_nothrow_applicable_type(info fn, info tuple);
+consteval info apply_result(info fn, info tuple);
 
 // The range forms' kiln encoding (spec/reflection-traits.md §1.3): the
 // range as a pointer to its first element and a count. The IS's
