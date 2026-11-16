@@ -80,9 +80,12 @@
 //! frame and the steps as it found it repeats until the step limit,
 //! which the walk jumps to.
 //!
-//! Builtin calls follow clang's table, never the Oven, which folds more
-//! (the P0533 `<cmath>` builtins and their library twins) and notes some
-//! calls its own way (WP-945; [`Sema::builtin_call_kind`] asks
+//! Builtin calls follow clang's table, except the `<cmath>` builtins
+//! the Oven evaluates exactly (`builtin::p0533_base`: P0533's rounding,
+//! remainder, exponent and `nextafter` families, `fma`, `sqrt`), which
+//! are opaque here since a call of one may be constant (WP-1468; GCC
+//! agrees, clang reports them before C++23). The Oven also folds their
+//! library twins and notes some calls its own way (WP-945; [`Sema::builtin_call_kind`] asks
 //! `Sema::clang_constexpr_builtin`, `kiln_pp`'s `__has_constexpr_builtin`
 //! for the target, `-std` and compat): a builtin clang does not evaluate
 //! fails at its callee, another is opaque (its arguments walked), a
@@ -1045,7 +1048,9 @@ impl Sema<'_, '_> {
     fn nc_static_local(&mut self, d: DeclId) -> Option<EvalFailure> {
         let v = self.ast.decls.var(d)?;
         let tls = v.spec.tls() != kiln_ast::decl::TlsKind::None;
+        // A block-scope `extern` declaration defines nothing (CWG2552).
         if (!tls && v.spec.storage() != kiln_ast::decl::VarStorage::Static)
+            || v.spec.storage() == kiln_ast::decl::VarStorage::Extern
             || self.usable_in_constant_expressions(d)
         {
             return None;
@@ -1338,6 +1343,12 @@ impl Sema<'_, '_> {
             let Some(info) = kiln_ast::decl::builtin::info(id) else {
                 return BuiltinCall::Opaque;
             };
+            // A `<cmath>` builtin the Oven evaluates exactly may give a
+            // constant, so a function calling it is not "never constant"
+            // (WP-1468, as GCC); transcendental ones still follow clang.
+            if kiln_ast::decl::builtin::p0533_base(id).is_some() {
+                return BuiltinCall::Opaque;
+            }
             return match (self.clang_constexpr_builtin)(info.name, q) {
                 Some(false) => BuiltinCall::Invalid,
                 _ => BuiltinCall::Opaque,

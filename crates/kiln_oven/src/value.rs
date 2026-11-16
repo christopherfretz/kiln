@@ -261,8 +261,10 @@ impl Oven {
     /// by later evaluations of the same variable).
     fn placeholder(&mut self, g: u32, ty: OTy, d: DeclId) -> u64 {
         let info = *self.types.info(ty);
-        let fl =
-            flags::CONST | flags::RESOLVING | if info.has_union { flags::HAS_UNION } else { 0 };
+        let fl = flags::CONST
+            | flags::RESOLVING
+            | if info.has_union { flags::HAS_UNION } else { 0 }
+            | if info.has_const { flags::CONST_SUB } else { 0 };
         let slot = self.globals[g as usize].slot;
         if slot != 0 {
             let p = Ptr::decode(slot);
@@ -1008,9 +1010,16 @@ impl Oven {
                 past,
             });
         }
+        // The variable being initialized: a permitted result when it has
+        // static storage duration, or (C++26) when it is a `constexpr`
+        // local, constexpr-referenceable from its own initializer; the
+        // address of any other automatic object is not
+        // ([expr.const]/22, `constexpr A a = f();` with `a.self == &a`
+        // in a function; WP-1468).
         if let (Origin::Var(d), Some(o)) = (a.origin, self.run.object)
             && d == o
             && a.live
+            && (!is_local_var(b.ast(), d) || self.referenceable_from_object(b, d))
         {
             let ast = b.ast();
             // Nor does the variable itself when it is `thread_local`
@@ -1033,7 +1042,8 @@ impl Oven {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
         let ast = b.ast();
-        let sub = offset != 0 || p.past || pointee != a.ty;
+        // `&x + 1` designates no subobject (clang's empty designator).
+        let sub = pointee != a.ty || (offset != 0 && offset != u64::from(a.size));
         let what = if sub { "subobject of " } else { "" };
         let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
@@ -1041,13 +1051,24 @@ impl Oven {
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
-                // clang `note_constexpr_non_global`.
+                // clang `note_constexpr_non_global`, then
+                // `note_constexpr_not_static` for a `constexpr` local.
                 let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
                 notes.push(Note::new(
                     loc,
                     format!("{kind} to {what}'{name}' is not a constant expression"),
                 ));
-                notes.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                let constexpr_local = ast.decls.get(d).kind() == DeclKind::Var
+                    && is_local_var(ast, d)
+                    && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+                let here = if constexpr_local {
+                    format!(
+                        "address of non-static constexpr variable '{name}' may differ on each invocation of the enclosing function; add 'static' to give it a constant address"
+                    )
+                } else {
+                    "declared here".to_owned()
+                };
+                notes.push(Note::new(ast.decls.get(d).loc(), here));
             }
             Origin::Temp(e) => {
                 notes.push(Note::new(
@@ -1742,7 +1763,7 @@ impl Oven {
     }
 
     /// A static object of type `ty` for global `d`.
-    fn global_obj(&mut self, ty: OTy, fl: u8, d: DeclId) -> u64 {
+    fn global_obj(&mut self, ty: OTy, fl: u16, d: DeclId) -> u64 {
         let size = self.types.size(ty);
         self.mem.alloc_static(ty, size, fl, Origin::Global(d))
     }
@@ -1817,7 +1838,7 @@ impl Oven {
         ty: OTy,
         init: ExprId,
         top: u32,
-        hu: u8,
+        hu: u16,
     ) -> u64 {
         let lax = (self.run.lax, self.mem.lax);
         (self.run.lax, self.mem.lax) = (true, true);
@@ -1841,7 +1862,7 @@ impl Oven {
         ty: OTy,
         init: ExprId,
         top: u32,
-        hu: u8,
+        hu: u16,
         lax_read: bool,
         manifest: bool,
     ) -> Result<u64, u64> {
@@ -1923,7 +1944,7 @@ impl Oven {
     /// The type flags of a static object of type `ty` thawed from a value
     /// (its lifetime began outside the evaluation): unions, and `mutable`
     /// members whose reads are diagnosed ([expr.const]/5.9).
-    fn static_flags(&self, ty: OTy) -> u8 {
+    fn static_flags(&self, ty: OTy) -> u16 {
         let info = self.types.info(ty);
         (if info.has_union { flags::HAS_UNION } else { 0 })
             | if info.has_mutable { flags::MUTABLE_OUTSIDE } else { 0 }

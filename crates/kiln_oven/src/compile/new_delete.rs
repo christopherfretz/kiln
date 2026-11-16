@@ -193,6 +193,13 @@ impl Compiler<'_> {
                 // reflection.
                 self.default_init_info(dst, elem, loc_new, 0);
             }
+            // `new const T`: the object is const once initialized
+            // ([dcl.type.cv]/4, [class.ctor.general]/5; WP-1468). A
+            // placement new's storage may be part of a larger object,
+            // which the flag would cover: not marked.
+            if place.is_none() && super::const_object(self.ast(), x.allocated_ty) {
+                self.emit_loc(Op::MakeConst, 0, &[dst], loc_new);
+            }
             return;
         };
         // The bound, without its conversion to `size_t` (clang strips

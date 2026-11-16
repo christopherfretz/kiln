@@ -60,6 +60,9 @@ impl Oven {
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
+        if !init && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(raw, ty, k)?;
+        }
         let has_union = a.flags & flags::HAS_UNION != 0;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
@@ -128,6 +131,9 @@ impl Oven {
         let (st, abs, a) = self.mem.check(raw, nb, true).map_err(fault)?;
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
+        }
+        if !init && a.flags & flags::CONST_PATH != 0 {
+            self.const_path(raw, ty, k)?;
         }
         let has_union = a.flags & flags::HAS_UNION != 0;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;

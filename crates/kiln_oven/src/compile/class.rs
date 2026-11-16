@@ -265,11 +265,14 @@ impl Compiler<'_> {
     /// object only once constructed, [class.ctor.general]/5: its const
     /// type is left to its destructor's `this`).
     fn materialize_as(&mut self, e: ExprId, ty: OTy, is_const: bool) -> u32 {
-        let is_const = is_const && self.is_late_const(ty).is_none();
+        let late = is_const && self.is_late_const(ty);
         let r = self.reg();
-        self.alloc(r, ty, Origin::Temp(e), is_const, e);
+        self.alloc(r, ty, Origin::Temp(e), is_const && !late, e);
         self.init(e, r, ty);
         let loc = self.begin(e);
+        if late {
+            self.emit_loc(Op::MakeConst, 0, &[r], loc);
+        }
         self.push_cleanup(r, ty, 0, loc);
         r
     }
@@ -287,6 +290,11 @@ impl Compiler<'_> {
             self.init(x, r, ty);
             if let Some(&f) = self.ext_flags.get(&e) {
                 self.konst(f, 1);
+            }
+            // A const temporary is const once initialized (WP-1468).
+            if super::const_object(self.ast(), self.ast().exprs.get(e).ty()) {
+                let loc = self.begin(x);
+                self.emit_loc(Op::MakeConst, 0, &[r], loc);
             }
             return Place::Mem(r);
         }
@@ -311,8 +319,14 @@ impl Compiler<'_> {
         // whose storage was not preallocated: lives until the evaluation
         // ends.
         let r = self.reg();
-        self.alloc(r, ty, Origin::Temp(x), false, x);
+        let is_const = super::const_object(self.ast(), self.ast().exprs.get(e).ty());
+        let late = is_const && self.is_late_const(ty);
+        self.alloc(r, ty, Origin::Temp(x), is_const && !late, x);
         self.init(x, r, ty);
+        if late {
+            let loc = self.begin(x);
+            self.emit_loc(Op::MakeConst, 0, &[r], loc);
+        }
         Place::Mem(r)
     }
 
@@ -450,17 +464,17 @@ impl Compiler<'_> {
         }
     }
 
-    /// Whether a `const` local of type `ty` is made const only once
-    /// initialized (a class object, [class.ctor.general]/5): the class
-    /// has no mutable members (which stay modifiable; kiln has no
-    /// per-member constness, so the object stays modifiable).
-    pub(super) fn is_late_const(&mut self, ty: OTy) -> Option<bool> {
+    /// Whether a `const` object of type `ty` is made const only once
+    /// initialized (a class object or array of them,
+    /// [class.ctor.general]/5): `Op::MakeConst` after its
+    /// initialization, which keeps the `mutable` members of one
+    /// modifiable ([dcl.stc]/10, `flags::CONST_MUT`, WP-1468).
+    pub(super) fn is_late_const(&mut self, ty: OTy) -> bool {
         let mut t = ty;
         while let TyKind::Array { elem, .. } = self.kind(t) {
             t = elem;
         }
-        let TyKind::Record { decl, .. } = self.kind(t) else { return None };
-        Some(!record_bits(self.b.ast(), decl).contains(DefinitionBits::HAS_MUTABLE_FIELDS))
+        matches!(self.kind(t), TyKind::Record { .. })
     }
 
     // ---- construction -----------------------------------------------------

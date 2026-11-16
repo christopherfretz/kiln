@@ -150,6 +150,8 @@ WP-1459 fixed cluster 3, temporary lifetime (29 tests: 30 → 64 of 73 run cases
 
 ### Rejects-valid where clang accepts (997 cases, top 30 clusters)
 
+WP-1468 fixed cluster 7 (an instantiated variable template binding its own temporary, a dependent array bound taken from the in-class declaration, `this` in a union member's default initializer, block-scope `extern` in a constexpr function (CWG2552), value-initialized vectors): its 7 tests went from 3 to 18 of 18 cases; cluster 29 already passed on main except four clang-matching wrong-line tests; the `g++.dg/cpp23` math builtins the Oven evaluates exactly no longer make a function "never constant" (`attr-assume5`/`6` pass; `attr-assume1`/`3` stop at the C++23-extension warning, as with clang).
+
 WP-1465 fixed the deduction parts of clusters 1, 5, 11 and 23 (CWG2303 most-derived base, CTAD implicit-guide access, CWG2918 constraints in address selection, `auto` in array declarators, a type deduced from an array bound): re-run of their 46 tests, 13 → 45 of 133 cases pass; the rest are placement `new(0)`, C++98 null pointer constants, string-literal conversions and aggregate CTAD of member templates.
 
 WP-1466 fixed the parser clusters 2, 3, 8, 9, 21, 22 and 30 (re-run of their 61 tests: 6 → 103 of 177 cases pass; most of the rest are access declarations in C++11 and later, which clang rejects too, compound literals that define an anonymous union, which clang rejects too, and six reduced repros left as `xfail(kiln): WP-1495`, two of them outside the parser: `#pragma GCC diagnostic ignored "-Wpedantic"` and access checks in partial specialization matching).
@@ -251,6 +253,8 @@ WP-1472 added GCC's `__builtin_is_corresponding_member` / `__builtin_is_pointer_
     ...)' cannot be defined in a type specifier`, 6 cases). Area: parser.
 
 ### Accepts-invalid where clang rejects (922 cases, top 30 clusters)
+
+WP-1468 fixed clusters 1, 12 and 18: a const member, a const subobject reached through a base or union, a const temporary and `new const T` are now const in the Oven (the 8 cluster-1 tests report the modification in a note at GCC's line, under an error at the use, as clang does), an aggregate reading a later element of itself is an error (`constexpr-array12` passes; `stmtexpr21` is accepted by clang too), and a constexpr local's own address in its value is rejected before C++26 (6 of 9 cluster-18 cases; at C++26 P2686R5 makes it valid, which kiln implements and GCC and clang do not yet).
 
 The largest group (130 cases, 61 tests) expects any error at all
 (`dg-error ""`). It is mixed: mostly old-deja programs that are invalid

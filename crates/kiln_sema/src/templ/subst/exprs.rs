@@ -2764,7 +2764,7 @@ impl Substituter<'_, '_, '_> {
                     ExprKind::ExprWithCleanups => self.sema.ast.exprs.operand(init),
                     _ => init,
                 };
-                let e = self.expr(src)?;
+                let e = self.expr(self.unextended(src, peeled))?;
                 // A braced element of an expansion-init-list: `decl =
                 // {…};` ([stmt.expand]/5.1).
                 if pk == ExprKind::CXXExpansionSelectExpr && self.is_braced_element(e) {
@@ -2779,6 +2779,22 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }))
+    }
+
+    /// `src`, or `peeled` (its written operand) when `src` is a temporary
+    /// the pattern's variable extends: that is the pattern's own object,
+    /// so the instantiated variable binds a temporary of its own, rebuilt
+    /// as clang strips the materialization ([class.temporary]/6;
+    /// `template <class> constexpr const int &v = 1;`, WP-1468).
+    fn unextended(&self, src: ExprId, peeled: ExprId) -> ExprId {
+        let ex = &self.sema.ast.exprs;
+        if ex.get(src).kind() == ExprKind::MaterializeTemporaryExpr
+            && ex.lifetime_extended_temporary(src).is_some()
+        {
+            peeled
+        } else {
+            src
+        }
     }
 
     /// The object argument of the conversion function call an implicit

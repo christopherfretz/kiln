@@ -2282,11 +2282,9 @@ impl Compiler<'_> {
             if self.needs_mem(d, ty) {
                 // A const class object is modifiable until its
                 // constructor completes ([class.ctor.general]/5).
-                if is_const && let Some(late) = self.is_late_const(ty) {
+                if is_const && self.is_late_const(ty) {
                     is_const = false;
-                    if late {
-                        self.late_const.insert(d);
-                    }
+                    self.late_const.insert(d);
                 }
                 mem.push((d, ty, is_const));
             }
@@ -3359,7 +3357,10 @@ impl Compiler<'_> {
                         && (ast.types.is_integral(q)
                             || matches!(ast.types.canonical_view(q), TypeView::Enum(_)))
                 });
-            if (tls || v.spec.storage() == VarStorage::Static) && !usable {
+            // A block-scope `extern` declaration defines nothing
+            // (CWG2552, [dcl.constexpr]/3; WP-1468).
+            let decl_only = v.spec.storage() == VarStorage::Extern;
+            if (tls || v.spec.storage() == VarStorage::Static) && !usable && !decl_only {
                 let what = if tls { "thread_local" } else { "static" };
                 self.trap_loc(
                     n.loc(),
@@ -3422,11 +3423,9 @@ impl Compiler<'_> {
                 if self.needs_mem(d, ty) {
                     // Not hoisted (a condition variable of a loop iteration).
                     let mut is_const = const_object(self.b.ast(), q);
-                    if is_const && let Some(late) = self.is_late_const(ty) {
+                    if is_const && self.is_late_const(ty) {
                         is_const = false;
-                        if late {
-                            self.late_const.insert(d);
-                        }
+                        self.late_const.insert(d);
                     }
                     let p = self.reg();
                     self.alloc_var(p, ty, d, is_const);
@@ -5924,6 +5923,12 @@ impl Compiler<'_> {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
             }
+            // `V()` of a vector type: zero lanes ([dcl.init.general]/9;
+            // WP-1468).
+            ExprKind::CXXScalarValueInitExpr if self.o.types.is_aggregate(ty) => {
+                self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
+                return;
+            }
             ExprKind::CompoundLiteralExpr if self.o.types.is_aggregate(ty) => {
                 let init = self.ast().exprs.compound_literal_init(e);
                 return self.init_inner(init, p, ty);
@@ -6184,15 +6189,22 @@ impl Compiler<'_> {
                 let zero_fill = rest > 0
                     && filler
                         .is_none_or(|f| self.node(f).kind() == ExprKind::ImplicitValueInitExpr);
-                if zero_fill {
-                    self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
-                }
                 let es = self.o.types.size(elem);
                 for (i, &x) in inits.iter().enumerate() {
                     let q = self.elem_ptr(p, i as u64 * es, e);
                     self.elem_step(tr, i as u64 * es, elem, es, Some(x));
                     self.init(x, q, elem);
                     self.elem_track = None;
+                }
+                // The remaining elements are value-initialized after the
+                // listed ones ([dcl.init.aggr]/5, /7): an initializer
+                // reading one of them reads an object outside its
+                // lifetime (WP-1468).
+                if zero_fill {
+                    let q = self.elem_ptr(p, inits.len() as u64 * es, e);
+                    let tail =
+                        if inits.is_empty() { ty } else { self.o.types.array_of(elem, rest) };
+                    self.emit_at(Op::ZeroInit, 0, &[q, tail.0], e);
                 }
                 if rest > 0
                     && !zero_fill
@@ -6244,7 +6256,14 @@ impl Compiler<'_> {
                 self.emit_at(Op::SetActive, 1, &[p, idx as u32, ty.0], e);
                 let fi = fields[idx];
                 if let Some(&x) = inits.first() {
+                    // A default member initializer's `this` is the union
+                    // being initialized ([class.mem.general]/11; WP-1468).
+                    let saved = self.this_override;
+                    if self.is_default_init(x) {
+                        self.this_override = Some(p);
+                    }
                     self.init_field(x, p, fi, e);
+                    self.this_override = saved;
                 } else {
                     let q = self.elem_ptr(p, fi.offset, e);
                     self.emit_at(Op::ZeroInit, 0, &[q, fi.ty.0], e);

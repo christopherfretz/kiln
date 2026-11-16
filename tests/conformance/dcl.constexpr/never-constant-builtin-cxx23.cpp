@@ -12,7 +12,7 @@
 //@ diag: 17:18 error "constexpr function never produces a constant expression"
 //@ diag: 17:40 note "non-constexpr function 'fabs' cannot be used in a constant expression"
 //@ diag: 16:19 note "declared here"
-constexpr double w1(double x) { return x + __builtin_floor(1.0); }
+constexpr double w1(double x) { return x + __builtin_log10(1.0); }
 extern "C" double fabs(double);
 constexpr double w2(double x) { return fabs(2.0) + x; }
 constexpr double w3(double x) { return fabs(x); }

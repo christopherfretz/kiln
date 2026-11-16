@@ -153,7 +153,8 @@ impl Oven {
         if size == 0 || !self.frame_trackable(ty, 0) || self.frame.bytes + size > MAX_FRAME_BYTES {
             return Ok(None);
         }
-        let p = self.mem.alloc_static(ty, size, 0, Origin::Var(d));
+        let fl = if self.types.info(ty).has_const { flags::CONST_SUB } else { 0 };
+        let p = self.mem.alloc_static(ty, size, fl, Origin::Var(d));
         if let Some(e) = init
             && let Err(f) = self.frame_job(bridge, e, frame, FrameHow::Init(d, ty), p).0
         {
