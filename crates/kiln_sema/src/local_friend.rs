@@ -461,3 +461,98 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     }
     row[b.len()]
 }
+
+impl Sema<'_, '_> {
+    /// [class.friend]/11: `friend class n;` in a local class. The prior
+    /// declaration is looked up in the enclosing (local) classes and in
+    /// the innermost enclosing non-class scope, never outside it; without
+    /// one the class belongs to that block scope and is not found by name
+    /// lookup until a matching declaration there (`class n { ... };`
+    /// later in the block redeclares it,
+    /// [`Sema::is_hidden_local_friend`]). `None`: not a friend of a local
+    /// class. GCC follows the rule; clang looks outside the block (an
+    /// outer block's or a namespace's class is befriended).
+    pub(crate) fn act_on_local_friend_tag(
+        &mut self,
+        keyword: kiln_ast::types::TagKeyword,
+        n: Symbol,
+        loc: Loc,
+        nloc: Loc,
+    ) -> Option<DeclId> {
+        let c = self.current_class()?.record;
+        if !self.is_local_class(c) {
+            return None;
+        }
+        let func = self.enclosing_function(self.ctx)?;
+        let mut prev = None;
+        let mut block = None;
+        for (i, s) in self.scopes.iter().enumerate().rev() {
+            if s.is_transparent() {
+                continue;
+            }
+            if s.is_local() {
+                block = Some(i);
+                prev = s.find(n, Ns::Tag);
+                break;
+            }
+            if s.kind == ScopeKind::Record
+                && let Some(e) = s.entity
+            {
+                let found: Vec<DeclId> =
+                    self.ast.lookup_local(e, DeclName::ident(n)).iter().collect();
+                prev =
+                    found.into_iter().rev().find(|&d| crate::lookup::is_tag_kind(self.kind_of(d)));
+                if prev.is_some() {
+                    break;
+                }
+            }
+        }
+        let block = block?;
+        if let Some(p) = prev {
+            if self.tag_matches(p, keyword) {
+                self.mark_type_referenced(p);
+                return Some(p);
+            }
+            self.diag_wrong_tag(sym_str(self, n), loc, p);
+        }
+        let mut h = kiln_ast::DeclHead::new(func, DeclName::ident(n), nloc);
+        h.lexical = Some(self.ctx);
+        h.misc = h.misc.with_friend(kiln_ast::decl::FriendKind::Undeclared);
+        let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+        self.scopes[block].locals.push((n, d, Ns::Tag));
+        self.friend_tag = Some(d);
+        Some(d)
+    }
+
+    /// A class a friend of a local class declared in a block scope
+    /// ([`Sema::act_on_local_friend_tag`]): only a redeclaration in that
+    /// scope finds it ([class.friend]/11).
+    pub(crate) fn is_hidden_local_friend(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        n.misc().friend() == kiln_ast::decl::FriendKind::Undeclared
+            && !n.has(kiln_ast::decl::DeclFlags::INVALID)
+            && crate::lookup::is_tag_kind(n.kind())
+    }
+
+    /// The hidden friend class `n` of the innermost block scope that an
+    /// elaborated-type-specifier `class n` naming no visible class
+    /// redeclares (as [`Sema::hidden_friend_tag`] in a namespace).
+    pub(crate) fn hidden_local_friend_tag(
+        &self,
+        n: Symbol,
+        keyword: kiln_ast::types::TagKeyword,
+    ) -> Option<DeclId> {
+        let s =
+            self.scopes.iter().rev().find(|s| !s.is_transparent() && s.kind != ScopeKind::Enum)?;
+        if !s.is_local() {
+            return None;
+        }
+        s.locals.iter().rev().find_map(|&(m, d, k)| {
+            (m == n
+                && k == Ns::Tag
+                && self.is_hidden_local_friend(d)
+                && self.tag_matches(d, keyword))
+            .then_some(d)
+        })
+    }
+}

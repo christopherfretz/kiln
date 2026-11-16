@@ -5,7 +5,12 @@
 // one, and the local is constructed in the return slot with no copy or
 // move (WP-1176). C++23: C++26 kiln fills the local with its erroneous
 // value ([basic.indet]/1), which clang 22 does not.
+// The IR is release-specific (the datalayout line and frame-pointer attributes
+// differ between clang 19 and 22): pinned to clang 22 here and to clang 19 in its twin
+// nrvo-through-generic-selection-ir-19.cpp (a clang compiler under test is never
+// compared with the other release's oracle).
 //@ expect: ir
+//@ requires: clang>=22
 //@ std: c++23
 struct S {
   S();

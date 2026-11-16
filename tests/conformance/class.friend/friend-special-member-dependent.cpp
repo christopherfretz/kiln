@@ -1,6 +1,7 @@
 // [temp.friend]/1: friend constructors of a class template's specialization
-// and of a dependent class. kiln accepts them; a dependent one grants no
-// access yet (spec/sema-class.md). `template<class U> friend X<U>::X(U);`
+// and of a dependent class. kiln accepts them; a dependent one is matched
+// in each specialization (WP-1507, dependent-special-member-friend-run.cpp),
+// a friend template grants no access yet. `template<class U> friend X<U>::X(U);`
 // is valid ([temp.friend]/1, GCC 16.1) but clang 22 rejects it ("friends
 // can only be classes or functions"). Found running GCC's C++ testsuite
 // (WP-1466).

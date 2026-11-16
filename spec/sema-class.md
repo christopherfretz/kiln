@@ -150,11 +150,25 @@ function templates last as `candidate template ignored: failed template
 argument deduction`; invalid declarations and friend redeclarations are
 skipped. A non-special friend function of a non-dependent class that
 matches nothing gets the same notes (`act_on_function`, not for a friend
-template, as in clang). When the
-class or the type is dependent, or the friend is a template
+template, as in clang). When the class is templated (a class template's
+pattern, which `Z<T>::` also names outside `Z` when the parameters line
+up, or a member of one) or dependent, or the type is dependent, the
+friend keeps its type and a `SpecialFriend` entry in
+`Sema.special_friends` (the special member kind, the type, the class and
+the written nested-name-specifier; side data keyed by the `FriendDecl`,
+so the class record does not grow; part of the PCH snapshot, and a reason
+for the BMI image to fall back to replay). Each specialization substitutes
+the specifier and the type and matches them in the class named
+(`befriend_special_member`, `templ/subst/decls.rs` `friend_decl`): the
+same rule and the same no-match error, then with the instantiation note.
+A match in the pattern itself (a member class of the current
+instantiation, `friend M::M(T);`) is also befriended in the pattern, for
+the access checks of the template definition (WP-1507,
+`class.friend/dependent-special-member-friend-{run,denied,pch-run,module-run}.cpp`;
+clang befriends none of these and reports no mismatch). A friend template
 (`template<class U> friend X<U>::X(U);`, which clang 22 rejects and GCC
-accepts), the friend constructor is accepted and grants nothing until a
-later row matches it per specialization. A friend function (not a
+accepts) is accepted and grants nothing (an xfail repro,
+`class.friend/friend-constructor-template-of-class-template-run.cpp`). A friend function (not a
 constructor, destructor or conversion function) with a dependent
 qualifier that is not a class template (`friend R T::f();`,
 `friend bool T::operator==(const T &) const;`) is deferred like a
@@ -321,6 +335,20 @@ redeclares that class: the new declaration joins its chain and is visible
 `hidden_friend_tag`), so `friend class X; class X *p;` and a later
 definition of `X` are one class and the friendship holds
 (tests/conformance/class.friend/friend-then-elaborated-member.cpp, WP-799).
+
+`friend class F;` in a local class follows [class.friend]/11, as GCC does
+(clang searches past the block): the prior declaration is looked up in the
+enclosing local classes' members and in the innermost enclosing block scope
+only (`local_friend.rs` `act_on_local_friend_tag`). Without one, `F` is
+declared as a member of the enclosing function, entered in that block
+scope's locals hidden (`FriendKind::Undeclared`,
+`Sema::is_hidden_local_friend`): block-scope lookup skips it, while the
+block's redeclaration lookup (`class F { ... };`, `class F;`) and a plain
+reference `class F *p;` (`hidden_local_friend_tag`) redeclare it, so the
+block's later class is the friend. A local class of a templated function
+declares it again in each instantiated block (`templ/subst/decls.rs`
+`local_friend_tag`). A namespace class of that name is not befriended
+(WP-1507; tests/conformance/class.friend/local-class-friend-class-block-scope-{run,denied}.cpp).
 
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as

@@ -766,7 +766,10 @@ pub struct Sema<'a, 'sm> {
     /// match waits for instantiation (`template<class U> friend int
     /// B<T>::g(U, W<T>&);`): substituted, it names the class whose member
     /// the instantiated friend redeclares ([temp.friend]/1; WP-1110).
-    pub(crate) friend_qualifier_nns: kiln_source::fx::FxHashMap<DeclId, kiln_ast::ids::NnsId>,
+    /// With where the specifier begins: a substituted specifier that
+    /// names no class is reported there (clang).
+    pub(crate) friend_qualifier_nns:
+        kiln_source::fx::FxHashMap<DeclId, (kiln_ast::ids::NnsId, Loc)>,
     /// Where `override` / `final` were written on each member function
     /// whose override control is deferred to instantiation (a dependent
     /// class or type; `check_override_control`): the instantiation is
@@ -1300,6 +1303,11 @@ pub struct Sema<'a, 'sm> {
     /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
+    /// The constructor, destructor and conversion function friends of
+    /// templated classes naming a member of a templated or dependent
+    /// class (`friend Z<T>::Z(typename T::t);`), keyed by their
+    /// `FriendDecl`: matched per specialization (WP-1507).
+    pub(crate) special_friends: kiln_source::fx::FxHashMap<DeclId, class::friend::SpecialFriend>,
     /// The [temp.friend]/5 friends (`template<class T> friend class
     /// A<T>::Member;`; spec/sema-templates.md §4.8, WP-1072).
     pub(crate) member_friends: class::member_friend::MemberFriends,
@@ -1712,6 +1720,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             anon_namespaces: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
+            special_friends: kiln_source::fx::FxHashMap::default(),
             member_friends: class::member_friend::MemberFriends::default(),
             nsdmi_this: Vec::new(),
             contract_ctx: Vec::new(),

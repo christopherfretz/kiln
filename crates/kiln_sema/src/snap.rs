@@ -146,7 +146,7 @@ macro_rules! sema_fields {
                 unparsed_default_args, uninstantiated_exc, dyn_exc_rparen, implicit_exc_dtors,
                 uninstantiated_annots, annot_of_attr, member_refs, oper_lookups, elided_ctors,
                 declarator_type_invalid,
-                declspec_restrict_error, friend_specs, member_friends, inherited_defaults,
+                declspec_restrict_error, friend_specs, special_friends, member_friends, inherited_defaults,
                 inherited_aligned, inh_ctors, inh_ctor_base, anon_namespaces, has_contracts,
                 post_param_diagnosed, post_param_pattern_locs, friend_pattern_prev, templ, inst,
                 abstract_noted, srcloc, meta_names, meta_members, meta_packed_elems, lambda_packs,

@@ -2784,7 +2784,10 @@ reports a dropped statement, part or declaration lookup.
   invented head is its own (WP-1145). The deferred friend
   redeclares nothing in the pattern, without a diagnostic, and records
   its qualifier (`friend_qualifiers`), plus the written specifier when
-  that is dependent (`friend_qualifier_nns`). Each instantiation declares
+  that is dependent (`friend_qualifier_nns`, with where the specifier
+  begins: a substituted specifier naming no class, "type 'int' cannot be
+  used prior to '::'", is reported there, as clang does; WP-1507). Each
+  instantiation declares
   it with the class the substituted specifier names
   (`Substituter::nns_context`, templ/subst/decls.rs `function_decl`), so
   it is matched there against the members with the substituted signature
@@ -9430,7 +9433,17 @@ requires-clause scope.**
   instantiated (`instantiate_friend_spec`); `friend_template_of` finds
   the befriended template for access checks. Diagnostics:
   `sema_dependent_friend_spec_no_candidate` with
-  `note_dependent_spec_not_template`.
+  `note_dependent_spec_not_template`. A qualified friend without
+  template arguments, `friend void A::f(int);`, where the non-dependent
+  class `A` declares no non-template `f` of that type but a member
+  function template whose specialization the type deduces
+  ([temp.friend]/1.2, [temp.deduct.decl]) befriends that one
+  specialization (`declare_member_template_spec_friend`); a matching
+  non-template member wins. A non-dependent friend specialization of a
+  class member, with or without template arguments, is access-checked
+  ([class.friend]/9), the "declared private here" note at the friend as
+  clang puts it (`check_friend_access_noted`; WP-1507,
+  `temp.friend/member-template-specialization-friend-{run,denied}.cpp`).
 - *Template redeclarations* share one identity: `Ast::first`/`latest`
   resolve a template through its pattern's redeclaration group. A friend
   class template naming an existing template is a redeclaration in that

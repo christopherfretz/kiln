@@ -10,7 +10,7 @@ use kiln_ast::decl::{
 };
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{TagKeyword, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -777,11 +777,11 @@ impl Substituter<'_, '_, '_> {
         }
         let mut dr = self.pattern_declarator(d, ctx)?;
         if friend.is_some() {
-            dr.qualifier = if let Some(&n) = self.sema.friend_qualifier_nns.get(&d) {
+            dr.qualifier = if let Some(&(n, qloc)) = self.sema.friend_qualifier_nns.get(&d) {
                 // A method friend matched at instantiation (WP-1110): the
                 // class its substituted specifier names.
-                let n = self.nns(n, loc)?;
-                Some(self.nns_context(n, loc)?)
+                let n = self.nns(n, qloc)?;
+                Some(self.nns_context(n, qloc)?)
             } else {
                 match self.sema.friend_qualifiers.get(&d) {
                     Some(&q) => Some(q),
@@ -1719,7 +1719,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             crate::decl::TagUse::Declaration
         };
-        let kw = kiln_ast::types::TagKeyword::Enum;
+        let kw = TagKeyword::Enum;
         let e = self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, loc);
         if failed {
             self.sema.ast.decls.set_flags(e, DeclFlags::INVALID);
@@ -1859,6 +1859,98 @@ impl Substituter<'_, '_, '_> {
         self.sema.declaring_class(m)
     }
 
+    /// The instantiation of `friend class n;` in a local class whose
+    /// class `n` (pattern `t`) belongs to the block scope
+    /// ([`Sema::act_on_local_friend_tag`]).
+    fn local_friend_tag(&mut self, t: DeclId, loc: Loc) -> SubstResult<DeclId> {
+        let n = *self.sema.ast.decls.get(t);
+        let name = n.name().as_ident().ok_or(SubstFail)?;
+        let kw = match self.sema.ast.decls.record(t).map(|r| r.tag) {
+            Some(kiln_ast::decl::TagKind::Class) => TagKeyword::Class,
+            Some(kiln_ast::decl::TagKind::Union) => TagKeyword::Union,
+            _ => TagKeyword::Struct,
+        };
+        let x = self.sema.act_on_local_friend_tag(kw, name, loc, n.loc()).ok_or(SubstFail)?;
+        self.locals.insert(t, DeclOrPack::Decl(x));
+        let ty = self.sema.tag_type(x);
+        let mut ds = DeclSpec::new(loc);
+        ds.base = TypeSpecKind::Named;
+        ds.named = Some(ty);
+        ds.type_loc = Some(loc);
+        ds.friend = Some(loc);
+        self.sema.act_on_friend(&ds, ty, None, loc).ok_or(SubstFail)
+    }
+
+    /// A friend naming a type in the pattern (`friend struct Z;`,
+    /// `friend Ts...;`; see `friend_decl`).
+    fn friend_type(
+        &mut self,
+        ty: QualType,
+        owned_tag: Option<DeclId>,
+        loc: Loc,
+    ) -> SubstResult<Option<DeclId>> {
+        // `friend struct Z;` that first declared `Z` in the enclosing
+        // namespace: the instantiation befriends the same class (not
+        // dependent). One that a local class of a templated function
+        // declared in the block scope ([class.friend]/11) is declared
+        // again in the instantiated block, where the instantiated
+        // definition redeclares it.
+        if let Some(t) = owned_tag
+            && self.sema.is_hidden_local_friend(t)
+            && self.sema.enclosing_function(t).is_some()
+        {
+            return self.local_friend_tag(t, loc).map(Some);
+        }
+        if let Some(t) = owned_tag
+            && !self.sema.ast.decls.get(t).ctx().is_some_and(|c| {
+                matches!(self.sema.kind_of(c), DeclKind::Namespace | DeclKind::TranslationUnit)
+            })
+        {
+            return self.unimplemented("friend class declared in a class template", loc);
+        }
+        // `friend Ts...;` ([class.friend]/3, P2893): one friend
+        // per element of the expansion.
+        let tys = if crate::templ::pack::type_pattern(self.sema, ty).is_some() {
+            self.expand_types(&[ty], loc)?
+        } else {
+            vec![self.ty(ty, loc)?]
+        };
+        let mut last = None;
+        for ty in tys {
+            let mut ds = DeclSpec::new(loc);
+            ds.base = TypeSpecKind::Named;
+            ds.named = Some(ty);
+            ds.type_loc = Some(loc);
+            ds.friend = Some(loc);
+            last = self.sema.act_on_friend(&ds, ty, None, loc).or(last);
+        }
+        Ok(last)
+    }
+
+    /// `friend Z<T>::Z(typename T::t);` in a class template (see
+    /// `friend_decl`).
+    fn special_friend(
+        &mut self,
+        sf: crate::class::friend::SpecialFriend,
+        loc: Loc,
+    ) -> SubstResult<Option<DeclId>> {
+        // `friend Z<T>::Z(typename T::t);`: matched in the class the
+        // substituted specifier names ([class.friend]/4, [temp.friend]/1).
+        let ty = self.ty(sf.ty, loc)?;
+        let class = match sf.nns {
+            Some(n) => {
+                let n = self.nns(n, loc)?;
+                self.nns_context(n, loc)?
+            }
+            None if self.sema.in_dependent_class(sf.class) => {
+                self.find_instantiated_decl(sf.class, loc)?
+            }
+            None => sf.class,
+        };
+        let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+        Ok(self.sema.befriend_special_member(record, class, sf.kind, ty, loc))
+    }
+
     /// A friend declaration of the pattern ([temp.friend]).
     pub(crate) fn friend_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
         let loc = self.sema.ast.decls.get(d).loc();
@@ -1885,45 +1977,16 @@ impl Substituter<'_, '_, '_> {
             let at = (depth, self.args);
             return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
         }
+        if let Some(sf) = self.sema.special_friends.get(&d).copied() {
+            return self.special_friend(sf, loc);
+        }
         match self.sema.ast.decls.friend_target(d) {
-            // A friend function or special member of a dependent class
-            // (`friend R T::f();`, `friend X<U>::X(U);`) is kept with its
-            // type only; its instantiation befriends nothing yet (WP-1466
+            // A friend function of a dependent class (`friend R T::f();`)
+            // or a special member friend template is kept with its type
+            // only; its instantiation befriends nothing yet (WP-1466
             // follow-up, spec/sema-class.md).
             FriendTarget::Type { ty, .. } if self.sema.ast.types.is_function(ty) => Ok(None),
-            FriendTarget::Type { ty, owned_tag } => {
-                // `friend struct Z;` that first declared `Z` in the
-                // enclosing namespace: the instantiation befriends the
-                // same class (not dependent). A tag declared in a local
-                // scope would need its instantiated declaration.
-                if let Some(t) = owned_tag
-                    && !self.sema.ast.decls.get(t).ctx().is_some_and(|c| {
-                        matches!(
-                            self.sema.kind_of(c),
-                            DeclKind::Namespace | DeclKind::TranslationUnit
-                        )
-                    })
-                {
-                    return self.unimplemented("friend class declared in a class template", loc);
-                }
-                // `friend Ts...;` ([class.friend]/3, P2893): one friend
-                // per element of the expansion.
-                let tys = if crate::templ::pack::type_pattern(self.sema, ty).is_some() {
-                    self.expand_types(&[ty], loc)?
-                } else {
-                    vec![self.ty(ty, loc)?]
-                };
-                let mut last = None;
-                for ty in tys {
-                    let mut ds = DeclSpec::new(loc);
-                    ds.base = TypeSpecKind::Named;
-                    ds.named = Some(ty);
-                    ds.type_loc = Some(loc);
-                    ds.friend = Some(loc);
-                    last = self.sema.act_on_friend(&ds, ty, None, loc).or(last);
-                }
-                Ok(last)
-            }
+            FriendTarget::Type { ty, owned_tag } => self.friend_type(ty, owned_tag, loc),
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
                 // `template<class U> friend class X;` names a namespace
                 // scope template, which substitution leaves unchanged; a

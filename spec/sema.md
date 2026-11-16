@@ -4867,6 +4867,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
       The uses of a declarator that failed
       (`Substituter::failed_usings`) are errors without another
       diagnostic (clang's invalid `UsingDecl`; WP-197).
+    - A member using-declarator (or C++98 access declaration) whose
+      specifier names the class's own current instantiation (`using
+      D<T>::m;`, `D<T>::m;` in `D`, [namespace.udecl]/3) is not deferred
+      for the class's dependent bases when `D` itself declares no `m`:
+      "no member named 'm' in 'D<T>'" at the name, as clang reports it
+      at the definition (`class_using_declarator`; WP-1507,
+      tests/conformance/namespace.udecl/own-class-dependent-bases-no-member*.cpp).
     - A qualifier that is still dependent after substitution (a
       generic lambda in a function template specialization, or a
       local class in one) leaves the declarator unresolved, rebuilt

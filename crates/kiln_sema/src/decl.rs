@@ -5874,7 +5874,7 @@ impl Sema<'_, '_> {
                 && let Some(n) = d.qualifier_nns
                 && self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT)
             {
-                self.friend_qualifier_nns.insert(f, n);
+                self.friend_qualifier_nns.insert(f, (n, d.loc));
             }
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
@@ -9849,7 +9849,9 @@ impl Sema<'_, '_> {
             && keyword != TagKeyword::Enum
             && let Some((n, _)) = name
         {
-            prev = self.hidden_friend_tag(ctx, n, keyword);
+            prev = self
+                .hidden_friend_tag(ctx, n, keyword)
+                .or_else(|| self.hidden_local_friend_tag(n, keyword));
         }
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
@@ -10152,6 +10154,9 @@ impl Sema<'_, '_> {
         // `friend class Ts...;` expands no pack. Tag lookup does not find
         // a non-type parameter: `friend struct T;` then declares `::T`.
         self.check_template_param_shadow_in(n, nloc, true);
+        if let Some(d) = self.act_on_local_friend_tag(keyword, n, loc, nloc) {
+            return d;
+        }
         let lookup = self.lookup_name(n, LookupKind::Tag);
         let found = lookup.decls;
         // The innermost enclosing namespace's own tag of that name, also

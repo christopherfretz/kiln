@@ -801,6 +801,20 @@ impl Sema<'_, '_> {
     /// `loc` with clang's "friend function ... is a private member of"
     /// and the access-path notes; never delayed.
     pub(crate) fn check_friend_access(&mut self, member: DeclId, loc: Loc) -> bool {
+        self.check_friend_access_noted(member, loc, None)
+    }
+
+    /// [`Sema::check_friend_access`] for a function template
+    /// specialization the friend declaration itself names (`friend void
+    /// A::f(int);` deducing `A::f<int>`): clang reports the private
+    /// member as declared at the friend (`note_at`), whose declaration is
+    /// the specialization's first one it sees.
+    pub(crate) fn check_friend_access_noted(
+        &mut self,
+        member: DeclId,
+        loc: Loc,
+        note_at: Option<Loc>,
+    ) -> bool {
         let first = self.ast.first(member);
         let decl_access = self.ast.decls.get(first).misc().access();
         if matches!(decl_access, Access::Public | Access::None) || !self.access_control {
@@ -827,7 +841,12 @@ impl Sema<'_, '_> {
             .arg(name)
             .arg(u8::from(unpriv == Access::Protected))
             .arg(self.ty_arg(self.tag_type(t.declaring)));
-        let msg = self.access_path_notes(msg, &ec, &t, naming);
+        let msg = match note_at {
+            Some(at) if decl_access == Access::Private => {
+                self.direct_access_notes_at(msg, &ec, &t, first, naming, Some(at))
+            }
+            _ => self.access_path_notes(msg, &ec, &t, naming),
+        };
         self.emit(msg);
         false
     }
@@ -1167,6 +1186,19 @@ impl Sema<'_, '_> {
         m: DeclId,
         naming: DeclId,
     ) -> Diag {
+        self.direct_access_notes_at(msg, ec, t, m, naming, None)
+    }
+
+    /// [`Sema::direct_access_notes`], the note at `at` when given.
+    fn direct_access_notes_at(
+        &self,
+        msg: Diag,
+        ec: &EffectiveContext,
+        t: &Target,
+        m: DeclId,
+        naming: DeclId,
+        at: Option<Loc>,
+    ) -> Diag {
         let first = self.ast.first(m);
         // clang locates an alias template at its `using` keyword.
         let loc = (self.kind_of(first) == DeclKind::TypeAliasTemplate)
@@ -1174,6 +1206,7 @@ impl Sema<'_, '_> {
             .flatten()
             .and_then(|p| self.templ.alias_using_loc.get(&p).copied())
             .unwrap_or_else(|| self.ast.decls.get(first).loc());
+        let loc = at.unwrap_or(loc);
         if t.decl_access == Access::Protected
             && let Some(note) = self.protected_note(ec, t, naming, loc)
         {

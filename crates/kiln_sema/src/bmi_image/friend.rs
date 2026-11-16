@@ -120,7 +120,9 @@ impl Writer<'_, '_, '_> {
         {
             return Err("a friend declaration in a template");
         }
-        if self.s.friend_specs.contains_key(&d) || self.s.member_friends.by_friend.contains_key(&d)
+        if self.s.friend_specs.contains_key(&d)
+            || self.s.special_friends.contains_key(&d)
+            || self.s.member_friends.by_friend.contains_key(&d)
         {
             return Err("a friend specialization or member of a class template");
         }

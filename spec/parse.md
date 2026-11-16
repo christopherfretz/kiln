@@ -379,6 +379,12 @@ clang's `Parser` over `Preprocessor::Lex`.
   in class refers into 'R', which is not a class") is not implemented
   and keeps "expected member name or ';'"
   (`tests/conformance/class.mem/qualified-member-no-type.cpp`).
+  A constructor name `C::C(...)` ([class.qual]/2) with no
+  decl-specifiers whose parameter had an error (`X<T>::X(nosuch) {}`,
+  which the constructor lookahead could not take for one) is typed as a
+  constructor (`group_base_type`, `ctor_name_with_invalid_param`), so the
+  invalid declaration adds nothing to "unknown type name" (GCC's one
+  error; WP-1507, `class.qual/ctor-name-invalid-param-one-error.cpp`).
   A qualified name followed by `<` that names no template
   (`Q::f<int> z;` with `Q::f` a variable, `Q::g<int>` undeclared) is
   "no template named 'f' in namespace 'Q'" (clang

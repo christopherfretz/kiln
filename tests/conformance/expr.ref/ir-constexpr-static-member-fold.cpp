@@ -6,7 +6,12 @@
 // when integral (`EvaluateAsInt`). WP-940: kiln loaded a pointer from an
 // emitted linkonce_odr global. Found by the WP-871 fmt smoke (fmt's
 // `static_named_arg::name`, which also changed the UBSan check count).
+// The IR is release-specific (the datalayout line and frame-pointer attributes
+// differ between clang 19 and 22): pinned to clang 22 here and to clang 19 in its twin
+// ir-constexpr-static-member-fold-19.cpp (a clang compiler under test is never
+// compared with the other release's oracle).
 //@ expect: ir
+//@ requires: clang>=22
 //@ std: c++20
 struct B { int x; };
 struct A {
