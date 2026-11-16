@@ -772,7 +772,7 @@ impl Sema<'_, '_> {
     /// [class.dtor]/1: the class-name after `~` names the class
     /// (clang's `ActOnDestructorName`). Reports and returns false
     /// otherwise.
-    fn dtor_name_matches(
+    pub(crate) fn dtor_name_matches(
         &mut self,
         class: DeclId,
         n: Symbol,

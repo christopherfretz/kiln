@@ -132,6 +132,23 @@ field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
+A friend constructor, destructor or conversion function of another class
+(`friend A::A(int);`, `friend A::~A();`, `friend A::operator int();`,
+[class.friend]/4; `declare_special_member_friend`, WP-1466) is matched as
+an out-of-line member declaration is: the name is formed as for
+`act_on_special_declarator` (implicit special members declared first),
+a non-template member of `A` with the same type (ignoring the exception
+specification) is befriended, else a specialization of a constructor or
+conversion function template deduced from the type ([temp.deduct.decl]).
+The befriended member must be accessible ([class.friend]/9). No match is
+`friend declaration of 'A' does not match any declaration in 'A'` (for a
+template candidate kiln's `no function template matches function template
+specialization` instead, without clang's per-candidate notes). When the
+class or the type is dependent, or the friend is a template
+(`template<class U> friend X<U>::X(U);`, which clang 22 rejects and GCC
+accepts), the friend is accepted and grants nothing until a later row
+matches it per specialization. Tests: `class.friend/friend-special-member*.cpp`.
+
 Friend functions of a local class ([class.friend]/11, WP-280, WP-290;
 `local_friend.rs`): an unqualified friend function must redeclare a function
 declared in the innermost enclosing non-class scope (the block holding the

@@ -355,10 +355,41 @@ impl Parser<'_, '_> {
     }
 
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        // `__extension__` before a declaration-statement silences the
+        // whole declaration (clang `ParseCompoundStatementBody`); before
+        // an expression it is the unary operator, which silences its
+        // operand ([`Parser::parse_cast_expr`]).
+        if self.at_kw(Kw::Extension) && self.extension_declaration_follows() {
+            let entered = self.enter_extension();
+            let s = self.parse_statement_after_attrs_inner();
+            self.leave_extension(entered);
+            return s;
+        }
+        self.parse_statement_after_attrs_inner()
+    }
+
+    /// At `__extension__`: whether a declaration follows the run of
+    /// them (an alias-declaration, a using-declaration, a template
+    /// declaration, or a declaration-statement by [stmt.ambig] other
+    /// than an asm-declaration).
+    fn extension_declaration_follows(&mut self) -> bool {
+        let mut n = 0;
+        while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
+            n += 1;
+        }
+        match self.kw_of(self.peek(n)) {
+            Some(Kw::Using | Kw::Template) => true,
+            // An asm-declaration in a block takes no `__extension__`
+            // (clang; GCC accepts it).
+            Some(Kw::Asm) => false,
+            _ => self.is_cxx_declaration_statement(false),
+        }
+    }
+
+    fn parse_statement_after_attrs_inner(&mut self) -> Option<StmtId> {
         let lead_attrs = std::mem::take(&mut self.stmt_attrs);
         let lead_loc = self.stmt_attrs_loc.take().filter(|_| !lead_attrs.is_empty());
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
-        self.skip_extension_before_using();
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),

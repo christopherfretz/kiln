@@ -2,6 +2,9 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+// WP-1466: clang err_access_decl / warn_access_decl_deprecated ([class.access.dcl], C++98).
+parse_access_decl = Error (0) "ISO C++11 does not allow access declarations; use using declarations instead";
+parse_access_decl_deprecated = Warning [Deprecated] (0) "access declarations are deprecated; use using declarations instead";
 parse_address_of_label_outside_fn = Error (0) "use of address-of-label extension outside of a function body";
 parse_annotation_mixed = Error (0) "an attribute-specifier cannot mix annotations and attributes";
 parse_anon_bitfield_member_init = Error (0) "anonymous bit-field cannot have a default member initializer";

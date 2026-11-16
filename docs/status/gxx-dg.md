@@ -152,6 +152,8 @@ WP-1459 fixed cluster 3, temporary lifetime (29 tests: 30 → 64 of 73 run cases
 
 WP-1465 fixed the deduction parts of clusters 1, 5, 11 and 23 (CWG2303 most-derived base, CTAD implicit-guide access, CWG2918 constraints in address selection, `auto` in array declarators, a type deduced from an array bound): re-run of their 46 tests, 13 → 45 of 133 cases pass; the rest are placement `new(0)`, C++98 null pointer constants, string-literal conversions and aggregate CTAD of member templates.
 
+WP-1466 fixed the parser clusters 2, 3, 8, 9, 21, 22 and 30 (re-run of their 61 tests: 6 → 103 of 177 cases pass; most of the rest are access declarations in C++11 and later, which clang rejects too, compound literals that define an anonymous union, which clang rejects too, and six reduced repros left as `xfail(kiln): WP-1495`, two of them outside the parser: `#pragma GCC diagnostic ignored "-Wpedantic"` and access checks in partial specialization matching).
+
 1. **Deduction from a base class that is ambiguous** (60 cases, 22 tests).
    `struct C : A<int,int>, A<int> {}; template<class... T> void f(const A<T...>&); f(C{});`
    deduces `A<int,int>` (CWG2303: the most derived candidate wins). The

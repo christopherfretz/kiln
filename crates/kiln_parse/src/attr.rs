@@ -410,20 +410,39 @@ impl Parser<'_, '_> {
 
     /// True at GNU `__attribute__((...))` specifiers followed by `;`: an
     /// attributed null statement, `__attribute__((fallthrough));` (clang
-    /// `ParseStatementOrDeclarationAfterAttributes`, `kw___attribute`; a
-    /// `[[` after them starts an expression there, so it is not taken).
+    /// `ParseStatementOrDeclarationAfterAttributes`, `kw___attribute`).
     /// Likewise before `return` or `{`, which cannot start a declaration
     /// (`__attribute__((musttail)) return f(x);`, WP-809).
+    ///
+    /// The specifier sequence may mix the GNU and the C++11 forms in any
+    /// order (`__attribute__(()) [[]] __attribute__((assume(x))) [[]];`,
+    /// clang's `ParseStatementOrDeclarationAfterAttributes` retries after
+    /// each run), and a label may follow it
+    /// (`__attribute__((unused)) L: ...`, [stmt.label]/1). Only a leading
+    /// `__attribute__` is looked at here: a leading `[[` is already a
+    /// statement's attribute-specifier-seq.
     pub(crate) fn at_gnu_attr_null_stmt(&self) -> bool {
+        if !self.at_kw(Kw::Attribute) {
+            return false;
+        }
         let mut i = self.pos();
-        while self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
-            let Some(j) = self.skip_balanced(i + 1) else { return false };
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Attribute) {
+                let Some(j) = self.skip_balanced(i + 1) else { return false };
+                i = j;
+                continue;
+            }
+            let Some(j) = self.after_cxx11_attrs_at(i) else { return false };
+            if j == i {
+                break;
+            }
             i = j;
         }
         let t = self.tok_at(i);
-        i != self.pos()
-            && (matches!(Self::punct_of(t), Some(Punct::Semi | Punct::LBrace))
-                || self.kw_of(t) == Some(Kw::Return))
+        matches!(Self::punct_of(t), Some(Punct::Semi | Punct::LBrace))
+            || self.kw_of(t) == Some(Kw::Return)
+            || (self.ident_of(t).is_some()
+                && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::Colon))
     }
 
     /// A C++11 attribute-specifier-seq at namespace scope before a
@@ -604,6 +623,13 @@ impl Parser<'_, '_> {
                     .fixit(kiln_diag::FixIt::replace(at, "_Clang"));
                 self.emit(d);
                 Some(self.s.intern("_Clang"))
+            }
+            // An alternative token in an attribute-token is an identifier
+            // (`[[and, bitor, compl]]`, [dcl.attr.grammar]/5; clang
+            // `TryParseCXX11AttributeIdentifier`, WP-1466).
+            TokKind::Punct(_) => {
+                let sp = self.spelling_of(&t);
+                sp.bytes().all(|b| b.is_ascii_lowercase() || b == b'_').then(|| self.s.intern(&sp))
             }
             _ => None,
         }

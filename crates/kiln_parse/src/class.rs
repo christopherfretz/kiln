@@ -544,6 +544,11 @@ impl Parser<'_, '_> {
 
     /// The name of the innermost class being defined (for constructor
     /// declarators, [class.ctor.general]/1).
+    /// The class being defined, innermost.
+    pub(crate) fn current_class_record(&self) -> Option<DeclId> {
+        Some(self.late.last()?.record)
+    }
+
     pub(crate) fn current_class_name(&self) -> Option<Symbol> {
         let r = self.late.last()?.record;
         self.s.ast.decls.get(r).name().as_ident()
@@ -1170,7 +1175,6 @@ impl Parser<'_, '_> {
     }
 
     fn parse_member_declaration_leader(&mut self) -> bool {
-        self.skip_extension_before_using();
         let loc = self.loc();
         // A loop-hint or FP pragma in a class (clang
         // `ParseCXXClassMemberDeclarationWithPragmas`): only the pragma is
@@ -1230,8 +1234,75 @@ impl Parser<'_, '_> {
                 self.s.act_on_end_abbreviated();
                 true
             }
-            _ => false,
+            _ => match self.at_access_declaration() {
+                Some(name) => {
+                    self.parse_access_declaration(loc, name);
+                    true
+                }
+                None => false,
+            },
         }
+    }
+
+    /// C++98 [class.access.dcl]: `A::f;` in a member-specification is an
+    /// access declaration, `qualified-id ;` (clang's tentative parse in
+    /// `ParseCXXClassMemberDeclaration`). Returns the index of the
+    /// unqualified-id. Only `name ::` pairs are walked, with no template
+    /// argument skipped, so a member whose type is qualified
+    /// (`std::vector<int> v;`) costs a few token peeks; a template-id in
+    /// the qualifier (`B<T>::f;`) is not recognised.
+    fn at_access_declaration(&self) -> Option<usize> {
+        if self.s.is_c() || self.ident().is_none() || !self.peek_is(1, Punct::ColonColon) {
+            return None;
+        }
+        let mut i = self.pos();
+        while self.ident_of(self.tok_at(i)).is_some()
+            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
+        {
+            i += 2;
+        }
+        if self.ident_of(self.tok_at(i)).is_some() {
+            return (Self::punct_of(self.tok_at(i + 1)) == Some(Punct::Semi)).then_some(i);
+        }
+        if self.kw_of(self.tok_at(i)) != Some(Kw::Operator) {
+            return None;
+        }
+        // `A::operator int;`, `A::operator+;`, `A::operator();`: a `;`
+        // before any `{` or `(` (but the `()` of `operator()`).
+        let mut j = i + 1;
+        if Self::punct_of(self.tok_at(j)) == Some(Punct::LParen)
+            && Self::punct_of(self.tok_at(j + 1)) == Some(Punct::RParen)
+        {
+            j += 2;
+        }
+        loop {
+            if self.tok_at(j).is_eof() {
+                return None;
+            }
+            match Self::punct_of(self.tok_at(j)) {
+                Some(Punct::Semi) => return Some(i),
+                Some(Punct::LBrace | Punct::RBrace | Punct::LParen) => return None,
+                _ => j += 1,
+            }
+        }
+    }
+
+    /// An access declaration ([`Parser::at_access_declaration`]): ill-formed
+    /// since C++11 (removed from [class.access]), deprecated in C++98
+    /// ([depr.access.dcl]). Reported
+    /// at the unqualified-id as clang does, and recovered as the
+    /// using-declaration it means ([namespace.udecl]).
+    fn parse_access_declaration(&mut self, loc: Loc, name: usize) {
+        let at = self.tok_at(name).span.lo;
+        let id = if self.std >= kiln_lex::Std::Cxx11 {
+            DiagId::parse_access_decl
+        } else {
+            DiagId::parse_access_decl_deprecated
+        };
+        let d = self.s.diag(id, at);
+        self.emit(d);
+        self.trace(|_| "access_decl".to_owned());
+        self.parse_using_declaration(loc, false);
     }
 
     /// The part of a member-declarator after the declarator itself, up to
@@ -1532,7 +1603,7 @@ impl Parser<'_, '_> {
     /// (a special member, an implicit-int declarator, or a qualified
     /// member name) follows.
     fn at_member_without_type(&mut self) -> bool {
-        !self.at_special_declarator(DeclaratorContext::Member)
+        !self.at_special_declarator(DeclaratorContext::Member, false)
             && !self.at_implicit_int_declarator()
             && !self.at_qualified_member_declarator()
     }
@@ -1542,6 +1613,13 @@ impl Parser<'_, '_> {
         reason = "one member-declarator list, each kind handled inline"
     )]
     fn parse_member_declaration_inner(&mut self) {
+        if self.at_kw(Kw::Extension) {
+            // `__extension__ member-declaration`, silenced as a whole.
+            let entered = self.enter_extension();
+            self.parse_member_declaration_inner();
+            self.leave_extension(entered);
+            return;
+        }
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
@@ -1903,7 +1981,17 @@ impl Parser<'_, '_> {
     /// be empty ([class.ctor.general]/1, [class.dtor]/1, [class.conv.fct];
     /// clang's `isConstructorDeclarator` and friends). Unqualified
     /// constructors only in the class's own member-specification.
-    pub(crate) fn at_special_declarator(&mut self, ctx: DeclaratorContext) -> bool {
+    ///
+    /// `friend` is whether the decl-specifiers hold `friend`: an
+    /// unqualified constructor name is then never followed by a type
+    /// that is a dependent name without `typename` (clang's
+    /// `isConstructorDeclarator`, `ImplicitTypenameContext::No`), so
+    /// `friend C(T::fn)();` declares the friend function `T::fn`.
+    ///
+    /// CWG2237: in its own class the constructor name may be written as
+    /// a simple-template-id (`X<T>(...)`); valid before C++20, a warning
+    /// from C++20 ([`Parser::parse_cdtor_template_id`]).
+    pub(crate) fn at_special_declarator(&mut self, ctx: DeclaratorContext, friend: bool) -> bool {
         if !matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member) {
             return false;
         }
@@ -1915,8 +2003,21 @@ impl Parser<'_, '_> {
         let Some(n) = self.ident_of(t) else {
             return false;
         };
-        if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
+        let mut lp = i + 1;
+        if Self::punct_of(self.tok_at(lp)) == Some(Punct::Less) {
+            if last.is_some() || i != self.pos() || !self.names_own_class(n, ctx) {
+                return false;
+            }
+            match self.skip_template_args(lp) {
+                Some((close, false)) => lp = close + 1,
+                _ => return false,
+            }
+        }
+        if Self::punct_of(self.tok_at(lp)) != Some(Punct::LParen) {
             return false;
+        }
+        if lp != i + 1 {
+            return self.ctor_params_follow_in(lp, true, None, friend);
         }
         if i == self.pos() && self.deduction_guide_at(i).is_some() {
             return true;
@@ -1934,7 +2035,13 @@ impl Parser<'_, '_> {
             Some(_) => self.scan_name_qual_at(self.pos()).and_then(|(_, _, _, _, q)| q),
             None => None,
         };
-        self.ctor_params_follow_in(i + 1, last.is_none(), qual)
+        self.ctor_params_follow_in(i + 1, last.is_none(), qual, friend && last.is_none())
+    }
+
+    /// Whether `n` names the class being defined in context `ctx`, as an
+    /// unqualified constructor name ([class.ctor.general]/1).
+    fn names_own_class(&self, n: Symbol, ctx: DeclaratorContext) -> bool {
+        ctx == DeclaratorContext::Member && self.current_class_name() == Some(n)
     }
 
     /// [`Parser::ctor_params_follow`] with the scope of the declarator-id's
@@ -1955,13 +2062,14 @@ impl Parser<'_, '_> {
         lp: usize,
         unqualified: bool,
         qual: Option<DeclId>,
+        friend: bool,
     ) -> bool {
         let opaque = !unqualified
             && !qual.is_some_and(|q| {
                 matches!(self.s.ast.decls.get(q).kind(), DeclKind::CXXRecord | DeclKind::Namespace)
             });
         let entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
-        let r = self.ctor_params_follow(lp, unqualified, opaque);
+        let r = self.ctor_params_follow(lp, unqualified, opaque, friend);
         self.s.act_on_exit_declarator_scope(entered);
         r
     }
@@ -1981,7 +2089,13 @@ impl Parser<'_, '_> {
     /// `S (S::*pm)(int)`, `S (f)(int)` and `S ((int))` are declarators,
     /// and `S (X);` with `X` not a type is a constructor whose parameter
     /// type is unknown (clang 19).
-    pub(crate) fn ctor_params_follow(&self, lp: usize, unqualified: bool, opaque: bool) -> bool {
+    pub(crate) fn ctor_params_follow(
+        &self,
+        lp: usize,
+        unqualified: bool,
+        opaque: bool,
+        friend: bool,
+    ) -> bool {
         let j = lp + 1;
         let t = self.tok_at(j);
         match Self::punct_of(t) {
@@ -2008,8 +2122,9 @@ impl Parser<'_, '_> {
         let Some((end, class, _)) = self.scan_name(j) else { return opaque };
         // A name after a dependent qualifier is a type here (clang's
         // `ImplicitTypenameContext::Yes`, [temp.res.general]/4.3.2:
-        // `C<T>::C(T::type) {}`).
-        if matches!(class, NameClass::Dependent) {
+        // `C<T>::C(T::type) {}`); not after an unqualified friend's
+        // name (`friend C(T::fn)();`).
+        if matches!(class, NameClass::Dependent) && !friend {
             return true;
         }
         if self.ident_of(self.tok_at(end - 1)).is_none() {
@@ -2129,9 +2244,96 @@ impl Parser<'_, '_> {
         }
         let named = match last_qual {
             Some(q) => q == n,
-            None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
+            None => self.names_own_class(n, ctx),
         };
-        named && self.ctor_params_follow_in(self.pos() + 1, last_qual.is_none(), qual)
+        named && self.ctor_params_follow_in(self.pos() + 1, last_qual.is_none(), qual, false)
+    }
+
+    /// CWG2237: the unqualified constructor name `n<args>` at `n` in its
+    /// own class's member-specification, when a constructor's
+    /// parameter-declaration-clause follows the template-id
+    /// ([class.ctor.general]/1). A friend declaration never declares one
+    /// unqualified.
+    pub(crate) fn names_constructor_template_id(
+        &mut self,
+        n: Symbol,
+        ctx: DeclaratorContext,
+        friend: bool,
+    ) -> bool {
+        if friend || !self.peek_is(1, Punct::Less) || !self.names_own_class(n, ctx) {
+            return false;
+        }
+        let lp = match self.skip_template_args(self.pos() + 1) {
+            Some((close, false)) => close + 1,
+            _ => return false,
+        };
+        Self::punct_of(self.tok_at(lp)) == Some(Punct::LParen)
+            && self.ctor_params_follow_in(lp, true, None, false)
+    }
+
+    /// The template-arguments after a constructor or destructor name
+    /// `n` written as a simple-template-id, at the `<` (`X<T>()`,
+    /// `~X<T>()`, `X<T>::~X<T>()`; CWG2237, [class.ctor.general]/1,
+    /// [class.dtor]/1): the template-id must name `class` (the class
+    /// being declared, or the qualifier's class), else "expected the
+    /// class name after '~' to name the enclosing class" and false. From
+    /// C++20 the template-id is no longer allowed there: GCC's warning
+    /// `-Wtemplate-id-cdtor` ([`DiagId::ext_template_id_cdtor`], an
+    /// error under `-pedantic-errors`; clang 19 and 22 accept it
+    /// silently, spec/diag.md D18).
+    pub(crate) fn parse_cdtor_template_id(
+        &mut self,
+        n: Symbol,
+        nl: Loc,
+        class: Option<DeclId>,
+        dtor: Option<Loc>,
+    ) -> bool {
+        let at = dtor.unwrap_or(nl);
+        let named = self.s.classify_name(n, None);
+        // `~X<T>()` in `Z`: the name itself is not the class's, which the
+        // destructor's name check reports ([class.dtor]/1).
+        let other_name = dtor.is_some()
+            && match (&named, class) {
+                (NameClass::TypeTemplate(t), Some(c)) => {
+                    self.s.injected_template_of(c).map(|x| self.s.ast.first(x))
+                        != Some(self.s.ast.first(*t))
+                }
+                _ => false,
+            };
+        let ty = match self.parse_template_id_rest(named, n, nl) {
+            Ok(kiln_sema::templ::actions::TemplateIdRef::Type(t)) => Some(t),
+            _ => None,
+        };
+        let Some(ty) = ty else { return false };
+        if other_name {
+            return true;
+        }
+        // The class itself, or a partial specialization's own
+        // injected-class-name type (`P<T*>(int);` in `P<T*>`).
+        let is_class = class.is_some_and(|c| {
+            self.s.is_class_type_of(ty, c)
+                || self.s.injected_tag_type(c).is_some_and(|it| {
+                    let types = &self.s.ast.types;
+                    types.canonical(it).ty() == types.canonical(ty).ty()
+                })
+        });
+        if !is_class {
+            // `~Y<int>()` / `X<int>()` in `X<T>`: not the class itself
+            // (GCC rejects both; clang accepts the constructor form).
+            let id = if dtor.is_some() {
+                DiagId::sema_dtor_class_name
+            } else {
+                DiagId::parse_expected_unqualified_id
+            };
+            self.s.error(id, at);
+            return false;
+        }
+        if self.std >= kiln_lex::Std::Cxx20 {
+            let which = u8::from(dtor.is_some()).to_string();
+            let d = self.s.diag(DiagId::ext_template_id_cdtor, at).arg(which);
+            self.s.emit(d);
+        }
+        true
     }
 
     /// A destructor or operator-function-id / conversion-function-id
@@ -2151,17 +2353,31 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// At `~` of a destructor declarator-id: `~X`, `~X<T>` (CWG2237).
+    fn parse_destructor_declarator_id(&mut self, d: &mut Declarator, loc: Loc) {
+        self.bump();
+        let Some(n) = self.ident() else {
+            self.error_here(DiagId::parse_destructor_tilde_identifier);
+            d.invalid = true;
+            return;
+        };
+        let nl = self.bump().span.lo;
+        d.special = Some((SpecialName::Destructor(n), loc));
+        if self.at(Punct::Less) {
+            // `~X<T>()`, `X<T>::~X<T>()` (CWG2237).
+            let class = d.qualifier.or_else(|| {
+                (d.ctx == DeclaratorContext::Member).then(|| self.current_class_record()).flatten()
+            });
+            if !self.parse_cdtor_template_id(n, nl, class, Some(loc)) {
+                d.invalid = true;
+            }
+        }
+    }
+
     pub(crate) fn parse_special_declarator_id(&mut self, d: &mut Declarator) {
         let loc = self.loc();
         if self.at(Punct::Tilde) {
-            self.bump();
-            if let Some(n) = self.ident() {
-                self.bump();
-                d.special = Some((SpecialName::Destructor(n), loc));
-            } else {
-                self.error_here(DiagId::parse_destructor_tilde_identifier);
-                d.invalid = true;
-            }
+            self.parse_destructor_declarator_id(d, loc);
             return;
         }
         self.bump();

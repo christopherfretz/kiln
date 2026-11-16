@@ -982,7 +982,17 @@ impl Substituter<'_, '_, '_> {
         // template-id is resolved over the whole set (reflect-cpp's
         // `Literal::contains(const std::string&)` beside
         // `template <StringLiteral> contains()`).
-        let t = found.decls.iter().find_map(|&x| self.sema.template_of(x));
+        // An injected-class-name followed by `<` names its class template
+        // ([temp.local]/1): `d.template D<T>::template B<T>::f()` with `B`
+        // found as the injected-class-name of the base `B<int>`, and
+        // `A<T>::template A<T>::type` (CWG1835, WP-1466).
+        let t = found.decls.iter().find_map(|&x| self.sema.template_of(x)).or_else(|| {
+            found.decls.iter().find_map(|&x| {
+                (self.sema.kind_of(x) == DeclKind::CXXRecord)
+                    .then(|| self.sema.injected_template_of(x))
+                    .flatten()
+            })
+        });
         if let Some(t) = t {
             // [class.access]/4: a member class or alias template is
             // checked now (a SFINAE failure in a deduction); a function

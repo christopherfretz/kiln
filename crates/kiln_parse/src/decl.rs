@@ -204,30 +204,29 @@ impl Parser<'_, '_> {
         self.pch_key_end(note);
     }
 
-    /// `__extension__` before an alias- or using-declaration (libc++
-    /// `__extension__ using __calc_type = unsigned __int128;`) or a
-    /// template declaration (libstdc++ `__extension__ template<> struct
-    /// __is_integer_nonstrict<__int128>`, WP-237): the GNU
-    /// keyword only silences extension diagnostics, so it is dropped and
-    /// the declaration parsed as usual (clang skips it in
+    /// Consumes a run of GNU `__extension__` keywords before a
+    /// declaration or a statement and silences extension diagnostics
+    /// until [`Self::leave_extension`] (clang's `ExtensionRAIIObject` in
     /// `ParseExternalDeclaration`, `ParseCXXClassMemberDeclaration` and
-    /// `ParseCompoundStatementBody`). Elsewhere it stays a decl-specifier
-    /// or the unary operator.
-    pub(crate) fn skip_extension_before_using(&mut self) {
-        self.skip_extension_before(&[Kw::Using, Kw::Template]);
+    /// `ParseCompoundStatementBody`; spec/parse.md "`__extension__`").
+    /// Returns whether it did; at any other token, nothing happens.
+    pub(crate) fn enter_extension(&mut self) -> bool {
+        if !self.at_kw(Kw::Extension) {
+            return false;
+        }
+        while self.at_kw(Kw::Extension) {
+            self.bump();
+        }
+        let n = &self.s.extensions_silenced;
+        n.set(n.get() + 1);
+        true
     }
 
-    /// Drops the `__extension__` keywords before a declaration starting
-    /// with one of `kws`.
-    fn skip_extension_before(&mut self, kws: &[Kw]) {
-        let mut n = 0;
-        while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
-            n += 1;
-        }
-        if n > 0 && self.kw_of(self.peek(n)).is_some_and(|k| kws.contains(&k)) {
-            for _ in 0..n {
-                self.bump();
-            }
+    /// Ends what [`Self::enter_extension`] began, when `entered`.
+    pub(crate) fn leave_extension(&mut self, entered: bool) {
+        if entered {
+            let n = &self.s.extensions_silenced;
+            n.set(n.get().saturating_sub(1));
         }
     }
 
@@ -235,9 +234,14 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return;
         }
-        // At namespace scope also before an asm-declaration (libstdc++
-        // `__extension__ asm(...)`); not in a class or block, as clang.
-        self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
+        // `__extension__ declaration` (libstdc++ `__extension__ asm(...)`,
+        // `__extension__ template<> struct ...`): the declaration that
+        // follows, with extension diagnostics silenced.
+        if self.enter_extension() {
+            self.parse_external_declaration_inner();
+            self.leave_extension(true);
+            return;
+        }
         if self.take_fp_pragmas(FpAt::File) && (self.at(Punct::RBrace) || self.at_eof()) {
             return;
         }
@@ -664,7 +668,11 @@ impl Parser<'_, '_> {
     /// `[typename] nested-name-specifier unqualified-id [...]`, here
     /// optionally followed by an attribute-specifier-seq (a clang
     /// extension for `using_if_exists`).
-    fn parse_using_declaration(&mut self, using_loc: Loc, leading_if_exists: bool) -> Vec<DeclId> {
+    pub(crate) fn parse_using_declaration(
+        &mut self,
+        using_loc: Loc,
+        leading_if_exists: bool,
+    ) -> Vec<DeclId> {
         let mut out = Vec::new();
         loop {
             let typename = self.eat_kw(Kw::Typename).is_some();
@@ -914,7 +922,7 @@ impl Parser<'_, '_> {
             }
             if !ds.has_type_specifier()
                 && self.template_scope_end(self.pos()).is_some()
-                && !self.at_special_declarator(ctx)
+                && !self.at_special_declarator(ctx, ds.friend.is_some())
             {
                 // `X<A>::name` / `td::name` whose scope the lookahead
                 // cannot look into: parse the scope first. Not
@@ -937,7 +945,7 @@ impl Parser<'_, '_> {
             }
             if self.at(Punct::ColonColon) || self.ident().is_some() {
                 if ds.has_type_specifier()
-                    || self.at_special_declarator(ctx)
+                    || self.at_special_declarator(ctx, ds.friend.is_some())
                     || !self.parse_type_name_spec(&mut ds, ctx)
                 {
                     break;
@@ -3186,7 +3194,19 @@ impl Parser<'_, '_> {
                 entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
-                let ctor = self.names_constructor(n, last_qual, qual, d.ctx);
+                // In a friend declaration with a type specifier the name
+                // is no constructor (clang's `ParseDirectDeclarator`,
+                // `AllowConstructorName`): `friend void S(T);` in class
+                // `S` befriends a function. A member `int S();` stays a
+                // constructor with a return type (an error).
+                let ctor =
+                    !(d.typed && d.friend) && self.names_constructor(n, last_qual, qual, d.ctx);
+                // CWG2237: `X<T>(...)` in class `X`.
+                let ctor_tid = !ctor
+                    && !d.typed
+                    && qual.is_none()
+                    && self.names_constructor_template_id(n, d.ctx, d.friend);
+                let ctor = ctor || ctor_tid;
                 let guide = if ctor
                     || d.typed
                     || qual.is_some()
@@ -3197,6 +3217,12 @@ impl Parser<'_, '_> {
                     self.deduction_guide_at(self.pos())
                 };
                 let l = self.bump().span.lo;
+                if ctor_tid {
+                    let class = self.current_class_record();
+                    if !self.parse_cdtor_template_id(n, l, class, None) {
+                        d.invalid = true;
+                    }
+                }
                 if ctor {
                     d.special = Some((SpecialName::Constructor(n), l));
                 } else if let Some(t) = guide {
@@ -4620,7 +4646,7 @@ impl Parser<'_, '_> {
     /// a declarator without a type declared as an invalid `int` (clang's
     /// `err_missing_type_specifier`).
     fn at_declarator_without_specifiers(&mut self, ctx: DeclaratorContext) -> bool {
-        self.at_special_declarator(ctx)
+        self.at_special_declarator(ctx, false)
             || (ctx == DeclaratorContext::File
                 && (self.at_implicit_int_declarator()
                     || self.at_qualified_implicit_int_declarator()))
@@ -4684,10 +4710,25 @@ impl Parser<'_, '_> {
         level: usize,
     ) -> Vec<DeclId> {
         let tmpl_kind = self.template_decl_kind.take();
+        let start = self.pos();
         let mut ds = self.parse_decl_specifiers(ctx);
         let mut tmpl_group = self.template_group(tmpl_kind);
         let mut decls: Vec<DeclId> = ds.tag.filter(|_| ds.tag_declares).into_iter().collect();
         if self.at(Punct::Semi) {
+            if ctx == DeclaratorContext::File
+                && ds.is_empty()
+                && ds.tag.is_none()
+                && ds.attrs.is_empty()
+                && self.pos() > start
+            {
+                // `[[]] [[]];`, `__attribute__(()) [[]];`: an
+                // attribute-declaration whose specifiers are all empty
+                // ([dcl.pre]/10) declares nothing, silently (clang 22,
+                // GCC 16.1; WP-1466).
+                self.bump();
+                self.s.end_delayed_access_to(level, None);
+                return decls;
+            }
             self.prohibit_free_standing_lead_attrs(&mut ds, ctx);
             self.bump();
             decls.extend(self.s.act_on_decl_spec_only(&ds));

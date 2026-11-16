@@ -176,7 +176,7 @@ macro_rules! sema_fields {
                 reverse_using_shadows, declarator_int_recovery, declarator_field,
                 declarator_distant_exc, pattern_member_access, base_annotation_packs, friend_tag,
                 friend_class_template, extraneous_tag_head, nested_tag, inst_enable_if,
-                declspec_nulls, image_texprs, bmi],
+                declspec_nulls, image_texprs, bmi, extensions_silenced],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
                 cand_scratch, deduce_scratch],
             rebuilt: [spare_oven, classify_memo],
