@@ -160,6 +160,10 @@ Planned as 1.3.0.
   leaves the link line as before; below C++26 it is still added only
   with `-f[no-]contracts`.
 
+- `-fno-elide-constructors` is accepted before C++17 (WP-1503): the
+  copies C++98 to C++14 allow to be elided are now built, and the flag
+  makes them, as clang does. By default they are still elided.
+
 ### Fixed
 
 - Expansion statements and related checks, found running GCC's C++
@@ -799,6 +803,19 @@ Planned as 1.3.0.
   an implicit copy or move assignment operator, report "packs of
   different lengths" and the value of an `explicit(b)` guide, and alias
   guides print no `<null expr>` default arguments.
+
+- Found running GCC's C++ testsuite (WP-1503, WP-1504, WP-1511): a
+  single-inheritance chain of any depth gets its vtables (the builder
+  ran out of fuel past about 250 classes, and virtual-base walks stopped
+  at depth 256); `static int a[10] = {a[3] = 5}` is initialized
+  dynamically as clang does instead of being folded to a constant that
+  dropped the store; copy-initialization with an explicit copy
+  constructor reports an array structured binding at clang's location,
+  naming the array type, and adds the parameter note for a function
+  argument; `-fcontracts-client-check=pre|all` compiles calls with
+  `_Complex` arguments or results and checks the allocation and
+  deallocation functions of new- and delete-expressions, as GCC 16.1
+  does.
 
 ## [1.2.1] - 2026-11-14
 

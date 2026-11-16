@@ -1673,7 +1673,7 @@ impl Oven {
     /// gives a subobject its value as it is initialized, in order, so one
     /// not reached yet is absent: "outside its lifetime" (`constexpr P
     /// p{p.y, 1};`).
-    fn unbegun_init_object(&self, a: &crate::mem::Alloc, p: u64) -> bool {
+    pub(crate) fn unbegun_init_object(&self, a: &crate::mem::Alloc, p: u64) -> bool {
         let Origin::Var(d) = a.origin else { return false };
         if self.run.object != Some(d) {
             return false;

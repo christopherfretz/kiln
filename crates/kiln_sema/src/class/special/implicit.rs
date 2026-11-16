@@ -21,6 +21,12 @@ use crate::class::r#virtual::is_virtual;
 /// (a cycle is impossible for complete classes; this bounds the stack).
 const MAX_DEPTH: usize = 256;
 
+/// How deep [`Sema::virtual_bases`] walks: the vtable builder's
+/// `MAX_DYNAMIC_DEPTH`, so a class whose vtable is built has all its
+/// virtual bases constructed and destroyed (a shallower walk silently
+/// dropped the virtual base of a 300-deep chain; WP-1511).
+const VBASE_DEPTH: usize = 4096;
+
 /// Whether `k` is declared, given the definition bits and the
 /// implicitly-declared set (clang `DeclaredSpecialMembers`).
 fn declared(bits: DefinitionBits, implicit: u8, k: SpecialKind) -> bool {
@@ -305,7 +311,7 @@ impl Sema<'_, '_> {
         walked: &mut FxHashSet<DeclId>,
         depth: usize,
     ) {
-        if depth > MAX_DEPTH {
+        if depth > VBASE_DEPTH {
             return;
         }
         let bases: Vec<BaseSpec> = self.ast.decls.bases(r, &self.ast.lists).copied().collect();

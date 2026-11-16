@@ -396,7 +396,12 @@ impl Sema<'_, '_> {
             Initializer::Expr(_) => conv::ConvCtx::Initialization,
             Initializer::Paren(..) | Initializer::List(_) => conv::ConvCtx::DirectInitialization,
         };
-        let init = match self.init_decomp_elements(ty, e, ctx, loc) {
+        // A failed element initialization is reported at the declaration
+        // and names the array (clang: the entity is the decomposition).
+        let at = self.ast.decls.get(v).loc();
+        let built = self.init_decomp_elements(ty, e, ctx, (loc, at, ty));
+        self.ctor_diag_ty = None;
+        let init = match built {
             Ok(x) => x,
             Err(()) => self.recover_err(&[e], loc),
         };
@@ -414,13 +419,15 @@ impl Sema<'_, '_> {
     /// resolution in context `ctx` (copy- or direct-initialization from
     /// an lvalue element, [dcl.init.general]/16.6.2) rather than by the
     /// copy constructor alone; any other element as
-    /// [`Self::init_subobject_from`] does.
+    /// [`Self::init_subobject_from`] does. `(loc, at, whole)`: the
+    /// location of the nodes, and the location and type a failed class
+    /// element's diagnostic names.
     fn init_decomp_elements(
         &mut self,
         ty: QualType,
         arg: ExprId,
         ctx: conv::ConvCtx,
-        loc: Loc,
+        (loc, at, whole): (Loc, Loc, QualType),
     ) -> Result<ExprId, ()> {
         let t = &self.ast.types;
         if t.is_array(ty) {
@@ -439,17 +446,19 @@ impl Sema<'_, '_> {
             let ety = self.ast.types.pointee(pty).unwrap_or(QualType::ERROR);
             let sub = self.builder().subscript(decayed, idx, ety, loc);
             let elem_ty = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
-            let elem = self.init_decomp_elements(elem_ty, sub, ctx, loc)?;
+            let elem = self.init_decomp_elements(elem_ty, sub, ctx, (loc, at, whole))?;
             return Ok(self.builder().array_init_loop(ty, ove, elem));
         }
         let class = t.as_record(ty).and_then(|r| self.ast.definition(r));
         if class.is_none_or(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) {
             return self.init_subobject_from(ty, arg, InitEntity::Var, loc);
         }
-        match self.class_init_from_expr(ty, arg, ctx, loc) {
-            Some(x) => Ok(x),
-            None => self.init_subobject_from(ty, arg, InitEntity::Var, loc),
+        self.ctor_diag_ty = Some(whole);
+        if let Some(x) = self.class_init_from_expr(ty, arg, ctx, at) {
+            return Ok(x);
         }
+        self.ctor_diag_ty = None;
+        self.init_subobject_from(ty, arg, InitEntity::Var, loc)
     }
 
     /// A decomposition declared without an initializer

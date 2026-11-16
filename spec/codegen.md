@@ -2696,13 +2696,15 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   `T(...)`, a converting constructor template, an initializer-list
   constructor or a conversion function; the CWG2327 practice of clang and
   GCC, which the working draft does not yet permit); C++14
-  [class.copy]/31.3 permits it. A base-class initializer (not a complete
+  [class.copy]/31.3 permits it. Before C++17 it is also every copy of a
+  temporary sema builds as an elidable constructor call
+  (spec/sema-class.md §5.5: `T x = T();`, returns, arguments, thrown
+  objects, conditional expressions, array elements). A base-class initializer (not a complete
   object) copies, as clang does (GCC 16.1 elides there too). The Oven
   elides the same copies when the argument is a `MaterializeTemporaryExpr`
   (clang's constant evaluator), so a counting copy constructor agrees at
   compile time and run time. `-fno-elide-constructors`
-  (`CodegenOptions::elide_constructors`, C++17 and later) turns these
-  and NRVO off; the Oven is unaffected, as in clang.
+  (`CodegenOptions::elide_constructors`) turns these and NRVO off; the Oven is unaffected, as in clang.
 - **Arrays of classes** (`EmitCXXAggrConstructorCall`): an
   `arrayctor.loop` with a `phi`, one element at a time, and an
   `arraydestroy` loop on cleanup. Variable-length arrays of classes
@@ -4420,6 +4422,35 @@ Linux targets; `Cg::frame_pointer` applies it.
   `kiln_driver` `frame_pointer_flags_last_win`,
   `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
   (exact under oracle 19 on both targets).
+
+### Caller-side contract checks (WP-1504)
+Which calls `-fcontracts-client-check=pre|all` checks in the caller
+(spec/contracts.md §6.1, §6.3), established against GCC 16.1 with the
+callee compiled under `-fcontracts-definition-check=off` and a handler
+that prints the call it reports:
+
+| Call | GCC 16.1 | kiln |
+|---|---|---|
+| direct call of a function or member function, `_Complex` arguments or result included | checked | checked |
+| overloaded operator (binary, compound assignment, `[]`, `()`, `->`, copy assignment), an explicit `x.operator+=(..)` | checked | checked |
+| rewritten or synthesized comparison (`!=` through `==`, reversed `==`, `<` through `<=>`) | checked | checked |
+| conversion function (implicit, `static_cast`, contextual `bool`, copy-initialization of a class) | checked | checked |
+| user-defined literal | checked | checked |
+| range-for `begin`/`end` | checked | checked |
+| allocation and deallocation function of a new- or delete-expression (class-specific, array, placement), and the deallocation when the initialization of a new-expression throws | checked | checked (`emit_new_delete_call`) |
+| constructor, destructor (implicit or an explicit `t.~T()`) | not checked | not checked (`Cg::client_checked`) |
+| call through a pointer to function or member function, virtual call | not checked | not checked |
+| a member function template specialization declared in the unit but not defined there, directly or as a structured binding's `get` | checked | *not checked*: its assertions are instantiated with its definition only (`Substituter::function_contracts`) |
+| the same for a member of a class template | internal compiler error | *not checked*, as above |
+
+The checks bind each parameter to the argument the callee gets: a
+`_Complex` one is stored to a temporary of its type (`cx_store`), and a
+`_Complex` result is taken from the call's result pair, which is kept
+across the checks (`emit_client_pre`, `emit_client_post`;
+`client_checks_of_complex_arguments_and_results` in
+`crates/kiln_codegen/tests/contracts.rs` on both targets,
+`basic.contract.eval/run-client-check-complex.cpp` and
+`run-client-check-new-delete.cpp`).
 
 ### Freestanding `main` (WP-1456)
 Under `-ffreestanding` `main` is an ordinary function (clang's

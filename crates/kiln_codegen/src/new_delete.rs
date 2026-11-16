@@ -360,6 +360,14 @@ impl Cg<'_> {
         {
             ret_align = Some(n as u64);
         }
+        // GCC 16.1 checks the allocation and deallocation function a
+        // new- or delete-expression calls in the caller too, the cleanup
+        // of a new-expression included (spec/codegen.md, "Caller-side
+        // contract checks").
+        let client = match self.client_checked(d) {
+            Some(d) => Some(self.emit_client_pre(d, None, vals)?),
+            None => None,
+        };
         let (ret, params) = self.sig_attrs(&sig, vals.len(), false);
         let mut fa = Vec::new();
         if af.replaceable {
@@ -402,6 +410,9 @@ impl Cg<'_> {
         );
         if af.replaceable && af.is_new {
             self.alloc_align_assume(d, vals, r);
+        }
+        if let Some(b) = client {
+            self.emit_client_post(b, (rty != LTy::VOID).then_some(r), None)?;
         }
         Ok(r)
     }

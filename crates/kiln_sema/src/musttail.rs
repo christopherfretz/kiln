@@ -180,6 +180,9 @@ impl Sema<'_, '_> {
                 | ExprKind::ConstantExpr
                 | ExprKind::MaterializeTemporaryExpr
                 | ExprKind::CXXBindTemporaryExpr => e = exprs.operand(e),
+                // clang `IgnoreElidableCopyConstructors`: the copy of the
+                // result before C++17.
+                ExprKind::CXXConstructExpr => e = self.ast.elidable_copy_source(e)?,
                 ExprKind::CallExpr
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXOperatorCallExpr => {

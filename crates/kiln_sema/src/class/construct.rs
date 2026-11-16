@@ -112,9 +112,12 @@ impl Sema<'_, '_> {
                 // from the temporary, a copy that may be elided
                 // ([class.copy.elision]/1.3 in C++14): the constructor
                 // must still be usable (clang `CXXConstructExpr` marked
-                // elidable). The prvalue itself initializes the object.
-                self.check_elided_ctor(e, to, ctx, entity_at, deleted_as);
-                return Some(e);
+                // elidable), and the copy is built; codegen and the Oven
+                // elide it (`Ast::elidable_copy_source`) unless
+                // `-fno-elide-constructors`.
+                return Some(
+                    self.check_elided_ctor(e, to, ctx, entity_at, deleted_as).unwrap_or(e),
+                );
             }
         }
         let k =
@@ -245,9 +248,13 @@ impl Sema<'_, '_> {
         Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
     }
 
-    /// The move constructor (C++11/14) that copy-initializing a `to`
-    /// object from prvalue `e` of the same class would call: resolved,
-    /// checked and diagnosed as a construction, then dropped.
+    /// The copy or move constructor call (C++98 to C++14) that
+    /// copy-initializing a `to` object from prvalue `e` of the same class
+    /// makes, a copy that may be elided ([class.copy.elision]/1.3 in
+    /// C++14): resolved, checked and diagnosed as a construction, and
+    /// built over the materialized `e` (spec/sema-class.md §5.5). `None`
+    /// from C++17 on (guaranteed elision), for a dependent `e`, and when
+    /// the constructor is not usable (diagnosed).
     pub(crate) fn check_elided_ctor(
         &mut self,
         e: ExprId,
@@ -255,16 +262,14 @@ impl Sema<'_, '_> {
         ctx: ConvCtx,
         entity_at: Loc,
         deleted_as: DeletedAs,
-    ) {
+    ) -> Option<ExprId> {
         // Also in an unevaluated operand (clang builds the elidable
         // `CXXConstructExpr` there too): its access and deletion are
         // checked, and `noexcept` sees it.
         if self.std >= kiln_lex::Std::Cxx17 || self.expr_is_type_dependent(e) {
-            return;
+            return None;
         }
-        let Some(class) = self.ast.types.as_record(to).and_then(|r| self.ast.definition(r)) else {
-            return;
-        };
+        let class = self.ast.types.as_record(to).and_then(|r| self.ast.definition(r))?;
         let at = self.begin_loc(e);
         let (variable, direct) = match ctx {
             ConvCtx::Initialization => (true, false),
@@ -287,7 +292,10 @@ impl Sema<'_, '_> {
         if let Selected::Found(c) | Selected::Deleted(c) = sel {
             let _ = self.elided_ctors.insert(e, c);
         }
-        let _ = self.use_ctor(sel, to, class, SpecialKind::MoveCtor, call, loc, entity, sites);
+        // A parameter's copy is a bound temporary, as a built one is
+        // (clang `shouldBindAsTemporary`): the caller destroys it.
+        let c = self.use_ctor(sel, to, class, SpecialKind::MoveCtor, call, loc, entity, sites)?;
+        Some(if ctx == ConvCtx::Argument { self.maybe_bind_temporary(c) } else { c })
     }
 
     /// The entity of the outermost constructor call being built: the

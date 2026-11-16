@@ -629,7 +629,7 @@ impl Sema<'_, '_> {
         walked: &mut FxHashSet<DeclId>,
         depth: usize,
     ) -> Option<u32> {
-        if depth > 1024 {
+        if depth > 4096 {
             return None;
         }
         for (i, b) in self.indexed_bases(r) {
@@ -1337,6 +1337,8 @@ impl Sema<'_, '_> {
                     DeletedAs::Conversion(n) => (true, n, None),
                     DeletedAs::Return => (true, None, None),
                     DeletedAs::Cast(_, c) => (false, None, Some(c)),
+                    // clang `PrintInitLocationNote` for a parameter.
+                    DeletedAs::Param(n) => (false, Some(n), None),
                     _ => (false, None, None),
                 };
                 let msg = if let Some(c) = cast

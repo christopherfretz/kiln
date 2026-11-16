@@ -445,7 +445,16 @@ pays nothing for it.
     the subobject is absent. A scalar variable's self-reference still
     reads the `RESOLVING` placeholder. Corpus:
     `expr.const/initializer-reads-own-member{,-local,-calls}.cpp`,
-    `expr.const/initializer-reads-unbegun-member.cpp`.
+    `expr.const/initializer-reads-unbegun-member.cpp`. An assignment (a
+    plain store or a class copy, not an initialization) to such a
+    subobject, none of whose bytes is initialized yet, is "assignment to
+    object outside its lifetime" (`vm.rs` `unbegun_write`, WP-1503):
+    `static int a[10] = {a[3] = 5};` is then initialized dynamically, as
+    clang does, instead of folding to a value that lost the store
+    (`expr.const/assignment-to-unbegun-element-of-own-init.cpp`,
+    `basic.life/own-init-assignment-dynamic{,-O2}-run.cpp`). The same
+    write to a local variable from its own initializer in a constexpr
+    function is not diagnosed yet (WP-1503 remainder).
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
   - **Trial-fold fast path** (WP-656, `leaf.rs`): an outermost

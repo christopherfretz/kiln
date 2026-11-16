@@ -1559,7 +1559,7 @@ impl Cg<'_> {
         have: &mut FxHashSet<DeclId>,
     ) {
         let ast = self.ast;
-        if depth > 1024 {
+        if depth > 4096 {
             return;
         }
         let bases: Vec<(QualType, bool)> =

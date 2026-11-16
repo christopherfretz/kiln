@@ -5011,13 +5011,21 @@ impl Sema<'_, '_> {
             // [expr.cond]/7: a class glvalue arm copy-initializes the
             // result prvalue (clang `PerformCopyInitialization` of an
             // `InitializeTemporary` entity per arm): its copy or move
-            // constructor runs.
+            // constructor runs. Before C++17 a prvalue arm does too, a
+            // copy that may be elided (spec/sema-class.md §5.5).
             let mut arms = [t2, f2];
+            let pre17 = self.std < kiln_lex::Std::Cxx17;
             for a in &mut arms {
-                if !self.ast.exprs.get(*a).value_category().is_glvalue() {
+                let glvalue = self.ast.exprs.get(*a).value_category().is_glvalue();
+                if !pre17 && !glvalue {
                     continue;
                 }
                 match conv::implicit_convert(self, *a, ty, ConvCtx::Initialization) {
+                    // The elidable copy of a prvalue arm is bound as the
+                    // arm was (clang: a bound `InitializeTemporary`).
+                    Ok(x) if !self.is_err_expr(x) && !glvalue && x != *a => {
+                        *a = self.maybe_bind_temporary(x);
+                    }
                     Ok(x) if !self.is_err_expr(x) => *a = x,
                     Ok(_) => return self.recover_err(&[c, t, f], loc),
                     Err(err) => return self.conv_failed(&err, t, f, loc),

@@ -81,6 +81,8 @@ limit, `-faligned-new=N`, `-fcheck-new`).
 
 WP-1484 fixed `eh/init-temp1.C` (elidable copies of a prvalue are elided, and a virtual base is destroyed when a temporary in its own initializer throws) and added `-f[no-]elide-constructors` from C++17; `init/copy3.C` (C++14 and earlier) remains.
 
+WP-1503 fixed `init/copy3.C` (the copies C++98 to C++14 may elide are built and elided, and `-fno-elide-constructors` is accepted there): the wrong-code subset went from 147 to 148 passing cases, none going from pass to fail; in `g++.dg/contracts` (100 passing before and after) caller-side checks now also cover `_Complex` calls and new/delete's allocation functions, and `expr.prim.id.unqual.p7.C` passes (`p7-2.C` differs only in the line of the lambda-call error: clang's convention).
+
 WP-1457 fixed cluster 1 (dynamic exception specifications filter at run time in C++98 to C++14; C++98 destructors and class-specific `operator delete` may throw): its 14 tests went from 23 wrong cases to 0.
 
 Clang fails 58 of these tests too. Many of those depend on GCC-specific

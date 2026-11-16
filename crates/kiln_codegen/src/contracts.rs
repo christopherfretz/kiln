@@ -168,11 +168,12 @@ impl Cg<'_> {
                     a
                 }
                 CallArg::Agg(a) => a,
-                CallArg::Complex(..) => {
-                    return err(
-                        Some(ast.decls.get(p).loc()),
-                        "cannot compile a caller-side contract check of a _Complex argument yet",
-                    );
+                CallArg::Complex(re, im) => {
+                    let mt = self.mty(pq);
+                    let (_, align) = self.size_align(pq);
+                    let a = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
+                    self.cx_store((re, im), a, pq);
+                    a
                 }
             };
             addrs.push(a);
@@ -226,6 +227,9 @@ impl Cg<'_> {
                 .and_then(|t| ast.types.proto(t))
                 .map(kiln_ast::types::FuncProto::ret);
             let mut slot = None;
+            // A complex result is in `cx_ret`, which a call in a check
+            // would overwrite.
+            let cx = self.f.cx_ret;
             let t = self.client_terminate_scope(b.d);
             for s in self.contracts_of(b.d, ContractKind::Post) {
                 if let Some(n) = ast.stmts.contract_result_name(s) {
@@ -239,6 +243,13 @@ impl Cg<'_> {
                                 Some(a)
                             }
                             (None, Some(a), _) => Some(a),
+                            (None, None, Some(rq)) if cx.is_some() && self.is_complex(rq) => {
+                                let mt = self.mty(rq);
+                                let (_, align) = self.size_align(rq);
+                                let a = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
+                                self.cx_store(cx.expect("checked"), a, rq);
+                                Some(a)
+                            }
                             _ => {
                                 return err(
                                     Some(ast.stmts.get(s).loc()),
@@ -256,6 +267,7 @@ impl Cg<'_> {
             if t {
                 self.pop_terminate();
             }
+            self.f.cx_ret = cx;
         }
         for (k, old) in res.into_iter().rev().chain(b.saved.into_iter().rev()) {
             match old {

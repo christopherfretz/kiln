@@ -2280,8 +2280,8 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   `CXXConstructExpr` is formed. Before C++17 the copy is only elidable
   ([class.copy.elision]/1.3): the move (or copy) constructor it would call
   is still resolved and checked for deletion and access in
-  copy-initializations, returns and arguments (`check_elided_ctor`), and
-  then dropped (WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`).
+  copy-initializations, returns and arguments (`check_elided_ctor`;
+  WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`).
   Unevaluated operands are checked too, as clang builds the elidable
   `CXXConstructExpr` there, and the selected constructor is recorded
   against the prvalue (`Sema::elided_ctors`, empty from C++17 on) so
@@ -2289,13 +2289,24 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   ([except.spec]/6; `can_throw`; WP-1496,
   `class.copy.elision/elidable-ctor-unevaluated-cxx14.cpp`,
   `expr.unary.noexcept/cxx14-elidable-copy.cpp`). The copy itself is
-  still not built, so `-fno-elide-constructors` stays rejected before
-  C++17 (spec/driver.md): building it means wrapping the prvalue in the
-  `CXXConstructExpr` that `check_elided_ctor` forms (over a
-  `MaterializeTemporaryExpr`) at its two call sites, and checking that
-  `Ast::elidable_copy_source` elides every such shape in codegen and the
-  Oven (returns, arguments, `throw`, mem-initializers, the conditional
-  operator's arms) so default IR stays unchanged.
+  built (WP-1503): `check_elided_ctor` returns the `CXXConstructExpr`
+  it forms over the materialized prvalue, and its two call sites
+  (`construct_from_class_in`, and `implicit_convert` for returns,
+  arguments and copy-initializations) return it in place of the
+  prvalue. It needs no flag: `Ast::elidable_copy_source` recognizes it
+  (a complete-object copy or move constructor whose argument is a
+  same-class prvalue), and codegen and the Oven construct the prvalue
+  in the destination instead. An argument's copy, and a prvalue
+  conditional arm's, is bound (`CXXBindTemporaryExpr`) as clang binds
+  it, so the caller still destroys the object; `musttail` and codegen's
+  return path look through the copy. Default IR is unchanged except
+  where the elided copy now follows clang's C++14 output (a closure
+  copy-initialized from a lambda is no longer copied from a constant,
+  an aggregate conditional's cleanups); under
+  `-fno-elide-constructors` codegen makes the copy, as clang does
+  (`class.copy.elision/elidable-copy-counts-*-run.cpp`, C++98/11/14
+  with and without the flag). From C++17 on nothing is built, and
+  before it only where a copy can be elided.
 - **No elision into a base or delegating target** (CWG2403; clang
   `RequireActualConstructor`, WP-158): a prvalue initializing a base
   subobject (a mem-initializer, or an aggregate's base element, whose

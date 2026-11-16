@@ -13,8 +13,8 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::VTableError;
 use super::classes::{
-    Classes, all_overridden, can_share_vcall_offset, implicit_rank, is_dtor, is_implicit, is_pure,
-    parent, record_of, return_type,
+    Classes, can_share_vcall_offset, implicit_rank, is_dtor, is_implicit, is_pure, parent,
+    record_of, return_type,
 };
 use super::overriders::{FinalOverriders, OverriderInfo};
 
@@ -356,8 +356,8 @@ impl VTableBuilder<'_, '_> {
         let (Some(drd), Some(brd)) = (record_of(ast, dp), record_of(ast, bp)) else {
             return Err(VTableError::Incomplete);
         };
-        let paths = self.cx.paths(drd)?;
-        let e = paths.iter().find(|e| e.class == brd).ok_or(VTableError::Incomplete)?;
+        let paths = self.cx.paths_to(drd, brd)?;
+        let e = paths.first().ok_or(VTableError::Incomplete)?;
         Ok(BaseOffset { derived: Some(drd), vbase: e.vbase, nv: e.nv })
     }
 
@@ -370,9 +370,9 @@ impl VTableBuilder<'_, '_> {
         if base.0 == derived.0 {
             return Err(VTableError::Incomplete);
         }
-        let paths = self.cx.paths(derived.0)?;
+        let paths = self.cx.paths_to(derived.0, base.0)?;
         let mut found = false;
-        for e in paths.iter().filter(|e| e.class == base.0) {
+        for e in &paths {
             found = true;
             let off = e.nv
                 + match e.vbase {
@@ -472,7 +472,8 @@ impl VTableBuilder<'_, '_> {
         if layout_off == first_off || parent(ast, overrider) == first_base {
             return Ok(true);
         }
-        let mut chain = vec![first_base];
+        let mut chain: FxHashSet<DeclId> = FxHashSet::default();
+        chain.insert(first_base);
         let mut rd = first_base;
         loop {
             self.cx.tick()?;
@@ -481,16 +482,15 @@ impl VTableBuilder<'_, '_> {
             if pv && self.layout_vbase_offset(p) != first_off {
                 break;
             }
-            if chain.contains(&p) {
+            if !chain.insert(p) {
                 return Err(VTableError::Incomplete);
             }
-            chain.push(p);
             rd = p;
         }
         if chain.contains(&parent(ast, overrider)) {
             return Ok(true);
         }
-        Ok(all_overridden(ast, overrider).into_iter().any(|o| chain.contains(&parent(ast, o))))
+        Ok(self.cx.all_overridden(overrider).iter().any(|&o| chain.contains(&parent(ast, o))))
     }
 
     /// clang `AddMethods`.
@@ -500,7 +500,7 @@ impl VTableBuilder<'_, '_> {
         layout_off: i64,
         first_base: DeclId,
         first_off: i64,
-        primary_bases: &mut Vec<DeclId>,
+        primary_bases: &mut PrimaryBases,
     ) -> Result<(), VTableError> {
         self.cx.tick()?;
         let ast = self.cx.ast();
@@ -512,16 +512,15 @@ impl VTableBuilder<'_, '_> {
                 (base.1, layout_off)
             };
             self.add_methods((p, po), plo, first_base, first_off, primary_bases)?;
-            if primary_bases.contains(&p) {
+            if !primary_bases.push(p) {
                 return Err(VTableError::Incomplete);
             }
-            primary_bases.push(p);
         }
         let mut new_fns = Vec::new();
         let mut new_implicit = Vec::new();
         for &m in &info.slots {
             let overrider = self.ov.get(m, base.1)?;
-            if let Some(om) = find_nearest_overridden(ast, m, primary_bases)
+            if let Some(om) = self.find_nearest_overridden(m, primary_bases)
                 && self.return_adjustment_base_offset(m, om)?.is_empty()
             {
                 self.original.insert(m, om);
@@ -664,7 +663,7 @@ impl VTableBuilder<'_, '_> {
         self.components.push(VTableComponent::OffsetToTop(self.md_offset - layout_off));
         self.components.push(VTableComponent::Rtti(self.md));
         let ap = index(self.components.len())?;
-        let mut primary_bases = Vec::new();
+        let mut primary_bases = PrimaryBases::default();
         self.add_methods(base, layout_off, base.0, layout_off, &mut primary_bases)?;
         if base.0 == self.md {
             for (&m, mi) in &self.method_info {
@@ -777,11 +776,49 @@ impl VTableBuilder<'_, '_> {
     }
 }
 
-/// clang `FindNearestOverriddenMethod`: the method `m` overrides whose
-/// class is the nearest of `bases` (searched from the last).
-fn find_nearest_overridden(ast: &kiln_ast::Ast, m: DeclId, bases: &[DeclId]) -> Option<DeclId> {
-    let all = all_overridden(ast, m);
-    bases.iter().rev().find_map(|&b| all.iter().copied().find(|&o| parent(ast, o) == b))
+/// The primary bases `add_methods` has visited, in order, with a set
+/// for the membership tests (a chain of depth `n` asks `n` times).
+#[derive(Default)]
+struct PrimaryBases {
+    list: Vec<DeclId>,
+    set: FxHashSet<DeclId>,
+}
+
+impl PrimaryBases {
+    /// Appends `b`; false if it is already there.
+    fn push(&mut self, b: DeclId) -> bool {
+        if !self.set.insert(b) {
+            return false;
+        }
+        self.list.push(b);
+        true
+    }
+}
+
+impl VTableBuilder<'_, '_> {
+    /// clang `FindNearestOverriddenMethod`: the method `m` overrides
+    /// whose class is the nearest of `bases` (searched from the last).
+    /// The common case, `m`'s first direct override declared in the
+    /// last primary base, is the answer without the transitive set.
+    fn find_nearest_overridden(&mut self, m: DeclId, bases: &PrimaryBases) -> Option<DeclId> {
+        let ast = self.cx.ast();
+        let last = *bases.list.last()?;
+        let direct = super::classes::overridden(ast, m);
+        if let Some(&o) = direct.first()
+            && parent(ast, o) == last
+        {
+            return Some(o);
+        }
+        if direct.is_empty() {
+            return None;
+        }
+        let all = self.cx.all_overridden(m);
+        let mut by_class: FxHashMap<DeclId, DeclId> = FxHashMap::default();
+        for &o in all.iter() {
+            by_class.entry(parent(ast, o)).or_insert(o);
+        }
+        bases.list.iter().rev().find_map(|b| by_class.get(b).copied())
+    }
 }
 
 /// clang `ItaniumVTableContext::getVirtualBaseOffsetOffset(rd, vbase)`.
