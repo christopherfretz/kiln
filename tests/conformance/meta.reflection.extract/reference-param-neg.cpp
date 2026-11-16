@@ -7,16 +7,17 @@
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 24:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 22:41 note "'^^r' cannot be extracted as a 'long &'"
-//@ diag: 23:46 note "in call to 'bad_type(x)'"
-//@ diag: 24:15 note "in call to 'call_bad()'"
-//@ diag: 26:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 25:48 note "'^^r' cannot be extracted as a 'int &'"
-//@ diag: 26:15 note "in call to 'bad_const(2)'"
-//@ diag: 33:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 31:10 note "'^^r' is not a variable of static storage duration, nor one whose lifetime began within the evaluation"
-//@ diag: 33:15 note "in call to 'dangling()'"
+//@ diag: 25:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 23:41 note "'^^r' cannot be extracted as a 'long &'"
+//@ diag: 24:46 note "in call to 'bad_type(x)'"
+//@ diag: 25:15 note "in call to 'call_bad()'"
+//@ diag: 27:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 26:48 note "'^^r' cannot be extracted as a 'int &'"
+//@ diag: 27:15 note "in call to 'bad_const(2)'"
+//@ diag: 34:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 32:10 note "'^^r' is not a variable of static storage duration, nor one whose lifetime began within the evaluation"
+//@ diag: 34:15 note "in call to 'dangling()'"
+//@ diag: 28:37 note "declared here"
 #include <meta>
 
 consteval int bad_type(int &r) { return std::meta::extract<long &>(^^r); }

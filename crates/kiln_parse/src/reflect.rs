@@ -46,14 +46,20 @@ impl Parser<'_, '_> {
         }
         let operand = self.tok().span.lo;
         let qual = self.parse_nested_name_nns().ok()?;
-        // `^^T::template m<U>` ([temp.names]/5): after a dependent
-        // qualifier only.
+        // `^^T::template m<U>` ([temp.names]/5), and the reflection-name
+        // `^^nns template m` ([expr.reflect]/1-2: m shall denote a
+        // template) after any qualifier.
         let dependent = qual.filter(|q| self.s.is_dependent_ctx(q.ctx));
-        let template_kw = if dependent.is_some() { self.eat_kw(Kw::Template) } else { None };
+        let template_kw = if qual.is_some() { self.eat_kw(Kw::Template) } else { None };
         let Some(name) = self.ident() else {
             return self.parse_reflect_special_name(loc, operand, qual, dependent, template_kw);
         };
         let name_loc = self.bump().span.lo;
+        if let (Some(q), Some(_), None) = (qual, template_kw, dependent)
+            && !self.s.names_template(name, Some(q.ctx))
+        {
+            return Some(self.s.reflect_template_kw_non_template(name, name_loc, loc));
+        }
         // `^^S::S` names the constructors ([class.qual]/2): an overload
         // set, never the injected-class-name.
         if ahead == Some(ReflectAhead::Constructor) {
@@ -201,6 +207,19 @@ impl Parser<'_, '_> {
             i += 1;
         }
         loop {
+            // `nns template name` not followed by `<`: the
+            // reflection-name form ([expr.reflect]/1), never a type-id
+            // (the parse checks that `name` denotes a template).
+            if ctx.is_some()
+                && self.kw_of(self.tok_at(i)) == Some(Kw::Template)
+                && matches!(self.tok_at(i + 1).kind, TokKind::Identifier(_))
+                && !matches!(
+                    Self::punct_of(self.tok_at(i + 2)),
+                    Some(Punct::Less | Punct::ColonColon)
+                )
+            {
+                return Some(ReflectAhead::Template);
+            }
             let TokKind::Identifier(name) = self.tok_at(i).kind else { return None };
             let next = Self::punct_of(self.tok_at(i + 1));
             if next == Some(Punct::ColonColon) {
@@ -228,7 +247,27 @@ impl Parser<'_, '_> {
             {
                 return Some(ReflectAhead::Constructor);
             }
-            return self.s.names_template(name, ctx).then_some(ReflectAhead::Template);
+            if self.s.names_template(name, ctx) {
+                return Some(ReflectAhead::Template);
+            }
+            // A reflection-name (nothing continues it as a type-id) that
+            // lookup finds through a using-declarator: /5.1 decides
+            // before the type-id form does (/5, /6), so a type-name found
+            // that way is the using-declarator error too.
+            let ends =
+                !matches!(
+                    Self::punct_of(self.tok_at(i + 1)),
+                    Some(
+                        Punct::Star
+                            | Punct::Amp
+                            | Punct::AmpAmp
+                            | Punct::LParen
+                            | Punct::LSquare
+                            | Punct::Ellipsis
+                    )
+                ) && !matches!(self.kw_of(self.tok_at(i + 1)), Some(Kw::Const | Kw::Volatile));
+            return (ends && self.s.names_using_declarator(name, ctx))
+                .then_some(ReflectAhead::UsingName);
         }
     }
 
@@ -359,4 +398,7 @@ enum ReflectAhead {
     Template,
     /// `nns C::C`.
     Constructor,
+    /// A reflection-name lookup finds through a using-declarator
+    /// ([expr.reflect]/5.1).
+    UsingName,
 }

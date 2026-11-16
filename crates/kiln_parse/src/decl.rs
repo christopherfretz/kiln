@@ -529,6 +529,20 @@ impl Parser<'_, '_> {
     /// The rest of `namespace name = [qual] target;` after the `=`
     /// ([namespace.alias]).
     pub(crate) fn parse_namespace_alias(&mut self, name: Symbol, name_loc: Loc) -> Option<DeclId> {
+        // `namespace A = [: r :];` ([namespace.alias]/1-2: a namespace
+        // other than the global one, as for a using-directive).
+        if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
+            let ns = self
+                .parse_splice_operand()
+                .and_then(|e| self.s.act_on_splice_namespace(e, "namespace alias"));
+            let Some(ns) = ns else {
+                self.skip_to_semi();
+                return None;
+            };
+            let d = self.s.act_on_namespace_alias_to(name, name_loc, ns);
+            self.expect_semi_after("namespace name");
+            return d;
+        }
         let Ok(qual) = self.parse_nested_name_nns() else {
             self.skip_to_semi();
             return None;
@@ -559,8 +573,9 @@ impl Parser<'_, '_> {
             // `using namespace [: r :];` ([namespace.udir]/1 with a
             // splice-specifier).
             if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
-                let ns =
-                    self.parse_splice_operand().and_then(|e| self.s.act_on_splice_namespace(e));
+                let ns = self
+                    .parse_splice_operand()
+                    .and_then(|e| self.s.act_on_splice_namespace(e, "using-directive"));
                 let Some(ns) = ns else {
                     self.skip_to_semi();
                     return Vec::new();

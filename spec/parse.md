@@ -1909,6 +1909,10 @@ for `^^`, §5 for splices).
   | `postfix-expression . splice-expression`, `-> splice-expression` [expr.ref] | the member-access suffix when `[:` follows `.`/`->` and the splice is not followed by `::` | `act_on_member_splice` (with the `.`/`->` location) |
   | `splice-scope-specifier: splice-specifier ::` [expr.prim.id.qual] | `decltype_scope_end` treats `[: e :]::` like `decltype(e)::`: the start of a nested-name-specifier in an expression, a type, an elaborated-type-specifier (`parse_tag_qualifier`), a `typename`-specifier, a using-declarator and a ptr-operator (`int [: r :]::* p`) | `act_on_nested_name_splice` → `DecltypeScope` annotation |
   | `using namespace splice-specifier ;` [namespace.udir] | `parse_using_attrs`, when the splice is not followed by `::` (else it leads the namespace-name's nested-name-specifier) | `act_on_splice_namespace` → `act_on_using_directive` |
+  | `namespace identifier = splice-specifier ;` [namespace.alias] | `parse_namespace_alias`, when the splice is not followed by `::` | `act_on_splice_namespace` → `act_on_namespace_alias_to` |
+  | `~ typename splice-specifier` [class.dtor] | `parse_member_destructor_name` after `.~`/`->~` | `parse_splice_type` → `rebuild_member_destructor` (as `~decltype`) |
+  | `typename splice-specifier < args > ::` [temp.names]/3 | `parse_typename_specifier` (`typename_splice_scope_end`); the tentative scanner skips the whole qualified name (`typename_splice_end`) | `act_on_splice_template_type` → `act_on_nested_name_decltype` (pending first component) |
+  | `^^ nested-name-specifier template identifier` [expr.reflect]/1-2 | `reflect_lookahead` returns `Template` (never the type-id path); after any qualifier the identifier must denote a template | `reflect_template_kw_non_template` otherwise (clang's "does not refer to a template") |
 
   A declarative nested-name-specifier that starts with a splice
   ([expr.prim.id.qual]/3) is diagnosed by the parser, which then skips the

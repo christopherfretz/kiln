@@ -484,7 +484,13 @@ impl Compiler<'_> {
     pub(super) fn scan_inits(&mut self, def: DeclId) {
         let ast = self.b.ast();
         let inits: Vec<ExprId> = ast.ctor_inits(def).map(|c| c.init).collect();
-        let mut s = super::Scan { ast, mem: &mut self.mem_vars, cur: None, temps: false };
+        let mut s = super::Scan {
+            ast,
+            mem: &mut self.mem_vars,
+            refl: &mut self.refl_refs,
+            cur: None,
+            temps: false,
+        };
         for e in inits {
             s.expr(e, false);
         }

@@ -427,6 +427,22 @@ impl Sema<'_, '_> {
             };
             return self.object_constant(o, p, ctx, oven);
         }
+        // [: R :] of an automatic variable whose lifetime began within
+        // this evaluation and ended reads it outside its lifetime
+        // ([meta.reflection.queries] constant_of's example; WP-1521).
+        if self.kind_of(d) != DeclKind::EnumConstant
+            && !self.has_static_storage(d)
+            && oven.meta_local_ended(d)
+        {
+            return fail(
+                loc,
+                format!(
+                    "read of variable '{}' outside its lifetime is not allowed in a constant \
+                     expression",
+                    self.decl_name(d)
+                ),
+            );
+        }
         let value = if self.kind_of(d) == DeclKind::EnumConstant {
             let v = self.ast.decls.enumerator(d).and_then(|e| e.value);
             v.and_then(|v| self.const_int(v)).map(|v| self.int_const(ty, v))
@@ -545,7 +561,7 @@ impl Sema<'_, '_> {
     /// `constexpr`, or `const` non-volatile of integral or enumeration
     /// type, with a constant initializer (evaluated now if it was not
     /// yet); a reference's is the pointer to the object it binds.
-    fn var_constant_value(
+    pub(in crate::meta) fn var_constant_value(
         &mut self,
         d: DeclId,
         ty: QualType,

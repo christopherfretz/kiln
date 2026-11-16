@@ -6,9 +6,10 @@
 //@ skip(clang): clang does not implement P2996 reflection
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 19:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 18:32 note "'^^gone' is not a variable of static storage duration, nor one whose lifetime began within the evaluation"
-//@ diag: 19:15 note "in call to 'stale()'"
+//@ diag: 20:15 error "static assertion expression is not an integral constant expression"
+//@ diag: 19:32 note "'^^gone' is not a variable of static storage duration, nor one whose lifetime began within the evaluation"
+//@ diag: 20:15 note "in call to 'stale()'"
+//@ diag: 16:7 note "declared here"
 #include "kiln_meta.h"
 
 consteval std::meta::info leak() {

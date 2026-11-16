@@ -12,7 +12,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{BuiltinType, Quals, TypeView};
 use kiln_ast::{ConstValueId, DeclId, QualType, ReflectionId};
-use kiln_oven::{MetaCtx, MetaError, MetaOut, Oven, Shape, ValueOp, info_arg};
+use kiln_oven::{MetaCtx, MetaError, MetaOut, Note, Oven, Shape, ValueOp, info_arg};
 use kiln_source::Loc;
 
 use super::fail;
@@ -39,7 +39,7 @@ impl Sema<'_, '_> {
             ValueOp::Extract => {
                 let r = info_arg(args, 0)?;
                 self.use_reflected_var(r, loc, oven);
-                let out = self.extract(r, ret, loc, oven)?;
+                let out = self.extract(r, ret, ctx, oven)?;
                 if let Some(f) = self.extracted_function(r, &out) {
                     self.use_reflected_function(f, loc, oven);
                 }
@@ -437,9 +437,10 @@ impl Sema<'_, '_> {
         &mut self,
         r: ReflectionId,
         t: QualType,
-        loc: Loc,
+        ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<MetaOut, MetaError> {
+        let loc = ctx.loc;
         let tc = self.ast.types.canonical(t);
         match self.ast.reflections.get(r) {
             Reflectee::Value(cv) => self.extract_value(r, cv, tc, loc),
@@ -447,7 +448,7 @@ impl Sema<'_, '_> {
             // via `constant_of`, P3394R4).
             Reflectee::Annotation(a) => {
                 let c = self.annotation_constant(a, loc)?;
-                self.extract(c, t, loc, oven)
+                self.extract(c, t, ctx, oven)
             }
             Reflectee::Object(p) => self.extract_object(r, p, tc, loc),
             Reflectee::Decl(d) => match self.kind_of(d) {
@@ -456,9 +457,49 @@ impl Sema<'_, '_> {
                         return Err(MetaError::invalid());
                     };
                     if self.ast.types.is_reference(vt) {
+                        // A block-scope reference of a live frame of the
+                        // evaluation: its referent there (WP-1515); else
+                        // one usable in constant expressions, else the
+                        // lifetime failure.
+                        let local = !self.has_static_storage(d);
+                        if local && oven.meta_ref_local(d).is_none() {
+                            let usable = self
+                                .var_init_value(d, oven)
+                                .and_then(|v| self.ast.consts.scalar(v))
+                                .is_some_and(|v| matches!(v, Scalar::Pointer { .. }));
+                            if !usable {
+                                return self.extract_local(r, d, (vt, tc), loc, oven);
+                            }
+                        } else if local {
+                            return self.extract_local(r, d, (vt, tc), loc, oven);
+                        }
                         return self.extract_through_ref(r, d, (vt, tc), loc, oven);
                     }
                     if !self.has_static_storage(d) {
+                        // By value, `extract-value<U>(constant_of(r))`
+                        // ([meta.reflection.extract]/12): a local the
+                        // evaluation did not start (one of an enclosing
+                        // function, or of an earlier evaluation) that is
+                        // usable in constant expressions gives its
+                        // constant, whatever its storage duration. One
+                        // whose lifetime began in this evaluation is read
+                        // live, or fails once its block ended (WP-1521).
+                        let other = oven.meta_local(d).is_none() && !oven.meta_local_ended(d);
+                        if other && !self.ast.types.is_reference(tc) {
+                            if let Ok(c) = self.reflect_constant_of(r, ctx, oven) {
+                                return self.extract_constant(r, c, t, ctx, oven);
+                            }
+                        } else if other {
+                            // extract-ref (/5.3): usable in constant
+                            // expressions suffices; the reference
+                            // designates the variable's (const) object.
+                            let vc = self.ast.types.canonical(vt);
+                            if self.var_constant_value(d, vc, oven).is_some() {
+                                let first = self.ast.first(d);
+                                let p = self.object_ptr(vt, PtrBase::Decl(first), 0)?;
+                                return self.extract_place(r, p, true, tc, loc);
+                            }
+                        }
                         return self.extract_local(r, d, (vt, tc), loc, oven);
                     }
                     let first = self.ast.first(d);
@@ -480,9 +521,35 @@ impl Sema<'_, '_> {
                     self.extract_member(r, d, tc, loc)
                 }
                 DeclKind::EnumConstant => self.extract_enumerator(r, d, tc, loc),
+                // A structured binding is neither a variable nor an object
+                // (no reference extract), but by value it is
+                // `extract-value<U>(constant_of(r))`
+                // ([meta.reflection.extract]/12; GCC 16.1 rejects it).
+                DeclKind::Binding if !self.ast.types.is_reference(tc) => {
+                    let c = self.reflect_constant_of(r, ctx, oven)?;
+                    self.extract_constant(r, c, t, ctx, oven)
+                }
                 _ => self.not_extractable(r, loc),
             },
             _ => self.not_extractable(r, loc),
+        }
+    }
+
+    /// `extract-value<U>(c)` for `c`, the `constant_of` of `r`: what `r`
+    /// names in the diagnostics.
+    fn extract_constant(
+        &mut self,
+        r: ReflectionId,
+        c: ReflectionId,
+        t: QualType,
+        ctx: &MetaCtx,
+        oven: &mut Oven,
+    ) -> Result<MetaOut, MetaError> {
+        let tc = self.ast.types.canonical(t);
+        match self.ast.reflections.get(c) {
+            Reflectee::Value(cv) => self.extract_value(r, cv, tc, ctx.loc),
+            Reflectee::Object(p) => self.extract_object(r, p, tc, ctx.loc),
+            _ => self.extract(c, t, ctx, oven),
         }
     }
 
@@ -528,7 +595,9 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<MetaOut, MetaError> {
         // A reference parameter: its referent, which the frame's register
-        // names (WP-1505); a reference local has no such record yet.
+        // names (WP-1505); a reference local: the object its block holds
+        // the referent's address in, made because it is reflected
+        // (WP-1515).
         let is_ref = self.ast.types.is_reference(vt);
         let vt = if is_ref {
             let t = &self.ast.types;
@@ -536,16 +605,23 @@ impl Sema<'_, '_> {
         } else {
             vt
         };
-        let found = if is_ref { oven.meta_ref_param(d) } else { oven.meta_local(d) };
+        let found = if !is_ref {
+            oven.meta_local(d)
+        } else if self.ast.decls.get(d).kind() == DeclKind::ParmVar {
+            oven.meta_ref_param(d)
+        } else {
+            oven.meta_ref_local(d)
+        };
         let Some(addr) = found else {
-            return fail(
-                loc,
-                format!(
-                    "'{}' is not a variable of static storage duration, nor one whose lifetime \
-                     began within the evaluation",
-                    self.reflection_str(r)
-                ),
+            let msg = format!(
+                "'{}' is not a variable of static storage duration, nor one whose lifetime began \
+                 within the evaluation",
+                self.reflection_str(r)
             );
+            // The variable, whose block ended (or whose frame returned)
+            // before the reflection was extracted.
+            let decl = Note::new(self.ast.decls.get(d).loc(), "declared here");
+            return Err(MetaError::failed(vec![Note::new(loc, msg), decl]));
         };
         let t = &self.ast.types;
         let u = t.canonical(vt);

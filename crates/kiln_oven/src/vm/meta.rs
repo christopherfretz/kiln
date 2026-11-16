@@ -43,6 +43,25 @@ impl Oven {
         })
     }
 
+    /// Whether the lifetime of automatic variable `d` began within the
+    /// running evaluation and has ended (its block ended or its frame
+    /// returned): a dead frame object of `d` made by a frame of this
+    /// evaluation. A reflected local lives in memory (`Compiler` scan),
+    /// so its dead object keeps its origin until the slot is reused,
+    /// which waits for the frame quarantine; once reused this says false,
+    /// and `extract` then reads the variable's constant initializer
+    /// (never memory), so no stale read can follow. Looked at only by
+    /// `extract` and `constant_of` of a local not found live
+    /// ([meta.reflection.extract], WP-1521): nothing on the hot path.
+    pub fn meta_local_ended(&self, d: kiln_ast::DeclId) -> bool {
+        let Some(first) = self.stack.get(self.run.entry).map(|f| f.serial) else {
+            return false;
+        };
+        self.mem.slots.iter().any(|a| {
+            !a.live && matches!(a.origin, crate::mem::Origin::Var(v) if v == d) && a.frame >= first
+        })
+    }
+
     /// The referent's address of reference parameter `d` of a live frame
     /// of the running evaluation, the innermost activation first: what
     /// `extract` of a reflected reference parameter reads (WP-1505). The
@@ -55,6 +74,19 @@ impl Oven {
             let p = self.funcs[f.func as usize].params.iter().find(|p| p.is_ref && p.decl == d)?;
             self.regs.get(f.fb as usize + p.reg as usize).map(|&v| v as u64)
         })
+    }
+
+    /// The referent's address of block-scope reference `d` of a live
+    /// frame of the running evaluation, while its block lasts: what
+    /// `extract` of a reflected reference local reads (WP-1515). Only a
+    /// reference whose reflection its function takes has the frame object
+    /// holding the address (`Compiler::refl_refs`), made with its block
+    /// and ended with it, so it is found as [`Self::meta_local`] finds a
+    /// reflected object: None once the block ended or the frame returned.
+    pub fn meta_ref_local(&self, d: kiln_ast::DeclId) -> Option<u64> {
+        let p = self.meta_local(d)?;
+        let s = self.mem.slots.get(crate::mem::Ptr::decode(p).slot as usize)?;
+        self.load(p, s.ty, ak::READ).ok().map(|v| v as u64)
     }
 
     /// Runs reflection intrinsic `sub` (a [`MetaOp`] code) of the

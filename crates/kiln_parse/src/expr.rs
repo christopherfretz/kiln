@@ -1513,6 +1513,17 @@ impl Parser<'_, '_> {
             let ty = ty?;
             return Some(self.s.rebuild_member_destructor(e, ty, false, dl, loc, arrow));
         }
+        if self.at_kw(Kw::Typename) && self.splice_end(self.pos() + 1).is_some() {
+            // `x.~typename [: r :]()`: a splice-type-specifier is a
+            // computed-type-specifier, which may denote the destroyed
+            // type as a decltype-specifier does ([class.dtor]/16,
+            // [dcl.type.splice]); `~[: r :]` without `typename` is a
+            // splice-expression, which may not designate a destructor.
+            self.bump();
+            let dl = self.loc();
+            let ty = self.parse_splice_type()?;
+            return Some(self.s.rebuild_member_destructor(e, ty, false, dl, loc, arrow));
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_destructor_tilde_identifier);
             return None;

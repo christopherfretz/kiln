@@ -1819,6 +1819,42 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         true
     }
 
+    /// After `typename`, at `[: r :] < args > ::`: the index of that `::`
+    /// ([temp.names]/3: the `<` after a splice-specifier that follows
+    /// `typename` opens a template argument list).
+    pub(crate) fn typename_splice_scope_end(&self) -> Option<usize> {
+        let after = self.splice_end(self.pos)?;
+        if self.tok_at(after).kind != TokKind::Punct(Punct::Less) {
+            return None;
+        }
+        let (end, split) = self.skip_template_args(after)?;
+        (!split && self.tok_at(end + 1).kind == TokKind::Punct(Punct::ColonColon))
+            .then_some(end + 1)
+    }
+
+    /// The token index past `[: r :] [< args >] {:: name [< args >]}` at
+    /// token `i` after `typename` (lookahead; the qualified name a
+    /// splice-specialization-specifier scopes, [temp.names]/3).
+    pub(crate) fn typename_splice_end(&self, i: usize) -> Option<usize> {
+        let mut e = self.splice_spec_end(i)?;
+        while self.tok_at(e).kind == TokKind::Punct(Punct::ColonColon)
+            && self.ident_of(self.tok_at(e + 1)).is_some()
+        {
+            e += 2;
+            if self.tok_at(e).kind == TokKind::Punct(Punct::Less) {
+                e = self.skip_template_args(e)?.0 + 1;
+            }
+        }
+        Some(e)
+    }
+
+    /// Records `qual` (made from the tokens before the current `::`) as
+    /// the pending first component of the nested-name-specifier there.
+    pub(crate) fn set_decltype_scope(&mut self, qual: Option<(DeclId, NnsId)>, loc: Loc) {
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+    }
+
     /// At a `T ... [ expression ] ::` ([`Parser::pack_index_scope_end`]),
     /// parses the pack-index-specifier up to the `::`. `None` after an
     /// error.
