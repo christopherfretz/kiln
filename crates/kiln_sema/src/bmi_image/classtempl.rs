@@ -777,7 +777,8 @@ impl Sema<'_, '_> {
             return Some(self.builder().var_partial_spec(h, tmpl, list, al, ty, vspec));
         }
         let locs = vec![h.loc; args.len()];
-        let spec = self.find_or_create_var_spec(tmpl, &args, &locs, h.loc, ty, vspec).ok()?;
+        let spec =
+            self.find_or_create_var_spec(tmpl, &args, &locs, h.loc, ty, vspec, false).ok()?;
         if let Some((k, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(k, |s| {
                 s.kind = SpecKind::ExplicitSpecialization;

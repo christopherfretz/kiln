@@ -494,7 +494,7 @@ impl Sema<'_, '_> {
         let op = if array_form { OverloadedOperator::ArrayNew } else { OverloadedOperator::New };
         // A class element type's own `operator new` (unless `::new`) is
         // looked up in the class first ([expr.new]/12).
-        let alloc = self.alloc_fns(elem, op, global, tid.loc);
+        let alloc = self.alloc_fns(elem, op, global, loc);
         let place_args: Vec<ExprId> =
             placement.as_ref().map(|p| p.args.clone()).unwrap_or_default();
         // With function templates among them, the non-template functions

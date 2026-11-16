@@ -258,6 +258,8 @@ WP-1469 fixed the variable length array clusters 10, 17 and 20 and the "variable
 
 WP-1468 fixed clusters 1, 12 and 18: a const member, a const subobject reached through a base or union, a const temporary and `new const T` are now const in the Oven (the 8 cluster-1 tests report the modification in a note at GCC's line, under an error at the use, as clang does), an aggregate reading a later element of itself is an error (`constexpr-array12` passes; `stmtexpr21` is accepted by clang too), and a constexpr local's own address in its value is rejected before C++26 (6 of 9 cluster-18 cases; at C++26 P2686R5 makes it valid, which kiln implements and GCC and clang do not yet).
 
+WP-1470 fixed clusters 2 to 10 (an uninitialized reference member in aggregate init, `= default` with a mismatched signature (an error before C++20), an explicit specialization of a member whose constraints fail or of a constrained variable template, ambiguous class-scope `operator new`, access of the copy constructor for a vararg and of an elidable C++14 constructor, protected `&A::m`, explicit-object redeclarations, default arguments added to an out-of-line member template, a class incomplete inside instantiations it triggers): re-run of their 39 tests, 22 → 86 of 113 cases pass; the rest are pack constraint subsumption, an ambiguous conversion in direct-init, using-declaration hiding by requires-clause, P3074 unions, and cases clang also accepts.
+
 The largest group (130 cases, 61 tests) expects any error at all
 (`dg-error ""`). It is mixed: mostly old-deja programs that are invalid
 in many small ways (missing `typename`, a bad friend, a nested class in an

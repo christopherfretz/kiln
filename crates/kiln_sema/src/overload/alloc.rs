@@ -117,6 +117,10 @@ impl Sema<'_, '_> {
             && let Some(def) = self.ast.definition(rec)
         {
             let found = self.lookup_in_class_dn(def, name, LookupKind::Ordinary);
+            // [class.member.lookup]/6: found in two bases (clang
+            // `LookupQualifiedName` + `DiagnoseAmbiguousLookup`); the
+            // candidates still take part so no second error follows.
+            self.diagnose_member_ambiguity(&found, name, loc);
             let fns: Vec<DeclId> = found
                 .decls
                 .iter()

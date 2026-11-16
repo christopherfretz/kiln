@@ -1369,10 +1369,14 @@ pub fn implicit_convert(
     let (fr, tr) = (s.ast.types.as_record(from), s.ast.types.as_record(to));
     if tr.is_some() {
         let prvalue = s.ast.exprs.get(e).value_category() == ValueCategory::PRValue;
+        let at = s.begin_loc(e);
         if prvalue && s.ast.types.same_unqualified(from, to) {
+            // C++11/14: an elidable copy of the temporary.
+            if matches!(ctx, ConvCtx::Return | ConvCtx::Argument | ConvCtx::Initialization) {
+                s.check_elided_ctor(e, to, ctx, at, crate::class::DeletedAs::Call);
+            }
             return Ok(e);
         }
-        let at = s.begin_loc(e);
         if fr.is_some() {
             if let Some(x) = s.construct_from_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
                 return Ok(x);

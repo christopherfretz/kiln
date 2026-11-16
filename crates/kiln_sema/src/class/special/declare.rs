@@ -429,6 +429,7 @@ impl Sema<'_, '_> {
                 enable_if,
                 member_using: false,
                 pass_object_size: false,
+                explicit_object: false,
             };
             matched = self.ref_qualifier_mix(name, new, sloc);
         }
@@ -621,6 +622,11 @@ impl Sema<'_, '_> {
         // not a user-declared one and no candidate (WP-318).
         *invalid |= fparams.iter().any(|p| p.invalid);
         let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams, true);
+        if let Some(p) = prev_ok
+            && !redefined
+        {
+            self.check_added_default_args(p, ctx, !in_class, &fparams, &defaults);
+        }
         if redefined {
             prev_ok = None;
             redecl_invalid = true;

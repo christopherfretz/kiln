@@ -1043,6 +1043,10 @@ delete of a new-expression, and [expr.delete]/10) is a rule-based pick, not
 ([basic.stc.dynamic]/2) are declared lazily on first use
 (`declare_global_new_delete`, clang `DeclareGlobalNewDelete`). WP-061a uses
 these for non-class types; 068b adds the class-member and placement paths.
+A class-scope `operator new`/`delete` found in more than one base is the
+member lookup ambiguity of [class.member.lookup]/6 ("member 'operator new'
+found in multiple base classes of different types", at the `new`); the
+candidates still take part, so no second error follows (WP-1470).
 
 ### 6.6 Conversion functions and `explicit` ([class.conv.fct], [conv]/5–6)
 Candidates are the conversion functions (templates via
@@ -1154,6 +1158,16 @@ parameter without a default after one with a default (after merging) is
 "missing default argument on parameter 'b'"; a block-scope redeclaration
 starts fresh (/4); friend declarations with defaults must be definitions;
 out-of-class members of class templates may not add defaults.
+A redeclaration of a function template may not add one ("default
+arguments cannot be added to a function template that has already been
+declared" + "previous template declaration is here"), nor may an
+out-of-line definition of a member of a templated class ("... to an
+out-of-line definition of a member of a class template"), nor may an
+added default make a constructor a default, copy or move constructor
+("addition of default argument on redeclaration makes this constructor a
+{default|copy|move} constructor"; [dcl.fct.default]/4, /6; clang
+`MergeCXXFunctionDecl`; `check_added_default_args`, WP-1470, tests
+`dcl.fct.default/added-default-arg-*.cpp`).
 A friend function declaration with a default argument must be a
 definition and the only declaration of the function in the translation
 unit ([dcl.fct.default]/4; clang `ActOnFriendFunctionDecl`,

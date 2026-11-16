@@ -108,6 +108,12 @@ impl Sema<'_, '_> {
                 Some((InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating))
             );
             if !base_or_delegating {
+                // Before C++17 the object is copy- or move-constructed
+                // from the temporary, a copy that may be elided
+                // ([class.copy.elision]/1.3 in C++14): the constructor
+                // must still be usable (clang `CXXConstructExpr` marked
+                // elidable). The prvalue itself initializes the object.
+                self.check_elided_ctor(e, to, ctx, entity_at, deleted_as);
                 return Some(e);
             }
         }
@@ -187,10 +193,12 @@ impl Sema<'_, '_> {
         if sel == Selected::Missing
             && style == InitStyle::Direct
             && !args.is_empty()
+            && self.std >= kiln_lex::Std::Cxx20
             && self.is_aggregate(ty)
         {
-            // [dcl.init.general]/16.6.2.2: no constructor is viable, so
-            // the aggregate is initialized from the parenthesized list.
+            // [dcl.init.general]/16.6.2.2 (C++20, P0960): no constructor
+            // is viable, so the aggregate is initialized from the
+            // parenthesized list.
             let rparen = site.rparen.or(site.temp_end).or(site.agg_end).unwrap_or(loc);
             if !matches!(site.sites.deleted_as, DeletedAs::Cast(..)) || args.len() != 1 {
                 return Some(self.paren_aggregate_init(ty, args, loc, rparen));
@@ -235,6 +243,48 @@ impl Sema<'_, '_> {
         self.ctor_diag_ty = diag_ty;
         let built = self.use_ctor(sel, ty, class, k, call, loc, entity, site.sites);
         Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
+    }
+
+    /// The move constructor (C++11/14) that copy-initializing a `to`
+    /// object from prvalue `e` of the same class would call: resolved,
+    /// checked and diagnosed as a construction, then dropped.
+    pub(crate) fn check_elided_ctor(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        entity_at: Loc,
+        deleted_as: DeletedAs,
+    ) {
+        if self.std >= kiln_lex::Std::Cxx17
+            || self.unevaluated > 0
+            || self.expr_is_type_dependent(e)
+        {
+            return;
+        }
+        let Some(class) = self.ast.types.as_record(to).and_then(|r| self.ast.definition(r)) else {
+            return;
+        };
+        let at = self.begin_loc(e);
+        let (variable, direct) = match ctx {
+            ConvCtx::Initialization => (true, false),
+            ConvCtx::DirectInitialization
+            | ConvCtx::Cast
+            | ConvCtx::CStyleCast
+            | ConvCtx::Condition => (true, true),
+            _ => (false, false),
+        };
+        let sites = DiagSites {
+            access: if direct { entity_at } else { at },
+            deleted: if variable { entity_at } else { at },
+            deleted_as,
+        };
+        let entity = self.ctor_entity.map_or(InitEntity::Var, |(x, _)| x);
+        let style = if direct { InitStyle::Direct } else { InitStyle::Copy };
+        let sel = self.resolve_ctor(class, std::slice::from_ref(&e), style);
+        let call = CtorCall::new(std::slice::from_ref(&e));
+        let loc = if direct { entity_at } else { at };
+        let _ = self.use_ctor(sel, to, class, SpecialKind::MoveCtor, call, loc, entity, sites);
     }
 
     /// The entity of the outermost constructor call being built: the

@@ -2035,6 +2035,14 @@ Out-of-class partial specializations of a member template (WP-150):
   its members prints the specialization as written at compat 22
   (`'P<T, int>'`) and canonically at 19 (`'P<type-parameter-0-0, int>'`).
   Test: `temp.spec.partial.member/out-of-line-member-mismatch{,-clang19}.cpp`.
+- An explicit specialization of a member function whose trailing
+  requires-clause the class's arguments do not satisfy matches no member
+  ("out-of-line definition of 'f' does not match any declaration in
+  'S<int>'" with "member declaration nearly matches" at the member), and
+  the template-id of a constrained variable template's explicit
+  specialization must satisfy its constraints ("constraints not satisfied
+  for variable template 'v' [with T = char]", [temp.names]/8; WP-1470,
+  `temp.expl.spec/constraints-{un,}satisfied.cpp`).
 
 **Allowed `SpecKind` transitions** (clang's `CheckSpecializationInstantiationRedecl`):
 

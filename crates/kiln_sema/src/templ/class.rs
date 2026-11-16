@@ -60,6 +60,21 @@ struct SavedState {
 }
 
 impl Sema<'_, '_> {
+    /// Takes the classes being defined, recording them as set aside by an
+    /// instantiation context (still incomplete inside it,
+    /// [class.mem.general]/8) until [`Sema::resume_defining`].
+    fn suspend_defining(&mut self) -> Vec<DeclId> {
+        self.suspended_defining.extend_from_slice(&self.defining);
+        std::mem::take(&mut self.defining)
+    }
+
+    /// Restores `defining` taken by [`Sema::suspend_defining`].
+    fn resume_defining(&mut self, defining: Vec<DeclId>) {
+        let n = self.suspended_defining.len().saturating_sub(defining.len());
+        self.suspended_defining.truncate(n);
+        self.defining = defining;
+    }
+
     /// Runs `f` in the context of declaration context `ctx` (a namespace
     /// or a class), with the parse state of the point of instantiation
     /// set aside ([temp.point]: names are looked up from the template's
@@ -81,7 +96,7 @@ impl Sema<'_, '_> {
             immediate: std::mem::take(&mut self.immediate),
             pending_odr: std::mem::take(&mut self.pending_odr),
             potential_caps: std::mem::take(&mut self.potential_caps),
-            defining: std::mem::take(&mut self.defining),
+            defining: self.suspend_defining(),
             enums: std::mem::take(&mut self.enums),
             braced_args: std::mem::take(&mut self.braced_args),
             prototype_params: std::mem::take(&mut self.prototype_params),
@@ -146,7 +161,7 @@ impl Sema<'_, '_> {
         self.pending_odr = saved.pending_odr;
         self.potential_caps = saved.potential_caps;
         self.restore_immediate_state(imm);
-        self.defining = saved.defining;
+        self.resume_defining(saved.defining);
         self.enums = saved.enums;
         self.braced_args = saved.braced_args;
         self.prototype_params = saved.prototype_params;
@@ -847,7 +862,11 @@ impl Sema<'_, '_> {
             // members declared so far ([class.mem.general]/8; clang's
             // `RequireCompleteDeclContext`), e.g. `C::duration` in a
             // default template argument substituted inside `C`.
-            && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
+            && !self
+                .defining
+                .iter()
+                .chain(&self.suspended_defining)
+                .any(|&x| self.ast.first(x) == self.ast.first(r))
         {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
             let d = self.incomplete_note(d, q);

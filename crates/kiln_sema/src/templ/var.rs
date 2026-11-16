@@ -60,6 +60,7 @@ impl Sema<'_, '_> {
     /// The specialization of variable template `tmpl` for `written`,
     /// created `Undeclared` with type `ty` and specifiers `vspec` if new
     /// (an explicit specialization's declaration).
+    #[allow(clippy::too_many_arguments, reason = "the specialization's parts")]
     pub(crate) fn find_or_create_var_spec(
         &mut self,
         tmpl: DeclId,
@@ -68,9 +69,16 @@ impl Sema<'_, '_> {
         loc: Loc,
         ty: QualType,
         vspec: VarSpec,
+        check_constraints: bool,
     ) -> Result<DeclId, ()> {
         let tmpl = self.ast.first(tmpl);
         let conv = self.check_template_args(tmpl, written, arg_locs, loc)?;
+        if check_constraints {
+            // [temp.expl.spec]/1 via [temp.names]/8: the template-id
+            // naming the specialization is valid only if the constraints
+            // are satisfied.
+            self.ensure_template_constraints(tmpl, conv.sugared, 2, loc)?;
+        }
         if let Some(s) = self.ast.templates.find_spec(tmpl, conv.canonical) {
             return Ok(s);
         }
@@ -608,7 +616,8 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = sid.template;
         let loc = sid.loc;
-        let spec = self.find_or_create_var_spec(tmpl, &sid.args, &sid.arg_locs, loc, ty, vspec)?;
+        let spec =
+            self.find_or_create_var_spec(tmpl, &sid.args, &sid.arg_locs, loc, ty, vspec, true)?;
         if !self.check_spec_scope(tmpl, false, loc) {
             return Err(());
         }

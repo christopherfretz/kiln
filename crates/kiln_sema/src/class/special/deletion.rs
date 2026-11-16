@@ -845,6 +845,11 @@ impl Sema<'_, '_> {
         let bits = self.defn_bits(class);
         let mut had_error = false;
         let mut mismatch = false;
+        // [dcl.fct.def.default]/2.6 (C++20, P0641): a type mismatch makes
+        // a function defaulted on its first declaration deleted; before
+        // C++20, or on a later declaration, it is ill-formed (clang
+        // `DeleteOnTypeMismatch`).
+        let delete_on_mismatch = first && self.std >= kiln_lex::Std::Cxx20;
         let params = self.special_params(f);
         let expected = usize::from(!matches!(k, K::DefaultCtor | K::Dtor));
         let info = self.fn_info(f);
@@ -879,11 +884,19 @@ impl Sema<'_, '_> {
                 had_error = true;
             }
             let tq = info.this_quals();
-            if tq.is_const() || tq.is_volatile() {
-                if first {
+            // A C++11 constexpr member function is implicitly const
+            // ([dcl.constexpr]/8 of C++11).
+            let cxx11_const = self.std < kiln_lex::Std::Cxx14
+                && self.fn_spec(f).constexpr_kind() != kiln_ast::decl::ConstexprKind::None;
+            if tq.is_const() || tq.is_volatile() || cxx11_const {
+                if delete_on_mismatch {
                     mismatch = true;
                 } else {
-                    self.unsupported("a cv-qualified explicitly-defaulted assignment", floc);
+                    let d = self
+                        .diag(DiagId::sema_defaulted_special_member_quals, floc)
+                        .arg(u8::from(k == K::MoveAssign))
+                        .arg(u8::from(self.std < kiln_lex::Std::Cxx14));
+                    self.emit(d);
                     had_error = true;
                 }
             }
@@ -895,14 +908,28 @@ impl Sema<'_, '_> {
                 TypeView::LValueRef(t) | TypeView::RValueRef(t) => {
                     let rq = self.ast.types.effective_quals(t);
                     has_const_param = rq.is_const();
-                    if rq.is_volatile() || has_const_param && !can_const {
-                        if first {
+                    if rq.is_volatile() {
+                        if delete_on_mismatch {
                             mismatch = true;
                         } else {
-                            self.unsupported(
-                                "this parameter of an out-of-line explicitly-defaulted special member",
-                                floc,
-                            );
+                            let d = self
+                                .diag(DiagId::sema_defaulted_special_member_volatile_param, floc)
+                                .arg(k.index());
+                            self.emit(d);
+                            had_error = true;
+                        }
+                    }
+                    if has_const_param && !can_const {
+                        if delete_on_mismatch {
+                            mismatch = true;
+                        } else {
+                            let id = if matches!(k, K::CopyCtor | K::CopyAssign) {
+                                DiagId::sema_defaulted_special_member_copy_const_param
+                            } else {
+                                DiagId::sema_defaulted_special_member_move_const_param
+                            };
+                            let d = self.diag(id, floc).arg(u8::from(k.is_assign()));
+                            self.emit(d);
                             had_error = true;
                         }
                     }
