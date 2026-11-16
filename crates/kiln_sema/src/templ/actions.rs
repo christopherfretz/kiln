@@ -2354,7 +2354,7 @@ impl Sema<'_, '_> {
     /// The class template whose injected-class-name class `d` declares
     /// ([temp.local]/1): the template of a pattern, a partial
     /// specialization or a specialization.
-    pub(crate) fn injected_template_of(&self, d: DeclId) -> Option<DeclId> {
+    pub fn injected_template_of(&self, d: DeclId) -> Option<DeclId> {
         let first = self.ast.first(d);
         if let Some(t) = self.ast.described_template(first) {
             return Some(t);

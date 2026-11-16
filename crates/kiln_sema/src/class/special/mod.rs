@@ -245,7 +245,7 @@ impl Sema<'_, '_> {
     /// class too ([temp.dep.type]/1; clang compares with the canonical
     /// injected-class-name type), so `X(const X &) = default;` in a
     /// template is a copy constructor.
-    pub(crate) fn is_class_type_of(&self, q: QualType, r: DeclId) -> bool {
+    pub fn is_class_type_of(&self, q: QualType, r: DeclId) -> bool {
         let first = self.ast.first(r);
         if self.ast.types.as_record(q).is_some_and(|d| self.ast.first(d) == first) {
             return true;

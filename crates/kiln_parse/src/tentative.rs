@@ -1213,6 +1213,23 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     }
 
     /// clang's `isCXXSimpleDeclaration`.
+    /// `X::~X();`, `N::Z::~Z();` at block scope: a destructor is never
+    /// declared there, so a qualified destructor name starts an
+    /// expression (an explicit destructor call, [class.dtor]/14, CWG272;
+    /// clang's `isCXXDeclarationSpecifier` finds no type in `X::~`).
+    /// Only `name ::` pairs are walked (WP-1466).
+    fn at_qualified_destructor_name(&self) -> bool {
+        let mut i = self.i;
+        if self.punct_at(i) == Some(Punct::ColonColon) {
+            i += 1;
+        }
+        let start = i;
+        while self.ident_at(i).is_some() && self.punct_at(i + 1) == Some(Punct::ColonColon) {
+            i += 2;
+        }
+        i > start && self.punct_at(i) == Some(Punct::Tilde)
+    }
+
     fn is_simple_declaration(&mut self, allow_for_range: bool) -> bool {
         if self.dependent_template_id_name() {
             return false;
@@ -1299,6 +1316,7 @@ impl Parser<'_, '_> {
         }
         match s.kw() {
             Some(Kw::Asm | Kw::Namespace | Kw::Using | Kw::StaticAssert) => true,
+            _ if s.at_qualified_destructor_name() => false,
             _ => s.is_simple_declaration(allow_for_range),
         }
     }

@@ -10,3 +10,7 @@ ext_cxx20_attr = Extension [Cxx20AttributeExtensions] (1) "use of the '{0}' attr
 ext_cxx23_attr = Extension [Cxx23AttributeExtensions] (1) "use of the '{0}' attribute is a C++23 extension";
 ext_cxx_type_aware_allocators = ExtWarn [ExtCxxTypeAwareAllocators] (0) "type aware allocators are a Clang extension";
 ext_kiln_define_member = Warning [KilnExtension] (0) "'__kiln_define_member' is a kiln extension; use 'std::meta::define_aggregate'";
+// WP-1466: CWG2237, a simple-template-id as a constructor or destructor
+// name in C++20 (GCC's -Wtemplate-id-cdtor words; clang 19 and 22 are
+// silent, spec/diag.md D18).
+ext_template_id_cdtor = ExtWarn [TemplateIdCdtor] (1) "template-id not allowed for {0:constructor|destructor} in C++20";

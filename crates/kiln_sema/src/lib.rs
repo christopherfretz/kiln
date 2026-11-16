@@ -865,6 +865,13 @@ pub struct Sema<'a, 'sm> {
     /// proves a failed instantiation step was diagnosed
     /// ([`Sema::failure_mark`]; spec/sema-templates.md §4.6, WP-1054).
     pub(crate) failures: std::cell::Cell<u64>,
+    /// The depth of GNU `__extension__` the parser is inside: while it
+    /// is positive, [`Sema::emit`] drops extension diagnostics (the ones
+    /// `-pedantic` turns on; clang's `ExtensionRAIIObject` and
+    /// `AllExtensionsSilenced`). Only the parse is covered: a template
+    /// instantiated later reports them again, as clang does
+    /// (spec/parse.md "`__extension__`").
+    pub extensions_silenced: std::cell::Cell<u32>,
     /// The designator warnings of a braced list checked in a template
     /// definition, by its semantic `InitListExpr`: an instantiation
     /// shares the non-dependent list but issues them again, as clang's
@@ -1544,6 +1551,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             failures: std::cell::Cell::new(0),
+            extensions_silenced: std::cell::Cell::new(0),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
             null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -1737,6 +1745,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
+        if self.extensions_silenced.get() > 0
+            && d.id().is_some_and(|id| id.class() == kiln_diag::DiagClass::Extension)
+        {
+            return;
+        }
         if d.id().is_some_and(|id| {
             id.class() == kiln_diag::DiagClass::Error
                 || id.is_default_error()

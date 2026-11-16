@@ -537,9 +537,16 @@ impl Parser<'_, '_> {
                 // GNU `__extension__ e`: clang keeps a `UO_Extension`
                 // node, which `decltype` and the mangler see
                 // (spec/abi.md, WP-1029); sema looks through it.
+                // Its operand is parsed with extension diagnostics
+                // silenced (clang `ParseCastExpression`,
+                // `ExtensionRAIIObject`).
                 self.bump();
-                let e = self.parse_cast_expr()?;
-                return Some(self.s.act_on_unary(UnaryOp::Extension, e, loc));
+                let n = &self.s.extensions_silenced;
+                n.set(n.get() + 1);
+                let e = self.parse_cast_expr();
+                let n = &self.s.extensions_silenced;
+                n.set(n.get().saturating_sub(1));
+                return Some(self.s.act_on_unary(UnaryOp::Extension, e?, loc));
             }
             Some(k @ (Kw::Real | Kw::Imag)) => {
                 // GNU `__real__ e` / `__imag__ e` (clang's `ParseCastExpression`).
@@ -601,9 +608,20 @@ impl Parser<'_, '_> {
                 _ => i += 1,
             }
         };
-        let t = self.tok_at(after);
+        let mut after = after;
+        let mut t = self.tok_at(after);
+        // `(T())++;`: after `++` or `--` clang's `ParseCastExpression`
+        // recurses, so they are prefix (a cast) only when an operand
+        // follows; otherwise postfix on a parenthesized expression
+        // (WP-1466; GCC PR61804).
+        let mut incdec = false;
+        while matches!(t.kind, TokKind::Punct(Punct::PlusPlus | Punct::MinusMinus)) {
+            incdec = true;
+            after += 1;
+            t = self.tok_at(after);
+        }
         match t.kind {
-            TokKind::Punct(Punct::LBrace) => true,
+            TokKind::Punct(Punct::LBrace) => !incdec,
             TokKind::Punct(Punct::LParen) => {
                 self.tok_at(after + 1).kind != TokKind::Punct(Punct::RParen)
             }
@@ -2351,6 +2369,30 @@ impl Parser<'_, '_> {
             && self.at_kw(Kw::Operator)
         {
             return self.parse_qualified_operator_id(q, begin, template_loc);
+        }
+        // `X::~X()` in a non-static member function: the destructor of the
+        // implicit object, `(*this).X::~X()` ([expr.prim.id.general]/2,
+        // [class.dtor]/14, CWG272; WP-1466).
+        if let Some(q) = qual
+            && self.at(Punct::Tilde)
+            && self.ident_of(self.peek(1)).is_some()
+            && !self.peek_is(2, Punct::Less)
+            && self.s.implicit_this_available()
+        {
+            let tl = self.bump().span.lo;
+            let name = self.ident()?;
+            let nl = self.bump().span.lo;
+            let this = self.s.act_on_this(begin);
+            return Some(self.s.act_on_member_destructor_q(
+                this,
+                Some(q),
+                None,
+                name,
+                tl,
+                nl,
+                begin,
+                true,
+            ));
         }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);

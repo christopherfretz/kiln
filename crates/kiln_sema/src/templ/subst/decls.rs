@@ -1885,6 +1885,11 @@ impl Substituter<'_, '_, '_> {
             return Ok(self.sema.instantiate_member_friend(&mf, nns, ty, at, loc));
         }
         match self.sema.ast.decls.friend_target(d) {
+            // A friend function or special member of a dependent class
+            // (`friend R T::f();`, `friend X<U>::X(U);`) is kept with its
+            // type only; its instantiation befriends nothing yet (WP-1466
+            // follow-up, spec/sema-class.md).
+            FriendTarget::Type { ty, .. } if self.sema.ast.types.is_function(ty) => Ok(None),
             FriendTarget::Type { ty, owned_tag } => {
                 // `friend struct Z;` that first declared `Z` in the
                 // enclosing namespace: the instantiation befriends the
@@ -1940,6 +1945,21 @@ impl Substituter<'_, '_, '_> {
             }
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::FunctionTemplate => {
                 self.friend_function_template(t, loc).map(Some)
+            }
+            FriendTarget::Decl(f)
+                if matches!(
+                    self.sema.kind_of(f),
+                    DeclKind::CXXConstructor | DeclKind::CXXDestructor | DeclKind::CXXConversion
+                ) =>
+            {
+                // `friend X<int>::X(int);` in a class template: matched to
+                // a member of a non-dependent class in the definition, so
+                // each specialization befriends the same member.
+                let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(f));
+                let first = self.sema.ast.first(f);
+                self.sema.push_friend(first);
+                Ok(Some(fd))
             }
             FriendTarget::Decl(f) => {
                 if !matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) {

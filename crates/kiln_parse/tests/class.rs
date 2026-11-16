@@ -34,18 +34,19 @@ fn class_special_declarator_ids() {
     assert_eq!(p.problems().len(), 0, "{:?}", p.problems());
 }
 
-/// [class.friend]: friend declarations with special declarator-ids reach
-/// sema's stubs by name.
+/// [class.friend]: friend declarations with special declarator-ids are
+/// declared, or matched to a member by name.
 #[test]
 fn class_friend_special_names() {
     let p = parse(
         "struct P { friend P operator<(P, int); friend constexpr P operator<=>(P v, int) noexcept \
          { return v; } friend P::operator int(); };",
     );
-    assert_parsed(&p);
-    // Operator friends are declared (WP-068b); only the out-of-class
-    // conversion-function friend reaches a stub.
-    p.assert_diag("1:114 error: conversion functions is not supported yet");
+    // Operator friends are declared (WP-068b); the conversion-function
+    // friend is looked up in `P`, which has none (WP-1466, as clang).
+    p.assert_diag(
+        "1:114 error: friend declaration of 'operator int' does not match any declaration in 'P'",
+    );
     assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 

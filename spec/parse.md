@@ -920,6 +920,28 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `O::I::R::R(I::R &&)` the name `I` is found through the enclosing
     classes of `R`, so the declarator is a constructor and no access
     check of `O::I` runs outside the member's context (WP-1455).
+    In a friend declaration an unqualified name after a dependent
+    qualifier in the parentheses is not taken as a type (clang's
+    `ImplicitTypenameContext::No`): `friend C(T::fn)();` declares a
+    friend function `T::fn` returning `C`. A friend declaration with a
+    type specifier never names a constructor (`friend void S(T);` in
+    `S`); a member `int S();` in `S` is still a constructor declarator
+    (with a return type, an error).
+  - a simple-template-id naming the class as a constructor or
+    destructor declarator-id in the member-specification (`X<T>();`,
+    `~X<T>();`, CWG2237; `names_constructor_template_id`,
+    `parse_cdtor_template_id`, WP-1466): valid before C++20; from C++20
+    (where [class.ctor.general]/1 and [class.dtor]/1 no longer allow
+    it) `template-id not allowed for constructor|destructor in C++20`
+    (`ext_template_id_cdtor`, ExtWarn, `-Wtemplate-id-cdtor`, an error
+    under `-pedantic-errors`), as GCC 16.1 does; clang 22 accepts it
+    silently (spec/diag.md D18). The out-of-class
+    `X<T>::~X<T>()` is checked the same way; `X<T>::X()` and
+    `p->~X<int>()` are not template-ids as declarator-ids and stay
+    silent. A template-id that names another specialization is an error:
+    `~Y<int>()` in `Y<T>` is `expected the class name after '~' to name
+    the enclosing class`, `X<int>()` in `X<T>` is `expected
+    unqualified-id` (GCC rejects it too; clang 22 accepts it).
   - an attribute-specifier-seq right after the declarator-id
     (`declarator-id attribute-specifier-seq(opt)`, [dcl.decl.general]/4),
     for every kind of declarator-id: an identifier or qualified-id
@@ -1121,10 +1143,20 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
     any, which then joins the `DeclStmt`.
-- **GNU `__extension__`** before a `using` or `template` declaration at
-  namespace, class or block scope is dropped (`skip_extension_before_using`;
-  clang skips it in `ParseExternalDeclaration`): libc++ `__extension__
-  using`, libstdc++ `__extension__ template<>` (WP-237). At namespace
+- **GNU `__extension__`** before a declaration at namespace, class or
+  block scope (a member-declaration, or a block declaration whose
+  first token after the run starts one) is consumed and silences every
+  extension diagnostic (`DiagClass::Extension`: the Extension and
+  ExtWarn kinds, including under `-pedantic-errors`) for the whole
+  declaration, as clang's `ExtensionRAIIObject` does
+  (`Parser::enter_extension` / `leave_extension` count nesting in
+  `Sema::extensions_silenced`, a transient snapshot field; WP-1466).
+  The unary operator silences its operand the same way. Other
+  diagnostics are unaffected, and the silencing ends with the
+  declaration. Unlike clang, an extension diagnostic that kiln issues
+  only when the declaration is first parsed is not re-issued at a
+  template's instantiation. libc++ `__extension__ using`, libstdc++
+  `__extension__ template<>` (WP-237). At namespace
   scope only, it is also dropped before an asm-declaration (libstdc++
   `__extension__ asm(...)`, WP-271); in a class or block `asm` after it
   is an error, as clang.
@@ -1398,7 +1430,20 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `ParseCXXClassMemberDeclaration`):
   - leaders: `;`, `public:`/`protected:`/`private:` (a missing `:` is
     `expected ':'`; `act_on_access_spec`), `static_assert`, `using`,
-    `template` (unsupported).
+    `template` (unsupported), and access declarations: one or more
+    `name ::`, then an identifier and `;`, or `operator` up to a `;`
+    before any `{` or `(` (but `operator()`) (`A::f;`, `T::m;`,
+    `A::B::f;`, `A::operator int;`; `at_access_declaration`, scanned only
+    after a name followed by `::`, with no template argument skipped, so
+    `B<T>::f;` is not one; clang's tentative parse in
+    `ParseCXXClassMemberDeclaration`, WP-1466). C++98
+    [class.access.dcl] made them deprecated (`access declarations are
+    deprecated; use using declarations instead`, `-Wdeprecated`); from
+    C++11 they are ill-formed (`ISO C++11 does not allow access
+    declarations; use using declarations instead`), reported at the
+    unqualified-id, both as clang 22 (GCC 16.1 warns in every mode). Each
+    is then parsed as the using-declaration it means
+    (`parse_using_declaration`), so access to the member is adjusted.
   - `decl-specifier-seq ;`: `act_on_friend(ds, base, None, loc)` for
     `friend class X;`, else `act_on_decl_spec_only`.
   - No decl-specifiers and no special declarator: a name followed by
@@ -1522,7 +1567,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     clang's `ParseCastExpression` accepts without `NotCastExpr`:
     literals, identifiers and the keywords that start a primary or
     unary expression or a functional cast, `(`, `[`, `::`, `^^`, `[:`,
-    and the unary operators `++ -- & && * + - ! ~`). So `(T())x` and
+    and the unary operators `++ -- & && * + - ! ~`; after a run of
+    `++`/`--` the next token decides the same way, as clang's
+    `ParseCastExpression` recurses, so `(T())++;` is a postfix increment
+    of a parenthesized expression, WP-1466). So `(T())x` and
     `(T())*x` are casts, while `(T());`, `(T())/x`, `(T())()` and the
     direct-initializer `T x((T()))` (libc++ `count_new.h`'s
     `MemCounter counter((MemCounter::MemCounterCtorArg_()))`) are
@@ -1814,7 +1862,12 @@ for `^^`, §5 for splices).
 ### 6.1 Statements (`stmt.rs`)
 - **Declaration or expression** ([stmt.ambig], [dcl.ambig.res]):
   `is_cxx_declaration_statement` (§2.1) decides, as clang's
-  `isCXXDeclarationStatement` does. A `[` after a declarator is clang's
+  `isCXXDeclarationStatement` does. A qualified destructor name
+  (`X::~X();`, `::N::Z::~Z();`, only `name ::` pairs walked) starts an
+  expression, an explicit destructor call (CWG272; WP-1466,
+  `at_qualified_destructor_name`); in a non-static member function the
+  id-expression `Q::~X` names the destructor of the implicit object,
+  `(*this).Q::~X` (`parse_id_expression_rest`). A `[` after a declarator is clang's
   `TryParseBracketDeclarator`: `[{` or a top-level `,` before the `]`
   means an expression; `[[` is a declarator suffix (the attributes are
   then `an attribute list cannot appear here` after a parenthesized
@@ -2055,7 +2108,8 @@ for `^^`, §5 for splices).
   `__attribute__((…))` are all collected as scope, name and arguments.
 - **Attribute scopes** (WP-889/WP-891; clang
   `TryParseCXX11AttributeIdentifier`): a `[[...]]` scope, name, or `using`
-  prefix is an identifier or keyword (`cxx11_attr_ident`). `__clang__` is
+  prefix is an identifier, keyword or alternative token
+  (`[[and, bitor]]`, [dcl.attr.grammar]/5, WP-1466; `cxx11_attr_ident`). `__clang__` is
   a predefined macro, so `[[__clang__::x]]` arrives as the number `1`; a
   numeric token whose macro expansion is spelled `__clang__` is read as
   `_Clang` (the clang scope, spec/sema.md §4.5 "Attribute namespaces")
@@ -2182,6 +2236,15 @@ for `^^`, §5 for splices).
     at namespace scope its attributes are subject-checked against
     nothing (sema `act_on_decl_attrs` on the enclosing context); in a
     member-specification it is `declaration does not declare anything`.
+    At namespace scope one whose specifiers are all empty (`[[]] [[]];`,
+    `__attribute__(()) [[]];`) is silent, as in clang 22 and GCC 16.1
+    (WP-1466).
+  - a statement may start with a sequence that mixes GNU
+    (`__attribute__((...))`) and C++11 (`[[...]]`, `alignas`) specifiers
+    in any order (`at_gnu_attr_null_stmt`, WP-1466): followed by `;` it
+    is an attribute-declaration statement (`__attribute__(()) [[]]
+    __attribute__((fallthrough)) [[]];`, also `assume`), and it may also
+    precede a label, a compound statement, `return` and a declaration.
   - after the class-name of a class-head (`struct S [[x]] { };`,
     `struct S alignas(4) final : B { };`, `struct S [[x]];`,
     `template<> struct A<int> [[x]] { };`, [class.pre]/1): `an

@@ -451,6 +451,22 @@ Planned as 1.3.0.
   whose constructors' parameters had no type; they are not
   members-of-representable and are left out. Found in downstream code
   (WP-1490).
+- Parser rejects-valid found running GCC's C++ testsuite (WP-1466).
+  `X<T>()` and `~X<T>()` as a constructor or destructor declarator in
+  class `X` are accepted with a warning in C++20 and later (CWG2237,
+  `-Wtemplate-id-cdtor`, an error under `-pedantic-errors`). GNU
+  attributes may be mixed with `[[...]]` in any order before a
+  statement, a label or a declaration, and `[[]] [[]];` declares
+  nothing silently; attribute names may be alternative tokens
+  (`[[and]]`). `__extension__` silences pedantic diagnostics in the whole
+  declaration or expression it starts, also in template instantiations.
+  Friend declarations of constructors, destructors and conversion
+  functions (`friend A::A(int);`, `friend X<T>::~X();`) befriend them.
+  `p->template A<T>::f()` and `x.A<int>::template g<char>()` name a
+  member. Access declarations (`A::x;` in a class) are a using-declaration
+  with a deprecation warning in C++98 and an error from C++11, as clang.
+  `(T())++` and `N::C::~C();` in a member function parse, and anonymous
+  unions and structs in class templates are instantiated.
 
 ## [1.2.1] - 2026-11-14
 

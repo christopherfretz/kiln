@@ -516,7 +516,7 @@ impl Sema<'_, '_> {
     /// Whether an unqualified member name here can be an implicit member
     /// access: in a non-static member function, or outside any function
     /// in a default member initializer.
-    pub(crate) fn implicit_this_available(&self) -> bool {
+    pub fn implicit_this_available(&self) -> bool {
         match &self.func {
             Some(f) => f.this_ty.is_some(),
             None => !self.nsdmi_this.is_empty(),
