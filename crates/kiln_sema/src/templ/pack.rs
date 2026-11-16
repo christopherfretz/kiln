@@ -646,16 +646,43 @@ impl Substituter<'_, '_, '_> {
         let pattern = pattern.ok_or(SubstFail)?;
         let ellipsis = self.sema.templ.fold_ellipsis.get(&e).copied().unwrap_or(loc);
         let init = self.opt_expr(init)?;
-        let elems = match self.expand_pattern_at(Some(ellipsis), |s| s.element_expr(pattern))? {
+        // An element substituted from a pack element that is itself an
+        // expansion (an alias guide's `Ts` bound to `{Ts'...}`) still
+        // names its pack: it stays a fold over that slice, combined with
+        // the rest (clang `TransformCXXFoldExpr`, "retain a pack
+        // expansion for this slice").
+        let elems = match self.expand_pattern_rewrap(Some(ellipsis), |s| s.element_expr(pattern))? {
             Expansion::Elements(v) => v,
             Expansion::Unexpanded(p) => {
                 let (l, r) = if right { (Some(p), init) } else { (init, Some(p)) };
                 return Ok(self.sema.act_fold(l, op, r, loc, ellipsis, end));
             }
         };
-        let mut it: Box<dyn Iterator<Item = ExprId>> =
-            if right { Box::new(elems.into_iter().rev()) } else { Box::new(elems.into_iter()) };
-        let Some(mut acc) = init.or_else(|| it.next()) else {
+        let rw = self.take_rewrap();
+        let mut it: Box<dyn Iterator<Item = (ExprId, bool)>> = {
+            let tagged =
+                elems.into_iter().enumerate().map(move |(k, x)| (x, rw.get(k) == Some(&true)));
+            if right {
+                Box::new(tagged.collect::<Vec<_>>().into_iter().rev())
+            } else {
+                Box::new(tagged)
+            }
+        };
+        let mut acc = init;
+        // A fold-expression prints its own parentheses.
+        let mut folded = false;
+        if acc.is_none() {
+            match it.next() {
+                Some((x, false)) => acc = Some(x),
+                Some((x, true)) => {
+                    let (l, r) = if right { (Some(x), None) } else { (None, Some(x)) };
+                    acc = Some(self.sema.act_fold(l, op, r, loc, ellipsis, end));
+                    folded = true;
+                }
+                None => {}
+            }
+        }
+        let Some(mut acc) = acc else {
             use kiln_ast::expr::BinaryOp;
             return match op {
                 BinaryOp::LAnd => Ok(self.sema.act_on_bool_literal(true, ellipsis)),
@@ -670,16 +697,21 @@ impl Substituter<'_, '_, '_> {
                 }
             };
         };
-        for x in it {
+        for (x, slice) in it {
             self.check_stack(|_| loc)?;
-            acc = if right {
-                self.sema.act_on_binary(op, x, acc, ellipsis)
-            } else {
-                self.sema.act_on_binary(op, acc, x, ellipsis)
+            folded = slice;
+            acc = match (slice, right) {
+                (true, true) => self.sema.act_fold(Some(x), op, Some(acc), loc, ellipsis, end),
+                (true, false) => self.sema.act_fold(Some(acc), op, Some(x), loc, ellipsis, end),
+                (false, true) => self.sema.act_on_binary(op, x, acc, ellipsis),
+                (false, false) => self.sema.act_on_binary(op, acc, x, ellipsis),
             };
             if self.sema.is_err_expr(acc) {
                 return Err(SubstFail);
             }
+        }
+        if folded {
+            return Ok(acc);
         }
         Ok(self.sema.act_on_paren(acc, loc, end))
     }

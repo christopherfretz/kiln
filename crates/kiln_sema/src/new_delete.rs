@@ -1985,6 +1985,36 @@ impl Sema<'_, '_> {
         self.emit(msg.with_note(note));
     }
 
+    /// Whether `( v )` of an array new of `elem` is one string literal
+    /// that can initialize it (C++20).
+    fn paren_string_literal(&self, elem: QualType, v: &[ExprId]) -> bool {
+        v.len() == 1
+            && self.std >= kiln_lex::Std::Cxx20
+            && self
+                .string_lit_of(v[0])
+                .is_some_and(|s| self.string_init_compat(elem, s) == crate::init::StringInit::Ok)
+    }
+
+    /// `new char[N]("foo")` (C++20): the literal initializes the array;
+    /// with `unbounded`, its length is the bound.
+    fn new_paren_string_init(
+        &mut self,
+        t: QualType,
+        v: Vec<ExprId>,
+        l: Loc,
+        r: Loc,
+        at: Loc,
+        unbounded: bool,
+    ) -> Result<(Option<ExprId>, Option<u64>), ()> {
+        let e = self.perform_init(t, Initializer::Paren(v, l, r), at, false);
+        if self.is_err_expr(e) {
+            return Err(());
+        }
+        let completed =
+            if unbounded { self.ast.types.array_size(self.ast.exprs.get(e).ty()) } else { None };
+        Ok((Some(e), completed))
+    }
+
     /// The semantic initializer of a new-expression ([expr.new]/23) and,
     /// for `new T[]{...}`, the bound the initializer gives.
     fn new_initializer(
@@ -2024,6 +2054,13 @@ impl Sema<'_, '_> {
             NewInit::Paren(v, l, r) => {
                 if array_form {
                     let t = array_ty(self);
+                    // `new char[]("foo")`: a string literal initializes
+                    // the array ([dcl.init.general]/16.3, [dcl.init.string];
+                    // C++20 P1975), its length completing the bound.
+                    let unbounded = matches!(first, Some((None, _)));
+                    if self.paren_string_literal(elem, &v) {
+                        return self.new_paren_string_init(t, v, l, r, at, unbounded);
+                    }
                     if !v.is_empty() {
                         return self.new_paren_array_init(elem, t, &v, first, l, r);
                     }

@@ -765,6 +765,24 @@ Planned as 1.3.0.
   destroyed (or one with no active member) is accepted in C++23 as in
   C++26, and the copy keeps the member ended.
 
+- Template argument deduction and class template argument deduction
+  found running GCC's C++ testsuite: with `-fclang-compat=22` the
+  associated constraints are checked before the non-dependent conversions
+  that may use a user-defined conversion (CWG2369, in clang 22's order); an
+  aggregate deduction candidate skips a pack that is not trailing;
+  copy-initialization CTAD considers only guides callable with one
+  argument, and a guide whose `explicit(b)` depends on a template
+  parameter is resolved per deduction; `auto(x)` with a dependent operand,
+  `new char[]("abc")` (C++20) and `new char[]{"abc"}`, function parameter
+  packs of function type (`T... f(int)`), constant expressions such as
+  template arguments inside `sizeof` and `decltype`, dependent functional
+  casts to a reference type, and, in C++11, implicit `const` on a
+  constexpr member function with a trailing return type and classes with
+  default member initializers not being aggregates. Candidate notes name
+  an implicit copy or move assignment operator, report "packs of
+  different lengths" and the value of an `explicit(b)` guide, and alias
+  guides print no `<null expr>` default arguments.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

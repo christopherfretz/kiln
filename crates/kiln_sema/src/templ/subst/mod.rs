@@ -404,7 +404,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 // later, it keeps the enclosing full-expression's cleanups
                 // (spec/sema-class.md §5.3).
                 let outer = self.sema.cleanup;
-                let e = self.expr(expr)?;
+                // Evaluated even inside an unevaluated operand
+                // (`sizeof(f<(T(), 0)>())`, [expr.context]/1; clang's
+                // `ConstantEvaluated` context).
+                let unevaluated = std::mem::take(&mut self.sema.unevaluated);
+                let e = self.expr(expr);
+                self.sema.unevaluated = unevaluated;
+                let e = e?;
                 self.sema.note_constant_outer_cleanups(e, outer);
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }

@@ -2220,24 +2220,36 @@ impl AstBuilder<'_> {
             deps |= d.without(ExprDeps::TYPE);
         }
         let vk = self.ref_category(ty);
+        // A glvalue of the referenced type (clang `getNonLValueExprType`);
+        // the type as written is kept for substitution, mangling and
+        // printing ([`crate::expr::Exprs::unresolved_construct_type`]).
+        let node_ty = if self.ast.types.is_reference(ty) {
+            self.ast.types.pointee(ty).unwrap_or(ty)
+        } else {
+            ty
+        };
         let l = self.ast.lists.push(args);
         let e = self.simple(
             ExprKind::CXXUnresolvedConstructExpr,
             vk,
             deps,
             u8::from(list),
-            ty,
+            node_ty,
             loc,
             l.raw(),
             0,
         );
+        if node_ty != ty {
+            let _ = self.ast.exprs.cold.cast_written.insert(e, ty);
+        }
         let _ = self.ast.exprs.cold.end_loc.insert(e, rparen);
         e
     }
 
     fn ref_category(&self, ty: QualType) -> ValueCategory {
         use crate::types::TypeView;
-        match self.ast.types.view(ty.ty()) {
+        // Through sugar: `R(x)` with `typedef int& R`.
+        match self.ast.types.view(self.ast.types.canonical(ty).ty()) {
             TypeView::LValueRef(_) => ValueCategory::LValue,
             TypeView::RValueRef(_) => ValueCategory::XValue,
             _ => ValueCategory::PRValue,

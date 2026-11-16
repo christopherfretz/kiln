@@ -2363,8 +2363,10 @@ impl Sema<'_, '_> {
             if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
                 // An array whose bound alone names the pack (`int
                 // ...a[Ns]`) expands unadjusted; each element decays when
-                // the pack is substituted, as in clang.
-                let base = if self.has_unexpanded_pack(ty) {
+                // the pack is substituted, as in clang. So does a function
+                // type (`T... x(int)`, mangled `DpFT_iE`).
+                let base = if self.has_unexpanded_pack(ty) && !self.ast.types.is_function(declared)
+                {
                     ty
                 } else {
                     original_ty = None;
@@ -2506,7 +2508,13 @@ impl Sema<'_, '_> {
         }
         let Some(Chunk::Function { rparen, .. }) = d.chunks.first() else { return ty };
         let rparen = *rparen;
-        let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
+        // The written prototype: the canonical one drops the trailing
+        // return flag, which `this` in a trailing `decltype` needs.
+        let Some(p) =
+            self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty)).copied()
+        else {
+            return ty;
+        };
         let info = p.info();
         if info.this_quals().is_const() {
             return ty;

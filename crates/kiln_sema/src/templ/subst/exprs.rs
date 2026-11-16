@@ -1070,7 +1070,8 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.act_on_convert_vector(o, ty, loc, end))
             }
             ExprKind::CXXUnresolvedConstructExpr => {
-                let ty = self.ty(n.ty(), loc)?;
+                let written = self.sema.ast.exprs.unresolved_construct_type(e);
+                let ty = self.ty(written, loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
                 if n.aux() != 0 && self.invalid_class_braced_cast(ty, loc) {
                     return Err(SubstFail);

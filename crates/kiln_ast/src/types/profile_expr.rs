@@ -635,7 +635,8 @@ impl Ast {
                 stack.push(Work::Opt(id(n.a())));
             }
             K::CXXUnresolvedConstructExpr => {
-                out.extend([tag(k, aux & 1), self.canon_word(n.ty()), self.ctad_word(n.ty())]);
+                let t = x.unresolved_construct_type(e);
+                out.extend([tag(k, aux & 1), self.canon_word(t), self.ctad_word(t)]);
                 self.push_list(ListId::new(n.a()), stack);
             }
             K::CXXParenListInitExpr => {

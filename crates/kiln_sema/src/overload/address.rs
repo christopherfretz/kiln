@@ -1333,9 +1333,27 @@ impl Sema<'_, '_> {
         let kind = if self.kind_of(d) == DeclKind::FunctionTemplate {
             "function template"
         } else {
-            "function"
+            self.implicit_assign_kind(d)
         };
         self.diag(DiagId::note_ovl_candidate, loc).arg(kind)
+    }
+
+    /// "function", or the implicit copy/move assignment operator phrase
+    /// of clang's `select_ovl_candidate_kind` for an implicitly declared
+    /// one.
+    fn implicit_assign_kind(&self, d: DeclId) -> &'static str {
+        if !self.ast.decls.get(d).has(DeclFlags::IMPLICIT) {
+            return "function";
+        }
+        match self.special_kind_of(d) {
+            Some(crate::class::SpecialKind::MoveAssign) => {
+                "function (the implicit move assignment operator)"
+            }
+            Some(crate::class::SpecialKind::CopyAssign) => {
+                "function (the implicit copy assignment operator)"
+            }
+            _ => "function",
+        }
     }
 
     /// The note for candidate `d` whose type does not match the function
@@ -1343,7 +1361,7 @@ impl Sema<'_, '_> {
     /// count, then the first differing parameter, then the return type,
     /// then the exception specification; otherwise plain.
     fn mismatch_note(&self, d: DeclId, want: QualType) -> Diag {
-        self.mismatch_note_as(d, want, "function")
+        self.mismatch_note_as(d, want, self.implicit_assign_kind(d))
     }
 
     /// [`Self::mismatch_note`] for a candidate of kind `kind` ("function",

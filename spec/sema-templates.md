@@ -1335,7 +1335,7 @@ never recomputed (ast.md §5). The rules follow [temp.dep.expr],
 | `UnresolvedLookupExpr` | TYPE \| VALUE \| INST if any explicit template arg is dependent; otherwise `requires_adl` decides at the `CallExpr` |
 | a lambda in a dependent context | INST |
 | a named or C-style cast to a dependent type (`dependent_cast`) | its type's deps; the value category is the target's, read through sugar (`static_cast<result_type>(b)` with `typedef X<R>& result_type;` is an lvalue, rebuilt as a reference cast; libstdc++ future:751; WP-332, test `expr.static.cast/libstdcxx-dependent-cast-to-reference-typedef.cpp`) |
-| `CXXUnresolvedConstructExpr` (`T(args)`, `T{args}`) | its type's deps; an argument's TYPE becomes VALUE unless the type is an undeduced placeholder (`auto(x)`, CTAD), which stays TYPE-dependent ([temp.dep.expr]/3: `u16(t.v)` has type `u16`, so `RP d(u16(t.v));` is direct-initialized at definition; WP-775, `temp.dep.expr/functional-cast-not-type-dependent-run.cpp`; the placeholder case WP-782, `temp.dep.expr/p3-placeholder-functional-cast-type-dependent-run.cpp`) |
+| `CXXUnresolvedConstructExpr` (`T(args)`, `T{args}`) | its type's deps; an argument's TYPE becomes VALUE unless the type is an undeduced placeholder (`auto(x)`, CTAD), which stays TYPE-dependent ([temp.dep.expr]/3: `u16(t.v)` has type `u16`, so `RP d(u16(t.v));` is direct-initialized at definition; WP-775, `temp.dep.expr/functional-cast-not-type-dependent-run.cpp`; the placeholder case WP-782, `temp.dep.expr/p3-placeholder-functional-cast-type-dependent-run.cpp`); `auto(x)`/`auto{x}` (P0849) with a type-dependent operand has a dependent `auto` type, deduced again at instantiation, so `+auto(t)` is not checked at definition (`expr.type.conv/p0849-auto-cast-dependent.cpp`) |
 | any of the above with an error operand | plus ERROR |
 
 INST alone means the expression mentions a template parameter but neither
@@ -3607,6 +3607,43 @@ and `act_member`. Every check and implicit conversion is therefore
 recomputed exactly as for non-template code (clang's
 `TreeTransform::Rebuild*`).
 
+A dependent functional cast to a reference type (`R(x)` with
+`using R = T&`, [expr.type.conv]/2) is a `CXXUnresolvedConstructExpr`
+whose node type is the referred-to type with the value category of the
+reference ([expr.type]/1; looked through sugar); the written type is kept
+in `cast_written` and read back by `Exprs::unresolved_construct_type`
+(substitution, dumps, the mangler's `cv`). Tests:
+`temp.dep.expr/functional-cast-reference-type-run.cpp`,
+`.../functional-cast-reference-type-lvalue.cpp`.
+
+A template argument and any other constant expression
+([expr.const]/2) are potentially evaluated even inside an unevaluated
+operand (`sizeof(A<f()>)`, `decltype(B<N + g()>{})`): the parser's
+`parse_constant_expr` (`enter_constant_expression`) and the template-argument
+substitution both clear the unevaluated depth for the operand, so
+odr-uses and constexpr calls in it are evaluated
+(`expr.context/template-argument-in-unevaluated-operand.cpp`).
+
+Related non-template rules fixed with the same work (WP-1506), noted
+here because the GCC cases reaching them are template tests:
+- C++11 [dcl.constexpr]/8: a `constexpr` non-static member function
+  other than a constructor or destructor is implicitly `const`
+  (`Sema::cxx11_constexpr_const`, conversion functions and `operator=`
+  included), with clang's `-Wconstexpr-not-const`; the written prototype
+  is rebuilt, so a trailing `-> decltype(this->m)` keeps its `this`, and
+  an out-of-line definition of a static member function is not adjusted
+  (`dcl.constexpr/p8-cxx11-implicit-const.cpp`).
+- C++11: a class with a default member initializer is not an aggregate
+  ([dcl.init.aggr]/1 in C++11; `over.ics.list/aggregate-default-member-init-cxx11.cpp`).
+- [over.ics.list]/8: in the aggregate walk a string literal of a
+  compatible character type is a valid conversion for an array element;
+  its length is diagnosed by the initialization, not the conversion
+  sequence (`over.ics.list/aggregate-string-literal-element-{run,too-long}.cpp`).
+- [over.over]: a candidate note for an implicitly declared copy or move
+  assignment operator names it as clang does ("candidate function (the
+  implicit copy assignment operator)";
+  `over.over/implicit-assignment-candidate-note.cpp`).
+
 - **Implicit nodes are stripped, then rebuilt by the action.** This
   covers `ImplicitCastExpr`, `MaterializeTemporaryExpr`,
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
@@ -4588,6 +4625,30 @@ formed it:
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
+   - (clang 22, `-fclang-compat=22` and later; CWG2369) the non-dependent
+     conversions below run in two passes around the constraints, as clang
+     22's `CheckNonDependent` does: first the arguments that cannot use a
+     user-defined conversion (GCC's PR99599 heuristic: through references,
+     then through one pointer level when both sides are pointers, the
+     parameter is not a defined class with a one-argument constructor
+     other than copy or move (explicit, template and inherited ones
+     count), and the argument is not a class with a visible conversion
+     function; so `f(bar_tag, T) requires C<T>` with an empty `bar_tag`
+     fails on its conversion before `C<T>` is checked,
+     `temp.deduct/cwg2369-checked-first-without-converting-ctor.cpp`);
+     a bad one fails at once, reporting the first bad
+     conversion of all arguments in index order. Then check the
+     associated constraints here, once the deduced, defaulted and
+     explicit arguments are all known: [temp.deduct.general]/5 orders
+     them before the function type is substituted and before the
+     non-dependent conversions below, so an unsatisfied constraint stops
+     a conversion that would instantiate a hard error (a conversion
+     function template whose default template argument names
+     `typename Z<T>::xx`), and a candidate failing both reports the
+     constraints; the deferred (user-defined) conversions run after
+     them. They are checked once, here; under clang 19 they are
+     checked last instead (below). Tests:
+     `tests/conformance/temp.deduct/cwg2369-constraints-before-nondependent-conversion.cpp`;
    - check the argument of each P without deduced template params
      (step 2's last bullet) for an implicit conversion, with the
      options `add_candidate` would use (`deduce_call`'s `opts`), before
@@ -4603,7 +4664,7 @@ formed it:
    - substitute everything into the function type under
      `DeducedTemplateArgumentSubstitution`. A failure is
      `SubstitutionFailure`;
-   - only then check the associated constraints (§8,
+   - under clang 19 only then check the associated constraints (§8,
      [temp.deduct.general]/5: "If the function template has associated
      constraints, those constraints are checked for satisfaction").
      Failure is `ConstraintsNotSatisfied`. The order is clang 19's
@@ -5378,8 +5439,42 @@ template-id in a qualifier gains a stray keyword (`template
 ChkDep<D>::ok()` for clang's `ChkDep<D>::ok()`): note-only differences
 kept for a follow-up (the rebuilt dependent name has no written-form
 sugar).
+When the guide is a member template of a class template specialization
+(a constructor template of `C<int>::Inner<U>` reached through an alias),
+its associated constraints are the pattern's, substituted with the
+enclosing specialization's arguments plus the guide's own level
+(`inst.concepts.member_constraints`), not the member's unsubstituted
+clause; the guide's own constraint is printed in its signature before the
+`__is_deducible` conjunct. Test (clang 22 only; clang 19 crashes on it):
+`tests/conformance/over.match.class.deduct/p3-alias-guide-constraints.cpp`.
 `tests/conformance/over.match.class.deduct/alias-ctor-template-members.cpp`,
 `.../alias-aggregate.cpp`.
+
+**Aggregate candidate with packs (WP-1506).** In the aggregate
+deduction candidate ([over.match.class.deduct]/1.5) an element whose
+type is a pack expansion that is not the last element corresponds to no
+initializer clause and gets no parameter (`agg_elements`). The trailing
+pack may then deduce fewer elements than an earlier deduction of the same
+pack; as in clang's aggregate-candidate deduction, a shorter deduction
+that is a prefix of the earlier one keeps the earlier one
+(`DeducedArgs::aggregate`, `record_pack`), and the candidate's minimum
+arity is the argument count (`add_candidate`). Two packs deduced to
+different lengths otherwise note "deduced packs of different lengths".
+Tests: `over.match.class.deduct/p1-aggregate-non-trailing-pack.cpp`.
+
+**Copy-initialization (WP-1506).** For `T x = e;` the candidates are only
+the guides callable with one argument ([over.match.class.deduct]/1 via
+[over.match.copy]): a guide with more than one required parameter, or
+with none and no ellipsis, is not added and not noted
+(`add_ctad_candidate`, clang `DeduceTemplateSpecializationFromInitializer`).
+An `explicit(b)` guide template whose `b` is value-dependent is resolved
+per specialization; in copy-initialization a specialization whose
+specifier evaluates to true is non-viable, noted "explicit deduction guide
+is not a candidate (explicit specifier evaluates to true)". Tests:
+`over.match.class.deduct/p1-copy-init-converting-guides.cpp`,
+`.../p3-explicit-dependent-guide.cpp`. An alias guide's signature in a
+note prints no default arguments (clang prints none, the substituted
+default having no expression): `.../p3-alias-guide-default-args.cpp`.
 
 A template template parameter named alone (`C(args)`, `C{args}`,
 `C x(args);`) is a placeholder for a deduced class type as in clang
@@ -6070,6 +6165,15 @@ selected and checked when the template is instantiated. Test:
 `expr.prim.lambda/libstdcxx-copy-capture-local-class-in-template.cpp`
 (libstdc++ pstl/algorithm_impl.h:1978).
 
+**Function parameter pack of function type (WP-1506).** In
+`template <class... T> void f(T... x(int))` the pattern is the unadjusted
+function type `T(int)` ([dcl.fct]/5 adjusts each parameter, not the
+pattern): the pack expands it and each element decays to `T(*)(int)` when
+it is substituted (`act_on_param_declarator`). It mangles `DpFT_iE`. Deduction from an
+overloaded or template argument against such a pattern fails as in clang
+and GCC. Tests: `temp.variadic/function-type-parameter-pack-run.cpp`,
+`.../function-type-parameter-pack-mismatch.cpp`.
+
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
 1. **Collect the unexpanded packs** in `pattern`, pruning on
@@ -6246,7 +6350,12 @@ With elements `E1..EN`:
 **Building.** Each step goes through `act_binary`, which does overload
 resolution. The whole result is wrapped in `ParenExpr`, as clang's
 `TransformCXXFoldExpr` does; the golden `packs/fold-dump.cpp` pins this
-down.
+down. An element that is itself still an expansion (the outer level's
+`E` substituted by `T2<Us...>` in an alias guide, `(... && same<E, Ts>)`)
+stays a fold over that slice: alone it is a unary fold, after other
+elements a binary fold with the accumulated result as init, and such a
+step adds no extra `ParenExpr` (`p3-alias-guide-constraints.cpp` prints
+`(... && same<T2<Us...>, Ts>)`).
 
 **Deep trees.** A fold over N elements yields a tree N deep.
 - Requirement R-WALK: every consumer that walks expression trees

@@ -1767,6 +1767,12 @@ impl ExprArena {
         self.cold.cast_written.get(e).copied()
     }
 
+    /// The type as written of `CXXUnresolvedConstructExpr` `e`: the
+    /// node's own type, or the reference type it was written with.
+    pub fn unresolved_construct_type(&self, e: ExprId) -> QualType {
+        self.cast_written_type(e).unwrap_or_else(|| self.get(e).ty())
+    }
+
     /// The base path (`ListId` of base-spec indices) of a derived-to-base /
     /// base-to-derived cast.
     pub fn cast_path(&self, e: ExprId) -> Option<ListId> {

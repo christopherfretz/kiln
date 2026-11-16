@@ -1047,6 +1047,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let fd = self.ast.decls.field(f).copied();
+            // C++11 [dcl.init.aggr]/1: an aggregate has no default member
+            // initializers (N3653 lifted it in C++14; clang
+            // `setHasInClassInitializer`).
+            if self.std < kiln_lex::Std::Cxx14 && self.field_has_nsdmi(f) {
+                bits = bits.without(DefinitionBits::AGGREGATE);
+            }
             // [class.prop]/3.6 names bit-fields too: an unnamed one in a
             // class whose base has fields (CWG1813; clang checks
             // `HasBasesWithFields` before skipping it).

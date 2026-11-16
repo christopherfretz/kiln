@@ -1370,7 +1370,8 @@ impl<'a> AstNames<'a> {
                 out.push(']');
             }
             ExprKind::CXXUnresolvedConstructExpr => {
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                let t = ast.exprs.unresolved_construct_type(e);
+                write_type(&ast.types, self, t, self.expr_types, out);
                 let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };
                 let args = ListId::from_raw(n.a());
                 // The braced form's one argument is the list itself.
