@@ -475,6 +475,24 @@ Planned as 1.3.0.
   with a deprecation warning in C++98 and an error from C++11, as clang.
   `(T())++` and `N::C::~C();` in a member function parse, and anonymous
   unions and structs in class templates are instantiated.
+- Invalid code kiln accepted, found running GCC's C++ testsuite (WP-1471).
+  A return-type requirement must be a type-constraint (`{ t } -> bool;` is
+  an error), and one whose own arguments are dependent is checked per
+  specialization. A destructor template is an error. Lambda template
+  parameter lists, `[=, this]` and init-capture packs warn before C++20
+  (`-Wc++20-extensions`). `typedef int Q::K;` is an error. The try block
+  and handlers of a function-try-block may not redeclare a parameter.
+  Too many braces around a scalar or reference initializer is an error
+  under `-pedantic-errors`. A member enumeration redeclared with a
+  different access is an error. A dependent placeholder constraint
+  (`static inline same_as<T> auto v = 0;`) is checked in each
+  specialization. A pack expansion into a non-pack alias parameter is
+  caught through a template template parameter too (CWG1430). A default
+  template argument that makes a later parameter's type invalid is a
+  deduction failure. A member pointer to `void` or to a reference formed
+  by substitution is an error. `A<n>::B` without `template` is not a
+  template template argument. `= delete` after a definition is a
+  redefinition, and a deduction guide may not be redeclared.
 - Code clang accepts that kiln rejected, found running GCC's C++ testsuite:
   a string literal converts to `char*` with a warning, as in clang
   (`-Wwritable-strings` ExtWarn since C++11 and ranked worst in overload

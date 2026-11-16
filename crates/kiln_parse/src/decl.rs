@@ -2903,13 +2903,14 @@ impl Parser<'_, '_> {
                 None
             }
         };
+        let star_loc = self.tok_at(star).span.lo;
         if self.pos() == star {
             self.bump();
         }
         let (quals, nulls) = self.parse_ptr_quals();
         d.attrs.append(&mut self.chunk_decl_attrs);
         rest(self, d);
-        d.push_chunk(Chunk::MemberPointer { qual, quals, loc }, nulls);
+        d.push_chunk(Chunk::MemberPointer { qual, quals, loc, star: star_loc }, nulls);
     }
 
     /// Attributes appertaining to a type, after a ptr-operator or an

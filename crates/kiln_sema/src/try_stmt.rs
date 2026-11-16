@@ -26,19 +26,21 @@ impl Sema<'_, '_> {
     /// Enters the block scope of a try-block's compound statement (clang
     /// `TryScope`), where the search for a thrown variable's scope stops
     /// ([class.copy.elision]/3.2).
-    pub fn push_try_scope(&mut self) {
+    pub fn push_try_scope(&mut self, fn_try: bool) {
         let mut s = Scope::new(ScopeKind::Block, None);
         s.try_barrier = true;
+        s.fn_try_block = fn_try;
         self.scopes.push(s);
     }
 
     /// Enters the scope of a handler ([except.pre]/1; clang
     /// `CatchScope`), where `co_await` and `co_yield` are ill-formed
     /// ([expr.await]/2).
-    pub fn push_catch_scope(&mut self) {
+    pub fn push_catch_scope(&mut self, fn_try: bool) {
         self.push_scope(ScopeKind::Control);
         if let Some(s) = self.scopes.last_mut() {
             s.catch_handler = true;
+            s.fn_try_block = fn_try;
         }
     }
 
@@ -102,6 +104,19 @@ impl Sema<'_, '_> {
             }
         }
         let name = d.name.map(|n| n.0);
+        // [basic.scope.block]/2: the exception variable of a handler of a
+        // function-try-block may not redeclare a parameter (clang
+        // `ActOnExceptionDeclarator`, `isDeclInScope` of a
+        // `FnTryCatchScope`).
+        if let Some(n) = name
+            && !invalid
+            && let Some(&p) = self.current_scope_raw(n).first()
+        {
+            let msg = self.diag(DiagId::sema_redefinition, loc).arg(crate::decl::sym_str(self, n));
+            let msg = self.note_prev(msg, p, true);
+            self.emit(msg);
+            invalid = true;
+        }
         let ctx = self.ctx;
         let mut h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), loc);
         if invalid {

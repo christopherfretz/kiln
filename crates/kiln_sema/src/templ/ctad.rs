@@ -339,13 +339,48 @@ impl Sema<'_, '_> {
             self.act_on_trailing_requires(f, r);
         }
         self.set_member_access(f);
-        if let Some(t) = self.finish_template_pattern(f) {
+        let t = self.finish_template_pattern(f);
+        if let Some(t) = t {
             self.set_member_access(t);
             if !invalid {
                 self.check_guide_deducible(t, f, sloc);
             }
         }
+        if !invalid {
+            self.check_guide_redeclaration(ctx, name, t.unwrap_or(f), sloc);
+        }
         Some(f)
+    }
+
+    /// [temp.deduct.guide]/3: two deduction guides of a class template
+    /// in one scope shall not have equivalent parameter-declaration-
+    /// clauses (clang `CheckDeductionGuideDeclarator` via
+    /// `MergeFunctionDecl`): a non-template guide differing only in its
+    /// return type cannot be overloaded either (WP-1471).
+    fn check_guide_redeclaration(&mut self, ctx: DeclId, name: DeclName, g: DeclId, loc: Loc) {
+        let template = self.kind_of(g) == DeclKind::FunctionTemplate;
+        let prior: Vec<DeclId> = self.ast.lookup_local(ctx, name).iter().collect();
+        for &p in prior.iter().rev() {
+            if p == g
+                || (self.kind_of(p) == DeclKind::FunctionTemplate) != template
+                || !self.equivalent_signatures(p, g)
+            {
+                continue;
+            }
+            let ret = |s: &Self, d: DeclId| s.ast.types.canonical(s.fn_ret(d));
+            let id = if !template && ret(self, p) != ret(self, g) {
+                DiagId::sema_ovl_diff_return_type
+            } else {
+                DiagId::sema_deduction_guide_redeclared
+            };
+            // The latest one is noted, a redeclaration diagnosed before
+            // included (clang keeps it in the redeclaration chain).
+            let m = self.diag(id, loc);
+            let m = self.note_prev(m, p, false);
+            self.emit(m);
+            self.ast.decls.set_flags(g, DeclFlags::INVALID);
+            return;
+        }
     }
 
     /// [temp.deduct.guide]/3 (clang `CheckDeductionGuideTemplate`): every

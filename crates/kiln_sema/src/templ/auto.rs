@@ -236,7 +236,14 @@ impl Sema<'_, '_> {
                 return Err(AutoFail::Multiple(at));
             }
         }
-        if init.iter().flatten().any(|&e| self.expr_is_type_dependent(e)) {
+        // So does a type-constraint with dependent arguments (`C<T> auto
+        // v = 0;` in a template): the type it deduced is checked against
+        // the constraint only once the arguments are known, so the
+        // instantiation deduces again ([dcl.type.auto.deduct]/2; clang's
+        // dependent constrained `AutoType`).
+        if init.iter().flatten().any(|&e| self.expr_is_type_dependent(e))
+            || self.placeholder_constraint_dependent(declared)
+        {
             return Ok(self.dependent_auto(declared));
         }
         match kind {
@@ -632,6 +639,17 @@ impl Sema<'_, '_> {
     /// A plain undeduced placeholder `kw`.
     fn auto_type(&mut self, kw: AutoKeyword) -> QualType {
         self.ast.types.auto_type(kw, None, None, None, false)
+    }
+
+    /// The placeholder in `declared` has a type-constraint with
+    /// dependent template arguments (`C<T> auto`).
+    pub(crate) fn placeholder_constraint_dependent(&self, declared: QualType) -> bool {
+        self.contained_placeholder(declared).is_some_and(|leaf| {
+            matches!(
+                self.ast.types.canonical_view(leaf),
+                TypeView::Auto { concept: Some(_), args: Some(_), pack: false, deduced: None, .. }
+            ) && self.ast.types.is_dependent(leaf)
+        })
     }
 
     /// `declared` with its placeholder replaced by the dependent `auto`

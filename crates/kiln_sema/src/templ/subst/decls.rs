@@ -222,11 +222,6 @@ impl Substituter<'_, '_, '_> {
         } else {
             self.var_align_attrs(v, d);
         }
-        // A constrained placeholder's diagnostics point at its
-        // type-constraint, as in the pattern.
-        if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
-            self.sema.inst.concepts.placeholder_locs.insert(v, l);
-        }
         self.var_init(d, v)?;
         self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
@@ -402,6 +397,12 @@ impl Substituter<'_, '_, '_> {
         let Some(data) = self.sema.ast.decls.var(d).copied() else { return Ok(()) };
         if self.sema.kind_of(v) != DeclKind::Var {
             return Ok(());
+        }
+        // A constrained placeholder's diagnostics point at its
+        // type-constraint, as in the pattern (a static data member and a
+        // variable template specialization alike, WP-1471).
+        if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
+            self.sema.inst.concepts.placeholder_locs.insert(v, l);
         }
         let Some(init) = data.init else {
             if self.sema.undeduced_var_spec_without_init(v) {

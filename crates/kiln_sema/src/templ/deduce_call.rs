@@ -1132,6 +1132,7 @@ impl Sema<'_, '_> {
         }
         stat_step!("defaults");
         // §6.1 step 3: defaults, then completeness.
+        let mut defaulted = false;
         for (j, &p) in params.iter().enumerate() {
             // An expanded parameter pack needs one argument per element
             // type ([temp.variadic]/5; clang's `TDK_IncompletePack`).
@@ -1176,6 +1177,36 @@ impl Sema<'_, '_> {
                         }
                     }
                 }
+                // [temp.deduct.general]/5: a deduced non-type argument
+                // whose parameter's type uses a defaulted parameter
+                // (`template<class T = void, typename T::type M>`) is
+                // converted to that type once it is substituted (clang
+                // `ConvertDeducedTemplateArgument`; WP-1471).
+                if defaulted
+                    && self.kind_of(p) == DeclKind::NonTypeTemplateParm
+                    && self.ast.decls.get(p).ty().is_some_and(|t| self.ast.types.is_dependent(t))
+                {
+                    let prior: Vec<TemplateArg> = d.args[..j].to_vec();
+                    let shown = self.ast.types.arg_list(&prior);
+                    let r = self.in_sfinae_held(
+                        FrameKind::DeducedArgSubstitution,
+                        ft,
+                        Some(shown),
+                        loc,
+                        &mut held,
+                        |s| s.nttp_type(ft, depth, p, &prior, loc),
+                    );
+                    match r {
+                        None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
+                        Some((Ok(_), Ok(()))) => {}
+                        Some((_, failed)) => {
+                            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                            f.args = Some(shown);
+                            f.diag = failed.err().flatten();
+                            return Err(f);
+                        }
+                    }
+                }
                 continue;
             }
             if let Some(t) = self.bound_value_type(params, j, depth, &d) {
@@ -1207,7 +1238,10 @@ impl Sema<'_, '_> {
             );
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok(a), Ok(()))) => d.args[j] = a,
+                Some((Ok(a), Ok(()))) => {
+                    d.args[j] = a;
+                    defaulted = true;
+                }
                 Some((formed, failed)) => {
                     // A default that was formed but diagnosed (an
                     // inaccessible `typename T::P`) is shown with the

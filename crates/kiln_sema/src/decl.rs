@@ -585,7 +585,7 @@ impl Sema<'_, '_> {
         Some(c)
     }
 
-    fn declarator_name(&self, d: &Declarator) -> String {
+    pub(crate) fn declarator_name(&self, d: &Declarator) -> String {
         if let Some((sp, _)) = d.special {
             return match sp {
                 SpecialName::Constructor(n) => sym_str(self, n),
@@ -1577,7 +1577,7 @@ impl Sema<'_, '_> {
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
                     prev_ref = false;
                 }
-                Chunk::MemberPointer { qual, quals, loc } => {
+                Chunk::MemberPointer { qual, quals, loc, .. } => {
                     prev_ref = false;
                     let Some(qual) = qual else { fail!() };
                     let Some(class) = self.member_pointer_class(qual) else {
@@ -3565,6 +3565,17 @@ impl Sema<'_, '_> {
         // diagnosed and invalid, so no call selects it (clang's "no
         // matching member function", without candidates).
         invalid |= self.templ.local_template && self.ast.types.is_function(ty);
+        // [class.dtor]/1: a destructor is not a template; a head that is
+        // not matched to the qualifier's classes makes it one (clang
+        // `err_destructor_template`). clang keeps an invalid declaration
+        // that matches nothing; kiln drops it.
+        if head.is_some()
+            && let Some((SpecialName::Destructor(_), sloc)) = d.special
+        {
+            self.error(DiagId::sema_destructor_template, sloc);
+            self.templ.cur = None;
+            return None;
+        }
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -4386,6 +4397,12 @@ impl Sema<'_, '_> {
             let _ = s;
             self.error(DiagId::sema_storage_class_on_typedef, loc);
         }
+        // [dcl.meaning.general]/2: a qualified declarator-id declares a
+        // member or a namespace member already declared, never a
+        // typedef-name (clang `err_qualified_typedef_declarator`).
+        if !alias && d.qualifier.is_some() {
+            self.error(DiagId::sema_qualified_typedef_declarator, d.name_loc());
+        }
         let (ctx, lexical) = self.decl_contexts(d);
         // An earlier redefinition that was diagnosed is not the previous
         // declaration (as in clang, which does not chain invalid
@@ -4549,11 +4566,15 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The innermost `*` or `[` of `d`, when that chunk applies to the
+    /// The innermost `*`, `C::*` or `[` of `d`, when that chunk applies to the
     /// decl-specifiers ([`Sema::inner_chunk_locs`]); invalid otherwise.
     pub(crate) fn inner_chunk_loc(d: &Declarator) -> Loc {
         match d.chunks.last() {
-            Some(Chunk::Pointer { loc, .. } | Chunk::Array { loc, .. }) => *loc,
+            Some(
+                Chunk::Pointer { loc, .. }
+                | Chunk::Array { loc, .. }
+                | Chunk::MemberPointer { star: loc, .. },
+            ) => *loc,
             _ => Loc::INVALID,
         }
     }
@@ -8752,7 +8773,11 @@ impl Sema<'_, '_> {
         self.check_sme_definition(f);
         self.no_builtin_defined(f, false);
         // A deleted function is defined by its first declaration.
-        let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
+        // The latest deleted declaration is noted: an explicit
+        // specialization's first declaration is kiln's own (WP-1471).
+        let deleted = Some(self.ast.first(f))
+            .filter(|&p| p != f && self.is_deleted_fn(p))
+            .map(|p| self.ast.prev(f).filter(|&q| self.is_deleted_fn(q)).unwrap_or(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
             && prev != f
             && !self.is_dependent_friend_fn(f)
@@ -8764,7 +8789,7 @@ impl Sema<'_, '_> {
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
-                .arg(self.decl_name(f));
+                .arg(self.name_for_diagnostic(self.ast.first(f)));
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
             // clang `CheckForFunctionRedefinition` invalidates the
@@ -9398,6 +9423,17 @@ impl Sema<'_, '_> {
         if self.invalid_by_failed_spec(v, elem, vloc) {
             return true;
         }
+        // The recovery enumeration of a diagnosed reference (`enum TE e;`
+        // for a typedef `TE`) is invalid: no second error (WP-1471).
+        if self
+            .ast
+            .types
+            .as_enum(elem)
+            .is_some_and(|e| self.ast.decls.get(e).has(DeclFlags::INVALID))
+        {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return true;
+        }
         if self.require_complete(elem, vloc) {
             return false;
         }
@@ -9749,13 +9785,14 @@ impl Sema<'_, '_> {
             f.enums.push(d);
         }
         self.finish_member_class_spec(member_class_spec, d);
-        if qualifier.is_none() {
-            self.set_member_access(d);
-        }
+        // An out-of-line definition (`enum C::E : int { e };`) takes the
+        // access of its first declaration, as its enumerators do
+        // ([class.access.spec]/1, [class.access]/4).
+        self.set_tag_member_access(d);
         let t = self.finish_template_pattern(d);
         if let Some(t) = t {
             if qualifier.is_none() {
-                self.set_member_access(t);
+                self.set_tag_member_access(t);
             } else if self.templ.member_spec.is_some() {
                 self.specialize_member_template(t);
             }

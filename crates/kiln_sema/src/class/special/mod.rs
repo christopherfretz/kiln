@@ -454,10 +454,26 @@ impl Sema<'_, '_> {
         // A deleted definition is a definition ([dcl.fct.def.general]/1).
         let first = self.ast.first(f);
         if first != f && self.is_deleted_fn(first) {
+            let prev = self.ast.prev(f).filter(|&q| self.is_deleted_fn(q)).unwrap_or(first);
             let m = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
-                .arg(self.decl_name(f));
-            let m = self.note_prev(m, first, true);
+                .arg(self.name_for_diagnostic(first));
+            let m = self.note_prev(m, prev, true);
+            self.emit(m);
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            return;
+        }
+        // A function already defined is redefined by `= delete`
+        // ([basic.def.odr]/1; clang `CheckForFunctionRedefinition`;
+        // WP-1471).
+        if let Some(def) = self.ast.prev(f).and_then(|p| self.ast.definition(p))
+            && def != f
+            && !self.is_deleted_fn(def)
+        {
+            let m = self
+                .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
+                .arg(self.name_for_diagnostic(first));
+            let m = self.note_prev(m, def, true);
             self.emit(m);
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;

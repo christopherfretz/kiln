@@ -69,6 +69,12 @@ impl Parser<'_, '_> {
         let id = self.s.act_on_lambda_start(&intro);
         let lbracket = intro.lbracket;
         if self.at(Punct::Less) {
+            // P0428R2: a lambda template-head is C++20 (clang
+            // `ext_lambda_template_parameter_list`).
+            if self.std < Std::Cxx20 {
+                let w = self.s.diag(DiagId::parse_ext_lambda_template_parameter_list, self.loc());
+                self.emit(w);
+            }
             self.parse_lambda_template_head();
         }
         let mut specs = LambdaSpecifiers::default();
@@ -224,8 +230,14 @@ impl Parser<'_, '_> {
                     return None;
                 }
                 cap.kind = CaptureKind::StarThis;
-            } else if self.eat_kw(Kw::This).is_some() {
+            } else if let Some(this) = self.eat_kw(Kw::This) {
                 cap.kind = CaptureKind::This;
+                // P0409R2: `[=, this]` is C++20 (clang
+                // `ext_equals_this_lambda_capture_cxx20`).
+                if intro.default == CaptureDefault::ByCopy && self.std < Std::Cxx20 {
+                    let w = self.s.diag(DiagId::parse_ext_equals_this_lambda_capture, this);
+                    self.emit(w);
+                }
             } else if (self.at(Punct::Amp) || self.at(Punct::Equal))
                 && next_ends(self)
                 && intro.default == CaptureDefault::None
@@ -249,9 +261,18 @@ impl Parser<'_, '_> {
                     self.error_here(DiagId::parse_expected_capture);
                     return None;
                 }
+                let lead = ellipsis;
                 ellipsis = ellipsis.or(self.eat(Punct::Ellipsis));
                 cap.ellipsis = ellipsis;
                 cap.init = self.parse_init_capture_initializer();
+                // P0780R2: a pack init-capture (`...xs = e`) is C++20
+                // (clang `ext_init_capture_pack`).
+                if let (Some(at), Some(_)) = (lead, &cap.init)
+                    && self.std < Std::Cxx20
+                {
+                    let w = self.s.diag(DiagId::parse_ext_init_capture_pack, at);
+                    self.emit(w);
+                }
             }
             cap.end = self.prev_lo();
             intro.captures.push(cap);

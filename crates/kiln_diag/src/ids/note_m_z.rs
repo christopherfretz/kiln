@@ -101,6 +101,8 @@ note_pragma_attribute_namespace_on_attribute = Note (0) "omit the namespace to a
 note_pragma_attribute_region_ends_here = Note (0) "'#pragma clang attribute push' regions ends here";
 note_pragma_attribute_use_attribute_kw = Note (0) "use the GNU '__attribute__' syntax";
 note_pragma_loop_invalid_vectorize_option = Note (0) "vectorize_width loop hint malformed; use vectorize_width(X, fixed) or vectorize_width(X, scalable) where X is an integer, or vectorize_width('fixed' or 'scalable')";
+// WP-1471: clang note_previous_access_declaration.
+note_previous_access_declaration = Note (1) "previously declared '{0:public|protected|private}' here";
 note_previous_attribute = Note (0) "previous attribute is here";
 note_previous_binding_pack = Note (0) "previous binding pack specified here";
 note_previous_builtin_declaration = Note (2) "'{0}' is a builtin with type {1}";

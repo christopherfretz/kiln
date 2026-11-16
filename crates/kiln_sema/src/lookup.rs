@@ -1198,11 +1198,29 @@ impl Sema<'_, '_> {
             let mut out: Vec<DeclId> = Vec::new();
             // The outermost block of a control statement's sub-statement
             // also conflicts with the condition's names ([basic.scope.block]/2).
+            let parent = i.checked_sub(1).map(|j| &self.scopes[j]);
             if s.kind == ScopeKind::Block
-                && let Some(c) = i.checked_sub(1).map(|j| &self.scopes[j])
+                && let Some(c) = parent
                 && c.kind == ScopeKind::Control
             {
                 out.extend(c.locals.iter().filter(|e| e.0 == name).map(|e| e.1));
+            }
+            // The compound statement of a function-try-block, and each of
+            // its handlers (its exception-declaration and its outermost
+            // block), conflict with the parameters ([basic.scope.block]/2).
+            let fn_try = if s.fn_try_block {
+                parent
+            } else if s.kind == ScopeKind::Block
+                && parent.is_some_and(|c| c.fn_try_block && c.kind == ScopeKind::Control)
+            {
+                i.checked_sub(2).map(|j| &self.scopes[j])
+            } else {
+                None
+            };
+            if let Some(f) = fn_try
+                && f.kind == ScopeKind::Function
+            {
+                out.extend(f.locals.iter().filter(|e| e.0 == name).map(|e| e.1));
             }
             out.extend(s.locals.iter().filter(|e| e.0 == name).map(|e| e.1));
             return out;

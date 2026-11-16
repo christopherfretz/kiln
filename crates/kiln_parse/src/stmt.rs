@@ -842,13 +842,14 @@ impl Parser<'_, '_> {
             self.skip_statement();
             return None;
         }
-        self.parse_try_block_common(loc)
+        self.parse_try_block_common(loc, false)
     }
 
     /// The compound statement and handlers of a try-block or a
     /// function-try-block (clang `ParseCXXTryBlockCommon`), at `{`.
-    pub(crate) fn parse_try_block_common(&mut self, loc: Loc) -> Option<StmtId> {
-        self.s.push_try_scope();
+    /// `fn_try`: the function-try-block of a function definition.
+    pub(crate) fn parse_try_block_common(&mut self, loc: Loc, fn_try: bool) -> Option<StmtId> {
+        self.s.push_try_scope(fn_try);
         let (block, _) = self.parse_compound(false);
         self.s.pop_scope();
         if self.at_attr() {
@@ -861,7 +862,7 @@ impl Parser<'_, '_> {
         }
         let mut handlers = Vec::new();
         while self.at_kw(Kw::Catch) {
-            if let Some(h) = self.parse_handler() {
+            if let Some(h) = self.parse_handler(fn_try) {
                 handlers.push(h);
             }
         }
@@ -876,14 +877,14 @@ impl Parser<'_, '_> {
     /// exception variable lives in the handler's own scope, which the
     /// compound statement's outermost block may not redeclare
     /// ([basic.scope.block]/2).
-    fn parse_handler(&mut self) -> Option<StmtId> {
+    fn parse_handler(&mut self, fn_try: bool) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         let Some(lparen) = self.eat(Punct::LParen) else {
             let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("'('");
             self.emit(d);
             return None;
         };
-        self.s.push_catch_scope();
+        self.s.push_catch_scope(fn_try);
         let var = if self.eat(Punct::Ellipsis).is_some() {
             None
         } else {

@@ -2477,7 +2477,20 @@ impl AstBuilder<'_> {
         for r in reqs {
             let d = match *r {
                 Requirement::Simple(e) | Requirement::Nested(e) => self.deps(e),
-                Requirement::Compound { expr, .. } => self.deps(expr),
+                // The type-constraint's own arguments (`-> C<T>`) count;
+                // its invented first parameter does not (WP-1471).
+                Requirement::Compound { expr, constraint, .. } => {
+                    let mut d = self.deps(expr);
+                    if let Some(c) = constraint
+                        && self.ast.exprs.get(c).kind() == ExprKind::ConceptSpecializationExpr
+                        && let Some(l) = ArgListId::from_raw(self.ast.exprs.get(c).b())
+                    {
+                        for &a in self.ast.types.args(l).iter().skip(1) {
+                            d |= arg_deps(self, a);
+                        }
+                    }
+                    d
+                }
                 Requirement::Type(t, _) => self.type_deps(t),
             };
             dep |= !d.is_none();
