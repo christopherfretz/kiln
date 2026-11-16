@@ -212,6 +212,19 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         self.sema.meta_shape(op, param, q)
     }
 
+    fn meta_packed_elem(&mut self, arg: ExprId) -> Option<QualType> {
+        if self.sema.meta_packed_elems.is_empty() {
+            return None;
+        }
+        let e = self.sema.ignore_paren_imp_casts(arg);
+        let x = self.sema.ast.exprs.get(e);
+        if x.kind() != kiln_ast::expr::ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = self.sema.ast.exprs.decl(e);
+        self.sema.meta_packed_elems.get(&d).copied()
+    }
+
     fn meta_exception(&mut self) -> Option<kiln_oven::ExcCtor> {
         self.sema.meta_exception_ctor()
     }

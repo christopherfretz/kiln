@@ -2773,6 +2773,22 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// The dependent member splice template-id `base.template [: r :] <
+    /// args >` (`base` and whether it was written with `->`).
+    pub fn member_splice_template_expr(
+        &mut self,
+        operand: ExprId,
+        base: (ExprId, bool),
+        args: ArgListId,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let unexpanded = self.ast.types.arg_list_flags(args).contains(TypeFlags::UNEXPANDED_PACK);
+        let e = self.splice_node(operand, Some(base), unexpanded, loc, end);
+        self.ast.exprs.cold.splice_args.insert(e, args).expect(FRESH_EXPR);
+        e
+    }
+
     /// `__array_rank(T)` / `__array_extent(T, dim)` (§9.4): a `size_t`
     /// prvalue. Value-dependent if `arg` or `dim` is.
     #[allow(clippy::too_many_arguments, reason = "one per field of the node")]

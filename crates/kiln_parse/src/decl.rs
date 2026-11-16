@@ -648,6 +648,19 @@ impl Parser<'_, '_> {
 
     /// `using enum [qual] name;` after `enum` ([enum.udecl]).
     fn parse_using_enum(&mut self) -> Vec<DeclId> {
+        // A splice-type-specifier ([enum.udecl]/1, P2996).
+        if let Some(end) = self.splice_spec_end(self.pos())
+            && Self::punct_of(self.tok_at(end)) != Some(Punct::ColonColon)
+        {
+            let loc = self.loc();
+            let Some(ty) = self.parse_splice_type() else {
+                self.skip_to_semi();
+                return Vec::new();
+            };
+            let d = self.s.act_on_using_enum_type(ty, loc);
+            self.expect_semi_after("using-enum declaration");
+            return d.into_iter().collect();
+        }
         let Ok(qual) = self.parse_nested_name_nns() else {
             self.skip_to_semi();
             return Vec::new();

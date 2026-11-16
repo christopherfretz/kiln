@@ -465,6 +465,15 @@ pub trait SemaBridge {
         Ok(None)
     }
 
+    /// The element type `V` that range argument `arg` of a value op holds
+    /// packed as scalars (the buffer an iterated range of `bool`s or of
+    /// arrays is collected in; spec/reflection.md §3.5): the op reads its
+    /// elements as `V`s. `None` for any other argument.
+    fn meta_packed_elem(&mut self, arg: ExprId) -> Option<QualType> {
+        let _ = arg;
+        None
+    }
+
     /// The `std::meta::exception` constructor a failing intrinsic throws
     /// with (spec/reflection.md §8.2), when the class is declared;
     /// consulted when a call of an intrinsic is compiled.

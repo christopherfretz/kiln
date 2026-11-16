@@ -911,6 +911,9 @@ u8_enum!(
         IsRvalueExpr = "__is_rvalue_expr",
         /// GNU `__builtin_types_compatible_p`, C only (C17 6.2.7).
         TypesCompatible = "__builtin_types_compatible_p",
+        /// GCC 16's `__builtin_is_structural` (`std::is_structural`,
+        /// [meta.unary.prop]; libstdc++ 16.1 tests `__has_builtin` for it).
+        IsStructural = "__builtin_is_structural",
     }
 );
 

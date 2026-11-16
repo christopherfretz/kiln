@@ -190,6 +190,18 @@ Planned as 1.3.0.
   names the specialization. A member of a namespace-scope anonymous union
   is a class member, and `members_of` of the namespace lists the union's
   variable. `data_member_spec` rejects built-in trait names.
+- Reflection follow-ups, found running GCC's C++ testsuite (WP-1489): an
+  iterated range argument whose elements are `bool` (`vector<bool>`) or
+  arrays is read as its value type. Member template splices
+  `x.template [:r:]` and `x.template [:r:]<args>`, splice type specifiers
+  in base specifiers, mem-initializers and using-enum declarators, and a
+  splice of a class or alias template used as a deduced class type are
+  accepted. A splice operand of class type converts to
+  `std::meta::info`. `^^C<args>::m` parses. `members_of` skips consteval
+  blocks and lists the variables behind a tuple-like structured binding.
+  `^^` of an anonymous union member and the union's member are the same
+  reflection. `has_identifier` of a parameter depends on the evaluation
+  point. `std::is_structural_type` works with GCC's `<meta>`.
 - Temporary lifetime found running GCC's C++ testsuite (WP-1459): a
   reference bound through `.*` with a pointer to data member, a
   base-to-derived or dynamic cast, or a reversed subscript now extends the

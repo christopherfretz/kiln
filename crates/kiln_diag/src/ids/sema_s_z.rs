@@ -55,6 +55,8 @@ sema_splice_intervening_lambda = Error (1) "cannot splice local entity '{0}' for
 sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_not_expression = Error (0) "splice in an expression position does not designate a variable, function, enumerator, value or object";
+// [expr.prim.splice]/3: `template [: r :]` without arguments (WP-1489)
+sema_splice_not_function_template = Error (0) "splice after 'template' without a template argument list does not designate a function template";
 sema_splice_not_info = Error (1) "splice operand of type {0} is not a reflection";
 // [expr.ref]/2 (WP-474)
 sema_splice_not_member = Error (1) "splice in a member access position does not designate a member of {0}";

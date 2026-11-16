@@ -1166,6 +1166,13 @@ impl Substituter<'_, '_, '_> {
                 if let Some(list) = targs {
                     let list = self.args(list, loc)?;
                     let v = self.sema.ast.types.args(list).to_vec();
+                    if let Some((b, arrow)) = base {
+                        let b = self.expr(b)?;
+                        let a = Some(&v[..]);
+                        return Ok(self
+                            .sema
+                            .act_on_member_template_splice(b, op, a, loc, end, loc, arrow));
+                    }
                     return Ok(self.sema.act_on_splice_template_expr(op, &v, loc, end));
                 }
                 Ok(match base {

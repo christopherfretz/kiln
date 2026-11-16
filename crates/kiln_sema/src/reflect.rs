@@ -9,6 +9,7 @@
 //! [`kiln_oven::SemaBridge::meta`]; their sema halves are in `meta/`
 //! (spec/reflection.md §3).
 
+use kiln_ast::decl::DeclKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{ExprId, QualType};
@@ -45,6 +46,15 @@ impl Sema<'_, '_> {
         let _ = open;
         if let Reflectee::Type(t) = r {
             Some(t)
+        } else if let Reflectee::Template(n) = r
+            && self.ast.types.template_decl(n).is_some_and(|d| {
+                matches!(self.kind_of(d), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
+            })
+        {
+            // [dcl.type.splice]/2: a splice designating a class or alias
+            // template is a placeholder for a deduced class type
+            // ([dcl.type.class.deduct]).
+            Some(self.ast.types.deduced_template_specialization(n, None))
         } else {
             self.error(DiagId::sema_splice_not_type, at);
             None
