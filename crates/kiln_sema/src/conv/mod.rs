@@ -587,6 +587,51 @@ pub fn is_null_pointer_constant(s: &Sema<'_, '_>, e: ExprId) -> bool {
     false
 }
 
+/// C++98/03 [conv.ptr]/1 (before CWG903, which C++11 adopted): any
+/// integral constant expression of integer type (an enumeration is not
+/// one; `bool` and the character types are) that evaluates to zero is a
+/// null pointer constant, not only a literal: `int *p = 1 == 0;`,
+/// `int *const q = sizeof(*q) ? 0 : 0;`. Asked only where `e` would
+/// convert to a pointer or pointer to member `to`, before C++11; the
+/// literal forms are [`is_null_pointer_constant`]'s. clang 22 agrees
+/// (`Expr::isNullPointerConstant` before C++11) and warns at the
+/// conversion (`-Wnon-literal-null-conversion`, `-Wbool-conversion`).
+pub(crate) fn cxx98_zero_constant(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> bool {
+    if s.std >= kiln_lex::Std::Cxx11 || s.is_c() {
+        return false;
+    }
+    let t = &s.ast.types;
+    if !(t.is_pointer(to) || scs::member_pointer_parts(s, to).is_some()) {
+        return false;
+    }
+    let n = s.ast.exprs.get(e);
+    if n.is_value_dependent() || n.is_type_dependent() || !t.is_integral(n.ty()) {
+        return false;
+    }
+    s.fold_int(e) == Some(0)
+}
+
+/// clang `CheckPointerConversion`: an implicit conversion of a C++98 null
+/// pointer constant that is not a literal ([`cxx98_zero_constant`])
+/// to a pointer in an initialization, argument, return or assignment
+/// (not in a comparison or conditional, which convert it directly) warns
+/// at the expression: a `bool` one as run-time
+/// behavior (`-Wbool-conversion`), any other outside an unevaluated
+/// operand (`-Wnon-literal-null-conversion`).
+fn cxx98_zero_constant_warning(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to: QualType) {
+    if s.std >= kiln_lex::Std::Cxx11 || s.is_c() || is_null_pointer_constant(s, e) {
+        return;
+    }
+    let at = s.expr_loc(e);
+    if s.ast.types.builtin(from) == Some(kiln_ast::types::BuiltinType::Bool) {
+        let d = s.diag(DiagId::sema_impcast_bool_to_null_pointer, at).arg(s.ty_arg(to));
+        s.diag_runtime_behavior(d);
+    } else if s.unevaluated == 0 {
+        let d = s.diag(DiagId::sema_c_non_literal_null, at).arg(s.ty_arg(to));
+        s.emit(d);
+    }
+}
+
 /// clang's `{rvalue|lvalue}` select: an xvalue (such as an implicitly
 /// moved `return` operand, [class.copy.elision]/3) prints as "rvalue".
 fn category_select(s: &Sema<'_, '_>, e: ExprId) -> &'static str {
@@ -1401,6 +1446,19 @@ pub fn implicit_convert(
     }
     if let Some(scs) = standard_conversion(s, e, to, ctx) {
         exc_spec_compat(s, e, from, to, ctx)?;
+        if scs.null_pointer
+            && scs.second == SecondStep::PointerConversion
+            && matches!(
+                ctx,
+                ConvCtx::Initialization
+                    | ConvCtx::DirectInitialization
+                    | ConvCtx::Argument
+                    | ConvCtx::Return
+                    | ConvCtx::Assignment
+            )
+        {
+            cxx98_zero_constant_warning(s, e, from, to);
+        }
         return apply_standard_conversion(s, e, &scs, to);
     }
     if !retargeted

@@ -1417,7 +1417,7 @@ impl Sema<'_, '_> {
         // Templates join the overload set as in a new-expression
         // (`template <class A> operator new(size_t, allocator_arg_t, A)`).
         let found = if fns.templates.is_empty() {
-            self.find_operator_new(&fns.fns, place, pass_align)
+            self.find_operator_new(&fns.fns, place, pass_align, loc).ok().flatten()
         } else {
             let all: Vec<DeclId> = fns.fns.iter().chain(&fns.templates).copied().collect();
             self.find_operator_new_template(&all, place, pass_align, (None, loc), &mut None)

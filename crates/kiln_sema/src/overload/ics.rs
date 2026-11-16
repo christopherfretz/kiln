@@ -368,7 +368,8 @@ impl Sema<'_, '_> {
             }
             return self.user_conversion(a, to, SetKind::ConvToNonClass, opts);
         }
-        match standard_conversion_from(self, a.ty, a.vk, a.npc, a.bit_field, to, ConvCtx::Argument)
+        let npc = a.npc || a.expr.is_some_and(|e| conv::cxx98_zero_constant(self, e, to));
+        match standard_conversion_from(self, a.ty, a.vk, npc, a.bit_field, to, ConvCtx::Argument)
             .or_else(|| a.expr.and_then(|e| conv::deprecated_string_conversion(self, e, to)))
         {
             Some(s) => Ics::Standard(s),

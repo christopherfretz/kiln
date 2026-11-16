@@ -4248,6 +4248,9 @@ impl Sema<'_, '_> {
         let (lmp, rmp) = (self.is_member_pointer(lt), self.is_member_pointer(rt));
         let (lnull, rnull) =
             (conv::is_null_pointer_constant(self, l), conv::is_null_pointer_constant(self, r));
+        // C++98: a zero integral constant expression ([conv.ptr]/1).
+        let lnull = lnull || (ptr(self, rt) && conv::cxx98_zero_constant(self, l, rt));
+        let rnull = rnull || (ptr(self, lt) && conv::cxx98_zero_constant(self, r, lt));
         if self.is_nullptr_type(lt) && self.is_nullptr_type(rt) {
             return Some((l, r, lt));
         }
@@ -4613,14 +4616,14 @@ impl Sema<'_, '_> {
         };
         if lmp
             && !rmp
-            && conv::is_null_pointer_constant(self, r)
+            && (conv::is_null_pointer_constant(self, r) || conv::cxx98_zero_constant(self, r, lt))
             && let Some(r2) = to_null(self, r, lt)
         {
             return self.builder().binary(op, l, r2, QualType::BOOL, loc);
         }
         if rmp
             && !lmp
-            && conv::is_null_pointer_constant(self, l)
+            && (conv::is_null_pointer_constant(self, l) || conv::cxx98_zero_constant(self, l, rt))
             && let Some(l2) = to_null(self, l, rt)
         {
             return self.builder().binary(op, l2, r, QualType::BOOL, loc);

@@ -474,7 +474,13 @@ impl Sema<'_, '_> {
                 used[usize::from(i)]
             })
         };
+        // Access is checked from the template's own declaration, as in
+        // the final substitution (`friend_template_access_ctx`): a class
+        // befriending the template grants its signature access
+        // ([temp.friend]/1, WP-1493).
+        let at = self.templated_or_self(ft);
         self.in_template_context(ft, |s| {
+            s.access_ctx = Some(at);
             let mut sub = Substituter::new(s, levels);
             sub.final_subst = true;
             if let Some(ExplicitRet::Leading(r)) = ret {
@@ -1511,11 +1517,15 @@ impl Sema<'_, '_> {
     }
 
     /// Whether call argument `a` is checked against its deduced `A`
-    /// ([temp.deduct.call]/4): not a braced list or an overload set.
+    /// ([temp.deduct.call]/4): not a braced list or an overload set (a
+    /// function template-id resolved early is one, as for clang).
     fn is_original_arg(&self, a: &ArgInfo) -> bool {
         a.list.is_none()
             && a.ty != QualType::OVERLOAD
-            && a.expr.is_none_or(|e| matches!(self.overload_set_arg(e), OverloadArg::NotASet))
+            && a.expr.is_none_or(|e| {
+                matches!(self.overload_set_arg(e), OverloadArg::NotASet)
+                    && self.template_id_ref_set(e).is_none()
+            })
     }
 
     /// The argument type `A` of `a` adjusted for deduction against
@@ -1734,48 +1744,13 @@ impl Sema<'_, '_> {
         let mut flags = TdfFlags::NONE;
         // [temp.deduct.call]/1: a braced-init-list.
         if let Some(li) = a.list {
-            let inner = match t.canonical_view(p) {
-                TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
-                _ => p,
-            };
             let items: Vec<crate::init::InitValue> = self
                 .ovl
                 .lists
                 .get(li as usize)
                 .map(|l| l.items.iter().map(|x| x.value.clone()).collect())
                 .unwrap_or_default();
-            // `P'[N]` with a non-empty list: each element deduces `P'`,
-            // and the list's length deduces `N` (WP-134: the aggregate
-            // deduction candidate's `T(&&)[N]` parameters).
-            let t = &self.ast.types;
-            let array = match t.canonical_view(inner) {
-                TypeView::ConstantArray(pa) if !items.is_empty() => Some((pa.elem, None)),
-                TypeView::DependentSizedArray { elem, size } if !items.is_empty() => {
-                    Some((elem, Some(size)))
-                }
-                _ => None,
-            };
-            let Some(elem) = array.map(|x| x.0).or_else(|| self.initializer_list_param(inner))
-            else {
-                // A non-deduced context.
-                return Tdk::Success;
-            };
-            let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
-            // clang `DeduceFromInitializerList`: a non-dependent `P'`
-            // (`to_array<long>({1, 2})`) deduces nothing from the elements.
-            let items = if self.ast.types.is_dependent(elem) { items } else { Vec::new() };
-            for v in items {
-                let crate::init::InitValue::Expr(e) = v else { continue };
-                let info = self.arg_info(e);
-                let r = self.deduce_call_arg(elem, &info, d);
-                if r != Tdk::Success {
-                    return r;
-                }
-            }
-            if let Some((_, Some(size))) = array {
-                return self.deduce_array_bound(size, Some(Ok(n)), d);
-            }
-            return Tdk::Success;
+            return self.deduce_from_init_list(p, items, d);
         }
         let mut at = a.ty;
         // An overload set ([temp.deduct.call]/6): the type of the one
@@ -1789,11 +1764,18 @@ impl Sema<'_, '_> {
             }
         } else if let Some(set) = a.expr.and_then(|e| self.template_id_ref_set(e)) {
             // A function template-id resolved early: clang keeps it a
-            // set and resolves it for the deduction (its result is the
-            // one already made; spec/sema-lambda.md §3.5).
-            self.holding_pending_uses(|s| {
-                let _ = s.resolve_overload_for_deduction(p, &set, d);
-            });
+            // set and resolves it for the deduction (spec/sema-lambda.md
+            // §3.5). Against a function-like `P` its trial may differ from
+            // the early resolution: `foo<int>` with `foo(T*)` and
+            // `foo(T*, U)` against `void (*)(int*, U)` matches no member
+            // (the second's `U` is not deduced from the explicit
+            // arguments), so the argument is a non-deduced context and the
+            // conversion re-resolves it once `U` is deduced from another
+            // argument ([temp.deduct.call]/6, [over.over]/3).
+            match self.holding_pending_uses(|s| s.resolve_overload_for_deduction(p, &set, d)) {
+                Some(t) => at = t,
+                None => return Tdk::Success,
+            }
         }
         let t = &mut self.ast.types;
         let mut at = t.canonical(at);
@@ -1852,6 +1834,64 @@ impl Sema<'_, '_> {
             flags = flags.union(TdfFlags::DERIVED_CLASS);
         }
         self.deduce(p, at, flags, d)
+    }
+
+    /// [temp.deduct.call]/1: deduction from a braced-init-list argument
+    /// with elements `items` against `p`: for `std::initializer_list<P'>`
+    /// or `P'[N]` (references and cv removed) each element deduces `P'`
+    /// on its own, a nested braced list recursively (`T (&&)[3][2]`
+    /// against `{{1, 2}, {3, 4}, {5, 6}}`: each inner list against
+    /// `T[2]`), and the list's length deduces a dependent `N`; any other
+    /// `P` is a non-deduced context.
+    fn deduce_from_init_list(
+        &mut self,
+        p: QualType,
+        items: Vec<crate::init::InitValue>,
+        d: &mut DeducedArgs,
+    ) -> Tdk {
+        let t = &self.ast.types;
+        let p = t.canonical(p);
+        let inner = match t.canonical_view(p) {
+            TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
+            _ => p,
+        };
+        // `P'[N]` with a non-empty list: each element deduces `P'`,
+        // and the list's length deduces `N` (WP-134: the aggregate
+        // deduction candidate's `T(&&)[N]` parameters).
+        let array = match t.canonical_view(inner) {
+            TypeView::ConstantArray(pa) if !items.is_empty() => Some((pa.elem, None)),
+            TypeView::DependentSizedArray { elem, size } if !items.is_empty() => {
+                Some((elem, Some(size)))
+            }
+            _ => None,
+        };
+        let Some(elem) = array.map(|x| x.0).or_else(|| self.initializer_list_param(inner)) else {
+            // A non-deduced context.
+            return Tdk::Success;
+        };
+        let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
+        // clang `DeduceFromInitializerList`: a non-dependent `P'`
+        // (`to_array<long>({1, 2})`) deduces nothing from the elements.
+        let items = if self.ast.types.is_dependent(elem) { items } else { Vec::new() };
+        for v in items {
+            let r = match v {
+                crate::init::InitValue::Expr(e) => {
+                    let info = self.arg_info(e);
+                    self.deduce_call_arg(elem, &info, d)
+                }
+                crate::init::InitValue::List(l) => {
+                    let nested = l.items.into_iter().map(|x| x.value).collect();
+                    self.deduce_from_init_list(elem, nested, d)
+                }
+            };
+            if r != Tdk::Success {
+                return r;
+            }
+        }
+        if let Some((_, Some(size))) = array {
+            return self.deduce_array_bound(size, Some(Ok(n)), d);
+        }
+        Tdk::Success
     }
 
     /// [temp.deduct.call]/2-3 as clang deduces over sugared types: a `P`

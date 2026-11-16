@@ -111,13 +111,13 @@ impl Sema<'_, '_> {
         // check accepted there only because the class may turn out to
         // derive from the naming class is not replayed in the pattern's
         // instantiations (they check the constructor itself).
-        let guide = access.is_some() && self.ctor_guide_class(spec).is_some();
+        let guide = self.ctor_guide_class(spec).is_some();
         // A member template of a class template specialization numbers
         // in its own templated function (`S<int>::f`), not the pattern's.
         let own = self.templated_function(tmpl).unwrap_or(pattern);
         let site = self.begin_signature_mangling(tmpl, own);
         let r = self.in_inst_context(ctx, |s| {
-            s.access_ctx = access;
+            s.access_ctx = Some(access);
             let saved = if guide { s.requires_access_replay.replace(false) } else { None };
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
@@ -153,8 +153,7 @@ impl Sema<'_, '_> {
     /// s.priv_)` of a friend defined in the class may name its private
     /// members). clang substitutes a friend template's declaration with
     /// its lexical context as the owner and the templated declaration as
-    /// the current context (`FinishTemplateArgumentDeduction`). `None`
-    /// (the specialization's semantic context) for any other template.
+    /// the current context (`FinishTemplateArgumentDeduction`).
     ///
     /// The implicit deduction guide formed from a constructor (or
     /// constructor template) names what the constructor names, so its
@@ -164,11 +163,15 @@ impl Sema<'_, '_> {
     /// function are in its class's scope; `C(T, typename Base<T>::type)`
     /// with a protected `type` deduces). A user-declared guide keeps its
     /// own scope.
-    fn friend_template_access_ctx(&self, spec: DeclId) -> Option<DeclId> {
-        if let Some(c) = self.ctor_guide_class(spec) {
-            return Some(c);
-        }
-        self.friend_decl_of(spec).map(|_| spec)
+    ///
+    /// Any other function template's specialization is its own context
+    /// too (clang's `DeduceTemplateArguments` runs deduction and the final
+    /// substitution under `ContextRAII(FunctionTemplate->
+    /// getTemplatedDecl())`), so a class that befriends the template by a
+    /// later redeclaration (`template <class T> friend B<T::I> f();`)
+    /// grants its signature access ([temp.friend]/1, WP-1493).
+    fn friend_template_access_ctx(&self, spec: DeclId) -> DeclId {
+        self.ctor_guide_class(spec).unwrap_or(spec)
     }
 
     /// For a specialization `spec` of an implicit deduction guide formed
@@ -225,7 +228,7 @@ impl Sema<'_, '_> {
         let trapped = self.sfinae_errors();
         let access = self.friend_template_access_ctx(spec);
         let r = self.in_inst_context(ctx, |s| {
-            s.access_ctx = access;
+            s.access_ctx = Some(access);
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);

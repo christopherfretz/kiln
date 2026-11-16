@@ -24,6 +24,7 @@ use kiln_source::symbol::Symbol;
 use super::{GuideShape, InheritedGuide};
 use crate::Sema;
 use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
 impl Sema<'_, '_> {
@@ -115,8 +116,17 @@ impl Sema<'_, '_> {
             let Some(b) = found else { continue };
             let want = self.ast.types.canonical(b);
             let mut b = b;
-            while let TypeView::Elaborated { named, .. } = self.ast.types.view(b.ty()) {
-                b = named;
+            // A base named by a typedef or using-declarator (`using B =
+            // A<int>; struct C : B`) denotes the simple-template-id it
+            // aliases (GCC PR122070; clang 22 agrees).
+            loop {
+                b = match self.ast.types.view(b.ty()) {
+                    TypeView::Elaborated { named, .. } => named,
+                    TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => {
+                        underlying
+                    }
+                    _ => break,
+                };
             }
             if b.quals().is_empty() && !out.iter().any(|&o| self.ast.types.canonical(o) == want) {
                 out.push(b);
@@ -234,7 +244,21 @@ impl Sema<'_, '_> {
                 ArgView::Null if self.ast.template_parm(p).is_some_and(|i| i.pack) => {
                     args.push(TemplateArg::pack(self.ast.types.arg_list(&[])));
                 }
-                ArgView::Null => return None,
+                // An undeduced parameter takes its default argument
+                // ([temp.deduct.general]/5), substituted with the
+                // arguments before it; a failed substitution is no match.
+                ArgView::Null => {
+                    let def = self.template_default(p)?;
+                    let at = d.loc;
+                    let prior = args.clone();
+                    let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, c, None, at, |s| {
+                        s.default_template_arg(c, list.depth, p, def, at, &prior)
+                    });
+                    match r {
+                        Some((Ok(a), Ok(()))) => args.push(a),
+                        _ => return None,
+                    }
+                }
                 _ => args.push(*a),
             }
         }
