@@ -7950,7 +7950,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     statement reads the initializer's `ManglingContextDecl`); otherwise
     emitted at once (`diag_runtime_behavior_now`);
   - a braced-init-list is an error, "cannot pass initializer list to
-    variadic function" (§6), and the call is not formed.
+    variadic function" (§6), and the call is not formed;
+  - a glvalue of complete class type copy-initializes a temporary
+    ([conv.lval]/3.2): in an evaluated operand the copy constructor is
+    selected and checked for deletion and access (clang
+    `DefaultVariadicArgumentPromotion`; "calling a private constructor of
+    class 'A'"), and the argument is passed as before (WP-1470,
+    `class.access/vararg-and-protected-address.cpp`).
 
   Each points at the argument's begin. The callee is named as clang's
   `getVariadicCallType` does: `constructor` for a constructor, `method`
@@ -9701,6 +9707,17 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
       member (`union_default_member`, [dcl.init.aggr]/5; clang
       `CheckStructUnionTypes`), and otherwise value-initializes its
       first member.
+    - a member of reference type left without an initializer and
+      without a default member initializer (directly, in a base or
+      nested aggregate, or in an omitted array element) is "reference
+      member of type 'int &' uninitialized" with "uninitialized
+      reference member is here" ([dcl.init.aggr]/5; clang
+      `err_init_reference_member_uninitialized`; WP-1470). clang's extra
+      "in implicit initialization of ..." note is not printed yet.
+    - a parenthesized expression list initializes an aggregate or an
+      array only from C++20 (P0960): before it a class gets the ordinary
+      constructor errors and an array "array initializer must be an
+      initializer list" (WP-1470, `dcl.init.general/paren-aggregate-*.cpp`).
   - In templates (spec/ast.md §5.6, spec/sema-templates.md §5.4), the
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the

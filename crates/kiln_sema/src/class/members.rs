@@ -512,6 +512,27 @@ impl Sema<'_, '_> {
         self.attach_bases_annotated(r, specs, &[])
     }
 
+    /// Diagnoses dependent base `ty` (at `loc`) of `r` that names the
+    /// current instantiation of a class still being defined (`struct C :
+    /// B<U>` nested in `B<U>`), which is incomplete (clang
+    /// `CheckBaseSpecifier`), and invalidates `r`'s definition.
+    fn incomplete_current_base(&mut self, r: DeclId, ty: QualType, loc: Loc) -> bool {
+        if !self.is_dependent_type(ty) {
+            return false;
+        }
+        let Some(cur) = self.friend_current_instantiation(ty) else { return false };
+        if !self.defining.contains(&cur) {
+            return false;
+        }
+        // The note prints the injected type (`B<U>`, clang 22 `A::B<U>`).
+        let t = self.this_class_type(cur);
+        let at = self.ast.decls.get(cur).loc();
+        let note = self.diag(DiagId::note_definition_not_complete, at).arg(self.ty_arg(t));
+        self.emit(self.diag(DiagId::sema_base_incomplete, loc).with_note(note));
+        self.invalidate_defining(r);
+        true
+    }
+
     /// [`Sema::attach_bases`]; `inst[i]` are annotations of `specs[i]`
     /// already made (an instantiated base-specifier's, substituted from
     /// its pattern's), after those its own attributes give
@@ -536,7 +557,9 @@ impl Sema<'_, '_> {
         let mut kept: Vec<(u32, usize)> = Vec::new();
         let mut seen: Vec<DeclId> = Vec::new();
         for (si, s) in specs.iter().enumerate() {
-            if self.is_error_type(s.ty) {
+            // The current instantiation of a class still being defined
+            // as a base is incomplete.
+            if self.is_error_type(s.ty) || self.incomplete_current_base(r, s.ty, s.loc) {
                 dropped = true;
                 continue;
             }

@@ -529,6 +529,21 @@ Planned as 1.3.0.
   `-Wpedantic` includes every off-by-default extension, so
   `-Wno-error=pedantic` and `#pragma GCC diagnostic ignored "-Wpedantic"`
   reach `-Wc99-extensions` and `-Wzero-length-array`.
+- Accepts-invalid found running GCC's C++ testsuite (WP-1470), now
+  errors as in clang: aggregate initialization that leaves a reference
+  member uninitialized; before C++20, a defaulted special member whose
+  type differs from the implicit one (deleted from C++20, P0641) and a
+  parenthesized list initializing an array; an explicit specialization of
+  a member whose requires-clause the class's arguments do not satisfy,
+  and of a constrained variable template with arguments that do not
+  satisfy it; an ambiguous class-scope `operator new`; a class argument
+  to `...` whose copy constructor is inaccessible, a C++14 elidable copy
+  or move whose constructor is unusable, and `&A::m` of a protected
+  member through the base; an explicit-object member function
+  redeclaring an implicit-object one ([basic.scope.scope]/4); a default
+  argument added to an out-of-line member function of a class template;
+  an empty pack initializing an array of unknown bound; and a class
+  named as complete inside an instantiation its own definition triggers.
 
 ## [1.2.1] - 2026-11-14
 

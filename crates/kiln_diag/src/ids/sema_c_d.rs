@@ -324,8 +324,15 @@ sema_deduced_nttp_type_mismatch = Error (2) "deduced non-type template argument 
 sema_deduced_return_type_cxx14 = Error (0) "deduced return types are a C++14 extension";
 sema_deduction_guide_not_deducible = Error (1) "deduction guide template contains {0:a template parameter|template parameters} that cannot be deduced";
 sema_deep_exception_specs_differ = Error (1) "exception specifications of {0:return|argument} types differ";
+// [dcl.fct.default]/4, /6 (WP-1470): default arguments added by a
+// redeclaration (clang `err_param_default_argument_template_redecl`,
+// `err_param_default_argument_member_template_redecl`).
+sema_default_arg_added_member_of_template = Error (0) "default arguments cannot be added to an out-of-line definition of a member of a class template";
+sema_default_arg_added_template = Error (0) "default arguments cannot be added to a function template that has already been declared";
 sema_default_arg_declared_later = Error (2) "use of default argument to function {0} that is declared later in class {1}";
 sema_default_arg_in_partial_spec = Error (0) "default template argument in a class template partial specialization";
+// [dcl.fct.default]/6 (WP-1470; clang `err_param_default_argument_makes_ctor_special`).
+sema_default_arg_makes_ctor_special = Error (1) "addition of default argument on redeclaration makes this constructor a {0:default|copy|move} constructor";
 sema_default_arg_redefinition = Error (0) "redefinition of default argument";
 sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
 sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
@@ -356,6 +363,13 @@ sema_defaulted_constexpr_with_vbase = Error (1) "{0:default constructor|copy con
 sema_defaulted_copy_assign_not_ref = Error (0) "the parameter for an explicitly-defaulted copy assignment operator must be an lvalue reference type";
 sema_defaulted_default_args = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot have default arguments";
 sema_defaulted_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} is implicitly deleted";
+// [dcl.fct.def.default]/2 before C++20 (P0641) and for a declaration that
+// is not the first: a type the implicit declaration would not have (clang
+// `err_defaulted_special_member_*`; WP-1470).
+sema_defaulted_special_member_copy_const_param = Error (1) "the parameter for this explicitly-defaulted copy {0:constructor|assignment operator} is const, but a member or base requires it to be non-const";
+sema_defaulted_special_member_move_const_param = Error (1) "the parameter for an explicitly-defaulted move {0:constructor|assignment operator} may not be const";
+sema_defaulted_special_member_quals = Error (2) "an explicitly-defaulted {0:copy|move} assignment operator may not have 'const'{1:|, 'constexpr'} or 'volatile' qualifiers";
+sema_defaulted_special_member_volatile_param = Error (1) "the parameter for an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} may not be volatile";
 sema_define_explicitly_defaulted_member = Error (1) "definition of explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";
 sema_define_implicit_member = Error (1) "definition of implicitly declared {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";
 sema_delegating_ctor_cycle = WarningError [DelegatingCtorCycles] (1) "constructor for {0} creates a delegation cycle";

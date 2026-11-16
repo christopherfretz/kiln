@@ -547,7 +547,8 @@ impl Sema<'_, '_> {
         }
         if let Some(r) = self.ast.types.as_record(q) {
             let f = self.ast.first(r);
-            if self.defining.iter().any(|&d| self.ast.first(d) == f) {
+            if self.defining.iter().chain(&self.suspended_defining).any(|&d| self.ast.first(d) == f)
+            {
                 return false;
             }
         }
@@ -4199,16 +4200,21 @@ impl Sema<'_, '_> {
         if let Some(def) = self.ast.definition(rec) {
             // Still being defined (clang `RequireCompleteType` on a tag
             // that `isBeingDefined`).
-            if self.defining.contains(&def) {
+            if self.defining.contains(&def) || self.suspended_defining.contains(&def) {
                 // An invalid class (a member of incomplete type) is not
                 // reported again (clang).
                 if self.invalid_defining.contains(&def) {
                     self.inst.suppress_next_error.set(true);
                     return msg;
                 }
-                let note = self
-                    .diag(DiagId::note_definition_not_complete, self.ast.decls.get(def).loc())
-                    .arg(format!("'{}'", self.qualified_decl_name(def)));
+                // A specialization being instantiated prints its arguments.
+                let at = self.ast.decls.get(def).loc();
+                let note = self.diag(DiagId::note_definition_not_complete, at);
+                let note = if self.ast.spec_info(def).is_some() {
+                    note.arg(format!("'{}'", self.name_for_diagnostic(def)))
+                } else {
+                    note.arg(format!("'{}'", self.qualified_decl_name(def)))
+                };
                 return msg.with_note(note);
             }
             return msg;
@@ -4898,6 +4904,7 @@ impl Sema<'_, '_> {
                     .flat_map(|p| &p.attrs)
                     .any(|&a| self.ast.attrs.get(a).kind == AttrKind::PASS_OBJECT_SIZE)
             }),
+            explicit_object,
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
@@ -5616,6 +5623,13 @@ impl Sema<'_, '_> {
             None => {}
         }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        if let Some(p) = prev_ok
+            && !redefined
+            && !friend
+            && !block
+        {
+            self.check_added_default_args(p, ctx, method && !in_class, &params, &defaults);
+        }
         // [dcl.fct.default]/4: a friend declaration with a default
         // argument is the only declaration of its function; clang
         // `MergeCXXFunctionDecl` reports any redeclaration of a hidden
@@ -6171,6 +6185,85 @@ impl Sema<'_, '_> {
             }
         }
         (out, redefined)
+    }
+
+    /// [dcl.fct.default]/4, /6: a redeclaration of `prev` (in scope
+    /// `ctx`; `out_of_line` for a member declared outside its class) that
+    /// adds a default argument (`defaults`: after merging) is ill-formed
+    /// for a function template, for a member of a templated class
+    /// declared outside the class, and when it makes a constructor a
+    /// default, copy or move constructor.
+    pub(crate) fn check_added_default_args(
+        &mut self,
+        prev: DeclId,
+        ctx: DeclId,
+        out_of_line: bool,
+        params: &[ParamInfo],
+        defaults: &[Option<ExprId>],
+    ) {
+        let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) else {
+            return;
+        };
+        let olds: Vec<DeclId> = self
+            .ast
+            .decls
+            .function(prev)
+            .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let had = |s: &Self, i: usize| {
+            olds.get(i)
+                .and_then(|&op| s.ast.decls.param(op))
+                .is_some_and(|x| x.default_arg.is_some())
+        };
+        let Some(i) = (first..params.len())
+            .find(|&i| params[i].default_arg != DefaultArg::None && !had(self, i))
+        else {
+            return;
+        };
+        let at = match params[i].default_arg {
+            DefaultArg::Unparsed(l, _) => l,
+            _ if params[i].default_loc.is_valid() => params[i].default_loc,
+            _ => params[i].loc,
+        };
+        if self.ast.described_template(prev).is_some() {
+            let note = self
+                .diag(DiagId::note_template_prev_declaration, self.ast.decls.get(prev).loc())
+                .arg(0u8);
+            let msg = self.diag(DiagId::sema_default_arg_added_template, at).with_note(note);
+            self.emit(msg);
+            return;
+        }
+        if out_of_line && self.in_templated_class(Some(ctx)) {
+            self.error(DiagId::sema_default_arg_added_member_of_template, at);
+            return;
+        }
+        if self.kind_of(prev) != DeclKind::CXXConstructor {
+            return;
+        }
+        // The number of leading parameters without a default argument,
+        // before and after this declaration.
+        let required =
+            |has: &dyn Fn(usize) -> bool| (0..params.len()).take_while(|&k| !has(k)).count();
+        let after = required(&|k| defaults.get(k).is_some_and(Option::is_some));
+        let before = required(&|k| had(self, k));
+        let kind = match after {
+            0 if before > 0 => 0u8,
+            1 if before > 1 => {
+                let t = params[0].ty;
+                let cls = self.ast.types.pointee(t).and_then(|x| self.ast.types.as_record(x));
+                let own = cls.is_some_and(|c| self.ast.first(c) == self.ast.first(ctx));
+                match self.ast.types.canonical_kind(t) {
+                    kiln_ast::types::TypeKind::LValueRef if own => 1,
+                    kiln_ast::types::TypeKind::RValueRef if own => 2,
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+        let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+        let msg =
+            self.diag(DiagId::sema_default_arg_makes_ctor_special, at).arg(kind).with_note(note);
+        self.emit(msg);
     }
 
     /// True if `d` was declared inside a function body.

@@ -10,6 +10,9 @@ note_marked_unavailable = Note (1) "'{0}' has been explicitly marked unavailable
 note_matching = Note (1) "to match this {0}";
 note_member_declared_at = Note (0) "member is declared here";
 note_member_declared_named = Note (1) "member '{0}' declared here";
+// An out-of-line member definition matches this declaration except for
+// its unsatisfied constraints (clang `note_member_def_close_match`).
+note_member_def_close_match = Note (0) "member declaration nearly matches";
 note_member_first_declared_here = Note (1) "member {0} first declared here";
 note_member_fn_declared_const = Note (1) "member function '{0}' is declared const here";
 note_member_reference_arrow_from_operator_arrow = Note (0) "'->' applied to return value of the operator->() declared here";

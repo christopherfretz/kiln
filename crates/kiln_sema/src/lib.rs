@@ -587,6 +587,10 @@ pub struct Sema<'a, 'sm> {
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
+    /// The classes being defined in the contexts an instantiation set
+    /// aside (`in_inst_context`): still incomplete there ([class.mem.general]/8;
+    /// `struct W { Y<W> y; };` instantiating `Y<W>`'s field `W t`).
+    pub(crate) suspended_defining: Vec<DeclId>,
     /// Set while a member access resolved in a template's pattern is
     /// formed again for an instantiation; taken by the next object
     /// completeness check ([`Sema::member_object`]).
@@ -1492,6 +1496,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
+            suspended_defining: Vec::new(),
             pattern_member_access: false,
             invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),

@@ -13,6 +13,7 @@ use crate::lookup::is_tag_kind;
 
 /// The new declaration being matched against previous ones.
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one declaration")]
 pub(crate) struct NewFn {
     /// Its (declared) function type.
     pub ty: QualType,
@@ -32,6 +33,8 @@ pub(crate) struct NewFn {
     /// function with such parameters and one without do not correspond;
     /// WP-803).
     pub pass_object_size: bool,
+    /// Its first parameter is an explicit object parameter (P0847).
+    pub explicit_object: bool,
 }
 
 impl Sema<'_, '_> {
@@ -200,6 +203,10 @@ impl Sema<'_, '_> {
             return true;
         };
         let (ao, an) = (t.params(&po), t.params(&pn));
+        // An explicit object parameter is the object parameter, not part
+        // of the non-object-parameter-type-list ([basic.scope.scope]/4).
+        let old_eo = self.has_explicit_object(old);
+        let ((oo, ao), (on, an)) = (split(ao, old_eo), split(an, new.explicit_object));
         if ao.len() != an.len()
             || po.info().variadic() != pn.info().variadic()
             || ao.iter().zip(an).any(|(x, y)| !t.same_type(*x, *y))
@@ -210,7 +217,14 @@ impl Sema<'_, '_> {
             self.ast.decls.function(old).is_some_and(|f| f.spec.storage() == FnStorage::Static);
         let both_non_static =
             self.kind_of(old) == DeclKind::CXXMethod && !old_static && !new.is_static;
-        if ref_mix {
+        if oo.is_some() || on.is_some() {
+            if ref_mix
+                || (both_non_static
+                    && !self.object_params_correspond(old, (oo, po.info()), (on, pn.info())))
+            {
+                return false;
+            }
+        } else if ref_mix {
             // Conversion functions are non-static members too (only
             // compared here; their redeclarations match by type).
             let both_non_static =
@@ -279,6 +293,55 @@ impl Sema<'_, '_> {
         }
         self.same_enable_if(old, new.enable_if)
             && self.ast.pass_object_size_params(old).is_empty() != new.pass_object_size
+    }
+
+    /// [basic.scope.scope]/4.3: the object parameters of two non-static
+    /// member functions of the class of `old`, at least one with an
+    /// explicit object parameter (each side: the explicit object
+    /// parameter's type, else `None` and the implicit object member
+    /// function's qualifiers), correspond when their types are the same,
+    /// or when exactly one is an implicit object member function without
+    /// a ref-qualifier and the types are the same after removing
+    /// references (`void f();` and `void f(this S&&);` correspond).
+    fn object_params_correspond(
+        &mut self,
+        old: DeclId,
+        a: (Option<QualType>, kiln_ast::types::FuncInfo),
+        b: (Option<QualType>, kiln_ast::types::FuncInfo),
+    ) -> bool {
+        let t = &self.ast.types;
+        let (explicit, info) = match (a, b) {
+            ((Some(x), _), (Some(y), _)) => return t.same_type(x, y),
+            ((Some(x), _), (None, i)) | ((None, i), (Some(x), _)) => (x, i),
+            _ => return true,
+        };
+        let refq = match t.canonical_kind(explicit) {
+            kiln_ast::types::TypeKind::LValueRef => RefQual::LValue,
+            kiln_ast::types::TypeKind::RValueRef => RefQual::RValue,
+            _ => RefQual::None,
+        };
+        // Sugared: an injected-class-name type names its class only
+        // before canonicalization.
+        let obj = if refq == RefQual::None {
+            explicit
+        } else {
+            t.pointee_sugared(explicit).unwrap_or(explicit)
+        };
+        let Some(cls) = self.ast.decls.get(old).ctx() else { return false };
+        let same_class = t.as_record(obj).is_some_and(|r| self.ast.first(r) == self.ast.first(cls))
+            || {
+                let this = self.this_class_type(cls);
+                self.ast.types.same_unqualified(obj, this)
+            };
+        let t = &self.ast.types;
+        let ref_ok = match info.ref_qual() {
+            RefQual::None => true,
+            RefQual::LValue => refq == RefQual::LValue,
+            RefQual::RValue => refq == RefQual::RValue,
+        };
+        same_class
+            && ref_ok
+            && t.canonical(obj).quals() - Quals::RESTRICT == info.this_quals() - Quals::RESTRICT
     }
 
     /// The constraints of member template `x` of a class template
@@ -369,5 +432,14 @@ impl Sema<'_, '_> {
                 _ => true,
             }
         })
+    }
+}
+
+/// A parameter-type-list split into the explicit object parameter (when
+/// `eo`) and the non-object parameters.
+fn split(ps: &[QualType], eo: bool) -> (Option<QualType>, &[QualType]) {
+    match ps.split_first() {
+        Some((&o, rest)) if eo => (Some(o), rest),
+        _ => (None, ps),
     }
 }

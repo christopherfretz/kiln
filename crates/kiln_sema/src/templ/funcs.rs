@@ -1132,6 +1132,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let mut exc = None;
+        let mut close = None;
         for &c in &cands {
             if self.kind_of(c).payload() != kiln_ast::decl::PayloadClass::Function
                 || self.ast.member_spec_info(c).is_none()
@@ -1141,6 +1142,13 @@ impl Sema<'_, '_> {
             let Some(pty) = self.declared_fn_type(c) else { continue };
             if self.ast.types.same_type(pty, ty) {
                 let c = self.most_constrained_member_match(c, &cands, ty, d.name_loc());
+                if !inst && close.is_none() && self.spec_unsatisfied(c, d.name_loc()) {
+                    // [temp.expl.spec]: a member whose constraints are not
+                    // satisfied by the class's arguments is not a member
+                    // of the specialization; the definition matches nothing.
+                    close = Some(c);
+                    continue;
+                }
                 if inst && self.clang_compat >= 22 && self.explicit_inst_unsatisfied(c, d, name) {
                     return Some(None);
                 }
@@ -1203,8 +1211,21 @@ impl Sema<'_, '_> {
             .arg(self.decl_name_str(name))
             .arg(self.class_context_str(q));
         let e = self.with_class_defined_note(e, q);
+        let e = match close {
+            Some(c) => {
+                let loc = self.ast.decls.get(c).loc();
+                e.with_note(self.diag(DiagId::note_member_def_close_match, loc))
+            }
+            None => e,
+        };
         self.emit(e);
         Some(None)
+    }
+
+    /// Member `c` of a class template specialization has a trailing
+    /// requires-clause its arguments do not satisfy.
+    fn spec_unsatisfied(&mut self, c: DeclId, loc: Loc) -> bool {
+        self.check_function_constraints(c, loc).is_some_and(|sat| !self.sat_ok(sat))
     }
 
     /// clang 22 (`-fclang-compat=22`): an explicit instantiation whose

@@ -2148,7 +2148,10 @@ impl Sema<'_, '_> {
             // member access, also one through a dependent base (an implicit
             // `this->Q::name`, [temp.dep.type]/6) whose check is replayed in
             // the instantiation with `*this`'s instantiated class.
-            let object = if !self.is_instance_member(d) {
+            // `&C::m` names the member without an object
+            // ([expr.unary.op]/3): [class.protected] then requires the
+            // naming class to be the context's class or derived from it.
+            let object = if !self.is_instance_member(d) || (self.address_operand && nns.is_some()) {
                 None
             } else if self.member_via_dependent_base(d) {
                 self.this_class().map(|(_, c)| c)
@@ -6025,10 +6028,24 @@ impl Sema<'_, '_> {
             }
             let t = self.ety(a);
             if defer {
-                if self.ast.types.is_void(t) || self.vararg_non_trivial(t) {
+                if self.ast.types.is_void(t)
+                    || self.vararg_non_trivial(t)
+                    || self.vararg_copies(a, t)
+                {
                     let _ = self.vararg_recheck.insert(a, kind);
                 }
                 continue;
+            }
+            if self.unevaluated == 0 && self.vararg_copies(a, t) {
+                // [conv.lval]/3.2: the lvalue-to-rvalue conversion of a
+                // class glvalue copy-initializes a temporary, which uses
+                // (and checks the access to) the copy or move constructor
+                // ([class.access]/1; clang `DefaultVariadicArgumentPromotion`).
+                // The temporary is not kept: the argument is passed as
+                // before.
+                let at = self.ast.exprs.get(a).loc();
+                let ty = self.ast.types.canonical(t).without_quals();
+                let _ = self.class_init_from_expr(ty, a, ConvCtx::Initialization, at);
             }
             if self.ast.types.is_void(t) {
                 let msg = self
@@ -6044,6 +6061,14 @@ impl Sema<'_, '_> {
                 self.diag_runtime_behavior_now(msg);
             }
         }
+    }
+
+    /// Whether the variadic argument `a` of type `t` is a glvalue of a
+    /// complete class type, which the lvalue-to-rvalue conversion copies.
+    fn vararg_copies(&self, a: ExprId, t: QualType) -> bool {
+        !self.is_c()
+            && self.ast.exprs.get(a).value_category() != ValueCategory::PRValue
+            && self.ast.types.as_record(t).is_some_and(|r| self.ast.definition(r).is_some())
     }
 
     /// clang `isValidVarArgType` returning `VAK_Undefined` in C++11 and

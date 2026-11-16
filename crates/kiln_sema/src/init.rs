@@ -805,6 +805,34 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Diagnoses parenthesized initialization of array type `ty` by `v`
+    /// (`settled` if no argument is dependent or erroneous) that is
+    /// ill-formed: `()` value-initializes and an array of unknown bound is
+    /// incomplete ([dcl.init.general]/16.4, `T t(f<A>()...)` with an empty
+    /// pack), and a parenthesized expression list initializes an array
+    /// (other than from a string literal) only from C++20
+    /// ([dcl.init.general]/16.5, P0960; clang `FK_ArrayNeedsInitList`).
+    fn paren_init_rejected(&mut self, ty: QualType, v: &[ExprId], settled: bool, loc: Loc) -> bool {
+        if v.is_empty()
+            && self.ast.types.canonical_kind(ty) == kiln_ast::types::TypeKind::IncompleteArray
+        {
+            let msg =
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return true;
+        }
+        if self.std >= kiln_lex::Std::Cxx20
+            || !settled
+            || !self.ast.types.is_array(ty)
+            || (v.len() == 1 && self.string_lit_of(v[0]).is_some())
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_array_init_not_init_list, loc).arg(0u8);
+        self.emit(msg);
+        true
+    }
+
     /// The initialization of an object of type `ty` by `init`
     /// ([dcl.init.general]/16); `direct_list` for `T x{...}`
     /// (direct-list-initialization, [dcl.init.list]/1).
@@ -838,11 +866,15 @@ impl Sema<'_, '_> {
                 let settled = !v
                     .iter()
                     .any(|&a| self.expr_is_type_dependent(a) || self.is_error_type(self.ety(a)));
+                if self.paren_init_rejected(ty, &v, settled, loc) {
+                    return self.recover(ty, &v, l);
+                }
                 if settled
                     && self.ast.types.is_array(ty)
                     && !(v.len() == 1 && self.string_lit_of(v[0]).is_some())
                 {
-                    // [dcl.init.general]/16.5: `T a[N](x, y)`.
+                    // [dcl.init.general]/16.5: `T a[N](x, y)`, from C++20
+                    // (P0960; clang `FK_ArrayNeedsInitList` before).
                     return self.paren_aggregate_init(ty, &v, loc, r);
                 }
                 if settled
@@ -1367,6 +1399,14 @@ impl Sema<'_, '_> {
                 self.note_default_use(e, f, at);
                 return e;
             }
+            return self.recover(fty, &[], at);
+        }
+        // [dcl.init.aggr]/5.2-3: an element of reference type that is
+        // neither explicitly initialized nor has a default member
+        // initializer makes the program ill-formed (clang's
+        // `err_init_reference_member_uninitialized`).
+        if !self.is_c() && self.ast.types.is_reference(fty) {
+            self.uninit_reference_member(f, fty, at);
             return self.recover(fty, &[], at);
         }
         self.filler(fty, at)

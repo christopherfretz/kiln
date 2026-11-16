@@ -101,6 +101,7 @@ impl Sema<'_, '_> {
                 enable_if,
                 member_using,
                 pass_object_size: !self.ast.pass_object_size_params(fb).is_empty(),
+                explicit_object: self.has_explicit_object(fb),
             },
         )
     }

@@ -477,6 +477,14 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   (`is_explicit_object_method`). Lambdas with an explicit object
   parameter (the closure type as `Self`) follow spec/sema-lambda.md §3.1
   (WP-356): `param_nonmember` and `param_not_first` select "lambda".
+  Redeclaration ([basic.scope.scope]/4, `object_params_correspond`): an
+  explicit object member function corresponds to an implicit object one
+  with the same non-object parameters when the explicit parameter's type,
+  references removed, is the class with the implicit one's cv-qualifiers,
+  and its reference kind matches the ref-qualifier (a non-ref-qualified
+  implicit one matches any, a by-value parameter included); declaring
+  both is "class member cannot be redeclared" (WP-1470,
+  `basic.scope.scope/explicit-object-{corresponds,overloads}.cpp`).
 
 ### 2.6 Pointers to members
 `&C::m` forms `MemberPointer` (types.md §5.2) for non-static members (`&(C::m)`
@@ -1129,7 +1137,12 @@ deleted function must be deleted on its first declaration. Signature checks of
 [dcl.fct.def.default]/2–3 (`the parameter for an explicitly-defaulted copy
 constructor is const, but a member or base requires it to be non-const`, return
 type of assignment, `explicitly-defaulted copy assignment operator must return
-'X &'`).
+'X &'`). A type mismatch on the first declaration deletes the member only
+from C++20 (P0641); before C++20, and on a later declaration, a volatile
+parameter, a const move parameter, a const copy parameter a member or base
+requires non-const, and a const (C++11: constexpr, so implicitly const)
+assignment are errors with clang's wording (WP-1470). Tests:
+`defaulted-mismatch-cxx11.cpp`, `defaulted-mismatch-cxx20.cpp`.
 
 ### 4.5 Implicit definition
 An implicit or defaulted-on-first-declaration member is defined when odr-used
@@ -2204,7 +2217,11 @@ the `-Wdangling-gsl` extensions to more `std` members and the
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
   class (ignoring cv) initializes the object directly; no copy or move
-  `CXXConstructExpr` is formed.
+  `CXXConstructExpr` is formed. Before C++17 the copy is only elidable
+  ([class.copy.elision]/1.3): the move (or copy) constructor it would call
+  is still resolved and checked for deletion and access in evaluated
+  copy-initializations, returns and arguments (`check_elided_ctor`), and
+  then dropped (WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`).
 - **No elision into a base or delegating target** (CWG2403; clang
   `RequireActualConstructor`, WP-158): a prvalue initializing a base
   subobject (a mem-initializer, or an aggregate's base element, whose
@@ -3552,8 +3569,10 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
 7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
    `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
    would show either differ.
-8. (WP-066b, WP-174) `&B::m`'s [class.protected] rule and member-pointer
-   base-to-derived conversion access are not re-checked; an unqualified
+8. (WP-066b, WP-174) Member-pointer base-to-derived conversion access is
+   not re-checked (`&B::m` gets the [class.protected] rule with no object
+   since WP-1470: the naming class must be the context class or derived
+   from it); an unqualified
    `&f` naming a member function gets no `must explicitly qualify name of
    member function` diagnostic; calls through member pointers get no
    cv/ref-qualifier check; storage class specifiers on friends are not
