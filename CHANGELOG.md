@@ -667,6 +667,20 @@ Planned as 1.3.0.
   under construction. Reads before an object's lifetime began (a later
   member in a mem-initializer, a local in its own initializer) now say
   "read of object outside its lifetime" as clang 22 does.
+- C++20 and C++23 programs found running GCC's C++ testsuite: a class
+  non-type template argument holding a lambda through an alias template
+  or a member template's default; `decltype` of a static data member no
+  longer instantiates its initializer; a qualified call to a static
+  member deduces its return type before its constraints are checked; an
+  init-capture (also a pack) named in its lambda's requires-clause;
+  `typename T::type()` as a simple requirement; an overload set's address
+  failing a requirement; a concept naming a non-static data member;
+  defaulted comparisons of unions without variant members; a strong
+  ordering library without `equivalent`; `static_cast` to an array type;
+  libstdc++'s `source_location::current()` in a generic function; and
+  `__builtin_is_pointer_interconvertible_with_class` /
+  `__builtin_is_corresponding_member` on a member of an anonymous struct
+  in a union.
 
 ## [1.2.1] - 2026-11-14
 

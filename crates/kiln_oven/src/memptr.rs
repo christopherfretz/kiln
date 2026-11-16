@@ -40,20 +40,22 @@ pub(crate) struct MpEntry {
     pub adj: u64,
     /// The member's class.
     pub cls: OTy,
-    /// A data member: its offset and type in `cls`; `idx` its field index
-    /// in the class that directly contains it (for a union's active
-    /// member).
-    pub field: Option<(u64, OTy, u32)>,
-    /// The union that directly contains the data member (`cls`, or for a
-    /// member of an anonymous union the union's type, [class.union.anon]).
-    pub union: Option<OTy>,
+    /// A data member: its offset and type in `cls`.
+    pub field: Option<(u64, OTy)>,
+    /// The unions on the data member's access path, outermost first
+    /// (`cls` itself, and the anonymous unions of [class.union.anon]):
+    /// each union's type, the index in it of the member the path goes
+    /// through (the data member, or the anonymous struct or union that
+    /// holds it), and the data member's offset from the union's start. An
+    /// access through the member pointer checks each is active.
+    pub unions: Box<[(OTy, u32, u64)]>,
     /// A member function: its function index, and whether it is virtual
     /// (a call through the member pointer dispatches, `Op::MpFn`).
     pub fn_index: u32,
     pub virt: bool,
     /// Interned while its class (or a class of its path) was incomplete
     /// and not laid out yet ([`Oven::mp_refresh`]): `adj`, `field` and
-    /// `union` are not meaningful.
+    /// `unions` are not meaningful.
     pub pending: bool,
 }
 
@@ -61,8 +63,8 @@ pub(crate) struct MpEntry {
 struct MpLayout {
     adj: u64,
     cls: OTy,
-    field: Option<(u64, OTy, u32)>,
-    union: Option<OTy>,
+    field: Option<(u64, OTy)>,
+    unions: Box<[(OTy, u32, u64)]>,
 }
 
 /// The interned member pointer values of an Oven.
@@ -128,8 +130,7 @@ impl Oven {
     /// Interns the member pointer to `member` (a field or member
     /// function) with conversion state `derived` and `path`; returns its
     /// register value (never 0), or `None` if the member cannot be
-    /// designated (a bit-field, a member reached through an anonymous
-    /// union holding an anonymous struct). A member
+    /// designated (a bit-field). A member
     /// of an anonymous union or struct is its `IndirectField`: the offset
     /// sums its access path ([class.union.anon]/1).
     pub(crate) fn mp_intern(
@@ -170,8 +171,8 @@ impl Oven {
         let ast = b.ast();
         let pending =
             Types::incomplete(ast, owner) || path.iter().any(|&d| Types::incomplete(ast, d));
-        let MpLayout { adj, cls, field, union } = if pending {
-            MpLayout { adj: 0, cls: self.record_ty(b, owner)?, field: None, union: None }
+        let MpLayout { adj, cls, field, unions } = if pending {
+            MpLayout { adj: 0, cls: self.record_ty(b, owner)?, field: None, unions: Box::new([]) }
         } else {
             self.mp_layout(b, owner, &chain, derived, &path)?
         };
@@ -184,7 +185,7 @@ impl Oven {
             adj,
             cls,
             field,
-            union,
+            unions,
             fn_index,
             virt,
             pending,
@@ -209,18 +210,15 @@ impl Oven {
         path: &[DeclId],
     ) -> Option<MpLayout> {
         let cls = self.record_ty(b, owner)?;
-        let mut union = None;
+        // Each union on the path, with its offset from the start of `cls`
+        // until the path is walked (then the member's offset from it).
+        let mut unions = Vec::new();
         let field = if chain.is_empty() {
             None
         } else {
-            let (mut ty, mut off, mut last) = (cls, 0, None);
-            for (k, &fd) in chain.iter().enumerate() {
+            let (mut ty, mut off) = (cls, 0);
+            for &fd in chain {
                 let is_union = matches!(self.types.kind(ty), TyKind::Record { union: true, .. });
-                if is_union && k + 1 < chain.len() {
-                    // Activating the anonymous struct inside the union is
-                    // not modelled.
-                    return None;
-                }
                 let fs = self.types.fields(ty);
                 let i = fs.iter().position(|f| !f.base && f.decl == fd)?;
                 let f = fs[i];
@@ -228,13 +226,15 @@ impl Oven {
                     return None;
                 }
                 if is_union {
-                    union = Some(ty);
+                    unions.push((ty, i as u32, off));
                 }
                 off += f.offset;
                 ty = f.ty;
-                last = Some(i as u32);
             }
-            Some((off, ty, last?))
+            for u in &mut unions {
+                u.2 = off - u.2;
+            }
+            Some((off, ty))
         };
         let mut tys = Vec::with_capacity(path.len());
         for &d in path {
@@ -258,7 +258,7 @@ impl Oven {
             }
             adj += self.direct_base(cur, cls);
         }
-        Some(MpLayout { adj, cls, field, union })
+        Some(MpLayout { adj, cls, field, unions: unions.into_boxed_slice() })
     }
 
     /// Lays out the pending member pointer values whose classes completed
@@ -289,8 +289,8 @@ impl Oven {
             // designates no subobject (`Fault::Invalid` at a use).
             if let Some(l) = self.mp_layout(b, owner, &chain, derived, &path) {
                 let e = &mut self.mp.entries[i as usize];
-                (e.adj, e.cls, e.field, e.union, e.pending) =
-                    (l.adj, l.cls, l.field, l.union, false);
+                (e.adj, e.cls, e.field, e.unions, e.pending) =
+                    (l.adj, l.cls, l.field, l.unions, false);
             }
         }
     }

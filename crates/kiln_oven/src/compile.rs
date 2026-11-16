@@ -4780,9 +4780,12 @@ impl Compiler<'_> {
                         // clang permits any cast from `void *` within
                         // `std::allocator<T>::allocate` (an empty
                         // allocation's `T[0]` included).
+                        // So does `std::source_location::current` (clang's
+                        // `IsDeclSourceLocationCurrent`).
                         let in_allocate = fvoid
                             && self.cur_fn.is_some_and(|f| {
                                 new_delete::std_allocator_elem(self.ast(), f, "allocate").is_some()
+                                    || new_delete::is_source_location_current(self.ast(), f)
                             });
                         let func = matches!(self.kind(fp), TyKind::Func)
                             || matches!(self.kind(tp), TyKind::Func);

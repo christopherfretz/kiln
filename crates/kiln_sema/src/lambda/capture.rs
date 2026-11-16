@@ -1402,8 +1402,12 @@ impl Sema<'_, '_> {
             // The pattern stays as written, as one expression (a
             // dependent variable initializer's form); each element is
             // deduced and initialized when the pack is expanded.
+            // The element type is the dependent `auto` (clang deduces the
+            // pattern `auto` against a dependent initializer), so `xs(a)`
+            // in the declarator is a dependent call (WP-1497).
             let pattern = self.dependent_initializer(&init);
-            (self.ast.types.pack_expansion(declared, None), pattern)
+            let elem = self.dependent_auto(declared);
+            (self.ast.types.pack_expansion(elem, None), pattern)
         } else {
             let direct = style == InitStyle::List;
             // Deduced as `auto x <init>`, reported in clang's lambda-capture

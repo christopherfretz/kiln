@@ -5465,7 +5465,11 @@ the initializer, or after default initialization, and before the
     (`'int *'` for an `int[3]`, `'void (*)(int)'` for a function), and
     `const_cast<void>` is `const_cast to 'void', which is not a
     reference, pointer-to-object, or pointer-to-data-member` (WP-327;
-    test `expr.static.cast/bad-cast-decayed-operand.cpp`).
+    test `expr.static.cast/bad-cast-decayed-operand.cpp`). From C++20 a
+    `static_cast` to an array type direct-initializes it from `(e)`
+    ([expr.static.cast]/4, a parenthesized aggregate initialization); when that initialization fails its
+    diagnostics are dropped for the generic message
+    (`expr.static.cast/cast-to-array*.cpp`; WP-1497).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold. They are run-time
   behavior diagnostics anchored at the right operand (clang's

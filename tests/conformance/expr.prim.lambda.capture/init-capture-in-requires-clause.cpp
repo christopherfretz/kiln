@@ -4,7 +4,6 @@
 // function template. Found running GCC's C++ testsuite (WP-1472).
 //@ expect: compile-ok
 //@ std: c++23
-//@ xfail(kiln): WP-1497, the requires-clause sees the init-capture before its type is deduced ("atomic constraint that stays value-dependent")
 template <class Fn> constexpr auto mk(Fn fn) {
   return [f{fn}](int a) requires requires { f(a); } { return f(a); };
 }

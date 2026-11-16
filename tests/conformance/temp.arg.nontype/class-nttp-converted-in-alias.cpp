@@ -4,7 +4,6 @@
 // on an `n`. Found running GCC's C++ testsuite (WP-1472).
 //@ expect: compile-ok
 //@ std: c++20
-//@ xfail(kiln): WP-1497, the alias substitutes the unconverted int argument ("member reference base type 'int'")
 struct n {
   constexpr n(int a) : i(a) {}
   int i;

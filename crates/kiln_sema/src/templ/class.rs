@@ -525,6 +525,11 @@ impl Sema<'_, '_> {
         // clang 19 substitutes an alias with the canonical arguments: the
         // aliased type of `Ptr<I>` is `int *`, not `I *`.
         let subst_args = if sugared { conv.sugared } else { self.alias_subst_args(conv.sugared) };
+        let subst_args = if dependent {
+            self.convert_dependent_class_nttp_args(tmpl, subst_args, loc)
+        } else {
+            subst_args
+        };
         args.push(subst_args, tmpl, LevelMode::Substitute);
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
@@ -628,6 +633,55 @@ impl Sema<'_, '_> {
         if let Some(st) = self.inst.sfinae.borrow_mut().last_mut() {
             st.first = Some(d);
         }
+    }
+
+    /// [temp.arg.nontype]/2: the argument for a non-type parameter of class
+    /// type is a converted constant expression of that type. A
+    /// value-dependent argument is kept as written by
+    /// [`Self::check_template_args`] (it is evaluated when substituted);
+    /// an alias template, substituted at once, is substituted with it
+    /// converted to the parameter's type (`const n`, clang's
+    /// `CheckTemplateArgument` performing the initialization), so `N.i` in
+    /// `template <n N> using A = decltype(N.i)` names a member of `n` for
+    /// `A<X>` with `int X` (WP-1497). O(1) unless an argument is such an
+    /// expression.
+    fn convert_dependent_class_nttp_args(
+        &mut self,
+        tmpl: DeclId,
+        list: ArgListId,
+        loc: Loc,
+    ) -> ArgListId {
+        let n = self.ast.types.args(list).len();
+        let mut out: Option<Vec<TemplateArg>> = None;
+        let head = self.head_template(tmpl);
+        for i in 0..n {
+            let a = self.ast.types.args(list)[i];
+            let ArgView::Expr { expr, .. } = a.view() else { continue };
+            let Some(info) = self.ast.template_info(head).copied() else { break };
+            let pl = self.ast.templates.param_list(info.params).params;
+            let Some(p) = self.ast.lists.iter::<DeclId>(pl).nth(i) else { break };
+            if self.kind_of(p) != DeclKind::NonTypeTemplateParm {
+                continue;
+            }
+            let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            let ety = self.ast.exprs.get(expr).ty();
+            let t = &self.ast.types;
+            if t.is_dependent(pty)
+                || t.as_record(pty).is_none()
+                || t.is_dependent(ety)
+                || self.is_err_expr(expr)
+            {
+                continue;
+            }
+            // Checked by `check_template_args`: no new diagnostic.
+            let Ok(c) = self.convert_dependent_class_nttp_arg(pty, expr, loc) else { continue };
+            if c == expr {
+                continue;
+            }
+            let v = TemplateArg::expr(c, Some(self.ast.profile_expr(c)));
+            out.get_or_insert_with(|| self.ast.types.args(list).to_vec())[i] = v;
+        }
+        out.map_or(list, |v| self.ast.types.arg_list(&v))
     }
 
     /// The arguments an alias template is substituted with: canonical,
@@ -1672,6 +1726,21 @@ impl Sema<'_, '_> {
         }
         let constant = self.might_be_constant_var(v);
         if !odr && !constant {
+            return;
+        }
+        // clang `isPotentiallyConstantEvaluatedContext`: an unevaluated
+        // operand written in the source (`decltype(A<int>::value)`)
+        // outside a constant-evaluated context needs only the declaration
+        // ([temp.inst]/4, /8). The contexts are counters, not a stack, so
+        // an unevaluated operand inside a constant-evaluated one
+        // (`static_assert(sizeof(A<int>::value))`), and any reference
+        // made while instantiating or checking constraints (whose atoms
+        // are constant-evaluated), still instantiates.
+        if !odr
+            && self.unevaluated > 0
+            && !self.in_constant_evaluated()
+            && self.inst.stack.frames.is_empty()
+        {
             return;
         }
         if deferred && constant {

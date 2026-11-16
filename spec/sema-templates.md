@@ -2508,6 +2508,20 @@ reports a dropped statement, part or declaration lookup.
   last member. References inside another instantiation, or during the
   end-of-TU drain, are not recorded: codegen emits those at first use.
   `tests/codegen/var_template_point_of_instantiation.cpp`.
+- A reference written in an unevaluated operand outside any
+  constant-evaluated context (`decltype(A<int>::value)`, `sizeof`,
+  `noexcept`) instantiates nothing: only the declaration is needed
+  (clang `isPotentiallyConstantEvaluatedContext` in
+  `DoMarkVarDeclReferenced`; [temp.inst]/4, /8). A template argument is
+  constant-evaluated, so `decltype(B<A<int>::value>{})` instantiates it.
+  The two contexts are counters, not a stack, so an unevaluated operand
+  inside a constant-evaluated one (`static_assert(sizeof(A<int>::value)
+  == 4)`) still instantiates, and so does a reference made while
+  instantiating or checking constraints (`inst.stack.frames` not empty:
+  `requires { A<T>::value; }` in a concept, a substituted `decltype` in
+  a signature), deviations that only instantiate more
+  (tests/conformance/temp.inst/static-member-init-unevaluated*.cpp,
+  static-member-init-template-argument.cpp; WP-1497).
 
 ### 4.7 Injected-class-name
 
@@ -6894,7 +6908,11 @@ headers. They are implemented in M3 because they cost one row each:
   operands are. Each argument decays and must be a pointer to member
   (`sema_builtin_member_pointer_arg`, "argument to 'X' is not a pointer
   to member (was 'T')"); its class must be complete. The answer is
-  spec/abi.md §3.4 on the classes of the member pointer types.
+  spec/abi.md §3.4 on the classes of the member pointer types. An
+  incomplete class is diagnosed and the call kept (a `bool` call, not an
+  erroneous expression), so a wrapper template's specialization stays
+  valid and a later call of it is not reported again as a substitution
+  failure (WP-1497).
 - `__is_pointer_interconvertible_base_of(B,D)` ([meta.rel]/5): non-union
   classes; the same class (cv ignored) is true, else `D` must be complete
   and standard-layout with `B` as a base.
@@ -7668,8 +7686,17 @@ ambiguity errors.
   implicit conversion sequence is "value of type 'const E' is not
   implicitly convertible to 'int *'" (the source type keeps its cv); both
   at the argument, with "template parameter is declared here" at
-  `-fclang-compat=22` only. Narrowing waits for the value, and a
-  parameter of class or placeholder type, a parameter pack's type, a
+  `-fclang-compat=22` only. A parameter of non-dependent class type is
+  initialized from the argument at once (`convert_dependent_class_nttp_arg`,
+  "no viable conversion from 'const q' to 'n'" at the argument), and an
+  alias template substituted with dependent arguments
+  (`alias_template_type`, `convert_dependent_class_nttp_args`) substitutes
+  that conversion, so `template<int X> using j = i_type<X>;` with
+  `template<n N> using i_type = decltype(N.i);` names `n::i`
+  (tests/conformance/temp.arg.nontype/class-nttp-converted-in-alias.cpp,
+  class-nttp-lambda-member-and-alias.cpp,
+  class-nttp-alias-not-convertible.cpp; WP-1497). Narrowing waits for the
+  value, and a parameter of placeholder type, a parameter pack's type, a
   type that names dependent prior arguments, and an explicit argument
   of a function template-id (`f<i>()`) wait for substitution
   (`nttp_type_pending`). A missing argument needs a default, which is
@@ -8306,6 +8333,12 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
   scope exits.
 - Calling a function whose return type is still undeduced instantiates
   it if it is a template specialization member (`check_undeduced_use`).
+  A name built by `build_decl_ref_extra` checks the function's
+  constraints first, as clang's `DiagnoseUseOfDecl` does, so a function
+  whose constraints are not satisfied is never instantiated (`A<T>::r()`
+  for `static auto r() requires false`;
+  tests/conformance/temp.inst/unsatisfied-member-return-deduction*.cpp;
+  WP-1497).
   Otherwise it reports
   `function {0} with deduced return type cannot be used before it is defined`.
   A conversion function considered as a candidate is treated the same
@@ -8895,7 +8928,20 @@ explicit specialization errors remain. The blockers are:
   A non-dependent requires-expression is evaluated in
   `act_requires_expr` and keeps its written requirements in the AST.
   The parser accepts an unqualified type-requirement
-  `typename X<T>;`.
+  `typename X<T>;`. A requirement whose `typename`-specifier is followed
+  by `(` or `{` (`typename T::type();`, `typename W<T>::type{}`) is a
+  simple requirement, an explicit type conversion, as clang's
+  tentative parse (`typename_requirement_is_expression`;
+  `expr.prim.req.type/typename-requirement-expression.cpp`). A
+  non-dependent simple or compound requirement is also invalid when its
+  expression names an overload set or a member template with no target
+  (`&X::f`; `check_overload_use`, under SFINAE). A concept's
+  constraint-expression is parsed as an unevaluated operand
+  ([temp.concept]/3), so it may name a non-static data member
+  (`temp.constr.decl/concept-definition-unevaluated.cpp`), and as
+  constant-evaluated too, so the variables a non-dependent atom names
+  have their initializers instantiated for satisfaction
+  (`concept-definition-variable-initializer.cpp`; WP-1497).
 - Subsumption (`concepts/normal.rs`, `concepts/subsume.rs`): normal
   forms are hash-consed `NormNode::{Atomic{expr, mapping}, And, Or}`.
   A concept-id is expanded through its arguments, with a recursion

@@ -5,7 +5,6 @@
 //@ std: c++20
 //@ oracle: gcc
 //@ skip(clang): clang 19 rejects the defaulted lambda (clang 22 accepts)
-//@ xfail(kiln): WP-1497, `N.n + y` in the defaulted generic lambda sees `N` as void ("member reference base type 'void'")
 struct X { int n; };
 template <class T> struct A {
   template <class U> struct B {

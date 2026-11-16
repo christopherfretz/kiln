@@ -53,7 +53,21 @@ through four entry points (`kiln_sema/src/lambda/mod.rs`), in order:
    opens (`declare_init_captures`). Several init-captures named `_` are
    all found, in order ([basic.scope.scope]/5, P2169). As in clang 19 and
    22, `decltype((x))` of an init-capture `x` in the declarator does not
-   add the call operator's `const`.
+   add the call operator's `const`. A lambda substituted in a template
+   instantiation keeps its pattern's requires-clause; when its constraints
+   are checked, the pattern's init-capture variables map to the
+   substituted lambda's (`Substituter::seed_init_captures`, from
+   `sat_atom_uncached`; clang `LambdaScopeForCallOperatorInstantiationRAII`),
+   and in a generic lambda a requirement that is only
+   instantiation-dependent once every level is substituted (it names such
+   a variable, whose context stays a template) is checked then
+   (`requires_expr`'s `dep_expr`;
+   tests/conformance/expr.prim.lambda.capture/init-capture-in-requires-clause*.cpp;
+   WP-1497). An init-capture pack of the pattern maps to the run of
+   same-named expanded captures (`DeclOrPack::Pack`), and its element type
+   while the lambda is a template is the dependent `auto`, so a call
+   through it stays dependent
+   (`init-capture-pack-requires-clause.cpp`).
 2. `act_on_lambda_template_params_start(l_angle)` if `<` follows: opens a
    template head one level deeper than the enclosing ones and a
    template-parameter scope. The parser then parses the parameter list
@@ -772,7 +786,18 @@ in the member template, is the one whose call operator the program uses
 (`_ZZN1SIiE4fET_ENKUlvE_clEv`). A variable template member whose type is
 neither instantiation-dependent nor a placeholder keeps the type its class
 instantiation formed (`instantiate_var_spec_decl`), as clang does, so its
-closure is numbered in the class.
+closure is numbered in the class. A lambda in the default of a non-type
+template parameter of a member template, substituted while the class
+template is instantiated (`templ/member.rs::param_list`), is not
+never-dependent outside an unevaluated operand: the member template's own
+parameters are still open there (`TemplState::member_head_default`, with
+`dependent_depth` raised), so `template<auto N, auto F = [] { return
+N.n; }>` sees `N` and each use is a new closure numbered in the class,
+while `class U = decltype([] {})` stays the one closure of the class, as
+clang 19 and 22 mangle them
+(tests/conformance/temp.param/lambda-default-arg-member-nttp-mangling-run.cpp)
+(tests/conformance/temp.arg.nontype/lambda-default-argument-member.cpp,
+lambda-default-argument-siblings.cpp; WP-1497).
 
 ## 10. Tests
 

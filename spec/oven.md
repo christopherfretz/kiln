@@ -2248,7 +2248,11 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   allocation; WP-375).
   Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
   libc++ writes `static_cast<T*>(__builtin_operator_new(...))`) is a plain
-  move, not the C++26 `void*` cast check.
+  move, not the C++26 `void*` cast check. The same holds within
+  `std::source_location::current` (clang `IsDeclSourceLocationCurrent`),
+  where libstdc++ casts `__builtin_source_location()` back to its
+  `__impl` (`expr.const/source-location-current-void-cast.cpp`;
+  WP-1497).
   Before C++26 ([expr.const]/5.14 of C++11 to C++23) every other cast
   from `cv void *` to an object pointer (`static_cast`, C-style,
   functional, in any function including a template instantiation) is
@@ -3341,8 +3345,11 @@ evaluated like any other initializer.
 `memptr.rs`), so freeze/thaw maps 1:1 to `Scalar::MemberPtr`. The
 member of `&C::m` for a member of an anonymous union or struct is its
 `IndirectField` ([class.union.anon]/1): the entry's offset sums the
-access path, and the union checked by `MpActive` is the anonymous union
-that directly holds the member (WP-716). `&C::m` while `C` (or a class
+access path, and `MpActive` checks every union on that path, outermost
+first: each must have the member the path goes through active (the
+member itself, or the anonymous struct or union holding it; WP-716,
+WP-1497: a member of an anonymous struct inside an anonymous union is
+designated, so the member-layout builtins and `.*` work on it). `&C::m` while `C` (or a class
 of the path) is still being defined, as in a static data member
 initializer of `C` or of a class nested in it, interns a *pending* entry
 (member and path only; it compares equal as usual) that

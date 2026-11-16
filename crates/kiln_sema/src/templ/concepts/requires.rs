@@ -246,14 +246,17 @@ impl Substituter<'_, '_, '_> {
         recs: &mut Vec<SatRecord>,
         dependent: &mut bool,
     ) -> Option<Requirement> {
-        let dep_expr = |s: &Self, x: ExprId| {
-            s.sema
-                .ast
-                .exprs
-                .get(x)
-                .deps()
-                .intersects(ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK))
+        // With every level substituted by concrete arguments, a result
+        // that is only instantiation-dependent names a local of a context
+        // that stays a template (an init-capture of a generic lambda,
+        // P2036): it is checked now, as clang checks the call operator's
+        // specialization.
+        let deps = if self.sema.levels_dependent(self.args) {
+            ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK)
+        } else {
+            ExprDeps::TYPE.with(ExprDeps::VALUE).with(ExprDeps::UNEXPANDED_PACK)
         };
+        let dep_expr = |s: &Self, x: ExprId| s.sema.ast.exprs.get(x).deps().intersects(deps);
         match r {
             Requirement::Simple(e) => {
                 let x = self.req_expr(body, e, recs)?;
@@ -356,7 +359,16 @@ impl Substituter<'_, '_, '_> {
     /// `None` (with the "would be invalid" note) when it fails.
     fn req_expr(&mut self, body: DeclId, e: ExprId, recs: &mut Vec<SatRecord>) -> Option<ExprId> {
         let loc = self.sema.begin_loc(e);
-        match self.sfinae(body, loc, |s| s.expr(e).ok()) {
+        // An expression of overloaded-function type with no target
+        // (`&X::operator()` naming a template) is invalid
+        // ([over.over]/1; clang's `CheckPlaceholderExpr` on the
+        // requirement).
+        let checked = |s: &mut Self| {
+            let x = s.expr(e).ok()?;
+            let dependent = s.sema.ast.exprs.get(x).deps().intersects(ExprDeps::TYPE_VALUE_INST);
+            (dependent || !s.sema.check_overload_use(x)).then_some(x)
+        };
+        match self.sfinae(body, loc, checked) {
             Some((Some(x), Ok(()))) => Some(x),
             Some((_, st)) => {
                 let first = st.err().flatten();

@@ -672,7 +672,11 @@ ctor-initializer (`initializing multiple members of union` + note `previous
 initialization is here`); union special members are deleted when a variant
 member's corresponding member is non-trivial ([class.union.general]/3, §4.2;
 from C++26 not for the default constructor and destructor, P3074R7);
-no bases, not a base, no virtual functions, no reference members. Anonymous
+no bases, not a base, no virtual functions, no reference members. A union
+has variant members (`HAS_VARIANT_MEMBERS`) only once it declares a
+non-static data member, so a defaulted comparison of a union without one is
+not deleted ([class.compare.default]/2;
+`class.compare.default/union-defaulted-equality*.cpp`; WP-1497). Anonymous
 unions are M2 (`IndirectField`).
 
 ### 2.9 Definition data ([class.prop], [dcl.init.aggr])
@@ -1756,7 +1760,9 @@ a port of the clang 19 function it names.
   checks run at the class's `}` (primaries, then secondaries), or at an
   out-of-class `= default`. An ill-formed comparison is recorded in
   `special.cmp.invalid` rather than marked `INVALID`, because clang still
-  considers it as a candidate. The implicit `operator==` of a defaulted
+  considers it as a candidate. A strong ordering only needs the library's
+  `less`, `equal` and `greater` ([cmp.categories.pre]; the `equivalent`
+  value is not looked up; `strong-ordering-values.cpp`, WP-1497). The implicit `operator==` of a defaulted
   `<=>` ([class.compare.default]/4) is declared at `}`
   (`declare_implicit_equality`), `default implicit-inline`.
 - **Deletedness, category deduction, `constexpr`** (`analyze.rs`, clang

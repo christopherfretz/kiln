@@ -515,6 +515,37 @@ impl Sema<'_, '_> {
         ((params > 0).then_some(f), this_ty)
     }
 
+    /// The context pairs a constraint of `entity` is substituted with. A
+    /// member of a class template specialization: names of the pattern
+    /// class are looked up in the specialization. A friend defined in one
+    /// (a hidden friend of a member class such as `view<V>::iterator`,
+    /// [temp.friend]/1) maps the classes of the class that declared it,
+    /// its lexical context, so the members of the enclosing
+    /// specializations it names resolve ([temp.dep.type]).
+    fn constraint_context_pairs(&mut self, entity: DeclId) -> Vec<(DeclId, DeclId)> {
+        let class = self.inst_lexical_class(entity);
+        if self.kind_of(class) == kiln_ast::decl::DeclKind::CXXRecord {
+            self.inst_context_pairs(class)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The pattern call operator and `entity`'s, when `entity` is (the
+    /// template of) a call operator substituted from a lambda with
+    /// init-captures, which its constraints may name (P2036).
+    pub(crate) fn constraint_lambda_captures(&self, entity: DeclId) -> Option<(DeclId, DeclId)> {
+        let &(pattern, _) = self.inst.concepts.member_constraints.get(&entity)?;
+        let function_of = |d: DeclId| match self.kind_of(d) {
+            kiln_ast::decl::DeclKind::FunctionTemplate => self.templated_function(d),
+            k if k.is_function() => Some(d),
+            _ => None,
+        };
+        let (p, n) = (function_of(pattern)?, function_of(entity)?);
+        let l = self.lambda_of_call_op(p)?;
+        self.ast.exprs.lambdas.get(l).captures.iter().any(|c| c.init).then_some((p, n))
+    }
+
     /// Errors emitted or captured by the enclosing SFINAE trap so far.
     fn errors_so_far(&self) -> u64 {
         let trapped = self.inst.sfinae.borrow().last().map_or(0, |s| s.errors);
@@ -535,18 +566,7 @@ impl Sema<'_, '_> {
         }
         let loc = self.begin_loc(e);
         let (params_of, this_ty) = self.constraint_function_scope(entity);
-        // A member of a class template specialization: names of the
-        // pattern class are looked up in the specialization. A friend
-        // defined in one (a hidden friend of a member class such as
-        // `view<V>::iterator`, [temp.friend]/1) maps the classes of the
-        // class that declared it, its lexical context, so the members of
-        // the enclosing specializations it names resolve ([temp.dep.type]).
-        let class = self.inst_lexical_class(entity);
-        let pairs = if self.kind_of(class) == kiln_ast::decl::DeclKind::CXXRecord {
-            self.inst_context_pairs(class)
-        } else {
-            Vec::new()
-        };
+        let pairs = self.constraint_context_pairs(entity);
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
@@ -561,6 +581,7 @@ impl Sema<'_, '_> {
                 if let Some(f) = params_of {
                     sub.seed_function_params(f).ok()?;
                 }
+                sub.seed_init_captures(entity);
                 sub.expr(e).ok()
             });
             s.access_ctx = saved;
@@ -655,7 +676,7 @@ impl Sema<'_, '_> {
 
     /// True if substituting `levels` leaves template parameters behind: a
     /// retained level or a dependent argument.
-    fn levels_dependent(&self, levels: &MultiLevelArgs) -> bool {
+    pub(crate) fn levels_dependent(&self, levels: &MultiLevelArgs) -> bool {
         levels.levels.iter().any(|l| {
             l.mode == LevelMode::Retain
                 || self.ast.types.args(l.args).iter().any(|&a| {
