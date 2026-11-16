@@ -1430,7 +1430,9 @@ impl Parser<'_, '_> {
             // materialized, to be extended with the element's
             // declaration); the collected temporaries are not needed.
             let collect = self.s.begin_for_range_init(true);
+            let mark = self.s.expansion_init_mark();
             let l = self.parse_init_list().ok().map(ExpansionInit::List);
+            self.s.act_on_expansion_initializer_captures(mark);
             let _ = self.s.end_for_range_init(collect);
             l
         } else {
@@ -1441,7 +1443,9 @@ impl Parser<'_, '_> {
             // materialized here as well; `extend_init_temporaries`
             // extends them once the form is known.
             let collect = self.s.begin_for_range_init(true);
+            let mark = self.s.expansion_init_mark();
             let e = self.parse_expression().map(ExpansionInit::Expr);
+            self.s.act_on_expansion_initializer_captures(mark);
             let _ = self.s.end_for_range_init(collect);
             e
         }

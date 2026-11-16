@@ -20,7 +20,7 @@ int use_arr() { return sum(arr); }
 
 template <class T> constexpr unsigned long sizes() {
   unsigned long n = 0;
-  template for (constexpr auto x : T{}) { n += sizeof(x); }
+  template for (constexpr auto&& x : T{}) { n += sizeof(x); }
   return n;
 }
 struct P { int a; char b; };

@@ -632,6 +632,23 @@ impl Sema<'_, '_> {
             return self.builder().compound_literal(ty, il, lparen);
         }
         if self.ast.types.is_array(ty) {
+            // C17 6.5.2.5p1: no variable length array type. clang folds
+            // the bound when it can (`tryToFixVariablyModifiedVarType`:
+            // `-Wgnu-folding-constant` at the `(`), else rejects it; at
+            // file scope and in a function alike (WP-1512).
+            let ty = if self.is_c()
+                && self.ast.types.qflags(ty).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+            {
+                let Some(t) = self.fold_vla_dims(ty, 0) else {
+                    self.error(DiagId::sema_typecheck_compound_literal_vla, lparen);
+                    // An lvalue, as the literal: its decay is no temporary.
+                    return self.builder().recovery(Some(ty), ValueCategory::LValue, &flat, lparen);
+                };
+                self.error(DiagId::sema_vla_folded_to_constant, lparen);
+                t
+            } else {
+                ty
+            };
             return self.array_compound_literal(ty, l, lparen, &flat);
         }
         if self.ast.types.is_reference(ty) {

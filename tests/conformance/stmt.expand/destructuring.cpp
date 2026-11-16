@@ -17,11 +17,13 @@ constexpr long tuple_sum() {
 }
 static_assert(tuple_sum() == 6);
 
-// constexpr: over a prvalue and over a local constexpr tuple.
+// constexpr: over a prvalue and over a local constexpr tuple. A prvalue
+// is bound by `constexpr auto&&`, its temporary not const, so an element
+// may refer to it but not read it in a constant expression
+// (`destructuring-prvalue-neg.cpp`).
 constexpr unsigned long tuple_sizes() {
   unsigned long n = 0;
-  template for (constexpr auto x : std::tuple{1, 2L, 'c'}) {
-    static_assert(x > 0);
+  template for (constexpr auto&& x : std::tuple{1, 2L, 'c'}) {
     n += sizeof(x);
   }
   constexpr std::tuple<short, char> t{1, 2};

@@ -213,6 +213,21 @@ impl Sema<'_, '_> {
                 // one still has the type a capture would give it under a
                 // capture-default ([expr.prim.id.unqual]/3).
                 if !self.lambdas.iter().any(|s| s.id == l) {
+                    // An odr-use the pattern could not decide (a use in an
+                    // instantiation-dependent full-expression, or the range
+                    // of an expansion statement) of a variable no lambda
+                    // can capture: diagnosed in the instantiation, as clang
+                    // does (`tryCaptureVariable` there). Only a variable
+                    // that might be usable in constant expressions has its
+                    // capture deferred; any other was diagnosed when named.
+                    if build
+                        && top.is_none()
+                        && data.default == CaptureDefault::None
+                        && self.might_be_constant(d)
+                    {
+                        self.diagnose_impcap(d, loc, l, true);
+                        return Err(Captured::Failed);
+                    }
                     if build || data.default == CaptureDefault::None {
                         return Err(Captured::NotNeeded);
                     }
@@ -223,7 +238,7 @@ impl Sema<'_, '_> {
                 }
                 if data.default == CaptureDefault::None {
                     if build {
-                        self.diagnose_impcap(d, loc, l);
+                        self.diagnose_impcap(d, loc, l, false);
                     }
                     return Err(Captured::Failed);
                 }
@@ -775,7 +790,20 @@ impl Sema<'_, '_> {
         constant: &crate::expr::ConstantCandidates,
     ) {
         let dependent = self.ast.exprs.get(full).deps().intersects(ExprDeps::TYPE_VALUE_INST);
-        for r in std::mem::take(&mut self.potential_caps) {
+        let caps = std::mem::take(&mut self.potential_caps);
+        self.resolve_potential_capture_list(caps, dependent, constant);
+    }
+
+    /// [`Sema::resolve_potential_captures`] of the potential captures
+    /// `caps`, as those of a full-expression that is `dependent` and
+    /// whose lvalue-to-rvalue operands are `constant`.
+    pub(crate) fn resolve_potential_capture_list(
+        &mut self,
+        caps: Vec<ExprId>,
+        dependent: bool,
+        constant: &crate::expr::ConstantCandidates,
+    ) {
+        for r in caps {
             let d = self.ast.exprs.decl(r);
             if !dependent && constant.contains(r) && self.usable_in_constant_expressions(d) {
                 continue;
@@ -807,13 +835,20 @@ impl Sema<'_, '_> {
 
     /// `err_lambda_impcap` for variable `d` used at `loc` in lambda `l`,
     /// which has no capture-default, with clang's notes and fix-it notes
-    /// (`buildLambdaCaptureFixit`).
-    fn diagnose_impcap(&mut self, d: DeclId, loc: Loc, l: LambdaId) {
+    /// (`buildLambdaCaptureFixit`). In an instantiated call operator
+    /// (`instantiated`) clang's introducer range is the `[` alone, so the
+    /// capture fix-it notes are there too (clang 19 and 22).
+    fn diagnose_impcap(&mut self, d: DeclId, loc: Loc, l: LambdaId, instantiated: bool) {
         let name = self.decl_name(d);
         let data = self.ast.exprs.lambdas.get(l);
-        let (lbracket, rbracket) = (data.lbracket, data.rbracket);
+        let lbracket = data.lbracket;
+        let rbracket = if instantiated { lbracket } else { data.rbracket };
+        // In an instantiation clang counts an init-capture as a captured
+        // variable too (no capture-default notes after `[k = 0]`).
         let explicit_vars = data.captures.iter().any(|c| {
-            !c.implicit && !c.init && matches!(c.kind, CaptureKind::ByCopy | CaptureKind::ByRef)
+            !c.implicit
+                && (!c.init || instantiated)
+                && matches!(c.kind, CaptureKind::ByCopy | CaptureKind::ByRef)
         });
         let mut msg = self.diag(DiagId::sema_lambda_impcap, loc).arg(name.clone());
         msg = msg.with_note(

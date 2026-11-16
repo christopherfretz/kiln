@@ -1128,13 +1128,34 @@ family, and the `nonnull` attribute spellings.
      constant) is a VLA too (WP-1499, clang `VerifyIntegerConstantExpression`
      in C), so it warns `-Wvla` at the bound and is folded the same way
      at file scope, in a structure member, for a static or `extern`
-     local and for a local with an initializer; a type-name outside a
-     function keeps the constant. An automatic VLA variable with
+     local and for a local with an initializer. A type-name (in
+     `sizeof`, `_Alignof`, a cast) is a VLA type everywhere, file scope
+     included (C17 6.7.6.2p2 restricts declarations, not types; WP-1512,
+     as clang 22): `sizeof(int[m])` is then no constant, so a file-scope
+     initializer, static assertion, enumerator, case label or array bound
+     using it is rejected as clang rejects it; a compound literal folds
+     its bounds with the ExtWarn at its `(` or is the error "compound
+     literal cannot be of variable-length array type" there
+     (`Sema::act_on_compound_literal`). A typedef or automatic array at
+     block scope stays a VLA; an enumerator or a macro expanding to a
+     literal is a constant bound
+     (`tests/c/c99/vla-type-name-folding.c`,
+     `tests/c/c99/vla-type-name-not-constant.c`). An automatic VLA variable with
      an initializer whose bounds all fold is given the folded constant
      array type with the same ExtWarn at the name (clang
      `TryToFixInvalidVariablyModifiedType` for an initialized variable,
      also in C; WP-1469); otherwise any initializer is the error
-     "variable-sized object may not be initialized" at the bound. The
+     "variable-sized object may not be initialized": a braced-init-list
+     and, from C++20, a parenthesized list of several expressions
+     (aggregate initialization) at the bound; a single expression (`=
+     e`, `(e)`) at the declarator's name (clang's initialization-kind
+     location); before C++20 a parenthesized list of several is "array
+     initializer must be an initializer list" instead (WP-1512,
+     `tests/conformance/dcl.array/vla-initializer-location.cpp`). Before
+     C++11 the VLA warning has no notes and is reported where the first
+     note would point (clang's `CheckICE` location), and a `{` after a
+     declarator is no initializer but "expected ';' at end of
+     declaration" (§parse, `vla-initializer-cxx98.cpp`). The
      same error rejects a copy capture of a VLA, at the capture or, for
      an implicit one, at the capture default (clang
      `BuildCaptureField`; a by-reference capture is fine, §lambda VLA
@@ -11097,13 +11118,48 @@ not supported yet`.
     unevaluated on an undeclared implicit variable, WP-1499: "cannot
     increment value of type"), `begin + i`, `b != e` and `*iter`, each
     diagnosed at the range's `:` when missing, and N a constant
-    (`iterating-requirements{,-neg}.cpp`, GCC oracle). *Capture errors*:
+    (`iterating-requirements{,-neg}.cpp`, GCC oracle). The count's
+    `++b` must also be usable in a constant expression (WP-1512): kiln
+    never evaluates it, so with N > 0 an `operator++` that is not
+    `constexpr` (the Oven's own test, `constexpr_kind() == None`) is
+    `sema_expansion_size_not_constant` with the evaluator's notes
+    ("non-constexpr function 'operator++' cannot be used in a constant
+    expression", "declared here"; `expansion_increment_constant`); an
+    empty range never runs it and is accepted. A non-constexpr begin-expr,
+    end-expr or `!=` already failed the count (with `constexpr`, the
+    initialization of `__begin` / `__end` reports it first).
+    GCC 16.1 agrees on every case; it reports each as a second error
+    "call to non-'constexpr' function" where kiln, as clang does, gives
+    the note (`iterating-constant-increment-{neg,run}.cpp`). *Capture errors*:
     when `__range`'s initialization fails and the range names a local of
     an enclosing function the lambda cannot capture
     (`names_uncaptured_local`, `lambda/capture.rs`), only the capture
     error is emitted and `__range` is marked invalid (one error for one
     mistake; the destructuring form does the same for its `[__u...]`;
-    `capture-neg.cpp`). Without `constexpr`, N is still a
+    `capture-neg.cpp`). *Odr-uses of the initializer* (WP-1512): the
+    expansion-initializer and the expansion-init-list are no
+    full-expressions of their own; whether a variable named there is
+    odr-used is decided by the declarations the expansion builds
+    ([basic.def.odr]/5): `auto&& __range = b` or `auto&& [__u...] = b`
+    binds a reference and odr-uses a `constexpr` `b`, an element `b.x`
+    read into `int e` does not. So the pending odr-uses noted while the
+    initializer is parsed or substituted are dropped at its end
+    (`expansion_init_mark` / `act_on_expansion_initializer_captures`) and
+    noted again for each such declaration (`note_expansion_uses`, a walk
+    of that one expression, skipping lambdas and unevaluated operands;
+    nothing for any other name). In a template the potential captures of
+    the initializer are resolved as dependent: a lambda with a
+    capture-default captures them at once, since its closure is complete
+    before the generic call operator is instantiated. An odr-use found in
+    the instantiation of a generic lambda without a capture-default, of
+    a variable that might be usable in constant expressions (others are
+    diagnosed when named), is `err_lambda_impcap` there, with clang's
+    capture fix-it notes at the `[` (`capture_chain`; also any other
+    odr-use a generic lambda's definition cannot decide, as clang).
+    A `static constexpr` local, an unevaluated operand and a member read
+    need no capture (`capture-generic-lambda-{neg,run}.cpp`,
+    `expr.prim.lambda.capture/generic-lambda-odr-use-at-instantiation.cpp`).
+    Without `constexpr`, N is still a
     constant: `expansion_runtime_size` evaluates `__end - __begin`
     (contiguous) or counts `__begin + D{i} != __end` from their
     initializers, so a range whose size, not value, is constant works
@@ -11182,11 +11238,22 @@ not supported yet`.
     constant evaluation).
 - **Binding a constexpr destructuring range** (`expansion_fallback`,
   `RangeBind`; the iterating form does not use it since WP-1483).
-  A prvalue initializer is bound by value (`RangeBind::Copy`, `static
-  constexpr auto`, const, so its value is usable in constant expressions;
-  a lifetime-extended temporary would not be; deviation: the working
-  draft's `constexpr auto&&` binds the temporary, which GCC 16.1 rejects
-  as not a constant expression). A glvalue is bound by
+  The range is never copied. A prvalue initializer is bound as the
+  working draft declares it, `constexpr auto&& [__u...] = init;`, an
+  automatic reference to the lifetime-extended temporary
+  (`RangeBind::Automatic`, one attempt, in every mode; WP-1512, until
+  then `RangeBind::Copy` copied it into a `static constexpr auto`). In
+  C++26 the temporary is constexpr-referenceable in its function
+  ([expr.const.init]/2.2.2, P2686R5), so the declaration is constant and
+  an empty range is accepted; but the temporary is not const, so an
+  element that reads it (`constexpr auto e = __u_i`) is "read of
+  temporary is not allowed in a constant expression outside the
+  expression that created the temporary", while `constexpr auto&& e`
+  may refer to it. Before C++26 the reference itself is "reference to
+  temporary is not a constant expression". GCC 16.1 rejects every
+  `constexpr` destructuring of a prvalue (it has no P2686), so the
+  accepted C++26 cases deviate from it by the text
+  (`destructuring-prvalue{-neg,-cxx23-neg,-run}.cpp`). A glvalue is bound by
   reference, trying in order, each attempt in a block scope of its own
   with its diagnostics captured (a failed constant initialization does not
   mark the variable INVALID, so failure is `stash_has_error`):

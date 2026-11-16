@@ -502,6 +502,14 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     };
     let compiler_id = crate::util::identify(&compiler)?;
     let compiler_kind = compiler_id.kind;
+    // A clang under test is compared with the clang of its own release
+    // (spec/harness.md "Oracle toolchain", WP-1512), unless the oracle or
+    // the toolchain was given explicitly.
+    let toolchain = if opts.toolchain.is_none() && opts.oracle.is_none() {
+        toolchain.following(compiler_id.clang_version())
+    } else {
+        toolchain
+    };
     if opts.meta_header && compiler_kind != CompilerKind::Kiln {
         return Err("--meta-header runs kiln only (the compiler is not kiln)".into());
     }
