@@ -5,7 +5,6 @@
 // specialized. Found running GCC's C++ testsuite.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): WP-1496: a non-dependent overloaded operator in a template body is re-resolved at instantiation and finds operator templates declared after the definition
 
 template <class T> struct wrap {};
 template <class T> bool operator==(wrap<T>, wrap<T>);

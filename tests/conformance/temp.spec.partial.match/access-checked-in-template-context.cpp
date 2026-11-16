@@ -5,7 +5,6 @@
 // primary template even inside a friend of `C`. Found running GCC's C++
 // testsuite (WP-1466).
 //@ expect: run
-//@ xfail(kiln): WP-1495, partial specialization matching checks access in the context of the use, so a friend of C sees the specialization
 template<class, class = void> struct H { static const bool value = false; };
 template<class T> struct H<T, typename T::type> { static const bool value = true; };
 struct P;

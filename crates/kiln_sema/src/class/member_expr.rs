@@ -2990,6 +2990,22 @@ impl Sema<'_, '_> {
         reported
     }
 
+    /// [`Self::flush_member_refs`] for the pending references built since
+    /// the expression arena held `mark` expressions (those of an
+    /// enclosing expression keep waiting): the operand of a `decltype`
+    /// substituted in a SFINAE context, whose errors are substitution
+    /// failures ([temp.deduct.general]/8).
+    pub(crate) fn flush_member_refs_since(&mut self, mark: usize) -> bool {
+        if !self.member_refs.keys().any(|e| e.index() as usize >= mark) {
+            return false;
+        }
+        let outer: Vec<(ExprId, MemberRef)> =
+            self.member_refs.extract_if(|e, _| (e.index() as usize) < mark).collect();
+        let reported = self.flush_member_refs();
+        self.member_refs.extend(outer);
+        reported
+    }
+
     /// A bound member function (or member overload set) `e` used other
     /// than as a callee ([expr.ref]/7.3.2), recovered as clang's
     /// `tryToRecoverWithCall` does: "must be called" is reported, and

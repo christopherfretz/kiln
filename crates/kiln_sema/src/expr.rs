@@ -3179,7 +3179,9 @@ impl Sema<'_, '_> {
             if op == UnaryOp::AddrOf && self.member_refs.get(&e).is_some_and(|r| r.qualified) {
                 self.member_refs.remove(&e);
             }
-            return self.builder().dependent_unary(op, e, loc);
+            let d = self.builder().dependent_unary(op, e, loc);
+            self.note_dependent_oper(d, crate::overload::oper::unary_oper(op));
+            return d;
         }
         // `&C::m` of a non-static member forms a pointer to member
         // ([expr.unary.op]/3) whatever the type of `m`: it never calls an
@@ -3682,7 +3684,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[l, r], loc);
         }
         if self.expr_is_type_dependent(l) || self.expr_is_type_dependent(r) {
-            return self.builder().dependent_binary(op, l, r, loc);
+            let e = self.builder().dependent_binary(op, l, r, loc);
+            self.note_dependent_oper(e, crate::overload::oper::binary_oper(op));
+            return e;
         }
         self.binary_operator(op, l, r, None, loc)
     }
@@ -7445,6 +7449,26 @@ impl Sema<'_, '_> {
         } else {
             from
         };
+        // [expr.static.cast]/11, /12: no static_cast gives a pointer from
+        // a non-pointer or a pointer to member from a non-member-pointer;
+        // the message of clang's `TryStaticPointerDowncast` /
+        // `TryStaticMemberPointerUpcast` stands when no other rule applies
+        // (a C-style or functional cast's reinterpret_cast included).
+        if style.allows_static() && !self.is_c() {
+            let to = conv::strip_cv(self, ty);
+            let id = if self.ast.types.is_pointer(to) && !self.ast.types.is_pointer(from) {
+                Some(DiagId::sema_bad_static_cast_pointer_nonpointer)
+            } else if self.is_member_pointer(to) && !self.is_member_pointer(from) {
+                Some(DiagId::sema_bad_static_cast_member_pointer_nonmp)
+            } else {
+                None
+            };
+            if let Some(id) = id {
+                let msg = self.diag(id, loc).arg(self.ty_arg(from)).arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &[e], loc);
+            }
+        }
         let msg = self
             .diag(DiagId::sema_bad_cxx_cast, loc)
             .arg(style.select())

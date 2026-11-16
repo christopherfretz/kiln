@@ -1053,6 +1053,18 @@ impl Sema<'_, '_> {
     /// friend template defined in a class template, the class that
     /// declared it (its lexical context; [temp.friend]/1).
     pub(crate) fn inst_lexical_class(&self, tmpl: DeclId) -> DeclId {
+        // A friend template declared first elsewhere and defined in a
+        // later class template specialization: the defining
+        // redeclaration carries the same pattern link.
+        let link = self.ast.templates.instantiated_from_map(tmpl);
+        let tmpl = match link {
+            Some(_) if self.ast.first(tmpl) == tmpl => self
+                .ast
+                .redecls_of(tmpl)
+                .find(|&y| y != tmpl && self.ast.templates.instantiated_from_map(y) == link)
+                .unwrap_or(tmpl),
+            _ => tmpl,
+        };
         let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         if self.kind_of(ctx) != DeclKind::CXXRecord
             && let Some(l) = self.ast.decls.lexical_ctx(tmpl)
@@ -1541,7 +1553,19 @@ impl Sema<'_, '_> {
         if self.inst.stack.contains(FrameKind::MemberFunction, f) {
             return;
         }
-        let Some(pattern) = self.ast.instantiated_from(f) else { return };
+        let Some(mut pattern) = self.ast.instantiated_from(f) else { return };
+        // A specialization of a friend template named before a later
+        // class template specialization defined it ([temp.inject]/1,
+        // [temp.inst]/4): instantiated from that definition now.
+        if self.ast.definition(pattern).is_none()
+            && let Some((i, info)) = self.ast.spec_info(f)
+            && let Some(p) = self.pattern_of(self.inst_template(info.template))
+            && p != pattern
+            && self.ast.definition(p).is_some()
+        {
+            self.ast.templates.update_spec(i, |s| s.from = p);
+            pattern = p;
+        }
         let Some(pdef) = self.ast.definition(pattern) else {
             self.instantiate_out_of_line_defaulted(f, pattern, poi);
             return;

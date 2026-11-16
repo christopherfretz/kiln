@@ -312,10 +312,19 @@ impl Substituter<'_, '_, '_> {
             // specialization of the friend is instantiated.
             if (self.sema.ast.decls.function(pattern).is_some_and(|f| f.body.is_some())
                 || self.sema.delayed_bodies.contains(&pattern))
-                && self.sema.ast.first(x) == x
-                && self.sema.ast.templates.instantiated_from_map(x).is_none()
+                && self.sema.ast.templates.instantiated_from_map(self.sema.ast.first(x)).is_none()
             {
-                self.sema.ast.templates.set_instantiated_from(x, t);
+                // Declared first elsewhere (another class's friend, or
+                // at namespace scope; [temp.inject]/1): the entity's
+                // specializations, named through the first declaration,
+                // are instantiated from this definition, with the
+                // arguments of the class defining it
+                // ([`Sema::inst_lexical_class`]).
+                let first = self.sema.ast.first(x);
+                self.sema.ast.templates.set_instantiated_from(first, t);
+                if first != x {
+                    self.sema.ast.templates.set_instantiated_from(x, t);
+                }
             }
             // A friend template constrained on the enclosing class's
             // parameters ([temp.friend]/9) keeps the pattern's constraints,

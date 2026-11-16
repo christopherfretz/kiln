@@ -497,6 +497,29 @@ impl Sema<'_, '_> {
         Ordering::Equal
     }
 
+    /// A base's conversion function is listed after the object class's
+    /// own: clang's display ranks its object argument as a derived-to-base
+    /// conversion (the acting context of [over.match.funcs.general]/5
+    /// applies to ranking only).
+    fn compare_conv_fn_class(
+        &self,
+        set: &OverloadCandidateSet,
+        l: &Candidate,
+        r: &Candidate,
+    ) -> Ordering {
+        if l.kind != CandidateKind::ConvFn || r.kind != CandidateKind::ConvFn {
+            return Ordering::Equal;
+        }
+        let obj = set.args.first().and_then(|x| self.ast.types.as_record(x.ty));
+        let own = |c: &Candidate| {
+            obj.is_some_and(|o| {
+                self.declaring_class(c.func())
+                    .is_some_and(|d| self.ast.first(d) == self.ast.first(o))
+            })
+        };
+        own(r).cmp(&own(l))
+    }
+
     /// clang `CompareOverloadCandidatesForDisplay` as an ordering.
     fn compare_for_display(&self, set: &OverloadCandidateSet, a: u32, b: u32) -> Ordering {
         let (l, r) = (set.cand(a), set.cand(b));
@@ -504,6 +527,10 @@ impl Sema<'_, '_> {
             (true, false) => return Ordering::Less,
             (false, true) => return Ordering::Greater,
             (true, true) => {
+                let o = self.compare_conv_fn_class(set, l, r);
+                if o != Ordering::Equal {
+                    return o;
+                }
                 let o = Self::compare_conversions(set, a, b);
                 if o != Ordering::Equal {
                     return o;

@@ -681,6 +681,24 @@ Planned as 1.3.0.
   `__builtin_is_pointer_interconvertible_with_class` /
   `__builtin_is_corresponding_member` on a member of an anonymous struct
   in a union.
+- Valid code found running GCC's C++ testsuite is accepted (WP-1496):
+  access during partial-specialization matching and template argument
+  deduction is checked in the template's context (a failure in a
+  function template's signature is a substitution failure), and a
+  default template argument's access in its template's context;
+  `V a{{}}` with an `initializer_list` constructor gives a list of one
+  element; a deleted or undefined function template named in `decltype`
+  is no longer diagnosed before overload resolution selects it; a friend
+  function template defined in a class template is found whichever
+  specialization defines it; a base class's conversion function no
+  longer ranks worse than the derived class's own (`bool(y)`); an
+  operator in a template finds the non-member operators visible at its
+  definition, plus argument-dependent lookup at instantiation, and a
+  non-dependent one keeps the function selected at definition; before
+  C++17 the elidable copy or move constructor of a temporary is
+  selected, access-checked and considered by `noexcept`. A `static_cast`
+  to a pointer from a non-pointer (a member pointer to `void*`
+  included) has clang's "cannot cast from type ... to pointer type".
 
 ## [1.2.1] - 2026-11-14
 

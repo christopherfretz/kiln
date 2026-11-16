@@ -256,10 +256,10 @@ impl Sema<'_, '_> {
         entity_at: Loc,
         deleted_as: DeletedAs,
     ) {
-        if self.std >= kiln_lex::Std::Cxx17
-            || self.unevaluated > 0
-            || self.expr_is_type_dependent(e)
-        {
+        // Also in an unevaluated operand (clang builds the elidable
+        // `CXXConstructExpr` there too): its access and deletion are
+        // checked, and `noexcept` sees it.
+        if self.std >= kiln_lex::Std::Cxx17 || self.expr_is_type_dependent(e) {
             return;
         }
         let Some(class) = self.ast.types.as_record(to).and_then(|r| self.ast.definition(r)) else {
@@ -284,6 +284,9 @@ impl Sema<'_, '_> {
         let sel = self.resolve_ctor(class, std::slice::from_ref(&e), style);
         let call = CtorCall::new(std::slice::from_ref(&e));
         let loc = if direct { entity_at } else { at };
+        if let Selected::Found(c) | Selected::Deleted(c) = sel {
+            let _ = self.elided_ctors.insert(e, c);
+        }
         let _ = self.use_ctor(sel, to, class, SpecialKind::MoveCtor, call, loc, entity, sites);
     }
 

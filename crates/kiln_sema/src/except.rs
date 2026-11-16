@@ -440,6 +440,13 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
+            // Before C++17, the elidable copy of a prvalue that sema
+            // checked but did not build.
+            if !self.elided_ctors.is_empty()
+                && self.elided_ctors.get(&x).is_some_and(|&c| !self.decl_is_nothrow(c))
+            {
+                return true;
+            }
             exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         false

@@ -5465,7 +5465,15 @@ the initializer, or after default initialization, and before the
     (`'int *'` for an `int[3]`, `'void (*)(int)'` for a function), and
     `const_cast<void>` is `const_cast to 'void', which is not a
     reference, pointer-to-object, or pointer-to-data-member` (WP-327;
-    test `expr.static.cast/bad-cast-decayed-operand.cpp`). From C++20 a
+    test `expr.static.cast/bad-cast-decayed-operand.cpp`). For a
+    `static_cast`, a C-style or a functional cast (not in C), a pointer
+    target from an operand that is not a pointer is instead `cannot cast
+    from type 'F' to pointer type 'T'`, and a pointer-to-member target
+    from one that is not a pointer to member `cannot cast from type 'F'
+    to member pointer type 'T'` (clang's `TryStaticPointerDowncast` /
+    `TryStaticMemberPointerUpcast` messages, which stand when the
+    reinterpret_cast step does not apply; `(void *)&S::x`; WP-1496, test
+    `expr.static.cast/pointer-from-non-pointer.cpp`). From C++20 a
     `static_cast` to an array type direct-initializes it from `(e)`
     ([expr.static.cast]/4, a parenthesized aggregate initialization); when that initialization fails its
     diagnostics are dropped for the generic message
@@ -9874,6 +9882,13 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   one, /3.5 value-initializes it first, as clang does): the backing array
   is `const E[0]` and `size()` is 0 in a run and in a constant expression.
   Tests: `tests/conformance/dcl.init.list/empty-initializer-list-no-default-ctor{,-run}.cpp`.
+  A `std::initializer_list` specialization is never aggregate-initialized
+  from a braced list, even when the library declares it with public data
+  members (an aggregate; `is_list_aggregate`): `V a{{}}` with an
+  initializer-list constructor passes a list of one value-initialized
+  element, not an initializer_list aggregate-initialized from the inner
+  `{}` with size 0 (WP-1496,
+  `dcl.init.list/initializer-list-ctor-inner-empty-braces-{run,errors}.cpp`).
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
   the single element is not reference-related, a temporary of the
   referenced type is list-initialized with the reference's own kind

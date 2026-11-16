@@ -612,6 +612,19 @@ object argument"; "no known conversion from 'X' to 'Y' for object
 argument". An explicit object parameter is an ordinary first parameter
 (full ICS, UDC allowed). A static member's object slot is identity with
 `RefBinding::IGNORED`.
+A conversion function is a candidate as a member of the class of the
+implied object argument ([over.match.funcs.general]/5): its object slot
+is identity, not `DerivedToBase`, for one inherited from a base
+(`conv_object_ics`), so a base's `operator bool` (exact match) is better
+than the derived class's own `operator void*` (boolean conversion) in a
+contextual conversion to `bool`, and a base's `operator int` and the
+derived class's `operator long` converting to `bool` are ambiguous; the
+object is still converted to the base when the call is built. Only the
+candidate notes keep clang's display order, the object class's own
+conversion functions first (`compare_for_display`). A conversion
+function a member of the class hides ([namespace.udecl]/14: its
+using-shadow is marked hidden) is not a candidate (WP-1496,
+`tests/conformance/over.match.funcs/conversion-acting-context-*.cpp`).
 
 ### 3.3 Implicit conversion sequences (`overload/ics.rs`)
 ```rust
