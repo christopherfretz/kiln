@@ -625,6 +625,19 @@ Planned as 1.3.0.
   from its destructor. `-fno-elide-constructors` (and
   `-felide-constructors`) are accepted from C++17, where they turn off
   NRVO and these copies; before C++17 the flag is rejected.
+- More valid code from GCC's C++ testsuite is accepted (48 → 111 of
+  133 cases of the deduction and overload rows): placement `new (0) X`
+  chooses its `operator new` by overload resolution; a template-id
+  naming an overload set is resolved after the call's other deductions;
+  in C++98 an integral constant expression of value zero is a null
+  pointer constant, with clang's warnings; aggregate class template
+  argument deduction for a member template of a class template
+  specialization and from nested braced lists (also with `#embed`);
+  alias template deduction with a defaulted parameter (a C++20
+  extension warning before C++20); inherited-constructor guides through
+  a base named by a typedef; a defaulted `operator=` matching a
+  `noexcept` pointer to member; and the signature of a function template
+  befriended by a later redeclaration has the friend's access.
 
 ## [1.2.1] - 2026-11-14
 

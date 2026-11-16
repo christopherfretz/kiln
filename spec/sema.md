@@ -2073,7 +2073,18 @@ and returns the scope it names:
     not value-dependent; a braced element or string literal for an
     array of dependent bound is `T(&&)[N]` / `const T(&)[N]`. Not cached: it depends on the initializer. Call
     deduction deduces `P'[N]` from a braced list (each element deduces
-    `P'`, the length `N`);
+    `P'`, the length `N`). An element of a braced list that is itself
+    a braced list deduces against `P'` the same way, recursively
+    ([temp.deduct.call]/1: "if P' has the form P''[N] ... deduction is
+    performed for each element", applied to nested lists), so
+    `T(&&)[3][2]` deduces from `{{1,2},{3,4},{5,6}}` (WP-1493,
+    `deduce_from_init_list`). For a member class template of a class
+    template specialization (no definition yet, see below) the
+    candidate is built from the original member's definition
+    ([over.match.class.deduct]/1.5-1.8 apply to `C` as a member of the
+    specialization, [temp.mem]/1), its element types substituted with
+    the enclosing levels (`member_template_levels`), pack elements
+    expanded (WP-1493);
   - the user guides (`user_guides`).
 - **Member templates** (WP-134). A member class template of a class
   template specialization (`Outer<int>::In`, redeclared at
@@ -2103,7 +2114,11 @@ and returns the scope it names:
   are resugared to them; `g`'s undeduced parameters follow. The guide
   carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
   clang's `__is_deducible(A, R)` on the deduced return type
-  (`note_alias_not_deducible`). An RHS that is not a simple-template-id
+  (`note_alias_not_deducible`); an alias parameter the deduction leaves
+  undeduced counts as deduced when it is a pack or has a default
+  argument ([over.match.class.deduct]/4's partial-specialization match
+  takes defaults, [temp.deduct.general]/5; WP-1493, as clang and GCC
+  PR99008). An RHS that is not a simple-template-id
   is `sema_ctad_non_deducible_template`. Details (WP-311):
   - The deduction of `g`'s return type from the RHS may fail part way
     (`pair<A, B>`'s `tuple<A, B>` against `tuple<int, T...>`: `B` against
@@ -6841,6 +6856,26 @@ for them.
 - **Zero-length arrays** `T[0]`: `zero size arrays are an extension`
   [-Wzero-length-array, in -Wgnu] at the bound, per instantiation; an
   error in a SFINAE context (above).
+- **C++98 null pointer constants** (`conv::cxx98_zero_constant`,
+  WP-1493). Before C++11 (CWG903) [conv.ptr]/1 makes any integral
+  constant expression of integer type that evaluates to zero a null
+  pointer constant: `bool` and the character types count, an enumerator
+  does not (clang `Expr::isNullPointerConstant` excludes enumeration
+  types in C++). kiln asks only where the expression would convert to a
+  pointer or pointer to member (the standard conversion of an
+  initialization, argument, return or assignment; an overload
+  candidate's implicit conversion sequence; the composite pointer type of
+  `==`/`!=` and `?:`), and folds it there; from C++11 on only the literal
+  forms of `is_null_pointer_constant` count. The conversion of such a
+  non-literal constant to a pointer in an initialization, argument,
+  return or assignment (not a cast, comparison or conditional) warns as
+  clang's `CheckPointerConversion`: `initialization of pointer of type
+  'T' to null from a constant boolean expression` [-Wbool-conversion] for
+  `bool` (a run-time-behavior diagnostic, so after the function's other
+  diagnostics), otherwise `expression which evaluates to zero treated as
+  a null pointer constant of type 'T'` [-Wnon-literal-null-conversion]
+  outside an unevaluated operand, at clang's `getExprLoc` (tests
+  `conv.ptr/p1-cxx98-zero-constant.cpp`, `p1-cxx11-zero-constant.cpp`).
 - **`__null`** (`gnu_null.rs`; `NULL` in the resource `<stddef.h>`): a
   `GNUNullExpr` prvalue of the signed integer type as wide as a data
   pointer (`int`, `long` or `long long`; `long` on LP64, clang's

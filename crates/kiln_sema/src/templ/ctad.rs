@@ -609,6 +609,29 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// The substitution from the original member template's definition
+    /// to `tmpl`, a member template of a class template specialization
+    /// with parameters `params`: the enclosing specialization's arguments,
+    /// then `tmpl`'s own parameters for the member template's.
+    fn member_template_levels(
+        &mut self,
+        tmpl: DeclId,
+        params: TemplateParamListId,
+    ) -> MultiLevelArgs {
+        let pl = *self.ast.templates.param_list(params);
+        let own: Vec<DeclId> = self.ast.lists.iter::<DeclId>(pl.params).collect();
+        let mut args = Vec::with_capacity(own.len());
+        for &p in &own {
+            let a = self.template_param_arg(p);
+            let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
+            args.push(if pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a });
+        }
+        let args = self.ast.types.arg_list(&args);
+        let mut levels = self.base_levels(tmpl);
+        levels.push(args, tmpl, LevelMode::Substitute);
+        levels
+    }
+
     /// The guides of the non-template constructors of `od`, the
     /// definition of the member template that `tmpl` (a member template
     /// of a class template specialization) was instantiated from: their
@@ -626,16 +649,7 @@ impl Sema<'_, '_> {
         od: DeclId,
     ) -> (Vec<DeclId>, bool) {
         let pl = *self.ast.templates.param_list(params);
-        let own: Vec<DeclId> = self.ast.lists.iter::<DeclId>(pl.params).collect();
-        let mut args = Vec::with_capacity(own.len());
-        for &p in &own {
-            let a = self.template_param_arg(p);
-            let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
-            args.push(if pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a });
-        }
-        let args = self.ast.types.arg_list(&args);
-        let mut levels = self.base_levels(tmpl);
-        levels.push(args, tmpl, LevelMode::Substitute);
+        let levels = self.member_template_levels(tmpl, params);
         let members: Vec<DeclId> = self.ast.members(od).collect();
         let mut out = Vec::new();
         let mut any_ctor = false;
@@ -966,7 +980,20 @@ impl Sema<'_, '_> {
     /// initializes no element.
     fn aggregate_guide(&mut self, tmpl: DeclId, init: &Initializer) -> Option<DeclId> {
         let pat = self.pattern_of(tmpl)?;
-        let def = self.ast.definition(pat)?;
+        // A member template of a class template specialization
+        // (`A<int>::B`, [temp.mem]) has no definition of its own until one
+        // of its specializations is instantiated: its elements are those
+        // of the original member template's definition, the enclosing
+        // arguments substituted (as its constructors' guides,
+        // [`Sema::member_ctor_guides`]).
+        let (def, member) = match self.ast.definition(pat) {
+            Some(d) => (d, false),
+            None if self.inst_template(tmpl) != tmpl => {
+                let orig = self.inst_template(tmpl);
+                (self.pattern_of(orig).and_then(|p| self.ast.definition(p))?, true)
+            }
+            None => return None,
+        };
         let bits = self.ast.decls.record(def).map(|x| x.defn).unwrap_or_default();
         if !bits.contains(DefinitionBits::AGGREGATE) {
             return None;
@@ -1002,8 +1029,40 @@ impl Sema<'_, '_> {
             _ => return None,
         }
         let first = self.ast.first(tmpl);
-        let owner = self.ast.described_template(def).unwrap_or(tmpl);
+        let owner = if member { tmpl } else { self.ast.described_template(def).unwrap_or(tmpl) };
         let info = self.ast.template_info(owner).copied()?;
+        if member {
+            let levels = self.member_template_levels(tmpl, info.params);
+            let saved = self.ast.templates.dependent_depth;
+            let depth = self.ast.templates.param_list(info.params).depth;
+            self.ast.templates.dependent_depth = u32::from(depth) + 1;
+            let loc = self.ast.decls.get(tmpl).loc();
+            let r = (|| {
+                let mut s = Substituter::new(self, &levels);
+                let mut out = Vec::with_capacity(ptys.len());
+                for &t in &ptys {
+                    // A trailing pack expansion element stays one, as a
+                    // constructor's pack parameter does.
+                    let t = if let TypeView::PackExpansion { pattern, .. } =
+                        s.sema.ast.types.view(t.ty())
+                    {
+                        match s.expand_pattern(|s| s.ty(pattern, loc))? {
+                            Expansion::Unexpanded(x) => s.sema.ast.types.pack_expansion(x, None),
+                            Expansion::Elements(es) if es.len() == 1 => {
+                                s.sema.strip_expansion_ty(es[0])
+                            }
+                            Expansion::Elements(_) => return Err(SubstFail),
+                        }
+                    } else {
+                        s.ty(t, loc)?
+                    };
+                    out.push(t);
+                }
+                Ok::<_, SubstFail>(out)
+            })();
+            self.ast.templates.dependent_depth = saved;
+            ptys = r.ok()?;
+        }
         let Some(TypeView::InjectedClassName { injected, .. }) =
             self.guide_injected_type(owner).map(|q| self.ast.types.view(q.ty()))
         else {
@@ -1262,8 +1321,14 @@ impl Sema<'_, '_> {
         if self.deduce(rhs, ty, TdfFlags::NONE, &mut d) != Tdk::Success {
             return false;
         }
+        // A parameter left undeduced is deducible when it is a pack or has
+        // a default argument (the partial-specialization match of /4 goes
+        // through [temp.deduct.general]/5: undeduced parameters take their
+        // defaults; clang's FinishTemplateArgumentDeduction, GCC PR99008).
         d.args.iter().zip(&params).all(|(a, &p)| {
-            !matches!(a.view(), ArgView::Null) || self.ast.template_parm(p).is_some_and(|i| i.pack)
+            !matches!(a.view(), ArgView::Null)
+                || self.ast.template_parm(p).is_some_and(|i| i.pack)
+                || self.template_default(p).is_some()
         })
     }
 
@@ -1503,6 +1568,12 @@ impl Sema<'_, '_> {
             } else {
                 None
             };
+            // A non-dependent `R` whose `CC<R>` does not match (a default
+            // argument of the inheriting template that does not
+            // substitute) gives no guide.
+            if inherited && cc.is_none() && !s.sema.is_dependent_type(nret) {
+                return Err(SubstFail);
+            }
             let cparams: Vec<DeclId> = match s.sema.ast.decls.function(f) {
                 Some(fd) if aligned => s.sema.ast.lists.iter::<DeclId>(fd.params).collect(),
                 _ => Vec::new(),
@@ -1674,6 +1745,12 @@ impl Sema<'_, '_> {
         let site = self.templ.ctad_site.take().unwrap_or(loc);
         let name_loc = self.templ.ctad_name_locs.get(&site).copied().unwrap_or(loc);
         let (name, tmpl) = self.undeduced_ctad(declared)?;
+        // P1814 is C++20; earlier modes accept it as an extension, as
+        // clang (`ext_cxx20_alias_template_ctad`) does.
+        if self.std < kiln_lex::Std::Cxx20 && self.kind_of(tmpl) == DeclKind::TypeAliasTemplate {
+            let w = self.diag(DiagId::sema_ext_alias_template_ctad, loc);
+            self.emit(w);
+        }
         let with_quals = |s: &mut Self, t: QualType| {
             let d = s.ast.types.deduced_template_specialization(name, Some(t));
             QualType::new(d.ty(), d.quals_bits() | declared.quals_bits())

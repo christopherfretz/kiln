@@ -5304,11 +5304,18 @@ of `A` are guides of `C`, each with its return type `R` replaced by
   [temp.dep.type]/6) where `N` is the name of the class template of exactly
   one base-specifier (`dependent_base_named`; `using G::F::F;` in the
   standard's example). Only a `B` that is a specialization of a class
-  template contributes. The definition's `HAS_INHERITED_CTOR` bit
-  short-circuits the scan.
+  template contributes; a base named by a typedef or alias declaration
+  (`using B = A<int>; struct C : B`) is looked through to the
+  specialization it names (WP-1493, GCC PR122070, as clang 22). The
+  definition's `HAS_INHERITED_CTOR` bit short-circuits the scan.
 - **Deducible** `A`: every template parameter of `C` is deduced from `B`
   against itself (`alias_deducible(C, B, B)`; an undeduced pack is
-  empty). `template<class T> struct E : B<int> { using B<int>::B; };`
+  empty, and an undeduced parameter with a default argument takes it,
+  [temp.deduct.general]/5, WP-1493). In `CC<R>::type`
+  (`inherited_ctad_result`) that default is substituted with the
+  arguments before it, under SFINAE; a failure is no match, and a guide
+  whose non-dependent `R` does not match is dropped rather than made
+  "late". `template<class T> struct E : B<int> { using B<int>::B; };`
   gets no guides from `B`.
 - **Forming** (`inherited_guide`, cached in `ctad_alias_cache` under
   `(C, g)`): the guides of `B`'s template are its full set (implicit,

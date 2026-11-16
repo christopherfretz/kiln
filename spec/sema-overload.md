@@ -452,7 +452,12 @@ reserves these.
 `resolve_address_of_overloaded(ule, target, complain) -> Option<ExprId>`.
 Targets: an initialized object or reference, assignment LHS, a parameter
 (during ICS a ULE argument converts by [over.over]), a cast, a non-type
-template parameter, a return. A class type, or a reference to one, is not
+template parameter, a return. A non-template candidate whose type does
+not match as declared has its exception specification resolved
+(`resolve_exc_for_type`; a defaulted special member's implicit one,
+[except.spec]/8) and is compared again, so `&G::operator=` with a
+defaulted move assignment matches `G &(G::*)(G &&) noexcept` (WP-1493,
+`over.over/p5-defaulted-assignment-exception-spec.cpp`). A class type, or a reference to one, is not
 a target: when a converting constructor takes the set (`dynamic(ObjectMaker
 (*)())`), the set is that constructor's argument
 (`overload_set_converts_to_class`, so `const dynamic& v = dynamic::object`
@@ -1550,15 +1555,24 @@ Where the code differs from (or details) the design above:
   overload resolution together ([expr.new]/20; `resolve_set`) and the
   chosen specialization is instantiated on use (WP-686, WP-712); with
   no viable candidate the notes are the overload set's, template
-  candidates included. Without templates, `find_operator_new` matches
-  each placement argument against its parameter (`placement_arg_match`):
-  the same type is exact, and arithmetic conversions, `nullptr`,
-  object pointer to `void *`, array decay and derived-to-base pointer
-  conversion ([conv.ptr]/3, with no loss of cv) are viable but not exact.
-  The most exact matches win (WP-801,
+  candidates included. Without templates, `find_operator_new` first
+  takes an exact-match fast path: with no placement arguments the
+  candidate whose leading parameters are `size_t` (and `align_val_t`);
+  with placement arguments, a candidate every argument matches exactly
+  (`placement_arg_match`: same type, array decay; `new (p) T` with
+  `void *p`, `new (std::nothrow) T`) in the first alignment form tried.
+  Anything else (a conversion on some placement argument) goes through
+  the same overload resolution as the template case ([expr.new]/20,
+  [over.match.best]): a null pointer constant converts to `void *`
+  ([conv.ptr]/1; `new (0) X`, `new (0) X[3]`, a class's own `operator
+  new(size_t, void *)`), `B *` to `A *` beats `B *` to `void *`, and two
+  conversions of one rank (`0` to `void *` and to `long`) are
+  `err_ovl_ambiguous_call` with the candidates; with no viable candidate
+  the notes stay `find_operator_new`'s own (WP-1493,
+  `tests/conformance/expr.new/p20-placement-null-pointer-constant*.cpp`;
+  WP-801,
   `tests/conformance/expr.new/p19-placement-arg-derived-to-base-pointer-run.cpp`).
-  Gap: this is not [over.ics.rank], so `B *` to `A *` does not beat
-  `B *` to `void *`. A placement `operator delete` template matches
+  A placement `operator delete` template matches
   when deduction against `void(void*, P...)` from the allocation
   function's parameters succeeds ([expr.new]/28, WP-713). The default
   arguments of the allocation function's parameters past the written
@@ -1703,6 +1717,17 @@ Where the code differs from (or details) the design above:
     complete. Only when the target selects nothing is it
     `template_id_no_match`'s "address of overloaded function does not
     match required type".
+  - [temp.deduct.call]/6 (WP-1493): as a call argument such a
+    template-id is an overload set to deduction as well
+    (`deduce_call_arg`): against a function-like `P` each member is
+    tried, and when none or several deduce, the argument is a
+    non-deduced context and not an original argument
+    ([temp.deduct.call]/4, `is_original_arg`). `bar<int*>(foo<int>, 1)`
+    with `foo(T*)` and `foo(T*, U)` deduces `U` from `1`, and the
+    conversion re-resolves `foo<int>` against `void (*)(int*, int)`
+    (`retarget_template_id`, keeping the operand's parentheses and `&`,
+    so `&S::m<int>` stays a pointer to member; test
+    `temp.deduct.call/p6-template-id-set-resolved-after-deduction-run.cpp`).
     The specialization resolved early is then not used: when that
     resolution alone queued its definition, the definition is withdrawn
     from the queue ([temp.inst]/5), so an ill-formed body of the

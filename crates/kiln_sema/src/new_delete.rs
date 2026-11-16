@@ -545,7 +545,7 @@ impl Sema<'_, '_> {
         if matches!(found, Ok(None)) {
             tmpl_notes = None;
             found = if alloc.templates.is_empty() {
-                Ok(self.find_operator_new(&untyped_fns, &place_args, pass_align))
+                self.find_operator_new(&untyped_fns, &place_args, pass_align, loc)
             } else if untyped_fns.is_empty() {
                 Ok(None)
             } else {
@@ -1237,10 +1237,39 @@ impl Sema<'_, '_> {
         Some(out)
     }
 
-    /// The allocation function for `op` with `place` arguments, and
-    /// whether it takes the alignment ([expr.new]/19: first with the
-    /// alignment argument when the type is over-aligned, then without).
+    /// The allocation function among the non-template `cands` for
+    /// `place` arguments, and whether it takes the alignment
+    /// ([expr.new]/19: first with the alignment argument when the type is
+    /// over-aligned, then without). The placement arguments are the
+    /// arguments of an ordinary overload resolution ([expr.new]/20,
+    /// [over.match.best]): a null pointer constant converts to `void *`
+    /// ([conv.ptr]/1), and a tie of two conversions is ambiguous (`Err`
+    /// with the candidate notes). Without placement arguments, or with a
+    /// candidate every placement argument matches exactly (`new (p) T`
+    /// with `void *p`, `new (std::nothrow) T`), the selection takes the
+    /// exact-match fast path and builds no overload set.
     pub(crate) fn find_operator_new(
+        &mut self,
+        cands: &[DeclId],
+        place: &[ExprId],
+        pass_align: bool,
+        loc: Loc,
+    ) -> Result<Option<(DeclId, bool)>, Vec<kiln_diag::Diag>> {
+        match self.find_operator_new_exact(cands, place, pass_align) {
+            Some(found) => Ok(Some(found)),
+            None if place.is_empty() || cands.is_empty() => Ok(None),
+            None => {
+                self.find_operator_new_template(cands, place, pass_align, (None, loc), &mut None)
+            }
+        }
+    }
+
+    /// [`Sema::find_operator_new`]'s fast path: without placement
+    /// arguments, the candidate whose leading parameters are `size_t`
+    /// (and `std::align_val_t`); with them, only a candidate every
+    /// placement argument matches exactly in the first alignment form
+    /// tried. `None` sends the selection to overload resolution.
+    fn find_operator_new_exact(
         &mut self,
         cands: &[DeclId],
         place: &[ExprId],
@@ -1279,12 +1308,17 @@ impl Sema<'_, '_> {
                         }
                     }
                 }
-                if ok && best.is_none_or(|(_, e)| exact > e) {
+                if ok && exact == place.len() && best.is_none() {
                     best = Some((f, exact));
                 }
             }
             if let Some((f, _)) = best {
                 return Some((f, with_align));
+            }
+            if !place.is_empty() {
+                // A placement argument that converts: overload resolution
+                // ranks the candidates, in every alignment form.
+                return None;
             }
         }
         None

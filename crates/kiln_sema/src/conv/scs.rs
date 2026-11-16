@@ -340,7 +340,7 @@ pub fn standard_conversion(
 ) -> Option<StandardConversion> {
     let n = *s.ast.exprs.get(e);
     let bw = bit_field_width(s, e);
-    let npc = is_null_pointer_constant(s, e);
+    let npc = is_null_pointer_constant(s, e) || super::cxx98_zero_constant(s, e, to);
     let r = standard_conversion_from(s, n.ty(), n.value_category(), npc, bw, to, ctx);
     if r.is_some()
         || matches!(

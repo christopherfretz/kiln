@@ -272,11 +272,27 @@ impl Sema<'_, '_> {
         if !self.ast.types.is_function(fnty) {
             return false;
         }
-        let Some(t) = self.ast.decls.get(d).ty() else { return false };
-        let t = self.ast.types.canonical(t);
+        let Some(t0) = self.ast.decls.get(d).ty() else { return false };
+        let t = self.ast.types.canonical(t0);
         if self.ast.types.same_type(t, fnty) {
             return true;
         }
+        // An implicit exception specification not yet computed (a
+        // defaulted `operator=`, [except.spec]/8) is part of the type
+        // compared: resolve it first (clang AddMatchingNonTemplateFunction
+        // calls ResolveExceptionSpec), then compare its updated type.
+        let at = self.ast.decls.get(d).loc();
+        self.resolve_exc_for_type(d, at);
+        let t = match self.ast.decls.get(d).ty() {
+            Some(t1) if t1 != t0 => {
+                let t = self.ast.types.canonical(t1);
+                if self.ast.types.same_type(t, fnty) {
+                    return true;
+                }
+                t
+            }
+            _ => t,
+        };
         crate::conv::is_function_conversion(self, t, fnty)
     }
 
@@ -1087,6 +1103,10 @@ impl Sema<'_, '_> {
         let r = self.taking_over_numbers(early, |s| {
             s.resolve_address_of_overloaded(ule, to, false, AddrCtx::Convert, at)
         })?;
+        // The operand's parentheses and `&` stay around the new
+        // resolution: `&S::m<int>` is a pointer to member
+        // ([expr.unary.op]/4), not the member function it names.
+        let r = if early == ule || early == e { r } else { self.rebuild_over(e, early, r) };
         self.drop_template_id_warnings(e);
         // The specialization resolved early is not used: its definition
         // is not instantiated ([temp.inst]/5), unless something else
