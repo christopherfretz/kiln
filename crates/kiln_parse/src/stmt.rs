@@ -652,8 +652,14 @@ impl Parser<'_, '_> {
     }
 
     /// `( [init-statement] condition )` for `if` and `switch`. Returns
-    /// the init-statement and the condition expression.
-    fn parse_paren_condition(&mut self, what: &str) -> Option<(Option<StmtId>, Cond)> {
+    /// the init-statement and the condition expression; with `constant`
+    /// (`if constexpr`) the condition, not the init-statement, is parsed
+    /// as manifestly constant-evaluated.
+    fn parse_paren_condition(
+        &mut self,
+        what: &str,
+        constant: bool,
+    ) -> Option<(Option<StmtId>, Cond)> {
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self
                 .s
@@ -672,7 +678,14 @@ impl Parser<'_, '_> {
                 self.parse_statement()
             };
         }
-        let Some(c) = self.parse_condition() else {
+        if constant {
+            self.s.enter_constant_evaluated();
+        }
+        let c = self.parse_condition();
+        if constant {
+            self.s.exit_constant_evaluated(None);
+        }
+        let Some(c) = c else {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
         };
@@ -956,14 +969,10 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.push_scope(ScopeKind::Control);
-        // An `if constexpr` condition is manifestly constant-evaluated.
-        if constexpr {
-            self.s.enter_constant_evaluated();
-        }
-        let cond = self.parse_paren_condition("if");
-        if constexpr {
-            self.s.exit_constant_evaluated(None);
-        }
+        // An `if constexpr` condition is manifestly constant-evaluated;
+        // its init-statement is not ([stmt.if]/2, [expr.const.defns]):
+        // `if constexpr (auto r = ^^int; ...)` declares a run-time `r`.
+        let cond = self.parse_paren_condition("if", constexpr);
         let Some((init, (var, c))) = cond else {
             self.s.pop_scope();
             self.skip_if_rest_after_cond();
@@ -1087,7 +1096,7 @@ impl Parser<'_, '_> {
     fn parse_switch(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Control);
-        let Some((init, (var, c))) = self.parse_paren_condition("switch") else {
+        let Some((init, (var, c))) = self.parse_paren_condition("switch", false) else {
             self.skip_sub_statement();
             self.s.pop_scope();
             return None;

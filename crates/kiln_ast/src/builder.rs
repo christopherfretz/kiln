@@ -2720,7 +2720,20 @@ impl<'a> AstBuilder<'a> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
-        self.splice_node(operand, base, false, loc, end)
+        self.splice_node(operand, base, false, false, loc, end)
+    }
+
+    /// A dependent `template [: operand :]` (or `base.template [:
+    /// operand :]`) without template arguments: a [`Self::splice_expr`]
+    /// that remembers the `template` keyword ([expr.prim.splice]/3).
+    pub fn template_splice_expr(
+        &mut self,
+        operand: ExprId,
+        base: Option<(ExprId, bool)>,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        self.splice_node(operand, base, false, true, loc, end)
     }
 
     fn splice_node(
@@ -2728,6 +2741,7 @@ impl<'a> AstBuilder<'a> {
         operand: ExprId,
         base: Option<(ExprId, bool)>,
         unexpanded_args: bool,
+        template_kw: bool,
         loc: Loc,
         end: Loc,
     ) -> ExprId {
@@ -2740,7 +2754,7 @@ impl<'a> AstBuilder<'a> {
         if unexpanded(self, operand) || base.is_some_and(|(b, _)| unexpanded(self, b)) {
             deps |= ExprDeps::UNEXPANDED_PACK;
         }
-        let aux = u8::from(base.is_some_and(|(_, arrow)| arrow));
+        let aux = u8::from(base.is_some_and(|(_, arrow)| arrow)) | u8::from(template_kw) << 1;
         let b = base.map_or(0, |(b, _)| b.raw());
         let e = self.simple(
             ExprKind::CXXSpliceExpr,
@@ -2768,7 +2782,7 @@ impl<'a> AstBuilder<'a> {
         end: Loc,
     ) -> ExprId {
         let unexpanded = self.ast.types.arg_list_flags(args).contains(TypeFlags::UNEXPANDED_PACK);
-        let e = self.splice_node(operand, None, unexpanded, loc, end);
+        let e = self.splice_node(operand, None, unexpanded, true, loc, end);
         self.ast.exprs.cold.splice_args.insert(e, args).expect(FRESH_EXPR);
         e
     }
@@ -2784,7 +2798,7 @@ impl<'a> AstBuilder<'a> {
         end: Loc,
     ) -> ExprId {
         let unexpanded = self.ast.types.arg_list_flags(args).contains(TypeFlags::UNEXPANDED_PACK);
-        let e = self.splice_node(operand, Some(base), unexpanded, loc, end);
+        let e = self.splice_node(operand, Some(base), unexpanded, true, loc, end);
         self.ast.exprs.cold.splice_args.insert(e, args).expect(FRESH_EXPR);
         e
     }

@@ -34,6 +34,7 @@ mod lambda;
 mod mptr;
 mod new_delete;
 mod rtti;
+mod udesig;
 mod vector;
 mod wide;
 
@@ -5415,6 +5416,9 @@ impl Compiler<'_> {
                 if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                     site.loc = loc;
                 }
+                if decay && acc == Access::Addr {
+                    return Place::Mem(self.tag_union_chain(e, r));
+                }
                 Place::Mem(r)
             }
             ExprKind::UnaryOperator => {
@@ -5553,6 +5557,9 @@ impl Compiler<'_> {
                 let p = self.lv_mem(op, sub);
                 let r = self.reg();
                 self.class_cast(e, p, r, false, down);
+                if acc == Access::Addr && !down {
+                    return Place::Mem(self.tag_union_chain(e, r));
+                }
                 Place::Mem(r)
             }
             // A call returning a reference: the referent's address.
@@ -5687,17 +5694,14 @@ impl Compiler<'_> {
                     };
                     self.emit_site(Op::ActiveCheck, akind, &[p, idx as u32, rt.0], e, loc);
                 }
-                // The address of a member that another member of the
-                // union could hold at its offset is tagged with the member
-                // it designates (`vm/udesig.rs`, WP-1494).
-                Access::Addr if self.o.types.union_member_shared(rt, idx) => {
-                    let r = self.reg();
-                    let aux = crate::kbc::UNION_DESIG | (idx as u32) << 4;
-                    self.emit_at(Op::VoidCast, aux, &[r, q, rt.0], e);
-                    q = r;
-                }
                 Access::Addr => {}
             }
+        }
+        // The address of a subobject that another member of a union on
+        // its access chain could hold at its offset is tagged with the
+        // members the chain designates (`compile/udesig.rs`, WP-1508).
+        if acc == Access::Addr && fi.width.is_none() && !is_reference_decl(self.ast(), fd) {
+            q = self.tag_union_chain(e, q);
         }
         if is_reference_decl(self.ast(), fd) {
             // A reference member holds its referent's address.

@@ -95,13 +95,17 @@ target scope" or (1.2) X is a non-defining friend declaration.
   `void` parameter list, a using-directive, a using-declaration, a
   namespace alias, a concept, a deduction guide, a template parameter, a
   structured binding written after its identifier, an asm-declaration, an
-  attribute-declaration, a declaration with no declarator, a label, and a
+  attribute-declaration, a declaration with no declarator, an unnamed
+  bit-field (not a member, [class.bit]/2; WP-1505), a label, and a
   lambda's call operator (none of these declares an entity of the listed
   kinds). `static_assert` takes no attribute-specifier-seq at all.
 - **Non-declarations** (`sema_annotation_non_declaration`, "an annotation
   can appertain only to a declaration"): a statement, a type
-  (type-specifier-seq or declarator-chunk position), anything else that
-  is not a declaration. Test: `non-declaration.cpp`.
+  (type-specifier-seq or declarator-chunk position: after `*`, `&`, `&&`,
+  `C::*`, a parameter clause, an array bound, and each bracket of a
+  new-declarator, the outermost included, [expr.new]/1, where GCC 16.1
+  only warns), anything else that is not a declaration. Tests:
+  `non-declaration.cpp`, `type-chunks-and-unnamed-bitfield.cpp` (WP-1505).
 - **Base-specifiers** (/1): the annotations of a base-specifier (its
   leading attribute-specifier-seq, before any `virtual` or access
   keyword, [class.derived.general]/1) are kept in `AnnotArena::of_base`,

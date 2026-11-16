@@ -138,5 +138,11 @@ super::meta_family! {
         InvokeResultN = ("invoke_result", "ixx", Stable, 477);
         CommonTypeN = ("common_type", "xx", Stable, 477);
         CommonReferenceN = ("common_reference", "xx", Stable, 477);
+        // P1317's `std::is_applicable` family as [meta.syn] declares it
+        // (spec/reflection-traits.md §1.4). libstdc++ 16.1's `<meta>`
+        // does not declare them yet: kiln_meta_traits.h does.
+        IsApplicableType = ("is_applicable_type", "ii", Stable, 477);
+        IsNothrowApplicableType = ("is_nothrow_applicable_type", "ii", Stable, 477);
+        ApplyResult = ("apply_result", "ii", Stable, 477);
     }
 }

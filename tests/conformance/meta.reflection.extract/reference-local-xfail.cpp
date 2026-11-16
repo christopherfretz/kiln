@@ -1,17 +1,13 @@
 // [meta.reflection.extract] (extract-ref, extract-value): a reference
-// variable whose lifetime began within the evaluation (a reference
-// parameter or local of a consteval function, [basic.life]/1) extracts
-// to the object it refers to. GCC 16.1 rejects it too, so no GCC oracle
-// (spec/reflection-queries.md §5). Found running GCC's C++ testsuite.
+// local whose lifetime began within the evaluation ([basic.life]/1)
+// extracts to the object it refers to. GCC 16.1 rejects it too, so no GCC
+// oracle (spec/reflection-queries.md §5). The reference parameter case
+// passes (`reference-param.cpp`). Found running GCC's C++ testsuite.
 //@ expect: compile-ok
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
-//@ xfail(kiln): WP-1505: a reflected reference local or parameter has no memory slot (Oven::meta_local), so extract cannot reach its referent
+//@ xfail(kiln): WP-1515: a reference local lives in a register reused after its block, so the Oven needs its per-scope register and pc range in Func to find it
 #include <meta>
-
-consteval int by_param(int &r) { return std::meta::extract<int>(^^r); }
-consteval int call_param() { int x = 3; return by_param(x); }
-static_assert(call_param() == 3);
 
 consteval int by_local() {
   int x = 5;

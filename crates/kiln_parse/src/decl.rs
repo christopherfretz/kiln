@@ -882,6 +882,17 @@ impl Parser<'_, '_> {
         let mut trailing: Option<(Loc, usize, Vec<AttrId>)> = None;
         loop {
             let loc = self.loc();
+            // clang `ParseDeclarationSpecifiers`: libstdc++'s `static const
+            // bool __is_signed;` reverts that trait keyword.
+            if let TokKind::Identifier(s) = self.tok().kind
+                && ds.base == TypeSpecKind::Bool
+                && ds.cv == Quals::CONST
+                && matches!(ds.storage, Some((StorageSpec::Static, _)))
+                && self.kw.is_revertible_trait(s)
+                && self.spelling_of(&self.tok()) == "__is_signed"
+            {
+                self.revert_trait_keyword(s);
+            }
             if let Some((at, end, _)) = &trailing
                 && *end != self.pos()
             {
@@ -2427,6 +2438,16 @@ impl Parser<'_, '_> {
         let kw_loc = self.bump().span.lo;
         let (keyword, scoped, scoped_loc) = self.parse_tag_key(ds, k);
         let mut attrs = self.parse_tag_key_attrs(keyword);
+        // clang `ParseClassSpecifier`: `struct __is_void` makes a
+        // revertible trait keyword an identifier for the rest of the
+        // translation unit (`TryKeywordIdentFallback`), so library headers
+        // can name class templates after the traits (spec/parse.md §1).
+        if keyword == TagKeyword::Struct
+            && let TokKind::Identifier(s) = self.tok().kind
+            && self.kw.is_revertible_trait(s)
+        {
+            self.revert_trait_keyword(s);
+        }
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let splice_qual = self.at_splice().then_some(qual_loc);
@@ -3196,7 +3217,12 @@ impl Parser<'_, '_> {
                 self.bump();
                 nulls.push(NullSpec { kind, loc });
             } else if self.at_attr() {
-                self.skip_attributes();
+                // [dcl.ref]/1: these appertain to the reference type, and
+                // an annotation never appertains to a type
+                // ([dcl.attr.annotation]/1).
+                let mut attrs = Vec::new();
+                self.parse_attributes(&mut attrs);
+                self.s.reject_annotations_in(&attrs, None);
             } else {
                 return nulls;
             }

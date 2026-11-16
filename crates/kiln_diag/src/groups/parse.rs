@@ -20,6 +20,7 @@ GnuCaseRange = "gnu-case-range" [];
 GnuConditionalOmittedOperand = "gnu-conditional-omitted-operand" [];
 GnuLabelAsValue = "gnu-label-as-value" [];
 IgnoredPragmas = "ignored-pragmas" [];
+KeywordCompat = "keyword-compat" [];
 MissingTemplateArgListAfterTemplateKw = "missing-template-arg-list-after-template-kw" [];
 StaticInlineExplicitInstantiation = "static-inline-explicit-instantiation" [];
 UnknownAttributes = "unknown-attributes" [];

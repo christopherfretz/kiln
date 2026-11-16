@@ -312,7 +312,13 @@ impl Parser<'_, '_> {
             }
             first = false;
             self.expect_closing(Punct::RSquare, Punct::LSquare, open);
-            self.skip_attributes();
+            // [expr.new]/1: these appertain to the array type, outermost
+            // included, and an annotation never appertains to a type
+            // ([dcl.attr.annotation]/1; GCC 16.1 only warns that it ignores
+            // one on the outermost array).
+            let mut attrs = Vec::new();
+            self.parse_attributes(&mut attrs);
+            self.s.reject_annotations_in(&attrs, None);
             d.chunks.push(Chunk::Array { size, loc: open });
         }
     }

@@ -527,7 +527,16 @@ impl Sema<'_, '_> {
         loc: Loc,
         oven: &mut Oven,
     ) -> Result<MetaOut, MetaError> {
-        let found = (!self.ast.types.is_reference(vt)).then(|| oven.meta_local(d)).flatten();
+        // A reference parameter: its referent, which the frame's register
+        // names (WP-1505); a reference local has no such record yet.
+        let is_ref = self.ast.types.is_reference(vt);
+        let vt = if is_ref {
+            let t = &self.ast.types;
+            t.pointee(t.canonical(vt)).map_or(vt, |p| t.canonical(p))
+        } else {
+            vt
+        };
+        let found = if is_ref { oven.meta_ref_param(d) } else { oven.meta_local(d) };
         let Some(addr) = found else {
             return fail(
                 loc,

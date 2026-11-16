@@ -122,6 +122,17 @@ impl Sema<'_, '_> {
                 if self.reflect_auto_var_in_own_init(d, name_loc) {
                     return self.recover(info, &[], loc);
                 }
+                // [expr.reflect]/5: "if lookup finds a declaration that
+                // replaced a using-declarator during a single search, R is
+                // ill-formed" (a using-declaration is not an entity; the
+                // same name found by another path, as for a virtual base,
+                // is fine).
+                if found.found.iter().any(|&f| self.ast.strip_shadow(f) != f) {
+                    let text = self.decl_name_str(name);
+                    let e = self.diag(DiagId::sema_reflect_using_declarator, name_loc).arg(text);
+                    self.emit(e);
+                    return self.recover(info, &[], loc);
+                }
                 self.reflect_entity(d, name_loc, loc, end)
             }
             _ => self.reflect_overload_set(name_loc, loc),

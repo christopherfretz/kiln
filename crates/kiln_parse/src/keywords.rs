@@ -221,6 +221,26 @@ struct Entry {
     /// unless followed by `(` (clang's revertible type-trait keywords), so
     /// libc++'s fallbacks such as `__make_signed<T>` still parse.
     builtin: Option<BuiltinKw>,
+    /// For a builtin trait name in C++: whether it is a keyword when not
+    /// followed by `(` ([`TraitKw`]).
+    trait_kw: TraitKw,
+}
+
+/// How a builtin trait name behaves when it is not followed by `(` (C++
+/// only; spec/parse.md §1, "Trait keywords").
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+enum TraitKw {
+    /// An ordinary identifier: the type transforms, clang 22's
+    /// non-keyword traits ([`NON_KEYWORD_TRAITS`]), C, and a
+    /// [`TraitKw::Revertible`] name once reverted.
+    #[default]
+    Ident,
+    /// A keyword: `int __has_trivial_copy;` is an error (clang 22).
+    Keyword,
+    /// A keyword until `struct name` (or `static const bool __is_signed`)
+    /// turns it into an identifier for the rest of the translation unit
+    /// (clang's `TryKeywordIdentFallback`; [`REVERTIBLE_TRAITS`]).
+    Revertible,
 }
 
 /// A builtin type-trait or type-transform name.
@@ -275,7 +295,15 @@ impl Keywords {
             {
                 continue;
             }
-            slot(&mut table, interner.intern(t.spelling())).builtin = Some(BuiltinKw::Trait(t));
+            let e = slot(&mut table, interner.intern(t.spelling()));
+            e.builtin = Some(BuiltinKw::Trait(t));
+            e.trait_kw = if REVERTIBLE_TRAITS.binary_search(&t.spelling()).is_ok() {
+                TraitKw::Revertible
+            } else if NON_KEYWORD_TRAITS.contains(&t.spelling()) {
+                TraitKw::Ident
+            } else {
+                TraitKw::Keyword
+            };
         }
         for v in 0..=u8::MAX {
             let Some(k) = UnaryTransformKind::from_u8(v) else { break };
@@ -326,6 +354,7 @@ impl Keywords {
             self.remove(interner, k);
         }
         for e in &mut self.table {
+            e.trait_kw = TraitKw::Ident;
             if matches!(e.builtin, Some(BuiltinKw::Trait(t)) if !C_TYPE_TRAITS.contains(&t))
                 || matches!(e.builtin, Some(BuiltinKw::Transform(_)))
             {
@@ -367,7 +396,98 @@ impl Keywords {
     pub fn get(&self, sym: Symbol) -> Option<Kw> {
         self.table.get(sym.index() as usize).and_then(|e| e.kw)
     }
+
+    /// Whether `sym` is an identifier: neither a keyword nor a trait
+    /// keyword ([`TraitKw`]) that has not been reverted.
+    pub fn is_ident(&self, sym: Symbol) -> bool {
+        self.table
+            .get(sym.index() as usize)
+            .is_none_or(|e| e.kw.is_none() && e.trait_kw == TraitKw::Ident)
+    }
+
+    /// Whether `sym` is a revertible trait keyword not yet reverted.
+    pub fn is_revertible_trait(&self, sym: Symbol) -> bool {
+        self.table.get(sym.index() as usize).is_some_and(|e| e.trait_kw == TraitKw::Revertible)
+    }
+
+    /// Turns the revertible trait keyword `sym` into an identifier for
+    /// the rest of the translation unit; it is still the trait when
+    /// followed by `(`.
+    pub fn revert_trait(&mut self, sym: Symbol) {
+        if let Some(e) = self.table.get_mut(sym.index() as usize)
+            && e.trait_kw == TraitKw::Revertible
+        {
+            e.trait_kw = TraitKw::Ident;
+        }
+    }
 }
+
+/// clang 22's revertible type-trait keywords (sorted): the names clang's
+/// `ParseClassSpecifier` turns into identifiers after `struct`, so that
+/// libstdc++ and libc++ may name class templates after them.
+const REVERTIBLE_TRAITS: [&str; 56] = [
+    "__is_abstract",
+    "__is_aggregate",
+    "__is_arithmetic",
+    "__is_array",
+    "__is_assignable",
+    "__is_base_of",
+    "__is_bounded_array",
+    "__is_class",
+    "__is_complete_type",
+    "__is_compound",
+    "__is_const",
+    "__is_constructible",
+    "__is_convertible",
+    "__is_convertible_to",
+    "__is_destructible",
+    "__is_empty",
+    "__is_enum",
+    "__is_final",
+    "__is_floating_point",
+    "__is_function",
+    "__is_fundamental",
+    "__is_integral",
+    "__is_literal",
+    "__is_literal_type",
+    "__is_lvalue_expr",
+    "__is_lvalue_reference",
+    "__is_member_function_pointer",
+    "__is_member_object_pointer",
+    "__is_member_pointer",
+    "__is_nothrow_assignable",
+    "__is_nothrow_constructible",
+    "__is_nothrow_convertible",
+    "__is_nothrow_destructible",
+    "__is_object",
+    "__is_pod",
+    "__is_pointer",
+    "__is_polymorphic",
+    "__is_reference",
+    "__is_rvalue_expr",
+    "__is_rvalue_reference",
+    "__is_same",
+    "__is_same_as",
+    "__is_scalar",
+    "__is_scoped_enum",
+    "__is_signed",
+    "__is_standard_layout",
+    "__is_trivial",
+    "__is_trivially_assignable",
+    "__is_trivially_constructible",
+    "__is_trivially_copyable",
+    "__is_trivially_equality_comparable",
+    "__is_unbounded_array",
+    "__is_union",
+    "__is_unsigned",
+    "__is_void",
+    "__is_volatile",
+];
+
+/// The builtin traits that clang 22 does not make keywords in C++: plain
+/// identifiers unless followed by `(`. (`__is_referenceable` at `compat`
+/// 22 and `__builtin_types_compatible_p` are not C++ traits at all.)
+const NON_KEYWORD_TRAITS: [&str; 2] = ["__builtin_is_structural", "__is_nullptr"];
 
 /// The builtin traits that are keywords in C too (clang `KEYALL` in
 /// TokenKinds.def; the others are `KEYCXX`). `__builtin_types_compatible_p`

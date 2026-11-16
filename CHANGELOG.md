@@ -125,6 +125,10 @@ Planned as 1.3.0.
   aligned allocation functions. The default output is unchanged.
 - GCC's `__builtin_exit`, `__builtin__Exit` and `__builtin__exit` (WP-1485),
   calls of the library functions; never constant expressions.
+- The [meta.syn] metafunctions `std::meta::is_applicable_type`,
+  `is_nothrow_applicable_type` and `apply_result` (WP-1505, P1317), for a
+  callable type and a tuple-like type
+  ([spec/reflection-traits.md](spec/reflection-traits.md) §1.4).
 
 ### Changed
 
@@ -736,6 +740,30 @@ Planned as 1.3.0.
   column of a friend's qualifier points at the qualifier, and a member of a
   class template with dependent bases named through its own class in C++98
   is reported as "no member named".
+- Reflection (WP-1505): `^^` of a name found through a using-declarator is
+  ill-formed ([expr.reflect]/5); a splice of a template without `template`
+  before it is a `-Wmissing-template-keyword` warning, as GCC, and
+  `template` before a splice that is not a template is an error;
+  `define_aggregate` of a type alias is rejected; only the condition of an
+  `if constexpr` is constant-evaluated, not its init-statement; an
+  annotation after a ref-qualifier, in a new-declarator or on an unnamed
+  bit-field is rejected; `extract` of a reflected reference parameter
+  reads the object it refers to. clang 22's type-trait keywords revert to
+  identifiers exactly where clang 22 reverts them (`-Wkeyword-compat`), so
+  `int __is_convertible;` as a member is rejected as clang and GCC do.
+
+- The Oven tells union members apart through more pointers (WP-1508): the
+  member a pointer designates survives pointer arithmetic and a store to
+  memory (an array of pointers, a class member, a lambda capture, a
+  reference member), and the address of a subobject reached through a
+  member (`&u.s.k`, `&u.arr[1]`, `(&u.s)->k`, a base of a member) names
+  that member at each union level, so reading through it while another
+  member is active is rejected as clang does. Subtracting pointers to two
+  members of one union is rejected ("subtracted pointers are not elements
+  of the same array"); destroying an inactive union member is rejected in
+  C++20 and C++23 too, as clang does; copying a union whose member was
+  destroyed (or one with no active member) is accepted in C++23 as in
+  C++26, and the copy keeps the member ended.
 
 ## [1.2.1] - 2026-11-14
 

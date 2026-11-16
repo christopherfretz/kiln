@@ -136,6 +136,7 @@ MissingConstinit = "missing-constinit" [];
 MissingDeclarations = "missing-declarations" [];
 MissingExceptionSpec = "missing-exception-spec" [];
 MissingNoreturn = "missing-noreturn" [];
+MissingTemplateKeyword = "missing-template-keyword" [];
 NonLiteralNullConversion = "non-literal-null-conversion" [];
 NonNull = "nonnull" [];
 NonPodVarargs = "non-pod-varargs" [];

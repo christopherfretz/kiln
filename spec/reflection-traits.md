@@ -212,6 +212,7 @@ library template's own requirements (§1.2). Result: **b** `bool`, **z**
 | `invoke_result((data, n))`, `common_type((data, n))`, `common_reference((data, n))`, `unwrap_reference`, `unwrap_ref_decay` | `std::X<…>::type` | L | i |
 | `tuple_size`, `variant_size` | `std::X<T>::value` | L | z |
 | `tuple_element(I, T)`, `variant_alternative(I, T)` | `std::X<I, T>::type` | L | i |
+| `is_applicable_type(F, Tup)`, `is_nothrow_applicable_type`, `apply_result` (P1317, WP-1505) | *tuple-like* `Tup` ([tuple.like]: `remove_cvref_t<Tup>` a specialization of `std::array`, `complex`, `pair`, `tuple` or `ranges::subrange`): `std::is_invocable` / `is_nothrow_invocable` / `invoke_result` of `F` and the `get<I>(declval<Tup>())` types (`std::tuple_element` through `Tup`'s `const` and value category; a `subrange`'s by value; a `volatile` `Tup` has no `get`); any other `Tup`: `false`, and `apply_result` fails (no `type`). libstdc++ 16.1 has no `std::is_applicable`, so kiln builds it over `is_invocable` (`meta.reflection.traits/applicable.cpp`) | L | b / i |
 | `type_order` | GCC 16.1's order: `strcmp` of the canonical types' Itanium manglings (gcc/cp/method.cc `type_order_value`; `meta.reflection.traits/type-order-mangling.cpp`), with `std::meta::info` as GCC's `Dm` whatever `-fkiln-reflection-mangling` says (WP-909), interned id on a tie; the `std::strong_ordering` static member of the result type | — | i |
 
 An operand may be a cv- or ref-qualified function type (`^^FnC` for
@@ -219,8 +220,9 @@ An operand may be a cv- or ref-qualified function type (`^^FnC` for
 declares nothing, so [dcl.fct]/6 does not restrict it (`DeclSite::Reflect`;
 GCC 16.1 agrees; `reflect-qualified-function-type{,-neg}.cpp`).
 
-All 121 rows of `kiln_oven/src/meta/traits.rs` (111 IS signatures and the
-10 `(data, n)` rows of §1.3) are `Stable` and owned by WP-477.
+All 124 rows of `kiln_oven/src/meta/traits.rs` (114 IS signatures and the
+10 `(data, n)` rows of §1.3) are `Stable` and owned by WP-477 (the three
+P1317 rows were added by WP-1505).
 
 ## 6. Tests
 

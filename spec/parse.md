@@ -149,6 +149,28 @@ WP-1290 completes the table:
   identifier in C++; spec/sema-templates.md §9.1). The other traits and
   the type transforms are identifiers.
 
+**Trait keywords** (C++; WP-1505, per name exactly clang 22). A builtin
+trait name followed by `(` is always the trait. Otherwise
+(`keywords::TraitKw`):
+- the 56 `keywords::REVERTIBLE_TRAITS` (`__is_void`, `__is_same`,
+  `__is_signed`, ...) are keywords until `struct name` (clang
+  `ParseClassSpecifier`; `class`/`union` do not) or, for `__is_signed`
+  only, `static const bool __is_signed` (clang `ParseDeclarationSpecifiers`)
+  reverts the name to an identifier for the rest of the translation unit,
+  with clang's warning "keyword '__is_void' will be made available as an
+  identifier for the remainder of the translation unit"
+  [-Wkeyword-compat]. Library headers name class templates after the
+  traits this way; `int __is_convertible;` before any such use is
+  "expected member name or ';'" / "expected unqualified-id";
+- every other trait (`__has_trivial_copy`, `__is_trivially_destructible`,
+  `__is_layout_compatible`, `__builtin_is_implicit_lifetime`, ... ) is a
+  keyword everywhere;
+- `__builtin_is_structural` and `__is_nullptr`
+  (`keywords::NON_KEYWORD_TRAITS`), and the type transforms
+  (`__remove_cv`, ...), stay identifiers unless followed by `(`.
+`Parser::ident_of` is the one check (`Keywords::is_ident`). Test:
+`lex.key/trait-keywords.cpp`.
+
 Tests: `tests/c/lex/`, `tests/c/parse/`, `tests/c/expr/builtin-types-compatible*.c`.
 
 ### Snapshots

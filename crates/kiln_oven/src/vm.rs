@@ -1072,13 +1072,22 @@ impl Oven {
                             },
                         },
                     };
-                    reg!(0) = u128::from(p);
+                    // A union member designator stays: arithmetic never
+                    // leaves the designated member (`vm/udesig.rs`).
+                    reg!(0) = u128::from(p) | udesig::desig_bits(reg!(1));
                     pc += 5;
                 }
                 Op::PtrSub => {
                     let (p, q, elem) = (reg!(1) as u64, reg!(2) as u64, OTy(arg!(3) as u32));
                     if aux != 0 && Ptr::alloc_key(p) == Ptr::alloc_key(q) {
                         fail!(Fault::ZeroSizeSub { elem });
+                    }
+                    // Pointers designating different members of one union
+                    // are not elements of one array ([expr.add]/5,
+                    // `vm/udesig.rs`), even at the same address.
+                    let (dp, dq) = (udesig::desig_of(reg!(1)), udesig::desig_of(reg!(2)));
+                    if dp | dq != 0 && self.desig_apart(p, dp, q, dq) {
+                        fail!(Fault::PtrSub);
                     }
                     match self.ptr_sub(p, q, elem) {
                         Ok(d) => reg!(0) = d as u128,
@@ -1125,11 +1134,13 @@ impl Oven {
                         if p.past {
                             fail!(Fault::PastField);
                         }
+                        // A member or base of the designated union
+                        // member is in it (`vm/udesig.rs`).
                         reg!(0) = u128::from(Ptr::with_off(
                             raw,
                             u64::from(p.off) + arg!(2) as u64,
                             false,
-                        ));
+                        )) | udesig::desig_bits(reg!(1));
                     }
                     pc += 4;
                 }
@@ -2098,8 +2109,11 @@ impl Oven {
             }
             Op::VoidCast if aux & 0xF == crate::kbc::UNION_DESIG => {
                 let v = reg!(1);
-                let t =
-                    if v as u64 == 0 { 0 } else { self.udesig.tag(OTy(arg!(2) as u32), aux >> 4) };
+                let t = if v as u64 == 0 {
+                    0
+                } else {
+                    self.udesig.extend(udesig::desig_of(v), OTy(arg!(2) as u32), aux >> 4)
+                };
                 reg!(0) = udesig::with_desig(v, t);
                 pc += 4;
             }
@@ -3744,15 +3758,17 @@ impl Oven {
         if fl & flags::MUTABLE_OUTSIDE != 0 && (k == ak::READ || fl & flags::CONST == 0) {
             self.mutable_path(raw, ty, k)?;
         }
+        // The members a pointer designates first (`vm/udesig.rs`), so the
+        // note names the designated member.
+        if desig != 0 && fl & flags::HAS_UNION != 0 {
+            self.desig_check(raw, desig, ty, k)?;
+        }
         // The memo probe inlined: a load of union storage hits it.
         if fl & flags::HAS_UNION != 0
             && self.union_overlaps(a.ty, Ptr::decode(raw).off, ty)
             && !self.union_memo_hit(a.ty, raw, ty)
         {
             self.union_path_miss(a.ty, raw, ty, k)?;
-        }
-        if desig != 0 {
-            self.desig_check(raw, desig, ty, k)?;
         }
         Ok(())
     }
@@ -3795,7 +3811,8 @@ impl Oven {
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
-        let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
+        let (st, abs, a) =
+            self.rmw_check(raw, len, ty, k).map_err(|f| self.desig_first(raw, desig, ty, k, f))?;
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
             self.slow_access(a, raw, desig, ty, k)?;
         }
@@ -3843,7 +3860,10 @@ impl Oven {
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
-        let (st, abs, a) = self.mem.check(raw, len, true).map_err(fault)?;
+        let (st, abs, a) = self
+            .mem
+            .check(raw, len, true)
+            .map_err(|f| self.desig_first(raw, desig, ty, k, fault(f)))?;
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
@@ -3858,19 +3878,22 @@ impl Oven {
         }
         self.mem.trial_write(raw, len).map_err(fault)?;
         if has_union {
-            self.union_path_in(aty, raw, ty, k)?;
             if desig != 0 && !init {
                 self.desig_check(raw, desig, ty, k)?;
             }
+            self.union_path_in(aty, raw, ty, k)?;
         }
-        // A pointer keeps its `void *` tag in its mark (`kbc::VOID_TAG`),
-        // not its union member designator (`vm/udesig.rs`).
+        // A pointer keeps its `void *` tag (`kbc::VOID_TAG`) and its union
+        // member designator (`vm/udesig.rs`) in its mark; static memory,
+        // which a snapshot keeps, the `void *` tag only.
         let mark = if !is_ptr {
             0
-        } else if (v >> 64) as u32 == 0 {
+        } else if v >> 64 == 0 {
             1
         } else {
-            self.mem.set_void_tag(st, abs, (v >> 64) as u32)
+            let hi = (v >> 64) as u64;
+            let hi = if st == Sp::Static { u64::from(hi as u32) } else { hi };
+            self.mem.set_void_tag(st, abs, hi)
         };
         let sp = self.mem.space_mut(st);
         sp.write(abs, len, v);
@@ -4017,13 +4040,21 @@ impl Oven {
         // Nor is its source read (clang's `isReadByLvalueToRvalueConversion`):
         // copying an `extern const` empty object is a constant.
         let mut src_at = None;
+        let mut dead_union = false;
         if !empty {
-            let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
-                f,
-                ak: ak::READ,
-                ty,
-                p: src,
-            })?;
+            let checked = match self.mem.check(src, size, false) {
+                // A union member whose lifetime an explicit destruction
+                // ended is part of the union's object representation,
+                // which the copy copies, not a read of the member
+                // ([class.copy.ctor]/15, WP-1508): the copy keeps it ended.
+                Err(MemFault::Lifetime) if self.dead_only_in_unions(src, size, ty) => {
+                    dead_union = true;
+                    self.mem.check_storage(src, size, false)
+                }
+                r => r,
+            };
+            let (ss, sa, sa_alloc) =
+                checked.map_err(|f| Fault::Mem { f, ak: ak::READ, ty, p: src })?;
             src_at = Some((ss, sa));
             if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
                 self.mutable_path(src, ty, ak::READ)?;
@@ -4051,6 +4082,9 @@ impl Oven {
         let Some((ss, sa)) = src_at.filter(|_| size != 0) else { return Ok(()) };
         self.mem.trial_write(dst, size).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         self.mem.copy(ds, da, ss, sa, size);
+        if dead_union {
+            self.copy_dead_runs(dst, ss, sa, size)?;
+        }
         if self.types.info(ty).has_union {
             let (so, dof) = (u64::from(Ptr::decode(src).off), u64::from(Ptr::decode(dst).off));
             let (a, z) = self.types.info(ty).upos;
@@ -4063,6 +4097,68 @@ impl Oven {
                     self.mem.union_alts_put(Ptr::union_key(dst, dof + o, ut), Some(m));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Whether the `len` bytes of the `ty` object at `src` that are
+    /// outside their lifetime all lie in union subobjects (a union member
+    /// an explicit destruction ended before C++26 kills its bytes): the
+    /// copy of such an object copies the union's object representation.
+    #[cold]
+    #[inline(never)]
+    fn dead_only_in_unions(&self, src: u64, len: u64, ty: OTy) -> bool {
+        let info = *self.types.info(ty);
+        if !info.has_union {
+            return false;
+        }
+        let Ok((sp, abs, _)) = self.mem.check_storage(src, len, false) else { return false };
+        let so = u64::from(Ptr::decode(src).off);
+        // The member ranges of the unions that are alive with a member
+        // (active or ended): a destroyed union has no entry.
+        let mut pos = self.types.union_pos[info.upos.0 as usize..info.upos.1 as usize].to_vec();
+        if matches!(info.kind, TyKind::Record { union: true, .. }) {
+            pos.push((0, ty));
+        }
+        let ranges: Vec<(u64, u64)> = pos
+            .iter()
+            .filter_map(|&(o, u)| {
+                let key = Ptr::union_key(src, so + o, u);
+                let m = self.mem.active(key).or_else(|| self.mem.ended_member(key))?;
+                let f = self.types.fields(u).get(m as usize)?;
+                Some((o + f.offset, o + f.offset + self.types.size(f.ty)))
+            })
+            .collect();
+        let s = self.mem.space(sp);
+        !ranges.is_empty()
+            && (0..len)
+                .all(|i| s.is_live(abs + i, 1) || ranges.iter().any(|&(a, z)| i >= a && i < z))
+    }
+
+    /// After a copy of `len` bytes from `abs` of space `sp` to `dst`, ends
+    /// the lifetime of the destination bytes whose source bytes are
+    /// outside theirs (an ended union member stays ended in the copy).
+    #[cold]
+    #[inline(never)]
+    fn copy_dead_runs(&mut self, dst: u64, sp: Sp, abs: u64, len: u64) -> Result<(), Fault> {
+        let off = u64::from(Ptr::decode(dst).off);
+        let mut i = 0;
+        while i < len {
+            if self.mem.space(sp).is_live(abs + i, 1) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < len && !self.mem.space(sp).is_live(abs + i, 1) {
+                i += 1;
+            }
+            let at = Ptr::with_off(dst, off + start, false);
+            self.mem.set_lifetime(at, i - start, false).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::INIT,
+                ty: OTy(0),
+                p: at,
+            })?;
         }
         Ok(())
     }
@@ -4107,6 +4203,18 @@ impl Oven {
                 let fields = if union {
                     let i = self.mem.active(Ptr::union_key(raw, off, t))?;
                     let f = self.types.fields[(first + i) as usize];
+                    // A member an explicit destruction ended before C++26
+                    // (its bytes outside their lifetime) is not active
+                    // ([class.union.general]/2): the union has no value
+                    // to check, as in C++26 (WP-1508).
+                    if f.width.is_none()
+                        && self
+                            .alloc_any(Ptr::decode(raw))
+                            .is_some_and(|a| a.flags & flags::TRACKED != 0)
+                        && !s.is_live(abs + f.offset, self.types.size(f.ty))
+                    {
+                        return None;
+                    }
                     if self.cxx_year >= 2026
                         && f.width.is_none()
                         && matches!(self.types.kind(f.ty), TyKind::Array { .. })
@@ -4481,15 +4589,14 @@ impl Oven {
         ty: OTy,
         implicit: bool,
     ) -> Result<(), Fault> {
-        let desig = self.desig(desig);
         let p = Ptr::decode(raw);
         let akey = Ptr::alloc_key(raw);
         let stamp = umemo::Stamp { epoch: self.mem.union_epoch, rebuilt: self.types.rebuilt() };
-        if desig.is_none() && self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
+        if desig == 0 && self.umemo.hit(umemo::Walk::Place, akey, root, ty, p.off, stamp) {
             return Ok(());
         }
         if let Some(cover) = self.place_walk(raw, desig, root, ty, implicit)?
-            && desig.is_none()
+            && desig == 0
         {
             self.umemo.put(umemo::Walk::Place, akey, root, ty, cover, stamp);
         }
@@ -4508,7 +4615,7 @@ impl Oven {
     fn place_walk(
         &mut self,
         raw: u64,
-        desig: Option<(OTy, u32)>,
+        desig: u32,
         root: OTy,
         ty: OTy,
         implicit: bool,
@@ -4587,9 +4694,8 @@ impl Oven {
                         active.into_iter().chain(alt_members(alts, n, active)).find(|&i| reach(i));
                     // A pointer designating one of the members that are
                     // the object constructs that one (`vm/udesig.rs`).
-                    if let Some((du, di)) = desig
-                        && du == t
-                        && di < n
+                    let dm = self.desig_member(desig, t).filter(|&di| di < n);
+                    if let Some(di) = dm
                         && direct & 1 << di != 0
                     {
                         direct = 1 << di;
@@ -4597,7 +4703,14 @@ impl Oven {
                         if active != Some(di) {
                             held = None;
                         }
-                    } else if desig.is_none() && direct != 0 && arrs != 0 {
+                    } else if let Some(di) = dm
+                        && arrs & 1 << di != 0
+                    {
+                        // An element of the designated array member.
+                        direct = 0;
+                        arrs = 1 << di;
+                        held = held.filter(|&i| i == di);
+                    } else if dm.is_none() && direct != 0 && arrs != 0 {
                         // An untagged pointer that may name a member or an
                         // element of an array member of the same type at
                         // the same offset (`&u.arr[0]` with `union { int
@@ -4760,10 +4873,10 @@ impl Oven {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
             }
             if a.flags & flags::HAS_UNION != 0 {
-                self.union_path_in(a.ty, raw, ty, ak::MEMBER_CALL)?;
                 if desig != 0 {
                     self.desig_check(raw, desig, ty, ak::MEMBER_CALL)?;
                 }
+                self.union_path_in(a.ty, raw, ty, ak::MEMBER_CALL)?;
             }
             return self.member_call_life(raw, ty);
         }
@@ -4783,14 +4896,19 @@ impl Oven {
                     r.map_err(fault)?;
                 }
             }
-            // C++26: a union whose active member was destroyed is alive
-            // with no active member (below), so destroying a member that
-            // is not active is checked as an access ("destruction of
-            // member 's' of union with no active member").
-            if self.cxx_year >= 2026
-                && let Some(a) = self.alloc_any(Ptr::decode(raw))
+            // Destroying a union member that is not active is checked as
+            // an access ("destruction of member 'i' of union with active
+            // member 's'", in every mode as clang; [class.dtor]/19,
+            // [expr.const]/10.8), through the member the pointer
+            // designates (`vm/udesig.rs`). In C++26 a union whose active
+            // member was destroyed is alive with no active member (below):
+            // destroying another member then names the ended one.
+            if let Some(a) = self.alloc_any(Ptr::decode(raw))
                 && a.flags & flags::HAS_UNION != 0
             {
+                if desig != 0 {
+                    self.desig_check(raw, desig, ty, ak::DESTROY)?;
+                }
                 self.union_path_in(a.ty, raw, ty, ak::DESTROY)?;
             }
         }
@@ -4811,8 +4929,8 @@ impl Oven {
                 // (`vm/udesig.rs`), which one ended is unknown: none is
                 // recorded.
                 let key = Ptr::union_key(raw, uoff, ut);
-                let known =
-                    !self.mem.union_alts.contains_key(&key) || self.desig(desig) == Some((ut, i));
+                let known = !self.mem.union_alts.contains_key(&key)
+                    || self.desig_member(desig, ut) == Some(i);
                 let ended = known.then_some(i | UNION_ENDED);
                 let at = Ptr::with_off(raw, uoff, false);
                 self.mem.trial_write(at, self.types.size(ut)).map_err(fault)?;
@@ -4841,7 +4959,6 @@ impl Oven {
     /// A pointer's member designator `desig` (`vm/udesig.rs`) picks that
     /// member among those that may be active.
     fn union_of_member(&self, raw: u64, desig: u32, ty: OTy) -> Option<(u64, OTy, u32)> {
-        let desig = self.desig(desig);
         let p = Ptr::decode(raw);
         let a = self.alloc_any(p)?;
         if a.flags & flags::HAS_UNION == 0 {
@@ -4879,9 +4996,9 @@ impl Oven {
                             self.mem.may_be_active(key, i)
                                 && self.types.reaches(Walk::Union, u, rel, ty, reach, i)
                         };
-                        let i = desig
-                            .filter(|&(du, di)| du == u && ok(di))
-                            .map(|d| d.1)
+                        let i = self
+                            .desig_member(desig, u)
+                            .filter(|&di| ok(di))
                             .or_else(|| (0..n).find(|&i| ok(i)))?;
                         let f = fields[i as usize];
                         // With a member of an array member at the same

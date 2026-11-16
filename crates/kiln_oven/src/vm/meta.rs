@@ -43,6 +43,20 @@ impl Oven {
         })
     }
 
+    /// The referent's address of reference parameter `d` of a live frame
+    /// of the running evaluation, the innermost activation first: what
+    /// `extract` of a reflected reference parameter reads (WP-1505). The
+    /// caller bound the reference, and the parameter's register holds the
+    /// address for the whole activation (`ParamInfo::is_ref`), so nothing
+    /// is added to a frame. None once the frame returned.
+    pub fn meta_ref_param(&self, d: kiln_ast::DeclId) -> Option<u64> {
+        let frames = self.stack.get(self.run.entry..).unwrap_or_default();
+        frames.iter().rev().find_map(|f| {
+            let p = self.funcs[f.func as usize].params.iter().find(|p| p.is_ref && p.decl == d)?;
+            self.regs.get(f.fb as usize + p.reg as usize).map(|&v| v as u64)
+        })
+    }
+
     /// Runs reflection intrinsic `sub` (a [`MetaOp`] code) of the
     /// `Op::Builtin` at `pc`: its `n` arguments are in the consecutive
     /// registers from `base` of the frame at `fb`; `t1` is the element

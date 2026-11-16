@@ -262,6 +262,9 @@ sema_reflect_intervening_lambda = Error (0) "cannot take the reflection of a loc
 sema_reflect_nttp = Error (1) "'^^' cannot be applied to a non-type template parameter '{0}'";
 sema_reflect_operand = Error (0) "'^^' cannot be applied to this operand";
 sema_reflect_overload_set = Error (0) "cannot take the reflection of an overload set";
+// [expr.reflect]/5: lookup found a declaration that replaced a
+// using-declarator (WP-1505)
+sema_reflect_using_declarator = Error (1) "cannot take the reflection of '{0}', which names a declaration introduced by a using-declaration";
 sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not allow 'register' storage class specifier";
 // clang `err_attribute_regparm_invalid_number` (WP-808)
 sema_regparm_invalid_number = Error (1) "'regparm' parameter must be between 0 and {0} inclusive";

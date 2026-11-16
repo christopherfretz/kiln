@@ -152,14 +152,30 @@ impl Sema<'_, '_> {
     /// The splice-expression `[: e :]` ([expr.prim.splice]/2): a
     /// variable, structured binding, function, enumerator, value or
     /// object; a non-static member only names it without an object (the
-    /// operand of `&`, or an unevaluated operand).
-    pub fn act_on_splice_expr(&mut self, e: ExprId, open: Loc, close: Loc) -> ExprId {
+    /// operand of `&`, or an unevaluated operand). With `template_kw`
+    /// (`template [: e :]`, /3) it must designate a function template
+    /// that is not a constructor template; without it, a template is
+    /// ill-formed (/2.7: diagnosed, then taken as if `template` were
+    /// written).
+    pub fn act_on_splice_expr(
+        &mut self,
+        e: ExprId,
+        template_kw: bool,
+        open: Loc,
+        close: Loc,
+    ) -> ExprId {
         let r = match self.splice_entity(e) {
             Spliced::Error => return self.recover_err(&[e], open),
+            Spliced::Dependent if template_kw => {
+                return self.builder().template_splice_expr(e, None, open, close);
+            }
             Spliced::Dependent => return self.builder().splice_expr(e, None, open, close),
             Spliced::Entity(r) => r,
         };
         let at = self.begin_loc(e);
+        if !self.splice_template_kw_fits(r, template_kw, at) {
+            return self.recover_err(&[e], open);
+        }
         match r {
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Field | DeclKind::IndirectField => {
@@ -227,6 +243,40 @@ impl Sema<'_, '_> {
             },
             _ => self.splice_misfit_expr(e, at, open),
         }
+    }
+
+    /// [expr.prim.splice]/2.7 and /3 for a splice-expression without
+    /// template arguments designating `r`: after `template` it must be a
+    /// function template that is not a constructor template (else
+    /// diagnosed, `false`); without `template`, a template is diagnosed
+    /// (missing keyword) and then accepted for recovery.
+    fn splice_template_kw_fits(&mut self, r: Reflectee, template_kw: bool, at: Loc) -> bool {
+        let fn_template = match r {
+            Reflectee::Template(n) => self.ast.types.template_decl(n).map(|d| {
+                self.kind_of(d) == DeclKind::FunctionTemplate
+                    && !self
+                        .pattern_of(d)
+                        .is_some_and(|p| self.kind_of(p) == DeclKind::CXXConstructor)
+            }),
+            _ => Some(false),
+        };
+        if template_kw {
+            if fn_template == Some(false) {
+                self.error(DiagId::sema_splice_not_function_template, at);
+                return false;
+            }
+        } else if matches!(r, Reflectee::Template(_)) {
+            self.error(DiagId::sema_splice_missing_template_kw, at);
+            return fn_template == Some(true);
+        }
+        true
+    }
+
+    /// The missing-`template` error for frozen splice operand `e` that
+    /// designates a template and is followed by `<` in an expression
+    /// ([temp.names]/3, [expr.prim.splice]/2.7).
+    pub fn missing_splice_template_kw(&mut self, e: ExprId) {
+        self.error(DiagId::sema_splice_missing_template_kw, self.begin_loc(e));
     }
 
     /// Whether splice operand `e` is frozen ([`Self::splice_frozen_id`])
@@ -430,9 +480,11 @@ impl Sema<'_, '_> {
         if self.expr_is_type_dependent(base) {
             return self.builder().splice_expr(e, Some((base, arrow)), open, close);
         }
-        // A member function template (`x.template [:r:](a)`, or `x.[:r:]`
-        // substituted): its one-template overload set.
+        // A member function template (`x.template [:r:](a)` substituted):
+        // its one-template overload set. Without `template` it is
+        // ill-formed ([expr.prim.splice]/2.7; recovered as with it).
         if matches!(r, Reflectee::Template(_)) {
+            self.error(DiagId::sema_splice_missing_template_kw, self.begin_loc(e));
             return self.act_on_member_template_splice(base, e, None, open, close, op_loc, arrow);
         }
         let (base, arrow) = match self.member_arrow_base(base, open, op_loc, arrow) {
@@ -525,7 +577,7 @@ impl Sema<'_, '_> {
             || self.in_template();
         if dependent {
             let Some(args) = args else {
-                return self.builder().splice_expr(e, Some((base, arrow)), open, close);
+                return self.builder().template_splice_expr(e, Some((base, arrow)), open, close);
             };
             let list = self.ast.types.arg_list(args);
             return self.builder().member_splice_template_expr(e, (base, arrow), list, open, close);

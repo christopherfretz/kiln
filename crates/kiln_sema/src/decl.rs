@@ -3741,6 +3741,11 @@ impl Sema<'_, '_> {
         let Some((name, name_loc)) = d.name else {
             self.templ.cur = None;
             if d.ctx == DeclaratorContext::Member && d.bit_width.is_some() {
+                // [dcl.attr.annotation]/1, [class.bit]/2: an unnamed
+                // bit-field is not a member, so no annotation appertains
+                // to it.
+                self.reject_annotations_in(&ds.attrs, Some("an unnamed bit-field"));
+                self.reject_annotations_in(&d.attrs, Some("an unnamed bit-field"));
                 let f = self.act_on_field(ds, ty, d, invalid);
                 self.set_member_access(f);
                 return Some(f);

@@ -435,7 +435,14 @@ mod tests {
     }
 
     /// The rows that are kiln's, not `<meta>`'s (spec/reflection.md §1.3).
-    const EXTENSIONS: &[&str] = &["name_of"];
+    const EXTENSIONS: &[&str] = &[
+        "name_of",
+        // [meta.syn] names libstdc++ 16.1's `<meta>` does not declare yet
+        // (WP-1505; spec/reflection-queries.md §6).
+        "is_applicable_type",
+        "is_nothrow_applicable_type",
+        "apply_result",
+    ];
 
     /// The name table (WP-484): every intrinsic GCC 16.1's `<meta>`
     /// declares has a row (so a call answers or says "not implemented yet

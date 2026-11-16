@@ -505,9 +505,10 @@ pub(crate) const NO_DTOR: u32 = u32::MAX;
 pub(crate) const VOID_TAG: u32 = 1;
 
 /// `VoidCast` aux low bits: `[dst, p, union type]`, aux `UNION_DESIG |
-/// idx << 4`: `p` is the address of member `idx` of a union with another
-/// member that can hold an object of its type at its offset; `dst` is `p`
-/// tagged with that designator in bits 96..128 (`vm/udesig.rs`, WP-1494).
+/// idx << 4`: `p` is the address of a subobject reached through member
+/// `idx` of a union with another member that can hold an object of its
+/// type at its offset; `dst` is `p` with its designator path extended by
+/// that level in bits 96..128 (`vm/udesig.rs`, WP-1494, WP-1508).
 pub(crate) const UNION_DESIG: u32 = 2;
 
 /// The kinds of `Builtin` and their operands.

@@ -310,9 +310,14 @@ impl Parser<'_, '_> {
         let open = self.loc();
         let (e, close) = self.parse_splice_specifier()?;
         if self.at(Punct::Less) && self.s.splice_names_template(e) {
+            // [temp.names]/3: without `template` the `<` is less-than
+            // and the splice designating a template is ill-formed
+            // ([expr.prim.splice]/2.7); diagnosed, then read as the
+            // template argument list GCC 16.1 also recovers with.
+            self.s.missing_splice_template_kw(e);
             return self.parse_splice_template_args(e, open, open);
         }
-        Some(self.s.act_on_splice_expr(e, open, close))
+        Some(self.s.act_on_splice_expr(e, false, open, close))
     }
 
     /// The splice-expression `template [: r :]` or
@@ -327,7 +332,7 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) {
             return self.parse_splice_template_args(e, open, begin);
         }
-        Some(self.s.act_on_splice_expr(e, open, close))
+        Some(self.s.act_on_splice_expr(e, true, open, close))
     }
 
     /// The `< args >` of the splice template-id whose splice operand is
