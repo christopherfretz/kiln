@@ -2304,7 +2304,11 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   ([class.copy.elision]/1.3): the move (or copy) constructor it would call
   is still resolved and checked for deletion and access in
   copy-initializations, returns and arguments (`check_elided_ctor`;
-  WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`).
+  WP-1470, `class.copy.elision/elidable-ctor-cxx14.cpp`). The copy that
+  ends a copy-initialization by user-defined conversion (C++14
+  [dcl.init]/17.6.3, `check_temp_copy`) direct-initializes: an explicit
+  copy constructor is a candidate (WP-1473,
+  `dcl.init.general/copy-init-explicit-copy-ctor-cxx98-run.cpp`).
   Unevaluated operands are checked too, as clang builds the elidable
   `CXXConstructExpr` there, and the selected constructor is recorded
   against the prvalue (`Sema::elided_ctors`, empty from C++17 on) so

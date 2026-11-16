@@ -445,6 +445,12 @@ impl Sema<'_, '_> {
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.templ.cur = None;
         let (sp, _) = d.special?;
+        // [class.dtor]/1: a destructor is not a template, a friend one
+        // either (clang `err_destructor_template`).
+        if head.is_some() && matches!(sp, SpecialName::Destructor(_)) {
+            self.error(DiagId::sema_destructor_template, sloc);
+            return None;
+        }
         if !self.ast.types.is_function(ty) {
             self.error(DiagId::parse_expected_unqualified_id, sloc);
             return None;

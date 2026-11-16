@@ -2382,7 +2382,13 @@ impl Sema<'_, '_> {
     /// bound deduces such a value, and its type is `std::size_t`
     /// ([temp.deduct.type]/20, its example `template<class T, T i> void
     /// f(int (&)[i])`). Taken after every argument, so a deduction of `T`
-    /// from another argument wins (clang `DeducedFromArrayBound`).
+    /// from another argument wins (clang `DeducedFromArrayBound`). An
+    /// array bound gives the value `std::size_t` while `T` is undeduced
+    /// ([`Sema::deduce_array_bound`]); a value of another type came from a
+    /// template-id's argument (`A<N>` given `A<0>`), which before C++17
+    /// does not deduce `T` (from C++17 `deduce_nttp_type` has already
+    /// deduced it from that argument's type). A template-id argument of
+    /// type `std::size_t` is not told apart from a bound.
     fn bound_value_type(
         &self,
         params: &[DeclId],
@@ -2396,6 +2402,9 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         params.iter().zip(&d.args).skip(j + 1).find_map(|(&q, a)| {
             let ArgView::Value { ty, .. } = a.view() else { return None };
+            if !t.same_type(ty, self.size_type()) {
+                return None;
+            }
             let pt = self.ast.decls.get(q).ty()?;
             match t.canonical_view(pt) {
                 TypeView::CanonTemplateTypeParm { depth: pd, index, .. }

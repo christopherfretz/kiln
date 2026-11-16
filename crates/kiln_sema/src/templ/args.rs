@@ -1668,14 +1668,18 @@ impl Sema<'_, '_> {
     /// Whether the second conversion of `scs` may appear in a converted
     /// constant expression of pointer, member pointer, reference or
     /// `bool` type ([expr.const]/12; clang
-    /// `CheckConvertedConstantConversions`, its pointer, derived-to-base
-    /// and boolean rows: the integral and floating rows are checked by
-    /// the caller). A reference bound to a base subobject of its
+    /// `CheckConvertedConstantConversions`, its pointer, derived-to-base,
+    /// boolean and floating-integral rows: the callers also compare the
+    /// argument's own type, which misses the floating-integral step after
+    /// a user-defined conversion; narrowing is checked by them). A reference bound to a base subobject of its
     /// referent is a derived-to-base conversion ([over.ics.ref]/1), not
     /// one of the conversions [expr.const]/12 lists (WP-561).
     pub(crate) fn cce_second_allowed(&self, scs: &StandardConversion) -> bool {
         match scs.second {
-            SecondStep::DerivedToBase => false,
+            // [expr.const]/12 lists no floating-integral conversion, also
+            // after a user-defined conversion (`operator double()` for an
+            // `int` parameter; clang `ICK_Floating_Integral`).
+            SecondStep::DerivedToBase | SecondStep::FloatingIntegral => false,
             SecondStep::PointerConversion | SecondStep::MemberPointerConversion => {
                 self.is_nullptr_type(scs.from)
             }

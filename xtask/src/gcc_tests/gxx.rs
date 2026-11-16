@@ -56,6 +56,9 @@ only when the tool fails. Contract: spec/harness.md \"GCC testsuites\".
                          of these comma-separated globs
   --sample <n>           a deterministic sample: n tests evenly spaced over
                          the sorted selection
+  --shard <K/N>          run only every N-th selected test, starting at the
+                         K-th (1-based; the N shards are disjoint and cover
+                         the selection; a test's cases stay together)
   --list                 list the planned cases and skips, run nothing
   -j, --jobs <n>         cases in parallel (default 4; an upper bound under a
                          MAKEFLAGS jobserver, see spec/harness.md)
@@ -131,6 +134,8 @@ pub struct Options {
     pub oracles_always: bool,
     pub filter: Option<String>,
     pub sample: Option<usize>,
+    /// `--shard K/N`: (K, N), 1-based; keep every N-th selected test.
+    pub shard: Option<(usize, usize)>,
     pub list: bool,
     pub jobs: usize,
     pub timeout: Duration,
@@ -157,6 +162,7 @@ impl Default for Options {
             oracles_always: false,
             filter: None,
             sample: None,
+            shard: None,
             list: false,
             jobs: 4,
             timeout: Duration::from_secs(60),
@@ -261,6 +267,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                         .ok_or_else(|| format!("bad --sample `{v}`"))?,
                 );
             }
+            "--shard" => o.shard = Some(crate::libcxx::parse_shard(&value("--shard")?)?),
             "--tsv" => o.tsv = Some(PathBuf::from(value("--tsv")?)),
             "--summary" => o.summary = Some(PathBuf::from(value("--summary")?)),
             "--report" => o.report = Some(PathBuf::from(value("--report")?)),
@@ -959,6 +966,11 @@ fn execute(opts: &Options) -> Result<(), String> {
     if let Some(n) = opts.sample {
         tests = sample(&tests, n);
     }
+    if let Some(shard) = opts.shard {
+        let all = tests.len();
+        tests = crate::libcxx::shard_of(tests, shard);
+        println!("xtask gxx-dg: shard {}/{}: {} of {all} tests", shard.0, shard.1, tests.len());
+    }
     let bodies: Vec<String> = tests
         .iter()
         .map(|t| {
@@ -1112,6 +1124,9 @@ fn command_line(o: &Options) -> String {
     }
     if let Some(n) = o.sample {
         let _ = write!(c, " --sample {n}");
+    }
+    if let Some((k, n)) = o.shard {
+        let _ = write!(c, " --shard {k}/{n}");
     }
     c
 }
@@ -1551,6 +1566,34 @@ mod tests {
         assert!(parse_args(args(&["--suite", "gcc.dg"])).is_err());
         assert!(parse_args(args(&["--oracles-on", "some"])).is_err());
         assert!(parse_args(args(&["--help"])).unwrap().is_none());
+    }
+
+    /// `--shard K/N` (spec/harness.md "The g++.dg runner"): the N shards
+    /// of a selection are disjoint, cover it and keep its order, and a
+    /// test's cases never split (shards are taken over tests, not cases).
+    #[test]
+    fn shards_partition_the_tests() {
+        assert_eq!(parse_args(args(&["--shard", "2/4"])).unwrap().unwrap().shard, Some((2, 4)));
+        assert_eq!(parse_args(args(&["--shard=1/1"])).unwrap().unwrap().shard, Some((1, 1)));
+        for bad in ["0/3", "4/3", "3", "a/b", "1/0"] {
+            assert!(parse_args(args(&["--shard", bad])).is_err(), "{bad:?}");
+        }
+        let all: Vec<Test> =
+            (0..23).map(|i| test(&format!("g++.dg/t{i:02}.C"), Suite::Dg)).collect();
+        let n = 4;
+        let parts: Vec<Vec<Test>> =
+            (1..=n).map(|k| crate::libcxx::shard_of(all.clone(), (k, n))).collect();
+        let mut seen: Vec<String> = parts.iter().flatten().map(|t| t.id.clone()).collect();
+        assert_eq!(seen.len(), all.len(), "the shards overlap or drop tests");
+        seen.sort();
+        let want: Vec<String> = all.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(seen, want);
+        for p in &parts {
+            assert!(p.windows(2).all(|w| w[0].id < w[1].id), "a shard reorders its tests");
+            assert!(p.len().abs_diff(all.len() / n) <= 1, "unbalanced shard: {}", p.len());
+        }
+        let o = Options { shard: Some((3, 4)), ..Options::default() };
+        assert!(command_line(&o).ends_with(" --shard 3/4"), "{}", command_line(&o));
     }
 
     #[test]

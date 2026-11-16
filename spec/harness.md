@@ -1422,6 +1422,39 @@ Each step holds a jobserver token and runs under `--mem-limit` (default
 2048 MiB plus kiln's stack reservation) and `--timeout` (default 60 s per
 compile or link step; `--run-timeout` 10 s per run).
 
+**Shards** (WP-1473). `--shard K/N` (1-based, as `cargo xtask libcxx`'s)
+keeps every N-th test of the selection (after `--filter` and `--sample`),
+starting at the K-th: round robin over tests, never over cases, so a
+test's standards stay in one shard, the N shards are disjoint and cover
+the selection (`gxx::tests::shards_partition_the_tests`), and each shard's
+TSV holds its tests' skip rows too. The command line in a shard's summary
+names its `--shard`. The x86_64 sweep (docs/VALIDATION.md "x86_64 sweep")
+runs the suite as shards and merges their TSVs.
+
+**Comparing runs** (WP-1473). `scripts/gxx-dg-compare.py` (standard
+library only; `python3 -I scripts/gxx-dg-compare.py --help`) reads the
+TSVs:
+
+- `summary A.tsv`: the headline, "N of M applicable cases pass (P%)",
+  where an applicable case is a row that is not a skip row; the class
+  counts per compiler; kiln's failures by triage bucket (the runner's
+  rules, re-derived from the classes in the row).
+- `compare BEFORE.tsv AFTER.tsv [--labels B,A] [--list]`: both headlines,
+  the class matrix of kiln over the cases (test, opt) both runs have (rows
+  the first run's class, columns the second's, `skip` included), the
+  counts of pass-to-failing, failing-to-pass and failing-to-other-failing
+  cases, and every pass-to-failing case with its new detail and the
+  oracles' classes (`--list`: the failing-to-pass cases too). It compares
+  two runs of one host over time, and two hosts (aarch64 against
+  x86_64) at one kiln commit.
+- `clusters A.tsv [--bucket B] [--top N]`: kiln's failure clusters per
+  bucket, by the runner's cluster key (`outcome::cluster_key`: class and
+  first error with quoted names and digit runs folded), with test counts
+  and examples.
+- `merge --out M.tsv [--expect N] S1.tsv ...`: one run's shard TSVs into
+  one, sorted by (test, opt); an error when the headers differ, a case
+  appears in two shards or, with `--expect`, the shard count is not N.
+
 ## Resource limits
 
 A runaway test must die alone. On 2026-10-31 one `kiln -fdump-ast` that

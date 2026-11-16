@@ -411,7 +411,12 @@ impl Sema<'_, '_> {
     /// variable length array, diagnosed at `init_at`. A dependent type is
     /// checked as the lambda is instantiated. True after an error.
     fn check_by_copy_capture(&mut self, d: DeclId, cap: QualType, loc: Loc, init_at: Loc) -> bool {
-        if self.ast.types.is_dependent(cap) || cap == QualType::ERROR {
+        // A reference to a function stays a reference member (/10), and a
+        // reference type is never incomplete ([basic.types.general]/5).
+        if self.ast.types.is_dependent(cap)
+            || cap == QualType::ERROR
+            || self.ast.types.is_reference(cap)
+        {
             return false;
         }
         // A variable length array (GNU extension) cannot be copied into a

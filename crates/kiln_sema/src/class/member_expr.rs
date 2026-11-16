@@ -118,6 +118,25 @@ impl Sema<'_, '_> {
         self.derived_inclusive(c, declaring).then_some(c)
     }
 
+    /// [expr.prim.id.general]/3: `Q::m` names a member of `*this` only
+    /// when `Q` is the class of `*this` or one of its bases; a qualifier
+    /// naming an unrelated class (a sibling deriving from the same base)
+    /// leaves the member without an object (clang
+    /// `CheckQualifiedMemberReference`). False for anything dependent.
+    fn qualifier_not_this_class(&self, class: DeclId, nns: Option<kiln_ast::NnsId>) -> bool {
+        let Some(nns) = nns else { return false };
+        let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
+            return false;
+        };
+        if self.ast.types.is_dependent(ty) || self.has_dependent_bases(class) {
+            return false;
+        }
+        let Some(q) = self.ast.types.as_record(ty) else { return false };
+        let q = self.ast.definition(q).unwrap_or(q);
+        let class = self.ast.definition(class).unwrap_or(class);
+        !same_class(self, q, class) && !is_derived_from(self, class, q)
+    }
+
     /// Whether an id-expression naming instance member `d` (or a member
     /// template of instance member functions) is an implicit
     /// `this->Q::name` resolved at instantiation: `d`'s class is not
@@ -246,6 +265,7 @@ impl Sema<'_, '_> {
         }
         if let Some(class) = self.implicit_object_class(d)
             && let Some((this_ty, _)) = self.this_class()
+            && !self.qualifier_not_this_class(class, nns)
         {
             self.note_this_use(loc);
             self.check_contract_implicit_this(loc);

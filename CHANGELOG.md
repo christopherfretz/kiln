@@ -882,6 +882,27 @@ Planned as 1.3.0.
   [: r :]()` and `typename [: r :]<args>::member` are accepted. A dependent
   namespace alias splice is reported as not supported yet.
 
+- Regressions found by the second full run of GCC's C++ testsuite
+  (WP-1473), each a behaviour kiln had before a recent fix row:
+  a by-copy capture of a reference to a function is valid again; `explicit`
+  in a friend declaration and a friend destructor template are rejected;
+  `&f<X>` picks the more constrained template only when the two
+  specializations have the same parameter-type-lists (CWG2918), so
+  `&g<int>` of `g(T)` and `g(T*)` is ambiguous; a converted constant
+  expression rejects a conversion function to `double` for an `int`
+  template parameter; C++98 accepts an explicit instantiation in an
+  enclosing namespace, as C++11 does; an array from an empty parenthesized
+  pack expansion is value-initialized; before C++17 a template-id's
+  argument value does not deduce the type of `template<class T, T N>`;
+  before C++17 an in-class `constexpr` static data member without an
+  initializer is an error again; before C++17
+  the copy that ends a copy-initialization by converting constructor
+  direct-initializes, so an explicit copy constructor serves it; an
+  out-of-line C++11 definition of a static `constexpr` member function
+  template is not made `const`; `C::m()` inside a member of a sibling
+  class `B` (both derived from `A`) is a call without an object; and
+  `__is_pod` of a class with `const` members is true in C++98.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

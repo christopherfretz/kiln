@@ -286,7 +286,10 @@ impl Sema<'_, '_> {
             deleted_as,
         };
         let entity = self.ctor_entity.map_or(InitEntity::Var, |(x, _)| x);
-        let style = if direct { InitStyle::Direct } else { InitStyle::Copy };
+        // The second step of a copy-initialization by user-defined
+        // conversion direct-initializes ([dcl.init]/17.6.3 in C++14):
+        // an explicit copy constructor is a candidate.
+        let style = if direct || second_step { InitStyle::Direct } else { InitStyle::Copy };
         let sel =
             self.resolve_ctor_opts(class, std::slice::from_ref(&e), style, false, second_step);
         let temp_copy = second_step.then_some(match ctx {
