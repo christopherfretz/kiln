@@ -34,10 +34,18 @@ pub enum CaptureKind {
     ByCopy,
     /// A variable captured by reference (or an init-capture with `&`).
     ByRef,
+    /// The run-time bound of a variable length array type the body uses
+    /// (GNU extension; clang's VLA type capture,
+    /// `captureVariablyModifiedType`): a hidden `size_t` member, no
+    /// variable; the capture's initializer in [`LambdaData::inits`] is the
+    /// bound expression of the enclosing function, whose value (computed
+    /// where the array type was declared) the closure copies.
+    VlaBound,
 }
 
 /// One capture of a lambda, in closure member order: the explicit captures
-/// as written, then the implicit ones in order of first odr-use.
+/// as written, then the implicit ones in order of first odr-use, then the
+/// variable length array bounds ([`CaptureKind::VlaBound`]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct LambdaCapture {
     /// How it is captured.

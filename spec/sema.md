@@ -1121,12 +1121,38 @@ family, and the `nonnull` attribute spellings.
      ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
      bound (`fold_rvalue_int`) to a constant array with the
      -Wgnu-folding-constant ExtWarn at the name, or is an error ("cannot
-     have 'static' storage duration"). Any initializer is the error
-     "variable-sized object may not be initialized" at the bound. A VLA
+     have 'static' storage duration"). An automatic VLA variable with
+     an initializer whose bounds all fold is given the folded constant
+     array type with the same ExtWarn at the name (clang
+     `TryToFixInvalidVariablyModifiedType` for an initialized variable,
+     also in C; WP-1469); otherwise any initializer is the error
+     "variable-sized object may not be initialized" at the bound. The
+     same error rejects a copy capture of a VLA, at the capture or, for
+     an implicit one, at the capture default (clang
+     `BuildCaptureField`; a by-reference capture is fine, §lambda VLA
+     bounds below). `-Wvla-cxx-extension` is an ExtWarn
+     (`ext_vla_cxx`): `-pedantic-errors` makes it an error, while
+     `-Werror=pedantic` does not (it is not in `pedantic`). A VLA
      variable counts as complete. Template substitution rebuilds a
      `VariableArray` with the substituted bound. Kiln's diagnostic
      dedupe keeps an instantiation from repeating the warning (clang
      repeats it), and `sizeof(T[n])` warns once (clang twice).
+   - VLA bounds in lambdas (WP-1469, clang `captureVariablyModifiedType`):
+     when a lambda captures (by reference) a variable whose type is
+     variably modified, or names a variably modified typedef of an
+     enclosing scope in `sizeof`/`alignof`
+     (`Sema::note_vla_type_use`), each array bound of that type
+     becomes a capture of kind `CaptureKind::VlaBound` after the
+     ordinary captures: no variable, a hidden `size_t` closure member
+     whose initializer is the bound expression itself (codegen reuses
+     the value computed when the type was elaborated, never evaluating
+     the bound again). The BMI image does not encode such a lambda
+     (`lambda_rec` reports it unsupported). The Oven rejects a lambda
+     expression with a `VlaBound` capture with clang's "subexpression
+     not valid in a constant expression" at the lambda: a VLA bound is
+     never a constant, so every constant-evaluation path involving a
+     `VariableArray` (its `sizeof`, an element access through an
+     unknown bound, a captured bound) ends in a note, never a value.
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain. A declaration
@@ -10514,9 +10540,11 @@ template saved in `range_for_outer_depth` for instantiations).
   variable gets type `auto`); a structured binding is declared by
   `act_on_decomposition_declarator` (§4.9); an
   init-statement before C++20 is `-Wc++20-extensions`.
-- **Range kinds.** An array range (a constant array; a VLA is
-  unsupported) uses `__range` and `__range + N` (`N` a `ptrdiff_t`
-  literal). A class range uses member `begin`/`end` when the class has
+- **Range kinds.** An array range uses `__range` and `__range + N`
+  (`N` a `ptrdiff_t` literal); for a VLA range `N` is
+  `sizeof(__range-type) / sizeof(element)` at the `:` (clang
+  `BuildCXXForRangeStmt`, WP-1469), the size recorded when the array
+  was created. A class range uses member `begin`/`end` when the class has
   either member ([stmt.ranged]/1.3, P0962), else ADL-only calls
   `begin(__range)`/`end(__range)` (`build_begin_end`), each checked for
   viability before it is built. A braced-init-list range deduces
@@ -10561,8 +10589,7 @@ template saved in `range_for_outer_depth` for instantiations).
   dependent `auto` (deduced as `<dependent type>`) as `auto`.
 - **Left (WP-089):** `err_range_on_array_parameter` (needs
   `ParamData.original_ty`, which `act_on_param_declarator` does not set,
-  so an array parameter gets the generic `'int *'` diagnostic);
-  VLA ranges; the default-on
+  so an array parameter gets the generic `'int *'` diagnostic); the default-on
   `-Wempty-body`-style `warn_empty_range_based_for_body` and the
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ

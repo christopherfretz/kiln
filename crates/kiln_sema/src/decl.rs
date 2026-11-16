@@ -2140,8 +2140,28 @@ impl Sema<'_, '_> {
     /// one with static or thread storage duration has its bound folded
     /// (`TryToFixInvalidVariablyModifiedType`, after the warning
     /// [`Self::folded_array_bound`] gave) or is an error, as is one with
-    /// `extern` linkage. Returns the variable's type.
+    /// `extern` linkage. An automatic one with an initializer has its
+    /// bound folded the same way when it folds (clang and GCC accept
+    /// `const R a = {12}; char c[a.r] = "...";`); one that does not fold
+    /// is rejected with its initializer ([`Self::reject_vla_init`]).
+    /// Returns the variable's type.
     fn check_vla_var(&mut self, ty: QualType, spec: VarSpec, d: &Declarator) -> QualType {
+        let automatic = spec.storage() != VarStorage::Static && spec.tls() == TlsKind::None;
+        if automatic
+            && d.init_style.is_some()
+            && spec.storage() != VarStorage::Extern
+            && self.ast.types.qflags(ty).contains(TypeFlags::VARIABLY_MODIFIED)
+            && self.ast.types.is_array(ty)
+        {
+            let at = d.name.map_or(d.loc, |(_, l)| l);
+            return match self.fold_vla_dims(ty, 0) {
+                Some(t) => {
+                    self.error(DiagId::sema_vla_folded_to_constant, at);
+                    t
+                }
+                None => ty,
+            };
+        }
         let TypeView::VariableArray { elem, size } = self.ast.types.canonical_view(ty) else {
             return ty;
         };
@@ -2150,7 +2170,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_vla_extern_linkage, at);
             return QualType::ERROR;
         }
-        if spec.storage() != VarStorage::Static && spec.tls() == TlsKind::None {
+        if automatic {
             return ty;
         }
         let folded = self
@@ -2163,6 +2183,30 @@ impl Sema<'_, '_> {
         };
         self.error(DiagId::sema_vla_folded_to_constant, at);
         self.ast.types.constant_array(elem, n, None)
+    }
+
+    /// The array type `q` with each variable length dimension folded to a
+    /// constant one (clang `TryToFixInvalidVariablyModifiedType` over
+    /// arrays), or `None` when one does not fold.
+    fn fold_vla_dims(&mut self, q: QualType, depth: u32) -> Option<QualType> {
+        if depth > 64 || !self.ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
+            return (depth <= 64).then_some(q);
+        }
+        match self.ast.types.canonical_view(q) {
+            TypeView::VariableArray { elem, size } => {
+                let n = self
+                    .fold_rvalue_int(size)
+                    .filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+                    .and_then(|v| u64::try_from(v).ok())?;
+                let e = self.fold_vla_dims(elem, depth + 1)?;
+                Some(self.ast.types.constant_array(e, n, None))
+            }
+            TypeView::ConstantArray(a) => {
+                let e = self.fold_vla_dims(a.elem, depth + 1)?;
+                Some(self.ast.types.constant_array(e, a.size, None))
+            }
+            _ => None,
+        }
     }
 
     /// clang `FK_VariableLengthArrayHasInitializer`: a variable length

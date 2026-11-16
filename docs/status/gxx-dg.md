@@ -160,6 +160,8 @@ WP-1467 (after this run) fixed most of clusters 4, 6, 12, 13, 14, 18, 26, 27 and
 
 WP-1472 added GCC's `__builtin_is_corresponding_member` / `__builtin_is_pointer_interconvertible_with_class` and fixed clusters 16 and 25 (`g++.dg/cpp2a` + `g++.dg/cpp23`: 3267 → 3296 of 4371 cases pass); clusters 19 and 24 and `lambda-scope10` have xfail repros (row WP-1497).
 
+WP-1469 fixed the variable length array clusters 10, 17 and 20 and the "variable-sized object may not be initialized" row (re-run of their 29 tests: 0 → 45 of 87 cases pass, every case clang 22 accepts; the other 42 clang rejects too or puts on the same wrong line): VLA bounds captured by lambdas, explicit casts to variably modified types, range-based `for` over a VLA, VLAs of class objects, an initialized VLA whose bound folds, `-Wvla-cxx-extension` as an ExtWarn under `-pedantic-errors`, and `-Wpedantic` covering the off-by-default extensions (flexible array members under `-Wno-error=pedantic`).
+
 1. **Deduction from a base class that is ambiguous** (60 cases, 22 tests).
    `struct C : A<int,int>, A<int> {}; template<class... T> void f(const A<T...>&); f(C{});`
    deduces `A<int,int>` (CWG2303: the most derived candidate wins). The

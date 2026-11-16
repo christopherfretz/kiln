@@ -6015,6 +6015,12 @@ impl Compiler<'_> {
             // direct-initialized from the captures, in order.
             ExprKind::LambdaExpr => {
                 let ast = self.ast();
+                // A captured variable length array bound (GNU extension)
+                // is not a constant: clang's generic note at the lambda.
+                let data = ast.exprs.lambda(e);
+                if data.captures.iter().any(|c| c.kind == kiln_ast::lambda::CaptureKind::VlaBound) {
+                    return self.throw_invalid(e);
+                }
                 let inits: Vec<ExprId> = ast
                     .exprs
                     .lambda(e)

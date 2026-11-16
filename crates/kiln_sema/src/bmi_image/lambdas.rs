@@ -137,7 +137,8 @@ fn cap_kind(k: CaptureKind) -> u8 {
         CaptureKind::This => 0,
         CaptureKind::StarThis => 1,
         CaptureKind::ByCopy => 2,
-        CaptureKind::ByRef => 3,
+        // Refused by `lambda_rec` (never written).
+        CaptureKind::ByRef | CaptureKind::VlaBound => 3,
     }
 }
 
@@ -458,6 +459,11 @@ impl Writer<'_, '_, '_> {
         };
         let mut caps = Vec::with_capacity(data.captures.len());
         for c in &data.captures {
+            // A variable length array bound (GNU extension) is a local
+            // of a function body, which no image holds.
+            if c.kind == CaptureKind::VlaBound {
+                return Err("a lambda capturing a variable length array bound");
+            }
             let var = match c.var {
                 Some(v) => self.lam_dref(v)?,
                 None => NONE,

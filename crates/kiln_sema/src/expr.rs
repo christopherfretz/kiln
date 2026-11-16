@@ -6659,6 +6659,7 @@ impl Sema<'_, '_> {
         if !self.check_trait_operand(kind, ty, loc, range) {
             return self.recover_err(&[], loc);
         }
+        self.note_vla_type_use(ty);
         let st = self.size_type();
         self.builder().trait_of_type(kind, ty, st, loc, rparen)
     }
@@ -6722,6 +6723,7 @@ impl Sema<'_, '_> {
         }
         if kind == TraitKind::SizeOf {
             self.warn_sizeof_array_decay(e);
+            self.capture_vla_operand(e, ty);
         }
         let st = self.size_type();
         self.builder().trait_of_expr(kind, e, st, loc)

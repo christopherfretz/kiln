@@ -57,6 +57,25 @@ impl Sema<'_, '_> {
         self.ast.types.qualify(r, quals)
     }
 
+    /// The element count of the variable length array range type `q` of a
+    /// range-based `for` ([stmt.ranged]/1.1, the `__bound` of `__range +
+    /// __bound`): `sizeof(q) / sizeof(element)` (clang
+    /// `BuildCXXForRangeStmt`), so that the bound is the one evaluated
+    /// when the array was declared, not the bound expression evaluated
+    /// again. `None` (after an error) for any other array type.
+    pub(crate) fn vla_range_count(&mut self, q: QualType, loc: Loc) -> Option<ExprId> {
+        let TypeView::VariableArray { elem, .. } = self.ast.types.canonical_view(q) else {
+            self.unsupported("range-based for over this array type", loc);
+            return None;
+        };
+        let st = self.size_type();
+        let whole =
+            self.builder().trait_of_type(kiln_ast::expr::TraitKind::SizeOf, q, st, loc, loc);
+        let each =
+            self.builder().trait_of_type(kiln_ast::expr::TraitKind::SizeOf, elem, st, loc, loc);
+        Some(self.act_on_binary(kiln_ast::expr::BinaryOp::Div, whole, each, loc))
+    }
+
     /// `q` contains a `[*]` array derivation (C17 6.7.6.3p12; clang
     /// `diagnoseArrayStarInParamType`), through pointers and arrays.
     pub(crate) fn has_vla_star(&self, q: QualType) -> bool {

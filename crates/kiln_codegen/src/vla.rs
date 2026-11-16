@@ -4,6 +4,7 @@
 //! variable length array (spec/codegen.md).
 
 use kiln_ast::expr::{CastKind, ExprKind, TraitKind};
+use kiln_ast::lambda::CaptureKind;
 use kiln_ast::types::{TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, TypeId as LTy};
@@ -67,6 +68,51 @@ impl Cg<'_> {
         }
     }
 
+    /// The `i64` value of the variable length array bound `size`: the one
+    /// computed where its array type was declared (`VLASizeMap`), or, for
+    /// a bound not evaluated yet in this function, evaluated now and
+    /// remembered.
+    pub(crate) fn vla_bound_value(&mut self, size: ExprId) -> R<V> {
+        if let Some(&v) = self.f.vla_sizes.get(&size) {
+            return Ok(v);
+        }
+        self.ensure_insert_point();
+        let v = self.emit_scalar(size)?;
+        let sq = self.ast.exprs.get(size).ty();
+        self.ub_vla_bound(size, v, sq)?;
+        let v = self.int_cast(v, LTy::I64, false);
+        self.f.vla_sizes.insert(size, v);
+        Ok(v)
+    }
+
+    /// clang `StartFunction` in a lambda's call operator: each variable
+    /// length array bound the closure `l` captured
+    /// ([`CaptureKind::VlaBound`]) is loaded from its member into
+    /// `VLASizeMap`, so the body's uses of the array types see the value
+    /// of the enclosing function.
+    pub(crate) fn load_vla_bound_captures(&mut self, l: kiln_ast::LambdaId) -> R<()> {
+        let ast = self.ast;
+        let data = ast.exprs.lambdas.get(l);
+        if !data.captures.iter().any(|c| c.kind == CaptureKind::VlaBound) {
+            return Ok(());
+        }
+        let inits: Vec<ExprId> =
+            data.inits.map(|x| ast.lists.iter::<ExprId>(x).collect()).unwrap_or_default();
+        let caps: Vec<_> = data.captures.iter().filter(|c| c.field.is_some()).copied().collect();
+        for (c, size) in caps.into_iter().zip(inits) {
+            let Some(field) = c.field.filter(|_| c.kind == CaptureKind::VlaBound) else {
+                continue;
+            };
+            let fq = ast.decls.get(field).ty().unwrap_or_else(|| ast.exprs.get(size).ty());
+            let lv = self.closure_field_lvalue(field, fq)?;
+            let t = self.lty(fq);
+            let v = self.load(t, lv.addr.v, lv.addr.align, false);
+            let v = self.int_cast(v, LTy::I64, false);
+            self.f.vla_sizes.insert(size, v);
+        }
+        Ok(())
+    }
+
     /// clang `getVLASize`: the total element count of the variable length
     /// array type `q` (its nested variable length dimensions multiplied)
     /// and its first non-variable element type.
@@ -106,12 +152,17 @@ impl Cg<'_> {
         while let TypeView::VariableArray { elem: e, .. } = self.ast.types.canonical_view(elem) {
             elem = e;
         }
-        if self.destructed_class(elem).is_some() || init.is_some() {
+        // A class element type: `init` is the default construction of the
+        // elements (a braced or other initializer is rejected by Sema).
+        let needs = init.is_some() || self.destructed_class(elem).is_some();
+        if needs && !matches!(self.ast.types.canonical_view(elem), TypeView::Record(_)) {
             return err(
                 loc,
-                "variable length arrays of objects needing construction or destruction \
-                 are not supported yet (M3)",
+                "variable length arrays of arrays of class objects are not supported yet",
             );
+        }
+        if init.is_some_and(|i| ast.exprs.get(i).kind() != ExprKind::CXXConstructExpr) {
+            return err(loc, "this initializer of a variable length array is not supported yet");
         }
         if !self.f.did_stack_save {
             // The stack is saved once per cleanup scope and restored when
@@ -160,7 +211,21 @@ impl Cg<'_> {
             );
         }
         // [basic.indet]/1: the erroneous value (spec/codegen.md §7y).
-        self.auto_var_init_vla(d, q, addr)
+        self.auto_var_init_vla(d, q, addr)?;
+        // clang `EmitCXXAggrConstructorCall` with the run-time element
+        // count, then the `emitDestroy` of the whole array (from the end,
+        // an empty array checked first) as the variable's cleanup.
+        let elem_size = self.alloc_size(ty);
+        let elem_align = crate::func::min_align(align, elem_size);
+        if let Some(i) = init {
+            self.construct_array_n(i, v, ty, elem_align, count, false, false)?;
+        }
+        if let Some(record) = self.destructed_class(elem) {
+            let end = self.gep(ty, v, vec![count], true);
+            let c = Cleanup::PartialArray { begin: v, end, elem: ty, record };
+            self.push_cleanup_kind(c, true, true);
+        }
+        Ok(())
     }
 
     /// clang `EmitArraySubscriptExpr` of an element of variable length

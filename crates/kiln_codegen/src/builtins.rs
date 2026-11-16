@@ -1875,6 +1875,12 @@ impl Cg<'_> {
         let e = self.skip_parens(e);
         let n = *ast.exprs.get(e);
         if n.kind().is_cast() {
+            // clang `EmitExplicitCastExprType`: an explicit cast to a
+            // variably modified type (`*(int (*)[n])p`) evaluates its
+            // bounds, also when only the operand's address is used.
+            if n.kind() != ExprKind::ImplicitCastExpr {
+                self.emit_vla_bounds(n.ty())?;
+            }
             let s = ast.exprs.operand(e);
             match ast.exprs.cast_kind(e) {
                 CastKind::NoOp | CastKind::BitCast => {
