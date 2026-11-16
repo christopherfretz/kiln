@@ -210,7 +210,18 @@ impl Parser<'_, '_> {
                 continue;
             }
             if next == Some(Punct::Less) {
-                return None;
+                // `C<args>::` (a class template specialization as a
+                // qualifier, [expr.reflect]/1, [temp.names]/1): what
+                // follows is looked up in the template's pattern, for
+                // this lookahead only.
+                let pattern = self.s.class_template_pattern(name, ctx)?;
+                let (close, split) = self.skip_template_args(i + 1)?;
+                if split || Self::punct_of(self.tok_at(close + 1)) != Some(Punct::ColonColon) {
+                    return None;
+                }
+                ctx = Some(pattern);
+                i = close + 2;
+                continue;
             }
             if let Some(c) = ctx
                 && self.s.is_class_named(c, name)

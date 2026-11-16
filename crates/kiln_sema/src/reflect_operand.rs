@@ -381,6 +381,15 @@ impl Sema<'_, '_> {
     /// alias kept). `None` for anything else (a constructor, a template
     /// parameter, a declaration with no entity).
     pub(crate) fn reflectee_of_decl(&mut self, d: DeclId) -> Option<Reflectee> {
+        // A member of an anonymous union named from the enclosing scope
+        // is that union's member ([class.union.anon]/1): one reflection,
+        // the one `members_of` of the union yields.
+        let d = if self.kind_of(d) == DeclKind::IndirectField {
+            let chain = self.ast.indirect_field_chain(d);
+            self.ast.lists.iter::<DeclId>(chain).last().unwrap_or(d)
+        } else {
+            d
+        };
         // One reflection per entity (`Sema::same_entity`).
         let first = self.entity_decl(d);
         Some(match self.kind_of(d) {
@@ -475,6 +484,22 @@ impl Sema<'_, '_> {
                     | DeclKind::TemplateTemplateParm
             )
         })
+    }
+
+    /// The pattern class of the class template `name` in `ctx` (the
+    /// current scope when `None`) finds, for the parser's lookahead past
+    /// a qualifier `C<args>::`.
+    pub fn class_template_pattern(&self, name: Symbol, ctx: Option<DeclId>) -> Option<DeclId> {
+        let found = match ctx {
+            Some(c) => self.lookup_qualified(c, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        let &[d] = found.decls.as_slice() else { return None };
+        let d = self.ast.strip_shadow(d);
+        if self.kind_of(d) != DeclKind::ClassTemplate {
+            return None;
+        }
+        self.ast.template_info(d).and_then(|t| t.pattern)
     }
 
     /// True if `c` is a class whose name is `name` (`C::C` names its

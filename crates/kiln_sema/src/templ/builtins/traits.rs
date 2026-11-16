@@ -921,6 +921,7 @@ impl Sema<'_, '_> {
             T::CanPassInRegs => self.can_pass_in_regs_trait(q, loc),
             T::IsBitwiseCloneable => self.is_bitwise_cloneable(q, 0),
             T::IsImplicitLifetime => self.is_implicit_lifetime(q),
+            T::IsStructural => self.is_structural_type(q, loc).unwrap_or(false),
             T::IsCppTriviallyRelocatable => self.is_cxx_trivially_relocatable(q, 0),
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
                 self.is_destructible(t, q, loc)

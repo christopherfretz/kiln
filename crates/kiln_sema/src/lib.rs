@@ -1344,6 +1344,10 @@ pub struct Sema<'a, 'sm> {
     /// The member lists and access scope of the `std::meta` member
     /// queries (`meta/member.rs`; spec/reflection-members.md §2).
     pub(crate) meta_members: meta::member::MemberState,
+    /// The element buffers of iterated range arguments that hold `V`s
+    /// packed as scalars (a `bool` or array `range_value_t`), by the
+    /// buffer's local: `V` (`meta/iterate.rs`; spec/reflection.md §3.5).
+    pub(crate) meta_packed_elems: kiln_source::fx::FxHashMap<DeclId, QualType>,
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
@@ -1693,6 +1697,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             srcloc: builtins::SrcLocCache::default(),
             meta_names: meta::names::NameCache::default(),
             meta_members: meta::member::MemberState::default(),
+            meta_packed_elems: kiln_source::fx::FxHashMap::default(),
             lambdas: Vec::new(),
             lambda_base: 0,
             lambda_mangle: lambda::ManglingState::default(),

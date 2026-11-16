@@ -686,7 +686,13 @@ impl Sema<'_, '_> {
         let Ok(v) = self.get_var_spec(m.decls[0], &written, &locs, loc) else {
             return self.recover_err(&[m.base], loc);
         };
-        self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, None, m.nns, loc)
+        let r = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, None, m.nns, loc);
+        // In a template the access keeps its arguments: substitution names
+        // the member again by its name ([temp.names]/3).
+        if self.in_template() && self.ast.exprs.get(r).kind() == ExprKind::MemberExpr {
+            let _ = self.ast.exprs.set_member_template_args(r, targs);
+        }
+        r
     }
 
     /// A member access `x` naming a static data member template with no

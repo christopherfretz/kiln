@@ -1560,17 +1560,16 @@ impl Parser<'_, '_> {
             let (r, close) = self.parse_splice_specifier()?;
             return Some(self.s.act_on_member_splice(e, r, open, close, loc, arrow));
         }
-        // `e.template [: r :] < args >`: a member template named by a
-        // splice is not implemented (spec/reflection.md §5).
+        // `e.template [: r :]`, `e.template [: r :] < args >`: a member
+        // template named by a splice ([expr.ref]/1, [expr.prim.splice]/3).
         if self.kw() == Some(Kw::Template) && self.peek_is(1, Punct::SpliceOpen) {
             self.bump();
             let open = self.loc();
-            let (r, _) = self.parse_splice_specifier()?;
-            if self.at(Punct::Less) {
-                let _ = self.parse_template_arg_list();
-            }
-            self.unsupported("a member access naming a template by a splice", open);
-            return Some(self.s.act_on_error_expr(&[e, r], open));
+            let (r, close) = self.parse_splice_specifier()?;
+            let args =
+                if self.at(Punct::Less) { Some(self.parse_template_arg_list()?.0) } else { None };
+            let args = args.as_deref();
+            return Some(self.s.act_on_member_template_splice(e, r, args, open, close, loc, arrow));
         }
         let mut template_kw = self.eat_kw(Kw::Template).is_some();
         // `p->T::~T()`, `p->N::T::~T()` on a scalar or dependent object: a

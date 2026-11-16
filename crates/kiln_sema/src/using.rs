@@ -1072,6 +1072,23 @@ impl Sema<'_, '_> {
     /// the declarator spelled it): checks completeness and introduces a
     /// shadow of each enumerator in the current scope. Also the
     /// instantiation of a block-scope `using enum` in a template.
+    /// `using enum [: r :];` ([enum.udecl]/1 with a splice-type-specifier,
+    /// P2996): the enumeration type `ty` the splice designates, at `loc`.
+    pub fn act_on_using_enum_type(&mut self, ty: QualType, loc: Loc) -> Option<DeclId> {
+        let written = self.ty_str(ty);
+        let Some(e) = self.ast.types.as_enum(ty) else {
+            let msg = self.diag(DiagId::sema_using_enum_not_enum, loc).arg(written);
+            self.emit(msg);
+            return None;
+        };
+        if self.ast.types.is_dependent(ty) {
+            self.error(DiagId::sema_using_enum_is_dependent, loc);
+            return None;
+        }
+        self.mark_type_referenced(e);
+        Some(self.using_enum_of(e, &written, loc))
+    }
+
     pub(crate) fn using_enum_of(&mut self, e: DeclId, written: &str, name_loc: Loc) -> DeclId {
         // A scoped member enumeration of a class template specialization
         // is defined when first required ([temp.inst]/3).

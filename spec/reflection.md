@@ -642,10 +642,20 @@ before. Tested by
   ordinary transient allocation, freed when the body returns: memory used
   to iterate is reclaimed during the evaluation, and nothing of it is in
   the result. The contiguous path is unchanged (no thunk is built or
-  called for a range read by layout). Not supported, and diagnosed as a
-  call of an undefined function: an `Iter` range whose value type is
-  `bool` or an array type (`vector<V>` cannot hold it; a range of arrays
-  of a known contiguous class is read by layout).
+  called for a range read by layout). **Packed elements (WP-1489).** A
+  `bool` or array `V` cannot be a `vector`'s contiguous element, so its
+  scalars are collected instead: `std::vector<S>` with `S` the
+  `remove_all_extents_t<V>` (`unsigned char` for `bool`), an array element
+  walked by nested range-based `for`s down to its scalars. Sema records
+  the buffer's local (`Sema::meta_packed_elems`); when the call is
+  compiled the Oven asks `SemaBridge::meta_packed_elem` for the argument
+  and reads the buffer as `V`s (`MetaSite::packed`: the element type is
+  `V`, the count the buffer's bytes over `sizeof(V)`), so
+  `reflect_constant_array(vector<bool>{...})` is a `const bool[N]` and a
+  range of `int[2]` rows a `const int[N][2]`
+  (`meta.define.static/iterated-ranges-packed.cpp`). The buffer is the
+  same ordinary transient `vector`. A class without `std::vector` fails
+  as a call of an undefined function.
 - **Test helpers.** `__kiln_reflection_range(r)` (the range as a
   `vector<info>`), `__kiln_member_offset(bytes, bits)` and
   `__kiln_access_context(scope, cls)` exercise the `Range`, `Vector` and
@@ -985,6 +995,10 @@ position's operand).
   non-constant one gets "splice operand must be a constant expression"
   followed by the Oven's notes (`basic.splice/p1-not-info.cpp`,
   `basic.splice/p1-not-constant.cpp`, `reflection/splice-type-neg.cpp`).
+- **Class operands.** An operand of class type is converted to
+  `std::meta::info` first (a converted constant expression, so through a
+  conversion function; `basic.splice/operand-converted-to-info.cpp`,
+  WP-1489).
 - **Designated entity.** The splice designates the operand's `Reflectee`.
   Each grammar position accepts these kinds:
 
@@ -992,9 +1006,11 @@ position's operand).
   |---|---|---|---|
   | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); in a template argument list only as `typename [: r :]` (a bare `[: r :]` forming a whole template-argument is ill-formed, [temp.names]/1: `parse_splice_template_arg_unparenthesized`, `temp.names/splice-template-argument-unparenthesized.cpp`; a splice that only starts an argument, `[: r :] + 1`, `([: r :])`, `[: r :]::type`, is an ordinary operand, `temp.names/splice-template-argument.cpp`; WP-830) | a type or a type alias | implemented (`dcl.type.splice/`) |
   | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), an object with no declaration included (WP-830) |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category); a member of an anonymous union of the class through the class's member for it ([class.union.anon]/1, WP-1489) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
+  | member template | `e.template [: m :]`, `e.template [: m :] < args >` [expr.ref]/1, [expr.prim.splice]/3 | a member function template or a static data member template of `e`'s class or a base, the one designated (not what its name finds); without arguments only a function template (`sema_splice_not_function_template`); kept with its arguments in a template (`Sema::act_on_member_template_splice`, WP-1489) | implemented (`expr.ref/splice-member-template*.cpp`) |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
-  | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression | implemented (`temp.names/splice-*.cpp`; spec/landed/reflection/WP-482.md) |
+  | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression; a class or alias template without arguments in a type is a deduced class type placeholder ([dcl.type.splice]/2, [dcl.type.class.deduct]; WP-1489) | implemented (`temp.names/splice-*.cpp`, `dcl.type.splice/ctad-placeholder.cpp`; spec/landed/reflection/WP-482.md) |
+  | base, mem-initializer, using-enum | `[typename] [: r :] [< args >]` as a base-specifier's or mem-initializer-id's class, `using enum [: r :];` ([class.derived.general]/1, [class.base.init]/2, [enum.udecl]/1) | a class (an enumeration for `using enum`, else "'T' is not an enumerated type") | implemented (`dcl.type.splice/base-meminit-using-enum.cpp`, WP-1489) |
   | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
 
   A misfit gets "splice in a {position} position does not designate a

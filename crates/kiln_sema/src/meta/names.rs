@@ -79,6 +79,14 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<(), MetaError> {
         let loc = ctx.loc;
+        // A parameter's name is that of the declarations of its function
+        // preceding the evaluation point ([meta.reflection.names]/1.5):
+        // a later redeclaration can change it.
+        if let Ok(r) = info_arg(args, 0)
+            && matches!(self.ast.reflections.get(r), Reflectee::FnParam(..))
+        {
+            oven.mark_impure();
+        }
         *out = match q {
             QueryOp::HasIdentifier => {
                 MetaOut::Scalar(u128::from(self.identifier(info_arg(args, 0)?, oven).is_some()))
@@ -133,7 +141,9 @@ impl Sema<'_, '_> {
         oven: &Oven,
     ) -> Result<MetaOut, MetaError> {
         let key = (r, t as u8 + u8::from(u8));
-        if let Some(&(cv, len)) = self.meta_names.strs.get(&key) {
+        // A parameter's strings depend on the evaluation point.
+        let point = matches!(self.ast.reflections.get(r), Reflectee::FnParam(..));
+        if !point && let Some(&(cv, len)) = self.meta_names.strs.get(&key) {
             return Ok(MetaOut::Str(cv, len));
         }
         let s = match t {

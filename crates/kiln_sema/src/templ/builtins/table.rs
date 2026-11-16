@@ -549,7 +549,7 @@ pub fn has_builtin_staged(name: &str) -> Option<bool> {
 
 /// Whether `name` is a GCC builtin clang does not have, which kiln
 /// implements and reports through `__has_builtin` (WP-484, WP-757,
-/// WP-773, WP-774, WP-1472).
+/// WP-773, WP-774, WP-1472, WP-1489).
 pub fn gcc_only(name: &str) -> bool {
     matches!(
         name,
@@ -559,6 +559,7 @@ pub fn gcc_only(name: &str) -> bool {
             | "__builtin_clear_padding"
             | "__builtin_is_corresponding_member"
             | "__builtin_is_pointer_interconvertible_with_class"
+            | "__builtin_is_structural"
     )
 }
 

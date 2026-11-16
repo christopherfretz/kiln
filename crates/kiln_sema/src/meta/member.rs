@@ -58,6 +58,7 @@ fn never_a_member(k: DeclKind) -> bool {
         k,
         K::AccessSpec
             | K::StaticAssert
+            | K::ConstevalBlock
             | K::Friend
             | K::FriendTemplate
             | K::IndirectField
@@ -585,6 +586,19 @@ impl Sema<'_, '_> {
     ) -> Result<(), MetaError> {
         let n = self.ast.decls.get(m);
         let kind = n.kind();
+        // [dcl.struct.bind]/7: a tuple-like structured binding
+        // declaration introduces a variable r_i per binding, a member of
+        // the namespace (the binding itself is none); it has the
+        // binding's name (as in GCC 16.1).
+        if kind == DeclKind::Binding
+            && let Some(hv) = self.ast.decls.binding_var(m)
+        {
+            if l.seen.insert(self.ast.first(hv)) {
+                let r = self.member_reflection(hv, loc)?;
+                l.items.push(MemberEntry { r, decl: hv, kind: mk::PUBLIC });
+            }
+            return Ok(());
+        }
         if !self.members_of_eligible(m)
             || (n.has(DeclFlags::IMPLICIT) && !self.anonymous_union_object(m))
             || kind == DeclKind::TranslationUnit

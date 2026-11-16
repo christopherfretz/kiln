@@ -70,6 +70,15 @@ impl Oven {
             for (i, a) in args[..n].iter_mut().enumerate() {
                 if let Some(rc) = s.ranges[i] {
                     *a = self.range_arg(rc, *a as u64)?;
+                    // Scalars packed for `V`s: as many `V`s as they fill.
+                    if let (Some(v), Some(e)) = (s.packed, recipe_elem(&self.types, rc)) {
+                        let (es, vs) = (self.types.size(e), self.types.size(v));
+                        let bytes = (*a >> 64) as u64 * es;
+                        if vs == 0 || !bytes.is_multiple_of(vs) {
+                            return Err(Fault::Invalid);
+                        }
+                        *a = (*a & u128::from(u64::MAX)) | u128::from(bytes / vs) << 64;
+                    }
                 }
             }
         }
@@ -88,7 +97,11 @@ impl Oven {
         // trait's `reflection_range` argument: `info` (WP-484).
         let elem = site
             .filter(|_| value_op || matches!(op, MetaOp::Trait(_)))
-            .and_then(|s| s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc)))
+            .and_then(|s| {
+                s.packed.or_else(|| {
+                    s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc))
+                })
+            })
             .unwrap_or(OTy(t1));
         let elems_inline = value_op
             && site.is_some_and(|s| {

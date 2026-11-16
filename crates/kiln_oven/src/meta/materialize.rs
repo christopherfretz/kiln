@@ -127,6 +127,9 @@ pub(crate) struct MetaSite {
     pub result: Option<Recipe>,
     /// The recipes of `reflection_range` arguments, by position.
     pub ranges: [Option<Recipe>; super::MAX_META_ARGS],
+    /// The element type a value op's range argument holds packed as
+    /// scalars ([`crate::SemaBridge::meta_packed_elem`]), if any.
+    pub packed: Option<OTy>,
     pub exc: Option<ExcSite>,
 }
 

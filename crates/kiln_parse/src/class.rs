@@ -318,6 +318,36 @@ impl Parser<'_, '_> {
     /// clang's `ConsumeAndStoreFunctionPrologue`: moves an optional `try`,
     /// a ctor-initializer and the body's `{` into `out`. Returns false
     /// (reported) if no body was found.
+    /// Captures a `[typename] [: r :]` naming a base (P2996).
+    fn capture_splice_base(&mut self, out: &mut Vec<Token>) {
+        if self.at_kw(Kw::Typename) && self.peek_is(1, Punct::SpliceOpen) {
+            self.take_into(out);
+        }
+        if let Some(end) = self.splice_end(self.pos()) {
+            while self.pos() < end {
+                self.take_into(out);
+            }
+        }
+    }
+
+    /// At `[typename] [: r :]` or `[: r :] < args >` not followed by `::`
+    /// (which qualifies a class-name instead), parses the
+    /// splice-type-specifier (`QualType::ERROR` when it is malformed);
+    /// `None` when not at one.
+    fn parse_splice_type_spec_here(&mut self) -> Option<QualType> {
+        let typename_splice = self.at_kw(Kw::Typename)
+            && Self::punct_of(self.tok_at(self.pos() + 1)) == Some(Punct::SpliceOpen);
+        let at = self.pos() + usize::from(typename_splice);
+        let end = self.splice_spec_end(at)?;
+        if Self::punct_of(self.tok_at(end)) == Some(Punct::ColonColon) {
+            return None;
+        }
+        if typename_splice {
+            self.bump();
+        }
+        Some(self.parse_splice_type().unwrap_or(QualType::ERROR))
+    }
+
     fn capture_function_prologue(&mut self, out: &mut Vec<Token>) -> bool {
         if self.at_kw(Kw::Try) {
             self.take_into(out);
@@ -352,6 +382,7 @@ impl Parser<'_, '_> {
                     return false;
                 }
             }
+            self.capture_splice_base(out);
             loop {
                 if self.at(Punct::ColonColon) {
                     self.take_into(out);
@@ -983,6 +1014,19 @@ impl Parser<'_, '_> {
             let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
                 return (None, false);
             };
+            let Some(init) = self.parse_mem_init_args() else {
+                return (None, false);
+            };
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
+        }
+        // `[typename] [: r :] (args)`: a splice-type-specifier names the
+        // base as in a base-specifier (P2996 [class.base.init]/1).
+        let loc = self.loc();
+        if let Some(ty) = self.parse_splice_type_spec_here() {
             let Some(init) = self.parse_mem_init_args() else {
                 return (None, false);
             };
@@ -2626,6 +2670,7 @@ impl Parser<'_, '_> {
     }
 
     /// base-specifier, with a trailing `...` (clang's `ParseBaseSpecifier`).
+    #[allow(clippy::too_many_lines, reason = "one path per base-specifier form")]
     fn parse_base_specifier(&mut self) -> Option<BaseSpecInfo> {
         let loc = self.loc();
         let mut attrs = Vec::new();
@@ -2672,6 +2717,13 @@ impl Parser<'_, '_> {
                 return None;
             }
             let ty = ty?;
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
+        }
+        // `[typename] [: r :]` / `[: r :] < args >`, a splice-type-specifier
+        // naming the base class ([class.derived.general]/1, P2996); a
+        // splice followed by `::` qualifies a class-name (below).
+        if let Some(ty) = self.parse_splice_type_spec_here() {
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }

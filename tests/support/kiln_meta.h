@@ -484,9 +484,19 @@ template <class T, decltype(sizeof 0) N>
 T* __kiln_begin(T (&a)[N]);
 template <class R>
 auto __kiln_begin(R& r) -> decltype(r.begin());
+template <class T>
+struct __kiln_id {
+  using type = T;
+};
+// The class's value_type when it has one (a proxy reference such as
+// vector<bool>'s is no value type), else what *begin() refers to.
 template <class R>
-using __kiln_range_value_t =
-    typename __kiln_unref<decltype(*__kiln_begin(__kiln_lval<R>()))>::type;
+auto __kiln_value_of(int) -> __kiln_id<typename __kiln_unref<R>::type::value_type>;
+template <class R>
+auto __kiln_value_of(long)
+    -> __kiln_id<typename __kiln_unref<decltype(*__kiln_begin(__kiln_lval<R>()))>::type>;
+template <class R>
+using __kiln_range_value_t = typename decltype(__kiln_value_of<R>(0))::type;
 
 // The intrinsics read a built-in array (a string literal's terminator
 // recognized) or a contiguous range by layout; a range with data() and

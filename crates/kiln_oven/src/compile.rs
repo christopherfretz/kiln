@@ -7062,8 +7062,14 @@ impl Compiler<'_> {
             self.unsupported(e);
             return self.reg();
         }
-        let mut site =
-            MetaSite { e, callee, result: None, ranges: [None; crate::MAX_META_ARGS], exc: None };
+        let mut site = MetaSite {
+            e,
+            callee,
+            result: None,
+            ranges: [None; crate::MAX_META_ARGS],
+            packed: None,
+            exc: None,
+        };
         // The recipes, matched once per call site.
         let rty = self.ety(e);
         let is_class = |c: &Self, t: OTy| matches!(c.kind(t), TyKind::Record { .. });
@@ -7091,6 +7097,11 @@ impl Compiler<'_> {
                 Ok(Some(sh)) => match recipe(&self.o.types, xt, sh) {
                     Ok(rc) => {
                         site.ranges[i] = Some(rc);
+                        if sh == Shape::Elems
+                            && let Some(v) = self.b.meta_packed_elem(x)
+                        {
+                            site.packed = Some(self.ty(v));
+                        }
                         if sh == Shape::Range {
                             self.o.meta.info_ty = self.o.meta.info_ty.or(match rc {
                                 crate::meta::materialize::Recipe::Vector { elem, .. }

@@ -118,17 +118,25 @@ impl Sema<'_, '_> {
                 let r = self.ast.decls.get(p).ty()?;
                 self.std_ranges_alias("range_value_t", r, loc)?
             };
-            // `vector<bool>` is no contiguous range, and an array is no
-            // element a `vector` holds (LWG4483's multidimensional arrays
-            // are read by layout only).
+            // A `bool` or array element is collected packed: its scalars
+            // (a `bool` as an `unsigned char`) in a `vector`, which the
+            // intrinsic reads as `V`s ([`Sema::meta_packed_elems`]):
+            // `vector<bool>` is no contiguous range and an array is no
+            // element a `vector` holds.
             let ec = self.ast.types.canonical(elem);
-            if ec.without_quals() == QualType::BOOL || self.ast.types.is_array(ec) {
-                return None;
-            }
+            let scalar = self.base_element(ec);
+            let packed = scalar.without_quals() == QualType::BOOL || self.ast.types.is_array(ec);
+            let store = if !packed {
+                elem
+            } else if scalar.without_quals() == QualType::BOOL {
+                QualType::UCHAR
+            } else {
+                scalar.without_quals()
+            };
             let (_, vt) = self.std_class_template("vector")?;
             let name = self.template_name_for(vt);
             let Ok(TemplateIdRef::Type(vty)) =
-                self.act_template_id(name, &[TemplateArg::ty(elem)], loc, loc)
+                self.act_template_id(name, &[TemplateArg::ty(store)], loc, loc)
             else {
                 return None;
             };
@@ -136,22 +144,45 @@ impl Sema<'_, '_> {
             let v = self.implicit_local(&format!("__kiln_elems{k}"), vty, loc);
             self.act_on_uninit(v);
             stmts.push(self.builder().decl_stmt(&[v], loc));
-            // for (auto&& __xK : p) __vK.emplace_back(__xK);
-            let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
-            let rref = self.ast.types.rvalue_ref_to(auto);
-            let x = self.implicit_local(&format!("__kiln_elem{k}"), rref, loc);
-            self.ast.decls.mark_var(x, VarSpec::new().with_cxx_for_range(true));
-            let range = self.build_decl_ref(p, loc);
-            let head =
-                self.act_on_for_range(None, x, RangeInit::Expr(range), Vec::new(), loc, loc)?;
+            if packed {
+                self.meta_packed_elems.insert(v, ec.without_quals());
+            }
+            // for (auto&& __xK : p) __vK.emplace_back(__xK); an array
+            // element is walked down to its scalars by nested loops.
+            let mut heads = Vec::new();
+            let mut range = self.build_decl_ref(p, loc);
+            let mut t = ec;
+            let mut x;
+            loop {
+                let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
+                let rref = self.ast.types.rvalue_ref_to(auto);
+                x = self.implicit_local(&format!("__kiln_elem{k}_{}", heads.len()), rref, loc);
+                self.ast.decls.mark_var(x, VarSpec::new().with_cxx_for_range(true));
+                heads.push(self.act_on_for_range(
+                    None,
+                    x,
+                    RangeInit::Expr(range),
+                    Vec::new(),
+                    loc,
+                    loc,
+                )?);
+                if !packed || !self.ast.types.is_array(t) {
+                    break;
+                }
+                t = self.ast.types.element(t)?;
+                range = self.build_decl_ref(x, loc);
+            }
             let vref = self.build_decl_ref(v, loc);
             let emplace = self.intern("emplace_back");
             let m = self.act_on_member(vref, emplace, loc, loc, false);
             let xref = self.build_decl_ref(x, loc);
             let push = self.act_on_call(m, &[xref], loc, loc);
             let push = self.act_on_full_expr(push);
-            let body = self.builder().expr_stmt(push);
-            stmts.push(self.act_on_finish_for_range(head, body));
+            let mut body = self.builder().expr_stmt(push);
+            while let Some(head) = heads.pop() {
+                body = self.act_on_finish_for_range(head, body);
+            }
+            stmts.push(body);
             args[i] = self.build_decl_ref(v, loc);
         }
         let name = self.ast.decls.get(ft).name();

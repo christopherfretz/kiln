@@ -4,15 +4,10 @@
 // like any other class qualifier.
 //@ expect: compile-ok
 //@ oracle: gcc
-//@ args: -freflection -I tests/support
+//@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang 19 does not implement P2996 reflection
-//@ xfail(kiln): WP-1243 follow-up, reflect_lookahead stops at `W<` so `^^W<int>::In` parses as a type-id needing template arguments
 //@ strict-diags
-#ifdef __KILN__
-#include "kiln_meta.h"
-#else
 #include <meta>
-#endif
 
 namespace demo {
 template <class T> struct W {
@@ -23,5 +18,11 @@ template <class T> struct W {
 constexpr auto r = ^^demo::W<int>::In;
 static_assert(std::meta::is_class_template(r));
 static_assert(std::meta::parent_of(r) == ^^demo::W<int>);
+static_assert(!std::meta::has_template_arguments(^^demo::W<int>::In));
+static_assert(std::meta::template_of(^^demo::W<int>::In<char>) == r);
+// A member type of a specialization stays a type-id.
+template <class T> struct X { using type = T; static constexpr int v = 1; };
+static_assert(std::meta::is_type_alias(^^X<int>::type) && dealias(^^X<int>::type) == ^^int);
+static_assert(std::meta::is_variable(^^X<int>::v));
 
 int main() {}

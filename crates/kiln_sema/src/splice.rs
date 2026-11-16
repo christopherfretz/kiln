@@ -60,6 +60,18 @@ impl Sema<'_, '_> {
             return Spliced::Dependent;
         }
         let at = self.begin_loc(e);
+        // A class operand converts to `info` through a conversion
+        // function ([basic.splice]/1: a converted constant expression).
+        let mut e = e;
+        if self.ast.types.as_record(self.non_reference(ety)).is_some() {
+            let info = kiln_ast::types::BuiltinType::MetaInfo.qual_type();
+            if let Ok(c) =
+                crate::conv::implicit_convert(self, e, info, crate::conv::ConvCtx::Initialization)
+            {
+                e = c;
+            }
+        }
+        let ety = self.ast.exprs.get(e).ty();
         if !self.is_meta_info(ety) {
             let d = self.diag(DiagId::sema_splice_not_info, at).arg(self.ty_arg(ety));
             self.emit(d);
@@ -151,6 +163,13 @@ impl Sema<'_, '_> {
         match r {
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Field | DeclKind::IndirectField => {
+                    let Ok(d) = self.anon_member_as_indirect(d) else {
+                        let name = self.decl_name(d);
+                        self.emit(
+                            self.diag(DiagId::sema_invalid_nonstatic_member_use, open).arg(name),
+                        );
+                        return self.recover_err(&[e], open);
+                    };
                     let nns = self.splice_class_nns(d);
                     self.member_ref_without_object(d, open, None, nns)
                 }
@@ -332,6 +351,45 @@ impl Sema<'_, '_> {
 
     /// [expr.prim.splice]/2: a splice-expression designating a
     /// constructor or destructor is ill-formed.
+    /// Field `d` of an anonymous union or struct as the member its
+    /// innermost enclosing named class declares for it
+    /// ([class.union.anon]/1: the `IndirectField` a member access names);
+    /// `d` itself otherwise; `Err` for a member of an anonymous union at
+    /// namespace or block scope, which is a member of no named class
+    /// (CWG issue 705: no splice designates it).
+    fn anon_member_as_indirect(&self, d: DeclId) -> Result<DeclId, ()> {
+        if self.kind_of(d) != DeclKind::Field {
+            return Ok(d);
+        }
+        let anon = |s: &Self, c: DeclId| {
+            s.ast
+                .decls
+                .record(c)
+                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::ANONYMOUS))
+        };
+        let Some(mut c) = self.ast.decls.get(d).ctx() else { return Ok(d) };
+        if !anon(self, c) {
+            return Ok(d);
+        }
+        while anon(self, c) {
+            let Some(p) = self.ast.decls.get(c).ctx() else { return Ok(d) };
+            c = p;
+        }
+        if self.ast.decls.record(c).is_none() {
+            return Err(());
+        }
+        let c = self.ast.definition(c).unwrap_or(c);
+        Ok(self
+            .ast
+            .members(c)
+            .find(|&m| {
+                self.kind_of(m) == DeclKind::IndirectField
+                    && self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(m)).last()
+                        == Some(d)
+            })
+            .unwrap_or(d))
+    }
+
     fn splice_special_member(&mut self, d: DeclId, at: Loc) {
         let which = u8::from(self.kind_of(d) == DeclKind::CXXDestructor);
         self.emit(self.diag(DiagId::sema_splice_special_member, at).arg(which));
@@ -372,6 +430,11 @@ impl Sema<'_, '_> {
         if self.expr_is_type_dependent(base) {
             return self.builder().splice_expr(e, Some((base, arrow)), open, close);
         }
+        // A member function template (`x.template [:r:](a)`, or `x.[:r:]`
+        // substituted): its one-template overload set.
+        if matches!(r, Reflectee::Template(_)) {
+            return self.act_on_member_template_splice(base, e, None, open, close, op_loc, arrow);
+        }
         let (base, arrow) = match self.member_arrow_base(base, open, op_loc, arrow) {
             Ok(x) => x,
             Err(x) => return x,
@@ -381,6 +444,10 @@ impl Sema<'_, '_> {
             Err(x) => return x,
         };
         let at = self.begin_loc(e);
+        let r = match r {
+            Reflectee::Decl(d) => Reflectee::Decl(self.anon_member_as_indirect(d).unwrap_or(d)),
+            r => r,
+        };
         match r {
             Reflectee::Decl(d)
                 if matches!(
@@ -424,6 +491,111 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 self.recover_err(&[b, e], open)
             }
+        }
+    }
+
+    /// The class member access `base.template [: e :]` or
+    /// `base.template [: e :] < args >` ([expr.ref]/1, [expr.prim.splice]/3,
+    /// P2996): `e` designates a member function template or a static data
+    /// member template of the object's class or of a base; without
+    /// arguments it must be a function template, whose arguments the call
+    /// deduces. The template is the one designated, not what its name
+    /// finds in the object's class (a derived class's template of the
+    /// same name hides nothing). In a template (or with a dependent object
+    /// or `e`) the access is kept, with its arguments, for substitution.
+    /// `open` is the `[:`.
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub fn act_on_member_template_splice(
+        &mut self,
+        base: ExprId,
+        e: ExprId,
+        args: Option<&[TemplateArg]>,
+        open: Loc,
+        close: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if self.is_err_expr(base) {
+            return self.recover_err(&[base, e], open);
+        }
+        // In a template the access is kept as written: substitution would
+        // look the set's name up again in the object's class.
+        let dependent = matches!(self.splice_entity_peek(e), Spliced::Dependent)
+            || self.expr_is_type_dependent(base)
+            || self.in_template();
+        if dependent {
+            let Some(args) = args else {
+                return self.builder().splice_expr(e, Some((base, arrow)), open, close);
+            };
+            let list = self.ast.types.arg_list(args);
+            return self.builder().member_splice_template_expr(e, (base, arrow), list, open, close);
+        }
+        let base = self.resolve_single_overload_candidate(base);
+        let n = match self.splice_entity(e) {
+            Spliced::Error => return self.recover_err(&[base, e], open),
+            Spliced::Dependent => unreachable!("peeked"),
+            Spliced::Entity(Reflectee::Template(n))
+                if args.is_some()
+                    || self
+                        .ast
+                        .types
+                        .template_decl(n)
+                        .is_some_and(|d| self.kind_of(d) == DeclKind::FunctionTemplate) =>
+            {
+                n
+            }
+            Spliced::Entity(_) => {
+                let id = if args.is_some() {
+                    DiagId::sema_splice_not_template
+                } else {
+                    DiagId::sema_splice_not_function_template
+                };
+                self.error(id, self.begin_loc(e));
+                return self.recover_err(&[base, e], open);
+            }
+        };
+        let (base, arrow) = match self.member_arrow_base(base, open, op_loc, arrow) {
+            Ok(x) => x,
+            Err(x) => return x,
+        };
+        let (b, obj_ty, def) = match self.member_object(base, open, op_loc, arrow) {
+            Ok(x) => x,
+            Err(x) => return x,
+        };
+        let at = self.begin_loc(e);
+        let d = self.ast.types.template_decl(n);
+        let member = d.and_then(|d| {
+            let kind = self.kind_of(d);
+            let c = self.declaring_class(d)?;
+            (self.qualifier_names_base(c, def)
+                && matches!(kind, DeclKind::FunctionTemplate | DeclKind::VarTemplate))
+            .then_some((d, c))
+        });
+        let Some((d, naming)) = member else {
+            let d = self.diag(DiagId::sema_splice_not_member, at).arg(self.ty_arg(obj_ty));
+            self.emit(d);
+            return self.recover_err(&[b, e], open);
+        };
+        let set = crate::overload::OvlMember {
+            name: self.ast.decls.get(d).name(),
+            decls: vec![d],
+            found: vec![d],
+            naming,
+            obj_ty,
+            def,
+            base: b,
+            arrow,
+            nns: None,
+            implicit: false,
+            targs: None,
+        };
+        let x = self.build_member_overload(set, open);
+        match args {
+            Some(args) => {
+                let l = self.ast.types.arg_list(args);
+                self.act_on_member_template_args(x, l)
+            }
+            None => x,
         }
     }
 

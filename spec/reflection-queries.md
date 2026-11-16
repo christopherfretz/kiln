@@ -264,6 +264,40 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
   [temp.deduct.guide]), so kiln leaves it out (WP-1490;
   `meta.reflection.member.queries/members-of-deduction-guide.cpp`, which
   therefore has no GCC oracle).
+- `has_identifier` of a parameter of a function template specialization
+  instantiated from a function parameter pack (`T... b`): GCC says false.
+  [meta.reflection.names]/1 asks whether a declaration of the function
+  or of the templated function it is a specialization of introduces a
+  name for the corresponding parameter, and `T... b` names it `b`; the
+  "instantiated from a function parameter pack" exclusion is in the
+  variable bullet only. kiln says true, `identifier_of` is `b`
+  (g++.dg/reflect `has_identifier1.C` line 211 fails under kiln).
+- `extract` of a reference variable whose lifetime began within the
+  evaluation (a reference parameter or a reference local of a consteval
+  function, reflected in its body), WP-1489. `^^r` there represents a
+  variable ([basic.pre]/6: a reference declaration other than a
+  non-static data member declares one; a parameter declaration is such
+  a declaration), not a parameter reflection (`parameters_of` gives
+  those, and `extract` of one is not constant: it is not a variable or
+  object). [meta.reflection.extract] *extract-ref* is constant when `r`
+  represents a variable of suitable type and that variable is usable in
+  constant expressions *or its lifetime began within the core constant
+  expression currently under evaluation*, and returns a reference to
+  the object the variable refers to; *extract-value* reads that object
+  under the same condition. A reference's lifetime begins when its
+  initialization completes ([basic.life]/1), which for a parameter is
+  at the call, inside the evaluation. So `consteval int f(int &r) {
+  return extract<int>(^^r); }` called from a constant evaluation with a
+  live `int` is a constant expression with that `int`'s value. GCC 16.1
+  rejects it (`reflect_constant failed`). kiln rejects it too ("not a
+  variable of static storage duration, nor one whose lifetime began
+  within the evaluation"): the Oven keeps a reference local in a
+  register, so `Oven::meta_local` has no slot to find it by
+  (`compile.rs`, a reflected local is memory-backed only when it is not
+  a reference). The text decides for accepting it; the fix (a reflected
+  reference local or parameter memory-backed, holding the pointer) is
+  WP-1489's remainder, pinned by
+  `meta.reflection.extract/reference-local-xfail.cpp`.
 - No longer a deviation: a closure type at namespace or class scope has
   no linkage in GCC 16.1 either (`linkage-storage.cpp`).
 
