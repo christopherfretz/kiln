@@ -135,6 +135,35 @@ is ill-formed, never reinterpreted ([expr.cast]/4: "even if a cast resulting
 from that interpretation is ill-formed"; WP-1460,
 `tests/conformance/expr.cast/cstyle-static-then-const*.cpp`).
 
+Between pointer-to-member types the const step accepts a pointer to data
+member (never a member function pointer), and the reinterpret step is
+[expr.reinterpret.cast]/10: two pointers to data members or two pointers to
+member functions convert (`CastKind::ReinterpretMemberPointer`; codegen
+keeps the bits, so a null data member pointer stays `-1`, and the Oven
+fails it as clang's invalid subexpression, [expr.const]/10.15); a data
+member pointer and a member function pointer never do, and a
+`reinterpret_cast` casting constness away is `casts away qualifiers`
+(WP-1467, `tests/conformance/expr.reinterpret.cast/member-pointer-c-style*.cpp`).
+
+The deprecated string literal conversion ([depr.string]; C++03
+[conv.array]/2): a narrow or wide string literal, possibly parenthesized
+(`ignore_parens`), converts to a pointer to unqualified plain `char` /
+`wchar_t` as array-to-pointer plus a qualification step
+(`StandardConversion::deprecated_string`, `deprecated_string_conversion`;
+clang's `IsStringLiteralToNonConstPointerConversion`). It is tried after
+the ordinary conversions for an expression (initialization, argument,
+return, assignment; never a comparison, condition or cast) and for an
+overload argument with an expression. Applying it reports `conversion from
+string literal to 'char *' is deprecated` in C++98
+(-Wc++11-compat-deprecated-writable-strings) and `ISO C++11 does not allow
+conversion from string literal to 'char *'` since (-Wwritable-strings, an
+extension warning: -pedantic-errors makes it an error), at the literal.
+Since C++11 a sequence through it is worse than any other, an ellipsis one
+included, unless exactly one of the two is bad (clang
+`CompareImplicitConversionSequences`; `compare_ics`). `u`/`U`/`u8`
+literals, a conditional expression and C never convert this way (WP-1467,
+`tests/conformance/depr.string/`).
+
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,
 Indistinguishable}` implements these rules in clang 19's

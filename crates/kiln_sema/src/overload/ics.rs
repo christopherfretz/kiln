@@ -369,6 +369,7 @@ impl Sema<'_, '_> {
             return self.user_conversion(a, to, SetKind::ConvToNonClass, opts);
         }
         match standard_conversion_from(self, a.ty, a.vk, a.npc, a.bit_field, to, ConvCtx::Argument)
+            .or_else(|| a.expr.and_then(|e| conv::deprecated_string_conversion(self, e, to)))
         {
             Some(s) => Ics::Standard(s),
             None => Ics::bad(BadKind::NoConversion, a.ty, to),
@@ -2123,6 +2124,20 @@ impl Sema<'_, '_> {
 
     /// Compares two implicit conversion sequences ([over.ics.rank]).
     pub(crate) fn compare_ics(&self, a: &Ics, b: &Ics) -> IcsCompare {
+        // Since C++11 a sequence through the deprecated string literal to
+        // `char*` conversion ([depr.string]) is worse than any other, an
+        // ellipsis one included, unless both are bad (clang
+        // `CompareImplicitConversionSequences`).
+        if self.std >= kiln_lex::Std::Cxx11 {
+            let ds = |i: &Ics| match i {
+                Ics::Standard(s) => s.deprecated_string,
+                Ics::UserDefined(u) => u.before.deprecated_string,
+                _ => false,
+            };
+            if ds(a) != ds(b) && a.is_bad() == b.is_bad() {
+                return if ds(a) { IcsCompare::Worse } else { IcsCompare::Better };
+            }
+        }
         let (ca, cb) = (a.class(), b.class());
         if ca < cb {
             return IcsCompare::Better;

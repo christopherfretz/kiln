@@ -66,6 +66,8 @@ pub struct ParseOptions {
     /// Run-time type information is enabled (`-f[no-]rtti`): `typeid`
     /// is an error otherwise (clang's `err_no_typeid_with_fno_rtti`).
     pub rtti: bool,
+    /// `-f[no-]access-control` ([`kiln_sema::Sema::access_control`]).
+    pub access_control: bool,
     /// A GNU dialect (`-std=gnu++NN`, [`kiln_sema::Sema::gnu`]).
     pub gnu: bool,
     /// GNU89 inline semantics in C ([`kiln_sema::Sema::gnu89_inline`]).
@@ -168,6 +170,7 @@ impl Default for ParseOptions {
             prefix: false,
             exceptions: true,
             rtti: true,
+            access_control: true,
             gnu: false,
             gnu89_inline: false,
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
@@ -354,6 +357,7 @@ pub fn parse_tu<'sm>(
 fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
+    s.access_control = opts.access_control;
     s.reflection = opts.reflection;
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.lax_vector_conversions = opts.lax_vector_conversions;

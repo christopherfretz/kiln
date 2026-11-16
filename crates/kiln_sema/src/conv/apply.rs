@@ -44,6 +44,18 @@ pub fn apply_standard_conversion(
         .filter(|_| !s.ast.types.same_unqualified(scs.to_types[2], to))
         .map(|v| (to, v));
     let to = atomic_to.map_or(to, |(_, v)| v);
+    if scs.deprecated_string {
+        // [depr.string]: a C++98 deprecation, an extension since C++11
+        // (clang `PerformImplicitConversion`, at the literal).
+        let id = if s.std >= kiln_lex::Std::Cxx11 {
+            DiagId::sema_writable_string_conversion
+        } else {
+            DiagId::sema_deprecated_string_literal_conversion
+        };
+        let at = s.begin_loc(e);
+        let d = s.diag(id, at).arg(s.ty_arg(to));
+        s.emit(d);
+    }
     match scs.first {
         FirstStep::Identity => {}
         FirstStep::LValueToRValue => {

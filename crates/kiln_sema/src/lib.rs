@@ -283,6 +283,9 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// C++ access checking is on (`-f[no-]access-control`; default on):
+    /// off, every member and base is accessible (clang `AccessControl`).
+    pub access_control: bool,
     /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
     /// splices and the reflection intrinsics (spec/reflection.md).
     pub reflection: bool,
@@ -1409,6 +1412,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exc_disabled_seen: kiln_source::fx::FxHashSet::default(),
             exc_disabled_pattern: kiln_source::fx::FxHashSet::default(),
             rtti: true,
+            access_control: true,
             reflection: false,
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             consteval_only_inits: kiln_source::fx::FxHashSet::default(),

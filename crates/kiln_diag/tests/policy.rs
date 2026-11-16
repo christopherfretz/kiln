@@ -1,5 +1,6 @@
 //! The `-W*` policy matrix (`spec/diag.md` sections 4 and 5). Expected
-//! levels were taken from clang 19 on the equivalent preprocessor input.
+//! levels were taken from clang 19 on the equivalent preprocessor input;
+//! the one row clang 22 changed is noted at its entry.
 
 mod common;
 
@@ -17,8 +18,13 @@ const IDS: [DiagId; 7] = [
 ];
 
 fn levels(args: &str) -> String {
+    levels_at(args, 22)
+}
+
+fn levels_at(args: &str, compat: u32) -> String {
     let (sm, _) = source("p.c", "");
-    let opts = DiagOptions::from_args(args.split_whitespace());
+    let mut opts = DiagOptions::from_args(args.split_whitespace());
+    opts.clang_compat = compat;
     let engine = DiagEngine::new(&sm, &opts, MemorySink::new());
     IDS.iter()
         .map(|&id| match engine.severity(id) {
@@ -57,8 +63,9 @@ fn warning_flag_matrix() {
         ("-Wno-macro-redefined -Werror=macro-redefined", "WEW--WE"),
         ("-Werror=macro-redefined -Wmacro-redefined", "WEW--WE"),
         ("-pedantic-errors", "WEW--EE"),
-        // -Wno-error= is not a user mapping, so -pedantic-errors still applies.
-        ("-pedantic-errors -Wno-error=extra-tokens", "WEW--EE"),
+        // clang 22 (the default level): -Wno-error= keeps an extension a
+        // warning under -pedantic-errors (clang 19: see below).
+        ("-pedantic-errors -Wno-error=extra-tokens", "WEW--WE"),
         ("-Wfatal-errors", "WWW--WF"),
         ("-Werror -Wfatal-errors", "FFW--FF"),
         ("-Werror -Wfatal-errors -Wno-fatal-errors=#warnings", "EFW--FF"),
@@ -188,4 +195,12 @@ fn pragma_state_by_location() {
     // Enabled somewhere: worth checking.
     assert!(engine.is_enabled(off));
     assert_eq!(engine.severity(id), Severity::Error);
+}
+
+// spec: diag.md §5.2 (severity computation, step 4)
+#[test]
+fn no_werror_under_pedantic_errors_clang19() {
+    // clang 19: -Wno-error= is not a user mapping, so -pedantic-errors
+    // still makes the extension an error.
+    assert_eq!(levels_at("-pedantic-errors -Wno-error=extra-tokens", 19), "WEW--EE");
 }

@@ -340,6 +340,7 @@ impl CodegenJob<'_> {
         ParseOptions {
             exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
             rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
+            access_control: a.predef.access_control.unwrap_or(true),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),

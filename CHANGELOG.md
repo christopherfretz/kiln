@@ -467,6 +467,22 @@ Planned as 1.3.0.
   with a deprecation warning in C++98 and an error from C++11, as clang.
   `(T())++` and `N::C::~C();` in a member function parse, and anonymous
   unions and structs in class templates are instantiated.
+- Code clang accepts that kiln rejected, found running GCC's C++ testsuite:
+  a string literal converts to `char*` with a warning, as in clang
+  (`-Wwritable-strings` ExtWarn since C++11 and ranked worst in overload
+  resolution; `-Wc++11-compat-deprecated-writable-strings` in C++98); a
+  C-style cast between pointer-to-member types is a `reinterpret_cast`
+  ([expr.reinterpret.cast]/10); `register` is a warning before C++17
+  (`-Wdeprecated-register` in C++11/14); `-f[no-]access-control`; an
+  inherited default constructor can be trivial (CWG2799); unnamed bit-fields
+  count for standard layout (CWG1813); the injected-class-name of an
+  enclosing class template names the class as a base; the implicit
+  `operator=` hides a `using B::operator=`; placement `new` passes its
+  default arguments to the matching placement `operator delete`; a dependent
+  `T::template operator-<U>` names a function template; C++98 template
+  arguments have no narrowing check. At `-fclang-compat=22`,
+  `-Wno-error=<group>` keeps an extension a warning under `-pedantic-errors`
+  (WP-1467).
 
 ## [1.2.1] - 2026-11-14
 

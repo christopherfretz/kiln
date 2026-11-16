@@ -56,8 +56,8 @@ pub use rank::{
 };
 pub use scs::{
     ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, ListArray, RefBinding, SecondStep,
-    StandardConversion, ThirdStep, compare_standard_conversions, standard_conversion,
-    standard_conversion_from,
+    StandardConversion, ThirdStep, compare_standard_conversions, deprecated_string_conversion,
+    standard_conversion, standard_conversion_from,
 };
 
 /// Where a conversion happens: selects the conversions allowed and

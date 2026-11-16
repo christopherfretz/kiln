@@ -154,6 +154,8 @@ WP-1465 fixed the deduction parts of clusters 1, 5, 11 and 23 (CWG2303 most-deri
 
 WP-1466 fixed the parser clusters 2, 3, 8, 9, 21, 22 and 30 (re-run of their 61 tests: 6 → 103 of 177 cases pass; most of the rest are access declarations in C++11 and later, which clang rejects too, compound literals that define an anonymous union, which clang rejects too, and six reduced repros left as `xfail(kiln): WP-1495`, two of them outside the parser: `#pragma GCC diagnostic ignored "-Wpedantic"` and access checks in partial specialization matching).
 
+WP-1467 (after this run) fixed most of clusters 4, 6, 12, 13, 14, 18, 26, 27 and 28: 108 of their 167 cases now pass; left are SFINAE access and deletion checks, pre-C++17 elidable copies in `noexcept`, `V a{{}}` with an initializer-list constructor, explicit-instantiation ordering and two-phase operator lookup.
+
 1. **Deduction from a base class that is ambiguous** (60 cases, 22 tests).
    `struct C : A<int,int>, A<int> {}; template<class... T> void f(const A<T...>&); f(C{});`
    deduces `A<int,int>` (CWG2303: the most derived candidate wins). The

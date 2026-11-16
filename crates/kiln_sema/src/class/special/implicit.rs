@@ -1135,13 +1135,21 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::USER_PROVIDED_DEFAULT_CTOR);
         }
         let implicit = self.implicit_bits(d);
+        // An inherited default constructor gives the class an implicit
+        // one (declared by [`Sema::finish_special_members`]) despite its
+        // user-declared constructors, trivial as any implicit one
+        // ([class.default.ctor]/3, CWG2799; clang `HasInheritedDefaultConstructor`).
+        let inh_default = bits.contains(DefinitionBits::HAS_INHERITED_CTOR)
+            && decl.user & K::DefaultCtor.bit() == 0
+            && !self.has_default_ctor_decl(d)
+            && self.inherits_default_ctor(d);
         // Triviality from the eligible members ([special]/6; clang
         // `HasTrivialSpecialMembers` and `DeclaredNonTrivialSpecialMembers`,
         // read through `hasTrivial*` / `hasNonTrivial*`;
         // spec/sema-class.md §4.7.2).
         for k in K::ALL {
             let ht = bits.contains(k.trivial_bit());
-            let needs = needs_from(bits, implicit, k);
+            let needs = needs_from(bits, implicit, k) || (k == K::DefaultCtor && inh_default);
             let (trivial, declared_nt) = if decl.user & k.bit() != 0 {
                 (decl.trivial & k.bit() != 0, decl.non_trivial & k.bit() != 0)
             } else if needs {
@@ -1522,6 +1530,29 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().set_overrides(f, &overridden);
         self.check_implicit_overrider(f, k, fty, loc, &overridden);
+        // [namespace.udecl]/14: the implicit copy or move assignment
+        // operator hides a base `operator=` a using-declarator of the class
+        // names when their parameter-type-lists correspond (clang declares
+        // the implicit one before building the shadow and drops the
+        // shadow in `CheckUsingShadowDecl`); the others stay visible.
+        if matches!(k, K::CopyAssign | K::MoveAssign) {
+            let shadows: Vec<DeclId> = self
+                .ast
+                .decls
+                .members(d)
+                .filter(|&m| {
+                    self.kind_of(m) == DeclKind::UsingShadow
+                        && self.ast.decls.get(m).name() == name
+                        && self.ast.decls.hidden_shadow(m).is_none()
+                })
+                .collect();
+            for sh in shadows {
+                let t = self.ast.strip_shadow(sh);
+                if self.member_hides_using_target(f, t) {
+                    let _ = self.ast.decls.set_hidden_shadow(sh, f);
+                }
+            }
+        }
         let t = self.with_exc_spec(fty, ExcSpec::Deferred(f));
         self.ast.decls.set_ty(f, t);
         if self.should_delete(f, k, false) {

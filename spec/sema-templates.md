@@ -514,6 +514,18 @@ Tests: `temp.param/concept-variable-ttp.cpp`,
 - a name after the `template` keyword (§2.3);
 - an injected-class-name used as a template-name ([temp.local]/1).
 
+A base-specifier that names the injected-class-name of a class template
+without a template argument list is the class, not the template
+([temp.local]/1): unqualified in a member class or member class template of
+the template defined outside it (`template<class T> struct A<T>::C : A {}`)
+it is the enclosing current specialization (`parse_base_specifier`, WP-1467,
+test `temp.local/injected-class-name-enclosing-base.cpp`). A dependent
+`T::template operator-<double>` names the member operator function
+template after substitution (`member_template_named_dn`, test
+`temp.names/dependent-operator-template-id.cpp`). In C++98 a non-type
+template argument converts without the C++11 narrowing check
+(`convert_nttp_arg`, test `temp.arg.nontype/cxx98-no-narrowing-check.cpp`).
+
 In every other case `<` is less-than.
 
 **Before C++20: a non-template followed by template arguments**

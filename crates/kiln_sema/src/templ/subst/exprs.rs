@@ -821,10 +821,9 @@ impl Substituter<'_, '_, '_> {
                 // `T::template x<args>` ([temp.names]/5, /6): the member
                 // template the name finds after substitution.
                 if let Some(l) = self.sema.ast.templates.expr_targs.get(e).copied() {
-                    let Some(name) = name.as_ident() else {
-                        return self.unimplemented("an operator function template-id", loc);
-                    };
-                    let t = self.member_template_named(nns, name, loc)?;
+                    // An operator function template-id too (`T::template
+                    // operator-<double>`, [temp.names]/1).
+                    let t = self.member_template_named_dn(nns, name, loc)?;
                     let l = self.args(l, loc)?;
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
@@ -845,7 +844,7 @@ impl Substituter<'_, '_, '_> {
                             // With the other overloads of the name and its
                             // qualifier, as the parser forms `C::f<A>`.
                             let ctx = self.nns_context(nns, begin)?;
-                            let x = self.sema.widen_function_template_id(x, name, Some(ctx));
+                            let x = self.sema.widen_function_template_id_dn(x, name, Some(ctx));
                             self.sema.set_template_id_begin(x, begin, loc);
                             self.sema.set_template_id_qualifier(x, nns);
                             Ok(if callee { x } else { self.sema.resolve_single_template_id(x) })
@@ -1340,6 +1339,14 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.exprs.get(e);
         let x = *self.sema.ast.exprs.new_extra(e);
         let placement = match x.placement {
+            // Only default arguments: no new-placement was written.
+            Some(l)
+                if self.sema.ast.lists.iter::<ExprId>(l).next().is_some_and(|a| {
+                    self.sema.ast.exprs.get(a).kind() == ExprKind::CXXDefaultArgExpr
+                }) =>
+            {
+                None
+            }
             // The allocation function's default arguments are added again.
             Some(l) => Some(NewPlacement { args: self.expr_list(l)?, lparen: loc, rparen: loc }),
             None => None,

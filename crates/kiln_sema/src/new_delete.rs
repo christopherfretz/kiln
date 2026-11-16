@@ -737,7 +737,13 @@ impl Sema<'_, '_> {
         if pass_align {
             flags = flags.with(ExprFlags::PASS_ALIGN);
         }
-        let placement_list = placement.map(|_| self.ast.lists.push(&conv_place));
+        // The list keeps the default arguments of an allocation function
+        // called without new-placement (`new A` with `operator new(size_t,
+        // float = 0)`), as clang's placement arguments do: they are passed
+        // to the matching placement deallocation function too
+        // ([expr.new]/28).
+        let placement_list = (placement.is_some() || !conv_place.is_empty())
+            .then(|| self.ast.lists.push(&conv_place));
         let ty = self.ast.types.pointer_to(elem);
         let extra = NewExtra {
             allocated_ty: elem,

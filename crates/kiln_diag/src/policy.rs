@@ -348,7 +348,14 @@ impl Policy {
             r = Severity::Warning;
         }
         if id.class() == DiagClass::Extension && !m.user {
-            r = r.max(self.ext_behavior);
+            // clang 22: `-Wno-error=<group>` keeps an extension that only
+            // -pedantic-errors makes an error a warning (clang 19 does not).
+            let ext = if self.ext_behavior == Severity::Error && m.no_werror && self.compat >= 22 {
+                Severity::Warning
+            } else {
+                self.ext_behavior
+            };
+            r = r.max(ext);
         }
         if r == Severity::Ignored {
             return r;

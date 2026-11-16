@@ -2602,6 +2602,29 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The injected-class-name of an enclosing class template (or of a
+    /// base class template specialization) without template arguments
+    /// names the class itself ([temp.local]/1-2): the current
+    /// instantiation for `template<class T> struct A<T>::C : A {}`.
+    fn injected_class_base(
+        &mut self,
+        class: NameClass,
+        name: Symbol,
+        q: Option<DeclId>,
+    ) -> Option<QualType> {
+        let NameClass::TypeTemplate(t) = class else { return None };
+        if self.at(Punct::Less) {
+            return None;
+        }
+        if q.is_none() && self.s.names_injected_class(t) {
+            return self.s.injected_class_type(t);
+        }
+        self.s.inherited_injected_class(name, q).map(|d| {
+            self.s.mark_type_referenced(d);
+            self.s.elaborated_tag_type(d, TagKeyword::None)
+        })
+    }
+
     /// base-specifier, with a trailing `...` (clang's `ParseBaseSpecifier`).
     fn parse_base_specifier(&mut self) -> Option<BaseSpecInfo> {
         let loc = self.loc();
@@ -2689,7 +2712,12 @@ impl Parser<'_, '_> {
         // ([class.derived.general]/2): a function of the same scope does
         // not hide the class (clang's `getTypeName` with `isClassName`
         // looks it up as a nested-name-specifier name).
-        let NameClass::Type(ty, d) = self.s.classify_base_class_name(name, q) else {
+        let class = self.s.classify_base_class_name(name, q);
+        if let Some(ty) = self.injected_class_base(class, name, q) {
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
+        }
+        let NameClass::Type(ty, d) = class else {
             // `N::B` with `N` a member class of the current instantiation
             // that has a dependent base: a member of an unknown
             // specialization ([temp.dep.type]/6), looked up at

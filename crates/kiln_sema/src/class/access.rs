@@ -401,7 +401,9 @@ impl Sema<'_, '_> {
         naming: DeclId,
         unprivileged: Access,
     ) -> bool {
-        if unprivileged == Access::Public {
+        // clang returns `AR_accessible` for every check under
+        // `-fno-access-control`.
+        if unprivileged == Access::Public || !self.access_control {
             return true;
         }
         if unprivileged != Access::None && self.has_access(ec, naming, unprivileged, t) {
@@ -785,7 +787,7 @@ impl Sema<'_, '_> {
     pub(crate) fn check_friend_access(&mut self, member: DeclId, loc: Loc) -> bool {
         let first = self.ast.first(member);
         let decl_access = self.ast.decls.get(first).misc().access();
-        if matches!(decl_access, Access::Public | Access::None) {
+        if matches!(decl_access, Access::Public | Access::None) || !self.access_control {
             return true;
         }
         let Some(declaring) = self.declaring_class(first) else { return true };
@@ -1017,6 +1019,9 @@ impl Sema<'_, '_> {
         loc: Loc,
         usage: BaseUse,
     ) -> bool {
+        if !self.access_control {
+            return true;
+        }
         let Some(derived) = self.ast.types.as_record(self.ast.types.canonical(derived_ty)) else {
             return true;
         };

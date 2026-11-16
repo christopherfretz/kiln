@@ -936,6 +936,15 @@ nothing, but `{ P1 m; }` declares P1's copy members); such members are
 appended to the member list (§8.2), as clang. Observed clang 19 (golden
 `ast/class.implicit/eager.cpp`):
 
+**Inherited default constructor** (CWG2799, clang
+`HasInheritedDefaultConstructor`). A class that inherits a default
+constructor (`using A::A;` with a default-constructible `A`) and declares
+none gets the implicit one despite its user-declared constructors; its
+triviality comes from the bases and members as for any implicit default
+constructor (`special_member_bits`), so `__is_trivially_constructible(B)`
+holds for `struct B : A { using A::A; B(int); }` with a trivial `A()`
+(WP-1467, test `class.default.ctor/inherited-default-ctor-trivial.cpp`).
+
 | class | eagerly declared |
 |---|---|
 | `{ int a; }`, `{ ~D1(); }`, `{ P2(const P2&); }`, `{ P3(); }`, `{ mutable int m; }`, `{ CA& operator=(const CA&); }` | none |

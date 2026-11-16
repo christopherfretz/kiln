@@ -710,12 +710,26 @@ impl Sema<'_, '_> {
         name: Symbol,
         qualifier: Option<DeclId>,
     ) -> ExprId {
+        self.widen_function_template_id_dn(e, DeclName::ident(name), qualifier)
+    }
+
+    /// [`Self::widen_function_template_id`] for any name (an operator
+    /// function template-id).
+    pub(crate) fn widen_function_template_id_dn(
+        &mut self,
+        e: ExprId,
+        name: DeclName,
+        qualifier: Option<DeclId>,
+    ) -> ExprId {
         if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
             return e;
         }
         let found = match qualifier {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
-            None => self.lookup_name(name, LookupKind::Ordinary),
+            Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
+            None => match name.as_ident() {
+                Some(id) => self.lookup_name(id, LookupKind::Ordinary),
+                None => return e,
+            },
         };
         let decls: Vec<DeclId> = found
             .decls
@@ -738,15 +752,7 @@ impl Sema<'_, '_> {
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let targs = self.ast.templates.expr_targs.get(e).copied();
         let dep = self.overload_set_is_dependent(&decls);
-        self.builder().unresolved_lookup_in(
-            DeclName::ident(name),
-            &decls,
-            false,
-            nns,
-            targs,
-            dep,
-            n.loc(),
-        )
+        self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
     }
 
     /// True if the unqualified `name`, followed by `<`, is assumed to name
