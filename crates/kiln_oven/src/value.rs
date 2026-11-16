@@ -1376,7 +1376,7 @@ impl Oven {
                 }
                 if union {
                     let key = Ptr::union_key(raw, u64::from(p.off), t);
-                    let Some(&i) = self.mem.unions.get(&key) else { return Ok(()) };
+                    let Some(i) = self.mem.active(key) else { return Ok(()) };
                     let f = self.types.fields[first + i as usize];
                     s.unions.push(UnionMember { at: at as u32, field: f.decl });
                     if self.cxx_year >= 2026

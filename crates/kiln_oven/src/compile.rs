@@ -5661,7 +5661,7 @@ impl Compiler<'_> {
         // `p->m` checks its operand for null even at offset 0 (clang:
         // "cannot access field of null pointer"); `.` on an lvalue cannot
         // see a null base (a later read says "dereferenced null pointer").
-        let q = if fi.offset == 0 && !arrow {
+        let mut q = if fi.offset == 0 && !arrow {
             p
         } else {
             let r = self.reg();
@@ -5683,6 +5683,15 @@ impl Compiler<'_> {
                         _ => (ak::READ, self.begin(e)),
                     };
                     self.emit_site(Op::ActiveCheck, akind, &[p, idx as u32, rt.0], e, loc);
+                }
+                // The address of a member that another member of the
+                // union could hold at its offset is tagged with the member
+                // it designates (`vm/udesig.rs`, WP-1494).
+                Access::Addr if self.o.types.union_member_shared(rt, idx) => {
+                    let r = self.reg();
+                    let aux = crate::kbc::UNION_DESIG | (idx as u32) << 4;
+                    self.emit_at(Op::VoidCast, aux, &[r, q, rt.0], e);
+                    q = r;
                 }
                 Access::Addr => {}
             }

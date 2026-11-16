@@ -671,6 +671,27 @@ impl Oven {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
             }
+            Fault::CdtorSibling { op, stat, x, dtor, decl } => {
+                let what = match op {
+                    crate::vm::CDTOR_CALL => "virtual function called on",
+                    crate::vm::CDTOR_TYPEID => "typeid applied to",
+                    _ => "dynamic_cast applied to",
+                };
+                let (st, xn) = (self.tname(ast, stat), self.tname(ast, x));
+                let phase = if dtor { "destruction" } else { "construction" };
+                if let Some(d) = decl {
+                    extra.push(Note::new(
+                        ast.decls.get(d).loc(),
+                        format!("object of type '{xn}' is under {phase} here"),
+                    ));
+                }
+                (
+                    site.loc,
+                    format!(
+                        "{what} subobject of type '{st}' that is not the object of type '{xn}' under {phase} or one of its bases"
+                    ),
+                )
+            }
             Fault::NewBadSize { bytes, elem } => (
                 site.loc,
                 format!(
@@ -1356,7 +1377,7 @@ impl Oven {
                 let off = u64::from(Ptr::decode(raw).off);
                 s.push('{');
                 if union {
-                    if let Some(&i) = self.mem.unions.get(&Ptr::union_key(raw, off, t)) {
+                    if let Some(i) = self.mem.active(Ptr::union_key(raw, off, t)) {
                         let f = fields[i as usize];
                         let _ = write!(s, ".{} = ", name_of(ast, f.decl));
                         self.write_field(ast, s, raw, f, depth);
@@ -1578,8 +1599,7 @@ impl Oven {
                 && rel >= f.offset
                 && self.types.has_subobject(f.ty, rel - f.offset, pointee)
         };
-        let active =
-            self.mem.unions.get(&Ptr::union_key(raw, at, t)).and_then(|&i| fs.get(i as usize));
+        let active = self.mem.active(Ptr::union_key(raw, at, t)).and_then(|i| fs.get(i as usize));
         active
             .filter(holds)
             .or_else(|| fs.iter().find(holds))
@@ -1666,6 +1686,43 @@ impl Oven {
                 this != 0 && Ptr::alloc_key(this) == key
             })
         })
+    }
+
+    /// Whether uninitialized bytes read at `p` are of a local variable
+    /// whose own initializer is running (`int a[2] = {a[1], 2};`, also
+    /// from a call it makes) while no constructor or destructor of an
+    /// object in it is: clang gives its subobjects their values in order,
+    /// so one not reached yet is "outside its lifetime" (WP-1494). Cold:
+    /// the diagnostic path only.
+    fn in_own_local_init(&self, ast: &Ast, pc: usize, p: u64) -> bool {
+        let Some(a) = self.alloc_any(Ptr::decode(p)) else { return false };
+        let Origin::Var(d) = a.origin else { return false };
+        if a.frame == 0 {
+            return false;
+        }
+        let Some(init) = ast.decls.var(d).and_then(|v| v.init) else { return false };
+        let Some(i) = self.stack.iter().position(|f| f.serial == a.frame) else { return false };
+        let key = Ptr::alloc_key(p);
+        let structor = self.stack[i + 1..].iter().any(|fr| {
+            let f = &self.funcs[fr.func as usize];
+            f.this_reg.filter(|_| f.structor).is_some_and(|r| {
+                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+                this != 0 && Ptr::alloc_key(this) == key
+            })
+        });
+        if structor {
+            return false;
+        }
+        let at = self.stack.get(i + 1).map_or(pc, |up| up.call_pc as usize);
+        let Some(e) = self.site(at).e else { return false };
+        let mut work = vec![init];
+        while let Some(x) = work.pop() {
+            if x == e {
+                return true;
+            }
+            ast.exprs.children_into(x, &ast.lists, &mut work);
+        }
+        false
     }
 
     /// Whether the call that created dead frame object `p` is running.
@@ -1766,7 +1823,9 @@ impl Oven {
             MemFault::Uninit => {
                 let resolving = self.alloc_any(Ptr::decode(p)).is_some_and(|a| {
                     a.flags & flags::RESOLVING != 0 || self.unbegun_init_object(a, p)
-                });
+                }) || (site.loc != Loc::INVALID
+                    && (self.not_yet_begun(site.pc as usize, p, ty.0)
+                        || self.in_own_local_init(ast, site.pc as usize, p)));
                 if resolving {
                     format!(
                         "{verb} object outside its lifetime is not allowed in a constant expression"

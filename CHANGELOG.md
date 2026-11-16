@@ -654,6 +654,19 @@ Planned as 1.3.0.
   warning, a friend constructor or destructor that matches nothing gets
   clang's candidate notes, and `-C`/`-CC` without `-E` is clang's error
   instead of feeding comments to the parser.
+- Union lifetimes in constant evaluation (WP-1494): a read of a union
+  member after `destroy_at` is a read of an object outside its lifetime.
+  `union { int a; int b; }` members of one type at one offset are told
+  apart by the glvalue that names them, for a read, a placement new and
+  an explicit destruction. A single-object placement new into an element
+  of an inactive array member activates the array and ends the old
+  member.
+- A virtual call, `typeid` or `dynamic_cast` on a sibling base of the
+  object under construction or destruction is not a constant expression
+  ([class.cdtor]/4-6); kiln reports it with a note naming the class
+  under construction. Reads before an object's lifetime began (a later
+  member in a mem-initializer, a local in its own initializer) now say
+  "read of object outside its lifetime" as clang 22 does.
 
 ## [1.2.1] - 2026-11-14
 

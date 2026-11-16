@@ -1441,6 +1441,22 @@ impl Types {
         self.empty_bases.get(&t).map_or(&[], Vec::as_slice)
     }
 
+    /// Whether another member of union `u` can hold an object of the type
+    /// of member `idx` at its address (`union { int a; int b; }`, `union {
+    /// S s; S arr[2]; }`, a similar type): a pointer to member `idx` then
+    /// does not tell which member it designates by its offset and type,
+    /// and the compiler tags it (`vm/udesig.rs`, WP-1494).
+    pub fn union_member_shared(&self, u: OTy, idx: usize) -> bool {
+        let fs = self.fields(u);
+        let Some(f) = fs.get(idx).filter(|f| f.width.is_none()) else { return false };
+        fs.iter().enumerate().any(|(j, g)| {
+            j != idx
+                && g.width.is_none()
+                && g.offset <= f.offset
+                && self.has_subobject(g.ty, f.offset - g.offset, f.ty)
+        })
+    }
+
     pub fn has_subobject(&self, mut root: OTy, mut off: u64, p: OTy) -> bool {
         // The leading arrays by index arithmetic, then the first record
         // through the path cache (WP-644).

@@ -14,7 +14,7 @@ use kiln_ast::decl::{Access, DeclKind, TagKind};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
-use super::Fault;
+use super::{CDTOR_CALL, CDTOR_DYNAMIC_CAST, CDTOR_TYPEID, Fault};
 use crate::Oven;
 use crate::SemaBridge;
 use crate::kbc::ak;
@@ -592,7 +592,11 @@ impl Oven {
     ) -> Result<(u32, u64, u128), Fault> {
         let d = self.read_vptr(b.ast(), raw, cls, ak::MEMBER_CALL)?;
         if d.rel {
-            return self.vcall_rel(b, method, cls, d, raw);
+            let r = self.vcall_rel(b, method, cls, d, raw)?;
+            if !self.cdtors.is_empty() {
+                self.cdtor_check(b, raw, cls, CDTOR_CALL)?;
+            }
+            return Ok(r);
         }
         let key = (d.cls, d.off as u64, method);
         let t = match self.virt.dispatch.get(&key) {
@@ -614,6 +618,9 @@ impl Oven {
             }
             _ => Ptr::with_off(raw, (i64::from(Ptr::decode(raw).off) + t.delta) as u64, false),
         };
+        if !self.cdtors.is_empty() {
+            self.cdtor_check(b, raw, cls, CDTOR_CALL)?;
+        }
         Ok((t.func, this, t.cov))
     }
 
@@ -744,6 +751,23 @@ impl Oven {
             return Ok(0);
         }
         let d = self.read_vptr(b.ast(), raw, stat, ak::DYNAMIC_CAST)?;
+        let r = self.dyn_cast_dyn(b, d, raw, stat, target, glvalue)?;
+        if !self.cdtors.is_empty() {
+            self.cdtor_check(b, raw, stat, CDTOR_DYNAMIC_CAST)?;
+        }
+        Ok(r)
+    }
+
+    /// [`Self::dyn_cast`] of the object at `raw` with dynamic-type word `d`.
+    fn dyn_cast_dyn(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        d: Dyn,
+        raw: u64,
+        stat: OTy,
+        target: Option<OTy>,
+        glvalue: bool,
+    ) -> Result<u64, Fault> {
         let (c, start) = (d.cls, self.rel_start(raw, d));
         let Some(t) = target else { return Ok(start) };
         let (i, k) = self.locate(b, d, stat, raw).ok_or(Fault::Invalid)?;
@@ -888,11 +912,8 @@ impl Oven {
                     }
                 }
                 // [class.union]/2: at most one member is active.
-                let active = if union {
-                    self.mem.unions.get(&Ptr::union_key(raw, abs, t)).copied()
-                } else {
-                    None
-                };
+                let active =
+                    if union { self.mem.active(Ptr::union_key(raw, abs, t)) } else { None };
                 let fields: Vec<_> = self
                     .types
                     .fields(t)
@@ -959,13 +980,109 @@ impl Oven {
     /// `cls`): its dynamic type ([expr.typeid]/3).
     pub(crate) fn type_info_dyn(
         &mut self,
-        ast: &Ast,
+        b: &mut dyn SemaBridge,
         raw: u64,
         cls: OTy,
         ti: OTy,
     ) -> Result<u64, Fault> {
-        let d = self.read_vptr(ast, raw, cls, ak::TYPEID)?;
+        let d = self.read_vptr(b.ast(), raw, cls, ak::TYPEID)?;
+        if !self.cdtors.is_empty() {
+            self.cdtor_check(b, raw, cls, CDTOR_TYPEID)?;
+        }
         let q = self.types.info(d.cls).q;
         Ok(self.type_info(q, ti))
+    }
+
+    /// [class.cdtor]/4-6 (WP-1494): a virtual call, `typeid` or
+    /// `dynamic_cast` (`op`) applied to the polymorphic object at `raw`
+    /// (static class `cls`) while a constructor or destructor of an
+    /// object `x` is running is undefined when the object is within the
+    /// object whose base `x` is but is neither `x` nor one of `x`'s bases
+    /// (a sibling base, reached through a pointer the constructor was
+    /// given): [`Fault::CdtorSibling`]. Called only while a constructor
+    /// or destructor is on the stack ([`Oven::cdtors`] not empty), so an
+    /// evaluation outside them pays one length test. The structors on the stack are tried innermost
+    /// first: the first whose `x` holds the object as `x` or a base
+    /// decides it is fine; one whose `x` and the object are both bases
+    /// of the object of an enclosing structor decides it is not; one
+    /// unrelated to the object (a member under construction calling back
+    /// into the enclosing object) decides nothing.
+    #[cold]
+    #[inline(never)]
+    fn cdtor_check(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        raw: u64,
+        cls: OTy,
+        op: u8,
+    ) -> Result<(), Fault> {
+        self.cdtor_prune();
+        let key = Ptr::alloc_key(raw);
+        let frames: Vec<(u64, OTy, u32)> = self
+            .cdtors
+            .iter()
+            .rev()
+            .filter_map(|&(depth, _)| {
+                let fr = &self.stack[depth as usize];
+                let f = &self.funcs[fr.func as usize];
+                let (r, x) = (f.this_reg.filter(|_| f.structor)?, f.this_ty?);
+                let this = self.regs.get((fr.fb + r) as usize).map_or(0, |&v| v as u64);
+                (this != 0 && Ptr::alloc_key(this) == key).then_some((this, x, fr.func))
+            })
+            .collect();
+        for (i, &(t, x, func)) in frames.iter().enumerate() {
+            if self.within_bases(b, raw, cls, t, x) {
+                return Ok(());
+            }
+            for &(t2, y, _) in &frames[i + 1..] {
+                if self.within_bases(b, raw, cls, t2, y) && self.within_bases(b, t, x, t2, y) {
+                    let decl = self.funcs[func as usize].decl;
+                    let dtor = decl
+                        .is_some_and(|d| b.ast().decls.get(d).kind() == DeclKind::CXXDestructor);
+                    return Err(Fault::CdtorSibling { op, stat: cls, x, dtor, decl });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Records the constructor or destructor activation `serial` just
+    /// pushed ([`Oven::cdtors`]), first dropping the entries of returned
+    /// frames.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn cdtor_enter(&mut self, serial: u32) {
+        self.cdtor_prune();
+        self.cdtors.push((self.stack.len() as u32 - 1, serial));
+    }
+
+    /// Drops the [`Oven::cdtors`] entries of frames that have returned
+    /// (a suffix: a later entry is deeper or was pushed after them).
+    fn cdtor_prune(&mut self) {
+        while let Some(&(d, s)) = self.cdtors.last() {
+            if self.stack.get(d as usize).is_some_and(|f| f.serial == s) {
+                break;
+            }
+            self.cdtors.pop();
+        }
+    }
+
+    /// Whether the `cls` object at `raw` is the `x` object at `t` or one
+    /// of its base class subobjects.
+    fn within_bases(&mut self, b: &mut dyn SemaBridge, raw: u64, cls: OTy, t: u64, x: OTy) -> bool {
+        if raw == t && cls == x {
+            return true;
+        }
+        let (p, q) = (Ptr::decode(raw), Ptr::decode(t));
+        let virt = self.types.vbase_start(x) < self.types.fields(x).len();
+        if !virt && (p.off < q.off || u64::from(p.off - q.off) >= self.types.size(x)) {
+            return false;
+        }
+        let i = self.poly_info(b, x) as usize;
+        let n = self.virt.infos[i].subs.len();
+        (0..n).any(|k| {
+            self.virt.infos[i].subs[k].cls == cls
+                && u16::try_from(k).ok().and_then(|k| self.sub_addr(b, t, x, k)) == Some(raw)
+        })
     }
 }

@@ -1,14 +1,14 @@
 // [expr.const]/10, [class.union.general], [basic.life] (P3074R7, P3726R2,
 // C++26): each invalid access to a trivial union in constant evaluation
-// is diagnosed. Reading a member of a union with no active member (before
-// any construction, or after the active member was destroyed); reading a
-// member other than the active one; reading an array element that is a
-// hole (its array is active, the element was never constructed or was
-// destroyed); constructing an array element over the active member of
-// another type without destroying it, which ends that member's lifetime
-// without running its destructor, so its allocation leaks
-// ([basic.life]/5). Expected output from the wording (spec/oven.md
-// "Unions").
+// is diagnosed. Reading a member of a never-active union; after the active
+// member was destroyed, reading another (clang names the destroyed one as
+// active) or the destroyed one, outside its lifetime ([basic.life]/7);
+// reading a member other than the active one; reading an array element
+// that is a hole (its array is active, the element was never constructed)
+// or was destroyed (outside its lifetime); constructing an array element over the active member
+// of another type without destroying it, which ends that member's lifetime
+// without running its destructor, so its allocation leaks ([basic.life]/5).
+// Expected output from the wording (spec/oven.md "Unions").
 //@ skip(clang): clang 22 does not implement P3074/P3726 (trivial unions)
 //@ std: c++26
 //@ expect: compile-fail
@@ -17,10 +17,10 @@
 //@ diag: 50:44 note "read of member 'i' of union with no active member is not allowed in a constant expression"
 //@ diag: 51:15 note "in call to 'never_active()'"
 //@ diag: 54:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 53:102 note "read of member 'i' of union with no active member is not allowed in a constant expression"
+//@ diag: 53:102 note "read of member 'i' of union with active member 's' is not allowed in a constant expression"
 //@ diag: 54:15 note "in call to 'destroyed_then_read()'"
 //@ diag: 57:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 56:105 note "read of member 's' of union with no active member is not allowed in a constant expression"
+//@ diag: 56:105 note "read of object outside its lifetime is not allowed in a constant expression"
 //@ diag: 57:15 note "in call to 'destroyed_member_read()'"
 //@ diag: 60:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 59:83 note "read of member 'i' of union with active member 's' is not allowed in a constant expression"
@@ -29,7 +29,7 @@
 //@ diag: 62:76 note "read of uninitialized object is not allowed in a constant expression"
 //@ diag: 63:15 note "in call to 'hole_read()'"
 //@ diag: 71:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 69:11 note "read of member 'arr' of union with no active member is not allowed in a constant expression"
+//@ diag: 69:11 note "read of object outside its lifetime is not allowed in a constant expression"
 //@ diag: 71:15 note "in call to 'destroyed_element_read()'"
 //@ diag: 74:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 45:26 note "allocation performed here was not deallocated"

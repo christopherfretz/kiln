@@ -291,10 +291,12 @@ impl Oven {
     /// initializing (`Oven::ctor_steps`), or that one when it is not of
     /// class or array type (its initializer is being evaluated). A
     /// subobject of class type being initialized is left to the
-    /// constructor frames above (WP-445). While a complete-object
+    /// constructor frames above (WP-445); with none above (its
+    /// constructor's arguments are being evaluated) it has not begun
+    /// (WP-1494). While a complete-object
     /// constructor initializes its virtual bases, its non-virtual
     /// subobjects and later virtual bases have not begun (WP-465).
-    pub(super) fn not_yet_begun(&self, pc: usize, raw: u64, t: u32) -> bool {
+    pub(crate) fn not_yet_begun(&self, pc: usize, raw: u64, t: u32) -> bool {
         if self.ctor_steps.is_empty() {
             return false;
         }
@@ -356,6 +358,24 @@ impl Oven {
                 let whole = !fi.base
                     && !matches!(tys.kind(fi.ty), TyKind::Record { .. } | TyKind::Array { .. });
                 if whole {
+                    return true;
+                }
+                // A base or class member whose constructor has not been
+                // entered yet (its arguments are being evaluated) has not
+                // begun either; once entered, the frames above decide.
+                let (lo, hi) =
+                    (this.off as u64 + fi.offset, this.off as u64 + fi.offset + tys.size(fi.ty));
+                let entered = self.stack[i + 1..].iter().any(|up| {
+                    let g = &self.funcs[up.func as usize];
+                    g.structor
+                        && g.this_reg.is_some_and(|r| {
+                            let t = self.regs[up.fb as usize + r as usize] as u64;
+                            let tp = Ptr::decode(t);
+                            Ptr::alloc_key(t) == Ptr::alloc_key(raw)
+                                && (lo..hi.max(lo + 1)).contains(&u64::from(tp.off))
+                        })
+                });
+                if !entered && matches!(tys.kind(fi.ty), TyKind::Record { .. }) {
                     return true;
                 }
             }

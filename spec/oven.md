@@ -292,6 +292,22 @@ fault counts and trap ids unchanged.
   pointers are keyed by contents (see Open questions).
 
 ### Diagnostics — normative for M2
+**Read diagnostics by object state** (WP-1494; clang 22's choice
+between its messages, `notes.rs` `mem_msg`; contract test
+`tests/conformance/expr.const/constexpr-read-wording-by-state.cpp`):
+
+| Oven state of the object read | Message |
+|---|---|
+| uninitialized bytes of a default-initialized local or member (`MemFault::Uninit`) | "read of uninitialized object is not allowed in a constant expression" |
+| uninitialized bytes of a subobject whose initialization has not begun: a later member read by a mem-initializer, a base or class member whose constructor's arguments are being evaluated (`not_yet_begun`, `ctor_steps`), a later element or member read by a local's own initializer (`in_own_local_init`), the object of a constexpr variable's initializer (`unbegun_init_object`), a `RESOLVING` allocation | "read of object outside its lifetime is not allowed in a constant expression" |
+| dead bytes (`MemFault::Lifetime`): after an explicit destructor call or `std::destroy_at`, a union member whose lifetime ended (`mem::UNION_ENDED`); a dead frame object whose call is still running (a closed scope, `MemFault::Dead` with `frame_alive`) or a parameter | "read of object outside its lifetime is not allowed in a constant expression" |
+| a deleted heap allocation (`MemFault::Dead(Origin::Heap)`, a stale heap pointer) | "read of heap allocated object that has been deleted" |
+| a variable or temporary of a returned call (`MemFault::Dead(Origin::Var/Temp)`) | "read of variable\|temporary whose lifetime has ended" + "declared here"\|"temporary created here" |
+| an inactive union member (`Fault::Union`) | "read of member 'i' of union with active member 's'" / "with no active member" (an ended member is named as the active one) |
+| a moved-from object (alive, initialized) | no diagnostic |
+
+The `Uninit` row is split on the fault path only (`mem_msg`): a load
+pays nothing for it.
 - `EvalFailure { kind, notes }`: the primary note, then "in call to
   'f(args)'" for each active frame innermost first (clang's backtrace:
   arguments rendered as clang prints them; more than 10 frames elide the
@@ -2560,12 +2576,22 @@ modes keep the WP-334 behaviour above.
 - **Destroying the active member** (`std::destroy_at(&u.s)`,
   `u.s.~S()`, `EndLife` aux 2, `Vm::union_of_member`) leaves the union
   alive with no active member, as its trivial default constructor leaves
-  it. The union's bytes become uninitialized (not dead), and its entry
-  and nested entries are removed. The union may then be destroyed,
-  assigned, or given a new member by construction. A member read is "no
-  active member", and destroying the member again is "destruction of
-  member 's' of union with no active member" (`EndLife` aux 1 checks the
-  path as a `DESTROY` access).
+  it. The union's bytes become uninitialized (not dead) and its nested
+  entries are removed; its own entry keeps the member with
+  `mem::UNION_ENDED` set (WP-1494): the member is still the union's
+  last-activated member, its lifetime over. `Memory::active` (every
+  reader of the active member) sees no active member; the cold fault
+  paths (`Vm::union_fault`, `active_check`, `desig_check`) read
+  `Memory::ended_member`. A read of the ended member, or of a subobject
+  of it, is "read of object outside its lifetime", destroying it again
+  is "destruction of object outside its lifetime", and a read of another
+  member is "read of member 'i' of union with active member 's'", as
+  clang 22 says. The union may then be destroyed, assigned, or given a
+  new member by construction (which replaces the entry). The entry is
+  recorded ended only when the destroyed member is certain: no
+  `union_alts` candidate, or the destroying pointer's designator names it
+  ("Union member designators" below); otherwise the entry is removed as
+  before and a read is "no active member".
 - **Constructing an element of an inactive array member**
   (`std::construct_at(&u.arr[i], ...)`, `Vm::place_in_unions`,
   `Vm::array_element_at`) activates the array member. Its other elements
@@ -2616,9 +2642,17 @@ modes keep the WP-334 behaviour above.
   GCC rejects it. Template-argument equivalence ([temp.type]) compares
   the image's cover, so two constants that differ only in which elements
   are holes compare by their constructed elements.
-- **Element or member at offset 0.** A pointer has no designator, so
-  `&u.s` and `&u.arr[0]` of one type are both candidates. The entry
-  keeps the member and `union_alts` the array (WP-233). Constructing
+- **Element or member at offset 0.** `&u.s` carries the designator of
+  `s` when `s` shares its type and offset with another member's
+  subobject ("Union member designators"), so constructing through it
+  activates `s` alone. A pointer without one (`&u.arr[0]`, a pointer
+  read back from memory) names the element: a single-object
+  construction through it activates the array member and ends the old
+  member, never leaving both alive (WP-1494; `place_walk` drops the
+  direct members when an array member holds the object as an element).
+  A pointer that came from elsewhere (`&u.s` stored and reloaded) is
+  still ambiguous: the entry keeps the member and `union_alts` the
+  array (WP-233). Constructing
   through the pointer again with the array possibly active collapses the
   union to the array. Destroying the member at the entry ends the
   union's member (above). Pointer arithmetic on such a pointer uses the
@@ -2632,13 +2666,52 @@ modes keep the WP-334 behaviour above.
   performed here was not deallocated" at the end of evaluation, as GCC 17
   reports it.
 
-No new memory state: entries are removed when the member is destroyed,
+No new per-object state: an ended member is a bit of its union's entry,
 and element lifetimes are the existing per-byte bitmap
 (`tests/conformance/class.union/constexpr-trivial-union-lifetime-cxx26.cpp`,
 `tests/conformance/expr.const/constexpr-trivial-union-invalid-cxx26.cpp`,
 `tests/conformance/basic.life/union-member-destroyed-cxx26.cpp`,
 `tests/conformance/obj.lifetime/start-lifetime-*.cpp`,
-`tests/conformance/expr.const/constexpr-union-partial-array-*.cpp`).
+`tests/conformance/expr.const/constexpr-union-partial-array-*.cpp`,
+`tests/conformance/class.union/constexpr-member-destroyed-cxx26.cpp`,
+`tests/conformance/class.union/constexpr-placement-array-element-cxx26.cpp`).
+
+**Union member designators** (WP-1494, `vm/udesig.rs`). A pointer is an
+allocation and an offset, so two members of one union that hold an
+object of the same type at the same offset (`union { int a; int b; }`,
+`union { S s; S arr[2]; }`; `Types::union_member_shared`) cannot be
+told apart by it, while the glvalue `u.b` designates `b` all the same
+([basic.life]/7, [expr.const]/10.9). The compiler tags the address of
+such a member (`member()` with `Access::Addr`: `VoidCast` aux
+`kbc::UNION_DESIG | idx << 4`, `[dst, p, union type]`) with an interned
+(union type, member index) pair (`Oven::udesig`, append-only per TU) in
+bits 96..128 of the pointer register; bits 64..96 stay the `void *`
+designator type. The tag travels with the register: copies, calls,
+returns, a reference bound to the member, a field projection through it
+(`Field` aux 2 keeps the register), a conversion to `void *` and back.
+Three operations read it:
+- a load or store through the pointer (`load_desig`/`store_desig`):
+  `Oven::desig_check` runs only on `slow_access`, the side path of an
+  allocation holding unions (`HAS_UNION`), and only when the tag is
+  nonzero. A member not (possibly) active is "read of member 'b' of
+  union with active member 'a'", or "read of object outside its
+  lifetime" when it is the union's ended member;
+- a placement new or `std::construct_at` (`place_walk`): the tagged
+  member is the constructed one, not another of the same type;
+- an explicit destruction (`end_life`): the tagged member is the one
+  ended (and recorded `UNION_ENDED`).
+Every other operation reads the low 64 bits, and a store of the pointer
+to memory keeps no tag (the pointer mark byte has no room): such a
+pointer, and one formed by pointer arithmetic, is checked by offset and
+type as before (WP-233's `union_alts`). Untagged pointers pay nothing:
+the tag test is on paths that already handle a union. Pointer equality
+compares addresses (`&u.a == &u.b` is true). A common-initial-sequence
+read through an inactive standard-layout member is rejected in a
+constant expression as clang and GCC do ([class.mem.general]/26 permits
+it at run time only; [expr.const]/10.9)
+(`tests/conformance/class.union/constexpr-same-type-member-designated.cpp`;
+xfail `constexpr-same-type-member-designator-lost.cpp`, WP-1494
+remainder: the tag is lost through pointer arithmetic and memory).
 
 An explicit destruction of a non-union class object whose union members'
 bytes alone are outside their lifetime is accepted too (`EndLife` aux 1,
@@ -2992,11 +3065,13 @@ is identified by offset and type. When several members may be it (two
 members of one type at one offset, or a member and a subobject of the
 active member), the entry keeps one and `Memory::union_alts` the others;
 a member access or assignment naming any of them is accepted, and an
-assignment makes it the only active member. Deviation: after
-`std::construct_at(&s.b, 7)` in `union S { int a; int b; }`, reading
-`s.a` is accepted (clang rejects it; xfail
-`tests/conformance/class.union/constexpr-placement-same-type.cpp`); a
-frozen union records the one kept member
+assignment makes it the only active member. The address of a member
+that shares its type and offset with another carries a designator
+("Union member designators"), so `std::construct_at(&s.b, 7)` in
+`union S { int a; int b; }` activates `b` alone and reading `s.a` is
+"read of member 'a' of union with active member 'b'"
+(`tests/conformance/class.union/constexpr-placement-same-type.cpp`,
+WP-1494); a frozen union records the one kept member
 (`tests/conformance/class.union/constexpr-placement-activate.cpp`,
 WP-233). The active-member check on the path to an access reaches a
 bit-field's storage unit inside a member of class type
@@ -3366,6 +3441,36 @@ phase), else `Fault::NoDynamic(ak)` ("<verb> object outside its
 lifetime", a subobject whose construction has not started). An object
 not usable in constant expressions (`MemFault::External`/`Temporary`) is
 `Fault::UnknownDynamic` ("... whose dynamic type is not constant").
+
+**Siblings of an object under construction or destruction** (WP-1494,
+[class.cdtor]/4-6). While a constructor or destructor of a base class
+subobject `x` runs, a virtual call, `typeid` or `dynamic_cast` applied
+to another base of the object `x` is a base of (a sibling base, reached
+through a pointer the structor was given, also from a member's
+constructor running inside `x`'s) is undefined, so not a constant
+expression. `Oven::cdtor_check` (`vm/virt.rs`, cold) runs after the
+operation itself succeeded, only while a constructor or destructor is on
+the stack: `Oven::cdtors` lists their activations (depth and frame
+serial, pushed by `enter` for a `Func::structor`, the entries of
+returned frames dropped lazily as a suffix), so outside structors the
+cost is one length test per virtual call, `typeid` or `dynamic_cast`
+of a polymorphic glvalue, and none for loads, stores or other calls.
+The structors in the object's allocation are tried innermost first: the
+first whose object `x` holds the operand as `x` or one of its base
+subobjects (`within_bases`, through `Virt::poly_info` and `sub_addr`)
+decides it is fine; one whose `x` and the operand are both base
+subobjects of the object of an enclosing structor decides it is not,
+`Fault::CdtorSibling`: "virtual function called on|typeid applied
+to|dynamic_cast applied to subobject of type 'A' that is not the object
+of type 'B' under construction|destruction or one of its bases", then
+"object of type 'B' is under construction|destruction here" at the
+structor's declaration. A structor unrelated to the operand (a member
+under construction calling back into the enclosing object, whose own
+constructor is the next frame out) decides nothing. clang 22 and GCC
+16.1 accept these calls; the wording is kiln's own. A failure of the
+operation itself (a word not yet written: "subexpression not valid")
+keeps its own diagnostic
+(`tests/conformance/class.cdtor/constexpr-sibling-base-cdtor.cpp`).
 
 **Dispatch.** `VCall [method, args, class, adj]` (aux 1: sret) reads the
 word at `this`, locates the subobject (`class`, offset) in `C`'s

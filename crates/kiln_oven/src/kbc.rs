@@ -504,6 +504,12 @@ pub(crate) const NO_DTOR: u32 = u32::MAX;
 /// mark (`Memory::set_void_tag`) and a load restores it.
 pub(crate) const VOID_TAG: u32 = 1;
 
+/// `VoidCast` aux low bits: `[dst, p, union type]`, aux `UNION_DESIG |
+/// idx << 4`: `p` is the address of member `idx` of a union with another
+/// member that can hold an object of its type at its offset; `dst` is `p`
+/// tagged with that designator in bits 96..128 (`vm/udesig.rs`, WP-1494).
+pub(crate) const UNION_DESIG: u32 = 2;
+
 /// The kinds of `Builtin` and their operands.
 pub(crate) mod bi {
     /// `t1`/`t2`: no static type; the type of the designated object.

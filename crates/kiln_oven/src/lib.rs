@@ -715,6 +715,14 @@ pub struct Oven {
     pub(crate) mem: Memory,
     /// Remembered `union_path` answers (WP-760, `vm/umemo.rs`).
     pub(crate) umemo: vm::umemo::UnionMemo,
+    /// Interned union member designators (WP-1494, `vm/udesig.rs`).
+    pub(crate) udesig: vm::udesig::UnionDesigs,
+    /// The constructor and destructor activations on the stack, (depth,
+    /// frame serial), outermost first; entries of returned frames are a
+    /// suffix, dropped lazily (WP-1494, [class.cdtor]/4-6,
+    /// `Oven::cdtor_check`). Empty outside constructors and destructors,
+    /// which is all a virtual call tests.
+    pub(crate) cdtors: Vec<(u32, u32)>,
     pub(crate) regs: Vec<u128>,
     pub(crate) stack: Vec<Frame>,
     /// Registered destructions, innermost last (`Op::PushCleanup`).
@@ -813,6 +821,8 @@ impl Oven {
             frame: frame::FrameState::default(),
             mem: Memory::new(budget.bytes),
             umemo: vm::umemo::UnionMemo::default(),
+            udesig: vm::udesig::UnionDesigs::default(),
+            cdtors: Vec::new(),
             regs: vec![0; 256],
             stack: Vec::with_capacity(64),
             cleanups: Vec::new(),
@@ -1519,6 +1529,8 @@ impl Oven {
             + cap(&self.let_pending)
             + cap(&self.msg_chars)
             + self.mem.footprint()
+            + self.udesig.footprint()
+            + self.cdtors.capacity() * size_of::<(u32, u32)>()
             + cap(&self.regs)
             + cap(&self.stack)
             + cap(&self.cleanups)
@@ -1797,6 +1809,7 @@ impl Oven {
         self.stats.note_static_peak(self.mem.static_peak());
         self.mem.reset();
         self.stack.clear();
+        self.cdtors.clear();
         self.cleanups.clear();
         // The next evaluation's objects reuse this one's encodings.
         self.run.end_param = 0;
