@@ -676,6 +676,17 @@ pub(crate) fn std_allocator_elem(ast: &Ast, f: DeclId, name: &str) -> Option<Qua
     }
 }
 
+/// clang's `IsDeclSourceLocationCurrent`: `f` is
+/// `std::source_location::current`, where a cast from `void *` is
+/// permitted before C++26 (libstdc++ passes `__builtin_source_location()`
+/// through a `const void *` parameter; llvm-project issue 53780).
+pub(crate) fn is_source_location_current(ast: &Ast, f: DeclId) -> bool {
+    let node = ast.decls.get(f);
+    node.kind() == DeclKind::CXXMethod
+        && is_named(ast, f, "current")
+        && node.ctx().is_some_and(|rec| is_std_named(ast, rec, "source_location"))
+}
+
 /// clang's `FunctionDecl::isReservedGlobalPlacementOperator` for an
 /// allocation function: the global `operator new(std::size_t, void*)` /
 /// `operator new[](std::size_t, void*)` ([new.delete.placement]).

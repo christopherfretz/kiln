@@ -206,6 +206,15 @@ pub struct TemplState {
     /// takes the expansion as written, so a non-pack parameter is an
     /// error there too ([temp.alias]/2, CWG1430).
     pub(crate) ttp_written_expansion: bool,
+    /// A default argument of a member template's own parameter is being
+    /// substituted as the member template is redeclared in a class
+    /// template specialization: a lambda in it is in a dependent context
+    /// (the member template's parameters are open), so its closure type
+    /// is not never-dependent and the default is substituted again at
+    /// each use ([temp.param]/15, [expr.prim.lambda.closure]/1; WP-1497).
+    /// Not in a snapshot: transient, false at a snapshot point.
+    #[snap(skip)]
+    pub(crate) member_head_default: bool,
     /// The head consumed by the declaration being built: its pattern is
     /// wrapped in a template decl by [`Sema::finish_template_pattern`].
     pub(crate) cur: Option<TemplateParamListId>,

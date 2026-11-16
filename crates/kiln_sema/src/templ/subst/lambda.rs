@@ -377,6 +377,54 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Maps the init-capture variables of pattern call operator `pat` to
+    /// those of `new`, the call operator substituted from it, for a
+    /// constraint of `new` (`entity`, `Sema::constraint_lambda_captures`)
+    /// that names them (P2036, [basic.scope.lambda];
+    /// clang `LambdaScopeForCallOperatorInstantiationRAII` adds the
+    /// instantiated captures to the scope). An expanded init-capture pack
+    /// `...xs = init` maps to its elements, the run of captures named `xs`
+    /// in `new` ([expr.prim.lambda.capture]/17).
+    pub(crate) fn seed_init_captures(&mut self, entity: kiln_ast::DeclId) {
+        let Some((pat, new)) = self.sema.constraint_lambda_captures(entity) else { return };
+        let (Some(lp), Some(ln)) =
+            (self.sema.lambda_of_call_op(pat), self.sema.lambda_of_call_op(new))
+        else {
+            return;
+        };
+        let inits = |s: &Self, l| -> Vec<(kiln_ast::DeclId, bool)> {
+            let caps = &s.sema.ast.exprs.lambdas.get(l).captures;
+            caps.iter()
+                .filter(|c| c.init)
+                .filter_map(|c| Some((c.var?, c.ellipsis.is_valid())))
+                .collect()
+        };
+        let (olds, news) = (inits(self, lp), inits(self, ln));
+        let mut j = 0;
+        let mut map = Vec::with_capacity(olds.len());
+        for (o, pack) in olds {
+            if !pack || news.get(j).is_some_and(|&(_, p)| p) {
+                let Some(&(n, _)) = news.get(j) else { return };
+                j += 1;
+                map.push((o, DeclOrPack::Decl(n)));
+                continue;
+            }
+            let name = self.sema.ast.decls.get(o).name();
+            let start = j;
+            while news.get(j).is_some_and(|&(n, p)| !p && self.sema.ast.decls.get(n).name() == name)
+            {
+                j += 1;
+            }
+            let elems: Vec<kiln_ast::DeclId> = news[start..j].iter().map(|x| x.0).collect();
+            map.push((o, DeclOrPack::Pack(self.sema.ast.lists.push(&elems))));
+        }
+        for (o, n) in map {
+            if !matches!(n, DeclOrPack::Decl(d) if d == o) {
+                self.locals.insert(o, n);
+            }
+        }
+    }
+
     /// The call operator's constraints stay the pattern's, checked with
     /// this instantiation's levels outside the operator's own (as a class
     /// template member's, `ConceptState::member_constraints`,

@@ -365,7 +365,9 @@ impl Sema<'_, '_> {
     /// [expr.prim.lambda.closure]/2). Clang 22 also excludes a context
     /// in a generic lambda's closure.
     pub(crate) fn substituted_lambda_never_dependent(&self) -> bool {
-        if self.unevaluated == 0 && !self.in_constant_evaluated() {
+        if self.unevaluated == 0
+            && (self.templ.member_head_default || !self.in_constant_evaluated())
+        {
             return false;
         }
         // A requires-expression's body does not count.

@@ -5,7 +5,6 @@
 // instantiated). Found running GCC's C++ testsuite (WP-1472).
 //@ expect: compile-ok
 //@ std: c++20
-//@ xfail(kiln): WP-1497, the qualified call deduces the return type before checking the constraints
 template <class T> struct A {
   static auto r() requires false { return T::fail; }
 };

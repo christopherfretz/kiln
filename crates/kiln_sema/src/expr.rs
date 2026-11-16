@@ -2446,8 +2446,13 @@ impl Sema<'_, '_> {
         if n.kind().is_function() && n.has(DeclFlags::INVALID) && !self.invalid_by_param(d) {
             return self.recover_err(&[], loc);
         }
+        // clang `DiagnoseUseOfDecl`: the constraints are checked before
+        // the return type is deduced, so a function whose constraints are
+        // not satisfied never instantiates its body ([temp.inst]/5;
+        // `A<T>::r()` for `static auto r() requires false`).
         if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
-            && self.check_undeduced_use(d, loc)
+            && ((!self.is_class_member_ref(d) && self.diagnose_unsatisfied_use(d, loc))
+                || self.check_undeduced_use(d, loc))
         {
             return self.recover_err(&[], loc);
         }
@@ -7213,6 +7218,26 @@ impl Sema<'_, '_> {
                 let x = self.maybe_bind_temporary(x);
                 return self.explicit_cast(style, kind, x, ty, loc, rparen);
             }
+        }
+        // [expr.static.cast]/4 with an array target: `T t(e);`, a
+        // parenthesized aggregate initialization from C++20 (P0960,
+        // P1975); `int[]` gets the bound 1 ([dcl.init.general]/16.5).
+        // An initialization that fails is "static_cast from 'P' to
+        // 'int[2]' is not allowed" (clang `TryStaticImplicitCast` fails
+        // quietly).
+        if style == CastStyle::Static
+            && self.ast.types.is_array(ty)
+            && self.std >= kiln_lex::Std::Cxx20
+            && !self.expr_is_type_dependent(e)
+        {
+            let init = crate::init::Initializer::Paren(vec![e], loc, rparen);
+            let (x, stash) = self.capturing(|s| s.perform_init(ty, init, loc, false));
+            if self.is_err_expr(x) || self.stash_has_error(&stash) {
+                return self.bad_cast(style, e, ty, loc);
+            }
+            self.release(stash, vec![]);
+            let xt = self.ety(x);
+            return self.explicit_cast(style, CastKind::NoOp, x, xt, loc, rparen);
         }
         if style.allows_static()
             && self.ast.types.as_record(ty).is_none()

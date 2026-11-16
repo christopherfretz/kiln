@@ -2360,10 +2360,18 @@ impl Sema<'_, '_> {
             };
             let class = QualType::new(class, 0);
             if !self.require_complete(class, at) {
+                // WP-1497: the call stays a `bool` call (a value of an
+                // incomplete class's member pointer type is a null one at
+                // constant evaluation, false), so the statement holding
+                // it is not invalid: an instantiated wrapper such as
+                // `std::is_corresponding_member` keeps its specialization
+                // and a later call of it is not diagnosed again as a
+                // substitution failure (one error for one mistake).
                 let msg =
                     self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(class));
                 self.emit(self.incomplete_note(msg, class));
-                return None;
+                out.push(a);
+                continue;
             }
             self.ensure_record_layout(class);
             out.push(a);

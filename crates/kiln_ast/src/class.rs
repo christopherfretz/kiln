@@ -297,9 +297,9 @@ impl CmpCategory {
     /// checking order (`ComparisonCategories::getPossibleResultsForType`).
     pub const fn results(self) -> &'static [CmpResult] {
         match self {
-            CmpCategory::Strong => {
-                &[CmpResult::Equal, CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater]
-            }
+            // `equivalent` is not required (clang
+            // `getPossibleResultsForType`).
+            CmpCategory::Strong => &[CmpResult::Equal, CmpResult::Less, CmpResult::Greater],
             CmpCategory::Weak => &[CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater],
             CmpCategory::Partial => {
                 &[CmpResult::Equivalent, CmpResult::Less, CmpResult::Greater, CmpResult::Unordered]

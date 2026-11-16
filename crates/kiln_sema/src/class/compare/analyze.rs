@@ -140,9 +140,7 @@ impl Sema<'_, '_> {
     fn analyze_top(&mut self, cx: &mut Cx) -> CmpAnalysis {
         let rd = cx.rd;
         let is_union = self.ast.decls.record(rd).is_some_and(|x| x.tag == TagKind::Union);
-        if cx.k.is_primary()
-            && (is_union || self.defn_bits(rd).contains(DefinitionBits::HAS_VARIANT_MEMBERS))
-        {
+        if cx.k.is_primary() && self.defn_bits(rd).contains(DefinitionBits::HAS_VARIANT_MEMBERS) {
             if cx.diagnose {
                 let d = self
                     .diag(DiagId::note_defaulted_cmp_union, cx.floc)

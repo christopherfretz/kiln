@@ -539,7 +539,13 @@ impl Substituter<'_, '_, '_> {
                 // Substituted now (clang's `SubstDefaultArgument` when
                 // the member template is redeclared).
                 let saved = self.sema.act_on_start_template_param_default();
+                // In the member template's head: its parameters are open,
+                // so a closure type created here is dependent.
+                let head = std::mem::replace(&mut self.sema.templ.member_head_default, true);
+                self.sema.ast.templates.dependent_depth += 1;
                 let a = self.template_arg(a, n.loc());
+                self.sema.ast.templates.dependent_depth -= 1;
+                self.sema.templ.member_head_default = head;
                 self.sema.act_on_end_template_param_default(saved);
                 let a = a?;
                 let _ = self.sema.builder().set_template_default(np, a);

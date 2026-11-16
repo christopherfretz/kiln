@@ -278,6 +278,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Value-dependent argument `e` (of a known type) for a non-type
+    /// parameter of class type `pty`, converted to `const pty` as the
+    /// parameter's object is initialized ([temp.arg.nontype]/2): the
+    /// converted, still value-dependent expression (`e` itself when it
+    /// has that class type already), `Err` once diagnosed (WP-1497).
+    pub(crate) fn convert_dependent_class_nttp_arg(
+        &mut self,
+        pty: QualType,
+        e: ExprId,
+        at: Loc,
+    ) -> Result<ExprId, ()> {
+        let canon = crate::conv::strip_cv(self, self.ast.types.canonical(pty));
+        let ety = self.ast.exprs.get(e).ty();
+        if crate::conv::strip_cv(self, self.ast.types.canonical(ety)) == canon {
+            return Ok(e);
+        }
+        let cty = self.ast.types.qualify(canon, Quals::CONST);
+        let c = self.perform_init(cty, Initializer::Expr(e), at, false);
+        if self.is_err_expr(c) || self.has_errors_in(c) { Err(()) } else { Ok(c) }
+    }
+
     /// Clang 22 (`CheckConvertedConstantExpression` called from
     /// `CheckTemplateArgument`) follows a conversion error in a non-type
     /// template argument with "template parameter is declared here" at

@@ -665,7 +665,19 @@ impl Parser<'_, '_> {
             return;
         }
         self.s.act_on_concept_head();
-        let Some(e) = self.parse_expr_prec(prec::LOR) else {
+        // The constraint-expression is an unevaluated operand (clang's
+        // `ParseConceptDefinition`; [expr.prim.id.general]/4 lets it name
+        // a non-static data member, `V || A::y`). It is also treated as
+        // constant-evaluated: a non-dependent atom is evaluated as written
+        // at satisfaction (clang substitutes it again in a
+        // `ConstantEvaluated` context), so the variables it names have
+        // their initializers instantiated here (`i<int>`).
+        self.s.enter_unevaluated();
+        self.s.enter_constant_evaluated();
+        let e = self.parse_expr_prec(prec::LOR);
+        self.s.exit_constant_evaluated(None);
+        self.s.exit_unevaluated();
+        let Some(e) = e else {
             self.skip_to_semi();
             return;
         };
@@ -1471,6 +1483,38 @@ impl Parser<'_, '_> {
 
     /// At `typename name ;` or `typename name<args> ;` in a
     /// type-requirement: the type-name has no nested-name-specifier.
+    /// At `typename` in a requirement-seq: whether the
+    /// typename-specifier is followed by `(` or `{`, an explicit type
+    /// conversion that starts a simple requirement (`typename T::type();`,
+    /// [expr.prim.req.simple]) rather than a type-requirement (clang's
+    /// tentative parse in `ParseRequiresExpression` takes the type
+    /// requirement only before `;`).
+    fn typename_requirement_is_expression(&self) -> bool {
+        let mut p = self.pos() + 1;
+        loop {
+            let t = self.tok_at(p);
+            match (t.kind, self.kw_of(t)) {
+                (TokKind::Punct(Punct::ColonColon), _) | (_, Some(Kw::Template)) => p += 1,
+                (_, Some(Kw::Decltype)) => match self.skip_balanced(p + 1) {
+                    Some(after) => p = after,
+                    None => return false,
+                },
+                (_, Some(_)) => return false,
+                (TokKind::Punct(Punct::LParen | Punct::LBrace), _) => return true,
+                _ if self.ident_of(t).is_some() => {
+                    p += 1;
+                    if self.tok_at(p).kind == TokKind::Punct(Punct::Less) {
+                        match self.skip_template_args(p) {
+                            Some((close, false)) => p = close + 1,
+                            _ => return false,
+                        }
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+
     fn unqualified_type_requirement(&self) -> bool {
         let p = self.pos() + 1;
         if self.ident_of(self.tok_at(p)).is_none() {
@@ -2080,7 +2124,7 @@ impl Parser<'_, '_> {
                 constraint = Some(self.s.act_on_return_type_requirement(c, &args, loc));
             }
             Requirement::Compound { expr, noexcept, constraint }
-        } else if self.at_kw(Kw::Typename) {
+        } else if self.at_kw(Kw::Typename) && !self.typename_requirement_is_expression() {
             // type-requirement ([expr.prim.req.type]): `typename
             // nested-name-specifier? type-name ;`; an unqualified
             // type-name (`typename X<T>;`) is a plain type.

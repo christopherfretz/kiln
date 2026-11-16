@@ -10497,7 +10497,12 @@ impl Sema<'_, '_> {
         if self.check_flexible_array_members(r) {
             bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
         }
-        if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
+        // A union's members are variant members; one with none has none
+        // (clang `hasVariantMembers`; P2002 lets such a union default
+        // `operator==`, [class.compare.default]/2).
+        if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union)
+            && self.ast.decls.members(r).any(|f| self.ast.decls.get(f).kind() == DeclKind::Field)
+        {
             bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);
         }
         if then_semi && self.ast.decls.get(r).name() == DeclName::EMPTY {

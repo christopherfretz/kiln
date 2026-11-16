@@ -1133,8 +1133,13 @@ impl Sema<'_, '_> {
         }
         let pty = self.nttp_arg_param_type(tmpl, depth, p, at, prior)?;
         let t = &self.ast.types;
+        if !t.is_dependent(pty) && t.as_record(pty).is_some() {
+            // [temp.arg.nontype]/2: the initialization of the parameter's
+            // object from the argument is checked now (clang's
+            // `CheckTemplateArgument`); the value when it is substituted.
+            return self.convert_dependent_class_nttp_arg(pty, e, at).map(|_| ());
+        }
         if t.is_dependent(pty)
-            || t.as_record(pty).is_some()
             || matches!(t.canonical_view(pty), TypeView::Auto { .. })
             || self.is_ctad_placeholder(pty)
             || self.placeholder_keyword(pty).is_some()

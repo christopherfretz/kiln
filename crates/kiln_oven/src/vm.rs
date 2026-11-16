@@ -1812,13 +1812,21 @@ impl Oven {
                 pc += 4;
             }
             Op::MpActive => {
-                if let Some(e) = self.mp.get(reg!(1))
-                    && let Some(cls) = e.union
-                    && let Some((_, _, idx)) = e.field
+                let raw = reg!(0) as u64;
+                if raw != 0
+                    && let Some(e) = self.mp.get(reg!(1))
                 {
-                    // A union's members are all at its offset 0.
-                    if let Err(f) = self.active_check(reg!(0) as u64, idx, cls, aux) {
-                        fail!(f);
+                    // Outermost first; each union starts `off` bytes
+                    // before the member (its members are all at its
+                    // offset 0).
+                    for &(cls, idx, off) in &e.unions {
+                        let p = Ptr::decode(raw);
+                        let Some(at) = u64::from(p.off).checked_sub(off) else { break };
+                        if let Err(f) =
+                            self.active_check(Ptr::with_off(raw, at, false), idx, cls, aux)
+                        {
+                            fail!(f);
+                        }
                     }
                 }
                 pc += 3;
@@ -5076,7 +5084,7 @@ impl Oven {
             let p = Ptr::decode(raw);
             Ptr::with_off(raw, u64::from(p.off) + adj, false)
         };
-        let Some((off, _, _)) = field else { return Ok(obj) };
+        let Some((off, _)) = field else { return Ok(obj) };
         let p = Ptr::decode(obj);
         Ok(Ptr::with_off(obj, u64::from(p.off) + off, false))
     }
