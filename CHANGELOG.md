@@ -439,6 +439,18 @@ Planned as 1.3.0.
   C++98/03 a destructor or class-specific `operator delete` declared
   without a specification may throw (it was implicitly `noexcept`)
   (WP-1457).
+- Constant evaluation: a read of a union's active member through a
+  glvalue of a similar type (a `const T *const &` bound directly to a
+  `T *` member) was rejected as "read of member 'm' of union with active
+  member 'm'"; `std::vector<T>::insert(pos, n, value)` with spare capacity
+  hit it for an element owning a vector. The Oven now identifies the
+  object an access reaches and the member recorded active by one rule
+  ([basic.lval]/11). Found in downstream code (WP-1490).
+- Reflection: `members_of` (and `static_data_members_of`) of a namespace or
+  class listed partial specializations of class and variable templates,
+  whose constructors' parameters had no type; they are not
+  members-of-representable and are left out. Found in downstream code
+  (WP-1490).
 
 ## [1.2.1] - 2026-11-14
 

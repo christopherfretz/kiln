@@ -225,7 +225,7 @@ impl Types {
     fn hop_in(&self, w: Walk, mut t: OTy, mut off: u64, p: OTy) -> Hop {
         let mut at = 0;
         loop {
-            if t == p && off == 0 {
+            if off == 0 && self.same_object(t, p) {
                 return Hop::Reached;
             }
             match self.kind(t) {

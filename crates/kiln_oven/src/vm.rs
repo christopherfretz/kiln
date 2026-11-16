@@ -3141,7 +3141,7 @@ impl Oven {
         let (mut t, mut base) = (a.ty, 0u64);
         let target = u64::from(p.off);
         loop {
-            if t == ty && base == target {
+            if base == target && self.types.same_object(t, ty) {
                 return match self.mutable_read(ty) {
                     Some(field) => Err(Fault::Mutable { ak: k, field }),
                     None => Ok(()),
@@ -3255,7 +3255,7 @@ impl Oven {
             if vol && matches!(self.types.kind(t), TyKind::Record { .. }) && structor(base, t) {
                 vol = false;
             }
-            if t == ty && base == target {
+            if base == target && self.types.same_object(t, ty) {
                 break;
             }
             match self.types.kind(t) {
@@ -3425,7 +3425,7 @@ impl Oven {
         // Every union so far was resolved by its active member.
         let mut by_active = true;
         loop {
-            if t == ty && base == target {
+            if base == target && self.types.same_object(t, ty) {
                 return Ok(exact);
             }
             let info = self.types.info(t);
@@ -4238,7 +4238,7 @@ impl Oven {
         let (mut t, mut base) = (root, 0u64);
         let (mut clean, mut unions, mut region) = (true, 0u32, None);
         loop {
-            if t == ty && base == target {
+            if base == target && self.types.same_object(t, ty) {
                 return Ok(if !clean {
                     None
                 } else if unions == 1 && region.is_some() {
@@ -4529,7 +4529,7 @@ impl Oven {
         let (mut t, mut base) = (a.ty, 0u64);
         let target = u64::from(p.off);
         loop {
-            if t == ty && base == target {
+            if base == target && self.types.same_object(t, ty) {
                 return None;
             }
             match self.types.kind(t) {

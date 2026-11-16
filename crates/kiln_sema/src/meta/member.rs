@@ -365,12 +365,11 @@ impl Sema<'_, '_> {
         let eq = DeclName::operator(OverloadedOperator::EqualEqual);
         let dtor = self.ast.destructor(def).map(|d| self.ast.first(d));
         for m in decls {
-            let n = self.ast.decls.get(m);
-            let kind = n.kind();
-            // A friend declaration names a non-member ([class.friend]/1).
-            if never_a_member(kind) || n.misc().friend() != kiln_ast::decl::FriendKind::None {
+            if !self.members_of_eligible(m) {
                 continue;
             }
+            let n = self.ast.decls.get(m);
+            let kind = n.kind();
             if kind == DeclKind::CXXDestructor && dtor.is_some_and(|d| !self.same_entity(d, m)) {
                 continue;
             }
@@ -380,9 +379,6 @@ impl Sema<'_, '_> {
                 } else if kind == DeclKind::CXXMethod && n.name() == eq {
                     implicit_eq.push(m);
                 }
-                continue;
-            }
-            if matches!(self.ast.templ_link(m).get(), Some((TemplLinkKind::Specialization, _))) {
                 continue;
             }
             // A function whose constraints are not satisfied is not
@@ -430,6 +426,35 @@ impl Sema<'_, '_> {
         }
         self.meta_members.cache.put(def, MemberList::Bases, b);
         Ok(())
+    }
+
+    /// Whether declaration `m`, lexically a member of the class or
+    /// namespace whose list is being built, is *members-of-eligible*
+    /// ([meta.reflection.member.queries]/2 in the C++26 working draft):
+    /// the one predicate every list query (`members_of` and the filters
+    /// built on its list: `static_data_members_of`,
+    /// `nonstatic_data_members_of`, `subobjects_of`) applies, at the point
+    /// the cached list is built ([`Sema::build_class`],
+    /// [`Sema::namespace_member`]). Not eligible: a declaration that
+    /// declares no member entity or one reached another way
+    /// ([`never_a_member`]: access, using and using-enum declarations,
+    /// `static_assert`, deduction guides, enumerators, parameters), a
+    /// friend declaration (it names a non-member, [class.friend]/1), and a
+    /// specialization of a template, explicit or instantiated, and a
+    /// partial specialization, which is neither a template nor a member
+    /// the queries can represent (P2996R13 [meta.reflection.member.queries]
+    /// note: "partial template specializations" are counterexamples;
+    /// WP-1490). The checks that depend on the evaluation point
+    /// (constraints, undeduced placeholders) and the implicit members stay
+    /// with the callers.
+    fn members_of_eligible(&self, m: DeclId) -> bool {
+        let n = self.ast.decls.get(m);
+        !never_a_member(n.kind())
+            && n.misc().friend() == kiln_ast::decl::FriendKind::None
+            && !matches!(
+                self.ast.templ_link(m).get(),
+                Some((TemplLinkKind::Specialization | TemplLinkKind::PartialSpecialization, _))
+            )
     }
 
     /// Whether member function `m` has a trailing requires-clause that is
@@ -560,10 +585,9 @@ impl Sema<'_, '_> {
     ) -> Result<(), MetaError> {
         let n = self.ast.decls.get(m);
         let kind = n.kind();
-        if never_a_member(kind)
+        if !self.members_of_eligible(m)
             || (n.has(DeclFlags::IMPLICIT) && !self.anonymous_union_object(m))
             || kind == DeclKind::TranslationUnit
-            || matches!(self.ast.templ_link(m).get(), Some((TemplLinkKind::Specialization, _)))
         {
             return Ok(());
         }
