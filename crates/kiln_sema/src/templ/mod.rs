@@ -200,6 +200,12 @@ pub struct TemplState {
     /// The template-head of each such definition (WP-1352: the
     /// declaration image writes it with the definition's record).
     pub(crate) partial_def_head: kiln_source::fx::FxHashMap<DeclId, TemplateParamListId>,
+    /// The template-id being re-formed by substitution names a template
+    /// template parameter whose arguments as written hold a pack
+    /// expansion (`TT<Ts...>`): an alias template substituted for it
+    /// takes the expansion as written, so a non-pack parameter is an
+    /// error there too ([temp.alias]/2, CWG1430).
+    pub(crate) ttp_written_expansion: bool,
     /// The head consumed by the declaration being built: its pattern is
     /// wrapped in a template decl by [`Sema::finish_template_pattern`].
     pub(crate) cur: Option<TemplateParamListId>,

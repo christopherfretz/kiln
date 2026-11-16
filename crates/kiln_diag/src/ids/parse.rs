@@ -103,12 +103,18 @@ parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs
 parse_ext_concept_template_param = Error (0) "concept template parameter is a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_decl_attrs_on_lambda = ExtWarn [Cxx23LambdaAttributes] (0) "an attribute specifier sequence in this position is a C++23 extension";
+// WP-1471: clang ext_equals_this_lambda_capture_cxx20 ([expr.prim.lambda.capture]/2, P0409R2).
+parse_ext_equals_this_lambda_capture = ExtWarn [Cxx20Extensions] (0) "explicit capture of 'this' with a capture default of '=' is a C++20 extension";
 parse_ext_expansion_statements = ExtWarn [Cxx26Extensions] (0) "expansion statements are a C++26 extension";
 parse_ext_expansion_stmt_body_attr = Extension [ExpansionStmtMissingBraces] (0) "ISO C++ forbids attributes before the compound statement of an expansion statement";
 parse_ext_expansion_stmt_body_not_compound_stmt = Extension [ExpansionStmtMissingBraces] (0) "ISO C++ requires the body of an expansion statement to be a compound statement";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
+// WP-1471: clang ext_init_capture_pack ([expr.prim.lambda.capture]/1, P0780R2).
+parse_ext_init_capture_pack = ExtWarn [Cxx20Extensions] (0) "initialized lambda pack captures are a C++20 extension";
 parse_ext_int_deprecated = Warning [DeprecatedType] (0) "'_ExtInt' is deprecated; use '_BitInt' instead";
 parse_ext_lambda_missing_parens = ExtWarn [Cxx23Extensions] (0) "lambda without a parameter clause is a C++23 extension";
+// WP-1471: clang ext_lambda_template_parameter_list ([expr.prim.lambda.general]/1, P0428R2).
+parse_ext_lambda_template_parameter_list = ExtWarn [Cxx20Extensions] (0) "explicit template parameter list for lambdas is a C++20 extension";
 parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";
 parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_ext_variable_template_template_param = Error (0) "variable template template parameter is a C++2c extension";
@@ -182,6 +188,8 @@ parse_pragma_stdc_expected_eod = ExtWarn [UnknownPragmas] (0) "expected end of d
 parse_pragma_stdc_on_off = ExtWarn [UnknownPragmas] (0) "expected 'ON' or 'OFF' or 'DEFAULT' in pragma";
 parse_pragma_stdc_unknown = ExtWarn [UnknownPragmas] (0) "unknown pragma in STDC namespace";
 parse_requires_clause_needs_parens = Error (0) "parentheses are required around this expression in a requires clause";
+// WP-1471: clang err_requires_expr_expected_type_constraint ([expr.prim.req.compound]/1).
+parse_requires_expr_expected_type_constraint = Error (0) "expected concept name with optional arguments";
 // [temp.names]/1, [expr.prim.splice] (WP-830): a splice used as a whole
 // template-argument must be parenthesized or prefixed with `typename`/`template`.
 parse_splice_template_arg_unparenthesized = Error (0) "unparenthesized splice expression cannot be used as a template argument";

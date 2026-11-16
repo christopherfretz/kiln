@@ -26,14 +26,54 @@ impl Sema<'_, '_> {
     /// access of the class being defined when declared inside it, else
     /// (an out-of-line definition) the access of its first declaration.
     pub(crate) fn set_member_access(&mut self, d: DeclId) {
+        self.set_member_access_impl(d, false);
+    }
+
+    /// [`Sema::set_member_access`] for a class, enumeration or class
+    /// template, which may be redeclared in its class: the redeclaration
+    /// must keep the first declaration's access ([class.access.spec]/4).
+    pub(crate) fn set_tag_member_access(&mut self, d: DeclId) {
+        self.set_member_access_impl(d, true);
+    }
+
+    fn set_member_access_impl(&mut self, d: DeclId, check: bool) {
         let Some(ctx) = self.ast.decls.get(d).ctx() else { return };
         if self.kind_of(ctx) != DeclKind::CXXRecord {
             return;
         }
         let lexical = self.ast.decls.lexical_ctx(d).unwrap_or(ctx);
-        let access = match self.classes.last() {
-            Some(c) if c.record == lexical => c.access,
-            _ => match self.ast.prev(d) {
+        let prev = self.ast.prev(d);
+        let in_class = self.classes.last().filter(|c| c.record == lexical).map(|c| c.access);
+        let access = match in_class {
+            Some(cur) => {
+                // [class.access.spec]/4: a member redeclared in its class
+                // keeps the access of its first declaration (clang
+                // `SetMemberAccessSpecifier`,
+                // `err_class_redeclared_with_different_access`).
+                if check
+                    && let Some(p) = prev
+                    && self.ast.decls.get(p).ctx() == Some(ctx)
+                    && let old = self.ast.decls.get(p).misc().access()
+                    && old != Access::None
+                    && old != cur
+                {
+                    let sel = |a: Access| (a as u8).saturating_sub(1).to_string();
+                    let ploc = self.ast.decls.get(p).loc();
+                    let note =
+                        self.diag(DiagId::note_previous_access_declaration, ploc).arg(sel(old));
+                    let msg = self
+                        .diag(
+                            DiagId::sema_class_redeclared_with_different_access,
+                            self.ast.decls.get(d).loc(),
+                        )
+                        .arg(self.decl_name(d))
+                        .arg(sel(cur))
+                        .with_note(note);
+                    self.emit(msg);
+                }
+                cur
+            }
+            None => match prev {
                 Some(p) => self.ast.decls.get(p).misc().access(),
                 None => return,
             },
@@ -291,6 +331,11 @@ impl Sema<'_, '_> {
         }
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            // The constrained placeholder's diagnostics point here, as
+            // for a namespace-scope variable (WP-1471).
+            self.inst.concepts.placeholder_locs.insert(v, l);
+        }
         if invalid {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }

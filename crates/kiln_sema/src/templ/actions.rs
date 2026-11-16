@@ -1201,7 +1201,9 @@ impl Sema<'_, '_> {
         r: Loc,
     ) -> Result<TemplateIdRef, ()> {
         let _ = r;
-        let res = self.template_id(name, args, l);
+        // Read by the alias template check of this template-id only.
+        let ttp_expansion = std::mem::take(&mut self.templ.ttp_written_expansion);
+        let res = self.template_id(name, args, l, ttp_expansion);
         // A dependent or instantiation-dependent specialization: where written (§5.8).
         if let Ok(TemplateIdRef::Type(t)) = res
             && self.is_instantiation_dependent_type(t)
@@ -1230,6 +1232,7 @@ impl Sema<'_, '_> {
         name: TemplateNameId,
         args: &[TemplateArg],
         l: Loc,
+        ttp_expansion: bool,
     ) -> Result<TemplateIdRef, ()> {
         let converted = self.injected_template_args(name, args);
         let args = converted.as_deref().unwrap_or(args);
@@ -1319,7 +1322,10 @@ impl Sema<'_, '_> {
                 // The arguments before the expansion are checked, and an
                 // expansion for a parameter that is not a pack is an error
                 // (§3.2).
-                self.check_dependent_template_args(d, args, l)?;
+                self.templ.ttp_written_expansion = ttp_expansion;
+                let r = self.check_dependent_template_args(d, args, l);
+                self.templ.ttp_written_expansion = false;
+                r?;
                 Ok(TemplateIdRef::Type(
                     self.ast.types.template_specialization(name, list, None, true),
                 ))

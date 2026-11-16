@@ -497,6 +497,7 @@ impl Sema<'_, '_> {
         locs: &[Loc],
         loc: Loc,
     ) -> Result<(), ()> {
+        let ttp_expansion = std::mem::take(&mut self.templ.ttp_written_expansion);
         self.check_expanded_pack_arity(tmpl, args, loc)?;
         let head = self.head_template(tmpl);
         let params = self.template_params(head);
@@ -544,7 +545,7 @@ impl Sema<'_, '_> {
                 // `err_template_expansion_into_fixed_list`).
                 if expansion.is_some() {
                     let alias = match self.kind_of(tmpl) {
-                        _ if !written => None,
+                        _ if !written && !ttp_expansion => None,
                         DeclKind::TypeAliasTemplate => Some(0u32),
                         DeclKind::Concept => Some(1),
                         _ => None,
@@ -929,7 +930,7 @@ impl Sema<'_, '_> {
     /// (its declared type with those substituted). A substituted array or
     /// function type is adjusted to a pointer ([temp.param]/10, as at the
     /// declaration; clang `CheckNonTypeTemplateParameterType`).
-    fn nttp_type(
+    pub(crate) fn nttp_type(
         &mut self,
         tmpl: DeclId,
         depth: u16,

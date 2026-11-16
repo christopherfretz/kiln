@@ -951,7 +951,7 @@ impl Parser<'_, '_> {
             return;
         }
         if let Some(try_loc) = fn_try {
-            let body = self.parse_try_block_common(try_loc);
+            let body = self.parse_try_block_common(try_loc, true);
             let (body, end) = match body {
                 Some(t) => {
                     // The `}` of the last handler ends the definition.

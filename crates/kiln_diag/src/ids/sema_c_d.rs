@@ -120,6 +120,8 @@ sema_cconv_unsupported = Warning [IgnoredAttributes] (1) "'{0}' calling conventi
 sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires a constant expression";
 sema_circular_arrow = Error (0) "circular pointer delegation detected";
+// WP-1471: clang err_class_redeclared_with_different_access ([class.access.spec]/4).
+sema_class_redeclared_with_different_access = Error (2) "'{0}' redeclared with '{1:public|protected|private}' access";
 sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_cleanup_arg_named_not_function = Error (1) "'cleanup' argument {0} is not a function";
 sema_cleanup_arg_not_function = Error (0) "'cleanup' argument is not a function";
@@ -323,6 +325,8 @@ sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
 sema_deduced_nttp_type_mismatch = Error (2) "deduced non-type template argument does not have the same type as the corresponding template parameter ({0} vs {1})";
 sema_deduced_return_type_cxx14 = Error (0) "deduced return types are a C++14 extension";
 sema_deduction_guide_not_deducible = Error (1) "deduction guide template contains {0:a template parameter|template parameters} that cannot be deduced";
+// WP-1471: clang err_deduction_guide_redeclared.
+sema_deduction_guide_redeclared = Error (0) "redeclaration of deduction guide";
 sema_deep_exception_specs_differ = Error (1) "exception specifications of {0:return|argument} types differ";
 // [dcl.fct.default]/4, /6 (WP-1470): default arguments added by a
 // redeclaration (clang `err_param_default_argument_template_redecl`,
@@ -429,6 +433,8 @@ sema_destroying_operator_delete_dependent_param_type_19 = Error (2) "'{0}' canno
 sema_destroying_operator_delete_not_usual = Error (0) "destroying operator delete can have only an optional size and optional alignment parameter";
 sema_destroying_operator_delete_param_type = Error (2) "1st parameter of destroying '{0}' must have type {1}";
 sema_destroying_operator_delete_param_type_19 = Error (2) "first parameter of '{0}' must have type {1}";
+// WP-1471: clang err_destructor_template ([class.dtor]/1).
+sema_destructor_template = Error (0) "destructor cannot be declared as a template";
 sema_diagnose_if_invalid_diagnostic_type = Error (0) "invalid diagnostic type for 'diagnose_if'; use \"error\" or \"warning\" instead";
 sema_diagnose_if_succeeded_error = Error (1) "{0}";
 sema_diagnose_if_succeeded_warning = Warning [UserDefinedWarnings] (1) "{0}";

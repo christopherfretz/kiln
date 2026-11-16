@@ -82,6 +82,10 @@ pub struct Scope {
     /// are ill-formed inside it up to the enclosing function scope
     /// ([expr.await]/2).
     pub catch_handler: bool,
+    /// The try-block or a handler of a function-try-block: its outermost
+    /// block, and a handler's exception-declaration, may not redeclare a
+    /// parameter ([basic.scope.block]/2).
+    pub fn_try_block: bool,
     /// For a namespace or translation-unit scope: the index of the first
     /// declaration created while this scope instance is open. Members of
     /// the entity with a lower index were declared in an earlier
@@ -118,6 +122,7 @@ impl Scope {
             nrvo: NrvoState::default(),
             try_barrier: false,
             catch_handler: false,
+            fn_try_block: false,
             first_decl: u32::MAX,
             errors: 0,
         }

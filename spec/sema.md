@@ -9431,6 +9431,70 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   laid out as a `packed` one (`Sema::short_enums`; clang `ActOnEnumBody`).
   Tests: `dcl.enum/short-enums*`.
 
+### 5.31 Accepts-invalid rules from GCC's C++ testsuite, batch 2 (WP-1471)
+- **Return-type requirement** ([expr.prim.req.compound]/1): what follows
+  `->` must start a type-constraint (`::` or an identifier naming a
+  concept); a type is "expected concept name with optional arguments" in
+  the parser (`parse_concept_name_or`). A requires-expression is dependent
+  when a type-constraint's own arguments are (`-> C<T>` with a
+  non-dependent `{ 0 }`), so a member template's requires-clause is
+  checked per specialization (`AstBuilder::requires_expr`). Tests:
+  `expr.prim.req.compound/*`.
+- **Destructor templates** ([class.dtor]/1): a template head on a
+  destructor declarator is "destructor cannot be declared as a template";
+  the declaration is dropped (no "does not match" cascade). Test:
+  `class.dtor/destructor-template-errors.cpp`.
+- **C++20 lambda extensions before C++20**: a template parameter list,
+  `[=, this]` and an init-capture pack are `-Wc++20-extensions` warnings
+  in the parser. Test: `expr.prim.lambda/cxx20-extensions-in-cxx17.cpp`.
+- **Qualified typedef declarator** ([dcl.typedef]/1): `typedef int Q::K;`
+  is "typedef declarator cannot be qualified" (`act_on_typedef`). The
+  recovery enumeration of `enum TE e;` for a typedef `TE` is invalid, so
+  the variable gets no "incomplete type" error. Test:
+  `dcl.typedef/qualified-typedef-declarator-errors.cpp`.
+- **Function-try-block scopes** ([basic.scope.block]/2): the try block
+  and each handler's exception-declaration and outermost block conflict
+  with the parameters (`Scope::fn_try_block`, `current_scope_raw_impl`).
+  Test: `basic.scope.block/function-try-block-parameter-redeclaration.cpp`.
+- **Too many braces** ([dcl.init.list]/3): "too many braces around scalar
+  initializer" is clang's extension warning, an error under
+  `-pedantic-errors`. Test: `dcl.init.list/many-braces-reference-pedantic.cpp`.
+- **Member redeclared with another access** ([class.access.general]): a
+  member tag redeclared in its class with a different access is
+  "'E' redeclared with 'private' access" with the previous access noted
+  (`set_tag_member_access`). Test: `class.access/enum-redeclared-access.cpp`.
+- **Constrained placeholders in templates** ([dcl.type.auto.deduct]/2): a
+  placeholder whose constraint is dependent stays dependent in the pattern
+  (`placeholder_constraint_dependent`), so each specialization deduces and
+  checks it; the diagnostic points at the type-constraint of a static data
+  member and of a variable template specialization too. Test:
+  `dcl.type.auto.deduct/constrained-placeholder-template-member.cpp`.
+- **CWG1430 through a template template parameter** ([temp.alias]/2): a
+  written pack expansion in `TT<Ts...>` is checked against the alias
+  template `TT` is substituted with (`TemplState::ttp_written_expansion`).
+  Test: `temp.alias/cwg1430-template-template-parameter.cpp`.
+- **Defaulted parameter in a later parameter's type**
+  ([temp.deduct.general]/5): after a default is substituted, a deduced
+  non-type argument whose parameter type is dependent has that type
+  substituted (`nttp_type`); a failure is a deduction failure. Test:
+  `temp.deduct/default-argument-in-later-parameter-type.cpp`.
+- **Member pointer to void or reference after substitution** ([dcl.mptr]/3),
+  at the `*` (`Chunk::MemberPointer::star`). Test:
+  `dcl.mptr/member-pointer-to-void-instantiated.cpp`.
+- **Dependent member without `template`** ([temp.res.general]/3): as a
+  template-argument, `A<n>::B` names no template; it is a dependent
+  expression, which a template template parameter rejects. Test:
+  `temp.arg.template/dependent-member-without-template-keyword.cpp`.
+- **`= delete` after a definition** ([dcl.fct.def.delete]/4): a redefinition
+  ("redefinition of 'f<int>'", the specialization's arguments printed; the
+  latest deleted declaration noted for deleted-then-defined). Test:
+  `dcl.fct.def.delete/delete-after-definition.cpp`.
+- **Deduction guide redeclaration** ([temp.deduct.guide]/3): an equivalent
+  guide is "redeclaration of deduction guide", a non-template one
+  differing only in its return type "functions that differ only in their
+  return type cannot be overloaded" (`check_guide_redeclaration`). Test:
+  `temp.deduct.guide/guide-redeclaration-errors.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - an invalid element (WP-408): an expression standing for clang's

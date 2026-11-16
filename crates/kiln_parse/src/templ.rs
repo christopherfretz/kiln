@@ -13,6 +13,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::BinaryOp;
+use kiln_ast::names::DeclName;
 use kiln_ast::templates::{Requirement, TtpKind};
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -820,10 +821,16 @@ impl Parser<'_, '_> {
     /// type-constraint ([temp.param]/2). Returns the concept and its
     /// explicit arguments.
     pub(crate) fn parse_concept_name(&mut self) -> Option<(DeclId, Vec<TemplateArg>)> {
+        self.parse_concept_name_or(DiagId::parse_expected_unqualified_id)
+    }
+
+    /// [`Self::parse_concept_name`], reporting `not_concept` at a name
+    /// that is not a concept.
+    fn parse_concept_name_or(&mut self, not_concept: DiagId) -> Option<(DeclId, Vec<TemplateArg>)> {
         let qual = self.parse_nested_name().ok()?;
         let name = self.ident()?;
         let NameClass::Concept(c) = self.s.classify_name(name, qual) else {
-            self.error_here(DiagId::parse_expected_unqualified_id);
+            self.error_here(not_concept);
             return None;
         };
         self.bump();
@@ -1341,9 +1348,8 @@ impl Parser<'_, '_> {
         // below once the qualifier is parsed, which instantiates the
         // specialization ([temp.inst]/2, [basic.lookup.qual]/1).
         let via_pattern = qual.is_some_and(|q| self.s.uninstantiated_spec_template(q).is_some());
-        let dep_name = (matches!(class, NameClass::Dependent)
-            && end >= 2
-            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template))
+        let template_kw = end >= 2 && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
+        let dep_name = (matches!(class, NameClass::Dependent) && template_kw)
             || ((dep_qual || via_pattern) && matches!(class, NameClass::TypeTemplate(_)));
         let d = match class {
             _ if dep_name => None,
@@ -1378,10 +1384,21 @@ impl Parser<'_, '_> {
             return Some(self.s.act_bare_concept_template_arg(c, loc));
         }
         let Some(d) = d else {
+            let begin = self.loc();
             let qual = self.parse_nested_name_nns().ok()??;
             let template_kw = self.eat_kw(Kw::Template).is_some();
             let n = self.ident()?;
+            let at = self.loc();
             self.bump();
+            // Without `template`, a member of an unknown specialization
+            // is not a template name ([temp.res.general]/3): `C<A<n>::B>`
+            // passes an expression, which a template template parameter
+            // rejects (clang `ParseTemplateTemplateArgument`; WP-1471).
+            if !template_kw && self.s.is_dependent_ctx(qual.ctx) {
+                let e =
+                    self.s.act_dependent_scope_ref(qual.nns, DeclName::ident(n), None, begin, at);
+                return Some(self.s.builder().template_arg_expr(e));
+            }
             // `X<T>::template M` inside `X` names the current
             // instantiation's member ([temp.dep.type]/1), found now.
             if !self.s.is_dependent_ctx(qual.ctx)
@@ -2045,8 +2062,17 @@ impl Parser<'_, '_> {
             let noexcept = self.eat_kw(Kw::Noexcept);
             let mut constraint = None;
             if self.eat(Punct::Arrow).is_some() {
+                // [expr.prim.req.compound]/1: what follows `->` is a
+                // type-constraint, never a type (the Concepts TS form
+                // `{ e } -> bool;`; clang
+                // `err_requires_expr_expected_type_constraint`).
                 let loc = self.loc();
-                let (c, args) = self.parse_concept_name()?;
+                let missing = DiagId::parse_requires_expr_expected_type_constraint;
+                if !self.at(Punct::ColonColon) && self.ident().is_none() {
+                    self.error_here(missing);
+                    return None;
+                }
+                let (c, args) = self.parse_concept_name_or(missing)?;
                 constraint = Some(self.s.act_on_return_type_requirement(c, &args, loc));
             }
             Requirement::Compound { expr, noexcept, constraint }

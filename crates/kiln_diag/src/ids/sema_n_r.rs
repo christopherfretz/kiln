@@ -220,6 +220,8 @@ sema_pure_not_virtual = Error (1) "'{0}' is not virtual and cannot be declared p
 sema_pure_virtual_call_in_cdtor = Warning [CallToPureVirtualFromCtorDtor] (3) "call to pure virtual member function {0} has undefined behavior; overrides of {0} in subclasses are not available in the {1:constructor|destructor} of {2}";
 sema_qualified_fn_type = Error (3) "{0:non-member function|static member function} of type {1} cannot have '{2}' qualifier";
 sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
+// WP-1471: clang err_qualified_typedef_declarator ([dcl.meaning.general]/2).
+sema_qualified_typedef_declarator = Error (0) "typedef declarator cannot be qualified";
 sema_range_on_array_parameter = Error (3) "cannot build range expression with array function parameter '{0}' since parameter with array type {1} is treated as pointer type {2}";
 sema_read_only_not_assignable = Error (0) "read-only variable is not assignable";
 sema_realimag_invalid_type = Error (2) "invalid type {0} to {1} operator";

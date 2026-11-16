@@ -509,7 +509,7 @@ impl Substituter<'_, '_, '_> {
         let block = self.sema.ast.stmts.try_block(s);
         let hs: Vec<StmtId> =
             self.sema.ast.lists.iter::<StmtId>(self.sema.ast.stmts.try_handlers(s)).collect();
-        self.sema.push_try_scope();
+        self.sema.push_try_scope(false);
         let block = self.body(block);
         self.sema.pop_scope();
         let mut handlers = Vec::with_capacity(hs.len());

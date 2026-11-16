@@ -339,6 +339,8 @@ anonymous union). The named clusters, by the expected message:
     clusters, for example `__int128` and zero-length arrays without
     `__extension__`). Area: diagnostics.
 
+WP-1471 fixed clusters 11, 14 to 17, 19 to 22, 24 to 26 and 28 (its subset of 37 tests and 111 cases went from 9 to 81 cases passing). Still open: clusters 13 and 27 (wait for WP-1470), cluster 23 (an operator found only at instantiation; two-phase operator lookup, WP-1496 item 6), cluster 29 (the copy check for an elidable copy before C++17, WP-1496 item 7), and two GCC-only wrong-line expectations (nontype-auto17, crash11) where kiln matches clang.
+
 ### Priority directories
 
 | directory | cases | pass | what fails |

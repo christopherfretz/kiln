@@ -705,6 +705,9 @@ pub enum Chunk {
         quals: Quals,
         /// Where the nested-name-specifier starts.
         loc: Loc,
+        /// The `*` (where an instantiation's diagnostics point, clang's
+        /// `MemberPointerTypeLoc::getStarLoc`).
+        star: Loc,
     },
     /// `&`.
     LRef {

@@ -339,6 +339,25 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(d);
                     return Err(SubstFail);
                 }
+                // [dcl.mptr]/3: no member pointer to a reference or to
+                // cv `void` (clang `BuildMemberPointerType`; WP-1471).
+                let at = self.chunk_loc.take().unwrap_or(loc);
+                let t = &self.sema.ast.types;
+                if t.is_reference(p) || t.is_void(p) {
+                    let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+                    d.name = self.declarator_name;
+                    let name = self.sema.declarator_name(&d);
+                    let msg = if self.sema.ast.types.is_reference(p) {
+                        self.sema
+                            .diag(DiagId::sema_mptr_to_reference, at)
+                            .arg(name)
+                            .arg(self.sema.ty_arg(p))
+                    } else {
+                        self.sema.diag(DiagId::sema_mptr_to_void, at).arg(name)
+                    };
+                    self.sema.emit(msg);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.member_pointer(p, c.ty()))
             }
             TypeView::ConstantArray(a) => {
@@ -536,6 +555,14 @@ impl Substituter<'_, '_, '_> {
                     Some(_) if self.sema.clang_compat >= 22 => self.ttp_arg_qualifier(name, loc),
                     _ => None,
                 };
+                let written_expansion = ttp.is_some()
+                    && self
+                        .sema
+                        .ast
+                        .types
+                        .args(args)
+                        .iter()
+                        .any(|&a| self.sema.is_pack_expansion_arg(a));
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
                 let mut v = self.sema.ast.types.args(args).to_vec();
@@ -544,7 +571,12 @@ impl Substituter<'_, '_, '_> {
                 }
                 let l = self.written(WrittenKey::Type(q), loc);
                 let saved = std::mem::replace(&mut self.sema.subst_template_id, true);
+                let saved_exp = std::mem::replace(
+                    &mut self.sema.templ.ttp_written_expansion,
+                    written_expansion,
+                );
                 let r = self.sema.act_template_id(name, &v, l, l);
+                self.sema.templ.ttp_written_expansion = saved_exp;
                 self.sema.subst_template_id = saved;
                 match r {
                     Ok(TemplateIdRef::Type(t)) => Ok(match qual {
