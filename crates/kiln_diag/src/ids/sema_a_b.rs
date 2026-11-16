@@ -301,6 +301,7 @@ sema_builtin_invalid_arg_type_19 = Error (3) "{0:1st|2nd} argument must be {1:an
 sema_builtin_is_string_literal_arg = Error (0) "argument to '__builtin_is_string_literal' must be a pointer to a character type";
 sema_builtin_is_within_lifetime_invalid_arg = Error (1) "{0:non-|function }pointer argument to '__builtin_is_within_lifetime' is not allowed";
 sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
+sema_builtin_member_pointer_arg = Error (2) "argument to '{0}' is not a pointer to member (was {1})";
 sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";
 sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
 sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";

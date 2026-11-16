@@ -105,6 +105,14 @@ Planned as 1.3.0.
   moves no line (a comment in a header) leaves the objects byte-identical
   for incremental links with mortar; a debugger can then no longer detect
   a stale source. The default, `-fkiln-debug-source-checksum`, is unchanged.
+- GCC's `__builtin_is_corresponding_member` and
+  `__builtin_is_pointer_interconvertible_with_class` (WP-1472), so
+  libstdc++'s `std::is_corresponding_member`,
+  `std::is_pointer_interconvertible_with_class` and their feature-test
+  macros are available, in constant expressions and at run time. They
+  share one common-initial-sequence rule with `__is_layout_compatible`,
+  which now also accepts members that are both `[[no_unique_address]]`
+  (CWG2759, as GCC; clang answers false).
 
 ### Changed
 
@@ -483,6 +491,13 @@ Planned as 1.3.0.
   arguments have no narrowing check. At `-fclang-compat=22`,
   `-Wno-error=<group>` keeps an extension a warning under `-pedantic-errors`
   (WP-1467).
+- A call of a member function template through an object whose type is
+  the current instantiation (`[o] { o.f<int>(); }`, `p->f<int>()` in a
+  class template) is resolved when the member is instantiated; a const
+  object calling a non-const member template was an error even in a
+  member never instantiated. In a lambda capturing `*this` with a deduced
+  explicit object parameter, a member of the copy is const when the
+  closure object is (`decltype((x))` is `const int&`) (WP-1472).
 
 ## [1.2.1] - 2026-11-14
 

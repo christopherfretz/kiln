@@ -625,7 +625,7 @@ impl Sema<'_, '_> {
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
         if let Some(t) = self.current_this() {
             self.note_this_use(loc);
-            self.builder().this_expr(t, false, loc)
+            self.build_this(t, false, loc)
         } else {
             let explicit_obj = self.func.as_ref().is_some_and(|f| self.has_explicit_object(f.decl));
             let id = if explicit_obj {

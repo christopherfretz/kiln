@@ -493,6 +493,12 @@ pub static TABLE: &[Row] = &[
     // WP-484: GCC's (libstdc++ `<meta>` declares `std::is_string_literal`
     // over it); sema `builtin_is_string_literal`, the Oven `bi::STRING_LIT`.
     f("__builtin_is_string_literal", DONE, Oven::Yes),
+    // WP-1472: GCC's (libstdc++ `<type_traits>` declares
+    // `std::is_corresponding_member` and
+    // `std::is_pointer_interconvertible_with_class` over them); sema
+    // `builtin_member_layout`, the Oven `bi::MEMBER_LAYOUT`.
+    f("__builtin_is_corresponding_member", DONE, Oven::Yes),
+    f("__builtin_is_pointer_interconvertible_with_class", DONE, Oven::Yes),
     // WP-757: GCC's P1494R5 observable checkpoint (libstdc++ `<utility>`
     // declares `std::observable_checkpoint` over it); codegen lowers it to
     // an opaque memory barrier; the Oven evaluates it as a no-op, as GCC
@@ -543,7 +549,7 @@ pub fn has_builtin_staged(name: &str) -> Option<bool> {
 
 /// Whether `name` is a GCC builtin clang does not have, which kiln
 /// implements and reports through `__has_builtin` (WP-484, WP-757,
-/// WP-773, WP-774).
+/// WP-773, WP-774, WP-1472).
 pub fn gcc_only(name: &str) -> bool {
     matches!(
         name,
@@ -551,6 +557,8 @@ pub fn gcc_only(name: &str) -> bool {
             | "__builtin_observable_checkpoint"
             | "__builtin_start_lifetime"
             | "__builtin_clear_padding"
+            | "__builtin_is_corresponding_member"
+            | "__builtin_is_pointer_interconvertible_with_class"
     )
 }
 

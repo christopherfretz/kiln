@@ -505,6 +505,67 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// `this` of type `ty` at `loc` (`implicit` for a member named without
+    /// `this->`), type-dependent where the innermost enclosing lambda
+    /// that captures `*this` has an explicit object parameter of
+    /// dependent type that is not known to be const: the copy is const
+    /// in a specialization whose object parameter is, so `this`, `x` and
+    /// `decltype((x))` of a member `x` depend on it, as a variable
+    /// captured by copy does ([temp.dep.expr]/3, [expr.prim.this]/2,
+    /// [expr.prim.lambda.closure]/5; clang and GCC re-form them in each
+    /// specialization; WP-1472).
+    pub(crate) fn build_this(&mut self, ty: QualType, implicit: bool, loc: Loc) -> ExprId {
+        let e = self.builder().this_expr(ty, implicit, loc);
+        if self.this_depends_on_object_parameter() {
+            self.ast.exprs.mark_type_dependent(e);
+        }
+        e
+    }
+
+    /// See [`Self::build_this`].
+    fn this_depends_on_object_parameter(&self) -> bool {
+        let mut c = self.ctx;
+        for _ in 0..4096 {
+            let Some(l) = self.lambda_of_call_op(c) else {
+                if self.kind_of(c) == DeclKind::RequiresExprBody
+                    && let Some(p) = self.ast.decls.get(c).ctx()
+                {
+                    c = p;
+                    continue;
+                }
+                return false;
+            };
+            let data = self.ast.exprs.lambdas.get(l);
+            if data.captures.iter().any(|x| x.kind == CaptureKind::StarThis) {
+                if !self.has_explicit_object(c) {
+                    return false;
+                }
+                let Some(t) = self
+                    .ast
+                    .decls
+                    .function(c)
+                    .and_then(|x| self.ast.lists.iter::<DeclId>(x.params).next())
+                    .and_then(|p| self.ast.decls.get(p).ty())
+                else {
+                    return false;
+                };
+                if !self.ast.types.is_dependent(t) {
+                    return false;
+                }
+                let t = self
+                    .ast
+                    .types
+                    .pointee(t)
+                    .filter(|_| self.ast.types.is_reference(t))
+                    .unwrap_or(t);
+                return !self.ast.types.canonical(t).quals().contains(Quals::CONST);
+            }
+            let Some(p) = self.lambda_parent(l) else { return false };
+            c = p;
+        }
+        false
+    }
+
     /// [expr.prim.lambda.closure]/5 (P0847) for a call at `loc` of `f`:
     /// [`Self::check_lambda_explicit_object_type`] for a specialization
     /// of a generic lambda's call operator (a non-template one was

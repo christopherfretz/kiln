@@ -2295,7 +2295,7 @@ impl Sema<'_, '_> {
         if all_instance {
             self.note_this_use(loc);
         }
-        let this = self.builder().this_expr(this_ty, true, loc);
+        let this = self.build_this(this_ty, true, loc);
         if self.ast.types.is_dependent(obj_ty) {
             // [temp.dep.expr]/3: `this` is type-dependent in a member of a
             // class template, so the call of an overloaded member through
@@ -5445,6 +5445,11 @@ impl Sema<'_, '_> {
                 Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
                 _ => return self.recover_err(&kids, loc),
             }
+        } else if self.member_overload(callee).is_some()
+            && !args_dep
+            && let Some(dep) = self.dependent_object_member_overload(callee)
+        {
+            self.rebuild_parens(callee, dep)
         } else if self.member_overload(callee).is_some() && !args_dep {
             match self.resolve_member_call(callee, args, &braced) {
                 Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),

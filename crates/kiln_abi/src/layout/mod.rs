@@ -9,6 +9,7 @@
 //! native stack.
 
 mod base_info;
+pub mod compat;
 mod empty;
 pub mod padding;
 pub(crate) mod props;

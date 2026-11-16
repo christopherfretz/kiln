@@ -212,7 +212,7 @@ impl Sema<'_, '_> {
         nns: Option<kiln_ast::NnsId>,
         loc: Loc,
     ) -> ExprId {
-        let this = self.builder().this_expr(this_ty, true, loc);
+        let this = self.build_this(this_ty, true, loc);
         let b = conv::decay_dependent(self, this);
         self.builder().dependent_member(Some(b), true, name, false, nns, None, loc)
     }
@@ -249,7 +249,7 @@ impl Sema<'_, '_> {
         {
             self.note_this_use(loc);
             self.check_contract_implicit_this(loc);
-            let this = self.builder().this_expr(this_ty, true, loc);
+            let this = self.build_this(this_ty, true, loc);
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             self.diagnose_deprecated(d, loc);
             self.check_sve_use(d, loc);

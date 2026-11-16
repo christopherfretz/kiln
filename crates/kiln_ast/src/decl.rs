@@ -5787,6 +5787,14 @@ pub mod builtin {
         row(DWARF_SP_COLUMN, "__builtin_dwarf_sp_column", "Ui", N),
         row(EH_RETURN, "__builtin_eh_return", "vzv*", R),
         row(EXTEND_POINTER, "__builtin_extend_pointer", "ULLiv*", N),
+        // WP-1472.
+        row(IS_CORRESPONDING_MEMBER, "__builtin_is_corresponding_member", "b.", N | T),
+        row(
+            IS_POINTER_INTERCONVERTIBLE_WITH_CLASS,
+            "__builtin_is_pointer_interconvertible_with_class",
+            "b.",
+            N | T,
+        ),
         // WP-1057.
         row(READCYCLECOUNTER, "__builtin_readcyclecounter", "ULLi", N),
         // WP-774.
@@ -5953,6 +5961,18 @@ pub mod builtin {
     /// `unsigned long long __builtin_extend_pointer(void *)` (`NoThrow`):
     /// the pointer as an `_Unwind_Word` (`ptrtoint` to `i64`).
     pub const EXTEND_POINTER: u32 = 2453;
+    // ---- WP-1472 (GCC builtins libstdc++'s `<type_traits>` tests for).
+    /// `bool __builtin_is_corresponding_member(M1 S1::*m1, M2 S2::*m2)`
+    /// (GCC; `std::is_corresponding_member`, [meta.member]/4): whether
+    /// `m1` and `m2` name corresponding members of the common initial
+    /// sequence of the standard-layout structs `S1` and `S2`
+    /// ([class.mem.general]/23). Kiln-private id.
+    pub const IS_CORRESPONDING_MEMBER: u32 = 2460;
+    /// `bool __builtin_is_pointer_interconvertible_with_class(M S::*m)`
+    /// (GCC; `std::is_pointer_interconvertible_with_class`,
+    /// [meta.member]/2): whether an `S` object is pointer-interconvertible
+    /// with its member `m` ([basic.compound]/5). Kiln-private id.
+    pub const IS_POINTER_INTERCONVERTIBLE_WITH_CLASS: u32 = 2461;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[
