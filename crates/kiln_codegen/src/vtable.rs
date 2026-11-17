@@ -300,7 +300,7 @@ impl Cg<'_> {
         let ty = self.vtable_ir_ty(&l);
         let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTV", first);
         let vis = self.class_visibility(first, false);
-        let g = self.m.add_global(&name, ty);
+        let g = self.named_global_decl(&name, ty);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.linkage = Linkage::External;
@@ -309,6 +309,24 @@ impl Cg<'_> {
         gv.visibility = vis;
         self.vtables.insert(first, g);
         Ok(g)
+    }
+
+    /// The global for symbol `name` with value type `ty`, created by an
+    /// entity's emission (a class's vtable, a `type_info` definition): a
+    /// declaration codegen already made by NAME (the `__cxxabiv1` vtable
+    /// an RTTI descriptor points into, an external `type_info`) is that
+    /// global, retyped and moved to the end of the module as clang's
+    /// `CreateOrReplaceCXXRuntimeVariable` and `BuildTypeInfo` replace
+    /// it; else a new global (spec/codegen.md §7a, one global per
+    /// symbol, WP-1620). One map lookup, which `add_global` makes anyway.
+    pub(crate) fn named_global_decl(&mut self, name: &str, ty: LTy) -> GlobalId {
+        match self.m.get_global(name) {
+            Some(g) if self.m.global(g).initializer().is_none() => {
+                self.m.retype_global_to_end(g, ty);
+                g
+            }
+            _ => self.m.add_global(name, ty),
+        }
     }
 
     /// clang `EmitDeferredVTables`: an external vtable is emitted
@@ -623,6 +641,13 @@ impl Cg<'_> {
         // vtable (without whole-program vtables).
         if linkage != VtLinkage::AvailableExternally {
             self.vtable_type_metadata(g, &l, first);
+            // clang `emitVTableDefinitions` (WP-1620): kiln only where
+            // the vtable is defined (clang also from an
+            // `available_externally` one at -O1, which would define the
+            // runtime's objects in a user unit).
+            if self.is_abi_fundamental_type_info(first) {
+                self.emit_fundamental_rtti(first)?;
+            }
         }
         Ok(())
     }
@@ -2219,6 +2244,20 @@ impl Cg<'_> {
     /// The `_ZTS` global `ts_name` (its string is the mangling after the
     /// prefix).
     fn rtti_name_global(&mut self, ts_name: &str, linkage: VtLinkage, q: QualType) -> Value {
+        if let Some(g) = self.m.get_global(ts_name) {
+            return Value::global(g);
+        }
+        let vis = self.rtti_visibility(q, linkage);
+        self.rtti_name_global_vis(ts_name, linkage, vis)
+    }
+
+    /// [`Self::rtti_name_global`] with visibility `vis`.
+    fn rtti_name_global_vis(
+        &mut self,
+        ts_name: &str,
+        linkage: VtLinkage,
+        vis: Visibility,
+    ) -> Value {
         let ts_name = ts_name.to_owned();
         if let Some(g) = self.m.get_global(&ts_name) {
             return Value::global(g);
@@ -2227,7 +2266,6 @@ impl Cg<'_> {
         let ty = self.m.const_type(init);
         let g = self.m.add_global(&ts_name, ty);
         let _ = self.m.set_initializer(g, Some(init));
-        let vis = self.rtti_visibility(q, linkage);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.align = Some(1);
@@ -2242,7 +2280,7 @@ impl Cg<'_> {
     /// it after them (spec/codegen.md §6a). The reserved placeholder is
     /// retyped by [`Self::finish_rtti`].
     fn reserve_rtti(&mut self, name: &str) -> Option<GlobalId> {
-        (self.opts.clang_compat >= 22).then(|| self.m.add_global(name, LTy::PTR))
+        (self.opts.clang_compat >= 22).then(|| self.named_global_decl(name, LTy::PTR))
     }
 
     /// The `_ZTI` global `name` (the `reserve_rtti` placeholder `pre`, or
@@ -2255,6 +2293,19 @@ impl Cg<'_> {
         linkage: VtLinkage,
         q: QualType,
     ) -> R<Value> {
+        let vis = self.rtti_visibility(q, linkage);
+        self.finish_rtti_vis(pre, name, fields, linkage, vis)
+    }
+
+    /// [`Self::finish_rtti`] with visibility `vis`.
+    fn finish_rtti_vis(
+        &mut self,
+        pre: Option<GlobalId>,
+        name: &str,
+        fields: &[Value],
+        linkage: VtLinkage,
+        vis: Visibility,
+    ) -> R<Value> {
         let init = match self.m.const_anon_struct(fields, false) {
             Ok(v) => v,
             Err(e) => return err(None, format!("bad type_info: {e:?}")),
@@ -2265,10 +2316,9 @@ impl Cg<'_> {
                 self.m.set_global_value_type(g, ty);
                 g
             }
-            None => self.m.add_global(name, ty),
+            None => self.named_global_decl(name, ty),
         };
         let _ = self.m.set_initializer(g, Some(init));
-        let vis = self.rtti_visibility(q, linkage);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
         gv.align = Some(8);
@@ -2276,6 +2326,75 @@ impl Cg<'_> {
         self.set_vague_linkage(g, linkage);
         self.rtti_globals.insert(name.to_owned(), g);
         Ok(Value::global(g))
+    }
+
+    /// `rd` is `::__cxxabiv1::__fundamental_type_info`: the class is
+    /// named so, its context is a namespace `__cxxabiv1` and that
+    /// namespace's context is the translation unit itself (clang 22's
+    /// test: not through an inline namespace, a linkage specification or
+    /// an export declaration).
+    fn is_abi_fundamental_type_info(&self, rd: DeclId) -> bool {
+        let decls = &self.ast.decls;
+        if !self.decl_named(rd, "__fundamental_type_info") {
+            return false;
+        }
+        decls.get(rd).ctx().is_some_and(|ns| {
+            decls.get(ns).kind() == DeclKind::Namespace
+                && self.decl_named(ns, "__cxxabiv1")
+                && decls
+                    .get(ns)
+                    .ctx()
+                    .is_some_and(|tu| decls.get(tu).kind() == DeclKind::TranslationUnit)
+        })
+    }
+
+    /// Itanium C++ ABI §2.9.2 (clang `EmitFundamentalRTTIDescriptors`):
+    /// where the vtable of `::__cxxabiv1::__fundamental_type_info` (`rd`)
+    /// is defined, the C++ runtime's `type_info` objects and names of
+    /// every fundamental type `X` and of `X*` and `const X*` are defined,
+    /// `external` with the class's visibility, in clang 22's order (the
+    /// same on every ELF target). A unit that already referred to one of
+    /// them (`typeid(int)`) refers to the definition (one global per
+    /// symbol).
+    fn emit_fundamental_rtti(&mut self, rd: DeclId) -> R<()> {
+        const FUNDAMENTAL_TYPES: [&str; 25] = [
+            "v", "Dn", "b", "w", "c", "h", "a", "s", "t", "i", "j", "l", "m", "x", "y", "n", "o",
+            "Dh", "f", "d", "e", "g", "Du", "Ds", "Di",
+        ];
+        let vis = self.class_visibility(rd, true);
+        for code in FUNDAMENTAL_TYPES {
+            let base = self.fundamental_rtti_def(code, None, vis)?;
+            self.fundamental_rtti_def(&format!("P{code}"), Some((0, base)), vis)?;
+            self.fundamental_rtti_def(&format!("PK{code}"), Some((1, base)), vis)?;
+        }
+        Ok(())
+    }
+
+    /// The strong `type_info` `_ZTI<code>` (a `__fundamental_type_info`, or
+    /// with `pointee` a `__pointer_type_info` of those flags and pointee)
+    /// and its name `_ZTS<code>`.
+    fn fundamental_rtti_def(
+        &mut self,
+        code: &str,
+        pointee: Option<(u32, Value)>,
+        vis: Visibility,
+    ) -> R<Value> {
+        let name = format!("_ZTI{code}");
+        if let Some(&g) = self.rtti_globals.get(&name) {
+            return Ok(Value::global(g));
+        }
+        let pre = self.reserve_rtti(&name);
+        let vt = match pointee {
+            None => "_ZTVN10__cxxabiv123__fundamental_type_infoE",
+            Some(_) => "_ZTVN10__cxxabiv119__pointer_type_infoE",
+        };
+        let mut fields = vec![self.abi_vtable(vt)?];
+        fields.push(self.rtti_name_global_vis(&format!("_ZTS{code}"), VtLinkage::Strong, vis));
+        if let Some((flags, pti)) = pointee {
+            fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
+            fields.push(pti);
+        }
+        self.finish_rtti_vis(pre, &name, &fields, VtLinkage::Strong, vis)
     }
 
     /// clang `IsStandardLibraryRTTIDescriptor`: fundamental types and

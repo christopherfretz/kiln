@@ -129,7 +129,7 @@ impl Cg<'_> {
         Some(a)
     }
 
-    fn decl_named(&self, d: DeclId, name: &str) -> bool {
+    pub(crate) fn decl_named(&self, d: DeclId, name: &str) -> bool {
         let ast = self.ast;
         ast.decls.get(d).name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == name)
     }

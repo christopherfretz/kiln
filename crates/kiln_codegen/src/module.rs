@@ -6,10 +6,10 @@ use kiln_abi::call::{ArgKind, CallInfo, classify_call};
 use kiln_abi::irtype::{IrType, IrTypes, record_kind_prefix};
 use kiln_abi::mangle;
 use kiln_abi::{Arch, Target};
-use kiln_ast::decl::FriendTarget;
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, TemplLinkKind, VarStorage,
 };
+use kiln_ast::decl::{FriendKind, FriendTarget};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, CallConv, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
@@ -1544,6 +1544,18 @@ impl<'a> Cg<'a> {
                     .templates
                     .member_spec(i)
                     .is_some_and(|m| m.kind == SpecKind::ExplicitSpecialization)
+                {
+                    return false;
+                }
+                // A function first declared by a friend declaration of a
+                // class template specialization and defined outside the
+                // class is an ordinary function ([class.friend]/6, WP-1620:
+                // libc++'s `__get_ostream_file`).
+                if ast.decls.get(first).misc().friend() != FriendKind::None
+                    && ast.redecls_of(first).any(|r| {
+                        ast.decls.function(r).is_some_and(|f| f.body.is_some())
+                            && ast.decls.get(r).misc().friend() == FriendKind::None
+                    })
                 {
                     return false;
                 }
@@ -4000,6 +4012,15 @@ impl<'a> Cg<'a> {
     // ---- module trailer ------------------------------------------------
 
     fn trailer(&mut self) {
+        // spec/codegen.md §7a "One global per symbol": a renamed `name.N`
+        // beside a `name` where both have non-local linkage is two LLVM
+        // globals for one symbol (WP-1620). Checked in debug builds (the
+        // corpus); the cost is one entry per rename.
+        debug_assert!(
+            self.m.external_name_collisions().is_empty(),
+            "two non-local globals for one symbol: {:?}",
+            self.m.external_name_collisions()
+        );
         self.finish_dso_local();
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();

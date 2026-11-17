@@ -248,6 +248,15 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Codegen, found building libc++abi and libc++ 22.1.8 with kiln (WP-1620):
+  the vtable of a `__cxxabiv1` `type_info` class that RTTI referred to
+  before the class's own vtable was emitted is one global again (it was
+  defined as `_ZTV...E.N` and left undefined under its own name); the key
+  function of `__cxxabiv1::__fundamental_type_info` defines the
+  fundamental `type_info` objects (`_ZTIv`, `_ZTIPKc`, ...) and their
+  names, as clang and GCC do; a function first declared as a friend of a
+  class under `extern template` and defined outside the class is emitted
+  (libc++'s `std::__get_ostream_file`).
 - Templates and concepts, found running GCC's C++ testsuite (WP-1570,
   WP-1578, WP-1598, WP-1599): a member call through `this` of the current
   instantiation naming one non-template member function with a
