@@ -227,6 +227,8 @@ fn excluded(args: &Args) -> Args {
         // PCH built without it matches a consumer with it. Other levels
         // stay as spelled (their predefines are a component too).
         opt_flag: args.opt_flag.clone().filter(|f| f != "-O0"),
+        // WP-1557: the `.mason.meta` unit is written after the front end.
+        codegen: crate::codegen_flags::CodegenFlags { mason_meta: None, ..args.codegen.clone() },
         ..args.clone()
     }
 }
@@ -1851,6 +1853,9 @@ mod tests {
         same(&["-std=c++20", "t.cpp"], &["-std=c++20", "-O0", "-c", "t.cpp"]);
         same(&["-std=c++20", "-O0", "t.cpp"], &["-std=c++20", "t.cpp"]);
         assert_ne!(diff(&["-std=c++20", "t.cpp"], &["-std=c++20", "-O2", "t.cpp"]), None);
+        // WP-1557: the `.mason.meta` unit is written after the front end.
+        same(BASE, &with(&["-fmason-metadata"]));
+        same(&with(&["-fmason-metadata=all"]), BASE);
         named(
             &["-std=c++20", "-Wall", "-Wno-unused-variable", "t.cpp"],
             &["-std=c++20", "-Wno-unused-variable", "-Wall", "t.cpp"],

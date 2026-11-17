@@ -452,6 +452,8 @@ impl CodegenJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
+        // WP-1557: read from the macro table at the end of the TU.
+        let mason_meta = crate::mason_meta::options(a, &job.std, &pp);
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
@@ -553,6 +555,7 @@ impl CodegenJob<'_> {
                 && a.new_bound_check.unwrap_or(true);
             opts.check_new = a.check_new;
             opts.contract_checks = a.contract_checks;
+            opts.mason_meta = mason_meta;
             // WP-1032: the ignorelists the driver validated.
             opts.ignorelist = a.sanitize.ignorelist(
                 opts.sanitize.kinds,
