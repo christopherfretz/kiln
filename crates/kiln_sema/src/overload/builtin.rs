@@ -36,6 +36,7 @@ pub(crate) struct ConvTargets {
 
 /// The types one operand converts to (clang `BuiltinCandidateTypeSet`).
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent membership flags, as in clang's set")]
 struct TypeSet {
     /// Pointer types (canonical), with their more-qualified variants.
     ptrs: Vec<QualType>,
@@ -45,6 +46,8 @@ struct TypeSet {
     enums: Vec<QualType>,
     /// `std::nullptr_t` is among them.
     nullptr: bool,
+    /// `std::meta::info` is among them.
+    meta_info: bool,
     /// A non-class type is among them.
     non_record: bool,
     /// An arithmetic or enumeration type is among them.
@@ -268,6 +271,7 @@ impl Sema<'_, '_> {
                 }
             }
             TypeView::Builtin(BuiltinType::NullPtr) => set.nullptr = true,
+            TypeView::Builtin(BuiltinType::MetaInfo) => set.meta_info = true,
             TypeView::BitInt { .. } => {
                 if !set.bit_ints.contains(&t) {
                     set.bit_ints.push(t);
@@ -394,6 +398,13 @@ impl Sema<'_, '_> {
                     if b.sets[i].nullptr && !added.contains(&QualType::NULLPTR) {
                         added.push(QualType::NULLPTR);
                         self.add_builtin(&mut b, &[QualType::NULLPTR, QualType::NULLPTR]);
+                    }
+                    // [expr.eq]/2 (P2996): `bool operator==(info, info)`,
+                    // which a defaulted comparison of a member of type
+                    // `std::meta::info` finds (CWG3153).
+                    if b.sets[i].meta_info && !added.contains(&QualType::META_INFO) {
+                        added.push(QualType::META_INFO);
+                        self.add_builtin(&mut b, &[QualType::META_INFO, QualType::META_INFO]);
                     }
                 }
                 self.pointer_or_enum_pairs(&mut b, false);

@@ -2198,7 +2198,11 @@ impl Parser<'_, '_> {
         let j = lp + 1;
         let t = self.tok_at(j);
         match Self::punct_of(t) {
-            Some(Punct::RParen) => return true,
+            // `()`, or a splice-type-specifier: the
+            // parameter-declaration-clause is a type-only context
+            // ([dcl.type.splice], [temp.res.general]/4.3.2), and a splice
+            // is never a declarator-id.
+            Some(Punct::RParen | Punct::SpliceOpen) => return true,
             Some(Punct::Ellipsis) => {
                 return Self::punct_of(self.tok_at(j + 1)) == Some(Punct::RParen);
             }

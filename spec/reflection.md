@@ -549,7 +549,12 @@ at later uses (`set_default_immediate_value`) only when the evaluation
 was not marked impure (`Oven::impure_count`): a point-dependent value
 (`access_context::current()` in a default member initializer used by an
 aggregate initialization) is evaluated afresh at each use. Tested by
-`meta.reflection.access.context/eval-point.cpp`.
+`meta.reflection.access.context/eval-point.cpp`. The scope of an
+inheriting constructor's evaluation point is the inherited
+constructor's (its class's default member initializers run for it),
+and that of a trailing requires-clause being checked is the scope of
+the constrained declaration (`Sema::constraint_scope`; WP-1537,
+`current-inherited-ctor-variant-members.cpp`).
 
 Templates (WP-1482): an immediate invocation in a template whose
 evaluation the Oven marked impure (`Sema::eval_immediate`) keeps no
@@ -744,7 +749,7 @@ before. Tested by
   | Function | Result |
   |---|---|
   | `has_identifier(r)` | whether `identifier_of(r)` succeeds |
-  | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
+  | `identifier_of(r)`, `u8identifier_of(r)` | a class, enumeration, enumerator, variable, function, data member, namespace, namespace alias, type alias or template (a `Template` reflection answers for its templated declaration): the identifier it was declared with; an unnamed class or enumeration with a typedef name for linkage ([dcl.typedef]/9): that name; a literal operator: its suffix. A type: as its alias when it is a cv-unqualified typedef or alias-declaration type (not an alias template specialization), else as its class or enumeration when it is a cv-unqualified one. A direct base class relationship: as its base class (canonical, not the alias that names it; WP-1537). A function parameter: the name of the parameter of the function's declarations, except one declared by a function parameter pack, which has none (the parameters after a pack keep theirs; WP-1537). Otherwise (a specialization, a constructor, destructor, operator or conversion function, an unnamed entity, the global namespace, any other type or value) fails: "'R' has no identifier" |
   | `display_string_of(r)`, `u8display_string_of(r)` | implementation-defined; never fails; GCC 16.1's string (below): a type as GCC's diagnostic `%T`, a declaration as `%D`, a value or object as its source spelling (below), anything else as `^^…` |
   | `source_location_of(r)` | the location of the declared name, with an empty `function_name`; a reflection with no declaration (a fundamental or compound type, a value, the translation unit) gives `source_location{}`. The file name follows `-fkiln-source-path-style=` (below), then `-ffile-prefix-map=`/`-fmacro-prefix-map=` apply |
 
@@ -1020,7 +1025,7 @@ position's operand).
   |---|---|---|---|
   | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); in a template argument list only as `typename [: r :]` (a bare `[: r :]` forming a whole template-argument is ill-formed, [temp.names]/1: `parse_splice_template_arg_unparenthesized`, `temp.names/splice-template-argument-unparenthesized.cpp`; a splice that only starts an argument, `[: r :] + 1`, `([: r :])`, `[: r :]::type`, is an ordinary operand, `temp.names/splice-template-argument.cpp`; WP-830) | a type or a type alias | implemented (`dcl.type.splice/`) |
   | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), an object with no declaration included (WP-830) |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category); a member of an anonymous union of the class through the class's member for it ([class.union.anon]/1, WP-1489) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category; the object is converted to the relationship's derived class, then along that one base-specifier, so a class with a direct and an indirect base of one type is not ambiguous, and `p->[: b :]` is the subobject, WP-1537 `expr.ref/splice-direct-base-run.cpp`); a member of an anonymous union of the class through the class's member for it ([class.union.anon]/1, WP-1489) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
   | member template | `e.template [: m :]`, `e.template [: m :] < args >` [expr.ref]/1, [expr.prim.splice]/3 | a member function template or a static data member template of `e`'s class or a base, the one designated (not what its name finds); without arguments only a function template (`sema_splice_not_function_template`); kept with its arguments in a template (`Sema::act_on_member_template_splice`, WP-1489) | implemented (`expr.ref/splice-member-template*.cpp`) |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression; a class or alias template without arguments in a type is a deduced class type placeholder ([dcl.type.splice]/2, [dcl.type.class.deduct]; WP-1489) | implemented (`temp.names/splice-*.cpp`, `dcl.type.splice/ctad-placeholder.cpp`; spec/landed/reflection/WP-482.md) |
@@ -1210,7 +1215,16 @@ it, with `from() == ^^data_member_spec`:
     cv-qualified type 'T'".
 
 14. Each element of `annotations` has a type: "reflection does not have
-    a type" (WP-484; `^^int`, a null `info`, a namespace).
+    a type" (WP-484; `^^int`, a null `info`, a namespace), which is a
+    non-array object type: "'T' is not a non-array object type" (a
+    function, an array, a reference; WP-1537).
+15. Annotations need a name: "'annotations' specified without a 'name'"
+    (WP-1537; P3795 [meta.reflection.define.aggregate]/5).
+
+The Oven sets the `info` type of the run from the annotations vector's
+element type when it reads the options (WP-1537: a `data_member_spec`
+with annotations as the first reflection operation of a unit read them
+with no `info` type).
 
 **Annotations** (P3394's `data_member_options::annotations`, a
 `vector<info>`; WP-484, GCC 16.1's semantics). The Oven reads the vector

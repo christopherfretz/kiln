@@ -27,7 +27,7 @@ use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::{Nns, TemplateArg, TemplateName};
+use kiln_ast::types::{Nns, Quals, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, NnsId, QualType, ReflectionId, TemplateNameId};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
@@ -407,7 +407,7 @@ impl Sema<'_, '_> {
     /// `d` itself otherwise; `Err` for a member of an anonymous union at
     /// namespace or block scope, which is a member of no named class
     /// (CWG issue 705: no splice designates it).
-    fn anon_member_as_indirect(&self, d: DeclId) -> Result<DeclId, ()> {
+    pub(crate) fn anon_member_as_indirect(&self, d: DeclId) -> Result<DeclId, ()> {
         if self.kind_of(d) != DeclKind::Field {
             return Ok(d);
         }
@@ -448,6 +448,72 @@ impl Sema<'_, '_> {
     fn splice_misfit_expr(&mut self, e: ExprId, at: Loc, open: Loc) -> ExprId {
         self.error(DiagId::sema_splice_not_expression, at);
         self.recover_err(&[e], open)
+    }
+
+    /// `b.[: r :]` (or `->`) for a direct base relationship `r` of
+    /// `derived`, a base of the object's class `def` ([expr.ref]/7.6).
+    fn member_base_splice(
+        &mut self,
+        b: ExprId,
+        def: DeclId,
+        (derived, i): (DeclId, u32),
+        q: Quals,
+        arrow: bool,
+        open: Loc,
+    ) -> ExprId {
+        let Some(dd) = self.ast.definition(derived) else {
+            return self.recover_err(&[b], open);
+        };
+        let bt = self.ast.decls.bases(dd, &self.ast.lists).nth(i as usize).map(|s| s.ty);
+        let Some(bt) = bt.filter(|&t| self.ast.types.as_record(t).is_some()) else {
+            return self.recover_err(&[b], open);
+        };
+        // [expr.ref]/7.6 (P2996): the direct base class subobject
+        // the relationship designates, not the result of a search
+        // from the object's class for the base type (a class with
+        // a direct and an indirect `B` is not ambiguous here). The
+        // object is first converted to the relationship's derived
+        // class, then along that one base-specifier.
+        let b = self.object_to_class_as(
+            b,
+            arrow,
+            def,
+            q,
+            (dd, None),
+            q,
+            kiln_ast::expr::CastKind::UncheckedDerivedToBase,
+        );
+        if self.is_err_expr(b) {
+            return b;
+        }
+        let Some(&spec) =
+            self.ast.decls.record(dd).and_then(|r| self.ast.lists.get(r.bases).get(i as usize))
+        else {
+            return self.recover_err(&[b], open);
+        };
+        let list = self.ast.lists.push_raw(&[spec]);
+        let bt = if q.is_empty() { bt } else { self.ast.types.qualify(bt, q) };
+        let ty = if arrow { self.ast.types.pointer_to(bt) } else { bt };
+        let b = if arrow { b } else { self.materialize_object(b) };
+        let vk = if arrow {
+            kiln_ast::expr::ValueCategory::PRValue
+        } else {
+            self.ast.exprs.get(b).value_category()
+        };
+        let at = self.eloc(b);
+        let r = self.builder().cast(
+            ExprKind::ImplicitCastExpr,
+            kiln_ast::expr::CastKind::UncheckedDerivedToBase,
+            b,
+            ty,
+            vk,
+            Some(list),
+            at,
+            kiln_ast::expr::ExprFlags::NONE,
+        );
+        // `p->[: base :]` is `(*p).[: base :]` ([expr.ref]/2): the
+        // base subobject, not a pointer to it.
+        if arrow { self.act_on_unary(kiln_ast::expr::UnaryOp::Deref, r, at) } else { r }
     }
 
     /// The class member access `base.[: e :]` / `base->[: e :]`
@@ -519,24 +585,8 @@ impl Sema<'_, '_> {
                 self.member_of_object(b, obj_ty, def, arrow, d, None, None, open)
             }
             Reflectee::BaseSpec(derived, i) if self.qualifier_names_base(derived, def) => {
-                let Some(dd) = self.ast.definition(derived) else {
-                    return self.recover_err(&[b], open);
-                };
-                let bt = self.ast.decls.bases(dd, &self.ast.lists).nth(i as usize).map(|s| s.ty);
-                let Some(target) = bt.and_then(|t| self.ast.types.as_record(t)) else {
-                    return self.recover_err(&[b], open);
-                };
-                let target = self.ast.first(target);
                 let q = self.ast.types.effective_quals(obj_ty);
-                self.object_to_class_as(
-                    b,
-                    arrow,
-                    def,
-                    q,
-                    (target, bt),
-                    q,
-                    kiln_ast::expr::CastKind::UncheckedDerivedToBase,
-                )
+                self.member_base_splice(b, def, (derived, i), q, arrow, open)
             }
             _ => {
                 let d = self.diag(DiagId::sema_splice_not_member, at).arg(self.ty_arg(obj_ty));

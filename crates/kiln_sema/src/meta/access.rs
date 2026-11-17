@@ -136,7 +136,7 @@ impl Sema<'_, '_> {
     /// ([meta.reflection.scope]/3.5), so the walk goes on from the
     /// block's synthesized lambda to the context of its closure type.
     fn current_scope(&self, ctx: &MetaCtx) -> DeclId {
-        let mut cur = Some(ctx.scope.unwrap_or_else(|| self.access_start()));
+        let mut cur = Some(ctx.scope.unwrap_or_else(|| self.constraint_scope()));
         for _ in 0..10_000 {
             let Some(c) = cur else { break };
             let k = self.kind_of(c);
@@ -144,6 +144,13 @@ impl Sema<'_, '_> {
                 && let Some(closure) = self.consteval_block_closure(c)
             {
                 cur = self.ast.decls.get(closure).ctx();
+                continue;
+            }
+            // An inheriting constructor has no body: a call in its frame
+            // is in a default member initializer it uses, whose point is
+            // in the class scope ([meta.reflection.access.context]/1.1.2).
+            if k == DeclKind::CXXConstructor && self.inherited_ctor_base(c).is_some() {
+                cur = self.ast.decls.get(c).ctx();
                 continue;
             }
             if k.is_function()
@@ -161,6 +168,30 @@ impl Sema<'_, '_> {
             cur = self.ast.decls.get(c).ctx();
         }
         self.ast.tu
+    }
+
+    /// The evaluation point's scope outside any function: while the
+    /// associated constraints of a declaration `D` (a trailing or
+    /// template-head requires-clause) or a concept's constraint are being
+    /// checked, the innermost scope enclosing `D`'s locus that is not a
+    /// template parameter scope ([meta.reflection.access.context]/1.3:
+    /// a class template member's is its class); else the context the
+    /// constant expression is in.
+    fn constraint_scope(&self) -> DeclId {
+        use crate::templ::stack::FrameKind;
+        let frame = self
+            .inst
+            .stack
+            .frames
+            .iter()
+            .rev()
+            .find(|f| !matches!(f.kind, FrameKind::ConstraintSubstitution));
+        match frame {
+            Some(f) if matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck) => {
+                self.ast.decls.get(f.entity).ctx().unwrap_or_else(|| self.access_start())
+            }
+            _ => self.access_start(),
+        }
     }
 
     /// The closure type of the consteval block whose synthesized lambda
@@ -212,8 +243,27 @@ impl Sema<'_, '_> {
         let nc = self.reflected_class_def(designating).unwrap_or(parent);
         // A member of the designating class (inherited included); a base
         // of it or of one of its bases.
-        if !same_class(self, nc, parent) && !is_derived_from(self, nc, parent) {
-            return Ok(false);
+        let member_of = |s: &Self, c: DeclId| same_class(s, nc, c) || is_derived_from(s, nc, c);
+        let mut decl = decl;
+        if !member_of(self, parent) {
+            // A variant (or anonymous struct) member of the designating
+            // class ("possibly indirect or variant member"): a member of
+            // the enclosing named class ([class.union.anon]/1), with the
+            // access of the anonymous object that class declares.
+            let ind = match base {
+                None => self.anon_member_as_indirect(decl).ok().filter(|&m| m != decl),
+                Some(_) => None,
+            };
+            let obj = ind.and_then(|m| {
+                self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(m)).next()
+            });
+            let outer = obj.and_then(|m| self.declaring_class(m));
+            match (obj, outer) {
+                (Some(m), Some(c)) if member_of(self, self.ast.definition(c).unwrap_or(c)) => {
+                    decl = m;
+                }
+                _ => return Ok(false),
+            }
         }
         let Some(from) = self.scope_decl(scope) else { return Ok(true) };
         let mut sc = std::mem::take(&mut self.meta_members.scope);

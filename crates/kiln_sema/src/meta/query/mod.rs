@@ -141,8 +141,9 @@ impl Sema<'_, '_> {
             Reflectee::Decl(d) if self.undeduced_decl(d) => None,
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => self.reflected_var_type(d),
+                // A structured binding is not in *has-type*'s list
+                // ([meta.reflection.queries]/1): `type_of` throws for it.
                 DeclKind::ParmVar
-                | DeclKind::Binding
                 | DeclKind::Field
                 | DeclKind::IndirectField
                 | DeclKind::Function
@@ -253,6 +254,17 @@ impl Sema<'_, '_> {
         // ([meta.reflection.queries] *has-type*); its table is the Oven's.
         let ty = match x {
             Reflectee::DataMemberSpec(id) => oven.dms(id).map(|d| d.ty),
+            // An enumerator of an enumeration still being defined has the
+            // type it has before the closing brace ([meta.reflection.
+            // queries]/2.4, [dcl.enum]/5); the answer changes at the
+            // brace, so it is not memoized.
+            Reflectee::Decl(d) => match self.enumerator_pre_brace_type(d) {
+                Some(t) => {
+                    oven.mark_impure();
+                    Some(t)
+                }
+                None => self.type_of_reflectee(x),
+            },
             _ => self.type_of_reflectee(x),
         };
         match ty {

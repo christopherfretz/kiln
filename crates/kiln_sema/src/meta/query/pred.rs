@@ -53,14 +53,22 @@ impl Sema<'_, '_> {
                     .get(first)
                     .is_some_and(|&l| self.ast.lists.iter::<DeclId>(l).next().is_some())
             }),
+            // A class being defined has its class-virt-specifier already
+            // ([class.pre]/3: `final` is part of the class-head); its
+            // definition bits are committed only at the closing brace.
             Q::IsFinal => match x {
-                Reflectee::Type(t) => self
-                    .ast
-                    .types
-                    .as_record(t)
-                    .and_then(|d| self.ast.definition(d))
-                    .and_then(|d| self.ast.decls.record(d))
-                    .is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)),
+                Reflectee::Type(t) => self.ast.types.as_record(t).is_some_and(|d| {
+                    let d = self.ast.definition(d).unwrap_or(d);
+                    // same_entity: raw ok (both are the definition)
+                    match self.classes.iter().rev().find(|c| c.record == d) {
+                        Some(c) => c.bits.contains(DefinitionBits::FINAL),
+                        None => self
+                            .ast
+                            .decls
+                            .record(d)
+                            .is_some_and(|r| r.defn.contains(DefinitionBits::FINAL)),
+                    }
+                }),
                 _ => self.fn_decl(x).is_some_and(|f| self.fn_spec(self.ast.first(f)).is_final()),
             },
             Q::IsDeleted => {

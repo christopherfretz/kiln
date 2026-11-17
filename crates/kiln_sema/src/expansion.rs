@@ -11,7 +11,7 @@
 //! becoming the element (spec/sema-templates.md §5.5).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle, VarSpec, VarStorage};
-use kiln_ast::expr::{BinaryOp, ExprKind, NonOdrUse, Radix, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprKind, NonOdrUse, Radix, UnaryOp, ValueCategory};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{ExpansionData, ExpansionForm, StmtKind};
@@ -27,6 +27,7 @@ use crate::declspec::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, StorageSpec,
     TypeSpecKind,
 };
+use crate::expr::CastStyle;
 use crate::init::{InitList, InitValue, Initializer};
 use crate::scope::ScopeKind;
 use crate::templ::args::{LevelMode, MultiLevelArgs};
@@ -975,10 +976,25 @@ impl Sema<'_, '_> {
             return None;
         }
         let prelude = vec![self.act_on_decl_stmt(&[v], colon)];
+        // [stmt.expand]/5.3 (CWG3149): `v_i` is `u_i` for an lvalue
+        // expansion-initializer, else `static_cast<decltype(u_i)&&>(u_i)`.
+        let lvalue = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
         let elems = self
             .decomp_binding_list(v)
             .into_iter()
-            .map(|b| (None, self.build_decl_ref(b, colon)))
+            .map(|b| {
+                let u = self.build_decl_ref(b, colon);
+                if lvalue || self.expr_has_error(u) {
+                    return (None, u);
+                }
+                let t = self.decltype_of(u);
+                let t = if self.ast.types.is_reference(t) {
+                    t
+                } else {
+                    self.ast.types.rvalue_ref_to(t)
+                };
+                (None, self.act_on_cast(CastStyle::Static, t, u, colon, colon))
+            })
             .collect();
         Some((v, prelude, elems))
     }

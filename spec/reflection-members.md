@@ -149,7 +149,13 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   designating class (default: the member's class). [class.protected]
   applies with the designating class as the object expression's class,
   so a protected member from a derived class's member needs
-  `via(^^Derived)` (GCC 16.1 agrees).
+  `via(^^Derived)` (GCC 16.1 agrees). A member of an anonymous union
+  (possibly nested) is checked as the outermost anonymous member of the
+  class it belongs to (a possibly indirect variant member, /4; WP-1537).
+- A reflect-expression naming a protected non-static member (`^^A::f`,
+  `^^A::m` in a member of a class derived from `A`) gets no
+  [class.protected]/1 check: it forms no pointer to member and has no
+  object expression (`AccessCheck::reflected`, WP-1537).
 - One access check: `Sema::member_accessible_in` /
   `base_accessible_in` over an `AccessScope` built from the scope
   (`set_access_scope`) — the same code ordinary name lookup uses, not a

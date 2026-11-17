@@ -469,6 +469,39 @@ annotation checks 3 (c); constant-evaluation errors reported at the use
 7 (a); others 14. `bit_cast` (accepts-invalid) is GCC's eager error;
 kiln follows [bit.cast]/2 (deviations.md).
 
+### g++.dg/reflect compile-reject cases (WP-1537)
+
+Hand-written from the WP-1537 triage of the 60 compile-reject cases of the
+base re-run (448 of 565 then): (K) kiln wrong, (G) GCC 16.1 wrong or on
+older wording (rows in docs/status/deviations.md "GCC 16.1 reflection
+divergences"), (U) unspecified, (T) outside reflection. After WP-1537:
+462 of 565 pass (14 compile-reject cases now pass, none regressed; 46
+compile-reject left). WP-1537 fixed: the
+identifier of a base relationship and of a parameter from a pack
+(`bases_of1`, `has_identifier1`), `data_member_spec` annotations (`data_member_spec5`,
+`mangle1`, `display_string_of1` L122), defaulted comparisons by value with an
+explicit object parameter (`members_of6` L18), `>=` after a splice in a
+template argument (`parse1`), `type_of` of a structured binding and of an
+enumerator inside its enum-specifier (`type_of1`), `is_final` of a class being
+defined (`is_final1`), variant members in `is_accessible` and `^^A::f` of a
+protected member (`is_accessible2`, `member-visibility2`), `extract` of a
+pointer variable and of a closure as a function pointer (`extract1`,
+`extract4`), extern "C" default arguments per namespace (`p2996-9`),
+`access_context::current()` in an inherited constructor's default member
+initializer and in a trailing requires-clause (`p2996-18`), a base
+splice through the designated direct base (`splicing-base1`), a constructor
+parameter's splice-type-specifier (`type3`), the built-in `==` for
+`std::meta::info` in a defaulted comparison (`cwg3153`), a dependent member
+template-id reflected in a class template (`dep13`), and CWG3149 xvalue
+elements (`cwg3149`, now G only).
+
+| class | cases |
+|---|---|
+| K left (xfail repros under rows WP-1613 and WP-1614) | `member15`, `member17` (member splice rebuilt by name in templates), `enumerators_of1`, `is_enumerable_type1` (local opaque enum in a function template), `type_trait6` L781-783 (abominable function type in `is_assignable`), `reflect_constant9` L33, `reflect_function2` L74, `p2996-7` (dependent namespace alias), `variable_of2`, `define_aggregate10` (CWG3162), `visibility1` (substituted template arguments not constant-evaluated), `parse2` (constexpr expansion over a prvalue in a template), `json-parser` (`define_aggregate` refused under `substitute`; also `#embed` pedantic) |
+| G | `members_of6` L30/34, `is_accessible2` L454-465, `mangle3` (alias template named as its parameter, [temp.local]/6; splice of a variable template without `template`), `type_trait6` L988 and `is_constructible_type1` L606 (P3074), `type_rels1` L41-42, `reflect_constant9` L29/32, `expansion-stmt1` / `cwg3149` / `parse2` (body not a compound-statement), `eh9` (IFNDR, diagnosed), `eh5` `qux`, `expr7` (`using enum`), `extract11`, `is_constructible_type1` L230-234 and L667-671; existing rows: `has_linkage1`, `has_external_linkage1`, `has_c_language_linkage1`, `has_parent1`, `parent_of1`, `constant_of7`, `reflect_constant_array1`, `reflect_constant_string1`, `data_member_spec4`, `type_trait5` |
+| U | display strings (`display_string_of1`), `eh5` `what()` texts, `source_location_of1`, `source_location_of2`, `reflect_constant7` |
+| T | `::nullptr_t` without `<cstddef>` (`extract1` L9-11, `reflect_constant5`, `type_trait1`), `variable_of3` (`__integer_pack`), `members_of11` (`__builtin_constexpr_diag`), `init17` and `has_identifier1` L223 (statement expressions) |
+
 ### x86-64
 
 The first x86-64 run: the opt-in `gxx-dg` jobs of `.github/workflows/sweep.yml`

@@ -1476,7 +1476,12 @@ Redeclaration and linkage rules:
   expanded: the pattern's parameters pair with the specialization's
   around the expansion (`param_pairs`), so `f(C c = C{}, A&&... a)`
   called as `f(x)` never substitutes `C{}` (WP-690). Test:
-  `dcl.fct.default/pack-after-default.cpp`.
+  `dcl.fct.default/pack-after-default.cpp`. Default arguments belong to
+  a scope ([dcl.fct.default]/4): an extern "C" function redeclared in
+  another namespace (or at global scope) merges only the default
+  arguments of the declarations in the same namespace
+  (`merge_default_args_in` with the declaring context; WP-1537,
+  `dcl.fct.default/extern-c-scopes-{run,neg}.cpp`).
 - **Erroneous default arguments** (WP-293; clang's
   `ActOnParamDefaultArgumentError`). A default argument parsed in place
   whose expression is erroneous — including an explicit cast that fails
@@ -11454,7 +11459,10 @@ not supported yet`.
     `tests/stress/expansion-iterating-user-iterator.cpp` budgets the
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`
-    (`struct_bind.rs`); element i is `__u_i`. With a `constexpr`
+    (`struct_bind.rs`); element i is `__u_i` for an lvalue
+    initializer, else `static_cast<decltype(__u_i)&&>(__u_i)`
+    ([stmt.expand]/5.3, CWG3149; WP-1537,
+    `destructuring-xvalue-elements-run.cpp`). With a `constexpr`
     for-range-declaration the declaration is `constexpr` (`static`
     unless bound by automatic reference, below). The
     initializer's temporaries persist for the lifetime of that reference,

@@ -493,7 +493,7 @@ impl Sema<'_, '_> {
         object: Option<DeclId>,
         loc: Loc,
     ) -> bool {
-        self.check_member_access_at(found, naming, object, loc, false)
+        self.check_member_access_at(found, naming, object, loc, false, false)
     }
 
     /// [`Sema::check_member_access`] for a check that may share its
@@ -506,7 +506,7 @@ impl Sema<'_, '_> {
         naming: DeclId,
         loc: Loc,
     ) -> bool {
-        self.check_member_access_at(found, naming, None, loc, true)
+        self.check_member_access_at(found, naming, None, loc, true, false)
     }
 
     fn check_member_access_at(
@@ -516,6 +516,7 @@ impl Sema<'_, '_> {
         object: Option<DeclId>,
         loc: Loc,
         distinct: bool,
+        reflected: bool,
     ) -> bool {
         // A public member named in its own class is accessible; through a
         // base its access is that along the path ([class.access.base]/1).
@@ -537,8 +538,14 @@ impl Sema<'_, '_> {
                 .frames
                 .last()
                 .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
-        let check =
-            AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
+        let check = AccessCheck {
+            member: found,
+            naming_class: naming,
+            object_class: object,
+            loc,
+            repeat,
+            reflected,
+        };
         // Delayed only while still in the declaration's own context: a
         // class or function body (or lambda) inside the delayed region is
         // its own context (clang's `pushUndelayed`). So is a SFINAE
@@ -564,6 +571,20 @@ impl Sema<'_, '_> {
         let Some(naming) = found.naming else { return true };
         let Some(&via) = found.found.first().or(found.decls.first()) else { return true };
         self.check_member_access(via, naming, None, loc)
+    }
+
+    /// [`Sema::check_found_access`] of the operand of a reflect-expression
+    /// (`^^C::m`, [expr.reflect]): without [class.protected]'s additional
+    /// check, which constrains only an object expression or a pointer to
+    /// member.
+    pub(crate) fn check_reflected_access(
+        &mut self,
+        found: &crate::lookup::Found,
+        loc: Loc,
+    ) -> bool {
+        let Some(naming) = found.naming else { return true };
+        let Some(&via) = found.found.first().or(found.decls.first()) else { return true };
+        self.check_member_access_at(via, naming, None, loc, false, true)
     }
 
     /// The access check of a type or template name `name` that
@@ -776,9 +797,12 @@ impl Sema<'_, '_> {
 
     fn run_access_check(&mut self, c: AccessCheck) -> bool {
         let t = self.injected_target(c.member, c.naming_class);
-        let Some(t) = t.or_else(|| self.member_target(c.member, c.object_class)) else {
+        let Some(mut t) = t.or_else(|| self.member_target(c.member, c.object_class)) else {
             return true;
         };
+        if c.reflected {
+            t.instance_member = false;
+        }
         let naming = self.ast.definition(c.naming_class).unwrap_or(c.naming_class);
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);

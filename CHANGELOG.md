@@ -1102,6 +1102,22 @@ Planned as 1.3.0.
   destructor throws ([expr.delete]/7); after a bit-cast, an indeterminate
   `unsigned char` bit-field that shares a byte with a determinate one is
   not readable in a constant expression, also through copies ([bit.cast]/2).
+- Reflection cases that kiln rejected, found running GCC's C++ testsuite
+  (WP-1537): `identifier_of` and `display_string_of` of a base relationship
+  and of a function parameter pack; `data_member_spec` checks its
+  annotations; `type_of` of a structured binding and of an enumerator inside
+  its enum-specifier; `is_final` of a class being defined; access checks
+  for reflected variant members and protected members; `extract` of a
+  pointer variable and of a closure converted to a function pointer;
+  `access_context::current()` in inheriting constructors and trailing
+  requires-clauses; a splice of a base relationship accesses the direct
+  base; a constructor parameter may start with a splice; `==` and `!=` on
+  `std::meta::info` operands of class type that convert to it
+  ([over.built]/16); a reflection of a dependent member template-id; the
+  elements of an expansion statement over a non-lvalue are xvalues
+  (CWG3149); `>=` after a splice in a template argument list; defaulted
+  comparisons with an explicit object parameter taken by value; default
+  arguments of `extern "C"` functions in different namespaces.
 
 ## [1.2.1] - 2026-11-14
 

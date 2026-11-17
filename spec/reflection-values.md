@@ -115,7 +115,14 @@ shape, so a public name would claim the library template itself.
    ([meta.reflection.extract]/3). A reference variable usable in
    constant expressions (constexpr, or constant-initialized,
    [expr.const]/4; WP-1462) extracts through to its referent; another
-   fails "reference 'r' is not usable in constant expressions". Otherwise "cannot be extracted as".
+   fails "reference 'r' is not usable in constant expressions". A
+   variable of pointer type extracted by value is
+   `extract-value<T>(constant_of(r))` (/12): its value, with a
+   qualification conversion, never a read through its address. A
+   variable holding a closure without captures extracts as a function
+   pointer through the closure's conversion function
+   ([expr.prim.lambda.closure]/8; the pointee must match, noexcept as
+   the conversion's; WP-1537). Otherwise "cannot be extracted as".
    `extract<U&>` is a glvalue immediate invocation: its value is the
    object's address, never the object's value. That object need not be
    usable in constant expressions. A reference bound to the result,

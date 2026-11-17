@@ -1843,7 +1843,11 @@ a port of the clang 19 function it names.
   `less`, `equal` and `greater` ([cmp.categories.pre]; the `equivalent`
   value is not looked up; `strong-ordering-values.cpp`, WP-1497). The implicit `operator==` of a defaulted
   `<=>` ([class.compare.default]/4) is declared at `}`
-  (`declare_implicit_equality`), `default implicit-inline`.
+  (`declare_implicit_equality`), `default implicit-inline`. With an
+  explicit object parameter the object parameter is the first of the two
+  compared ones, so `(this C, C)` by value is valid like
+  `(this const C&, const C&)` and a mixed pair is the "must have the same
+  type" error (clang 22; WP-1537, `explicit-object-by-value.cpp`).
 - **Deletedness, category deduction, `constexpr`** (`analyze.rs`, clang
   `DefaultedComparisonAnalyzer`). Overload resolution for each subobject
   comparison `xi @ xi` (opaque lvalues) runs with the defaulted function

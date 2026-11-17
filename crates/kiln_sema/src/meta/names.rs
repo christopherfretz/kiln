@@ -174,9 +174,42 @@ impl Sema<'_, '_> {
         match self.ast.reflections.get(r) {
             Reflectee::FnParam(f, i) => return self.param_identifier(f, i),
             Reflectee::DataMemberSpec(id) => return oven.dms(id)?.name,
+            // /1.12: a direct base class relationship has the identifier
+            // of its base class type (`has_identifier(type_of(r))`).
+            Reflectee::BaseSpec(c, i) => {
+                // The base class itself, not the alias that names it.
+                let t = self.ast.types.canonical(self.base_spec_ty(c, i)?);
+                return self.decl_identifier(self.type_named_decl(t)?);
+            }
             _ => {}
         }
         self.decl_identifier(self.named_decl(r)?)
+    }
+
+    /// The index in the parameters of `pattern` of parameter `i` of `f`,
+    /// a function instantiated from it with `n` parameters; `None` when
+    /// that parameter is instantiated from a function parameter pack
+    /// ([meta.reflection.names]/1.7: it has no identifier).
+    fn pattern_param_index(&self, pattern: &[DeclId], n: usize, i: usize) -> Option<usize> {
+        let mut at = 0;
+        for (k, &p) in pattern.iter().enumerate() {
+            let pack = self.is_pack_decl(p);
+            let width = if pack { (n + 1).saturating_sub(pattern.len()) } else { 1 };
+            if i < at + width {
+                return (!pack).then_some(k);
+            }
+            at += width;
+        }
+        None
+    }
+
+    /// The parameters of function `f`, in order.
+    fn params_of_fn(&self, f: DeclId) -> Vec<DeclId> {
+        self.ast
+            .decls
+            .function(f)
+            .map(|d| self.ast.lists.iter::<DeclId>(d.params).collect())
+            .unwrap_or_default()
     }
 
     /// The name of parameter `i` of function `f` ([meta.reflection.names]/1,
@@ -189,25 +222,31 @@ impl Sema<'_, '_> {
         // parameters and forgets the older names), a member of a class
         // template specialization's from every declaration of the
         // primary's member, which must agree.
+        // A parameter instantiated from a pack has none (/1.7).
         let mut f = f;
+        let mut i = i as usize;
         if let Some((_, info)) = self.ast.spec_info(f)
             && self.kind_of(info.template) == DeclKind::FunctionTemplate
             && let Some(p) = self.ast.template_info(info.template).and_then(|t| t.pattern)
         {
             let last = self.ast.definition(p).unwrap_or_else(|| self.ast.latest(p));
-            let data = self.ast.decls.function(last)?;
-            let p = self.ast.lists.iter::<DeclId>(data.params).nth(i as usize)?;
-            return self.ast.decls.get(p).name().as_ident();
+            let pattern = self.params_of_fn(last);
+            let n = self.params_of_fn(f).len();
+            let k = self.pattern_param_index(&pattern, n, i)?;
+            return self.ast.decls.get(pattern[k]).name().as_ident();
         }
         if let Some((_, m)) = self.ast.member_spec_info(self.ast.first(f))
             && self.ast.decls.get(m.instantiated_from).kind().is_function()
         {
-            f = m.instantiated_from;
+            let from = m.instantiated_from;
+            let n = self.params_of_fn(f).len();
+            i = self.pattern_param_index(&self.params_of_fn(from), n, i)?;
+            f = from;
         }
         let mut found = None;
         for d in self.ast.redecls_of(f) {
             let Some(data) = self.ast.decls.function(d) else { continue };
-            let Some(p) = self.ast.lists.iter::<DeclId>(data.params).nth(i as usize) else {
+            let Some(p) = self.ast.lists.iter::<DeclId>(data.params).nth(i) else {
                 continue;
             };
             let Some(n) = self.ast.decls.get(p).name().as_ident() else { continue };
@@ -228,21 +267,24 @@ impl Sema<'_, '_> {
     /// reflections of no declaration (values, objects, base specifiers).
     fn named_decl(&self, r: ReflectionId) -> Option<DeclId> {
         match self.ast.reflections.get(r) {
-            Reflectee::Type(t) => {
-                if !t.quals().is_empty() {
-                    return None;
-                }
-                match self.ast.types.view(t.ty()) {
-                    TypeView::Typedef { decl, .. } => return Some(decl),
-                    TypeView::TemplateSpecialization { alias: true, .. } => return None,
-                    _ => {}
-                }
-                self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))
-            }
+            Reflectee::Type(t) => self.type_named_decl(t),
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => Some(d),
             Reflectee::Template(n) => self.ast.types.template_decl(n),
             _ => None,
         }
+    }
+
+    /// [`Self::named_decl`] of type `t`.
+    fn type_named_decl(&self, t: kiln_ast::QualType) -> Option<DeclId> {
+        if !t.quals().is_empty() {
+            return None;
+        }
+        match self.ast.types.view(t.ty()) {
+            TypeView::Typedef { decl, .. } => return Some(decl),
+            TypeView::TemplateSpecialization { alias: true, .. } => return None,
+            _ => {}
+        }
+        self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))
     }
 
     /// The identifier declaration `d` introduces, if it has one.

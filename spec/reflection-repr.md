@@ -86,7 +86,11 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
   template-id whose arguments are dependent (`^^ns::plain<T>`,
   `^^operator""_x<C...>`) is a dependent `CXXReflectExpr` (tag 12, `a`
   the `UnresolvedLookupExpr`); substitution re-selects the
-  specialization with the substituted arguments.
+  specialization with the substituted arguments. So is one whose
+  arguments are not dependent but whose selected specialization's type
+  is (`^^visit<0>` in `S<F>`, `visit` a member function template taking
+  an `F`): each specialization of the class reflects its own `visit<0>`
+  (WP-1537, `expr.reflect/member-template-id-dependent.cpp`).
 - `^^id-expression` (/7): `Decl` of the entity it names after lookup — a
   variable (a `constexpr` one reflects the variable, not its value), a
   function, a static or non-static data member, a member function, an

@@ -114,9 +114,10 @@ impl Sema<'_, '_> {
             &[d] => {
                 // The operand names a member: it is access-checked like
                 // any other use of the name ([class.access]/4; GCC 16.1
-                // rejects `^^C::priv` outside C). Splices are not
+                // rejects `^^C::priv` outside C), but without
+                // [class.protected]'s object check. Splices are not
                 // ([expr.prim.splice]), so this is the only check.
-                if !self.check_found_access(&found, name_loc) {
+                if !self.check_reflected_access(&found, name_loc) {
                     return self.recover(info, &[], loc);
                 }
                 if self.reflect_auto_var_in_own_init(d, name_loc) {
@@ -324,6 +325,25 @@ impl Sema<'_, '_> {
             // `&f<A>` finds it but not referenced: a member function
             // template's needs no object.
             TemplateIdRef::Overload(e) => match self.single_template_spec(e) {
+                // A specialization of a member template of a class
+                // template whose type depends on the class's parameters
+                // (`template<int I> static int f(T)` in `S<T>`): its
+                // template-id is resolved again in each instantiation, as
+                // `^^ns::f<T>` is, so that it reflects that
+                // instantiation's specialization.
+                Some((d, _))
+                    if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr
+                        && self
+                            .ast
+                            .decls
+                            .get(d)
+                            .ty()
+                            .is_some_and(|t| self.ast.types.is_dependent(t)) =>
+                {
+                    let r = self.builder().dependent_reflect_expr(e, info, loc, end);
+                    self.note_consteval_only(r);
+                    return r;
+                }
                 Some((d, _)) if !self.expr_has_error(e) => {
                     return self.reflect_entity(d, name_loc, loc, end);
                 }

@@ -194,6 +194,10 @@ pub struct AccessCheck {
     /// Made substituting an alias template: reported at every use, even
     /// at the same location (clang re-substitutes the alias each time).
     pub repeat: bool,
+    /// Named by a reflect-expression (`^^C::m`): [class.protected]/1
+    /// adds no check, as neither an object expression nor a pointer to
+    /// member is involved.
+    pub reflected: bool,
 }
 
 /// Whether the current full-expression needs an `ExprWithCleanups`
