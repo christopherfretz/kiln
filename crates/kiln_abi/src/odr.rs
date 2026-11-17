@@ -301,7 +301,8 @@ pub const ITEM_VPTR: u32 = 2;
 pub const ITEM_SLOT: u32 = 3;
 /// Item kind 4: an enumerator (name, value).
 pub const ITEM_ENUMERATOR: u32 = 4;
-/// Item kind 5: an enumeration's underlying type (type).
+/// Item kind 5: an enumeration's underlying type (type; value bit 0
+/// scoped, bit 1 the underlying type fixed, as the layout hash's byte).
 pub const ITEM_UNDERLYING: u32 = 5;
 /// A data member item's bit-field flag.
 pub const ITEM_BITFIELD: u32 = 1 << 4;
@@ -362,7 +363,14 @@ impl LayoutSerializer<'_, '_> {
         out.push(bits);
         let enc = mangle::mangle_type(ast, self.anon, int);
         put_str(&mut out, &enc);
-        self.item(|| DetailItem { ty: enc, flags: ITEM_UNDERLYING, ..DetailItem::default() });
+        // The item's `value` repeats the two bits (WP-1608, mortar's
+        // request of 11-17; kind 4 is not hashed, the bits above are).
+        self.item(|| DetailItem {
+            ty: enc,
+            value: u64::from(bits),
+            flags: ITEM_UNDERLYING,
+            ..DetailItem::default()
+        });
         let members: Vec<DeclId> = ast.decls.members(def).collect();
         out.extend_from_slice(&u32::try_from(members.len()).ok()?.to_le_bytes());
         for m in members {

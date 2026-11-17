@@ -400,13 +400,13 @@ impl DefHasher<'_> {
             | K::CXXDependentScopeMemberExpr
             | K::PackExpansionExpr
             | K::CXXFoldExpr
-            | K::CXXUnresolvedConstructExpr => self.dep_expr(e, k),
+            | K::CXXUnresolvedConstructExpr
+            | K::ParenListExpr => self.dep_expr(e, k),
             // ----- dependent only: a function template's own body is never
             // hashed; these wait for modules (K-6).
             K::UnresolvedMemberExpr
             | K::SubstNonTypeTemplateParmPackExpr
             | K::FunctionParmPackExpr
-            | K::ParenListExpr
             | K::DesignatedInitExpr
             | K::DependentCoawaitExpr
             | K::CXXExpansionSelectExpr => self.partial(Area::Dependent, Site::Expr(k)),

@@ -158,7 +158,7 @@ impl DefHasher<'_> {
                 // A dependent concept-id: the concept and its arguments
                 // (signature.rs).
                 _ if k == K::ConceptSpecializationExpr => self.dep_expr(e, k),
-                _ => self.partial(Area::Dependent, Site::Expr(k)),
+                _ => self.dep_requires(e, k),
             },
             // The semantic result (what is evaluated).
             K::PseudoObjectExpr => {

@@ -54,7 +54,7 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
     assert_eq!(row_size, 48);
     assert!(rows > 0, "no block without rows");
     assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
-    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d4"));
+    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d5"));
     let out: Vec<Def> = (0..rows)
         .map(|i| {
             let r = at + 16 + i * 48;
@@ -955,5 +955,84 @@ fn abi_tags_and_visibility_not_hashed() {
         let (x, y) = (row(&ra, sym).expect(sym), row(&rb, sym).expect(sym));
         assert_eq!(x.flags & PARTIAL, 0, "{sym}: {x:?}");
         assert_eq!(x.hash == y.hash, equal, "{sym}: {x:?} {y:?}");
+    }
+}
+
+/// No byte of a row depends on the rest of the unit (WP-1636, reported
+/// by mortar's maintainers): an attribute-free inline function hashes the
+/// same with and without an unrelated listed attribute anywhere in the
+/// unit, before or after it, or a header that declares one.
+#[test]
+fn attribute_free_rows_ignore_the_rest_of_the_unit() {
+    let d = scratch("defs-1636");
+    let one = |file: &str, before: &str, after: &str| {
+        let src = format!("{before}\ninline void fr() {{}}\nvoid ua() {{ fr(); }}\n{after}\n");
+        let rows = defs_of(&d, file, &src, &[]).unwrap();
+        let r = row(&rows, "_Z2frv").expect("fr");
+        (r.hash, r.flags)
+    };
+    let aligned = "struct alignas(8) S { long long a; };";
+    let base = one("p0.cpp", "", "");
+    for (i, (before, after)) in [
+        (aligned, ""),
+        ("", aligned),
+        ("[[noreturn]] void die();", ""),
+        ("#include <stddef.h>", ""),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(one(&format!("p{}.cpp", i + 1), before, after), base, "{before}{after}");
+    }
+}
+
+/// The three `noreturn` spellings hash alike, and unlike none (WP-1637):
+/// the GNU ones also mark the function type, which is not hashed. A
+/// `noreturn` that arrives only through a typedef'd function type is a
+/// miss (spec/abi.md "Misses"): pinned.
+#[test]
+fn noreturn_spellings_agree() {
+    let d = scratch("defs-1637");
+    let h = |file: &str, pre: &str, spell: &str| {
+        let src = format!("{pre}{spell} inline void nr() {{ throw 1; }}\nvoid u() {{ nr(); }}\n");
+        row(&defs_of(&d, file, &src, &[]).unwrap(), "_Z2nrv").expect("nr").hash
+    };
+    let a = h("n1.cpp", "", "[[noreturn]]");
+    assert_eq!(a, h("n2.cpp", "", "[[gnu::noreturn]]"));
+    assert_eq!(a, h("n3.cpp", "", "__attribute__((noreturn))"));
+    let none = h("n4.cpp", "", "");
+    assert_ne!(a, none);
+    let td = "typedef void F() __attribute__((noreturn));\ninline F nr;\n";
+    assert_eq!(h("n5.cpp", td, ""), none, "the typedef's bit is not seen");
+}
+
+/// A closure under a function type or a template argument is TU-local
+/// only when the mangler would not make it visible (WP-1638, reported by
+/// mortar's maintainers, the shape of libc++'s `std::visit` tables): a
+/// lambda of an inline function or an inline variable is the same entity
+/// in every unit; one of a `static` variable is not.
+#[test]
+fn visible_closures_are_not_internal() {
+    let d = scratch("defs-1638");
+    let src = "template <class V> struct Wrap { V v; };\n\
+        template <class T, int N> struct Arr { T buf[N]; __attribute__((noinline)) const T& operator[](int i) const { return buf[i]; } };\n\
+        template <class V> __attribute__((noinline)) int disp(Wrap<V>&& w) { return w.v(); }\n\
+        template <class V> __attribute__((noinline)) int run(V v) { constexpr Arr<int (*)(Wrap<V>&&), 1> table = {{&disp<V>}}; return table[0](Wrap<V>{v}); }\n\
+        __attribute__((noinline)) inline int g() { return run([] { return 1; }); }\n\
+        int use() { return g(); }\n";
+    let rows = defs_of(&d, "v.cpp", src, &[]).unwrap();
+    for line in [2, 4] {
+        let r = rows.iter().find(|r| r.line == line).expect("row");
+        assert_eq!(r.flags & USES_INTERNAL, 0, "line {line}: {r:?}");
+    }
+    for (file, spec, set) in [("i.cpp", "inline", false), ("s.cpp", "static", true)] {
+        let src = format!(
+            "template <class V> struct Wrap {{ V v; }};\n{spec} auto lam = [] {{ return 1; }};\n\
+             inline int k() {{ int (*p)(Wrap<decltype(lam)>&&) = nullptr; return p != nullptr; }}\n\
+             int use() {{ return k(); }}\n"
+        );
+        let rows = defs_of(&d, file, &src, &[]).unwrap();
+        let r = row(&rows, "_Z1kv").expect("k");
+        assert_eq!(r.flags & USES_INTERNAL != 0, set, "{spec}: {r:?}");
     }
 }

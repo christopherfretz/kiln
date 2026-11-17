@@ -2149,9 +2149,10 @@ to a user unit linked against them). It is explicit only: nothing is
 derived from macros, `-nostdinc++` or a suppressed `#pragma GCC
 system_header`. It changes only the `SYSTEM` bits: no hash input reads
 `SYSTEM` or whether an entity lies in a system header, so the keys,
-hashes, other flags, places, row order, the kind 1, 4 and 5 blocks and
-the string table are byte-identical with and without it (kind 1 records
-nothing of it; kinds 4 and 5 have no location flag). Diagnostics are not
+hashes, other flags, places, row order and the kind 4 and 5 rows are
+the same with and without it (kinds 4 and 5 have no location flag);
+kind 1 adds one row, `unit.system` = `yes` (WP-1639), so the string
+table differs by its two strings. Diagnostics are not
 affected (no header becomes a system header for warnings), and like the
 level it is not part of a PCH's or a module file's identity. Test:
 `crates/kiln_driver/tests/mason_system_unit.rs`.
@@ -2183,11 +2184,17 @@ name bytes, names unique, flag bit 0 `ENFORCE`:
 | `abi.stdlib-debug` | libstdc++: `_GLIBCXX_DEBUG` when defined, else `off` (`_GLIBCXX_ASSERTIONS` counts as `off` here); libc++: `off` (libc++ 17 and later has no debug ABI) | yes, on every value, `off` included (the layout class; WP-1564, mortar's answer to WP-1557) | as `abi.stdlib-abi` |
 | `abi.stdlib-hardening` | libstdc++: `_GLIBCXX_ASSERTIONS` when defined, else no row; libc++: the hardening mode, `none`, `fast`, `extensive` or `debug` (no row when `_LIBCPP_HARDENING_MODE` equals none of the four mode macros) | no (no hardening mode changes a layout) | as `abi.stdlib-abi` (WP-1564) |
 | `abi.wchar` | size in bytes | yes | the target's builtin layout |
+| `abi.wchar-sign` | `signed` / `unsigned` (`wchar_t`'s signedness: AArch64 Linux `unsigned`, x86-64 Linux `signed`; kiln has no `-fshort-wchar` or `-f[un]signed-wchar`, and `-f[un]signed-char` does not move it) | yes | the target's `wchar_signed` (`Target::types`); every unit, C included (WP-1608, mortar's ruling of 11-17: `abi.char`'s vocabulary, beside `abi.wchar`, which keeps its meaning) |
 | `isa` | the module's `target-features` string (the one a function without a `target` attribute gets) | no | `Cg::features_attr(None)` |
 | `lang` | `c` / `c++` | no | `CodegenOptions::c` |
 | `producer` | `kiln <version>` | no | the driver's version |
 | `source` | the main file's path as given on the command line, after `-ffile-prefix-map` / `-fdebug-prefix-map` (never made absolute) | no | `CodegenOptions::source_filename` through `DebugOptions::remap` |
 | `std` | the standard's base name (`c++20`, `c17`; `gnu++20` is `c++20`) | no | the driver's `LangStd::base` |
+| `unit.system` | `yes`; no row without the option | no (informational: the unit is a standard library's own source, so its kind 5 rows, which carry no `SYSTEM` bit, are the implementation's) | `-fmason-metadata-system-unit`, `MasonMetaOptions::system_unit` (WP-1639, mortar's request of 11-17) |
+
+The key space is open: readers skip unknown kind 1 keys that are not
+`ENFORCE`, so a later package may add an informational key without a
+format change (WP-1639).
 
 **libc++'s ABI switches** (`LIBCXX_LAYOUT_SWITCHES` in
 `crates/kiln_driver/src/mason_meta.rs`): every `_LIBCPP_ABI_*` macro of
@@ -2240,7 +2247,7 @@ Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
 exactly when the unit has kind 3 rows (its name changes with any change
 to the layout serialization below), and `odr.scheme` (O-11), which names
-the definition hash of kind 2, value `kiln-odr-1.d4`
+the definition hash of kind 2, value `kiln-odr-1.d5`
 (`mason_defs::DEF_SCHEME` = `kiln_abi::odr_def::ODR_DEF_SCHEME`, renamed
 by every package that changes what is hashed; spec/abi.md "Definition
 hash" has its history), exactly when the unit has kind 2 rows. So a
@@ -2538,7 +2545,7 @@ count; u32 reserved = 0}` and `count` 24-byte items:
 | 2 | the vptr (step 6, only when there is one) | | | offset in bits |
 | 3 | vtable slot (step 7: `f`, `d`, `D`, `u`; `p` and `x` as `__cxa_pure_virtual` and `__cxa_deleted_virtual`) | the final overrider's mangled name | | the component's index in the group as hashed (RTTI slots left out, `c`/`b`/`o` counted) |
 | 4 | enumerator | its name | | its value (as hashed) |
-| 5 | an enumeration's underlying type | | its `<type>` | |
+| 5 | an enumeration's underlying type | | its `<type>` | bit 0 scoped (`enum class`), bit 1 the underlying type fixed (written, or scoped: `enum E : int`, every `enum class`, an opaque declaration's); the layout hash's step 1 byte, so the bits change no hash (WP-1608, mortar's request of 11-17) |
 
 Items appear in exactly the order in which the layout hash consumes the
 same facts, one for every hashed fact that has an item kind, so the
@@ -2546,8 +2553,9 @@ first differing item is the first difference. They are built by the
 same walk that writes the hashed bytes (`LayoutSerializer::details`),
 so the two cannot disagree. Facts without an item kind (the class kind,
 size, alignment and attributes, the list counts, the width of a member
-that is not a bit-field, `c`/`b`/`o` components, an enumeration's
-scoped and fixed bits) are in the row or nowhere; the driver test
+that is not a bit-field, `c`/`b`/`o` components) are in the row or nowhere
+(an enumeration's scoped and fixed bits are its underlying-type item's
+`value`); the driver test
 (`layout_details`, `enumeration_rows_two_units`) re-computes the layout
 hash from the items and these facts for every class of its golden
 without bases, vptr or unnamed members, and for an enumeration.
@@ -2601,7 +2609,7 @@ rows"); a closure outside a function is its own context. kiln rejects function m
 to decide. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
-The hash (scheme `kiln-odr-1.d4`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e) is the definition
+The hash (scheme `kiln-odr-1.d5`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e, WP-1608, WP-1626, WP-1636, WP-1637, WP-1638) is the definition
 digest of `kiln_abi::odr_def` (spec/abi.md "Definition hash"):
 `DefHasher::function` over a function definition (declarator,
 ctor-initializers, a destructor's deallocation function, body),
@@ -2616,17 +2624,38 @@ module uniqued it with a `.N` suffix, and only in a module without an
 `abi_tag` attribute: the hash names entities without their tags) before
 mangling it itself, so the
 bytes never depend on which entities the module declared; the per-TU
-guard applies to both. Constructors and destructors are always mangled
+guard applies to both. A rule of the scheme (WP-1636): no byte of a row
+depends on unit-wide state (whether an attribute kind, a declaration or
+an overload occurs elsewhere in the unit, an interned or table index, a
+per-unit counter or numbering); the one unit-dependent part of a row is
+the `PARTIAL` flag of a short-form callee beside an overload, which
+withdraws the row from comparison. Constructors and destructors are always mangled
 (their complete-object name): a unit may fold the complete-object
 variant into the base-object one, and its `Cg::sfns` entry then names
 the base-object symbol. Without
 a source manager (codegen unit tests) no kind 2 rows are written.
 `PARTIAL` is set exactly when the definition holds a construct of a
-later package (spec/abi.md's area table: `target_clones`, reflection,
-`#embed`, expansion statements, dependent nodes the signature area does
-not cover, a short-form callee of an overloaded template, a template's
-own definition, an exception specification sema had not computed). `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
+later package (spec/abi.md's area table: reflection, `#embed`,
+expansion statements, dependent nodes the signature area does not
+cover, a short-form callee of a template with an overload that could
+share its short form, a template's own definition, an exception
+specification sema had not computed for the definition itself). `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
 oracle") is the must-equal check of every K-3 package.
+
+**Definitions naming system entities** (WP-1627; statistics only: no
+row, flag or hash changes). `DefDigest::names_system` holds when the
+definition's stream named an entity, template or type whose first
+declaration is in a system header (the `SYSTEM` test of
+`mason_place`): a referenced entity or tag, a template argument, a
+class enclosing a named member. It is memoized per first declaration,
+and the memos the hasher reuses across definitions (a callee item, a
+signature digest, a closure digest, a referenced entity's or type's
+encoding) carry the bit, so a definition reaching a named entity
+through a memo another definition filled still counts.
+`Cg::mason_def_rows` counts, per unit, the rows written, those without
+`SYSTEM`, and of those the ones with the bit (`MasonDefStats`); the
+driver reports them as `KILN_STATS_LOG`'s `mason_defs` field
+(spec/driver.md "Compile statistics log").
 
 **Levels** (mortar's level table, K-1): `min` writes kinds 1 and 2;
 `default`, `detail` and `all` add kinds 3 and 5. At

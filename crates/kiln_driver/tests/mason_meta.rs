@@ -251,6 +251,7 @@ fn tu_summary_rows() {
             "abi.short-enums",
             "abi.stdlib",
             "abi.wchar",
+            "abi.wchar-sign",
             "isa",
             "lang",
             "odr.scheme",
@@ -264,7 +265,14 @@ fn tu_summary_rows() {
     let enforced: Vec<&str> = rows.iter().filter(|r| r.2 == 1).map(|r| r.0.as_str()).collect();
     assert_eq!(
         enforced,
-        ["abi.char", "abi.long-double", "abi.short-enums", "abi.stdlib", "abi.wchar"]
+        [
+            "abi.char",
+            "abi.long-double",
+            "abi.short-enums",
+            "abi.stdlib",
+            "abi.wchar",
+            "abi.wchar-sign"
+        ]
     );
     assert!(rows.iter().all(|r| r.2 <= 1));
     assert_eq!(value(&rows, "std"), Some("c++20"));
@@ -292,6 +300,34 @@ fn tu_summary_rows() {
     let base = rows_of(&d, "t.cpp", CXX, &[]);
     for l in ["min", "detail", "all"] {
         assert_eq!(rows_of(&d, "t.cpp", CXX, &[&format!("-fmason-metadata={l}")]), base, "{l}");
+    }
+}
+
+/// `abi.wchar-sign` (WP-1608, mortar's ruling of 11-17): `wchar_t`'s
+/// signedness from the target, beside `abi.wchar` (the size, unchanged)
+/// in C and C++ units, `ENFORCE`d as `abi.char`; `-f[un]signed-char`
+/// does not move it. Adding it moves no other row: the rest are the
+/// same names, values and flags, in the same order.
+#[test]
+fn wchar_sign_row() {
+    let d = scratch("wchar");
+    for (target, sign) in [
+        ("--target=aarch64-unknown-linux-gnu", "unsigned"),
+        ("--target=x86_64-linux-gnu", "signed"),
+    ] {
+        for (file, src) in [("t.cpp", CXX), ("t.c", C)] {
+            for extra in [&[][..], &["-funsigned-char"][..], &["-fsigned-char"][..]] {
+                let mut a = vec![target];
+                a.extend(extra);
+                let rows = rows_of(&d, file, src, &a);
+                let at = rows.iter().position(|r| r.0 == "abi.wchar-sign").expect("the row");
+                assert_eq!(rows[at].1, sign, "{target} {file} {extra:?}");
+                assert_eq!(rows[at].2, 1, "ENFORCE");
+                assert_eq!(rows[at - 1].0, "abi.wchar", "sorted right after abi.wchar");
+                assert_eq!(value(&rows, "abi.wchar"), Some("4"), "the size, as before");
+                assert!(rows[at + 1].0.as_bytes() > b"abi.wchar-sign".as_slice());
+            }
+        }
     }
 }
 
@@ -1551,7 +1587,50 @@ fn enumeration_rows_two_units() {
         ]
     );
     assert_eq!(ix[3], item("Extra", "", 2, I_ENUMERATOR));
-    assert_eq!(rehash_enum(&ia, 0), trow(&da, "5Color").unwrap().layout);
+    assert_eq!(rehash_enum(&ia), trow(&da, "5Color").unwrap().layout);
+}
+
+/// Kind 4's underlying-type item carries the enumeration's scoped (bit 0)
+/// and fixed (bit 1) facts in `value` (WP-1608, mortar's request of
+/// 11-17), the same two bits the layout hash reads, so no hash changes:
+/// the rows equal those of `default` and re-hash from the items alone.
+#[test]
+fn enumeration_underlying_item_bits() {
+    let d = scratch("enum-bits");
+    let src = "enum Plain { pa };\n\
+               enum Fixed : int { fa };\n\
+               enum class Scoped { sa };\n\
+               enum class ScopedShort : short { ssa };\n\
+               enum Opaque : int;\n\
+               enum Never : int;\n\
+               enum Opaque : int { oa };\n\
+               template <class T> struct Tpl { enum In { ia }; enum class Sc : T { sb }; };\n\
+               int f() { return (int)pa + (int)fa + (int)Scoped::sa + (int)ScopedShort::ssa\n\
+                 + (int)oa + (int)Tpl<long>::ia + (int)Tpl<long>::Sc::sb + (int)sizeof(Never); }\n";
+    let args = ["-std=c++20", "-fmason-metadata=detail"];
+    let rows = types_of(&d, "e.cpp", src, &args).unwrap();
+    let dflt = types_of(&d, "e.cpp", src, &["-std=c++20"]).unwrap();
+    for (name, bits, ty) in [
+        ("5Plain", 0, "j"),
+        ("5Fixed", 2, "i"),
+        ("6Scoped", 3, "i"),
+        ("11ScopedShort", 3, "s"),
+        ("6Opaque", 2, "i"),
+        ("N3TplIlE2InE", 0, "j"),
+        ("N3TplIlE2ScE", 3, "l"),
+    ] {
+        let t = trow(&rows, name).unwrap_or_else(|| panic!("{name}: {rows:#?}"));
+        let items = t.details.clone().unwrap();
+        assert_eq!((items[0].flags, items[0].ty.as_str()), (I_UNDERLYING, ty), "{name}");
+        assert_eq!(items[0].value, bits, "{name}");
+        assert_eq!(rehash_enum(&items), t.layout, "{name}");
+        assert_eq!(trow(&dflt, name).unwrap().layout, t.layout, "{name}: the hash is unchanged");
+    }
+    assert!(trow(&rows, "5Never").is_none(), "an opaque declaration never completed: no row");
+    // C units write no kind 3 or 4 (an enumeration with a C23 fixed
+    // underlying type included).
+    let c = "enum E : int { A };\nint f(void) { return A; }\n";
+    assert_eq!(types_of(&d, "e.c", c, &["-std=c23", "-fmason-metadata=detail"]), None);
 }
 
 // Record kind 4, the layout details (WP-1576; mortar's answer B3).
@@ -1561,10 +1640,11 @@ fn put_str(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
 }
 
-/// The layout hash of an enumeration re-computed from its items and the
-/// one fact without an item (`bits`: scoped, fixed).
-fn rehash_enum(items: &[Item], bits: u8) -> u64 {
-    let mut out = vec![b'E', bits];
+/// The layout hash of an enumeration re-computed from its items alone
+/// (the scoped and fixed bits are the underlying-type item's `value`
+/// since WP-1608).
+fn rehash_enum(items: &[Item]) -> u64 {
+    let mut out = vec![b'E', u8::try_from(items[0].value).unwrap()];
     put_str(&mut out, &items[0].ty);
     out.extend_from_slice(&u32::try_from(items.len() - 1).unwrap().to_le_bytes());
     for it in &items[1..] {

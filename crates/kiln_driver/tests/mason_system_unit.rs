@@ -105,6 +105,18 @@ fn all_system(b: &[u8]) -> Vec<u8> {
 
 /// The unit kiln++ writes for `args` in `d`: through the IR
 /// (`-emit-llvm`), or from the object (`-c`, the `llc` route).
+/// `on` is `off` with every `SYSTEM` bit set and one more kind 1 row,
+/// `unit.system` = `yes`, flags 0 (WP-1639): every other summary row and
+/// every kind 2 and 3 row field by field.
+fn system_of(off: &[u8], on: &[u8], what: &str) {
+    let mut k1 = summary_rows(off);
+    assert!(k1.iter().all(|r| r.0 != "unit.system"), "{what}");
+    k1.push(("unit.system".to_owned(), "yes".to_owned(), 0));
+    k1.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    assert_eq!(summary_rows(on), k1, "{what}");
+    assert_eq!(rows(on), rows(&all_system(off)), "{what}");
+}
+
 fn unit(d: &Path, obj: bool, args: &[&str]) -> Vec<u8> {
     let mut a = vec!["-fmason-metadata=detail"];
     a.extend(args);
@@ -130,9 +142,8 @@ const USER_CPP: &str = "#include \"user.h\"\n\
     int use(Mode m) { Box b{}; b.v = twice(3); return b.get() + pick(1, 2) + (m == Mode::a); }\n";
 
 /// The user header's rows: none `SYSTEM` without the flag, all with it;
-/// and the section with the flag is the section without it with only the
-/// `SYSTEM` bits set (every field of every row, the order, the other
-/// blocks and the string table byte-identical).
+/// and the section with the flag is the section without it with the
+/// `SYSTEM` bits set and the `unit.system` row added ([`system_of`]).
 #[test]
 fn user_header_rows_and_byte_identity() {
     let d = scratch("sysunit-user");
@@ -160,7 +171,7 @@ fn user_header_rows_and_byte_identity() {
             assert_eq!(Row { flags: b.flags & !bit, ..b.clone() }, *a);
         }
         // The whole unit.
-        assert_eq!(on, all_system(&off), "obj {obj}");
+        system_of(&off, &on, &format!("obj {obj}"));
         // The negation, last wins; without `-fmason-metadata` nothing.
         let neg = [&base[..], &["-fmason-metadata-system-unit", "-fno-mason-metadata-system-unit"]]
             .concat();
@@ -236,7 +247,7 @@ fn routes() {
     let flag = "-fmason-metadata-system-unit";
     let check = |off: &[u8], on: &[u8], what: &str| {
         assert!(!rows(off).is_empty() && rows(off).iter().all(|r| !r.system()), "{what}");
-        assert_eq!(on, all_system(off), "{what}");
+        system_of(off, on, what);
     };
     for o in ["-O0", "-O2"] {
         for obj in [false, true] {

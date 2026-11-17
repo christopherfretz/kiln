@@ -367,8 +367,9 @@ impl AttrKind {
     /// hides a non-default version entirely.
     pub const TARGET_VERSION: AttrKind = AttrKind(222);
     /// GNU `target_clones("A", ...)` (`TargetClonesAttr`; WP-810). On
-    /// `AArch64` without `fmv` the function is an ordinary function; `a`,
-    /// `b` unused.
+    /// `AArch64` without `fmv` the function is an ordinary function. `a` =
+    /// the `Symbol` of the clone list (the strings split at commas,
+    /// trimmed, joined by `,`), `b` = 1 (WP-1608; 0: not kept).
     pub const TARGET_CLONES: AttrKind = AttrKind(223);
     /// `cpu_dispatch(...)` / `cpu_specific(...)` (`CPUDispatchAttr`,
     /// `CPUSpecificAttr`; WP-810): never attached (invalid on `AArch64`,

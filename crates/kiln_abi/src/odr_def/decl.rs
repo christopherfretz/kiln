@@ -84,9 +84,11 @@ pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -
                 h.ty(q);
             }
             // Variadic, ref-qualifier, `this` qualifiers, calling
-            // convention, `noreturn`, regparm, SME bits; not whether the
-            // return type was written trailing.
-            h.u32(p.info().with_trailing_return(false).bits());
+            // convention, regparm, SME bits; not whether the return type
+            // was written trailing, nor `noreturn`, which only the GNU
+            // spellings put on the type (the attribute record carries
+            // every spelling; WP-1637).
+            h.u32(p.info().with_trailing_return(false).with_noreturn(false).bits());
             match ast.types.exc_spec(&p) {
                 // A synthesized member's effective exception
                 // specification follows from its class and the members
@@ -94,9 +96,13 @@ pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -
                 // when a unit needs it, so it is never hashed.
                 _ if synthesized => h.byte(2),
                 ExcSpec::Deferred(_) => h.partial(Area::Init, Site::Item(Item::UnresolvedNoexcept)),
-                ExcSpec::DependentNoexcept(_)
-                | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => {
-                    h.partial(Area::Dependent, Site::Item(Item::DependentNoexcept));
+                // A member of a class template specialization keeps its
+                // pattern's dependent `noexcept(e)` until a unit needs it:
+                // by structure, as in a signature (WP-1626).
+                ExcSpec::DependentNoexcept(c)
+                | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(c), .. } => {
+                    h.byte(3);
+                    h.profile(c);
                 }
                 e => h.byte(u8::from(e.is_nothrow())),
             }
@@ -114,7 +120,14 @@ pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -
             h.stack.push(Work::Expr(e));
             h.run();
         }
-        Some(_) => h.partial(Area::Dependent, Site::Item(Item::DependentRequires)),
+        // Its pattern's, kept unsubstituted (a member of a class template
+        // specialization): by structure, parameters by position (WP-1626).
+        Some(e) => {
+            h.byte(1);
+            h.positional += 1;
+            h.opt_expr_now(Some(e));
+            h.positional -= 1;
+        }
         None => h.byte(T_NONE),
     }
     // Items of later packages.

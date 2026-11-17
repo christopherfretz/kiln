@@ -1953,7 +1953,7 @@ O-10..O-13). This section is its contract: a later kiln reproduces these
 bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
 (WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d4"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d5"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
@@ -1967,7 +1967,15 @@ rows of closure members, local classes and enumerations, the GNU,
 vector, atomic and coroutine forms, `asm`, constraints (below); `d4`
 (K-3e) function template specializations by entity (the signature
 area), the listed attributes, the declaration's default arguments,
-`USES_INTERNAL`, and names without abi tags (below).
+`USES_INTERNAL`, and names without abi tags (below); `d5` (WP-1608,
+WP-1626) a deferred `noexcept` from its pattern, dependent
+requires-expressions and parenthesized lists, a definition's own
+dependent `noexcept` and trailing requires-clause by structure, the
+narrower overload test of the short form, and `target_clones`' clone
+list; and (WP-1636..1638, mortar's probe of 11-17) an empty attribute
+area that no longer depends on the rest of the unit, the `noreturn`
+type bit left to the attribute record, and no `USES_INTERNAL` for an
+externally visible closure under a function type.
 
 **Digest.** `DefHasher::function(def) -> DefDigest { hash, partial, uses_internal }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
@@ -2026,7 +2034,9 @@ on implicit or defaulted members or closure call operators, N25;
 defaulted, explicit object parameter), the return type, the parameter
 types (count + types), the function-type bits other than "written
 trailing" (variadic, ref-qualifier, `this` qualifiers, calling
-convention, `noreturn`), the EFFECTIVE `noexcept` as one byte, the
+convention; not the `noreturn` bit, which `[[gnu::noreturn]]` and
+`__attribute__((noreturn))` set on the type and `[[noreturn]]` does not:
+the listed-attribute record carries all three, WP-1637), the EFFECTIVE `noexcept` as one byte, the
 trailing requires-clause (an expression) or `0xA0`. Then the body
 statement. Parameters are locals 0..n-1; parameter names and the
 function's own name are not hashed. An implicit or defaulted member
@@ -2157,10 +2167,10 @@ the types or operand; array traits: trait, type, value, dimension.
 | misc (K-3d) | hashed | `ImaginaryLiteral` `BinaryConditionalOperator` `OffsetOfExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `PseudoObjectExpr` `GenericSelectionExpr` `GCCAsmStmt`; `RequiresExpr` `ConceptSpecializationExpr` outside a template |
 | misc (K-3d) | `partial` | `UserDefinedLiteral` (sema builds calls: not met) `EmbedExpr` `SizeOfPackExpr` `PackIndexingExpr` `CXXReflectExpr` `CXXSpliceExpr` `RecoveryExpr` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
 | attrs (K-3e) | hashed | the listed attributes (below) on the function, a variable or a local; `[[assume]]`; the declaration's default arguments |
-| attrs (K-3e) | `partial` | `target_clones` (its arguments are not kept) |
-| signature (K-3e) | hashed | a function template specialization named in a definition; dependent types, template parameters, function parameters by position, nested-name-specifiers, dependent `noexcept`, the template's requires-clause, inside a signature or a generic lambda's pattern |
-| signature (K-3e) | `partial` | a specialization whose signature holds an uncovered node (a deferred `noexcept`, an uncovered dependent kind) when its template has an overload of the same name and template parameter count (else the short form, not `partial`) |
-| dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a dependent `ChooseExpr`, `GenericSelectionExpr`, `CoyieldExpr`, `RequiresExpr` or `ConceptSpecializationExpr` (in a generic lambda's pattern); a template's own definition, a dependent `noexcept` or requires-clause |
+| attrs (K-3e) | `partial` | `target_clones` read from an AST that does not keep its clone list (none since `d5`) |
+| signature (K-3e) | hashed | a function template specialization named in a definition; dependent types, template parameters, function parameters by position, nested-name-specifiers, dependent `noexcept` (a deferred one from its pattern, `d5`), the template's requires-clause, `RequiresExpr` and `ParenListExpr` (`d5`), inside a signature or a generic lambda's pattern; a definition's own dependent `noexcept` and trailing requires-clause (`d5`) |
+| signature (K-3e) | `partial` | a specialization whose signature holds an uncovered node (a deferred `noexcept` with no pattern, an uncovered dependent kind) when its template has an overload that could share its short form (below; else the short form, not `partial`) |
+| dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr` outside the signature area; a dependent `ChooseExpr`, `GenericSelectionExpr` or `CoyieldExpr` (in a generic lambda's pattern); a template's own definition |
 
 **Signature area** (`odr_def/signature.rs`, K-3e; mortar's ruling of
 11-17). A function template specialization named in a definition (a
@@ -2181,10 +2191,32 @@ parameters by position (`0xB9`), nested-name-specifiers canonically
 (`0xBC`), dependent expressions by their equivalence class's canonical
 profile and a dependent `noexcept` by its expression: never a mangling,
 whose dependent parts print the unit's first equivalent spelling. A
-signature holding a node the area does not cover (a deferred `noexcept`,
-a dependent kind the K-6 row lists) takes the short form; the row is
-then `PARTIAL` only when the template's scope has another function
-template of the same name and template parameter count. A member
+`noexcept` sema has not instantiated yet (`ExcSpec::Deferred(p)`, a
+member template of a class template specialization) is hashed from
+the pattern `p` it waits on (or, waiting on itself, the declaration it
+is instantiated from): its dependent `noexcept(e)` as above, a known one
+by value; the hasher instantiates nothing (`d5`). A dependent
+requires-expression is its expression tag, its parameters' types, then per
+requirement a byte (1 simple, 2 type, 3 compound, 4 nested), a
+compound's `noexcept` bit, and its operands, parameters by position; a
+dependent parenthesized list is its expressions (`d5`). A signature
+holding a node the area does not cover (a deferred `noexcept` with no
+pattern, a dependent kind the K-6 row lists) takes the short form; the
+row is then `PARTIAL` only when the template's scope has another
+function template of the same name that could share the short form
+(`d5`; before, any of the same template parameter count): the same
+template parameter kinds in order (type, constant by the class of its
+type: integral or enumeration, floating, pointer or member pointer,
+reference, class, or any for a dependent or placeholder type, which
+matches every class; template), a pack on either side matching any
+list, and a function parameter count range (fewest: the least over the
+pattern's declarations, one less for a class member; most: unbounded
+with a pack or `...`) that overlaps the callee's. Another kind sequence
+gives other template arguments, so another short form; a range that
+cannot take the call's argument count is never chosen for it. A
+definition's own dependent `noexcept(e)` and trailing requires-clause
+(a member of a class template specialization keeps its pattern's until
+a unit needs them) are hashed the same way (`d5`). A member
 function of a class template specialization and a variable template
 specialization are named by their mangled names (their signature and
 type are the instantiation's, with no dependent part); a member
@@ -2195,7 +2227,9 @@ class specialization by its type item.
 (scheme 1), as WRITTEN on the declaration chain (an instantiation: its
 pattern's chain), never an implicit or inherited copy, as a set: each
 record (kind, arguments) on its own, sorted and deduplicated; `0xA0`
-when there is none.
+when the chain has none, whatever the rest of the unit holds (before
+WP-1636 a unit with a listed attribute anywhere wrote an empty record
+list instead).
 
 | attribute | hashed as | O-10 choice |
 |---|---|---|
@@ -2204,7 +2238,7 @@ when there is none.
 | `aligned` (no argument) | `0` | the target's maximum, a token of its own |
 | `noreturn` / `[[noreturn]]` | present | `[[noreturn]]` and `[[gnu::noreturn]]` equal |
 | `target("s")`, `target_version("s")` | the string bytes | not normalized (`"avx2,sse4.2"` against `"sse4.2,avx2"`: differ) |
-| `target_clones` | present, `partial` | the AST keeps no arguments |
+| `target_clones` | the clone list: the strings split at commas, trimmed, joined by `,` (`d5`) | `"a,b"` and `"a", "b"` equal; the order is hashed |
 | `indeterminate` | a bit per parameter | any declaration of the chain writing it on the parameter |
 | `[[assume(e)]]` | the expressions, at the statement | |
 | everything else | not hashed | `visibility`, `exclude_from_explicit_instantiation`, `abi_tag`, `weak`, `section`, `deprecated`, `nodiscard`, `maybe_unused`, ... |
@@ -2237,8 +2271,12 @@ one that did not; a friend declaration's default (only on a definition,
 **`USES_INTERNAL`** (`odr_def/internal.rs`, O-16, strict only). Set
 during the walk when the definition odr-uses a function or variable
 with internal linkage, or names a TU-local type (an unnamed-namespace
-class or enumeration, a per-TU placeholder of a type), other than its
-own local entities. Not set by a constant read by value (N17), an
+class or enumeration, a per-TU placeholder of a type whose TU-local
+part the walk locates, or one it does not locate, such as a closure
+under a function type, that is not externally visible:
+`mangle::type_externally_visible`; a closure of an inline function is
+the same entity in every unit, WP-1638), other than its own local
+entities. Not set by a constant read by value (N17), an
 unevaluated operand, or a discarded one (sema's non-odr-use mark). A
 closure's memo carries the flag to every use. Inside a signature
 digest nothing sets it (the signature names no definition's use). A
@@ -2249,8 +2287,11 @@ equal.
 not): an attribute written only on a later redeclaration the other unit
 does not see; `alignas(T)` against `alignas(alignof(T))`; unnormalized
 `target` strings; a default argument added by a redeclaration only one
-unit sees; `target_clones` (always `partial`); a short-form callee of an
-overloaded template (`partial`).
+unit sees; a short-form callee of a template with an overload that could
+share its short form (`partial`); a `noreturn` that reaches a function
+only through a typedef'd function type (`typedef void F()
+__attribute__((noreturn)); F f;`), which has no attribute record while
+the type bit is not hashed (WP-1637).
 
 A skipped construct writes `0xA6`, its class and its kind's code in place
 of its subtree (one token per node kind, mortar's ruling 2), so equal

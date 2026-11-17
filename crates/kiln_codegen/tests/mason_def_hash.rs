@@ -605,6 +605,18 @@ const GOLDEN_CASES: &[(&str, &str)] = &[
     ("new and delete", "void f(int n) { int *p = new int[n]{1, 2}; delete[] p; delete new S; }"),
     ("throw", "void f(int a) { if (a) throw a; throw; }"),
     ("traits", "bool f() { return __is_class(S) && !__is_union(S) && noexcept(g(1)); }"),
+    // d5 (WP-1626): a deferred noexcept and a requires-expression in a
+    // callee's signature.
+    (
+        "deferred noexcept",
+        "template <class T> struct DX { template <class U> int m(U) noexcept(sizeof(T) > sizeof(U)) \
+         { return 1; } };\nint f() { DX<int> x; return x.m('a'); }",
+    ),
+    (
+        "requires expression",
+        "template <class T> requires requires(T t) { t.m; { t.m + 1 } noexcept; requires sizeof(T) > 1; } \
+         int rq(T) { return 1; }\nint f() { return rq(S{}); }",
+    ),
 ];
 
 fn golden_path() -> PathBuf {
@@ -612,7 +624,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d4).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d5).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -1378,17 +1390,39 @@ fn overloads_differing_in_signature_only() {
 }
 
 /// The fallback: a signature holding a node the area does not cover (a
-/// requires-expression) takes the short form, `PARTIAL` only when an
-/// overload of the same name and parameter count exists.
+/// dependent designated initializer) takes the short form, `PARTIAL`
+/// only when another template could be named by the same short form
+/// (WP-1626(b)): same scope and name, same template parameter kinds, an
+/// overlapping function parameter count.
 #[test]
 fn short_form_with_overloads_is_partial() {
-    let one = "template <class T> requires requires(T t) { t + 1; } int r(T) { return 1; }\n";
-    let two = "template <class T> requires requires(T t) { t * 2; } int r(T *) { return 2; }\n";
-    let call = "int f() { return r(1); }\n";
-    let alone = digest_in(&format!("{one}{call}"), "f");
-    let both = digest_in(&format!("{one}{two}{call}"), "f");
-    assert!(!alone.partial, "no overload: the short form is complete");
-    assert!(both.partial, "an overload in scope: PARTIAL");
+    let one = "struct A { int a; };\n\
+               template <class T> requires (sizeof(T{.a = 1}) > 0) int r(T) { return 1; }\n";
+    let call = "int f() { return r(A{}); }\n";
+    let with = |other: &str| {
+        let (sm, tu) = parse(&format!("{one}{other}{call}"));
+        let ast = &tu.ast;
+        let d = definitions(ast).into_iter().find(|&d| ident(ast, d) == "f").unwrap();
+        let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+        let partial = h.function(d).partial;
+        assert_eq!(h.stats().callee_short, 1, "{other}: the short form");
+        partial
+    };
+    assert!(!with(""), "no overload: the short form is complete");
+    for (other, partial) in [
+        ("template <class T> requires (sizeof(T{.a = 2}) > 0) int r(T *) { return 2; }\n", true),
+        ("template <class T> int r(T *, int = 0) { return 2; }\n", true),
+        ("template <class T> int r(T, int) { return 2; }\n", false),
+        ("template <class T, class... U> int r(T, U...) { return 2; }\n", true),
+        ("template <auto N> int r(int) { return 2; }\n", false),
+        ("template <int N> int r(int) { return 2; }\n", false),
+        ("template <class T, class U> int r(T, U) { return 2; }\n", false),
+        ("template <class T> int r(T, T, T) { return 2; }\n", false),
+        ("template <template <class> class T> int r(int) { return 2; }\n", false),
+        ("template <class T> int g(T) { return 2; }\n", false),
+    ] {
+        assert_eq!(with(other), partial, "{other}");
+    }
 }
 
 /// The signature memo is per template declaration: three redeclarations
@@ -1427,4 +1461,212 @@ fn dependent_noexcept_in_signatures() {
     let (a, b) = (digest_in(one, "f"), digest_in(&two, "f"));
     assert!(!a.partial && !b.partial, "{a:x?}");
     assert_ne!(a.hash, b.hash);
+}
+
+/// WP-1608: `target_clones` hashes its clone list (`AArch64`, where kiln
+/// keeps the attribute): the strings split at commas and trimmed, so one
+/// list spelled two ways agrees and another list differs; not partial.
+#[test]
+fn target_clones_list_is_hashed() {
+    let digest = |list: &str| {
+        let src = format!("[[gnu::target_clones({list})]] int f() {{ return 1; }}\n");
+        let sm = SourceManager::new();
+        let file = sm.add_virtual("t.cpp", src).expect("location space");
+        let interner = Arc::new(Interner::new());
+        let sink = MemorySink::new();
+        let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+        let tu = parse_tu(
+            &sm,
+            &interner,
+            file,
+            &engine,
+            Target::for_arch(Arch::AArch64),
+            &ParseOptions::default(),
+            ConstexprLimits::default(),
+        );
+        let errors: Vec<String> = sink
+            .take()
+            .into_iter()
+            .filter(|d| d.level >= Level::Error)
+            .map(|d| d.message)
+            .collect();
+        assert!(errors.is_empty(), "{list}: {errors:?}");
+        drop(engine);
+        let g = digest_of(&sm, &tu.ast, "f");
+        assert!(!g.partial, "{list}");
+        g.hash
+    };
+    let a = digest(r#""sve", "default""#);
+    assert_eq!(a, digest(r#""sve,default""#));
+    assert_eq!(a, digest(r#""sve , default""#));
+    assert_ne!(a, digest(r#""sve2", "default""#));
+    assert_ne!(a, digest(r#""default", "sve""#));
+}
+
+/// WP-1626(a): a dependent requires-expression and a dependent
+/// parenthesized initializer list are hashed by structure: the callee
+/// item is full, and they move the digest.
+#[test]
+fn dependent_requires_and_paren_lists() {
+    let digest = |src: &str| {
+        let (sm, tu) = parse(src);
+        let ast = &tu.ast;
+        let d = definitions(ast).into_iter().find(|&d| ident(ast, d) == "f").unwrap();
+        let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+        let g = h.function(d);
+        let s = h.stats();
+        (g.hash, g.partial, s.callee_full, s.callee_short)
+    };
+    let req = |body: &str| {
+        format!(
+            "struct S {{ using type = int; }};\n\
+             constexpr S operator+(S, S) noexcept {{ return {{}}; }}\n\
+             constexpr S operator-(S, S) {{ return {{}}; }}\n\
+             template <class T> requires requires(T t, T u) {{ {body} }} int r(T) {{ return 1; }}\n\
+             int f() {{ return r(S{{}}); }}\n"
+        )
+    };
+    let a = digest(&req("t + u;"));
+    assert_eq!((a.1, a.2, a.3), (false, 1, 0), "a full callee item");
+    assert_eq!(a.0, digest(&req("t + u;")).0);
+    for other in [
+        "u + t;",
+        "t - u;",
+        "typename T::type;",
+        "{ t + u } noexcept;",
+        "{ t + u };",
+        "requires sizeof(T) > 0;",
+        "t + u; t;",
+    ] {
+        let b = digest(&req(other));
+        assert_eq!((b.1, b.2, b.3), (false, 1, 0), "{other}");
+        assert_ne!(a.0, b.0, "{other}");
+    }
+    // A generic lambda's pattern keeps `int y(x)` as a paren list.
+    let lam = |init: &str| {
+        format!("int f() {{ auto l = [](auto x) {{ int y{init}; return y; }}; return l(1); }}\n")
+    };
+    let (x, y) = (digest(&lam("(x)")), digest(&lam("(x + 1)")));
+    assert!(!x.1 && !y.1, "covered");
+    assert_ne!(x.0, y.0);
+}
+
+/// WP-1626(a): a member of a class template specialization with a
+/// `noexcept(e)` and a trailing requires-clause written in terms of the
+/// template parameter is covered, not partial: the specification moves the
+/// digest by its value, the requires-clause by its structure.
+#[test]
+fn member_dependent_noexcept_and_requires() {
+    let digest = |spec: &str, req: &str| {
+        let src = format!(
+            "template <class T> struct MC {{ int g() noexcept({spec}) requires ({req}) {{ return 2; }} }};\n\
+             int f() {{ return MC<long>{{}}.g(); }}\n"
+        );
+        let (sm, tu) = parse(&src);
+        let g = digest_of(&sm, &tu.ast, "g");
+        assert!(!g.partial, "{spec} / {req}");
+        g.hash
+    };
+    let a = digest("sizeof(T) > 1", "sizeof(T) > 2");
+    assert_eq!(a, digest("sizeof(T) > 1", "sizeof(T) > 2"));
+    assert_ne!(a, digest("sizeof(T) > 64", "sizeof(T) > 2"));
+    assert_ne!(a, digest("sizeof(T) > 1", "sizeof(T) > 4"));
+}
+
+/// WP-1626(a): the `noexcept` of a member template of a class template
+/// specialization, not instantiated yet (`ExcSpec::Deferred`), is hashed
+/// from its pattern by structure: a full callee item, no fallback, and
+/// the AST keeps the specification uncomputed (the hasher instantiates
+/// nothing). Two spellings of one specification agree; two
+/// specifications differ.
+#[test]
+fn deferred_noexcept_from_the_pattern() {
+    let src = |spec: &str| {
+        format!(
+            "template <class T> struct B {{ static constexpr bool v = sizeof(T) > 1; }};\n\
+             template <class T> struct X {{\n\
+               template <class U> int m(U) noexcept({spec}) {{ return 1; }}\n\
+             }};\n\
+             int f() {{ X<int> x; return x.m(1); }}\n"
+        )
+    };
+    let hashed = |spec: &str| {
+        let (sm, tu) = parse(&src(spec));
+        let ast = &tu.ast;
+        let d = definitions(ast).into_iter().find(|&d| ident(ast, d) == "f").unwrap();
+        let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+        let g = h.function(d);
+        let s = h.stats();
+        let sites = format!("{:?}", s.signature_sites);
+        let counts = (s.callee_full, s.callee_short);
+        // The member template of `X<int>` still has its own uncomputed.
+        let deferred = ast.decls.ids().filter(|&m| {
+            ast.decls.get(m).ty().and_then(|t| ast.types.proto(t)).is_some_and(|p| {
+                matches!(ast.types.exc_spec(p), kiln_ast::types::ExcSpec::Deferred(_))
+            })
+        });
+        assert!(deferred.count() > 0, "{spec}: nothing was instantiated");
+        assert_eq!(counts, (1, 0), "{spec}: {sites}");
+        assert!(!g.partial, "{spec}");
+        g.hash
+    };
+    let a = hashed("B<T>::v && B<U>::v");
+    assert_eq!(a, hashed("B<T>::v && B<U>::v"));
+    assert_ne!(a, hashed("B<U>::v && B<T>::v"));
+    assert_ne!(a, hashed("B<T>::v || B<U>::v"));
+}
+
+/// WP-1627: `names_system` holds for a definition whose stream names an
+/// entity or type declared in a system header (here a line marker's flag
+/// 3), also when one hasher reaches the named entity through a memo a
+/// previous definition filled: the callee item (`sys_t<int>`), the
+/// signature digest (`mk`'s return type), the type reference (`sys_s`).
+#[test]
+fn names_system_through_memos() {
+    let src = "# 1 \"sys.h\" 1 3\n\
+               struct sys_s { int v; };\n\
+               inline int sys_f() { return 1; }\n\
+               template <class T> T sys_t() { return T(); }\n\
+               # 5 \"t.cpp\" 2\n\
+               inline sys_s mk() { return {}; }\n\
+               inline int own(int x) { return x + 1; }\n\
+               inline int callee_a() { return sys_t<int>(); }\n\
+               inline int callee_b() { return sys_t<int>() + 1; }\n\
+               inline int sig_a() { return mk().v; }\n\
+               inline int sig_b() { return mk().v + 1; }\n\
+               inline int ty_a() { sys_s s{}; return s.v; }\n\
+               inline int ty_b() { sys_s s{}; return s.v + 1; }\n\
+               inline int plain_a() { return own(1); }\n\
+               inline int plain_b() { return own(2); }\n";
+    let (sm, tu) = parse(src);
+    let ast = &tu.ast;
+    let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+    let mut got = Vec::new();
+    for name in [
+        "callee_a", "callee_b", "sig_a", "sig_b", "ty_a", "ty_b", "plain_a", "plain_b", "own",
+        "mk", "sys_f",
+    ] {
+        let d = definitions(ast).into_iter().find(|&d| ident(ast, d) == name).unwrap();
+        got.push((name, h.function(d).names_system));
+    }
+    let want: Vec<_> = [
+        ("callee_a", true),
+        ("callee_b", true),
+        ("sig_a", true),
+        ("sig_b", true),
+        ("ty_a", true),
+        ("ty_b", true),
+        ("plain_a", false),
+        ("plain_b", false),
+        ("own", false),
+        ("mk", true),
+        // Its own row is SYSTEM; its stream names nothing.
+        ("sys_f", false),
+    ]
+    .into();
+    assert_eq!(got, want);
+    // A fresh hasher gives every definition the same bit (no memo state).
+    for (name, bit) in want {
+        assert_eq!(digest_of(&sm, ast, name).names_system, bit, "{name}");
+    }
 }

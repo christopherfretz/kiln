@@ -145,12 +145,29 @@ pub struct Job {
     /// The module was handed to the in-process back end
     /// (`crate::backend_hook`, WP-1559).
     pub in_process: bool,
+    /// The `-fmason-metadata` kind 2 row counts (WP-1627), taken from
+    /// [`set_mason_defs`] by [`Job::finish`].
+    pub mason_defs: Option<kiln_codegen::MasonDefStats>,
+}
+
+thread_local! {
+    /// The kind 2 row counts of the job running on this thread: the
+    /// driver's jobs run one at a time on its thread, and the counts are
+    /// made deep inside the frontend (`CodegenJob::lower`).
+    static MASON_DEFS: std::cell::Cell<Option<kiln_codegen::MasonDefStats>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Records the current job's kind 2 row counts (statistics only).
+pub fn set_mason_defs(s: Option<kiln_codegen::MasonDefStats>) {
+    MASON_DEFS.with(|c| c.set(s));
 }
 
 impl Job {
     /// Starts the job of `input` (`None`: the link) and the phase sums.
     pub fn start(input: Option<&str>) -> Job {
         trace::phases_start();
+        set_mason_defs(None);
         Job {
             input: input.map(str::to_owned),
             start: Instant::now(),
@@ -161,13 +178,15 @@ impl Job {
             hod_reason: None,
             hod_skip: None,
             in_process: false,
+            mason_defs: None,
         }
     }
 
     /// Ends the job and appends its line to `log`. A log that cannot be
     /// written is ignored: the statistics never change a compile's output
     /// or exit status.
-    pub fn finish(self, args: &Args, log: &OsStr) {
+    pub fn finish(mut self, args: &Args, log: &OsStr) {
+        self.mason_defs = self.mason_defs.or_else(|| MASON_DEFS.with(std::cell::Cell::take));
         let phases = trace::phases_finish();
         let total = self.start.elapsed();
         let line = self.line(args, &phases, u64::try_from(total.as_micros()).unwrap_or(u64::MAX));
@@ -275,14 +294,27 @@ impl Job {
             }
             None => o.push_str(",\"hod_skip\":null"),
         }
+        self.tail(&mut o, truncated);
+        o
+    }
+
+    /// The present-only fields and the closing brace of [`Job::line`].
+    fn tail(&self, o: &mut String, truncated: bool) {
         if self.in_process {
             o.push_str(",\"in_process\":true");
+        }
+        // WP-1627: present only when kind 2 rows were computed.
+        if let Some(m) = self.mason_defs {
+            let _ = write!(
+                o,
+                ",\"mason_defs\":{{\"rows\":{},\"user_rows\":{},\"user_rows_naming_system\":{}}}",
+                m.rows, m.user_rows, m.user_rows_naming_system
+            );
         }
         if truncated {
             o.push_str(",\"truncated\":true");
         }
         o.push_str("}\n");
-        o
     }
 }
 

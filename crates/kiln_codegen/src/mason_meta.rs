@@ -554,6 +554,13 @@ impl Cg<'_> {
                 true,
             ),
             row("abi.wchar", types.builtin_size_align(BuiltinType::WChar).0.to_string(), true),
+            // `abi.wchar`'s signedness (WP-1608, mortar's ruling of
+            // 11-17): beside it in every unit, `abi.char`'s vocabulary.
+            row(
+                "abi.wchar-sign",
+                (if types.wchar_signed { "signed" } else { "unsigned" }).to_owned(),
+                true,
+            ),
             row(
                 "abi.long-double",
                 (u32::from(types.builtin_size_align(BuiltinType::LongDouble).0) * 8).to_string(),
@@ -572,6 +579,11 @@ impl Cg<'_> {
             if let Some(mode) = &s.hardening {
                 rows.push(row("abi.stdlib-hardening", mode.clone(), false));
             }
+        }
+        // `-fmason-metadata-system-unit` (WP-1639, mortar's request of
+        // 11-17): informational, absent otherwise.
+        if m.system_unit {
+            rows.push(row("unit.system", "yes".to_owned(), false));
         }
         rows
     }
