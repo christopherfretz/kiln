@@ -151,12 +151,21 @@ fn summary_rows(b: &[u8]) -> Vec<(String, String, u32)> {
     assert_eq!(unit_size % 8, 0);
     assert_eq!(u32_at(b, 12), 32, "header_size");
     let blocks = u32_at(b, 16);
-    assert!(blocks == 1 || blocks == 2, "kind 1, and kind 5 from level default up");
+    assert!((1..=3).contains(&blocks), "kind 1, and kinds 3 and 5 from level default up");
     let (st_off, st_size) = (u32_at(b, 20) as usize, u32_at(b, 24) as usize);
     assert!(st_off >= 32 && st_off + st_size <= unit_size);
     assert_eq!(b[st_off], 0, "the table starts with the empty string");
     assert_eq!(b[st_off + st_size - 1], 0);
     assert_eq!(u16_at(b, 28), 1, "producer kiln");
+    let mut at = 32;
+    let mut last = 0;
+    for _ in 0..blocks {
+        let (kind, size) = (u16_at(b, at), u32_at(b, at + 4) as usize);
+        assert!(kind > last && [1, 3, 5].contains(&kind), "MT-11: sorted, one per kind");
+        assert!(size % 8 == 0 && at + size <= st_off);
+        last = kind;
+        at += size;
+    }
     let (kind, version) = (u16_at(b, 32), u16_at(b, 34));
     assert_eq!((kind, version), (1, 1));
     let (block_size, row_size, rows) =
@@ -174,6 +183,18 @@ fn summary_rows(b: &[u8]) -> Vec<(String, String, u32)> {
         assert!(w[0].0.as_bytes() < w[1].0.as_bytes(), "sorted, unique: {w:?}");
     }
     out
+}
+
+/// The offset of the unit's block of `kind`, if any (MT-11).
+fn block_at(b: &[u8], kind: u16) -> Option<usize> {
+    let mut at = 32;
+    for _ in 0..u32_at(b, 16) {
+        if u16_at(b, at) == kind {
+            return Some(at);
+        }
+        at += u32_at(b, at + 4) as usize;
+    }
+    None
 }
 
 /// The string at offset `o` of the unit's string table (MT-12).
@@ -212,11 +233,8 @@ struct Decl {
 /// per key).
 fn decl_rows(b: &[u8]) -> Option<Vec<Decl>> {
     summary_rows(b);
-    if u32_at(b, 16) == 1 {
-        return None;
-    }
     let st_off = u32_at(b, 20) as usize;
-    let at = 32 + u32_at(b, 36) as usize;
+    let at = block_at(b, 5)?;
     assert_eq!((u16_at(b, at), u16_at(b, at + 2)), (5, 1), "kind 5, version 1");
     let (block_size, row_size, rows) =
         (u32_at(b, at + 4) as usize, u32_at(b, at + 8) as usize, u32_at(b, at + 12) as usize);
@@ -1142,4 +1160,350 @@ fn two_cxx_units() {
     assert_eq!((va.size, vb.size), (4, 8));
     assert_ne!(row(&a, "_Z2r1v").unwrap().ty, row(&b, "_Z2r1v").unwrap().ty);
     assert!(row(&a, "_Z2g1l").is_none() && row(&b, "_Z2g1l").is_some());
+}
+
+// Record kind 3, the type rows (WP-1566; mortar `spec/odr.md` O-17, O-18).
+
+const T_UNION: u16 = 2;
+const T_POLYMORPHIC: u16 = 4;
+const T_HAS_VBASES: u16 = 8;
+const T_SYSTEM: u16 = 32;
+
+/// One kind 3 row; `key` is checked to be the hash of `name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeRow {
+    name: String,
+    layout: u64,
+    size: u32,
+    align: u16,
+    flags: u16,
+    file: String,
+    line: u32,
+}
+
+/// The kind 3 rows of the unit in `b`, `None` without a kind 3 block,
+/// after checking the block and every row (O-17: 56 bytes, `hash` zero,
+/// `details` none, flags in bits 1, 2, 3, 5; sorted by key, then name,
+/// one row per name).
+fn type_rows(b: &[u8]) -> Option<Vec<TypeRow>> {
+    summary_rows(b);
+    let st_off = u32_at(b, 20) as usize;
+    let at = block_at(b, 3)?;
+    assert_eq!(u16_at(b, at + 2), 1, "version 1");
+    let (block_size, row_size, rows) =
+        (u32_at(b, at + 4) as usize, u32_at(b, at + 8) as usize, u32_at(b, at + 12) as usize);
+    assert_eq!(row_size, 56);
+    assert!(16 + rows * 56 <= block_size && at + block_size <= st_off);
+    let mut keys = Vec::new();
+    let out: Vec<TypeRow> = (0..rows)
+        .map(|i| {
+            let r = at + 16 + i * 56;
+            assert!(b[r + 8..r + 24].iter().all(|&x| x == 0), "hash: not hashed");
+            assert_eq!(u32_at(b, r + 52), 0xffff_ffff, "details: no kind 4");
+            let t = TypeRow {
+                name: string_at(b, u32_at(b, r + 32)),
+                layout: u64_at(b, r + 24),
+                size: u32_at(b, r + 36),
+                align: u16_at(b, r + 40),
+                flags: u16_at(b, r + 42),
+                file: string_at(b, u32_at(b, r + 44)),
+                line: u32_at(b, r + 48),
+            };
+            assert_eq!(u64_at(b, r), fnv(&t.name), "{t:?}");
+            assert_eq!(t.flags & !(T_UNION | T_POLYMORPHIC | T_HAS_VBASES | T_SYSTEM), 0, "{t:?}");
+            keys.push((u64_at(b, r), t.name.clone()));
+            t
+        })
+        .collect();
+    for w in keys.windows(2) {
+        assert!((w[0].0, w[0].1.as_bytes()) < (w[1].0, w[1].1.as_bytes()), "sorted: {w:?}");
+    }
+    Some(out)
+}
+
+/// The kind 3 rows of `src` compiled with `args` (through the IR).
+fn types_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> Option<Vec<TypeRow>> {
+    std::fs::write(dir.join(file), src).unwrap();
+    let mut a = vec!["-fmason-metadata", "-S", "-emit-llvm", "-o", "-"];
+    a.extend(args);
+    a.push(file);
+    let ir = ok(dir, &a);
+    type_rows(&ir_bytes(meta_line(&ir).expect("the global")))
+}
+
+/// The row of type `name` (its `<type>` encoding), if any.
+fn trow<'r>(rows: &'r [TypeRow], name: &str) -> Option<&'r TypeRow> {
+    rows.iter().find(|t| t.name == name)
+}
+
+/// The per-TU component of a `<type>` encoding, if any (`_GLOBAL__N`, a
+/// local name `Z`, `Ut`/`Ul`, clang's `$_N`), as in
+/// `crates/kiln_codegen/tests/mason_tu_local.rs`.
+fn per_tu_component(enc: &str) -> Option<&'static str> {
+    let b = enc.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n: usize = enc[start..i].parse().unwrap();
+            let name = &enc[i..(i + n).min(enc.len())];
+            if name.starts_with("_GLOBAL__N") {
+                return Some("_GLOBAL__N");
+            }
+            if name.starts_with('$') {
+                return Some("$_N");
+            }
+            i += n;
+            continue;
+        }
+        match b[i] {
+            b'Z' => return Some("Z...E"),
+            b'U' if matches!(b.get(i + 1), Some(b't' | b'l')) => return Some("Ut/Ul"),
+            b'L' if b.get(i + 1) == Some(&b'_') && b.get(i + 2) == Some(&b'Z') => i += 2,
+            b'L' if b.get(i + 1).is_some_and(u8::is_ascii_lowercase) => {
+                while i < b.len() && b[i] != b'E' {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Classes written in the test with fixed-width members, so the
+/// target-neutral rows are the same on every target (pointers and the
+/// vptr are pinned to x86-64 where they matter).
+const TYPES_CXX: &str = r"
+namespace ns {
+struct Plain { int a; short b; char c; };
+union U { int i; float f; };
+struct Bits { unsigned a : 3; unsigned b : 5; int : 0; unsigned c : 7; };
+struct __attribute__((packed)) Packed { char c; int i; };
+struct Anon { union { int i; float f; }; struct { short s; } named; int tail; };
+template <class T> struct Box { T t; };
+struct Base { virtual ~Base(); virtual int f() = 0; int b; };
+struct Derived : Base { int f() override; long long d; };
+struct VB : virtual Base { int g; };
+struct Holder { Box<int> bi; Plain p; };
+}
+namespace { struct Impl { int i; }; }
+static int local() { struct Local { int l; } l{}; return l.l; }
+static auto lam = [] { return 1; };
+typedef struct { int t; } TypedefNamed;
+struct HasTU { Impl impl; };
+int use(ns::Derived &d, ns::VB &v) {
+  ns::Plain p{}; ns::U u{}; ns::Bits bt{}; ns::Packed pk{}; ns::Anon an{}; ns::Holder h{};
+  ns::Box<Impl> bx{}; ns::Box<decltype(lam)> bl{}; TypedefNamed td{}; HasTU tu{};
+  (void)bl;
+  return d.f() + v.g + p.a + u.i + (int)bt.a + pk.i + an.i + h.bi.t + bx.t.i + local() + lam()
+       + td.t + tu.impl.i;
+}
+";
+
+#[test]
+fn type_rows_golden() {
+    let d = scratch("types");
+    let rows = types_of(&d, "t.cpp", TYPES_CXX, &["-std=c++20", "--target=x86_64-linux-gnu"])
+        .expect("kind 3 at the default level");
+    let got: Vec<(&str, u32, u16, u16)> =
+        rows.iter().map(|t| (t.name.as_str(), t.size, t.align, t.flags)).collect();
+    let mut want = vec![
+        ("N2ns5PlainE", 8, 4, 0),
+        ("N2ns1UE", 4, 4, T_UNION),
+        ("N2ns4BitsE", 8, 4, 0),
+        ("N2ns6PackedE", 5, 1, 0),
+        ("N2ns4AnonE", 12, 4, 0),
+        ("N2ns3BoxIiEE", 4, 4, 0),
+        ("N2ns4BaseE", 16, 8, T_POLYMORPHIC),
+        ("N2ns7DerivedE", 24, 8, T_POLYMORPHIC),
+        ("N2ns2VBE", 32, 8, T_POLYMORPHIC | T_HAS_VBASES),
+        ("N2ns6HolderE", 12, 4, 0),
+    ];
+    want.sort_by_key(|w| (fnv(w.0), w.0));
+    assert_eq!(
+        got, want,
+        "no row: Impl, Box<Impl>, Local, the closure, Box<closure>, the typedef-named class, HasTU (a member of TU-local type)"
+    );
+    for t in &rows {
+        assert_eq!(t.file, "t.cpp", "{t:?}");
+        assert_eq!(per_tu_component(&t.name), None);
+    }
+    assert_eq!(trow(&rows, "N2ns5PlainE").unwrap().line, 3);
+    let summary = rows_of(&d, "t.cpp", TYPES_CXX, &["--target=x86_64-linux-gnu"]);
+    assert!(summary.contains(&("odr.scheme".into(), "kiln-odr-1".into(), 0)));
+}
+
+/// O-11's bump rule: the layout hashes of a fixed corpus are checked in,
+/// so that a change to the serialization (spec/codegen.md "The layout
+/// hash") fails here and comes with a new `odr.scheme` name.
+#[test]
+fn layout_hash_golden() {
+    let d = scratch("golden");
+    let rows =
+        types_of(&d, "t.cpp", TYPES_CXX, &["-std=c++20", "--target=x86_64-linux-gnu"]).unwrap();
+    let got: Vec<(&str, u64)> = rows.iter().map(|t| (t.name.as_str(), t.layout)).collect();
+    let want: Vec<(&str, u64)> = LAYOUT_GOLDEN.to_vec();
+    assert_eq!(got, want);
+}
+
+const LAYOUT_GOLDEN: &[(&str, u64)] = &[
+    ("N2ns4BaseE", 0x430e_a296_2b19_2380),
+    ("N2ns3BoxIiEE", 0xe5a3_9015_eaa6_57a5),
+    ("N2ns4BitsE", 0x2596_b995_af2d_1553),
+    ("N2ns5PlainE", 0x7025_3c0d_624a_0453),
+    ("N2ns6PackedE", 0x00a9_6b70_c2d2_6707),
+    ("N2ns4AnonE", 0x736d_d532_6f5f_1e91),
+    ("N2ns1UE", 0x446c_77b8_71da_0761),
+    ("N2ns7DerivedE", 0xae1b_3f9e_9d66_24f0),
+    ("N2ns2VBE", 0xfa60_0edf_16e3_42fb),
+    ("N2ns6HolderE", 0xff8c_da38_b490_dc1f),
+];
+
+/// O-18: every layout change the hash must see changes it; the options
+/// that change no layout (RTTI, optimization, debug info) do not.
+#[test]
+fn layout_hash_sees_layout_changes() {
+    let d = scratch("changes");
+    let base = "struct B1 { int b; }; struct B2 { int c; };\n\
+                struct S : B1 { virtual void f(); virtual void g(); int a; char c; unsigned w : 3; };\n";
+    let variants = [
+        ("member type", base.replace("int a;", "unsigned a;")),
+        ("member order", base.replace("int a; char c;", "char c; int a;")),
+        ("added base", base.replace("S : B1", "S : B1, B2")),
+        ("virtual base", base.replace("S : B1", "S : virtual B1")),
+        ("added virtual", base.replace("virtual void g();", "virtual void g(); virtual void h();")),
+        (
+            "virtual order",
+            base.replace(
+                "virtual void f(); virtual void g();",
+                "virtual void g(); virtual void f();",
+            ),
+        ),
+        ("bit-field width", base.replace("w : 3", "w : 4")),
+        ("packed", base.replace("struct S", "struct __attribute__((packed)) S")),
+        ("base layout", base.replace("struct B1 { int b; }", "struct B1 { long b; }")),
+    ];
+    let hash = |src: &str, args: &[&str]| {
+        let src = format!("{src}void S::f() {{}}\n");
+        let mut a = vec!["--target=x86_64-linux-gnu"];
+        a.extend(args);
+        let rows = types_of(&d, "t.cpp", &src, &a).unwrap();
+        trow(&rows, "1S").map(|t| t.layout).expect("S's row")
+    };
+    let h = hash(base, &[]);
+    for (what, v) in &variants {
+        assert_ne!(hash(v, &[]), h, "{what}");
+    }
+    for args in [&["-fno-rtti"][..], &["-O2"], &["-g"], &["-std=c++17"]] {
+        assert_eq!(hash(base, args), h, "{args:?}");
+    }
+    // An overrider in a derived class changes the derived class's hash only.
+    let derived = format!("{base}struct D : S {{ int d; }};\nD dd;\n");
+    let over = derived.replace("int d; }", "int d; void g() override; }");
+    let rows = |src: &str| {
+        types_of(&d, "t.cpp", &format!("{src}void S::f() {{}}\n"), &["--target=x86_64-linux-gnu"])
+            .unwrap()
+    };
+    let (r0, r1) = (rows(&derived), rows(&over));
+    assert_eq!(trow(&r0, "1S"), trow(&r1, "1S"));
+    assert_ne!(trow(&r0, "1D").unwrap().layout, trow(&r1, "1D").unwrap().layout);
+}
+
+/// The N31 shape (two units, each with its own unnamed-namespace `Impl`,
+/// a template over it, a local class of a `static` function) writes no
+/// row for any of them; the classes the two units share get equal rows.
+#[test]
+fn two_units_and_tu_local_types() {
+    let d = scratch("n31");
+    let unit = |n: i32| {
+        format!(
+            "template <class T> struct Opt {{ T t; bool engaged; }};\n\
+             struct Shared {{ int a; Opt<int> o; }};\n\
+             namespace {{ struct Impl {{ int v{n}; }}; }}\n\
+             static int local() {{ struct L {{ int l = {n}; }} l; return l.l; }}\n\
+             int u{n}(Shared &s) {{ Opt<Impl> o{{}}; return s.a + o.t.v{n} + local(); }}\n"
+        )
+    };
+    let a = types_of(&d, "a.cpp", &unit(1), &[]).unwrap();
+    let b = types_of(&d, "b.cpp", &unit(2), &[]).unwrap();
+    let names = |r: &[TypeRow]| r.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    let mut want = vec!["6Shared".to_string(), "3OptIiE".to_string()];
+    want.sort_by_key(|n| (fnv(n), n.clone()));
+    assert_eq!(names(&a), want, "no row: Impl, Opt<Impl>, L");
+    assert_eq!(names(&a), names(&b));
+    for (x, y) in a.iter().zip(&b) {
+        assert_eq!(
+            (x.layout, x.size, x.align, x.flags, x.line),
+            (y.layout, y.size, y.align, y.flags, y.line)
+        );
+    }
+}
+
+/// Levels and languages: `min` and C write no kind 3; a PCH's classes
+/// get the same rows as the same header included.
+#[test]
+fn type_rows_levels_c_and_pch() {
+    let d = scratch("tlevels");
+    let src = "struct P { int x; };\nint f(P p) { return p.x; }\n";
+    assert_eq!(types_of(&d, "t.cpp", src, &["-fmason-metadata=min"]), None);
+    for l in ["detail", "all"] {
+        let r = types_of(&d, "t.cpp", src, &[&format!("-fmason-metadata={l}")]).unwrap();
+        assert_eq!(r.len(), 1, "{l}");
+    }
+    assert_eq!(
+        types_of(&d, "t.c", "struct P { int x; };\nint f(struct P p) { return p.x; }\n", &[]),
+        None
+    );
+    std::fs::write(d.join("h.h"), "struct InPch { int a; double b; };\n").unwrap();
+    ok(&d, &["-x", "c++-header", "h.h", "-o", "h.pch"]);
+    let u = "int f(InPch &p) { return p.a; }\nInPch g;\n";
+    let with_pch = types_of(&d, "u.cpp", u, &["-include-pch", "h.pch"]).unwrap();
+    let with_h = types_of(&d, "u.cpp", u, &["-include", "h.h"]).unwrap();
+    assert_eq!(with_pch, with_h);
+    assert_eq!(
+        with_h.iter().map(|t| (t.name.as_str(), t.file.as_str(), t.line)).collect::<Vec<_>>(),
+        [("5InPch", "./h.h", 1)]
+    );
+}
+
+/// Real library code: two units sharing standard headers write rows with
+/// no per-TU component, flagged SYSTEM, and equal rows for every class
+/// they share. Skipped for a library whose headers are not installed.
+#[test]
+fn library_rows_agree_across_units() {
+    let d = scratch("library");
+    let hdr = "#include <vector>\n#include <string>\n#include <map>\n#include <optional>\n#include <variant>\n";
+    let a = format!(
+        "{hdr}int a(std::map<std::string, std::vector<int>> &m) {{ std::optional<std::string> o; std::variant<int, std::string> v; return (int)m.size() + (int)o.has_value() + (int)v.index(); }}\n"
+    );
+    let b = format!(
+        "{hdr}std::string b(std::vector<std::string> &v) {{ std::map<std::string, std::vector<int>> m; return v.empty() ? std::string() : v[0] + std::to_string(m.size()); }}\n"
+    );
+    for lib in ["-stdlib=libstdc++", "-stdlib=libc++"] {
+        std::fs::write(d.join("a.cpp"), &a).unwrap();
+        if !run(&d, &["-std=c++20", lib, "-fsyntax-only", "a.cpp"]).status.success() {
+            eprintln!("skipping {lib}");
+            continue;
+        }
+        let ra = types_of(&d, "a.cpp", &a, &["-std=c++20", lib, "-fmason-metadata=all"]).unwrap();
+        let rb = types_of(&d, "b.cpp", &b, &["-std=c++20", lib, "-fmason-metadata=all"]).unwrap();
+        assert!(ra.len() > 20 && rb.len() > 20, "{lib}: {} {}", ra.len(), rb.len());
+        let mut shared = 0;
+        for t in ra.iter().chain(&rb) {
+            assert_eq!(per_tu_component(&t.name), None, "{lib}: {t:?}");
+            assert!(t.flags & T_SYSTEM != 0, "{lib}: {t:?}");
+        }
+        for t in &ra {
+            if let Some(u) = trow(&rb, &t.name) {
+                assert_eq!(t, u, "{lib}");
+                shared += 1;
+            }
+        }
+        assert!(shared > 10, "{lib}: {shared}");
+    }
 }

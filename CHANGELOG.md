@@ -144,6 +144,12 @@ Planned as 1.3.0.
   an asm label, C++ function types as hashes only at `default`), and
   `abi.stdlib-abi` now lists libc++'s layout-changing ABI switches
   ([spec/codegen.md](spec/codegen.md) §5.5).
+- `-fmason-metadata` (from level `default` up, C++) also records a hash
+  of the layout of every class an object uses (size, alignment, bases,
+  members, virtual functions), so the mortar linker can report two
+  objects that disagree on a class's layout (WP-1566); classes that are
+  local to one translation unit get no record
+  ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed
 

@@ -146,6 +146,12 @@ impl LayoutCache {
         self.map.get(&record).map(|b| &**b)
     }
 
+    /// Every cached layout, keyed by first declaration (in no particular
+    /// order: a caller that needs one sorts).
+    pub fn iter(&self) -> impl Iterator<Item = (DeclId, &RecordLayout)> + '_ {
+        self.map.iter().map(|(&d, l)| (d, &**l))
+    }
+
     /// Number of cached layouts.
     pub fn len(&self) -> usize {
         self.map.len()

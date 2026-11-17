@@ -203,6 +203,12 @@ impl<'a> IrTypes<'a> {
         &mut self.lay
     }
 
+    /// Every class layout the session computed so far, keyed by first
+    /// declaration (in no particular order).
+    pub fn layouts(&self) -> impl Iterator<Item = (DeclId, &kiln_ast::types::RecordLayout)> + '_ {
+        self.lay.layouts()
+    }
+
     /// The AST.
     pub fn ast(&self) -> &'a Ast {
         self.lay.ast()
