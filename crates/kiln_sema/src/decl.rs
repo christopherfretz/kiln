@@ -4669,6 +4669,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The `auto` of the decl-specifier's constrained placeholder (its
+    /// type-specifier), else `l` (a trailing return type's).
+    pub(crate) fn placeholder_auto_loc(ds: &DeclSpec, l: Loc) -> Loc {
+        match ds.type_loc {
+            Some(t) if ds.auto_constraint.is_some() && t.is_valid() => t,
+            _ => l,
+        }
+    }
+
     /// The outermost `&`/`&&` of `d` when its declared type is a
     /// reference (its first chunk), else invalid.
     pub(crate) fn outer_ref_loc(d: &Declarator) -> Loc {
@@ -5903,7 +5912,7 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
         if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
-            self.inst.concepts.placeholder_locs.insert(f, l);
+            self.inst.concepts.placeholder_locs.insert(f, (l, Self::placeholder_auto_loc(ds, l)));
         }
         if d.missing_typename {
             self.missing_typename_fns.insert(f);
@@ -6659,7 +6668,7 @@ impl Sema<'_, '_> {
             self.note_ref_loc(f, d, ty);
         }
         if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
-            self.inst.concepts.placeholder_locs.insert(f, l);
+            self.inst.concepts.placeholder_locs.insert(f, (l, Self::placeholder_auto_loc(ds, l)));
         }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
@@ -7548,7 +7557,7 @@ impl Sema<'_, '_> {
         self.lambda_mangle.var = Some(v);
         if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here.
-            self.inst.concepts.placeholder_locs.insert(v, l);
+            self.inst.concepts.placeholder_locs.insert(v, (l, Self::placeholder_auto_loc(ds, l)));
         }
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);
@@ -8138,7 +8147,8 @@ impl Sema<'_, '_> {
                     }
                 }
                 Ok(t) => {
-                    let at = self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or(loc);
+                    let at =
+                        self.inst.concepts.placeholder_locs.get(&v).copied().unwrap_or((loc, loc));
                     // `constexpr C decltype(auto) x = e;`: the constraint
                     // is checked against `decltype(e)`, before `constexpr`
                     // adds its `const` ([dcl.type.auto.deduct]/2,/5).

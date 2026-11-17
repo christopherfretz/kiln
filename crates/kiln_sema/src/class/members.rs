@@ -344,7 +344,7 @@ impl Sema<'_, '_> {
         if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here, as
             // for a namespace-scope variable (WP-1471).
-            self.inst.concepts.placeholder_locs.insert(v, l);
+            self.inst.concepts.placeholder_locs.insert(v, (l, Self::placeholder_auto_loc(ds, l)));
         }
         if invalid {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);

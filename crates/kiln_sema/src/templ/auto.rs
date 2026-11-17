@@ -509,12 +509,16 @@ impl Sema<'_, '_> {
     /// `declared` deduced (`deduced` is the whole declared type after
     /// deduction) must satisfy its type-constraint `C<T, args...>`.
     /// Reports clang's "deduced type 'T' does not satisfy 'C'" at `loc`
-    /// with the concept's chain; returns false when it did.
+    /// with the concept's chain; returns false when it did. The
+    /// type-constraint's list is checked first, as the concept-id with the
+    /// deduced type first ([`Sema::type_constraint_args_ok`], WP-1610),
+    /// its error at `auto_at` (the placeholder's `auto`, clang's
+    /// location).
     pub(crate) fn check_placeholder_constraint(
         &mut self,
         declared: QualType,
         deduced: QualType,
-        loc: Loc,
+        (loc, auto_at): (Loc, Loc),
     ) -> bool {
         let found = self.contained_placeholder(declared).and_then(|leaf| {
             match self.ast.types.canonical_view(leaf) {
@@ -527,6 +531,11 @@ impl Sema<'_, '_> {
             return true;
         }
         let Some((_, t)) = self.placeholder_deduction(declared, deduced) else { return true };
+        let written: Vec<TemplateArg> =
+            extra.map(|x| self.ast.types.args(x).to_vec()).unwrap_or_default();
+        if !self.type_constraint_args_ok(c, &written, extra.is_some(), &[], auto_at) {
+            return false;
+        }
         let mut args = vec![TemplateArg::ty(t)];
         if let Some(x) = extra {
             args.extend_from_slice(self.ast.types.args(x));

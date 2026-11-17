@@ -616,6 +616,9 @@ impl Sema<'_, '_> {
     ) -> Result<DeclId, ()> {
         let tmpl = sid.template;
         let loc = sid.loc;
+        if self.spec_args_invalid(&sid.args) {
+            return Err(());
+        }
         let spec =
             self.find_or_create_var_spec(tmpl, &sid.args, &sid.arg_locs, loc, ty, vspec, true)?;
         if !self.check_spec_scope(tmpl, false, loc) {

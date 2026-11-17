@@ -1,0 +1,179 @@
+TranslationUnitDecl
+|-ConceptDecl C
+| |-TemplateTypeParmDecl class depth 0 index 0
+| `-CXXBoolLiteralExpr 'bool' true
+|-ClassTemplateDecl B
+| |-TemplateTypeParmDecl class depth 0 index 0
+| |-CXXRecordDecl struct B definition
+| | `-CXXMethodDecl fb 'int (int)'
+| |   `-ParmVarDecl 'int'
+| `-ClassTemplateSpecializationDecl struct B definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-CXXMethodDecl fb 'int (int)'
+|     `-ParmVarDecl 'int'
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct A definition
+|   |-CXXMethodDecl st 'int (int)'
+|   | `-ParmVarDecl 'int'
+|   |-CXXMethodDecl st 'int (long)'
+|   | `-ParmVarDecl 'long'
+|   |-CXXMethodDecl so 'int (int)' static
+|   | `-ParmVarDecl 'int'
+|   |-CXXMethodDecl so 'int (long)' static
+|   | `-ParmVarDecl 'long'
+|   |-FunctionTemplateDecl tm
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | |-CXXMethodDecl tm 'int (U)'
+|   | | `-ParmVarDecl 'U'
+|   | |-CXXMethodDecl tm 'int (int)'
+|   | | `-ParmVarDecl 'int'
+|   | `-CXXMethodDecl tm 'int (long)'
+|   |   `-ParmVarDecl 'long'
+|   |-FunctionTemplateDecl dep
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | `-CXXMethodDecl dep 'T (U)'
+|   |   `-ParmVarDecl 'U'
+|   |-FunctionTemplateDecl dflt
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | |-TemplateTypeParmDecl class depth 1 index 1 V
+|   | | `-TemplateArgument type 'T'
+|   | `-CXXMethodDecl dflt 'int (U)'
+|   |   `-ParmVarDecl 'U'
+|   |-FunctionTemplateDecl ptp
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | `-CXXMethodDecl ptp 'int (U, T)'
+|   |   |-ParmVarDecl 'U'
+|   |   `-ParmVarDecl 'T'
+|   |-FunctionTemplateDecl con
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | | `-ConceptSpecializationExpr 'bool'
+|   | |   `-TemplateArgument type 'U'
+|   | `-CXXMethodDecl con 'int (U)'
+|   |   `-ParmVarDecl 'U'
+|   |-FunctionTemplateDecl rq
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | `-CXXMethodDecl rq 'int (U)'
+|   |   |-ParmVarDecl 'U'
+|   |   `-CXXBoolLiteralExpr 'bool' true
+|   |-FunctionTemplateDecl ded
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | |-CXXMethodDecl ded 'auto (U)' implicit-inline
+|   | | |-ParmVarDecl 'U'
+|   | | `-CompoundStmt
+|   | |   `-ReturnStmt
+|   | |     `-IntegerLiteral 'int' 1
+|   | `-CXXMethodDecl ded 'auto (int)' implicit-inline
+|   |   `-ParmVarDecl 'int'
+|   |-FunctionTemplateDecl ex
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | `-CXXMethodDecl ex 'int (U, int)'
+|   |   |-ParmVarDecl 'U'
+|   |   `-ParmVarDecl 'int'
+|   |-FunctionTemplateDecl tt
+|   | |-TemplateTemplateParmDecl depth 1 index 0 X
+|   | | `-TemplateTypeParmDecl class depth 2 index 0
+|   | `-CXXMethodDecl tt 'int (X<int>)'
+|   |   `-ParmVarDecl 'X<int>'
+|   |-CXXMethodDecl ov 'int (int)'
+|   | `-ParmVarDecl 'int'
+|   |-CXXMethodDecl ov 'int (T)'
+|   | `-ParmVarDecl 'T'
+|   |-CXXConversionDecl referenced operator int 'int ()'
+|   |-CXXMethodDecl g 'void ()' implicit-inline
+|   | `-CompoundStmt
+|   |   |-CallExpr 'int'
+|   |   | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->st
+|   |   | | `-CXXThisExpr 'A<T> *' implicit this
+|   |   | `-IntegerLiteral 'int' 1
+|   |   |-CallExpr 'int'
+|   |   | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
+|   |   | | `-CXXThisExpr 'A<T> *' implicit this
+|   |   | `-IntegerLiteral 'int' 1
+|   |   |-CallExpr 'int'
+|   |   | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'so'
+|   |   | `-IntegerLiteral 'int' 1
+|   |   `-CallExpr 'int'
+|   |     |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
+|   |     | `-CXXThisExpr 'A<T> *' this
+|   |     `-IntegerLiteral 'int' 1
+|   `-CXXMethodDecl h 'void (T)' implicit-inline
+|     |-ParmVarDecl referenced t 'T'
+|     `-CompoundStmt
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->dep
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->dflt
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ptp
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | |-IntegerLiteral 'int' 1
+|       | `-IntegerLiteral 'int' 2
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->con
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->rq
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ded
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ex
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tt
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-CXXTemporaryObjectExpr 'B<int>' 'void ()' zeroing
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ov
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->st
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->st
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-FloatingLiteral 'double' 1e0
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->st
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-StringLiteral 'const char[1]' lvalue ""
+|       |-CallExpr '<dependent type>'
+|       | `-MemberExpr '<bound member function type>' ->operator int
+|       |   `-CXXThisExpr 'A<T> *' this
+|       |-CallExpr '<dependent type>'
+|       | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'so'
+|       | `-IntegerLiteral 'int' 1
+|       `-CallExpr '<dependent type>'
+|         |-UnresolvedLookupExpr '<dependent type>' lvalue (ADL) = 'tm'
+|         | `-TemplateArgument type 'long'
+|         `-IntegerLiteral 'int' 1
+`-ClassTemplateDecl D
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct D definition
+    |-public 'B<T>'
+    |-CXXMethodDecl g 'int (int)'
+    | `-ParmVarDecl 'int'
+    |-CXXMethodDecl g 'int (long)'
+    | `-ParmVarDecl 'long'
+    `-CXXMethodDecl f 'void ()' implicit-inline
+      `-CompoundStmt
+        |-CallExpr '<dependent type>'
+        | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->g
+        | | `-CXXThisExpr 'D<T> *' implicit this
+        | `-IntegerLiteral 'int' 1
+        `-CallExpr '<dependent type>'
+          |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->g
+          | `-CXXThisExpr 'D<T> *' this
+          `-IntegerLiteral 'int' 1

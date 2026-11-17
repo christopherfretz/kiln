@@ -1166,6 +1166,19 @@ Planned as 1.3.0.
   `operator B() const` beside a better `operator B&()` initializes `b`
   through `operator B() const` as clang does instead of being ambiguous
   (a recorded deviation, docs/status/deviations.md).
+- Templates and builtins, found running GCC's C++ testsuite (WP-1609,
+  WP-1610, WP-1612): a call through `this` of the current instantiation
+  that names an overload set or a member template (`this->f(1)`,
+  `(*this).f`, an implicit `this`, `C::f`, a non-dependent base's
+  `Q::f`, explicit template arguments) is resolved at definition and is
+  not type-dependent when instantiation cannot choose differently, so a
+  `<` after a member template of its result needs no `template`; a
+  type-constraint `C<A...>` is checked as the concept-id `C<X, A...>`, so
+  a pack expansion onto a non-pack parameter of the concept and a wrong
+  number of arguments are rejected as clang does; `__builtin_parityg`
+  rejects `bool` and enumeration operands as GCC does; a specialization
+  whose template arguments hold an error is dropped instead of being
+  followed by a `redefinition` error.
 
 ## [1.2.1] - 2026-11-14
 

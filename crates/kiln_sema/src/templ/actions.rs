@@ -2209,7 +2209,7 @@ impl Sema<'_, '_> {
             self.forget_immediate_ref(r);
         }
         if !args.iter().any(|&a| self.expr_is_type_dependent(a))
-            && let Some((ty, vk)) = self.current_instantiation_call_type(callee)
+            && let Some((ty, vk)) = self.current_instantiation_call_type(callee, args)
         {
             let c = self.builder().call(f, args, ty, vk, loc, rparen, ExprFlags::NONE);
             self.ast.exprs.clear_type_dependence(c);
@@ -2219,30 +2219,33 @@ impl Sema<'_, '_> {
         self.builder().call(f, args, ty, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE)
     }
 
-    /// [temp.dep.expr]/5 (WP-1570): the type and value category of a call
-    /// `this->f(args)`, `f(args)` or `Q::f(args)` (implicit `this`) whose
-    /// callee is type-dependent only through the `this` of the current
-    /// instantiation, when the result cannot change at instantiation: the
-    /// member access names one non-template member function (no overload
-    /// set, no template arguments) whose type is not dependent and holds
-    /// no placeholder, of a class that is complete here and has no
-    /// dependent base. The call is then not type-dependent; it stays
-    /// value- and instantiation-dependent and is rebuilt (and its overload
-    /// resolution and argument conversions checked) at instantiation.
-    /// Anything else returns `None` and the call keeps the dependent
-    /// type: a dependent base may hide or add a member at instantiation
-    /// ([temp.dep.type]), an overload set or a member template would
-    /// need overload resolution or deduction here, an incomplete class
-    /// may still declare an overload that a later lookup finds, and a
-    /// result (pointer or reference) naming an incomplete class may be
-    /// complete at instantiation.
+    /// [temp.dep.expr]/5 (WP-1570, WP-1609): the type and value category
+    /// of a call `this->f(args)`, `f(args)` or `Q::f(args)` (implicit
+    /// `this`) whose callee is type-dependent only through the `this` of
+    /// the current instantiation, when the result cannot change at
+    /// instantiation: the member access names one non-template member
+    /// function (no template arguments) whose type is not dependent and
+    /// holds no placeholder, of a class that is complete here and has no
+    /// dependent base, or an overload set that resolves here
+    /// ([`Self::current_instantiation_set_call_type`]). The call is then
+    /// not type-dependent; it stays value- and instantiation-dependent
+    /// and is rebuilt (and its overload resolution and argument
+    /// conversions checked) at instantiation. Anything else returns
+    /// `None` and the call keeps the dependent type (spec/sema-templates.md
+    /// "Calls through `this` of the current instantiation").
     fn current_instantiation_call_type(
-        &self,
+        &mut self,
         callee: ExprId,
+        args: &[ExprId],
     ) -> Option<(QualType, kiln_ast::expr::ValueCategory)> {
-        use kiln_ast::expr::ValueCategory;
         let x = self.ignore_parens(callee);
         let n = *self.ast.exprs.get(x);
+        if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
+            return self.current_instantiation_set_call_type(x, args);
+        }
+        if n.kind() == ExprKind::UnresolvedLookupExpr {
+            return self.current_instantiation_static_call_type(x, args);
+        }
         if n.kind() != ExprKind::MemberExpr
             || n.ty() == QualType::OVERLOAD
             || self.ast.templates.expr_targs.get(x).is_some()
@@ -2259,39 +2262,14 @@ impl Sema<'_, '_> {
         }
         let class = self.ast.types.as_record(self.pointee_sugared(self.ety(base))?)?;
         let class = self.ast.definition(class)?;
-        if self.defining.contains(&class)
-            || self.suspended_defining.contains(&class)
-            || self.has_dependent_bases(class)
-        {
+        if !self.current_instantiation_complete(class) {
             return None;
         }
         let fty = self.ast.decls.get(d).ty()?;
         if self.ast.types.is_dependent(fty) || self.contained_placeholder(fty).is_some() {
             return None;
         }
-        let ret = self.sugared_proto(fty)?.ret();
-        if ret == QualType::ERROR {
-            return None;
-        }
-        // A result naming an incomplete class (`Heap *`) stays dependent:
-        // a member access into it is checked at instantiation, where the
-        // class may be complete, not rejected at definition (GCC only
-        // warns there; `g++.dg/template/incomplete8.C`).
-        let r = self.non_reference(ret);
-        let obj = self.pointee_sugared(r).unwrap_or(r);
-        if self.ast.types.as_record(obj).is_some() && !self.is_complete(obj) {
-            return None;
-        }
-        Some(if self.ast.types.is_reference(ret) {
-            let r = self.non_reference(ret);
-            let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
-                || self.ast.types.is_function(r);
-            (r, if lvalue { ValueCategory::LValue } else { ValueCategory::XValue })
-        } else if self.ast.types.as_record(ret).is_some() {
-            (ret, ValueCategory::PRValue)
-        } else {
-            (crate::conv::strip_cv(self, ret), ValueCategory::PRValue)
-        })
+        self.current_instantiation_result(fty)
     }
 
     /// An unqualified name followed by `(` that ordinary lookup does not

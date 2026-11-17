@@ -699,6 +699,132 @@ impl Sema<'_, '_> {
         Ok(())
     }
 
+    /// A type-constraint `C<A...>` (a constrained template parameter, a
+    /// constrained placeholder, a return-type-requirement) names the
+    /// concept-id `C<X, A...>` with the constrained type `X` first
+    /// ([temp.param]/4, [dcl.type.auto.deduct]/4,
+    /// [expr.prim.req.compound]/1.3.1): its arguments are checked as that
+    /// list is ([temp.arg.general]/1, [temp.variadic]/10), at the
+    /// type-constraint, before any argument is substituted (clang's
+    /// `CheckConceptTemplateId` from `BuildTypeConstraint`). A pack
+    /// expansion `Us...` must correspond to the concept's parameter pack or
+    /// to parameters after its last one: onto a non-pack parameter it is
+    /// "pack expansion used as argument for non-pack parameter of concept"
+    /// at the expansion, as for a written concept-id; with no `<>` and a
+    /// second parameter without a default it is clang's "requires more
+    /// than 1 template argument"; otherwise too few or too many is the
+    /// arity error at the concept's name. `written`: a `<...>` list was
+    /// written; `full`: check the list (a constrained template parameter,
+    /// a function parameter's placeholder, a return-type-requirement);
+    /// otherwise (a variable's or a return type's placeholder) only the
+    /// missing list is checked here and the rest when the placeholder is
+    /// deduced ([`Sema::check_placeholder_constraint`]), as clang does.
+    /// `loc`: the concept's name; the arguments' locations are the parsed
+    /// list's. False after a diagnostic: the constraint is dropped
+    /// (WP-1610).
+    pub fn check_type_constraint_args(
+        &mut self,
+        concept: DeclId,
+        args: &[TemplateArg],
+        written: bool,
+        full: bool,
+        loc: Loc,
+    ) -> bool {
+        if !full {
+            if written || self.kind_of(concept) != DeclKind::Concept {
+                return true;
+            }
+            let params = self.template_params(self.head_template(concept));
+            let needs_more = params.get(1).is_some_and(|&p| {
+                !self.ast.template_parm(p).is_some_and(|x| x.pack)
+                    && self.template_default(p).is_none()
+            });
+            if needs_more {
+                let d = self
+                    .diag(DiagId::sema_type_constraint_missing_arguments, loc)
+                    .arg(self.unqualified_decl_name(concept));
+                self.emit(d);
+            }
+            return !needs_more;
+        }
+        let locs = if self.templ.arg_locs.len() == args.len() {
+            self.templ.arg_locs.clone()
+        } else {
+            Vec::new()
+        };
+        self.type_constraint_args_ok(concept, args, written, &locs, loc)
+    }
+
+    /// [`Sema::check_type_constraint_args`]'s check of the list `args`
+    /// (packs of substituted arguments flattened), located at `locs` (or
+    /// at `loc` without them).
+    pub(crate) fn type_constraint_args_ok(
+        &mut self,
+        concept: DeclId,
+        args: &[TemplateArg],
+        written: bool,
+        locs: &[Loc],
+        loc: Loc,
+    ) -> bool {
+        if self.kind_of(concept) != DeclKind::Concept {
+            return true;
+        }
+        let mut flat = Vec::with_capacity(args.len());
+        for &a in args {
+            match a.view() {
+                ArgView::Pack(l) => flat.extend_from_slice(self.ast.types.args(l)),
+                _ => flat.push(a),
+            }
+        }
+        let locs = if flat.len() == locs.len() { locs } else { &[] };
+        let args = &flat[..];
+        let params = self.template_params(self.head_template(concept));
+        let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
+        let pack = params.iter().position(|&p| is_pack(self, p));
+        let fixed = pack.unwrap_or(params.len());
+        let arg_loc = |i: usize| locs.get(i).copied().unwrap_or(loc);
+        for (i, &a) in args.iter().enumerate() {
+            if !self.is_pack_expansion_arg(a) {
+                continue;
+            }
+            // The parameter the expansion's first element would take.
+            let pi = i + 1;
+            if pi < fixed {
+                let d = self
+                    .diag(DiagId::sema_template_expansion_into_fixed_list, arg_loc(i))
+                    .arg(1u32);
+                let d = self.note_param_here(d, params[pi]);
+                self.emit(d);
+                return false;
+            }
+            if pack.is_none() && pi >= params.len() {
+                self.diag_template_arity(concept, true, loc);
+                return false;
+            }
+            // The expansion covers any number of the parameters left.
+            return true;
+        }
+        let total = args.len() + 1;
+        if pack.is_none() && total > params.len() {
+            self.diag_template_arity(concept, true, loc);
+            return false;
+        }
+        let required =
+            params[..fixed].iter().filter(|&&p| self.template_default(p).is_none()).count();
+        if total < required {
+            if written {
+                self.diag_template_arity(concept, false, loc);
+            } else {
+                let d = self
+                    .diag(DiagId::sema_type_constraint_missing_arguments, loc)
+                    .arg(self.unqualified_decl_name(concept));
+                self.emit(d);
+            }
+            return false;
+        }
+        true
+    }
+
     pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         // clang prints the `TemplateDecl` unqualified: `A`, also for a
         // member template of a specialization (`O<int, char>::A`).

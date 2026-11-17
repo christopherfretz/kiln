@@ -636,7 +636,10 @@ impl Sema<'_, '_> {
                     .get(&fdecl)
                     .or_else(|| pattern.and_then(|p| locs.get(&p)))
                     .copied()
-                    .unwrap_or(self.ast.decls.get(fdecl).loc());
+                    .unwrap_or_else(|| {
+                        let l = self.ast.decls.get(fdecl).loc();
+                        (l, l)
+                    });
                 let _ = self.check_placeholder_constraint(declared, deduced, at);
             }
             self.set_deduced_return(fdecl, deduced);

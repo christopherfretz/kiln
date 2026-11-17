@@ -2,15 +2,16 @@
 //@ skip(clang): clang 22 treats a call through `this` of the current instantiation as type-dependent
 //@ oracle: none
 // [temp.dep.expr]/5: a call through `this` of the current instantiation
-// is not type-dependent when it names one non-template member function
-// whose type is not dependent, of a class with no dependent base, and no
-// argument is type-dependent: `this->f(1)`, `f(1)` and `Q::g()` have the
-// return type (an lvalue for an lvalue reference return). Every other
-// call stays `<dependent type>` and is decided at instantiation: an
-// overload set, a member template, a deduced return type, a dependent
-// function type, a type-dependent argument, a result naming an incomplete
-// class (which may be complete at instantiation), and any call in a class
-// with a dependent base (which may hide or add members at instantiation).
+// is not type-dependent when it names member functions whose types are
+// not dependent, of a class with no dependent base, and no argument is
+// type-dependent: `this->f(1)`, `f(1)` and `Q::g()` have the return type
+// (an lvalue for an lvalue reference return), and so do `this->ov(1)`
+// and `this->tm(1)`, whose overload resolution (and deduction) succeeds
+// at definition (WP-1609). Every other call stays `<dependent type>` and
+// is decided at instantiation: a deduced return type, a dependent
+// function type, a type-dependent argument, a result naming an incomplete class (which may
+// be complete at instantiation), and any call in a class with a dependent
+// base (which may hide or add members at instantiation).
 struct Inc;
 struct Q { int g() { return 0; } };
 template <class T> struct A : Q {

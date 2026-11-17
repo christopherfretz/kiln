@@ -18,6 +18,7 @@ pub mod class;
 pub mod concepts;
 pub mod ctad;
 pub(crate) mod ctad_site;
+mod current_inst;
 pub mod deduce;
 pub mod deduce_call;
 #[cfg(feature = "op-stats")]
