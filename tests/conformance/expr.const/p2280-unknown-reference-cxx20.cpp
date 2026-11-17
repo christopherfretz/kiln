@@ -1,24 +1,27 @@
-// [expr.const]/5.12 (C++20, before P2280R4): an id-expression naming a
-// reference must refer to a variable usable in constant expressions or
-// whose lifetime began within the evaluation. A reference parameter
-// outside its call has an unknown value, so even naming it is not
-// constant (clang applies P2280 from C++23 only).
-//@ expect: compile-fail
-//@ strict-diags
+// [expr.const]/10 (P2280R4, a defect report against C++11 on): a reference
+// not usable in constant expressions binds to an object of unknown value,
+// in every language mode (as GCC 16.1; clang 22 applies it from C++23
+// only, `p2280-unknown-reference.cpp`). Naming the reference, passing it
+// on, a member call that reads nothing and `sizeof` are constant in C++20.
+// Found running GCC's C++ testsuite.
 //@ std: c++20
-//@ diag: 20:47 error "static assertion expression is not an integral constant expression"
-//@ diag: 20:52 note "function parameter 'a' with unknown value cannot be used in a constant expression"
-//@ diag: 20:24 note "declared here"
-//@ diag: 22:46 error "static assertion expression is not an integral constant expression"
-//@ diag: 22:46 note "function parameter 's' with unknown value cannot be used in a constant expression"
-//@ diag: 22:27 note "declared here"
-//@ diag: 24:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 24:16 note "initializer of 'er' is unknown"
-//@ diag: 23:13 note "declared here"
+//@ oracle: gcc
+//@ xfail(clang): clang 22 applies P2280 from C++23 only
 using size_t = decltype(sizeof 0);
 template <class T, size_t N> constexpr size_t size(T (&)[N]) { return N; }
-void array_param(int (&a)[4]) { static_assert(size(a) == 4); }
+void array_param(int (&a)[4]) {
+  static_assert(size(a) == 4);
+  static_assert(sizeof(a) == 4 * sizeof(int));
+}
 struct S { constexpr int three() const { return 3; } };
 void class_param(const S &s) { static_assert(s.three() == 3); }
-extern int &er;
-static_assert(&er == &er);
+extern S &es;
+static_assert(es.three() == 3);
+template <int N> struct Array { constexpr int count() const { return N; } };
+template <int> void tmpl() {}
+void template_argument(const Array<7> &a) { tmpl<a.count()>(); }
+int main() {
+  S s;
+  // A by-reference capture names the enclosing variable.
+  [&] { static_assert(s.three() == 3); }();
+}

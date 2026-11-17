@@ -1509,13 +1509,28 @@ literal is one instruction and one step, not an interpreted loop.
 - **`__builtin_bit_cast`** (`bi::BIT_CAST`; `compile/bitcast.rs`,
   `vm/bitcast.rs`): clang's `checkBitCastConstexprEligibilityType` runs at
   compile time (unions, pointers, member pointers, `volatile` and
-  reference members are rejected with clang's subobject notes; so are a
-  source bit-field and classes with bases). The VM then reads the source
-  value representation into a byte buffer through the `kiln_abi` layout
-  (padding and uninitialized scalars stay indeterminate) and builds the
-  destination scalar by scalar: an indeterminate byte may only initialize
-  `unsigned char`, unsigned plain `char` or `std::byte`, a `bool` byte
-  must be 0 or 1. Dense, fully initialized types copy all bytes at once.
+  reference members are rejected with clang's subobject notes). The VM
+  then reads the source value representation into a buffer through the
+  `kiln_abi` layout, with a determinate-bit mask per byte (padding and
+  uninitialized scalars stay indeterminate), and builds the destination
+  scalar by scalar: an indeterminate byte may only initialize `unsigned
+  char`, unsigned plain `char` or `std::byte`, a `bool` byte must be 0 or
+  1. Dense, fully initialized types copy all bytes at once.
+  Classes with bases and bit-fields (WP-1526) follow [bit.cast]/2, which
+  does not list them among the "Constant When" exclusions (clang 22
+  rejects bit-fields, "not yet supported"; GCC 16.1 accepts both):
+
+  | case | [bit.cast]/2 | Oven |
+  |---|---|---|
+  | base class subobject, either side | an ordinary subobject | walked with the members (`Types::fields`), an empty base takes no bytes, a member in a base's tail padding is copied from there |
+  | source bit-field | its value bits are value representation; the other bits of its bytes are padding | the field's bits are copied with their positions, marked determinate when its bytes are initialized |
+  | unnamed bit-field, either side | not a member; its bits are padding ([class.bit]/2) | skipped: indeterminate in the buffer, unwritten in the result |
+  | source bit-field wider than its type | the excess bits are padding ([class.bit]/1) | only the type's bits are copied |
+  | destination bit-field, all bits determinate | the value those bits represent | written as `Vm::store_bits` does (sign from the type when read) |
+  | destination bit-field with an indeterminate bit, of `unsigned char` or `std::byte` type | the bit-field is the smallest object containing the bit: it holds an indeterminate value | left unwritten; a later read fails as uninitialized (unless a neighbour in the same byte was written: the Oven tracks initialization per byte, so it then reads as zero bits; `bit.cast/constexpr-bit-field-shared-byte-indeterminate.cpp`, `xfail(kiln)`) |
+  | the same, other types | undefined behavior: not a constant | `note_constexpr_bit_cast_indet_dest` |
+  | `bool` bit-field whose bits are not 0 or 1 | no value corresponds: undefined | `note_constexpr_bit_cast_unrepresentable_value` |
+
   `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
   the source (clang reads before its type checks).
 - **`__builtin_start_lifetime(p)`** (WP-773, `bi::START_LIFETIME`;
@@ -3163,7 +3178,15 @@ that shares its type and offset with another carries a designator
 `union S { int a; int b; }` activates `b` alone and reading `s.a` is
 "read of member 'a' of union with active member 'b'"
 (`tests/conformance/class.union/constexpr-placement-same-type.cpp`,
-WP-1494); a frozen union records the one kept member
+WP-1494); a designated inactive member that holds the constructed object
+but is not it (`&u.s.b`, with an `int` array member at the same offset)
+is "construction of subobject of member 's'", not an element of the
+array (WP-1528). An array of one `T` (`new (p) T[1]()`, the form
+`std::construct_at` of an array type `T` takes) is placed as its
+element, a `T`: an inactive array member of type `T` becomes the active
+member, in every mode ([intro.object]/2; `int[1][4]` at `u.arr` of type
+`int[4]`, also of class elements, nested and anonymous unions:
+`class.union/constexpr-construct-array-member-of-one*.cpp`, WP-1528); a frozen union records the one kept member
 (`tests/conformance/class.union/constexpr-placement-activate.cpp`,
 WP-233). The active-member check on the path to an access reaches a
 bit-field's storage unit inside a member of class type
@@ -4220,11 +4243,12 @@ an uncaught exception's content is printed as every Oven note prints a
 value (a class as `{4}`).
 
 ### Unknown references — Landed (WP-357)
-P2280 (C++23 [expr.const]/10, a DR applied from C++23 on, as clang 20+;
-`SemaBridge::cxx23()`; in every mode for the implicit variables of an
-expansion statement, `SemaBridge::expansion_var`, which also makes them
-P2686 constexpr-referenceable, `expansion_referenceable`, WP-1483, as the
-statement is C++26-only): naming a reference variable that is not usable
+P2280 ([expr.const]/10, a defect report: applied in every mode from
+C++11, as GCC 16.1 does, WP-1527; clang 22 applies it from C++23 only and
+clang 19 not at all, and kiln does not follow either at any
+`-fclang-compat` level; the implicit variables of an expansion statement
+are also P2686 constexpr-referenceable in every mode,
+`SemaBridge::expansion_referenceable`, WP-1483): naming a reference variable that is not usable
 in constant expressions (a parameter of a function outside its call, an
 `extern` reference, a reference whose initializer is not constant) is
 constant; the reference binds to "an unspecified object of the referenced
@@ -4249,20 +4273,49 @@ calls that do not read it are constant
 - a constant result referring to it (a namespace-scope reference's
   initializer): the clang 22 "reference to ... is not a constant
   expression" form.
-Before C++23 the reference stays external: naming it is "function
-parameter 'x' with unknown value cannot be used in a constant expression"
-as before (`expr.const/p2280-unknown-reference-cxx20.cpp`).
+The same holds before C++23 (`expr.const/p2280-unknown-reference-cxx20.cpp`,
+`p2280-unknown-reference-cxx11.cpp`, `p2280-unknown-reference-cxx11-errors.cpp`).
 As in clang 22, only a *variable* of reference type binds to an unknown
 object: a reference member of an unknown object is read from that object
-("read of variable 'h' whose value is not known"), and `this` outside
-the evaluation of a call to a constexpr member function is not constant
-("[implicit] use of 'this' pointer is only allowed within the evaluation
-of a call to a 'constexpr' member function"); inside a member function
-called on an unknown object, `this` is its address, so comparing it with
-the object's own address is constant and with null is not
-(`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
+("read of variable 'h' whose value is not known"). Inside a member
+function called on an unknown object, `this` is its address, so
+comparing it with the object's own address is constant and with null is
+not (`expr.const/p2280-ok.cpp`, `p2280-errors.cpp`). *Deviation:* a
 reference to an object of 4 GiB or more stays external (naming it is
-diagnosed as before C++23); clang accepts it.
+diagnosed: "function parameter 'x' with unknown value ..."); clang
+accepts it.
+
+**`this` of unknown value (WP-1527).** [expr.const]/10.1 (P2280R4)
+excepts `this` "when appearing as the postfix-expression of an implicit
+or explicit class member access expression" even outside the evaluation
+of a call to a constexpr member function: `f()`, `this->f()`,
+`m.g()`, `len(this->arr)` and `tmpl<inner.size()>()` in a non-constexpr
+member function are constant when nothing reads the object (GCC 16.1
+agrees; clang 22 rejects them all). The compiler marks such a `this`
+(`Compiler::member_object`, for a `MemberExpr` with `->` and a member
+call's object; parentheses and implicit casts are looked through) and
+lowers it to `Op::UnknownThis [dst, cls]` (cold path): the address of an
+unbacked `EXTERNAL | CONST` object of the class, origin
+`Origin::Unknown(class)`, made once per class and kept in
+`Oven::unknowns` under the class's declaration (no variable's), so it
+costs one static slot per class per translation unit. Every access of
+it is diagnosed with clang's `note_constexpr_this` ("[implicit] use of
+'this' pointer is only allowed within the evaluation of a call to a
+'constexpr' member function") at the `this` the access goes through
+(`notes::this_note`); a pointer to it as a constant result likewise;
+in a comparison it prints as `this`. Any other `this` (`(*this).f()`,
+whose object expression is `*this`; `this` as a value) is diagnosed as
+before; GCC accepts `(*this).f()`, the text does not
+(`expr.const/p2280-this-member-access.cpp`, `p2280-this-errors.cpp`,
+`p2280-this-call-read.cpp`). A potential-constant frame job
+(`frame_running`) keeps failing quietly on `this`, and so does a class
+still being defined (no complete record yet, a member's trailing return
+type inside the class: `p2280-this-incomplete-class-errors.cpp`).
+Remainder: sema enters a `this` scope for a static member function's
+declarator as well (clang does too, and fails in its evaluator), so in
+a substituted static member function template's trailing return type
+`is<T>()` is now accepted where GCC says "without object"
+(`p2280-this-static-member-declarator.cpp`, `xfail(kiln)`).
 
 **Provisional globals (WP-378).** A variable with no initializer yet
 (`extern const int &r;` before its definition, `extern const int n;`)
@@ -4284,8 +4337,12 @@ initializer, the next resolution is a fresh one (the old object stays, at
 most one per variable, since a frozen result may still point to it)
 (`expr.const/p2280-provisional-global.cpp`).
 
-*Per mode* (WP-1483, measured). kiln follows clang 22, which applies
-P2280 from C++23 only; GCC 16.1 applies parts of it in every mode:
+*Per mode* (WP-1483, measured; superseded by WP-1527, which applies
+P2280 in every mode: the C++23 column below is now kiln's in every
+mode, `expr.const/p2280-unknown-reference-cxx11*.cpp`,
+`p2280-unknown-reference-cxx20.cpp`). Before WP-1527 kiln followed
+clang 22, which applies P2280 from C++23 only; GCC 16.1 applies parts of
+it in every mode:
 - `r.size()` on a reference parameter to a class whose `size` reads no
   state, `len(a)` passing an array reference on, a member call reading
   no state: clang 22 and kiln reject before C++23 and accept from C++23;
@@ -4297,8 +4354,8 @@ P2280 from C++23 only; GCC 16.1 applies parts of it in every mode:
   reading a member through the reference, `this` in a non-constexpr
   member, `p == p` for a pointer parameter: all three reject in every
   mode.
-P2280R4 was adopted as a defect report, so neither split is wrong by the
-text; kiln keeps clang 22's (from C++23) for compatibility.
+P2280R4 was adopted as a defect report, so kiln applies it in every
+mode (WP-1527).
 
 ### Label addresses — Landed (WP-444)
 GNU `&&l` (clang's `AddrLabelExpr` lvalue base: an object of unknown

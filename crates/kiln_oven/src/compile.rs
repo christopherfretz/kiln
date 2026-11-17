@@ -1159,6 +1159,11 @@ pub(crate) struct Compiler<'a> {
     /// captured `this` (the `this` of its body; `closure_reg` is the
     /// closure).
     lambda_this: Option<u32>,
+    /// The `this` expression being compiled as the object expression of
+    /// a class member access while no `this` is known (P2280R4,
+    /// [expr.const]/10.1: it then designates an object of unknown value,
+    /// `Compiler::this_expr`).
+    this_postfix: Option<ExprId>,
     /// In a lambda call operator: the closure object (`this_reg`, or the
     /// explicit object parameter as the closure type).
     closure_reg: Option<u32>,
@@ -1251,6 +1256,7 @@ impl<'a> Compiler<'a> {
             this_reg: None,
             this_override: None,
             lambda_this: None,
+            this_postfix: None,
             closure_reg: None,
             ext_temps: FxHashMap::default(),
             held: None,
@@ -5703,7 +5709,7 @@ impl Compiler<'_> {
         };
         let fi = self.o.types.fields(rt)[idx];
         let p = if arrow {
-            self.rv(base)
+            self.member_object(base, |c| c.rv(base))
         } else {
             let sub = match acc {
                 Access::Write => Access::Write,

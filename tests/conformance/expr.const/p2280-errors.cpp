@@ -1,7 +1,7 @@
 // [expr.const]/5.10, /10 (C++23, P2280R4): only a variable of reference type
 // binds to an unknown object. A reference member of an unknown object is
-// read from that object, so naming it reads the variable; `this` outside a
-// constexpr member function's call is not a constant ([expr.const]/5.1); a
+// read from that object, so naming it reads the variable (as clang 22
+// does: the member's referent is a value of the unknown object); a
 // pointer to the unknown object is not a constant result, and comparing it
 // with null or another object, or reading through the reference, is not
 // constant (clang 22's notes).
@@ -9,12 +9,12 @@
 //@ strict-diags
 //@ std: c++23
 //@ requires: clang>=22
-//@ diag: 46:39 error "static assertion expression is not an integral constant expression"
-//@ diag: 49:17 note "in instantiation of member function 'Widget<3>::member' requested here"
-//@ diag: 46:39 note "implicit use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function"
-//@ diag: 47:46 error "static assertion expression is not an integral constant expression"
-//@ diag: 49:17 note "in instantiation of member function 'Widget<3>::explicit_this' requested here"
-//@ diag: 47:46 note "use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function"
+// (`this` as the object expression of a member access, `f()` and
+// `this->f()` in a non-constexpr member, is P2280R4 [expr.const]/10.1:
+// constant since WP-1527, `p2280-this-member-access.cpp`; clang 22
+// still rejects it.)
+//
+//
 //@ diag: 51:50 error "static assertion expression is not an integral constant expression"
 //@ diag: 51:57 note "read of variable 'h' whose value is not known"
 //@ diag: 51:31 note "declared here"
@@ -43,8 +43,8 @@ struct Holder { int (&arr)[5]; Array<int, 3> &a; };
 template <int N> struct Widget {
   constexpr int f() const { return N; }
   constexpr const Widget *self() const { return this; }
-  void member() const { static_assert(f() == N); }
-  void explicit_this() const { static_assert(this->f() == N); }
+  void member() const {}
+  void explicit_this() const {}
 };
 template struct Widget<3>;
 

@@ -79,6 +79,14 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, t]);
                 }
             }
+            // P2280R4 ([expr.const]/10.1): `this` as the object
+            // expression of a class member access designates an object
+            // of unknown value (as a reference not usable in constant
+            // expressions binds to one, [expr.const]/10): `this->m.f()`
+            // is constant when `f` reads nothing.
+            None if let Some(cls) = self.unknown_this_class(e) => {
+                self.emit_at(Op::UnknownThis, 0, &[dst, cls.0], e);
+            }
             None if self.o.frame_running() => {
                 // A potential-constant frame job (WP-1163): `this` is
                 // unknown, a quiet failure (`frame::frame_unknown_read`).
@@ -95,6 +103,43 @@ impl Compiler<'_> {
                 self.trap(e, msg);
             }
         }
+    }
+
+    /// The class of the unknown object the `this` `e` designates, when it
+    /// is the object expression of a class member access evaluated with
+    /// no `this` known. A class still being defined (no complete record
+    /// yet) has none: the plain `this` note.
+    fn unknown_this_class(&mut self, e: ExprId) -> Option<OTy> {
+        if self.this_postfix != Some(e) || self.o.frame_running() {
+            return None;
+        }
+        let t = self.ety(e);
+        match self.kind(t) {
+            TyKind::Ptr(cls) if matches!(self.kind(cls), TyKind::Record { .. }) => Some(cls),
+            _ => None,
+        }
+    }
+
+    /// Compiles `obj`, the object expression of a class member access
+    /// (`this->m`, implicit or explicit), with `f`: a `this` there, with
+    /// no `this` known, is an object of unknown value
+    /// ([`Compiler::this_expr`]).
+    pub(super) fn member_object(&mut self, obj: ExprId, f: impl FnOnce(&mut Self) -> u32) -> u32 {
+        if self.this_ptr().is_some() {
+            return f(self);
+        }
+        let ast = self.ast();
+        let mut t = skip_parens(ast, obj);
+        while ast.exprs.get(t).kind() == ExprKind::ImplicitCastExpr {
+            t = skip_parens(ast, ast.exprs.operand(t));
+        }
+        if ast.exprs.get(t).kind() != ExprKind::CXXThisExpr {
+            return f(self);
+        }
+        let saved = self.this_postfix.replace(t);
+        let r = f(self);
+        self.this_postfix = saved;
+        r
     }
 
     /// The byte offset of the direct, non-virtual base `base` in class
@@ -1474,7 +1519,7 @@ impl Compiler<'_> {
             && self.ast().decls.get(md).name().as_operator()
                 == Some(kiln_ast::names::OverloadedOperator::Equal);
         let this = if arrow {
-            self.rv(obj)
+            self.member_object(obj, |c| c.rv(obj))
         } else if self.node(obj).value_category().is_glvalue() {
             self.lv_mem(obj, if trivial_assign { Access::Write } else { Access::Addr })
         } else {

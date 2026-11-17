@@ -388,6 +388,11 @@ ops! {
     // variable (`global`) designates it (`GState::Bound`; [basic.life]/1,
     // clang's `EvaluatingDecl`; WP-1100)
     BindObject = 2,
+    // [dst, cls]: `this` (of class type `cls`) as the object expression
+    // of a class member access outside a call of a member function: the
+    // address of the object of unknown value it designates (P2280R4,
+    // [expr.const]/10.1; `Oven::unknown_this`).
+    UnknownThis = 2,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`

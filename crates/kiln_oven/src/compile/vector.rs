@@ -696,9 +696,7 @@ impl Compiler<'_> {
             p
         };
         let loc = self.begin(e);
-        if let Some(m) =
-            self.bit_cast_unsupported(ts, true).or_else(|| self.bit_cast_unsupported(td, false))
-        {
+        if let Some(m) = self.bit_cast_unsupported(ts).or_else(|| self.bit_cast_unsupported(td)) {
             return self.trap_loc(loc, m);
         }
         let (b, sub) = mem.map_or((src, 0), |p| (p, bi::TO_MEM));

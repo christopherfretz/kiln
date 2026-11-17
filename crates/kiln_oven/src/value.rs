@@ -953,6 +953,11 @@ impl Oven {
                 return Err(Freeze::Fault(FailKind::NotConstant));
             }
             let ast = b.ast();
+            if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar) {
+                // The object `this` designates (`Oven::unknown_this`).
+                let (_, msg) = crate::notes::this_note(ast, None);
+                return Err(Freeze::Notes(vec![Note::new(loc, msg)]));
+            }
             let mut name = String::new();
             kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
             return Err(Freeze::Notes(vec![
@@ -1577,10 +1582,10 @@ impl Oven {
                 let p = if let Some((_, p)) = reuse {
                     p
                 } else {
-                    let mut p = self.resolve_var(b, g, d, top);
-                    if b.cxx23() || b.expansion_var(d) {
-                        p = self.bind_unknown(b, d, p);
-                    }
+                    // P2280R4 is a defect report: every mode from C++11
+                    // (as GCC; clang 22 only from C++23, WP-1527).
+                    let p = self.resolve_var(b, g, d, top);
+                    let p = self.bind_unknown(b, d, p);
                     match ty {
                         Some(t) => _ = self.provisional_objs.insert(g, (t, p)),
                         None => _ = self.provisional_objs.remove(&g),
@@ -1709,6 +1714,35 @@ impl Oven {
         self.mem.stat.set_init(base, len, true);
         self.mem.stat.set_ptr(base, len, true);
         p
+    }
+
+    /// `Op::UnknownThis`: the object of unknown value `this` designates
+    /// as the object expression of a class member access outside a call
+    /// of a member function (P2280R4, [expr.const]/10.1). Like a
+    /// reference's ([`Oven::bind_unknown`]) it holds no bytes, so every
+    /// access of it is diagnosed; it is made once per class and kept in
+    /// [`Oven::unknowns`] under the class's declaration (no variable's).
+    pub(crate) fn unknown_this(&mut self, cls: OTy) -> u64 {
+        let TyKind::Record { decl, .. } = self.types.kind(cls) else { return 0 };
+        if let Some(&u) = self.unknowns.get(&decl) {
+            return u;
+        }
+        let size = self.types.size(cls);
+        if size > u64::from(u32::MAX) {
+            // Not representable (32-bit offsets): a null `this`, whose
+            // member access is diagnosed (as for a reference, the
+            // deviation of spec/oven.md "Unknown references").
+            return 0;
+        }
+        let hu = self.static_flags(cls) & flags::HAS_UNION;
+        let u = self.mem.alloc_unbacked(
+            cls,
+            size,
+            flags::EXTERNAL | flags::CONST | hu,
+            Origin::Unknown(decl),
+        );
+        self.unknowns.insert(decl, u);
+        u
     }
 
     /// The object of a variable not usable in constant expressions: every

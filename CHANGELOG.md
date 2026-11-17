@@ -937,6 +937,15 @@ Planned as 1.3.0.
   template of the current instantiation or of a non-dependent base, take
   a template argument list without `template`.
 
+- Constant evaluation, found running GCC's C++ testsuite (WP-1526..WP-1529):
+  P2280 (references of unknown value) applies in every mode from C++11, as a
+  defect report, and `this` as the object expression of a class member
+  access (`this->m.f()`, `inner.size()` in a template argument of a
+  non-constexpr member function) designates an object of unknown value;
+  placement new or `std::construct_at` into an inactive `T[1]` union member
+  activates it; `__builtin_bit_cast` of classes with base classes or
+  bit-fields is constant ([bit.cast]/2; unnamed bit-fields are padding).
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

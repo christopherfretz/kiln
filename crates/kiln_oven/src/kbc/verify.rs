@@ -144,7 +144,9 @@ fn kinds(op: Op, aux: u32) -> &'static [K] {
         Op::VBase => &[R, R, T, I],
         Op::Load | Op::Store | Op::InitStore | Op::Copy | Op::VoidCast => &[R, R, T],
         Op::LoadBits | Op::StoreBits => &[R, R, T, I],
-        Op::ZeroInit | Op::RefChk | Op::Delete | Op::EndLife | Op::SetVptr => &[R, T],
+        Op::ZeroInit | Op::RefChk | Op::Delete | Op::EndLife | Op::SetVptr | Op::UnknownThis => {
+            &[R, T]
+        }
         Op::Alloc => &[R, T, O],
         Op::ScopeEnter
         | Op::ScopeExit
