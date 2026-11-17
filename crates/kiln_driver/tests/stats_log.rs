@@ -227,3 +227,45 @@ fn syntax_only_and_link_lines() {
     assert!(l[3].get("children_ms").unwrap().get("clang++").is_some(), "{:?}", l[3]);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+const SYS_H: &str = "#pragma once\n\
+                     struct sys_s { int v; };\n\
+                     inline int sys_f() { return 1; }\n\
+                     template <class T> T sys_t() { return T(); }\n";
+
+const USER: &str = "#include <sys.h>\n\
+                    inline int only_user(int x) { return x + 1; }\n\
+                    inline int names_fn() { return sys_f(); }\n\
+                    inline int names_type(sys_s s) { return s.v; }\n\
+                    inline int same_callee_a() { return sys_t<int>(); }\n\
+                    inline int same_callee_b() { return sys_t<int>() + 1; }\n\
+                    int use() {\n\
+                      return only_user(1) + names_fn() + names_type({}) + same_callee_a() + same_callee_b();\n\
+                    }\n";
+
+/// WP-1627: `mason_defs` is present only with `-fmason-metadata`, counts
+/// every kind 2 row, the rows without `SYSTEM`, and of those the ones
+/// naming a system-declared entity or type, also when two definitions
+/// reach the same memoized callee (`sys_t<int>`).
+#[test]
+fn mason_defs_counts() {
+    let d = setup("mason");
+    std::fs::create_dir_all(d.join("sys")).unwrap();
+    std::fs::write(d.join("sys/sys.h"), SYS_H).unwrap();
+    std::fs::write(d.join("user.cpp"), USER).unwrap();
+    let common = ["-isystem", "sys", "-S", "-emit-llvm", "user.cpp", "-o", "u.ll"];
+    kiln(&d, Some("stats.jsonl"), &common);
+    let mut with = vec!["-fmason-metadata"];
+    with.extend(common);
+    kiln(&d, Some("stats.jsonl"), &with);
+    let l = lines(&d);
+    assert_eq!(l.len(), 2);
+    assert!(l[0].get("mason_defs").is_none(), "{:?}", l[0]);
+    let m = l[1].get("mason_defs").unwrap_or_else(|| panic!("{:?}", l[1]));
+    let (rows, user, naming) =
+        (num(m, "rows"), num(m, "user_rows"), num(m, "user_rows_naming_system"));
+    // The five inline user functions and `sys_f`, `sys_t<int>` (SYSTEM);
+    // `use` is not vague: no row. All but `only_user` name the header.
+    assert_eq!((rows, user, naming), (Some(7), Some(5), Some(4)), "{m:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}

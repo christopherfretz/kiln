@@ -94,6 +94,7 @@ use kiln_llvm::Module;
 pub use kiln_llvm::{TlsModel, Visibility};
 use kiln_oven::Oven;
 use kiln_source::Loc;
+pub use mason_defs::MasonDefStats;
 pub use mason_meta::{MasonMetaLevel, MasonMetaOptions, StdlibSummary};
 
 /// Options controlling code generation.
@@ -894,6 +895,21 @@ pub fn emit_with_debug(
     opts: &CodegenOptions,
     sm: Option<&kiln_source::SourceManager>,
 ) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>) {
+    let (m, d, _) = emit_with_stats(ast, oven, target, opts, sm);
+    (m, d)
+}
+
+/// [`emit_with_debug`], also returning the `-fmason-metadata` kind 2 row
+/// counts ([`MasonDefStats`]; `None` when no kind 2 rows were computed:
+/// the flag off, a C unit, no source manager). Statistics only (the
+/// driver's `KILN_STATS_LOG`); they change no output.
+pub fn emit_with_stats(
+    ast: &mut Ast,
+    oven: &mut Oven,
+    target: &Target,
+    opts: &CodegenOptions,
+    sm: Option<&kiln_source::SourceManager>,
+) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>, Option<MasonDefStats>) {
     let folds = fold::prepass(ast, oven, target);
     // The mangler reads data member descriptions from the AST
     // (spec/reflection.md §8.3).
@@ -918,7 +934,7 @@ pub fn emit_with_debug(
     if let Some(sm) = sm {
         cg.start_debug_info(sm);
     }
-    cg.run()
+    cg.run_with_stats()
 }
 
 #[cfg(test)]

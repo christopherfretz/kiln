@@ -244,15 +244,27 @@ impl Sema<'_, '_> {
                 }
             }
             AttrKind::TARGET_CLONES => {
+                // The clone list, normalized (`"a,b"` and `"a", "b"` are
+                // one list; WP-1608): `a` = its `Symbol`, `b` = 1.
+                let mut clones: Vec<String> = Vec::new();
                 for arg in args {
-                    if let Err(at) = string_at(self, arg) {
-                        let msg = self
-                            .diag(DiagId::parse_attribute_requires_string, at)
-                            .arg("target_clones");
-                        self.emit(msg);
-                        return Some(None);
+                    match string_at(self, arg) {
+                        Ok((lit, _)) => {
+                            let b = self.ast.strings.bytes(self.ast.exprs.string_lit(lit));
+                            let text = String::from_utf8_lossy(b);
+                            clones.extend(text.split(',').map(|t| t.trim().to_owned()));
+                        }
+                        Err(at) => {
+                            let msg = self
+                                .diag(DiagId::parse_attribute_requires_string, at)
+                                .arg("target_clones");
+                            self.emit(msg);
+                            return Some(None);
+                        }
                     }
                 }
+                node.a = self.intern(&clones.join(",")).index();
+                node.b = 1;
             }
             _ => {
                 let Some(first) = args.first() else {

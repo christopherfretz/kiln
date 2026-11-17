@@ -117,6 +117,20 @@ pub fn definitions_block(rows: &[DefRow], st: &mut StrTab) -> Block {
     }
 }
 
+/// The kind 2 row counts of one unit (WP-1627; statistics for an open
+/// design question of mortar's maintainers, a second "user-view" hash that
+/// is NOT built: nothing here changes a row, flag or hash).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MasonDefStats {
+    /// Kind 2 rows written.
+    pub rows: u64,
+    /// Of them without `SYSTEM`.
+    pub user_rows: u64,
+    /// Of `user_rows`, those whose hash stream named an entity or type
+    /// declared in a system header (`DefDigest::names_system`).
+    pub user_rows_naming_system: u64,
+}
+
 /// A candidate symbol: (name as the symbol table spells it, the first
 /// declaration of the definition, variable, vague).
 type Cand = (String, DeclId, bool, bool);
@@ -246,7 +260,7 @@ impl Cg<'_> {
             .with_clang_compat(self.opts.clang_compat);
         let mut hasher = DefHasher::new(self.ast, sm, anon).with_names(&names);
         let mut digests: FxHashMap<DeclId, DefDigest> = FxHashMap::default();
-        let mut by_symbol: BTreeMap<String, Option<DefRow>> = BTreeMap::new();
+        let mut by_symbol: BTreeMap<String, Option<(DefRow, bool)>> = BTreeMap::new();
         for (name, first, var, vague) in cands {
             let name = name.strip_prefix('\u{1}').unwrap_or(&name).to_owned();
             let Some((def, mut row)) = self.mason_def_row(&name, first, var, vague) else {
@@ -264,16 +278,30 @@ impl Cg<'_> {
             }
             match by_symbol.get_mut(&name) {
                 None => {
-                    by_symbol.insert(name, Some(row));
+                    by_symbol.insert(name, Some((row, d.names_system)));
                 }
                 Some(slot) => {
-                    if slot.as_ref() != Some(&row) {
+                    if slot.as_ref().map(|s| &s.0) != Some(&row) {
                         *slot = None;
                     }
                 }
             }
         }
-        by_symbol.into_values().flatten().collect()
+        // WP-1627: counted per row written (a row's symbols are its keys).
+        let mut st = MasonDefStats::default();
+        let rows: Vec<DefRow> = by_symbol
+            .into_values()
+            .flatten()
+            .map(|(row, names_system)| {
+                let user = row.flags & DEF_SYSTEM == 0;
+                st.rows += 1;
+                st.user_rows += u64::from(user);
+                st.user_rows_naming_system += u64::from(user && names_system);
+                row
+            })
+            .collect();
+        self.mason_stats = Some(st);
+        rows
     }
 
     /// Whether function `f` is `alwaysinline`. A vague one gets no row:

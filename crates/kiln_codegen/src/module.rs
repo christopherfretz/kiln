@@ -204,6 +204,9 @@ pub(crate) struct Cg<'a> {
     pub type_md_ids: FxHashMap<String, kiln_llvm::MetadataId>,
     /// The source manager, for `UBSan` source locations (WP-675).
     pub sm: Option<&'a kiln_source::SourceManager>,
+    /// The kind 2 row counts of `-fmason-metadata` (WP-1627 statistics;
+    /// set once, by [`Cg::mason_def_rows`]).
+    pub mason_stats: Option<crate::MasonDefStats>,
     /// Named struct types by record.
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
@@ -434,6 +437,7 @@ impl<'a> Cg<'a> {
             ub_returning: FxHashSet::default(),
             type_md_ids: FxHashMap::default(),
             sm: None,
+            mason_stats: None,
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
             const_objects: FxHashMap::default(),
@@ -529,7 +533,9 @@ impl<'a> Cg<'a> {
 
     /// Emits the whole translation unit; also returns the warnings
     /// reported on the way (even when emission fails).
-    pub fn run(mut self) -> (R<Module>, Vec<Diag>) {
+    /// Also returns the kind 2 row counts of `-fmason-metadata` (`None`
+    /// when no kind 2 rows were computed).
+    pub fn run_with_stats(mut self) -> (R<Module>, Vec<Diag>, Option<crate::MasonDefStats>) {
         let r = self.run_tu();
         // An expression in a symbol with no encoding: a requires-clause
         // (WP-818), a template argument, `decltype` operand or array
@@ -542,7 +548,8 @@ impl<'a> Cg<'a> {
                 self.diags.push(Diag::new(DiagId::cg_cannot_mangle_expression, at).arg(&kind));
             }
         }
-        (r.map(|()| self.m), self.diags)
+        let stats = self.mason_stats.take();
+        (r.map(|()| self.m), self.diags, stats)
     }
 
     fn run_tu(&mut self) -> R<()> {

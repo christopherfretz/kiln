@@ -198,10 +198,26 @@ Planned as 1.3.0.
   names are not, so a library built with its hiding macros empty
   agrees with its users; a row that uses an internal-linkage entity or
   a type local to its unit is marked `USES_INTERNAL` (WP-1585; scheme
-  `kiln-odr-1.d4`). A row is marked partial only when the definition
-  holds a construct not hashed yet (`target_clones`, some dependent
-  forms, reflection): about 1 % of the rows of fmt and googletest
-  ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)").
+  `kiln-odr-1.d4`). The `noexcept` of a member template of a class
+  template specialization not instantiated yet, requires-expressions,
+  parenthesized initializer lists in templates and the arguments of
+  `target_clones` are hashed, and a function template specialization is
+  hashed by its short form only beside an overload whose template
+  parameters and arity could also match (WP-1626; scheme
+  `kiln-odr-1.d5`). A row is marked partial only when the definition
+  holds a construct not hashed yet (some dependent types, reflection):
+  under 0.1 % of the rows of fmt and googletest
+  ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)"). The unit
+  summary also records `abi.wchar-sign` (`signed` or `unsigned`) beside
+  `abi.wchar`, and an enumeration's underlying-type record says whether
+  the enumeration is scoped and whether its underlying type is fixed
+  (WP-1608). With `KILN_STATS_LOG`, each job's line counts the
+  definition rows, those of user code, and those of user code that name
+  a standard library entity (`mason_defs`, WP-1627;
+  [spec/driver.md](spec/driver.md)). With `-fmason-metadata-system-unit` the
+  unit summary also says `unit.system` = `yes` (WP-1639); the summary's
+  key space is open: readers skip keys they do not know unless marked
+  `ENFORCE`.
 
 ### Changed
 
@@ -247,6 +263,17 @@ Planned as 1.3.0.
   longer holds the merge queue for six hours (WP-1600).
 
 ### Fixed
+
+- `.mason.meta`: three false ODR differences reported by mortar's
+  maintainers. A definition without listed attributes no longer hashes
+  differently in a unit that has such an attribute anywhere (an
+  `alignas` type, a `[[noreturn]]` declaration, `<stddef.h>`), so an
+  inline function's row agrees across units (WP-1636); `[[noreturn]]`,
+  `[[gnu::noreturn]]` and `__attribute__((noreturn))` hash alike
+  (WP-1637); a lambda of an inline function named under a function type
+  or template argument (libc++'s `std::visit` tables) no longer marks the
+  row `USES_INTERNAL` (WP-1638). Scheme `kiln-odr-1.d5`
+  ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)").
 
 - Codegen, found building libc++abi and libc++ 22.1.8 with kiln (WP-1620):
   the vtable of a `__cxxabiv1` `type_info` class that RTTI referred to

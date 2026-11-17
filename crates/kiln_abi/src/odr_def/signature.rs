@@ -33,7 +33,7 @@ use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, Nns, TemplateName, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType, RawId};
 
-use super::{Area, DefHasher, Item, Site, T_NONE, T_TU_PLACEHOLDER, Work, fnv1a_128_bytes};
+use super::{Area, Callee, DefHasher, Item, Site, T_NONE, T_TU_PLACEHOLDER, Work, fnv1a_128_bytes};
 
 /// A dependent type: qualifiers, kind, then its layout.
 const T_DEP_TYPE: u8 = 0xB7;
@@ -72,6 +72,7 @@ impl DefHasher<'_> {
         let args = ast.types.canonical_args(s.args);
         let start = self.out.len();
         let outer = std::mem::replace(&mut self.partial, false);
+        let outer_system = std::mem::replace(&mut self.refs.named_system, false);
         self.byte(T_CALLEE);
         self.byte(ast.decls.get(first).kind() as u8);
         self.template_entity(tmpl);
@@ -92,16 +93,21 @@ impl DefHasher<'_> {
         let overloaded = full.is_none() && self.has_overload(tmpl);
         // The item's own skips (memoized with it) join the definition's.
         let partial = std::mem::replace(&mut self.partial, outer);
-        let c = (h, partial, overloaded);
+        // WP-1627: the template and arguments are written as strings, not
+        // through the memo, so they are asked here.
+        let system = std::mem::replace(&mut self.refs.named_system, outer_system)
+            || self.refs.template_item_system(tmpl, s.args);
+        let c = Callee { hash: h, partial, overloaded, system };
         self.callees.insert(first, c);
         self.write_callee(c);
     }
 
-    fn write_callee(&mut self, (h, partial, overloaded): (u128, bool, bool)) {
+    fn write_callee(&mut self, c: Callee) {
         self.byte(T_CALLEE);
-        self.out.extend_from_slice(&h.to_le_bytes());
-        self.join_partial(partial);
-        if overloaded {
+        self.out.extend_from_slice(&c.hash.to_le_bytes());
+        self.refs.named_system |= c.system;
+        self.join_partial(c.partial);
+        if c.overloaded {
             self.partial(Area::Dependent, Site::Item(Item::ShortCallee));
         }
     }
@@ -111,15 +117,17 @@ impl DefHasher<'_> {
     /// cover. Memoized per template.
     fn signature(&mut self, tmpl: DeclId) -> Option<u128> {
         let ast = self.ast;
-        if let Some(&r) = self.sigs.get(&tmpl) {
+        if let Some(&(r, system)) = self.sigs.get(&tmpl) {
+            self.refs.named_system |= system;
             return r;
         }
         // A signature naming its own template meets this entry.
-        self.sigs.insert(tmpl, None);
+        self.sigs.insert(tmpl, (None, false));
         let info = ast.template_info(tmpl)?;
         let pattern = info.pattern?;
         self.stats.signatures += 1;
         let start = self.out.len();
+        let outer_system = std::mem::replace(&mut self.refs.named_system, false);
         let uncovered = std::mem::replace(&mut self.sig_uncovered, false);
         self.sig += 1;
         self.positional += 1;
@@ -135,7 +143,9 @@ impl DefHasher<'_> {
         let covered = !std::mem::replace(&mut self.sig_uncovered, uncovered);
         let r = covered.then(|| fnv1a_128_bytes(&self.out[start..]));
         self.out.truncate(start);
-        self.sigs.insert(tmpl, r);
+        let system = std::mem::replace(&mut self.refs.named_system, outer_system);
+        self.refs.named_system |= system;
+        self.sigs.insert(tmpl, (r, system));
         r
     }
 
@@ -168,22 +178,25 @@ impl DefHasher<'_> {
     }
 
     /// Walks an optional expression now (a nested walk).
-    fn opt_expr_now(&mut self, e: Option<ExprId>) {
+    pub(super) fn opt_expr_now(&mut self, e: Option<ExprId>) {
         let base = self.stack.len();
         self.stack.push(Work::OptExpr(e));
         self.run_nested(base);
     }
 
-    /// Whether another function template of `tmpl`'s name and template
-    /// parameter count is declared in `tmpl`'s scope (the fallback's
-    /// condition, read at the template's scope rather than at the call).
+    /// Whether another function template could be named by the same
+    /// short form as `tmpl` (WP-1626(b)): declared in `tmpl`'s scope with
+    /// its name (the fallback's condition, read at the template's scope
+    /// rather than at the call), with the same template parameter kinds
+    /// in order ([`Self::tparm_shape`]: a specialization of a template of
+    /// other kinds has other template arguments, so another short form),
+    /// and a function parameter count range that overlaps `tmpl`'s (the
+    /// call's argument count is in `tmpl`'s range, and a template that
+    /// cannot take it is never chosen for it).
     fn has_overload(&self, tmpl: DeclId) -> bool {
         let ast = self.ast;
         let n = ast.decls.get(tmpl);
-        let count = |t: DeclId| {
-            ast.template_info(t).map(|i| ast.lists.len(ast.templates.param_list(i.params).params))
-        };
-        let own = count(tmpl);
+        let own = (self.tparm_shape(tmpl), self.arity(tmpl));
         let Some(ctx) = n.ctx() else { return false };
         ast.redecls_of(ctx).any(|c| {
             ast.members(c).any(|m| {
@@ -191,9 +204,89 @@ impl DefHasher<'_> {
                 mn.kind() == DeclKind::FunctionTemplate
                     && mn.name() == n.name()
                     && ast.first(m) != tmpl
-                    && count(m) == own
+                    && Self::shapes_match(own.0.as_deref(), self.tparm_shape(m).as_deref())
+                    && Self::ranges_meet(own.1, self.arity(m))
             })
         })
+    }
+
+    /// The template parameter kinds of function template `t` in order:
+    /// per parameter (declaration kind, pack, the class of a constant
+    /// parameter's type: 1 integral or enumeration, 2 floating, 3 pointer
+    /// or member pointer, 4 reference, 5 class, 0 any (dependent,
+    /// placeholder, other)). `None` when `t` has no parameter list.
+    fn tparm_shape(&self, t: DeclId) -> Option<Vec<(u8, bool, u8)>> {
+        use kiln_ast::types::TypeKind as T;
+        let ast = self.ast;
+        let info = ast.template_info(t)?;
+        let pl = ast.templates.param_list(info.params);
+        let shape = ast.lists.iter::<DeclId>(pl.params).map(|p| {
+            let node = ast.decls.get(p);
+            let pack = ast.template_parm(p).is_some_and(|x| x.pack);
+            let class = match node.ty() {
+                Some(q) if node.kind() == DeclKind::NonTypeTemplateParm => {
+                    match ast.types.canonical_kind(q) {
+                        T::Builtin if ast.types.is_integral(q) => 1,
+                        T::BitInt | T::Enum => 1,
+                        T::Builtin if ast.types.is_floating(q) => 2,
+                        T::Pointer | T::MemberPointer => 3,
+                        T::LValueRef | T::RValueRef => 4,
+                        T::Record => 5,
+                        _ => 0,
+                    }
+                }
+                _ => 0,
+            };
+            (node.kind() as u8, pack, class)
+        });
+        Some(shape.collect())
+    }
+
+    /// Whether two templates' parameter kinds could give one argument
+    /// list: equal lengths and kinds, constant classes equal or one of
+    /// them any; a pack on either side, or an unknown list, matches.
+    fn shapes_match(a: Option<&[(u8, bool, u8)]>, b: Option<&[(u8, bool, u8)]>) -> bool {
+        let (Some(a), Some(b)) = (a, b) else { return true };
+        if a.iter().chain(b).any(|p| p.1) {
+            return true;
+        }
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| x.0 == y.0 && (x.2 == y.2 || x.2 == 0 || y.2 == 0))
+    }
+
+    /// The argument counts a call of function template `t` can have:
+    /// (fewest, most; `None` without a bound). The fewest is the least over
+    /// the pattern's declarations (a later one may add default
+    /// arguments), one less for a class member (an explicit object
+    /// parameter is not an argument of a member call); a parameter pack
+    /// or `...` has no bound.
+    fn arity(&self, t: DeclId) -> (usize, Option<usize>) {
+        let ast = self.ast;
+        let Some(pattern) = ast.template_info(t).and_then(|i| i.pattern) else {
+            return (0, None);
+        };
+        let Some(p) = ast.decls.get(pattern).ty().and_then(|q| ast.types.proto(q)) else {
+            return (0, None);
+        };
+        let params = ast.types.params(p);
+        let packs = params
+            .iter()
+            .any(|&q| ast.types.canonical_kind(q) == kiln_ast::types::TypeKind::PackExpansion);
+        let max = (!p.variadic() && !packs).then_some(params.len());
+        let fewest =
+            ast.redecls_of(pattern).map(|r| ast.decls.min_args(r).unwrap_or(0)).min().unwrap_or(0);
+        let member = ast.decls.get(t).ctx().is_some_and(|c| {
+            matches!(
+                ast.decls.get(c).kind(),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+            )
+        });
+        (fewest.saturating_sub(usize::from(member)), max)
+    }
+
+    /// Whether two argument count ranges share a count.
+    fn ranges_meet(a: (usize, Option<usize>), b: (usize, Option<usize>)) -> bool {
+        a.0 <= b.1.unwrap_or(usize::MAX) && b.0 <= a.1.unwrap_or(usize::MAX)
     }
 
     /// A template (class, alias, variable, function or concept template,
@@ -329,7 +422,7 @@ impl DefHasher<'_> {
 
     /// The canonical form of an equivalence class: its first expression,
     /// walked with function parameters by position.
-    fn profile(&mut self, p: ProfileId) {
+    pub(super) fn profile(&mut self, p: ProfileId) {
         match self.ast.types.profile_expr(p) {
             Some(e) => {
                 self.positional += 1;
@@ -499,7 +592,8 @@ impl DefHasher<'_> {
                 for &q in params {
                     self.ty(q);
                 }
-                self.u32(p.info().with_trailing_return(false).bits());
+                // Not `noreturn`: as the declarator (WP-1637).
+                self.u32(p.info().with_trailing_return(false).with_noreturn(false).bits());
                 match ast.types.exc_spec(&p) {
                     // A dependent `noexcept(e)`: its equivalence class's
                     // expression, like any other.
@@ -511,9 +605,7 @@ impl DefHasher<'_> {
                         self.byte(3);
                         self.profile(c);
                     }
-                    ExcSpec::Deferred(_) => {
-                        self.partial(Area::Dependent, Site::Item(Item::DependentNoexcept));
-                    }
+                    ExcSpec::Deferred(d) => self.deferred_noexcept(d),
                     e => self.byte(u8::from(e.is_nothrow())),
                 }
             }
@@ -573,6 +665,97 @@ impl DefHasher<'_> {
             _ => self.partial(Area::Dependent, Site::Item(Item::DependentType)),
         }
         self.type_depth -= 1;
+    }
+
+    /// The exception specification of `d` that sema has not computed yet
+    /// (`ExcSpec::Deferred(d)`: a member of a class template
+    /// specialization, or a function template specialization, still
+    /// waiting for its `noexcept` to be instantiated; `d` is the pattern
+    /// it waits on, or itself) by structure, from that pattern (WP-1626):
+    /// a dependent `noexcept(e)` as the equivalence class's expression,
+    /// like any other, a known one by its value. Nothing is instantiated:
+    /// the hasher only reads the AST. An implicit or defaulted member (no
+    /// pattern), or a dynamic specification, stays a skip.
+    fn deferred_noexcept(&mut self, d: DeclId) {
+        use kiln_ast::types::NoexceptValue;
+        let ast = self.ast;
+        let spec_of = |d: DeclId| {
+            ast.decls.get(d).ty().and_then(|t| ast.types.proto(t)).map(|p| ast.types.exc_spec(p))
+        };
+        let mut cur = d;
+        // At most one pattern per enclosing template level.
+        for _ in 0..8 {
+            match spec_of(cur) {
+                Some(
+                    ExcSpec::DependentNoexcept(c)
+                    | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(c), .. },
+                ) => {
+                    self.byte(3);
+                    return self.profile(c);
+                }
+                Some(ExcSpec::Deferred(n)) if n != cur => cur = n,
+                // Waiting on itself: the declaration it is instantiated
+                // from (a member template's function: its template's).
+                Some(ExcSpec::Deferred(_)) => {
+                    let from = ast.instantiated_from(ast.first(cur)).or_else(|| {
+                        let t = ast.instantiated_from(ast.first(ast.described_template(cur)?))?;
+                        ast.template_info(t)?.pattern
+                    });
+                    match from {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+                Some(ExcSpec::Dynamic(_)) | None => break,
+                Some(e) => return self.byte(u8::from(e.is_nothrow())),
+            }
+        }
+        self.partial(Area::Dependent, Site::Item(Item::DependentNoexcept));
+    }
+
+    /// A dependent requires-expression by structure (WP-1626): its
+    /// parameters' types, then per requirement its kind and operands; its
+    /// parameters are named by position wherever it appears.
+    pub(super) fn dep_requires(&mut self, e: ExprId, k: K) {
+        use kiln_ast::templates::Requirement;
+        let ast = self.ast;
+        let Some(r) = ast.requires_of(e) else {
+            return self.partial(Area::Dependent, Site::Expr(k));
+        };
+        self.expr_tag(k);
+        self.positional += 1;
+        self.count(ast.lists.len(r.params));
+        for p in ast.lists.iter::<DeclId>(r.params) {
+            match ast.decls.get(p).ty() {
+                Some(t) => self.ty(t),
+                None => self.byte(T_NONE),
+            }
+        }
+        let reqs = ast.templates.requirements(r);
+        self.count(reqs.len());
+        for &q in reqs {
+            match q {
+                Requirement::Simple(x) => {
+                    self.byte(1);
+                    self.opt_expr_now(Some(x));
+                }
+                Requirement::Type(t, _) => {
+                    self.byte(2);
+                    self.ty(t);
+                }
+                Requirement::Compound { expr, noexcept, constraint } => {
+                    self.byte(3);
+                    self.byte(u8::from(noexcept.is_some()));
+                    self.opt_expr_now(Some(expr));
+                    self.opt_expr_now(constraint);
+                }
+                Requirement::Nested(x) => {
+                    self.byte(4);
+                    self.opt_expr_now(Some(x));
+                }
+            }
+        }
+        self.positional -= 1;
     }
 
     /// The dependent expression kinds (spelling-independent: qualifiers
@@ -637,6 +820,11 @@ impl DefHasher<'_> {
                 self.expr_tag(k);
                 self.byte(n.aux() & 1);
                 self.ty(x.unresolved_construct_type(e));
+                self.exprs(ListId::new(n.a()));
+            }
+            // A dependent parenthesized initializer list (WP-1626).
+            K::ParenListExpr => {
+                self.expr_tag(k);
                 self.exprs(ListId::new(n.a()));
             }
             K::ConceptSpecializationExpr => {

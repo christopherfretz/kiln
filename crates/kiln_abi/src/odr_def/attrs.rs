@@ -14,10 +14,11 @@
 //! Arguments: `alignas(e)` / `aligned(e)` the expression (a dependent one
 //! by structure, the signature area), `alignas(T)` the type, `aligned`
 //! without one a token of its own; `target("s")` and `target_version("s")`
-//! the string's bytes. The spelling (`alignas` against `gnu::aligned`,
-//! `[[noreturn]]` against `[[gnu::noreturn]]`) is not hashed: the
-//! arguments decide the meaning. `target_clones` keeps no arguments in the
-//! AST: it hashes as present and makes the row partial.
+//! the string's bytes; `target_clones` its clone list as sema keeps it
+//! (the strings split at commas, trimmed, joined by `,`: `"a,b"` and
+//! `"a", "b"` hash alike; WP-1608). The spelling (`alignas` against
+//! `gnu::aligned`, `[[noreturn]]` against `[[gnu::noreturn]]`) is not
+//! hashed: the arguments decide the meaning.
 //!
 //! Not on the list and so not hashed (O-10): every other attribute, among
 //! them `visibility`, `exclude_from_explicit_instantiation`, `abi_tag`,
@@ -76,7 +77,9 @@ impl DefHasher<'_> {
 
     /// The listed attributes of `def`'s chain (module docs); with
     /// `params`, `def` is a function and `[[indeterminate]]` is read per
-    /// parameter.
+    /// parameter. A chain with none writes `T_NONE`, whatever the rest of
+    /// the unit holds (no byte depends on unit-wide state; WP-1636): the
+    /// unit-wide check is only a shortcut to those bytes.
     pub(super) fn listed_attrs(&mut self, def: DeclId, params: bool) {
         let ast = self.ast;
         if !LISTED.iter().any(|&k| ast.attrs.has_kind(k)) {
@@ -96,11 +99,6 @@ impl DefHasher<'_> {
         }
         records.sort_unstable();
         records.dedup();
-        self.byte(T_ATTRS);
-        self.count(records.len());
-        for r in &records {
-            self.out.extend_from_slice(r);
-        }
         // `[[indeterminate]]`: one bit per parameter.
         let mut indet: Vec<u32> = Vec::new();
         for &r in chain.iter().filter(|_| params) {
@@ -115,6 +113,14 @@ impl DefHasher<'_> {
         }
         if !params && self.written(def).any(|n| n.kind == AttrKind::INDETERMINATE) {
             indet.push(0);
+        }
+        if records.is_empty() && indet.is_empty() {
+            return self.byte(T_NONE);
+        }
+        self.byte(T_ATTRS);
+        self.count(records.len());
+        for r in &records {
+            self.out.extend_from_slice(r);
         }
         indet.sort_unstable();
         self.count(indet.len());
@@ -146,7 +152,13 @@ impl DefHasher<'_> {
                 }
                 None => self.byte(T_NONE),
             },
-            // The clone list is not kept: present, and partial.
+            // The clone list as sema normalized it (WP-1608); an AST
+            // without it (`b` = 0): present, and partial.
+            AttrKind::TARGET_CLONES if n.b == 1 => {
+                let list = self.ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(n.a));
+                self.count(list.len());
+                self.out.extend_from_slice(list.as_bytes());
+            }
             AttrKind::TARGET_CLONES => self.partial(Area::Attrs, Site::Item(Item::Attributes)),
             _ => {}
         }

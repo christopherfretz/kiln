@@ -62,7 +62,12 @@ use crate::mangle::AnonIds;
 /// callees by entity with the signature area (dependent types and
 /// expressions by structure), the listed attributes, the declaration's
 /// default arguments, `USES_INTERNAL` (K-3e).
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d4";
+/// `d5`: a deferred `noexcept` hashed from its pattern, dependent
+/// requires-expressions and parenthesized lists, a definition's own
+/// dependent `noexcept` and trailing requires-clause by structure, the
+/// narrower overload test of the short form, `target_clones`' clone list
+/// (WP-1608, WP-1626).
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d5";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.
@@ -136,6 +141,11 @@ pub struct DefDigest {
     /// The definition odr-uses an entity with internal linkage or names a
     /// TU-local entity (O-16 `USES_INTERNAL`; `internal.rs`).
     pub uses_internal: bool,
+    /// Statistics only (WP-1627; never hashed, no row flag): the stream
+    /// named at least one entity or type declared in a system header (an
+    /// entity reference, a function template specialization item, a class
+    /// or enumeration item, a type item; `refs.rs`).
+    pub names_system: bool,
 }
 
 /// The package that will hash a skipped construct (spec/abi.md
@@ -246,6 +256,20 @@ pub struct DefStats {
     /// Of `uses_internal_definitions`, those set only through a per-TU
     /// placeholder (an entity or type kiln cannot name).
     pub internal_by_placeholder: u64,
+    /// Definitions whose stream named an entity or type declared in a
+    /// system header ([`DefDigest::names_system`]; WP-1627).
+    pub system_naming_definitions: u64,
+}
+
+/// A memoized function template specialization item (signature.rs): its
+/// digest, its own `partial`, whether the short form had an overload, and
+/// whether it named a system entity (WP-1627).
+#[derive(Clone, Copy, Debug)]
+struct Callee {
+    hash: u128,
+    partial: bool,
+    overloaded: bool,
+    system: bool,
 }
 
 /// One pending item of the walk.
@@ -327,11 +351,11 @@ pub struct DefHasher<'a> {
     /// progress: function parameters by position.
     positional: u32,
     type_depth: u32,
-    /// Signature digests per function template (`None`: uncovered).
-    sigs: FxHashMap<DeclId, Option<u128>>,
-    /// Function template specializations by entity: the item's digest,
-    /// its own `partial`, and whether the short form had an overload.
-    callees: FxHashMap<DeclId, (u128, bool, bool)>,
+    /// Signature digests per function template (`None`: uncovered), and
+    /// whether the signature named a system entity (WP-1627).
+    sigs: FxHashMap<DeclId, (Option<u128>, bool)>,
+    /// Function template specializations by entity (signature.rs).
+    callees: FxHashMap<DeclId, Callee>,
     /// The sites already counted for the current definition.
     seen: Vec<(Area, Site)>,
     stats: DefStats,
@@ -348,7 +372,7 @@ impl<'a> DefHasher<'a> {
         DefHasher {
             ast,
             sm,
-            refs: refs::Refs::new(ast, anon),
+            refs: refs::Refs::new(ast, sm, anon),
             out: Vec::with_capacity(4096),
             stack: Vec::with_capacity(256),
             locals: FxHashMap::default(),
@@ -408,8 +432,8 @@ impl<'a> DefHasher<'a> {
             + self.locals.capacity() * (size_of::<(DeclId, u32)>() + 1)
             + self.seen.capacity() * size_of::<(Area, Site)>()
             + self.closures.capacity() * (size_of::<(DeclId, DefDigest)>() + 1)
-            + self.sigs.capacity() * (size_of::<(DeclId, Option<u128>)>() + 1)
-            + self.callees.capacity() * (size_of::<(DeclId, (u128, bool, bool))>() + 1)
+            + self.sigs.capacity() * (size_of::<(DeclId, (Option<u128>, bool))>() + 1)
+            + self.callees.capacity() * (size_of::<(DeclId, Callee)>() + 1)
             + self.internal.capacity() * (size_of::<(DeclId, bool)>() + 1)
     }
 
@@ -502,6 +526,7 @@ impl<'a> DefHasher<'a> {
         self.uses_internal = false;
         self.internal_named = false;
         self.internal_seen.clear();
+        self.refs.named_system = false;
         self.odr_use = true;
         self.root = self.ast.first(def);
         self.stack.clear();
@@ -514,6 +539,7 @@ impl<'a> DefHasher<'a> {
         self.stats.partial_definitions += u64::from(self.partial);
         self.stats.uses_internal_definitions += u64::from(self.uses_internal);
         self.stats.internal_by_placeholder += u64::from(self.uses_internal && !self.internal_named);
+        self.stats.system_naming_definitions += u64::from(self.refs.named_system);
         for &d in &self.internal_seen {
             *self.stats.internal_entities.entry(d).or_default() += 1;
         }
@@ -522,6 +548,7 @@ impl<'a> DefHasher<'a> {
             hash: fnv1a_128_bytes(&self.out),
             partial: self.partial,
             uses_internal: self.uses_internal,
+            names_system: self.refs.named_system,
         }
     }
 

@@ -573,8 +573,9 @@ impl CodegenJob<'_> {
             // spec/driver.md "Time trace": `EmitIR` is the module's
             // construction, `PrintIR` (the caller's) its text.
             let emit = kiln_source::trace::Phase::new("EmitIR");
-            let (r, warnings) =
-                kiln_codegen::emit_with_debug(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
+            let (r, warnings, mason) =
+                kiln_codegen::emit_with_stats(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
+            crate::stats::set_mason_defs(mason);
             drop(emit);
             drop(phase);
             for w in warnings {

@@ -60,14 +60,19 @@ impl<'a> DefHasher<'a> {
         if let Some(&d) = self.closures.get(&key) {
             self.partial |= d.partial;
             self.uses_internal |= d.uses_internal;
+            self.refs.named_system |= d.names_system;
             return d;
         }
         // A closure naming its own type (an explicit object parameter)
         // meets this entry while its digest is computed.
-        self.closures.insert(key, DefDigest { hash: 0, partial: false, uses_internal: false });
+        self.closures.insert(
+            key,
+            DefDigest { hash: 0, partial: false, uses_internal: false, names_system: false },
+        );
         let start = self.out.len();
         let outer_partial = std::mem::replace(&mut self.partial, false);
         let outer_internal = std::mem::replace(&mut self.uses_internal, false);
+        let outer_system = std::mem::replace(&mut self.refs.named_system, false);
         let base = self.stack.len();
         let floor = std::mem::replace(&mut self.floor, base);
         self.byte(T_CLOSURE);
@@ -111,10 +116,12 @@ impl<'a> DefHasher<'a> {
             hash: fnv1a_128_bytes(&self.out[start..]),
             partial: self.partial,
             uses_internal: self.uses_internal,
+            names_system: self.refs.named_system,
         };
         self.out.truncate(start);
         self.partial = outer_partial | d.partial;
         self.uses_internal = outer_internal | d.uses_internal;
+        self.refs.named_system = outer_system | d.names_system;
         self.floor = floor;
         self.closures.insert(key, d);
         d
@@ -210,6 +217,7 @@ impl<'a> DefHasher<'a> {
         self.out.extend_from_slice(&d.hash.to_le_bytes());
         self.partial = d.partial;
         self.uses_internal = d.uses_internal;
+        self.refs.named_system = d.names_system;
         let spec = data.call_op.is_some_and(|op| ast.first(op) != ast.first(def));
         if spec {
             self.byte(1);
@@ -312,7 +320,15 @@ impl<'a> DefHasher<'a> {
                 _ => break,
             }
         }
-        self.tu_local_type(record_of(ast, t));
+        match record_of(ast, t) {
+            Some(rd) => self.tu_local_type(Some(rd)),
+            // A type the walk does not take apart (a closure under a
+            // function type): TU-local only when the mangler would not make
+            // it visible; a closure of an inline function is the same
+            // entity in every unit (WP-1638).
+            None if !crate::mangle::type_externally_visible(ast, t) => self.tu_local_type(None),
+            None => {}
+        }
         self.byte(T_TU_PLACEHOLDER);
     }
 
