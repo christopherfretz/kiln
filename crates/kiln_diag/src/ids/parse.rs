@@ -115,6 +115,9 @@ parse_ext_int_deprecated = Warning [DeprecatedType] (0) "'_ExtInt' is deprecated
 parse_ext_lambda_missing_parens = ExtWarn [Cxx23Extensions] (0) "lambda without a parameter clause is a C++23 extension";
 // WP-1471: clang ext_lambda_template_parameter_list ([expr.prim.lambda.general]/1, P0428R2).
 parse_ext_lambda_template_parameter_list = ExtWarn [Cxx20Extensions] (0) "explicit template parameter list for lambdas is a C++20 extension";
+// WP-1630: clang ext_implicit_typename ([temp.res.general]/4, P0634R3) before C++20; clang 19 words it as `_19`.
+parse_ext_missing_typename = ExtWarn [Cxx20Extensions] (1) "missing 'typename' prior to dependent type name '{0}' is a C++20 extension";
+parse_ext_missing_typename_19 = ExtWarn [Cxx20Extensions] (1) "missing 'typename' prior to dependent type name {0}; implicit 'typename' is a C++20 extension";
 parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";
 parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_ext_using_attribute_ns = ExtWarn [Cxx17Extensions] (0) "default scope specifier for attributes is a C++17 extension";

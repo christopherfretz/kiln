@@ -880,12 +880,17 @@ impl Sema<'_, '_> {
                     }
                     prev = Some(e);
                 } else if in_class && self.kind_of(es) == DeclKind::EnumConstant {
-                    // [class.mem.general]/5: the enumerator of a member
-                    // enumeration is already a member of this class, and
-                    // the using-declarator would declare it a second time
-                    // (`enum E { A }; using E::A;` or `using enum E;` in
-                    // the class; GCC 16 rejects, clang 22 accepts).
-                    self.emit_using_conflict(loc, target, es);
+                    // The enumerator of a member enumeration is already a
+                    // member of this class (`enum E { A }; using E::A;` or
+                    // `using enum E;` in the class): the using-declarator
+                    // names the same entity, so it does not conflict
+                    // ([basic.scope.scope]/6: only different entities do),
+                    // nor is it a second member declaration
+                    // ([class.mem.general]/5: a using-declarator declares
+                    // no member; two using-declarators naming one
+                    // declaration are [namespace.udecl]/8's case). It
+                    // makes no new shadow. clang 22 accepts; GCC 16
+                    // rejects (docs/status/deviations.md, WP-1631).
                     return None;
                 }
                 continue;

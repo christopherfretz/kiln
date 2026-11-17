@@ -255,12 +255,15 @@ fn similarly_qualified_pointer(
     to: QualType,
 ) -> QualType {
     let to_pointee = s.ast.types.pointee(to).unwrap_or(QualType::ERROR);
-    let cf = s.ast.types.canonical(from_pointee);
+    // An array type is as cv-qualified as its elements
+    // ([basic.type.qualifier]/3): `const int (*)[2]` converts to
+    // `const void *`, not `void *` ([conv.ptr]/2).
+    let fq = s.ast.types.effective_quals(from_pointee);
     let ct = s.ast.types.canonical(to_pointee);
-    if cf.quals() == ct.quals() {
+    if fq == ct.quals() {
         return strip_cv(s, to);
     }
-    let p = s.ast.types.qualify(ct.without_quals(), cf.quals());
+    let p = s.ast.types.qualify(ct.without_quals(), fq);
     s.ast.types.pointer_to(p)
 }
 

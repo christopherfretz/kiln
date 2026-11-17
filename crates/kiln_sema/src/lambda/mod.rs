@@ -1456,11 +1456,13 @@ impl Sema<'_, '_> {
 
     /// True if the closure type `r` has a defaulted default constructor
     /// and copy assignment operator ([expr.prim.lambda.closure]/13: its
-    /// lambda has no *lambda-capture*).
+    /// lambda has no *lambda-capture*, from C++20 only).
     pub(crate) fn closure_default_constructible(&self, r: DeclId) -> bool {
         let Some(id) = self.ast.decls.record(r).and_then(|x| x.lambda) else { return true };
         let l = self.ast.exprs.lambdas.get(id);
-        l.default == CaptureDefault::None && l.captures.is_empty()
+        self.std >= kiln_lex::Std::Cxx20
+            && l.default == CaptureDefault::None
+            && l.captures.is_empty()
     }
 }
 

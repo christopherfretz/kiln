@@ -159,6 +159,7 @@ impl Sema<'_, '_> {
             || (self.body_stmts(body).invalid.is_none()
                 && (self.std >= kiln_lex::Std::Cxx23
                     || (self.first_non_literal_var(body).is_none()
+                        && self.pre23_body_valid(body)
                         && !self.non_literal_signature_type(self.fn_ret(f), true)
                         && self.non_literal_param(f).is_none())))
         {
@@ -166,6 +167,16 @@ impl Sema<'_, '_> {
         }
         let s = spec.with_constexpr_kind(ConstexprKind::None);
         self.ast.decls.respecify_function(f, s);
+    }
+
+    /// Before C++23, a body with none of the statements or static
+    /// variables a constexpr function may hold only as an extension
+    /// (clang `CheckConstexprKind::CheckValid` fails on each).
+    fn pre23_body_valid(&self, body: StmtId) -> bool {
+        let stmts = self.body_stmts(body);
+        stmts.cxx23.is_none()
+            && stmts.statics.is_empty()
+            && (self.std >= kiln_lex::Std::Cxx20 || stmts.cxx20.is_none())
     }
 
     fn constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
@@ -193,6 +204,28 @@ impl Sema<'_, '_> {
         }
         let stmts = self.body_stmts(body);
         let var = if pre23 { self.first_non_literal_var(body) } else { None };
+        // clang `CheckConstexprDeclStmt`: each static or thread_local
+        // variable before the first error is a C++23 extension.
+        if pre23 {
+            let stop = [
+                stmts.invalid.map(|s| self.ast.stmts.get(s).loc()),
+                var.map(|v| self.ast.decls.get(v).loc()),
+            ]
+            .into_iter()
+            .flatten()
+            .map(kiln_source::Loc::to_raw)
+            .min();
+            for &(loc, thread) in &stmts.statics {
+                if stop.is_some_and(|m| loc.to_raw() >= m) {
+                    break;
+                }
+                let msg = self
+                    .diag(DiagId::sema_constexpr_static_var, loc)
+                    .arg(u8::from(ctor))
+                    .arg(u8::from(thread));
+                self.emit(msg);
+            }
+        }
         // The first violation in source order is reported.
         if let Some(s) = stmts.invalid
             && var.is_none_or(|v| {
@@ -296,6 +329,13 @@ impl Sema<'_, '_> {
                     return out;
                 }
                 StmtKind::ReturnStmt => out.has_return = true,
+                StmtKind::DeclStmt => {
+                    for v in self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
+                        if let Some(thread) = self.local_static_kind(v) {
+                            out.statics.push((self.ast.decls.get(v).loc(), thread));
+                        }
+                    }
+                }
                 StmtKind::LabelStmt | StmtKind::GotoStmt => {
                     out.cxx23.get_or_insert(st.get(s).loc());
                 }
@@ -363,6 +403,23 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// For a block-scope variable `v` of static or thread storage
+    /// duration (not `extern`): whether it is `thread_local`.
+    fn local_static_kind(&self, v: DeclId) -> Option<bool> {
+        if self.kind_of(v) != DeclKind::Var {
+            return None;
+        }
+        let spec = self.ast.decls.var(v)?.spec;
+        // A block-scope `extern` declaration defines nothing (CWG2552).
+        if spec.storage() == VarStorage::Extern {
+            return None;
+        }
+        if spec.tls() != kiln_ast::decl::TlsKind::None {
+            return Some(true);
+        }
+        (spec.storage() == VarStorage::Static).then_some(false)
+    }
+
     /// Whether `v` is a local variable definition of a complete,
     /// non-dependent, non-literal type.
     fn is_non_literal_local(&self, v: DeclId) -> bool {
@@ -392,4 +449,8 @@ struct BodyStmts {
     cxx20: Option<kiln_source::Loc>,
     /// A `return` statement was seen (clang's `ReturnStmts`).
     has_return: bool,
+    /// Each variable of static or thread storage duration defined, in
+    /// source order: its location and whether it is `thread_local`
+    /// (allowed from C++23).
+    statics: Vec<(kiln_source::Loc, bool)>,
 }

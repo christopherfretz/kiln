@@ -195,6 +195,11 @@ pub struct DeducedArgs {
     /// deduction that agrees with that pack's prefix keeps it (clang
     /// `checkDeducedTemplateArguments`, `AggregateCandidateDeduction`).
     pub aggregate: bool,
+    /// Deducing for an implicit deduction guide: its leading parameters
+    /// that represent the class template's, whose `T&&` is not a
+    /// forwarding reference ([temp.deduct.call]/3; clang
+    /// `getFirstInnerIndex`). 0 otherwise.
+    pub class_params: u32,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -223,6 +228,7 @@ impl DeducedArgs {
             params: None,
             nttp_types: false,
             aggregate: false,
+            class_params: 0,
             nttp_mismatch: None,
             loc: Loc::INVALID,
             call_seed: None,

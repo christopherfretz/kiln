@@ -190,6 +190,8 @@ sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be co
 // ----- WP-1500 (clang `warn_cxx14_compat_constexpr_not_const`)
 sema_constexpr_not_const = Warning [ConstexprNotConst] (0) "'constexpr' non-static member function will not be implicitly 'const' in C++14; add 'const' to avoid a change in behavior";
 sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
+// WP-1630: clang ext_constexpr_static_var ([dcl.constexpr]/3 before C++23).
+sema_constexpr_static_var = ExtWarn [Cxx23Extensions] (2) "definition of a {1:static|thread_local} variable in a constexpr {0:function|constructor} is a C++23 extension";
 sema_constexpr_tag = Error (2) "{0:class|struct|interface|union|enum|enum class|enum struct} cannot be marked {1:constexpr|consteval|constinit}";
 // [dcl.constexpr]/1: a constexpr variable declaration shall be a definition (clang err_invalid_constexpr_var_decl).
 sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declaration must be a definition";

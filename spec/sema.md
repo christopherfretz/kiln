@@ -592,6 +592,15 @@ translation unit that fails costs about what it costs clang:
   as clang does (`Diag::allow_duplicate`). The diagnostic is at the
   member access's location (`(g.f)` at its `(`). Under SFINAE nothing is
   recovered. `expr.ref/bound-member-recovery-by-call.cpp`.
+  A discarded-value expression gets the same checks wherever it is: an
+  expression statement and a for-statement's increment both go through
+  `stmt.rs` `discarded_value_checks` (clang's `ActOnFinishFullExpr`
+  with `DiscardedValue`), and an operand of a conditional expression
+  that is still an overload set after single-candidate resolution is
+  "reference to overloaded function could not be resolved" (the first
+  operand only, as clang; [over.over]/1 lists no conditional operand as
+  a target, so `fp = b ? g : g;` is an error too, as in clang and GCC)
+  (WP-1630). `over.over/p1-no-target-for-increment-conditional.cpp`.
 - **Nothing fails silently** (WP-1054). A declaration kiln cannot form
   produces an error, a SFINAE failure or a "not yet implemented" note,
   never nothing: recovery may stay quiet only because an earlier error
@@ -2165,6 +2174,15 @@ and returns the scope it names:
     the enclosing levels (`member_template_levels`), pack elements
     expanded (WP-1493);
   - the user guides (`user_guides`).
+- **Class parameters are not forwarding** (WP-1630). In an implicit
+  guide (not one formed for an alias template), `T&&` naming one of
+  the leading parameters that represent the class template's is not a
+  forwarding reference ([temp.deduct.call]/3, P0512R0; clang
+  `getFirstInnerIndex`): `templ.ctad_class_params` records their count
+  per guide and call deduction reads it (`DeducedArgs::class_params`),
+  so `template<class T> struct A { A(T&&); }; A a = lvalue;` deduces
+  `T = int` and the guide is not viable. A constructor template's own
+  `U&&` and a user guide's `T&&` stay forwarding references.
 - **Member templates** (WP-134). A member class template of a class
   template specialization (`Outer<int>::In`, redeclared at
   instantiation, [temp.mem]) has no definition until one of its
@@ -5000,12 +5018,15 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     any non-tag, and outside a class kiln keeps clang's rule, which GCC
     16 shares at namespace scope; WP-1534);
   - in a class, a using-declarator (or `using enum`) naming an
-    enumerator of a member enumeration of that class names a member
-    already declared there, a second declaration of it
-    ([class.mem.general]/5; GCC 16, clang 22 accepts): `target of using
-    declaration conflicts with declaration already in scope` (WP-1534,
-    `namespace.udecl/class-scope-member-conflict*.cpp`). At block and
-    namespace scope the same entity is no conflict (P1787);
+    enumerator of a member enumeration of that class names the member
+    the class already has: the same entity, so no conflict
+    ([basic.scope.scope]/6), and no second member declaration (a
+    using-declarator declares no member, [class.mem.general]/5; only two
+    using-declarators naming one declaration are ill-formed,
+    [namespace.udecl]/8). It makes no new shadow. clang 22 accepts, GCC
+    16 rejects (docs/status/deviations.md; WP-1631, reversing WP-1534;
+    `namespace.udecl/class-scope-own-enumerator-accepted.cpp`). At block
+    and namespace scope the same entity is no conflict either (P1787);
   - a data or static data member declared after a shadow of the same
     name reports only the conflict below, not `duplicate member`;
   - two typedefs conflict unless they name the same type;
@@ -5712,6 +5733,22 @@ the initializer, or after default initialization, and before the
   (tests `conv.mem/p2-inaccessible-base*.cpp`,
   `expr.static.cast/p12-member-pointer-inaccessible-ambiguous-base.cpp`,
   `expr.static.cast/p11-downcast-inaccessible-base.cpp`).
+  A `static_cast` downcast between related classes to a less
+  cv-qualified pointee or referent is `static_cast from 'const B *' to
+  'D *' casts away qualifiers` ([expr.static.cast]/2, /11; clang
+  `TryStaticDowncast` checks it once the classes are known related). An
+  array type is as cv-qualified as its elements
+  ([basic.type.qualifier]/3), so the pointer conversion to `cv void *`
+  ([conv.ptr]/2, `conv/scs.rs` `similarly_qualified_pointer`) keeps the
+  element qualifiers: `const int (*)[2]` converts to `const void *`, not
+  `void *` (WP-1630; `expr.static.cast/p11-casts-away-constness*.cpp`).
+  CWG2310 ([conv.ptr]/3 "where D is a complete class type") is not
+  enforced for a class being defined: like clang (`IsDerivedFrom` allows
+  `isBeingDefined`), kiln converts `Z*` to `W*` inside `Z`'s own
+  member-specification outside a complete-class context; GCC 16.1
+  rejects only where it builds the base path in a constant initializer
+  (`static constexpr W *p = &z;`) and accepts `std::is_convertible_v<Z*,
+  W*>` in the same place.
 - **Decl-specifiers out of place** ([dcl.spec], [dcl.inline]/1,
   [dcl.constexpr]/1, [dcl.fct]/3, [class.conv.fct]/1, [class.dtor]/1;
   WP-1539), in clang's order and texts: a declaration of only a class or
@@ -5764,8 +5801,9 @@ the initializer, or after default initialization, and before the
   `D::B` finding the injected-class-names of two specializations through
   different bases is clang's ambiguous-member error, recovering with the
   first; `typename D::template B<int>` in the current instantiation with
-  a dependent base is a dependent name looked up at instantiation (an
-  ambiguity found there is not yet diagnosed). `typename A::f<0>` naming
+  a dependent base is a dependent name looked up at instantiation, where the substituted
+  `typename D::B` reports the same ambiguity (`templ/subst/types.rs`
+  `DependentName`, WP-1631). `typename A::f<0>` naming
   a function or variable template is `typename specifier refers to a
   non-type template` (clang's further recovery errors are not copied).
   `using E::x;` repeated in a class through an enumeration is
@@ -6667,7 +6705,10 @@ Tests: `tests/conformance/expr.throw/no-exceptions-*.cpp`,
 an operand naming an implicitly movable entity is an xvalue. Before
 C++23 the copy-initialization of the result is first tried, in a SFINAE
 frame, with the operand as an xvalue; when that fails other than by
-selecting a deleted constructor or function, the operand is used as the
+selecting a deleted constructor or function, or an inaccessible
+constructor (access is checked on the result, not part of the
+initialization sequence: P1825, clang in every mode; WP-1630,
+`class.copy.elision/p3-move-ctor-inaccessible*.cpp`), the operand is used as the
 lvalue it is (clang's `PerformMoveOrCopyInitialization`): `T& f(T&& t)
 { return t; }` and a class with only a `C(C&)` copy constructor are
 accepted in C++20. `decltype(auto)` of `return (x);` is then `T&`.
@@ -8450,7 +8491,14 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   non-literal variable, the function made invalid as above. Before
   C++23 a body that breaks neither rule but holds a label or a `goto`
   gets "use of this statement in a constexpr {function|constructor} is
-  a C++23 extension" (`-Wc++23-extensions`) at the first one. Tests
+  a C++23 extension" (`-Wc++23-extensions`) at the first one, and each
+  variable of static or thread storage duration before the first error
+  "definition of a {static|thread_local} variable in a constexpr
+  {function|constructor} is a C++23 extension" (clang
+  `CheckConstexprDeclStmt`; WP-1630). An implicitly constexpr lambda
+  with any of these (or, before C++20, an asm-declaration or try-block)
+  is not constexpr (`pre23_body_valid`;
+  `dcl.constexpr/p3-static-variable-cxx23-extension.cpp`). Tests
   `tests/conformance/stmt.goto/computed-goto-constexpr-body{,-cxx20}.cpp`.
   Otherwise, before C++20, the first asm-declaration or try-block
   statement gets "use of this statement in a constexpr

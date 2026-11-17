@@ -71,6 +71,17 @@ impl Sema<'_, '_> {
             {
                 return x;
             }
+            // [expr.static.cast]/2: a downcast to a less cv-qualified
+            // referent casts away qualifiers (clang
+            // `TryStaticReferenceDowncast`).
+            if style.allows_static()
+                && !keeps_cv
+                && !style.allows_const()
+                && self.is_static_downcast(et, r, loc)
+            {
+                self.qualifiers_away(style, et, ty, loc);
+                return self.recover(ty, &[e], loc);
+            }
         }
         // [expr.cast]/4: a C-style or functional cast is a `static_cast`
         // before it is a `reinterpret_cast`, so `(const int&)c` for a
@@ -231,6 +242,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `err_bad_cxx_cast_qualifiers_away`: a cast from `from` to
+    /// `to` that would cast away constness.
+    fn qualifiers_away(&mut self, style: CastStyle, from: QualType, to: QualType, loc: Loc) {
+        let msg = self
+            .diag(DiagId::sema_bad_cast_qualifiers_away, loc)
+            .arg(style.select())
+            .arg(self.ty_arg(from))
+            .arg(self.ty_arg(to));
+        self.emit(msg);
+    }
+
     /// clang `err_static_downcast_via_virtual` ([expr.static.cast]/2,
     /// /11): a downcast from `from` to `to` through virtual base `v`.
     fn static_downcast_via_virtual(
@@ -309,6 +331,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether `to` names a complete class derived from class `from`
+    /// through a unique base path ([expr.static.cast]/2, /11), the
+    /// relation a downcast needs.
+    fn is_static_downcast(&mut self, from: QualType, to: QualType, loc: Loc) -> bool {
+        let (Some(fc), Some(tc)) = (self.ast.types.as_record(from), self.ast.types.as_record(to))
+        else {
+            return false;
+        };
+        let tu = conv::strip_cv(self, to);
+        self.require_complete_silent(tu, loc)
+            && matches!(find_base(self, tc, fc), BaseSearch::Unique(_))
+    }
+
     /// `static_cast<D*>(b)` for a prvalue `x` of type "pointer to cv B"
     /// where `D` is derived from `B` ([expr.static.cast]/11).
     pub(super) fn static_downcast(
@@ -324,11 +359,8 @@ impl Sema<'_, '_> {
         let tp = self.ast.types.pointee(to).filter(|_| self.ast.types.is_pointer(to))?;
         let fc = self.ast.types.as_record(fp)?;
         let tc = self.ast.types.as_record(tp)?;
-        if !style.allows_const()
-            && !self.ast.types.effective_quals(tp).contains(self.ast.types.effective_quals(fp))
-        {
-            return None;
-        }
+        let keeps_cv =
+            self.ast.types.effective_quals(tp).contains(self.ast.types.effective_quals(fp));
         let (fu, tu) = (conv::strip_cv(self, fp), conv::strip_cv(self, tp));
         // clang `TryStaticDowncast`: the derived class must be complete,
         // instantiating a class template specialization ([temp.inst]/2).
@@ -336,6 +368,13 @@ impl Sema<'_, '_> {
             return None;
         }
         let BaseSearch::Unique(p) = find_base(self, tc, fc) else { return None };
+        // [expr.static.cast]/11: "cv2 is the same cv-qualification as, or
+        // greater cv-qualification than, cv1"; clang checks it once the
+        // classes are known to be related.
+        if !style.allows_const() && !keeps_cv {
+            self.qualifiers_away(style, xt, to, loc);
+            return Some(self.recover(to, &[x], loc));
+        }
         if let Some(v) = p.first_virtual {
             self.static_downcast_via_virtual(xt, to, v, loc);
             return Some(self.recover(to, &[x], loc));

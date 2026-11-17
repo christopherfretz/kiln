@@ -992,7 +992,12 @@ parameter. Arity per [over.unary]/[over.binary]; `()`/`[]` any count
 arguments except for `()`/`[]`. Wordings are clang's
 `err_operator_overload_*` (e.g. "overloaded 'operator+' must be a unary or
 binary operator (has 3 parameters)"), each pinned by a 068b test. The
-`DeclName` operator tag (ast.md §3) is the lookup key.
+`DeclName` operator tag (ast.md §3) is the lookup key. Before C++23 a
+static `operator()`/`operator[]` is a `-Wc++23-extensions` warning
+("declaring overloaded 'operator[]' as 'static' is a C++23 extension"),
+and `operator[]` with other than one parameter, or a defaulted one, is
+"overloaded 'operator[]' cannot have no|a defaulted|more than one
+parameter before C++23" (WP-1630).
 
 ### 6.2 Built-in candidates ([over.built], `builtin.rs`)
 Per operand, a `BuiltinTypeSet` is built from the operand's type and its

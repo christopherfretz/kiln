@@ -619,6 +619,22 @@ impl Sema<'_, '_> {
         self.check_name_access_as(name, Some(qualifier), d, loc, LookupKind::Ordinary);
     }
 
+    /// The access check of class or alias template name `name`
+    /// (classified as `d`, after the nested-name-specifier naming
+    /// `qualifier`, if any) used as a template template argument or a
+    /// template template parameter's default ([class.access]/4: the name
+    /// is checked where it is written; clang `ParseTemplateTemplateArgument`
+    /// → `LookupTemplateName`).
+    pub fn check_template_name_access(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        d: DeclId,
+        loc: Loc,
+    ) {
+        self.check_name_access_as(name, qualifier, d, loc, LookupKind::Ordinary);
+    }
+
     /// [`Sema::check_type_name_access`] for a name `d` found by a lookup
     /// of kind `kind` (`Tag` for an elaborated-type-specifier).
     pub(crate) fn check_name_access_as(

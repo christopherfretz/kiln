@@ -310,10 +310,17 @@ impl Sema<'_, '_> {
                     self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
                 }
             } else {
-                // clang `InitializationSequence::Diagnose` makes the
-                // variable invalid: a constant evaluation reaching its
-                // definition fails with no note (spec/oven.md).
-                self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                // clang `ActOnUninitializedDecl`: a failed default
+                // initialization leaves a recovery expression as the
+                // initializer; the variable stays valid, so its uses are
+                // still checked (`lam3 = lam;` after `decltype(lam) lam3;`),
+                // and a constant evaluation reaching its definition fails
+                // with no note (spec/oven.md).
+                if self.ast.decls.var(v).is_some_and(|x| x.init.is_none()) {
+                    let r = self.recover(ty, &[], loc);
+                    let _ = self.builder().set_var_init(v, r);
+                    self.ast.decls.mark_var(v, VarSpec::new().with_init_style(InitStyle::Call));
+                }
                 ok = false;
             }
         }

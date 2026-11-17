@@ -1299,7 +1299,7 @@ fn type_rows_golden() {
         assert_eq!(per_tu_component(&t.name), None);
     }
     assert_eq!(trow(&rows, "N2ns5PlainE").unwrap().line, 3);
-    let summary = rows_of(&d, "t.cpp", TYPES_CXX, &["--target=x86_64-linux-gnu"]);
+    let summary = rows_of(&d, "t.cpp", TYPES_CXX, &["-std=c++20", "--target=x86_64-linux-gnu"]);
     // WP-1581: the layout serialization is `odr.layout-scheme` (mortar's
     // ruling 3 of 11-17); `odr.scheme` names the kind 2 hash.
     assert!(summary.contains(&("odr.layout-scheme".into(), "kiln-odr-1".into(), 0)));

@@ -44,7 +44,7 @@ pub(crate) mod site {
 
 /// The verdict on a placeholder in a declarator's context.
 #[derive(Clone, Copy)]
-enum Misplaced {
+pub(crate) enum Misplaced {
     /// `err_auto_not_allowed` with this context selector.
     NotAllowed(u8),
     /// `err_template_missing_args`.
@@ -54,7 +54,7 @@ enum Misplaced {
 impl Sema<'_, '_> {
     /// The placeholder for a deduced class type `ty` where none may
     /// appear, reported at `loc` with the template note; the error type.
-    fn ctad_misplaced(&mut self, ty: QualType, loc: Loc, why: Misplaced) -> QualType {
+    pub(crate) fn ctad_misplaced(&mut self, ty: QualType, loc: Loc, why: Misplaced) -> QualType {
         let Some((_, tmpl)) = self.undeduced_ctad(ty) else { return ty };
         let what = if self.kind_of(tmpl) == DeclKind::ClassTemplate {
             "class template"

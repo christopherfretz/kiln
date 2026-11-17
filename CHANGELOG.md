@@ -1260,6 +1260,24 @@ Planned as 1.3.0.
   `variable_of` in a nested evaluation sees the function of that
   evaluation's point (CWG3162). A nested evaluation still sees classes
   the enclosing evaluation completed with `define_aggregate`.
+- More required diagnostics found running GCC's C++ testsuite: an overload
+  set with no target in a `for` increment or a conditional operand;
+  `static_cast` of an array of `const` to `void *` and downcasts that cast
+  away qualifiers; closures have no default constructor before C++20 and
+  none with captures; a member of an unspecialized class template
+  specialized without its own `template <>`; class template parameters are
+  not forwarding references in implicit deduction guides; an inaccessible
+  move constructor in a returned local is not replaced by the copy
+  constructor; access of a class template named as a template template
+  argument; members of an anonymous union declared private or protected;
+  later-standard features in earlier modes (`typename`-free dependent types
+  before C++20, `static` and `thread_local` variables in constexpr
+  functions before C++23, class templates without arguments before C++17,
+  static and multi-parameter `operator[]` and static `operator()` before
+  C++23); an ambiguous injected-class-name found through dependent bases
+  at instantiation; a friend redeclaration of an implicit special member
+  without its exception specification. A class's using-declarator of its
+  own enumerator is accepted, as clang 22 does (WP-1630, WP-1631).
 
 ## [1.2.1] - 2026-11-14
 

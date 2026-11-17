@@ -1060,7 +1060,10 @@ impl Parser<'_, '_> {
                     Some(tn)
                 } else {
                     match self.s.classify_name(n, qual.map(|q| q.ctx)) {
-                        NameClass::TypeTemplate(d) => Some(self.s.template_name_for(d)),
+                        NameClass::TypeTemplate(d) => {
+                            self.s.check_template_name_access(n, qual.map(|q| q.ctx), d, nl);
+                            Some(self.s.template_name_for(d))
+                        }
                         // A concept or variable template for a parameter
                         // of that kind (P2841R7); sema checks the kinds.
                         NameClass::VarTemplate(d) | NameClass::Concept(d)
@@ -1471,6 +1474,14 @@ impl Parser<'_, '_> {
                 .template_name(TemplateName::DependentIdentifier { nns: qual.nns, name: n });
             return Some(TemplateArg::template(tn));
         };
+        // [class.access]/4: a class or alias template named as the
+        // argument is access-checked where it is written.
+        if matches!(class, NameClass::TypeTemplate(_))
+            && let Some(n) = self.ident_of(self.tok_at(end - 1))
+        {
+            let at = self.tok_at(end - 1).span.lo;
+            self.s.check_template_name_access(n, qual, d, at);
+        }
         // `nns template name` naming a member template found now keeps
         // its qualifier and keyword as written ([temp.names]/5).
         let template_kw = end >= 2 && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
@@ -1992,6 +2003,16 @@ impl Parser<'_, '_> {
     /// `typename` ([temp.res.general]/4, P0634: block scope, a condition,
     /// a for-init-statement, a parameter of a function declared with an
     /// unqualified declarator-id at namespace or block scope).
+    /// [`Self::parse_template_type_name`] for the class name of a
+    /// base-specifier or mem-initializer, where `typename` is never needed
+    /// ([temp.res.general]/4 before P0634 too).
+    pub(crate) fn parse_base_type_name(&mut self) -> Option<QualType> {
+        let saved = std::mem::replace(&mut self.base_type_name, true);
+        let ty = self.parse_template_type_name(DeclaratorContext::TypeName);
+        self.base_type_name = saved;
+        ty
+    }
+
     pub(crate) fn typename_required(&self, ctx: DeclaratorContext) -> bool {
         match ctx {
             DeclaratorContext::Block
@@ -2005,13 +2026,26 @@ impl Parser<'_, '_> {
     /// "missing 'typename' prior to dependent type name" for the
     /// dependent qualified name `q::name` at `start` (the name follows),
     /// where `ctx` requires `typename`; it is parsed as if written.
+    /// Elsewhere `typename` is implied (P0634), an extension before C++20
+    /// (clang `ext_implicit_typename`).
     fn diagnose_missing_typename(&mut self, q: Qualifier, ctx: DeclaratorContext, start: Loc) {
-        if !self.typename_required(ctx) {
+        let required = self.typename_required(ctx);
+        if !required && (self.std >= Std::Cxx20 || self.base_type_name) {
             return;
         }
         let k = usize::from(self.at_kw(Kw::Template));
         if let Some(name) = self.ident_of(self.tok_at(self.pos() + k)) {
             let text = format!("{}{}", self.s.nns_str(q.nns), self.s.ast.symbols().as_str(name));
+            if !required {
+                let id = if self.s.clang_compat >= 22 {
+                    DiagId::parse_ext_missing_typename
+                } else {
+                    DiagId::parse_ext_missing_typename_19
+                };
+                let d = self.s.diag(id, start).arg(text);
+                self.emit(d);
+                return;
+            }
             let d = self.s.diag(DiagId::parse_missing_typename, start).arg(text);
             self.emit(d);
             if ctx == DeclaratorContext::Prototype {
