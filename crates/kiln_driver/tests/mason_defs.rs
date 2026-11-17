@@ -53,7 +53,7 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
     assert_eq!(row_size, 48);
     assert!(rows > 0, "no block without rows");
     assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
-    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d2"));
+    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d3"));
     let out: Vec<Def> = (0..rows)
         .map(|i| {
             let r = at + 16 + i * 48;
@@ -211,11 +211,11 @@ fn definition_rows_golden() {
         ("_ZN3ImpD2Ev", F, IN, 17),
         // A closure's `operator()` (an inline variable's lambda) and a
         // generic lambda's specialization; the variables themselves (a
-        // lambda initializer is not hashed yet: PARTIAL).
+        // lambda initializer is hashed since K-3d).
         ("_ZNK2fpMUliE_clEi", F, IN, 27),
         ("_ZNK2glMUlT_E_clIiEEDaS0_", F, IN | IMPLICIT_INST, 24),
-        ("fp", V, IN | PARTIAL, 27),
-        ("gl", V, IN | PARTIAL, 24),
+        ("fp", V, IN, 27),
+        ("gl", V, IN, 24),
         // A function with a static local (the local and its guard: none).
         ("_Z2slv", F, IN, 26),
     ];
@@ -267,9 +267,14 @@ fn units_and_definitions_without_rows() {
     let x15 = "inline int g(int a = [] { return 1; }()) { return a; }\n\
                template <class T> inline int h(T, decltype([] {}) = {}) { return 2; }\n\
                inline int k() { return 3; }\n\
-               int use() { return g() + h(1) + k(); }\n";
+               template <class T> inline auto r(T) -> decltype([] { return 4; }) { return {}; }\n\
+               template <class T> inline int q(T) requires ([] { return true; }()) { return 5; }\n\
+               int use() { return g() + h(1) + k() + r(1)() + q(1); }\n";
     let rows = defs_of(&d, "x.cpp", x15, &["-std=c++20"]).unwrap();
-    assert_eq!(rows.iter().map(|r| r.line).collect::<Vec<_>>(), [3], "{rows:?}");
+    // Only `k` and the closure members of `r`'s return type (an ordinary
+    // closure's call operator: its own row).
+    assert!(rows.iter().all(|r| r.line == 3 || r.line == 4), "{rows:?}");
+    assert_eq!(rows.iter().filter(|r| r.line == 3).count(), 1, "{rows:?}");
     assert!(row(&rows, "_Z1kv").is_some());
     // C: inline definitions, but no kind 2 and no `odr.scheme` (N21).
     let c = "inline int ci(void) { return 1; }\nextern inline int ce(void) { return 2; }\nint cu(void) { return ci() + ce(); }\n";
@@ -285,7 +290,7 @@ fn units_and_definitions_without_rows() {
     // Every level writes kind 2, from `min` (mortar's K-1 level table).
     for l in ["min", "default", "detail", "all"] {
         let rows = defs_of(&d, "x.cpp", x15, &["-std=c++20", &format!("-fmason-metadata={l}")]);
-        assert_eq!(rows.map(|r| r.len()), Some(1), "{l}");
+        assert_eq!(rows.map(|r| r.iter().filter(|r| r.line == 3).count()), Some(1), "{l}");
     }
 }
 
@@ -532,8 +537,8 @@ fn decided_forms() {
     }
     assert_eq!(
         row(&rows, "_Z2cov").map(|r| (r.flags, r.line)),
-        Some((IN | PARTIAL, 3)),
-        "the ramp (a coroutine body: not hashed yet)"
+        Some((IN, 3)),
+        "the ramp (a coroutine body, K-3d)"
     );
     std::fs::write(
         d.join("mv.cpp"),
@@ -598,15 +603,17 @@ fn textual_and_pch_rows_equal() {
     let (decls, uses) = KINDS.split_at(KINDS.find("int use()").unwrap());
     let extra = "int ext(int x = 2);\n\
                  struct M { int a = 4; int *p; M(int x) : p(new int(x)) {} virtual ~M() { delete p; } };\n\
-                 inline int dm() { M m(ext()); int v[3] = {1}; return m.a + v[0] + *m.p; }\n";
+                 inline int dm() { M m(ext()); int v[3] = {1}; return m.a + v[0] + *m.p; }\n\
+                 template <class T> inline T lt(T t) { auto g = [t](auto u) { return [&] { return t + u; }(); }; struct L { T k; T get() { return k; } }; return g(1) + g(2L) + L{t}.get(); }\n\
+                 inline int lam() { int y = 1; auto l = [=, &y](int x) mutable { y += x; return [y] { return y; }(); }; return l(1) + lt(1) + lt(2L); }\n";
     std::fs::write(d.join("h.h"), format!("{decls}{extra}")).unwrap();
     ok(&d, &["-std=c++20", "-x", "c++-header", "h.h", "-o", "h.pch"]);
-    let u = format!("{uses}int use2() {{ return dm(); }}\n");
+    let u = format!("{uses}int use2() {{ return dm() + lam(); }}\n");
     let with_pch = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include-pch", "h.pch"]).unwrap();
     let with_h = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include", "h.h"]).unwrap();
     assert_eq!(with_pch, with_h);
     assert!(with_h.len() > 25 && with_h.iter().all(|r| r.file.ends_with("h.h")), "{with_h:#?}");
-    for sym in ["_Z2dmv", "_ZN1MC2Ei", "_ZN1MD2Ev"] {
+    for sym in ["_Z2dmv", "_ZN1MC2Ei", "_ZN1MD2Ev", "_Z3lamv", "_Z2ltIiET_S0_"] {
         let r = row(&with_h, sym).unwrap_or_else(|| panic!("no row for {sym}"));
         assert_eq!(r.flags & PARTIAL, 0, "{sym}");
     }
@@ -685,4 +692,80 @@ fn size_gate_with_kind_2() {
     );
     assert!(unit.len() <= 125_000, "{}", unit.len());
     assert!(unit.len() * 100 <= obj.len() * 12, "{} of {}", unit.len(), obj.len());
+}
+
+/// K11 (O-13): a lambda in an inline function whose body differs: the
+/// enclosing function's row and the closure's `operator()` row differ;
+/// the same source gives the same rows. The static invoker and the
+/// conversion function get no row (O-14); a local class's members none
+/// (their definitions are the enclosing function's); a generic lambda's
+/// specializations each one, equal across units.
+#[test]
+fn closure_rows() {
+    let dir = scratch("defs-closures");
+    let src = |v: i32| {
+        format!(
+            "inline int f(int a) {{ auto l = [a](int x) {{ return x + a + {v}; }}; int (*p)(int) = [](int x) {{ return x; }}; return l(1) + p(2); }}\n\
+             inline int gen() {{ auto g = [](auto x) {{ return x; }}; return g(1) + (int)g(2L); }}\n\
+             inline int lc() {{ struct L {{ int get() const {{ return 7; }} }}; return L().get(); }}\n\
+             int use() {{ return f(1) + gen() + lc(); }}\n"
+        )
+    };
+    let ir = ir_of(&dir, "a.cpp", &src(1), &["-std=c++20"]);
+    let a = def_rows(&ir_bytes(meta_line(&ir).unwrap())).unwrap();
+    let b = defs_of(&dir, "b.cpp", &src(2), &["-std=c++20"]).unwrap();
+    let a2 = defs_of(&dir, "c.cpp", &src(1), &["-std=c++20"]).unwrap();
+    let key =
+        |v: &[Def]| v.iter().map(|r| (r.key, r.hash, r.class, r.flags, r.line)).collect::<Vec<_>>();
+    assert_eq!(key(&a), key(&a2));
+    let defs = defined(&ir);
+    let op = "_ZZ1fiENKUliE_clEi";
+    assert!(defs.iter().any(|s| s == op), "{defs:?}");
+    for sym in ["_Z1fi", op] {
+        let (x, y) = (row(&a, sym).unwrap(), row(&b, sym).unwrap());
+        assert_ne!(x.hash, y.hash, "{sym}");
+        assert_eq!(x.flags & PARTIAL, 0, "{sym}");
+    }
+    // Unchanged closures and functions keep their rows.
+    for sym in ["_ZZ1fiENKUliE0_clEi", "_Z3genv", "_Z2lcv"] {
+        let strip = |r: Option<&Def>| r.map(|r| (r.key, r.hash, r.class, r.flags, r.line));
+        assert_eq!(strip(row(&a, sym)), strip(row(&b, sym)), "{sym}");
+        assert!(row(&a, sym).is_some(), "{sym}");
+    }
+    let specs: Vec<&String> =
+        defs.iter().filter(|s| s.starts_with("_ZZ3genvENKUlT_E_clI")).collect();
+    assert_eq!(specs.len(), 2, "{defs:?}");
+    let (s0, s1) = (row(&a, specs[0]).unwrap(), row(&a, specs[1]).unwrap());
+    assert_ne!(s0.hash, s1.hash);
+    for sym in &defs {
+        let thunk = sym.contains("__invoke") || sym.contains("cvPF");
+        let local = sym.starts_with("_ZZ2lcvENK1L");
+        if thunk || local {
+            assert_eq!(row(&a, sym), None, "{sym}");
+        }
+    }
+    assert!(defs.iter().any(|s| s.starts_with("_ZZ2lcvENK1L")), "{defs:?}");
+}
+
+/// The main risk of closure rows: numbering that depends on the order a
+/// unit instantiates in. Two units instantiate the same templates holding
+/// lambdas and the same generic lambda in opposite orders: every shared
+/// key has the same row.
+#[test]
+fn instantiation_order_does_not_change_rows() {
+    let d = scratch("defs-order");
+    let hdr = "template <class T> inline T t(T v) { auto a = [v] { return v; }; auto b = [&](auto w) { return a() + w; }; return b(v) + [] { return T(1); }(); }\n\
+               inline auto gl = [](auto x) { return [x](auto y) { return x + y; }(x); };\n";
+    let one = format!("{hdr}int u1() {{ return t(1) + (int)t(2L) + gl(1) + (int)gl(2.0); }}\n");
+    let two = format!("{hdr}int u2() {{ return (int)gl(2.0) + gl(1) + (int)t(2L) + t(1); }}\n");
+    let ra = defs_of(&d, "one.cpp", &one, &["-std=c++20"]).unwrap();
+    let rb = defs_of(&d, "two.cpp", &two, &["-std=c++20"]).unwrap();
+    let mut shared = 0;
+    for r in &ra {
+        if let Some(s) = rb.iter().find(|s| s.key == r.key) {
+            assert_eq!((r.hash, r.flags, r.line), (s.hash, s.flags, s.line), "{r:?}");
+            shared += 1;
+        }
+    }
+    assert!(shared >= 8, "{shared}: {ra:#?}");
 }

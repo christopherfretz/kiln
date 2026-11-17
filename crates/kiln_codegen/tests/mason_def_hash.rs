@@ -229,6 +229,42 @@ const MUST_EQUAL: &[(&str, &str, &str)] = &[
         "struct S { int g(); int f(); }; int S::f() { return g(); }",
         "struct S { int g(); int f(); }; int S::f() { return S::g(); }",
     ),
+    // K-3d: closures by their resolved captures; specifiers as written.
+    (
+        "lambda: [=] and [x] capturing only x",
+        "int f(int x) { return [=] { return x; }(); }",
+        "int f(int x) { return [x] { return x; }(); }",
+    ),
+    (
+        "lambda: [&] and [&x] capturing only x",
+        "int f(int x) { return [&] { return x; }(); }",
+        "int f(int x) { return [&x] { return x; }(); }",
+    ),
+    (
+        "lambda: constexpr written on the call operator is not hashed (N25)",
+        "int f() { return [] { return 1; }(); }",
+        "int f() { return []() constexpr { return 1; }(); }",
+    ),
+    (
+        "lambda: parameter and capture-default spellings",
+        "int f(int x) { return [=](int a) { return a + x; }(1); }",
+        "int f(int x) { return [x](int b) { return b + x; }(1); }",
+    ),
+    (
+        "lambda: closure named by index, local typedef transparent",
+        "int f() { auto l = [] { return 1; }; decltype(l) &r = l; return r(); }",
+        "int f() { auto m = [] { return 1; }; typedef decltype(m) M; M &q = m; return q(); }",
+    ),
+    (
+        "local class: names of the class and its parameters",
+        "int f() { struct L { int g(int a) { return a; } }; return L().g(1); }",
+        "int f() { struct K { int g(int b) { return b; } }; return K().g(1); }",
+    ),
+    (
+        "contract assertion skipped (X16)",
+        "int f(int a) { return [a] { return a; }(); }",
+        "int f(int a) { contract_assert(a > 0); return [a] { contract_assert(a); return a; }(); }",
+    ),
 ];
 
 #[test]
@@ -382,6 +418,49 @@ compound assign | void f(int &a, int b) { a += b; } | void f(int &a, int b) { a 
 increment | int f(int a) { return ++a; } | int f(int a) { return a++; }
 logical vs bitwise | bool f(bool a, bool b) { return a && b; } | bool f(bool a, bool b) { return a & b; }
 operator call | int f(It i) { return *i; } | int f(It i) { return *++i; }
+lambda capture kind | int f(int a) { return [=] { return a; }(); } | int f(int a) { return [&] { return a; }(); }
+lambda capture entity | int f(int a, int b) { return [a] { return 1; }(); } | int f(int a, int b) { return [b] { return 1; }(); }
+lambda capture order | int f(int a, int b) { return [a, b] { return a - b; }(); } | int f(int a, int b) { return [b, a] { return a - b; }(); }
+lambda init-capture | int f(int a) { return [y = a] { return y; }(); } | int f(int a) { return [y = a + 1] { return y; }(); }
+lambda init-capture by reference | int f(int a) { return [y = a] { return y; }(); } | int f(int a) { return [&y = a] { return y; }(); }
+lambda this vs *this | struct T { int m; int f(); }; int T::f() { return [this] { return m; }(); } | struct T { int m; int f(); }; int T::f() { return [*this] { return m; }(); }
+lambda body | int f() { return [] { return 1; }(); } | int f() { return [] { return 2; }(); }
+lambda parameter type | int f() { return [](int x) { return x; }(1); } | int f() { return [](long x) { return x; }(1); }
+lambda mutable | int f(int a) { return [a]() { return a; }(); } | int f(int a) { return [a]() mutable { return a; }(); }
+lambda noexcept | int f() { return [] { return 1; }(); } | int f() { return []() noexcept { return 1; }(); }
+lambda consteval | int f() { return [] { return 1; }(); } | int f() { return []() consteval { return 1; }(); }
+lambda static | int f() { return [] { return 1; }(); } | int f() { return []() static { return 1; }(); }
+lambda generic | int f() { return [](int x) { return x; }(1); } | int f() { return [](auto x) { return x; }(1); }
+lambda generic pack | int f() { return [](auto x) { return x; }(1); } | int f() { return [](auto... x) { return (x + ...); }(1); }
+lambda nested body | int f(int a) { return [a] { return [a] { return a; }(); }(); } | int f(int a) { return [a] { return [a] { return a + 1; }(); }(); }
+lambda nested capture | int f(int a) { return [a] { return [a] { return a; }(); }(); } | int f(int a) { return [a] { return [&a] { return a; }(); }(); }
+lambda order | int f() { auto x = [] { return 1; }; auto y = [] { return 2; }; return x() - y(); } | int f() { auto x = [] { return 2; }; auto y = [] { return 1; }; return y() - x(); }
+lambda in decltype | unsigned long f() { return sizeof(decltype([] { return 1; })); } | unsigned long f() { return sizeof(decltype([] { return 1L; })); }
+local class member body | int f() { struct L { int g() { return 1; } }; return L().g(); } | int f() { struct L { int g() { return 2; } }; return L().g(); }
+local class field type | int f() { struct L { int m; }; return sizeof(L); } | int f() { struct L { long m; }; return sizeof(L); }
+local class field init | int f() { struct L { int m = 1; }; return L().m; } | int f() { struct L { int m = 2; }; return L().m; }
+local class base | int f() { struct B { int m; }; struct L : B {}; return L().m; } | int f() { struct B { int m; }; struct L : virtual B {}; return L().m; }
+local enum value | int f() { enum L { A = 1 }; return A; } | int f() { enum L { A = 2 }; return A; }
+statement expression | int f() { return ({ 1; }); } | int f() { return ({ 2; }); }
+label address | void *f() { x: y: return &&x; } | void *f() { x: y: return &&y; }
+computed goto | void f(int a) { void *p = &&x; x: if (a--) goto *p; } | void f(int a) { void *p = &&x; x: y: if (a--) goto *&&y; }
+choose expr | int f() { return __builtin_choose_expr(1, 2, 3); } | int f() { return __builtin_choose_expr(0, 2, 3); }
+generic selection | int f(int a) { return _Generic(a, int: 1, default: 2); } | int f(int a) { return _Generic(a, int: 3, default: 2); }
+generic selection type | int f(int a) { return _Generic(a, int: 1, default: 1); } | int f(long a) { return _Generic(a, int: 1, default: 1); }
+GNU conditional | int f(int a, int b) { return a ?: b; } | int f(int a, int b) { return b ?: a; }
+atomic order | int f(int *p) { return __atomic_load_n(p, 0); } | int f(int *p) { return __atomic_load_n(p, 2); }
+atomic op | int f(int *p) { return __atomic_load_n(p, 0); } | int f(int *p) { return __atomic_fetch_add(p, 0, 0); }
+shufflevector | typedef int V __attribute__((vector_size(16))); V f(V a) { return __builtin_shufflevector(a, a, 0, 1, 2, 3); } | typedef int V __attribute__((vector_size(16))); V f(V a) { return __builtin_shufflevector(a, a, 3, 2, 1, 0); }
+convertvector | typedef int V __attribute__((vector_size(16))); typedef float W __attribute__((vector_size(16))); typedef unsigned U __attribute__((vector_size(16))); W f(V a) { return __builtin_convertvector(a, W); } | typedef int V __attribute__((vector_size(16))); typedef float W __attribute__((vector_size(16))); typedef unsigned U __attribute__((vector_size(16))); W f(V a) { return (W)__builtin_convertvector(a, U); }
+ext vector accessor | typedef int V __attribute__((ext_vector_type(4))); int f(V a) { return a.x; } | typedef int V __attribute__((ext_vector_type(4))); int f(V a) { return a.y; }
+offsetof | unsigned long f() { return __builtin_offsetof(S, m); } | unsigned long f() { return __builtin_offsetof(S, n); }
+va_arg type | int f(int n, ...) { __builtin_va_list v; __builtin_va_start(v, n); int r = __builtin_va_arg(v, int); __builtin_va_end(v); return r; } | int f(int n, ...) { __builtin_va_list v; __builtin_va_start(v, n); int r = __builtin_va_arg(v, long); __builtin_va_end(v); return r; }
+imaginary | _Complex double f() { return 1.0i; } | _Complex double f() { return 2.0i; }
+asm template | void f() { asm("nop"); } | void f() { asm(""); }
+asm volatile | int f() { int r; asm("" : "=r"(r)); return r; } | int f() { int r; asm volatile("" : "=r"(r)); return r; }
+asm constraint | int f(int a) { int r; asm("" : "=r"(r) : "r"(a)); return r; } | int f(int a) { int r; asm("" : "=r"(r) : "m"(a)); return r; }
+asm operand | int f(int a, int b) { int r; asm("" : "=r"(r) : "r"(a)); return r; } | int f(int a, int b) { int r; asm("" : "=r"(r) : "r"(b)); return r; }
+asm clobber | void f() { asm("" ::: "memory"); } | void f() { asm("" ::: "cc"); }
 "#;
 
 const BINARY: &[&str] = &[
@@ -463,7 +542,20 @@ const GOLDEN_CASES: &[(&str, &str)] = &[
     ("constexpr", "constexpr int f(int a) { return a; }"),
     ("method", "struct T { int m; int f() const &; }; int T::f() const & { return m; }"),
     ("new", "int *f() { return new int(1); }"),
-    ("partial: lambda", "int f() { return [] { return 1; }(); }"),
+    ("lambda", "int f(int a) { return [a, &b = a](int x) mutable { return x + a + b; }(1); }"),
+    ("generic lambda", "int f() { return [](auto x) { return x; }(1); }"),
+    (
+        "local class",
+        "int f() { struct L : S { int k = 2; int g() { return k; } }; enum Q { QA = 3 }; return L().g() + QA; }",
+    ),
+    (
+        "gnu forms",
+        "int f(int a, int *p) { return ({ a; }) + (a ?: 2) + __builtin_choose_expr(1, 3, 4) + __atomic_load_n(p, 0); }",
+    ),
+    (
+        "asm",
+        "int f(int a) { int r; asm volatile(\"mov %0, %1\" : \"=r\"(r) : \"r\"(a) : \"memory\"); return r; }",
+    ),
     ("construct", "S f() { return S(); }"),
     ("init list", "int f() { int a[3] = {1}; int b[2]{1, 2}; return a[2] + b[0]; }"),
     ("new and delete", "void f(int n) { int *p = new int[n]{1, 2}; delete[] p; delete new S; }"),
@@ -476,7 +568,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d2).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d3).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -519,9 +611,9 @@ fn golden_digests() {
 /// different reasons differ.
 #[test]
 fn partial_tokens_are_per_kind() {
-    let a = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 1; }}(); }}"), "f");
-    let b = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 2; }}(); }}"), "f");
-    let c = digest_in(&format!("{PRELUDE}int f() {{ return ({{ 1; }}); }}"), "f");
+    let a = digest_in(&format!("{PRELUDE}int f(int a = 1) {{ return a; }}"), "f");
+    let b = digest_in(&format!("{PRELUDE}int f(int a = 2) {{ return a; }}"), "f");
+    let c = digest_in(&format!("{PRELUDE}[[gnu::aligned(16)]] int f(int a) {{ return a; }}"), "f");
     assert!(a.partial && b.partial && c.partial);
     assert_eq!(a, b, "the same partial token for the same kind (subtree not hashed)");
     assert_ne!(a.hash, c.hash);

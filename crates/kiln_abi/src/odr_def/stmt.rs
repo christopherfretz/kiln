@@ -160,12 +160,11 @@ impl DefHasher<'_> {
             // ----- not hashed in scheme 1 (X16): not partial; dropped from
             // a block, an empty statement where a statement is required.
             S::ContractAssertStmt => self.stmt_tag(S::NullStmt),
-            // ----- area: lambda (K-3d): coroutines.
-            S::CoroutineBodyStmt | S::CoreturnStmt => {
-                self.partial(Area::Lambda, Site::Stmt(k));
-            }
-            // ----- area: misc (K-3d): asm, expansion statements.
-            S::GCCAsmStmt | S::CXXExpansionStmt => self.partial(Area::Misc, Site::Stmt(k)),
+            // ----- area: lambda and misc (K-3d, `misc.rs`): coroutines,
+            // asm.
+            S::CoroutineBodyStmt | S::CoreturnStmt | S::GCCAsmStmt => self.misc_stmt(s, k),
+            // ----- still partial: expansion statements (C++26 P1306).
+            S::CXXExpansionStmt => self.partial(Area::Misc, Site::Stmt(k)),
         }
     }
 
@@ -183,7 +182,7 @@ impl DefHasher<'_> {
 
     /// A label by its index (labels are locals, numbered at their first
     /// appearance, a `goto` before its label included).
-    fn label(&mut self, d: DeclId) {
+    pub(super) fn label(&mut self, d: DeclId) {
         self.byte(T_LOCAL);
         match self.local(d) {
             Some(i) => self.u32(i),

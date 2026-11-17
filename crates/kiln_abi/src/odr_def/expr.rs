@@ -41,9 +41,21 @@ impl DefHasher<'_> {
     /// function or variable by its mangled name.
     pub(super) fn decl_ref(&mut self, d: DeclId) {
         let ast = self.ast;
+        if let Some(&(_, p)) = self.captures.iter().find(|c| c.0 == d) {
+            self.byte(super::T_CAPTURE);
+            return self.u32(p);
+        }
         if let Some(i) = self.local(d) {
             self.byte(T_LOCAL);
             return self.u32(i);
+        }
+        // A local of an enclosing scope named inside a closure without
+        // being captured (an unevaluated operand, a constant).
+        if !self.scopes.is_empty()
+            && let Some(ix) = self.outer_index(d)
+        {
+            self.byte(super::T_OUTER_LOCAL);
+            return self.write_index(ix);
         }
         let k = ast.decls.get(d).kind();
         match k {
@@ -58,7 +70,7 @@ impl DefHasher<'_> {
                     self.byte(T_ENTITY);
                     self.out.extend_from_slice(&h.to_le_bytes());
                 }
-                None => self.byte(T_TU_PLACEHOLDER),
+                None => self.local_member(d),
             },
             DeclKind::EnumConstant => {
                 self.byte(T_ENUMERATOR);
@@ -90,13 +102,13 @@ impl DefHasher<'_> {
 
     /// The class or enumeration enclosing `d` as a type item.
     pub(super) fn owner(&mut self, d: DeclId) {
-        let r = self.ast.decls.get(d).ctx().and_then(|c| self.refs.tag(c, &mut self.stats));
-        match r {
+        let Some(c) = self.ast.decls.get(d).ctx() else { return self.byte(T_TU_PLACEHOLDER) };
+        match self.refs.tag(c, &mut self.stats) {
             Some(h) => {
                 self.byte(super::T_TYPE);
                 self.out.extend_from_slice(&h.to_le_bytes());
             }
-            None => self.byte(T_TU_PLACEHOLDER),
+            None => self.local_tag(c),
         }
     }
 
@@ -325,22 +337,18 @@ impl DefHasher<'_> {
             | K::ArrayTypeTraitExpr
             | K::ExpressionTraitExpr => self.init_expr(e, k),
 
-            // ----- area: lambda (K-3d): lambdas, coroutine operators.
-            K::LambdaExpr | K::CoawaitExpr | K::CoyieldExpr => {
-                self.partial(Area::Lambda, Site::Expr(k));
-            }
+            // ----- area: lambda (K-3d, `lambda.rs`).
+            K::LambdaExpr => self.lambda_expr(e),
+            // ----- area: lambda (K-3d, `misc.rs`): coroutine operators.
+            K::CoawaitExpr | K::CoyieldExpr => self.coawait(e, k),
 
-            // ----- area: misc (K-3d): GNU and builtin forms, reflection,
-            // literal operators, constraints, recovery.
-            K::UserDefinedLiteral
-            | K::ImaginaryLiteral
-            | K::EmbedExpr
+            // ----- area: misc (K-3d, `misc.rs`): GNU and builtin forms,
+            // constraints, pseudo-objects.
+            K::ImaginaryLiteral
             | K::BinaryConditionalOperator
             | K::OffsetOfExpr
-            | K::SizeOfPackExpr
             | K::RequiresExpr
             | K::ConceptSpecializationExpr
-            | K::PackIndexingExpr
             | K::StmtExpr
             | K::AddrLabelExpr
             | K::ChooseExpr
@@ -349,10 +357,17 @@ impl DefHasher<'_> {
             | K::ShuffleVectorExpr
             | K::ConvertVectorExpr
             | K::ExtVectorElementExpr
+            | K::PseudoObjectExpr
+            | K::GenericSelectionExpr => self.misc_expr(e, k),
+            // ----- still partial (fixed token): literal operators (sema
+            // builds calls), `#embed`, packs met outside a pattern,
+            // reflection, recovery.
+            K::UserDefinedLiteral
+            | K::EmbedExpr
+            | K::SizeOfPackExpr
+            | K::PackIndexingExpr
             | K::CXXReflectExpr
             | K::CXXSpliceExpr
-            | K::PseudoObjectExpr
-            | K::GenericSelectionExpr
             | K::RecoveryExpr => self.partial(Area::Misc, Site::Expr(k)),
 
             // ----- dependent only: a function template's own body is never

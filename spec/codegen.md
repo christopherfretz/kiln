@@ -2191,7 +2191,7 @@ Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
 exactly when the unit has kind 3 rows (its name changes with any change
 to the layout serialization below), and `odr.scheme` (O-11), which names
-the definition hash of kind 2, value `kiln-odr-1.d2`
+the definition hash of kind 2, value `kiln-odr-1.d3`
 (`mason_defs::DEF_SCHEME` = `kiln_abi::odr_def::ODR_DEF_SCHEME`, renamed
 by every package that changes what is hashed; spec/abi.md "Definition
 hash" has its history), exactly when the unit has kind 2 rows. So a
@@ -2538,16 +2538,21 @@ them; at `-O0` a vague C1 is folded into C2 and has no symbol). No row
 for owned symbols (static locals `_ZZ`, guards `_ZGV`, reference
 temporaries `_ZGR`, `_ZTW`/`_ZTH`, thunks, vtables, VTTs, typeinfo and
 their names), a closure's static invoker and conversion function, a
-definition whose declarator holds a lambda (X15: a `$_N` symbol or a
-lambda in a default argument), `alias` and `ifunc` symbols (their
+definition whose declarator holds a lambda (X15, decided on the AST
+by `kiln_abi::odr_def::lambda_in_declarator`; a `$_N` symbol too), the
+member functions of a local class (`_ZZ` names: their definitions are
+hashed inside the enclosing function's, O-14 and mortar's ruling 1), `alias` and `ifunc` symbols (their
 aliasee has its own), and a vague `always_inline` function (the
 always-inliner deletes it at every `-O`). A function with an `asm` label
 is keyed by the label. A coroutine's ramp has a row; its outlined parts
-are internal. kiln rejects function multiversioning, so it has no clones
+are internal. A closure's call operator and each emitted specialization
+of a generic one have a row whose hash is a function of the closure's
+digest inside its enclosing definition (spec/abi.md "Closure member
+rows"); a closure outside a function is its own context. kiln rejects function multiversioning, so it has no clones
 to decide. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
-The hash (scheme `kiln-odr-1.d2`, WP-1583, K-3c) is the definition
+The hash (scheme `kiln-odr-1.d3`, WP-1583 K-3c, WP-1584 K-3d) is the definition
 digest of `kiln_abi::odr_def` (spec/abi.md "Definition hash"):
 `DefHasher::function` over a function definition (declarator,
 ctor-initializers, a destructor's deallocation function, body),
@@ -2566,12 +2571,10 @@ variant into the base-object one, and its `Cg::sfns` entry then names
 the base-object symbol. Without
 a source manager (codegen unit tests) no kind 2 rows are written.
 `PARTIAL` is set exactly when the definition holds a construct of a
-later package (spec/abi.md's area table: lambdas, coroutines, local
-classes, GNU and builtin forms, listed attributes and declaration-level
-default arguments, a template's own definition, an exception
-specification sema had not computed); in the real-code oracle runs of
-WP-1583 most remaining `PARTIAL` rows are those default arguments and
-lambdas. `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
+later package (spec/abi.md's area table: listed attributes and
+declaration-level default arguments, reflection, `#embed`, expansion
+statements, dependent nodes of a generic lambda's pattern, a template's
+own definition, an exception specification sema had not computed). `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
 oracle") is the must-equal check of every K-3 package.
 
 **Levels** (mortar's level table, K-1): `min` writes kinds 1 and 2;

@@ -62,8 +62,14 @@ pub fn is_templated_def(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 
 /// Writes the declarator of `def`. `false` when the definition is a
 /// template's own (only its instantiations are hashed).
-#[allow(clippy::many_single_char_names, reason = "short local names, one per AST item")]
 pub(super) fn declarator(h: &mut DefHasher<'_>, def: DeclId) -> bool {
+    declarator_as(h, def, false)
+}
+
+/// [`declarator`]; with `pattern`, also of a template's own declaration
+/// (a generic lambda's call operator, hashed inside its closure).
+#[allow(clippy::many_single_char_names, reason = "short local names, one per AST item")]
+pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -> bool {
     let ast = h.ast;
     let n = ast.decls.get(def);
     h.byte(T_FUNCTION);
@@ -72,7 +78,7 @@ pub(super) fn declarator(h: &mut DefHasher<'_>, def: DeclId) -> bool {
         h.partial(Area::Misc, Site::Decl(n.kind()));
         return false;
     };
-    if is_templated_def(ast, def) {
+    if !pattern && is_templated_def(ast, def) {
         // A template's own body: dependent nodes wait for modules (K-6).
         h.partial(Area::Dependent, Site::Item(Item::Templated));
         return false;
@@ -230,9 +236,9 @@ impl DefHasher<'_> {
                 self.stack.push(Work::OptExpr(init));
             }
             _ if !decl_hashed(ast, d) => {}
-            DeclKind::CXXRecord
-            | DeclKind::Enum
-            | DeclKind::ClassTemplate
+            // A local class or enumeration (lambda.rs).
+            DeclKind::CXXRecord | DeclKind::Enum => self.local_class(d),
+            DeclKind::ClassTemplate
             | DeclKind::ClassTemplateSpecialization
             | DeclKind::FunctionTemplate
             | DeclKind::TypeAliasTemplate => self.partial(Area::Lambda, Site::Decl(n.kind())),

@@ -25,7 +25,6 @@ use kiln_abi::mangle::{self, AnonIds};
 use kiln_abi::odr::fnv1a64;
 use kiln_abi::odr_def::{DefDigest, DefHasher, KnownNames, ODR_DEF_SCHEME};
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
-use kiln_ast::expr::ExprKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::{Ast, DeclId};
 use kiln_llvm::{Attr, AttrKind, FuncId, GlobalId, Linkage, Module, Value, ValueRef};
@@ -325,7 +324,10 @@ impl Cg<'_> {
                 return None;
             }
             let def = ast.definition(first).unwrap_or(first);
-            if self.closure_forwarder(def) || self.lambda_in_default_argument(def) {
+            if self.closure_forwarder(def)
+                || local_class_member(ast, def)
+                || kiln_abi::odr_def::lambda_in_declarator(ast, def)
+            {
                 return None;
             }
             def
@@ -431,35 +433,26 @@ impl Cg<'_> {
             || ast.decls.function(def).is_some_and(|f| f.spec.storage() == FnStorage::Static)
             || ast.closure_thunk(def).is_some()
     }
+}
 
-    /// X15: a parameter of the definition (or of the template it was
-    /// instantiated from) has a default argument holding a lambda.
-    fn lambda_in_default_argument(&self, def: DeclId) -> bool {
-        let ast = self.ast;
-        let mut cur = Some(def);
-        let mut stack = Vec::new();
-        for _ in 0..8 {
-            let Some(d) = cur else { return false };
-            for r in ast.redecls_of(d) {
-                let Some(f) = ast.decls.function(r) else { continue };
-                for p in ast.lists.iter::<DeclId>(f.params) {
-                    if let Some(e) = ast.decls.param(p).and_then(|x| x.default_arg) {
-                        stack.push(e);
-                    }
-                }
-            }
-            while let Some(e) = stack.pop() {
-                if ast.exprs.get(e).kind() == ExprKind::LambdaExpr {
-                    return true;
-                }
-                ast.exprs.children_into(e, &ast.lists, &mut stack);
-            }
-            cur = ast.instantiated_from(ast.first(d)).or_else(|| {
-                ast.spec_info(d).and_then(|(_, s)| ast.template_info(s.template)?.pattern)
-            });
-        }
-        false
+/// Whether function `def` is a member of a local class (not a closure):
+/// its definition is part of the enclosing function's (O-14, ruling 1:
+/// owned symbols get no rows).
+fn local_class_member(ast: &Ast, def: DeclId) -> bool {
+    let Some(rec) = ast.decls.get(def).ctx() else { return false };
+    if ast.closure_lambda(rec).is_some() {
+        return false;
     }
+    let mut c = Some(rec);
+    for _ in 0..64 {
+        let Some(x) = c else { return false };
+        match ast.decls.get(x).kind().payload() {
+            kiln_ast::decl::PayloadClass::Function => return true,
+            kiln_ast::decl::PayloadClass::Record => c = ast.decls.get(x).ctx(),
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// The file and line of location `loc` (presumed, after the prefix maps

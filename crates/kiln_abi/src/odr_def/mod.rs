@@ -28,6 +28,9 @@ mod decl;
 pub use decl::is_templated_def;
 mod expr;
 mod init;
+mod lambda;
+pub use lambda::lambda_in_declarator;
+mod misc;
 mod refs;
 mod stmt;
 
@@ -49,8 +52,11 @@ use crate::mangle::AnonIds;
 /// serializer core (declarators, statements, basic expressions; K-3b),
 /// `d2` initialization and object expressions, ctor-initializers,
 /// synthesized members, a destructor's deallocation function, variables'
-/// initializers, `visibility` off the attribute list (K-3c).
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d2";
+/// initializers, `visibility` off the attribute list (K-3c), `d3`
+/// closures, local classes and enumerations, the rows of closure members,
+/// statement expressions, coroutines, `asm`, label addresses, the GNU,
+/// vector and atomic builtin forms, `_Generic`, constraints (K-3d).
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d3";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.
@@ -82,6 +88,24 @@ const T_FUNCTION: u8 = 0xAA;
 const T_VARIABLE: u8 = 0xAB;
 /// A synthesized (implicit or defaulted) member.
 const T_SYNTHESIZED: u8 = 0xAD;
+/// A closure's serialization (its digest is what the enclosing stream
+/// and the call operator's row hold).
+const T_CLOSURE: u8 = 0xB0;
+/// A captured entity inside a closure's body: `u32` capture position.
+const T_CAPTURE: u8 = 0xB1;
+/// A local class, enumeration or closure type of the current scope: a
+/// shape byte, then its `u32` local index.
+const T_LOCAL_TYPE: u8 = 0xB2;
+/// A member of a local class or closure: the class (`0xB2`), the member's
+/// name, declaration kind and declared type.
+const T_LOCAL_MEMBER: u8 = 0xB3;
+/// A local class or enumeration definition.
+const T_LOCAL_CLASS: u8 = 0xB4;
+/// The row of a closure member (`operator()` or a specialization of it).
+const T_CALL_OP_ROW: u8 = 0xB5;
+/// A local entity of an enclosing scope (inside a closure): the depth
+/// byte, then its `u32` index there.
+const T_OUTER_LOCAL: u8 = 0xB6;
 
 /// The names codegen already gave entities (deliverable 2 of K-3c): the
 /// hasher asks before mangling. An answer must be exactly the name
@@ -198,6 +222,18 @@ enum Work {
     /// A declaration inside a statement (a local variable and its
     /// initializer, a structured binding, a local type).
     Decl(DeclId),
+    /// A string literal's bytes (an `asm` template, constraint, clobber).
+    Str(kiln_ast::ids::StringLitId),
+}
+
+/// The lexical state a closure's call operator replaces while its body is
+/// hashed (lambda.rs): the scope's definition, locals and captures.
+#[derive(Debug, Default)]
+struct Scope {
+    def: Option<DeclId>,
+    locals: FxHashMap<DeclId, u32>,
+    captures: Vec<(DeclId, u32)>,
+    inline_defs: Vec<DeclId>,
 }
 
 /// The definition hasher: one per unit, reused for every definition
@@ -212,8 +248,22 @@ pub struct DefHasher<'a> {
     stack: Vec<Work>,
     /// Local entities of the current definition, by declaration index.
     locals: FxHashMap<DeclId, u32>,
-    /// The current definition's first declaration.
+    /// The current definition's first declaration (inside a closure, its
+    /// call operator's).
     def: DeclId,
+    /// Captured entities of the closure whose body is walked, by capture
+    /// position.
+    captures: Vec<(DeclId, u32)>,
+    /// Member functions of local classes hashed inside the current scope:
+    /// their parameters and locals share its numbering.
+    inline_defs: Vec<DeclId>,
+    /// The saved enclosing scopes (and spare maps for new ones).
+    scopes: Vec<Scope>,
+    spare: Vec<Scope>,
+    /// Closure digests, per closure type (first declaration).
+    closures: FxHashMap<DeclId, DefDigest>,
+    /// The work stack below this length belongs to an enclosing walk.
+    floor: usize,
     partial: bool,
     /// The sites already counted for the current definition.
     seen: Vec<(Area, Site)>,
@@ -236,6 +286,12 @@ impl<'a> DefHasher<'a> {
             stack: Vec::with_capacity(256),
             locals: FxHashMap::default(),
             def: DeclId::new(1),
+            captures: Vec::new(),
+            inline_defs: Vec::new(),
+            scopes: Vec::new(),
+            spare: Vec::new(),
+            closures: FxHashMap::default(),
+            floor: 0,
             partial: false,
             seen: Vec::new(),
             stats: DefStats::default(),
@@ -271,6 +327,7 @@ impl<'a> DefHasher<'a> {
             + self.stack.capacity() * size_of::<Work>()
             + self.locals.capacity() * (size_of::<(DeclId, u32)>() + 1)
             + self.seen.capacity() * size_of::<(Area, Site)>()
+            + self.closures.capacity() * (size_of::<(DeclId, DefDigest)>() + 1)
     }
 
     /// The serialization of the last definition hashed (for tests).
@@ -281,6 +338,18 @@ impl<'a> DefHasher<'a> {
     /// The digest of function definition `def` (a declaration with a
     /// body): its declarator and specifiers, then its body (mortar O-10).
     pub fn function(&mut self, def: DeclId) -> DefDigest {
+        // A closure's call operator or a specialization of it: the
+        // closure's digest (O-14, lambda.rs).
+        if let Some(l) = self.ast.call_op_lambda(def) {
+            return self.call_op_row(def, l);
+        }
+        self.walk_function(def);
+        self.finish()
+    }
+
+    /// The walk of [`Self::function`] without the digest (also what fills
+    /// the closure memo for a call operator's row).
+    fn walk_function(&mut self, def: DeclId) {
         self.start(def);
         if decl::declarator(self, def) {
             // A constructor: its ctor-initializers; a destructor: the
@@ -294,7 +363,6 @@ impl<'a> DefHasher<'a> {
             self.stack.push(Work::OptStmt(body));
             self.run();
         }
-        self.finish()
     }
 
     /// The digest of variable definition `def` (an inline variable, a
@@ -341,11 +409,17 @@ impl<'a> DefHasher<'a> {
     }
 
     fn start(&mut self, def: DeclId) {
+        while !self.scopes.is_empty() {
+            self.leave_scope();
+        }
         self.out.clear();
         self.locals.clear();
+        self.captures.clear();
+        self.inline_defs.clear();
         self.seen.clear();
         self.partial = false;
         self.stack.clear();
+        self.floor = 0;
         self.def = self.ast.first(def);
     }
 
@@ -356,8 +430,10 @@ impl<'a> DefHasher<'a> {
         DefDigest { hash: fnv1a_128_bytes(&self.out), partial: self.partial }
     }
 
+    /// Runs the work stack down to [`Self::floor`].
     fn run(&mut self) {
-        while let Some(w) = self.stack.pop() {
+        while self.stack.len() > self.floor {
+            let Some(w) = self.stack.pop() else { break };
             match w {
                 Work::Expr(e) | Work::OptExpr(Some(e)) => {
                     self.stats.nodes += 1;
@@ -377,8 +453,21 @@ impl<'a> DefHasher<'a> {
                     self.local_decl(d);
                     self.stack[mark..].reverse();
                 }
+                Work::Str(id) => {
+                    let (_, bytes) = self.ast.strings.get(id);
+                    self.count(bytes.len());
+                    self.out.extend_from_slice(bytes);
+                }
             }
         }
+    }
+
+    /// Runs the work pushed since the stack had `base` items, leaving the
+    /// enclosing walk's items alone.
+    fn run_nested(&mut self, base: usize) {
+        let saved = std::mem::replace(&mut self.floor, base);
+        self.run();
+        self.floor = saved;
     }
 
     fn byte(&mut self, b: u8) {
@@ -436,7 +525,7 @@ impl<'a> DefHasher<'a> {
                 self.byte(T_TYPE);
                 self.out.extend_from_slice(&h.to_le_bytes());
             }
-            None => self.byte(T_TU_PLACEHOLDER),
+            None => self.local_type(q),
         }
     }
 
@@ -448,8 +537,8 @@ impl<'a> DefHasher<'a> {
             return Some(i);
         }
         let ast = self.ast;
-        let ctx = ast.decls.get(d).ctx()?;
-        if ast.first(ctx) != self.def {
+        let ctx = ast.first(ast.decls.get(d).ctx()?);
+        if ctx != self.def && !self.inline_defs.contains(&ctx) {
             return None;
         }
         let i = u32::try_from(self.locals.len()).unwrap_or(u32::MAX);
