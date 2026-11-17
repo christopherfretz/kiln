@@ -186,6 +186,11 @@ impl GlobalVar {
     pub fn initializer(&self) -> Option<Value> {
         self.init
     }
+    /// The metadata attachments (`, !dbg !N`, `, !type !N`), sorted by
+    /// kind id; attachments of one kind keep their insertion order.
+    pub fn metadata(&self) -> &[(MdKindId, MetadataId)] {
+        &self.md
+    }
 }
 
 /// A global alias, or (when [`Alias::is_ifunc`]) a GNU indirect function
@@ -225,6 +230,10 @@ impl Alias {
     /// Whether this is an `ifunc` ([`Module::add_ifunc`]).
     pub fn is_ifunc(&self) -> bool {
         self.ifunc
+    }
+    /// The value type (an ifunc's: its function type).
+    pub fn value_type(&self) -> TypeId {
+        self.value_type
     }
 }
 
@@ -846,7 +855,8 @@ impl Module {
         self.global_order.iter().copied()
     }
 
-    /// The ids of all aliases, in creation (print) order.
+    /// The ids of all aliases and IFUNCs, in creation order. The printer
+    /// prints the aliases in this order, then the IFUNCs in this order.
     pub fn alias_ids(&self) -> impl Iterator<Item = AliasId> + use<> {
         (0..self.aliases.len() as u32).map(AliasId)
     }
@@ -1651,6 +1661,98 @@ impl Module {
 }
 
 /// Insert or replace a `(kind, node)` attachment, keeping kind order.
+/// The read view's module-level lookups (`spec/llvm.md` "Read view"): the
+/// sizes of the id arenas and the tables the rest of the API names by id.
+/// A kiln-internal surface with no stability promise.
+impl Module {
+    /// Number of functions created: [`FuncId`]s are dense in
+    /// `0..num_functions()`. Erased declarations
+    /// ([`Module::replace_function`]) keep their id but are not in
+    /// [`Module::functions`].
+    pub fn num_functions(&self) -> usize {
+        self.funcs.len()
+    }
+
+    /// Number of global variables created: [`GlobalId`]s are dense in
+    /// `0..num_globals()`. Erased declarations
+    /// ([`Module::replace_global_with_alias`]) are not in
+    /// [`Module::global_ids`].
+    pub fn num_globals(&self) -> usize {
+        self.globals.len()
+    }
+
+    /// Number of aliases and IFUNCs: [`AliasId`]s are dense in
+    /// `0..num_aliases()`.
+    pub fn num_aliases(&self) -> usize {
+        self.aliases.len()
+    }
+
+    /// Number of comdats: [`ComdatId`]s are dense in `0..num_comdats()`.
+    pub fn num_comdats(&self) -> usize {
+        self.comdats.len()
+    }
+
+    /// The ids of all comdats, in creation order (the printer prints only
+    /// the comdats a function or global uses, in first-use order).
+    pub fn comdat_ids(&self) -> impl ExactSizeIterator<Item = ComdatId> + use<> {
+        (0..self.comdats.len() as u32).map(ComdatId)
+    }
+
+    /// A comdat's selection kind.
+    pub fn comdat_kind(&self, c: ComdatId) -> ComdatKind {
+        self.comdats[c.index()].kind
+    }
+
+    /// Number of interned inline asm callees: [`AsmId`]s are dense in
+    /// `0..num_inline_asms()`.
+    pub fn num_inline_asms(&self) -> usize {
+        self.asms.len()
+    }
+
+    /// Number of interned attribute sets: [`AttrSetId`]s are dense in
+    /// `0..num_attr_sets()`, and 0 is the empty set.
+    pub fn num_attr_sets(&self) -> usize {
+        self.attrs.len()
+    }
+
+    /// Number of metadata nodes: [`MetadataId`]s are dense in
+    /// `0..num_metadata()`. Nodes nothing reaches are in the table but not
+    /// printed.
+    pub fn num_metadata(&self) -> usize {
+        self.md.len()
+    }
+
+    /// The named metadata (`!name = !{...}`), in print order (creation
+    /// order of the names; operands in insertion order).
+    pub fn named_metadata(&self) -> impl ExactSizeIterator<Item = (&str, &[MetadataId])> + '_ {
+        self.named_md.iter().map(|(n, ops)| (&**n, ops.as_slice()))
+    }
+
+    /// Number of metadata kinds: [`MdKindId`]s are dense in
+    /// `0..num_md_kinds()`; the first ones are LLVM's fixed kinds in
+    /// LLVM's order (`dbg` is 0).
+    pub fn num_md_kinds(&self) -> usize {
+        self.md_kinds.len()
+    }
+
+    /// A metadata kind's name (`dbg`, `tbaa`, ...).
+    pub fn md_kind_name(&self, k: MdKindId) -> &str {
+        &self.md_kinds[k.index()]
+    }
+
+    /// Number of synchronization scopes ([`SyncScope::index`] is below
+    /// it): the system scope, `singlethread`, then the named ones.
+    pub fn num_sync_scopes(&self) -> usize {
+        self.sync_scopes.len()
+    }
+
+    /// A synchronization scope's name: empty for the system scope (not
+    /// printed), else the name inside `syncscope("...")`.
+    pub fn sync_scope_name(&self, s: SyncScope) -> &str {
+        &self.sync_scopes[s.index()]
+    }
+}
+
 pub(crate) fn set_attachment(
     list: &mut Vec<(MdKindId, MetadataId)>,
     kind: MdKindId,

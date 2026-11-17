@@ -433,3 +433,97 @@ fixed point of ours. `all_programs_covered` keeps the list and the
 directory in sync. These builders are the reference for how `kiln_codegen`
 mirrors clang's `-O0` lowering (attribute sets `#0`, `noundef` parameters,
 alloca-then-store prologue, block layout).
+
+## 10. Read view
+A reader outside the crate (an in-process back end, an analysis) can reach
+everything the printer prints through `&Module` (WP-1558).
+
+**Rules.**
+- **Read-only.** The view is accessor methods returning ids, `Copy`
+  payloads and borrowed slices; no field became public for it, and nothing
+  reachable from `&Module` mutates the module or bypasses the builder's
+  invariants (ids are minted only by the module; the view hands out
+  existing ones).
+- **No cost.** No accessor allocates or copies per instruction or per
+  operand: an instruction is `Function::inst(id).kind()` (a borrowed
+  `InstKind`), its operand lists are slices of the function's pools.
+- **No stability promise.** A kiln-internal surface: it changes with the
+  model, and its readers are built in kiln's CI. `InstKind` is exhaustive
+  on purpose, so a new instruction kind fails a reader's build instead of
+  being skipped.
+
+**What is reachable.**
+
+| part | entry points |
+|---|---|
+| print order | `Module::functions` (functions), `global_ids` (variables), `alias_ids` (aliases, then the printer filters IFUNCs to after them: `Alias::is_ifunc`) |
+| headers | public fields of `Function`, `GlobalVar`, `Alias`; `Function::{name, ty, ret_type, param_types, is_varargs, arg_name, is_declaration}`; `GlobalVar::{name, value_type, initializer, metadata}`; `Alias::{name, value_type, aliasee}` |
+| bodies | `Function::layout` (blocks in print order), `block_insts`, `block_name`, `inst`, `inst_name`, `Inst::{kind, ty}` |
+| payloads | `InstKind` (every instruction); `OpRange` read through `Function::ops` (operand pool) or `Function::idx` (index pool), the field says which; `Function::call_data` (`CallData`: callee, function type, arguments, call-site attributes, calling convention, tail marker, fast-math flags, `invoke`/`callbr` destinations, operand bundles); `Function::landing_pad` (`LandingPadData`) |
+| absent operands | `Value::is_none` / `Value::opt` (`Value::NONE`): `alloca` without a count, `ret void`, `within none`, unwind "to caller" |
+| metadata | `Function::metadata` (function attachments), `Function::inst_metadata`, `GlobalVar::metadata`, `Function::debug_records`; `Module::md_node` (`MdNode`, `MdField`; `is_numbered`, `is_distinct`), `named_metadata`, `md_kind_name`, `MdKindId::DBG` |
+| tables | `Module::const_data` (`ConstData`), `attrs_of` (`Attr`), `asm` (`InlineAsm`), `comdat_name`, `comdat_kind`, `comdat_ids`, `sync_scope_name` (`SyncScope::index`), `types` (`TypeTable::data`), `module_asm`, the header strings |
+| arena sizes | `num_functions`, `num_globals`, `num_aliases`, `num_comdats`, `num_inline_asms`, `num_attr_sets`, `num_metadata`, `num_md_kinds`, `num_sync_scopes`, `num_consts`, `TypeTable::len`; per function `num_blocks`, `num_insts` |
+| names | `CallConv::keyword`, the `name()` of every operator, predicate, ordering and attribute kind |
+
+**Guarantees a reader may rely on.**
+- *Id density*: every id kind indexes its arena densely from 0 (`FuncId` in
+  `0..num_functions()`, and so on), so a reader memoizes per id in a `Vec`.
+  Arenas may hold entries that do not print: erased declarations
+  (`Module::replace_function`, `replace_global_with_alias`) keep their ids
+  but leave the print order; blocks created and never placed (or removed)
+  are not in the layout; metadata nothing reaches is not printed.
+- *Print order*: `functions()` and `global_ids()` are the printer's order
+  (creation order unless `move_function_to_end` / `retype_global_to_end`
+  moved one); aliases print in `alias_ids()` order, then IFUNCs in the same
+  order. *Layout order*: `Function::layout`; a block's instructions in
+  `block_insts` order, each preceded by its `debug_records` in insertion
+  order. Attachments are sorted by kind id.
+- *Resolution*: operands are stored as built. A use of an erased
+  declaration prints as what `Module::resolve` returns (followed to a
+  fixed point); a reader resolves every function and global operand the
+  same way.
+
+**Conventions the printer applies while printing** (derived, not stored;
+a reader that needs them recomputes them from the view):
+- Local numbering `%N`: §4.1. Global numbering `@N`: one counter over the
+  unnamed variables in print order, then the unnamed aliases and IFUNCs in
+  `alias_ids()` order, then the unnamed functions in print order. Unnamed
+  identified structs `%N`: their rank among the unnamed identified
+  structs of `TypeTable::named_structs`.
+- Attribute groups `#N`: only function-position sets get a group, numbered
+  by first use over the functions in print order, then over the call sites
+  of each function in layout order; return and parameter sets print
+  inline.
+- Metadata `!N`: numbered nodes (`MdNode::is_numbered`) by depth-first
+  first use, operands left to right, from the global attachments (print
+  order), the named metadata, then per function its attachments and, per
+  instruction in layout order, the metadata arguments of calls to
+  `llvm.*` functions, the debug records' variable and location, and the
+  instruction's attachments. Strings, values, `DIExpression` and
+  `DIArgList` print inline.
+- Identified struct definitions: the unnamed ones, then the named ones the
+  printed module uses, in LLVM's `TypeFinder` order. Comdats: only those a
+  function or variable uses, functions first, in first-use order.
+- Elided defaults: `ccc`, address space 0, an absent alignment, an
+  implied `dso_local` (local linkage, or non-default visibility without
+  `extern_weak`), an `alloca` count of `i32 1` (the builder drops it), a
+  call's function type (only its return type prints, unless the type is
+  variadic); `external` is printed for an external variable without an
+  initializer.
+
+**Completeness proof.** `tests/common/view_print.rs` is a second printer
+that follows `print.rs` statement for statement but reads only the public
+API (it is compiled outside the crate, so any private access fails its
+build); the formatting helpers the crate keeps private (type, attribute,
+float and wide-integer spelling) are rebuilt there from the public data.
+`common::check` requires its text to equal `to_text()` for every
+hand-built module of `tests/corpus.rs`, `tests/builder.rs` and
+`tests/differential.rs`, and `kiln_codegen`'s `tests/read_view.rs`
+requires the same for the modules lowered, with and without `-g`, from
+the self-contained files of `tests/codegen`, `tests/debuginfo` and the
+`tests/conformance` files that use exceptions, atomics, inline asm,
+coroutines, vectors, computed goto, aliases, IFUNCs, wide integers or
+thread-local storage, and checks that the compared text covers each of
+those constructs. A printer change is mirrored in `view_print.rs`, or
+these tests fail.

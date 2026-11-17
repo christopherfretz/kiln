@@ -65,6 +65,11 @@ impl AttrSetId {
     pub const EMPTY: AttrSetId = AttrSetId(0);
 }
 
+impl MdKindId {
+    /// `!dbg`, LLVM's fixed kind 0 (every module has it).
+    pub const DBG: MdKindId = MdKindId(0);
+}
+
 const TAG_SHIFT: u32 = 28;
 const INDEX_MASK: u32 = (1 << TAG_SHIFT) - 1;
 
@@ -113,8 +118,9 @@ pub enum ValueRef {
 }
 
 impl Value {
-    /// Absent operand sentinel (never a real value).
-    pub(crate) const NONE: Value = Value(TAG_NONE << TAG_SHIFT);
+    /// Absent operand sentinel (never a real value): an optional operand of
+    /// [`crate::InstKind`] that is not there. [`Value::get`] panics on it.
+    pub const NONE: Value = Value(TAG_NONE << TAG_SHIFT);
 
     const fn pack(tag: u32, idx: u32) -> Value {
         debug_assert!(idx <= INDEX_MASK, "arena index exceeds 2^28");
@@ -153,15 +159,19 @@ impl Value {
     pub fn metadata(m: MetadataId) -> Value {
         Value::pack(TAG_META, m.0)
     }
-    pub(crate) fn block(b: BlockId) -> Value {
+    /// A basic block as an operand-pool entry (`phi` incoming blocks,
+    /// `switch` and `indirectbr` destinations).
+    pub fn block(b: BlockId) -> Value {
         Value::pack(TAG_BLOCK, b.0)
     }
 
-    pub(crate) fn is_none(self) -> bool {
+    /// True for the absent-operand sentinel [`Value::NONE`].
+    pub fn is_none(self) -> bool {
         self == Value::NONE
     }
 
-    pub(crate) fn opt(self) -> Option<Value> {
+    /// `None` for [`Value::NONE`], else the value.
+    pub fn opt(self) -> Option<Value> {
         (!self.is_none()).then_some(self)
     }
 

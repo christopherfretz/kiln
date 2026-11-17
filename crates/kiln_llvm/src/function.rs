@@ -369,20 +369,44 @@ impl Function {
         self.dbg_records[lo..hi].iter().map(|e| &e.1)
     }
 
-    pub(crate) fn inst_metadata(&self, inst: InstId) -> &[(InstId, MdKindId, MetadataId)] {
+    /// The metadata attachments of `inst` (`, !kind !N`), sorted by kind
+    /// id; each entry repeats `inst`.
+    pub fn inst_metadata(&self, inst: InstId) -> &[(InstId, MdKindId, MetadataId)] {
         let lo = self.inst_md.partition_point(|e| e.0 < inst);
         let hi = self.inst_md.partition_point(|e| e.0 <= inst);
         &self.inst_md[lo..hi]
     }
 
-    /// Operand-pool slice.
-    pub(crate) fn ops(&self, r: crate::inst::OpRange) -> &[Value] {
+    /// Operand-pool slice: the values of an [`crate::OpRange`] held by an
+    /// operand-pool field of [`crate::InstKind`] or by
+    /// [`CallData::args`].
+    pub fn ops(&self, r: crate::inst::OpRange) -> &[Value] {
         &self.ops[r.range()]
     }
 
-    /// Index-pool slice.
-    pub(crate) fn idx(&self, r: crate::inst::OpRange) -> &[u32] {
+    /// Index-pool slice: the integers of an [`crate::OpRange`] held by an
+    /// index-pool field of [`crate::InstKind`] (`extractvalue` and
+    /// `insertvalue` indices, `shufflevector` masks).
+    pub fn idx(&self, r: crate::inst::OpRange) -> &[u32] {
         &self.idx[r.range()]
+    }
+
+    /// The side data of a `call`, `invoke` or `callbr`
+    /// ([`crate::InstKind::Call`]'s index).
+    pub fn call_data(&self, index: u32) -> &CallData {
+        &self.calls[index as usize]
+    }
+
+    /// The side data of a `landingpad` ([`crate::InstKind::LandingPad`]'s
+    /// index).
+    pub fn landing_pad(&self, index: u32) -> &LandingPadData {
+        &self.pads[index as usize]
+    }
+
+    /// The function's metadata attachments (`!dbg !N` after the header),
+    /// sorted by kind id.
+    pub fn metadata(&self) -> &[(MdKindId, MetadataId)] {
+        &self.md
     }
 
     /// The type of a function-local value (instruction result or argument).
