@@ -260,7 +260,11 @@ fn derived_to_base(
 }
 
 /// [conv.mem]: a null member pointer, or a base-to-derived member pointer
-/// conversion (not through a virtual base; ambiguity is an error).
+/// conversion ([conv.mem]/2: the base must be unambiguous, accessible and
+/// not virtual, nor a base of a virtual base; reported at the operand, as
+/// clang `CheckMemberPointerConversion`). The access check shares the
+/// path the search found with the derived-to-base pointer conversion's
+/// ([conv.ptr]/3); a C-style cast ignores it ([expr.cast]/4).
 fn member_pointer_conversion(
     s: &mut Sema<'_, '_>,
     e: ExprId,
@@ -282,20 +286,26 @@ fn member_pointer_conversion(
         BaseSearch::Unique(p) => {
             if let Some(v) = p.first_virtual {
                 let vt = QualType::unqual(s.ast.types.record_type(v));
-                return Err(ConvError::new(
+                let mut err = ConvError::new(
                     DiagId::sema_member_pointer_conv_via_virtual,
                     vec![s.ty_arg(fq), s.ty_arg(tq), s.ty_arg(vt)],
-                ));
+                );
+                err.at = Some(s.begin_loc(e));
+                return Err(err);
             }
+            let at = s.begin_loc(e);
+            s.check_downcast_base_access(tq, fq, &p, at);
             let list = path_list(s, &p);
             cast_to(s, CastKind::BaseToDerivedMemberPointer, e, to, Some(list))
         }
         BaseSearch::Ambiguous(paths) => {
             let shown = ambiguous_paths_string(s, tq, &paths);
-            return Err(ConvError::new(
+            let mut err = ConvError::new(
                 DiagId::sema_ambiguous_member_pointer_conv,
                 vec!["0".into(), s.ty_arg(fq), s.ty_arg(tq), shown],
-            ));
+            );
+            err.at = Some(s.begin_loc(e));
+            return Err(err);
         }
         BaseSearch::NotDerived => e,
     })

@@ -948,6 +948,12 @@ register and clobber names (`is_valid_register_name`, `is_valid_clobber`,
 (clang's `SimplifyConstraint`), and the template parser
 `analyze_asm_string` (pieces: text, operand with modifier; clang's
 errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
+x86-64 `f` (any x87 stack register) is refused in an `=` output; in a
+`+` output it sets `ConstraintInfo::x87_stack`, which sema refuses from
+`-fclang-compat=22` as clang 22 does (`invalid output constraint '+f' in
+asm`, any alternative; clang 19 accepts it and llc may then abort; `t`
+and `u` stay valid outputs, plain or read-write; WP-1543, tests
+`dcl.asm/x87-*-x86_64.cpp`).
 Not implemented: other targets, immediate range validation of operand
 sizes.
 

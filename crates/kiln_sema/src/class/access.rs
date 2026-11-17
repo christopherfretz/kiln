@@ -1044,6 +1044,23 @@ impl Sema<'_, '_> {
         self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Conversion)
     }
 
+    /// [`Self::check_base_access`] for a base-to-derived conversion
+    /// (clang `err_downcast_from_inaccessible_base`): `cannot cast private
+    /// base class 'B' to 'D'`. `derived_ty` and `base_ty` name the classes
+    /// as for a derived-to-base conversion.
+    pub(crate) fn check_downcast_base_access(
+        &mut self,
+        derived_ty: QualType,
+        base_ty: QualType,
+        path: &BasePath,
+        loc: Loc,
+    ) -> bool {
+        if self.cast_ignores_base_access {
+            return true;
+        }
+        self.check_base_access_impl(derived_ty, base_ty, path, loc, BaseUse::Downcast)
+    }
+
     /// [`Self::check_base_access`] for a covariant return type
     /// ([class.virtual]/8): `invalid covariant return for virtual
     /// function: 'B' is a private base class of 'D'` (WP-078a).
@@ -1146,6 +1163,11 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(derived_ty))
                 .arg(u8::from(acc == Access::Protected))
                 .arg(self.ty_arg(base_ty)),
+            BaseUse::Downcast => self
+                .diag(DiagId::sema_access_base_downcast, loc)
+                .arg(u8::from(acc == Access::Protected))
+                .arg(self.ty_arg(base_ty))
+                .arg(self.ty_arg(derived_ty)),
             BaseUse::LambdaObject => self
                 .diag(DiagId::sema_explicit_object_lambda_capture_type, loc)
                 .arg(self.ty_arg(derived_ty))
@@ -1653,6 +1675,10 @@ impl Default for AccessScope {
 enum BaseUse {
     /// A derived-to-base conversion ([conv.ptr]/3).
     Conversion,
+    /// A base-to-derived conversion: `static_cast` of a pointer or
+    /// reference to a base ([expr.static.cast]/2,11), or a pointer to
+    /// member of a base converted to one of the derived class ([conv.mem]/2).
+    Downcast,
     /// A covariant return type ([class.virtual]/8).
     Covariant,
     /// A lambda's explicit object parameter ([expr.prim.lambda.closure]/5).

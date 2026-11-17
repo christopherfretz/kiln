@@ -5680,6 +5680,84 @@ the initializer, or after default initialization, and before the
     ([expr.static.cast]/4, a parenthesized aggregate initialization); when that initialization fails its
     diagnostics are dropped for the generic message
     (`expr.static.cast/cast-to-array*.cpp`; WP-1497).
+- **Member-pointer conversions through a base** ([conv.mem]/2,
+  [expr.static.cast]/12, [expr.cast]/4; WP-1539): the implicit
+  conversion from `T B::*` to `T D::*` and `static_cast` the other way
+  use the base path `find_base` found, as the pointer conversions do: an
+  ambiguous base is `ambiguous conversion from pointer to member of
+  {base|derived} class 'B' to pointer to member of {derived|base} class
+  'D':` with the paths (a C-style cast too), a virtual base on the path
+  is `... via virtual base 'V' is not allowed`, both at the operand (at
+  the cast for `static_cast`'s reverse direction), and an inaccessible
+  base is checked by the access check of [conv.ptr]/3 with clang's
+  texts: `cannot cast private base class 'B' to 'D'` for the
+  base-to-derived direction (also a `static_cast` downcast of a pointer
+  or reference, [expr.static.cast]/2,11) and `cannot cast 'D' to its
+  private base class 'B'` for derived-to-base. A C-style cast skips only
+  the access check; `reinterpret_cast` checks no base. An inaccessible
+  base does not remove an overload candidate: the error comes when the
+  chosen conversion is applied, a substitution failure under SFINAE
+  (tests `conv.mem/p2-inaccessible-base*.cpp`,
+  `expr.static.cast/p12-member-pointer-inaccessible-ambiguous-base.cpp`,
+  `expr.static.cast/p11-downcast-inaccessible-base.cpp`).
+- **Decl-specifiers out of place** ([dcl.spec], [dcl.inline]/1,
+  [dcl.constexpr]/1, [dcl.fct]/3, [class.conv.fct]/1, [class.dtor]/1;
+  WP-1539), in clang's order and texts: a declaration of only a class or
+  enumeration takes no `inline` (`'inline' can only appear on functions
+  and non-local variables`), no `constexpr`/`consteval`/`constinit`
+  (`struct cannot be marked constexpr`, which drops the declaration), no
+  function specifier and no `typedef` (`typedef requires a name`
+  [-Wmissing-declarations]); a storage class, `thread_local` or a
+  cv-qualifier there is `'static' is not permitted on a declaration of a
+  type` [-Wmissing-declarations], `mutable` the member-variable error.
+  `inline` on a typedef, non-static data member or parameter is the same
+  `inline` error; a parameter also takes no function specifier and no
+  qualified declarator (`parameter declarator cannot be qualified`). A
+  lone unnamed cv-qualified `void` parameter is `'void' as parameter must
+  not have type qualifiers`, `void` beside other parameters or `...` is
+  `'void' must be the first and only parameter if specified`. A
+  cv-qualifier in a conversion function's decl-specifiers is `cannot
+  specify any part of a return type ...`. A destructor named by a typedef
+  or alias of its class (also `C2::~C2()` out of class) is `destructor
+  cannot be declared using a typedef 'C2' (aka 'C') of the class name`
+  [-Wdtor-typedef], an error by default. An inline variable before C++17
+  is `inline variables are a C++17 extension` [-Wc++17-extensions]. An
+  alias template specialization before `::` that names neither a class
+  nor an enumeration, also with dependent arguments (`A<X>::a` with `A`
+  aliasing `int`), is `type 'A<X>' (aka 'int') cannot be used prior to
+  '::' because it has no members`.
+- **Friend forms** ([class.friend]/1,3, [temp.friend]/1,
+  [temp.expl.spec]/1; WP-1539): a friend class declaration takes the
+  free-standing checks above first (`inline`, `constexpr`); from C++11 a
+  decl-specifier before `friend` in a friend type declaration is
+  `'friend' must appear first in a non-function declaration`; `virtual`
+  on any friend is `'virtual' is invalid in friend declarations` (with
+  `explicit` dropped too). A templated friend type that is not an
+  elaborated-type-specifier (`template<class U> friend S<U>;`,
+  `template<int U> friend typename S<U>::Y;`) is `friend type templates
+  must use an elaborated type` at the declaration's start; `template<>
+  friend void f<0>();` is `cannot declare an explicit specialization in a
+  friend` at the name; an unqualified constructor, destructor or
+  conversion function friend is `must use a qualified name when declaring
+  a {constructor|destructor|conversion operator} as a friend`, after the
+  declarator's qualifier check. None of these declares anything.
+- **Qualified type names** ([class.qual]/2, [temp.local]/4,
+  [temp.res.general]/5, [namespace.udecl]/10; WP-1539): `C::C` as a type
+  (no class key: a functional cast, a declaration's type, a `sizeof`
+  operand) names the constructors and is `qualified reference to 'C' is
+  a constructor name rather than a type in this context`, the class type
+  still used (not under GCC's `-fpermissive`, where GCC accepts it);
+  `D::C` through a derived class, `struct C::C`, a
+  mem-initializer and a nested-name-specifier `C::C::` are the class.
+  `D::B` finding the injected-class-names of two specializations through
+  different bases is clang's ambiguous-member error, recovering with the
+  first; `typename D::template B<int>` in the current instantiation with
+  a dependent base is a dependent name looked up at instantiation (an
+  ambiguity found there is not yet diagnosed). `typename A::f<0>` naming
+  a function or variable template is `typename specifier refers to a
+  non-type template` (clang's further recovery errors are not copied).
+  `using E::x;` repeated in a class through an enumeration is
+  `redeclaration of using declaration`.
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold. They are run-time
   behavior diagnostics anchored at the right operand (clang's

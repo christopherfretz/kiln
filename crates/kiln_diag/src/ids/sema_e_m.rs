@@ -82,6 +82,7 @@ sema_ext_decomp_decl_19 = ExtWarn [Cxx17Extensions] (0) "decomposition declarati
 sema_ext_decomp_decl_spec = ExtWarn [Cxx20Extensions] (1) "structured binding declaration declared {0} is a C++20 extension";
 sema_ext_decomp_decl_spec_19 = ExtWarn [Cxx20Extensions] (1) "decomposition declaration declared {0} is a C++20 extension";
 sema_ext_defaulted_comparison = ExtWarn [Cxx20Extensions] (0) "defaulted comparison operators are a C++20 extension";
+sema_ext_inline_variable = ExtWarn [Cxx17Extensions] (0) "inline variables are a C++17 extension";
 sema_ext_placeholder_var = ExtWarn [Cxx26Extensions] (0) "placeholder variables are a C++2c extension";
 sema_ext_vector_component_exceeds_length = Error (1) "vector component access exceeds type {0}";
 sema_ext_vector_component_name_illegal = Error (1) "illegal vector component name '{0}'";
@@ -158,6 +159,8 @@ sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match
 sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
+sema_friend_not_first = Error (0) "'friend' must appear first in a non-function declaration";
+sema_friend_special_unqualified = Error (1) "must use a qualified name when declaring a {0:constructor|destructor|conversion operator} as a friend";
 sema_func_def_incomplete_result = Error (1) "incomplete result type {0} in function definition";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
 sema_function_attribute_ignored_in_stmt = Warning [IgnoredAttributes] (1) "attribute is ignored on this statement as it only applies to functions; use '{0}' on statements";
@@ -265,6 +268,7 @@ sema_inline_declaration_block_scope = Error (1) "inline declaration of '{0}' not
 sema_inline_main = Error (0) "'main' is not allowed to be declared inline";
 sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reopened as inline";
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
+sema_inline_non_function = Error (1) "'inline' can only appear on functions{0:| and non-local variables}";
 // A pattern member that failed to instantiate with no error reported
 // (WP-1054; spec/sema-templates.md §4.6): an internal error, never a
 // silent drop.

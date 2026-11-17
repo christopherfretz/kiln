@@ -59,7 +59,7 @@ impl Parser<'_, '_> {
         d.op_name = Some(kiln_ast::names::OverloadedOperator::Call);
         self.s.act_on_start_prototype();
         self.s.act_on_end_prototype();
-        let params = self.s.act_on_param_list(Vec::new());
+        let params = self.s.act_on_param_list(Vec::new(), false, Loc::INVALID);
         d.chunks.push(Chunk::Function {
             params,
             variadic: false,

@@ -1290,14 +1290,26 @@ impl Sema<'_, '_> {
         self.act_on_exit_declarator_scope(scopes);
     }
 
-    /// Normalizes a parameter list ([dcl.fct]/2): a lone unnamed `void`
-    /// parameter means "no parameters"; any other `void` parameter is an
-    /// error.
-    pub fn act_on_param_list(&mut self, params: Vec<ParamInfo>) -> Vec<ParamInfo> {
+    /// Normalizes a parameter list ([dcl.fct]/2,4): a lone unnamed `void`
+    /// parameter, not followed by `...`, means "no parameters"; any other
+    /// `void` parameter is an error (clang `GetFullTypeForDeclarator`):
+    /// "'void' must be the first and only parameter if specified" when
+    /// there are others or a `...` (`(void, ...)`, `(void x, int)`), at
+    /// the parameter's name; "argument may not have 'void' type" for a
+    /// lone named one; a lone cv-qualified one (`(const void)`) is "'void'
+    /// as parameter must not have type qualifiers" at the `(` (`open`).
+    pub fn act_on_param_list(
+        &mut self,
+        params: Vec<ParamInfo>,
+        variadic: bool,
+        open: Loc,
+    ) -> Vec<ParamInfo> {
         let is_void = |s: &Self, p: &ParamInfo| s.ast.types.is_void(p.ty);
-        if params.len() == 1 && params[0].name.is_none() && is_void(self, &params[0]) {
+        let lone = params.len() == 1 && !variadic;
+        if lone && params[0].name.is_none() && is_void(self, &params[0]) {
             if !self.ast.types.effective_quals(params[0].ty).is_empty() {
-                self.error(DiagId::sema_param_with_void_type, params[0].loc);
+                let at = if open == Loc::INVALID { params[0].loc } else { open };
+                self.error(DiagId::sema_void_param_qualified, at);
             }
             // [dcl.attr.annotation]/1: not on a `void` parameter.
             self.reject_annotations_in(&params[0].attrs, Some("a parameter of type 'void'"));
@@ -1306,10 +1318,11 @@ impl Sema<'_, '_> {
         let mut out = Vec::with_capacity(params.len());
         for mut p in params {
             if is_void(self, &p) {
-                if p.name.is_none() {
-                    self.error(DiagId::sema_void_only_param, p.loc);
+                let at = p.name.map_or(p.loc, |n| n.1);
+                if lone {
+                    self.error(DiagId::sema_param_with_void_type, at);
                 } else {
-                    self.error(DiagId::sema_param_with_void_type, p.name.map_or(p.loc, |n| n.1));
+                    self.error(DiagId::sema_void_only_param, at);
                 }
                 p.ty = QualType::ERROR;
                 p.invalid = true;
@@ -2297,6 +2310,40 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The decl-specifiers and declarator-id a function parameter cannot
+    /// have, in clang's order (`ActOnParamDeclarator`).
+    fn param_specifier_errors(&mut self, ds: &DeclSpec, d: &Declarator) {
+        // [dcl.inline]/1: `inline` only on a function or variable (clang
+        // `err_inline_non_function`, before the constexpr check).
+        if let Some(l) = ds.inline {
+            self.inline_non_function(l);
+        }
+        // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
+        let specs = [ds.constexpr, ds.consteval, ds.constinit];
+        if let Some((which, l)) =
+            specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
+        {
+            let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
+            self.emit(m);
+        }
+        // [dcl.fct.spec]/2-4 (clang `DiagnoseFunctionSpecifiers`), then
+        // [dcl.meaning.general]/1: a parameter's declarator-id is not
+        // qualified (clang `err_qualified_param_declarator`, at the
+        // name).
+        if let Some(l) = ds.virtual_ {
+            self.error(DiagId::sema_virtual_not_member_fn, l);
+        }
+        if let Some(l) = ds.explicit {
+            self.error(DiagId::sema_explicit_non_function, l);
+        }
+        if let Some(l) = ds.noreturn {
+            self.error(DiagId::sema_noreturn_non_function, l);
+        }
+        if d.qualifier.is_some() && d.name.is_some() {
+            self.error(DiagId::sema_qualified_param_declarator, d.name_loc());
+        }
+    }
+
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
@@ -2343,14 +2390,8 @@ impl Sema<'_, '_> {
         self.declarator_int_recovery = false;
         ty = self.check_qualified_fn_type(ty, ds, d);
         let recovered = d.ellipsis.is_some() && self.diags.error_count() != errs;
-        // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
-        let specs = [ds.constexpr, ds.consteval, ds.constinit];
-        if !nttp
-            && let Some((which, l)) =
-                specs.iter().enumerate().find_map(|(i, l)| l.map(|l| (i as u8, l)))
-        {
-            let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
-            self.emit(m);
+        if !nttp {
+            self.param_specifier_errors(ds, d);
         }
         // [temp.local]/6 (a template parameter's own list is checked at
         // its end; WP-1042).
@@ -3845,6 +3886,15 @@ impl Sema<'_, '_> {
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
             // `explicit` was reported by `unsupported_declarator`.
             self.function_specifiers_on_object(ds, d, false);
+            // [dcl.inline]/1: not on a typedef or a non-static data
+            // member (clang `ActOnTypedefDeclarator`, `HandleField`).
+            let field = d.ctx == DeclaratorContext::Member
+                && !matches!(ds.storage, Some((StorageSpec::Static, _)));
+            if let Some(l) = ds.inline
+                && (ds.is_typedef() || field)
+            {
+                self.inline_non_function(l);
+            }
         }
         let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
@@ -6959,10 +7009,27 @@ impl Sema<'_, '_> {
             if self.in_local_scope() {
                 self.inline_block_scope(d, l);
             } else {
+                // [dcl.inline]/1: an inline variable is C++17 (clang
+                // `ext_inline_variable` before it).
+                if self.std < kiln_lex::Std::Cxx17 && !self.is_c() {
+                    self.emit(self.diag(DiagId::sema_ext_inline_variable, l));
+                }
                 spec = spec.with_inline(true);
             }
         }
         spec
+    }
+
+    /// [dcl.inline]/1: `inline` on a declaration that declares neither a
+    /// function nor a variable (a parameter, a non-static data member, a
+    /// typedef, a class with no declarator): clang
+    /// `err_inline_non_function`, "... and non-local variables" from
+    /// C++17.
+    pub(crate) fn inline_non_function(&mut self, l: Loc) {
+        let m = self
+            .diag(DiagId::sema_inline_non_function, l)
+            .arg(u8::from(self.std >= kiln_lex::Std::Cxx17));
+        self.emit(m);
     }
 
     /// [dcl.inline]: `inline` shall not appear on a block scope
@@ -11803,6 +11870,9 @@ impl Sema<'_, '_> {
             return None;
         }
         if let Some(t) = ds.tag {
+            if !self.is_c() && !self.free_standing_tag_specifiers(ds, t) {
+                return None;
+            }
             let n = *self.ast.decls.get(t);
             if ds.tag_declares
                 && n.kind() == DeclKind::CXXRecord
@@ -11820,6 +11890,9 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 return Some(self.act_on_anonymous_record(ds, t));
+            }
+            if !self.is_c() {
+                self.standalone_specifiers(ds);
             }
             self.warn_free_standing_tag_attrs(ds, t, &ds.attrs);
             return None;
@@ -11843,6 +11916,94 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_no_declarators, at);
         }
         None
+    }
+
+    /// The decl-specifiers of a C++ declaration of tag `t` with no
+    /// declarator that clang's `ParsedFreeStandingDeclSpec` checks before
+    /// the declaration itself, in its order: `inline` ([dcl.inline]/1),
+    /// `constexpr`, `consteval`, `constinit` ([dcl.constexpr]/1,
+    /// [dcl.constinit]/1: an error that ends the checks), `virtual`,
+    /// `explicit`, `_Noreturn` ([dcl.fct.spec]), then `typedef`
+    /// ([dcl.typedef]/1: "typedef requires a name", an extension warning,
+    /// which ends them too). False if the declaration is done with.
+    pub(crate) fn free_standing_tag_specifiers(&mut self, ds: &DeclSpec, t: DeclId) -> bool {
+        if ds.invalid {
+            return true;
+        }
+        if let Some(l) = ds.inline {
+            self.inline_non_function(l);
+        }
+        let ce = [(ds.constexpr, 0u8), (ds.consteval, 1), (ds.constinit, 2)];
+        if let Some((l, which)) = ce.into_iter().find_map(|(l, w)| l.map(|l| (l, w))) {
+            let key = match ds.keyword {
+                TagKeyword::Class => 0u8,
+                TagKeyword::Union => 3,
+                TagKeyword::Enum => match self.ast.decls.enumeration(t).map(|e| e.flags) {
+                    Some(f) if f & EnumData::SCOPED_STRUCT != 0 => 6,
+                    Some(f) if f & EnumData::SCOPED != 0 => 5,
+                    _ => 4,
+                },
+                _ => 1,
+            };
+            let m = self.diag(DiagId::sema_constexpr_tag, l).arg(key).arg(which);
+            self.emit(m);
+            return false;
+        }
+        if let Some(l) = ds.virtual_ {
+            self.error(DiagId::sema_virtual_not_member_fn, l);
+        }
+        if let Some(l) = ds.explicit {
+            self.error(DiagId::sema_explicit_non_function, l);
+        }
+        if let Some(l) = ds.noreturn {
+            self.error(DiagId::sema_noreturn_non_function, l);
+        }
+        if matches!(ds.storage, Some((StorageSpec::Typedef, _))) {
+            self.emit(self.diag(DiagId::sema_typedef_without_a_name, ds.loc));
+            return false;
+        }
+        true
+    }
+
+    /// clang `ParsedFreeStandingDeclSpec`'s last checks of a declaration
+    /// of a class or enumeration with no declarator ([dcl.stc]/1,
+    /// [dcl.type.cv]/1 and [dcl.pre]/5 give the specifiers nothing to
+    /// apply to): `mutable` is an error ([dcl.stc]/10), another storage
+    /// class (not a linkage-specification's `extern`), `thread_local`,
+    /// `const`, `volatile` and `_Atomic` are "'const' is not permitted on
+    /// a declaration of a type" (an extension warning, as clang).
+    fn standalone_specifiers(&mut self, ds: &DeclSpec) {
+        if ds.invalid {
+            return;
+        }
+        match ds.storage {
+            Some((StorageSpec::Mutable, l)) => self.error(DiagId::sema_mutable_nonmember, l),
+            Some((s, l)) => {
+                let m = self.diag(DiagId::sema_standalone_specifier, l).arg(s.spelling());
+                self.emit(m);
+            }
+            None => {}
+        }
+        if let Some(l) = ds.thread_local {
+            // `_Thread_local` in C++ is a clang extension; shown as `__thread`.
+            let kw = match ds.thread_kind {
+                TlsKind::Dynamic => "thread_local",
+                _ => "__thread",
+            };
+            let m = self.diag(DiagId::sema_standalone_specifier, l).arg(kw);
+            self.emit(m);
+        }
+        // clang reports `volatile` at the `const` (no location when there
+        // is none: kiln uses the `volatile`'s, so it stays in a system
+        // header's scope).
+        let vol = ds.cv_locs[1].map(|v| ds.cv_locs[0].unwrap_or(v));
+        let quals = [(ds.cv_locs[0], "const"), (vol, "volatile"), (ds.atomic_qual, "_Atomic")];
+        for (l, kw) in quals {
+            if let Some(l) = l {
+                let m = self.diag(DiagId::sema_standalone_specifier, l).arg(kw);
+                self.emit(m.allow_duplicate());
+            }
+        }
     }
 
     /// C++03 [class.union]/1 for the members of anonymous struct `rec`.
@@ -12537,6 +12698,17 @@ impl Sema<'_, '_> {
         self.classify_found(&found)
     }
 
+    /// Whether `d`, found as `name` in qualifier context `ctx`, is the
+    /// injected-class-name of `ctx` itself (so `ctx::name` names the
+    /// constructors, [class.qual]/2).
+    pub fn names_own_class(&self, ctx: DeclId, name: Symbol, d: DeclId) -> bool {
+        let ctx = self.type_name_qualifier(ctx);
+        self.kind_of(d) == DeclKind::CXXRecord
+            && self.kind_of(ctx) == DeclKind::CXXRecord
+            && self.ast.decls.get(d).name().as_ident() == Some(name)
+            && self.ast.first(d) == self.ast.first(ctx)
+    }
+
     /// The injected-class-name of a class template specialization that
     /// `name` (in `qualifier`, or unqualified) finds outside that
     /// specialization's own scope, e.g. a base class's through a derived
@@ -12818,7 +12990,23 @@ impl Sema<'_, '_> {
     /// in several base classes ([temp.local]/4); `None` for any other
     /// result.
     pub fn ambiguous_injected_class(&self, name: Symbol) -> Option<DeclId> {
-        let found = self.lookup_name(name, LookupKind::Ordinary);
+        self.ambiguous_injected_class_in(name, None)
+    }
+
+    /// [`Sema::ambiguous_injected_class`] for `name` looked up in the
+    /// class `qualifier` names (`D::B`), or unqualified.
+    pub fn ambiguous_injected_class_in(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+    ) -> Option<DeclId> {
+        let found = match qualifier.map(|q| self.type_name_qualifier(q)) {
+            Some(q) if self.kind_of(q) == DeclKind::CXXRecord && !self.is_dependent_ctx(q) => {
+                self.lookup_qualified(q, name, LookupKind::Ordinary)
+            }
+            Some(_) => return None,
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
         if found.decls.len() < 2 {
             return None;
         }

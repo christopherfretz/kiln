@@ -62,6 +62,7 @@ DeprecatedRegister = "deprecated-register" [];
 DeprecatedThisCapture = "deprecated-this-capture" [];
 DeprecatedVolatile = "deprecated-volatile" [];
 DivisionByZero = "division-by-zero" [];
+DtorTypedef = "dtor-typedef" [];
 DynamicExceptionSpec = "dynamic-exception-spec" [];
 ElaboratedEnumClass = "elaborated-enum-class" [];
 EmptyBody = "empty-body" [];

@@ -229,6 +229,9 @@ pub struct DeclSpec {
     pub explicit_expr: Option<ExprId>,
     /// `friend` written at ([class.friend]).
     pub friend: Option<Loc>,
+    /// Another decl-specifier came before `friend` (clang's
+    /// `isFriendSpecifiedFirst` is false).
+    pub friend_not_first: bool,
     /// C11 `_Noreturn` written at: a clang extension in C++, the
     /// `[[noreturn]]` of a function ([dcl.attr.noreturn]).
     pub noreturn: Option<Loc>,
