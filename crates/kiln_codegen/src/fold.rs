@@ -300,13 +300,6 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {
-        // A destructor that destroys a virtual base is never constexpr in
-        // clang (it rejects constructing one, too); the Oven's
-        // destruction of such an object does not reach the virtual
-        // bases' destructors (follow-up), so it is always called.
-        if b.ast.decls.get(d).ty().is_some_and(|q| has_vbase_subobject(b.ast, q, 0)) {
-            continue;
-        }
         let value = init.filter(|e| !refolded.contains(e)).and_then(|e| folds.get(e));
         let const_context = is_static && (init.is_none() || value.is_some());
         if oven.has_constant_destruction(&mut b, d, value, const_context) {
@@ -314,35 +307,6 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     folds
-}
-
-/// Whether an object of type `q` has a subobject (itself, an element, a
-/// base or a member, transitively) of a class with virtual bases.
-fn has_vbase_subobject(ast: &Ast, q: QualType, depth: u32) -> bool {
-    let mut q = q;
-    while let TypeView::ConstantArray(a) = ast.types.canonical_view(q) {
-        q = a.elem;
-    }
-    // Class nesting is bounded by the implementation limit; the guard
-    // keeps a malformed (self-containing) class from recursing.
-    if depth > 64 {
-        return false;
-    }
-    let Some(def) = ast.types.as_record(q).and_then(|r| ast.definition(r)) else {
-        return false;
-    };
-    let Some(rec) = ast.decls.record(def) else { return false };
-    if rec.defn.contains(kiln_ast::decl::DefinitionBits::HAS_VIRTUAL_BASES) {
-        return true;
-    }
-    ast.decls.bases(def, &ast.lists).any(|b| has_vbase_subobject(ast, b.ty, depth + 1))
-        || ast.members(def).any(|m| {
-            let n = ast.decls.get(m);
-            n.kind() == DeclKind::Field
-                && n.ty().is_some_and(|t| {
-                    !ast.types.is_reference(t) && has_vbase_subobject(ast, t, depth + 1)
-                })
-        })
 }
 
 /// clang `AggExprEmitter::EmitArrayInit` (WP-1008): an array

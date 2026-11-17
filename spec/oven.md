@@ -464,7 +464,7 @@ pays nothing for it.
     and is an integer, character or `bool` literal, `noexcept`, a type
     or expression trait, an enumerator, `sizeof` of a type or an
     expression (not a VLA), `alignof` of a type (not through a typedef
-    with attributes), a parenthesis, a substituted non-type template
+    with attributes, also under cv-qualifiers or as an array element), a parenthesis, a substituted non-type template
     parameter, a `ConstantExpr`, an integral, boolean or no-op cast (not to an
     enumeration), a unary `+ - ~ !`, a binary arithmetic, shift,
     comparison or logical operator, `?:`, or a variable read (below),
@@ -2575,6 +2575,19 @@ at its implicit destruction (ending its active member's lifetime, as
 `std::optional::reset` does, leaves the union without an active member,
 which the bytes cannot tell from a destroyed object)
 (`tests/conformance/basic.life/constexpr-lifetime-local.cpp`).
+An empty base class subobject has no storage of its own: the byte under
+it is another subobject's, so when that byte is dead (`life_ended`, the
+cold path only) the empty base's lifetime is its derived object's
+(`Types::empty_base_owner` finds the innermost object with an empty base,
+non-virtual or virtual, of that class at that offset, and that object is
+checked instead; [basic.life]/1). Destroying the member that shares its
+address leaves it alive: libstdc++ 14's `std::optional::emplace` calls
+`_M_construct` on the empty `_Optional_base_impl` after the payload's
+destructor ran, rejected as "member call on object outside its lifetime"
+before C++26 (WP-1574;
+`basic.life/constexpr-empty-base-after-member-destroyed*.cpp`,
+`basic.life/constexpr-library-optional-variant-expected.cpp`). An empty
+object of its own (a variable, a member, an array element) keeps its byte.
 The union's side-map entry tells the two apart for the union itself
 (WP-334): destroying the active member (`u.t.~T()`, `std::destroy_at`)
 ends the member's bytes but keeps the union's entry, so the union is
@@ -3156,7 +3169,21 @@ it, also through an anonymous union; so does a call of a trivial copy or
 move assignment operator on a member access chain, whose object operand
 is lowered as a write, clang's `MaybeHandleUnionActiveMemberChange`,
 WP-207; only the operator syntax does: `u.m.operator=(x)` is a member call
-on `m`, checked as above, WP-224). Nested unions are tracked per union
+on `m`, checked as above, WP-224). An assignment activates only the
+members of S(E1) ([class.union.general]/6): a member of class type (or
+array of class type) whose default constructor is not trivial, or is
+deleted (explicitly, or a defaulted one defined as deleted), is checked
+as an assignment to it instead, "assignment to member 'nt' of union with
+active member 'i'", also when it is an intermediate member of the chain
+(`Compiler::implicit_union_member`, compile time only; WP-1575,
+`class.union/constexpr-assign-inactive-*.cpp`; clang 22 accepts the
+deleted ones, GCC 16.1 rejects them as the text does). An anonymous
+struct or union member is still activated by the assignment: Sema does
+not yet initialize a nested anonymous union whose member has a default
+member initializer from the enclosing union's default constructor
+([class.union.general]/2), so checking it would reject valid code
+(`constexpr-assign-nested-anonymous-union.cpp`; the invalid case is an
+xfail). Nested unions are tracked per union
 subobject, so `n.q.x = 1` activates `q` in `n` and `x` in `q`
 (`tests/conformance/class.union/constexpr-nested-same-offset.cpp`).
 A placement new (`std::construct_at`, `Op::Placement`) walks the unions
@@ -3699,6 +3726,23 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
 
+**Flexible array members (GNU).** A flexible array member `T[]` is an
+`Opaque` field of size 0. A static object's initializer that gives it
+elements (Sema's `check_flexible_array_init`) does not write them into
+the object, of a structure (WP-1286) or of a union (WP-1569; before it
+the union's elements were evaluated as an rvalue and stored as a
+zero-size `Opaque`, and elements of class type were "not supported"): a
+union makes the member active and stops. No element exists during
+constant evaluation, which clang 22 matches (a decay of the member is
+"array-to-pointer decay of array member without known bound is not
+supported", a read of another union member names the active one); the
+code generator folds and emits the elements past the object's size on
+its own, with clang's and GCC's bytes and `.size`
+(`ext.gnu.flexible.array/run-union-constexpr-elements.cpp`,
+`union-constexpr-elements-errors.cpp`). A structure's, clang 22 rejects
+in a `constexpr` variable ("flexible array initialization is not yet
+supported"); kiln and GCC 16.1 accept it.
+
 ### Virtual bases — Landed (WP-388)
 
 *Status:* P3533R2 (C++26): objects with virtual base classes are
@@ -3717,7 +3761,7 @@ the complete object (`C` itself) and its base-subobject view
 (`Types::nv_view(C)`, `nv_size`/`nv_align`, mapped back by
 `Types::class_of`/`same_class`). The view's fields are the non-virtual
 bases then the members; the complete type has the same fields followed by
-one `base: true` field per non-empty virtual base, in `layout.vbases`
+one `base: true` field per non-empty virtual base (empty ones: below), in `layout.vbases`
 order at kiln_abi's offsets, each typed as that virtual base's own view
 (`Types::vbase_start(C)` is the index of the first). A base class
 subobject is laid out with the view of its class, so it holds no virtual
@@ -3736,7 +3780,16 @@ initializers first), and registers each for destruction on an exception
 ([except.ctor]/3); the base-object constructor skips them
 ([class.base.init]/7). The complete-object destructor alone destroys the
 virtual bases, after everything else, in the reverse order
-([class.dtor]/13). A class without virtual bases has one function, used
+([class.dtor]/13). An empty virtual base has no field: the complete
+class records every virtual base in construction order with its layout
+offset (`Types::empty_vbase_order`, only for a class with an empty one),
+and its constructor and destructor run on that address, registered for
+unwinding like the others; a class whose virtual bases are all empty
+still has its base-subobject view, so a base subobject's destructor
+skips them (WP-1568; before it the empty virtual base's destructor never
+ran, and a non-constexpr one passed as constant destruction:
+`class.dtor/constexpr-empty-virtual-base-destroyed-cxx26*.cpp`; GCC 16.1
+skips it too). A class without virtual bases has one function, used
 for both.
 
 **Dynamic-type words.** `SetVptr` with aux 1 (a base-object constructor
@@ -4931,7 +4984,11 @@ casts, `sizeof`/`alignof` (of a reference type: the referred type's;
 `SemaBridge::alignof_decl`, clang `GetAlignOfExpr`, spec/abi.md §3.2;
 `alignof(T)` where `T`'s sugar has a typedef with `aligned` is that
 typedef's alignment via `SemaBridge::opaque_size_align`, as the Oven's
-canonical type model drops it, WP-335);
+canonical type model drops it, WP-335; the sugar walk, `leaf.rs`
+`typedef_attributed`, also passes through a cv-qualified array, whose
+`desugar_once` is canonical, to its unqualified base, and through an
+array to its element, so `alignof(const T)`, `alignof(T[2])` and
+`alignof(const T[2])` are `T`'s, WP-1567);
 string literals (each evaluation of a `StringLiteral` is a distinct object;
 frozen pointers keep it through `PtrBase::StringLit { lit, origin }`, so
 `p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is rejected
