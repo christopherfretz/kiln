@@ -5,7 +5,8 @@
 //! captured `this` or the address of the captured `*this` copy
 //! ([expr.prim.this]/2, [expr.prim.lambda.capture]/10).
 
-use kiln_ast::expr::ExprFlags;
+use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::{ExprFlags, NonOdrUse};
 use kiln_ast::lambda::CaptureKind;
 use kiln_ast::{DeclId, ExprId, LambdaId};
 
@@ -115,7 +116,9 @@ impl Compiler<'_> {
         if !self.node(e).has(ExprFlags::REFERS_TO_ENCLOSING) {
             return None;
         }
-        let closure = self.closure_reg?;
+        let Some(closure) = self.closure_reg else {
+            return self.closure_copy_outside_call(e, d);
+        };
         let ast = self.ast();
         let l = ast.call_op_lambda(self.cur_fn?)?;
         let d = ast.first(d);
@@ -130,5 +133,34 @@ impl Compiler<'_> {
             return Some(Place::Mem(a));
         }
         Some(Place::Mem(p))
+    }
+
+    /// The place of `e`, a name of variable `d` captured by copy, evaluated
+    /// outside a call of its lambda's call operator (a constant expression
+    /// in the body: `constexpr int j = *&n;`): an odr-use names a member
+    /// of a closure object that does not exist in this evaluation
+    /// ([expr.prim.lambda.capture]/11, [expr.const]/10), so it is the
+    /// unbacked [`GKind::Capture`] object: reading it is diagnosed and its
+    /// address is not a constant. A name that is not an odr-use (sema's
+    /// `NonOdrUse`) is the variable itself, read as before; so is a
+    /// by-reference capture, which names the variable
+    /// (spec/sema-lambda.md §7).
+    ///
+    /// [`GKind::Capture`]: super::GKind::Capture
+    fn closure_copy_outside_call(&mut self, e: ExprId, d: DeclId) -> Option<Place> {
+        let ast = self.ast();
+        if !self.node(e).has(ExprFlags::NAMES_CLOSURE_COPY)
+            || ast.exprs.non_odr_use(e) != NonOdrUse::None
+            || !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::Binding)
+            || ast.decls.get(d).ty().is_none_or(|q| ast.types.is_reference(q))
+        {
+            return None;
+        }
+        let d = ast.first(d);
+        let ty = self.ety(e);
+        let g = self.o.capture_global(d, ty);
+        let r = self.reg();
+        self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+        Some(Place::Mem(r))
     }
 }

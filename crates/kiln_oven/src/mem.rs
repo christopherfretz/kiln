@@ -28,7 +28,7 @@
 //! nothing ([`NOWHERE`]).
 
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::fx::FxHashMap;
@@ -199,6 +199,21 @@ fn vkey(sp: Sp, g: u64) -> u64 {
     (sp as u64) << 62 | g
 }
 
+/// The bytes a [`Memory::indet`] entry costs (key, mask, and a share of
+/// the tree's nodes), for [`Memory::footprint`].
+const INDET_ENTRY: usize = 32;
+
+/// The bytes from the one holding bit `bit` (counted from `abs`) through
+/// the one holding bit `bit + width - 1`, each with the mask of those of
+/// its bits in the range.
+fn bit_bytes(abs: u64, bit: u32, width: u32) -> impl Iterator<Item = (u64, u8)> {
+    let (lo, hi) = (u64::from(bit), u64::from(bit) + u64::from(width));
+    (lo / 8..hi.div_ceil(8)).map(move |b| {
+        let (from, to) = (lo.max(b * 8) - b * 8, hi.min(b * 8 + 8) - b * 8);
+        (abs + b, (((1u16 << to) - 1) & !((1u16 << from) - 1)) as u8)
+    })
+}
+
 /// The pointer to [`crate::Oven::synth`] entry `idx` ([`SYNTH_SLOT`]).
 pub(crate) fn synth_ptr(idx: u32) -> u64 {
     NOWHERE | Ptr { slot: SYNTH_SLOT, generation: 0, past: false, off: idx }.encode()
@@ -313,6 +328,12 @@ pub(crate) mod flags {
     pub const CONST_MUT: u16 = 512;
     /// The bits whose writes take `Oven::const_path`.
     pub const CONST_PATH: u16 = CONST_SUB | CONST_MUT;
+    /// An object some of whose initialized bytes hold indeterminate
+    /// bits ([`Memory::indet`]): a bit-cast left an `unsigned char`
+    /// bit-field indeterminate next to a determinate one, or a copy
+    /// carried such bits. Its bit-field reads and writes consult the
+    /// table (WP-1573).
+    pub const INDET_BITS: u16 = 1024;
 }
 
 /// How a heap object was allocated, and how one is deallocated (clang's
@@ -821,6 +842,14 @@ pub(crate) struct Memory {
     /// overwritten is stale and harmless (the next spilled store there
     /// replaces it), so writes never clear it.
     vspill: FxHashMap<u64, OTy>,
+    /// The indeterminate bits of initialized bytes, by byte
+    /// (`sp << 62 | abs`, as [`Memory::vspill`]): initialization is kept
+    /// per byte, so a byte shared by a determinate bit-field and an
+    /// indeterminate one is initialized and the mask names the bits
+    /// that are not (WP-1573). Only objects with [`flags::INDET_BITS`]
+    /// have entries; empty for every other evaluation. Changes are
+    /// logged under a checkpoint; a deallocation drops its object's.
+    pub indet: BTreeMap<u64, u8>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -904,6 +933,7 @@ impl Memory {
             vtags: Vec::new(),
             vtag_ix: FxHashMap::default(),
             vspill: FxHashMap::default(),
+            indet: BTreeMap::new(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -1015,6 +1045,7 @@ impl Memory {
             + self.vtags.capacity() * size_of::<u64>()
             + self.vtag_ix.capacity() * (size_of::<(u64, u8)>() + 1)
             + self.vspill.capacity() * (size_of::<(u64, OTy)>() + 1)
+            + self.indet.len() * INDET_ENTRY
             + self.trial.footprint()
     }
 
@@ -1063,6 +1094,9 @@ impl Memory {
         if !self.union_alts.is_empty() {
             self.union_alts.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
             self.union_epoch += 1;
+        }
+        if !self.indet.is_empty() {
+            self.indet.retain(|&k, _| k >> 62 == Sp::Static as u64);
         }
         self.allocated = 0;
         self.peak = 0;
@@ -1148,6 +1182,16 @@ impl Memory {
         self.live.truncate(n);
         self.life_hi = self.life_hi.min(n);
         self.frame.top = mark & 0xFFFF_FFFF;
+        if !self.indet.is_empty() {
+            // Released frame objects were made after the mark, so no
+            // rollback revives them: their entries go unlogged.
+            let top = vkey(Sp::Frame, self.frame.top);
+            let end = vkey(Sp::Frame, 0) + (1 << 62);
+            let gone: Vec<u64> = self.indet.range(top..end).map(|(&k, _)| k).collect();
+            for k in gone {
+                self.indet.remove(&k);
+            }
+        }
     }
 
     /// Allocates a frame object of `size` bytes.
@@ -1323,6 +1367,9 @@ impl Memory {
                     self.union_epoch += 1;
                 }
             }
+        }
+        if a.flags & flags::INDET_BITS != 0 && a.base != UNBACKED {
+            self.indet_drop(Sp::Static, u64::from(a.base), u64::from(a.size));
         }
         if a.generation < GEN_MAX {
             self.sfree.push(idx);
@@ -1655,6 +1702,9 @@ impl Memory {
     /// Copies `len` bytes with their shadow (initialization and pointer
     /// marks) from `src` to `dst` (absolute addresses in their spaces).
     pub fn copy(&mut self, dst_sp: Sp, dst: u64, src_sp: Sp, src: u64, len: u64) {
+        if !self.indet.is_empty() {
+            self.indet_copy(dst_sp, dst, src_sp, src, len);
+        }
         if dst_sp == src_sp {
             let sp = self.space_mut(dst_sp);
             sp.bytes.copy_within(src as usize..(src + len) as usize, dst as usize);
@@ -1802,6 +1852,9 @@ impl Memory {
         }
         let a = self.hslots[i];
         self.release_heap(i);
+        if a.flags & flags::INDET_BITS != 0 {
+            self.indet_drop(Sp::Heap, u64::from(a.base), u64::from(a.size));
+        }
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(raw);
             for &(o, ut) in types.unions(a.ty) {
@@ -2091,6 +2144,8 @@ enum Undo {
     UnionAlts(UKey, Option<u64>),
     /// An allocation's flags.
     Flags { sp: Sp, idx: u32, old: u16 },
+    /// A [`Memory::indet`] entry (key, old mask; 0: none).
+    Indet(u64, u8),
     /// A frame object [`Memory::kill`] ended.
     Kill(u32),
     /// A heap slot (reused, or freed).
@@ -2236,6 +2291,12 @@ impl Memory {
                         Sp::Frame => &mut self.slots[idx as usize],
                     };
                     a.flags = old;
+                }
+                Undo::Indet(k, old) => {
+                    match old {
+                        0 => self.indet.remove(&k),
+                        m => self.indet.insert(k, m),
+                    };
                 }
                 Undo::Kill(s) => self.slots[s as usize].live = true,
                 Undo::HSlot(i, a) => self.hslots[i as usize] = *a,
@@ -2414,6 +2475,75 @@ impl Memory {
             self.trial.log.push(Undo::Flags { sp: p.space(), idx, old: a.flags });
         }
         self.alloc_of_mut(p).flags = fl;
+    }
+
+    /// The indeterminate bits of the initialized byte `abs` ([`Memory::indet`]).
+    pub fn indet_mask(&self, sp: Sp, abs: u64) -> u8 {
+        self.indet.get(&vkey(sp, abs)).copied().unwrap_or(0)
+    }
+
+    /// Whether a bit of `[bit, bit + width)` from byte `abs` is
+    /// indeterminate.
+    pub fn indet_any_bits(&self, sp: Sp, abs: u64, bit: u32, width: u32) -> bool {
+        !self.indet.is_empty()
+            && bit_bytes(abs, bit, width).any(|(b, m)| self.indet_mask(sp, b) & m != 0)
+    }
+
+    /// Whether a byte of `[abs, abs + len)` holds an indeterminate bit.
+    pub fn indet_any(&self, sp: Sp, abs: u64, len: u64) -> bool {
+        !self.indet.is_empty()
+            && self.indet.range(vkey(sp, abs)..vkey(sp, abs + len)).next().is_some()
+    }
+
+    /// The entries of the bytes `[abs, abs + len)`, as offsets from
+    /// `abs` and masks.
+    pub fn indet_in(&self, sp: Sp, abs: u64, len: u64) -> impl Iterator<Item = (u64, u8)> {
+        let r = vkey(sp, abs)..vkey(sp, abs + len);
+        self.indet.range(r).map(move |(&k, &m)| ((k & ((1 << 62) - 1)) - abs, m))
+    }
+
+    /// Sets the entry of byte `abs` to mask `m` (none for 0), logged
+    /// under a checkpoint.
+    fn indet_put(&mut self, sp: Sp, abs: u64, m: u8) {
+        let k = vkey(sp, abs);
+        let old = if m == 0 { self.indet.remove(&k) } else { self.indet.insert(k, m) };
+        if self.in_trial() && old.unwrap_or(0) != m {
+            self.trial.log.push(Undo::Indet(k, old.unwrap_or(0)));
+        }
+    }
+
+    /// Makes the bits `[bit, bit + width)` from byte `abs` indeterminate
+    /// (`on`) or determinate.
+    pub fn indet_set_bits(&mut self, sp: Sp, abs: u64, bit: u32, width: u32, on: bool) {
+        for (b, m) in bit_bytes(abs, bit, width) {
+            let old = self.indet_mask(sp, b);
+            self.indet_put(sp, b, if on { old | m } else { old & !m });
+        }
+    }
+
+    /// Drops the entries of the bytes `[abs, abs + len)` (an object
+    /// deallocated or overwritten whole).
+    pub fn indet_drop(&mut self, sp: Sp, abs: u64, len: u64) {
+        if !self.indet_any(sp, abs, len) {
+            return;
+        }
+        let gone: Vec<u64> =
+            self.indet.range(vkey(sp, abs)..vkey(sp, abs + len)).map(|(&k, _)| k).collect();
+        for k in gone {
+            self.indet_put(sp, k & ((1 << 62) - 1), 0);
+        }
+    }
+
+    /// [`Memory::copy`]'s part for [`Memory::indet`]: the destination
+    /// bytes get the source bytes' entries.
+    #[inline(never)]
+    fn indet_copy(&mut self, dst_sp: Sp, dst: u64, src_sp: Sp, src: u64, len: u64) {
+        // Collected first: the ranges may overlap.
+        let from: Vec<(u64, u8)> = self.indet_in(src_sp, src, len).collect();
+        self.indet_drop(dst_sp, dst, len);
+        for (o, m) in from {
+            self.indet_put(dst_sp, dst + o, m);
+        }
     }
 
     /// A heap allocation or deallocation under a checkpoint: refused in a
@@ -3063,6 +3193,39 @@ mod tests {
         m.commit();
         assert_eq!(get(&m, x), Some(99));
         assert!(m.trial.log.is_empty());
+    }
+
+    #[test]
+    fn indeterminate_bits_follow_their_object() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let h = hnew(&mut m, 8);
+        let p = Ptr::decode(h);
+        m.set_flags(p, flags::INDET_BITS);
+        let b = base(&m, h);
+        // Bits 3..9: three of byte 0, two of byte 1.
+        m.indet_set_bits(Sp::Heap, b, 3, 7, true);
+        assert_eq!((m.indet_mask(Sp::Heap, b), m.indet_mask(Sp::Heap, b + 1)), (0xF8, 0x03));
+        assert!(m.indet_any_bits(Sp::Heap, b, 0, 4) && !m.indet_any_bits(Sp::Heap, b, 0, 3));
+        // A copy carries them, a store clears its bits.
+        let h2 = hnew(&mut m, 8);
+        let b2 = base(&m, h2);
+        m.copy(Sp::Heap, b2, Sp::Heap, b, 8);
+        assert_eq!(m.indet_mask(Sp::Heap, b2 + 1), 0x03);
+        m.indet_set_bits(Sp::Heap, b2, 8, 2, false);
+        assert!(!m.indet_any(Sp::Heap, b2 + 1, 1));
+        // A deallocation drops them; a rolled-back change is undone.
+        m.set_flags(Ptr::decode(h2), flags::INDET_BITS);
+        m.checkpoint(TrialMode::Transactional);
+        m.indet_set_bits(Sp::Heap, b, 0, 16, false);
+        free(&mut m, h2);
+        assert!(m.indet.is_empty());
+        m.rollback(&t);
+        assert_eq!((m.indet_mask(Sp::Heap, b), m.indet_mask(Sp::Heap, b2)), (0xF8, 0xF8));
+        free(&mut m, h);
+        assert_eq!(m.indet_mask(Sp::Heap, b), 0);
+        m.reset();
+        assert!(m.indet.is_empty());
     }
 
     #[test]

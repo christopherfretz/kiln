@@ -667,6 +667,46 @@ A closure object is an ordinary class object in the Oven's memory; the
   member's place, or the referent of a reference member. A by-reference
   capture outliving its referent is a dangling access, diagnosed as for
   any reference (`constexpr-capture-lifetime.cpp`).
+- **Outside a call of the call operator** (WP-1590; a constant
+  expression evaluated in the body: `constexpr int j = *&n;`, a
+  `static_assert`, a template argument) there is no closure object. A
+  name that is not an odr-use (`NonOdrUse::Constant`, [basic.def.odr]/5)
+  is the variable and reads its value, at no extra cost. An odr-use of an
+  entity captured by copy names a member of the closure object
+  ([expr.prim.lambda.capture]/11; a by-reference capture of a by-copy
+  capture names the outer closure's member, /12): sema marks such a
+  `DeclRefExpr` `ExprFlags::NAMES_CLOSURE_COPY` (bit 4 of its flags, no
+  extra storage; `Sema::odr_use_names_closure_copy` walks the lambdas
+  between the name and the variable's scope, taking an implicit capture's
+  kind from the capture-default), and the Oven gives it an unbacked
+  external object (`GKind::Capture`, `Oven::closure_copy_object`: one per
+  variable per translation unit, kept in `Oven::unknowns`). Its global
+  resolves provisionally, afresh in each evaluation: a codegen fold
+  outside a constant context (`RunState::fold_outer`, outermost context
+  only) resolves it to the variable instead, as clang's codegen folds
+  `(&ca)->v` in the body to the variable's value. A variable's
+  reference is marked when its full-expression ends and shows it is an
+  odr-use (`act_on_full_expr_at`; in a template definition
+  `resolve_potential_capture_list`), a binding's when it is built. A case
+  value is evaluated before its full-expression ends:
+  `mark_constant_non_odr_uses` first marks its constant uses, so `case
+  i:` in a `[=]` body reads the variable, and an odr-use there (`case
+  *&i:`) is still accepted outside a template. Reading it is
+  diagnosed ("kiln: read of variable 'n' captured by copy is not allowed
+  in a constant expression outside a call of the lambda": clang reads the
+  variable and accepts), its address is not constant (clang's "pointer to
+  'n' is not a constant expression", as for the variable), and naming it
+  without reading (`sizeof`, a member function that reads nothing) is
+  constant, as for an object of unknown value ([expr.const]/10). A
+  by-reference capture names the variable and is unchanged; an
+  init-capture is a variable of the lambda and is unchanged. A structured
+  binding is always odr-used ([basic.def.odr]/5), so `[=] { constexpr int
+  j = a; }` with `constexpr auto [a, b] = ...` is rejected. GCC 16.1
+  rejects `*&n` and the address only; clang 22 only the address: both
+  accept reading the member through a reference parameter or `this`
+  (`rd(n)`, `s.val()`), the capture of a capture and the binding, which
+  the text rejects (`expr.prim.lambda.capture/odr-use-closure-member-constexpr*.cpp`,
+  `by-copy-capture-member-run.cpp`).
 - **Thunks**: the conversion function returns the address of its target;
   the static invoker runs the call operator's body with no object
   (its body never uses `this`: the lambda has no captures). Notes print

@@ -1461,6 +1461,7 @@ impl Oven {
         self.begin_outermost(true, false, const_context);
         // clang requires no notes at all (`VarDecl::evaluateDestruction`).
         self.run.fold = false;
+        self.run.fold_outer = false;
         let r = self.destroy_var(bridge, var, value);
         self.end_outermost();
         r
@@ -1775,6 +1776,7 @@ impl Oven {
         self.run.enum_check = enum_check;
         self.run.const_context = const_context;
         self.run.fold = silent && !const_context;
+        self.run.fold_outer = self.run.fold;
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.ub_check = std::mem::take(&mut self.ub_check_next);
         self.run.potential = std::mem::take(&mut self.potential_next);

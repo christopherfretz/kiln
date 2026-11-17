@@ -13,6 +13,7 @@
 //! | `statics`, `sfree`, `sholes`, `stat_peak` | state | as data |
 //! | `unions`, `union_alts`, `union_epoch` | state | as data (static entries only at rest; the epoch stamps the union-path memo) |
 //! | `vtags`, `vspill` | state | as data |
+//! | `indet` | state | as data (static entries only at rest) |
 //! | `vtag_ix` | rebuilt | from `vtags` |
 //! | `heap_ops`, `serial` | state | cumulative counters (the memo purity check and the frame serial allocator) |
 //! | `tu_arena_peak` | state | the translation unit's high-water mark (`oven.heap-peak`) |
@@ -26,13 +27,13 @@
 //! | `limit` | configuration | the consumer's `Budget::bytes` |
 
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::fx::FxHashMap;
 
 use super::{
-    Alloc, Bins, DEAD0, GEN_MAX, GRAN, Memory, PTR_SPILL, PTR_TAGGED, SYNTH_SLOT, Space, Trial,
+    Alloc, Bins, DEAD0, GEN_MAX, GRAN, Memory, PTR_SPILL, PTR_TAGGED, SYNTH_SLOT, Sp, Space, Trial,
     UKey, UNBACKED,
 };
 use crate::ty::OTy;
@@ -72,6 +73,7 @@ impl Memory {
             vtags: _,
             vtag_ix: _,
             vspill: _,
+            indet,
             allocated: _,
             peak: _,
             arena_peak: _,
@@ -108,6 +110,9 @@ impl Memory {
         if !trial.cps.is_empty() || !trial.log.is_empty() {
             return busy("trial: a checkpoint is open");
         }
+        if indet.keys().any(|&k| k >> 62 != Sp::Static as u64) {
+            return busy("indet: frame or heap bytes hold indeterminate bits");
+        }
         Ok(())
     }
 
@@ -140,6 +145,7 @@ impl Memory {
             vtags,
             vtag_ix: _,
             vspill,
+            indet,
             allocated: _,
             peak: _,
             arena_peak: _,
@@ -165,6 +171,7 @@ impl Memory {
         union_epoch.put(w);
         vtags.put(w);
         vspill.put(w);
+        indet.put(w);
         tu_arena_peak.put(w);
         serial.put(w);
     }
@@ -188,6 +195,7 @@ impl Memory {
         let union_epoch: u64 = at("Memory.union_epoch", r.get())?;
         let vtags: Vec<u64> = at("Memory.vtags", r.get())?;
         let vspill: FxHashMap<u64, OTy> = at("Memory.vspill", r.get())?;
+        let indet: BTreeMap<u64, u8> = at("Memory.indet", r.get())?;
         let tu_arena_peak: u64 = at("Memory.tu_arena_peak", r.get())?;
         let serial: u32 = at("Memory.serial", r.get())?;
         if let Err(why) = check_static(&stat, &statics, &sfree, &sholes, ntypes) {
@@ -200,6 +208,11 @@ impl Memory {
             || vspill.values().any(|t| t.0 as usize >= ntypes)
         {
             return Err(r.invalid::<Memory>("void pointer tags out of range"));
+        }
+        if indet.keys().any(|&k| {
+            k >> 62 != Sp::Static as u64 || k & ((1 << 62) - 1) >= stat.bytes.len() as u64
+        }) {
+            return Err(r.invalid::<Memory>("an indeterminate-bits entry outside the static space"));
         }
         let ntags = vtags.len();
         if stat
@@ -237,6 +250,7 @@ impl Memory {
             vtags,
             vtag_ix,
             vspill,
+            indet,
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -268,6 +282,7 @@ impl Memory {
         .field::<Vec<u64>>("vtags")
         .skip("vtag_ix", "FxHashMap<u64, u8>")
         .field::<FxHashMap<u64, OTy>>("vspill")
+        .field::<BTreeMap<u64, u8>>("indet")
         .field::<u64>("tu_arena_peak")
         .field::<u32>("serial")
         .finish();
@@ -286,6 +301,7 @@ impl Memory {
             .field::<Vec<u64>>("vtags")
             .skip::<FxHashMap<u64, u8>>("vtag_ix")
             .field::<FxHashMap<u64, OTy>>("vspill")
+            .field::<BTreeMap<u64, u8>>("indet")
             .field::<u64>("tu_arena_peak")
             .field::<u32>("serial");
         if s.register::<Memory>(d) {
@@ -298,6 +314,7 @@ impl Memory {
             FxHashMap::<UKey, u64>::schema(s);
             Vec::<OTy>::schema(s);
             FxHashMap::<u64, OTy>::schema(s);
+            BTreeMap::<u64, u8>::schema(s);
             u32::schema(s);
         }
     }

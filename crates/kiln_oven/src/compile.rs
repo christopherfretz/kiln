@@ -131,6 +131,11 @@ pub(crate) enum GKind {
     /// A string literal object; the `StringLiteral` expr that created it
     /// (`None`: thawed from a frozen pointer).
     Str(StringLitId, OTy, Option<ExprId>),
+    /// The member of a closure object that a by-copy capture of variable
+    /// (or binding) `.0`, of type `.1`, names when the name is evaluated
+    /// outside a call of the call operator (no closure object exists:
+    /// [`Oven::closure_copy_object`], spec/sema-lambda.md §7).
+    Capture(DeclId, OTy),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
@@ -384,6 +389,19 @@ impl Oven {
         let i = self.globals.len() as u32;
         self.globals.push(Global { kind: GKind::Var(d), state: GState::Unresolved, slot: 0 });
         self.global_map.insert(d, i);
+        i
+    }
+
+    /// A global for the closure member a by-copy capture of `d` (of type
+    /// `ty`) names outside a call of its lambda ([`GKind::Capture`]): one
+    /// per compiled name, all resolving to one object per variable.
+    pub(crate) fn capture_global(&mut self, d: DeclId, ty: OTy) -> u32 {
+        let i = self.globals.len() as u32;
+        self.globals.push(Global {
+            kind: GKind::Capture(d, ty),
+            state: GState::Unresolved,
+            slot: 0,
+        });
         i
     }
 

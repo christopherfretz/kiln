@@ -12,7 +12,7 @@
 //! `}` ([`Sema::finish_captures`]).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, InitStyle, VarSpec};
-use kiln_ast::expr::{ExprDeps, ExprKind, UnaryOp};
+use kiln_ast::expr::{ExprDeps, ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::ids::{ExprId, LambdaId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaCapture};
 use kiln_ast::names::DeclName;
@@ -736,6 +736,50 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether an odr-use of captured entity `d` named here denotes a
+    /// member of a closure object: some lambda between the current
+    /// context and `d`'s scope captures it by copy, explicitly or by its
+    /// `=` default ([expr.prim.lambda.capture]/11; a by-reference capture
+    /// of a by-copy capture names the outer closure's member, /12). The
+    /// Oven reads it ([`ExprFlags::NAMES_CLOSURE_COPY`]) for a name
+    /// evaluated outside a call of the call operator, where no closure
+    /// object exists (spec/sema-lambda.md §7).
+    ///
+    /// [`ExprFlags::NAMES_CLOSURE_COPY`]: kiln_ast::expr::ExprFlags::NAMES_CLOSURE_COPY
+    pub(crate) fn odr_use_names_closure_copy(&self, d: DeclId) -> bool {
+        let Some(home) = self.ast.decls.get(d).ctx() else { return false };
+        let mut c = self.ctx;
+        // Bounded like `capture_chain`.
+        for _ in 0..4096 {
+            if c == home {
+                return false;
+            }
+            if let Some(l) = self.lambda_of_call_op(c) {
+                let data = self.ast.exprs.lambdas.get(l);
+                let kind = match data.captures.iter().find(|x| x.var == Some(d)) {
+                    Some(x) => x.kind,
+                    None => match data.default {
+                        CaptureDefault::ByCopy => CaptureKind::ByCopy,
+                        CaptureDefault::ByRef => CaptureKind::ByRef,
+                        CaptureDefault::None => return false,
+                    },
+                };
+                if kind == CaptureKind::ByCopy {
+                    return true;
+                }
+                let Some(p) = self.lambda_parent(l) else { return false };
+                c = p;
+                continue;
+            }
+            let Some(p) = self.ast.decls.lexical_ctx(c).or_else(|| self.ast.decls.get(c).ctx())
+            else {
+                return false;
+            };
+            c = p;
+        }
+        false
+    }
+
     /// Whether `e` (parentheses and implicit casts looked through) names
     /// a local of an enclosing function that the lambdas in between
     /// cannot capture: its use is (or will be) `err_lambda_impcap`, so a
@@ -812,6 +856,15 @@ impl Sema<'_, '_> {
             let d = self.ast.exprs.decl(r);
             if !dependent && constant.contains(r) && self.usable_in_constant_expressions(d) {
                 continue;
+            }
+            // An odr-use in a template definition, as at the end of a
+            // full-expression outside one (`act_on_full_expr_at`).
+            if !dependent
+                && self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                && self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
+                && self.odr_use_names_closure_copy(d)
+            {
+                self.ast.exprs.mark_names_closure_copy(r);
             }
             let loc = self.eloc(r);
             let probe =

@@ -1883,6 +1883,20 @@ impl Oven {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 format!("{verb} variable '{}' whose value is not known", name_of(ast, d))
             }
+            // The closure member a by-copy capture names outside a call of
+            // its lambda (`Oven::closure_copy_object`; clang has no note:
+            // it reads the variable).
+            MemFault::External(d, false)
+                if self.unknowns.get(&d).is_some_and(|&u| {
+                    Ptr::decode(u).slot == Ptr::decode(p).slot
+                }) =>
+            {
+                extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
+                format!(
+                    "kiln: {verb} variable '{}' captured by copy is not allowed in a constant expression outside a call of the lambda",
+                    name_of(ast, d)
+                )
+            }
             MemFault::External(d, false) => {
                 let name = name_of(ast, d);
                 {
