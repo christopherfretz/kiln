@@ -902,9 +902,24 @@ impl Types {
                 let def = ast.definition(d).unwrap_or(d);
                 let int =
                     ast.decls.enumeration(def).and_then(|e| e.int_type).unwrap_or(QualType::INT);
+                // An `aligned` attribute on the enumeration raises its
+                // alignment, not its size (clang and GCC: `enum
+                // __attribute__((aligned(8))) E : char` is 1 byte aligned
+                // to 8), as `kiln_abi` lays it out.
+                let attrs = [ast.first(d), def]
+                    .iter()
+                    .any(|&x| ast.decls.get(x).has(kiln_ast::decl::DeclFlags::HAS_ATTRS));
                 let it = self.intern(bridge, int);
                 let info = *self.info(it);
-                self.simple(c, info.size, info.align, info.kind)
+                let align = if attrs {
+                    match bridge.opaque_size_align(c) {
+                        (0, _) => info.align,
+                        (_, a) => a,
+                    }
+                } else {
+                    info.align
+                };
+                self.simple(c, info.size, align, info.kind)
             }
             TypeView::ConstantArray(a) => {
                 let elem = self.intern(bridge, a.elem);

@@ -1445,10 +1445,20 @@ Redeclaration and linkage rules:
   (`TypeFlags::SUGAR`, then `DeclFlags::HAS_ATTRS`); a template argument
   is canonical, so `T[2]` with such a `T` is not checked (clang, GCC).
   Tests: `dcl.array/over-aligned-element*.cpp`,
-  `tests/c/dcl/over-aligned-array-element.c`. An array of an `aligned`
-  enumeration (`enum __attribute__((aligned(8))) E : char`), which
-  clang also rejects, is not checked (its `alignof` differs between kiln,
-  8, and clang 22, 1).
+  `tests/c/dcl/over-aligned-array-element.c`. The other such type is an
+  enumeration with a GNU `aligned` attribute (before its name, after its
+  closing brace, or through `typedef enum __attribute__((aligned(8))) E
+  {..} AE`): it raises the alignment, never the size (`enum
+  __attribute__((aligned(8))) E : char` is 1 byte aligned to 8 in clang 22
+  and GCC 16.1 in C++; GCC ignores it on the type in C, clang does not,
+  and kiln lays it out as clang in both). So the check also runs for an
+  enumeration whose declaration has attributes, also on a substituted
+  template argument (its canonical type; clang's `BuildArrayType` checks
+  it there too). The Oven's type model takes such an enumeration's
+  alignment from `kiln_abi` (it read the underlying type's before, so
+  `alignof(E)` was 1 while the layout used 8; WP-1604). Tests:
+  `dcl.array/over-aligned-enum{,-element-errors}.cpp`,
+  `tests/c/dcl/over-aligned-enum.c`.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -2689,7 +2699,11 @@ instantiation unless stated.
   conflict when their parameter-type-lists correspond, whatever their
   return types, in either order. As clang and gcc, a block scope's
   declarations are not compared again at its instantiation. Tests:
-  namespace.udecl/p11-return-type-conflict*.cpp.
+  namespace.udecl/p11-return-type-conflict*.cpp. A class at namespace
+  scope and a later using-declarator naming a typedef-name of another type
+  are not compared (the text: ill-formed; clang 22 and GCC 16.1 accept,
+  docs/status/deviations.md; WP-1592,
+  namespace.udecl/p11-class-beside-using-typedef.cpp).
 - **Forbidden type definitions** ([dcl.type.general]/3, [dcl.fct]/17,
   [stmt.pre]/2, [temp.alias]/2, [dcl.enum]/2; WP-946, clang's `ActOnTag`
   and `GetDeclSpecTypeForDeclarator`). A class or enumeration may be

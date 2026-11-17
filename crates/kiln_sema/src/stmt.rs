@@ -1303,8 +1303,13 @@ impl Sema<'_, '_> {
             }
         };
         let at = self.begin_loc(e);
-        self.mark_constant_non_odr_uses(conv);
-        match self.eval_const(conv, kiln_oven::EvalContext::converted(at)) {
+        // [intro.execution]/5: the value is a full-expression, completed
+        // before it is evaluated (clang `EvaluateConvertedConstantExpression`
+        // finishes it first): only then are its odr-uses decided, so an
+        // odr-use of a by-copy capture names the closure's member and is
+        // not constant ([expr.prim.lambda.capture]/11, [expr.const]/10).
+        let full = self.act_on_constant_full_expr(conv);
+        match self.eval_const(full, kiln_oven::EvalContext::converted(at)) {
             Ok(v) => {
                 // A value outside `i128` keeps its own (exact) constant
                 // and has no `i128` key.
@@ -1313,8 +1318,7 @@ impl Sema<'_, '_> {
                     Some(iv) => self.int_const(cond_ty, iv),
                     None => v,
                 };
-                let ce = self.builder().constant_expr(conv, Some(cv));
-                let ce = self.act_on_constant_full_expr(ce);
+                let ce = self.builder().constant_expr(full, Some(cv));
                 self.case_narrowing(narrowed, at, cond_ty);
                 if !invalid {
                     self.c_case_overflow(e, at);
@@ -1325,7 +1329,6 @@ impl Sema<'_, '_> {
                 // [stmt.switch]/2: a converted constant expression (clang's
                 // `CheckConvertedConstantExpression`, CCEK_CaseValue),
                 // reported at the value's first token.
-                let full = self.act_on_constant_full_expr(conv);
                 self.case_narrowing(narrowed, at, cond_ty);
                 let at = Self::fold_lone_invalid(&mut f, at);
                 // C: an integer constant expression (clang

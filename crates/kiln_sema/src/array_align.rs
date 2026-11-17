@@ -7,10 +7,13 @@
 //! Every complete type's size is a multiple of its alignment except a
 //! typedef (or alias) whose `__attribute__((aligned(N)))` raises the
 //! alignment above the size: `typedef int I __attribute__((aligned(16)));`
-//! is 4 bytes aligned to 16. So the check runs only when the element type
-//! is sugar (one bit) with a typedef carrying attributes
-//! (`DeclFlags::HAS_ATTRS`) on its desugaring chain; a canonical element
-//! type costs one flag test. A template argument is canonical, so `T[2]`
+//! is 4 bytes aligned to 16, and an enumeration with the attribute
+//! (`enum __attribute__((aligned(8))) E : char` is 1 byte aligned to 8,
+//! in clang and GCC; WP-1604). So the check runs only when the element
+//! type is sugar (one bit) with a typedef carrying attributes
+//! (`DeclFlags::HAS_ATTRS`) on its desugaring chain, or an enumeration
+//! whose declaration carries attributes; any other canonical element type
+//! costs a flag test. A template argument is canonical, so `T[2]`
 //! with `T = I` is never checked (as in clang and GCC).
 
 use kiln_ast::QualType;
@@ -28,7 +31,8 @@ impl Sema<'_, '_> {
     /// did: the array type is then not formed (clang's `BuildArrayType`
     /// returns no type).
     pub(crate) fn check_array_element_alignment(&mut self, elem: QualType, loc: Loc) -> bool {
-        if self.ast.types.is_canonical(elem.ty()) || !self.has_attributed_typedef(elem) {
+        let sugar = !self.ast.types.is_canonical(elem.ty()) && self.has_attributed_typedef(elem);
+        if !sugar && !self.is_attributed_enum(elem) {
             return false;
         }
         if self.is_dependent_type(elem) || !self.is_complete(elem) {
@@ -47,6 +51,14 @@ impl Sema<'_, '_> {
             .arg(align.to_string());
         self.emit(msg);
         true
+    }
+
+    /// Whether `q` is an enumeration with attributes on a declaration
+    /// (an `aligned` one raises its alignment above its size).
+    fn is_attributed_enum(&self, q: QualType) -> bool {
+        let TypeView::Enum(d) = self.ast.types.canonical_view(q) else { return false };
+        let def = self.ast.definition(d).unwrap_or(d);
+        [self.ast.first(d), def].iter().any(|&x| self.ast.decls.get(x).has(DeclFlags::HAS_ATTRS))
     }
 
     /// Whether the desugaring chain of `q` names a typedef or alias that

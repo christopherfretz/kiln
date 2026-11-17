@@ -1503,9 +1503,28 @@ Where the code differs from (or details) the design above:
   reached through that same conversion function or through one whose
   implicit object conversion is worse
   ([over.ics.rank]/3.3: a copy constructor through `operator T&` and a
-  move constructor through `operator T() const` are indistinguishable;
-  GCC 16 and the text reject, clang 22 accepts;
-  `over.match.ctor/conversion-functions-ambiguous-cxx17.cpp`). When the
+  move constructor through `operator T()` are indistinguishable; with
+  object conversions as good as each other the text and GCC 16 reject,
+  clang 22 accepts;
+  `over.match.ctor/conversion-functions-ambiguous-cxx17.cpp`). The
+  exception (WP-1592, `lvalue_conversion_best`): when the copy
+  constructor is reached through a conversion function yielding an
+  lvalue reference whose object conversion is better than that of every
+  other conversion function yielding the class or a class derived from
+  it (an lvalue reference to a derived class with an object conversion
+  as good loses the tie; a template yielding a pointer or a builtin type
+  is no rival, any other template is), and that copy constructor is not
+  deleted, GCC 16 binds the move constructor's `T&&` through that
+  function too ([over.match.ref]/1.1 sets it aside), finds the move
+  constructor not viable and calls the copy constructor, while clang 22
+  lets the conversion function yielding the prvalue win: both accept,
+  and kiln follows clang (`operator T() const` beside `operator T&()`:
+  `over.match.ctor/conversion-function-beside-better-lvalue-cxx17-run.cpp`,
+  rejected siblings `conversion-function-beside-lvalue-ambiguous-cxx17.cpp`;
+  a recorded deviation in docs/status/deviations.md). Before C++17 that
+  shape stays ambiguous as in clang
+  (`conversion-function-beside-lvalue-ambiguous-cxx14.cpp`; GCC 16
+  accepts it). When the
   constructors alone select one, the conversion function still wins as in
   clang (the libc++ PR31384 shape above; GCC 16 picks the constructor
   there), and it elides a deleted move constructor reached through it

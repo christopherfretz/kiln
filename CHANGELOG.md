@@ -1134,6 +1134,21 @@ Planned as 1.3.0.
   (CWG3149); `>=` after a splice in a template argument list; defaulted
   comparisons with an explicit object parameter taken by value; default
   arguments of `extern "C"` functions in different namespaces.
+- Anonymous unions and structs, enumerations with an aligned attribute,
+  case values in lambdas and copy-initialization through conversion
+  functions (WP-1604, WP-1606, WP-1592): an anonymous union or struct
+  rejects a nested type, a member function, a static member and a
+  non-public data member as clang does ([class.union.anon]/1;
+  `-Wnested-anon-types` for an unnamed nested class when named), and C's
+  anonymous unions are unchanged; `alignof` of an enumeration with an
+  aligned attribute is that alignment (it was the underlying type's), and
+  an array of one whose size is not a multiple of it is an error, also in
+  a template; an odr-use of a by-copy capture in a case value or a GNU
+  case range outside a template is rejected (the case value now ends its
+  full-expression before it is evaluated); from C++17, `B b(u)` with
+  `operator B() const` beside a better `operator B&()` initializes `b`
+  through `operator B() const` as clang does instead of being ambiguous
+  (a recorded deviation, docs/status/deviations.md).
 
 ## [1.2.1] - 2026-11-14
 
