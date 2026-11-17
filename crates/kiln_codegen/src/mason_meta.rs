@@ -6,12 +6,14 @@
 //! 32-byte header, blocks sorted by record kind, then the unit's string
 //! table, all little-endian and padded with zeros to a multiple of 8.
 //! [`encode_unit`] is a pure function from blocks to bytes, so a later
-//! record kind adds a [`Block`] without touching the framing. Only kind 1
-//! (the TU summary, MT-26) is written today ([`Cg::emit_mason_meta`]).
+//! record kind adds a [`Block`] without touching the framing. Kinds 1
+//! (the TU summary, MT-26), 3 (types), 4 (their layout details) and 5
+//! (declarations) are written ([`Cg::emit_mason_meta`]).
 
 use std::collections::BTreeMap;
 
 use kiln_abi::mangle;
+use kiln_abi::odr::DetailItem;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::sanitize::SanitizerSet;
 use kiln_ast::types::{BuiltinType, TypeView};
@@ -64,9 +66,18 @@ const TYPES_VERSION: u16 = 1;
 const TYPE_ROW_SIZE: u32 = 56;
 /// A kind 3 row's `details` without a kind 4 entry.
 const NO_DETAILS: u32 = 0xffff_ffff;
-/// Kind 3 flag bits (O-17; bit 0 `ENUM` and bit 4 `PARTIAL` are never
-/// set: no enumeration gets a row, and a layout kiln cannot serialize
-/// whole gets no row): a union.
+/// Record kind 4, the layout details (O-19), and its version: the body is
+/// a sequence of entries, each 8-aligned from the body's start, `{u32
+/// count; u32 reserved}` and `count` 24-byte items; no rows (`row_size`
+/// and `row_count` 0, as mortar's own writer has them).
+pub const KIND_DETAILS: u16 = 4;
+const DETAILS_VERSION: u16 = 1;
+/// A kind 4 item: `{u32 name; u32 type; u64 value; u32 width; u32 flags}`.
+const DETAIL_ITEM_SIZE: usize = 24;
+/// Kind 3 flag bits (O-17; bit 4 `PARTIAL` is never set: a layout kiln
+/// cannot serialize whole gets no row): an enumeration.
+pub const TYPE_ENUM: u16 = 1;
+/// A union.
 pub const TYPE_UNION: u16 = 2;
 /// Polymorphic ([class.virtual]/1).
 pub const TYPE_POLYMORPHIC: u16 = 4;
@@ -110,6 +121,13 @@ impl MasonMetaLevel {
     #[must_use]
     pub fn writes_types(self) -> bool {
         self != MasonMetaLevel::Min
+    }
+
+    /// The level writes record kind 4, the layout details of the kind 3
+    /// rows (K-1, O-19: `detail` and up).
+    #[must_use]
+    pub fn writes_details(self) -> bool {
+        matches!(self, MasonMetaLevel::Detail | MasonMetaLevel::All)
     }
 
     /// The level writes the type string of a C++-linkage function's kind 5
@@ -289,16 +307,21 @@ pub struct TypeRow {
     pub file: String,
     /// The definition's line (0: unknown).
     pub line: u32,
+    /// The kind 4 entry's items (O-19), `None` for no entry (below
+    /// `detail`).
+    pub details: Option<Vec<DetailItem>>,
 }
 
 /// The kind 3 block of `rows` (O-17, MT-11): sorted by `key`, then name
 /// bytes, one row per name (exact duplicates dropped; a name with two
 /// different rows gets none), strings added to `st` in row order (the
-/// name, then the file). `hash` is all zero ("not hashed": kiln has no
-/// definition serializer yet, K-3) and `details` is `0xffffffff` (no
-/// kind 4).
+/// name, then the file, then the strings of its kind 4 items). `hash` is
+/// all zero ("not hashed": kiln has no definition serializer yet, K-3).
+/// A row with `details` gets an entry in the kind 4 block returned with
+/// it (O-19), and `details` its byte offset in that block's body; a row
+/// without has `0xffffffff`, and no row with details means no kind 4.
 #[must_use]
-pub fn types_block(rows: &[TypeRow], st: &mut StrTab) -> Block {
+pub fn types_block(rows: &[TypeRow], st: &mut StrTab) -> (Block, Option<Block>) {
     let mut rows: Vec<&TypeRow> = rows.iter().collect();
     rows.sort_by(|a, b| (a.key, a.name.as_bytes()).cmp(&(b.key, b.name.as_bytes())).then(a.cmp(b)));
     rows.dedup();
@@ -315,9 +338,32 @@ pub fn types_block(rows: &[TypeRow], st: &mut StrTab) -> Block {
         i = j;
     }
     let mut body = Vec::with_capacity(kept.len() * TYPE_ROW_SIZE as usize);
+    let mut details: Vec<u8> = Vec::new();
+    let mut entries = 0usize;
     for r in &kept {
         let name = st.add(r.name.as_bytes());
         let file = st.add(r.file.as_bytes());
+        let at = match &r.details {
+            None => NO_DETAILS,
+            Some(items) => {
+                // Entries are 8 + 24n bytes: each stays 8-aligned.
+                let at = u32_len(details.len());
+                entries += 1;
+                details.reserve(8 + items.len() * DETAIL_ITEM_SIZE);
+                details.extend_from_slice(&u32_len(items.len()).to_le_bytes());
+                details.extend_from_slice(&0u32.to_le_bytes());
+                for it in items {
+                    let n = st.add(it.name.as_bytes());
+                    let t = st.add(it.ty.as_bytes());
+                    details.extend_from_slice(&n.to_le_bytes());
+                    details.extend_from_slice(&t.to_le_bytes());
+                    details.extend_from_slice(&it.value.to_le_bytes());
+                    details.extend_from_slice(&it.width.to_le_bytes());
+                    details.extend_from_slice(&it.flags.to_le_bytes());
+                }
+                at
+            }
+        };
         body.extend_from_slice(&r.key.to_le_bytes());
         body.extend_from_slice(&[0u8; 16]); // hash: not hashed
         body.extend_from_slice(&r.layout.to_le_bytes());
@@ -327,15 +373,23 @@ pub fn types_block(rows: &[TypeRow], st: &mut StrTab) -> Block {
         body.extend_from_slice(&r.flags.to_le_bytes());
         body.extend_from_slice(&file.to_le_bytes());
         body.extend_from_slice(&r.line.to_le_bytes());
-        body.extend_from_slice(&NO_DETAILS.to_le_bytes());
+        body.extend_from_slice(&at.to_le_bytes());
     }
-    Block {
+    let types = Block {
         kind: KIND_TYPES,
         version: TYPES_VERSION,
         row_size: TYPE_ROW_SIZE,
         row_count: u32_len(kept.len()),
         body,
-    }
+    };
+    let details = (entries > 0).then_some(Block {
+        kind: KIND_DETAILS,
+        version: DETAILS_VERSION,
+        row_size: 0,
+        row_count: 0,
+        body: details,
+    });
+    (types, details)
 }
 
 /// One kind 5 row before encoding (O-35).
@@ -674,9 +728,12 @@ impl Cg<'_> {
     /// the end of module emission; none is computed for the metadata), that
     /// is complete, valid, not templated and passes the syntactic
     /// not-TU-local test, and whose layout serializes without a per-TU
-    /// component. No enumeration gets a row (kiln does not record which
-    /// enumerations an emitted definition uses).
-    pub(crate) fn mason_type_rows(&mut self) -> Vec<TypeRow> {
+    /// component; and one per enumeration the unit defines (complete,
+    /// valid, not templated, passing the test) and references anywhere
+    /// (sema's `REFERENCED` mark, kept for the unused warnings, on the
+    /// enumeration or one of its enumerators: nothing is recorded for the
+    /// metadata). `details` collects each row's kind 4 items.
+    pub(crate) fn mason_type_rows(&mut self, details: bool) -> Vec<TypeRow> {
         use kiln_abi::odr::{LayoutSerializer, NotTuLocal, is_templated};
         use kiln_ast::decl::DefinitionBits;
         let ast = self.ast;
@@ -724,14 +781,99 @@ impl Cg<'_> {
                 if dynamic { self.vts.vtable_layout(first).ok() } else { None }
             })
             .collect();
+        // The enumerations: complete, valid, not templated, defined and
+        // referenced in the unit, in declaration order (MT-38).
+        // Referenced: the mark on a declaration of the enumeration or on
+        // one of its enumerators, or, for a member enumeration of a class
+        // template specialization, on the pattern it was instantiated
+        // from (a member's type names the pattern).
+        let marked = |d: DeclId| ast.decls.get(d).has(DeclFlags::REFERENCED);
+        let referenced = |def: DeclId| {
+            let mut cur = Some(def);
+            for _ in 0..8 {
+                let Some(e) = cur else { return false };
+                let e = ast.definition(e).unwrap_or(e);
+                if ast.redecls_of(e).any(marked) || ast.decls.members(e).any(marked) {
+                    return true;
+                }
+                cur = ast.instantiated_from(e);
+            }
+            false
+        };
+        let enum_cands: Vec<(DeclId, DeclId)> = ast
+            .decls
+            .ids()
+            .filter(|&d| ast.decls.get(d).kind() == DeclKind::Enum && ast.first(d) == d)
+            .filter_map(|first| {
+                let def = ast.definition(first)?;
+                let n = ast.decls.get(def);
+                let e = ast.decls.enumeration(def)?;
+                (e.flags & kiln_ast::decl::EnumData::COMPLETE != 0
+                    && e.int_type.is_some()
+                    && !n.has(DeclFlags::INVALID)
+                    && !n.has(DeclFlags::IMPLICIT)
+                    && !is_templated(ast, def)
+                    && referenced(def)
+                    && test.tag(first))
+                .then_some((first, def))
+            })
+            .collect();
+        let enum_sizes: Vec<(u64, u64)> = enum_cands
+            .iter()
+            .map(|&(_, def)| {
+                let int = ast.decls.enumeration(def).and_then(|e| e.int_type);
+                int.map_or((0, 0), |t| self.size_align(t))
+            })
+            .collect();
         let mut layouts: FxHashMap<DeclId, &kiln_ast::types::RecordLayout> = FxHashMap::default();
         for (d, l) in ast.layouts.iter().chain(self.tys.layouts()).chain(self.vts.layouts()) {
             layouts.entry(ast.first(d)).or_insert(l);
         }
-        let mut ser =
-            LayoutSerializer { ast, anon: &mut self.anon, test: &mut test, layouts: &layouts };
+        let mut ser = LayoutSerializer {
+            ast,
+            anon: &mut self.anon,
+            test: &mut test,
+            layouts: &layouts,
+            details: details.then(Vec::new),
+        };
         let sm = self.sm;
-        let mut rows = Vec::with_capacity(cands.len());
+        let opts = self.opts;
+        // The definition's file and line, and `SYSTEM`.
+        let place = |def: DeclId, flags: &mut u16| {
+            let loc = ast.decls.get(def).loc();
+            let (mut file, mut line) = (String::new(), 0);
+            if let Some(sm) = sm {
+                if sm.is_in_system_header(loc) {
+                    *flags |= TYPE_SYSTEM;
+                }
+                if let Some(p) = sm.presumed_line_col(loc) {
+                    file = opts.debug.remap(&sm.presumed_file_name(&p, loc));
+                    line = p.line;
+                }
+            }
+            (file, line)
+        };
+        let mut rows = Vec::with_capacity(cands.len() + enum_cands.len());
+        for (&(first, def), &(size, align)) in enum_cands.iter().zip(&enum_sizes) {
+            let Some(bytes) = ser.enumeration(def) else { continue };
+            let (Ok(size), Ok(align)) = (u32::try_from(size), u16::try_from(align)) else {
+                continue;
+            };
+            let mut flags = TYPE_ENUM;
+            let (file, line) = place(def, &mut flags);
+            let name = ser.type_name(first);
+            rows.push(TypeRow {
+                key: fnv1a64(name.as_bytes()),
+                name,
+                layout: fnv1a64(&bytes),
+                size,
+                align,
+                flags,
+                file,
+                line,
+                details: ser.details.as_mut().map(std::mem::take),
+            });
+        }
         for (&(first, def), vt) in cands.iter().zip(&vtables) {
             let Some(bytes) = ser.class(def, vt.as_deref()) else { continue };
             let Some(l) = layouts.get(&first) else { continue };
@@ -749,17 +891,7 @@ impl Cg<'_> {
             if !l.vbases.is_empty() {
                 flags |= TYPE_HAS_VBASES;
             }
-            let loc = ast.decls.get(def).loc();
-            let (mut file, mut line) = (String::new(), 0);
-            if let Some(sm) = sm {
-                if sm.is_in_system_header(loc) {
-                    flags |= TYPE_SYSTEM;
-                }
-                if let Some(p) = sm.presumed_line_col(loc) {
-                    file = self.opts.debug.remap(&sm.presumed_file_name(&p, loc));
-                    line = p.line;
-                }
-            }
+            let (file, line) = place(def, &mut flags);
             let name = ser.type_name(first);
             rows.push(TypeRow {
                 key: fnv1a64(name.as_bytes()),
@@ -770,6 +902,7 @@ impl Cg<'_> {
                 flags,
                 file,
                 line,
+                details: ser.details.as_mut().map(std::mem::take),
             });
         }
         rows
@@ -811,14 +944,15 @@ impl Cg<'_> {
             return;
         };
         let types = if m.level.writes_types() && self.opts.c.is_none() {
-            Some(self.mason_type_rows())
+            Some(self.mason_type_rows(m.level.writes_details()))
         } else {
             None
         };
         let mut rows = self.mason_summary_rows(&m);
         if types.as_ref().is_some_and(|t| !t.is_empty()) {
-            // Written by a unit with kind 2 or 3 rows and by no other
-            // (mortar's answer to WP-1557; O-11).
+            // Written exactly when the unit has rows of kind 2 or kind 3
+            // (O-11; mortar's answer B1 to WP-1566). Kind 2 is not
+            // written yet, so today that is "has kind 3 rows".
             rows.push(SummaryRow {
                 name: "odr.scheme",
                 value: ODR_SCHEME.to_owned(),
@@ -828,7 +962,9 @@ impl Cg<'_> {
         let mut st = StrTab::default();
         let mut blocks = vec![tu_summary_block(&rows, &mut st)];
         if let Some(types) = &types {
-            blocks.push(types_block(types, &mut st));
+            let (types, details) = types_block(types, &mut st);
+            blocks.push(types);
+            blocks.extend(details);
         }
         if m.level.writes_declarations() {
             let mut decls = self.mason_decl_rows();
@@ -883,6 +1019,8 @@ mod tests {
         kind: u16,
         version: u16,
         rows: Vec<Vec<u8>>,
+        /// Everything after the block header.
+        body: Vec<u8>,
     }
 
     #[derive(Debug)]
@@ -940,7 +1078,8 @@ mod tests {
             let rows = (0..row_count)
                 .map(|i| b[at + 16 + i * row_size..at + 16 + (i + 1) * row_size].to_vec())
                 .collect();
-            blocks.push(DecodedBlock { kind, version, rows });
+            let body = b[at + 16..at + block_size].to_vec();
+            blocks.push(DecodedBlock { kind, version, rows, body });
             at += block_size;
         }
         let strtab = if strtab_offset == 0 {
@@ -1199,6 +1338,7 @@ mod tests {
             flags,
             file: "a.h".to_owned(),
             line: 3,
+            details: None,
         }
     }
 
@@ -1215,7 +1355,8 @@ mod tests {
         ];
         let mut st = StrTab::default();
         let k1 = tu_summary_block(&[row("odr.scheme", ODR_SCHEME, false)], &mut st);
-        let k3 = types_block(&rows, &mut st);
+        let (k3, k4) = types_block(&rows, &mut st);
+        assert_eq!(k4, None, "no details, no kind 4");
         let k5 = declarations_block(&[decl("_Z1fv", "1S", 0, DECL_DEFINITION)], &mut st);
         let bytes = encode_unit(PRODUCER_KILN, &[k5, k3, k1], &st);
         let d = decode(&bytes);
@@ -1247,8 +1388,71 @@ mod tests {
             assert!(l.writes_types());
         }
         let mut st = StrTab::default();
-        let bytes = encode_unit(PRODUCER_KILN, &[types_block(&[], &mut st)], &st);
+        let bytes = encode_unit(PRODUCER_KILN, &[types_block(&[], &mut st).0], &st);
         assert!(types(&decode(&bytes)).is_empty());
+        assert!(!MasonMetaLevel::Default.writes_details());
+        assert!(MasonMetaLevel::Detail.writes_details() && MasonMetaLevel::All.writes_details());
+    }
+
+    /// Kind 4 (O-19 as fixed for WP-1576): entries 8-aligned from the body
+    /// start, `{u32 count; u32 reserved}` and 24-byte items; a kind 3
+    /// row's `details` is its entry's offset, `0xffffffff` without one.
+    #[test]
+    fn details_round_trip() {
+        use kiln_abi::odr::{ITEM_BITFIELD, ITEM_ENUMERATOR, ITEM_MEMBER, ITEM_UNDERLYING};
+        let item = |name: &str, ty: &str, value, width, flags| DetailItem {
+            name: name.to_owned(),
+            ty: ty.to_owned(),
+            value,
+            width,
+            flags,
+        };
+        let mut a = trow("1A", 1, 8, 0);
+        a.details =
+            Some(vec![item("x", "i", 0, 0, ITEM_MEMBER), item("b", "j", 32, 3, ITEM_BITFIELD)]);
+        let mut e = trow("1E", 2, 4, TYPE_ENUM);
+        e.details = Some(vec![
+            item("", "j", 0, 0, ITEM_UNDERLYING),
+            item("red", "", u64::MAX, 0, ITEM_ENUMERATOR),
+        ]);
+        let mut empty = trow("1Z", 3, 1, 0);
+        empty.details = Some(Vec::new());
+        let none = trow("1N", 4, 4, 0);
+        let rows = [a, e, empty, none];
+        let mut st = StrTab::default();
+        let (k3, k4) = types_block(&rows, &mut st);
+        let k4 = k4.expect("a kind 4 block");
+        let bytes = encode_unit(PRODUCER_KILN, &[k3, k4], &st);
+        let d = decode(&bytes);
+        assert_eq!(
+            d.blocks.iter().map(|b| (b.kind, b.version)).collect::<Vec<_>>(),
+            [(3, 1), (4, 1)]
+        );
+        let body = &d.blocks[1].body;
+        assert_eq!(u32_at(&bytes, 32 + 16 + 4 * 56 + 8), 0, "row_size 0");
+        let mut seen = 0;
+        for (key, .., details) in types(&d) {
+            let w = rows.iter().find(|r| r.key == key).unwrap();
+            let Some(items) = &w.details else {
+                assert_eq!(details, 0xffff_ffff);
+                continue;
+            };
+            seen += 1;
+            let at = details as usize;
+            assert_eq!(at % 8, 0, "entries are 8-aligned from the body start");
+            assert_eq!((u32_at(body, at) as usize, u32_at(body, at + 4)), (items.len(), 0));
+            for (i, it) in items.iter().enumerate() {
+                let o = at + 8 + i * 24;
+                assert_eq!(d.string(u32_at(body, o)), it.name.as_bytes());
+                assert_eq!(d.string(u32_at(body, o + 4)), it.ty.as_bytes());
+                let v = u64::from(u32_at(body, o + 8)) | (u64::from(u32_at(body, o + 12)) << 32);
+                assert_eq!(
+                    (v, u32_at(body, o + 16), u32_at(body, o + 20)),
+                    (it.value, it.width, it.flags)
+                );
+            }
+        }
+        assert_eq!(seen, 3);
     }
 
     #[test]

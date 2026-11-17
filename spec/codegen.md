@@ -2180,9 +2180,11 @@ Values that a macro holds are its integer value when its replacement list
 `|` over them (libc++'s `(1 << 2)`), else its tokens joined by spaces.
 Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 `reloc-model` (hod's own unit, H-3). `odr.scheme` (O-11) is written,
-value `kiln-odr-1`, flags 0, exactly when the unit has kind 3 rows (O-11:
-"written by a unit that carries kind 2 or 3 rows and by no other"); its
-name changes with any change to the layout serialization below. C units
+value `kiln-odr-1`, flags 0, exactly when the unit has rows of kind 2 OR
+kind 3 (O-11; mortar's answer B1 to WP-1566; kind 2 is not written yet,
+so today exactly when it has kind 3 rows); its name changes with any
+change to the layout serialization below, and when K-3 starts filling
+`hash`. C units
 have no `abi.stdlib*` rows.
 
 **Kind 5, the declarations** (O-35, O-33; WP-1564;
@@ -2263,10 +2265,17 @@ C++'s `bool`, `char8_t`,
 references pointers; `noexcept` and `restrict` dropped at every level;
 top-level qualifiers of the return type and of every parameter dropped
 (an array parameter is already a pointer: `int a[static 4]`, `int a[n]`
-and `int a[*]` are `Pi`); the major bound of a variable's own type
-erased (`A_`), every other bound kept (`int (*)[4]` is `PA4_i`, an
-unknown or variable bound `A_`), as in the Itanium form of C++ rows
-(ruling 4); a `transparent_union`
+and `int a[*]` are `Pi`); an array bound erased (`A_`) on every array
+type that is not the element type of another array, wherever C lets it
+be omitted (mortar's answer A(i) to WP-1566; C23 6.2.7: `int (*)[]` and
+`int (*)[4]` are compatible, so hashing them apart would invent a
+finding): a variable's own major bound and the outer bound of an array
+behind a pointer, a typedef, a parameter or a function pointer's
+parameter (`int (*)[4]` is `PA_i`); an inner dimension keeps its bound
+(`int (*)[2][3]` is `PA_A3_i`; an unknown or variable inner bound
+`A_`), so `int (*)[3]` against `int (*)[4]` is a miss (mortar's X19)
+while `int a[2][3]` against `int a[2][4]` differs. C++-linkage rows keep
+the Itanium form (only a variable's own major bound erased, ruling 4); a `transparent_union`
 parameter its first member's type; `(void)` and C++'s `()` one form.
 The grammar, every token (a second producer must reproduce it byte for
 byte):
@@ -2278,8 +2287,9 @@ byte):
             | R                       any struct, union or class
             | V                       the target's va_list
             | P <type>                pointer, lvalue or rvalue reference
-            | A [<bound>] _ <type>    array; no bound: a variable's own
-                                      major bound, an unknown bound, a VLA
+            | A [<bound>] _ <type>    array; the bound only on an array
+                                      that is another array's element
+                                      (and is known)
             | F <type> <params> E     prototyped function type
             | U <type>                _Atomic
             | C <builtin>             _Complex
@@ -2312,7 +2322,8 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | `__int128 f(unsigned __int128)` | `FnoE` |
 | `void f(int (*)(const char *, ...))` | `FvPFiPKczEE` |
 | `void f(int, ...)`; `void f(...)` (C23, C++) | `FvizE`; `FvzE` |
-| `void f(int (*)[4], int (*)[])` | `FvPA4_iPA_iE` |
+| `void f(int (*)[4], int (*)[])` | `FvPA_iPA_iE` |
+| `extern int (*p)[2][3];` | `PA_A3_i` |
 | `void f(int n, int a[n], int b[*][n])` | `FviPiPA_iE` |
 | `extern int a[][3];`, `int a[2][3];` (sizes 0, 24) | `A_A3_i` |
 | `unsigned f(unsigned, enum E)` (`E` of `unsigned int`) | `FiiiE` |
@@ -2324,23 +2335,23 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | member pointer, any other type with no C form | no row |
 | `const int f(void)` | `FivE` |
 
-**Kind 3, the types** (O-17, O-18; WP-1566; `Cg::mason_type_rows`,
+**Kind 3, the types** (O-17, O-18; WP-1566, WP-1576; `Cg::mason_type_rows`,
 `types_block`, `crates/kiln_abi/src/odr.rs`): one 56-byte row per class
-the TU defines whose layout the TU computed, if it passes the
-not-TU-local test below:
+the TU defines whose layout the TU computed, and per enumeration the TU
+defines and refers to, if it passes the not-TU-local test below:
 
 | field | bytes | value |
 |---|---|---|
 | `key` | u64 @0 | FNV-1a 64 of `name` |
 | `hash` | 16 @8 | zero: no definition hash (O-17 allows it; kind 2 is not written) |
 | `layout` | u64 @24 | FNV-1a 64 of the layout serialization below |
-| `name` | u32 @32 | string-table offset of the Itanium `<type>` of the class (what `_ZTS` names: `N2ns3BoxIiEE`) |
-| `size` | u32 @36 | `sizeof` in bytes |
+| `name` | u32 @32 | string-table offset of the Itanium `<type>` of the class or enumeration (what `_ZTS` names: `N2ns3BoxIiEE`) |
+| `size` | u32 @36 | `sizeof` in bytes (an enumeration: its underlying type's) |
 | `align` | u16 @40 | `alignof` in bytes |
-| `flags` | u16 @42 | bit 1 `UNION`, bit 2 `POLYMORPHIC`, bit 3 `HAS_VBASES`, bit 5 `SYSTEM` (defined in a system header); bit 0 `ENUM` and bit 4 `PARTIAL` are never set |
+| `flags` | u16 @42 | bit 0 `ENUM`, bit 1 `UNION`, bit 2 `POLYMORPHIC`, bit 3 `HAS_VBASES`, bit 5 `SYSTEM` (defined in a system header); bit 4 `PARTIAL` is never set |
 | `file` | u32 @44 | string-table offset of the presumed file of the definition, prefix maps applied |
 | `line` | u32 @48 | its presumed line (a template specialization: the line of the definition it was instantiated from) |
-| `details` | u32 @52 | `0xffffffff`: no kind 4 rows |
+| `details` | u32 @52 | at `detail` and `all` the byte offset of the type's entry in the kind 4 block's body (below); `0xffffffff` at `default` |
 
 Rows are sorted by `key`, then `name` bytes. A name with two different
 rows (it cannot happen in one TU; defensive) gets none.
@@ -2354,8 +2365,25 @@ no row). A candidate needs a complete, valid definition, is a class or
 class template specialization (not a template pattern, not a partial
 specialization, not a member of either), is not one of the compiler's
 own classes (AArch64's `std::__va_list`), and passes the test.
-Enumerations get no row yet (O-17 asks for those "appearing in an
-emitted definition", a use kiln does not record).
+
+*Which enumerations* (mortar's answer B2 to WP-1566: any subset of the
+complete, named, not-TU-local enumerations defined in the unit is
+sound). One row per enumeration whose definition the AST holds
+(complete: `}` seen and an underlying type; not invalid, not implicit,
+not templated) that passes the test and that the unit **refers to
+anywhere**: sema's `REFERENCED` mark (kept for the unused warnings, set
+by name lookup of a type name and by every reference to an enumerator)
+is on one of its declarations or enumerators, or, for a member
+enumeration of a class template specialization, on the pattern it was
+instantiated from (the member's type names the pattern). So an
+enumerator used only as a constant in an inline function no unit emits
+(mortar's K7) gives a row. Nothing is recorded for the metadata: the
+mark exists without it, and the candidates are a scan of the AST's
+declarations after module emission. No row: an opaque declaration
+without a definition, an unnamed enumeration (its users hash its
+underlying type), an enumeration in an unnamed namespace or local to a
+function (the test), one never referred to. C units write no kind 3, so
+no enumeration rows either.
 
 *The not-TU-local test* (O-17's syntactic test; `NotTuLocal`): a class
 passes when (1) it has a name of its own (not an unnamed class, not a
@@ -2402,6 +2430,17 @@ a string is a u32 length and its bytes; a class key is FNV-1a 64 of its
    destructor), `u` (an unused function) with the final overrider's
    mangled name; `p` pure virtual; `x` deleted.
 
+An enumeration's serialization (O-18 names "the underlying type and the
+(name, value) list"; the rest is kiln's, for mortar to confirm):
+
+1. `E`; u8: bit 0 scoped (`enum class`), bit 1 a fixed underlying type
+   (`enum E : int` and `enum E` are different definitions with the same
+   representation, and only the first allows every `int` value).
+2. the underlying type: its `<type>` encoding as a string.
+3. the enumerators, u32 count, then per enumerator in declaration
+   order: its name (a string) and its value u64 (the low 64 bits of its
+   two's-complement value).
+
 A class gets no row when its layout cannot be serialized without a
 per-TU component: a base, member type or overrider's class that fails
 the test. `-frtti`, `-O` and `-g` change no hash (test). The hashes of a
@@ -2409,10 +2448,43 @@ fixed corpus are checked in (`layout_hash_golden`): a change to the
 serialization changes them, and must come with a new `odr.scheme` name
 (O-11).
 
-**Kind 4** (O-19) is not written: its row encoding is still a proposal
-in mortar's spec. Under that proposal kiln would write, at `detail` and
-up, one row per member serialized in step 5, `{u32 name; u32 type; u64
-bit_offset; u32 width; u32 flags}`, and point `details` at the first.
+**Kind 4, the layout details** (O-19 as fixed in mortar's answer B3 to
+WP-1566; WP-1576; `types_block`, `kiln_abi::odr::DetailItem`): written
+at `detail` and `all` only, so `default` pays nothing for it (the
+serializer's item list is `None` there). Block version 1, `row_size` and
+`row_count` 0 (not rows; mortar's own writer does the same); the body is a sequence of entries,
+one per kind 3 row, each 8-aligned from the body's start, and the row's
+`details` is its entry's byte offset in the body. An entry is `{u32
+count; u32 reserved = 0}` and `count` 24-byte items:
+
+| field | bytes | value |
+|---|---|---|
+| `name` | u32 @0 | string-table offset (0: unused) |
+| `type` | u32 @4 | string-table offset (0: unused) |
+| `value` | u64 @8 | |
+| `width` | u32 @16 | a bit-field's width, else 0 |
+| `flags` | u32 @20 | bits 0-3 the item kind, bit 4 `BITFIELD`, bit 5 `VIRTUAL` |
+
+| kind | item | `name` | `type` | `value` |
+|---|---|---|---|---|
+| 0 | data member (step 5) | its name (empty: unnamed) | `T`: its `<type>`; `A`: `A<bound>_` and the element's string; `N`: the underlying type's `<type>`; `S`: empty, and the nested class's own items follow | bit offset (for the nested class's items, in the nested class) |
+| 1 | base (steps 3 and 4: a virtual base appears in both lists, as the hash has it) | | its `<type>` | offset in bits; `VIRTUAL` |
+| 2 | the vptr (step 6, only when there is one) | | | offset in bits |
+| 3 | vtable slot (step 7: `f`, `d`, `D`, `u`; `p` and `x` as `__cxa_pure_virtual` and `__cxa_deleted_virtual`) | the final overrider's mangled name | | the component's index in the group as hashed (RTTI slots left out, `c`/`b`/`o` counted) |
+| 4 | enumerator | its name | | its value (as hashed) |
+| 5 | an enumeration's underlying type | | its `<type>` | |
+
+Items appear in exactly the order in which the layout hash consumes the
+same facts, one for every hashed fact that has an item kind, so the
+first differing item is the first difference. They are built by the
+same walk that writes the hashed bytes (`LayoutSerializer::details`),
+so the two cannot disagree. Facts without an item kind (the class kind,
+size, alignment and attributes, the list counts, the width of a member
+that is not a bit-field, `c`/`b`/`o` components, an enumeration's
+scoped and fixed bits) are in the row or nowhere; the driver test
+(`layout_details`, `enumeration_rows_two_units`) re-computes the layout
+hash from the items and these facts for every class of its golden
+without bases, vptr or unnamed members, and for an enumeration.
 
 **Levels** (mortar's level table, K-1): `min` writes kind 1 (and kind 2,
 when it exists); `default`, `detail` and `all` add kinds 3 and 5. At
@@ -2420,12 +2492,12 @@ when it exists); `default`, `detail` and `all` add kinds 3 and 5. At
 (`type_name` 0; mortar's ruling 3 of 11-16, its 8 KB budget for a unit's
 kind 5 strings); `detail` and `all` write it. Variables and C-linkage
 rows have theirs at every level, and the `type` hash is FNV-1a 64 of the
-full string at every level. Kind 3 rows are the same at every level. The
-kind 1 rows are the same at every level except `odr.scheme`, which
-follows kind 3. C units write no kind 3. **Not written yet** (later work
-packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), kind 4
-(above), enumeration rows, and `all`'s rows for definitions inlined
-away. Kind 2 will need codegen to record the vague-linkage definitions
+full string at every level. Kind 3 rows are the same at every level
+(`details` aside). The kind 1 rows are the same at every level except
+`odr.scheme`, which follows kind 3. `detail` and `all` add kind 4. C
+units write no kind 3 or 4. **Not written yet** (later work
+packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), and
+`all`'s rows for definitions inlined away. Kind 2 will need codegen to record the vague-linkage definitions
 it emits (their symbol names, linkage and comdat), which it does not
 keep today.
 
@@ -2458,7 +2530,11 @@ declares; determinism; PCH and BMI either way; kind 3: a golden of
 which classes get rows and their sizes, flags and lines, the layout-hash
 golden, every O-18 change seen and RTTI/`-O`/`-g`/`-std` unseen, the N31
 shape, levels and C, a PCH's classes, two library-heavy units with
-libstdc++ and libc++ agreeing on every shared row), `codegen_flags.rs`
+libstdc++ and libc++ agreeing on every shared row; C array bounds
+(`c_array_bounds_erased`); enumeration rows, their golden and two units
+(`enumeration_rows`, `enumeration_rows_two_units`); kind 4 at `detail`
+and `all` only, re-hashed from its items (`layout_details`); the kind 4
+encoder round trip (`details_round_trip`)), `codegen_flags.rs`
 `mason_metadata_levels`, `crates/kiln_codegen/tests/mason_tu_local.rs`.
 
 ## 6. Validation
