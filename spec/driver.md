@@ -1576,7 +1576,10 @@ the current directory (standard input is `-`). `-o -` is standard output.
     this scan and the `always_inline` one below read only the IR before
     its first top-level `!` line (`code_part`, WP-817): the metadata
     section, half or more of a `-g` module, holds no attribute group or
-    function;
+    function. Since WP-1559 the driver reads these facts from the module
+    before printing it (`IrFacts::of_module`, `kiln_llvm` `query.rs`),
+    answering exactly as the text scan does ("In-process back end", the
+    `opt` predicate);
   - at `-O0`, when the IR defines an `always_inline` function (an
     `attributes #N` line holds `alwaysinline`; `needs_always_inline`;
     WP-389), `-passes=default<O0>`: clang 19's whole O0 module pipeline
@@ -2267,7 +2270,7 @@ clang 19 accepts the flag too; it behaves the same under
 | `WriteAST` | driver: writing a module file (`--precompile`, `-fmodule-output`; inside `Frontend`, as clang's for a module interface) or a PCH (after `Frontend`, as clang's). kiln's PCH is a replay record ("Precompiled headers"), not a serialized AST | the output path |
 | `Backend` | driver, from after the frontend to the end of `llc` | — |
 | `Optimizer` | driver, the `opt` child (its `OptModule`, `OptFunction`, `RunPass`, ... merged) | — |
-| `CodeGenPasses` | driver, the `llc` child (its passes merged) | — |
+| `CodeGenPasses` | driver, the `llc` child (its passes merged); hod's run (detail `hod`) or an in-process back end's call (detail `in-process`, WP-1559) in its place | — |
 | `OvenCompile`, `ConstevalCall`, `ConstexprCall`, `OvenMetaOp` | kiln only: spec/oven.md "Trace hook" | |
 
 Not recorded (no kiln counterpart, or a follow-up): `ParseTemplate` (clang
@@ -2379,6 +2382,121 @@ hod's answer), `codegen_cmd::run_hod` (the route); tests:
 answer, the predicate's exclusions, the search order, precedence, `-###`,
 `-ftime-trace`, the statistics fields).
 
+### In-process back end (WP-1559)
+
+`kiln_driver` has a dependency-free registration point for a back end
+that runs in the driver's process (`crates/kiln_driver/src/backend_hook.rs`,
+the in-process seam's package K4, hod's design 0004). A program that links
+`kiln_driver` as a library and a back end beside it (an out-of-tree
+wrapper binary) calls `backend_hook::register` once before it runs the
+driver; **nothing in kiln's own build registers one**, so the stock
+`kiln++` behaves exactly as described above. The hook, as hod's
+maintainers code against it:
+
+```rust
+pub enum Answer { Done, Declined(String), Failed(String) }
+pub trait InProcessBackend: Send + Sync {
+    fn compile(&self, module: &kiln_llvm::Module, llc_args: &[String], object: &mut Vec<u8>)
+        -> Answer;
+}
+pub fn register(backend: Box<dyn InProcessBackend>) -> Result<(), Box<dyn InProcessBackend>>;
+pub fn registered() -> Option<&'static dyn InProcessBackend>;
+```
+
+`llc_args` is exactly the argument list `llc` would get for the job
+(ending `-o <object> -`), for the back end to parse; it never opens a
+file, the driver writes `object` where `llc -o` would have.
+
+**Selection, both routes.** A job is offered to hod when all hold:
+
+1. the back end is `hod` (`-fkiln-backend=hod`, else `KILN_BACKEND=hod`);
+2. it makes an object (`-c`, or each source of a link);
+3. `-O0`; no `-flto`, sanitizer, coverage, `-finstrument-functions*`,
+   `-finstrument-function-entry-bare`, `-fxray-instrument`,
+   `-fpatchable-function-entry=` (`hod_static_skip`; decided before the
+   module);
+4. the module's `opt` triggers (statistics log `triggers`, from the
+   module's facts below) are a subset of the route's set: {`alwaysinline`,
+   `coro`} for the external executable, **none** for the in-process back
+   end (a module `opt` would change is not handed over in process: design
+   0004 §10's conservative first version).
+
+With a back end registered, the in-process route replaces the external
+one: the `hod` executable is never searched for or run, and a job that
+fails rule 4 takes the LLVM route directly.
+
+**The route** (`codegen_cmd::run_in_process`). Inside the frontend the
+driver reads the module's facts; when the rules hold, the module is kept
+unprinted and, after the frontend, handed to the back end inside a
+contained-panic scope:
+
+| answer | what the driver does |
+|---|---|
+| `Done` | the bytes are written where `llc -o` would have written them (standard output for `-o -`); no `opt`, no `llc`, the module never printed; `-gz`'s `llvm-objcopy` still runs. A write error is `unable to open output file`, the input fails |
+| `Declined(reason)` | the module is printed now and takes the LLVM route unchanged (`opt` if needed, `llc`), byte-identical to `-fkiln-backend=llvm`; no diagnostic; `-v`: ` (hod declined '<reason>'; falling back to llc)`. The external executable is not tried |
+| `Failed(message)` | warning `hod failed (in process): <message>; falling back to llc` (`-Whod-fallback`, as above), then the LLVM route; an error under `KILN_HOD_STRICT=1` or `-Werror=hod-fallback`, the input failed |
+| a panic (on the calling thread or a thread the back end started) | as `Failed`, the message `internal-panic: <the first panic's first line>`; the statistics reason `internal-panic` |
+
+After any answer but `Done` an existing `-o` file is removed before the
+fallback (or the error), as on the external route. **`-###`** prints
+` (in-process) hod "<llc arguments>"` in place of the hod command (then
+the fallback line and `llc`); **`-v`** prints the same line unquoted
+before calling the back end. **`-ftime-trace`**: the call is a
+`CodeGenPasses` event with detail `in-process`, inside `Backend`; a
+module never printed has no `PrintIR` event (a declined one has it, in
+`Backend`). **`KILN_STATS_LOG`**: `backend` and `hod_reason` as for the
+external route (`hod_reason` of a failure: the reason its message names
+as hod's display does, else `internal-error`; a panic `internal-panic`),
+`"in_process":true`, the call's time as `children_ms`'
+`in-process-backend`, and the five counts `null` when the module was
+never printed (`triggers` still listed).
+
+**The contained-panic scope** (`crash::contained`, design 0004 §4 and §10
+answer 5). `kiln_driver` owns the `catch_unwind`. While a scope is open,
+the crash hook records no panic as the process's first and prints
+nothing for: a panic on the scope's own thread (the innermost scope that
+thread opened takes it), and a panic on **any other thread** (the most
+recently opened scope takes it). The scope returns `Err` with the first
+panic's message when the unwind reaches it; a panic recorded before the
+scope stays the recorded one, and a panic after it is recorded as its own
+crash, with its own reproducer. Scopes nest. What it cannot distinguish:
+a thread the back end started from an unrelated thread that panics while
+the scope is open. In `kiln++` none runs then (the compile thread is in
+the scope, `main` waits on it, no child process's helper threads are
+alive); in a library user compiling on several threads, another
+compile's panic during the window is taken by the scope. Such a foreign
+panic is kept aside when the scope ends normally, and is the report's
+record only if the process later crashes with no panic recorded at all
+(otherwise the report would say `unknown panic`). A thread started inside
+the scope that panics after the scope closed is recorded as usual. A
+second panic while unwinding still aborts. Without the hook installed
+(library users that never call `crash::install_hook`), the scope still
+catches and returns the panic; the default hook prints it.
+
+**The `opt` predicate from the module.** `ir_passes`, `opt_triggers` and
+the route's rule 4 read `IrFacts` (an `alwaysinline` function attribute
+group on a printed function or a placed call site; a group holding an
+entry or exit instrumentation string attribute; a declared,
+unquoted-name `llvm.coro.*`) from the module before printing
+(`IrFacts::of_module`; `kiln_llvm` `Module::has_fn_attr_group`,
+`has_fn_attr_key`, `declares_prefixed`, `query.rs`). Cost: the
+interned attribute table first, answering `false` without visiting a
+function when no set holds the attribute; then each function's attribute
+set and call records (one per call built, not the instructions), walking
+one function's block layout only to confirm a matching call is placed;
+the declaration test reads function headers. **Checked mode**: wherever
+the module is printed, `print_checked` also scans the text
+(`IrFacts::of_text`, the pre-WP-1559 scan) and panics (an internal
+compiler error) on a difference. It is on in builds with debug
+assertions (the build `cargo xtask test` and `ci` run the corpus with,
+so every corpus compile that prints a module is checked on every CI run)
+and with `KILN_CHECK_OPT_PREDICATE=1` in any build (the release and
+harness profiles, a libc++ run). Tests: `crates/kiln_driver/tests/backend_hook.rs`
+(fake back ends in a re-executed wrapper: every answer, both panics, a
+later crash reported as its own, the rule's exclusions, `-###`, `-v`,
+the trace and the statistics), `tests/contained_panic.rs` (the scope),
+`kiln_llvm` `query.rs` unit tests.
+
 ## Compile statistics log
 
 `KILN_STATS_LOG=<path>` (WP-1370; kiln only, read once per run, unset or
@@ -2413,19 +2531,21 @@ the IR.
 | `functions_defined` | `define`s |
 | `frontend_ms` | the `Frontend` phase less `EmitIR` and `PrintIR`: preprocessing, parsing, sema, the Oven |
 | `emit_ir_ms`, `print_ir_ms` | the `EmitIR` and `PrintIR` phases ("Time trace") |
-| `children_ms` | an object: per tool run for the job (`opt`, `llc`, `llvm-as`, `llvm-objcopy`, `hod`; `clang++` on the link's line), its summed wall time |
+| `children_ms` | an object: per tool run for the job (`opt`, `llc`, `llvm-as`, `llvm-objcopy`, `hod`; `clang++` on the link's line), its summed wall time; `in-process-backend` for a registered in-process back end's call (WP-1559) |
 | `total_ms` | the job, from its start to its end |
 | `exit` | `0`, or `1` when a step of the job failed |
 | `backend` | the back end that made the job's code ("Back-end selection", WP-1371): `llvm` (`llc` ran), `hod`, `hod-declined`, `hod-failed`; `null` when neither ran (`-emit-llvm`, an error before code generation, the link) |
 | `hod_reason` | hod's reason when it declined; when it failed, the reason its message names (WP-1411, hod's `CompileError` display: `internal error: hod panicked: ...` is `internal-panic`, `internal error: ...` `internal-error`, `malformed input: ...` `malformed-input`, `invalid options: ...` `invalid-options`), else its status (`exit code 1`, `signal 9`, `not started`); `null` otherwise; at most 128 bytes |
 | `hod_skip` | `null` unless hod is the selected back end ("Back-end selection") and the job was not offered to it; then the first of, in this order: `output-kind` (no object: `-S`, `-emit-llvm`, `-fsyntax-only`, `--precompile`), `opt-level` (an `-O` level above 0), `lto`, `sanitizer`, `coverage`, `instrument` (`-finstrument-functions[-after-inlining]`, `-finstrument-function-entry-bare` (WP-1411), `-fxray-instrument`, `-fpatchable-function-entry=`), else the first `opt` trigger outside {`alwaysinline`, `coro`} by its `triggers` name (only `instrument-entry` could, and after the static reasons no module kiln writes has it); `null` on the link's line (WP-1398) |
+| `in_process` | present (`true`) only when the module was handed to a registered in-process back end ("In-process back end", WP-1559) |
 | `truncated` | present (`true`) only when the input path was cut |
 
 The five counts are of the module the frontend produced, before `opt`,
 taken from its IR text in one pass over the part before the metadata
 section (exact for kiln's printer: a quoted name holding `#N` is not a
 group reference); they are `null` for a job with no module (an error, or
-`-fsyntax-only` / `--precompile`). Times are milliseconds with three
+`-fsyntax-only` / `--precompile`) and for a module never printed (an
+in-process back end took it, WP-1559). Times are milliseconds with three
 decimals, wall clock, from the same clock readings `-ftime-trace` takes
 for the events of the same names (`kiln_source::trace::Phase`,
 `InputTrace::run_child`); the log starts no trace and writes no trace
