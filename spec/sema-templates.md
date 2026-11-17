@@ -2607,10 +2607,16 @@ reports a dropped statement, part or declaration lookup.
   (`mark_template_arg_uses`), except those in a constexpr `if` branch
   the substitution discarded (`Substituter::discarded`, [stmt.if]/2).
   clang 22 does not instantiate them; GCC 16 does
-  (`temp.inst/function-template-argument-instantiated.cpp`). Not covered:
-  an argument in a lambda body or in a class template member
-  declaration (outside a member function body), which GCC 16 also
-  instantiates.
+  (`temp.inst/function-template-argument-instantiated.cpp`). An argument
+  in the body of a non-generic lambda (nested or not) is recorded under
+  the innermost enclosing function that is not such a lambda, whose
+  instantiation instantiates the lambda's body (WP-1591,
+  `temp.inst/function-template-argument-in-lambda.cpp`); a generic
+  lambda's keeps its own key. Not covered: an argument in a class
+  template's member declaration (outside a member function body). GCC 16
+  instantiates it only when the definition completes the class naming it
+  (`A<&f> m;`, not `A<&f>* p;`), clang 22 never; recording it per class
+  instantiation would reject code both accept.
 - Each definition the drain instantiates is recorded in
   `TemplateTables::end_of_tu_defs` for codegen (spec/codegen.md §2a),
   in clang's order ([temp.point]/7: the end of the TU is a point of
@@ -8920,8 +8926,9 @@ four gaps above that they close are removed.
 *Remaining gaps.*
 - An out-of-line member declarator (`auto X::f() -> T`) does not enter
   the class scope for its trailing return type.
-- `this` is accepted in the trailing return type of a static member
-  function or a friend.
+- `this` is accepted in the trailing return type of a friend (a static
+  member function's is diagnosed, spec/sema.md "`this` in a static
+  member function's declarator").
 - Side effects inside `CXXDefaultArgExpr`, statement expressions and
   lambda init-captures are not inspected; an operand that is only
   instantiation-dependent may warn where clang does not; clang's

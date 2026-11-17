@@ -692,6 +692,11 @@ impl Substituter<'_, '_, '_> {
                     }
                 ));
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
+        // A static member function's substituted declaration may not use
+        // `this` either ([expr.prim.this]/3): reported per instantiation,
+        // as clang's `checkThisInStaticMemberFunctionType` (WP-1572).
+        let watch =
+            (this && self.sema.is_static_method(d)).then(|| self.sema.act_on_start_this_watch());
         let sig = params.and_then(|params| {
             let ret = match early_ret {
                 Some(r) => r?,
@@ -713,6 +718,12 @@ impl Substituter<'_, '_, '_> {
             };
             Ok((params, ret, exc))
         });
+        if let Some(w) = watch
+            && let Some((at, implicit)) = self.sema.act_on_end_this_watch(w)
+            && sig.is_ok()
+        {
+            self.sema.report_this_in_static_declarator(at, implicit);
+        }
         self.sema.act_on_end_this_scope(this);
         if sig.is_err() {
             self.forget_pattern_params(d);
@@ -1043,7 +1054,13 @@ impl Substituter<'_, '_, '_> {
             Some(Ok(r)) => (self.param_infos(pat), Some(r)),
             None => (self.param_infos(pat), None),
         };
-        let method = self.sema.kind_of(pat) == DeclKind::CXXMethod;
+        // [expr.prim.this]/3: no `this` in a static member function's
+        // declaration, so an implicit member access in its substituted
+        // signature has no object: a deduction failure (GCC 16.1; clang
+        // 22 substitutes with `this` and reports the use after
+        // deduction; WP-1572).
+        let method =
+            self.sema.kind_of(pat) == DeclKind::CXXMethod && !self.sema.is_static_method(pat);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match leading_ret {

@@ -732,7 +732,25 @@ no bases, not a base, no virtual functions, no reference members. A union
 has variant members (`HAS_VARIANT_MEMBERS`) only once it declares a
 non-static data member, so a defaulted comparison of a union without one is
 not deleted ([class.compare.default]/2;
-`class.compare.default/union-defaulted-equality*.cpp`; WP-1497). Anonymous
+`class.compare.default/union-defaulted-equality*.cpp`; WP-1497).
+The members of an anonymous union member of a union are variant members
+of the enclosing union, at every level of nesting ([class.union.general]/2;
+WP-1593): a default member initializer in a nested anonymous union is the
+enclosing union's for the deletion bullet "a variant member with a
+non-trivial default constructor and no variant member with a default
+member initializer" (`first_default_init` walks the anonymous members), and
+for "at most one" (`initializing multiple members of union`). The
+anonymous union member itself is no variant member, so from C++26
+(P3074R7) its non-trivial default constructor (from such an initializer)
+still makes the enclosing union's non-trivial, and that constructor
+activates the member through every level. An anonymous STRUCT member of a
+union is a variant member: from C++26 its default member initializers do
+not make the union's default constructor non-trivial (the text; clang 22
+and GCC 16.1 implement no P3074R7). The unnamed object of an anonymous
+union at namespace or block scope is default-initialized
+(`act_on_uninit`, as clang's `BuildAnonymousStructOrUnion`), so its
+default member initializers run (`class.union.anon/nested-anonymous-union-*`,
+`run-anonymous-union-object-default-member-init.cpp`). Anonymous
 unions are M2 (`IndirectField`).
 
 ### 2.9 Definition data ([class.prop], [dcl.init.aggr])

@@ -1703,6 +1703,13 @@ impl Sema<'_, '_> {
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
                     }
+                    // [dcl.array]/1 (clang `BuildArrayType`): the elements
+                    // are contiguous, so an over-aligned typedef element
+                    // whose size is not a multiple of its alignment is an
+                    // error (WP-1595), and the declarator is invalid.
+                    if self.check_array_element_alignment(ty, *loc) {
+                        fail!();
+                    }
                     ty = match size {
                         // C17 6.7.6.2p4: `[*]`, a variable length array of
                         // unspecified size (only in a prototype).
@@ -3890,6 +3897,9 @@ impl Sema<'_, '_> {
         }
         if let Some(r) = d.trailing_requires {
             self.act_on_trailing_requires(decl, r);
+        }
+        if !invalid && self.kind_of(decl) == DeclKind::CXXMethod {
+            self.check_this_in_static_declarator(decl, d.this_use, d.trailing_requires);
         }
         self.set_member_access(decl);
         let templ = self.finish_template_pattern(decl);
@@ -11800,6 +11810,21 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// C++03 [class.union]/1 for the members of anonymous struct `rec`.
+    fn cxx03_anon_struct_members(&mut self, rec: DeclId) {
+        let fields: Vec<DeclId> =
+            self.ast.decls.members(rec).filter(|&m| self.kind_of(m) == DeclKind::Field).collect();
+        for f in fields {
+            let n = *self.ast.decls.get(f);
+            if n.flags().contains(DeclFlags::INVALID) {
+                continue;
+            }
+            let nm = n.name().as_ident().map(|x| sym_str(self, x));
+            let fty = n.ty().unwrap_or(QualType::ERROR);
+            self.cxx03_nontrivial_member(fty, nm.as_deref(), n.loc(), false);
+        }
+    }
+
     /// An anonymous union (or, in a class, an anonymous struct)
     /// ([class.union.anon]): declares an unnamed object of the record's
     /// type and injects each member's name into the enclosing scope as an
@@ -11841,21 +11866,7 @@ impl Sema<'_, '_> {
         // (a union's were checked as they were declared; clang
         // `BuildAnonymousStructOrUnion`).
         if !union && self.std < kiln_lex::Std::Cxx11 {
-            let fields: Vec<DeclId> = self
-                .ast
-                .decls
-                .members(rec)
-                .filter(|&m| self.kind_of(m) == DeclKind::Field)
-                .collect();
-            for f in fields {
-                let n = *self.ast.decls.get(f);
-                if n.flags().contains(DeclFlags::INVALID) {
-                    continue;
-                }
-                let nm = n.name().as_ident().map(|x| sym_str(self, x));
-                let fty = n.ty().unwrap_or(QualType::ERROR);
-                self.cxx03_nontrivial_member(fty, nm.as_deref(), n.loc(), false);
-            }
+            self.cxx03_anon_struct_members(rec);
         }
         if in_class && let Some(x) = self.first_default_init(rec) {
             let loc = self.ast.decls.get(x).loc();
@@ -11878,7 +11889,16 @@ impl Sema<'_, '_> {
                 _ => VarStorage::None,
             };
             let h = if invalid { h.flags(DeclFlags::IMPLICIT.with(DeclFlags::INVALID)) } else { h };
-            self.builder().var(h, ty, VarSpec::new().with_storage(storage), None)
+            let v = self.builder().var(h, ty, VarSpec::new().with_storage(storage), None);
+            // The unnamed object is default-initialized ([dcl.init.general]/7;
+            // clang `ActOnUninitializedDecl` from
+            // `BuildAnonymousStructOrUnion`): a default member initializer
+            // of one of its members, at any level of nesting, initializes
+            // it (WP-1593).
+            if !invalid {
+                self.act_on_uninit(v);
+            }
+            v
         };
         let members: Vec<DeclId> = self.ast.decls.members(rec).collect();
         for m in members {

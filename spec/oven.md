@@ -3184,12 +3184,12 @@ active member 'i'", also when it is an intermediate member of the chain
 (`Compiler::implicit_union_member`, compile time only; WP-1575,
 `class.union/constexpr-assign-inactive-*.cpp`; clang 22 accepts the
 deleted ones, GCC 16.1 rejects them as the text does). An anonymous
-struct or union member is still activated by the assignment: Sema does
-not yet initialize a nested anonymous union whose member has a default
-member initializer from the enclosing union's default constructor
-([class.union.general]/2), so checking it would reject valid code
-(`constexpr-assign-nested-anonymous-union.cpp`; the invalid case is an
-xfail). Nested unions are tracked per union
+struct or union member follows the same rule: a nested anonymous union
+whose member has a default member initializer has a non-trivial default
+constructor, which the enclosing union's default constructor runs
+([class.union.general]/2; WP-1593), so assigning through it after another
+member of the enclosing union became active is rejected
+(`constexpr-assign-nested-anonymous-union*.cpp`). Nested unions are tracked per union
 subobject, so `n.q.x = 1` activates `q` in `n` and `x` in `q`
 (`tests/conformance/class.union/constexpr-nested-same-offset.cpp`).
 A placement new (`std::construct_at`, `Op::Placement`) walks the unions

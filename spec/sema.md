@@ -1430,6 +1430,25 @@ Redeclaration and linkage rules:
   `T x()`'s overload set, so the error is "no matching constructor for
   initialization of 'S'" with a note per candidate (clang
   `InitializationSequence` with no arguments).
+- **Arrays of over-aligned elements** (`array_align.rs`, WP-1595;
+  [dcl.array]/1 with [basic.align]/1: the elements are contiguous). An
+  array type whose element's size is not a multiple of its alignment is
+  an error, clang's `size of array element of type 'I' (aka 'int') (4
+  bytes) isn't a multiple of its alignment (16 bytes)`, at the `[` of a
+  declarator's bound (variables, typedefs, alias type-ids, parameters
+  before their adjustment, members, C) and at the type-id of `new I[n]`
+  (a later bound of a new-type-id at its `[`); the declarator is invalid,
+  as clang's `BuildArrayType` returns no type. Only a typedef's GNU
+  `aligned` attribute makes such a type (a class, `alignas` on an object,
+  a packed class are padded or unaligned), so the check runs only when
+  the element type is sugar with an attributed typedef on its chain
+  (`TypeFlags::SUGAR`, then `DeclFlags::HAS_ATTRS`); a template argument
+  is canonical, so `T[2]` with such a `T` is not checked (clang, GCC).
+  Tests: `dcl.array/over-aligned-element*.cpp`,
+  `tests/c/dcl/over-aligned-array-element.c`. An array of an `aligned`
+  enumeration (`enum __attribute__((aligned(8))) E : char`), which
+  clang also rejects, is not checked (its `alignof` differs between kiln,
+  8, and clang 22, 1).
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -4490,6 +4509,28 @@ specification as written (`TypeNames` prints ` noexcept`,
   member function` under the `in instantiation of exception
   specification` note, as in clang (WP-290,
   `class.mem.general/static-member-noexcept-this-instantiation.cpp`).
+  **`this` in a static member function's declarator** ([expr.prim.this]/2-3,
+  WP-1572): the parser opens a watch (`act_on_start_this_watch` /
+  `act_on_end_this_watch`) around a member's trailing return type; every
+  `CXXThisExpr` formed under it (`act_on_this`, the implicit `this` of
+  `note_this_use`) records its first location and whether it was
+  implicit in `Declarator::this_use`. `act_on_declarator` then calls
+  `check_this_in_static_declarator`: for a static method (by itself or
+  its first declaration) it reports `'this' cannot be [implicitly] used
+  in a static member function declaration` at that use, else at the
+  first `this` in the noexcept operand, else in the trailing
+  requires-clause (clang `checkThisInStaticMemberFunctionType`). In a
+  class template the substitution of the declaration's signature
+  (`subst::function_sig`) watches again and reports per instantiation.
+  When a static member function template's signature is substituted for
+  deduction, no `this` is formed, so a dependent call naming a
+  non-static member without an object is a deduction failure (`call to non-static member function
+  without an object argument`, as GCC), where clang hard-errors after
+  deduction. An explicit object member function is not checked: the text
+  makes `this` ill-formed there, clang accepts it, kiln follows clang.
+  A member named in such a function without its object parameter is
+  `invalid use of member 'm' in explicit object member function`
+  (`sema_invalid_member_in_static`'s second form).
   Every implicit object member function gets one: a constructor,
   destructor or conversion function's `noexcept(noexcept(m.f()))` names
   its members as a member function's does (WP-792,
@@ -5121,12 +5162,23 @@ diagnostics and IR.
   `act_on_decomposition_declarator`:
   - In a template-declaration it is `decomposition declaration template
     not supported`.
+  - Before C++17 it warns `structured binding declarations are a C++17
+    extension` (`-Wc++17-extensions`) at `[` (clang 19: `decomposition
+    declarations ...`), in every context; that warning replaces the
+    condition's below (WP-1588).
   - In a condition (`DeclaratorContext::Condition`, not an
-    init-statement) it warns `ISO C++17 does not permit structured
-    binding declaration in a condition` (`-Wbinding-in-condition`) at
-    `[` before C++26 (clang 19's wording; clang 22 calls it a C++2c
-    extension). In C++26 it is valid and silent ([stmt.pre]/4, P0963,
-    WP-356). The condition's value is the decomposed object `e`
+    init-statement) it warns `structured binding declaration in a
+    condition is a C++2c extension` (`-Wc++26-extensions`) at `[` from
+    C++17 to C++23 (at `-fclang-compat=19`: `ISO C++17 does not permit
+    structured binding declaration in a condition`,
+    `-Wbinding-in-condition`). In C++26 it is valid and silent
+    ([stmt.pre]/4, P0963, WP-356). [stmt.pre]/5: the declarator shall
+    not specify an array, so `act_on_condition_var` rejects a
+    decomposed variable of array type (`auto [a, b] = arr`, not
+    `auto& [a, b] = arr`) with `an array type is not allowed here` at
+    its `[` and forms no condition (as clang 22; GCC 16.1 rejects the
+    reference too; WP-1588, `dcl.struct.bind/condition-array-errors.cpp`).
+    The condition's value is the decomposed object `e`
     contextually converted to `bool`, and it is evaluated **before** the
     bindings are initialized: codegen (`emit_cond_var_decl`, then the
     condition, then `emit_binding_vars`, clang
@@ -5138,6 +5190,11 @@ diagnostics and IR.
     `switch` in §7, WP-364), likewise before the bindings. Tests:
     `dcl.struct.bind/p0963-binding-condition*.cpp`,
     `dcl.struct.bind/p0963-switch-condition.cpp`.
+  - At class scope ([class.mem.general]/1) the parser reports
+    `structured binding declaration not permitted in this context` at
+    `[` (`at_member_decomposition`) and skips the member-declaration,
+    so its names are never declared or looked up (WP-1588,
+    `dcl.struct.bind/class-scope-errors.cpp`).
   - Only `static`, `thread_local`, `auto` and cv are allowed
     ([dcl.pre]/6), plus `constexpr` and `constinit` in C++26 (P2686R5,
     WP-454; gated on `-std`, not on `-fclang-compat`). Another storage

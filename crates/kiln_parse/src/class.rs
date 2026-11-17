@@ -1764,6 +1764,15 @@ impl Parser<'_, '_> {
             if !first {
                 self.parse_declarator_gnu_attr_seq(&mut d);
             }
+            // [class.mem.general]/1: a member-declarator is never a
+            // structured binding declaration (clang `err_decomp_decl_context`
+            // at the `[`); the rest of the declaration is skipped, so its
+            // names are not looked up.
+            if self.at_member_decomposition() {
+                self.s.error(DiagId::sema_decomp_decl_context, self.loc());
+                self.skip_to_semi();
+                return;
+            }
             if !self.at(Punct::Colon) {
                 let saved = self.member_ds_range.replace(ds_range);
                 self.parse_declarator_in_group(&ds, &mut d);

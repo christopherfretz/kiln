@@ -5656,13 +5656,10 @@ impl Compiler<'_> {
     /// its lifetime ([class.union.general]/6, the set S(E)): a non-class
     /// type, or a class type (or array of one) whose default constructor
     /// is trivial and not deleted. Compile time only. An anonymous struct
-    /// or union member is still activated as before WP-1575: a nested
-    /// anonymous union whose member has a default member initializer
-    /// makes the enclosing union's default constructor initialize it
-    /// ([class.union.general]/2: its members are variant members of the
-    /// enclosing union), which Sema does not model yet (the enclosing
-    /// union is left without an active member), so checking it would
-    /// reject valid code.
+    /// or union member follows the same rule: a nested anonymous union
+    /// whose member has a default member initializer has a non-trivial
+    /// default constructor, which the enclosing union's default
+    /// constructor runs (WP-1593).
     fn implicit_union_member(&self, ty: OTy) -> bool {
         let mut t = ty;
         while let TyKind::Array { elem, .. } = self.kind(t) {
@@ -5672,9 +5669,6 @@ impl Compiler<'_> {
         let ast = self.ast();
         use kiln_ast::decl::DefinitionBits as B;
         let bits = new_delete::record_bits(ast, decl);
-        if bits.contains(B::ANONYMOUS) {
-            return true;
-        }
         if !bits.contains(B::TRIVIAL_DEFAULT_CTOR)
             || bits.contains(B::NONTRIVIAL_DEFAULT_CTOR)
             || bits.contains(B::DEFAULTED_DEFAULT_CTOR_DELETED)

@@ -356,6 +356,19 @@ impl Sema<'_, '_> {
             .is_some_and(|x| x.defn.contains(DefinitionBits::ANONYMOUS))
     }
 
+    /// Whether field `f` is an anonymous union member (not a variant
+    /// member itself: its members are, [class.union.general]/2).
+    pub(crate) fn is_anonymous_union_member(&self, f: DeclId) -> bool {
+        self.is_anonymous_member(f)
+            && self
+                .ast
+                .decls
+                .get(f)
+                .ty()
+                .and_then(|t| self.ast.types.as_record(t))
+                .is_some_and(|d| self.is_union(d))
+    }
+
     /// The fields of class `r` the special-member rules consider (no
     /// unnamed bit-fields).
     pub(crate) fn special_fields(&self, r: DeclId) -> Vec<DeclId> {

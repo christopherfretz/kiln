@@ -2990,6 +2990,9 @@ impl Sema<'_, '_> {
         let mut refs: Vec<(ExprId, MemberRef)> = self.member_refs.drain().collect();
         refs.sort_by_key(|(e, _)| e.index());
         let in_static = self.func.as_ref().is_some_and(|f| self.is_static_method(f.decl));
+        // [expr.prim.this]/2: no `this` in an explicit object member
+        // function either (clang `err_invalid_member_use_in_method`).
+        let explicit_obj = self.func.as_ref().is_some_and(|f| self.has_explicit_object(f.decl));
         let mut reported = false;
         for (e, r) in refs {
             if !r.error {
@@ -2998,8 +3001,10 @@ impl Sema<'_, '_> {
             let loc = self.eloc(e);
             let msg = if self.kind_of(r.decl) == DeclKind::CXXMethod {
                 self.diag(DiagId::sema_member_call_without_object, loc)
-            } else if in_static {
-                self.diag(DiagId::sema_invalid_member_in_static, loc).arg(self.decl_name(r.decl))
+            } else if in_static || explicit_obj {
+                self.diag(DiagId::sema_invalid_member_in_static, loc)
+                    .arg(self.decl_name(r.decl))
+                    .arg(u8::from(!in_static))
             } else {
                 self.diag(DiagId::sema_invalid_nonstatic_member_use, loc)
                     .arg(self.decl_name(r.decl))

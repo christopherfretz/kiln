@@ -65,11 +65,21 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
-        if d.ctx == DeclaratorContext::Condition && self.std < kiln_lex::Std::Cxx26 {
+        if self.std < kiln_lex::Std::Cxx17 {
+            // clang `ext_decomp_decl`, which replaces the condition's
+            // extension warning below.
+            self.error(DiagId::sema_ext_decomp_decl, dc.lbracket);
+        } else if d.ctx == DeclaratorContext::Condition && self.std < kiln_lex::Std::Cxx26 {
             // [stmt.pre]/4 (C++26, P0963): a structured binding declaration
             // may be a condition; before C++26 clang's
-            // `ext_decomp_decl_cond` (clang 19's wording).
-            self.error(DiagId::sema_decomp_decl_cond, dc.lbracket);
+            // `ext_decomp_decl_cond`: clang 22 `-Wc++26-extensions`, clang
+            // 19 `-Wbinding-in-condition` with another wording.
+            let id = if self.clang_compat >= 22 {
+                DiagId::sema_decomp_decl_cond
+            } else {
+                DiagId::sema_decomp_decl_cond_binding
+            };
+            self.error(id, dc.lbracket);
         }
         // [dcl.pre]/6: only static, thread_local, auto and cv; C++26
         // (P2686R5) adds constexpr and constinit (clang 22 accepts them

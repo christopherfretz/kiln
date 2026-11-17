@@ -3633,6 +3633,12 @@ impl Parser<'_, '_> {
             && matches!(Self::punct_of(self.peek(2)), Some(Punct::Equal | Punct::LBrace))
     }
 
+    /// Whether a member-declarator starts like a structured binding
+    /// declaration (the lookahead of [`Self::at_decomposition_declarator`]).
+    pub(crate) fn at_member_decomposition(&self) -> bool {
+        self.at_decomposition_declarator(&Declarator::new(DeclaratorContext::Block, self.loc()))
+    }
+
     /// `[ sb-identifier-list ]` (clang's `ParseDecompositionDeclarator`).
     fn parse_decomposition_declarator(&mut self, d: &mut Declarator) {
         let lbracket = self.bump().span.lo;
@@ -4464,31 +4470,44 @@ impl Parser<'_, '_> {
                     self.bump();
                     // A failed type-id was diagnosed: the declarator is
                     // invalid.
-                    // [expr.prim.this]/2: `this` may appear in a member
-                    // function's trailing return type; a friend is no
-                    // member (clang's `InitCXXThisScopeForDeclaratorIfRelevant`).
-                    let this = !d.friend
-                        && self
-                            .s
-                            .act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
-                    self.type_id_constraint = Loc::INVALID;
-                    let mark = self.s.lambda_mark();
-                    let tloc = self.loc();
-                    let mut ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
-                    if self.s.gnu_auto_type_return_check(ty, tloc) {
-                        ty = QualType::ERROR;
-                    }
-                    self.s.act_on_trailing_return_type(ty, mark);
-                    if !d.trailing_constraint.is_valid() {
-                        d.trailing_constraint = self.type_id_constraint;
-                    }
-                    self.s.act_on_end_this_scope(this);
+                    let ty = self.parse_trailing_return_type(d, quals);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
                 }
                 _ => return (exc.unwrap_or_default(), quals, ref_qual, trailing),
             }
         }
+    }
+
+    /// The type-id of a trailing return type, after `->`, with `this` in
+    /// scope for a member function ([expr.prim.this]/2).
+    fn parse_trailing_return_type(&mut self, d: &mut Declarator, quals: Quals) -> QualType {
+        // [expr.prim.this]/2: `this` may appear in a member
+        // function's trailing return type; a friend is no
+        // member (clang's `InitCXXThisScopeForDeclaratorIfRelevant`).
+        let this =
+            !d.friend && self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
+        // A static member function may not use it
+        // ([expr.prim.this]/3): the first use is kept for the
+        // declaration, which knows (WP-1572).
+        let watch = this.then(|| self.s.act_on_start_this_watch());
+        self.type_id_constraint = Loc::INVALID;
+        let mark = self.s.lambda_mark();
+        let tloc = self.loc();
+        let mut ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
+        if self.s.gnu_auto_type_return_check(ty, tloc) {
+            ty = QualType::ERROR;
+        }
+        self.s.act_on_trailing_return_type(ty, mark);
+        if !d.trailing_constraint.is_valid() {
+            d.trailing_constraint = self.type_id_constraint;
+        }
+        if let Some(w) = watch {
+            let used = self.s.act_on_end_this_watch(w);
+            d.this_use = d.this_use.or(used);
+        }
+        self.s.act_on_end_this_scope(this);
+        ty
     }
 
     /// noexcept-specifier ([except.spec]/1): `noexcept`,
