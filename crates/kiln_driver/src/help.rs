@@ -75,7 +75,8 @@ LANGUAGE:
   -f[no-]threadsafe-statics
                           Thread-safe initialization of static locals
   -fpermissive            Accept the arithmetic between enumerations that
-                          C++26 removed (P2864) with a warning
+                          C++26 removed (P2864) with a warning, and C::C
+                          naming the class
 
 PREPROCESSOR:
   -C, -CC                 With -E, keep comments (-CC: also in macros)

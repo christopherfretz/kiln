@@ -9,6 +9,7 @@ sema_abstract_final_class = Warning [AbstractFinalClass] (0) "abstract class is 
 sema_abstract_type_in_decl = Error (2) "{0:return|parameter|variable|field} type {1} is an abstract class";
 sema_access_base_conv = Error (3) "cannot cast {0} to its {1:private|protected} base class {2}";
 sema_access_base_ctor = Error (4) "{0:base class|inherited virtual base class} {1} has {3:private|protected} {2:default |copy |move |}constructor";
+sema_access_base_downcast = Error (3) "cannot cast {0:private|protected} base class {1} to {2}";
 sema_access_ctor = Error (2) "calling a {0:private|protected} constructor of class {1}";
 sema_access_dtor = Error (2) "calling a {1:private|protected} destructor of class {0}";
 sema_access_dtor_vbase = Error (2) "inherited virtual base class {0} has {1:private|protected} destructor";

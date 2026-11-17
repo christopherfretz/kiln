@@ -283,6 +283,14 @@ impl Sema<'_, '_> {
         if d.dropped {
             return None;
         }
+        // [temp.expl.spec]/1: an explicit specialization is not declared
+        // by a friend (`template<> friend void f<0>();`, clang
+        // `err_template_spec_decl_friend` at the name; nothing declared).
+        if self.templ.explicit_spec.is_some() && self.at_explicit_head() {
+            self.templ.explicit_spec = None;
+            self.error(DiagId::sema_template_spec_decl_friend, d.name_loc());
+            return None;
+        }
         // `friend void f(auto);` is an abbreviated friend function
         // template ([dcl.fct]/22): its invented head is the friend's.
         self.finish_invented_head();
@@ -305,6 +313,28 @@ impl Sema<'_, '_> {
             && let Some(class) = d.qualifier
         {
             return self.declare_special_member_friend(ds, base, d, record, class, head, sloc);
+        }
+        // [class.friend]/1, [class.mem.general]/3: a constructor,
+        // destructor or conversion function is a member, so a friend names
+        // it qualified (clang's "must use a qualified name" error, after
+        // the declarator's type checks; nothing declared).
+        if let Some((sp, sloc)) = d.special
+            && d.qualifier.is_none()
+            && let Some(k) = match sp {
+                SpecialName::Constructor(_) => Some(0u8),
+                SpecialName::Destructor(_) => Some(1),
+                SpecialName::Conversion(_) => Some(2),
+                _ => None,
+            }
+        {
+            if matches!(sp, SpecialName::Conversion(_)) {
+                let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
+                let _ = self.drop_invalid_fn_quals(ty, d, false, ds.loc);
+            }
+            self.templ.cur = None;
+            let msg = self.diag(DiagId::sema_friend_special_unqualified, sloc).arg(k);
+            self.emit(msg);
+            return None;
         }
         let op_d = self.operator_declarator(d);
         let d = op_d.as_ref().unwrap_or(d);
@@ -738,6 +768,22 @@ impl Sema<'_, '_> {
         owned: Option<DeclId>,
         friend_loc: Loc,
     ) -> Option<DeclId> {
+        // A friend class declaration is a free-standing one first (clang's
+        // `ParsedFreeStandingDeclSpec` before `ActOnFriendTypeDecl`).
+        if let Some(t) = ds.tag.or(owned) {
+            if !self.free_standing_tag_specifiers(ds, t) {
+                self.friend_class_template = None;
+                return None;
+            }
+        } else if let Some(l) = ds.inline {
+            self.inline_non_function(l);
+        }
+        // [class.friend]/3: a friend type declaration is `friend` followed
+        // by the type specifier (clang `err_friend_not_first_in_declaration`,
+        // C++11 on).
+        if ds.friend_not_first && self.std >= kiln_lex::Std::Cxx11 {
+            self.error(DiagId::sema_friend_not_first, ds.friend.unwrap_or(friend_loc));
+        }
         self.reject_friend_type_quals(ds);
         // `template<class U> friend class X;` ([temp.friend]/1): the
         // befriended class template (declared, hidden, by
@@ -748,6 +794,20 @@ impl Sema<'_, '_> {
             let first = self.ast.first(t);
             self.push_friend(first);
             return Some(fd);
+        }
+        // [temp.friend]/1: a friend class template is declared by an
+        // elaborated-type-specifier (`template<class U> friend S<U>;` and
+        // `template<int U> friend typename S<U>::Y;` are clang
+        // `err_tagless_friend_type_template` at `friend`; nothing declared).
+        if self.has_pending_head()
+            && owned.is_none()
+            && ds.tag.is_none()
+            && ds.dependent_tag_name.is_none()
+            && !self.is_error_type(base)
+        {
+            self.take_open_heads();
+            self.error(DiagId::sema_tagless_friend_type_template, ds.loc);
+            return None;
         }
         // `friend T;` / `friend class X;` ([class.friend]/3). A pack
         // outside an expansion is ill-formed ([temp.variadic]/12).

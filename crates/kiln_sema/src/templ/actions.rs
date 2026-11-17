@@ -412,6 +412,27 @@ impl Sema<'_, '_> {
         if let Some(p) = self.entered_partial_by_converted_args(tmpl, ty, loc) {
             return Some((p, n));
         }
+        // [expr.prim.id.qual]/1: an alias template specialization naming
+        // neither a class nor an enumeration (also with dependent
+        // arguments, `A<X>` aliasing `int`: clang
+        // `err_nested_name_spec_non_tag`).
+        if self.kind_of(tmpl) == DeclKind::TypeAliasTemplate {
+            let canon = self.ast.types.canonical(ty);
+            let t = &self.ast.types;
+            if !t.is_dependent(canon) && t.as_record(canon).is_none() && t.as_enum(canon).is_none()
+            {
+                let name = self.decl_name_str(self.ast.decls.get(tmpl).name());
+                let note = self
+                    .diag(DiagId::note_entity_declared_at, self.conflict_loc(tmpl))
+                    .arg(format!("type alias template '{name}'"));
+                let msg = self
+                    .diag(DiagId::sema_nested_name_spec_non_tag, loc)
+                    .arg(self.ty_arg(ty))
+                    .with_note(note);
+                self.emit(msg);
+                return None;
+            }
+        }
         if !self.is_dependent_type(ty) {
             // [expr.prim.id.qual]/1: the class must be complete.
             if !self.require_complete_nns(ty, loc) {

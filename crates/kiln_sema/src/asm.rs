@@ -65,7 +65,13 @@ impl Sema<'_, '_> {
             let c = self.asm_str(op.constraint);
             let name = self.asm_name(op);
             let mut info = ConstraintInfo::new(&c, &name);
-            if !tasm::validate_output_constraint(arch, &mut info) {
+            // clang 22's x86 `validateAsmConstraint` refuses `f` (any x87
+            // stack register) in a read-write output as well as in an
+            // `=` one (clang 19 only the latter); `t` and `u` stay valid.
+            let x87_rw = |i: &ConstraintInfo| i.is_read_write() && i.x87_stack();
+            if !tasm::validate_output_constraint(arch, &mut info)
+                || (self.clang_compat >= 22 && x87_rw(&info))
+            {
                 let d =
                     self.diag(DiagId::sema_asm_invalid_output_constraint, op.constraint_loc).arg(c);
                 self.emit(d);

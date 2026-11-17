@@ -497,7 +497,8 @@ pub struct Sema<'a, 'sm> {
     /// GCC's `-fpermissive` (default off): the C++26 arithmetic between
     /// different enumerations or an enumeration and a floating type
     /// (P2864, ill-formed) is diagnosed with the C++20/23 deprecation
-    /// warning, so GCC-built code still compiles (spec/driver.md).
+    /// warning, so GCC-built code still compiles, and `C::C` as a type
+    /// names the class ([class.qual]/2 is not enforced; spec/driver.md).
     pub permissive: bool,
     /// glibc's x86-64 `<bits/floatn.h>` declared `typedef __float128
     /// _Float128;` in a system header (the parser drops it, spec/types.md
@@ -2470,6 +2471,7 @@ fn is_access_error(id: DiagId) -> bool {
         id,
         DiagId::sema_access_base_conv
             | DiagId::sema_access_base_ctor
+            | DiagId::sema_access_base_downcast
             | DiagId::sema_access_ctor
             | DiagId::sema_access_dtor
             | DiagId::sema_access_field_ctor

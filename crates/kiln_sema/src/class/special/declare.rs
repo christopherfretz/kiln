@@ -291,6 +291,12 @@ impl Sema<'_, '_> {
                     Some(DiagId::sema_conv_not_member)
                 } else if ds.has_type_specifier() {
                     Some(DiagId::sema_conv_return_type)
+                } else if !ds.cv.is_empty() || ds.atomic_qual.is_some() {
+                    // [class.conv.fct]/1: cv-qualifiers among the
+                    // decl-specifiers would be part of a return type
+                    // (`const operator int();`; clang
+                    // `err_conv_function_with_complex_decl`).
+                    Some(DiagId::sema_conv_function_with_complex_decl)
                 } else if params.get(usize::from(xobj)).is_some() {
                     // [class.conv.fct]/1 (C++23): no non-object parameters;
                     // an explicit object parameter is allowed (P0847).
@@ -809,6 +815,24 @@ impl Sema<'_, '_> {
             (crate::lookup::is_tag_kind(k) || k == DeclKind::Typedef || k == DeclKind::TypeAlias)
                 && s.ast.decls.get(x).ty().is_some_and(|t| s.is_class_type_of(t, class))
         };
+        // [class.dtor]/1: the class-name after `~` is the class's
+        // injected-class-name (or, out of class, the terminal name of the
+        // nested-name-specifier), not a typedef-name for it (clang
+        // `ext_destructor_typedef_name`, an error by default in
+        // `-Wdtor-typedef`, also out of class, where GCC accepts
+        // `C2::~C2()`).
+        if let Some(&td) = found.iter().find(|&&x| names_class(self, x))
+            && matches!(self.kind_of(td), DeclKind::Typedef | DeclKind::TypeAlias)
+        {
+            let alias = self.kind_of(td) == DeclKind::TypeAlias;
+            let u = self.ast.decls.get(td).ty().unwrap_or(QualType::ERROR);
+            let tt = QualType::unqual(self.ast.types.typedef_type(td, u));
+            let m = self
+                .diag(DiagId::sema_dtor_typedef_name, tilde)
+                .arg(self.ty_arg(tt))
+                .arg(u8::from(alias));
+            self.emit(m);
+        }
         if found.iter().any(|&x| names_class(self, x)) || self.is_dependent_ctx(class) {
             return true;
         }

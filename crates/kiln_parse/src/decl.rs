@@ -1053,7 +1053,10 @@ impl Parser<'_, '_> {
                     self.emit(d);
                     Ok(())
                 }
-                Kw::Friend => set_flag(&mut ds.friend, loc, "friend"),
+                Kw::Friend => {
+                    ds.friend_not_first |= ds.friend.is_none() && !ds.is_empty();
+                    set_flag(&mut ds.friend, loc, "friend")
+                }
                 Kw::Noreturn => {
                     // clang `ext_c11_feature`: not in C11 and later.
                     if !self.s.c_at_least(kiln_lex::CStd::C11) {
@@ -1344,6 +1347,14 @@ impl Parser<'_, '_> {
         // function declaration inside its class, never a friend's (clang
         // `DeclSpec::Finish`, `err_friend_decl_spec`): reported at the
         // specifier and dropped, as clang does.
+        // `virtual` likewise ([dcl.fct.spec]/2; clang reports only it when
+        // both are written and drops both).
+        if let Some(l) = ds.virtual_.take() {
+            ds.explicit = None;
+            ds.explicit_expr = None;
+            let d = self.s.diag(DiagId::parse_friend_decl_spec, l).arg("virtual");
+            self.emit(d);
+        }
         if let Some(l) = ds.explicit.take() {
             ds.explicit_expr = None;
             let d = self.s.diag(DiagId::parse_friend_decl_spec, l).arg("explicit");
@@ -1674,7 +1685,7 @@ impl Parser<'_, '_> {
             // The injected-class-name of a base class template
             // specialization, `B` or `D::B` ([temp.local]/1-2).
             Some((end, NameClass::TypeTemplate(_), name))
-                if !self.next_is_less(end) && self.inherited_injected_at(start).is_some() =>
+                if !self.next_is_less(end) && self.base_injected_at(start, end) =>
             {
                 if end > start + 1 {
                     self.qualified_type_name_spec(ds, ctx, loc);
@@ -1846,6 +1857,21 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.inherited_injected_class(name, qual)
+    }
+
+    /// The name at `start..end` is a base's injected-class-name, or a
+    /// qualified one that is ambiguous between two bases.
+    fn base_injected_at(&self, start: usize, end: usize) -> bool {
+        self.inherited_injected_at(start).is_some()
+            || (end > start + 1 && self.ambiguous_injected_at(start).is_some())
+    }
+
+    /// [`Sema::ambiguous_injected_class_in`] for the qualified name at
+    /// token `start` (`D::B` with `B` the injected-class-names of two
+    /// specializations found through different bases).
+    fn ambiguous_injected_at(&self, start: usize) -> Option<DeclId> {
+        let (_, _, _, name, qual) = self.scan_name_qual_at(start)?;
+        self.s.ambiguous_injected_class_in(name, Some(qual?))
     }
 
     /// The injected-class-name of the class template `d` ([temp.local]/1).
@@ -3818,7 +3844,7 @@ impl Parser<'_, '_> {
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
         self.s.act_on_end_prototype();
-        let params = self.s.act_on_param_list(params);
+        let params = self.s.act_on_param_list(params, variadic, open);
         d.chunks.push(Chunk::Function {
             params,
             variadic,
@@ -3994,7 +4020,7 @@ impl Parser<'_, '_> {
             params.push(p);
         }
         self.s.act_on_end_prototype();
-        let params = self.s.act_on_param_list(params);
+        let params = self.s.act_on_param_list(params, false, Loc::INVALID);
         if let Some(Chunk::Function { params: ps, .. }) = d.chunks.first_mut() {
             *ps = params;
         }

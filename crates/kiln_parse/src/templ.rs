@@ -1720,6 +1720,29 @@ impl Parser<'_, '_> {
         {
             class = c;
         }
+        // [temp.res.general]/5: a typename-specifier names a type
+        // (`typename A::f<0>` with `f` a function or variable template:
+        // clang `err_typename_refers_to_non_type_template`).
+        if kw == TagKeyword::Typename
+            && self.at(Punct::Less)
+            && matches!(
+                class,
+                NameClass::FunctionTemplate(_) | NameClass::VarTemplate(_) | NameClass::Concept(_)
+            )
+        {
+            self.s.error(DiagId::sema_typename_refers_to_non_type_template, name_loc);
+            let _ = self.parse_template_arg_list();
+            return None;
+        }
+        // `typename D::template B<int>` with `D` the current instantiation
+        // and `B` not found in it but possibly in a dependent base: a
+        // member of an unknown specialization ([temp.dep.type]/6),
+        // looked up at instantiation.
+        if template_kw && class == NameClass::Dependent && self.at(Punct::Less) {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            let targs = Some(self.s.ast.types.arg_list(&args));
+            return Some(self.s.act_dependent_name_at(q.nns, name, targs, kw, name_loc));
+        }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             if let NameClass::TypeTemplate(d) = class {
                 self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
@@ -1746,6 +1769,18 @@ impl Parser<'_, '_> {
             && let Some(d) = self.s.inherited_injected_class(name, Some(q.ctx))
         {
             self.s.mark_type_referenced(d);
+            let named = self.s.tag_type(d);
+            return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
+        }
+        // Found as the injected-class-names of two specializations through
+        // different bases: ambiguous ([temp.local]/4, [class.member.lookup]),
+        // recovering with the first.
+        if matches!(class, NameClass::TypeTemplate(_))
+            && !template_kw
+            && !self.at(Punct::Less)
+            && let Some(d) = self.s.ambiguous_injected_class_in(name, Some(q.ctx))
+        {
+            self.s.diagnose_ambiguous_name(name, Some(q.ctx), name_loc);
             let named = self.s.tag_type(d);
             return Some(self.s.ast.types.elaborated(kw, Some(q.nns), named));
         }
@@ -1810,6 +1845,16 @@ impl Parser<'_, '_> {
             return None;
         };
         self.s.diagnose_ambiguous_name(name, Some(q.ctx), name_loc);
+        // [class.qual]/2: `C::C` names C's constructors, not the class,
+        // where the name is not a class-name (clang's `getTypeName`
+        // `err_out_of_line_qualified_id_type_names_constructor`; the type
+        // is still used). GCC's `-fpermissive` accepts it (a GCC
+        // permerror; clang has no such mode).
+        if kw == TagKeyword::None && !self.s.permissive && self.s.names_own_class(q.ctx, name, d) {
+            let text = format!("'{}'", self.s.ast.symbols().as_str(name));
+            let m = self.s.diag(DiagId::sema_qualified_ctor_name_as_type, name_loc).arg(text);
+            self.emit(m);
+        }
         self.s.mark_type_referenced(d);
         self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
         let kind = self.s.ast.decls.get(d).kind();

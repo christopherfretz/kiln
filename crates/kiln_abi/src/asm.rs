@@ -37,6 +37,7 @@ const ALLOWS_REGISTER: u8 = 2;
 const ALLOWS_MEMORY: u8 = 4;
 const EARLY_CLOBBER: u8 = 8;
 const MATCHING_INPUT: u8 = 16;
+const X87_STACK: u8 = 32;
 
 impl ConstraintInfo {
     /// A fresh info for `constraint` of the operand named `name`.
@@ -62,6 +63,11 @@ impl ConstraintInfo {
     /// `&`.
     pub fn early_clobber(&self) -> bool {
         self.flags & EARLY_CLOBBER != 0
+    }
+    /// x86 `f`: any x87 stack register (clang 22 rejects it in a
+    /// read-write output, see [`Self::is_read_write`]).
+    pub fn x87_stack(&self) -> bool {
+        self.flags & X87_STACK != 0
     }
     /// An input is tied to this output.
     pub fn has_matching_input(&self) -> bool {
@@ -153,7 +159,7 @@ fn validate_target(arch: Arch, c: &[u8], i: &mut usize, info: &mut ConstraintInf
                 if info.constraint.starts_with('=') {
                     return false;
                 }
-                info.set(ALLOWS_REGISTER);
+                info.set(ALLOWS_REGISTER | X87_STACK);
                 true
             }
             b'a' | b'b' | b'c' | b'd' | b'S' | b'D' | b'A' | b't' | b'u' | b'y' | b'x' | b'v'

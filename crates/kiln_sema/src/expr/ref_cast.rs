@@ -301,7 +301,7 @@ impl Sema<'_, '_> {
                     return Err(v);
                 }
                 if !style.ignores_base_access() {
-                    self.check_base_access(tu, fu, &p, loc);
+                    self.check_downcast_base_access(tu, fu, &p, loc);
                 }
                 Ok(Some((CastKind::BaseToDerived, Some(path_list(self, &p)))))
             }
@@ -341,7 +341,7 @@ impl Sema<'_, '_> {
             return Some(self.recover(to, &[x], loc));
         }
         if !style.ignores_base_access() {
-            self.check_base_access(tu, fu, &p, loc);
+            self.check_downcast_base_access(tu, fu, &p, loc);
         }
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;
@@ -377,7 +377,23 @@ impl Sema<'_, '_> {
         }
         let d = self.ast.types.as_record(QualType::unqual(fcls))?;
         let b = self.ast.types.as_record(QualType::unqual(tcls))?;
-        let BaseSearch::Unique(p) = find_base(self, d, b) else { return None };
+        let p = match find_base(self, d, b) {
+            BaseSearch::Unique(p) => p,
+            BaseSearch::Ambiguous(paths) => {
+                // [expr.static.cast]/12: `B` must be an unambiguous base
+                // (clang `TryStaticMemberPointerUpcast`, a hard failure).
+                let shown = ambiguous_paths_string(self, QualType::unqual(fcls), &paths);
+                let msg = self
+                    .diag(DiagId::sema_ambiguous_member_pointer_conv, loc)
+                    .arg(1u8)
+                    .arg(self.ty_arg(QualType::unqual(fcls)))
+                    .arg(self.ty_arg(QualType::unqual(tcls)))
+                    .arg(shown);
+                self.emit(msg);
+                return Some(self.recover(to, &[x], loc));
+            }
+            BaseSearch::NotDerived => return None,
+        };
         if let Some(v) = p.first_virtual {
             // [expr.static.cast]/12: no virtual base on the path (clang
             // `TryStaticMemberPointerUpcast`, a hard failure), so no
@@ -390,6 +406,11 @@ impl Sema<'_, '_> {
                 .arg(self.ty_arg(vt));
             self.emit(msg);
             return Some(self.recover(to, &[x], loc));
+        }
+        // ... and an accessible one, unless a C-style cast ([expr.cast]/4).
+        if !style.ignores_base_access() {
+            let (dt, bt) = (QualType::unqual(fcls), QualType::unqual(tcls));
+            self.check_base_access(dt, bt, &p, loc);
         }
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;

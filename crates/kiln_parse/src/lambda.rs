@@ -147,7 +147,7 @@ impl Parser<'_, '_> {
         // replayed once the call operator is declared.
         let contracts = self.capture_contract_specs();
         self.s.act_on_end_prototype();
-        let params = self.s.act_on_param_list(params);
+        let params = self.s.act_on_param_list(params, variadic, open);
         d.chunks.push(Chunk::Function {
             params,
             variadic,

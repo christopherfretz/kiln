@@ -1171,6 +1171,20 @@ Planned as 1.3.0.
   rejects `bool` and enumeration operands as GCC does; a specialization
   whose template arguments hold an error is dropped instead of being
   followed by a `redefinition` error.
+- Required diagnostics found running GCC's C++ testsuite: pointer-to-member
+  conversions through an inaccessible or ambiguous base; `inline`,
+  `virtual`, `explicit` and `_Noreturn` on parameters, qualified parameter
+  declarators, misplaced `void` parameters, cv-qualifiers on conversion
+  functions, specifiers on free-standing tag declarations, a template
+  typedef, a typedef-name destructor (`-Wdtor-typedef`), inline variables
+  before C++17 (`-Wc++17-extensions`); friend forms (explicit
+  specializations, tagless friend type templates, `friend` not first,
+  unqualified friend constructors, destructors and conversions); `C::C`
+  naming a type (accepted under `-fpermissive`), `typename` naming a
+  non-type template, ambiguous qualified injected-class-names, a type alias
+  template naming a non-class in a nested-name-specifier, and a repeated
+  `using E::x;` in a class; x86-64 `"+f"` asm outputs are rejected as clang
+  22 does instead of crashing the backend.
 
 ## [1.2.1] - 2026-11-14
 

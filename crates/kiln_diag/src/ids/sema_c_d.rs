@@ -190,6 +190,7 @@ sema_constexpr_nonstatic_member = Error (0) "non-static data member cannot be co
 // ----- WP-1500 (clang `warn_cxx14_compat_constexpr_not_const`)
 sema_constexpr_not_const = Warning [ConstexprNotConst] (0) "'constexpr' non-static member function will not be implicitly 'const' in C++14; add 'const' to avoid a change in behavior";
 sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
+sema_constexpr_tag = Error (2) "{0:class|struct|interface|union|enum|enum class|enum struct} cannot be marked {1:constexpr|consteval|constinit}";
 // [dcl.constexpr]/1: a constexpr variable declaration shall be a definition (clang err_invalid_constexpr_var_decl).
 sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declaration must be a definition";
 sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
@@ -213,6 +214,7 @@ sema_contract_result_deduced = Error (0) "postcondition with a result name on a 
 sema_contract_result_void = Error (0) "function does not return a value to test";
 sema_contract_virtual = Error (0) "function contract specifiers cannot be added to virtual functions";
 sema_conv_deleted_ctor = Error (2) "conversion function from {0} to {1} invokes a deleted function";
+sema_conv_function_with_complex_decl = Error (0) "cannot specify any part of a return type in the declaration of a conversion function; put the complete type after 'operator'";
 sema_conv_not_member = Error (0) "conversion function must be a non-static member function";
 sema_conv_params = Error (0) "conversion function cannot have any parameters";
 sema_conv_return_type = Error (0) "conversion function cannot have a return type";
@@ -467,6 +469,7 @@ sema_dtor_not_member = Error (0) "destructor must be a non-static member functio
 sema_dtor_params = Error (0) "destructor cannot have any parameters";
 sema_dtor_return_type = Error (0) "destructor cannot have a return type";
 sema_dtor_type_mismatch = Error (2) "destructor type {0} in object destruction expression does not match the type {1} of the object being destroyed";
+sema_dtor_typedef_name = WarningError [DtorTypedef] (2) "destructor cannot be declared using a {1:typedef|type alias} {0} of the class name";
 sema_dtor_undeclared_name = Error (1) "undeclared identifier '{0}' in destructor name";
 sema_dtor_variadic = Error (0) "destructor cannot be variadic";
 sema_duplicate_asm_operand_name = Error (1) "duplicate use of asm operand name \"{0}\"";

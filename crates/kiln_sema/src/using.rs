@@ -108,12 +108,8 @@ impl Sema<'_, '_> {
             return None;
         };
         if let Some(l) = ellipsis {
-            let packs = self
-                .ast
-                .types
-                .nns_flags(q.nns)
-                .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
-            if !packs {
+            let flags = self.ast.types.nns_flags(q.nns);
+            if !flags.contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK) {
                 self.error(DiagId::sema_pack_expansion_without_packs, l);
                 return None;
             }
@@ -163,6 +159,7 @@ impl Sema<'_, '_> {
             self.push_local(n, d);
             return Some(d);
         }
+        self.unrepeated_enum_using(q.ctx, name, name_loc)?;
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         // [namespace.udecl]/8: at namespace or block scope a
         // using-declarator may name a class member only if it is an
@@ -482,11 +479,7 @@ impl Sema<'_, '_> {
         // name the member through the same class. Through another class
         // (`using A::f; using B::f;`, B derived from A) the members already
         // introduced are not introduced again (`introduce_shadow`).
-        if let Some(prev) = self.previous_class_using(class, q.ctx, name) {
-            let msg = self
-                .diag(DiagId::sema_using_decl_redeclaration, name_loc)
-                .with_note(self.diag(DiagId::note_previous_using_decl, prev));
-            self.emit(msg);
+        if self.repeated_class_using(class, q.ctx, name, name_loc) {
             return None;
         }
         let access = self.current_member_access();
@@ -737,6 +730,34 @@ impl Sema<'_, '_> {
             .map(|m| self.ast.decls.get(m).loc())
     }
 
+    /// [namespace.udecl]/10: `using E::x;` repeated in one class through
+    /// the enumeration `qual` is a redeclaration (reported); `None` then.
+    fn unrepeated_enum_using(&mut self, qual: DeclId, name: DeclName, at: Loc) -> Option<()> {
+        let class = self.member_spec_class();
+        match class {
+            Some(c) if self.repeated_class_using(c, qual, name, at) => None,
+            _ => Some(()),
+        }
+    }
+
+    /// [`Sema::previous_class_using`] reported: "redeclaration of using
+    /// declaration" at `name_loc` with a note at the earlier one; true
+    /// when there was one.
+    fn repeated_class_using(
+        &mut self,
+        class: DeclId,
+        qual: DeclId,
+        name: DeclName,
+        name_loc: Loc,
+    ) -> bool {
+        let Some(prev) = self.previous_class_using(class, qual, name) else { return false };
+        let msg = self
+            .diag(DiagId::sema_using_decl_redeclaration, name_loc)
+            .with_note(self.diag(DiagId::note_previous_using_decl, prev));
+        self.emit(msg);
+        true
+    }
+
     /// The location of an earlier using-declarator of `name` in class
     /// `class` whose nested-name-specifier names class `qual`.
     fn previous_class_using(&self, class: DeclId, qual: DeclId, name: DeclName) -> Option<Loc> {
@@ -750,7 +771,10 @@ impl Sema<'_, '_> {
                 let Some(nns) = self.ast.using_qualifier(m) else { return false };
                 let Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else { return false };
                 let ty = self.ast.types.canonical(ty);
-                self.ast.types.as_record(ty).is_some_and(|r| self.ast.first(r) == qual)
+                // A member enumeration's qualifier too (`using E::x;`
+                // twice, [enum.udecl]).
+                let t = &self.ast.types;
+                t.as_record(ty).or_else(|| t.as_enum(ty)).is_some_and(|r| self.ast.first(r) == qual)
             })
             .map(|m| self.ast.decls.get(m).loc())
     }
