@@ -743,16 +743,60 @@ as an ambiguity with a member of the dependent base, is an error there
 `temp.dep.type/member-template-also-in-dependent-base.cpp`,
 `temp.names/p7-type-only-context-terminal-name-template-run.cpp`.
 
-Gap (WP-1530 remainder): a member *call* through the current
-instantiation whose callee has a non-dependent type (`this->fn(42)`,
-an implicit `this` calling `mf()`, `A0::nf()` of a non-dependent base)
-is not type-dependent by [temp.dep.expr]/5, so `auto b = this->fn(42);
-b.bfn<int>()` needs no `template`. Kiln (like clang) keeps the
-`MemberExpr` of a member function type-dependent through `this`
-(`kiln_ast` builder `member`: only a field of the current instantiation
-drops the type dependence), so the call and `b` are dependent. Test:
-`temp.dep.expr/p5-member-call-current-instantiation-not-type-dependent-run.cpp`
-(xfail).
+A member *call* through the current instantiation (`this->fn(42)`, an
+implicit `this` calling `mf()`, `A0::nf()` of a non-dependent base) is
+not type-dependent by [temp.dep.expr]/5 when its result cannot change at
+instantiation, so `auto b = this->fn(42); b.bfn<int>()` needs no
+`template` (WP-1570, WP-1530's remainder; clang 22 keeps such calls
+dependent, GCC 16.1 accepts most: the text decides). The member access
+itself stays type-dependent (`kiln_ast` builder `member` drops the type
+dependence only for a field); the call does not
+(`Sema::current_instantiation_call_type` in `dependent_call`) when all of
+these hold:
+- no argument is type-dependent;
+- the callee (through parentheses) is a `MemberExpr` whose object is
+  `this`, explicit or implicit, naming one non-template member function
+  (no overload set, no explicit template arguments);
+- the function's type is not dependent and holds no placeholder;
+- the result (through a reference or a pointer) does not name an
+  incomplete class;
+- the class of `*this` is complete at the call (not on the
+  being-defined stack) and has no dependent base.
+
+The call then gets the function's return type and its value category
+([expr.call]/14: an lvalue for an lvalue reference, an xvalue for an
+rvalue reference to an object), and stays VALUE | INST: it is not
+resolved or converted at definition (no new diagnostics there), but
+rebuilt by `act_on_call` at instantiation like any dependent call. The
+line is drawn where the result type is fixed by the definition alone;
+every excluded case keeps `<dependent type>`, which is always correct
+for valid code (it only requires `template` before a member template of
+the result):
+- an overload set or a member template would need overload resolution or
+  deduction at definition, which kiln does not do for a dependent
+  object (a dependent call is formed again anyway);
+- a deduced return type (`auto d()`) is not known before the member's
+  definition is instantiated;
+- a dependent base may add or hide a member at instantiation (a
+  using-declaration of the base's `f`, [temp.dep.type]);
+- an incomplete class (a trailing return type or a member declaration
+  in the class body) may still declare an overload a later lookup finds;
+- a result naming an incomplete class (`Heap *`) may be complete at
+  instantiation: a member access into it is checked there, not rejected
+  at definition (GCC only warns; `g++.dg/template/incomplete8.C`);
+- explicit specializations of a member function must keep the member's
+  type ([temp.expl.spec]), and default arguments do not change the
+  return type, so neither can change the result.
+
+With the object of `.v` no longer type-dependent, a `<` after a member
+template of the result begins a template argument list ([temp.names]/3):
+`this->mf().v < 1 > (2)` is `v<1>(2)` (clang reads less-than, an error
+at instantiation), and a now-redundant `template` stays valid
+([temp.names]/7). Tests:
+`temp.dep.expr/p5-member-call-current-instantiation-not-type-dependent-run.cpp`,
+`temp.dep.expr/p5-member-call-current-instantiation-dependence-ast.cpp`
+(where the line is drawn),
+`temp.dep.expr/p5-member-call-current-instantiation-template-keyword-run.cpp`.
 
 At instantiation, `T::template f<A>` names a template when the lookup of
 `f` in the substituted `T` finds any template: an overload set that also
@@ -5425,10 +5469,11 @@ immediate context: errors are hard.
   substitution rebuilds the list's elements and hands them to
   `act_on_param_default_list`, which list-initializes the instantiated
   parameter's type (the same path as a non-template braced default
-  argument; WP-136). Before C++17 the temporaries of a dependent template
-  argument in the parameter's type (`enable_if_t<f(Nil{}) && N == 0> =
-  {}`) can leave the stored `void` list wrapped in an `ExprWithCleanups`;
-  substitution unwraps it and treats it as the list (WP-1571,
+  argument; WP-136). The temporaries of a dependent template argument in
+  the parameter's type (`enable_if_t<f(Nil{}) && N == 0> = {}` before
+  C++17) end with that argument (spec/sema-class.md §5.3), so the stored
+  `void` list is never wrapped in an `ExprWithCleanups` (WP-1571,
+  WP-1578,
   `dcl.fct.default/dependent-braced-default-after-temporary-cxx14{,-reject}.cpp`).
 - A default argument of a parameter whose type is, or is a reference to,
   a dependent class ([temp.dep.type]/7: a nested class of a class
@@ -6848,8 +6893,7 @@ whose head the notes name. It evaluates:
     into the parameter mappings of the concept's atoms, so only atoms
     whose mapping names a failed parameter are ill-formed
     ([temp.constr.atomic]/3: not satisfied). `sat_concept_id_partial`
-    substitutes each argument alone (type and template arguments, no
-    packs, at most 64), and when some fail checks the concept with
+    substitutes each argument alone (at most 64), and when some fail checks the concept with
     those arguments null and the failed parameters recorded in
     `ConceptState::poisoned`; `sat_atom` answers an atom that uses a
     poisoned parameter (or whose use is unknown) as not satisfied
@@ -6870,9 +6914,21 @@ whose head the notes name. It evaluates:
     a poisoned parameter is poisoned unsubstituted: `C auto` for `int`
     with `template<class T, class U = typename T::type> concept C =
     true` is satisfied (`true` has an empty mapping; GCC 16.1 agrees,
-    clang 19/22 reject; the text decides). Non-type parameters and a
-    pack expansion before the pack's position are not split (the whole
-    concept-id fails). A nested requirement whose constraint-expression
+    clang 19/22 reject; the text decides). An argument for a non-type
+    parameter (or each element of a trailing non-type pack) is also
+    converted to the parameter's type ([temp.arg.nontype]/2) under the
+    same frame (`convert_concept_arg`): a narrowing or a type mismatch
+    poisons the parameter as a failed substitution does, and so does a
+    parameter type naming a poisoned parameter (`template<class T, T
+    V>`), but a failed conversion adds no "substituted constraint
+    expression is ill-formed" note (clang 22 names none); clang 22 and
+    GCC 16.1 agree (WP-1598,
+    `temp.constr.normal/concept-id-non-type-parameter-partial-satisfaction{,-reject}.cpp`).
+    A pack expansion written before the pack's position is not split
+    (the whole concept-id fails): written, it is ill-formed ("pack
+    expansion used as argument for non-pack parameter of concept",
+    §3.2), so only a type-constraint's immediately-declared constraint
+    reaches it. A nested requirement whose constraint-expression
     does not substitute as a whole is checked the same way, atom by
     atom ([expr.prim.req.nested]/1, `Sema::sat_nested_requirement`;
     clang 22 and GCC 16.1 agree). WP-1531,
@@ -7115,10 +7171,19 @@ substitution), are its own, and the saved locals mapped on through its
 own (a lambda parameter, a capture, a local of the lambda body). When
 the levels do not line up (more retained levels than the final
 substitution has) the two substitutions run one after the other, as
-before. Not deferred while a pack is expanded element by element or
-when the expression names an enclosing pack unexpanded. clang 19/22
-substitute the later requirements early and reject; GCC 16.1 agrees
-with the text. Tests:
+before. Under an expansion substituted element by element (a generic
+lambda in a fold, a pack-expanded base initializer or initializer
+list) each element defers by itself: `DeferredRequires::pack` holds the
+element's index and the expansion's length, the copy's unexpanded-pack
+bit is cleared (its packs are that element's, so the expansion is
+complete), and the final substitution substitutes the enclosing packs
+the requirements name with that element ([temp.variadic]/7; WP-1599,
+`expr.prim.req.general/p5-generic-lambda-requirement-order-pack{,-reject}.cpp`,
+with `sizeof...` and a pack index `Ts...[0]`). Not deferred when the
+expression names a pack of a partially substituted expansion kept
+unexpanded (§7.2). clang 19/22 substitute the later requirements early
+and reject; GCC 16.1 agrees with the text (and rejects these lambdas in
+a pack expansion). Tests:
 `expr.prim.req.general/p5-generic-lambda-requirement-order{,-reject}.cpp`.
 WP-1531.
 

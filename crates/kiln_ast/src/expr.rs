@@ -2944,12 +2944,29 @@ impl ExprArena {
         self.nodes[e.index() as usize].deps |= ExprDeps::VALUE_INST;
     }
 
+    /// Clears `e`'s unexpanded-pack bit: a copy of a pattern whose packs
+    /// are bound to one element of the enclosing expansion (a deferred
+    /// requires-expression). Call it before any parent of `e` is built.
+    pub fn clear_unexpanded_pack(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        n.deps = n.deps.without(ExprDeps::UNEXPANDED_PACK);
+    }
+
     /// Marks `e` type-, value- and instantiation-dependent: a variable
     /// captured by copy in a lambda whose explicit object parameter has a
     /// dependent type ([temp.dep.expr]/3, P0847) has a type that depends
     /// on the specialization. Call it before any parent of `e` is built.
     pub fn mark_type_dependent(&mut self, e: ExprId) {
         self.nodes[e.index() as usize].deps |= ExprDeps::TYPE_VALUE_INST;
+    }
+
+    /// Marks `e` value- and instantiation-dependent but not
+    /// type-dependent: a call of a member of the current instantiation
+    /// through a type-dependent `this` whose result type is known
+    /// ([temp.dep.expr]/5). Call it before any parent of `e` is built.
+    pub fn clear_type_dependence(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        n.deps = n.deps.without(ExprDeps::TYPE) | ExprDeps::VALUE_INST;
     }
 
     /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating

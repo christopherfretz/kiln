@@ -215,6 +215,18 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Templates and concepts, found running GCC's C++ testsuite (WP-1570,
+  WP-1578, WP-1598, WP-1599): a member call through `this` of the current
+  instantiation naming one non-template member function with a
+  non-dependent type, in a class with no dependent base, is no longer
+  type-dependent ([temp.dep.expr]/5), so `auto b = this->f(1);
+  b.g<int>()` needs no `template`. Before C++17 the temporaries of a
+  dependent template argument no longer leak into the next
+  full-expression. A concept-id with a non-type parameter whose argument
+  fails is judged atom by atom ([temp.constr.atomic]/3), and a
+  requires-expression under a pack expansion defers its later
+  requirements ([expr.prim.req.general]/5).
+
 - Expansion statements and related checks, found running GCC's C++
   testsuite (WP-1483): an iterating `template for` follows the working
   draft's [stmt.expand]/5.2. Its range and iterator are `constexpr`

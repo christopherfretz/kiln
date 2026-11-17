@@ -295,17 +295,28 @@ impl Sema<'_, '_> {
         self.imm.pending.const_eval = self.imm.pending.const_eval.saturating_sub(1);
         let outer = self.cleanup_marks.pop().unwrap_or_default();
         if let Some(e) = e {
-            self.note_constant_outer_cleanups(e, outer);
+            self.end_constant_operand(e, outer);
         }
     }
 
-    /// Records `outer`, the cleanup state before constant-expression `e`
-    /// was built, for [`Sema::act_on_constant_full_expr`] (clang's
-    /// `ConstantEvaluated` context saving `ParentCleanup`). Only an outer
-    /// full-expression with pending cleanups needs it.
-    pub(crate) fn note_constant_outer_cleanups(&mut self, e: ExprId, outer: CleanupState) {
-        if outer.needs {
+    /// The end of constant-expression `e`, built with `outer` the cleanup
+    /// state before it. `e` is a full-expression of its own
+    /// ([intro.execution]/5), completed by
+    /// [`Sema::act_on_constant_full_expr`] once converted, or never in
+    /// this context (a dependent template argument, an argument of a
+    /// dependent template name or of a parameter of dependent type,
+    /// converted where it is substituted): its temporaries end with it,
+    /// so the enclosing state comes back now and the next
+    /// full-expression (a following default argument or member
+    /// initializer) does not take them (clang's
+    /// `PopExpressionEvaluationContext` of a `ConstantEvaluated` context
+    /// restores `ParentCleanup`; WP-1578). `e` is recorded when it built
+    /// temporaries or the enclosing full-expression has some pending:
+    /// [`Sema::act_on_constant_full_expr`] then completes it with its own.
+    pub(crate) fn end_constant_operand(&mut self, e: ExprId, outer: CleanupState) {
+        if self.cleanup != outer || outer.needs {
             self.constant_outer_cleanups.insert(e, outer);
+            self.cleanup = outer;
         }
     }
 

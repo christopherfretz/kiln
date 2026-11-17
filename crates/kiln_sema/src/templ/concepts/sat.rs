@@ -727,8 +727,8 @@ impl Sema<'_, '_> {
     /// enclosing concept, the atoms naming the pack are unsatisfied and
     /// the others are evaluated (WP-1579).
     /// `None` when no argument fails on its own, or the concept-id has a
-    /// form this does not cover (a non-type parameter, a pack expansion
-    /// before the pack's position): the caller keeps the whole-atom
+    /// form this does not cover (a pack expansion before the pack's
+    /// position): the caller keeps the whole-atom
     /// answer. Only reached after a substitution failure, so the
     /// satisfied path is unchanged.
     fn sat_concept_id_partial(
@@ -754,16 +754,7 @@ impl Sema<'_, '_> {
         let pack =
             params.last().is_some_and(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack));
         let fixed = params.len() - usize::from(pack);
-        if params.len() > 64
-            || written.len() > 64
-            || (!pack && written.len() > params.len())
-            || params.iter().any(|&p| self.kind_of(p) == DeclKind::NonTypeTemplateParm)
-            || params[..fixed].iter().any(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack))
-            || written.iter().take(fixed).any(|&a| self.is_pack_expansion_arg(a))
-            || params[written.len().min(fixed)..fixed]
-                .iter()
-                .any(|&p| self.template_default(p).is_none())
-        {
+        if !self.partial_concept_id_form(&params, &written, pack, fixed) {
             return None;
         }
         let ce = self.ast.template_info(c).and_then(|i| i.constraint)?;
@@ -806,7 +797,13 @@ impl Sema<'_, '_> {
                     args.push(TemplateArg::NULL);
                     continue;
                 }
-                self.subst_concept_arg_group(entity, levels, at, group, i >= fixed)
+                let r = self.subst_concept_arg_group(entity, levels, at, group, i >= fixed);
+                match r {
+                    Some((Some(a), Ok(()))) if self.kind_of(p) == DeclKind::NonTypeTemplateParm => {
+                        self.convert_concept_arg(c, depth, p, a, at, &args, mask)
+                    }
+                    r => r,
+                }
             };
             match r {
                 Some((Some(a), Ok(()))) => args.push(a),
@@ -843,6 +840,72 @@ impl Sema<'_, '_> {
         }
         recs.extend(s.records);
         Some(false)
+    }
+
+    /// Whether [`Self::sat_concept_id_partial`] covers a concept-id with
+    /// template parameters `params` (a trailing pack if `pack`, `fixed`
+    /// before it) and written arguments `written`: at most 64 of each, no
+    /// extra argument, no pack before the last parameter, no pack
+    /// expansion before the pack's position, and a default for every
+    /// fixed parameter without a written argument.
+    fn partial_concept_id_form(
+        &self,
+        params: &[DeclId],
+        written: &[TemplateArg],
+        pack: bool,
+        fixed: usize,
+    ) -> bool {
+        params.len() <= 64
+            && written.len() <= 64
+            && (pack || written.len() <= params.len())
+            && !params[..fixed].iter().any(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack))
+            && !written.iter().take(fixed).any(|&a| self.is_pack_expansion_arg(a))
+            && params[written.len().min(fixed)..fixed]
+                .iter()
+                .all(|&p| self.template_default(p).is_some())
+    }
+
+    /// The substituted argument `a` of non-type parameter `p` of concept
+    /// `c` in [`Self::sat_concept_id_partial`], converted to the
+    /// parameter's type ([temp.arg.nontype]/2) with the arguments `prior`
+    /// before it, in a SFINAE frame; a trailing pack's elements one by
+    /// one. A narrowing or a type mismatch fails it as a failed
+    /// substitution does, and so does a parameter type naming a failed
+    /// parameter (in `mask`). Neither gives a "substituted constraint
+    /// expression is ill-formed" note (clang 22 names none for it).
+    #[allow(clippy::too_many_arguments, reason = "the parameter, its argument and the context")]
+    fn convert_concept_arg(
+        &mut self,
+        c: DeclId,
+        depth: u16,
+        p: DeclId,
+        a: TemplateArg,
+        at: Loc,
+        prior: &[TemplateArg],
+        mask: u64,
+    ) -> Option<SubstOutcome<TemplateArg>> {
+        let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        if mask != 0
+            && self
+                .used_template_params_in_arg(TemplateArg::ty(ty), depth)
+                .is_none_or(|u| u & mask != 0)
+        {
+            return Some((None, Ok(())));
+        }
+        let (a, st) =
+            self.in_sfinae(FrameKind::ConstraintSubstitution, c, None, at, |s| match a.view() {
+                ArgView::Pack(l) => {
+                    let xs = s.ast.types.args(l).to_vec();
+                    let mut out = Vec::with_capacity(xs.len());
+                    for x in xs {
+                        out.push(s.check_template_arg(c, depth, p, x, at, prior).ok()?);
+                    }
+                    Some(TemplateArg::pack(s.ast.types.arg_list(&out)))
+                }
+                _ => s.check_template_arg(c, depth, p, a, at, prior).ok(),
+            })?;
+        let st = if a.is_none() { Ok(()) } else { st };
+        Some((a, st))
     }
 
     /// The written arguments `group` of one parameter of a concept-id in

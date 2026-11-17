@@ -75,13 +75,19 @@ pub(crate) type AtomKey = (ExprId, Vec<ArgListId>);
 /// earlier one is known; spec/sema-templates.md §8.5). The copy keeps
 /// the pattern's requirements; the final substitution substitutes
 /// `pattern` with `levels` (its retained levels replaced by the final
-/// ones) and `locals` (composed with the final substitution's).
+/// ones) and `locals` (composed with the final substitution's), for the
+/// same element of an enclosing pack expansion.
 #[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct DeferredRequires {
     pub(crate) pattern: ExprId,
     pub(crate) levels: crate::templ::args::MultiLevelArgs,
     pub(crate) locals: Vec<(DeclId, crate::templ::subst::DeclOrPack)>,
     pub(crate) pairs: Vec<(DeclId, DeclId)>,
+    /// The element of an enclosing pack expansion being substituted, and
+    /// the expansion's length: the deferred requirements name its packs
+    /// unexpanded, for that element (a generic lambda in a fold;
+    /// [temp.variadic]/7).
+    pub(crate) pack: Option<(u32, u32)>,
 }
 
 /// The concept engine's state (§11.2).
