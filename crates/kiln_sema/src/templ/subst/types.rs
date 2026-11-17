@@ -699,6 +699,16 @@ impl Substituter<'_, '_, '_> {
                     return self.dependent_tag_name(keyword, n, name, ctx, loc);
                 }
                 let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
+                // [class.member.lookup]/6, [temp.local]/4: the
+                // injected-class-names of two specializations found in
+                // different bases name different types.
+                if self.sema.diagnose_member_ambiguity(
+                    &found,
+                    kiln_ast::names::DeclName::ident(name),
+                    loc,
+                ) {
+                    return Err(SubstFail);
+                }
                 let Some(&d) = found.decls.first() else {
                     let d = match self.enable_if_failure(nns, n, name, ctx) {
                         Some(d) => d,

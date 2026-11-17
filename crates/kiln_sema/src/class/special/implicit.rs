@@ -55,6 +55,9 @@ pub(crate) fn needs_from(bits: DefinitionBits, implicit: u8, k: SpecialKind) -> 
                 && !ud(SpecialKind::MoveCtor)
                 && !ud(SpecialKind::Dtor)
         }
+        // [expr.prim.lambda.closure]/13: such a closure type has no
+        // default constructor at all (clang `needsImplicitDefaultConstructor`).
+        SpecialKind::DefaultCtor => !bits.contains(DefinitionBits::LAMBDA_CAPTURES),
         _ => true,
     }
 }

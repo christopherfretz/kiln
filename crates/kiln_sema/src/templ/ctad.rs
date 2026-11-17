@@ -269,7 +269,15 @@ impl Sema<'_, '_> {
                 underlying: name,
             });
         }
-        self.ast.types.deduced_template_specialization(name, None)
+        let ty = self.ast.types.deduced_template_specialization(name, None);
+        // Before C++17 there is no deduced class type: the template name
+        // needs its arguments (clang's parser forms no placeholder,
+        // `err_template_missing_args`; WP-1630).
+        if self.std < kiln_lex::Std::Cxx17 && locs.0.is_valid() {
+            let at = if locs.1.is_valid() { locs.1 } else { locs.0 };
+            return self.ctad_misplaced(ty, at, super::ctad_site::Misplaced::MissingArgs);
+        }
+        ty
     }
 
     /// A deduction-guide declaration for class template `template`
@@ -601,6 +609,7 @@ impl Sema<'_, '_> {
         let loc = self.ast.decls.get(owner).loc();
         let g = self.copy_guide(ctx, name, injected, info.params, loc);
         let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Copy);
+        self.note_class_params(g, None);
         out.push(g);
         self.ast.templates.dependent_depth = saved;
         if def.is_some() || member_def.is_some() {
@@ -715,6 +724,7 @@ impl Sema<'_, '_> {
             let f = self.guide_function(ctx, name, loc, &shape);
             let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
             let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Ctor);
+            self.note_class_params(g, None);
             out.push(g);
         }
         self.ast.templates.dependent_depth = saved;
@@ -763,7 +773,26 @@ impl Sema<'_, '_> {
         }
         let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
         let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Ctor);
+        self.note_class_params(g, None);
         Some(g)
+    }
+
+    /// Records the leading parameters of implicit guide `g` that represent
+    /// the class template's: `n`, or all of them
+    /// ([`TemplState::ctad_class_params`](super::TemplState)).
+    fn note_class_params(&mut self, g: DeclId, n: Option<u32>) {
+        let n = n.or_else(|| {
+            let info = self.ast.template_info(g)?;
+            let len = self
+                .ast
+                .lists
+                .iter::<DeclId>(self.ast.templates.param_list(info.params).params)
+                .count();
+            u32::try_from(len).ok()
+        });
+        if let Some(n) = n.filter(|&n| n > 0) {
+            let _ = self.templ.ctad_class_params.insert(g, n);
+        }
     }
 
     /// The implicit guide of constructor template `ft`
@@ -875,6 +904,7 @@ impl Sema<'_, '_> {
         }
         let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, list);
         let _ = self.templ.ctad_origin.insert(g, GuideOrigin::CtorTemplate);
+        self.note_class_params(g, Some(u32::from(n)));
         Some(g)
     }
 
@@ -1087,6 +1117,7 @@ impl Sema<'_, '_> {
         self.ast.templates.dependent_depth = saved;
         let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, info.params);
         let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Aggregate);
+        self.note_class_params(g, None);
         Some(g)
     }
 

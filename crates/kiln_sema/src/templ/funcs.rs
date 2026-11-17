@@ -510,6 +510,11 @@ impl Sema<'_, '_> {
         let head = self.at_explicit_head();
         let spec_head = if head { self.templ.explicit_spec.take() } else { None };
         let inst = if head { self.templ.explicit_inst.take() } else { None };
+        // [temp.expl.spec]/17: the `template<>` headers the qualifier's
+        // implicit specializations took leave the declaration its own
+        // (a function template specialization) or none (a member that
+        // is not a template); clang `MatchTemplateParametersToScopeSpecifier`.
+        let own_header = if inst.is_none() { self.templ.spec_own_header.take() } else { None };
         self.templ.cur = None;
         let dname = match (d.op_name, d.name) {
             (Some(op), _) => DeclName::operator(op),
@@ -557,8 +562,17 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return Err(());
         }
+        if own_header == Some(false) && d.spec_id.is_some() {
+            // `template<> void A<int>::f<int>(int)`: the one header went
+            // to `A<int>`.
+            self.error(DiagId::sema_template_spec_needs_header, name_loc);
+            return Ok(None);
+        }
+        let member_only = own_header == Some(false);
         if d.spec_id.is_none()
-            && let Some(m) = self.member_of_spec_candidate(d, dname, ty, inst.is_some())
+            && own_header != Some(true)
+            && let Some(m) =
+                self.member_of_spec_candidate(d, dname, ty, inst.is_some(), member_only)
         {
             let Some(m) = m else { return Ok(None) };
             // [temp.expl.spec]/1, [temp.explicit]/3: a member function
@@ -1164,8 +1178,9 @@ impl Sema<'_, '_> {
     /// that `template<> R C<args>::f(params)` (or `template R
     /// C<args>::f(params);`) names: `None` when the qualifier is not such
     /// a specialization or names a member function template (then the
-    /// declarator is a function template specialization), `Some(None)`
-    /// after a diagnostic.
+    /// declarator is a function template specialization; not when
+    /// `member_only`, the qualifier having taken every `template<>`),
+    /// `Some(None)` after a diagnostic.
     #[allow(clippy::option_option, reason = "not a candidate / diagnosed / the member")]
     fn member_of_spec_candidate(
         &mut self,
@@ -1173,6 +1188,7 @@ impl Sema<'_, '_> {
         name: DeclName,
         ty: QualType,
         inst: bool,
+        member_only: bool,
     ) -> Option<Option<DeclId>> {
         let q = d.qualifier?;
         if self.kind_of(q).payload() != kiln_ast::decl::PayloadClass::Record {
@@ -1233,7 +1249,7 @@ impl Sema<'_, '_> {
                 exc = Some(c);
             }
         }
-        if templates {
+        if templates && !member_only {
             return None;
         }
         if let Some(p) = exc {

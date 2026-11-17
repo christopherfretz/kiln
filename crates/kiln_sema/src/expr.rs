@@ -4723,6 +4723,12 @@ impl Sema<'_, '_> {
         }
         let t = self.resolve_single_overload_candidate(t);
         let f = self.resolve_single_overload_candidate(f);
+        // An operand that is still an overload set has no target
+        // ([over.over]/1 lists no conditional operand): clang's
+        // `CheckPlaceholderExpr` reports the first and stops.
+        if self.check_overload_use(t) || self.check_overload_use(f) {
+            return self.recover_err(&[c, t, f], loc);
+        }
         // The GNU element-wise conditional (clang `CXXCheckConditionalOperands`).
         if !self.expr_is_type_dependent(c) {
             let ct = self.ety(c);

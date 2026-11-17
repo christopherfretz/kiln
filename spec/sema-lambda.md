@@ -209,7 +209,18 @@ deduced (WP-799).
 
 [expr.prim.lambda.closure]/13-14: a closure type without captures has a
 defaulted default constructor and copy assignment operator; with any
-capture-default or capture, both are deleted. The copy and move
+capture-default or capture it has no default constructor at all and a
+deleted copy assignment operator (and no implicit move assignment).
+Before C++20 every closure type is so (C++17
+[expr.prim.lambda.closure]/11; clang `lambdaIsDefaultConstructibleAndAssignable`):
+the definition bit `LAMBDA_CAPTURES` is set for those closures, and
+`decltype(lam) x;` is "no matching constructor" with the copy and move
+constructors as candidates (WP-1630). A variable whose default
+initialization failed keeps a recovery expression as its initializer and
+stays valid (clang `ActOnUninitializedDecl`), so `x = lam;` is then "cannot
+be assigned because its copy assignment operator is implicitly deleted"
+with "lambda expression begins here" (test
+`expr.prim.lambda.closure/p13-special-members-by-std.cpp`). The copy and move
 constructors are defaulted. `closure_default_constructible` drives the
 `__is_constructible` and value-initialization answers. A closure with a
 capture also loses `TRIVIAL_DEFAULT_CTOR` when its definition completes

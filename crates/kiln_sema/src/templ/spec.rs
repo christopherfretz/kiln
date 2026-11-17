@@ -71,6 +71,7 @@ impl Sema<'_, '_> {
     pub fn act_explicit_spec_end(&mut self) {
         self.templ.explicit_spec = None;
         self.templ.spec_headers.clear();
+        self.templ.spec_own_header = None;
     }
 
     /// The `template` keywords of the leading `template<>` headers of the
@@ -213,6 +214,9 @@ impl Sema<'_, '_> {
                 TagForm::ExplicitInst { declaration: ext.is_some() }
             }
         } else if self.templ.explicit_spec.take().is_some() {
+            if self.spec_of_member_of_unspecialized(name_loc) {
+                return Err(());
+            }
             let _ = self.check_extra_spec_headers(qualifier, 0);
             TagForm::ExplicitSpec
         } else if self.take_template_head(qualifier).is_some() {

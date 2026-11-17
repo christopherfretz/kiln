@@ -161,6 +161,12 @@ for the BMI image to fall back to replay). Each specialization substitutes
 the specifier and the type and matches them in the class named
 (`befriend_special_member`, `templ/subst/decls.rs` `friend_decl`): the
 same rule and the same no-match error, then with the instantiation note.
+A matched constructor or conversion function written without an
+exception specification is a potentially-throwing redeclaration of a
+non-throwing member, implicit or defaulted ones included: clang's
+"is missing exception specification" ([except.spec]/5,
+`check_friend_missing_exc_spec`; a destructor's is implicit; WP-1631,
+`except.spec/p5-friend-special-member-missing-spec.cpp`).
 A match in the pattern itself (a member class of the current
 instantiation, `friend M::M(T);`) is also befriended in the pattern, for
 the access checks of the template definition (WP-1507,
@@ -418,7 +424,10 @@ qualifier (`using T::f;`, `using typename T::type;`) is checked when the class
 is instantiated, at the declarator's name (`member_using`,
 `member_using_typename`; WP-194); inheriting constructors are not checked. The parser's classification
 (`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
-the lookup for a class member to learn the naming class and using-shadow. An
+the lookup for a class member to learn the naming class and using-shadow;
+`Sema::check_template_name_access` does the same for a class or alias template
+named as a template template argument or default (WP-1630,
+`temp.arg.template/access-of-template-name.cpp`). An
 injected-class-name is a public member of its own class (`struct G : F2 {
 A::B b; }` with `F2 : private A`: `'A' is a private member of 'A'` + `constrained
 by private inheritance here` + `member is declared here`); selected
@@ -751,7 +760,11 @@ union at namespace or block scope is default-initialized
 (`act_on_uninit`, as clang's `BuildAnonymousStructOrUnion`), so its
 default member initializers run (`class.union.anon/nested-anonymous-union-*`,
 `run-anonymous-union-object-default-member-init.cpp`). Anonymous
-unions are M2 (`IndirectField`).
+unions are M2 (`IndirectField`). An `IndirectField` injected into a class
+takes the access of the unnamed member (the outermost one for nested
+anonymous unions), so `a.z` for a member of a private anonymous union is
+"'z' is a private member of 'A'" (WP-1630,
+`class.union.anon/member-access-of-unnamed-member.cpp`).
 The member-specification of an anonymous union (or anonymous struct, the
 GNU extension) only defines public non-static data members
 ([class.union.anon]/1; C++ only: a C11 anonymous union may declare a tag of

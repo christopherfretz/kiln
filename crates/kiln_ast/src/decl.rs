@@ -1234,8 +1234,9 @@ impl DefinitionBits {
     /// The class was declared with the `final` class-virt-specifier
     /// ([class.pre]; clang dumps a `FinalAttr final` child).
     pub const FINAL: DefinitionBits = DefinitionBits(1 << 50);
-    /// A closure type whose lambda has a *lambda-capture*
-    /// ([expr.prim.lambda.closure]/13: no default constructor, a deleted
+    /// A closure type whose lambda has a *lambda-capture*, or any closure
+    /// type before C++20 ([expr.prim.lambda.closure]/13, C++17
+    /// [expr.prim.lambda.closure]/11: no default constructor, a deleted
     /// copy assignment operator and no implicit move assignment; clang
     /// `!lambdaIsDefaultConstructibleAndAssignable`).
     pub const LAMBDA_CAPTURES: DefinitionBits = DefinitionBits(1 << 51);

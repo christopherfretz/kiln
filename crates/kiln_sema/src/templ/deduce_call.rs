@@ -601,6 +601,7 @@ impl Sema<'_, '_> {
             self.ast.template_info(ft).map(|i| self.ast.templates.param_list(i.params).params);
         d.nttp_types = true;
         d.aggregate = self.templ.ctad_origin.get(&ft) == Some(&super::ctad::GuideOrigin::Aggregate);
+        d.class_params = self.templ.ctad_class_params.get(&ft).copied().unwrap_or(0);
         let name_loc = self.ast.decls.get(templated).loc();
         // The warnings the phases before the specialization is formed
         // hold back (§5.7): kept with it on success, else dropped.
@@ -1908,9 +1909,12 @@ impl Sema<'_, '_> {
                 if a.vk == ValueCategory::LValue
                     && inner.quals().is_empty()
                     && matches!(t.canonical_view(inner),
-                        TypeView::CanonTemplateTypeParm { depth, .. } if depth as u16 == d.depth) =>
+                        TypeView::CanonTemplateTypeParm { depth, index, .. }
+                            if depth as u16 == d.depth && index >= d.class_params) =>
             {
-                // A forwarding reference with an lvalue: `A&`.
+                // A forwarding reference with an lvalue: `A&` (not one
+                // naming a class template's parameter in an implicit
+                // guide, [temp.deduct.call]/3).
                 p = t.canonical(inner);
                 at = t.lvalue_ref_to(at);
             }

@@ -560,6 +560,9 @@ impl Sema<'_, '_> {
                 if self.friend_needs_access_check(target) {
                     self.check_friend_access(target, at);
                 }
+                if kind != SpecialFriendKind::Dtor {
+                    self.check_friend_missing_exc_spec(target, ty, at);
+                }
                 let fd = self.builder().friend(record, at, FriendTarget::Decl(target));
                 let first = self.ast.first(target);
                 self.push_friend(first);
@@ -576,6 +579,30 @@ impl Sema<'_, '_> {
         let msg = self.with_friend_candidate_notes(msg, &found, ty);
         self.emit(msg);
         None
+    }
+
+    /// [except.spec]/5: a friend redeclaration `ty` of constructor or
+    /// conversion function `target` written without an exception
+    /// specification is potentially throwing, so it conflicts with a
+    /// non-throwing `target`, an implicitly-declared or defaulted one
+    /// included (clang `CheckEquivalentExceptionSpec` through
+    /// `MergeFunctionDecl`; a destructor's is the implicit one).
+    fn check_friend_missing_exc_spec(&mut self, target: DeclId, ty: QualType, at: Loc) {
+        // Ignored under `-fno-exceptions` before C++17 (clang).
+        if self.written_exc_spec(ty) != kiln_ast::types::ExcSpec::None
+            || !(self.exceptions || self.std >= kiln_lex::Std::Cxx17)
+            || self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
+        {
+            return;
+        }
+        self.resolve_exc_for_type(target, at);
+        let Some(pty) = self.declared_fn_type(target) else { return };
+        let pe = self.written_exc_spec(pty);
+        if !pe.is_nothrow() || matches!(pe, kiln_ast::types::ExcSpec::Deferred(_)) {
+            return;
+        }
+        let name = self.decl_name(target);
+        let _ = self.merge_missing_exc_spec(target, pty, ty, (at, &name, None), false);
     }
 
     /// `template<class U> friend Z::Z(U);` in `record`: befriends the

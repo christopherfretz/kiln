@@ -192,6 +192,10 @@ pub struct Parser<'a, 'sm> {
     /// namespace or block scope with an unqualified declarator-id), so a
     /// missing `typename` there is diagnosed.
     pub(crate) param_typename: ParamTypename,
+    /// A base-specifier's or mem-initializer's class name is being parsed:
+    /// a dependent qualified name there has always been a type, so no
+    /// pre-C++20 implicit-`typename` warning is given.
+    pub(crate) base_type_name: bool,
     /// The parameter-declaration whose decl-specifier-seq is being parsed
     /// is the first of a declarator clang disambiguates tentatively
     /// (`Some(true)`) or another one (`Some(false)`); `None` outside one.
@@ -401,6 +405,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             type_id_constraint: Loc::INVALID,
             named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
+            base_type_name: false,
             param_recovery: None,
             next_tag_site: None,
             param_abort: false,
@@ -504,6 +509,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             type_id_constraint: _,
             named_cast_type_id: _,
             param_typename: _,
+            base_type_name: _,
             param_recovery: _,
             next_tag_site: _,
             param_abort: _,

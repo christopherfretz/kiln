@@ -417,14 +417,24 @@ impl Sema<'_, '_> {
         } else {
             e
         };
+        let e = self.discarded_value_checks(e);
+        let e = self.act_on_full_expr(e);
+        self.builder().expr_stmt(e)
+    }
+
+    /// The checks on a discarded-value expression ([expr.context]/2) of
+    /// an expression statement or a for-statement's increment (clang's
+    /// `ActOnFinishFullExpr` with `DiscardedValue`): an overload set or a
+    /// bound member function has no target there ([over.over]/1,
+    /// [expr.ref]/7.3.2), else the unused-result warnings; then
+    /// [`Sema::ignored_value_conversions`].
+    fn discarded_value_checks(&mut self, e: ExprId) -> ExprId {
         let e = self.resolve_single_overload_candidate(e);
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
         self.discard_assignment_ref(e);
-        let e = self.ignored_value_conversions(e);
-        let e = self.act_on_full_expr(e);
-        self.builder().expr_stmt(e)
+        self.ignored_value_conversions(e)
     }
 
     /// clang `IgnoredValueConversions` for a discarded-value expression
@@ -1049,9 +1059,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> StmtId {
         let inc = inc.map(|e| {
-            self.diagnose_unused(e);
-            self.discard_assignment_ref(e);
-            let e = self.ignored_value_conversions(e);
+            let e = self.discarded_value_checks(e);
             self.act_on_full_expr(e)
         });
         self.check_for_loop_analysis(cond_var, cond, inc, body);
@@ -1882,7 +1890,11 @@ impl Sema<'_, '_> {
             Some((_, Err(Some(d))))
                 if matches!(
                     d.id(),
-                    Some(DiagId::sema_call_deleted_ctor | DiagId::sema_call_deleted_function)
+                    Some(
+                        DiagId::sema_call_deleted_ctor
+                            | DiagId::sema_call_deleted_function
+                            | DiagId::sema_access_ctor
+                    )
                 ) =>
             {
                 moved

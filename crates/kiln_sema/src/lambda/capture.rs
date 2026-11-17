@@ -1902,7 +1902,13 @@ impl Sema<'_, '_> {
             cap_tys.push(self.size_type());
         }
         let data = self.ast.exprs.lambdas.get(id);
-        if data.default != CaptureDefault::None || !data.captures.is_empty() {
+        // Before C++20 every closure type is so (C++17
+        // [expr.prim.lambda.closure]/11: no default constructor and a
+        // deleted copy assignment operator).
+        if data.default != CaptureDefault::None
+            || !data.captures.is_empty()
+            || self.std < kiln_lex::Std::Cxx20
+        {
             self.ast.decls.set_definition_bits(closure, DefinitionBits::LAMBDA_CAPTURES);
         }
         if data.captures.is_empty() {

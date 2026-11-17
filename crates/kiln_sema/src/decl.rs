@@ -3629,6 +3629,12 @@ impl Sema<'_, '_> {
         {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
+        if self.templ.explicit_spec.is_some()
+            && self.at_explicit_head()
+            && self.spec_of_member_of_unspecialized(d.name_loc())
+        {
+            return None;
+        }
         let head = self.take_template_head(d.qualifier);
         if self.check_template_in_local_class(false, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
@@ -6051,6 +6057,44 @@ impl Sema<'_, '_> {
     /// §6.1, clang `CheckOverloadedOperatorDeclaration`): reports the first
     /// violation and returns false. Allocation and deallocation functions
     /// are checked elsewhere.
+    /// Before C++23: a static `operator()`/`operator[]` is an extension
+    /// (P1169, P2589), and `operator[]` takes exactly one parameter with no
+    /// default argument ([over.sub]/1 before P2128). False when invalid.
+    fn check_operator_pre_cxx23(
+        &mut self,
+        op: OverloadedOperator,
+        is_static: bool,
+        params: &[DeclId],
+        explicit_obj: bool,
+        loc: Loc,
+        spelled: &str,
+    ) -> bool {
+        if self.std >= kiln_lex::Std::Cxx23 {
+            return true;
+        }
+        if is_static {
+            let m = self.diag(DiagId::sema_operator_overload_static_cxx23, loc).arg(spelled);
+            self.emit(m);
+        }
+        if op != OverloadedOperator::Subscript {
+            return true;
+        }
+        let own = params.len() - usize::from(explicit_obj);
+        let defaulted = own == 1 && params.last().is_some_and(|&p| self.param_has_default(p));
+        if own == 1 && !defaulted {
+            return true;
+        }
+        let which = match own {
+            0 => "0",
+            1 => "1",
+            _ => "2",
+        };
+        let m =
+            self.diag(DiagId::sema_operator_overload_subscript_params, loc).arg(spelled).arg(which);
+        self.emit(m);
+        false
+    }
+
     pub(crate) fn check_operator_decl(&mut self, f: DeclId) -> bool {
         use OverloadedOperator as O;
         let Some(op) = self.ast.decls.get(f).name().as_operator() else { return true };
@@ -6104,6 +6148,9 @@ impl Sema<'_, '_> {
         }
         let (unary, binary, member) = operator_uses(op);
         let explicit_obj = self.has_explicit_object(f);
+        if !self.check_operator_pre_cxx23(op, is_static, &params, explicit_obj, loc, &spelled) {
+            return false;
+        }
         let n = params.len() + usize::from(method && !is_static && !explicit_obj);
         if !matches!(op, O::Call | O::Subscript)
             && (n == 1 && !unary || n == 2 && !binary || !(1..=2).contains(&n))
@@ -8636,6 +8683,17 @@ impl Sema<'_, '_> {
                 let n = self.ast.decls.get(d);
                 if n.kind() == DeclKind::Var && seen.insert(d) {
                     if n.has(DeclFlags::INVALID) {
+                        return true;
+                    }
+                    // A failed default initialization's recovery
+                    // initializer ([`Sema::check_class_default_init`]).
+                    if self
+                        .ast
+                        .decls
+                        .var(d)
+                        .and_then(|v| v.init)
+                        .is_some_and(|i| self.ast.exprs.get(i).kind() == ExprKind::RecoveryExpr)
+                    {
                         return true;
                     }
                     if let Some(init) = self.ast.decls.var(d).and_then(|v| v.init) {
@@ -12139,6 +12197,13 @@ impl Sema<'_, '_> {
             let fty = mn.ty().unwrap_or(QualType::ERROR);
             let ih = DeclHead::new(ctx, DeclName::ident(name), mn.loc());
             let ind = self.builder().indirect_field(ih, fty, &chain);
+            if in_class {
+                // [class.union.anon]/1: a member of an anonymous union is
+                // accessed as the unnamed member is (clang's
+                // `IndirectFieldDecl` takes the anonymous object's access).
+                let access = self.ast.decls.get(obj).misc().access();
+                self.ast.decls.set_access(ind, access);
+            }
             self.register_local(name, ind);
         }
         obj

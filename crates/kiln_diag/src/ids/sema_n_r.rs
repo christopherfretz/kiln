@@ -124,6 +124,10 @@ sema_operator_overload_must_be_member = Error (1) "overloaded '{0}' must be a no
 sema_operator_overload_needs_class_or_enum = Error (1) "overloaded '{0}' must have at least one parameter of class or enumeration type";
 sema_operator_overload_post_incdec_must_be_int = Error (2) "parameter of overloaded post-{1:increment|decrement} operator must have type 'int' (not {0})";
 sema_operator_overload_static = Error (1) "overloaded '{0}' cannot be a static member function";
+// WP-1630: clang ext_operator_overload_static (P1169R4, P2589R1) before C++23.
+sema_operator_overload_static_cxx23 = ExtWarn [Cxx23Extensions] (1) "declaring overloaded '{0}' as 'static' is a C++23 extension";
+// WP-1630: clang err_operator_overload_must_be_unary_or_binary for `operator[]` before C++23 (P2128R6).
+sema_operator_overload_subscript_params = Error (2) "overloaded '{0}' cannot have {1:no|a defaulted|more than one} parameter before C++23";
 sema_operator_overload_variable = Error (1) "'{0}' cannot be the name of a variable or data member";
 sema_operator_overload_variadic = Error (1) "overloaded '{0}' cannot be variadic";
 sema_ordered_pointer_zero = Error (2) "ordered comparison between pointer and zero ({0} and {1})";

@@ -1015,7 +1015,7 @@ impl Parser<'_, '_> {
         // [class.base.init]/2), names the base as a base-specifier would.
         if self.at_template_type_name(DeclaratorContext::TypeName) {
             let loc = self.loc();
-            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+            let Some(ty) = self.parse_base_type_name() else {
                 return (None, false);
             };
             let Some(init) = self.parse_mem_init_args() else {
@@ -2798,7 +2798,7 @@ impl Parser<'_, '_> {
         if self.at_template_type_name(DeclaratorContext::TypeName) {
             let scanned =
                 self.scan_name_at(self.pos()).and_then(|(end, split, ..)| (!split).then_some(end));
-            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+            let Some(ty) = self.parse_base_type_name() else {
                 // A qualifier that fails (`X<A>::B` where `X<A>` fails
                 // to instantiate here): clang goes on to the name after
                 // it, "expected class name".

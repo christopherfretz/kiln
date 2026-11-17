@@ -190,6 +190,23 @@ template-template-param := template-head ('class'|'typename'|'auto') '...'? iden
   `Outer<int>` written with `template<class T> template<class U>` gets
   the second error, and its declaration is then dropped
   (`take_template_head` reports `head_mismatch`).
+- **Header count of a member specialization** ([temp.expl.spec]/17,
+  WP-1630). When the qualifier's implicit specializations take every
+  leading `template<>`, the declaration has no header of its own: it
+  declares a member that is not a template, so a member function
+  template of that name does not match it ("out-of-line declaration of
+  'f' does not match any declaration in 'A<int>'") and a template-id
+  declarator-id is "template specialization requires 'template<>'".
+  When one is left, it is a function template specialization and a
+  non-template member is "no function template matches function
+  template specialization 'f2'" (`TemplState::spec_own_header`, set by
+  `check_extra_spec_headers`, read by `act_on_function_spec_declarator`).
+  A `template<>` under a non-empty head at namespace scope (`template<class
+  X> template<> struct bug<X>::a<char>`) is "cannot specialize (with
+  'template<>') a member of an unspecialized template" at the declared
+  name, and the declaration is dropped (`spec_of_member_of_unspecialized`,
+  clang `err_specialize_member_of_template`). Tests
+  `temp.expl.spec/p17-*.cpp`.
 - **Headers for an explicitly specialized class** ([temp.expl.spec]/17,
   WP-401). A member of an explicit specialization `O<int, char>` is
   defined with only its own head: `template<char c> int O<int,
@@ -641,7 +658,10 @@ TemplateExpansion (types.md §8.3) and calls `act_template_id` (§11.2).
 ### 2.3 Disambiguators: `typename` and `template`
 
 **`typename` is optional** in a *type-id-only context* ([temp.res.general]/4,
-P0634). The parser passes `implicit_typename: bool` into
+P0634); before C++20 a dependent qualified type name there without it is
+clang's "missing 'typename' prior to dependent type name '…' is a C++20
+extension" (`-Wc++20-extensions`, clang 19's wording at compatibility 19;
+`diagnose_missing_typename`, WP-1630). The parser passes `implicit_typename: bool` into
 `parse_decl_specifiers` and `parse_type_id`. It is `true` for the terminal
 name of:
 - a typename-specifier, type-requirement, nested-name-specifier,
@@ -8231,6 +8251,11 @@ ambiguity errors.
   its `using`, `conflict_loc`), as clang's
   `diagnoseMissingTemplateArguments` (WP-430,
   `temp.names/missing-args-nested-name-note.cpp`).
+- Before C++17 there is no deduced class type: `ctad_placeholder` reports
+  a bare class template name the same way ("use of class template 'W'
+  requires template arguments" at the name, "template is declared here"),
+  as clang's parser does (WP-1630,
+  `dcl.type.class.deduct/missing-args-before-cxx17.cpp`).
 - A variable template or concept named alone as a template-argument
   ([temp.names]/1): at compat 22 the parser takes it as a template name
   (P2841, `at_template_name_arg`) and the check reports it against the

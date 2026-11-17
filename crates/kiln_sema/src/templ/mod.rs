@@ -265,6 +265,13 @@ pub struct TemplState {
     /// namespace-scope declaration being parsed, not yet matched to its
     /// qualifier ([`Sema::check_extra_spec_headers`]).
     pub(crate) spec_headers: Vec<Loc>,
+    /// After [`Sema::check_extra_spec_headers`] matched the `template<>`
+    /// headers of a declaration with no other head to its qualifier:
+    /// whether one was left for the declaration itself (`template<>
+    /// template<> void A<int>::f(int)` for a member template `f`), or all
+    /// went to the classes, so it declares a member of an implicit
+    /// specialization that is not a template ([temp.expl.spec]/17).
+    pub(crate) spec_own_header: Option<bool>,
     /// The instantiation-stack depth at which `explicit_spec` /
     /// `explicit_inst` was set: a declarator met while a class named in
     /// the declaration's qualifier is instantiated is not the explicit
@@ -355,6 +362,11 @@ pub struct TemplState {
     /// What each implicit guide among them (template decl) was formed
     /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
     pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,
+    /// The number of leading template parameters of each implicit guide
+    /// (not one formed for an alias template) that represent the class
+    /// template's: their `T&&` is not a forwarding reference
+    /// ([temp.deduct.call]/3, P0512R0).
+    pub(crate) ctad_class_params: kiln_source::fx::FxHashMap<DeclId, u32>,
     /// Each guide formed for an alias template from a guide of the
     /// template it aliases ([over.match.class.deduct]/3, P1814): the
     /// alias template and its defining-type-id.
@@ -1440,6 +1452,36 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// An explicit specialization (`template<>`) under a non-empty
+    /// template head at namespace scope (`template<class X> template<>
+    /// class bug<X>::a<char>`): [temp.expl.spec]/17 forbids explicitly
+    /// specializing a member template whose enclosing class templates are
+    /// not explicitly specialized as well. clang's
+    /// `err_specialize_member_of_template` at `loc`, the declared name; the
+    /// open heads are consumed and the caller drops the declaration.
+    pub(crate) fn spec_of_member_of_unspecialized(&mut self, loc: Loc) -> bool {
+        // The declaration's own context, not its qualifier's that a
+        // declarator scope entered.
+        let lexical = self.declarator_records.last().map_or(self.ctx, |r| r.2);
+        if !matches!(self.kind_of(lexical), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            return false;
+        }
+        let floor = self.lambda_head_floor();
+        let open: Vec<usize> = (floor..self.templ.heads.len())
+            .rev()
+            .take_while(|&i| !self.templ.heads[i].taken)
+            .collect();
+        if !open.iter().any(|&i| !self.templ.heads[i].invented) {
+            return false;
+        }
+        for &i in &open {
+            self.templ.heads[i].taken = true;
+        }
+        self.templ.spec_headers.clear();
+        self.error(DiagId::sema_specialize_member_of_template, loc);
+        true
+    }
+
     /// Forgets the pending `template<>` headers after a qualifier that
     /// named nothing (diagnosed): they cannot be matched to its classes,
     /// so none is reported extraneous (clang's invalid `CXXScopeSpec`).
@@ -1478,6 +1520,7 @@ impl Sema<'_, '_> {
         if self.inst.stack.len() != self.templ.explicit_depth {
             return false;
         }
+        self.templ.spec_own_header = None;
         let empties = std::mem::take(&mut self.templ.spec_headers);
         let n = empties.len();
         if n == 0 {
@@ -1495,6 +1538,9 @@ impl Sema<'_, '_> {
                 ScopeSlot::Params(_) if empty => return false,
                 _ => consumed += 1,
             }
+        }
+        if written == 0 {
+            self.templ.spec_own_header = Some(consumed < total);
         }
         // Extra headers: `consumed .. total - 1`; only those with a
         // `template<>` among them (`consumed < n`) are handled here.
@@ -2177,7 +2223,13 @@ impl Sema<'_, '_> {
         let explicit = !self.has_pending_head();
         match (self.kind_of(tmpl), explicit) {
             (DeclKind::FunctionTemplate, false) => {
-                self.error(DiagId::sema_function_partial_spec, loc);
+                // `template<class X> template<> void A<X>::f<int>(int)`.
+                let under_head = self.templ.explicit_spec.is_some()
+                    && self.at_explicit_head()
+                    && self.spec_of_member_of_unspecialized(loc);
+                if !under_head {
+                    self.error(DiagId::sema_function_partial_spec, loc);
+                }
                 None
             }
             (_, _) => Some(spec::SpecDeclaratorId {

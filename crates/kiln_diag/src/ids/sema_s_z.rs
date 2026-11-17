@@ -50,6 +50,7 @@ sema_spec_redecl_global_scope = Error (2) "{0:class template|class template part
 sema_spec_redecl_out_of_class_scope = Error (3) "{0:class template|class template partial|variable template|variable template partial|function template|member function|static data member|member class|member enumeration} specialization of '{1}' not in class '{2}' or an enclosing namespace";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
 sema_specialization_not_primary_template = Error (2) "cannot reference member of primary template because deduced class template specialization {0} is {1:instantiated from a partial|an explicit} specialization";
+sema_specialize_member_of_template = Error (0) "cannot specialize (with 'template<>') a member of an unspecialized template";
 // WP-1552: GCC's `__builtin_speculation_safe_value` ("both arguments must
 // be compatible"), in clang's style.
 sema_speculation_safe_value_mismatch = Error (2) "second argument to '__builtin_speculation_safe_value' must have the type of the first, or both must be pointers ({0} vs {1})";
