@@ -2133,6 +2133,29 @@ exactly `SHF_EXCLUDE`, alignment 8, entry size, link and info 0, in no
 group, no `.rela.mason.meta` (checked at `-O0` and `-O2` by
 `crates/kiln_driver/tests/mason_meta.rs` with its own ELF reader).
 
+**`SYSTEM`** (kinds 2 and 3; `mason_defs::mason_place`, the one place
+either kind computes it): set when the location of the row's `file` and
+`line` is in a system header (`SourceManager::is_in_system_header`: a
+`-isystem` / system directory, or `#pragma GCC system_header`), and on
+every kind 2 and kind 3 row of a unit compiled with
+`-fmason-metadata-system-unit` (WP-1619, asked for by mortar's
+maintainers; `MasonMetaOptions::system_unit`), whatever file the
+definition lies in, the main file included. The flag is for the units of
+an implementation itself (libc++ and libc++abi are built with their
+headers found through `-I`, so their rows are not `SYSTEM` otherwise, and
+mortar's downgrade of a disagreement between units built at different
+`-std` levels, which needs every row of the group `SYSTEM`, cannot apply
+to a user unit linked against them). It is explicit only: nothing is
+derived from macros, `-nostdinc++` or a suppressed `#pragma GCC
+system_header`. It changes only the `SYSTEM` bits: no hash input reads
+`SYSTEM` or whether an entity lies in a system header, so the keys,
+hashes, other flags, places, row order, the kind 1, 4 and 5 blocks and
+the string table are byte-identical with and without it (kind 1 records
+nothing of it; kinds 4 and 5 have no location flag). Diagnostics are not
+affected (no header becomes a system header for warnings), and like the
+level it is not part of a PCH's or a module file's identity. Test:
+`crates/kiln_driver/tests/mason_system_unit.rs`.
+
 **The unit** (`encode_unit`, a pure function from blocks to bytes): the
 32-byte header of MT-10 (magic `MASN`, major 1, minor 0, `unit_size` a
 multiple of 8, `header_size` 32, `block_count`, the string table's offset
@@ -2391,7 +2414,7 @@ defines and refers to, if it passes the not-TU-local test below:
 | `name` | u32 @32 | string-table offset of the Itanium `<type>` of the class or enumeration (what `_ZTS` names: `N2ns3BoxIiEE`) |
 | `size` | u32 @36 | `sizeof` in bytes (an enumeration: its underlying type's) |
 | `align` | u16 @40 | `alignof` in bytes |
-| `flags` | u16 @42 | bit 0 `ENUM`, bit 1 `UNION`, bit 2 `POLYMORPHIC`, bit 3 `HAS_VBASES`, bit 5 `SYSTEM` (defined in a system header); bit 4 `PARTIAL` is never set |
+| `flags` | u16 @42 | bit 0 `ENUM`, bit 1 `UNION`, bit 2 `POLYMORPHIC`, bit 3 `HAS_VBASES`, bit 5 `SYSTEM` (defined in a system header, or every row: "`SYSTEM`" above); bit 4 `PARTIAL` is never set |
 | `file` | u32 @44 | string-table offset of the presumed file of the definition, prefix maps applied |
 | `line` | u32 @48 | its presumed line (a template specialization: the line of the definition it was instantiated from) |
 | `details` | u32 @52 | at `detail` and `all` the byte offset of the type's entry in the kind 4 block's body (below); `0xffffffff` at `default` |
@@ -2548,7 +2571,7 @@ Candidates whose rows differ for one symbol give it none.
 | `hash` | u128 @8 | below |
 | `name` | u32 @24 | 0 (anchored; `all`'s named rows are K-3f) |
 | `class` | u16 @28 | 1 function, 2 variable |
-| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 4 `USES_INTERNAL` (O-16: the definition odr-uses an internal-linkage entity or names a TU-local type; spec/abi.md "`USES_INTERNAL`"), 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kinds 3 and 5); bits 6, 7 and 9-15 are 0 |
+| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 4 `USES_INTERNAL` (O-16: the definition odr-uses an internal-linkage entity or names a TU-local type; spec/abi.md "`USES_INTERNAL`"), 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kind 3: "`SYSTEM`" above); bits 6, 7 and 9-15 are 0 |
 | `module` | u32 @32 | 0 |
 | `file`, `line` | u32 @36, @40 | of the definition (MT-38's prefix maps): an instantiation's template definition, an implicitly defined member's class, an explicit specialization's own definition |
 | `reserved` | u32 @44 | 0 |

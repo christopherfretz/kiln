@@ -204,6 +204,11 @@ pub struct CodegenFlags {
     /// (WP-1557; kiln only): the level of the `.mason.meta` unit for the
     /// mortar linker, `None` (the default) for none.
     pub mason_meta: Option<kiln_codegen::MasonMetaLevel>,
+    /// The last of `-fmason-metadata-system-unit` (true) /
+    /// `-fno-mason-metadata-system-unit` (WP-1619; kiln only): every kind
+    /// 2 and kind 3 row of the unit is `SYSTEM`. No effect without
+    /// [`Self::mason_meta`].
+    pub mason_system_unit: bool,
 }
 
 /// clang's `-fzero-call-used-regs=` values.
@@ -338,6 +343,8 @@ impl CodegenFlags {
             "-fno-lto" => self.lto = None,
             "-fmason-metadata" => self.mason_meta = Some(kiln_codegen::MasonMetaLevel::Default),
             "-fno-mason-metadata" => self.mason_meta = None,
+            "-fmason-metadata-system-unit" => self.mason_system_unit = true,
+            "-fno-mason-metadata-system-unit" => self.mason_system_unit = false,
             "-fsplit-lto-unit" => self.split_lto_unit = Some(true),
             "-fno-split-lto-unit" => self.split_lto_unit = Some(false),
             _ if IGNORED.contains(&arg) => {}
@@ -930,6 +937,23 @@ mod tests {
             Some(Err(ArgError::InvalidFlagValue("-fmason-metadata=max".into(), "max".into())))
         );
         assert_eq!(parse(&["-fmason-metadata="]).1[0].as_ref().map(Result::is_err), Some(true));
+    }
+
+    /// WP-1619: `-f[no-]mason-metadata-system-unit`, last wins, off by
+    /// default, independent of the level (and accepted without it).
+    #[test]
+    fn mason_metadata_system_unit() {
+        let on = |args: &[&str]| {
+            let (f, r) = parse(args);
+            assert!(r.iter().all(|r| r == &Some(Ok(()))), "{args:?}: {r:?}");
+            f.mason_system_unit
+        };
+        assert!(!CodegenFlags::default().mason_system_unit);
+        assert!(on(&["-fmason-metadata-system-unit"]));
+        assert!(!on(&["-fmason-metadata-system-unit", "-fno-mason-metadata-system-unit"]));
+        assert!(on(&["-fno-mason-metadata-system-unit", "-fmason-metadata-system-unit"]));
+        let (f, _) = parse(&["-fmason-metadata-system-unit", "-fno-mason-metadata"]);
+        assert_eq!((f.mason_meta, f.mason_system_unit), (None, true));
     }
 
     #[test]

@@ -172,6 +172,10 @@ pub struct MasonMetaOptions {
     pub short_enums: bool,
     /// The C++ standard library rows; `None` for a C unit.
     pub stdlib: Option<StdlibSummary>,
+    /// `-fmason-metadata-system-unit` (WP-1619): the unit is part of the
+    /// implementation, so every kind 2 and kind 3 row is `SYSTEM`
+    /// wherever its definition lies ([`crate::mason_defs::mason_place`]).
+    pub system_unit: bool,
 }
 
 /// The `abi.stdlib*` rows of a C++ unit.

@@ -463,16 +463,19 @@ fn local_class_member(ast: &Ast, def: DeclId) -> bool {
 }
 
 /// The file and line of location `loc` (presumed, after the prefix maps
-/// of `opts`) and whether it is in a system header: a kind 2 or kind 3
-/// row's `file`, `line` and `SYSTEM`.
+/// of `opts`) and whether it is in a system header, or the whole unit is
+/// marked as part of the implementation (`-fmason-metadata-system-unit`,
+/// WP-1619): a kind 2 or kind 3 row's `file`, `line` and `SYSTEM`. The
+/// one place either kind computes `SYSTEM`; no hash input reads it.
 pub(crate) fn mason_place(
     sm: Option<&kiln_source::SourceManager>,
     opts: &crate::CodegenOptions,
     loc: kiln_source::Loc,
 ) -> (String, u32, bool) {
-    let (mut file, mut line, mut system) = (String::new(), 0, false);
+    let unit = opts.mason_meta.as_ref().is_some_and(|m| m.system_unit);
+    let (mut file, mut line, mut system) = (String::new(), 0, unit);
     if let Some(sm) = sm {
-        system = sm.is_in_system_header(loc);
+        system = unit || sm.is_in_system_header(loc);
         if let Some(p) = sm.presumed_line_col(loc) {
             file = opts.debug.remap(&sm.presumed_file_name(&p, loc));
             line = p.line;

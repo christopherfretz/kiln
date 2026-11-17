@@ -25,6 +25,7 @@ pub(crate) fn options(
         std: std.base.to_owned(),
         short_enums: a.predef.short_enums,
         stdlib: std.cplusplus.then(|| stdlib_summary(a.stdlib.unwrap_or_default(), &macros)),
+        system_unit: a.codegen.mason_system_unit,
     })
 }
 
