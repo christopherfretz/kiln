@@ -1,0 +1,853 @@
+//! The definition hash of the link-time ODR checks (`kiln_abi::odr_def`;
+//! spec/abi.md "Definition hash (`odr_def`)"; mortar `spec/odr.md`
+//! O-10..O-13), checked five ways:
+//!
+//! - must-equal pairs: sources that differ only in what O-10 does not
+//!   hash (spelling, macros, typedefs, parentheses, implicit `this`,
+//!   implicit specifiers, how a unit uses the function);
+//! - the mutation table: each row a pair of definitions that must differ;
+//! - the golden file `mason_def_hash.golden`, which pins the bytes;
+//! - over a library-heavy unit with libstdc++ and libc++: no name fed to
+//!   the hash has a per-TU component, and two units that instantiate
+//!   different things agree on every definition they share;
+//! - deep trees do not overflow the stack.
+//!
+//! `cost_report` (ignored; run in release) prints what hashing every
+//! function definition of a unit costs against parsing it.
+
+#![allow(clippy::cast_precision_loss, reason = "percentages and rates in printed reports")]
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use kiln_abi::mangle::{self, AnonIds};
+use kiln_abi::odr_def::{DefDigest, DefHasher, ODR_DEF_SCHEME, is_templated_def};
+use kiln_abi::{Arch, Target};
+use kiln_ast::{Ast, DeclId};
+use kiln_diag::{DiagEngine, DiagOptions, Level, MemorySink};
+use kiln_lex::Std;
+use kiln_parse::{ConstexprLimits, ParseOptions, ParsedTu, parse_tu};
+use kiln_source::SourceManager;
+use kiln_source::symbol::Interner;
+
+fn host_arch() -> Arch {
+    if cfg!(target_arch = "aarch64") { Arch::AArch64 } else { Arch::X86_64 }
+}
+
+fn parse_opts(name: &str, src: String, opts: &ParseOptions) -> (SourceManager, ParsedTu) {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual(name, src).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let sink = MemorySink::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+    let tu = parse_tu(
+        &sm,
+        &interner,
+        file,
+        &engine,
+        Target::for_arch(host_arch()),
+        opts,
+        ConstexprLimits::default(),
+    );
+    let errors: Vec<String> =
+        sink.take().into_iter().filter(|d| d.level >= Level::Error).map(|d| d.message).collect();
+    assert!(errors.is_empty(), "parse errors: {errors:?}");
+    drop(engine);
+    (sm, tu)
+}
+
+fn parse(src: &str) -> (SourceManager, ParsedTu) {
+    parse_opts("t.cpp", src.to_owned(), &ParseOptions::default())
+}
+
+fn ident(ast: &Ast, d: DeclId) -> &str {
+    ast.decls.get(d).name().as_ident().map_or("", |s| ast.symbols().as_str(s))
+}
+
+/// The function definitions of `ast` that are hashed: every one with a
+/// body that is not a template's own.
+fn definitions(ast: &Ast) -> Vec<DeclId> {
+    ast.decls
+        .ids()
+        .filter(|&d| ast.decls.function(d).is_some_and(|f| f.body.is_some()))
+        .filter(|&d| !is_templated_def(ast, d))
+        .collect()
+}
+
+/// The digest of the one definition named `name` in `src`.
+fn digest_in(src: &str, name: &str) -> DefDigest {
+    let (sm, tu) = parse(src);
+    digest_of(&sm, &tu.ast, name)
+}
+
+fn digest_of(sm: &SourceManager, ast: &Ast, name: &str) -> DefDigest {
+    let defs: Vec<DeclId> =
+        definitions(ast).into_iter().filter(|&d| ident(ast, d) == name).collect();
+    assert_eq!(defs.len(), 1, "one definition of `{name}`");
+    DefHasher::new(ast, sm, AnonIds::new()).function(defs[0])
+}
+
+// ---------------------------------------------------------------- (a)
+
+/// Pairs that must give the same digest of `f`, and the same `partial`.
+const MUST_EQUAL: &[(&str, &str, &str)] = &[
+    // N16: comments, whitespace, ignored attributes, macro names.
+    (
+        "N16 comments and whitespace",
+        "int f(int a) { return a + 1; }",
+        "int f(int a) /* c */ {\n  // c\n  return a\n   + 1;\n}",
+    ),
+    (
+        "N16 ignored attributes",
+        "int f(int a) { if (a) return 1; int b = a; return b; }",
+        "[[nodiscard]] [[deprecated]] int f([[maybe_unused]] int a) { if (a) [[likely]] return 1; int b = a; return b; }",
+    ),
+    (
+        "N16 macros that expand alike",
+        "#define ONE 1\nint f(int a) { return a + ONE; }",
+        "#define UNO 1\nint f(int a) { return a + UNO; }",
+    ),
+    ("literal: decimal and hex", "int f() { return 16; }", "int f() { return 0x10; }"),
+    ("literal: decimal and binary", "int f() { return 16; }", "int f() { return 0b10000; }"),
+    ("literal: digit separator", "int f() { return 16; }", "int f() { return 1'6; }"),
+    ("literal: octal", "int f() { return 8; }", "int f() { return 010; }"),
+    ("literal: float spelling", "double f() { return 1.5; }", "double f() { return 15e-1; }"),
+    ("literal: char spelling", "int f() { return 'a'; }", "int f() { return '\\x61'; }"),
+    (
+        "literal: string spelling",
+        "const char *f() { return \"ab\"; }",
+        "const char *f() { return \"a\\x62\"; }",
+    ),
+    (
+        "macro against its expansion",
+        "#define TWICE(x) ((x) + (x))\nint f(int a) { return TWICE(a); }",
+        "int f(int a) { return ((a) + (a)); }",
+    ),
+    (
+        "object-like and function-like macro",
+        "#define E a * 2\nint f(int a) { return E; }",
+        "#define E() a * 2\nint f(int a) { return E(); }",
+    ),
+    (
+        "__LINE__ at two lines",
+        "int f() { return __LINE__; }",
+        "\n\n\n\nint f() { return __LINE__; }",
+    ),
+    (
+        "__LINE__ through a macro",
+        "int f() { return __LINE__; }",
+        "#define L __LINE__\n\nint f() { return L; }",
+    ),
+    (
+        "__FILE__ in two files",
+        "const char *f() { return __FILE__; }",
+        "#line 7 \"other.cpp\"\nconst char *f() { return __FILE__; }",
+    ),
+    (
+        "__FILE__ through a macro",
+        "const char *f() { return __FILE__; }",
+        "#define F __FILE__\nconst char *f() { return F; }",
+    ),
+    ("__func__", "const char *f() { return __func__; }", "\nconst char *f() { return __func__; }"),
+    (
+        "stringized __LINE__ concatenation",
+        "#define S2(x) #x\n#define S(x) S2(x)\nconst char *f() { return \"at \" S(__LINE__); }",
+        "#define S2(x) #x\n#define S(x) S2(x)\n\nconst char *f() { return \"at \" S(__LINE__); }",
+    ),
+    (
+        "typedef against the type it names",
+        "typedef long L; L f(L a) { L b = a; return b; }",
+        "long f(long a) { long b = a; return b; }",
+    ),
+    (
+        "alias against the type it names",
+        "using P = int *; P f(P a) { return a; }",
+        "int *f(int *a) { return a; }",
+    ),
+    (
+        "parameter names",
+        "int f(int a, int b) { return a - b; }",
+        "int f(int x, int y) { return x - y; }",
+    ),
+    ("local names", "int f() { int a = 1; return a; }", "int f() { int z = 1; return z; }"),
+    (
+        "redundant parentheses",
+        "int f(int a, int b) { return a * b + 1; }",
+        "int f(int a, int b) { return ((a * b)) + (1); }",
+    ),
+    (
+        "implicit this",
+        "struct S { int m; int f(); }; int S::f() { return m; }",
+        "struct S { int m; int f(); }; int S::f() { return this->m; }",
+    ),
+    (
+        "implicit this, member call",
+        "struct S { int g(); int f(); }; int S::f() { return g(); }",
+        "struct S { int g(); int f(); }; int S::f() { return this->g(); }",
+    ),
+    ("trailing return type", "int f(int a) { return a; }", "auto f(int a) -> int { return a; }"),
+    ("deduced return type", "int f(int a) { return a; }", "auto f(int a) { return a; }"),
+    (
+        "inline written on a class member",
+        "struct S { int f() { return 1; } }; int u = S().f();",
+        "struct S { inline int f() { return 1; } }; int u = S().f();",
+    ),
+    (
+        "noexcept(true) and noexcept",
+        "int f() noexcept { return 1; }",
+        "int f() noexcept(true) { return 1; }",
+    ),
+    (
+        "noexcept(false) and nothing",
+        "int f() { return 1; }",
+        "int f() noexcept(false) { return 1; }",
+    ),
+    (
+        "contract assertion (X16)",
+        "int f(int a) { return a; }",
+        "int f(int a) { contract_assert(a > 0); return a; }",
+    ),
+    (
+        "block-scope typedef and static_assert",
+        "int f(int a) { return a; }",
+        "int f(int a) { typedef int I; static_assert(sizeof(I) == sizeof(int)); return a; }",
+    ),
+    (
+        "enumerator through a using-enum",
+        "enum class E { A, B }; int f() { return int(E::B); }",
+        "enum class E { A, B }; int f() { using enum E; return int(B); }",
+    ),
+    (
+        "sizeof a type and a typedef of it",
+        "unsigned long f() { return sizeof(int); }",
+        "typedef int I; unsigned long f() { return sizeof(I); }",
+    ),
+    (
+        "qualified call of a non-virtual member",
+        "struct S { int g(); int f(); }; int S::f() { return g(); }",
+        "struct S { int g(); int f(); }; int S::f() { return S::g(); }",
+    ),
+];
+
+#[test]
+fn must_equal_pairs() {
+    let mut bad = Vec::new();
+    for &(case, a, b) in MUST_EQUAL {
+        let (x, y) = (digest_in(a, "f"), digest_in(b, "f"));
+        if x != y {
+            bad.push(format!("{case}: {x:x?} != {y:x?}"));
+        }
+    }
+    assert!(bad.is_empty(), "must-equal pairs differ:\n{}", bad.join("\n"));
+}
+
+/// N25: what kiln marks `constexpr` implicitly (an implicit destructor in
+/// C++20, a closure's call operator from C++17) is not hashed: the
+/// function using them hashes alike under every standard.
+#[test]
+fn n25_implicit_specifiers_across_standards() {
+    let src = "struct M { ~M() {} };\nstruct X { M s; };\n\
+               inline int f(int a) { X x; auto l = [a] { return a; }; return l(); }\n\
+               int u = f(1);\n";
+    let mut seen = Vec::new();
+    for std in [Std::Cxx17, Std::Cxx20, Std::Cxx26] {
+        let opts = ParseOptions { std, ..ParseOptions::default() };
+        let (sm, tu) = parse_opts("t.cpp", src.to_owned(), &opts);
+        let ast = &tu.ast;
+        let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+        let f = definitions(ast).into_iter().find(|&d| ident(ast, d) == "f").unwrap();
+        let x = definitions(ast).into_iter().filter(|&d| {
+            ast.decls.get(d).kind() == kiln_ast::decl::DeclKind::CXXDestructor
+                && ast.decls.get(d).ctx().is_some_and(|c| ident(ast, c) == "X")
+        });
+        let dtor: Vec<DefDigest> = x.map(|d| h.function(d)).collect();
+        seen.push((h.function(f), dtor));
+    }
+    assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:x?}");
+}
+
+/// O-10: lazily computed sema state is not hashed. The same inline
+/// function, used in a constant expression, address-taken and with more
+/// specializations instantiated in one unit, unreferenced in the other.
+#[test]
+fn use_in_the_unit_does_not_matter() {
+    let common = "template <class T> int t(T x) { return int(x) + 1; }\n\
+                  constexpr int f(int a) { return a * 2; }\n\
+                  inline int g(int a) { return t(a) + f(a); }\n";
+    let used = format!(
+        "{common}static_assert(f(2) == 4);\nint (*p)(int) = &f;\nint (*q)(int) = &g;\n\
+         int u = t(1L) + t('c') + t(2.0) + g(3);\nconstexpr int k = f(5);\n"
+    );
+    let (sm1, tu1) = parse(common);
+    let (sm2, tu2) = parse(&used);
+    for name in ["f", "g"] {
+        assert_eq!(digest_of(&sm1, &tu1.ast, name), digest_of(&sm2, &tu2.ast, name), "{name}");
+    }
+    let t1 = by_mangled(&sm1, &tu1.ast);
+    let t2 = by_mangled(&sm2, &tu2.ast);
+    assert_eq!(t1.get("_Z1tIiEiT_"), t2.get("_Z1tIiEiT_"));
+    assert!(t2.contains_key("_Z1tIlEiT_"));
+}
+
+fn by_mangled(sm: &SourceManager, ast: &Ast) -> BTreeMap<String, DefDigest> {
+    let mut h = DefHasher::new(ast, sm, AnonIds::new());
+    let mut anon = AnonIds::new();
+    definitions(ast)
+        .into_iter()
+        .map(|d| (mangle::mangle_decl(ast, &mut anon, d), h.function(d)))
+        .collect()
+}
+
+// ---------------------------------------------------------------- (b)
+
+/// Declarations every mutation row sees.
+const PRELUDE: &str = "struct S { int m; int n; int g(int); virtual int v(); static int st; };\n\
+                       enum E { EA, EB };\nint g(int); int h(int); int gl; long gl2;\n\
+                       struct It { int operator*(); It &operator++(); bool operator!=(It); };\n\
+                       struct R { It begin(); It end(); };\n";
+
+/// Each row: a case, then two definitions of `f` that must differ. One
+/// row a line; later packages add rows for the kinds they cover.
+const MUST_DIFFER: &str = r#"
+literal value | int f() { return 1; } | int f() { return 2; }
+literal type | long f() { return 16; } | long f() { return 16u; }
+literal type long | long f() { return 16; } | long f() { return 16l; }
+float value | double f() { return 1.0; } | double f() { return 1.5; }
+float type | double f() { return 1.0; } | double f() { return 1.0f; }
+char value | int f() { return 'a'; } | int f() { return 'b'; }
+char type | int f() { return 'a'; } | int f() { return u'a'; }
+string value | const char *f() { return "ab"; } | const char *f() { return "ac"; }
+string length | const char *f() { return "ab"; } | const char *f() { return "ab\0"; }
+bool value | bool f() { return true; } | bool f() { return false; }
+nullptr vs 0 | int *f() { return nullptr; } | int *f() { return 0; }
+callee | int f(int a) { return g(a); } | int f(int a) { return h(a); }
+argument | int f(int a, int b) { return g(a); } | int f(int a, int b) { return g(b); }
+argument order | int f(int a, int b) { return a - b; } | int f(int a, int b) { return b - a; }
+global | int f() { return gl; } | int f() { return (int)gl2; }
+member | int f(S s) { return s.m; } | int f(S s) { return s.n; }
+arrow | int f(S *p) { return p->m; } | int f(S *p) { return (*p).m; }
+virtual call qualified | int f(S &s) { return s.v(); } | int f(S &s) { return s.S::v(); }
+member call | int f(S &s) { return s.g(1); } | int f(S &s) { return s.g(2); }
+static member | int f() { return S::st; } | int f() { return gl; }
+enumerator | int f() { return EA; } | int f() { return EB; }
+cast type | long f(int a) { return (long)a; } | long f(int a) { return (short)a; }
+cast kind | long f(int a) { return static_cast<long>(a); } | long f(int a) { return (long)a; }
+reinterpret vs static | char *f(void *p) { return static_cast<char *>(p); } | char *f(void *p) { return (char *)(long *)p; }
+const_cast | int *f(const int *p) { return const_cast<int *>(p); } | int *f(const int *p) { return (int *)p; }
+local type | int f(int a) { int x = a; return x; } | int f(int a) { long x = a; return x; }
+local const | int f(int a) { int x = a; return x; } | int f(int a) { const int x = a; return x; }
+local static | int f(int a) { int x = 1; return x + a; } | int f(int a) { static int x = 1; return x + a; }
+local init | int f() { int x = 1; return x; } | int f() { int x = 2; return x; }
+local no init | int f() { int x; return 0; } | int f() { int x = 0; return 0; }
+direct vs copy init | int f() { int x = 1; return x; } | int f() { int x(1); return x; }
+statement order | void f(int &a, int &b) { a = 1; b = 2; } | void f(int &a, int &b) { b = 2; a = 1; }
+dropped statement | void f(int &a, int &b) { a = 1; b = 2; } | void f(int &a, int &b) { a = 1; }
+if vs if not | int f(int a) { if (a) return 1; return 0; } | int f(int a) { if (!a) return 1; return 0; }
+if vs if-else | int f(int a) { if (a) return 1; return 0; } | int f(int a) { if (a) return 1; else return 0; }
+if consteval | int f() { if consteval { return 1; } return 0; } | int f() { if !consteval { return 1; } return 0; }
+if constexpr | int f() { if constexpr (true) { return 1; } return 0; } | int f() { if (true) { return 1; } return 0; }
+while vs for | void f(int a) { while (a) --a; } | void f(int a) { for (; a;) --a; }
+while vs do | void f(int a) { while (a) --a; } | void f(int a) { do --a; while (a); }
+for parts | void f(int a) { for (int i = 0; i < a; ++i) g(i); } | void f(int a) { for (int i = 0; i < a; i++) g(i); }
+range-for vs iterator loop | int f(R r) { int s = 0; for (int x : r) s += x; return s; } | int f(R r) { int s = 0; for (It i = r.begin(), e = r.end(); i != e; ++i) s += *i; return s; }
+break vs continue | void f(int a) { while (a) { --a; break; } } | void f(int a) { while (a) { --a; continue; } }
+switch case | int f(int a) { switch (a) { case 1: return 1; default: return 0; } } | int f(int a) { switch (a) { case 2: return 1; default: return 0; } }
+case range | int f(int a) { switch (a) { case 1 ... 3: return 1; } return 0; } | int f(int a) { switch (a) { case 1 ... 4: return 1; } return 0; }
+goto target | void f(int a) { x: if (a--) goto x; y: if (a--) goto x; } | void f(int a) { x: if (a--) goto x; y: if (a--) goto y; }
+try catch type | int f() { try { return g(1); } catch (int) { return 1; } } | int f() { try { return g(1); } catch (long) { return 1; } }
+catch all | int f() { try { return g(1); } catch (int) { return 1; } } | int f() { try { return g(1); } catch (...) { return 1; } }
+conditional arms | int f(int a, int b, int c) { return a ? b : c; } | int f(int a, int b, int c) { return a ? c : b; }
+comma | int f(int a, int b) { return (a, b); } | int f(int a, int b) { return (b, a); }
+subscript | int f(int *p) { return p[0]; } | int f(int *p) { return p[1]; }
+subscript order | int f(int *p, int i) { return p[i]; } | int f(int *p, int i) { return i[p]; }
+sizeof type | unsigned long f() { return sizeof(int); } | unsigned long f() { return sizeof(long); }
+sizeof expr vs type | unsigned long f(int a) { return sizeof a; } | unsigned long f(int a) { return sizeof(int); }
+sizeof vs alignof | unsigned long f() { return sizeof(int); } | unsigned long f() { return alignof(int); }
+address of | int *f(int &a) { return &a; } | int *f(int &a) { int *p = &a; return p; }
+return type | int f() { return 1; } | long f() { return 1; }
+parameter type | int f(int a) { return a; } | int f(long a) { return a; }
+parameter count | int f(int a) { return a; } | int f(int a, int) { return a; }
+noexcept | int f() { return 1; } | int f() noexcept { return 1; }
+constexpr written | int f() { return 1; } | constexpr int f() { return 1; }
+consteval written | constexpr int f() { return 1; } | consteval int f() { return 1; }
+inline written | int f() { return 1; } | inline int f() { return 1; }
+static written | int f() { return 1; } | static int f() { return 1; }
+variadic | int f(int a, ...) { return a; } | int f(int a) { return a; }
+const member | struct T { int f(); }; int T::f() { return 1; } | struct T { int f() const; }; int T::f() const { return 1; }
+ref-qualifier | struct T { int f() &; }; int T::f() & { return 1; } | struct T { int f() &&; }; int T::f() && { return 1; }
+virtual | struct T { int f(); }; int T::f() { return 1; } | struct T { virtual int f(); }; int T::f() { return 1; }
+compound assign | void f(int &a, int b) { a += b; } | void f(int &a, int b) { a = a + b; }
+increment | int f(int a) { return ++a; } | int f(int a) { return a++; }
+logical vs bitwise | bool f(bool a, bool b) { return a && b; } | bool f(bool a, bool b) { return a & b; }
+operator call | int f(It i) { return *i; } | int f(It i) { return *++i; }
+"#;
+
+const BINARY: &[&str] = &[
+    "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", "<", ">", "<=", ">=", "==", "!=", "&&",
+    "||",
+];
+const UNARY: &[&str] = &["-a", "+a", "!a", "~a", "++a", "--a", "a++", "a--"];
+const ASSIGN: &[&str] = &["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="];
+
+fn mutation_pairs() -> Vec<(String, String, String)> {
+    let mut rows: Vec<(String, String, String)> = MUST_DIFFER
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let p: Vec<&str> = l.split(" | ").collect();
+            assert_eq!(p.len(), 3, "row: {l}");
+            (p[0].to_owned(), p[1].to_owned(), p[2].to_owned())
+        })
+        .collect();
+    let all = |ops: &[&str], body: &dyn Fn(&str) -> String, rows: &mut Vec<_>| {
+        for (i, x) in ops.iter().enumerate() {
+            for y in &ops[i + 1..] {
+                rows.push((format!("operator {x} vs {y}"), body(x), body(y)));
+            }
+        }
+    };
+    all(BINARY, &|op| format!("int f(int a, int b) {{ return a {op} b; }}"), &mut rows);
+    all(UNARY, &|op| format!("int f(int a) {{ return {op}; }}"), &mut rows);
+    all(ASSIGN, &|op| format!("void f(int &a, int b) {{ a {op} b; }}"), &mut rows);
+    rows
+}
+
+#[test]
+fn mutations_move_the_digest() {
+    let mut bad = Vec::new();
+    let rows = mutation_pairs();
+    for (case, a, b) in &rows {
+        let x = digest_in(&format!("{PRELUDE}{a}"), "f");
+        let y = digest_in(&format!("{PRELUDE}{b}"), "f");
+        if x.hash == y.hash {
+            bad.push(case.clone());
+        }
+    }
+    assert!(bad.is_empty(), "{} of {} mutations kept the digest: {bad:?}", bad.len(), rows.len());
+}
+
+// ---------------------------------------------------------------- (c)
+
+/// The golden cases: a name and a definition of `f` (after [`PRELUDE`]).
+const GOLDEN_CASES: &[(&str, &str)] = &[
+    ("empty", "void f() {}"),
+    ("literals", "long f() { return 16 + 'a' + 2u + (long)1.5 + true; }"),
+    ("string", "const char *f() { return \"kiln\"; }"),
+    ("placeholders", "const char *f(int &l) { l = __LINE__; return __FILE__; }"),
+    ("operators", "int f(int a, int b) { a += b; return -a * (b << 2) % 3 ^ ~a; }"),
+    ("calls", "int f(S &s, int a) { return g(a) + h(s.g(a)) + s.v() + s.S::v(); }"),
+    ("members", "int f(S *p, S s) { return p->m + s.n + S::st; }"),
+    ("enumerator", "int f() { return EA + EB; }"),
+    (
+        "casts",
+        "long f(int a, void *p) { return static_cast<long>(a) + (long)p + reinterpret_cast<long>(p); }",
+    ),
+    ("locals", "int f(int a) { int x = a; static int y = 2; const long z(3); return x + y + z; }"),
+    ("if", "int f(int a) { if (int b = a; b > 1) return 1; else if (a) return 2; return 3; }"),
+    (
+        "loops",
+        "void f(int a) { while (a) --a; do ++a; while (a < 3); for (int i = 0; i < a; ++i) g(i); }",
+    ),
+    ("range-for", "int f(R r) { int s = 0; for (int x : r) s += x; return s; }"),
+    (
+        "switch",
+        "int f(int a) { switch (a) { case 1: return 1; case 2: break; default: return 0; } return 3; }",
+    ),
+    ("goto", "void f(int a) { x: if (a--) goto x; }"),
+    ("try", "int f() { try { return g(1); } catch (int e) { return e; } catch (...) { throw; } }"),
+    ("conditional", "int f(int a, int b) { return a ? b : (a, b); }"),
+    ("sizeof", "unsigned long f(int a) { return sizeof a + sizeof(long) + alignof(int); }"),
+    ("noexcept", "int f() noexcept { return 1; }"),
+    ("constexpr", "constexpr int f(int a) { return a; }"),
+    ("method", "struct T { int m; int f() const &; }; int T::f() const & { return m; }"),
+    ("partial: new", "int *f() { return new int(1); }"),
+    ("partial: lambda", "int f() { return [] { return 1; }(); }"),
+    ("partial: construct", "S f() { return S(); }"),
+];
+
+fn golden_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mason_def_hash.golden")
+}
+
+const GOLDEN_HEADER: &str = "\
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d1).
+# BUMP RULE (mortar O-11): a changed digest here means the serialization
+# changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
+# spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
+# case<TAB>scheme<TAB>digest<TAB>partial
+";
+
+#[test]
+fn golden_digests() {
+    let mut text = String::from(GOLDEN_HEADER);
+    for &(case, src) in GOLDEN_CASES {
+        let d = digest_in(&format!("{PRELUDE}{src}"), "f");
+        writeln!(text, "{case}\t{ODR_DEF_SCHEME}\t{:032x}\t{}", d.hash, d.partial).unwrap();
+    }
+    let path = golden_path();
+    if std::env::var_os("KILN_BLESS").is_some() {
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap_or_default();
+    if want != text {
+        let diff: Vec<String> = want
+            .lines()
+            .zip(text.lines())
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("  - {a}\n  + {b}"))
+            .collect();
+        panic!(
+            "the definition hash's serialization changed ({} lines differ):\n{}\n\
+             mortar O-11: every change to what is hashed or how BUMPS the scheme: change \
+             ODR_DEF_SCHEME (crates/kiln_abi/src/odr_def/mod.rs) and spec/abi.md, then \
+             regenerate {} with KILN_BLESS=1",
+            diff.len(),
+            diff.join("\n"),
+            path.display()
+        );
+    }
+}
+
+/// Every partial site writes its own token: two definitions skipped for
+/// different reasons differ.
+#[test]
+fn partial_tokens_are_per_kind() {
+    let a = digest_in(&format!("{PRELUDE}int *f() {{ return new int(1); }}"), "f");
+    let b = digest_in(&format!("{PRELUDE}int *f() {{ return new int[1]; }}"), "f");
+    let c = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 1; }}(); }}"), "f");
+    assert!(a.partial && b.partial && c.partial);
+    assert_eq!(a, b, "the same partial token for the same kind (subtree not hashed)");
+    assert_ne!(a.hash, c.hash);
+}
+
+// ---------------------------------------------------------- deep trees
+
+fn on_small_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn_scoped(s, f)
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+}
+
+fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| {
+        std::thread::Builder::new().stack_size(1 << 30).spawn_scoped(s, f).unwrap().join().unwrap()
+    })
+}
+
+/// 100,000-deep `a+a+...` and nested blocks: the parser gets a large
+/// stack, the hasher a 256 KiB one.
+#[test]
+fn deep_trees_do_not_overflow() {
+    const N: usize = 100_000;
+    let mut sum = String::from("int f(int a) { return a");
+    sum.push_str(&"+a".repeat(N));
+    sum.push_str("; }");
+    let mut blocks = String::from("int f(int a) ");
+    blocks.push_str(&"{".repeat(N));
+    blocks.push_str("++a;");
+    blocks.push_str(&"}".repeat(N));
+    blocks.push(' ');
+    for src in [sum, blocks] {
+        let (sm, tu) = on_big_stack(|| parse(&src));
+        let ast = &tu.ast;
+        let f = definitions(ast)[0];
+        let d = on_small_stack(|| {
+            let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+            let d = h.function(f);
+            assert!(h.stats().nodes > N as u64);
+            d
+        });
+        assert!(!d.partial);
+        on_big_stack(move || drop(tu));
+    }
+}
+
+// ---------------------------------------------------------- (d), (e)
+
+const LIBRARY_UNIT_A: &str = "#include <algorithm>\n#include <string>\n#include <vector>\n\
+#include <map>\n#include <functional>\n\
+int use_a(int k) {\n  std::vector<int> v{3, 1, 2};\n  std::sort(v.begin(), v.end());\n\
+  std::map<std::string, int> m;\n  m[\"a\"] = k;\n  std::string s = \"x\";\n  s += std::to_string(k);\n\
+  std::function<int(int)> fn = [](int x) { return x + 1; };\n\
+  return fn(v[0]) + int(m.size()) + int(s.size());\n}\n";
+
+const LIBRARY_UNIT_B: &str = "#include <algorithm>\n#include <string>\n#include <vector>\n\
+#include <map>\n#include <functional>\n\
+long use_b(const std::string &s) {\n  std::map<std::string, int> m{{s, 1}};\n\
+  std::vector<long> w(4, 2L);\n  std::reverse(w.begin(), w.end());\n  std::vector<int> v{1, 2};\n\
+  std::sort(v.begin(), v.end(), std::greater<int>());\n  auto it = m.find(s);\n\
+  return w[0] + v[1] + (it == m.end() ? 0 : it->second) + long(std::count(s.begin(), s.end(), 'a'));\n}\n\
+int use_a2(int k) {\n  std::vector<int> v{3, 1, 2};\n  std::sort(v.begin(), v.end());\n  return v[0] + k;\n}\n";
+
+fn scratch(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("kiln-def-hash-{}-{tag}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// `src` preprocessed by kiln++ against `stdlib`, or `None` when that
+/// library is not installed.
+fn preprocess(src: &str, stdlib: &str, std: &str, tag: &str) -> Option<String> {
+    use kiln_driver::{Io, SharedWriter, run};
+    let dir = scratch(tag);
+    let input = dir.join("u.cpp");
+    let output = dir.join("u.ii");
+    std::fs::write(&input, src).unwrap();
+    let err = SharedWriter::new(std::io::sink());
+    let io =
+        Io { stdout: Box::new(std::io::sink()), stderr: err, stdin: Box::new(std::io::empty()) };
+    let args: Vec<String> = [
+        "-E",
+        &format!("-std={std}"),
+        &format!("-stdlib={stdlib}"),
+        "-o",
+        &output.display().to_string(),
+        &input.display().to_string(),
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    let rc = run(&args, io);
+    let text = std::fs::read_to_string(&output).ok();
+    std::fs::remove_dir_all(&dir).ok();
+    if rc != 0 {
+        eprintln!("skipped: kiln++ -E -stdlib={stdlib} failed ({rc})");
+        return None;
+    }
+    text
+}
+
+fn library_opts(std: Std) -> ParseOptions {
+    ParseOptions { std, gnu: true, aligned_allocation: true, ..ParseOptions::default() }
+}
+
+/// The per-TU component of a mangled name or `<type>` encoding, if any
+/// (an independent reader from refs.rs's guard).
+fn per_tu_component(enc: &str) -> Option<&'static str> {
+    let b = enc.as_bytes();
+    let mut i = if enc.starts_with("_Z") { 2 } else { 0 };
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n: usize = enc[start..i].parse().unwrap();
+            let name = &enc[i..(i + n).min(enc.len())];
+            if name.starts_with("_GLOBAL__N") {
+                return Some("_GLOBAL__N");
+            }
+            if name.starts_with('$') {
+                return Some("$_N");
+            }
+            i += n;
+            continue;
+        }
+        match c {
+            b'Z' => return Some("Z...E"),
+            b'U' if matches!(b.get(i + 1), Some(b't' | b'l')) => return Some("Ut/Ul"),
+            b'L' if b.get(i + 1) == Some(&b'_') && b.get(i + 2) == Some(&b'Z') => i += 2,
+            b'L' if b.get(i + 1).is_some_and(u8::is_ascii_lowercase) => {
+                while i < b.len() && b[i] != b'E' {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+struct UnitHash {
+    digests: BTreeMap<String, DefDigest>,
+    names: Vec<String>,
+    stats: kiln_abi::odr_def::DefStats,
+}
+
+fn hash_unit(ii: String) -> UnitHash {
+    let (sm, tu) = parse_opts("u.ii", ii, &library_opts(Std::Cxx20));
+    let ast = &tu.ast;
+    let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+    h.collect_names();
+    let mut anon = AnonIds::new();
+    let mut digests = BTreeMap::new();
+    for d in definitions(ast) {
+        let name = mangle::mangle_decl(ast, &mut anon, d);
+        let digest = h.function(d);
+        // A definition whose own name is per-TU has no row (O-2).
+        if per_tu_component(&name).is_none() {
+            digests.insert(name, digest);
+        }
+    }
+    UnitHash { digests, names: h.names().to_vec(), stats: h.stats().clone() }
+}
+
+fn report(stdlib: &str, u: &UnitHash) {
+    let s = &u.stats;
+    eprintln!(
+        "{stdlib}: {} definitions hashed, {} partial ({:.1}%), {} nodes, {} bytes",
+        s.definitions,
+        s.partial_definitions,
+        100.0 * s.partial_definitions as f64 / s.definitions.max(1) as f64,
+        s.nodes,
+        s.bytes
+    );
+    let mut by: BTreeMap<String, u64> = BTreeMap::new();
+    for (&(area, site), &n) in &s.partial_sites {
+        *by.entry(format!("{area:?} {}", site_name(site))).or_default() += n;
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|x| std::cmp::Reverse(x.1));
+    for (k, n) in by.iter().take(25) {
+        eprintln!(
+            "  partial {k}: {n} ({:.1}% of definitions)",
+            100.0 * *n as f64 / s.definitions.max(1) as f64
+        );
+    }
+}
+
+fn site_name(s: kiln_abi::odr_def::Site) -> String {
+    use kiln_abi::odr_def::Site;
+    match s {
+        Site::Expr(k) => format!("expr {k:?}"),
+        Site::Stmt(k) => format!("stmt {k:?}"),
+        Site::Decl(k) => format!("decl {k:?}"),
+        Site::Item(i) => format!("item {i:?}"),
+    }
+}
+
+fn library_check(stdlib: &str) {
+    let (Some(a), Some(b)) = (
+        preprocess(LIBRARY_UNIT_A, stdlib, "c++20", &format!("{stdlib}-a")),
+        preprocess(LIBRARY_UNIT_B, stdlib, "c++20", &format!("{stdlib}-b")),
+    ) else {
+        return;
+    };
+    let (ua, ub) = on_big_stack(|| (hash_unit(a), hash_unit(b)));
+    // (d) no name fed to the hash has a per-TU component.
+    for u in [&ua, &ub] {
+        let bad: Vec<&String> = u.names.iter().filter(|n| per_tu_component(n).is_some()).collect();
+        assert!(
+            bad.is_empty(),
+            "{stdlib}: per-TU names fed to the hash: {:?}",
+            &bad[..bad.len().min(10)]
+        );
+        assert!(!u.names.is_empty());
+    }
+    // (e) the two units agree on every definition they share.
+    let mut shared = 0;
+    let mut bad = Vec::new();
+    for (name, da) in &ua.digests {
+        if let Some(db) = ub.digests.get(name) {
+            shared += 1;
+            if da != db {
+                bad.push(name.clone());
+            }
+        }
+    }
+    report(stdlib, &ua);
+    report(stdlib, &ub);
+    eprintln!("{stdlib}: {shared} definitions in both units, {} disagree", bad.len());
+    assert!(shared > 100, "{stdlib}: only {shared} shared definitions");
+    assert!(
+        bad.is_empty(),
+        "{stdlib}: units disagree on {} definitions: {:?}",
+        bad.len(),
+        &bad[..bad.len().min(20)]
+    );
+}
+
+#[test]
+fn library_unit_libstdcxx() {
+    library_check("libstdc++");
+}
+
+#[test]
+fn library_unit_libcxx() {
+    library_check("libc++");
+}
+
+// ---------------------------------------------------------------- cost
+
+/// Deliverable 10: the cost of hashing every function definition of a
+/// unit against parsing it. Run in release:
+/// `cargo test --release -p kiln_codegen --test mason_def_hash -- --ignored --nocapture cost_report`.
+#[test]
+#[ignore = "a measurement, run by hand in release"]
+fn cost_report() {
+    let bench =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/frontend/format-like-g.cpp");
+    let units = [
+        (
+            "format-like-g (libstdc++)",
+            std::fs::read_to_string(&bench).unwrap(),
+            "libstdc++",
+            "c++26",
+        ),
+        ("library unit A (libstdc++)", LIBRARY_UNIT_A.to_owned(), "libstdc++", "c++20"),
+        ("library unit A (libc++)", LIBRARY_UNIT_A.to_owned(), "libc++", "c++20"),
+    ];
+    for (name, src, stdlib, std) in units {
+        let tp = std::time::Instant::now();
+        let Some(ii) = preprocess(&src, stdlib, std, "cost") else { continue };
+        let pp = tp.elapsed();
+        let std = if std == "c++26" { Std::Cxx26 } else { Std::Cxx20 };
+        on_big_stack(|| {
+            let t0 = std::time::Instant::now();
+            let (sm, tu) = parse_opts("u.ii", ii, &library_opts(std));
+            let parse = t0.elapsed();
+            let ast = &tu.ast;
+            let defs = definitions(ast);
+            let t1 = std::time::Instant::now();
+            let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+            for &d in &defs {
+                h.function(d);
+            }
+            let hash = t1.elapsed();
+            let s = h.stats().clone();
+            // Again with the memo maps warm: the walk without mangling.
+            let t2 = std::time::Instant::now();
+            for &d in &defs {
+                h.function(d);
+            }
+            let warm = t2.elapsed();
+            let front = pp + parse;
+            eprintln!(
+                "{name}: warm second pass {:.2} ms (mangling and the guard: the rest); \
+                 preprocess+parse+sema {:.1} ms, hashing {:.2}% of it",
+                warm.as_secs_f64() * 1e3,
+                front.as_secs_f64() * 1e3,
+                100.0 * hash.as_secs_f64() / front.as_secs_f64()
+            );
+            let rate = |hit: u64, miss: u64| 100.0 * hit as f64 / (hit + miss).max(1) as f64;
+            eprintln!(
+                "{name}: parse+sema {:.1} ms; hashing {:.2} ms ({:.2}%) for {} definitions, {} nodes \
+                 ({:.0} ns/node), {} bytes; entity memo {:.1}% hits ({} mangled), type memo {:.1}% \
+                 hits ({} mangled); hasher memory {} KiB; partial {}",
+                parse.as_secs_f64() * 1e3,
+                hash.as_secs_f64() * 1e3,
+                100.0 * hash.as_secs_f64() / parse.as_secs_f64(),
+                s.definitions,
+                s.nodes,
+                hash.as_nanos() as f64 / s.nodes.max(1) as f64,
+                s.bytes,
+                rate(s.entity_hits, s.entity_misses),
+                s.entity_misses,
+                rate(s.type_hits, s.type_misses),
+                s.type_misses,
+                h.memory() / 1024,
+                s.partial_definitions,
+            );
+        });
+    }
+}

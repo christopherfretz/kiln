@@ -1939,6 +1939,143 @@ AArch64, without `noundef`; a class holding one is classified as a class
 holding a pointer. A run-time `info` always holds the null reflection
 (spec/codegen.md "Run-time reflections").
 
+## Definition hash (`odr_def`)
+`kiln_abi::odr_def` (WP-1582, package K-3b) is the serializer of a
+function definition for the link-time ODR checks: record kind 2 of
+`.mason.meta` (spec/codegen.md "Link-time metadata"; mortar `spec/odr.md`
+O-10..O-13). This section is its contract: a later kiln reproduces these
+bytes, or changes `ODR_DEF_SCHEME`. In this package nothing outside the
+tests calls it (rows are wired by a later package).
+
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d1"`, separate from the layout
+serialization's scheme. Bump rule (O-11): every change to what is
+serialized or how changes the constant; the golden test
+`crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
+so when it fails.
+
+**Digest.** `DefHasher::function(def) -> DefDigest { hash, partial }`:
+`hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
+prime 2^88 + 0x13b; `kiln_abi::odr::fnv1a_128`) of the stream; `partial`
+is O-15's flag (some construct the scheme covers was skipped).
+
+**Stream.** Every node opens with a one-byte tag and has a fixed layout
+after it; a list is a little-endian `u32` count then its items, a string
+a `u32` length then its bytes, an absent optional `0xA0`. The stream is
+self-delimiting, so two different trees never give the same bytes.
+
+| tag | item | layout after the tag |
+|---|---|---|
+| `0x01 + StmtKind` | a statement | per kind, below |
+| `0x21 + ExprKind` | an expression | per kind, below |
+| `0xA0` | absent optional | — |
+| `0xA1` | a local (parameter, variable, binding, label) | `u32` index |
+| `0xA2` | an external entity | FNV-1a 128 of its mangled name (16 bytes) |
+| `0xA3` | a type | FNV-1a 128 of its `<type>` encoding (16 bytes) |
+| `0xA4` | per-TU placeholder (O-2) | — |
+| `0xA5` | value placeholder (X17) | expression tag, kind byte |
+| `0xA6` | skipped construct (`partial`) | class byte (`e` `s` `d` `i`), code byte |
+| `0xA7` | an enumerator | enumeration (`0xA3`/`0xA4`), name, `i128` value |
+| `0xA8` | a non-static data member | class (`0xA3`/`0xA4`), name |
+| `0xA9` | a local declaration | index, type, specifier bits, bindings, initializer |
+| `0xAA` | the declarator | below |
+
+Both kind enums are numbered stably (spec/ast.md); a new kind takes a new
+number and the exhaustive dispatch (no wildcard arm) does not compile
+until it is given a rule.
+
+**Declarator.** `0xAA`, the declaration kind, specifier bits (storage
+class; `inline` written or implied; `constexpr` only when written: never
+on implicit or defaulted members or closure call operators, N25;
+`consteval`; `virtual`, pure, `override`, `final`, `explicit`, deleted,
+defaulted, explicit object parameter), the return type, the parameter
+types (count + types), the function-type bits other than "written
+trailing" (variadic, ref-qualifier, `this` qualifiers, calling
+convention, `noreturn`), the EFFECTIVE `noexcept` as one byte, the
+trailing requires-clause (an expression) or `0xA0`. Then the body
+statement. Parameters are locals 0..n-1; parameter names and the
+function's own name are not hashed.
+
+**Names and types.** A referenced function or variable is its mangled
+name, memoized per first declaration; a type is its canonical type's
+`<type>` encoding, memoized per canonical type (a typedef equals the type
+it names). Both pass the structural not-TU-local test first (O-17,
+`NotTuLocal`; and, for a function template specialization, a scan of the
+encoding); a name or type that may hold a per-TU component (unnamed
+namespace, local entity, unnamed type, closure) is `0xA4`, which is a
+miss, not `partial`. The hasher mangles with its own `AnonIds`, never the
+module's. An enumerator is (enumeration, name, value), so an unnamed
+enumeration's enumerator is (`0xA4`, name, value). A local is its index in
+order of first appearance (a `goto` before its label numbers the label).
+
+**Statements.** A block: count and statements, a contract assertion and a
+declaration statement holding only typedefs, aliases, using-declarations
+and -directives, `static_assert`s or block-scope function declarations
+are left out (they change nothing the definition does). Each other kind:
+its tag, then its operands in source order (`if`: the `if` kind byte
+(`if`, `constexpr`, `consteval`, `!consteval`), init, condition variable,
+condition, then, else; loops: init, condition variable, condition,
+increment, body; range-`for`: init, range variable, begin and end
+variables, condition, increment, loop variable, body, so it differs from
+the iterator loop written out; `case`: low, high, statement; labels and
+`goto`: the label as a local). An attributed statement is its statement.
+A local variable: `0xA9`, its index, type, bits (storage class,
+thread-local kind, initialization style, `constexpr`, `constinit`), its
+bindings (count + indexes) or `0xA0`, its initializer or `0xA0`.
+
+**Expressions.** Transparent (their operand hashes in their place):
+implicit conversions, `ConstantExpr` (never its cached value),
+temporaries and cleanups, parentheses, a substituted template parameter
+(its replacement), an opaque value (its source). Literals by value and
+type, never by spelling: an integer as its type and value words, a
+floating literal as its type and bits, a character as its type and code
+point, a string as its kind, type, length and bytes, `true`/`false`,
+`nullptr`. A literal token from a builtin macro (`__LINE__`, `__FILE__`,
+`__COUNTER__`, ...) or from `#`/`##`, and any string literal concatenated
+from pieces, is `0xA5`; so are `__func__`-like names and the
+source-location builtins (X17, not `partial`). A name: its entity, local,
+enumerator or member as above. A member access: a byte (`->`; qualified
+name of a virtual member, which suppresses the virtual call), the member,
+the object (an implicit `this` is `this`, so `m` and `this->m` are equal).
+Operators: the operator byte and operands. Calls (`f(x)`, member calls,
+overloaded operators): the operator byte, the callee subexpression (it
+names the resolved function), the argument count and arguments. A
+rewritten comparison: the written operator and the semantic form.
+`sizeof`/`alignof`: the trait, then the type or the operand. A cast
+written in the source: the cast kind sema chose, the value category, the
+type, the operand.
+
+**Areas and states.** Every expression and statement kind is one of:
+
+| area | state | kinds |
+|---|---|---|
+| transparent | hashed through | `ImplicitCastExpr` `ConstantExpr` `MaterializeTemporaryExpr` `CXXBindTemporaryExpr` `ExprWithCleanups` `ParenExpr` `SubstNonTypeTemplateParmExpr` `OpaqueValueExpr` `AttributedStmt` |
+| stmt | hashed | `CompoundStmt` `DeclStmt` `ExprStmt` `NullStmt` `BreakStmt` `ContinueStmt` `IfStmt` `SwitchStmt` `CaseStmt` `DefaultStmt` `WhileStmt` `DoStmt` `ForStmt` `CXXForRangeStmt` `ReturnStmt` `LabelStmt` `GotoStmt` `IndirectGotoStmt` `CXXTryStmt` `CXXCatchStmt` |
+| expr | hashed | `IntegerLiteral` `FloatingLiteral` `CharacterLiteral` `StringLiteral` `CXXBoolLiteralExpr` `CXXNullPtrLiteralExpr` `GNUNullExpr` `CXXThisExpr` `PredefinedExpr` `SourceLocExpr` `DeclRefExpr` `MemberExpr` `UnaryOperator` `BinaryOperator` `CompoundAssignOperator` `ConditionalOperator` `ArraySubscriptExpr` `CallExpr` `CXXMemberCallExpr` `CXXOperatorCallExpr` `CXXRewrittenBinaryOperator` `UnaryExprOrTypeTraitExpr` `CStyleCastExpr` `CXXFunctionalCastExpr` `CXXStaticCastExpr` `CXXConstCastExpr` `CXXReinterpretCastExpr` `CXXDynamicCastExpr` `BuiltinBitCastExpr` `CXXPseudoDestructorExpr` |
+| excluded (X16) | not hashed, not `partial` | `ContractAssertStmt` |
+| init (K-3c) | `partial` | `InitListExpr` `ImplicitValueInitExpr` `CXXConstructExpr` `CXXTemporaryObjectExpr` `CXXInheritedCtorInitExpr` `CXXDefaultArgExpr` `CXXDefaultInitExpr` `CXXScalarValueInitExpr` `CXXParenListInitExpr` `ArrayInitLoopExpr` `ArrayInitIndexExpr` `CXXStdInitializerListExpr` `CompoundLiteralExpr` `NoInitExpr` `DesignatedInitUpdateExpr` `CXXNewExpr` `CXXDeleteExpr` `CXXThrowExpr` `CXXNoexceptExpr` `CXXTypeidExpr` `TypeTraitExpr` `ArrayTypeTraitExpr` `ExpressionTraitExpr`; constructors, virtual destructors, implicit and defaulted members; an exception specification not yet computed |
+| lambda (K-3d) | `partial` | `LambdaExpr` `CoawaitExpr` `CoyieldExpr` `CoroutineBodyStmt` `CoreturnStmt`; local classes, enumerations and templates |
+| misc (K-3d) | `partial` | `UserDefinedLiteral` `ImaginaryLiteral` `EmbedExpr` `BinaryConditionalOperator` `OffsetOfExpr` `SizeOfPackExpr` `RequiresExpr` `ConceptSpecializationExpr` `PackIndexingExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `CXXReflectExpr` `CXXSpliceExpr` `PseudoObjectExpr` `GenericSelectionExpr` `RecoveryExpr` `GCCAsmStmt` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
+| attrs (K-3e) | `partial` | an attribute of O-10's closed list on the function or a local, `[[assume]]`, a default argument on any declaration of the function |
+| dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a template's own definition, a dependent `noexcept` or requires-clause |
+
+A skipped construct writes `0xA6`, its class and its kind's code in place
+of its subtree (one token per node kind, mortar's ruling 2), so equal
+source still gives equal digests.
+
+**Not hashed** (each would make equal definitions differ between units):
+the value cached on a `ConstantExpr` and a variable's evaluated value
+(computed only when a unit needs them); odr-use marks and the
+`REFERENCED` bit (they depend on how the unit uses the entity); the
+overload-candidate and ADL flags; immediate-escalation, triviality, NRVO
+and return-deduction bits; which specializations a unit instantiated;
+any hash-map order; source locations, comments, macro names and spelling;
+the types and value categories of nodes other than literals and casts
+(they follow from the operands and the resolved entities).
+
+**Walk.** An explicit work stack, never recursion: no depth of expression
+or statement nesting overflows the stack. No per-node allocation; the
+hasher keeps one stream buffer, one stack and its memo maps per unit.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
