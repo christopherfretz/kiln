@@ -48,6 +48,7 @@ mod lambda;
 mod lifetime;
 mod loop_md;
 mod mason_ctype;
+mod mason_defs;
 mod mason_meta;
 mod memptr;
 mod module;

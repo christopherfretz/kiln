@@ -1727,6 +1727,26 @@ It runs under (WP-1034, closing WP-1031):
   `--compiler` the differential is not run (it tests kiln's mangler,
   not the compiler under test). The decision is `names_mangle_corpus`.
 
+## The ODR oracle
+
+`scripts/mason/odr_oracle.py` (WP-1581; Python 3 standard library only;
+`python3 -I scripts/mason/odr_oracle.py --help`) is the must-equal
+oracle of the `.mason.meta` definition rows (kind 2, spec/codegen.md §5.5
+"Kind 2"). It takes objects, `ar` archives and directories (searched for
+`*.o` and `*.a`), reads every unit of every `.mason.meta` section, and
+groups the kind 2 rows of all units by key. It reports (a) keys whose
+rows disagree in `hash` among rows of one `odr.scheme` (rows of different
+schemes are not compared), (b) K13 pairs: a key with an `EXPLICIT_SPEC`
+row and an `IMPLICIT_INST` row, and (c) the row count of each flag and
+the share of `PARTIAL` rows. Its exit status is 1 when (a) or (b) is not
+empty, 2 on a malformed section, else 0. `--names` names each reported
+key by the symbol of an object carrying it (FNV-1a 64 of the name);
+`--quiet` prints only the counts. It is not part of `ci`: each K-3
+package runs it over objects built with `-fmason-metadata` (OSS lanes
+built with `KILN_OSS_CXX` set to a wrapper that adds the flag), and
+expects zero of (a) and (b). `crates/kiln_driver/tests/mason_defs.rs`
+runs it on a K13 pair when `python3` is on `PATH`.
+
 ## CI
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a

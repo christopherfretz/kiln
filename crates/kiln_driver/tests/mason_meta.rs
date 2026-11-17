@@ -15,40 +15,11 @@
 //!   flag changes nothing for `-E` and `-fsyntax-only`.
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod mason_common;
 
-fn kilnpp() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
-}
+use std::path::Path;
 
-fn scratch(name: &str) -> PathBuf {
-    let d =
-        std::env::temp_dir().join(format!("kiln-mason-meta-test-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
-
-fn run(dir: &Path, args: &[&str]) -> Output {
-    Command::new(kilnpp()).args(args).current_dir(dir).output().unwrap()
-}
-
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
-}
-
-/// Runs kiln++, which must succeed silently; returns its stdout. A `.c`
-/// input is compiled as C (`-x c`; kiln++ takes it as C++).
-fn ok(dir: &Path, args: &[&str]) -> String {
-    let mut args = args.to_vec();
-    if let Some(i) = args.iter().position(|a| Path::new(a).extension().is_some_and(|e| e == "c")) {
-        args.splice(i..i, ["-x", "c"]);
-    }
-    let args = &args[..];
-    let r = run(dir, args);
-    assert_eq!((r.status.code(), text(&r.stderr).as_str()), (Some(0), ""), "{args:?}");
-    text(&r.stdout)
-}
+use mason_common::*;
 
 const CXX: &str = "inline int h() { return 2; }\nint f() { return h(); }\n";
 const C: &str = "int g(void) { return 1; }\n";
@@ -103,107 +74,6 @@ int c_use(void) {
 }
 ";
 
-/// The `@__mason_meta` line of IR `ir`, if any.
-fn meta_line(ir: &str) -> Option<&str> {
-    ir.lines().find(|l| l.starts_with("@__mason_meta "))
-}
-
-/// The bytes of the global's `c"..."` initializer.
-fn ir_bytes(line: &str) -> Vec<u8> {
-    let start = line.find("c\"").unwrap() + 2;
-    let s = &line.as_bytes()[start..];
-    let mut out = Vec::new();
-    let mut i = 0;
-    while s[i] != b'"' {
-        if s[i..].starts_with(b"\\\\") {
-            // LLVM writes a backslash byte as `\\`.
-            out.push(b'\\');
-            i += 2;
-        } else if s[i] == b'\\' {
-            let hex = std::str::from_utf8(&s[i + 1..i + 3]).unwrap();
-            out.push(u8::from_str_radix(hex, 16).unwrap());
-            i += 3;
-        } else {
-            out.push(s[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-fn u16_at(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes(b[o..o + 2].try_into().unwrap())
-}
-fn u32_at(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
-}
-fn u64_at(b: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes(b[o..o + 8].try_into().unwrap())
-}
-
-/// The kind 1 rows (name, value, flags) of the one unit in `b`, after
-/// checking the framing (MT-10, MT-11, MT-14) and the row order (MT-26).
-fn summary_rows(b: &[u8]) -> Vec<(String, String, u32)> {
-    assert_eq!(&b[..4], b"MASN");
-    assert_eq!((u16_at(b, 4), u16_at(b, 6)), (1, 0), "version 1.0");
-    let unit_size = u32_at(b, 8) as usize;
-    assert_eq!(unit_size, b.len(), "one unit, the whole section");
-    assert_eq!(unit_size % 8, 0);
-    assert_eq!(u32_at(b, 12), 32, "header_size");
-    let blocks = u32_at(b, 16);
-    assert!((1..=4).contains(&blocks), "kind 1; kinds 3 and 5 from level default up, 4 at detail");
-    let (st_off, st_size) = (u32_at(b, 20) as usize, u32_at(b, 24) as usize);
-    assert!(st_off >= 32 && st_off + st_size <= unit_size);
-    assert_eq!(b[st_off], 0, "the table starts with the empty string");
-    assert_eq!(b[st_off + st_size - 1], 0);
-    assert_eq!(u16_at(b, 28), 1, "producer kiln");
-    let mut at = 32;
-    let mut last = 0;
-    for _ in 0..blocks {
-        let (kind, size) = (u16_at(b, at), u32_at(b, at + 4) as usize);
-        assert!(kind > last && [1, 3, 4, 5].contains(&kind), "MT-11: sorted, one per kind");
-        assert!(size % 8 == 0 && at + size <= st_off);
-        last = kind;
-        at += size;
-    }
-    let (kind, version) = (u16_at(b, 32), u16_at(b, 34));
-    assert_eq!((kind, version), (1, 1));
-    let (block_size, row_size, rows) =
-        (u32_at(b, 36) as usize, u32_at(b, 40) as usize, u32_at(b, 44) as usize);
-    assert_eq!(row_size, 16);
-    assert!(16 + rows * 16 <= block_size && 32 + block_size <= st_off);
-    let out: Vec<_> = (0..rows)
-        .map(|i| {
-            let r = 48 + i * 16;
-            assert_eq!(u32_at(b, r + 12), 0, "reserved");
-            (string_at(b, u32_at(b, r)), string_at(b, u32_at(b, r + 4)), u32_at(b, r + 8))
-        })
-        .collect();
-    for w in out.windows(2) {
-        assert!(w[0].0.as_bytes() < w[1].0.as_bytes(), "sorted, unique: {w:?}");
-    }
-    out
-}
-
-/// The offset of the unit's block of `kind`, if any (MT-11).
-fn block_at(b: &[u8], kind: u16) -> Option<usize> {
-    let mut at = 32;
-    for _ in 0..u32_at(b, 16) {
-        if u16_at(b, at) == kind {
-            return Some(at);
-        }
-        at += u32_at(b, at + 4) as usize;
-    }
-    None
-}
-
-/// The string at offset `o` of the unit's string table (MT-12).
-fn string_at(b: &[u8], o: u32) -> String {
-    let (st_off, st_size) = (u32_at(b, 20) as usize, u32_at(b, 24) as usize);
-    let s = &b[st_off + o as usize..st_off + st_size];
-    String::from_utf8(s[..s.iter().position(|&c| c == 0).unwrap()].to_vec()).unwrap()
-}
-
 // Record kind 5, the declaration rows (WP-1564; mortar `spec/odr.md`
 // O-35, O-33).
 
@@ -211,11 +81,6 @@ const DEFINITION: u16 = 1;
 const VARIABLE: u16 = 2;
 const EXTERN_C: u16 = 4;
 const NOEXCEPT: u16 = 8;
-
-/// FNV-1a 64 (MT-13), written here from the spec.
-fn fnv(s: &str) -> u64 {
-    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
-}
 
 /// One kind 5 row; `ty` is checked to be the hash of `type_name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,97 +175,6 @@ fn row<'r>(rows: &'r [Decl], symbol: &str) -> Option<&'r Decl> {
     rows.iter().find(|d| d.key == fnv(symbol))
 }
 
-fn value<'r>(rows: &'r [(String, String, u32)], name: &str) -> Option<&'r str> {
-    rows.iter().find(|r| r.0 == name).map(|r| r.1.as_str())
-}
-
-/// The rows of `src` compiled with `args` (through the IR).
-fn rows_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> Vec<(String, String, u32)> {
-    std::fs::write(dir.join(file), src).unwrap();
-    let mut a = vec!["-fmason-metadata", "-S", "-emit-llvm", "-o", "-"];
-    a.extend(args);
-    a.push(file);
-    let ir = ok(dir, &a);
-    summary_rows(&ir_bytes(meta_line(&ir).expect("the global")))
-}
-
-const SHT_PROGBITS: u32 = 1;
-const SHT_RELA: u32 = 4;
-const SHT_REL: u32 = 9;
-const SHT_GROUP: u32 = 17;
-const SHF_EXCLUDE: u64 = 0x8000_0000;
-
-struct Section {
-    name: String,
-    ty: u32,
-    flags: u64,
-    data: Vec<u8>,
-    link: u32,
-    info: u32,
-    align: u64,
-    entsize: u64,
-}
-
-/// The sections of an ELF64 little-endian relocatable object.
-fn sections(obj: &[u8]) -> Vec<Section> {
-    assert_eq!(&obj[..4], b"\x7fELF");
-    assert_eq!((obj[4], obj[5]), (2, 1), "ELF64, little-endian");
-    let shoff = usize::try_from(u64_at(obj, 0x28)).unwrap();
-    let (shentsize, shnum, shstrndx) =
-        (u16_at(obj, 0x3a) as usize, u16_at(obj, 0x3c) as usize, u16_at(obj, 0x3e) as usize);
-    let raw: Vec<_> = (0..shnum)
-        .map(|i| {
-            let h = shoff + i * shentsize;
-            let (off, size) = (u64_at(obj, h + 24) as usize, u64_at(obj, h + 32) as usize);
-            let ty = u32_at(obj, h + 4);
-            let data = if ty == 8 { Vec::new() } else { obj[off..off + size].to_vec() };
-            (u32_at(obj, h), ty, u64_at(obj, h + 8), data, h)
-        })
-        .collect();
-    let names = raw[shstrndx].3.clone();
-    raw.into_iter()
-        .map(|(n, ty, flags, data, h)| {
-            let s = &names[n as usize..];
-            Section {
-                name: text(&s[..s.iter().position(|&c| c == 0).unwrap()]),
-                ty,
-                flags,
-                data,
-                link: u32_at(obj, h + 40),
-                info: u32_at(obj, h + 44),
-                align: u64_at(obj, h + 48),
-                entsize: u64_at(obj, h + 56),
-            }
-        })
-        .collect()
-}
-
-/// The `.mason.meta` section's bytes, after checking every property
-/// mortar requires of it (MT-1, MT-2, MT-2a, MT-6).
-fn container(obj: &[u8]) -> Vec<u8> {
-    let secs = sections(obj);
-    let found: Vec<usize> = (0..secs.len()).filter(|&i| secs[i].name == ".mason.meta").collect();
-    assert_eq!(found.len(), 1, "one container");
-    let i = found[0];
-    let s = &secs[i];
-    assert_eq!(s.ty, SHT_PROGBITS, "MT-1 type");
-    assert_eq!(s.flags, SHF_EXCLUDE, "MT-1/MT-6: flags exactly SHF_EXCLUDE");
-    assert_eq!((s.align, s.entsize, s.link, s.info), (8, 0, 0, 0), "MT-1");
-    let idx = u32::try_from(i).unwrap();
-    for r in &secs {
-        assert!(
-            !(matches!(r.ty, SHT_REL | SHT_RELA) && r.info == idx),
-            "MT-2a: {} relocates the container",
-            r.name
-        );
-        if r.ty == SHT_GROUP {
-            let members: Vec<u32> = r.data.chunks(4).skip(1).map(|c| u32_at(c, 0)).collect();
-            assert!(!members.contains(&idx), "MT-2: the container is in group {}", r.name);
-        }
-    }
-    s.data.clone()
-}
-
 #[test]
 fn ir_global_shape_cxx_and_c() {
     let d = scratch("ir");
@@ -479,11 +253,13 @@ fn tu_summary_rows() {
             "abi.wchar",
             "isa",
             "lang",
+            "odr.scheme",
             "producer",
             "source",
             "std",
         ],
-        "no header: no abi.stdlib-abi or abi.stdlib-debug; never odr.scheme or reloc-model"
+        "no header: no abi.stdlib-abi or abi.stdlib-debug; odr.scheme for the kind 2 row of `h` \
+         (WP-1581), no odr.layout-scheme (no kind 3 row: no class); never reloc-model"
     );
     let enforced: Vec<&str> = rows.iter().filter(|r| r.2 == 1).map(|r| r.0.as_str()).collect();
     assert_eq!(
@@ -521,6 +297,19 @@ fn tu_summary_rows() {
 
 /// The standard library rows come from the macro table at the end of the
 /// TU. Skipped where the library's headers are not installed.
+/// A C unit's `abi.exceptions` follows `-fexceptions` (mortar's read-back
+/// of 11-17); `abi.rtti` is off in C either way.
+#[test]
+fn c_exceptions_row() {
+    let d = scratch("cexc");
+    let rows = |extra: &[&str]| rows_of(&d, "t.c", C, extra);
+    for (args, want) in [(&[][..], "off"), (&["-fexceptions"][..], "on")] {
+        let r = rows(args);
+        assert_eq!(value(&r, "abi.exceptions"), Some(want), "{args:?}");
+        assert_eq!(value(&r, "abi.rtti"), Some("off"), "{args:?}");
+    }
+}
+
 #[test]
 fn stdlib_rows_from_the_macros() {
     let d = scratch("stdlib");
@@ -890,12 +679,16 @@ fn c_and_cxx_units_agree() {
         let cxx = decls_of(&d, "x.cpp", XL_CXX, &["-std=c++20", target]).unwrap();
         assert_eq!(cxx.len(), 33);
         assert!(cxx.iter().all(|r| r.flags & EXTERN_C != 0));
-        assert_eq!(decls_of(&d, "x.c", XL_C, &["-std=c23", target]).unwrap(), cxx, "{target}");
+        // WP-1581: the C `f_vla` has a variable bound (`b[*][n]`), so it
+        // gets no row; the C++ declaration has no variable bound.
+        let mut cxx_c = cxx.clone();
+        cxx_c.retain(|r| r.key != fnv("f_vla"));
+        assert_eq!(decls_of(&d, "x.c", XL_C, &["-std=c23", target]).unwrap(), cxx_c, "{target}");
         // Before C23 `f_np()` is unprototyped: no row; nor for a K&R
         // definition, an unprototyped function type inside a type, or a
         // calling convention C++ does not share.
         let c17 = decls_of(&d, "x.c", XL_C, &["-std=c17", quiet, target]).unwrap();
-        let mut want = cxx.clone();
+        let mut want = cxx_c.clone();
         want.retain(|r| r.key != fnv("f_np"));
         let no_row_tab = c17.iter().find(|r| r.key == fnv("no_row")).unwrap().clone();
         want.push(no_row_tab);
@@ -926,7 +719,6 @@ fn c_and_cxx_units_agree() {
         ("f_i128", "FnoE"),
         ("f_vfp", "FvPFiPKczEE"),
         ("f_parr", "FvPA_iPA_iE"),
-        ("f_vla", "FviPiPA_iE"),
         ("f_st", "FvPiPKiE"),
         ("f_nr", "FvvE"),
         ("f_vz", "FvizE"),
@@ -935,6 +727,7 @@ fn c_and_cxx_units_agree() {
     ] {
         assert_eq!(row(&rows, sym).map(|r| r.type_name.as_str()), Some(t), "{sym}");
     }
+    assert_eq!(row(&rows, "f_vla"), None, "a variable bound: no row (WP-1581)");
     assert_eq!(row(&rows, "f_enum").unwrap().ty, row(&cxx_rows(&d), "f_enum").unwrap().ty);
     // Deliberate mismatches: a parameter type, a variable's type.
     let c = decls_of(
@@ -1171,6 +964,35 @@ fn c_array_bounds_erased() {
         .unwrap();
     assert_eq!(row(&ry, "cp").unwrap().type_name, "PA4_i");
     assert_eq!(row(&ry, "cq").unwrap().type_name, "PA_i");
+}
+
+/// WP-1581: a C-linkage function whose type has a variable array bound
+/// (a VLA parameter type, `[*]`, a variably modified type inside a
+/// function pointer parameter) gets no kind 5 row; a top-level `int
+/// a[n]` parameter is adjusted to `int *`, so its bound is not in the
+/// type. A C++ unit's `extern "C"` declaration with constant bounds
+/// still agrees with C's.
+#[test]
+fn variable_bounds_have_no_row() {
+    let d = scratch("vla");
+    let c = "void f1(int n, int b[][n][n]) {}\n\
+             void f2(int n, int b[][4][4]) {}\n\
+             void f3(int n, void (*cb)(int m, int (*a)[m])) {}\n\
+             void f4(int n, int b[][*]);\n\
+             void f5(int n, int a[n]) {}\n\
+             void use(void) { f4(1, 0); }\n";
+    for std in ["-std=c17", "-std=c23"] {
+        let rows = decls_of(&d, "v.c", c, &[std]).unwrap();
+        for none in ["f1", "f3", "f4"] {
+            assert_eq!(row(&rows, none), None, "{none} {std}");
+        }
+        assert_eq!(row(&rows, "f2").unwrap().type_name, "FviPA_A4_iE");
+        assert_eq!(row(&rows, "f5").unwrap().type_name, "FviPiE");
+    }
+    let x = "extern \"C\" void f2(int n, int b[][4][4]) {}\n";
+    let rx = decls_of(&d, "v.cpp", x, &[]).unwrap();
+    let rc = decls_of(&d, "v.c", c, &[]).unwrap();
+    assert_eq!(row(&rx, "f2"), row(&rc, "f2"));
 }
 
 fn cxx_rows(d: &Path) -> Vec<Decl> {
@@ -1442,12 +1264,14 @@ fn type_rows_golden() {
     }
     assert_eq!(trow(&rows, "N2ns5PlainE").unwrap().line, 3);
     let summary = rows_of(&d, "t.cpp", TYPES_CXX, &["--target=x86_64-linux-gnu"]);
-    assert!(summary.contains(&("odr.scheme".into(), "kiln-odr-1".into(), 0)));
+    // WP-1581: the layout serialization is `odr.layout-scheme` (mortar's
+    // ruling 3 of 11-17); `odr.scheme` names the kind 2 hash.
+    assert!(summary.contains(&("odr.layout-scheme".into(), "kiln-odr-1".into(), 0)));
 }
 
 /// O-11's bump rule: the layout hashes of a fixed corpus are checked in,
 /// so that a change to the serialization (spec/codegen.md "The layout
-/// hash") fails here and comes with a new `odr.scheme` name.
+/// hash") fails here and comes with a new `odr.layout-scheme` name.
 #[test]
 fn layout_hash_golden() {
     let d = scratch("golden");
@@ -1850,18 +1674,42 @@ fn layout_details() {
     assert_eq!(vb[0], it("", "N2ns4BaseE", 128, 0, I_BASE | I_VIRTUAL), "the direct base");
     assert_eq!(vb[1], it("", "N2ns4BaseE", 128, 0, I_BASE | I_VIRTUAL), "the virtual bases");
     // An anonymous union and a member of unnamed class type: the
-    // member's item (empty type), then the nested class's members.
+    // member's item (empty type, `width` the number of items that follow
+    // and describe it: mortar's O-19 ruling of 11-17), then the nested
+    // class's members.
     assert_eq!(
         items("N2ns4AnonE"),
         [
-            it("", "", 0, 0, I_MEMBER),
+            it("", "", 0, 2, I_MEMBER),
             it("i", "i", 0, 0, I_MEMBER),
             it("f", "f", 0, 0, I_MEMBER),
-            it("named", "", 32, 0, I_MEMBER),
+            it("named", "", 32, 1, I_MEMBER),
             it("s", "s", 0, 0, I_MEMBER),
             it("tail", "i", 64, 0, I_MEMBER),
         ]
     );
+    // Two deep (the outer count includes the inner member's item and its
+    // items; a class with such a member has a row since WP-1581), and an
+    // empty unnamed class (0). Not hashed: the counts are only in kind 4.
+    let nest = "struct N { struct { int a; struct { int b; int c; } in; } out; struct {} e; int t; };\n\
+                int f() { N n{}; return n.t; }\n";
+    let r =
+        types_of(&d, "n.cpp", nest, &[&args[..], &["-fmason-metadata=detail"]].concat()).unwrap();
+    let n = trow(&r, "1N").unwrap();
+    assert_eq!(
+        n.details.clone().unwrap(),
+        [
+            it("out", "", 0, 4, I_MEMBER),
+            it("a", "i", 0, 0, I_MEMBER),
+            it("in", "", 32, 2, I_MEMBER),
+            it("b", "i", 0, 0, I_MEMBER),
+            it("c", "i", 32, 0, I_MEMBER),
+            it("e", "", 96, 0, I_MEMBER),
+            it("t", "i", 128, 0, I_MEMBER),
+        ]
+    );
+    let plain = types_of(&d, "n.cpp", nest, &args).unwrap();
+    assert_eq!(trow(&plain, "1N").unwrap().layout, n.layout);
     // Two classes whose hashes differ have a differing item.
     let one = |src: &str| {
         let r = types_of(&d, "c.cpp", src, &["-fmason-metadata=detail"]).unwrap();
