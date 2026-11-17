@@ -1238,7 +1238,8 @@ non-standard exit status from the compiler, or the memory cap); `wrong`
 on a wrong answer); `timeout` (compile, link or run outran
 `--timeout` / `--run-timeout`, defaults 120 s and 10 s); `accept-invalid`
 (a negative test compiled clean); `not-run` (the compiler could not be
-started). Each step runs under `--mem-limit` (default 2048 MiB address
+started); the g++.dg runner adds `wrong-line` and `expect-unknown` ("The
+g++.dg runner"). Each step runs under `--mem-limit` (default 2048 MiB address
 space, plus kiln's stack reservation for kiln) and holds a jobserver token;
 a step that cannot be spawned is retried twice, 2 s apart, before it is
 `not-run`.
@@ -1364,12 +1365,49 @@ the non-xfail `dg-error`s:
   `-Werror=` make severities differ between compilers) and so is an error
   on an xfail `dg-error` or xfail `dg-bogus` line (GCC errs there); one on
   a `dg-bogus` line is extra. A line argument may be a `dg-line` name. Errors
-  with line 0 satisfy a line-0 expectation and are never extra.
+  with line 0 satisfy a line-0 expectation and are never extra; a line-0
+  `dg-error` or `dg-message` (DejaGnu matches it on every line of the
+  output) accounts for an error on any line.
   `dg-excess-errors` or `dg-prune-output` (whose patterns are GCC's
   wording, which cannot be applied to other compilers' output) turns the
   extra-error check off for the case.
 
-Missing warnings are not failures. A negative case that passes stops after
+**Severities the file names** (WP-1554, from GCC 16.1's `lib/gcc-dg.exp`,
+`lib/gcc-defs.exp`, `lib/prune.exp` and DejaGnu's `dg.exp`). `dg-error`'s
+regexp gets the prefix `(fatal )?error:`, `dg-warning`'s `warning:`;
+`dg-message` gets none (it is `dg-warning` without a prefix), so its
+regexp matches a diagnostic of any kind on its line, and `""` matches any
+diagnostic there (at line 0, any line of the output). `dg-regexp` is a
+regexp over the whole output, with no line, that must match; `dg-prune-output`
+removes what its regexp matches before the excess-errors check;
+`dg-excess-errors` marks that check xfail; a compile test is judged by the
+output alone, never by the exit status. The runner reads a regexp only for
+the severity it names: `error:` (or `fatal error:`) or `sorry,
+unimplemented` names an error; `warning:` or `note:` (and no error) names
+another kind; anything else, `""` included, names none. So:
+
+- a `dg-message` naming an error is a `dg-error` (required on its line);
+  one naming another kind is a message as before; a non-xfail one naming
+  none leaves the kind open on its line;
+- a `dg-regexp` naming an error requires an error with no line (any
+  line); one naming another kind expects nothing the runner checks; one
+  naming none may hold errors anywhere;
+- `dg-excess-errors`, and a `dg-prune-output` whose regexp does not name
+  only a warning or a note, may hold errors anywhere.
+
+When no error is required and the compiler reports errors (or fails
+without an error line), the case is `expect-unknown` instead of
+`compile-reject` if the file does not decide it: the case does not link
+(a `dg-do link` or `run` test must compile under GCC, so there an error
+nothing requires is always a reject), and either a directive above may
+hold errors anywhere or every reported error sits on a line whose
+`dg-message` leaves the kind open. The detail names the directive (and
+its line) before the first error. `expect-unknown` is neither a pass nor
+a failure: it is counted apart (the headline's pass rate is over the
+decided cases), has no triage bucket, and the oracles run on it as on a
+failure; GCC's result there is evidence for the triage, never the rule.
+
+Missing warnings and messages are not failures. A negative case that passes stops after
 the compile; a positive one goes on to link and run as its action says,
 classed as in the torture runner (`wrong`, `crash`, `timeout`).
 
@@ -1407,7 +1445,8 @@ negative xfail dropped` (`opt` is the case's `-std=`, `-` for none, or the
 torture option set); while the run goes, each finished case is appended
 to `<tsv stem>.partial.tsv` (removed at the end), so an interrupted run
 keeps its rows. `--summary` (default `.../summary.md`): the header,
-results by class per compiler, the buckets, the priority directories
+results by class per compiler, the buckets, the `expect-unknown` cases by
+the directive that leaves them open, the priority directories
 (`g++.dg/reflect`, `g++.dg/contracts`, `g++.dg/cpp26`, `g++.dg/cpp2a`,
 `g++.dg/cpp23`, `g++.dg/torture`, `c-c++-common/torture`), every directory
 by class, the top 30 clusters of each bucket with examples, and the not

@@ -139,6 +139,7 @@ jobs:
     needs: [libcxx]
     if: ${{ !cancelled() && needs.libcxx.result != 'skipped' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -261,6 +262,7 @@ jobs:
     needs: [oss-matrix, oss]
     if: ${{ !cancelled() && needs.oss.result != 'skipped' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -344,6 +346,7 @@ jobs:
     needs: [gxx-dg]
     if: ${{ !cancelled() && needs.gxx-dg.result != 'skipped' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

@@ -27,6 +27,10 @@ env:
   KILN_REQUIRE_SANITIZER_RUNTIME: "1"
 defaults:
   run: { shell: bash }
+# Every job has a `timeout-minutes` of about three times its usual
+# duration (WP-1600; the data and what a timeout does to a merge-group run
+# are in docs/VALIDATION.md "Job timeouts"): a hung runner then fails the
+# job instead of holding the merge queue.
 jobs:
   # The reference environment (docs/VALIDATION.md "GitHub Actions"): Debian
   # 13 with Debian's clang 22.1.8 (the oracle) and 19.1.7 (the second
@@ -43,6 +47,7 @@ jobs:
   lints:
     name: lints
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
     container: gcc:16.1.0-trixie
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +62,7 @@ jobs:
   unit:
     name: unit ${{ matrix.group }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 50
     container: &debugger-container
       image: gcc:16.1.0-trixie
       options: --cap-add=SYS_PTRACE
@@ -80,6 +86,7 @@ jobs:
   self-check:
     name: self-check ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
     container: *debugger-container
     strategy:
       fail-fast: false
@@ -100,6 +107,7 @@ jobs:
   kiln-22:
     name: kiln-22 ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 25
     container: *debugger-container
     strategy:
       fail-fast: false
@@ -123,6 +131,7 @@ jobs:
   kiln-19:
     name: kiln-19 ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 25
     container: *debugger-container
     strategy:
       fail-fast: false

@@ -18,7 +18,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
 | Accepts-invalid | clang's own C++ negative tests (`clang/test/{CXX,SemaCXX}` of llvmorg-22.1.8, `-verify` files; `scripts/fetch-clang-tests.sh`), driven by `cargo xtask clang-neg` (`spec/clang-neg.md`); informational, not part of `ci`; status in `docs/status/accepts-invalid.md` | kiln rejects what clang rejects: no file where clang expects an error passes silently through kiln (accept vs reject only, no wording) |
 | GCC C torture | GCC 16.1's `gcc.c-torture` (`execute`, `execute/ieee`, `execute/builtins`, `compile`; `scripts/fetch-gcc-tests.sh`, gitignored `.oss/gcc-tests`, never vendored), driven by `cargo xtask gcc-torture` (spec/harness.md "GCC testsuites"); informational, not part of `ci`; status in `docs/status/c-mode.md` | kiln's C mode compiles and runs GCC's C tests at `-O0` and `-O2` as GCC 16.1 and clang-19 do; each case is pass, compile-reject, crash, wrong or timeout beside the oracles' result |
-| GCC C++ testsuite | GCC 16.1's `g++.dg` (with `g++.dg/torture`), `c-c++-common` and `g++.old-deja` (same sparse checkout, `scripts/fetch-gcc-tests.sh`, never vendored), driven by `cargo xtask gxx-dg` (spec/harness.md "The g++.dg runner"); informational, not part of `ci`; status in `docs/status/gxx-dg.md` | kiln++ meets each test's `dg-error` expectations by line and severity (never by message) at the standards GCC's `g++-dg.exp` picks, compiles valid tests and runs `dg-do run` ones; each case is pass, rejects-valid, accept-invalid, wrong-line, wrong, crash or timeout, with GCC 16.1 and clang on the cases kiln fails |
+| GCC C++ testsuite | GCC 16.1's `g++.dg` (with `g++.dg/torture`), `c-c++-common` and `g++.old-deja` (same sparse checkout, `scripts/fetch-gcc-tests.sh`, never vendored), driven by `cargo xtask gxx-dg` (spec/harness.md "The g++.dg runner"); informational, not part of `ci`; status in `docs/status/gxx-dg.md` | kiln++ meets each test's `dg-error` expectations (and the errors its `dg-message` and `dg-regexp` regexps name) by line and severity (never by message) at the standards GCC's `g++-dg.exp` picks, compiles valid tests and runs `dg-do run` ones; each case is pass, rejects-valid, accept-invalid, wrong-line, wrong, crash or timeout (or expect-unknown, counted apart, where the file does not decide), with GCC 16.1 and clang on the cases kiln fails |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
@@ -407,6 +407,51 @@ is `success`, so a failed, cancelled or skipped job fails them; they are
 the status checks branch rules name. That is 18 jobs per architecture
 plus the fan-in, 38 per run: on a plan with a 60-job concurrency limit two
 overlapping runs queue each other's jobs.
+
+**Job timeouts** (WP-1600). Every job has a `timeout-minutes` of about
+three times its usual duration, so a hung runner fails its job instead of
+holding the merge queue for GitHub's default six hours (on 2026-11-17
+`arm / kiln-19 4/6` sat 34 minutes without a log line until it was
+cancelled by hand). The data: the 30 latest successful `merge_group` and
+the 30 latest successful `pull_request` runs of `ci.yml` (2026-11-16 to
+11-17; 2280 jobs, each from its start, so time spent waiting for a runner
+is not counted), in minutes. A matrix job gets the timeout of its slowest
+leg; the rule is three times that leg's median rounded up to 5 minutes,
+and at least twice the longest run seen (10 minutes at least for a job
+that checks out, 5 for the fan-in jobs). The 80 successful runs before
+those (to 2026-11-11) stay under the same maxima (11.3 for `kiln-22`).
+
+| job (`ci-lane.yml`, both lanes) | slowest leg | median | maximum | timeout |
+|---|---|---:|---:|---:|
+| `lints` | x86_64 | 2.2 | 3.0 | 10 |
+| `unit <group>` | arm `rest` | 15.6 | 18.1 | 50 |
+| `self-check K/2` | arm 2/2 | 3.0 | 3.8 | 10 |
+| `kiln-22 K/6` | arm 1/6 | 8.3 | 11.0 (x86_64 1/6) | 25 |
+| `kiln-19 K/6` | arm 6/6 | 7.2 | 10.1 (x86_64 6/6) | 25 |
+| `check`, `check-x86_64` (`ci.yml`) | | 0.1 | 0.1 | 5 |
+
+The callers `arm` and `x86_64` cannot carry a timeout (a job that calls a
+reusable workflow takes none); their jobs do. The other workflows' jobs
+that had none got one by the same rule: `release.yml` `dist` 15 (median
+4.7, maximum 6.2 over 12 legs) and `draft release` 10 (0.2); `sweep.yml`
+`libcxx summary` and `gxx-dg summary` 10 (under 0.5), `oss summary` 10 (no
+successful run yet; a summary like the other two). The sweep's long jobs
+already had theirs (`build` 90, `libcxx` 240, `oss` 355, `gxx-dg` 150).
+`ci_tests::every_workflow_job_has_a_timeout` keeps every job of every
+workflow timed.
+
+What a timeout does: the job ends as cancelled with "exceeded the maximum
+execution time", its lane's result is not `success`, so `check` (or
+`check-x86_64`) fails. In a pull-request run that is an ordinary red
+check: re-run the failed jobs. In a merge-group run the required check
+failed, so GitHub removes the pull request from the merge queue (the
+groups queued behind it are rebuilt without it); re-running that
+merge-group run does not put it back. The way back in: read the timed-out
+job's log (no output for minutes is the runner, a test that loops is the
+change), then add the pull request to the queue again (`gh pr merge <n>
+--merge --auto`, or "Merge when ready"), which starts a new merge group.
+If the durations grow (a new corpus directory, a slower runner image),
+remeasure and raise the timeouts with the table.
 
 **Cache policy.** `Swatinem/rust-cache` keeps `~/.cargo` and the
 dependency builds under one `shared-key` per architecture (`ci-arm`,

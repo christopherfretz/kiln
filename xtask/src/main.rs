@@ -1026,6 +1026,38 @@ mod ci_tests {
         (yml, blocks)
     }
 
+    /// WP-1600: every job of every workflow has a `timeout-minutes`
+    /// (docs/VALIDATION.md "Job timeouts"), so a hung runner fails its job
+    /// instead of holding the merge queue for GitHub's six hours. A job
+    /// that calls a reusable workflow (`uses:`) cannot carry one: the
+    /// called workflow's jobs do.
+    #[test]
+    fn every_workflow_job_has_a_timeout() {
+        let dir = util::repo_root().join(".github/workflows");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "yml" || e == "yaml"))
+            .collect();
+        paths.sort();
+        assert!(paths.len() >= 4, "ci, ci-lane, sweep, release in {}", dir.display());
+        for path in &paths {
+            let (_, jobs) = workflow_jobs(path);
+            assert!(!jobs.is_empty(), "{} has no jobs", path.display());
+            for (name, b) in &jobs {
+                let key = |k: &str| b.lines().find_map(|l| l.strip_prefix(&format!("    {k}: ")));
+                if key("uses").is_some() {
+                    continue;
+                }
+                let t = key("timeout-minutes").unwrap_or_else(|| {
+                    panic!("{} job `{name}` has no timeout-minutes", path.display())
+                });
+                let t: u32 = t.trim().parse().unwrap_or_else(|_| panic!("`{name}`: `{t}`"));
+                assert!((1..=360).contains(&t), "{} job `{name}`: {t} minutes", path.display());
+            }
+        }
+    }
+
     /// ci-lane.yml's text and its jobs (`workflow_jobs`).
     fn lane_workflow() -> (String, Vec<(String, String)>) {
         workflow_jobs(&util::repo_root().join(".github/workflows/ci-lane.yml"))
