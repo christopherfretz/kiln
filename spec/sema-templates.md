@@ -7551,6 +7551,37 @@ implicit `format` attributes on the printf rows landed with WP-282 (see
 `overflow-run`, `alloca-args`, `alloca-run`, `printf-builtins-run`,
 `libstdcxx-gnu-builtins`), `tests/codegen/builtins_{overflow,alloca,printf_lib}.cpp`.
 
+**Landed (WP-1549): GCC's `__builtin_{add,sub,mul}_overflow_p(a, b, c)`.**
+Kiln-private ids 2465–2467 in `builtin::CHECKED` (`overflow_p_op` maps
+them to the operation); custom-checked by `builtin_overflow_p`: exactly
+three arguments, each decayed; `a` and `b` are integer operands as for
+`__builtin_add_overflow`; `c` must be an integer type other than `bool`
+or an enumeration (`result argument to overflow builtin must be an
+integer type other than 'bool' or an enumeration ('T' invalid)`, kiln's
+wording in clang's style; GCC rejects the same calls). The call is a
+`bool` prvalue: whether `a op b`, in infinite precision, fits `c`'s type,
+or `c`'s width when `c` is a bit-field (the argument is then cast to
+`_BitInt(W)` / `unsigned _BitInt(W)` of the field's signedness, so the
+type carries the width). `c`'s value is never read; it is evaluated
+only when it has side effects or calls a function, as GCC folds such a
+call to `(c, flag)`. So with constant operands the call is a constant
+expression, and in C an integer constant expression (`c_not_ice_operand`
+skips `c` unless it is evaluated), usable in `_Static_assert`, array
+bounds, enumerators and bit-field widths. clang has no `_p` forms, so
+`__has_builtin` answers 0 for them, as for `__builtin_exit` (WP-1485);
+GCC answers 1. Tests: `tests/c/expr/builtin-overflow-p-{run,ice,errors}.c`,
+`tests/conformance/ext.gnu.builtins/overflow-p-constexpr{,-neg}.cpp`.
+
+**Not implemented (WP-1550): GCC's `__builtin_va_arg_pack()` and
+`__builtin_va_arg_pack_len()`**, as in clang. glibc's fortify wrappers
+use them only when `__GNUC_PREREQ (4,3)`, which kiln's `__GNUC__` 4 /
+`__GNUC_MINOR__` 2 (clang's) do not meet. In C++ the name is an
+undeclared identifier; in C any undeclared `__builtin_` name called is
+clang's `use of unknown builtin 'X'` (`warn_builtin_unknown`,
+-Wimplicit-function-declaration, an error by default) instead of the
+implicit function declaration. Tests: `tests/c/expr/builtin-va-arg-pack-unknown.c`,
+the xfail repro `tests/c/run/builtin-va-arg-pack-run.c`.
+
 **Landed (WP-282): library builtins.** The three "library builtins" rows
 and the `*f128` row above (`builtin::F128`, clang 19 ids; `TABLE` rows
 with clang 19's `__has_constexpr_builtin` answers). The argument checks

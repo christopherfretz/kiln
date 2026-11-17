@@ -996,6 +996,17 @@ Planned as 1.3.0.
   with elements of class type is accepted (GNU); and `alignof` of a
   cv-qualified array typedef carrying `__attribute__((aligned))`, or of
   an array of one, is the typedef's alignment.
+- GCC compatibility (WP-1587, WP-1549, WP-1551, WP-1550): a C cast to a
+  union type from the type of one of its members (GNU) is accepted again,
+  as in clang (`-Wgnu-union-cast` under `-pedantic`); GCC's
+  `__builtin_add_overflow_p`, `__builtin_sub_overflow_p` and
+  `__builtin_mul_overflow_p` are implemented, constant when their
+  operands are (integer constant expressions in C); in C++ a plain
+  function pointer converts implicitly to one whose function type adds
+  GNU `noreturn`, as GCC accepts, with a
+  `-Wincompatible-function-pointer-types` warning (in C it is clang's
+  error); an `extern inline` redefinition in a GNU dialect and an unknown
+  `__builtin_` function in C get clang's wording.
 
 - Accepts-invalid cases found running GCC's C++ testsuite (WP-1532..WP-1535):
   the inherited-constructor tie-break needs equal parameter types

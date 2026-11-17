@@ -1545,6 +1545,7 @@ impl Cg<'_> {
                 return self.emit_sync_builtin(b, e, &args).map(BuiltinCall::Emitted);
             }
             _ if id::checked_op(b).is_some() => self.emit_checked(b, e, &args)?,
+            _ if id::overflow_p_op(b).is_some() => self.emit_overflow_p(b, e, &args)?,
             _ if id::carry_op(b).is_some() => self.emit_carry(b, e, &args)?,
             id::ALLOCA
             | id::ALLOCA_WITH_ALIGN

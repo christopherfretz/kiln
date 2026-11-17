@@ -612,6 +612,14 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       constants is not folded (IRBuilder `FoldSelect`). The calls are not
       fold candidates, since they store
       (`tests/codegen/builtins_overflow.cpp`);
+    - GCC's `__builtin_{add,sub,mul}_overflow_p(x, y, r)` (WP-1549,
+      `checked.rs` `emit_overflow_p`) emit `x` and `y` in the
+      encompassing width of the operands and `r`'s type, then `r` as an
+      ignored expression (its side effects only), then the same
+      overflow intrinsic (or `wide_signed_mul`) as the generic forms,
+      the flag OR-ed with a truncate-and-extend round trip of the result
+      against `r`'s width; nothing is stored. The result is the `i1`
+      flag as a `bool`;
     - the carry builtins `__builtin_{add,sub}c{b,s,,l,ll}(x, y, ci, co)`
       (WP-557, clang `BI__builtin_addcb`..) emit `x`, `y`, `ci`, then
       the carry-out pointer, then two `llvm.u{add,sub}.with.overflow`

@@ -279,6 +279,14 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
     }
     let (lu, ru) = (unqualified_pointee(s, lp), unqualified_pointee(s, rp));
     if compatible(s, lu, ru) {
+        // clang `checkPointerTypesForAssignment`: compatible function
+        // types, but the target adds GNU `noreturn` (dropping it is a
+        // function conversion): an incompatible function pointer (WP-1551;
+        // GCC warns `-Wdiscarded-qualifiers`).
+        let nr = |q: QualType| s.ast.types.proto(q).is_some_and(|p| p.info().noreturn());
+        if nr(lu) && !nr(ru) {
+            return PtrCheck::FunctionPointer;
+        }
         return res;
     }
     let (ls, rs) = (sign_insensitive(s, lu), sign_insensitive(s, ru));
@@ -413,6 +421,12 @@ pub(crate) fn c_not_ice_operand(s: &Sema<'_, '_>, e: ExprId) -> Option<ExprId> {
         }
         kids.clear();
         s.ast.exprs.children_into(x, &s.ast.lists, &mut kids);
+        // GCC's `__builtin_*_overflow_p`: only the type of the third
+        // argument counts (WP-1549), unless it has side effects or calls
+        // a function (GCC then folds to `(r, flag)`); it is the last child.
+        if s.overflow_p_call(x) && kids.last().is_some_and(|&r| !s.overflow_p_result_evaluated(r)) {
+            kids.pop();
+        }
         stack.extend(kids.iter().rev());
     }
     None
