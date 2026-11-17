@@ -894,8 +894,16 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   exception-declaration (`parse_handler`) a storage class or
   `thread_local` is `type name does not allow storage class to be
   specified` at the specifier (else at `thread_local`) and is dropped
-  (`reject_type_name_storage`, WP-327). spec/sema.md [dcl.stc] lists
-  every context that rejects a storage class.
+  (`reject_type_name_specifiers`, WP-327). spec/sema.md [dcl.stc] lists
+  every context that rejects a storage class. In the same contexts (and a
+  C member's specifier-qualifier-list) `inline`, `virtual`, `explicit`
+  and `_Noreturn` are then each `type name does not allow function
+  specifier to be specified`, in that order, and `constexpr`,
+  `consteval`, `constinit` (except in a condition, [stmt.pre], where
+  `constexpr` is allowed and the others are sema's) `type name does not
+  allow constexpr specifier to be specified`; each is dropped (clang
+  `ParseSpecifierQualifierList`, WP-1541; `dcl.type.general/type-name-specifiers.cpp`,
+  `stmt.pre/condition-specifiers.cpp`, `c/decl/member-function-specifier.c`).
 
   Sema checks the combination when it converts the DeclSpec to a type
   (`[dcl.type.simple]`, `type_from_declspec_at`).
@@ -1265,7 +1273,13 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   (`parse_static_inline_explicit_inst_ignored`, a warning in
   `-Wstatic-inline-explicit-instantiation`) and the rest is parsed as a
   template-declaration, so `static template<class T> void f(T);` is
-  still an ordinary template.
+  still an ordinary template. [temp.pre]/1 puts no decl-specifier before
+  `template`, so `inline template<class T> void f();` is ill-formed, and
+  GCC 16.1 rejects it; kiln keeps clang 22's plain warning (not promoted by
+  `-pedantic-errors`, an error under `-Werror`), a documented difference
+  (WP-1536; `temp.pre/decl-specifier-before-template*.cpp`). Any other
+  decl-specifier there (`constexpr`, `virtual`) is `expected
+  unqualified-id`, `friend` also `'friend' used outside of class`.
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
     declaration, definition or friend, decided by the next token, as in
@@ -2182,7 +2196,21 @@ for `^^`, §5 for splices).
 - **Attribute scopes** (WP-889/WP-891; clang
   `TryParseCXX11AttributeIdentifier`): a `[[...]]` scope, name, or `using`
   prefix is an identifier, keyword or alternative token
-  (`[[and, bitor]]`, [dcl.attr.grammar]/5, WP-1466; `cxx11_attr_ident`). `__clang__` is
+  (`[[and, bitor]]`, `[[class]]`, `[[x::new]]`, `[[using if: else]]`,
+  [dcl.attr.grammar]/4, WP-1466, WP-1536; `cxx11_attr_ident`): an unknown
+  one is `unknown attribute 'x' ignored`, and `[[alignas]]` is not the
+  alignas specifier. `using` after `[[` starts an attribute-using-prefix
+  only when what follows it is not `,`, `]`, `::`, `(` or `...`; otherwise
+  it is an attribute-token (`[[using]]`, `[[using::x]]`: the grammar
+  allows no prefix there; GCC 16.1 agrees, clang 22 says "expected
+  identifier"; `dcl.attr.grammar/attribute-token-using-keyword.cpp`).
+  Before C++17 a prefix is `default scope specifier for attributes is a
+  C++17 extension` [-Wc++17-extensions] at `using`. Under a prefix an
+  attribute starts at the prefix's namespace, and an
+  attribute-scoped-token is `attribute with scope specifier cannot follow
+  default scope specifier` at its scope (which is kept; clang
+  `err_using_attribute_ns_conflict`). C23 `[[...]]` shares the code
+  (`c/c23/attribute-token-keywords.c`). `__clang__` is
   a predefined macro, so `[[__clang__::x]]` arrives as the number `1`; a
   numeric token whose macro expansion is spelled `__clang__` is read as
   `_Clang` (the clang scope, spec/sema.md §4.5 "Attribute namespaces")
@@ -2272,8 +2300,8 @@ for `^^`, §5 for splices).
     namespace) this covers a namespace-definition or
     namespace-alias-definition, static_assert-declaration,
     template-declaration, explicit instantiation or specialization,
-    linkage-specification, asm-declaration and export-declaration
-    (`discard_attrs_before_unattributed_decl`); in a block, a
+    linkage-specification and export-declaration (a C asm-declaration
+    too) (`discard_attrs_before_unattributed_decl`); in a block, a
     static_assert-declaration and namespace-alias-definition
     (`parse_statement_after_attrs`, `prohibit_attrs_at`); in a
     member-specification, a `friend` declaration that is not a
@@ -2303,8 +2331,26 @@ for `^^`, §5 for splices).
   - before a statement that is not a declaration (`[[nodiscard]]
     return;`, [stmt.pre]/1): the non-statement attributes are reported
     by sema `act_on_stmt_decl_attrs` (`'X' attribute cannot be applied
-    to a statement`; on a block-scope asm-declaration clang's `'X'
-    attribute ignored` warning). `alignas` may also start such a list.
+    to a statement`). `alignas` may also start such a list.
+  - **Attributes on an asm-declaration** (CWG2262, [dcl.asm]/1,
+    WP-1536; `at_attrs_before_asm`, `parse_asm_decl_attrs`): in C++ an
+    attribute-specifier-seq (any mix of `[[...]]`, `alignas` and GNU
+    specifiers) before `asm` at namespace or block scope is parsed without
+    attaching anything: each `[[...]]` attribute and each `alignas` is
+    `'x' attribute ignored` [-Wignored-attributes] at its start (an
+    attribute of a using-prefix at its name; clang 22 names a scoped one
+    `'ns::x'`, clang 19 `'x'`), unknown ones too and not as unknown, the
+    arguments skipped unparsed (clang 22's block-scope handling). clang
+    22 rejects any attribute before a namespace-scope asm-declaration;
+    the text allows it, so kiln does as at block scope (GCC 16.1 accepts
+    and warns; `dcl.asm/attributes-namespace-scope.cpp`). GNU specifiers
+    are skipped silently at namespace scope (clang) and are `an attribute
+    list cannot appear here` at the first one in a block (clang
+    `ProhibitAttributes`). An annotation is `an annotation cannot
+    appertain to an asm-declaration` at its `=` ([dcl.attr.annotation]/1).
+    Tests: `dcl.asm/attributes-*.cpp`,
+    `dcl.asm/gnu-attributes-namespace-scope.cpp`,
+    `dcl.attr.annotation/non-declaration.cpp`.
   - an attribute-declaration (`[[x]];`, `alignas(4);`, [dcl.pre]/1):
     at namespace scope its attributes are subject-checked against
     nothing (sema `act_on_decl_attrs` on the enclosing context); in a

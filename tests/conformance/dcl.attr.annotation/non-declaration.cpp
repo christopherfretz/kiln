@@ -16,7 +16,7 @@
 //@ diag: 48:5 error "an annotation cannot appertain to a label"
 //@ diag: 51:5 error "an annotation cannot appertain to a block-scope declaration whose target scope is a namespace"
 //@ diag: 52:5 error "an annotation cannot appertain to a block-scope declaration whose target scope is a namespace"
-//@ diag: 56:1 error "an attribute list cannot appear here"
+//@ diag: 56:3 error "an annotation cannot appertain to an asm-declaration"
 //@ diag: 58:5 error "an annotation cannot appertain to an asm-declaration"
 // [dcl.attr.annotation]/1: an annotation appertains only to a declaration
 // of a type, type alias, variable, function, non-void function parameter,

@@ -964,6 +964,18 @@ Planned as 1.3.0.
   activates it; `__builtin_bit_cast` of classes with base classes or
   bit-fields is constant ([bit.cast]/2; unnamed bit-fields are padding).
 
+- Declaration specifiers and attributes, found running GCC's C++ testsuite
+  (WP-1541, WP-1536): `virtual`, `explicit` and `_Noreturn` on a structured
+  binding are errors, as are function specifiers on a for-range
+  declaration, an expansion statement and a condition, and `constexpr`,
+  `consteval` and `constinit` in any other type-specifier-seq (spec/sema.md
+  has the table). An attribute-specifier-seq before an asm-declaration is
+  accepted, with each attribute ignored (CWG2262). Keywords and alternative
+  tokens are attribute-tokens (`[[gnu::const]]` in C, `[[using gnu: const]]`).
+  A scoped attribute after a `using` prefix is an error, and a `using`
+  prefix before C++17 is an extension warning. `inline template` keeps
+  clang's warning; GCC rejects it.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

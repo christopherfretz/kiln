@@ -149,6 +149,10 @@ impl Parser<'_, '_> {
     /// attributes takes the hints into its `AttributedStmt` (clearing
     /// `hints`).
     fn parse_statement_hinted(&mut self, hints: &mut Vec<kiln_ast::AttrId>) -> Option<StmtId> {
+        if self.at_attrs_before_asm() {
+            self.parse_asm_decl_attrs(true);
+            return self.parse_asm_statement();
+        }
         if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) || self.at_gnu_attr_null_stmt() {
             let start = self.loc();
             let mut attrs = Vec::new();
@@ -773,8 +777,8 @@ impl Parser<'_, '_> {
     fn parse_condition_decl(&mut self) -> Option<Cond> {
         let ctx = DeclaratorContext::Condition;
         let mut ds = self.parse_decl_specifiers(ctx);
-        // [stmt.pre]/1: a type-specifier-seq, so no storage class.
-        self.reject_type_name_storage(&mut ds);
+        // [stmt.pre]: only type-specifiers and `constexpr`.
+        self.reject_type_name_specifiers(&mut ds, true);
         if ds.is_empty() {
             self.error_here(DiagId::parse_expected_expression);
             return None;
@@ -914,7 +918,7 @@ impl Parser<'_, '_> {
             self.next_tag_site = Some(kiln_sema::TagSite::TypeId);
             let mut ds = self.parse_decl_specifiers(ctx);
             // A type-specifier-seq: no storage class.
-            self.reject_type_name_storage(&mut ds);
+            self.reject_type_name_specifiers(&mut ds, false);
             let mut d = Declarator::new(ctx, self.loc());
             self.catch_declarator = true;
             self.in_exception_decl = true;

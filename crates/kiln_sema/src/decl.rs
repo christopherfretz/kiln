@@ -3836,11 +3836,8 @@ impl Sema<'_, '_> {
             return None;
         }
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
-            self.virtual_on_non_function(ds, d);
-            // clang's `DiagnoseFunctionSpecifiers`: `_Noreturn` is dropped.
-            if let Some(l) = ds.noreturn {
-                self.error(DiagId::sema_noreturn_non_function, l);
-            }
+            // `explicit` was reported by `unsupported_declarator`.
+            self.function_specifiers_on_object(ds, d, false);
         }
         let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
@@ -14297,6 +14294,7 @@ pub(crate) fn norm_attr_scope(s: &str) -> &str {
     }
 }
 
+#[allow(clippy::too_many_lines, reason = "one arm per attribute spelling")]
 pub(crate) fn attr_kind_of(
     n: &str,
     std: bool,
@@ -14326,7 +14324,8 @@ pub(crate) fn attr_kind_of(
         ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
         ("carries_dependency", true, _) => AttrKind::CARRIES_DEPENDENCY,
         ("indeterminate", true, _) => AttrKind::INDETERMINATE,
-        ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
+        ("aligned", _, true) => AttrKind::ALIGNED,
+        ("alignas", _, _) if syntax == AttrSyntax::Keyword => AttrKind::ALIGNED, // not `[[alignas]]`
         ("packed", _, true) => AttrKind::PACKED,
         ("used", _, true) => AttrKind::USED,
         // `GCC<"noinline">, CXX11<"clang", "noinline">` (the clang

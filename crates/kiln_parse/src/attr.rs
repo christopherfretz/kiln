@@ -449,7 +449,7 @@ impl Parser<'_, '_> {
     /// declaration that takes none ([dcl.pre]/5, [dcl.attr.grammar]/5):
     /// a namespace-definition or namespace-alias-definition, a
     /// static_assert-declaration, a template-declaration, explicit
-    /// instantiation or specialization, a linkage-specification, an
+    /// instantiation or specialization, a linkage-specification, a C
     /// asm-declaration or an export-declaration (clang
     /// `ProhibitAttributes`: "an attribute list cannot appear here").
     /// Reports and drops it.
@@ -460,7 +460,9 @@ impl Parser<'_, '_> {
         let Some(j) = self.after_cxx11_attrs() else { return };
         let next = self.kw_of(self.tok_at(j));
         let bad = match next {
-            Some(Kw::Namespace | Kw::StaticAssert | Kw::Template | Kw::Asm | Kw::Export) => true,
+            Some(Kw::Namespace | Kw::StaticAssert | Kw::Template | Kw::Export) => true,
+            // CWG2262: an asm-declaration takes them (`parse_asm_decl_attrs`).
+            Some(Kw::Asm) => self.s.is_c(),
             Some(Kw::Inline) => self.kw_of(self.tok_at(j + 1)) == Some(Kw::Namespace),
             Some(Kw::Extern) => {
                 (!self.s.is_c()
@@ -600,6 +602,93 @@ impl Parser<'_, '_> {
         self.parse_attributes(&mut v);
     }
 
+    /// At an attribute-specifier-seq (`[[...]]`, `alignas(...)` and GNU
+    /// `__attribute__((...))` in any order) followed by `asm`: the
+    /// attributed asm-declaration of CWG2262 ([dcl.asm]/1). C++ only.
+    pub(crate) fn at_attrs_before_asm(&self) -> bool {
+        if self.s.is_c() || !self.at_attr() {
+            return false;
+        }
+        let mut i = self.pos();
+        loop {
+            let Some(j) = self.after_cxx11_attrs_at(i) else { return false };
+            i = j;
+            if self.kw_of(self.tok_at(i)) != Some(Kw::Attribute) {
+                return self.kw_of(self.tok_at(i)) == Some(Kw::Asm);
+            }
+            if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
+                return false;
+            }
+            let Some(j) = self.skip_balanced(i + 1) else { return false };
+            i = j;
+        }
+    }
+
+    /// The attribute-specifier-seq of an asm-declaration (CWG2262,
+    /// [dcl.asm]/1; spec/parse.md "Attributes on an asm-declaration"),
+    /// before its `asm`. No attribute appertains to it: each attribute of
+    /// a `[[...]]` or an `alignas` is `'x' attribute ignored`
+    /// [-Wignored-attributes] at its start (clang 22's block-scope
+    /// `ParseStatementOrDeclarationAfterAttributes`: unknown ones too, and
+    /// not as unknown; arguments are skipped unparsed). clang 22 rejects
+    /// any attribute before a namespace-scope asm-declaration ("an
+    /// attribute list cannot appear here"); the text allows it, so kiln
+    /// treats it as at block scope (GCC 16.1 accepts both and warns
+    /// "attributes ignored on 'asm' declaration"). GNU `__attribute__`
+    /// specifiers are as clang treats them: skipped silently at namespace
+    /// scope, "an attribute list cannot appear here" at the first one in
+    /// a block (`block`). An annotation is "an annotation cannot
+    /// appertain to an asm-declaration" ([dcl.attr.annotation]/1).
+    pub(crate) fn parse_asm_decl_attrs(&mut self, block: bool) {
+        let mut gnu_at = None;
+        // Only annotations land here: [dcl.attr.annotation]/1 rejects them.
+        let mut annots = Vec::new();
+        loop {
+            if self.at_cxx11_attr() {
+                self.parse_cxx11_attributes_in(&mut annots, true);
+            } else if self.at_kw(Kw::Alignas) {
+                let at = self.bump().span.lo;
+                if self.eat(Punct::LParen).is_some() {
+                    self.skip_until(&[Punct::RParen], false, true);
+                }
+                let d = self.s.diag(DiagId::parse_attribute_ignored, at).arg("alignas");
+                self.emit(d);
+            } else if self.at_kw(Kw::Attribute) {
+                let at = self.bump().span.lo;
+                gnu_at.get_or_insert(at);
+                if self.eat(Punct::LParen).is_some() {
+                    self.skip_until(&[Punct::RParen], false, true);
+                }
+            } else {
+                break;
+            }
+        }
+        self.s.reject_annotations_in(&annots, Some("an asm-declaration"));
+        if block && let Some(at) = gnu_at {
+            self.s.error(DiagId::parse_attributes_not_allowed, at);
+        }
+    }
+
+    /// One attribute of an asm-declaration's `[[...]]`, after its
+    /// attribute-token: `'x' attribute ignored` at `loc` (clang 22 names a
+    /// scoped attribute `'ns::x'`, clang 19 `'x'`); the argument clause
+    /// and `...` are skipped.
+    fn ignore_asm_attribute(&mut self, scope: Option<Symbol>, name: Symbol, loc: Loc) {
+        if self.eat(Punct::LParen).is_some() {
+            self.skip_until(&[Punct::RParen], false, true);
+        }
+        self.eat(Punct::Ellipsis);
+        let syms = self.s.ast.symbols();
+        let shown = match scope {
+            Some(sc) if self.s.clang_compat >= 22 => {
+                format!("{}::{}", syms.as_str(sc), syms.as_str(name))
+            }
+            _ => syms.as_str(name).to_owned(),
+        };
+        let d = self.s.diag(DiagId::parse_attribute_ignored, loc).arg(shown);
+        self.emit(d);
+    }
+
     /// The name or scope of a `[[...]]` attribute: an identifier or
     /// keyword (clang `TryParseCXX11AttributeIdentifier`). A numeric
     /// constant produced by expanding the predefined `__clang__` macro (the
@@ -644,11 +733,18 @@ impl Parser<'_, '_> {
     }
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
+    fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+        self.parse_cxx11_attributes_in(out, false);
+    }
+
+    /// [`Self::parse_cxx11_attributes`]; `on_asm`: the specifier
+    /// appertains to an asm-declaration, so each attribute is only
+    /// named (`'x' attribute ignored`, its arguments skipped unparsed).
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per attribute argument grammar, as clang's ParseCXX11AttributeArgs"
     )]
-    fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+    fn parse_cxx11_attributes_in(&mut self, out: &mut Vec<AttrId>, on_asm: bool) {
         if self.at_sme_attr() {
             self.parse_sme_attr(out);
             return;
@@ -657,11 +753,35 @@ impl Parser<'_, '_> {
         let open = self.bump().span.lo;
         self.bump();
         let mut default_scope = None;
-        if self.at_kw(Kw::Using) {
+        let mut default_scope_loc = Loc::INVALID;
+        // An attribute-using-prefix is `using attribute-namespace :`
+        // ([dcl.attr.grammar]/1). A `using` followed by what ends or
+        // continues an attribute (`,`, `]`, `::`, `(`, `...`) cannot start
+        // one, so it is an attribute-token: a keyword there is an
+        // identifier ([dcl.attr.grammar]/4), `[[using]]` an unknown
+        // attribute. GCC 16.1 agrees; clang 22 reads every `using` as a
+        // prefix ("expected identifier"): the text decides.
+        if self.at_kw(Kw::Using)
+            && !matches!(
+                Self::punct_of(self.peek(1)),
+                Some(
+                    Punct::Comma
+                        | Punct::RSquare
+                        | Punct::ColonColon
+                        | Punct::LParen
+                        | Punct::Ellipsis
+                )
+            )
+        {
+            // clang `ext_using_attribute_ns` (C++17, P0028).
+            if self.std < kiln_lex::Std::Cxx17 {
+                let w = self.s.diag(DiagId::parse_ext_using_attribute_ns, self.loc());
+                self.emit(w);
+            }
             self.bump();
             default_scope = self.cxx11_attr_ident();
             if default_scope.is_some() {
-                self.bump();
+                default_scope_loc = self.bump().span.lo;
             } else {
                 self.error_here(DiagId::parse_expected_unqualified_id);
             }
@@ -699,7 +819,7 @@ impl Parser<'_, '_> {
                 break;
             };
             let mut loc = self.bump().span.lo;
-            let mut scope = default_scope;
+            let mut scope = None;
             let mut name_loc = loc;
             if self.at(Punct::ColonColon) {
                 self.bump();
@@ -711,6 +831,37 @@ impl Parser<'_, '_> {
                 scope = Some(name);
                 name = n;
                 name_loc = self.bump().span.lo;
+            }
+            // [dcl.attr.grammar]/3: under an attribute-using-prefix an
+            // attribute-token is not an attribute-scoped-token (clang
+            // `err_using_attribute_ns_conflict`, at the scope; the written
+            // scope is kept). Otherwise the prefix is the scope and the
+            // attribute starts there, as in clang.
+            if default_scope.is_some() {
+                if scope.is_some() {
+                    self.s.error(DiagId::parse_using_attribute_ns_conflict, loc);
+                } else {
+                    scope = default_scope;
+                    loc = default_scope_loc;
+                }
+            }
+            if on_asm {
+                // clang 22 reports an attribute of a using-prefix here at
+                // its name (clang 19 at the prefix's namespace).
+                let at = if default_scope.is_some() && self.s.clang_compat >= 22 {
+                    name_loc
+                } else {
+                    loc
+                };
+                self.ignore_asm_attribute(scope, name, at);
+                if self.at(Punct::RSquare) || self.at_eof() {
+                    break;
+                }
+                if self.expect(Punct::Comma).is_none() {
+                    self.skip_until(&[Punct::RSquare], true, false);
+                    break;
+                }
+                continue;
             }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             // clang 19 `Clang<"assume">` is the same statement attribute.

@@ -5165,6 +5165,40 @@ diagnostics and IR.
     specifiers is a C++20 extension` at the first one, and only when
     there is no specifier not allowed (`decomp_cxx20_specifiers`, WP-458;
     `dcl.struct.bind/static-thread-local-*.cpp`).
+  - **Specifiers by declaration kind** (WP-1541). The text:
+    [dcl.struct.bind]/1 allows `static`, `thread_local`, `constexpr`,
+    `constinit` (C++26), `auto` and cv on a structured binding
+    declaration; a for-range-declaration (also an expansion
+    statement's, [stmt.expand]/2) and a condition ([stmt.pre]) allow a
+    type-specifier or `constexpr` only; an init-statement is a
+    simple-declaration (the variable rules). Every other specifier is
+    ill-formed; who reports it (clang 22's text and location; GCC 16.1
+    rejects every "error" cell too):
+
+    | specifier | structured binding (namespace, block) | for-range / expansion declaration (plain, binding) | condition | init-statement |
+    |---|---|---|---|---|
+    | `virtual`, `explicit`, `_Noreturn` | `'virtual' can only appear on non-static member functions` (`function_specifiers_on_object`, after the binding list errors) | same | `type name does not allow function specifier to be specified` (parser) | variable rule (`'virtual' can only appear…`) |
+    | `inline` | binding list error, plus block-scope `inline declaration…` | `inline declaration of 'x' not allowed in block scope` | type-name function specifier error | `inline declaration…` |
+    | `friend` | `'friend' used outside of class` (parser) | same | same | same |
+    | `typedef` | binding list error | `for range declaration must declare a variable` | `illegal initializer` | `illegal initializer` |
+    | `extern`, `register`, `mutable` | binding list error (+ the variable's own rule) | `loop variable 'x' may not be declared 'extern'` (plain and binding); `mutable` the member rule | `type name does not allow storage class to be specified` (parser) | variable rules |
+    | `static`, `thread_local` | allowed (C++20; an extension before) | `loop variable … may not be declared 'static'` | storage-class error (parser) | allowed |
+    | `constexpr` | allowed in C++26, binding list error before | allowed | allowed | allowed |
+    | `consteval` | binding list error + `consteval can only be used in function declarations` | the latter | the latter | the latter |
+    | `constinit` | allowed in C++26 | `local variable cannot be declared 'constinit'` | same | same |
+
+    The function specifiers are ONE check, `function_specifiers_on_object`
+    (clang `DiagnoseFunctionSpecifiers`), called for every variable and
+    typedef declarator and for a structured binding declaration (the
+    missing call was the bug: `virtual auto [a, b] = s;` was accepted);
+    a condition's decl-specifiers are a type-specifier-seq checked by
+    the parser (`reject_type_name_specifiers`, spec/parse.md §4). Tests:
+    `dcl.struct.bind/function-specifiers.cpp`,
+    `stmt.pre/condition-specifiers.cpp`,
+    `stmt.expand/declaration-specifiers-neg.cpp`. A structured binding at
+    class scope is rejected by the parser with recovery errors, not
+    clang's `structured binding declaration not permitted in this
+    context`.
   - A declarator chunk other than `&`/`&&` is `decomposition declaration
     cannot be declared with parentheses` or `... with type 'T'; declared
     type must be 'auto' or reference to 'auto'`.
