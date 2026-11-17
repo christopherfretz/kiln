@@ -302,7 +302,19 @@ impl Sema<'_, '_> {
     /// this, `B b(S{42});` in a function template loses its
     /// `ExprWithCleanups`, and the `S` temporary outlives the declaration.
     pub(crate) fn note_shared_temporaries(&mut self, e: ExprId) {
-        if (self.cleanup.needs && self.cleanup.side_effects) || self.unevaluated > 0 {
+        if self.unevaluated > 0 {
+            return;
+        }
+        self.note_own_temporaries(e);
+    }
+
+    /// The cleanups of the temporaries `e` holds, outside a nested
+    /// `ExprWithCleanups`, lambda or unevaluated operand, noted for the
+    /// full-expression being built (for [`Sema::note_shared_temporaries`]
+    /// and a constant-expression completed after its parse,
+    /// [`Sema::end_constant_operand`]).
+    pub(crate) fn note_own_temporaries(&mut self, e: ExprId) {
+        if self.cleanup.needs && self.cleanup.side_effects {
             return;
         }
         let mut stack = self.take_walk_stack(e);

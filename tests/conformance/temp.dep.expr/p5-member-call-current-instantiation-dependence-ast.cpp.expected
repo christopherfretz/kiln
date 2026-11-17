@@ -1,0 +1,103 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Inc
+|-CXXRecordDecl referenced struct Q definition
+| `-CXXMethodDecl referenced g 'int ()' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-IntegerLiteral 'int' 0
+|-ClassTemplateDecl A
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct A definition
+|   |-public 'Q'
+|   |-CXXMethodDecl referenced f 'long (int)' implicit-inline
+|   | |-ParmVarDecl 'int'
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-ImplicitCastExpr 'long' <IntegralCast>
+|   |       `-IntegerLiteral 'int' 1
+|   |-CXXMethodDecl referenced r 'long &()' implicit-inline
+|   | `-CompoundStmt
+|   |   |-DeclStmt
+|   |   | `-VarDecl referenced l 'long' static
+|   |   `-ReturnStmt
+|   |     `-DeclRefExpr 'long' lvalue Var 'l' 'long'
+|   |-CXXMethodDecl ov 'int (int)' implicit-inline
+|   | |-ParmVarDecl 'int'
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-IntegerLiteral 'int' 0
+|   |-CXXMethodDecl ov 'int (long)' implicit-inline
+|   | |-ParmVarDecl 'long'
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-IntegerLiteral 'int' 0
+|   |-FunctionTemplateDecl tm
+|   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
+|   | `-CXXMethodDecl tm 'int (U)' implicit-inline
+|   |   |-ParmVarDecl 'U'
+|   |   `-CompoundStmt
+|   |     `-ReturnStmt
+|   |       `-IntegerLiteral 'int' 0
+|   |-CXXMethodDecl referenced d 'auto ()' implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-IntegerLiteral 'int' 1
+|   |-CXXMethodDecl referenced dt 'T ()' implicit-inline
+|   | `-CompoundStmt
+|   |   `-ReturnStmt
+|   |     `-CXXUnresolvedConstructExpr 'T'
+|   |-CXXMethodDecl referenced inc 'Inc *()'
+|   `-CXXMethodDecl use 'void (T)' implicit-inline
+|     |-ParmVarDecl referenced t 'T'
+|     `-CompoundStmt
+|       |-CallExpr 'long'
+|       | |-MemberExpr '<bound member function type>' ->f
+|       | | `-CXXThisExpr 'A<T> *' this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr 'long'
+|       | |-MemberExpr '<bound member function type>' ->f
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr 'int'
+|       | `-MemberExpr '<bound member function type>' ->g
+|       |   `-CXXThisExpr 'A<T> *' implicit this
+|       |-CallExpr 'long' lvalue
+|       | `-MemberExpr '<bound member function type>' ->r
+|       |   `-CXXThisExpr 'A<T> *' implicit this
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ov
+|       | | `-CXXThisExpr 'A<T> *' this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
+|       | | `-CXXThisExpr 'A<T> *' this
+|       | `-IntegerLiteral 'int' 1
+|       |-CallExpr '<dependent type>'
+|       | `-MemberExpr '<bound member function type>' ->d
+|       |   `-CXXThisExpr 'A<T> *' implicit this
+|       |-CallExpr '<dependent type>'
+|       | `-MemberExpr '<bound member function type>' ->dt
+|       |   `-CXXThisExpr 'A<T> *' implicit this
+|       |-CallExpr '<dependent type>'
+|       | |-MemberExpr '<bound member function type>' ->f
+|       | | `-CXXThisExpr 'A<T> *' implicit this
+|       | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|       `-CallExpr '<dependent type>'
+|         `-MemberExpr '<bound member function type>' ->inc
+|           `-CXXThisExpr 'A<T> *' implicit this
+`-ClassTemplateDecl D
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-CXXRecordDecl struct D definition
+    |-public 'T'
+    |-CXXMethodDecl referenced f 'long (int)' implicit-inline
+    | |-ParmVarDecl 'int'
+    | `-CompoundStmt
+    |   `-ReturnStmt
+    |     `-ImplicitCastExpr 'long' <IntegralCast>
+    |       `-IntegerLiteral 'int' 1
+    `-CXXMethodDecl use 'void ()' implicit-inline
+      `-CompoundStmt
+        `-CallExpr '<dependent type>'
+          |-MemberExpr '<bound member function type>' ->f
+          | `-CXXThisExpr 'D<T> *' implicit this
+          `-IntegerLiteral 'int' 1

@@ -12,7 +12,6 @@
 // class itself), so the text decides and no oracle is compared.
 //@ expect: run
 //@ skip(clang): clang 22 treats a call through `this` of the current instantiation as type-dependent
-//@ xfail(kiln): WP-1570 follow-up, a member call through `this` of the current instantiation is type-dependent in kiln
 struct B {
   template <class> int bfn() { return 1; }
 };

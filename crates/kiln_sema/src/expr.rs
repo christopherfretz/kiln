@@ -608,10 +608,20 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         let outer = self.set_aside_outer_immediates(e);
-        let pending = if self.has_own_temporaries(e) {
-            self.take_constant_outer_cleanups(e)
-        } else {
+        let ended = self.take_constant_outer_cleanups(e).is_some();
+        let pending = if !self.has_own_temporaries(e) {
             Some(std::mem::take(&mut self.cleanup))
+        } else if ended {
+            // Its parse ended with the enclosing state restored
+            // ([`Sema::end_constant_operand`]): what is pending now
+            // belongs to the enclosing full-expression (and to the
+            // operands built since), and `e` is completed with the
+            // temporaries it holds.
+            let outer = std::mem::take(&mut self.cleanup);
+            self.note_own_temporaries(e);
+            Some(outer)
+        } else {
+            None
         };
         // Only the names this constant expression uses are decided here
         // (clang keeps the potential odr-uses per expression evaluation

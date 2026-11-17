@@ -255,12 +255,14 @@ impl Substituter<'_, '_, '_> {
     /// Whether requires-expression `e`, substituted partially (some level
     /// retained), may be left as its pattern for the final substitution
     /// ([`DeferredRequires`]; a requirement stayed dependent, so some
-    /// level is still to come): not while a pack is expanded element by
-    /// element (the element index is this substitution's), and not when
-    /// it names an enclosing pack unexpanded.
+    /// level is still to come). Under an expansion substituted element by
+    /// element (a generic lambda in a fold or a pack-expanded
+    /// initializer), each element defers by itself with its index
+    /// ([`DeferredRequires::pack`]); not while it names a pack of a
+    /// partially substituted expansion that is kept unexpanded (§7.2).
     fn can_defer_requires(&self, e: ExprId) -> bool {
-        self.pack_index.is_none()
-            && !self.sema.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK)
+        self.pack_index.is_some()
+            || !self.sema.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK)
     }
 
     /// A copy of pattern `e` (requirements `rq`), value-dependent, recorded
@@ -277,6 +279,11 @@ impl Substituter<'_, '_, '_> {
         let x =
             self.sema.builder().requires_expr(rq.body, &params, &items, QualType::BOOL, at, rbrace);
         self.sema.ast.exprs.mark_value_dependent(x);
+        if self.pack_index.is_some() {
+            // The packs its requirements name are this element's
+            // ([`DeferredRequires::pack`]): the expansion is complete.
+            self.sema.ast.exprs.clear_unexpanded_pack(x);
+        }
         let mut locals: Vec<(DeclId, DeclOrPack)> =
             self.locals.iter().map(|(&k, &v)| (k, v)).collect();
         locals.sort_unstable_by_key(|&(k, _)| k.raw());
@@ -285,6 +292,7 @@ impl Substituter<'_, '_, '_> {
             levels: self.args.clone(),
             locals,
             pairs: self.pairs.clone(),
+            pack: self.pack_index.map(|i| (i, self.pack.expanding.as_ref().map_or(0, |e| e.0))),
         };
         self.sema.inst.concepts.deferred_requires.insert(x, d);
         x
@@ -306,6 +314,7 @@ impl Substituter<'_, '_, '_> {
                 s.locals = d.locals.iter().copied().collect();
                 s.pairs.clone_from(&pairs);
                 s.entity = self.entity;
+                s.set_deferred_pack(d.pack);
                 s.requires_expr(d.pattern, loc)?
             };
             return self.expr(mid);
@@ -354,7 +363,17 @@ impl Substituter<'_, '_, '_> {
         s.entity = entity;
         s.final_subst = final_subst;
         s.lambda_bodies = lambda_bodies;
+        s.set_deferred_pack(d.pack);
         s.requires_expr(d.pattern, loc)
+    }
+
+    /// The element of the enclosing expansion a deferred
+    /// requires-expression was left at ([`DeferredRequires::pack`]).
+    fn set_deferred_pack(&mut self, pack: Option<(u32, u32)>) {
+        if let Some((i, len)) = pack {
+            self.pack_index = Some(i);
+            self.pack.expanding = (len > 0).then(|| (len, crate::templ::pack::PackName::outer()));
+        }
     }
 
     /// Checks requirement `r` ([expr.prim.req.simple] to

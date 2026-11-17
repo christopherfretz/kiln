@@ -2011,25 +2011,42 @@ an error (§3.4).
   clang's `ConstantEvaluated` context restores `ParentCleanup`; WP-296,
   `tests/conformance/class.temporary/run-template-argument-keeps-full-expression-cleanups.cpp`).
   One with temporaries of its own gets its own `ExprWithCleanups` and then
-  restores the enclosing state from before it began (WP-301,
+  restores the enclosing state (WP-301,
   `tests/conformance/class.temporary/run-constant-expression-own-temporaries-order.cpp`):
   - entering a constant-evaluated context in the parser
     (`enter_constant_evaluated`) records the cleanup state. Leaving it
-    (`exit_constant_evaluated(e)`) files that state under the parsed
-    constant-expression `e` in `constant_outer_cleanups`, but only when the
-    state has pending cleanups;
+    (`exit_constant_evaluated(e)`, `end_constant_operand`) restores that
+    state at once when the parsed constant-expression `e` changed it or
+    it has pending cleanups, and files `e` in `constant_outer_cleanups`
+    (clang's `PopExpressionEvaluationContext` of a `ConstantEvaluated`
+    context restores `ParentCleanup`). The constant-expression is a
+    full-expression of its own ([intro.execution]/5), so its temporaries
+    end with it even when it is never completed where it is parsed: a
+    dependent template argument (converted where it is substituted), an
+    argument of a dependent template name or of a parameter of dependent
+    type, a dependent `noexcept`/`explicit` condition or array bound. The
+    next full-expression of the declaration (a dependent braced default
+    argument `= {}`, a default member initializer) takes none of them
+    (before C++17 `f(T{})` in a parameter's template argument copies from
+    a temporary; WP-1578,
+    `tests/conformance/class.temporary/template-argument-temporaries-end-with-argument-cxx{11,14,17,20}.cpp`,
+    `run-template-argument-temporaries-end-with-argument.cpp`);
   - the substituter does the same for an expression template argument
     (`use(D(N + 4)) + C<D(N).v>::v` in a function template);
   - `act_on_constant_full_expr` finds the entry inside its (converted)
-    operand, removes it, and restores that state after the constant
-    full-expression has consumed the merged state;
+    operand and removes it; one with temporaries of its own is completed
+    with the cleanups of the temporaries it holds (`note_own_temporaries`,
+    the walk of `note_shared_temporaries`), and what is pending when it
+    ends (the enclosing full-expression's, and the operands built since,
+    as `D(3)` in `f<D(1).v>(D(3))`) is restored after it;
   - a default template argument is substituted and converted between
     `push_cleanups` and `pop_cleanups` (clang `SubstDefaultTemplateArgument`
     enters a `ConstantEvaluated` context), so its temporaries never touch
     the call that uses it (`g(D(6))` with `int N = D(5).v`).
 
-  With no entry (no pending enclosing cleanups) the constant
-  full-expression takes and resets the state as any full-expression does.
+  With no entry (a constant-expression built by sema, an attribute
+  argument) the constant full-expression takes and resets the state as
+  any full-expression does.
 
 ### 5.4 Lifetime extension ([class.temporary]/6–8)
 When a reference is bound to a temporary — the result of a temporary

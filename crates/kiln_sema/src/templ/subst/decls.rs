@@ -1395,25 +1395,6 @@ impl Substituter<'_, '_, '_> {
         let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
             return;
         };
-        // A dependent `= {...}` kept as written may sit under an
-        // `ExprWithCleanups` that took the temporaries of an earlier
-        // expression of the declaration (before C++17, the elidable copy
-        // of `f(T{})` in a parameter's dependent template argument): the
-        // list is rebuilt below, its cleanups with it (WP-1571).
-        let def = match self.sema.ast.exprs.get(def).kind() {
-            kiln_ast::expr::ExprKind::ExprWithCleanups => {
-                let sub = self.sema.ast.exprs.operand(def);
-                let ex = &self.sema.ast.exprs;
-                if ex.get(sub).kind() == kiln_ast::expr::ExprKind::InitListExpr
-                    && ex.get(sub).ty() == QualType::VOID
-                {
-                    sub
-                } else {
-                    def
-                }
-            }
-            _ => def,
-        };
         let e = match self.sema.ast.exprs.get(def).kind() {
             kiln_ast::expr::ExprKind::CXXDefaultArgExpr => return,
             // A deduction guide's placeholder ([`Sema::guide_default_placeholder`]):
