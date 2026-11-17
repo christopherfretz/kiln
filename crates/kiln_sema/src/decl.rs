@@ -5783,7 +5783,8 @@ impl Sema<'_, '_> {
             Some(false) => invalid_redecl = true,
             None => {}
         }
-        let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
+        let (defaults, redefined) =
+            self.merge_default_args_in(prev_ok, block, &params, !prev_invalid, Some(ctx));
         if let Some(p) = prev_ok
             && !redefined
             && !friend
@@ -6269,6 +6270,21 @@ impl Sema<'_, '_> {
         params: &[ParamInfo],
         trailing: bool,
     ) -> (Vec<Option<ExprId>>, bool) {
+        self.merge_default_args_in(prev, block, params, trailing, None)
+    }
+
+    /// [`Sema::merge_default_args`] of a declaration whose target scope
+    /// is `target`: a previous namespace-scope declaration counts only
+    /// in that namespace (an `extern "C"` function redeclared in another
+    /// namespace has its own defaults, [dcl.fct.default]/4).
+    pub(crate) fn merge_default_args_in(
+        &mut self,
+        prev: Option<DeclId>,
+        block: bool,
+        params: &[ParamInfo],
+        trailing: bool,
+        target: Option<DeclId>,
+    ) -> (Vec<Option<ExprId>>, bool) {
         let mut out: Vec<Option<ExprId>> = params
             .iter()
             .map(|p| match p.default_arg {
@@ -6284,6 +6300,15 @@ impl Sema<'_, '_> {
                     self.ast.decls.lexical_ctx(r) == Some(cur)
                 } else {
                     !self.lexically_local(r)
+                        && target.is_none_or(|t| {
+                            let home =
+                                |c: DeclId| self.ast.primary_context(self.ast.redecl_context(c));
+                            let t = home(t);
+                            !matches!(
+                                self.kind_of(t),
+                                DeclKind::Namespace | DeclKind::TranslationUnit
+                            ) || self.ast.decls.get(r).ctx().is_some_and(|c| home(c) == t)
+                        })
                 }
             })
         });

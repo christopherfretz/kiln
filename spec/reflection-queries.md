@@ -107,6 +107,11 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   `temp.inst/p4-var-template-unknown-bound.cpp`, xfail).
 - **`return_type_of(r)`** gives the declared return type of a function or
   function type, canonical like `type_of`.
+- **Structured bindings and enumerators** (WP-1537): a structured
+  binding is not *has-type*, so `type_of` of one fails; an enumerator
+  reflected inside its enum-specifier has the type of its initializing
+  value ([dcl.enum]/5), the enumeration after the closing brace.
+  `is_final` of a class being defined reads the class-key's `final`.
 - **Undeduced placeholder types** ([meta.reflection.queries] *has-type*,
   [meta.reflection.member.queries]/3; WP-1243). A function whose type
   still contains an undeduced placeholder (`auto spin();` before any

@@ -12,7 +12,7 @@ use super::{MetaError, MetaErrorKind, OvenFault};
 use crate::Oven;
 use crate::kbc::ak;
 use crate::mem::Ptr;
-use crate::meta::materialize::{Shape, recipe};
+use crate::meta::materialize::{Recipe, Shape, recipe};
 use crate::ty::{OTy, TyKind};
 use crate::vm::Fault;
 
@@ -280,6 +280,12 @@ impl Oven {
         if let Some(d) = plan.annotations {
             let v = member(self, d)?;
             let rc = recipe(&self.types, v.ty, Shape::Vector).map_err(|_| MetaError::invalid())?;
+            // The elements are read as `info` even when no range argument
+            // was compiled before this call (which is what records the
+            // type otherwise).
+            if let Recipe::Vector { elem, .. } = rc {
+                self.meta.info_ty = self.meta.info_ty.or(Some(elem));
+            }
             let range = self.range_arg(rc, v.addr).map_err(fault)?;
             let mut anns = std::mem::take(&mut self.dms.anns);
             let mut r = Ok(());

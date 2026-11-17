@@ -940,7 +940,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - constructor or declarator ([class.ctor.general]/1, [dcl.ambig.res]/1,
     [dcl.decl.general]/4; clang's `isConstructorDeclarator`, WP-1423):
     after the class name and `(`, the name is a constructor only when the
-    next tokens are `)`, `...)`, `[[`, a decl-specifier (a keyword, a type
+    next tokens are `)`, `...)`, `[[`, `[:` (a splice-type-specifier: the
+    parameter-declaration-clause is a type-only context and a splice is
+    never a declarator-id; WP-1537), a decl-specifier (a keyword, a type
     trait transform, a type name, a name after a dependent qualifier;
     `this` before one), or a name that is not a type followed by anything
     but `(`, `[`, `::` or `)` (`S(X y)`, a parameter of an unknown type).

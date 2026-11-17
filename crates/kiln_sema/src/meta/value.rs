@@ -502,10 +502,18 @@ impl Sema<'_, '_> {
                         }
                         return self.extract_local(r, d, (vt, tc), loc, oven);
                     }
+                    // A pointer by value is `extract-value<T>(constant_of(r))`
+                    // ([meta.reflection.extract]/12): the variable's value,
+                    // converted as a constant is (`int *const` into
+                    // `const int *`), never a read through its address.
+                    let vc = self.ast.types.canonical(vt);
+                    if self.ast.types.is_pointer(tc) && self.ast.types.is_pointer(vc) {
+                        let c = self.reflect_constant_of(r, ctx, oven)?;
+                        return self.extract_constant(r, c, t, ctx, oven);
+                    }
                     let first = self.ast.first(d);
                     let p = self.object_ptr(vt, PtrBase::Decl(first), 0)?;
-                    let konst = self.ast.types.canonical(vt).quals().is_const();
-                    self.extract_place(r, p, konst, tc, loc)
+                    self.extract_place(r, p, vc.quals().is_const(), tc, loc)
                 }
                 DeclKind::ParmVar => {
                     let Some(vt) = self.ast.decls.get(d).ty() else {
@@ -760,6 +768,49 @@ impl Sema<'_, '_> {
         }
         if tc.without_quals() == u && !t.is_array(u) {
             return Ok(MetaOut::Deref(p));
+        }
+        // [meta.reflection.extract]/10.4: a closure object converts to a
+        // function pointer type through its conversion function.
+        if t.is_pointer(tc)
+            && let Some(c) = t.as_record(u)
+            && self.ast.decls.record(self.class_def(c)).is_some_and(|x| x.lambda.is_some())
+        {
+            return self.extract_closure_pointer(r, self.class_def(c), tc, loc);
+        }
+        self.mismatch(r, tc, loc)
+    }
+
+    /// `extract<T>` of a closure object of type `c` as function pointer
+    /// type `tc` (/10.4): the function its conversion function to `tc`
+    /// (or to its noexcept counterpart) returns, the static invoker or a
+    /// static call operator, with no state to read. A generic lambda's
+    /// conversion function template is not looked at.
+    fn extract_closure_pointer(
+        &mut self,
+        r: ReflectionId,
+        c: DeclId,
+        tc: QualType,
+        loc: Loc,
+    ) -> Result<MetaOut, MetaError> {
+        let want = self.ast.types.canonical(tc.without_quals());
+        let convs: Vec<DeclId> =
+            self.ast.members(c).filter(|&m| self.kind_of(m) == DeclKind::CXXConversion).collect();
+        for conv in convs {
+            let Some(kiln_ast::lambda::ClosureThunk::Conversion { target }) =
+                self.ast.closure_thunk(conv)
+            else {
+                continue;
+            };
+            let Some(ft) = self.ast.decls.get(target).ty() else { continue };
+            let ft = self.unqual(ft);
+            let Some(w) = self.ast.types.pointee(want).map(|q| self.ast.types.canonical(q)) else {
+                continue;
+            };
+            if w != ft && !self.same_but_noexcept(w, ft) {
+                continue;
+            }
+            self.define_lambda_conversion(conv, loc);
+            return self.extract_function(r, target, tc, loc);
         }
         self.mismatch(r, tc, loc)
     }

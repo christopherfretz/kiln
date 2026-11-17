@@ -998,7 +998,9 @@ binary operator (has 3 parameters)"), each pinned by a 068b test. The
 Per operand, a `BuiltinTypeSet` is built from the operand's type and its
 class's memoized `ConvTypeSet`: pointer types (with the cv variants
 [over.built] needs), member pointers, enums, `has_arithmetic`,
-`has_nullptr`. Candidates are emitted per [over.built]/3–25 in **clang's
+`has_nullptr`, `meta_info` (`bool operator==(info, info)` and `!=`,
+[over.built]/16; WP-1537: a defaulted `==` comparing an `info` member,
+CWG3153). Candidates are emitted per [over.built]/3–25 in **clang's
 `BuiltinOperatorOverloadBuilder` order**, which fixes note order. Promoted
 arithmetic order: float, double, long double, [`__float128` where
 `TargetTypes` has it — x86_64 yes, aarch64 no], int, long, long long,

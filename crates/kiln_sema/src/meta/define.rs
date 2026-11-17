@@ -250,6 +250,9 @@ impl Sema<'_, '_> {
         if name.is_none() && raw.bit_width.is_none() {
             return fail(loc, "neither 'name' nor 'bit_width' specified");
         }
+        if name.is_none() && raw.annotations != 0 {
+            return fail(loc, "'annotations' specified without a 'name'");
+        }
         if raw.alignment.is_some() && raw.bit_width.is_some() {
             return fail(loc, "both 'alignment' and 'bit_width' specified");
         }
@@ -313,10 +316,10 @@ impl Sema<'_, '_> {
     }
 
     /// The `annotations` of the options just read (P3394R4; GCC 16.1):
-    /// each must have a type ("reflection does not have a type"), and
-    /// stands for its constant (`constant_of`: a variable or object is
-    /// its value, an annotation its underlying constant). The constants'
-    /// list, interned (0 when there are none).
+    /// each must have a non-array object type ([meta.reflection.define.
+    /// aggregate]), and stands for its constant (`constant_of`: a
+    /// variable or object is its value, an annotation its underlying
+    /// constant). The constants' list, interned (0 when there are none).
     fn dms_annotations(
         &mut self,
         oven: &mut Oven,
@@ -331,13 +334,25 @@ impl Sema<'_, '_> {
         let mut out = Vec::with_capacity(args.len());
         for r in args {
             let x = self.ast.reflections.get(r);
+            // [meta.reflection.define.aggregate]: `type_of(r)` represents
+            // a non-array object type.
+            let Some(t) = self.type_of_reflectee(x) else {
+                return fail(loc, "reflection does not have a type");
+            };
+            let ct = self.ast.types.canonical(t);
+            let types = &self.ast.types;
+            if types.is_reference(ct)
+                || types.is_function(ct)
+                || types.is_void(ct)
+                || types.is_array(ct)
+            {
+                let shown = self.ty_str(t);
+                return fail(loc, format!("'{shown}' is not a non-array object type"));
+            }
             let c = match x {
                 Reflectee::Value(_) => r,
                 Reflectee::Object(_) if self.class_constant(r).is_some() => r,
                 Reflectee::Annotation(a) => self.annotation_constant(a, loc)?,
-                _ if self.type_of_reflectee(x).is_none() => {
-                    return fail(loc, "reflection does not have a type");
-                }
                 _ => self.reflect_constant_of(r, ctx, oven)?,
             };
             out.push(c);

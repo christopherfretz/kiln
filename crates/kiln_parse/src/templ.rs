@@ -1233,14 +1233,21 @@ impl Parser<'_, '_> {
         } else if self.at_splice()
             && let Some(end) = self.splice_spec_end(self.pos())
             && self.at_template_arg_end(end)
+            && !matches!(
+                Self::punct_of(self.tok_at(end)),
+                Some(Punct::GreaterEqual | Punct::GreaterGreaterEqual)
+            )
         {
             // [temp.names]/1 (P2996): a splice-specifier (or
             // splice-specialization-specifier) forming the whole
             // template-argument is ill-formed; it must be written
             // `typename [:r:]`, `template [:r:]` or `([:r:])`. A splice
             // starting a longer argument (`[:r:] + 1`, `[:r:]::type`)
-            // takes the paths below. GCC 16.1 accepts `[:vt:]<2>` here;
-            // the draft does not (WP-830).
+            // takes the paths below, and so does one followed by `>=` or
+            // `>>=`: a single token that is an operator of the constant-
+            // expression ([lex.pptoken], [temp.names]/4 splits only `>>`).
+            // GCC 16.1 accepts `[:vt:]<2>` here; the draft does not
+            // (WP-830).
             let loc = self.loc();
             self.error_here(DiagId::parse_splice_template_arg_unparenthesized);
             while self.pos() < end && !self.at_eof() {

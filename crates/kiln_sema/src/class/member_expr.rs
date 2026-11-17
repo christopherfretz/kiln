@@ -2214,7 +2214,7 @@ impl Sema<'_, '_> {
 
     /// A prvalue class object `e` materialized to an xvalue
     /// ([conv.rval]) for a member access.
-    fn materialize_object(&mut self, e: ExprId) -> ExprId {
+    pub(crate) fn materialize_object(&mut self, e: ExprId) -> ExprId {
         let n = *self.ast.exprs.get(e);
         if n.value_category() != ValueCategory::PRValue
             || self.ast.types.as_record(n.ty()).is_none()

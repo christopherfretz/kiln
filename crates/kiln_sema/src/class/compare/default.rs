@@ -263,12 +263,14 @@ impl Sema<'_, '_> {
                 });
             }
         }
-        let cmp_params: Vec<DeclId> =
-            params.iter().copied().skip(usize::from(explicit_obj)).collect();
-        if cmp_params.len() != if is_method { 1 } else { 2 } {
+        if params.len() - usize::from(explicit_obj) != if is_method { 1 } else { 2 } {
             // Already diagnosed as an ill-formed operator declaration.
             return true;
         }
+        // [class.compare.default]/1: an explicit object parameter is the
+        // first of the two, so `(this C, C)` compares by value (clang
+        // `CheckExplicitlyDefaultedComparison` checks every parameter).
+        let cmp_params = params;
         let mut known: Option<QualType> = None;
         for &p in &cmp_params {
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
@@ -284,7 +286,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             let mut cty = pty;
-            let mut ok = !is_method;
+            let mut ok = !is_method || explicit_obj;
             let mut expected = rd.map(|r| self.class_type(r));
             if let TypeView::LValueRef(i) = self.ast.types.canonical_view(pty) {
                 cty = i;
