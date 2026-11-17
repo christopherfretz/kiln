@@ -120,6 +120,10 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_decomp_decl_spec, l).arg(arg);
             self.emit(msg);
         }
+        // [dcl.struct.bind]/1 allows no function specifier: `virtual`,
+        // `explicit` and `_Noreturn` as on any variable (clang reports
+        // them after the list above, from `ActOnVariableDeclarator`).
+        self.function_specifiers_on_object(ds, d, true);
         // [dcl.constexpr]/2: consteval only on a function (clang's
         // `err_constexpr_wrong_decl_kind`, as for any variable).
         if let Some(l) = ds.consteval {

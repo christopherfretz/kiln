@@ -215,11 +215,30 @@ impl Sema<'_, '_> {
         out
     }
 
-    /// `virtual`, `override` and `final` on a declarator that does not
-    /// declare a function ([dcl.fct.spec]/2, [class.mem.general]/7).
-    pub(crate) fn virtual_on_non_function(&mut self, ds: &DeclSpec, d: &Declarator) {
+    /// The function specifiers on a declarator that declares no function
+    /// (clang `DiagnoseFunctionSpecifiers`, spec/sema.md "Function
+    /// specifiers on an object"): `virtual` ([dcl.fct.spec]/2), then
+    /// `explicit` ([dcl.fct.spec]/3) when `explicit` is set, then C11
+    /// `_Noreturn`, each at its location; and `override` and `final`
+    /// ([class.mem.general]/7). The one check of a variable, a typedef,
+    /// a for-range-declaration and a structured binding declaration
+    /// (which may also be a for-range-declaration or the declaration of
+    /// an expansion statement); a condition's are the parser's
+    /// (`reject_type_name_specifiers`).
+    pub(crate) fn function_specifiers_on_object(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        explicit: bool,
+    ) {
         if let Some(l) = ds.virtual_ {
             self.error(DiagId::sema_virtual_not_member_fn, l);
+        }
+        if explicit && let Some(l) = ds.explicit {
+            self.error(DiagId::sema_explicit_non_function, l);
+        }
+        if let Some(l) = ds.noreturn {
+            self.error(DiagId::sema_noreturn_non_function, l);
         }
         for (at, kw) in [(d.virt_override, "override"), (d.virt_final, "final")] {
             if let Some(l) = at {

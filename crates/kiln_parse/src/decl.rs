@@ -245,6 +245,11 @@ impl Parser<'_, '_> {
         if self.take_fp_pragmas(FpAt::File) && (self.at(Punct::RBrace) || self.at_eof()) {
             return;
         }
+        if self.at_attrs_before_asm() {
+            self.parse_asm_decl_attrs(false);
+            self.parse_file_scope_asm();
+            return;
+        }
         self.discard_attrs_before_unattributed_decl();
         let loc = self.loc();
         activity::at(loc);
@@ -1271,21 +1276,52 @@ impl Parser<'_, '_> {
         }
         self.reject_friend_storage(&mut ds, thread_spelling.as_deref().unwrap_or("thread_local"));
         if ctx == DeclaratorContext::TypeName {
-            self.reject_type_name_storage(&mut ds);
+            self.reject_type_name_specifiers(&mut ds, false);
         }
         ds
     }
 
     /// A type-specifier-seq ([dcl.type.general]/1: a type-id, new-type-id,
-    /// conversion-type-id, condition; spec/sema.md [dcl.stc]) takes no
-    /// storage class (clang `ParseSpecifierQualifierList`,
-    /// `err_typename_invalid_storageclass`): reported at the storage class,
-    /// else at `thread_local`, and dropped.
-    pub(crate) fn reject_type_name_storage(&mut self, ds: &mut DeclSpec) {
+    /// conversion-type-id, exception-declaration, C member; spec/parse.md
+    /// "Specifiers a type name rejects") takes no storage class, no
+    /// function specifier and no constexpr kind; a condition
+    /// ([stmt.pre]/5, `constexpr` allowed) the same. clang
+    /// `ParseSpecifierQualifierList`: `err_typename_invalid_storageclass`
+    /// at the storage class (else `thread_local`), then
+    /// `err_typename_invalid_functionspec` at `inline`, `virtual`,
+    /// `explicit`, `_Noreturn` in that order, then
+    /// `err_typename_invalid_constexpr`; each specifier is dropped.
+    pub(crate) fn reject_type_name_specifiers(&mut self, ds: &mut DeclSpec, condition: bool) {
         if let Some(l) = ds.storage.map(|(_, l)| l).or(ds.thread_local) {
             self.s.error(DiagId::parse_typename_storage_class, l);
             ds.storage = None;
             ds.thread_local = None;
+        }
+        if ds.inline.is_some()
+            || ds.virtual_.is_some()
+            || ds.explicit.is_some()
+            || ds.noreturn.is_some()
+        {
+            for l in [ds.inline.take(), ds.virtual_.take(), ds.explicit.take(), ds.noreturn.take()]
+                .into_iter()
+                .flatten()
+            {
+                self.s.error(DiagId::parse_typename_function_spec, l);
+            }
+            ds.explicit_expr = None;
+        }
+        if condition {
+            return;
+        }
+        for (at, kw) in [
+            (&mut ds.constexpr, "constexpr"),
+            (&mut ds.consteval, "consteval"),
+            (&mut ds.constinit, "constinit"),
+        ] {
+            if let Some(l) = at.take() {
+                let d = self.s.diag(DiagId::parse_typename_constexpr, l).arg(kw);
+                self.emit(d);
+            }
         }
     }
 

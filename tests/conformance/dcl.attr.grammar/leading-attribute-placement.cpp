@@ -3,7 +3,7 @@
 // [dcl.enum]/1, [temp.pre]/1: a leading attribute-specifier-seq is allowed
 // only where the grammar has one. Like clang 19, "an attribute list cannot
 // appear here" (attributes dropped) before a namespace, static_assert,
-// template, linkage-specification, asm-declaration, alias-declaration,
+// template, linkage-specification, alias-declaration,
 // namespace-alias and friend non-definition, at namespace scope, inside a
 // namespace, at block scope and in a member-specification; after the
 // class-name of a class-head (moved onto the class) or after `final`
@@ -26,7 +26,7 @@
 //@ diag: 104:1 error "'alignas' attribute only applies to variables, data members and tag types"
 //@ diag: 105:1 error "an attribute list cannot appear here"
 //@ diag: 106:1 error "an attribute list cannot appear here"
-//@ diag: 107:1 error "an attribute list cannot appear here"
+// line 107: an attributed asm-declaration is valid (CWG2262), dcl.asm/attributes-namespace-scope.cpp
 //@ diag: 108:1 error "an attribute list cannot appear here"
 //@ diag: 109:3 warning "'nodiscard' attribute only applies to Objective-C methods, enums, structs, unions, classes, functions, function pointers, and typedefs [-Wignored-attributes]"
 //@ diag: 110:1 error "an attribute list cannot appear here"
@@ -45,7 +45,7 @@
 //@ diag: 123:1 warning "ISO C++ does not allow an attribute list to appear here [-Wcxx-attribute-extension]"
 //@ diag: 123:1 error "'alignas' attribute only applies to variables, data members and tag types"
 //@ diag: 124:1 error "an attribute list cannot appear here"
-//@ diag: 125:1 error "an attribute list cannot appear here"
+// line 125: an attributed asm-declaration is valid (CWG2262), dcl.asm/attributes-namespace-scope.cpp
 //@ diag: 126:1 error "an attribute list cannot appear here"
 //@ diag: 127:21 error "misplaced attributes; expected attributes here"
 //@ diag: 128:1 error "an attribute list cannot appear here"
@@ -104,7 +104,7 @@ alignas(4) using namespace N;
 alignas(4) using N::f;
 [[nodiscard]] template <class T> void tf();
 [[nodiscard]] extern "C" { }
-[[nodiscard]] asm("");
+asm("");
 [[nodiscard]] namespace NA = N;
 [[nodiscard]];
 [[nodiscard]] template <> struct N::ST<int> {};
@@ -122,7 +122,7 @@ alignas(8) using X0 = int;
 [[nodiscard]] using N::f;
 alignas(4) using N::f;
 [[nodiscard]] template <class T> void tf();
-[[nodiscard]] asm("");
+asm("");
 [[nodiscard]] namespace NA = N;
 [[nodiscard]] struct S1 {};
 [[nodiscard]] extern "C" { }
