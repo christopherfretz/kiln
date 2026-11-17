@@ -1672,6 +1672,9 @@ literal is one instruction and one step, not an interpreted loop.
   | `ffs`, `ffsl`, `ffsll` | yes | `bi::INT_OP`/`FFS`: 0 for 0, else trailing zeros + 1 |
   | `parity`, `parityl`, `parityll` | yes | `INT_OP`/`PARITY`: popcount mod 2 |
   | `clrsb`, `clrsbl`, `clrsbll` | yes | `INT_OP`/`CLRSB`: redundant sign bits (width − significant bits) |
+  | GCC's `ffsg`, `parityg`, `clrsbg` (WP-1552) | yes | as `ffs`/`parity`/`clrsb` at the operand's width (up to 128 bits) |
+  | GCC's `assoc_barrier` (WP-1552) | yes | the operand's value (a vector through `vec_regs`) |
+  | GCC's `speculation_safe_value` (WP-1552) | no | trap, as GCC: never a constant |
   | `bitreverse8`..`64` | yes | `INT_OP`/`BITREVERSE` |
   | `rotateleft8`..`64`, `rotateright8`..`64` | yes | `INT_OP`/`ROTL`/`ROTR`: amount (unsigned) modulo the width |
   | `bcmp` | yes | `MEMCMP` sub 0 (as `memcmp`; the unsupported note names `'__builtin_bcmp'`) |
@@ -1824,7 +1827,11 @@ literal is one instruction and one step, not an interpreted loop.
   the input vectors; index of -1 found at position N is not permitted in
   a constexpr context`, which clang emits as an error-level note
   (`Note::is_error`, spec/diag.md §6). The two-argument mask form is not
-  a constant (generic note; clang 19 crashes on it). The `*f128` builtins with a `long double` twin
+  a constant (generic note; clang 19 crashes on it). GCC's mixed-length
+  form (WP-1548) concatenates the same way, the bound the sum of the two
+  lane counts. GCC's `__builtin_shuffle` (WP-1548, `vec_gcc_shuffle`)
+  reads lane `mask[i] mod N` (or `mod 2N`, `v0` then `v1`) of the
+  operands' objects at run time, so a mask need not be constant. The `*f128` builtins with a `long double` twin
   evaluate as the twin (quad-precision `softfloat` arithmetic), and so
   do the GCC `_FloatN` constants libstdc++ `<limits>` names
   (`__builtin_{huge_val,inf,nan,nans}f{16,32,64}`, `__builtin_nansf16b`;

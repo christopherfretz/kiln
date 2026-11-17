@@ -2831,3 +2831,43 @@ fn debug_source_checksum_off() {
     assert!(obj(&off, "one") == obj(&off, "two"), "objects differ with the checksum off");
     assert!(obj(&[], "one") != obj(&[], "two"), "objects equal with the checksum on");
 }
+
+/// GCC's builtins clang lacks, so no corpus IR test can compare them
+/// (WP-1548, WP-1552): `__builtin_speculation_safe_value` emits the
+/// target's speculation barrier (`x86_64` `lfence`, `AArch64` `isb; dsb sy`,
+/// as GCC 16.1), `__builtin_assoc_barrier` an `llvm.arithmetic.fence` on
+/// floating point, and a variable-mask `__builtin_shuffle` of 16 bytes
+/// one `pshufb` (`SSSE3`) / `tbl` at -O2.
+#[test]
+fn gcc_only_builtins_codegen() {
+    if !tools() {
+        return;
+    }
+    let d = scratch("gcc-only-builtins");
+    std::fs::write(
+        d.join("b.cpp"),
+        "typedef unsigned char v16 __attribute__((vector_size(16)));\n\
+         long g(long x) { return __builtin_speculation_safe_value(x, 0L); }\n\
+         double h(double a, double b, double c) { return __builtin_assoc_barrier(a + b) + c; }\n\
+         v16 s(v16 a, v16 m) { return __builtin_shuffle(a, m); }\n",
+    )
+    .unwrap();
+    for (t, bar, perm) in [
+        ("x86_64-linux-gnu", &["lfence"][..], "pshufb"),
+        ("aarch64-linux-gnu", &["isb", "dsb\tsy"][..], "tbl"),
+    ] {
+        let tgt = format!("--target={t}");
+        let o = kiln_in(&d, &[&tgt, "-O2", "-ffast-math", "-S", "-emit-llvm", "-o", "-", "b.cpp"]);
+        let ll = text(&o.stdout);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+        assert!(ll.contains("call fast double @llvm.arithmetic.fence.f64("), "{ll}");
+        let isa: &[&str] = if t.starts_with("x86") { &["-mssse3"] } else { &[] };
+        let o = kiln_in(&d, &[&[&tgt[..], "-O2", "-S", "-o", "-", "b.cpp"][..], isa].concat());
+        let s = text(&o.stdout);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+        for b in bar {
+            assert!(s.contains(&format!("\t{b}")), "{t}: {b}\n{s}");
+        }
+        assert!(s.contains(&format!("\t{perm}\t")), "{t}: {perm}\n{s}");
+    }
+}

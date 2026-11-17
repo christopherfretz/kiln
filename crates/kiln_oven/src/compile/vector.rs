@@ -66,7 +66,16 @@ impl Compiler<'_> {
             k if k.is_cast() => {
                 matches!(ast.exprs.cast_kind(e), CastKind::VectorSplat | CastKind::BitCast)
             }
-            ExprKind::CallExpr => self.elementwise_call(e).is_some(),
+            ExprKind::CallExpr => {
+                self.elementwise_call(e).is_some()
+                    || matches!(
+                        self.direct_builtin(e),
+                        Some(
+                            kiln_ast::decl::builtin::SHUFFLE
+                                | kiln_ast::decl::builtin::ASSOC_BARRIER
+                        )
+                    )
+            }
             _ => false,
         }
     }
@@ -75,6 +84,20 @@ impl Compiler<'_> {
     /// `e` names directly, if any.
     pub(super) fn elementwise_call(&self, e: ExprId) -> Option<u32> {
         use kiln_ast::decl::builtin as id;
+        self.direct_builtin(e).filter(|&b| {
+            matches!(
+                b,
+                id::ELEMENTWISE_ABS
+                    | id::ELEMENTWISE_MAX
+                    | id::ELEMENTWISE_MIN
+                    | id::ELEMENTWISE_ADD_SAT
+                    | id::ELEMENTWISE_SUB_SAT
+            )
+        })
+    }
+
+    /// The builtin that call `e` names directly, if any.
+    fn direct_builtin(&self, e: ExprId) -> Option<u32> {
         let ast = self.ast();
         let mut c = skip_parens(ast, ast.exprs.callee(e));
         while ast.exprs.get(c).kind().is_cast()
@@ -88,16 +111,7 @@ impl Compiler<'_> {
         if ast.exprs.get(c).kind() != ExprKind::DeclRefExpr {
             return None;
         }
-        ast.decls.builtin_id(ast.exprs.decl(c)).filter(|&b| {
-            matches!(
-                b,
-                id::ELEMENTWISE_ABS
-                    | id::ELEMENTWISE_MAX
-                    | id::ELEMENTWISE_MIN
-                    | id::ELEMENTWISE_ADD_SAT
-                    | id::ELEMENTWISE_SUB_SAT
-            )
-        })
+        ast.decls.builtin_id(ast.exprs.decl(c))
     }
 
     /// `__builtin_elementwise_abs` / `max` / `min` of the canonical
@@ -380,6 +394,15 @@ impl Compiler<'_> {
             ExprKind::ConditionalOperator => self.vec_cond(e, n),
             ExprKind::ShuffleVectorExpr => self.vec_shuffle(e),
             ExprKind::ExtVectorElementExpr => self.ext_elt_regs(e),
+            // WP-1552: `__builtin_assoc_barrier(v)` is `v`.
+            ExprKind::CallExpr
+                if self.direct_builtin(e) == Some(kiln_ast::decl::builtin::ASSOC_BARRIER) =>
+            {
+                let ast = self.ast();
+                let x = ast.lists.get(ast.exprs.call_args(e))[0];
+                self.vec_regs(ExprId::new(x))
+            }
+            ExprKind::CallExpr if self.elementwise_call(e).is_none() => self.vec_gcc_shuffle(e),
             ExprKind::CallExpr => self.vec_elementwise(e, elem),
             _ => {
                 let op = self.ast().exprs.operand(e);
@@ -478,6 +501,77 @@ impl Compiler<'_> {
                     out.push(lanes.first().copied().unwrap_or_else(|| self.reg()));
                 }
             }
+        }
+        out
+    }
+
+    /// GCC's `__builtin_shuffle(a[, b], mask)` (WP-1548; GCC folds a
+    /// `VEC_PERM_EXPR` of constants): lane `k` is lane `mask[k] mod t` of
+    /// `a` then `b` (`t` lanes in all), read from the operands' objects
+    /// at the reduced index.
+    fn vec_gcc_shuffle(&mut self, e: ExprId) -> Vec<u32> {
+        let ast = self.ast();
+        let args: Vec<ExprId> =
+            ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
+        let (Some(&a), Some(&m)) = (args.first(), args.last()) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let b = (args.len() == 3).then(|| args[1]);
+        let (vt, mty) = (self.ety(a), self.ety(m));
+        let (Some((elem, n)), Some((me, _))) = (self.lanes(vt), self.lanes(mty)) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let Some((w, _)) = int_of(self.kind(me)) else {
+            self.unsupported(e);
+            return Vec::new();
+        };
+        let ia = int_aux(w as u8, false);
+        let pa = self.vec_addr(a);
+        let pb = b.map(|b| self.vec_addr(b));
+        let mask = self.vec_regs(m);
+        let t = if pb.is_some() { 2 * n } else { n };
+        let loc = self.begin(e);
+        let kt = self.reg();
+        let kn = self.reg();
+        if t.is_power_of_two() {
+            self.konst(kt, u128::from(t - 1));
+        } else {
+            self.konst(kt, u128::from(t));
+        }
+        self.konst(kn, u128::from(n));
+        let mut out = Vec::with_capacity(mask.len());
+        for &mk in &mask {
+            let idx = self.reg();
+            let op = if t.is_power_of_two() { Op::IAnd } else { Op::IRem };
+            self.emit(op, ia, &[idx, mk, kt]);
+            let d = self.reg();
+            out.push(d);
+            let mark = self.next;
+            let load = |s: &mut Self, p: u32, i: u32| {
+                let q = s.reg();
+                s.emit_ptr_add(ia, &[q, p, i, elem.0], e);
+                let r = s.reg();
+                s.emit_site(Op::Load, ak::READ, &[r, q, elem.0], e, loc);
+                s.emit(Op::Mov, 0, &[d, r]);
+            };
+            let Some(pb) = pb else {
+                load(self, pa, idx);
+                self.next = mark;
+                continue;
+            };
+            let c = self.reg();
+            self.emit(Op::ICmp, ia | cmp::LT << 9, &[c, idx, kn]);
+            let j = self.jmp_if(c, false);
+            load(self, pa, idx);
+            let end = self.jmp();
+            self.patch_here(j);
+            let hi = self.reg();
+            self.emit(Op::ISub, ia, &[hi, idx, kn]);
+            load(self, pb, hi);
+            self.patch_here(end);
+            self.next = mark;
         }
         out
     }

@@ -340,9 +340,9 @@ fn math_op(b: u32) -> Option<u32> {
 /// The `bi::INT_OP` operation of the GCC integer builtin `b` (WP-150).
 fn int_op(b: u32) -> Option<u32> {
     Some(match b {
-        id::FFS | id::FFSL | id::FFSLL => bi::FFS,
-        id::PARITY | id::PARITYL | id::PARITYLL => bi::PARITY,
-        id::CLRSB | id::CLRSBL | id::CLRSBLL => bi::CLRSB,
+        id::FFS | id::FFSL | id::FFSLL | id::FFSG => bi::FFS,
+        id::PARITY | id::PARITYL | id::PARITYLL | id::PARITYG => bi::PARITY,
+        id::CLRSB | id::CLRSBL | id::CLRSBLL | id::CLRSBG => bi::CLRSB,
         id::BITREVERSE8 | id::BITREVERSE16 | id::BITREVERSE32 | id::BITREVERSE64 => bi::BITREVERSE,
         id::ROTATELEFT8 | id::ROTATELEFT16 | id::ROTATELEFT32 | id::ROTATELEFT64 => bi::ROTL,
         id::ROTATERIGHT8 | id::ROTATERIGHT16 | id::ROTATERIGHT32 | id::ROTATERIGHT64 => bi::ROTR,
@@ -1076,6 +1076,10 @@ impl Compiler<'_> {
             // clang: the value of the first operand (the expected value is
             // not evaluated).
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
+            // WP-1552: GCC's `__builtin_assoc_barrier(x)` is `x`;
+            // `__builtin_speculation_safe_value` is not constant (GCC).
+            id::ASSOC_BARRIER => self.rv_into(arg(0)?, dst),
+            id::SPECULATION_SAFE_VALUE => self.trap_loc(begin, INVALID.into()),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
             // WP-757: a P1494R5 checkpoint has no effect on constant

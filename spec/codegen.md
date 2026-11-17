@@ -787,7 +787,33 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       clang's `EmitShuffleVector` loop (`shuffle_by_mask`): the mask is
       ANDed with a splat of `NextPowerOf2(n - 1) - 1`, then each lane is
       an `extractelement` from the mask and from `v1`, then an
-      `insertelement` into a `poison` result. A `*f128` builtin with a `long
+      `insertelement` into a `poison` result. WP-1548: GCC's mixed-length
+      form (spec/sema.md §5.4) first widens the shorter operand to the
+      longer's lane count with `poison` lanes and remaps the second
+      operand's indices, then is one `shufflevector`
+      (`shuffle_mixed`). GCC's `__builtin_shuffle` (`gcc_shuffle`): a
+      constant mask is one `shufflevector` of the reduced indices; a
+      variable one is reduced (`and` with `N - 1` for a power-of-two
+      count, else `urem`) and permuted lane by lane (`extractelement`
+      / `insertelement`); with two operands, both are permuted by the
+      index mod `N` and a `select` on the index's `N` bit picks the lane
+      (-O2 on a 16-byte vector: `pshufb` with SSSE3, `tbl` on AArch64).
+      WP-1552: `__builtin_speculation_safe_value(v[, f])` evaluates `v`,
+      then `f` (side effects only), then emits GCC 16.1's speculation
+      barrier, `llvm.x86.sse2.lfence` on x86-64 (`lfence`) and
+      `llvm.aarch64.isb(15)` + `llvm.aarch64.dsb(15)` on AArch64 (`isb;
+      dsb sy`), and yields `v`. LLVM has no value-level speculation
+      intrinsic; the barrier stops all speculative execution past the
+      call, which is what GCC's targets do without a cheaper mechanism.
+      `__builtin_assoc_barrier(x)` is `llvm.arithmetic.fence` on a
+      floating (or floating-vector) `x`, as clang's
+      `__arithmetic_fence`, so `-ffast-math` reassociation does not move
+      operations across it (the operations inside `x` still carry the
+      fast-math flags, as in GCC, whose barrier also only separates
+      `x` from its surroundings); other types are `x` itself.
+      `__builtin_ffsg` / `clrsbg` / `parityg` share the fixed-width
+      builtins' lowering at the operand's width. Tests:
+      `kiln_driver/tests/codegen.rs` `gcc_only_builtins_codegen`. A `*f128` builtin with a `long
       double` twin (`builtin::f128_twin`) is lowered as the twin on its
       `fp128` operands (intrinsic or constant); `roundevenf128` is
       `llvm.roundeven`; the others call the function of the builtin's

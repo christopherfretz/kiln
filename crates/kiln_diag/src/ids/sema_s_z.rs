@@ -7,6 +7,12 @@ sema_selectany_non_extern_data = Error (0) "'selectany' can only be applied to d
 sema_shadow_field = WarningOff [ShadowField] (4) "{3:parameter|non-static data member} {0} {3:|of {1} }shadows member inherited from type {2}";
 sema_shift_gt_typewidth = Warning [ShiftCountOverflow] (0) "shift count >= width of type";
 sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative";
+sema_shuffle_mask = Error (2) "mask argument to '__builtin_shuffle' must be a vector of integers with as many elements as {1}, each of the same size ({0} invalid)";
+// WP-1548: GCC's `__builtin_shuffle` (GCC "'__builtin_shuffle' arguments
+// must be vectors", "... last argument must be an integer vector", "...
+// number of elements ... should be the same", "... inner type must have
+// the same size as inner type of the mask"), in clang's style.
+sema_shuffle_non_vector = Error (1) "{0:first argument|first two arguments} to '__builtin_shuffle' must be {0:a vector|vectors}";
 sema_shufflevector_argument_too_large = Error (0) "index for __builtin_shufflevector must be less than the total number of vector elements";
 sema_shufflevector_incompatible_vec = Error (1) "first two arguments to '{0}' must have the same type";
 sema_shufflevector_non_vector = Error (1) "first two arguments to '{0}' must be vectors";
@@ -44,6 +50,9 @@ sema_spec_redecl_global_scope = Error (2) "{0:class template|class template part
 sema_spec_redecl_out_of_class_scope = Error (3) "{0:class template|class template partial|variable template|variable template partial|function template|member function|static data member|member class|member enumeration} specialization of '{1}' not in class '{2}' or an enclosing namespace";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
 sema_specialization_not_primary_template = Error (2) "cannot reference member of primary template because deduced class template specialization {0} is {1:instantiated from a partial|an explicit} specialization";
+// WP-1552: GCC's `__builtin_speculation_safe_value` ("both arguments must
+// be compatible"), in clang's style.
+sema_speculation_safe_value_mismatch = Error (2) "second argument to '__builtin_speculation_safe_value' must have the type of the first, or both must be pointers ({0} vs {1})";
 // [expr.prim.id.qual]/2 (WP-474)
 sema_splice_declarative_scope = Error (0) "a splice-scope-specifier cannot be used in a declarative nested-name-specifier";
 // [namespace.udir]/1 (WP-474)

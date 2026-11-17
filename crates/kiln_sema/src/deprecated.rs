@@ -78,6 +78,13 @@ impl Sema<'_, '_> {
         if let Some(a) = self.find_attr(self.ast.latest(d), kind) {
             return Some(a);
         }
+        if self.kind_of(d) == DeclKind::EnumConstant {
+            // An enumerator of a member enumeration of a class template
+            // specialization has its pattern's (clang `InstantiateAttrs` in
+            // `TemplateDeclInstantiator::VisitEnumConstantDecl`; WP-1552).
+            let from = self.ast.instantiated_from(d)?;
+            return self.find_attr(self.ast.latest(from), kind);
+        }
         if self.ast.decls.var(d).is_some() {
             // An implicit or explicitly instantiated variable template
             // specialization has its pattern's (the primary template's

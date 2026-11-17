@@ -5763,6 +5763,14 @@ pub mod builtin {
         row(POWIF, "__builtin_powif", "ffi", N | C | F),
         row(POWIL, "__builtin_powil", "LdLdi", N | C | F),
         row(SHUFFLEVECTOR, "__builtin_shufflevector", "v.", N | C | T),
+        // WP-1548.
+        row(SHUFFLE, "__builtin_shuffle", "v.", N | C | T),
+        // WP-1552.
+        row(SPECULATION_SAFE_VALUE, "__builtin_speculation_safe_value", "v.", N | T),
+        row(ASSOC_BARRIER, "__builtin_assoc_barrier", "v.", N | C | T),
+        row(CLRSBG, "__builtin_clrsbg", "i.", N | C | T),
+        row(FFSG, "__builtin_ffsg", "i.", N | C | T),
+        row(PARITYG, "__builtin_parityg", "i.", N | C | T),
         row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
         row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C | F),
         row(IS_WITHIN_LIFETIME, "__builtin_is_within_lifetime", "bv*", N | T | I),
@@ -6027,6 +6035,43 @@ pub mod builtin {
     pub const SUB_OVERFLOW_P: u32 = 2466;
     /// `__builtin_mul_overflow_p` (as [`ADD_OVERFLOW_P`]).
     pub const MUL_OVERFLOW_P: u32 = 2467;
+    // ---- WP-1548 (GCC's vector shuffle; clang 22 has none).
+    /// `__builtin_shuffle(v, mask)` / `__builtin_shuffle(v0, v1, mask)`
+    /// (GCC "Vector Extensions"; custom type-checking): lane `i` of the
+    /// result is lane `mask[i] % N` of `v` (`% 2N` of `v0` then `v1`);
+    /// `mask` an integer vector with the operands' lane count and lane
+    /// size, not necessarily constant. The result has the operands' type.
+    /// `__has_builtin` answers clang's 0 ([`EXIT`]). Kiln-private id.
+    pub const SHUFFLE: u32 = 2468;
+    // ---- WP-1552 (GCC builtins clang 22 lacks; `__has_builtin` answers
+    // clang's 0, as for [`EXIT`]).
+    /// `T __builtin_speculation_safe_value(T val[, T failval])` (GCC;
+    /// custom type-checking): `val` (an integer or pointer), computed
+    /// before a full speculation barrier, so that no later instruction
+    /// runs speculatively with it: `x86_64` `lfence`, `AArch64` `isb; dsb sy`
+    /// (GCC's `speculation_barrier` on both). `failval` is evaluated for
+    /// its side effects only. Never a constant expression (GCC). Kiln-
+    /// private id.
+    pub const SPECULATION_SAFE_VALUE: u32 = 2469;
+    /// `T __builtin_assoc_barrier(T x)` (GCC; custom type-checking): `x`,
+    /// across which `-ffast-math` must not reassociate (a floating `x`
+    /// goes through `llvm.arithmetic.fence`); a constant expression when
+    /// `x` is. Kiln-private id.
+    pub const ASSOC_BARRIER: u32 = 2470;
+    /// `int __builtin_clrsbg(x)` (GCC; custom type-checking): the leading
+    /// redundant sign bits of the signed integer `x` (any width, not
+    /// `bool` or an enumeration), as [`CLRSB`]. Kiln-private id.
+    pub const CLRSBG: u32 = 2471;
+    /// `int __builtin_ffsg(x)` (GCC; as [`CLRSBG`]): one plus the index of
+    /// the least significant set bit of `x`, 0 for 0, as [`FFS`].
+    pub const FFSG: u32 = 2472;
+    /// `int __builtin_parityg(x)` (GCC; custom type-checking): the parity
+    /// of the unsigned integer `x` (as [`POPCOUNTG`]'s operand), as
+    /// [`PARITY`].
+    pub const PARITYG: u32 = 2473;
+    /// `int __builtin_puts(const char *)` (GCC): a call of the library
+    /// `puts`; never a constant. Kiln-private id.
+    pub const PUTS: u32 = 2474;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[
@@ -6039,6 +6084,8 @@ pub mod builtin {
         row(FSCANF, "__builtin_fscanf", "iP*RcC*R.", F),
         row(VFSCANF, "__builtin_vfscanf", "iP*RcC*Ra", F),
         row(INDEX, "__builtin_index", "c*cC*i", N | F),
+        // WP-1552.
+        row(PUTS, "__builtin_puts", "icC*", F),
         row(RINDEX, "__builtin_rindex", "c*cC*i", N | F),
         row(STPCPY, "__builtin_stpcpy", "c*c*cC*", N | F),
         row(STPNCPY, "__builtin_stpncpy", "c*c*cC*z", N | F),

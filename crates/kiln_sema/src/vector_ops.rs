@@ -876,7 +876,9 @@ impl Sema<'_, '_> {
     /// `Sema::BuiltinShuffleVector`; WP-282): at least two arguments; `v1`
     /// and `v2` vectors of the same unqualified type; each index an
     /// integer constant `-1` (a poison lane) or below twice the element
-    /// count. The result has `v1`'s type when there are as many indices as
+    /// count. GCC also accepts vectors of the same element type and
+    /// different lengths (WP-1548): the indices then count over both
+    /// operands' lanes in turn. The result has `v1`'s type when there are as many indices as
     /// elements, else a `vector_size` vector of the element type. The
     /// operands stay unconverted, as in clang's AST; the folded indices
     /// ride along for codegen and the Oven. Errors are at `loc`, the
@@ -918,7 +920,15 @@ impl Sema<'_, '_> {
                 }
                 return self.builder().shuffle_vector(args, Some(&[]), res, loc, rparen);
             }
-            if !same {
+            // GCC's extension (WP-1548; clang requires the same type):
+            // vectors of the same element type and different lengths; the
+            // indices count over the concatenation of both, `-1` still a
+            // poison lane (GCC "Vector Extensions").
+            let gcc_mixed = !same
+                && l.count != r.count
+                && self.ast.types.canonical(l.elem).without_quals()
+                    == self.ast.types.canonical(r.elem).without_quals();
+            if !same && !gcc_mixed {
                 let d = self.diag(DiagId::sema_shufflevector_incompatible_vec, loc).arg(name());
                 self.emit(d);
                 return self.recover_err(args, loc);
@@ -933,7 +943,7 @@ impl Sema<'_, '_> {
                 };
                 res = self.ast.types.vector(l.elem, n, kind);
             }
-            count = Some(i128::from(l.count));
+            count = Some(i128::from(l.count) + i128::from(r.count));
         }
         let mut mask = Some(Vec::with_capacity(args.len() - 2));
         for &a in &args[2..] {
@@ -949,7 +959,7 @@ impl Sema<'_, '_> {
             let word = if v == -1 {
                 u32::MAX
             } else if let Some(n) = count
-                && (v < 0 || v >= 2 * n)
+                && (v < 0 || v >= n)
             {
                 self.error(DiagId::sema_shufflevector_argument_too_large, loc);
                 return self.recover_err(args, loc);
@@ -964,6 +974,75 @@ impl Sema<'_, '_> {
             mask = None;
         }
         self.builder().shuffle_vector(args, mask.as_deref(), res, loc, rparen)
+    }
+
+    /// GCC's `__builtin_shuffle(v, mask)` / `__builtin_shuffle(v0, v1,
+    /// mask)` (WP-1548; clang has no such builtin; GCC "Vector
+    /// Extensions", `c_build_vec_perm_expr`): two or three arguments after
+    /// the lvalue-to-rvalue conversion; the operands vectors of the same
+    /// unqualified type; `mask` an integer vector with as many lanes as
+    /// the operands and lanes of the same size, constant or not. The
+    /// result has the operands' type. GCC's errors in clang's style, at
+    /// the offending argument.
+    pub(crate) fn builtin_shuffle(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let (id, n) = match args.len() {
+            2 | 3 => (None, 0),
+            n if n < 2 => (Some(DiagId::sema_call_too_few_args_at_least), 2),
+            _ => (Some(DiagId::sema_call_too_many_args_at_most), 3),
+        };
+        if let Some(id) = id {
+            let msg = self.diag(id, rparen).arg(n).arg(args.len());
+            self.emit(msg);
+            return None;
+        }
+        let out: Vec<ExprId> = args.iter().map(|&a| conv::lvalue_to_rvalue(self, a)).collect();
+        let tys: Vec<QualType> = out.iter().map(|&a| self.ety(a)).collect();
+        if tys.iter().any(|&t| self.ast.types.canonical(t).without_quals() == QualType::ERROR) {
+            return None;
+        }
+        let (ops, mt) = tys.split_at(tys.len() - 1);
+        let mt = mt[0];
+        let Some(v) = self.vector_parts(ops[0]) else {
+            let at = self.begin_loc(out[0]);
+            let d = self.diag(DiagId::sema_shuffle_non_vector, at).arg(ops.len() - 1);
+            self.emit(d);
+            return None;
+        };
+        if let Some(&t1) = ops.get(1) {
+            if self.vector_parts(t1).is_none() {
+                let d = self.diag(DiagId::sema_shuffle_non_vector, self.begin_loc(out[1])).arg(1);
+                self.emit(d);
+                return None;
+            }
+            if self.ast.types.canonical(ops[0]).without_quals()
+                != self.ast.types.canonical(t1).without_quals()
+            {
+                let d = self
+                    .diag(DiagId::sema_shufflevector_incompatible_vec, self.begin_loc(out[0]))
+                    .arg("__builtin_shuffle");
+                self.emit(d);
+                return None;
+            }
+        }
+        let ok = self.vector_parts(mt).is_some_and(|m| {
+            m.count == v.count
+                && v.elem != QualType::BOOL
+                && self.has_integer_repr(mt)
+                && self.scalar_bits(m.elem).is_some()
+                && self.scalar_bits(m.elem) == self.scalar_bits(v.elem)
+        });
+        if !ok {
+            let (a, b) = self.ty_arg_pair(mt, ops[0]);
+            let at = self.begin_loc(out[out.len() - 1]);
+            let d = self.diag(DiagId::sema_shuffle_mask, at).arg(a).arg(b);
+            self.emit(d);
+            return None;
+        }
+        Some((out, ops[0]))
     }
 
     /// `__builtin_reduce_{add,mul,and,or,xor,min,max}(v)` (clang
