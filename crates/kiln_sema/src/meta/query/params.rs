@@ -89,18 +89,24 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// `variable_of(r)` (P3096): for a parameter of the function whose
-    /// definition encloses this evaluation, that definition's parameter
-    /// variable.
+    /// `variable_of(r)` (P3096): for a parameter of a function `F` whose
+    /// parameter scope is the innermost non-block scope of a point in the
+    /// evaluation context ([meta.reflection.queries], [expr.const.reflect]):
+    /// the point of the evaluation sema runs (`self.ctx`), or of the
+    /// manifestly constant-evaluated expression nested in it that runs
+    /// (`nested`, a constexpr local's initializer in `F`'s body; CWG3162),
+    /// that definition's parameter variable.
     pub(super) fn reflect_variable_of(
         &mut self,
         r: ReflectionId,
+        nested: Option<DeclId>,
         loc: Loc,
     ) -> Result<ReflectionId, MetaError> {
         let not_param =
             |loc| fail(loc, "reflection does not represent parameter of current function");
         let Reflectee::FnParam(f, i) = self.ast.reflections.get(r) else { return not_param(loc) };
-        let Some(cur) = self.enclosing_function(self.ctx) else { return not_param(loc) };
+        let point = nested.or_else(|| self.enclosing_function(self.ctx));
+        let Some(cur) = point else { return not_param(loc) };
         if !self.same_entity(cur, f) {
             return not_param(loc);
         }

@@ -3,7 +3,6 @@
 // each instantiation, also when members share a name (here the
 // placeholder `_`), and never by name lookup. Found running GCC's C++
 // testsuite.
-//@ xfail(kiln): WP-1613: substitution rebuilds a member access from a splice by name lookup (templ/subst/exprs.rs)
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc

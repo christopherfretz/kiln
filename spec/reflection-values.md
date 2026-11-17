@@ -55,7 +55,14 @@ shape, so a public name would claim the library template itself.
    a class value gives `Reflectee::Object` of the template parameter
    object of `const T` with that value, so `reflect_constant(K{1}) ==
    reflect_constant(K{1})` and both designate the object `C<K{1}>`
-   would name. A consteval-only `T` other than `info` is valid; an `info`
+   would name. A class whose copy constructors are not all trivial is
+   copied as [temp.arg.nontype]/4 copies a template argument, in a
+   nested evaluation (`Sema::lend_oven`): `constexpr T v = V;`, then the
+   object from `v`; the object must be template-argument-equivalent to
+   `v` (interned values equal) or the call fails with "a template
+   parameter object copied from a value of type 'T' is not
+   template-argument-equivalent to it" (a throw where caught, P3560),
+   and its value is `v`'s (WP-1614). A consteval-only `T` other than `info` is valid; an `info`
    operand is `ReflectConstantInfo` and gives a value reflection of type
    `info`.
 2. `reflect_object(o)`: `o` must designate an object with static storage
@@ -66,7 +73,10 @@ shape, so a public name would claim the library template itself.
    reflection of the function's entity (`Sema::entity_decl`), equal to
    `^^f`. An immediate function fails: a reference to it is not a
    constant expression ([expr.const]). GCC 16.1 accepts this; kiln
-   follows the IS.
+   follows the IS. A constexpr-unknown function reference (P2280, an
+   `extern` one) designates no function a template argument could name:
+   the call fails, a throw where caught, as `reflect_object` of a
+   constexpr-unknown object reference (WP-1614).
 4. `reflect_constant_string(r)` / `reflect_constant_array(r)`: the
    element type must be structural (arrays are peeled to their innermost
    element); characters for the string form, which appends a null

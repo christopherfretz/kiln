@@ -147,6 +147,13 @@ pub(crate) struct RunState {
     /// evaluation that asked for it, false in every other (nested ones
     /// included); read through [`crate::Oven::plain`].
     pub plain: bool,
+    /// The innermost constexpr local's initializer running in this
+    /// evaluation, a manifestly constant-evaluated expression nested in
+    /// it ([expr.const.reflect], CWG3162): 1 + the index in `stack` of
+    /// the frame whose body holds it (its point of evaluation is in that
+    /// function), 0 if none. Saved and restored with `plain` by
+    /// `Op::IsConstEval`.
+    pub nested_frame: u32,
     /// The evaluation checks for undefined behaviour
     /// ([`crate::Oven::fold_for_overflow`]): a signed `+`, `-`, `*` or
     /// negation that overflows yields its wrapped value and is recorded
@@ -1273,8 +1280,14 @@ impl Oven {
                     } else {
                         let v = reg!(0) as u64;
                         let p = Ptr::decode(v);
-                        if v == 0 || !p.is_fn() {
+                        if v == 0 {
                             fail!(Fault::NullCallee);
+                        }
+                        // The unspecified function a constexpr-unknown
+                        // reference binds (`Oven::bind_unknown`): clang's
+                        // invalid subexpression, folded into the error.
+                        if !p.is_fn() {
+                            fail!(Fault::Invalid);
                         }
                         // A function pointer a fold cast (`Op::Cce`): clang
                         // calls none whose type differs from the callee's.
@@ -2003,9 +2016,14 @@ impl Oven {
                 } else if aux & 4 != 0 {
                     // A constexpr local's initializer: its own
                     // evaluation, never plainly (spec/consteval-blocks.md §3).
-                    reg!(0) = u128::from(std::mem::take(&mut self.run.plain));
+                    let saved = u128::from(std::mem::take(&mut self.run.plain))
+                        | u128::from(self.run.nested_frame) << 1;
+                    reg!(0) = saved;
+                    self.run.nested_frame = self.stack.len() as u32;
                 } else if aux & 8 != 0 {
-                    self.run.plain = reg!(0) != 0;
+                    let saved = reg!(0);
+                    self.run.plain = saved & 1 != 0;
+                    self.run.nested_frame = (saved >> 1) as u32;
                 } else if aux & 16 != 0 {
                     // `if consteval` ([stmt.if]/4).
                     reg!(0) = u128::from(self.run.const_context);

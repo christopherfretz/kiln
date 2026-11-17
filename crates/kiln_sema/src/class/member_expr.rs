@@ -2741,7 +2741,12 @@ impl Sema<'_, '_> {
             return Some(x);
         }
         let extra = self.ast.exprs.decl_ref_extra(x).copied();
-        Some(self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra))
+        let r = self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, n.loc(), extra);
+        // A member splice stays one (substituted from its member).
+        if n.has(ExprFlags::SPLICED) {
+            self.ast.exprs.set_member_spliced(r);
+        }
+        Some(r)
     }
 
     /// `l .* r` / `l ->* r` ([expr.mptr.oper]).

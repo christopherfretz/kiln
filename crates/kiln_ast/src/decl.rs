@@ -2404,6 +2404,12 @@ impl DeclArena {
         self.cold.binding_var.get(b).copied()
     }
 
+    /// True if `h` is the holding variable of a tuple-like `Binding`. A
+    /// scan of every binding: callers test cheaper conditions first.
+    pub fn is_holding_var(&self, h: DeclId) -> bool {
+        self.cold.binding_var.iter().any(|(_, &x)| x == h)
+    }
+
     /// The base class's `ConstructorUsingShadow` that shadow `s` was made
     /// from (the nominated base inherited the constructor too).
     pub fn ctor_shadow_nominated(&self, s: DeclId) -> Option<DeclId> {

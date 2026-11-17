@@ -300,7 +300,8 @@ fields used by fewer than ~5% of decls of a kind go there.
   `DeclArena::set_decomp_bindings(v, list, bindings)` and
   `set_binding(b, expr, holding)` write them; `decomp_bindings`,
   `is_decomposition`, `binding_decomp`, `binding_expr` and
-  `binding_var` read them. `AstBuilder::binding(head)` creates a
+  `binding_var` read them; `is_holding_var(h)` scans `binding_var` (the
+  Oven's test of a temporary it extends, after cheaper ones). `AstBuilder::binding(head)` creates a
   `Binding` (type set later by sema), `set_decomposition(v, bindings)`
   links them, and `holding_var(head, ty, spec)` creates the implicit
   (`implicit`) `Var` a tuple-like binding refers to: a member of its

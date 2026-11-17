@@ -275,6 +275,10 @@ impl ExprFlags {
     pub const NAMES_CLOSURE_COPY: ExprFlags = ExprFlags(1 << 4);
     /// `CallExpr`: the callee was found by ADL.
     pub const ADL: ExprFlags = ExprFlags(1 << 5);
+    /// `MemberExpr`: written as a member splice `x.[: r :]`
+    /// ([expr.ref]/7): it designates its member, so substitution maps the
+    /// member and never looks its name up again.
+    pub const SPLICED: ExprFlags = ExprFlags(1 << 5);
     /// `DeclRefExpr` / `MemberExpr` / `CXXConstructExpr` /
     /// `CXXTemporaryObjectExpr`: overload resolution chose among several
     /// candidates.
@@ -1994,6 +1998,17 @@ impl ExprArena {
             n.kind
         );
         n.bits |= ExprFlags::ADL.0;
+    }
+
+    /// Marks the `MemberExpr` `e` as written as a member splice
+    /// ([`ExprFlags::SPLICED`]).
+    ///
+    /// # Panics
+    /// If `e` is not a `MemberExpr`.
+    pub fn set_member_spliced(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::MemberExpr, "expected a member access, found {:?}", n.kind);
+        n.bits |= ExprFlags::SPLICED.0;
     }
 
     /// Makes the prefix `++`/`--` `e` a prvalue: C17 6.5.3.1p2 defines

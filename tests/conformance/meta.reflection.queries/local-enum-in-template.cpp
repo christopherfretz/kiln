@@ -3,7 +3,6 @@
 // one enumeration in each instantiation; is_enumerable_type is false
 // inside its own enumerator list and true after it. Found running GCC's
 // C++ testsuite.
-//@ xfail(kiln): WP-1613: instantiating a local opaque enum then its definition redefines its enumerators (templ/)
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc

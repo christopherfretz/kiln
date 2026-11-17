@@ -582,7 +582,19 @@ impl Sema<'_, '_> {
                 // Not a qualified-id: a virtual function is called
                 // virtually ([expr.call]/2; the [dcl.contract.func]
                 // example's `x1ref.[:^^X1::f:]()`).
-                self.member_of_object(b, obj_ty, def, arrow, d, None, None, open)
+                let r = self.member_of_object(b, obj_ty, def, arrow, d, None, None, open);
+                // In a template the access is substituted from the member
+                // it designates, not from its name (WP-1613). A member of
+                // an anonymous union or struct is reached through its
+                // unnamed object, whose class has that one member of the
+                // name: the chain is substituted as a name's.
+                if self.in_template()
+                    && self.kind_of(d) != DeclKind::IndirectField
+                    && self.ast.exprs.get(r).kind() == ExprKind::MemberExpr
+                {
+                    self.ast.exprs.set_member_spliced(r);
+                }
+                r
             }
             Reflectee::BaseSpec(derived, i) if self.qualifier_names_base(derived, def) => {
                 let q = self.ast.types.effective_quals(obj_ty);
@@ -748,14 +760,14 @@ impl Sema<'_, '_> {
             // dependent and shall not designate the global namespace.
             Spliced::Dependent => {
                 // A using-directive's may not be dependent ([namespace.udir]/1);
-                // a namespace alias's may ([temp.dep.namespace]), which
-                // kiln does not instantiate yet.
-                let d = if what == "namespace alias" {
-                    self.diag(DiagId::parse_unsupported, self.begin_loc(e))
-                        .arg("a namespace alias of a dependent splice-specifier")
-                } else {
-                    self.diag(DiagId::sema_splice_dependent_namespace, self.begin_loc(e)).arg(what)
-                };
+                // a namespace alias's may ([temp.dep.namespace]): the
+                // alias then stands for a dependent marker
+                // ([`Sema::dependent_alias_target`]).
+                if what == "namespace alias" {
+                    return self.dependent_alias_target(e);
+                }
+                let d =
+                    self.diag(DiagId::sema_splice_dependent_namespace, self.begin_loc(e)).arg(what);
                 self.emit(d);
                 None
             }
@@ -769,6 +781,39 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_splice_not_namespace, at);
                 None
             }
+        }
+    }
+
+    /// The target of a dependent namespace alias `namespace A = [: e :];`
+    /// ([temp.dep.namespace]/1): an unlinked type alias of the dependent
+    /// splice type of `e`, a dependent scope like the marker of a
+    /// dependent `decltype(...)::`. `A::x` is then a dependent name, and
+    /// instantiation declares the alias again from the substituted `e`
+    /// ([`Sema::dependent_alias_splice`]).
+    fn dependent_alias_target(&mut self, e: ExprId) -> Option<DeclId> {
+        let at = self.begin_loc(e);
+        let ty = self.act_on_splice_type(e, at, at)?;
+        let h = kiln_ast::builder::DeclHead::new(self.ast.tu, kiln_ast::names::DeclName::EMPTY, at)
+            .flags(kiln_ast::decl::DeclFlags::IMPLICIT);
+        Some(self.ast.builder().unlinked_alias(h, ty))
+    }
+
+    /// The splice operand of dependent namespace alias target `t`
+    /// ([`Sema::dependent_alias_target`]), if it is one.
+    pub(crate) fn dependent_alias_splice(&self, t: DeclId) -> Option<ExprId> {
+        if self.kind_of(t) != DeclKind::TypeAlias
+            || self.ast.decls.get(t).ctx() != Some(self.ast.tu)
+        {
+            return None;
+        }
+        let ty = self.ast.decls.get(t).ty()?;
+        let ty = self.ast.types.desugar_once(ty);
+        match self.ast.types.view(ty.ty()) {
+            kiln_ast::types::TypeView::Splice {
+                operand: kiln_ast::types::ExprOperand::Expr(e),
+                designated: None,
+            } => Some(e),
+            _ => None,
         }
     }
 

@@ -1736,6 +1736,14 @@ impl Substituter<'_, '_, '_> {
         let member = n.ctx().is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord)
             && !self.sema.is_local_class(d);
         let src = src.filter(|_| scoped == 0 || !member);
+        // A block-scope enumeration ([dcl.enum]/3, [temp.inst]/3): each
+        // of its declarations in the body is instantiated in statement
+        // order, so an opaque-enum-declaration is only declared and the
+        // enum-specifier after it defines the same enumeration (found by
+        // lookup in the instantiation's block), once.
+        let block = !n.ctx().is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord)
+            && self.sema.is_local_class(d);
+        let src = src.filter(|&x| !block || x == d);
         let use_ = if src.is_some() {
             crate::decl::TagUse::Definition
         } else {

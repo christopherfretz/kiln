@@ -1656,10 +1656,20 @@ impl Oven {
         let ast = b.ast();
         let q = ast.decls.get(t).ty().unwrap_or(QualType::INT);
         let l = ast.decls.lifetime_extended(t).copied();
-        // An array temporary is const through its elements.
-        let usable = (ast.types.canonical(q).has_const_bit()
-            || ast.types.effective_quals(q).is_const())
-            && l.is_some_and(|l| var_info(ast, l.extending).usable);
+        // An array temporary is const through its elements. A `constexpr`
+        // tuple-like structured binding's prvalue `get<i>` initializes an
+        // object, not a reference ([dcl.struct.bind]/4: U_i is T_i), a
+        // `constexpr` variable usable in constant expressions; kiln (as
+        // clang) holds it in a reference to a lifetime-extended
+        // temporary, so the temporary is that object.
+        let is_const =
+            ast.types.canonical(q).has_const_bit() || ast.types.effective_quals(q).is_const();
+        let usable = l.is_some_and(|l| {
+            var_info(ast, l.extending).usable
+                && (is_const
+                    || ast.decls.var(l.extending).is_some_and(|v| v.spec.is_constexpr())
+                        && ast.decls.is_holding_var(l.extending))
+        });
         let value = l.and_then(|l| l.value);
         let ty = self.types.intern(b, q);
         let size = self.types.size(ty);
@@ -1698,10 +1708,11 @@ impl Oven {
         if !ast.types.is_reference(q) {
             return p;
         }
+        // A reference to a function binds an unspecified "object" of
+        // function type too ([expr.const]/10 names every reference):
+        // naming it succeeds, calling it, comparing or freezing its
+        // address does not (`reflect_function` throws, WP-1614).
         let Some(rq) = ast.types.pointee(q) else { return p };
-        if ast.types.is_function(rq) {
-            return p;
-        }
         let u = if let Some(&u) = self.unknowns.get(&d) {
             u
         } else {

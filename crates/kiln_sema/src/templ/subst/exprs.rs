@@ -669,6 +669,20 @@ impl Substituter<'_, '_, '_> {
                 // from the substituted `x` ([over.ref]/1).
                 let base = if arrow { self.sema.arrow_chain_object(base) } else { base };
                 let (base, this_at) = self.member_base_deferred(base)?;
+                // A member splice `x.[: r :]` resolved in the pattern
+                // designates its member ([expr.ref]/7, [expr.prim.splice]):
+                // the access is formed again from the substituted object
+                // and the (instantiated) member, with no lookup of its
+                // name (a hidden member, one of several `_`, one function
+                // of an overload set) and no access check.
+                if n.has(ExprFlags::SPLICED) {
+                    let d = self.find_instantiated_decl(m, loc)?;
+                    let r = self.sema.make_reflect_expr(Reflectee::Decl(d), loc, end);
+                    let op = self.sema.ast.templates.member_op_loc.get(e).copied().unwrap_or(loc);
+                    let x = self.sema.act_on_member_splice(base, r, loc, end, op, arrow);
+                    self.note_deferred_this(Some(x), this_at);
+                    return Ok(x);
+                }
                 let name = self.sema.ast.decls.get(m).name();
                 if name.is_empty() && self.sema.kind_of(m) == DeclKind::Field {
                     // The unnamed object of an anonymous struct or union

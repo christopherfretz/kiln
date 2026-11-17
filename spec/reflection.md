@@ -989,11 +989,22 @@ before. Tested by
   instantiate and evaluate (the traits, the instantiating queries) and
   throw as anywhere else. The substitution itself keeps its SFINAE
   frame: an invalid substitution of the arguments is still a failure,
-  not a hard error. A `Mutating` op still fails under any checkpoint (a
-  rollback cannot undo a class definition), with the note "'X' cannot
-  run while a substitution is being tried (std::meta::substitute)" when
-  no trial hides it (follow-up: GCC 16.1 lets a consteval block of a
-  class template instantiated there define an aggregate).
+  not a hard error. `substitute` opens its checkpoint with
+  `Oven::trial_begin_injecting` (WP-1614): a class template
+  specialization it instantiates is instantiated outside the
+  substitution's immediate context, so a consteval block of it is a
+  plainly constant-evaluated evaluation that may `define_aggregate`
+  (`Oven::plain` and the `Mutating` check use
+  `Oven::trial_forbids_effects`: any checkpoint but that one, innermost,
+  forbids it). The injection is not undone; an attempt that injected and
+  then failed fails the call ("a declaration was injected while the
+  substitution was tried, which then failed"). Under `can_substitute`'s
+  checkpoint, or any other, a `Mutating` op still fails (kiln's probe
+  leaves no declaration behind; GCC 16.1 lets it define), with the note
+  "'X' cannot run while a substitution is being tried
+  (std::meta::substitute)" when no trial hides it
+  (`meta.reflection.substitute/substitute-instantiates-define-aggregate.cpp`,
+  `can-substitute-define-aggregate-neg.cpp`).
 - A bridge failure with no note outside a trial gets the Oven's note
   "kiln: internal: 'X' failed without a reason": a silent failure is
   only for a trial, whose notes are dropped.
@@ -1025,13 +1036,13 @@ position's operand).
   |---|---|---|---|
   | type | `typename [: r :]` [dcl.type.splice]; a bare `[: r :]` in a type-only context ([temp.res.general]/4: an alias-declaration, a namespace-scope or member decl-specifier, a member function's parameter, a trailing return type, a template parameter's default, a cast's or `new`'s type-id); in a template argument list only as `typename [: r :]` (a bare `[: r :]` forming a whole template-argument is ill-formed, [temp.names]/1: `parse_splice_template_arg_unparenthesized`, `temp.names/splice-template-argument-unparenthesized.cpp`; a splice that only starts an argument, `[: r :] + 1`, `([: r :])`, `[: r :]::type`, is an ordinary operand, `temp.names/splice-template-argument.cpp`; WP-830) | a type or a type alias | implemented (`dcl.type.splice/`) |
   | expression | `[: r :]` [expr.prim.splice] | a variable, function, enumerator, structured binding, value or object; a non-static data member or member function only as the operand of `&` (a pointer to member) or in an unevaluated operand ([expr.prim.id.general]/4) | implemented (`expr.prim.splice/`); a value or object as below ("Value and object splices", WP-550: `expr.prim.splice/value-*.cpp`, `object-*.cpp`), an object with no declaration included (WP-830) |
-  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category; the object is converted to the relationship's derived class, then along that one base-specifier, so a class with a direct and an indirect base of one type is not ambiguous, and `p->[: b :]` is the subobject, WP-1537 `expr.ref/splice-direct-base-run.cpp`); a member of an anonymous union of the class through the class's member for it ([class.union.anon]/1, WP-1489) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
+  | member access | `e.[: m :]`, `e->[: m :]` [expr.ref] | a member of `e`'s class or of one of its bases (data member, static member, member function, enumerator), or a direct base (P3293: the base subobject, same value category; the object is converted to the relationship's derived class, then along that one base-specifier, so a class with a direct and an indirect base of one type is not ambiguous, and `p->[: b :]` is the subobject, WP-1537 `expr.ref/splice-direct-base-run.cpp`); a member of an anonymous union of the class through the class's member for it ([class.union.anon]/1, WP-1489). In a template a resolved access is marked (`ExprFlags::SPLICED` on its `MemberExpr`, kept when a call converts the object) and substitution forms it again from the instantiated member with `act_on_member_splice`, never by lookup of its name (a hidden member, one of several `_`, one function of an overload set, a private member; a member of an anonymous union keeps the name path through its unnamed object; WP-1613 `expr.prim.splice/member-splice-in-template*.cpp`) | implemented; the base form is `basic.splice/p3293-base-subobject.cpp` |
   | member template | `e.template [: m :]`, `e.template [: m :] < args >` [expr.ref]/1, [expr.prim.splice]/3 | a member function template or a static data member template of `e`'s class or a base, the one designated (not what its name finds); without arguments only a function template (`sema_splice_not_function_template`); kept with its arguments in a template (`Sema::act_on_member_template_splice`, WP-1489) | implemented (`expr.ref/splice-member-template*.cpp`) |
   | scope | `[: r :]::` in a nested-name-specifier | a namespace, a namespace alias, a class or an enumeration (or an alias of one) | implemented (`basic.splice/splice-scope-specifier.cpp`, `namespace.udecl/splice-scope.cpp`) |
   | template | `template [: r :] < args >` [temp.names] in an expression, after `typename` or in a type-only context, and as a scope (`template [: r :] < args > ::`); `template [: r :]` alone before a call | a class or alias template in a type or scope; a variable template, concept or function template in an expression; a class or alias template without arguments in a type is a deduced class type placeholder ([dcl.type.splice]/2, [dcl.type.class.deduct]; WP-1489) | implemented (`temp.names/splice-*.cpp`, `dcl.type.splice/ctad-placeholder.cpp`; spec/landed/reflection/WP-482.md) |
   | base, mem-initializer, using-enum | `[typename] [: r :] [< args >]` as a base-specifier's or mem-initializer-id's class, `using enum [: r :];` ([class.derived.general]/1, [class.base.init]/2, [enum.udecl]/1) | a class (an enumeration for `using enum`, else "'T' is not an enumerated type") | implemented (`dcl.type.splice/base-meminit-using-enum.cpp`, WP-1489) |
   | namespace | `using namespace [: r :];` | a namespace other than the global namespace, not dependent ([namespace.udir]/1) | implemented (`namespace.udir/`) |
-  | namespace alias | `namespace A = [: r :];` | a namespace (or the target of an alias) other than the global namespace ([namespace.alias]/1-2) | implemented (`namespace.alias/splice-alias*.cpp`, WP-1515) |
+  | namespace alias | `namespace A = [: r :];` | a namespace (or the target of an alias) other than the global namespace ([namespace.alias]/1-2). A dependent splice makes a dependent namespace alias ([temp.dep.namespace]/1): its target is an unlinked type alias of the dependent splice type (`Sema::dependent_alias_target`), a name qualified by it is the dependent `[: r :]::` (`Nns::Splice`), and instantiation declares the alias again from the substituted splice, diagnosing a non-namespace or the global namespace there (WP-1613; a dependent qualified-namespace-specifier, `namespace B = A::In;` with `A` dependent, is not supported yet) | implemented (`namespace.alias/splice-alias*.cpp`, WP-1515; `expr.prim.splice/dependent-namespace-alias*.cpp`, WP-1613) |
   | destructor | `x.~typename [: r :]()`, `p->~typename [: r :]()` | the type of the object expression: a computed-type-specifier names a destructor as `~decltype(x)` does ([class.dtor], [expr.prim.id.dtor]/2) | implemented (`dcl.type.splice/destructor-typename-splice*.cpp`, WP-1515) |
   | specialization scope | `typename [: r :] < args > :: name` | after `typename` the `<` opens the splice's template arguments without `template` ([temp.names]/3); the specialization is the first component of the nested-name-specifier | implemented (`dcl.type.splice/typename-splice-specialization-scope.cpp`, WP-1515) |
 
@@ -1320,6 +1331,37 @@ one reported, as in GCC.
 **Cost.** O(n) in the number of descriptions: one hash set, one record
 finish. Names are already `Symbol`s in the interned descriptions.
 `stress/define-aggregate-10k.cpp` budgets a 10,000-member class.
+
+**Nested evaluations (CWG3162, [expr.const.reflect] "evaluation
+context"; WP-1614).** An evaluation X during the evaluation Y of a
+manifestly constant-evaluated expression that runs during an evaluation
+V (a constexpr local's initializer the Oven runs inline, bracketed by
+`Op::IsConstEval` 4/8) has Y's evaluation context, not V's: the point of
+evaluation of Y (where its expression appears, with the synthesized
+points of its instantiation context) and the injected declarations of
+evaluations run during Y and sequenced before X. So:
+- *Reflections* of the enclosing call's entities are values like any
+  other; what a query may say about them depends on the context.
+  `variable_of(r)` holds for a parameter of `F` when Y's point is in
+  `F`'s body: `MetaCtx::nested_point` is the function of the frame
+  holding the innermost running constexpr local initializer
+  (`RunState::nested_frame`, saved and restored with `plain`; no
+  allocation), tried before sema's own context (implemented:
+  `meta.reflection.queries/nested-evaluation-parameter.cpp`). Called
+  directly during V, `variable_of` sees V's point only.
+- The *values* of the enclosing call's objects are not readable in Y
+  unless usable in constant expressions (as anywhere).
+- A class V completed by `define_aggregate` before Y started is *not*
+  complete in Y unless it was complete from Y's point anyway: Y sees the
+  classes completed before V began and those completed during Y. The
+  completion log gives this without copying: Y records the log length
+  at its start (`e_Y`) and V's (`e_V`); a record whose completion entry
+  lies in `[e_V, e_Y)` reads as incomplete in Y (`is_complete_type`, the
+  member and layout queries, `define_aggregate`'s "already complete"
+  check). *Not implemented* (WP-1642; the queries read the
+  AST's completion directly):
+  `meta.reflection.define.aggregate/define-aggregate-nested-evaluation.cpp`
+  is `xfail(kiln)`.
 
 **This is the one exception** to "a class is frozen at its closing `}`"
 (spec/ast.md §2.4). It is serialized through sema, so the Oven never

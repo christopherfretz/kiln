@@ -218,6 +218,8 @@ impl Oven {
             cxx_year: _,
             cev_warn_next: _,
             ub_check_next: _,
+            inject_depth: _,
+            injected: _,
             contracts_off_next: _,
             contract_violated: _,
             potential_next: _,
