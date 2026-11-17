@@ -130,6 +130,12 @@ pub(crate) struct RunState {
     /// constant expression may not perform ([expr.const]/5.15) does not
     /// fail it; its pointer result points at nothing (`mem::NOWHERE`).
     pub fold: bool,
+    /// The outermost context is a fold ([`RunState::fold`] as
+    /// `begin_outermost` set it; a speculative trial does not change it):
+    /// a by-copy capture named in a lambda body outside a call reads the
+    /// enclosing variable, as clang's codegen folds it
+    /// ([`crate::Oven::resolve_global`] of a `GKind::Capture`).
+    pub fold_outer: bool,
     /// A silent constant initialization that still reports
     /// `-Wconstant-evaluated` ([`crate::Oven::warn_constant_evaluated`]):
     /// clang's `evaluateValue` of every variable with static storage or
@@ -2251,7 +2257,10 @@ impl Oven {
         if raw == 0 || (func == exc::LIFE_CHECK && self.mem.unconstructed.is_empty()) {
             return Ok(());
         }
-        let (elem, n) = if aux & 1 != 0 {
+        let (elem, n) = if func >= exc::SENTINEL {
+            // A sentinel names the whole object (`DEL_FREE` of an array).
+            (ty, 1)
+        } else if aux & 1 != 0 {
             let p = Ptr::decode(raw);
             let n = match self.mem.alloc_of(p) {
                 Ok(a) => u64::from(a.size) / self.types.size(ty).max(1),
@@ -3955,8 +3964,15 @@ impl Oven {
         let n = u64::from((bit + width).div_ceil(8));
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
-        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
-            self.slow_access(a, raw, 0, ty, k)?;
+        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE | flags::INDET_BITS) != 0 {
+            // Bits a bit-cast left indeterminate in an initialized byte
+            // (WP-1573).
+            if a.flags & flags::INDET_BITS != 0 && self.mem.indet_any_bits(st, abs, bit, width) {
+                return Err(fault(MemFault::Uninit));
+            }
+            if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
+                self.slow_access(a, raw, 0, ty, k)?;
+            }
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, n) {
@@ -4015,15 +4031,21 @@ impl Oven {
         if !init && a.flags & flags::CONST_PATH != 0 {
             self.const_path(raw, ty, k)?;
         }
-        let has_union = a.flags & flags::HAS_UNION != 0;
+        let slow = a.flags & (flags::HAS_UNION | flags::INDET_BITS);
         let aty = a.ty;
         let mutable = a.flags & (flags::MUTABLE_OUTSIDE | flags::CONST) == flags::MUTABLE_OUTSIDE;
         if mutable && !init {
             self.mutable_path(raw, ty, k)?;
         }
         self.mem.trial_write(raw, n).map_err(fault)?;
-        if has_union {
-            self.union_path_in(aty, raw, ty, k)?;
+        if slow != 0 {
+            if slow & flags::HAS_UNION != 0 {
+                self.union_path_in(aty, raw, ty, k)?;
+            }
+            // The stored bits are determinate (WP-1573).
+            if slow & flags::INDET_BITS != 0 {
+                self.mem.indet_set_bits(st, abs, bit, width, false);
+            }
         }
         if width == 0 {
             return Ok(());
@@ -4041,6 +4063,20 @@ impl Oven {
         sp.set_init(abs, n, true);
         sp.set_ptr(abs, n, false);
         Ok(())
+    }
+
+    /// Gives the allocation of `raw` [`flags::INDET_BITS`]: a copy or a
+    /// bit-cast may have put indeterminate bits in its initialized bytes
+    /// ([`crate::mem::Memory::indet`], WP-1573).
+    #[inline(never)]
+    pub(crate) fn mark_indet_bits(&mut self, raw: u64) {
+        let p = Ptr::decode(raw);
+        if let Some(a) = self.mem.alloc_any(p)
+            && a.flags & flags::INDET_BITS == 0
+        {
+            let fl = a.flags | flags::INDET_BITS;
+            self.mem.set_flags(p, fl);
+        }
     }
 
     /// Copies the object of type `ty` at `src` to `dst` (`init`: into
@@ -4064,6 +4100,7 @@ impl Oven {
         // Nor is its source read (clang's `isReadByLvalueToRvalueConversion`):
         // copying an `extern const` empty object is a constant.
         let mut src_at = None;
+        let mut src_indet = false;
         let mut dead_union = false;
         if !empty {
             let checked = match self.mem.check(src, size, false) {
@@ -4080,6 +4117,7 @@ impl Oven {
             let (ss, sa, sa_alloc) =
                 checked.map_err(|f| Fault::Mem { f, ak: ak::READ, ty, p: src })?;
             src_at = Some((ss, sa));
+            src_indet = sa_alloc.flags & flags::INDET_BITS != 0;
             if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
                 self.mutable_path(src, ty, ak::READ)?;
             }
@@ -4113,6 +4151,9 @@ impl Oven {
         let Some((ss, sa)) = src_at.filter(|_| size != 0) else { return Ok(()) };
         self.mem.trial_write(dst, size).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         self.mem.copy(ds, da, ss, sa, size);
+        if src_indet {
+            self.mark_indet_bits(dst);
+        }
         if dead_union {
             self.copy_dead_runs(dst, ss, sa, size)?;
         }
@@ -4213,7 +4254,7 @@ impl Oven {
     ) -> Option<(Option<DeclId>, OTy)> {
         let info = *self.types.info(t);
         let s = self.mem.space(sp);
-        if s.is_init(abs, info.size) {
+        if s.is_init(abs, info.size) && !self.mem.indet_any(sp, abs, info.size) {
             return None;
         }
         match info.kind {
@@ -4268,7 +4309,9 @@ impl Oven {
                         Some(w) if w == 0 || ast.decls.get(f.decl).name().is_empty() => None,
                         Some(w) => {
                             let n = u64::from((f.bit + w).div_ceil(8));
-                            (!s.is_init(abs + f.offset, n)).then_some((Some(f.decl), f.ty))
+                            let a = abs + f.offset;
+                            (!s.is_init(a, n) || self.mem.indet_any_bits(sp, a, f.bit, w))
+                                .then_some((Some(f.decl), f.ty))
                         }
                     }
                 })
@@ -4363,7 +4406,12 @@ impl Oven {
     /// A single-object `delete` of `raw` (static type `pointee`): a base
     /// class subobject of a `new`ed object is deleted as the whole object
     /// (`virt`: `pointee` has a virtual destructor, [expr.delete]/3).
-    fn delete_base(&self, raw: u64, pointee: OTy, virt: bool) -> Result<Option<(u64, OTy)>, Fault> {
+    pub(super) fn delete_base(
+        &self,
+        raw: u64,
+        pointee: OTy,
+        virt: bool,
+    ) -> Result<Option<(u64, OTy)>, Fault> {
         let p = Ptr::decode(raw);
         if p.is_fn() || !p.is_heap() || p.past {
             return Ok(None);

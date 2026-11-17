@@ -49,3 +49,9 @@ void k() {
   S s;
   U<int> u;
 }
+// An odr-use of a by-copy capture inside the body is the closure's
+// member, yet clang's codegen folds `(&ca)->v` to the variable's value.
+int n(int i) {
+  constexpr A ca{4, {5, 6}};
+  return [=](int j) { return j + (&ca)->v + (&ca)->arr[1]; }(i);
+}

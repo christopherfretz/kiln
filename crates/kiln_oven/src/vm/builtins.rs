@@ -1142,6 +1142,7 @@ impl Oven {
         if s_alloc.flags & flags::HAS_UNION != 0 {
             return false;
         }
+        let s_alloc_flags = s_alloc.flags;
         let space = self.mem.space(ss);
         if !space.is_init(sa, n) || space.any_ptr(sa, n) {
             return false;
@@ -1157,7 +1158,11 @@ impl Oven {
         if self.mem.trial_write(dst, n).is_err() {
             return false;
         }
+        let indet = s_alloc_flags & flags::INDET_BITS != 0;
         self.mem.copy(ds, da, ss, sa, n);
+        if indet {
+            self.mark_indet_bits(dst);
+        }
         true
     }
 }

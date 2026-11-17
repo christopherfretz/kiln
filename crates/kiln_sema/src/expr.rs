@@ -823,8 +823,47 @@ impl Sema<'_, '_> {
             let at = self.eloc(r);
             self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
+            if self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
+                && self.odr_use_names_closure_copy(d)
+            {
+                self.ast.exprs.mark_names_closure_copy(r);
+            }
         }
         e
+    }
+
+    /// Marks the names in `e` that are not odr-uses
+    /// (`NonOdrUse::Constant`: a variable usable in constant expressions
+    /// whose lvalue-to-rvalue conversion is applied, [basic.def.odr]/5)
+    /// before `e` is evaluated as a constant expression ahead of the end
+    /// of its full-expression (a case value), as `act_on_full_expr_at`
+    /// marks them at that end: such a name reads the variable, not a
+    /// closure member (WP-1590).
+    pub(crate) fn mark_constant_non_odr_uses(&mut self, e: ExprId) {
+        let mut constant = Vec::new();
+        let mut stack = vec![e];
+        let mut seen = 0usize;
+        while let Some(x) = stack.pop() {
+            seen += 1;
+            if seen > 1_000_000 {
+                break;
+            }
+            let n = *self.ast.exprs.get(x);
+            if n.kind() == ExprKind::ImplicitCastExpr
+                && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue
+            {
+                self.l2r_potential_results(self.ast.exprs.operand(x), &mut constant);
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+        for r in constant {
+            if self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                && self.ast.exprs.get(r).has(ExprFlags::NAMES_CLOSURE_COPY)
+                && self.usable_in_constant_expressions(self.ast.exprs.decl(r))
+            {
+                let _ = self.ast.exprs.set_non_odr_use(r, NonOdrUse::Constant);
+            }
+        }
     }
 
     /// The `DeclRefExpr`s among the potential results of the operand `e`
@@ -2577,6 +2616,17 @@ impl Sema<'_, '_> {
             && self.captured_by_copy_in_dependent_object_lambda(d)
         {
             self.ast.exprs.mark_type_dependent(e);
+        }
+        // A structured binding is odr-used whenever it is named; a
+        // variable only once its full-expression shows the lvalue-to-rvalue
+        // conversion does not make the reference a constant use
+        // (`act_on_full_expr_at`): a case value is evaluated before that,
+        // and reads the variable.
+        if flags == ExprFlags::REFERS_TO_ENCLOSING
+            && n.kind() == DeclKind::Binding
+            && self.odr_use_names_closure_copy(d)
+        {
+            self.ast.exprs.mark_names_closure_copy(e);
         }
         // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
         if n.kind() == DeclKind::Binding

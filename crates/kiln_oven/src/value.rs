@@ -1536,7 +1536,10 @@ impl Oven {
         };
         let abs = u64::from(a.base) + u64::from(p.off) + f.offset;
         let sp = self.mem.space(p.space());
-        if !sp.is_init(abs, n) {
+        if !sp.is_init(abs, n)
+            || a.flags & flags::INDET_BITS != 0
+                && self.mem.indet_any_bits(p.space(), abs, f.bit, width)
+        {
             return Err(self.uninit(b, Some(f.decl), f.ty, loc));
         }
         // The bits `[bit, bit + width)` of the bytes from `abs`, a byte at
@@ -1558,8 +1561,24 @@ impl Oven {
     /// Resolves global `g` (first use): returns its address. `top` is the
     /// first free register (for a nested evaluation of its initializer).
     pub(crate) fn resolve_global(&mut self, b: &mut dyn SemaBridge, g: u32, top: u32) -> u64 {
-        let p = match self.globals[g as usize].kind {
+        let kind = match self.globals[g as usize].kind {
+            // A fold outside a constant context reads the enclosing
+            // variable, as clang's codegen folds `(&ca)->v` in the body.
+            // Either resolution is provisional, so the next evaluation
+            // resolves it afresh.
+            GKind::Capture(d, ty) => {
+                self.provisional.push(g);
+                if self.run.fold_outer && self.ctx_depth == 1 {
+                    GKind::Var(d)
+                } else {
+                    GKind::Capture(d, ty)
+                }
+            }
+            k => k,
+        };
+        let p = match kind {
             GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
+            GKind::Capture(d, ty) => self.closure_copy_object(d, ty),
             GKind::Var(d) => {
                 // A variable with no initializer yet (`extern const int
                 // n;` before its definition) may get one later in the
@@ -1742,6 +1761,34 @@ impl Oven {
             Origin::Unknown(decl),
         );
         self.unknowns.insert(decl, u);
+        u
+    }
+
+    /// The object a by-copy capture of variable (or binding) `d` names
+    /// in an evaluation outside a call of its lambda: the member of a
+    /// closure object that does not exist there, so every access is
+    /// diagnosed and its address is not constant (an unbacked external
+    /// object, [expr.const]/10, [expr.prim.lambda.capture]/11); naming it
+    /// without reading it is constant, as for an object of unknown value
+    /// (P2280). One per variable per translation unit, kept in
+    /// `Oven::unknowns` under `d` (a non-reference variable or a binding,
+    /// so no reference variable's unknown object shares the key).
+    pub(crate) fn closure_copy_object(&mut self, d: DeclId, ty: OTy) -> u64 {
+        if let Some(&u) = self.unknowns.get(&d) {
+            return u;
+        }
+        let size = self.types.size(ty);
+        if size > u64::from(u32::MAX) {
+            return 0;
+        }
+        let hu = self.static_flags(ty) & flags::HAS_UNION;
+        let u = self.mem.alloc_unbacked(
+            ty,
+            size,
+            flags::EXTERNAL | flags::CONST | hu,
+            Origin::External(d),
+        );
+        self.unknowns.insert(d, u);
         u
     }
 

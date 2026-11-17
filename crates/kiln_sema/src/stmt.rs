@@ -1303,6 +1303,7 @@ impl Sema<'_, '_> {
             }
         };
         let at = self.begin_loc(e);
+        self.mark_constant_non_odr_uses(conv);
         match self.eval_const(conv, kiln_oven::EvalContext::converted(at)) {
             Ok(v) => {
                 // A value outside `i128` keeps its own (exact) constant

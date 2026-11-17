@@ -267,6 +267,12 @@ impl ExprFlags {
     pub const ARG_IS_TYPE: ExprFlags = ExprFlags(1 << 4);
     /// `DeclRefExpr`: refers to an enclosing variable or capture.
     pub const REFERS_TO_ENCLOSING: ExprFlags = ExprFlags(1 << 5);
+    /// `DeclRefExpr` with [`Self::REFERS_TO_ENCLOSING`]: an odr-use of it
+    /// names a member of a closure object, because a lambda between the
+    /// name and the entity's scope captures (or would capture) it by copy
+    /// ([expr.prim.lambda.capture]/11-12; spec/sema-lambda.md §4.4). Read
+    /// by the Oven only outside a call of the call operator.
+    pub const NAMES_CLOSURE_COPY: ExprFlags = ExprFlags(1 << 4);
     /// `CallExpr`: the callee was found by ADL.
     pub const ADL: ExprFlags = ExprFlags(1 << 5);
     /// `DeclRefExpr` / `MemberExpr` / `CXXConstructExpr` /
@@ -2107,6 +2113,16 @@ impl ExprArena {
         let n = &mut self.nodes[e.index() as usize];
         assert!(n.kind == ExprKind::ImplicitCastExpr, "not an ImplicitCastExpr");
         n.bits |= ExprFlags::PART_OF_EXPLICIT_CAST.0;
+    }
+
+    /// Marks `DeclRefExpr` `e` [`ExprFlags::NAMES_CLOSURE_COPY`]. Monotone.
+    ///
+    /// # Panics
+    /// If `e` is not a `DeclRefExpr`.
+    pub fn mark_names_closure_copy(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::DeclRefExpr, "not a DeclRefExpr");
+        n.bits |= ExprFlags::NAMES_CLOSURE_COPY.0;
     }
 
     fn expect_call(&self, e: ExprId) -> &ExprNode {

@@ -20,6 +20,7 @@ use super::{Access, Compiler, skip_parens};
 use crate::kbc::{Op, cmp, int_aux, new_aux};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
+use crate::vm::exc::{DEL_FREE, DEL_FREE_ARRAY, DEL_FREE_VIRTUAL};
 
 impl Compiler<'_> {
     /// The static type of the object a placement argument designates:
@@ -441,6 +442,7 @@ impl Compiler<'_> {
         if let Some(d) = vdtor {
             self.emit_at(Op::Delete, 2 | 4, &[p, pointee.0], e);
             let m = self.next;
+            let free = self.delete_free_on_throw(p, pointee, DEL_FREE_VIRTUAL);
             let c = self.reg();
             self.emit(Op::PtrToBool, 0, &[c, p]);
             let skip = self.jmp_if(c, false);
@@ -457,6 +459,9 @@ impl Compiler<'_> {
                 Some(loc),
             );
             self.patch_here(skip);
+            if let Some(mark) = free {
+                self.emit(Op::ScopeExit, 0, &[mark]);
+            }
             self.next = m;
             self.emit_at(Op::Delete, 4, &[p, pointee.0], e);
             return;
@@ -467,14 +472,51 @@ impl Compiler<'_> {
             // (or array) new created, then the storage is released.
             self.emit_at(Op::Delete, u32::from(array) | 2, &[p, pointee.0], e);
             let m = self.next;
-            let mark = self.reg();
-            self.emit(Op::ScopeEnter, 0, &[mark]);
+            let sentinel = if array { DEL_FREE_ARRAY } else { DEL_FREE };
+            let mark = match self.delete_free_on_throw(p, pointee, sentinel) {
+                Some(mark) => mark,
+                None => {
+                    let mark = self.reg();
+                    self.emit(Op::ScopeEnter, 0, &[mark]);
+                    mark
+                }
+            };
             let loc = self.ast().exprs.get(e).loc();
             self.push_cleanup(p, pointee, u32::from(array), loc);
             self.emit(Op::ScopeExit, 0, &[mark]);
             self.next = m;
         }
         self.emit_at(Op::Delete, u32::from(array), &[p, pointee.0], e);
+    }
+
+    /// [expr.delete]/7: the deallocation function is called even when the
+    /// destructor exits by an exception. When the destructor of `pointee`
+    /// (an element's, for an array) may throw in a C++26 evaluation
+    /// (P3068; a non-throwing destructor's exception ends the evaluation
+    /// at its boundary), opens a scope and registers in it an unwind-only
+    /// `sentinel` cleanup ([`DEL_FREE`], [`DEL_FREE_ARRAY`],
+    /// [`DEL_FREE_VIRTUAL`]) that releases the storage `p` points to as
+    /// the delete-expression would; the destructions registered after it
+    /// run first, and a normal exit drops it. Returns the scope's mark
+    /// register, to be closed with `ScopeExit` after the destruction; no
+    /// code for any other destructor.
+    fn delete_free_on_throw(&mut self, p: u32, pointee: OTy, sentinel: u32) -> Option<u32> {
+        if !self.b.cxx26() {
+            return None;
+        }
+        let mut t = pointee;
+        while let TyKind::Array { elem, .. } = self.kind(t) {
+            t = elem;
+        }
+        let TyKind::Record { decl, .. } = self.kind(t) else { return None };
+        let d = self.ast().destructor(decl)?;
+        if self.b.is_nothrow(d, self.o) {
+            return None;
+        }
+        let mark = self.reg();
+        self.emit(Op::ScopeEnter, 0, &[mark]);
+        self.emit(Op::PushCleanup, 4, &[p, sentinel, pointee.0]);
+        Some(mark)
     }
 }
 

@@ -1527,12 +1527,37 @@ literal is one instruction and one step, not an interpreted loop.
   | unnamed bit-field, either side | not a member; its bits are padding ([class.bit]/2) | skipped: indeterminate in the buffer, unwritten in the result |
   | source bit-field wider than its type | the excess bits are padding ([class.bit]/1) | only the type's bits are copied |
   | destination bit-field, all bits determinate | the value those bits represent | written as `Vm::store_bits` does (sign from the type when read) |
-  | destination bit-field with an indeterminate bit, of `unsigned char` or `std::byte` type | the bit-field is the smallest object containing the bit: it holds an indeterminate value | left unwritten; a later read fails as uninitialized (unless a neighbour in the same byte was written: the Oven tracks initialization per byte, so it then reads as zero bits; `bit.cast/constexpr-bit-field-shared-byte-indeterminate.cpp`, `xfail(kiln)`) |
+  | destination bit-field with an indeterminate bit, of `unsigned char` or `std::byte` type | the bit-field is the smallest object containing the bit: it holds an indeterminate value | left unwritten, its bits recorded as indeterminate (below); a later read fails as uninitialized, also when a neighbour in the same byte was written |
   | the same, other types | undefined behavior: not a constant | `note_constexpr_bit_cast_indet_dest` |
   | `bool` bit-field whose bits are not 0 or 1 | no value corresponds: undefined | `note_constexpr_bit_cast_unrepresentable_value` |
 
   `TO_MEM` builds an aggregate result in place; `READ_ONLY` only reads
   the source (clang reads before its type checks).
+
+  *Indeterminate bits* (WP-1573). Initialization is kept per byte, so a
+  byte holding a determinate bit-field and an indeterminate one is
+  initialized. `Memory::indet` maps such a byte (`sp << 62 | abs`) to
+  the mask of its indeterminate bits; only an allocation with
+  `flags::INDET_BITS` has entries, and the map is empty for every
+  evaluation that does not bit-cast an indeterminate `unsigned char`
+  bit-field.
+  - The bit-cast records the bits of an indeterminate destination
+    bit-field, drops the destination's old entries, and flags the
+    destination allocation when entries remain. Its source buffer
+    treats the recorded bits as indeterminate.
+  - `Op::LoadBits` tests `INDET_BITS` with the flags it already tests
+    and faults "read of uninitialized object" when a bit it reads is
+    recorded; `Vm::store_bits` makes the stored bits determinate.
+    Freezing (`walk_field`) and the full-object check of a trivial copy
+    (`first_uninit`) treat a recorded bit-field as uninitialized.
+  - `Memory::copy` carries the source entries to the destination (and
+    drops the destination's) when the map is non-empty; `copy_obj`, the
+    bulk element copy of `__builtin_memcpy` and the dense bit-cast flag
+    the destination when the source is flagged.
+  - Entries are dropped with their allocation (frame release, heap
+    deallocation, a dead static, the end of the evaluation), changes are
+    logged under a checkpoint, the static entries are part of the
+    snapshot, and `Memory::footprint` counts them.
 - **`__builtin_start_lifetime(p)`** (WP-773, `bi::START_LIFETIME`;
   P3726R2, GCC's builtin behind libstdc++'s `std::start_lifetime`): one
   instruction; `t1` is `p`'s designator type (the pointee; `DYN`, a
@@ -4277,6 +4302,21 @@ follow clang trunk's P3068 branch.
   once its target returns ([except.ctor]/4). A destructor's members and
   bases are destroyed before its handler is entered
   (`except.ctor/constexpr-ctor-try-block-subobjects.cpp`).
+- *A destructor that throws in a delete-expression* ([expr.delete]/7,
+  WP-1594): the deallocation function is called regardless, so when the
+  destructor of the deleted type (an element's, for `delete[]`) is
+  potentially-throwing, `delete_expr` opens a scope around the
+  destruction and registers, under the destructor's cleanups, an
+  unwind-only sentinel (`DEL_FREE`, `DEL_FREE_ARRAY`, `DEL_FREE_VIRTUAL`
+  in `vm/exc.rs`) that releases the storage as the final `Op::Delete`
+  would (the most-derived object through a virtual destructor). A normal
+  exit drops it; an exception runs it after the remaining elements'
+  destructors (which unwinding runs: [except.ctor]/2, as GCC 16.1 does;
+  a second one throwing is the terminate case above), so the storage is
+  never a leak and a later use of the pointer is a use after free
+  (`expr.delete/constexpr-dtor-throws*.cpp`, with a 10000-round churn
+  under `oven:` budgets). A non-throwing destructor gets no extra code
+  (its exception ends the evaluation at its boundary).
 - *`std::uncaught_exceptions`* ([except.uncaught]/1): a call of
   `std::uncaught_exceptions()` whose declaration is `constexpr` is
   `Builtin UNCAUGHT`, the number of exceptions of the running evaluation

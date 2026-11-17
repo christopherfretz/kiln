@@ -108,9 +108,9 @@ impl Oven {
         read_only: bool,
     ) -> Result<u128, Fault> {
         let n = self.types.size(ts);
-        let (ss, sa, has_union) = {
+        let (ss, sa, has_union, src_indet) = {
             let (ss, sa, a) = self.rmw_check(src, n, ts, ak::READ)?;
-            (ss, sa, a.flags & flags::HAS_UNION != 0)
+            (ss, sa, a.flags & flags::HAS_UNION != 0, a.flags & flags::INDET_BITS != 0)
         };
         if has_union {
             self.union_path(src, ts, ak::READ)?;
@@ -134,10 +134,19 @@ impl Oven {
             let (ds, da) = self.dest(dst, n, td)?;
             self.mem.copy(ds, da, ss, sa, n);
             self.mem.space_mut(ds).set_ptr(da, n, false);
+            if src_indet {
+                self.mark_indet_bits(dst);
+            }
             return Ok(0);
         }
         let mut buf = Buf::new(n);
         self.read_obj(ast, ss, sa, ts, 0, &mut buf);
+        if src_indet {
+            // Initialized bytes may hold indeterminate bits (WP-1573).
+            for (o, m) in self.mem.indet_in(ss, sa, n) {
+                buf.def[o as usize] &= !m;
+            }
+        }
         if !to_mem {
             // An indeterminate `unsigned char` result is read as a value.
             return self.cast_scalar(ast, &buf, td, 0)?.ok_or(Fault::Mem {
@@ -151,7 +160,12 @@ impl Oven {
         let sp = self.mem.space_mut(ds);
         sp.set_init(da, n, false);
         sp.set_ptr(da, n, false);
-        self.write_obj(ast, ds, da, &buf, td, 0)
+        self.mem.indet_drop(ds, da, n);
+        self.write_obj(ast, ds, da, &buf, td, 0)?;
+        if self.mem.indet_any(ds, da, n) {
+            self.mark_indet_bits(dst);
+        }
+        Ok(0)
     }
 
     /// clang 19's `CK_BitCast` of a widening `__builtin_shufflevector`
@@ -397,6 +411,9 @@ impl Oven {
         let o = base + f.offset;
         let Some(v) = buf.bits(o, f.bit, vw) else {
             if self.holds_indeterminate(ast, f.ty) {
+                // A determinate neighbour may initialize the byte: its
+                // bits stay indeterminate (WP-1573).
+                self.mem.indet_set_bits(sp, abs + o, f.bit, vw, true);
                 return Ok(());
             }
             return Err(Fault::Bi(BiFault::CastIndet { t: f.ty }));

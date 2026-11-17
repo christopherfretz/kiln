@@ -69,7 +69,7 @@ enum K {
     /// A function, or `NO_DTOR`.
     Fo,
     /// A function, or the cleanup sentinels the compiler registers
-    /// (`exc::EXC_FREE`, `exc::LIFE_CHECK`).
+    /// (`exc::EXC_FREE`, the `exc::DEL_FREE*`, `exc::LIFE_CHECK`).
     Fc,
     /// A global.
     G,
@@ -286,7 +286,11 @@ pub(crate) fn verify(
                 J => i < n && starts[i] && owner_at(i) == owner,
                 F => i < t.funcs.len(),
                 Fo => i < t.funcs.len() || v == super::NO_DTOR,
-                Fc => i < t.funcs.len() || v == exc::EXC_FREE || v == exc::LIFE_CHECK,
+                Fc => {
+                    i < t.funcs.len()
+                        || v == exc::LIFE_CHECK
+                        || (exc::SENTINEL..=exc::EXC_FREE).contains(&v)
+                }
                 G => i < t.nglobals,
                 T => i < t.ntypes,
                 To => i < t.ntypes || v == bi::DYN,

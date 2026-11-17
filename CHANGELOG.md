@@ -1061,6 +1061,15 @@ Planned as 1.3.0.
   error; a function template specialization named as a template argument
   in a lambda body inside a template is instantiated.
 
+- Oven fixes found running GCC's C++ testsuite (WP-1590, WP-1594,
+  WP-1573): an odr-use of a by-copy capture in a constant expression
+  evaluated in the lambda body names the closure's member, so reading it or
+  taking its address there is not constant ([expr.prim.lambda.capture]/11,
+  [expr.const]); a delete-expression deallocates the storage when the
+  destructor throws ([expr.delete]/7); after a bit-cast, an indeterminate
+  `unsigned char` bit-field that shares a byte with a determinate one is
+  not readable in a constant expression, also through copies ([bit.cast]/2).
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

@@ -38,13 +38,23 @@ pub(crate) const EXC_END: u32 = u32::MAX - 2;
 /// The deallocation of an exception object (`this`, of type `ty`) whose
 /// destructor runs above it.
 pub(crate) const EXC_FREE: u32 = u32::MAX - 3;
+/// The deallocation, by a delete-expression whose destructor call exits
+/// by an exception, of the object `this` of type `ty` created by a
+/// non-array new-expression ([expr.delete]/7: the deallocation function
+/// is called regardless; registered unwind-only, WP-1594).
+pub(crate) const DEL_FREE: u32 = u32::MAX - 4;
+/// [`DEL_FREE`] for `delete[]` (the array `this` of elements of `ty`).
+pub(crate) const DEL_FREE_ARRAY: u32 = u32::MAX - 5;
+/// [`DEL_FREE`] through a pointer to a base with a virtual destructor
+/// (the most-derived object is released, [expr.delete]/3).
+pub(crate) const DEL_FREE_VIRTUAL: u32 = u32::MAX - 6;
 /// The lowest sentinel.
-pub(crate) const SENTINEL: u32 = EXC_FREE;
+pub(crate) const SENTINEL: u32 = DEL_FREE_VIRTUAL;
 /// Not an exception sentinel (below [`SENTINEL`]): the destruction of a
 /// trivially destructible base subobject (`this`, of type `ty`) by its
 /// derived class's destructor, which runs no function but requires the
 /// base within its lifetime (clang's `HandleDestructionImpl`; `run_cleanup`).
-pub(crate) const LIFE_CHECK: u32 = u32::MAX - 4;
+pub(crate) const LIFE_CHECK: u32 = u32::MAX - 7;
 
 /// The most bytes of an uncaught exception's `what()` its note prints
 /// whole; past it the note prints this many (fewer when that would split
@@ -329,6 +339,22 @@ impl Oven {
             }
             EXC_FREE => {
                 self.free_exc(c.this, c.ty)?;
+                Ok(None)
+            }
+            DEL_FREE | DEL_FREE_ARRAY | DEL_FREE_VIRTUAL => {
+                let kind = if c.func == DEL_FREE_ARRAY { DynKind::ArrayNew } else { DynKind::New };
+                let (mut raw, mut ty) = (c.this, c.ty);
+                if kind == DynKind::New
+                    && let Some((r, t)) = self.delete_base(raw, ty, c.func == DEL_FREE_VIRTUAL)?
+                {
+                    (raw, ty) = (r, t);
+                }
+                self.mem.heap_free(raw, kind, Some(ty), &self.types).map_err(|f| Fault::Mem {
+                    f,
+                    ak: ak::READ,
+                    ty,
+                    p: raw,
+                })?;
                 Ok(None)
             }
             _ => Ok(None),
