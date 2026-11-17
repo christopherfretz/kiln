@@ -1397,6 +1397,7 @@ impl Oven {
                 | Op::Cx
                 | Op::Speculate
                 | Op::LabelAddr
+                | Op::UnknownThis
                 | Op::VoidCast
                 | Op::Cce
                 | Op::AddrInt
@@ -2093,6 +2094,10 @@ impl Oven {
                     fail!(f);
                 }
                 pc = arg!(1);
+            }
+            Op::UnknownThis => {
+                reg!(0) = u128::from(self.unknown_this(OTy(arg!(1) as u32)));
+                pc += 3;
             }
             Op::LabelAddr => {
                 let Some(e) = ExprId::try_new(arg!(1) as u32) else { fail!(Fault::Invalid) };
@@ -4475,7 +4480,15 @@ impl Oven {
         let owns = self.element_type(a.ty, off) == Some(target);
         let size = if !owns && self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         if a.flags & flags::HAS_UNION != 0 {
-            self.place_in_unions(raw, desig, a.ty, ty, true)?;
+            // An array of one `T` (`std::construct_at` of an array `T`
+            // is `new (p) T[1]()`): its element is the `T` created in the
+            // storage, which becomes the union member of that type
+            // ([intro.object]/2; WP-1528).
+            let mut uty = ty;
+            while let TyKind::Array { elem, n: 1 } = self.types.kind(uty) {
+                uty = elem;
+            }
+            self.place_in_unions(raw, desig, a.ty, uty, true)?;
         }
         self.mem.set_lifetime(raw, size, true).map_err(fault)?;
         if size == 0 && self.types.size(ty) > 0 {
@@ -4736,6 +4749,18 @@ impl Oven {
                         direct = 0;
                         arrs = 1 << di;
                         held = held.filter(|&i| i == di);
+                    } else if let Some(di) = dm
+                        && active != Some(di)
+                        && reach(di)
+                    {
+                        // A subobject of the designated, inactive member
+                        // (`&u.s.b`): not the member, nor an element of
+                        // an array member at the same offset (WP-1528).
+                        return Err(Fault::Union {
+                            ak: ak::CONSTRUCT,
+                            field: fields[di as usize].decl,
+                            active: active.map(|i| fields[i as usize].decl),
+                        });
                     } else if dm.is_none() && direct != 0 && arrs != 0 {
                         // An untagged pointer that may name a member or an
                         // element of an array member of the same type at

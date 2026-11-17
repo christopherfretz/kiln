@@ -266,8 +266,8 @@ pub trait SemaBridge {
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
     /// The translation unit's language standard as its year (1998, 2003,
     /// 2011, ..., 2026): the rules that depend on the language mode
-    /// (P2747 placement new outside namespace std in C++26; P2280
-    /// unknown references from C++23). The default is C++26.
+    /// (P2747 placement new outside namespace std in C++26). The default
+    /// is C++26.
     fn cxx_year(&self) -> u32 {
         2026
     }
@@ -297,8 +297,7 @@ pub trait SemaBridge {
     /// statement being expanded (its `__range`, `__begin`, `__end` and
     /// `__iter`; [stmt.expand]/5.2): a C++26 construct (an extension
     /// before C++26), so their constant evaluation follows C++26 in
-    /// every language mode: `__range` is a reference of unknown referent
-    /// (P2280), and the automatic objects of the function are
+    /// every language mode: the automatic objects of the function are
     /// constexpr-referenceable from their initializing declarations
     /// (P2686R5). Consulted only where a reference variable is first
     /// resolved or a pointer frozen, and only below the mode that has

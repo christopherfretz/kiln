@@ -969,9 +969,6 @@ impl Oven {
     /// its qualifiers, as clang's designator type) when it has one.
     fn bi_msg(&self, ast: &Ast, site: Site, f: BiFault) -> String {
         match f {
-            BiFault::CastBitfield => {
-                return "constexpr bit_cast involving bit-field is not yet supported".into();
-            }
             BiFault::CastIndet { t } => {
                 let chr = if ast.types.target().char_signed { " or" } else { ", 'char', or" };
                 return format!(
@@ -1078,8 +1075,7 @@ impl Oven {
                 "constant evaluation of '__builtin_memchr' on array of type '{}' is not supported; only arrays of narrow character types can be searched",
                 arg_ty(0, t)
             ),
-            BiFault::CastBitfield
-            | BiFault::CastIndet { .. }
+            BiFault::CastIndet { .. }
             | BiFault::CastUnrep { .. }
             | BiFault::Align { .. }
             | BiFault::Lifetime { .. }
@@ -1477,6 +1473,13 @@ impl Oven {
         let Some(a) = self.alloc_any(p) else { return "&<dead object>".into() };
         let mut s = String::from("&");
         match a.origin {
+            // The object `this` designates (`Oven::unknown_this`).
+            Origin::Unknown(d)
+                if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar) =>
+            {
+                s.clear();
+                s.push_str("this");
+            }
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 s.push_str(&name_of(ast, d));
             }
@@ -1866,6 +1869,15 @@ impl Oven {
                     "{verb} temporary is not allowed in a constant expression outside the expression that created the temporary"
                 )
             }
+            // The object `this` designates outside a member function's
+            // call (`Op::UnknownThis`): clang's `note_constexpr_this`, at
+            // the `this` of the access.
+            MemFault::Unknown(d) if ast.decls.get(d).kind() != DeclKind::Var
+                && ast.decls.get(d).kind() != DeclKind::ParmVar =>
+            {
+                let (at, msg) = this_note(ast, site.e);
+                return (at.unwrap_or(site.loc), msg.to_owned());
+            }
             // clang note_constexpr_access_unknown_variable (P2280).
             MemFault::Unknown(d) => {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
@@ -1984,6 +1996,40 @@ impl Oven {
         };
         (site.loc, msg)
     }
+}
+
+/// clang's `note_constexpr_this` for an access of the object of unknown
+/// value of `this` ([`Oven::unknown_this`]) by expression `e`: the
+/// location of the `this` the access goes through (as the object
+/// expression of member accesses), if found, and the wording ("implicit
+/// use" for a member named without `this->`).
+pub(crate) fn this_note(ast: &Ast, e: Option<ExprId>) -> (Option<Loc>, &'static str) {
+    const EXPLICIT: &str = "use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function";
+    const IMPLICIT: &str = "implicit use of 'this' pointer is only allowed within the evaluation of a call to a 'constexpr' member function";
+    let mut cur = e;
+    // Bounded: an access's object expression is a short chain.
+    for _ in 0..64 {
+        let Some(x) = cur.map(|x| skip_parens(ast, x)) else { break };
+        let n = ast.exprs.get(x);
+        cur = match n.kind() {
+            ExprKind::CXXThisExpr => {
+                let implicit = ast.exprs.this_is_implicit(x);
+                return (Some(n.loc()), if implicit { IMPLICIT } else { EXPLICIT });
+            }
+            ExprKind::MemberExpr | ExprKind::ImplicitCastExpr | ExprKind::UnaryOperator => {
+                Some(ast.exprs.operand(x))
+            }
+            ExprKind::ArraySubscriptExpr => Some(ast.exprs.operands(x)[0]),
+            ExprKind::CXXMemberCallExpr => Some(ast.exprs.member_call_object(x)),
+            // A builtin reading through its pointer argument
+            // (`__builtin_is_within_lifetime(&m)`).
+            ExprKind::CallExpr => {
+                ast.lists.get(ast.exprs.call_args(x)).first().map(|&a| ExprId::new(a))
+            }
+            _ => None,
+        };
+    }
+    (None, EXPLICIT)
 }
 
 /// Whether `raw` is a (possibly dangling) heap pointer.

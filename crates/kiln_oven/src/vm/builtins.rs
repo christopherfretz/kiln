@@ -43,9 +43,6 @@ pub(crate) enum BiFault {
     CmpType { t1: OTy, t2: OTy },
     /// `note_constexpr_memchr_unsupported`.
     ChrType { t: OTy },
-    /// `note_constexpr_bit_cast_unsupported_bitfield` (a destination
-    /// bit-field; a source one is rejected statically).
-    CastBitfield,
     /// `note_constexpr_bit_cast_indet_dest`.
     CastIndet { t: OTy },
     /// `note_constexpr_bit_cast_unrepresentable_value` (a `bool` byte).

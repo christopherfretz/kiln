@@ -4,9 +4,11 @@
 //! checks run: `checkBitCastConstexprEligibilityType` on the destination
 //! and then the source type (unions, pointers, member pointers, volatile
 //! and reference members are not allowed), and the unsupported cases of
-//! its buffer converters that depend on the types alone (a bit-field in
-//! the source, types it has no byte image for). What remains is one
-//! `Op::Builtin` (`bi::BIT_CAST`) the VM evaluates through the layout.
+//! its buffer converters that depend on the types alone (types it has no
+//! byte image for). Classes with bases and bit-fields, which clang 22
+//! still rejects, are bit-cast as [bit.cast]/2 says (WP-1526). What
+//! remains is one `Op::Builtin` (`bi::BIT_CAST`) the VM evaluates
+//! through the layout.
 
 use kiln_ast::decl::{DeclKind, TagKind};
 use kiln_ast::types::{PrintOptions, TypeKind};
@@ -82,9 +84,9 @@ fn ineligible(ast: &Ast, q: QualType, notes: &mut Vec<Note>) -> Option<usize> {
 
 impl Compiler<'_> {
     /// The note for a type the Oven cannot bit-cast (clang's buffer
-    /// converters' unsupported cases, plus classes with bases, which the
-    /// Oven's object model does not lay out), the source checked first.
-    pub(super) fn bit_cast_unsupported(&self, t: OTy, src: bool) -> Option<String> {
+    /// converters' unsupported cases but bit-fields), the source checked
+    /// first.
+    pub(super) fn bit_cast_unsupported(&self, t: OTy) -> Option<String> {
         let types = &self.o.types;
         // clang's `BitCastBuffer` has no `_BitInt` case: any width is
         // rejected (spec/oven.md "`_BitInt`").
@@ -101,7 +103,7 @@ impl Compiler<'_> {
                 let n = self.o.tname(self.ast(), t);
                 Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
             }
-            TyKind::Array { elem, .. } => self.bit_cast_unsupported(elem, src),
+            TyKind::Array { elem, .. } => self.bit_cast_unsupported(elem),
             // clang's `BitCastBuffer` reads a `bool` vector's lanes as
             // whole bytes only (`note_constexpr_bit_cast_invalid_vector`).
             TyKind::BoolVec { n, .. } if n % 8 != 0 => {
@@ -112,27 +114,9 @@ impl Compiler<'_> {
                      multiple of the byte size 8"
                 ))
             }
-            TyKind::Record { decl, .. } => {
-                if self.ast().decls.bases(decl, &self.ast().lists).next().is_some() {
-                    return Some(
-                        "kiln: constant evaluation of __builtin_bit_cast of a class with base classes is not supported yet"
-                            .to_owned(),
-                    );
-                }
-                for f in types.fields(t) {
-                    // The destination's bit-fields are reported when the
-                    // walk reaches them (after earlier fields' faults).
-                    if src && f.width.is_some() {
-                        return Some(
-                            "constexpr bit_cast involving bit-field is not yet supported"
-                                .to_owned(),
-                        );
-                    }
-                    if let Some(m) = self.bit_cast_unsupported(f.ty, src) {
-                        return Some(m);
-                    }
-                }
-                None
+            // Bases are among the fields.
+            TyKind::Record { .. } => {
+                types.fields(t).iter().find_map(|f| self.bit_cast_unsupported(f.ty))
             }
             _ => None,
         }
@@ -186,9 +170,7 @@ impl Compiler<'_> {
             self.trap_notes(loc, msg, notes);
             return;
         }
-        if let Some(m) =
-            self.bit_cast_unsupported(ts, true).or_else(|| self.bit_cast_unsupported(td, false))
-        {
+        if let Some(m) = self.bit_cast_unsupported(ts).or_else(|| self.bit_cast_unsupported(td)) {
             self.bit_cast_read(e, src, ts, td, loc);
             self.trap_loc(loc, m);
             return;
