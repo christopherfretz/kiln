@@ -64,9 +64,14 @@ use kiln_ast::{Ast, DeclId, QualType};
 const MAX_DEPTH: u32 = 64;
 
 /// The canonical form of function type `fty`, or `None` when it has none
-/// (an unprototyped function, or a type with no C form inside).
+/// (an unprototyped function, or a type with no C form inside) or when it
+/// contains a variable array bound anywhere (`[n]`, `[*]`, at any depth,
+/// in any parameter or nested function pointer type, after parameter
+/// adjustment: mortar's ruling of 11-17, its O-33). `int b[][n]` and
+/// `int b[][4]` are compatible in C but would write different rows; one
+/// unit without a row is never a party to a finding (a miss, X19).
 pub(crate) fn function(ast: &Ast, target: &Target, fty: QualType) -> Option<String> {
-    let mut w = Writer { ast, target, out: String::new() };
+    let mut w = Writer { ast, target, out: String::new(), no_vla: true };
     w.function(fty, 0)?;
     Some(w.out)
 }
@@ -74,7 +79,7 @@ pub(crate) fn function(ast: &Ast, target: &Target, fty: QualType) -> Option<Stri
 /// The canonical form of object type `q` (a variable's declared type;
 /// its own qualifiers kept), or `None`.
 pub(crate) fn object(ast: &Ast, target: &Target, q: QualType) -> Option<String> {
-    let mut w = Writer { ast, target, out: String::new() };
+    let mut w = Writer { ast, target, out: String::new(), no_vla: false };
     w.ty(q, true, 0)?;
     Some(w.out)
 }
@@ -83,6 +88,8 @@ struct Writer<'a> {
     ast: &'a Ast,
     target: &'a Target,
     out: String,
+    /// A variable array bound gives no form (a function's type).
+    no_vla: bool,
 }
 
 impl Writer<'_> {
@@ -180,6 +187,7 @@ impl Writer<'_> {
                     self.ty(p, true, d)?;
                 }
             }
+            TypeView::VariableArray { .. } if self.no_vla => return None,
             TypeView::ConstantArray(_)
             | TypeView::IncompleteArray(_)
             | TypeView::VariableArray { .. }

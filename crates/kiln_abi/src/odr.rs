@@ -274,7 +274,9 @@ pub struct DetailItem {
     pub ty: String,
     /// An offset in bits, a slot index or an enumerator's value.
     pub value: u64,
-    /// A bit-field's width (0 otherwise).
+    /// A bit-field's width; for a member of unnamed class type, the
+    /// number of items that follow and describe it, through every depth;
+    /// 0 otherwise. Not hashed.
     pub width: u32,
     /// Bits 0-3 the item kind (`ITEM_*`), bit 4 [`ITEM_BITFIELD`], bit 5
     /// [`ITEM_VIRTUAL`].
@@ -548,7 +550,9 @@ impl LayoutSerializer<'_, '_> {
                 if !n.name().is_empty()
                     || ast.closure_lambda(d).is_some()
                     || ast.first(n.ctx()?) != ast.first(owner)
-                    || !self.test.scopes(d)
+                    // An unnamed owner is a member's class this walk is
+                    // already inside (two deep): its scopes passed.
+                    || !(ast.decls.get(owner).name().is_empty() || self.test.scopes(d))
                 {
                     return None;
                 }
@@ -568,10 +572,21 @@ impl LayoutSerializer<'_, '_> {
                     return None;
                 }
                 out.push(b'S');
-                if let (Some(it), Some(d)) = (item, &mut self.details) {
-                    d.push(it);
+                // The item's `width` counts the items that follow and
+                // describe the nested class, through every depth (mortar's
+                // O-19 ruling of 11-17; not hashed).
+                let at = match (item, &mut self.details) {
+                    (Some(it), Some(d)) => {
+                        d.push(it);
+                        Some(d.len())
+                    }
+                    _ => None,
+                };
+                self.record(def, None, out)?;
+                if let (Some(at), Some(d)) = (at, &mut self.details) {
+                    d[at - 1].width = u32::try_from(d.len() - at).unwrap_or(u32::MAX);
                 }
-                self.record(def, None, out)
+                Some(())
             }
             _ => None,
         }

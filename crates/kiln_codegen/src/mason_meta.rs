@@ -7,8 +7,9 @@
 //! table, all little-endian and padded with zeros to a multiple of 8.
 //! [`encode_unit`] is a pure function from blocks to bytes, so a later
 //! record kind adds a [`Block`] without touching the framing. Kinds 1
-//! (the TU summary, MT-26), 3 (types), 4 (their layout details) and 5
-//! (declarations) are written ([`Cg::emit_mason_meta`]).
+//! (the TU summary, MT-26), 2 (definitions, `mason_defs.rs`), 3 (types),
+//! 4 (their layout details) and 5 (declarations) are written
+//! ([`Cg::emit_mason_meta`]).
 
 use std::collections::BTreeMap;
 
@@ -22,6 +23,7 @@ use kiln_llvm::{Linkage, TypeId as LTy, Value};
 use kiln_source::fx::FxHashMap;
 
 use crate::mason_ctype;
+use crate::mason_defs::{DEF_SCHEME, definitions_block, mason_place};
 use crate::module::{Cg, gval};
 
 /// The unit's magic (MT-10).
@@ -85,17 +87,20 @@ pub const TYPE_POLYMORPHIC: u16 = 4;
 pub const TYPE_HAS_VBASES: u16 = 8;
 /// Defined in a system header.
 pub const TYPE_SYSTEM: u16 = 32;
-/// Kind 1's `odr.scheme` (O-11) of the rows kiln hashes: the layout
-/// serialization of `kiln_abi::odr::LayoutSerializer` (version 1) under
-/// FNV-1a 64. Any change to what is serialized or how changes the name
-/// (O-11's bump rule; `layout_hash_golden` guards it).
-pub const ODR_SCHEME: &str = "kiln-odr-1";
+/// Kind 1's `odr.layout-scheme` (O-11; mortar's ruling 3 of 11-17): the
+/// layout serialization of `kiln_abi::odr::LayoutSerializer` (version 1)
+/// under FNV-1a 64, of the kind 3 `layout`. Any change to what is
+/// serialized or how changes the name (O-11's bump rule;
+/// `layout_hash_golden` guards it). The definition serialization is
+/// `odr.scheme` ([`crate::mason_defs::DEF_SCHEME`]).
+pub const ODR_LAYOUT_SCHEME: &str = "kiln-odr-1";
 
 /// How much `-fmason-metadata=<level>` asks for (mortar `spec/odr.md`
 /// K-1: `min` kinds 1 and 2; `default` 1, 2, 3, 5; `detail` + 4; `all` +
-/// rows for definitions inlined away). Kiln writes kind 1 at every level
-/// and kinds 3 and 5 from `default` up (WP-1564, WP-1566); kinds 2 and 4
-/// are later work.
+/// rows for definitions inlined away). Kiln writes kinds 1 and 2 at every
+/// level (kind 2 in C++ units), kinds 3 and 5 from `default` up and kind
+/// 4 from `detail` up; `all`'s rows for definitions inlined away are later
+/// work (K-3f).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MasonMetaLevel {
     /// `min`.
@@ -521,7 +526,7 @@ fn on_off(b: bool) -> String {
 impl Cg<'_> {
     /// The kind 1 rows of this unit (MT-26; spec/codegen.md "Link-time
     /// metadata (`.mason.meta`)" has the source of each value). Never
-    /// `odr.scheme` (no hashed rows yet), `abi.struct-return` (i386 only)
+    /// the scheme rows (`emit_mason_meta`), `abi.struct-return` (i386 only)
     /// or `reloc-model` (hod's).
     pub(crate) fn mason_summary_rows(&self, m: &MasonMetaOptions) -> Vec<SummaryRow> {
         let row = |name, value: String, enforce| SummaryRow { name, value, enforce };
@@ -840,16 +845,9 @@ impl Cg<'_> {
         let opts = self.opts;
         // The definition's file and line, and `SYSTEM`.
         let place = |def: DeclId, flags: &mut u16| {
-            let loc = ast.decls.get(def).loc();
-            let (mut file, mut line) = (String::new(), 0);
-            if let Some(sm) = sm {
-                if sm.is_in_system_header(loc) {
-                    *flags |= TYPE_SYSTEM;
-                }
-                if let Some(p) = sm.presumed_line_col(loc) {
-                    file = opts.debug.remap(&sm.presumed_file_name(&p, loc));
-                    line = p.line;
-                }
+            let (file, line, system) = mason_place(sm, opts, ast.decls.get(def).loc());
+            if system {
+                *flags |= TYPE_SYSTEM;
             }
             (file, line)
         };
@@ -948,19 +946,33 @@ impl Cg<'_> {
         } else {
             None
         };
+        // Kind 2 at every level, C++ units only (K-1's level table; O-14,
+        // N21: C has no vague linkage).
+        let defs = if self.opts.c.is_none() { self.mason_def_rows() } else { Vec::new() };
         let mut rows = self.mason_summary_rows(&m);
+        // Two scheme rows (mortar's ruling 3 of 11-17): the layout
+        // serialization exactly when the unit has kind 3 rows, the
+        // definition serialization exactly when it has kind 2 rows (or a
+        // non-zero kind 3 `hash`, which kiln does not write).
         if types.as_ref().is_some_and(|t| !t.is_empty()) {
-            // Written exactly when the unit has rows of kind 2 or kind 3
-            // (O-11; mortar's answer B1 to WP-1566). Kind 2 is not
-            // written yet, so today that is "has kind 3 rows".
+            rows.push(SummaryRow {
+                name: "odr.layout-scheme",
+                value: ODR_LAYOUT_SCHEME.to_owned(),
+                enforce: false,
+            });
+        }
+        if !defs.is_empty() {
             rows.push(SummaryRow {
                 name: "odr.scheme",
-                value: ODR_SCHEME.to_owned(),
+                value: DEF_SCHEME.to_owned(),
                 enforce: false,
             });
         }
         let mut st = StrTab::default();
         let mut blocks = vec![tu_summary_block(&rows, &mut st)];
+        if !defs.is_empty() {
+            blocks.push(definitions_block(&defs, &mut st));
+        }
         if let Some(types) = &types {
             let (types, details) = types_block(types, &mut st);
             blocks.push(types);
@@ -1354,7 +1366,7 @@ mod tests {
             trow("1X", 2, 4, 0),
         ];
         let mut st = StrTab::default();
-        let k1 = tu_summary_block(&[row("odr.scheme", ODR_SCHEME, false)], &mut st);
+        let k1 = tu_summary_block(&[row("odr.layout-scheme", ODR_LAYOUT_SCHEME, false)], &mut st);
         let (k3, k4) = types_block(&rows, &mut st);
         assert_eq!(k4, None, "no details, no kind 4");
         let k5 = declarations_block(&[decl("_Z1fv", "1S", 0, DECL_DEFINITION)], &mut st);
@@ -1378,7 +1390,7 @@ mod tests {
         let t = &d.strtab;
         assert_eq!(t.windows(4).filter(|w| w == b"\x001S\x00").count(), 1);
         assert_eq!(t.windows(5).filter(|w| w == b"\0a.h\0").count(), 1);
-        assert_eq!(summary(&d)[0], ("odr.scheme".to_owned(), "kiln-odr-1".to_owned(), 0));
+        assert_eq!(summary(&d)[0], ("odr.layout-scheme".to_owned(), "kiln-odr-1".to_owned(), 0));
     }
 
     #[test]

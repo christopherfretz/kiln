@@ -2179,13 +2179,17 @@ Values that a macro holds are its integer value when its replacement list
 (object-like macros expanded) is an integer literal or `(`, `)`, `<<`,
 `|` over them (libc++'s `(1 << 2)`), else its tokens joined by spaces.
 Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
-`reloc-model` (hod's own unit, H-3). `odr.scheme` (O-11) is written,
-value `kiln-odr-1`, flags 0, exactly when the unit has rows of kind 2 OR
-kind 3 (O-11; mortar's answer B1 to WP-1566; kind 2 is not written yet,
-so today exactly when it has kind 3 rows); its name changes with any
-change to the layout serialization below, and when K-3 starts filling
-`hash`. C units
-have no `abi.stdlib*` rows.
+`reloc-model` (hod's own unit, H-3). Two scheme rows (mortar's ruling 3
+of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
+exactly when the unit has kind 3 rows (its name changes with any change
+to the layout serialization below), and `odr.scheme` (O-11), which names
+the definition hash of kind 2, value `kiln-odr-1.d0`
+(`mason_defs::DEF_SCHEME`; K-3c switches it to `kiln_abi`'s constant of
+the body serialization), exactly when the unit has kind 2 rows. So a
+unit with kind 3 rows and no kind 2 rows writes no `odr.scheme`: mortar
+compares layouts by `odr.layout-scheme` once it reads that row, and
+until then treats the pair as incomparable (a miss, never a finding). C
+units have no `abi.stdlib*` rows.
 
 **Kind 5, the declarations** (O-35, O-33; WP-1564;
 `Cg::mason_decl_rows`, `declarations_block`): one 40-byte row per
@@ -2265,7 +2269,10 @@ C++'s `bool`, `char8_t`,
 references pointers; `noexcept` and `restrict` dropped at every level;
 top-level qualifiers of the return type and of every parameter dropped
 (an array parameter is already a pointer: `int a[static 4]`, `int a[n]`
-and `int a[*]` are `Pi`); an array bound erased (`A_`) on every array
+and `int a[*]` are `Pi`); a function whose type keeps a variable array
+bound after that adjustment (`int b[*][n]`, a VLA in a function pointer
+parameter's type) has no row (WP-1581, mortar's ruling of 11-17: no
+canonical form, and C++ has no such type); an array bound erased (`A_`) on every array
 type that is not the element type of another array, wherever C lets it
 be omitted (mortar's answer A(i) to WP-1566; C23 6.2.7: `int (*)[]` and
 `int (*)[4]` are compatible, so hashing them apart would invent a
@@ -2324,7 +2331,8 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | `void f(int, ...)`; `void f(...)` (C23, C++) | `FvizE`; `FvzE` |
 | `void f(int (*)[4], int (*)[])` | `FvPA_iPA_iE` |
 | `extern int (*p)[2][3];` | `PA_A3_i` |
-| `void f(int n, int a[n], int b[*][n])` | `FviPiPA_iE` |
+| `void f(int n, int a[n])` | `FviPiE` (the parameter is `int *`) |
+| `void f(int n, int b[*][n])`, `void f(int n, void (*)(int m, int (*)[m]))` | no row (a variable bound, below) |
 | `extern int a[][3];`, `int a[2][3];` (sizes 0, 24) | `A_A3_i` |
 | `unsigned f(unsigned, enum E)` (`E` of `unsigned int`) | `FiiiE` |
 | `void f(int a[static 4], const int b[const 2])` | `FvPiPKiE` |
@@ -2462,7 +2470,7 @@ count; u32 reserved = 0}` and `count` 24-byte items:
 | `name` | u32 @0 | string-table offset (0: unused) |
 | `type` | u32 @4 | string-table offset (0: unused) |
 | `value` | u64 @8 | |
-| `width` | u32 @16 | a bit-field's width, else 0 |
+| `width` | u32 @16 | a bit-field's width; for a member of unnamed class type (`S`), the number of items that follow and describe it, through every depth (a nested unnamed member's item and its items included; mortar's O-19 ruling of 11-17, WP-1581; 0 for an empty class; not hashed); else 0 |
 | `flags` | u32 @20 | bits 0-3 the item kind, bit 4 `BITFIELD`, bit 5 `VIRTUAL` |
 
 | kind | item | `name` | `type` | `value` |
@@ -2486,20 +2494,71 @@ scoped and fixed bits) are in the row or nowhere; the driver test
 hash from the items and these facts for every class of its golden
 without bases, vptr or unnamed members, and for an enumeration.
 
-**Levels** (mortar's level table, K-1): `min` writes kind 1 (and kind 2,
-when it exists); `default`, `detail` and `all` add kinds 3 and 5. At
+**Kind 2, the definitions** (O-14, O-15; WP-1581, K-3a of the K-3
+series; `crates/kiln_codegen/src/mason_defs.rs`, `Cg::mason_def_rows`,
+`definitions_block`): one 48-byte row per symbol the object defines that
+names a definition O-14 lists, C++ units only (none in C, N21), no block
+when there are no rows. The symbols are read after module emission from
+the declaration maps (`Cg::fns`, `Cg::sfns` with their aliases,
+`Cg::gvars`, after `resolve`), with the linkage the emitter gave them:
+vague (`linkonce_odr`, `weak_odr`) gives a row; a strong (`external`)
+definition only when it is an explicit specialization (K13) or the
+out-of-line definition of a `static constexpr` data member (N22); every
+other linkage (internal, `weak`: N5, `available_externally`: N7) none.
+Candidates whose rows differ for one symbol give it none.
+
+| field | bytes | value |
+|---|---|---|
+| `key` | u64 @0 | FNV-1a 64 of the symbol name as emitted (the asm label, LLVM's `\1` removed) |
+| `hash` | u128 @8 | below |
+| `name` | u32 @24 | 0 (anchored; `all`'s named rows are K-3f) |
+| `class` | u16 @28 | 1 function, 2 variable |
+| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 5 `PARTIAL` (every row: the body is not hashed yet), 8 `SYSTEM` (as kinds 3 and 5); bits 4, 6, 7 and 9-15 are 0 |
+| `module` | u32 @32 | 0 |
+| `file`, `line` | u32 @36, @40 | of the definition (MT-38's prefix maps): an instantiation's template definition, an implicitly defined member's class, an explicit specialization's own definition |
+| `reserved` | u32 @44 | 0 |
+
+The specialization flags come from the definition's own specialization
+kind, else the governing explicit instantiation, else the innermost
+enclosing class's: a member of an implicitly instantiated class template
+is `IMPLICIT_INST`; a member of an explicitly specialized class is
+`EXPLICIT_SPEC` ([temp.expl.spec]/5: it is never instantiated). Every
+symbol of one definition gets a row with the same hash and flags
+(ruling 1: constructor C1/C2, destructor D0/D1/D2 and the aliases among
+them; at `-O0` a vague C1 is folded into C2 and has no symbol). No row
+for owned symbols (static locals `_ZZ`, guards `_ZGV`, reference
+temporaries `_ZGR`, `_ZTW`/`_ZTH`, thunks, vtables, VTTs, typeinfo and
+their names), a closure's static invoker and conversion function, a
+definition whose declarator holds a lambda (X15: a `$_N` symbol or a
+lambda in a default argument), `alias` and `ifunc` symbols (their
+aliasee has its own), and a vague `always_inline` function (the
+always-inliner deletes it at every `-O`). A function with an `asm` label
+is keyed by the label. A coroutine's ramp has a row; its outlined parts
+are internal. kiln rejects function multiversioning, so it has no clones
+to decide. Rows are read before LLVM's passes, so `-O` changes none; a
+definition the optimizer deletes leaves an unanchored row (O-4, X1).
+
+The hash (scheme `kiln-odr-1.d0`) is `kiln_abi::odr::fnv1a_128` over
+`<class tag>\0<type>\0body not hashed`: the tag `function` or
+`variable`, the declared type's `<type>` encoding (`?per-tu` when it has
+a per-TU component: an unnamed namespace, a local entity, an unnamed or
+closure type), and a fixed token. It tells two definitions with one key
+apart only by their type; K-3b and later packages hash the body and
+clear `PARTIAL`. `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
+oracle") is the must-equal check of every K-3 package.
+
+**Levels** (mortar's level table, K-1): `min` writes kinds 1 and 2;
+`default`, `detail` and `all` add kinds 3 and 5. At
 `default` a C++-linkage function's kind 5 row has no type string
 (`type_name` 0; mortar's ruling 3 of 11-16, its 8 KB budget for a unit's
 kind 5 strings); `detail` and `all` write it. Variables and C-linkage
 rows have theirs at every level, and the `type` hash is FNV-1a 64 of the
 full string at every level. Kind 3 rows are the same at every level
-(`details` aside). The kind 1 rows are the same at every level except
-`odr.scheme`, which follows kind 3. `detail` and `all` add kind 4. C
-units write no kind 3 or 4. **Not written yet** (later work
-packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), and
-`all`'s rows for definitions inlined away. Kind 2 will need codegen to record the vague-linkage definitions
-it emits (their symbol names, linkage and comdat), which it does not
-keep today.
+(`details` aside), and so are kind 2's. The kind 1 rows are the same
+at every level except `odr.layout-scheme`, which follows kind 3. `detail`
+and `all` add kind 4. C units write no kind 2, 3 or 4. **Not written
+yet** (later K-3 packages): the body hash, `all`'s named rows and its
+rows for definitions inlined away.
 
 **Determinism** (MT-38): the unit is a function of the TU and its
 options: rows sorted, strings laid out in the order the sorted rows first
@@ -2535,7 +2594,15 @@ libstdc++ and libc++ agreeing on every shared row; C array bounds
 (`enumeration_rows`, `enumeration_rows_two_units`); kind 4 at `detail`
 and `all` only, re-hashed from its items (`layout_details`); the kind 4
 encoder round trip (`details_round_trip`)), `codegen_flags.rs`
-`mason_metadata_levels`, `crates/kiln_codegen/tests/mason_tu_local.rs`.
+`mason_metadata_levels`, `crates/kiln_codegen/tests/mason_tu_local.rs`;
+kind 2: `mason_defs.rs` unit tests (the row layout, the hash golden,
+per-TU components) and `crates/kiln_driver/tests/mason_defs.rs` (a
+golden row per definition kind and the symbols without one, `-O0`
+against `-O2`, X15, C and units without rows, every level, N9, N22 and
+K13 across two units with the oracle, the structor variants, the decided
+forms, two library-heavy units per standard library, the flag off,
+determinism, MT-41's size gate on `bench/frontend/format-like-g.cpp`);
+the variable-bound rule of kind 5: `variable_bounds_have_no_row`.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90

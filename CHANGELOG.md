@@ -157,6 +157,18 @@ Planned as 1.3.0.
   pointer, so `int (*)[]` and `int (*)[4]`, which C treats as
   compatible, are not reported as a mismatch (WP-1576)
   ([spec/codegen.md](spec/codegen.md) §5.5).
+- `-fmason-metadata` (every level, C++) also records a row for each
+  definition that may appear in several objects and that the object
+  defines (inline functions and variables, template instantiations,
+  explicit specializations), with a hash of its type for now, so the
+  mortar linker can report an explicit specialization declared after an
+  implicit instantiation elsewhere; `scripts/mason/odr_oracle.py` checks
+  such objects without the linker. The unit summary names the layout
+  hash scheme in `odr.layout-scheme`; `odr.scheme` now names the
+  definition hash. A C-linkage function whose type has a variable array
+  bound no longer gets a declaration record, and at `detail` a member of
+  unnamed class type records how many entries describe it (WP-1581)
+  ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed
 
