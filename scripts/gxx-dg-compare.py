@@ -8,7 +8,7 @@ A skip row has kiln class `skip`; every other row is an applicable case.
 Standard library only; run it as `python3 -I scripts/gxx-dg-compare.py`.
 
   summary A.tsv [--label L]
-      the headline ("N of M applicable cases pass (P%)"), the class counts
+      the headline ("N of M decided cases pass (P%), K expect-unknown"), the class counts
       per compiler and kiln's failures by triage bucket
   compare BEFORE.tsv AFTER.tsv [--labels B,A] [--list]
       both headlines, the class matrix (kiln's class before against after,
@@ -34,8 +34,11 @@ HEADER = [
 # The runner's class names (xtask/src/gcc_tests/outcome.rs), report order.
 CLASSES = [
     "pass", "compile-reject", "accept-invalid", "wrong-line", "wrong",
-    "crash", "timeout", "not-run",
+    "crash", "timeout", "not-run", "expect-unknown",
 ]
+# Neither a pass nor a failure: the test file does not decide the case
+# (WP-1554; spec/harness.md "The g++.dg runner").
+UNDECIDED = ("expect-unknown",)
 # The runner's triage buckets (gxx.rs `bucket`), report order.
 BUCKETS = [
     "kiln crash / hang",
@@ -77,16 +80,18 @@ def headline(rows):
     app = applicable(rows)
     tests = len({r["test"] for r in rows})
     p = sum(1 for r in app if r["kiln"] == "pass")
-    pct = 100.0 * p / len(app) if app else 0.0
+    u = sum(1 for r in app if r["kiln"] in UNDECIDED)
+    base = len(app) - u
+    pct = 100.0 * p / base if base else 0.0
     return (f"{tests} tests, {len(rows)} rows, {len(app)} applicable cases; "
-            f"{p} of {len(app)} applicable cases pass ({pct:.1f}%)")
+            f"{p} of {base} decided cases pass ({pct:.1f}%), {u} expect-unknown")
 
 
 def bucket(r):
     """The runner's triage bucket of a case kiln fails, else None."""
     k, clang = r["kiln"], r["clang"]
     has_clang = clang not in ("", "-")
-    if k in ("pass", "not-run", "skip"):
+    if k in ("pass", "not-run", "skip") or k in UNDECIDED:
         return None
     if k in ("crash", "timeout"):
         return "kiln crash / hang"
@@ -177,12 +182,14 @@ def cmd_compare(a):
     print(f"Class matrix (rows: {labels[0]}, columns: {labels[1]}; kiln, cases)\n")
     print(table([f"{labels[0]} \\ {labels[1]}"] + used,
                 [[c] + [m[(c, x)] for x in used] for c in used]))
-    regress = [k for k in both if b[k]["kiln"] == "pass" and f[k]["kiln"] not in ("pass", "skip")]
-    fixed = [k for k in both if b[k]["kiln"] not in ("pass", "skip") and f[k]["kiln"] == "pass"]
+    ok = ("pass", "skip") + UNDECIDED
+    regress = [k for k in both if b[k]["kiln"] == "pass" and f[k]["kiln"] not in ok]
+    fixed = [k for k in both if b[k]["kiln"] not in ok and f[k]["kiln"] == "pass"]
     between = sum(1 for k in both if b[k]["kiln"] != f[k]["kiln"]
-                  and b[k]["kiln"] not in ("pass", "skip") and f[k]["kiln"] not in ("pass", "skip"))
+                  and b[k]["kiln"] not in ok and f[k]["kiln"] not in ok)
+    undecided = sum(1 for k in both if (b[k]["kiln"] in UNDECIDED) != (f[k]["kiln"] in UNDECIDED))
     print(f"\npass -> failing: {len(regress)}; failing -> pass: {len(fixed)}; "
-          f"between two failing classes: {between}\n")
+          f"between two failing classes: {between}; into or out of expect-unknown: {undecided}\n")
     print(f"### pass in {labels[0]}, failing in {labels[1]} ({len(regress)})\n")
     for k in regress:
         r = f[k]

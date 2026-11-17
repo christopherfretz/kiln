@@ -13,6 +13,9 @@ concurrency:
 # jobs keep the names of the REQUIRED status checks, `check` and
 # `check-x86_64` (the main ruleset and the merge queue wait for them), so
 # they are plain jobs: a matrix axis would rename them.
+# A job that calls a reusable workflow cannot carry `timeout-minutes`:
+# the jobs of ci-lane.yml carry their own (docs/VALIDATION.md "Job
+# timeouts", WP-1600).
 jobs:
   arm:
     # The reference environment: aarch64 Debian 13 (see ci-lane.yml).
@@ -31,6 +34,7 @@ jobs:
     needs: [arm]
     if: always()
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
     steps:
       - name: every arm job succeeded
         run: |
@@ -40,6 +44,7 @@ jobs:
     needs: [x86_64]
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: every x86_64 job succeeded
         run: |

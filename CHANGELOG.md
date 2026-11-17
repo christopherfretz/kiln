@@ -219,6 +219,15 @@ Planned as 1.3.0.
 - `-fno-elide-constructors` is accepted before C++17 (WP-1503): the
   copies C++98 to C++14 allow to be elided are now built, and the flag
   makes them, as clang does. By default they are still elided.
+- The g++.dg runner (`cargo xtask gxx-dg`) reads the severity a
+  `dg-message` or `dg-regexp` pattern names, so expected errors written
+  that way are no longer reported as rejects-valid, and a line-0
+  `dg-error` accepts an error on any line; a case whose errors only a
+  `dg-message ""`, `dg-prune-output` or `dg-excess-errors` could account
+  for is counted apart as `expect-unknown` (WP-1554). The standard
+  citations in docs/status/gxx-dg.md were checked against the working draft
+  (WP-1556). Every CI job now has a `timeout-minutes`, so a hung runner no
+  longer holds the merge queue for six hours (WP-1600).
 
 ### Fixed
 

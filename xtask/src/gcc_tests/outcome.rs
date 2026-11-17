@@ -28,10 +28,16 @@ pub enum Class {
     WrongLine,
     /// The compiler could not be run at all (missing, a tool error).
     NotRun,
+    /// The compiler reported an error the test does not require, where the
+    /// test file does not decide whether GCC's output holds one (a
+    /// `dg-message` of no named severity on that line, `dg-excess-errors`,
+    /// a prune pattern that may match an error; [`super::expect`]): neither
+    /// a pass nor a failure, counted apart (g++.dg only).
+    ExpectUnknown,
 }
 
 impl Class {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Pass,
         Self::CompileReject,
         Self::Crash,
@@ -40,6 +46,7 @@ impl Class {
         Self::AcceptInvalid,
         Self::WrongLine,
         Self::NotRun,
+        Self::ExpectUnknown,
     ];
 
     pub fn label(self) -> &'static str {
@@ -52,11 +59,12 @@ impl Class {
             Self::AcceptInvalid => "accept-invalid",
             Self::WrongLine => "wrong-line",
             Self::NotRun => "not-run",
+            Self::ExpectUnknown => "expect-unknown",
         }
     }
 
     pub fn is_failure(self) -> bool {
-        !matches!(self, Self::Pass | Self::NotRun)
+        !matches!(self, Self::Pass | Self::NotRun | Self::ExpectUnknown)
     }
 }
 

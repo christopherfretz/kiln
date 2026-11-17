@@ -109,6 +109,7 @@ own subset; their BACKLOG rows have the detail).
 - WP-1590, WP-1594, WP-1573 (after this run): an odr-use of a by-copy capture in a constant expression in the lambda body names the closure member (`constexpr-lambda10`, 3 cases); `delete` deallocates when the destructor throws; an indeterminate bit-field sharing a byte with a determinate one after a bit-cast is not readable. Filtered before/after run (3119 cases): no case from pass to a failing class.
 - WP-1570, WP-1578, WP-1598, WP-1599 (after this run): a member call through `this` naming one non-template member function with a non-dependent type, of a class with no dependent base, is not type-dependent (`member3`, `member4`: 6 cases; `member5`'s call of a member template stays dependent, a remainder); the cleanups of a dependent template argument end with it before C++17; `sat_concept_id_partial` with a non-type parameter; requires-expression deferral under pack expansions. Filtered before/after run (12500 cases of template, lookup, cpp2a, concepts, cpp1z, cpp26 and others): no case from pass to a failing class.
 - WP-1548, WP-1552 (after this run): GCC's `__builtin_shuffle` and mixed-length `__builtin_shufflevector` (`builtin-shuffle-1`, `builtin-shufflevector-1`/`-2`, `builtin-convertvector-2`, every `vshuf-*`), `__builtin_speculation_safe_value` (`spec-barrier-*`, `builtin-speculation-overloads1`-`4`), `__builtin_assoc_barrier`, `__builtin_ffsg`/`clrsbg`/`parityg` (`pr111309-1`, `pr118868-1`), and deprecation/unavailability of conversion functions and instantiated enumerators; `builtin-assoc-barrier-1` still fails on its `optimize` attribute; `__builtin_has_attribute`, `__integer_pack` and `__is_invocable` are left out.
+- WP-1554, WP-1556, WP-1600 (after this run): the runner reads `dg-message` and `dg-regexp` lines that name an error as expected errors and line-0 `dg-error`/`dg-message` as any line; a case whose errors only `dg-message ""`, `dg-prune-output` or `dg-excess-errors` could account for is `expect-unknown`, counted apart (filtered run with one release kiln, 7292 cases: 27 to pass, 135 to expect-unknown, none from pass to a failing class); the citations of the verdict tables were checked against the working draft; every CI job has a timeout.
 
 ### Cases that went from pass to a failing class (99)
 
@@ -155,7 +156,7 @@ the same way (`pure-virtual1` link, contracts before C++26, `cond2`,
    overflows too). Direct-initializing a `volatile S` from another one, where `S` has
    only a variadic constructor `S(...)`, picks `S(...)`, whose argument
    must itself be copied into the ellipsis by `S(...)`, without end. Area: sema overload (passing a
-   class object through `...`: [expr.call]/12 makes it a copy, and a
+   class object through `...`: [expr.call]/13 makes it a copy, and a
    volatile glvalue has no usable copy constructor). WP-1542.
 2. **Compile timeout** (3 cases, `other/pr117516`): about 60 s on a
    chain of thousands of nested structs. Area: sema record layout and
@@ -251,12 +252,12 @@ clusters:
   (`enum E { a, b, };`, a lambda with a template parameter list in
   `gnu++98`; 9 cases). Area: parser extension warnings.
 - an implicitly moved `return x;` whose first overload resolution selects a deleted converting constructor `R(X&&)`
-  ([class.copy.elision]/3; 5 cases). Area: sema return.
+  ([expr.prim.id.unqual]/15; C++20 [class.copy.elision]/3; 5 cases). Area: sema return.
 - redeclarations through an alias template that ignores its parameter
   (`void f(void_t<typename T::type>*)` against `void f(void*)`, CWG1980;
   4 cases). Area: sema template redeclaration matching.
 - `requires b;` on a parameter in a requires-expression is not a
-  constant expression ([expr.prim.req.nested]/2; 4 cases). Area: sema
+  constant expression ([expr.prim.req.nested]/1; 4 cases). Area: sema
   constraint satisfaction.
 - `parse/dtor16` (a destructor template; 6 cases) passes after WP-1473.
 
@@ -264,16 +265,16 @@ clusters:
 
 Verdicts: **a** = kiln and clang are right by the standard (GCC accepts an extension, or GCC differs);
 **b** = the test needs a GCC-only flag, builtin, attribute, pragma or target feature; **c** = kiln is wrong
-along with clang. Paragraph numbers are C++23 (N4950) unless marked otherwise. A cluster is the first kiln
+along with clang. Paragraph numbers are the C++26 working draft of 2026-11 (cplusplus/draft of 2026-11-16) unless marked otherwise, checked against the paragraph text (WP-1556). A cluster is the first kiln
 diagnostic with names and numbers stripped. Mixed clusters give the dominant verdict and the split.
 
 Two caveats:
 - 75 of the 1093 cases in the 30 largest rejects-valid clusters have GCC rejecting the test as well. Those
   tests expect their error through `dg-message ""` or `dg-regexp`, which the runner does not read as an
-  expected error. That is a runner gap, not a kiln finding (WP-1554); it is marked "GCC-rej" below.
+  expected error. That is a runner gap, not a kiln finding; it is marked "GCC-rej" below. Since WP-1554
+  the runner reads them (see the WP-1554 line above).
 - clang 22 has no reflection, so for the 61 `reflect/` cases in this bucket "clang rejects too" tells us
   nothing. They are marked c? and need checking one by one (WP-1537).
-- Paragraph numbers in these tables were written from memory and only spot-checked (WP-1556).
 
 The c verdicts are rows WP-1526 to WP-1538; the b verdicts worth adding
 for GCC compatibility are WP-1548 to WP-1552 and WP-1553.
@@ -285,35 +286,35 @@ WP-1531 fixed, after this run: the generic-lambda requirement order (#30's c 3, 
 | # | cluster (short pattern) | cases | verdict | reason |
 |---|---|---|---|---|
 | 1 | use of undeclared identifier | 265 | b | GCC builtins: `__builtin_shuffle` 72, `__builtin_add_overflow_p` 38, `__builtin_apply_args` 18, `__builtin_va_arg_pack`(`_len`) 18, `__builtin_mul_overflow_p` 12, `__integer_pack` 10, `__builtin_assoc_barrier` 9, `__builtin_puts` 8, `__builtin_speculation_safe_value` 6, 7 smaller ones 16; `__builtin_has_attribute` operands 22; `__CHAR8_TYPE__` 4. a: `-fpermissive` lookup 10, `::nullptr_t` 3 (unspecified, [support.c.headers.other]/1). c: ADL of a non-hidden friend 1 ([basic.lookup.argdep]/4, P1787). GCC-rej 27 |
-| 2 | static assertion failed (no message) | 68 | mixed | c? reflection 25 (clang has no reflection); a 21: `source_location` column and function_name are implementation-defined ([support.srcloc.cons]) 18; `__is_trivial` with a deleted, more-constrained default ctor 3 ([special]/6, [class.prop]/2); b 21: GCC 16 makes misuse of `__atomic_*` and other builtins a SFINAE failure 12, `-D` taken from a target selector 6, `-fabi-version` 3; c? constexpr virtual inheritance 1 |
-| 3 | constexpr variable must be initialized by a constant expression | 54 | a | GCC differs on UB during constant evaluation 38: writing a member before its lifetime starts ([basic.life]/7) 18, member pointer cast to an unrelated class ([expr.static.cast]/12) 6, delete through a base without a virtual dtor ([expr.delete]/3) 3, reading an object in its own initializer 3, pointer parameter read in `p->static_member` ([expr.ref]) 3, local address 2, implementation-defined function_name 3. c 5: bit_cast with bit-fields 3, P2280 only applied from C++23 2. b 7: `-fconstexpr-fp-except`, vector `==`, zero-size array. Plus reflection 1, GCC-rej 3 |
-| 4 | a type specifier is required | 53 | a | implicit int (`main()`, `-fpermissive`, system-header line markers); [dcl.type.general]/2 |
+| 2 | static assertion failed (no message) | 68 | mixed | c? reflection 25 (clang has no reflection); a 21: `source_location` column and function_name are implementation-defined ([support.srcloc.cons]) 18; `__is_trivial` with a deleted, more-constrained default ctor 3 ([special]/6, [depr.meta.types]/3); b 21: GCC 16 makes misuse of `__atomic_*` and other builtins a SFINAE failure 12, `-D` taken from a target selector 6, `-fabi-version` 3; c? constexpr virtual inheritance 1 |
+| 3 | constexpr variable must be initialized by a constant expression | 54 | a | GCC differs on UB during constant evaluation 38: writing a member before its lifetime starts ([basic.life]/7) 18, member pointer cast to an unrelated class ([expr.static.cast]/11) 6, delete through a base without a virtual dtor ([expr.delete]/3) 3, reading an object in its own initializer 3, pointer parameter read in `p->static_member` ([expr.ref]) 3, local address 2, implementation-defined function_name 3. c 5: bit_cast with bit-fields 3, P2280 only applied from C++23 2. b 7: `-fconstexpr-fp-except`, vector `==`, zero-size array. Plus reflection 1, GCC-rej 3 |
+| 4 | a type specifier is required | 53 | a | implicit int (`main()`, `-fpermissive`, system-header line markers); [dcl.type.general]/3 |
 | 5 | unknown type name | 53 | b | Concepts TS `concept bool` (`-fconcepts`) 35; GCC trait `__remove_reference` 11; `__constinit` keyword 4; GNU attribute inside a parenthesized declarator 3 |
-| 6 | '_Complex' is a C99 extension (-Werror) | 42 | a | `_Complex` is a reserved identifier ([lex.name]/3) used as an extension; it is an error only under the suite's `-pedantic-errors` |
-| 7 | expected 'token' | 40 | b | GCC 15 extended toplevel `asm` with operands 18; a: `__builtin_offsetof` with a qualified member designator 6 ([support.types.layout]/1), `_Alignas` used as an identifier 2 ([lex.name]/3); GCC-rej 14 |
+| 6 | '_Complex' is a C99 extension (-Werror) | 42 | a | `_Complex` is a reserved identifier ([lex.name]/4) used as an extension; it is an error only under the suite's `-pedantic-errors` |
+| 7 | expected 'token' | 40 | b | GCC 15 extended toplevel `asm` with operands 18; a: `__builtin_offsetof` with a qualified member designator 6 ([support.types.layout]/1), `_Alignas` used as an identifier 2 ([lex.name]/4); GCC-rej 14 |
 | 8 | no matching function for call | 37 | mixed | a 11: CWG1286 alias template equivalence is still open 3, `-fpermissive` pointer conversions 6, exception-spec relaxed in system headers 2; b 9: GNU `noreturn` on a function-pointer parameter is ignored for conversions; c 9: P2280 `this->m.f()` in a template argument 3 (rejected even at C++23), explicit args plus deduction extending a pack ([temp.arg.explicit]/9) 3, default template argument of a concept outside the atomic constraint's parameter mapping ([temp.constr.normal]/1.4) 3; reflection 2; GCC-rej 6 |
 | 9 | link: undefined reference | 37 | b | `link_error` folded away only by GCC's optimizer 9, `#pragma interface/implementation` 9, `-nostdlib++` plus weak `__cxa_pure_virtual` 3, alias attribute on typeinfo 3; c 4: C++11 implicit move picks `X(const T&)` (C++11 [class.copy]/32) 1, friend template defined by a later implicit instantiation not emitted ([temp.point]/7) 3; GCC-rej 6 |
-| 10 | invalid suffix on literal (reserved UDL) | 36 | a | ud-suffix without `_` is reserved, IFNDR ([over.literal]/8, [usrlit.suffix]); `"x"MACRO` lexes as one UDL token ([lex.pptoken]/3); GCC-rej 2 |
+| 10 | invalid suffix on literal (reserved UDL) | 36 | a | ud-suffix without `_` is reserved, IFNDR ([over.literal]/8, [usrlit.suffix]); `"x"MACRO` lexes as one UDL token ([lex.pptoken]/5); GCC-rej 2 |
 | 11 | ISO C++11 does not allow access declarations | 34 | a | removed in C++11 (C++03 [class.access.dcl]); kiln still accepts them at C++98 |
-| 12 | static assertion expression is not an ICE | 34 | c | c 18: bit_cast of classes with bases or bit-fields 6, placement new/construct_at changing a union's active member 6, P2280 2, a thrown `nullptr` not caught by a pointer handler ([except.handle]/3) 1, ...; a 10: subtracting pointers into different subobjects ([expr.add]/5), arithmetic on a pointer to a non-similar type ([expr.add]/6), `&*nullptr` ([expr.unary.op]/1), `frexp` before C++23, `void*` cast to a non-similar type (C++26 [expr.const], P2738); b 3: `__builtin_strstr`/`index`/`rindex` in constant expressions; reflection 6 |
-| 13 | redefinition | 30 | b | `gnu_inline` extern-inline redefinition semantics 24; a: a namespace alias reusing the name of the namespace it aliases 3 ([basic.scope.scope]/4); alias specializations that ignore their argument 3 (CWG1980 open) |
+| 12 | static assertion expression is not an ICE | 34 | c | c 18: bit_cast of classes with bases or bit-fields 6, placement new/construct_at changing a union's active member 6, P2280 2, a thrown `nullptr` not caught by a pointer handler ([except.handle]/3) 1, ...; a 10: subtracting pointers into different subobjects ([expr.add]/5), arithmetic on a pointer to a non-similar type ([expr.add]/6), `&*nullptr` ([expr.unary.op]/1), `frexp` before C++23, `void*` cast to a non-similar type ([expr.const.core]/2.15, P2738); b 3: `__builtin_strstr`/`index`/`rindex` in constant expressions; reflection 6 |
+| 13 | redefinition | 30 | b | `gnu_inline` extern-inline redefinition semantics 24; a: a namespace alias reusing the name of the namespace it aliases 3 ([basic.link]/8, [basic.link]/11.3); alias specializations that ignore their argument 3 (CWG1980 open) |
 | 14 | variable-sized object may not be initialized | 30 | a | VLAs and initialized VLAs are GNU extensions ([dcl.array]/1); GCC-rej 3 |
-| 15 | attribute cannot be applied to types | 28 | a | attribute or `alignas` in a position that appertains to a type ([dcl.attr.grammar]/5, [dcl.align]/1); GCC ignores it with a warning |
-| 16 | use 'template' keyword for dependent template name | 27 | mixed | c 12: member of the current instantiation (`this->f()`, implicit `this`, non-dependent base) treated as type-dependent, so `.bfn<int>` is not parsed as a template ([temp.dep.type]/6, [temp.dep.expr]/5); a 12: a dependent `X::Y<int>::Z` with no `template` before Y (`<` in a non-terminal nested-name-specifier) ([temp.names]/3), GCC applies the CWG1710 direction; GCC-rej 3 |
+| 15 | attribute cannot be applied to types | 28 | a | attribute or `alignas` in a position that appertains to a type ([dcl.attr.grammar]/7, [dcl.align]/1); GCC ignores it with a warning |
+| 16 | use 'template' keyword for dependent template name | 27 | mixed | c 12: member of the current instantiation (`this->f()`, implicit `this`, non-dependent base) treated as type-dependent, so `.bfn<int>` is not parsed as a template ([temp.dep.type]/4, [temp.dep.expr]/5); a 12: a dependent `X::Y<int>::Z` with no `template` before Y (`<` in a non-terminal nested-name-specifier) ([temp.names]/7), GCC applies the CWG1710 direction; GCC-rej 3 |
 | 17 | pack expansion contains no unexpanded packs | 25 | b | GCC builtin `__integer_pack` 21; GCC-rej 4 |
-| 18 | static assertion failed (with message) | 25 | a | `noexcept(T())` with a trivial noexcept(false) default ctor 6 (CWG2820); nothrow array new with a runtime bound treated as throwing 3 ([except.spec]/6); list-init of a reference through a conversion function 3 ([dcl.init.list]/3.10, CWG1996); `__func__` length 3 ([dcl.fct.def.general]/8); closure size 3 ([expr.prim.lambda.capture]/10). b 5: `-fabi-version`, `_Complex` trait. c 2: `new T[](args)` (P1009/P0960, [expr.new]/7) |
-| 19 | expected unqualified-id | 23 | a | explicit template args on a qualified constructor name 6 ([class.qual]/2, [temp.arg.explicit]/2); `unsigned` with a typedef-name 3 ([dcl.type.simple]); b: `__is_invocable` trait 3, `-fconcepts` 1; c 3: keywords and alternative tokens in an attribute-token, `[[using, ...]]` ([dcl.attr.grammar]/4); GCC-rej 7 |
+| 18 | static assertion failed (with message) | 25 | a | `noexcept(T())` with a trivial noexcept(false) default ctor 6 (CWG2820); nothrow array new with a runtime bound treated as throwing 3 ([except.spec]/6); list-init of a reference through a conversion function 3 ([dcl.init.list]/3.10, CWG1996); `__func__` length 3 ([dcl.fct.def.general]/8); closure size 3 ([expr.prim.lambda.closure]/4). b 5: `-fabi-version`, `_Complex` trait. c 2: `new T[](args)` (P1009/P0960, [expr.new]/7) |
+| 19 | expected unqualified-id | 23 | a | explicit template args on a qualified constructor name 6 ([class.qual]/1, [temp.arg.explicit]/2); `unsigned` with a typedef-name 3 ([dcl.type.simple]); b: `__is_invocable` trait 3, `-fconcepts` 1; c 3: keywords and alternative tokens in an attribute-token, `[[using, ...]]` ([dcl.attr.grammar]/4); GCC-rej 7 |
 | 20 | cannot initialize a variable of type | 21 | a | `-fpermissive` int/pointer conversions, PMF to `void*` (`-Wno-pmf-conversions`), `_Complex` |
-| 21 | character not allowed in an identifier | 21 | a | bidi controls are not XID_Continue ([lex.name]/1); delimited and named escapes are C++23 ([lex.charset]) |
-| 22 | 'auto' not allowed in function prototype | 20 | b | Concepts TS `-fconcepts` at C++14 18; a: abbreviated function templates before C++20 2 ([dcl.fct]/22) |
-| 23 | an attribute list cannot appear here | 18 | a | attributes on a non-defining friend ([dcl.attr.grammar]/5), after an elaborated class name ([dcl.type.elab]/1), after a namespace name ([namespace.def.general]/1); c 3: attribute on an asm-declaration (CWG2262, [dcl.asm]/1) |
+| 21 | character not allowed in an identifier | 21 | a | bidi controls are not XID_Continue ([lex.name]/1); delimited and named escapes are C++23 ([lex.universal.char]) |
+| 22 | 'auto' not allowed in function prototype | 20 | b | Concepts TS `-fconcepts` at C++14 18; a: abbreviated function templates before C++20 2 ([dcl.fct]/23) |
+| 23 | an attribute list cannot appear here | 18 | a | attributes on a non-defining friend ([dcl.attr.grammar]/7), after an elaborated class name ([dcl.type.elab]), after a namespace name ([namespace.def.general]); c 3: attribute on an asm-declaration (CWG2262, [dcl.asm]/1) |
 | 24 | reference member binds to a temporary | 17 | a | GCC differs: a mem-initializer binding a temporary to a reference member is ill-formed ([class.base.init]/8); GCC only warns |
 | 25 | cannot be defined in a type specifier | 16 | a | GNU compound literal that defines a union (ISO C++ has no compound literals, and types cannot be defined in a cast); GCC-rej 3 |
 | 26 | implicit instantiation of undefined template | 16 | a | CWG1286 (open) 6; `gnu::aligned` after an array declarator applies to the array type 3; non-dependent use of an incomplete type in a template, IFNDR ([temp.res.general]/6) 3; default template arg of a member template substituted with the class (underspecified, [temp.inst]/3) 3; 1 not checked |
 | 27 | is a private member | 15 | a | non-dependent access violation in a template that is never instantiated, IFNDR ([temp.res.general]/6) |
 | 28 | first two args to `__builtin_shufflevector` must have the same type | 15 | b | GCC's `__builtin_shufflevector` takes vectors of different lengths |
-| 29 | structured binding cannot be declared X | 15 | a | `constexpr`/`static`/pack structured bindings are C++26/C++20 ([dcl.struct.bind]/1); GCC pedwarns in earlier modes |
-| 30 | type cannot be used prior to '::' | 15 | a | unspecified whether the instantiation happens ([temp.inst]/9) 9; c 3: a requires-expression checked out of order after partial instantiation of a generic lambda ([expr.prim.req.general]/5); GCC-rej 3 |
+| 29 | structured binding cannot be declared X | 15 | a | `constexpr`/`static`/pack structured bindings are C++26/C++20 ([dcl.pre]/7); GCC pedwarns in earlier modes |
+| 30 | type cannot be used prior to '::' | 15 | a | unspecified whether the instantiation happens ([temp.inst]/10) 9; c 3: a requires-expression checked out of order after partial instantiation of a generic lambda ([expr.prim.req.general]/5); GCC-rej 3 |
 
 Dominant verdicts: a 19, b 8, c 3 (counting #2 as c? because of reflection, and #16 as c).
 
@@ -322,28 +323,28 @@ Dominant verdicts: a 19, b 8, c 3 (counting #2 as c? because of reflection, and 
 | # | cluster (expected GCC message) | cases | verdict | reason |
 |---|---|---|---|---|
 | 1 | (empty pattern) | 41 | a | CWG727/CWG393 DRs (class-scope explicit specialization, reference to an array of unknown bound) 5; partial specialization after use, IFNDR ([temp.spec.partial.general]/1) 3; a floating-point new-array bound is valid since C++14 ([expr.new]/8) 2; GNU asm label on a member 3; out-of-namespace explicit specialization 3 ([temp.expl.spec]/3); deducing explicit object param of a captureless lambda 2; ... c 11: address-of a by-default-captured constant in a constexpr init in a lambda 3, `inline template<...>` 3 ([temp.pre]/1), deduction from ambiguous bases must fail 3 ([temp.deduct.call]/5), C++98 ICE rules 2; b 8: `-fno-elide-constructors`, `-fno-new-inheriting-ctors`, packed return |
-| 2 | changes meaning | 27 | a | a name whose meaning changes in class scope is IFNDR (C++20 [basic.scope.class]/2) |
+| 2 | changes meaning | 27 | a | a name whose meaning changes in class scope is IFNDR ([class.member.lookup]/6; C++20 [basic.scope.class]/2) |
 | 3 | is not supported for this target | 18 | b | `-fcf-protection` is an x86 CET flag; GCC also accepts on this host (target selector) |
-| 4 | conflicting | 12 | a | redeclaring `__cxa_*` with different types: reserved names ([lex.name]/3) 9; `__typeof__` conflict in a template that is never instantiated, IFNDR 3 |
+| 4 | conflicting | 12 | a | redeclaring `__cxa_*` with different types: reserved names ([lex.name]/4) 9; `__typeof__` conflict in a template that is never instantiated, IFNDR 3 |
 | 5 | not a member of coroutine_handle | 9 | a | the test supplies its own `std::coroutine_handle` without `address`; UB ([namespace.std]/1) |
 | 6 | ambiguous | 9 | c | inherited ctor vs derived ctor with different parameter types is ambiguous ([over.match.best.general]/2.7) 3; atomic constraint with an empty mapping is satisfied, so both overloads are viable ([temp.constr.normal]/1.4) 3; two different conversion functions leave the copy/move ctor candidates ambiguous ([over.ics.rank]/3.3, CWG2327 open) 2; b `-fconcepts` 1 |
 | 7 | arithmetic on pointer to an empty aggregate | 9 | a | zero-length arrays are GNU; kiln flags the declaration under `-pedantic-errors` and warns about the arithmetic |
 | 8 | narrowing (in system header) | 9 | c | narrowing is ill-formed ([dcl.init.list]/3.9, [intro.compliance.general]/2), but kiln exempts system headers on purpose; needs a decision, not a fix |
-| 9 | redeclared | 9 | a | `__cxa_*` reserved names ([lex.name]/3) |
-| 10 | does not declare anything | 8 | a | kiln issues a warning, which is a diagnostic ([dcl.pre]/5, [intro.compliance.general]/2); a lone GNU attribute declaration |
+| 9 | redeclared | 9 | a | `__cxa_*` reserved names ([lex.name]/4) |
+| 10 | does not declare anything | 8 | a | kiln issues a warning, which is a diagnostic ([dcl.pre]/6, [intro.compliance.general]/2); a lone GNU attribute declaration |
 | 11 | anonymous struct with base | 6 | a | anonymous structs are a GNU extension |
 | 12 | cannot bind packed field | 6 | a | `packed` is GNU; GCC's ban on binding a reference to a packed field is GCC policy |
 | 13 | cannot tail-call | 6 | a | `gnu::musttail` feasibility is implementation-specific and checked at codegen, not under `-fsyntax-only` |
-| 14 | conflicting declaration | 6 | a | `__dso_handle`, `__dynamic_cast` are reserved ([lex.name]/3) |
+| 14 | conflicting declaration | 6 | a | `__dso_handle`, `__dynamic_cast` are reserved ([lex.name]/4) |
 | 15 | depth | 6 | a | class-scope explicit specialization is valid (CWG727) 3; b: `-ftemplate-depth-50` spelling 3 |
 | 16 | fail | 6 | c | a function template named as a template argument is odr-used and must be instantiated ([basic.def.odr], [temp.inst]) |
 | 17 | incomplete | 6 | c | discarded volatile glvalue needs an lvalue-to-rvalue conversion, so the type must be complete ([expr.context]/2) 3; a: member of incomplete self type in a template that is never instantiated 3 |
 | 18 | invalid arguments for -fpatchable-function-entry | 6 | b | flag value check; GCC also accepts on this host |
 | 19 | match | 6 | b | `-fno-new-ttp-matching` (pre-P0522 behavior) |
 | 20 | no match | 6 | b | `-fno-new-inheriting-ctors` 3; a: call with no viable overload in a template that is never instantiated, IFNDR 3 |
-| 21 | conflicts | 5 | c | a using-declaration that redeclares an existing class member ([class.mem.general]/5, [namespace.udecl]/10 example; C++20 [basic.scope.declarative]/4) |
+| 21 | conflicts | 5 | c | a using-declaration that redeclares an existing class member ([class.mem.general]/8, [namespace.udecl]/10 example; C++20 [basic.scope.declarative]/4) |
 | 22 | indeterminate attr not on first declaration | 4 | a | `[[indeterminate]]` is C++26; earlier modes ignore it with a warning; kiln diagnoses it at C++26 |
-| 23 | deleted | 4 | a | GCC differs: a prvalue initializes a `[[no_unique_address]]` member directly ([dcl.init.general]/16.6.1; CWG2403 open) |
+| 23 | deleted | 4 | a | GCC differs: a prvalue initializes a `[[no_unique_address]]` member directly ([dcl.init.general]/15.6.1; CWG2403 open) |
 | 24 | designator used multiple times | 4 | a | kiln warns (`-Winitializer-overrides`); a warning is a diagnostic |
 | 25 | mixed designated and non-designated | 4 | a | kiln warns (`-Wc99-designator`) under the test's `dg-options ""` |
 | 26 | attribute may not be specified (strict_flex_array) | 3 | b | GCC attribute `strict_flex_array` |
@@ -373,13 +374,13 @@ LN") cases.
 |---|---:|---:|---|---|---|
 | Location only: kiln reports on a nearby line, at the use, or at the instantiation, where clang does (`initlist-ref-2267`, `nsdmi-dr1397`, `pr77655`, `parse/crash2`, `other/goto1`, `other/goto3`, `other/init9`, `eh/spec6`, `pt/crash36`, `robertl/eb93`, `ns/alias4`, `law/access4`, ...) | 103 | 38 | 98 wrong-line, 3 accepts, 2 pass | G | The error is there, on a line next to GCC's (jump: at the `goto`, not the label; parse errors: at the next token; deleted or private special members: at the use). `init/enum1`: kiln flags the enumerator, GCC the closing brace. Only `init/synth2` and `bob/inherit2` at C++98 (1 case each) match clang and not kiln |
 | Pre-C++11 rules not enforced at `-std=c++98 -pedantic-errors` (non-static member initializers, `long long`, trailing enum comma, braced default argument, empty member declaration, `friend T;` forms, local types as template arguments, `>>`, variable templates, internal linkage and pointer arithmetic in NTTPs, comma in a constant expression, explicit specialization outside the template's namespace, NTTP type that depends on a partial specialization's parameter) | 23 | 23 | 18 pass, 3 accepts, 2 wrong-line | R | C++03 [class.mem]/4, [basic.fundamental]/2, [dcl.enum]/1, [class.friend]/2, [temp.arg.type]/2, [temp.names]/3, [temp.arg.nontype]/1, [expr.const]/1, [temp.expl.spec]/2, [temp.class.spec]/9 |
-| Decl-specifier and declarator rules: `inline` on a non-static data member, a parameter, or a C++14 variable; `const` on a conversion function's decl-specifiers; `inline template<...>`; `template<...> typedef`; cv on a class declaration; a qualified parameter name; a declaration with no type; `(void, ...)`; `~Typedef()` | 27 | 9 | 24 pass, 3 accepts | R | [dcl.inline]/1, [dcl.inline]/4, [class.conv.fct]/1, [temp.pre]/1, [dcl.typedef]/1, [dcl.meaning.general]/1, [dcl.type.general]/2, [dcl.fct]/2, [class.dtor]/1. kiln reads `inline template` as an explicit instantiation and only warns |
-| Later-standard rules applied in earlier modes: CTAD before C++17 (`binder2nd(...)`), missing `typename` before C++20, static `operator[]` before C++23, NTTP subobject or cast forms before C++20, C++11 implicit copy assignment in a constant expression, `goto`/`static` in a lambda used in a constant expression before C++23 | 19 | 10 | 14 pass, 5 wrong-line | R (18), G (1) | C++14 [dcl.type.simple]/2 (template-name needs arguments), C++17 [temp.res]/3, C++20 [over.oper]/7, C++17 [temp.arg.nontype]/2, C++11 [dcl.constexpr]/8, C++20 [dcl.constexpr]/3. `pt/ptrmem6` at C++20 is valid ([expr.static.cast]/12): GCC differs |
-| Friend declarations: `explicit` on a friend, explicit specialization in a friend, `template<class U> friend S<U>;` and `friend typename S<U>::X` | 18 | 6 | 18 pass | R | [dcl.fct.spec]/4, [class.friend]/3, [temp.friend]/1 |
-| Pointer-to-member conversion through a private or ambiguous base (implicit, `static_cast`, C-style cast, base-to-derived direction) | 15 | 5 | 15 pass | R | [conv.mem]/2, [expr.static.cast]/12 |
+| Decl-specifier and declarator rules: `inline` on a non-static data member, a parameter, or a C++14 variable; `const` on a conversion function's decl-specifiers; `inline template<...>`; `template<...> typedef`; cv on a class declaration; a qualified parameter name; a declaration with no type; `(void, ...)`; `~Typedef()` | 27 | 9 | 24 pass, 3 accepts | R | [dcl.inline]/1, [class.conv.fct]/2, [temp.pre]/1, [temp.pre]/2, [dcl.type.cv]/1, [dcl.meaning.general]/3.1, [dcl.type.general]/3, [dcl.fct]/3, [class.dtor]/1. kiln reads `inline template` as an explicit instantiation and only warns |
+| Later-standard rules applied in earlier modes: CTAD before C++17 (`binder2nd(...)`), missing `typename` before C++20, static `operator[]` before C++23, NTTP subobject or cast forms before C++20, C++11 implicit copy assignment in a constant expression, `goto`/`static` in a lambda used in a constant expression before C++23 | 19 | 10 | 14 pass, 5 wrong-line | R (18), G (1) | C++14 [dcl.type.simple]/1 (template-name needs arguments), C++17 [temp.res]/3, C++20 [over.oper]/7, C++17 [temp.arg.nontype]/2, C++11 [expr.const]/2.21, C++20 [dcl.constexpr]/3. `pt/ptrmem6` at C++20 is valid ([expr.static.cast]/11): GCC differs |
+| Friend declarations: `explicit` on a friend, explicit specialization in a friend, `template<class U> friend S<U>;` and `friend typename S<U>::X` | 18 | 6 | 18 pass | R | [dcl.fct.spec]/3, [temp.expl.spec]/18, [temp.friend]/7 |
+| Pointer-to-member conversion through a private or ambiguous base (implicit, `static_cast`, C-style cast, base-to-derived direction) | 15 | 5 | 15 pass | R | [conv.mem]/2, [expr.static.cast]/11 |
 | Anonymous unions: private member, nested class, and access of members of an anonymous union in a private or protected section | 15 | 5 | 12 pass, 3 wrong-line | R | [class.union.anon]/1, [class.access.general]/1 |
-| Naming: `typename A::f<0>` where `f` is a function template, an injected-class-name found in two bases, `X::X` naming a constructor, a repeated `using E::x` in class scope | 12 | 4 | 9 pass, 3 wrong-line | R | [temp.res.general]/4, [temp.local]/4, [class.qual]/2, [namespace.udecl]/10 |
-| Non-static member function or overload set without a target (`for(;;s.f)`, `a ? f : g;`, `auto p = &f<int>;` with two templates) | 9 | 3 | 9 pass | R | [expr.ref]/6.3.2, [over.over]/1, [temp.deduct.call]/6. kiln only warns "expression result unused" |
+| Naming: `typename A::f<0>` where `f` is a function template, an injected-class-name found in two bases, `X::X` naming a constructor, a repeated `using E::x` in class scope | 12 | 4 | 9 pass, 3 wrong-line | R | [temp.res.general]/3, [temp.local]/4, [class.qual]/1, [namespace.udecl]/10 |
+| Non-static member function or overload set without a target (`for(;;s.f)`, `a ? f : g;`, `auto p = &f<int>;` with two templates) | 9 | 3 | 9 pass | R | [expr.ref]/8.3, [over.over]/1, [temp.deduct.call]/6. kiln only warns "expression result unused" |
 | VLA (GNU extension): `typeid` of a VLA type, deduction from a VLA | 9 | 3 | 9 pass | G | extension restriction; kiln warns on the VLA |
 | GNU named return value (`int f() return r {...}`): GCC also flags the body | 9 | 3 | 9 wrong-line | G | removed GCC extension; kiln errors at the declaration, as clang |
 | GCC-only flags: `-fno-elide-constructors`, `-fno-new-inheriting-ctors`, `-fno-new-ttp-matching`, `-ftemplate-depth-10` | 11 | 4 | 5 accepts, 3 pass, 3 wrong-line | G | GCC dialect flags; kiln drops `-ftemplate-depth-10` (clang accepts that spelling) |
@@ -388,13 +389,13 @@ LN") cases.
 | No diagnostic required: partial specialization declared after an instantiation it would match, C++98 non-ICE in a dependent template argument, an internal function used and not defined | 8 | 4 | 5 accepts, 3 pass | G | [temp.spec.partial.general]/1, [temp.res.general]/6, [basic.def.odr]/12 (kiln warns `-Wundefined-internal`) |
 | CTAD: `T&&` of a class template parameter treated as a forwarding reference | 6 | 2 | 6 pass | R | [temp.deduct.call]/3 |
 | Explicit specialization: one `template<>` for a member template of `A<int>`, specialization inside an unspecialized enclosing template | 6 | 2 | 3 pass, 3 wrong-line | R | [temp.expl.spec]/16-17 |
-| Lambdas: copy assignment of a capturing closure, `*&n` of a capture in a constant expression | 6 | 2 | 3 pass, 3 accepts | R | [expr.prim.lambda.closure]/13, [expr.const]/10.1 (`this` of the closure) |
+| Lambdas: copy assignment of a capturing closure, `*&n` of a capture in a constant expression | 6 | 2 | 3 pass, 3 accepts | R | [expr.prim.lambda.closure]/17, [expr.const.core]/2.14 (`this` of the closure) |
 | Concepts TS (`-fconcepts` at C++17) | 4 | 4 | 4 wrong-line | G | GCC dialect |
-| Access: private member template as a template template argument, private move constructor picked by implicit move in `return` | 4 | 2 | 4 pass | R | [class.access.general]/4, [class.copy.elision]/3 |
-| `static_cast<void*>` of a const array casts away constness | 3 | 1 | 3 pass | R | [expr.static.cast]/1 |
+| Access: private member template as a template template argument, private move constructor picked by implicit move in `return` | 4 | 2 | 4 pass | R | [class.access.general]/4, [expr.prim.id.unqual]/15 |
+| `static_cast<void*>` of a const array casts away constness | 3 | 1 | 3 pass | R | [expr.static.cast]/6 |
 | Deduction from two candidate bases yielding different `A` | 3 | 1 | 3 accepts | R | [temp.deduct.call]/5 (clang accepts too) |
 | Derived-to-base pointer conversion while the derived class is incomplete (CWG2310) | 3 | 1 | 3 accepts | R | [conv.ptr]/3; kiln reports a VLA error on the next line instead |
-| `__int128 signed signed` | 3 | 1 | 3 wrong-line | G | kiln warns (`-Wduplicate-decl-specifier`), a diagnostic per [intro.compliance.general]/2.2 |
+| `__int128 signed signed` | 3 | 1 | 3 wrong-line | G | kiln warns (`-Wduplicate-decl-specifier`), a diagnostic per [intro.compliance.general]/2.3 |
 | P2686R5 (C++26): constexpr reference and `initializer_list` bound to a constexpr local | 2 | 2 | 2 pass | G | kiln implements P2686R5, GCC and clang do not yet |
 | A body after an `export` diagnostic is not checked (undeclared name) | 1 | 1 | 1 pass | R | error recovery ([basic.lookup.unqual]) |
 

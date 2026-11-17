@@ -1,9 +1,12 @@
 //! The diagnostics a g++.dg test expects (`dg-error`, `dg-warning`,
-//! `dg-message`, `dg-bogus`, `dg-excess-errors`, `dg-prune-output`) and the
-//! judgement of a compiler's diagnostics against them (spec/harness.md
-//! "GCC testsuites", "Diagnostic matching"). Only the line and the severity
-//! are matched: a test's regexps are GCC's wording and kiln's wording is
-//! clang's, so the message text is never compared.
+//! `dg-message`, `dg-bogus`, `dg-regexp`, `dg-excess-errors`,
+//! `dg-prune-output`) and the judgement of a compiler's diagnostics against
+//! them (spec/harness.md "GCC testsuites", "Diagnostic matching"). Only the
+//! line and the severity are matched: a test's regexps are GCC's wording and
+//! kiln's wording is clang's, so the message text is never compared; a
+//! regexp is only read for the severity prefix it names (GCC's
+//! `lib/gcc-dg.exp` gives `dg-message` none, so its regexp may match an
+//! error, a warning or a note).
 
 use super::dg::Directive;
 use super::outcome::{Class, Verdict};
@@ -42,6 +45,17 @@ pub struct Expected {
     /// nothing expects are not held against the compiler (a prune pattern
     /// is GCC's wording, which cannot be applied to kiln's).
     pub excess_ok: bool,
+    /// The lines (0: anywhere) of the non-xfail `dg-message`s whose regexp
+    /// names no severity, each with the directive as shown: GCC's output
+    /// holds a diagnostic of a kind the file does not say there.
+    pub any_kind: Vec<(usize, String)>,
+    /// The first directive that lets GCC's output hold errors at lines the
+    /// file does not give: `dg-excess-errors`, a `dg-prune-output` or
+    /// `dg-regexp` whose regexp names no severity other than an error.
+    pub unlocated: Option<String>,
+    /// The case links (`dg-do link` or `run`): GCC must compile it, so an
+    /// error nothing requires is never one the file may expect.
+    pub links: bool,
 }
 
 impl Expected {
@@ -78,11 +92,41 @@ impl Expected {
         v
     }
 
+    /// Why an error the test does not require may still be one GCC's
+    /// output holds, so that the file does not decide the case: `errors`
+    /// (none: the compile failed without an error line) all on lines of
+    /// `any_kind` messages, or anywhere under an `unlocated` directive.
+    /// `None` when the file decides: a link or run case, or an error
+    /// elsewhere.
+    fn undecided(&self, errors: &[&Diag]) -> Option<String> {
+        if self.links {
+            return None;
+        }
+        if let Some(u) = &self.unlocated {
+            return Some(u.clone());
+        }
+        if let Some((_, d)) = self.any_kind.iter().find(|(l, _)| *l == 0) {
+            return Some(d.clone());
+        }
+        let first = errors.first()?;
+        let on = |d: &Diag| self.any_kind.iter().find(|(l, _)| *l == d.line);
+        if errors.iter().all(|d| on(d).is_some()) {
+            return on(first).map(|(l, d)| format!("{d} at L{l}"));
+        }
+        None
+    }
+
     /// Whether an error on `line` is accounted for: an error (xfail or
     /// not), a warning (a severity difference GCC's `-pedantic-errors` /
-    /// `-Werror=` flags can make) or a message is expected there.
+    /// `-Werror=` flags can make) or a message is expected there, or an
+    /// error or message is expected with no line (`DejaGnu` then matches the
+    /// regexp on every line of the output, and kiln's wording cannot say
+    /// which of its errors that is).
     fn allows(&self, line: usize) -> bool {
-        self.expects.iter().any(|e| e.line == line && (e.sev != Sev::Bogus || e.xfail))
+        self.expects.iter().any(|e| {
+            (e.line == line && (e.sev != Sev::Bogus || e.xfail))
+                || (e.line == 0 && matches!(e.sev, Sev::Error | Sev::Message))
+        })
     }
 }
 
@@ -125,6 +169,29 @@ pub fn expectations(dirs: &[Directive], target: &Target) -> Result<Expected, Str
             "dg-excess-errors" | "dg-prune-output" => {
                 if selector_applies(target, d.args.get(1), &d.name)?.is_some() {
                     out.excess_ok = true;
+                    let pattern = d.args.first().map_or("", Word::text);
+                    if d.name == "dg-excess-errors" || severity_named(pattern) != Some(Named::Other)
+                    {
+                        out.unlocated.get_or_insert_with(|| shown(&d.name, pattern));
+                    }
+                }
+                continue;
+            }
+            // A regexp over the whole output, no line (`lib/gcc-defs.exp`):
+            // naming an error, it requires one somewhere.
+            "dg-regexp" => {
+                let pattern = d.args.first().map_or("", Word::text);
+                match severity_named(pattern) {
+                    Some(Named::Error) => out.expects.push(Expect {
+                        line: 0,
+                        sev: Sev::Error,
+                        xfail: false,
+                        pattern: pattern.trim().to_owned(),
+                    }),
+                    Some(Named::Other) => {}
+                    None => {
+                        out.unlocated.get_or_insert_with(|| shown(&d.name, pattern));
+                    }
                 }
                 continue;
             }
@@ -138,9 +205,50 @@ pub fn expectations(dirs: &[Directive], target: &Target) -> Result<Expected, Str
                 .ok_or_else(|| format!("{}: bad line `{}`", d.name, w.text()))?,
         };
         let pattern = d.args.first().map_or("", Word::text).trim().to_owned();
+        // `dg-message` takes the severity its regexp names, if any.
+        let sev = match (sev, severity_named(&pattern)) {
+            (Sev::Message, Some(Named::Error)) => Sev::Error,
+            (Sev::Message, None) if !state => {
+                out.any_kind.push((line, shown(&d.name, &pattern)));
+                Sev::Message
+            }
+            (s, _) => s,
+        };
         out.expects.push(Expect { line, sev, xfail: state, pattern });
     }
     Ok(out)
+}
+
+/// The severity a directive's regexp names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Named {
+    /// `error:`, `fatal error:` (GCC's `gcc_error_prefix`, `(fatal
+    /// )?error:`) or `sorry, unimplemented`.
+    Error,
+    /// `warning:` or `note:` and no error.
+    Other,
+}
+
+/// The severity `pattern` names, `None` for none (or both kinds). A
+/// prune pattern that names no other kind may match an error line.
+fn severity_named(pattern: &str) -> Option<Named> {
+    let p = pattern.replace('\\', "");
+    let error = p.contains("error:") || p.contains("sorry, unimplemented");
+    let other = p.contains("warning:") || p.contains("note:");
+    match (error, other) {
+        (true, false) => Some(Named::Error),
+        (false, true) => Some(Named::Other),
+        _ => None,
+    }
+}
+
+/// A directive as a failure detail shows it: `dg-message ""`.
+fn shown(name: &str, pattern: &str) -> String {
+    let mut p: String = pattern.trim().chars().take(40).collect();
+    if p.len() < pattern.trim().len() {
+        p.push('…');
+    }
+    format!("{name} \"{p}\"")
 }
 
 /// `None`: a `{ target <sel> }` that does not match; `Some(xfail)`
@@ -230,6 +338,9 @@ pub fn judge(exp: &Expected, diags: &[Diag], compiled: bool) -> Option<Verdict> 
         let detail = errors
             .first()
             .map_or_else(|| "rejected without an error".to_owned(), |d| d.text.clone());
+        if let Some(why) = exp.undecided(&errors) {
+            return Some(Verdict::new(Class::ExpectUnknown, format!("{why}: {detail}")));
+        }
         return Some(Verdict::new(Class::CompileReject, detail));
     }
     if errors.is_empty() && compiled {
@@ -376,7 +487,10 @@ mod tests {
         assert_eq!(judge(&neg, &[err(1), err(0)], false), None, "an error without a line");
         let lineless = e("// { dg-error \"x\" \"\" { target *-*-* } 0 }\n");
         assert_eq!(judge(&lineless, &[err(0)], false), None);
-        assert_eq!(judge(&lineless, &[err(9)], false).unwrap().class, Class::WrongLine);
+        assert_eq!(judge(&lineless, &[err(9)], false), None, "no line: any line (WP-1554)");
+        let lined =
+            e("int a; // { dg-error \"x\" }\n// { dg-warning \"w\" \"\" { target *-*-* } 0 }\n");
+        assert_eq!(judge(&lined, &[err(1), err(9)], false).unwrap().class, Class::WrongLine);
         let excess = e("int a; // { dg-error \"x\" }\n// { dg-excess-errors \"\" }\n");
         assert_eq!(judge(&excess, &[err(1), err(5)], false), None);
         let bogus = e("int a; // { dg-error \"x\" }\nint b; // { dg-bogus \"y\" }\n");
@@ -384,5 +498,117 @@ mod tests {
         let bogus =
             e("int a; // { dg-error \"x\" }\nint b; // { dg-bogus \"\" \"\" { xfail *-*-* } }\n");
         assert_eq!(judge(&bogus, &[err(1), err(2)], false), None, "GCC errs there (xfail)");
+    }
+
+    /// `dg-message` has no severity prefix (`lib/gcc-dg.exp`): a regexp
+    /// that names one takes it, one that names none (`""` among them)
+    /// leaves the kind open on its line (WP-1554).
+    #[test]
+    fn dg_message_takes_the_severity_its_regexp_names() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let e = exp(
+            "int a; // { dg-message \"error: no\" }\n\
+             int b; // { dg-message \"sorry, unimplemented: x\" }\n\
+             int c; // { dg-message \"note: here\" }\n\
+             int d; // { dg-message \"\" }\n\
+             int f; // { dg-message \"declared\" \"\" { xfail *-*-* } }\n\
+             // { dg-message \"\\[^\\n\\]*warning: w\" \"\" { target *-*-* } 0 }\n",
+            &t,
+        );
+        let sevs: Vec<(usize, Sev)> = e.expects.iter().map(|x| (x.line, x.sev)).collect();
+        assert_eq!(
+            sevs,
+            [
+                (1, Sev::Error),
+                (2, Sev::Error),
+                (3, Sev::Message),
+                (4, Sev::Message),
+                (5, Sev::Message),
+                (0, Sev::Message)
+            ]
+        );
+        assert!(e.negative());
+        assert_eq!(
+            e.any_kind,
+            [(4, "dg-message \"\"".to_owned())],
+            "xfail and named kinds are not open"
+        );
+        assert_eq!(e.unlocated, None);
+    }
+
+    /// `dg-regexp` matches the whole output with no line
+    /// (`lib/gcc-defs.exp`): naming an error it requires one anywhere,
+    /// naming none it may hold errors anywhere.
+    #[test]
+    fn dg_regexp_is_a_region_without_a_line() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let e = exp("int a;\n// { dg-regexp {[^\\n]*a.h:3:1: error: bad\\n} }\n", &t);
+        assert_eq!(e.expects.len(), 1);
+        assert_eq!((e.expects[0].line, e.expects[0].sev), (0, Sev::Error));
+        assert!(e.negative() && e.unlocated.is_none());
+        let e = exp("int a;\n// { dg-regexp {[^\\n]*: note: here\\n} }\n", &t);
+        assert!(e.expects.is_empty() && e.unlocated.is_none() && !e.negative());
+        let e = exp("int a;\n// { dg-regexp {In file included from [^\\n]*\\n} }\n", &t);
+        assert_eq!(e.unlocated.as_deref(), Some("dg-regexp \"In file included from [^\\n]*\\n\""));
+    }
+
+    /// `dg-prune-output` and `dg-excess-errors` change what is unexpected:
+    /// errors may hide in the output unless the prune pattern names only
+    /// a warning or a note.
+    #[test]
+    fn prunes_and_excess_errors_may_hide_errors() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let e =
+            exp("// { dg-prune-output \"note: x\" }\n// { dg-prune-output \"warning: y\" }\n", &t);
+        assert!(e.excess_ok && e.unlocated.is_none());
+        let e = exp("// { dg-prune-output \"expected\" }\n// { dg-excess-errors \"\" }\n", &t);
+        assert_eq!(e.unlocated.as_deref(), Some("dg-prune-output \"expected\""));
+        let e = exp("// { dg-excess-errors \"crash\" }\n", &t);
+        assert_eq!(e.unlocated.as_deref(), Some("dg-excess-errors \"crash\""));
+        let e = exp("// { dg-excess-errors \"crash\" { target c++11_only } }\n", &t);
+        assert!(e.unlocated.is_none() && !e.excess_ok);
+    }
+
+    /// The judgement of the forms: a decided case stays pass or
+    /// rejects-valid; an error the file leaves open is `expect-unknown`;
+    /// a case that links is always decided (GCC must compile it).
+    #[test]
+    fn undecided_errors_are_expect_unknown() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let e = |s: &str| exp(s, &t);
+        let err = |line: usize| Diag { line, sev: Sev::Error, text: "error: e".into() };
+        let class = |x: &Expected, d: &[Diag]| judge(x, d, d.is_empty()).map(|v| v.class);
+
+        let open = e("int a;\nint b; // { dg-message \"\" }\n");
+        assert_eq!(class(&open, &[]), None, "no error: pass");
+        assert_eq!(class(&open, &[err(2)]), Some(Class::ExpectUnknown));
+        let v = judge(&open, &[err(2)], false).unwrap();
+        assert_eq!(v.detail, "dg-message \"\" at L2: error: e");
+        assert_eq!(class(&open, &[err(1)]), Some(Class::CompileReject), "error elsewhere");
+        assert_eq!(class(&open, &[err(2), err(1)]), Some(Class::CompileReject));
+        let mut linked = open.clone();
+        linked.links = true;
+        assert_eq!(class(&linked, &[err(2)]), Some(Class::CompileReject), "a run test compiles");
+
+        let named = e("int a; // { dg-message \"error: no\" }\n");
+        assert_eq!(class(&named, &[err(1)]), None, "an expected error");
+        assert_eq!(class(&named, &[]), Some(Class::AcceptInvalid));
+        assert_eq!(class(&named, &[err(3)]), Some(Class::WrongLine));
+        let note = e("int a; // { dg-message \"note: here\" }\n");
+        assert_eq!(class(&note, &[err(1)]), Some(Class::CompileReject), "a note is no error");
+
+        let anywhere = e("int a;\n// { dg-message \"\" \"\" { target *-*-* } 0 }\n");
+        assert_eq!(class(&anywhere, &[err(7)]), Some(Class::ExpectUnknown));
+        let excess = e("int a;\n// { dg-excess-errors \"\" }\n");
+        assert_eq!(class(&excess, &[err(1)]), Some(Class::ExpectUnknown));
+        assert_eq!(
+            judge(&excess, &[], false).unwrap().detail,
+            "dg-excess-errors \"\": rejected without an error"
+        );
+        let prune = e("int a;\n// { dg-prune-output \"warning: w\" }\n");
+        assert_eq!(class(&prune, &[err(1)]), Some(Class::CompileReject));
+        let regexp = e("int a;\n// { dg-regexp {[^\\n]*: error: x\\n} }\n");
+        assert_eq!(class(&regexp, &[err(1)]), None, "the regexp's error, anywhere");
+        assert_eq!(class(&regexp, &[]), Some(Class::AcceptInvalid));
     }
 }
