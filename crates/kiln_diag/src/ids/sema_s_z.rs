@@ -100,6 +100,7 @@ sema_static_block_func = Error (0) "function declared in block scope cannot have
 sema_static_data_member_reinit = Error (1) "static data member '{0}' already has an initializer";
 sema_static_downcast_via_virtual = Error (3) "cannot cast {0} to {1} via virtual base {2}";
 sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+sema_static_float_init_gnu = ExtWarn [GnuStaticFloatInit] (1) "in-class initializer for static data member of type {0} is a GNU extension";
 sema_static_local_in_extern_inline = Warning [StaticLocalInInline] (0) "non-constant static local variable in inline function may be different in different files";
 sema_static_main = Error (0) "'main' is not allowed to be declared static";
 sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";

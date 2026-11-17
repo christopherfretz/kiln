@@ -272,8 +272,12 @@ impl Sema<'_, '_> {
     /// function yielding the prvalue win, and kiln follows clang where
     /// both accept (WP-1592; docs/status/deviations.md). The caller
     /// requires that copy constructor not to be deleted (GCC selects it
-    /// and rejects). A conversion function template leaves the answer
-    /// open: not best.
+    /// and rejects). A rival yielding a derived class by value or by
+    /// lvalue reference with an object conversion as good loses the tie
+    /// when `g` yields the class itself; a conversion function template
+    /// with an object conversion no better than `gobj` loses to the
+    /// non-template `g`, one with a better one leaves the answer open:
+    /// not best.
     fn lvalue_conversion_best(
         &mut self,
         set: &OverloadCandidateSet,
@@ -311,8 +315,27 @@ impl Sema<'_, '_> {
                             | TypeView::MemberPointer { .. }
                             | TypeView::Builtin(_)
                     );
-                    if !never_class {
+                    if never_class {
+                        continue;
+                    }
+                    // One whose object conversion is no better than
+                    // `g`'s loses to the non-template `g`
+                    // ([over.match.best]/2.4) in GCC's binding of `T&&`
+                    // too (WP-1625; clang accepts through its CWG2327
+                    // candidates).
+                    if self.has_explicit_object(p) {
                         return false;
+                    }
+                    match self.conv_object_ics(&a, p) {
+                        Ics::Standard(hobj) => {
+                            if self.compare_ics(&Ics::Standard(gobj), &Ics::Standard(hobj))
+                                == IcsCompare::Worse
+                            {
+                                return false;
+                            }
+                        }
+                        ics if ics.is_bad() => {}
+                        _ => return false,
                     }
                     continue;
                 }
@@ -327,13 +350,15 @@ impl Sema<'_, '_> {
                     match self.compare_ics(&Ics::Standard(gobj), &Ics::Standard(hobj)) {
                         IcsCompare::Better => {}
                         // GCC's tie-break on the result: an lvalue of the
-                        // class binds better than one of a derived class.
+                        // class binds better than an lvalue or a prvalue
+                        // of a derived class (WP-1625: clang accepts too,
+                        // through its CWG2327 candidates).
                         IcsCompare::Indistinguishable
                             if g_exact
                                 && rc != target
-                                && matches!(
+                                && !matches!(
                                     self.ast.types.canonical_view(hret),
-                                    TypeView::LValueRef(_)
+                                    TypeView::RValueRef(_)
                                 ) => {}
                         _ => return false,
                     }

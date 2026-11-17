@@ -11,7 +11,11 @@ ships them unchanged (see `spec/pp.md`, `#include` resolution).
   `/usr/lib/llvm-19/lib/clang/19/include` (= `clang-19 -print-resource-dir` + `/include`).
 - **License:** Apache-2.0 WITH LLVM-exception; full text in `LICENSE.TXT`
   (verbatim `clang/LICENSE.TXT` at tag `llvmorg-19.1.7`).
-- **kiln changes:** every imported file is byte-identical to the source.
+- **kiln changes:** every imported file is byte-identical to the source,
+  except the local changes in `scripts/resource-include.patch` (re-applied by
+  `scripts/gen-resource.sh`): `__stddef_nullptr_t.h` declares `::nullptr_t`
+  in C++11 and later, as `<stddef.h>` must ([support.c.headers.other]/1) and
+  GCC's `stddef.h` does (clang 19's declares it only under `-fms-extensions`).
   One file is kiln's own, not clang's: `contracts`, the P2900
   `std::contracts` declarations for a standard library that ships none
   (libc++ 19; spec/contracts.md §6.3). Any future local change must be

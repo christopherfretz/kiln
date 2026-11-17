@@ -458,7 +458,15 @@ capture-default cannot capture either: `unnamed variable cannot be
 implicitly captured in a lambda expression` with a `declared here` note at
 the union (clang `isVariableCapturable`, WP-1405). A use of an enclosing function's local outside
 any lambda is `reference to local variable 'x' declared in enclosing
-function`.
+function`. So is an odr-use whose innermost enclosing context is a local
+class or enumeration nested in the variable's function, inside a lambda
+body or not ([basic.def.odr]/10: a class or enumeration scope is no
+block scope, so the variable is not odr-usable there; `capture_chain`,
+clang `getParentOfCapturingContextOrNull`): an enumerator's value, a
+bit-field width, a member's array bound, noexcept-specifier or default
+member initializer (clang accepts the last; GCC and the text reject it).
+A use that is no odr-use (a constant's value, an unevaluated operand)
+stays valid there (WP-1621, basic.def.odr/odr-usable-local-class-*.cpp).
 
 In a dependent context (a generic lambda's body, or a lambda in a
 template) no use is an odr-use yet ([temp.res.general]/6), but a generic
@@ -696,10 +704,15 @@ A closure object is an ordinary class object in the Oven's memory; the
   `expr.prim.lambda.capture/odr-use-case-value{,-ok}.cpp`). The Oven
   caches a compiled thunk per expression (`compile_thunk`): a fold of an
   expression before its full-expression ends compiles it unmarked for
-  good. A non-type template argument's narrowing check folds it that early
-  (`templ/args.rs`), so `T<*&i>` in a `[=]` body still reads the variable;
-  clang 22 and GCC 16.1 accept it too, and it is left so (WP-1606's
-  handback). Reading it is
+  good, so no fold may precede that end: a non-type template argument's
+  narrowing check folds its operand after it (`templ/args.rs`, WP-1622;
+  before, a temporary's destructor and the odr-use marking were missing
+  from the thunk the evaluation reused). `T<*&i>` in a `[=]` body reads
+  the variable by a rule of its own: while a non-type template
+  argument's full-expression ends (`Sema::template_arg_full_expr`), an
+  odr-use still captures but is not marked `NAMES_CLOSURE_COPY`, as clang
+  22 and GCC 16.1 read the variable (docs/status/deviations.md;
+  `temp.arg.nontype/closure-copy-odr-use-*.cpp`). Reading it is
   diagnosed ("kiln: read of variable 'n' captured by copy is not allowed
   in a constant expression outside a call of the lambda": clang reads the
   variable and accepts), its address is not constant (clang's "pointer to

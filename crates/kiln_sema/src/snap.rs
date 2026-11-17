@@ -78,7 +78,7 @@
 //! | `prototype_params`, `declarator_records`, `requires_param_scopes`, `nsdmi_this`, `contract_ctx`, `vis_namespaces` | transient | open parameter lists, declarator scopes, default member initializers, contract predicates, namespaces with a visibility attribute |
 //! | `vararg_copying` | transient | the variadic argument being copied (`Sema::check_variadic_args`) |
 //! | `subst_expr_depth`, `subst_template_id`, `expansion_element_init`, `expansion_vars`, `in_typedef_instantiation`, `instantiating_friend_template`, `friend_cmp_constraints`, `friend_template_apart`, `range_for_outer_depth` | transient | set while one substitution runs |
-//! | `unevaluated`, `immediate`, `constant_full_expr`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
+//! | `unevaluated`, `immediate`, `constant_full_expr`, `template_arg_full_expr`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
 //! | `agg_error_mark`, `agg_excess`, `agg_list_end`, `designator_pending`, `init_entity`, `init_var`, `ctor_entity`, `ctor_diag_ty`, `list_param_note`, `list_ctor_active`, `ref_temp_note`, `mem_inits`, `initializing` | transient | the initialization being checked |
 //! | `cleanup`, `cleanup_saved`, `cleanup_marks` | transient | the cleanups of the full-expression being built |
 //! | `delayed_access`, `delayed_access_depth`, `delayed_deprecations`, `depr_points`, `depr_init`, `exempt_next_delay` | transient | open access and deprecation delay points |
@@ -168,7 +168,7 @@ macro_rules! sema_fields {
                 subst_expr_depth, subst_template_id, expansion_element_init,
                 expansion_vars, in_typedef_instantiation, instantiating_friend_template, friend_cmp_constraints,
                 friend_template_apart, range_for_outer_depth, unevaluated, immediate,
-                constant_full_expr, discarding_init, address_operand, deref_after_amp,
+                constant_full_expr, template_arg_full_expr, discarding_init, address_operand, deref_after_amp,
                 decltype_calls, typeid_operands, pending_odr, potential_caps, misaligned,
                 deferred_call_refs, deferring_call_ref, extend_collector, agg_error_mark,
                 agg_excess, agg_list_end, designator_pending, init_entity, init_var, ctor_entity,

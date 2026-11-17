@@ -1511,9 +1511,12 @@ Where the code differs from (or details) the design above:
   constructor is reached through a conversion function yielding an
   lvalue reference whose object conversion is better than that of every
   other conversion function yielding the class or a class derived from
-  it (an lvalue reference to a derived class with an object conversion
-  as good loses the tie; a template yielding a pointer or a builtin type
-  is no rival, any other template is), and that copy constructor is not
+  it (a derived class by lvalue reference or by value with an object
+  conversion as good loses the tie; a template yielding a pointer or a
+  builtin type is no rival, nor is one whose object conversion is no
+  better, which loses to the non-template by [over.match.best]/2.4,
+  WP-1625: `conversion-function-beside-better-lvalue-rivals-ok.cpp`),
+  and that copy constructor is not
   deleted, GCC 16 binds the move constructor's `T&&` through that
   function too ([over.match.ref]/1.1 sets it aside), finds the move
   constructor not viable and calls the copy constructor, while clang 22
@@ -1533,6 +1536,27 @@ Where the code differs from (or details) the design above:
   both reached through a conversion function template) is ambiguous by
   the text too, but GCC 16 and clang 22 let the conversion function win
   and real code relies on it, so kiln does as well (same test).
+- **Rvalue reference through a derived prvalue (WP-1625,
+  `lvalue_conversion_preempts`).** By [over.match.ref]/1.1 an rvalue
+  reference to `B` bound through conversion functions considers only
+  those yielding an rvalue, so with `operator D() const` (`D` derived
+  from `B`) beside `operator B&()` the `B&&` binds the `D` prvalue and
+  `h(B&&)` / `h(const B&)` (or `B b(u)`, copy and move constructor) is
+  ambiguous by [over.ics.rank]/3.3. clang 22 and GCC 16 both weigh the
+  lvalue-yielding functions too, at every `-std`: when one yielding an
+  lvalue of `B` or of a class derived from it (any cv, not explicit,
+  not constrained) has a better implicit object conversion than the
+  function yielding the derived prvalue, or an equal one and yields `B`
+  itself, the `B&&` binding is not viable (`h(B&&)` alone is rejected,
+  the pair selects `h(const B&)`). kiln follows both
+  (`over.match.ctor/conversion-function-derived-result-ok.cpp`, rejected
+  siblings `conversion-function-derived-result-rejected.cpp`; a recorded
+  deviation). Where they part the text decides and the binding stands:
+  the rvalue result is an xvalue (`operator D&&()`; GCC keeps it, clang
+  drops it), another conversion function yields `B` by value (clang
+  keeps it, GCC drops it), or a conversion function template is
+  present. The check runs only after a binding through a conversion
+  function succeeded.
 - **`IcsOptions::CANDIDATE_ARG`**: an argument of a candidate. In a
   reference binding, a deleted best [over.match.ref] conversion is no
   conversion (clang `FindConversionForRefInit`), so the candidate is not

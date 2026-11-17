@@ -14,7 +14,8 @@ CLANG=... CLANGXX=... scripts/gen-resource.sh
 
 ## include/ — builtin headers
 
-A filtered, unmodified copy of clang 19.1.7's resource-dir headers. kiln's
+A filtered copy of clang 19.1.7's resource-dir headers, unmodified but for
+the local changes of `scripts/resource-include.patch`. kiln's
 `-resource-dir` points here; it takes the place of
 `/usr/lib/llvm-19/lib/clang/19/include` in the search order. Provenance, the
 license, and the skip list are in `include/README.md`.

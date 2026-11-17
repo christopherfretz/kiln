@@ -268,10 +268,20 @@ impl Sema<'_, '_> {
                 c = p;
                 continue;
             }
+            // [basic.def.odr]/10: a local class's or enumeration's scope
+            // between the variable's and the odr-use (a bit-field width,
+            // an enumerator's value, a member's array bound) makes the
+            // variable not odr-usable there, inside a lambda or not
+            // (clang `getParentOfCapturingContextOrNull`). C has no such
+            // rule: `enum { Z = sizeof(int[m]) }` is only not a constant.
+            let tag_scope =
+                !self.is_c() && matches!(self.kind_of(c), DeclKind::CXXRecord | DeclKind::Enum);
             // A reference from outside any function nested in the
             // variable's (a default argument, an instantiated exception
             // specification) has nothing to capture in.
-            if !self.ast.decls.get(c).kind().is_function() || !self.is_nested_in(c, home) {
+            if !(self.ast.decls.get(c).kind().is_function() || tag_scope)
+                || !self.is_nested_in(c, home)
+            {
                 return Err(Captured::NotNeeded);
             }
             if build {
@@ -860,6 +870,7 @@ impl Sema<'_, '_> {
             // An odr-use in a template definition, as at the end of a
             // full-expression outside one (`act_on_full_expr_at`).
             if !dependent
+                && !self.template_arg_full_expr
                 && self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && self.odr_use_names_closure_copy(d)
