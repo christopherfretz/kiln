@@ -8068,7 +8068,19 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
     selected and checked for deletion and access (clang
     `DefaultVariadicArgumentPromotion`; "calling a private constructor of
     class 'A'"), and the argument is passed as before (WP-1470,
-    `class.access/vararg-and-protected-address.cpp`).
+    `class.access/vararg-and-protected-address.cpp`). When that copy
+    selects a variadic constructor taking the object through its own
+    ellipsis (`struct S { S(...); };` and a `volatile S` source, which
+    binds no implicit copy constructor), the copy would copy the object
+    again without end: copying the argument that is already being copied
+    (`Sema::vararg_copying`, one slot saved and restored around the copy)
+    is the error "cannot pass object of type 'volatile S' through an
+    ellipsis: its copy selects a variadic constructor that would copy it
+    through the ellipsis again" (`sema_vararg_copy_recursive`). GCC
+    rejects at the same argument (no usable copy constructor); clang 22
+    overflows its stack (WP-1542,
+    `expr.call/variadic-copy-own-ellipsis-constructor.cpp`, accepted side
+    `expr.call/run-variadic-copy-own-ellipsis-constructor.cpp`).
 
   Each points at the argument's begin. The callee is named as clang's
   `getVariadicCallType` does: `constructor` for a constructor, `method`

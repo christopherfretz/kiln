@@ -908,6 +908,18 @@ Planned as 1.3.0.
   template is not made `const`; `C::m()` inside a member of a sibling
   class `B` (both derived from `A`) is a call without an object; and
   `__is_pod` of a class with `const` members is true in C++98.
+- Found running GCC's C++ testsuite (WP-1547, WP-1542, WP-1545): a
+  function-local `static` initialized with label addresses in a
+  constructor of a class with a virtual base no longer jumps into the
+  other constructor variant's code (a crash at run time); a static union or struct whose flexible array member is
+  initialized gets its elements; in C++26 the destructor of an object whose
+  class has a virtual base is called again (it was skipped); a string user-defined literal calls
+  `operator""X(str, len)` before the GNU character-pack template;
+  passing a class through `...` whose copy would select a variadic
+  constructor is an error instead of a stack overflow; and from C++11 a
+  candidate that needs no string-literal-to-`char*` conversion beats
+  one that does, so `s != "x"` with `s` converting to `char*` is no
+  longer ambiguous.
 
 ## [1.2.1] - 2026-11-14
 

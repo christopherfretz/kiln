@@ -596,6 +596,7 @@ impl Cg<'_> {
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         let ty = ast.decls.get(d).ty().expect("var type");
         let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
+        self.relabel_static_local(d, g, init)?;
         let perform = init.is_some_and(|e| self.folds.get(e).is_none());
         let dtor = !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some();
         // C never initializes a static dynamically (C23 6.7.11p4): sema's
@@ -611,6 +612,37 @@ impl Cg<'_> {
             return Ok(());
         }
         if perform || dtor { self.guarded_init(d, g, perform) } else { Ok(()) }
+    }
+
+    /// A static local whose constant initializer holds a label address
+    /// (`static void *p = &&l;`) in a body emitted twice (the complete
+    /// and base variants of a constructor or destructor of a class with a
+    /// virtual base) is one global whose label addresses can name the
+    /// blocks of one variant only. They name the complete-object
+    /// variant's, whatever the emission order: its initializer is emitted
+    /// again when that variant comes second, and that variant lists the
+    /// labels as its computed `goto` destinations. clang sets the
+    /// initializer again at every emission, so the variant emitted last
+    /// wins (the base one for a constructor defined in its class) and the
+    /// other jumps into a foreign function; GCC emits one body for both.
+    fn relabel_static_local(&mut self, d: DeclId, g: GlobalId, init: Option<ExprId>) -> R<()> {
+        let first = self.ast.first(d);
+        let (Some(&owner), Some(f)) = (self.label_statics.get(&first), self.f.func) else {
+            return Ok(());
+        };
+        let Some((e, c)) = init.and_then(|e| self.folds.get(e).map(|c| (e, c))) else {
+            return Ok(());
+        };
+        if owner == f || self.f.structor != Some(Structor::Complete) {
+            return Ok(());
+        }
+        let ty = self.ast.decls.get(d).ty().expect("var type");
+        let value = self.const_value(c, ty, Some(e), true)?;
+        if let Err(x) = self.m.set_initializer(g, Some(value)) {
+            return err(Some(self.ast.decls.get(d).loc()), format!("bad initializer: {x:?}"));
+        }
+        self.label_statics.insert(first, f);
+        Ok(())
     }
 
     /// Whether static local `first` (or a global) needs dynamic

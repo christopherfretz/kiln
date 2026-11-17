@@ -213,6 +213,7 @@ impl Cg<'_> {
         let (Some(f), true) = (self.f.func, here.is_some() && here == owner) else {
             return err(at, "address of a label of another function in a constant");
         };
+        self.label_addrs += 1;
         let g = self.f.fir.indirect_goto();
         let j = self.label_dest(d);
         self.f.fir.add_indirect_dest(g.br, j.blk);

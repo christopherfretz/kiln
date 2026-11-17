@@ -243,6 +243,22 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             folds.expr.insert(e, v);
         }
     }
+    // GNU: a union whose initialized member is a flexible array member
+    // (`union { char a[]; int b[]; } u = {.b = {1, 2}};`) holds elements
+    // past its size, which the Oven does not store, so its list may not
+    // fold; the elements' own fold is its value (`Cg::union_const` reads
+    // the elements from it, the active member from the list).
+    for &e in inits.keys() {
+        if folds.get(e).is_none()
+            && let Some(x) = flexible_elements_init(b.ast, e)
+            && let Some(v) = folds.get(x)
+            && b.ast.types.as_record(b.ast.exprs.get(e).ty()).is_some_and(|r| {
+                b.ast.decls.record(r).is_some_and(|d| d.tag == kiln_ast::decl::TagKind::Union)
+            })
+        {
+            folds.expr.insert(e, v);
+        }
+    }
     array_lists(&mut b, oven, &mut folds, &tried, arr_lists);
     for (e, init) in statics {
         if let Some(v) = folds.get(init).filter(|_| !refolded.contains(&init)) {
@@ -284,6 +300,13 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     let mut dtors: Vec<_> = dtors.into_iter().collect();
     dtors.sort_unstable_by_key(|&(first, _)| first);
     for (first, (d, init, is_static)) in dtors {
+        // A destructor that destroys a virtual base is never constexpr in
+        // clang (it rejects constructing one, too); the Oven's
+        // destruction of such an object does not reach the virtual
+        // bases' destructors (follow-up), so it is always called.
+        if b.ast.decls.get(d).ty().is_some_and(|q| has_vbase_subobject(b.ast, q, 0)) {
+            continue;
+        }
         let value = init.filter(|e| !refolded.contains(e)).and_then(|e| folds.get(e));
         let const_context = is_static && (init.is_none() || value.is_some());
         if oven.has_constant_destruction(&mut b, d, value, const_context) {
@@ -291,6 +314,35 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
     }
     folds
+}
+
+/// Whether an object of type `q` has a subobject (itself, an element, a
+/// base or a member, transitively) of a class with virtual bases.
+fn has_vbase_subobject(ast: &Ast, q: QualType, depth: u32) -> bool {
+    let mut q = q;
+    while let TypeView::ConstantArray(a) = ast.types.canonical_view(q) {
+        q = a.elem;
+    }
+    // Class nesting is bounded by the implementation limit; the guard
+    // keeps a malformed (self-containing) class from recursing.
+    if depth > 64 {
+        return false;
+    }
+    let Some(def) = ast.types.as_record(q).and_then(|r| ast.definition(r)) else {
+        return false;
+    };
+    let Some(rec) = ast.decls.record(def) else { return false };
+    if rec.defn.contains(kiln_ast::decl::DefinitionBits::HAS_VIRTUAL_BASES) {
+        return true;
+    }
+    ast.decls.bases(def, &ast.lists).any(|b| has_vbase_subobject(ast, b.ty, depth + 1))
+        || ast.members(def).any(|m| {
+            let n = ast.decls.get(m);
+            n.kind() == DeclKind::Field
+                && n.ty().is_some_and(|t| {
+                    !ast.types.is_reference(t) && has_vbase_subobject(ast, t, depth + 1)
+                })
+        })
 }
 
 /// clang `AggExprEmitter::EmitArrayInit` (WP-1008): an array
@@ -353,13 +405,17 @@ pub(crate) fn flexible_elements_init(ast: &Ast, init: ExprId) -> Option<ExprId> 
         return None;
     }
     let r = ast.types.as_record(ast.exprs.get(init).ty())?;
-    let last = ast
-        .decls
-        .members(ast.definition(r)?)
-        .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
-        .last()?;
+    let def = ast.definition(r)?;
+    let (parts, _, active) = crate::expr::agg_init_parts(ast, init);
+    // A union's flexible array member (GNU) is the member the list
+    // initializes; a structure's is its last member.
+    let last = if ast.decls.record(def).is_some_and(|x| x.tag == kiln_ast::decl::TagKind::Union) {
+        active?
+    } else {
+        ast.decls.members(def).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).last()?
+    };
     let lt = ast.decls.get(last).ty()?;
-    let x = *crate::expr::agg_init_parts(ast, init).0.last()?;
+    let x = *parts.last()?;
     let sized = matches!(
         ast.types.canonical_view(ast.exprs.get(x).ty()),
         TypeView::ConstantArray(c) if c.size > 0

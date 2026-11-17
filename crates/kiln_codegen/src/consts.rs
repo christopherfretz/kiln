@@ -729,10 +729,16 @@ impl Cg<'_> {
                 .filter_map(|b| ast.types.as_record(b.ty).map(|r| ast.first(r)))
                 .collect()
         });
+        // The members an initializer list initializes: unnamed bit-fields
+        // take no initializer ([dcl.init.aggr]/1).
         let fields: Vec<DeclId> = ast
             .decls
             .members(first)
-            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .filter(|&m| {
+                ast.decls.get(m).kind() == DeclKind::Field
+                    && !(ast.decls.get(m).name().is_empty()
+                        && ast.decls.field(m).is_some_and(|x| x.bit_width.is_some()))
+            })
             .collect();
         for (i, m) in members.iter().enumerate() {
             let at = rel + offs[i];
@@ -1000,9 +1006,23 @@ impl Cg<'_> {
         };
         let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
         let fq = self.ast.decls.get(f).ty().expect("field type");
-        let fit = self.tys.convert(fq);
-        let c = self.image_const(img, off, &fit, sub)?;
-        let (fs, _) = self.tys.size_align(&fit);
+        // GNU: an initialized flexible array member (folded on its own,
+        // `fold::flexible_elements_init`) is its elements, past the
+        // union's size if it must be (clang `{ [4 x i32] }`).
+        let fam = sub
+            .filter(|&x| {
+                ile.and_then(|l| crate::fold::flexible_elements_init(self.ast, l)) == Some(x)
+            })
+            .and_then(|x| self.folds.get(x).map(|c| (x, c)));
+        let (c, fs) = if let Some((x, v)) = fam {
+            let xt = self.ast.exprs.get(x).ty();
+            let c = self.const_value(v, xt, Some(x), false)?;
+            let xit = self.tys.convert(xt);
+            (c, self.tys.size_align(&xit).0)
+        } else {
+            let fit = self.tys.convert(fq);
+            (self.image_const(img, off, &fit, sub)?, self.tys.size_align(&fit).0)
+        };
         let mut elems = vec![c];
         if size > fs {
             let pt = self.m.types.array(LTy::I8, size - fs);

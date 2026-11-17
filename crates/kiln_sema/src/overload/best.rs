@@ -233,6 +233,34 @@ impl Sema<'_, '_> {
         set.args = args;
     }
 
+    /// clang's pre-pass of `isBetterOverloadCandidate` (C++11 and later):
+    /// the string literal to `char*` conversion is ill-formed there
+    /// ([depr.string] was removed; kiln and clang keep it as an
+    /// extension), so a candidate that needs it for an argument is never
+    /// better than one that does not, and one that does not need it where
+    /// the other does is better whatever its other arguments ([over.match.best]
+    /// then never sees an ill-formed sequence). Reached only when an
+    /// argument of `a` compared worse, so ranking pays nothing else.
+    fn ill_formed_string_better(&self, a: &[Ics], b: &[Ics]) -> bool {
+        if self.std < kiln_lex::Std::Cxx11 {
+            return false;
+        }
+        let ds = |i: &Ics| match i {
+            Ics::Standard(s) => s.deprecated_string,
+            Ics::UserDefined(u) => u.before.deprecated_string,
+            _ => false,
+        };
+        let mut better = false;
+        for (p, q) in a.iter().zip(b.iter()) {
+            match (ds(p), ds(q)) {
+                (true, false) => return false,
+                (false, true) => better = true,
+                _ => {}
+            }
+        }
+        better
+    }
+
     /// [over.match.best]: whether viable candidate `c1` is better than
     /// `c2` (C++26 order, spec/sema-overload.md §4.1).
     pub(crate) fn better(&self, set: &OverloadCandidateSet, c1: u32, c2: u32) -> bool {
@@ -264,7 +292,7 @@ impl Sema<'_, '_> {
                 IcsCompare::Worse if tolerate && self.allow_ambiguity(x.func(), y.func()) => {
                     has_worse = true;
                 }
-                IcsCompare::Worse => return false,
+                IcsCompare::Worse => return self.ill_formed_string_better(a, b),
                 IcsCompare::Indistinguishable => {}
             }
         }

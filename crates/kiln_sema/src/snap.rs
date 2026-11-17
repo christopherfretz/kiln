@@ -76,6 +76,7 @@
 //! | `ctx` | transient | the current declaration context: the translation unit at rest (else the prefix ends inside a namespace or linkage specification) |
 //! | `func`, `fn_saved`, `lambdas`, `lambda_base`, `classes`, `suspended_classes`, `defining`, `suspended_defining`, `enums`, `synth` | transient | the function, lambda, class, enumeration and implicit member being defined |
 //! | `prototype_params`, `declarator_records`, `requires_param_scopes`, `nsdmi_this`, `contract_ctx`, `vis_namespaces` | transient | open parameter lists, declarator scopes, default member initializers, contract predicates, namespaces with a visibility attribute |
+//! | `vararg_copying` | transient | the variadic argument being copied (`Sema::check_variadic_args`) |
 //! | `subst_expr_depth`, `subst_template_id`, `expansion_element_init`, `expansion_vars`, `in_typedef_instantiation`, `instantiating_friend_template`, `friend_cmp_constraints`, `friend_template_apart`, `range_for_outer_depth` | transient | set while one substitution runs |
 //! | `unevaluated`, `immediate`, `constant_full_expr`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
 //! | `agg_error_mark`, `agg_excess`, `agg_list_end`, `designator_pending`, `init_entity`, `init_var`, `ctor_entity`, `ctor_diag_ty`, `list_param_note`, `list_ctor_active`, `ref_temp_note`, `mem_inits`, `initializing` | transient | the initialization being checked |
@@ -182,7 +183,7 @@ macro_rules! sema_fields {
                 declarator_distant_exc, pattern_member_access, base_annotation_packs, friend_tag,
                 friend_class_template, extraneous_tag_head, nested_tag, inst_enable_if,
                 declspec_nulls, image_texprs, bmi, extensions_silenced,
-                temp_copy_second_step],
+                temp_copy_second_step, vararg_copying],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
                 cand_scratch, deduce_scratch],
             rebuilt: [spare_oven, classify_memo],

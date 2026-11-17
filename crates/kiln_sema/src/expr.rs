@@ -6064,8 +6064,23 @@ impl Sema<'_, '_> {
                 // The temporary is not kept: the argument is passed as
                 // before.
                 let at = self.ast.exprs.get(a).loc();
+                if self.vararg_copying == Some(a) {
+                    // The copy selected a variadic constructor taking the
+                    // object through its ellipsis (`S(...)` and a
+                    // `volatile S` source, which no implicit copy
+                    // constructor binds), whose argument is copied the same
+                    // way again, without end. GCC rejects it; clang 22
+                    // overflows its stack.
+                    let msg = self
+                        .diag(DiagId::sema_vararg_copy_recursive, self.begin_loc(a))
+                        .arg(self.ty_arg(t));
+                    self.emit(msg);
+                    continue;
+                }
                 let ty = self.ast.types.canonical(t).without_quals();
+                let outer = self.vararg_copying.replace(a);
                 let _ = self.class_init_from_expr(ty, a, ConvCtx::Initialization, at);
+                self.vararg_copying = outer;
             }
             if self.ast.types.is_void(t) {
                 let msg = self

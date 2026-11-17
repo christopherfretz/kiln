@@ -98,6 +98,7 @@ own subset; their BACKLOG rows have the detail).
 - WP-1494, WP-1508: union member designators in the Oven.
 - WP-1517: constexpr static data members before C++17 are not inline.
 - WP-1473 (this run): the regressions below.
+- WP-1547, WP-1542, WP-1545 (after this run): `label13a`, `fam-in-union-alone-in-struct-2`, `delete5`, `udlit-char-template-vs-std-literal-operator`, `ellipsis3` and `pr53011` from the crash, wrong-code and regression lists; `attr-aligned-1` is left (an Oven typedef-alignment bug).
 
 ### Cases that went from pass to a failing class (99)
 

@@ -524,6 +524,15 @@ impl Sema<'_, '_> {
             .chunks(width)
             .map(|c| c.iter().rev().fold(0u32, |v, &b| (v << 8) | u32::from(b)))
             .collect();
+        if forms.iter().any(|f| matches!(f.1, LitOpForm::Two(t) if self.is_const_ptr_to(t, elem))) {
+            let st = self.size_type();
+            let len = self.builder().int_literal(st, units.len() as u64, Radix::Decimal, loc);
+            return self.udl_call(sfx, &[e, len], loc, ud_loc);
+        }
+        // The GNU `template<class C, C...>` form is an extension the
+        // standard rules never reach: the `(str, len)` operator wins
+        // over it, as with clang (`LookupLiteralOperator` drops the
+        // templates on an exact match) and GCC.
         let templates = Self::templates_of(&forms, TemplForm::GnuPack);
         if !templates.is_empty() {
             let mut targs = vec![TemplateArg::ty(elem)];
@@ -532,11 +541,6 @@ impl Sema<'_, '_> {
                 targs.push(TemplateArg::value(elem, v));
             }
             return self.udl_template_call(sfx, &templates, &targs, loc, ud_loc);
-        }
-        if forms.iter().any(|f| matches!(f.1, LitOpForm::Two(t) if self.is_const_ptr_to(t, elem))) {
-            let st = self.size_type();
-            let len = self.builder().int_literal(st, units.len() as u64, Radix::Decimal, loc);
-            return self.udl_call(sfx, &[e, len], loc, ud_loc);
         }
         self.reject_ud_suffix(Some(sfx_str), ud_loc, UdOperand::String(elem));
         self.recover_err(&[], loc)

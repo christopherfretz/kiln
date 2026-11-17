@@ -221,6 +221,13 @@ pub(crate) struct Cg<'a> {
     pub srcloc: Option<kiln_ast::ExprId>,
     /// Static locals already emitted.
     pub static_locals: FxHashMap<DeclId, GlobalId>,
+    /// The static locals whose constant initializer holds a label address
+    /// (`&&l`), with the function whose block that address names: a body
+    /// emitted twice (a constructor's complete and base variants) emits
+    /// the initializer again ([`Cg::static_local_init`]).
+    pub label_statics: FxHashMap<DeclId, FuncId>,
+    /// The number of label addresses made ([`Cg::addr_of_label`]).
+    pub label_addrs: u32,
     /// The `__const.<function>.<variable>` global last made for each
     /// local variable (clang `InitializerConstants`;
     /// [`Cg::unnamed_global_from`]).
@@ -434,6 +441,8 @@ impl<'a> Cg<'a> {
             contract_checked: false,
             srcloc: None,
             static_locals: FxHashMap::default(),
+            label_statics: FxHashMap::default(),
+            label_addrs: 0,
             unnamed_consts: FxHashMap::default(),
             no_object: FxHashMap::default(),
             var_aligns: FxHashMap::default(),
@@ -3823,10 +3832,16 @@ impl<'a> Cg<'a> {
         // clang `AddInitializerToStaticVarDecl`.
         // A dynamic initializer runs, guarded, at the declaration
         // statement ([stmt.dcl]/3; `static_local_init`).
+        let labels = self.label_addrs;
         let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
             None => self.null_const(ty)?,
             Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
+        if self.label_addrs != labels
+            && let Some(f) = self.f.func
+        {
+            self.label_statics.insert(first, f);
+        }
         let ity = self.m.const_type(init);
         if ity != mt {
             self.m.set_global_value_type(g, ity);

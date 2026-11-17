@@ -764,7 +764,16 @@ operator '<' is ambiguous", a reversed candidate noted "candidate function
 (each printing the selected operator, checked against clang 19 and 22),
 `over.match.oper/p2468-eq-ne-suppression.cpp` (§5.1).
 
-Clang extras: reversed-operator acceptance kept (§5.3); the rest dropped (§9.3).
+Clang extras: reversed-operator acceptance kept (§5.3); the rest dropped (§9.3),
+except one (WP-1545): from C++11, when the ICS comparison makes `c1`
+worse than `c2` for some argument, `c1` is still better if no argument
+of `c1` needs the string-literal-to-`char*` conversion (ill-formed since
+C++11, an extension) and some argument of `c2` does (clang's pre-pass of
+`isBetterOverloadCandidate`; `best.rs::ill_formed_string_better`). So
+`s != "x"` with `s` converting to `char*` picks the built-in
+`(const char*, const char*)`, as clang and GCC do; in C++98 it is
+ambiguous, as in clang. Tests: `over.built/string-literal-vs-converted-
+char-pointer*.cpp`.
 
 ### 4.2 Selection
 ```rust
@@ -1151,8 +1160,11 @@ suppresses it for instantiated members).
   - **character:** the literal's own type;
   - **string:** in [lex.ext]/5 order:
     - a class-NTTP template called as `operator""X<str>()`;
-    - the GNU pack, with the element type and then the code units;
-    - `(str, len)`.
+    - `(str, len)`;
+    - the GNU pack, with the element type and then the code units: an
+      extension outside [lex.ext]/5, used only when no `(str, len)`
+      operator exists (clang `LookupLiteralOperator` drops templates on
+      an exact match; GCC agrees; WP-1547).
 
   A plain function call goes through `act_on_call`, so overload
   resolution and access checks apply. A template form calls through an
