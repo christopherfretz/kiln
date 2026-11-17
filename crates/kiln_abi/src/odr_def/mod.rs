@@ -24,20 +24,23 @@
 //! parsing or sema, and the hasher has its own mangling state (it never
 //! touches the module's [`AnonIds`]).
 
+mod attrs;
 mod decl;
 pub use decl::is_templated_def;
 mod expr;
 mod init;
+mod internal;
 mod lambda;
 pub use lambda::lambda_in_declarator;
 mod misc;
 mod refs;
+mod signature;
 mod stmt;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::{Ast, DeclId, ExprId, QualType, StmtId};
+use kiln_ast::{Ast, DeclId, ExprId, QualType, RawId, StmtId};
 use kiln_source::SourceManager;
 use kiln_source::fx::FxHashMap;
 
@@ -55,8 +58,11 @@ use crate::mangle::AnonIds;
 /// initializers, `visibility` off the attribute list (K-3c), `d3`
 /// closures, local classes and enumerations, the rows of closure members,
 /// statement expressions, coroutines, `asm`, label addresses, the GNU,
-/// vector and atomic builtin forms, `_Generic`, constraints (K-3d).
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d3";
+/// vector and atomic builtin forms, `_Generic`, constraints (K-3d), `d4`
+/// callees by entity with the signature area (dependent types and
+/// expressions by structure), the listed attributes, the declaration's
+/// default arguments, `USES_INTERNAL` (K-3e).
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d4";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.
@@ -106,6 +112,8 @@ const T_CALL_OP_ROW: u8 = 0xB5;
 /// A local entity of an enclosing scope (inside a closure): the depth
 /// byte, then its `u32` index there.
 const T_OUTER_LOCAL: u8 = 0xB6;
+/// The declaration's default arguments (`decl.rs`).
+const T_DEFAULT_ARGS: u8 = 0xBE;
 
 /// The names codegen already gave entities (deliverable 2 of K-3c): the
 /// hasher asks before mangling. An answer must be exactly the name
@@ -125,6 +133,9 @@ pub struct DefDigest {
     pub hash: u128,
     /// The hasher skipped a construct its scheme covers (O-15 `PARTIAL`).
     pub partial: bool,
+    /// The definition odr-uses an entity with internal linkage or names a
+    /// TU-local entity (O-16 `USES_INTERNAL`; `internal.rs`).
+    pub uses_internal: bool,
 }
 
 /// The package that will hash a skipped construct (spec/abi.md
@@ -185,6 +196,13 @@ pub enum Item {
     FpPragma,
     /// An integer literal wider than its value words say.
     WideLiteral,
+    /// A function template specialization named in the short form while
+    /// its template has an overload of the same name and template
+    /// parameter count (signature.rs).
+    ShortCallee,
+    /// A dependent type, name or argument form the signature area does
+    /// not cover.
+    DependentType,
 }
 
 /// Counters of the hasher (costs and the `partial` share by reason).
@@ -210,6 +228,24 @@ pub struct DefStats {
     pub entity_known: u64,
     /// `partial()` calls per site (at most one per definition and site).
     pub partial_sites: FxHashMap<(Area, Site), u64>,
+    /// Function template specializations named in the full form (with
+    /// their template's signature digest), counted once per entity.
+    pub callee_full: u64,
+    /// Of them in the short form (the signature holds an uncovered node).
+    pub callee_short: u64,
+    /// Template signatures serialized (once per template: the memo is
+    /// keyed by its first declaration).
+    pub signatures: u64,
+    /// The uncovered nodes of signatures, per site (once per signature).
+    pub signature_sites: FxHashMap<Site, u64>,
+    /// Definitions with `USES_INTERNAL`.
+    pub uses_internal_definitions: u64,
+    /// Per internal or TU-local entity (first declaration), the
+    /// definitions it set `USES_INTERNAL` on.
+    pub internal_entities: FxHashMap<DeclId, u64>,
+    /// Of `uses_internal_definitions`, those set only through a per-TU
+    /// placeholder (an entity or type kiln cannot name).
+    pub internal_by_placeholder: u64,
 }
 
 /// One pending item of the walk.
@@ -240,6 +276,10 @@ struct Scope {
 /// (its memo maps and buffers are what make the cost per unit, not per
 /// definition).
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent walk states, saved and restored apart"
+)]
 pub struct DefHasher<'a> {
     ast: &'a Ast,
     sm: &'a SourceManager,
@@ -265,6 +305,33 @@ pub struct DefHasher<'a> {
     /// The work stack below this length belongs to an enclosing walk.
     floor: usize,
     partial: bool,
+    /// `USES_INTERNAL` of the current definition (`internal.rs`).
+    uses_internal: bool,
+    /// Whether it was set by name (not only by a placeholder).
+    internal_named: bool,
+    /// The internal entities met in the current definition.
+    internal_seen: Vec<DeclId>,
+    /// Internal linkage per first declaration.
+    internal: FxHashMap<DeclId, bool>,
+    /// The definition whose row is computed (first declaration).
+    root: DeclId,
+    /// Whether the next [`Self::decl_ref`] is an odr-use.
+    odr_use: bool,
+    /// Whether the reference [`Self::decl_ref`] is writing is one.
+    cur_odr_use: bool,
+    /// Signature walks in progress (signature.rs): a skip makes the
+    /// signature uncovered instead of the definition `partial`.
+    sig: u32,
+    sig_uncovered: bool,
+    /// Walks of an equivalence class's expression or a signature in
+    /// progress: function parameters by position.
+    positional: u32,
+    type_depth: u32,
+    /// Signature digests per function template (`None`: uncovered).
+    sigs: FxHashMap<DeclId, Option<u128>>,
+    /// Function template specializations by entity: the item's digest,
+    /// its own `partial`, and whether the short form had an overload.
+    callees: FxHashMap<DeclId, (u128, bool, bool)>,
     /// The sites already counted for the current definition.
     seen: Vec<(Area, Site)>,
     stats: DefStats,
@@ -293,6 +360,19 @@ impl<'a> DefHasher<'a> {
             closures: FxHashMap::default(),
             floor: 0,
             partial: false,
+            sig: 0,
+            sig_uncovered: false,
+            positional: 0,
+            type_depth: 0,
+            sigs: FxHashMap::default(),
+            callees: FxHashMap::default(),
+            uses_internal: false,
+            internal_named: false,
+            internal_seen: Vec::new(),
+            internal: FxHashMap::default(),
+            root: DeclId::from_raw(1).expect("a declaration id"),
+            odr_use: true,
+            cur_odr_use: true,
             seen: Vec::new(),
             stats: DefStats::default(),
         }
@@ -328,6 +408,9 @@ impl<'a> DefHasher<'a> {
             + self.locals.capacity() * (size_of::<(DeclId, u32)>() + 1)
             + self.seen.capacity() * size_of::<(Area, Site)>()
             + self.closures.capacity() * (size_of::<(DeclId, DefDigest)>() + 1)
+            + self.sigs.capacity() * (size_of::<(DeclId, Option<u128>)>() + 1)
+            + self.callees.capacity() * (size_of::<(DeclId, (u128, bool, bool))>() + 1)
+            + self.internal.capacity() * (size_of::<(DeclId, bool)>() + 1)
     }
 
     /// The serialization of the last definition hashed (for tests).
@@ -394,9 +477,7 @@ impl<'a> DefHasher<'a> {
             .find_map(|r| ast.decls.var(r).and_then(|v| v.init.map(|i| (v.spec, i))));
         let tls = ast.decls.var(def).map_or(0, |v| v.spec.tls() as u8);
         self.byte(tls);
-        if ast.redecls_of(def).any(|r| decl::has_listed_attr(self, r)) {
-            self.partial(Area::Attrs, Site::Item(Item::Attributes));
-        }
+        self.listed_attrs(def, false);
         match with_init {
             Some((spec, init)) => {
                 self.byte(spec.init_style() as u8);
@@ -418,6 +499,11 @@ impl<'a> DefHasher<'a> {
         self.inline_defs.clear();
         self.seen.clear();
         self.partial = false;
+        self.uses_internal = false;
+        self.internal_named = false;
+        self.internal_seen.clear();
+        self.odr_use = true;
+        self.root = self.ast.first(def);
         self.stack.clear();
         self.floor = 0;
         self.def = self.ast.first(def);
@@ -426,8 +512,17 @@ impl<'a> DefHasher<'a> {
     fn finish(&mut self) -> DefDigest {
         self.stats.definitions += 1;
         self.stats.partial_definitions += u64::from(self.partial);
+        self.stats.uses_internal_definitions += u64::from(self.uses_internal);
+        self.stats.internal_by_placeholder += u64::from(self.uses_internal && !self.internal_named);
+        for &d in &self.internal_seen {
+            *self.stats.internal_entities.entry(d).or_default() += 1;
+        }
         self.stats.bytes += self.out.len() as u64;
-        DefDigest { hash: fnv1a_128_bytes(&self.out), partial: self.partial }
+        DefDigest {
+            hash: fnv1a_128_bytes(&self.out),
+            partial: self.partial,
+            uses_internal: self.uses_internal,
+        }
     }
 
     /// Runs the work stack down to [`Self::floor`].
@@ -503,7 +598,6 @@ impl<'a> DefHasher<'a> {
     /// Skips a construct of `area`: sets the flag and writes the fixed
     /// token of `site` in place of the subtree.
     fn partial(&mut self, area: Area, site: Site) {
-        self.partial = true;
         let (class, code) = match site {
             Site::Expr(k) => (b'e', k as u8),
             Site::Stmt(k) => (b's', k as u8),
@@ -511,16 +605,41 @@ impl<'a> DefHasher<'a> {
             Site::Item(i) => (b'i', i as u8),
         };
         self.out.extend_from_slice(&[T_PARTIAL, class, code]);
+        if self.sig > 0 {
+            // Inside a signature: the signature is uncovered (the callee
+            // takes the short form), the definition is not partial.
+            if !self.sig_uncovered {
+                *self.stats.signature_sites.entry(site).or_default() += 1;
+            }
+            self.sig_uncovered = true;
+            return;
+        }
+        self.partial = true;
         if !self.seen.contains(&(area, site)) {
             self.seen.push((area, site));
             *self.stats.partial_sites.entry((area, site)).or_default() += 1;
         }
     }
 
-    /// A type item: the canonical type's `<type>` encoding, or the per-TU
-    /// placeholder.
+    /// Joins a memoized item's own `partial` (inside a signature: makes
+    /// the signature uncovered).
+    fn join_partial(&mut self, p: bool) {
+        if !p {
+        } else if self.sig > 0 {
+            self.sig_uncovered = true;
+        } else {
+            self.partial = true;
+        }
+    }
+
+    /// A type item: the canonical type's `<type>` encoding, a dependent
+    /// type by structure (signature.rs), or the per-TU placeholder.
     fn ty(&mut self, q: QualType) {
-        match self.refs.ty(q, &mut self.stats) {
+        let c = self.ast.types.canonical(q);
+        if self.is_dep_type(c) {
+            return self.dep_type(c);
+        }
+        match self.refs.ty(c, &mut self.stats) {
             Some(h) => {
                 self.byte(T_TYPE);
                 self.out.extend_from_slice(&h.to_le_bytes());

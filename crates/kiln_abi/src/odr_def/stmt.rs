@@ -2,9 +2,8 @@
 //! naming its area. A statement writes its tag, then its fixed layout:
 //! optional parts are present or [`super::T_NONE`], lists are counted.
 
-use kiln_ast::attr::AttrKind;
 use kiln_ast::stmt::StmtKind as S;
-use kiln_ast::{AttrId, DeclId, StmtId};
+use kiln_ast::{DeclId, StmtId};
 
 use super::decl::decl_hashed;
 use super::{Area, DefHasher, Item, Site, T_LOCAL, Work};
@@ -143,18 +142,10 @@ impl DefHasher<'_> {
                 self.stack.push(Work::Stmt(st.catch_block(s)));
             }
             // ----- area: attrs (K-3e): `[[assume(e)]]` is on the closed
-            // list; every other statement attribute is not hashed and the
-            // statement is transparent.
+            // list and hashes `e`; every other statement attribute is not
+            // hashed, and a statement without an assumption is transparent.
             S::AttributedStmt => {
-                let assume = ast
-                    .lists
-                    .get(st.stmt_attrs(s))
-                    .iter()
-                    .filter_map(|&r| AttrId::try_new(r))
-                    .any(|a| ast.attrs.get(a).kind == AttrKind::ASSUME);
-                if assume {
-                    self.partial(Area::Attrs, Site::Stmt(k));
-                }
+                self.assume_attrs(k, st.stmt_attrs(s));
                 self.stack.push(Work::Stmt(st.sub_stmt(s)));
             }
             // ----- not hashed in scheme 1 (X16): not partial; dropped from

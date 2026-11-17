@@ -1947,7 +1947,7 @@ O-10..O-13). This section is its contract: a later kiln reproduces these
 bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
 (WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d3"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d4"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
@@ -1958,12 +1958,16 @@ init area (below), ctor-initializers, synthesized members, a
 destructor's deallocation function, variable definitions, and
 `visibility` taken off the attribute list; `d3` (K-3d) closures and the
 rows of closure members, local classes and enumerations, the GNU,
-vector, atomic and coroutine forms, `asm`, constraints (below).
+vector, atomic and coroutine forms, `asm`, constraints (below); `d4`
+(K-3e) function template specializations by entity (the signature
+area), the listed attributes, the declaration's default arguments,
+`USES_INTERNAL`, and names without abi tags (below).
 
-**Digest.** `DefHasher::function(def) -> DefDigest { hash, partial }`:
+**Digest.** `DefHasher::function(def) -> DefDigest { hash, partial, uses_internal }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
 prime 2^88 + 0x13b; `kiln_abi::odr::fnv1a_128`) of the stream; `partial`
-is O-15's flag (some construct the scheme covers was skipped).
+is O-15's flag (some construct the scheme covers was skipped);
+`uses_internal` is O-16's (below).
 
 **Stream.** Every node opens with a one-byte tag and has a fixed layout
 after it; a list is a little-endian `u32` count then its items, a string
@@ -1996,6 +2000,14 @@ self-delimiting, so two different trees never give the same bytes.
 | `0xB4` | a local class or enumeration definition | index, kind, bases, members |
 | `0xB5` | a closure member's row | closure digest, then `0` or (`1`, function type, template arguments) |
 | `0xB6` | a local of an enclosing scope inside a closure | depth byte, `u32` index |
+| `0xB7` | a dependent type (signature area) | qualifiers, type kind, then its layout |
+| `0xB8` | a template parameter | kind byte, `u32` depth, `u32` index, pack byte |
+| `0xB9` | a function parameter by position | `u32` index, pack byte, scope depth, type |
+| `0xBA` | a template by entity | its kind, scope path, name |
+| `0xBB` | a function template specialization | FNV-1a 128 of its item (16 bytes) |
+| `0xBC` | a nested-name-specifier | its canonical form |
+| `0xBD` | the listed attributes | record count, sorted records (kind, arguments), the `indeterminate` parameter bits |
+| `0xBE` | the declaration's default arguments | `u32` count, per parameter `0` (none), `1` and the expression, or `2` (a dependent default of an instantiation) |
 
 Both kind enums are numbered stably (spec/ast.md); a new kind takes a new
 number and the exhaustive dispatch (no wildcard arm) does not compile
@@ -2031,7 +2043,7 @@ whenever the member is defined, so no row depends on how a unit used it.
 **Variables.** `DefHasher::variable` (inline variables, static data
 members of class templates, variable template specializations): `0xAB`,
 the declaration kind, the declared type, the thread-local kind, a
-listed attribute (`partial`), then the initialization style and the
+listed attributes (below), then the initialization style and the
 INITIALIZER as an expression from the declaration that holds it (the
 in-class one of a member defined out of line), or `0xA0`. Never the
 evaluated value (K9): constant and dynamic initialization of one
@@ -2039,14 +2051,23 @@ expression hash alike; `inline`, `constexpr`, `constinit` and `static`
 are not hashed (an out-of-line definition need not repeat them, N22).
 
 **Names and types.** A referenced function or variable is its mangled
-name, memoized per first declaration; a type is its canonical type's
+name, memoized per first declaration (a function template
+specialization: the signature area below); a type is its canonical type's
 `<type>` encoding, memoized per canonical type (a typedef equals the type
 it names). Both pass the structural not-TU-local test first (O-17,
 `NotTuLocal`; and, for a function template specialization, a scan of the
 encoding); a name or type that may hold a per-TU component (unnamed
 namespace, local entity, unnamed type, closure) is `0xA4`, which is a
 miss, not `partial`. The hasher mangles with its own `AnonIds`, never the
-module's. An enumerator is (enumeration, name, value), so an unnamed
+module's, built `without_abi_tags`: a named entity, type, variable or
+enumeration contributes no abi tag, its own, implicit, or from an
+enclosing class or inline namespace, and a global-scope variable
+mangled only for its tags is its plain name (O-10 applied to
+references: a library built with its hiding macro empty names the
+untagged symbol where its users name the tagged one). Visibility and
+`exclude_from_explicit_instantiation` never reach a name. Codegen's own
+symbol names are reused only in a module without an `abi_tag`
+attribute. An enumerator is (enumeration, name, value), so an unnamed
 enumeration's enumerator is (`0xA4`, name, value). A local is its index in
 order of first appearance (a `goto` before its label numbers the label).
 
@@ -2060,7 +2081,9 @@ condition, then, else; loops: init, condition variable, condition,
 increment, body; range-`for`: init, range variable, begin and end
 variables, condition, increment, loop variable, body, so it differs from
 the iterator loop written out; `case`: low, high, statement; labels and
-`goto`: the label as a local). An attributed statement is its statement.
+`goto`: the label as a local). An attributed statement is its statement,
+preceded, when it carries `[[assume(e)]]`, by its tag, the count and the
+assumption expressions (no other statement attribute is hashed).
 A local variable: `0xA9`, its index, type, bits (storage class,
 thread-local kind, initialization style, `constexpr`, `constinit`), its
 bindings (count + indexes) or `0xA0`, its initializer or `0xA0`.
@@ -2127,8 +2150,101 @@ the types or operand; array traits: trait, type, value, dimension.
 | lambda (K-3d) | `partial` | a local class template, member template or alias template; a member of a local class the rule above does not name |
 | misc (K-3d) | hashed | `ImaginaryLiteral` `BinaryConditionalOperator` `OffsetOfExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `PseudoObjectExpr` `GenericSelectionExpr` `GCCAsmStmt`; `RequiresExpr` `ConceptSpecializationExpr` outside a template |
 | misc (K-3d) | `partial` | `UserDefinedLiteral` (sema builds calls: not met) `EmbedExpr` `SizeOfPackExpr` `PackIndexingExpr` `CXXReflectExpr` `CXXSpliceExpr` `RecoveryExpr` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
-| attrs (K-3e) | `partial` | an attribute of O-10's closed list (`aligned`, `noreturn`, `target`, `target_clones`, `target_version`, `indeterminate`; NOT `visibility`, `exclude_from_explicit_instantiation` or `abi_tag`, mortar's ruling of 11-17) on the function, a variable or a local, `[[assume]]`, a default argument on any declaration of the function |
+| attrs (K-3e) | hashed | the listed attributes (below) on the function, a variable or a local; `[[assume]]`; the declaration's default arguments |
+| attrs (K-3e) | `partial` | `target_clones` (its arguments are not kept) |
+| signature (K-3e) | hashed | a function template specialization named in a definition; dependent types, template parameters, function parameters by position, nested-name-specifiers, dependent `noexcept`, the template's requires-clause, inside a signature or a generic lambda's pattern |
+| signature (K-3e) | `partial` | a specialization whose signature holds an uncovered node (a deferred `noexcept`, an uncovered dependent kind) when its template has an overload of the same name and template parameter count (else the short form, not `partial`) |
 | dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a dependent `ChooseExpr`, `GenericSelectionExpr`, `CoyieldExpr`, `RequiresExpr` or `ConceptSpecializationExpr` (in a generic lambda's pattern); a template's own definition, a dependent `noexcept` or requires-clause |
+
+**Signature area** (`odr_def/signature.rs`, K-3e; mortar's ruling of
+11-17). A function template specialization named in a definition (a
+callee, an address taken, a default argument, a member pointer) is
+`0xBB` and the FNV-1a 128 of its item, memoized per specialization: the
+item is `0xBB`, the declaration kind, the template (`0xBA`: kind, scope
+path of namespaces by name and a non-templated class by its type item,
+name), the canonical template arguments' `<template-args>` encoding
+(non-dependent, so the spelling is the value's), then `1` and the
+template's signature digest, or `0` (the short form). The signature
+digest, memoized per template (first declaration, so a redeclaration
+cannot change it), hashes the template parameter list (count; kind,
+pack, a non-type parameter's type, the type-constraint; the
+requires-clause), the pattern's canonical function type and its trailing
+requires-clause, with every dependent type serialized by structure
+(`0xB7`), template parameters by depth and index (`0xB8`), function
+parameters by position (`0xB9`), nested-name-specifiers canonically
+(`0xBC`), dependent expressions by their equivalence class's canonical
+profile and a dependent `noexcept` by its expression: never a mangling,
+whose dependent parts print the unit's first equivalent spelling. A
+signature holding a node the area does not cover (a deferred `noexcept`,
+a dependent kind the K-6 row lists) takes the short form; the row is
+then `PARTIAL` only when the template's scope has another function
+template of the same name and template parameter count. A member
+function of a class template specialization and a variable template
+specialization are named by their mangled names (their signature and
+type are the instantiation's, with no dependent part); a member
+template specialization takes the item, its scope path naming the
+class specialization by its type item.
+
+**Attributes** (`odr_def/attrs.rs`, K-3e). O-10's closed list
+(scheme 1), as WRITTEN on the declaration chain (an instantiation: its
+pattern's chain), never an implicit or inherited copy, as a set: each
+record (kind, arguments) on its own, sorted and deduplicated; `0xA0`
+when there is none.
+
+| attribute | hashed as | O-10 choice |
+|---|---|---|
+| `alignas(e)` / `aligned(e)` | `1`, the expression (dependent: by structure) | the spelling is not hashed: the argument decides |
+| `alignas(T)` | `2`, the type | equal to `alignas(alignof(T))` only by value: differ (miss) |
+| `aligned` (no argument) | `0` | the target's maximum, a token of its own |
+| `noreturn` / `[[noreturn]]` | present | `[[noreturn]]` and `[[gnu::noreturn]]` equal |
+| `target("s")`, `target_version("s")` | the string bytes | not normalized (`"avx2,sse4.2"` against `"sse4.2,avx2"`: differ) |
+| `target_clones` | present, `partial` | the AST keeps no arguments |
+| `indeterminate` | a bit per parameter | any declaration of the chain writing it on the parameter |
+| `[[assume(e)]]` | the expressions, at the statement | |
+| everything else | not hashed | `visibility`, `exclude_from_explicit_instantiation`, `abi_tag`, `weak`, `section`, `deprecated`, `nodiscard`, `maybe_unused`, ... |
+
+Legal differences: `[[nodiscard]]` and `[[deprecated]]` may differ
+between declarations in different units ([dcl.attr.nodiscard],
+[dcl.attr.deprecated] allow a redeclaration to add them) and are not
+hashed; `[[noreturn]]` on the first declaration in one unit and not in
+another is ill-formed, no diagnostic required ([dcl.attr.noreturn]), so it
+is hashed, and a unit that adds it only on a later redeclaration differs
+from one that never writes it (a miss mortar reports, not a false
+match).
+
+**Default arguments** (`odr_def/decl.rs`, K-3e). The rule: each
+parameter hashes the default argument that a namespace- or class-scope
+declaration of the function's redeclaration chain gives it, as
+accumulated at the end of the unit, and for an instantiation the
+pattern's default when it is not dependent (a dependent one is the
+fixed token `2`: it is instantiated only where a unit uses it).
+`0xA0` when no parameter has one, else `0xBE` (layout above). Hazards:
+a default added by a later redeclaration is hashed (a unit that does not
+see the redeclaration differs); a block-scope redeclaration's defaults
+are skipped (they hold only in that block); default template arguments
+are not hashed (they are part of the template's declaration, and a
+callee's are in its template arguments); an uninstantiated default of a
+class-template member is the token `2`, so a unit that used it equals
+one that did not; a friend declaration's default (only on a definition,
+[dcl.fct.default]) is hashed like any other.
+
+**`USES_INTERNAL`** (`odr_def/internal.rs`, O-16, strict only). Set
+during the walk when the definition odr-uses a function or variable
+with internal linkage, or names a TU-local type (an unnamed-namespace
+class or enumeration, a per-TU placeholder of a type), other than its
+own local entities. Not set by a constant read by value (N17), an
+unevaluated operand, or a discarded one (sema's non-odr-use mark). A
+closure's memo carries the flag to every use. Inside a signature
+digest nothing sets it (the signature names no definition's use). A
+row with the flag still hashes its tokens: two units' rows may be
+equal.
+
+**Misses** (equal definitions that differ, or ill-formed ones that do
+not): an attribute written only on a later redeclaration the other unit
+does not see; `alignas(T)` against `alignas(alignof(T))`; unnormalized
+`target` strings; a default argument added by a redeclaration only one
+unit sees; `target_clones` (always `partial`); a short-form callee of an
+overloaded template (`partial`).
 
 A skipped construct writes `0xA6`, its class and its kind's code in place
 of its subtree (one token per node kind, mortar's ruling 2), so equal

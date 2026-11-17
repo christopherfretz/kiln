@@ -104,6 +104,37 @@ const MUST_EQUAL: &[(&str, &str, &str)] = &[
         "int f(int a) { if (a) return 1; int b = a; return b; }",
         "[[nodiscard]] [[deprecated]] int f([[maybe_unused]] int a) { if (a) [[likely]] return 1; int b = a; return b; }",
     ),
+    // K-3e: attributes off O-10's list (and the 03:11 ET ruling's).
+    (
+        "O-10 unlisted attributes",
+        "int f(int a) { return a; }",
+        "[[gnu::visibility(\"hidden\")]] [[gnu::section(\".text.k\")]] [[gnu::abi_tag(\"x\")]] [[gnu::cold]] [[gnu::used]] int f(int a) { return a; }",
+    ),
+    (
+        "O-10 a listed attribute as a set over the chain",
+        "[[noreturn]] void f(int);\n[[noreturn]] void f(int a) { throw a; }",
+        "[[noreturn]] void f(int a);\nvoid f(int);\nvoid f(int a) { throw a; }",
+    ),
+    (
+        "O-10 alignas on a local as written",
+        "int f() { alignas(16) int a = 1; return a; }",
+        "int f() { alignas(16) int b = 1; return b; }",
+    ),
+    (
+        "O-10 a block-scope redeclaration's default argument",
+        "int f(int a) { return a; }\nint g() { return f(3); }",
+        "int f(int a) { return a; }\nint g() { int f(int = 3); return f(); }",
+    ),
+    (
+        "O-10 a dependent default argument used in one unit only",
+        "template <class T> struct S { int m(T t = T(1)) { return t; } };\nint f() { return S<int>().m(2); }",
+        "template <class T> struct S { int m(T t = T(1)) { return t; } };\nint f() { return S<int>().m(2); }\nint g() { return S<int>().m(); }",
+    ),
+    (
+        "default template arguments of a callee",
+        "template <class T, int N = 1> int t(T a) { return a + N; }\nint f() { return t<int, 1>(1); }",
+        "template <class T, int N = 2> int t(T a) { return a + N; }\nint f() { return t<int, 1>(1); }",
+    ),
     (
         "N16 macros that expand alike",
         "#define ONE 1\nint f(int a) { return a + ONE; }",
@@ -461,6 +492,19 @@ asm volatile | int f() { int r; asm("" : "=r"(r)); return r; } | int f() { int r
 asm constraint | int f(int a) { int r; asm("" : "=r"(r) : "r"(a)); return r; } | int f(int a) { int r; asm("" : "=r"(r) : "m"(a)); return r; }
 asm operand | int f(int a, int b) { int r; asm("" : "=r"(r) : "r"(a)); return r; } | int f(int a, int b) { int r; asm("" : "=r"(r) : "r"(b)); return r; }
 asm clobber | void f() { asm("" ::: "memory"); } | void f() { asm("" ::: "cc"); }
+noreturn added | void f(int a) { throw a; } | [[noreturn]] void f(int a) { throw a; }
+noreturn on a redeclaration | void f(int a) { throw a; } | [[noreturn]] void f(int a); void f(int a) { throw a; }
+aligned changed | [[gnu::aligned(16)]] int f() { return 1; } | [[gnu::aligned(32)]] int f() { return 1; }
+aligned added | int f() { return 1; } | [[gnu::aligned]] int f() { return 1; }
+alignas on a local | int f() { alignas(8) int a = 1; return a; } | int f() { alignas(16) int a = 1; return a; }
+assume expression | int f(int x) { [[assume(x > 0)]]; return x; } | int f(int x) { [[assume(x > 1)]]; return x; }
+assume added | int f(int x) { return x; } | int f(int x) { [[assume(x > 0)]]; return x; }
+indeterminate added | int f(int a) { return 1; } | int f([[indeterminate]] int a) { return 1; }
+indeterminate on a redeclaration | int f(int a) { return 1; } | int f([[indeterminate]] int a); int f(int a) { return 1; }
+default argument value | int f(int a = 1) { return a; } | int f(int a = 2) { return a; }
+default argument added | int f(int a) { return a; } | int f(int a = 2) { return a; }
+default argument on a later redeclaration | int f(int a, int b) { return a + b; } | int f(int a, int b) { return a + b; } int f(int a, int b = 2);
+friend default argument | struct Q { friend int f(Q, int a = 1) { return a; } }; | struct Q { friend int f(Q, int a = 2) { return a; } };
 "#;
 
 const BINARY: &[&str] = &[
@@ -568,7 +612,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d3).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d4).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -607,16 +651,25 @@ fn golden_digests() {
     }
 }
 
-/// Every partial site writes its own token: two definitions skipped for
-/// different reasons differ.
+/// A partial site writes its own token: a definition with a skipped item
+/// differs from the same definition without it. The listed attributes and
+/// the declaration's default arguments are hashed since K-3e.
 #[test]
 fn partial_tokens_are_per_kind() {
+    let fp = digest_in(
+        &format!(
+            "{PRELUDE}double f(double a) {{\n#pragma STDC FP_CONTRACT OFF\n return a * a + 1; }}"
+        ),
+        "f",
+    );
+    let plain = digest_in(&format!("{PRELUDE}double f(double a) {{ return a * a + 1; }}"), "f");
+    assert!(fp.partial && !plain.partial);
+    assert_ne!(fp.hash, plain.hash);
     let a = digest_in(&format!("{PRELUDE}int f(int a = 1) {{ return a; }}"), "f");
     let b = digest_in(&format!("{PRELUDE}int f(int a = 2) {{ return a; }}"), "f");
     let c = digest_in(&format!("{PRELUDE}[[gnu::aligned(16)]] int f(int a) {{ return a; }}"), "f");
-    assert!(a.partial && b.partial && c.partial);
-    assert_eq!(a, b, "the same partial token for the same kind (subtree not hashed)");
-    assert_ne!(a.hash, c.hash);
+    assert!(!a.partial && !b.partial && !c.partial, "{a:x?} {c:x?}");
+    assert_ne!(a.hash, b.hash);
 }
 
 // ---------------------------------------------------------- deep trees
@@ -768,6 +821,8 @@ struct UnitHash {
     digests: BTreeMap<String, DefDigest>,
     names: Vec<String>,
     stats: kiln_abi::odr_def::DefStats,
+    /// The internal entities that set `USES_INTERNAL`, by definitions.
+    internal: Vec<(u64, String)>,
 }
 
 fn hash_unit(ii: String) -> UnitHash {
@@ -785,7 +840,14 @@ fn hash_unit(ii: String) -> UnitHash {
             digests.insert(name, digest);
         }
     }
-    UnitHash { digests, names: h.names().to_vec(), stats: h.stats().clone() }
+    let mut internal: Vec<(u64, String)> = h
+        .stats()
+        .internal_entities
+        .iter()
+        .map(|(&d, &n)| (n, mangle::mangle_decl(ast, &mut anon, d)))
+        .collect();
+    internal.sort_by(|a, b| b.cmp(a));
+    UnitHash { digests, names: h.names().to_vec(), stats: h.stats().clone(), internal }
 }
 
 fn report(stdlib: &str, u: &UnitHash) {
@@ -797,6 +859,16 @@ fn report(stdlib: &str, u: &UnitHash) {
         100.0 * s.partial_definitions as f64 / s.definitions.max(1) as f64,
         s.nodes,
         s.bytes
+    );
+    eprintln!(
+        "  callees: {} full, {} short; {} signatures; uncovered signature sites {:?}",
+        s.callee_full, s.callee_short, s.signatures, s.signature_sites
+    );
+    eprintln!(
+        "  USES_INTERNAL: {} definitions ({} by placeholder only); top: {:?}",
+        s.uses_internal_definitions,
+        s.internal_by_placeholder,
+        &u.internal[..u.internal.len().min(10)]
     );
     let mut by: BTreeMap<String, u64> = BTreeMap::new();
     for (&(area, site), &n) in &s.partial_sites {
@@ -1250,4 +1322,109 @@ fn parentheses_pairs_differ_by_meaning() {
         assert!(!x.partial && !y.partial, "{case}");
         assert_ne!(x.hash, y.hash, "{case}: hashed equal");
     }
+}
+
+// ---------------------------------------- K-3e (WP-1585): the signature area
+
+/// Templates whose signatures hold dependent names (fmt's shape: a member
+/// template of a class template, overloads that differ only in an
+/// `enable_if` condition).
+const SIG_PRELUDE: &str = "namespace ns {\n\
+    template <bool B, class T = void> struct enable_if {};\n\
+    template <class T> struct enable_if<true, T> { using type = T; };\n\
+    template <bool B, class T = void> using enable_if_t = typename enable_if<B, T>::type;\n\
+    template <class T> struct has { static constexpr bool value = sizeof(T) > 1; };\n\
+    template <class X> struct W {\n\
+      template <class T, enable_if_t<has<T>::value, int> = 0> int on(T) { return 1; }\n\
+      template <class T, enable_if_t<!has<T>::value, int> = 0> int on(T) { return 2; }\n\
+    };\n}\n";
+
+/// [temp.over.link]: a function template specialization named by entity.
+/// The unit that first spells an equivalent dependent name otherwise
+/// gives the callee another symbol; a redeclaration with another spelling
+/// does not change it.
+#[test]
+fn callee_by_entity_not_by_spelling() {
+    let use_on = "int f() { return ns::W<int>().on(1) + ns::W<int>().on('c'); }\n";
+    let a = digest_in(&format!("{SIG_PRELUDE}{use_on}"), "f");
+    let other = "template <class T, ns::enable_if_t<ns::has<T>::value, int> = 0> bool g(T);\n";
+    let b = digest_in(&format!("{SIG_PRELUDE}{other}{use_on}"), "f");
+    assert_eq!(a, b, "another spelling first");
+    assert!(!a.partial, "{a:x?}");
+    // The callee's first declaration spells the condition otherwise.
+    let def = "namespace ns { template <class T, enable_if_t<has<T>::value, int> = 0> int k(T) { return 1; } }\n\
+               int f() { return ns::k(1); }\n";
+    let fwd = "namespace ns { template <class T, enable_if_t<::ns::has<T>::value, int> = 0> int k(T); }\n";
+    let x = digest_in(&format!("{SIG_PRELUDE}{def}"), "f");
+    let y = digest_in(
+        &format!("{SIG_PRELUDE}{fwd}{}", def.replace(" = 0> int k(T) {", "> int k(T) {")),
+        "f",
+    );
+    assert_eq!(x, y, "a redeclaration spelled otherwise");
+    assert!(!x.partial);
+}
+
+/// The ruling's condition: overloads that differ only in their dependent
+/// signature hash apart (the call resolves to the other one with the same
+/// template arguments).
+#[test]
+fn overloads_differing_in_signature_only() {
+    let other = SIG_PRELUDE.replace("sizeof(T) > 1", "sizeof(T) > 64");
+    let use_on = "int f() { return ns::W<int>().on(1); }\n";
+    let a = digest_in(&format!("{SIG_PRELUDE}{use_on}"), "f");
+    let b = digest_in(&format!("{other}{use_on}"), "f");
+    assert_ne!(a.hash, b.hash);
+    assert!(!a.partial && !b.partial);
+}
+
+/// The fallback: a signature holding a node the area does not cover (a
+/// requires-expression) takes the short form, `PARTIAL` only when an
+/// overload of the same name and parameter count exists.
+#[test]
+fn short_form_with_overloads_is_partial() {
+    let one = "template <class T> requires requires(T t) { t + 1; } int r(T) { return 1; }\n";
+    let two = "template <class T> requires requires(T t) { t * 2; } int r(T *) { return 2; }\n";
+    let call = "int f() { return r(1); }\n";
+    let alone = digest_in(&format!("{one}{call}"), "f");
+    let both = digest_in(&format!("{one}{two}{call}"), "f");
+    assert!(!alone.partial, "no overload: the short form is complete");
+    assert!(both.partial, "an overload in scope: PARTIAL");
+}
+
+/// The signature memo is per template declaration: three redeclarations
+/// (two spellings) and three specializations serialize one signature.
+#[test]
+fn signature_memo_per_template() {
+    let src = format!(
+        "{SIG_PRELUDE}namespace ns {{\n\
+           template <class T, enable_if_t<has<T>::value, int> = 0> int k(T);\n\
+           template <class T, enable_if_t<::ns::has<T>::value, int>> int k(T);\n\
+           template <class T, enable_if_t<has<T>::value, int>> int k(T) {{ return 1; }}\n\
+         }}\n\
+         int f() {{ return ns::k(1) + ns::k(2L) + ns::k(short(3)); }}\n"
+    );
+    let (sm, tu) = parse(&src);
+    let ast = &tu.ast;
+    let d = definitions(ast).into_iter().find(|&d| ident(ast, d) == "f").unwrap();
+    let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+    assert!(!h.function(d).partial);
+    let s = h.stats();
+    assert_eq!((s.signatures, s.callee_full, s.callee_short), (1, 3, 0));
+}
+
+/// A dependent `noexcept` in a signature is covered: overloads that
+/// differ only in it hash apart, with no fallback.
+#[test]
+fn dependent_noexcept_in_signatures() {
+    let one = "template <class T> struct B { static constexpr bool v = sizeof(T) > 1; };\n\
+               template <class T> int s(T) noexcept(B<T>::v) { return 1; }\n\
+               template <class T> int s(T *) noexcept(!B<T>::v) { return 2; }\n\
+               int f() { return s(1); }\n";
+    // The callee's own dependent noexcept is part of its signature (B's
+    // body is B's own row).
+    let two = one.replace("int s(T) noexcept(B<T>::v)", "int s(T) noexcept(B<T *>::v)");
+    assert_ne!(one, two);
+    let (a, b) = (digest_in(one, "f"), digest_in(&two, "f"));
+    assert!(!a.partial && !b.partial, "{a:x?}");
+    assert_ne!(a.hash, b.hash);
 }

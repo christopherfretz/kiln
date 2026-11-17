@@ -27,6 +27,10 @@ pub(super) struct Refs<'a> {
     pub(super) names: Option<Vec<String>>,
     /// The names codegen already produced.
     pub(super) known: Option<&'a dyn KnownNames>,
+    /// Whether the module has an `abi_tag` attribute: codegen's names
+    /// may then carry tags, which the hash leaves out, so they are not
+    /// reused.
+    tagged: bool,
 }
 
 impl std::fmt::Debug for dyn KnownNames + '_ {
@@ -36,10 +40,13 @@ impl std::fmt::Debug for dyn KnownNames + '_ {
 }
 
 impl<'a> Refs<'a> {
+    /// `anon` is mangled without abi tags (an entity's tags, own or
+    /// inherited, are not part of its identity in the hash; O-10).
     pub(super) fn new(ast: &'a Ast, anon: AnonIds) -> Self {
         Refs {
             ast,
-            anon,
+            anon: anon.without_abi_tags(),
+            tagged: ast.attrs.has_kind(kiln_ast::attr::AttrKind::ABI_TAG),
             test: NotTuLocal::new(ast),
             entities: FxHashMap::default(),
             tags: FxHashMap::default(),
@@ -47,6 +54,19 @@ impl<'a> Refs<'a> {
             names: None,
             known: None,
         }
+    }
+
+    /// The hasher's own mangling state.
+    pub(super) fn anon_mut(&mut self) -> &mut AnonIds {
+        &mut self.anon
+    }
+
+    /// Whether `d` (a function or variable) passes the per-TU guard on
+    /// its scopes, template arguments and type (the guard of
+    /// [`Self::entity`], without mangling).
+    pub(super) fn passes(&mut self, d: DeclId) -> bool {
+        let first = self.ast.first(d);
+        self.entity_passes(first)
     }
 
     /// The heap of the memo maps, in bytes.
@@ -117,7 +137,7 @@ impl<'a> Refs<'a> {
         let r = if self.entity_passes(first) {
             // The name codegen gave the symbol, else a mangling of our own
             // (the guard above applies to both).
-            let known = self.known.and_then(|k| k.name(first));
+            let known = self.known.filter(|_| !self.tagged).and_then(|k| k.name(first));
             st.entity_known += u64::from(known.is_some());
             let owned;
             let s = if let Some(s) = known {
