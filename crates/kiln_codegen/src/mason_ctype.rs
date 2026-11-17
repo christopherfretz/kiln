@@ -10,8 +10,11 @@
 //! `va_list` is `V`, an enumeration is its integer type, `int` and
 //! `unsigned int` are one token, C++'s character and `bool` types are C's, references are pointers, `noexcept` and
 //! `restrict` are dropped, top-level qualifiers of parameters and of the
-//! return type are dropped, a variable's own major array bound is
-//! erased (inner bounds and pointee arrays keep theirs), and a
+//! return type are dropped, an array bound is erased on every array
+//! type that is not the element type of another array (C lets it be
+//! omitted there: a variable's own major bound and the outer bound of an
+//! array behind a pointer, a typedef or a parameter; inner dimensions
+//! keep theirs), and a
 //! `transparent_union` parameter is its first member's type. A type with
 //! no C form (a member pointer, a non-default calling convention, an
 //! unprototyped function type inside a type) has no canonical form:
@@ -26,8 +29,9 @@
 //!             | R                       any struct, union or class
 //!             | V                       the target's va_list
 //!             | P <type>                pointer, lvalue or rvalue reference
-//!             | A [<bound>] _ <type>    array; no bound: a variable's own
-//!                                       major bound, unknown bound, VLA
+//!             | A [<bound>] _ <type>    array; the bound only on an array
+//!                                       that is another array's element
+//!                                       (and is known)
 //!             | F <type> <params> E     prototyped function type
 //!             | U <type>                _Atomic
 //!             | C <builtin>             _Complex
@@ -119,6 +123,12 @@ impl Writer<'_> {
     /// array elements and variables), without them otherwise (parameters
     /// and return types).
     fn ty(&mut self, q: QualType, quals: bool, depth: u32) -> Option<()> {
+        self.ty_in(q, quals, depth, false)
+    }
+
+    /// [`Self::ty`]; `inner` when `q` is the element type of an array (the
+    /// only place an array keeps its bound).
+    fn ty_in(&mut self, q: QualType, quals: bool, depth: u32, inner: bool) -> Option<()> {
         if depth > MAX_DEPTH {
             return None;
         }
@@ -181,19 +191,21 @@ impl Writer<'_> {
                 {
                     self.out.push('V');
                 } else {
-                    // `A [<bound>] _`: only the major bound of a
-                    // variable's own type (depth 0) is erased, as in the
-                    // Itanium form of C++ rows; inner bounds and arrays
-                    // behind pointers keep theirs, an unknown or variable
-                    // bound is empty (mortar's ruling 4 of 11-16).
+                    // `A [<bound>] _`: the bound is erased wherever C
+                    // lets it be omitted, on every array that is not the
+                    // element type of another array (a variable's own
+                    // major bound, and the outer bound behind a pointer,
+                    // a typedef or a parameter: `int (*)[]` and
+                    // `int (*)[4]` are compatible, C23 6.2.7, so they
+                    // must not hash apart); inner dimensions keep theirs,
+                    // an unknown or variable one is empty (mortar's
+                    // answer A(i) to WP-1566).
                     self.out.push('A');
-                    if depth > 0
-                        && let Some(n) = ast.types.array_size(q)
-                    {
+                    if inner && let Some(n) = ast.types.array_size(q) {
                         self.out.push_str(&n.to_string());
                     }
                     self.out.push('_');
-                    self.ty(elem, true, d)?;
+                    self.ty_in(elem, true, d, true)?;
                 }
             }
             TypeView::Function(_) => self.function(q, d)?,

@@ -147,8 +147,15 @@ Planned as 1.3.0.
 - `-fmason-metadata` (from level `default` up, C++) also records a hash
   of the layout of every class an object uses (size, alignment, bases,
   members, virtual functions), so the mortar linker can report two
-  objects that disagree on a class's layout (WP-1566); classes that are
-  local to one translation unit get no record
+  objects that disagree on a class's layout (WP-1566), and of every
+  enumeration an object refers to (underlying type, enumerators and
+  their values; WP-1576); classes and enumerations that are local to one
+  translation unit get no record. At `detail` and `all` it also records
+  each class's and enumeration's members, bases, vtable slots and
+  enumerators, so the linker can name the first difference (WP-1576).
+  A C-linkage type no longer keeps the outer bound of an array behind a
+  pointer, so `int (*)[]` and `int (*)[4]`, which C treats as
+  compatible, are not reported as a mismatch (WP-1576)
   ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed

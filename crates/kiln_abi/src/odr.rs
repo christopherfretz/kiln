@@ -10,6 +10,8 @@
 //! local-entity `Z...E`, an unnamed `Ut`/`Ul`), which is what lets a type
 //! row be compared across units without a false finding.
 
+use std::fmt::Write as _;
+
 use kiln_ast::attr::AttrKind;
 use kiln_ast::class::{VTableComponent, VTableLayout};
 use kiln_ast::decl::{DeclKind, NamespaceData};
@@ -249,7 +251,53 @@ pub struct LayoutSerializer<'a, 'm> {
     pub test: &'m mut NotTuLocal<'a>,
     /// The layouts the TU computed, by first declaration.
     pub layouts: &'m FxHashMap<DeclId, &'m RecordLayout>,
+    /// `Some` to collect the kind 4 items of the type being serialized
+    /// (`-fmason-metadata=detail`; [`Self::class`] and
+    /// [`Self::enumeration`] start from an empty list): built by the same
+    /// walk that writes the hashed bytes, so the two cannot disagree.
+    /// `None` costs nothing.
+    pub details: Option<Vec<DetailItem>>,
 }
+
+/// One kind 4 item (mortar `spec/odr.md` O-19 as fixed in its maintainers'
+/// answer to WP-1566): `{u32 name; u32 type; u64 value; u32 width; u32
+/// flags}` before the strings are laid out. Items appear in the order the
+/// layout hash consumes the same facts, one per fact that has an item
+/// kind, so the first differing item is the first difference.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DetailItem {
+    /// The member's or enumerator's name, a vtable slot's final overrider
+    /// (its mangled name); empty when unused.
+    pub name: String,
+    /// The member's type as the hash spells it, a base's `<type>`, an
+    /// enumeration's underlying type; empty when unused.
+    pub ty: String,
+    /// An offset in bits, a slot index or an enumerator's value.
+    pub value: u64,
+    /// A bit-field's width (0 otherwise).
+    pub width: u32,
+    /// Bits 0-3 the item kind (`ITEM_*`), bit 4 [`ITEM_BITFIELD`], bit 5
+    /// [`ITEM_VIRTUAL`].
+    pub flags: u32,
+}
+
+/// Item kind 0: a non-static data member (name, type, bit offset, width).
+pub const ITEM_MEMBER: u32 = 0;
+/// Item kind 1: a base (type = its `<type>`, bit offset, [`ITEM_VIRTUAL`]).
+pub const ITEM_BASE: u32 = 1;
+/// Item kind 2: the vptr (bit offset).
+pub const ITEM_VPTR: u32 = 2;
+/// Item kind 3: a vtable slot (name = the final overrider's mangled name,
+/// value = the slot's index in the group as hashed).
+pub const ITEM_SLOT: u32 = 3;
+/// Item kind 4: an enumerator (name, value).
+pub const ITEM_ENUMERATOR: u32 = 4;
+/// Item kind 5: an enumeration's underlying type (type).
+pub const ITEM_UNDERLYING: u32 = 5;
+/// A data member item's bit-field flag.
+pub const ITEM_BITFIELD: u32 = 1 << 4;
+/// A base item's virtual flag.
+pub const ITEM_VIRTUAL: u32 = 1 << 5;
 
 /// The format version of [`LayoutSerializer`]'s bytes, part of the
 /// scheme name written with the rows (`odr.scheme`).
@@ -261,6 +309,74 @@ fn put_str(out: &mut Vec<u8>, s: &str) {
 }
 
 impl LayoutSerializer<'_, '_> {
+    /// Appends a kind 4 item when they are collected.
+    fn item(&mut self, make: impl FnOnce() -> DetailItem) {
+        if let Some(d) = &mut self.details {
+            d.push(make());
+        }
+    }
+
+    fn ident(&self, d: DeclId) -> String {
+        let ast = self.ast;
+        ast.decls
+            .get(d)
+            .name()
+            .as_ident()
+            .map(|s| ast.symbols().as_str(s).to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The bytes of the definition `def` of a complete enumeration (the
+    /// layout hash's enumeration form, spec/codegen.md "The layout hash"):
+    /// `E`; u8 bit 0 scoped, bit 1 fixed underlying type; the underlying
+    /// type's `<type>` encoding; the enumerator count u32, then per
+    /// enumerator in declaration order its name and its value u64 (the
+    /// low 64 bits of its two's-complement value). `None` without an
+    /// underlying type or with an enumerator without a value.
+    pub fn enumeration(&mut self, def: DeclId) -> Option<Vec<u8>> {
+        use kiln_ast::decl::EnumData;
+        let ast = self.ast;
+        if let Some(d) = &mut self.details {
+            d.clear();
+        }
+        let e = ast.decls.enumeration(def)?;
+        let int = e.int_type?;
+        let mut out = Vec::with_capacity(64);
+        out.push(b'E');
+        let mut bits = 0u8;
+        if e.flags & EnumData::SCOPED != 0 {
+            bits |= 1;
+        }
+        if e.flags & EnumData::FIXED != 0 {
+            bits |= 2;
+        }
+        out.push(bits);
+        let enc = mangle::mangle_type(ast, self.anon, int);
+        put_str(&mut out, &enc);
+        self.item(|| DetailItem { ty: enc, flags: ITEM_UNDERLYING, ..DetailItem::default() });
+        let members: Vec<DeclId> = ast.decls.members(def).collect();
+        out.extend_from_slice(&u32::try_from(members.len()).ok()?.to_le_bytes());
+        for m in members {
+            let v = ast.decls.enumerator(m)?.value?;
+            let value = match ast.consts.scalar(v)? {
+                kiln_ast::consts::Scalar::Int { bits, signed: true, .. } => bits.to_i128()? as u64,
+                kiln_ast::consts::Scalar::Int { bits, .. } => bits.to_u128()? as u64,
+                kiln_ast::consts::Scalar::Bool { value, .. } => u64::from(value),
+                _ => return None,
+            };
+            let name = self.ident(m);
+            put_str(&mut out, &name);
+            out.extend_from_slice(&value.to_le_bytes());
+            self.item(|| DetailItem {
+                name,
+                value,
+                flags: ITEM_ENUMERATOR,
+                ..DetailItem::default()
+            });
+        }
+        Some(out)
+    }
+
     /// The `<type>` encoding of class or enumeration `d` (what `_ZTS`
     /// names; the row's `name`, and FNV-1a 64 of it its `key`).
     pub fn type_name(&mut self, d: DeclId) -> String {
@@ -270,6 +386,9 @@ impl LayoutSerializer<'_, '_> {
     /// The bytes of class definition `def`'s layout, `None` when it gets
     /// no row (above).
     pub fn class(&mut self, def: DeclId, vtable: Option<&VTableLayout>) -> Option<Vec<u8>> {
+        if let Some(d) = &mut self.details {
+            d.clear();
+        }
         let mut out = Vec::with_capacity(128);
         self.record(def, vtable, &mut out)?;
         Some(out)
@@ -318,6 +437,13 @@ impl LayoutSerializer<'_, '_> {
             out.extend_from_slice(&fnv1a64(name.as_bytes()).to_le_bytes());
             out.extend_from_slice(&offset.to_le_bytes());
             out.push(u8::from(b.is_virtual));
+            let flags = ITEM_BASE | if b.is_virtual { ITEM_VIRTUAL } else { 0 };
+            self.item(|| DetailItem {
+                ty: name,
+                value: offset.wrapping_mul(8),
+                flags,
+                ..DetailItem::default()
+            });
         }
         // Every virtual base, in the layout's order, with its offset in
         // this class.
@@ -330,6 +456,12 @@ impl LayoutSerializer<'_, '_> {
             let name = self.type_name(v);
             out.extend_from_slice(&fnv1a64(name.as_bytes()).to_le_bytes());
             out.extend_from_slice(&offset.to_le_bytes());
+            self.item(|| DetailItem {
+                ty: name,
+                value: offset.wrapping_mul(8),
+                flags: ITEM_BASE | ITEM_VIRTUAL,
+                ..DetailItem::default()
+            });
         }
         // Non-static data members in declaration order.
         let fields = props::fields(ast, def);
@@ -341,13 +473,25 @@ impl LayoutSerializer<'_, '_> {
             out.extend_from_slice(&bit.to_le_bytes());
             let width = f.bit_width.map_or(u32::MAX, |w| u32::try_from(w).unwrap_or(u32::MAX - 1));
             out.extend_from_slice(&width.to_le_bytes());
-            self.member_type(def, f.ty, out)?;
+            let item = self.details.is_some().then(|| DetailItem {
+                name: self.ident(f.decl),
+                value: bit,
+                width: if f.bit_width.is_some() { width } else { 0 },
+                flags: ITEM_MEMBER | if f.bit_width.is_some() { ITEM_BITFIELD } else { 0 },
+                ty: String::new(),
+            });
+            self.member_type(def, f.ty, out, item)?;
         }
         // The vtable pointer.
         match l.vptr {
             Some(o) => {
                 out.push(1);
                 out.extend_from_slice(&o.to_le_bytes());
+                self.item(|| DetailItem {
+                    value: o.wrapping_mul(8),
+                    flags: ITEM_VPTR,
+                    ..DetailItem::default()
+                });
             }
             None => out.push(0),
         }
@@ -366,12 +510,27 @@ impl LayoutSerializer<'_, '_> {
     /// enumeration; `S` and the nested layout for an unnamed class of
     /// this class (an anonymous union, `struct { int x; } m;`), `N` and
     /// the underlying type's encoding for an unnamed enumeration.
-    fn member_type(&mut self, owner: DeclId, q: QualType, out: &mut Vec<u8>) -> Option<()> {
+    ///
+    /// `item` is the member's kind 4 item (when they are collected): its
+    /// type string is the encoding (`T`), `A<bound>_` and the element's
+    /// string (`A`), the underlying type's encoding (`N`), or empty (`S`:
+    /// the nested class's own items follow it).
+    fn member_type(
+        &mut self,
+        owner: DeclId,
+        q: QualType,
+        out: &mut Vec<u8>,
+        mut item: Option<DetailItem>,
+    ) -> Option<()> {
         let ast = self.ast;
         if self.test.member_ty(q) {
             out.push(b'T');
             let enc = mangle::mangle_type(ast, self.anon, q);
             put_str(out, &enc);
+            if let (Some(mut it), Some(d)) = (item, &mut self.details) {
+                it.ty.push_str(&enc);
+                d.push(it);
+            }
             return Some(());
         }
         let t = ast.types.canonical(q);
@@ -379,7 +538,10 @@ impl LayoutSerializer<'_, '_> {
             TypeView::ConstantArray(a) => {
                 out.push(b'A');
                 out.extend_from_slice(&a.size.to_le_bytes());
-                self.member_type(owner, ast.types.element(t)?, out)
+                if let Some(it) = &mut item {
+                    let _ = write!(it.ty, "A{}_", a.size);
+                }
+                self.member_type(owner, ast.types.element(t)?, out, item)
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
                 let n = ast.decls.get(d);
@@ -394,13 +556,21 @@ impl LayoutSerializer<'_, '_> {
                 if n.kind() == DeclKind::Enum {
                     let int = ast.decls.enumeration(def)?.int_type?;
                     out.push(b'N');
-                    put_str(out, &mangle::mangle_type(ast, self.anon, int));
+                    let enc = mangle::mangle_type(ast, self.anon, int);
+                    put_str(out, &enc);
+                    if let (Some(mut it), Some(d)) = (item, &mut self.details) {
+                        it.ty.push_str(&enc);
+                        d.push(it);
+                    }
                     return Some(());
                 }
                 if ast.decls.record(def).is_some_and(|r| r.defn.is_dynamic()) {
                     return None;
                 }
                 out.push(b'S');
+                if let (Some(it), Some(d)) = (item, &mut self.details) {
+                    d.push(it);
+                }
                 self.record(def, None, out)
             }
             _ => None,
@@ -417,7 +587,13 @@ impl LayoutSerializer<'_, '_> {
         let slots: Vec<&VTableComponent> =
             vt.components.iter().filter(|c| !matches!(c, VTableComponent::Rtti(_))).collect();
         out.extend_from_slice(&u32::try_from(slots.len()).ok()?.to_le_bytes());
-        for c in slots {
+        for (index, c) in slots.into_iter().enumerate() {
+            let slot = |name: String| DetailItem {
+                name,
+                value: index as u64,
+                flags: ITEM_SLOT,
+                ..DetailItem::default()
+            };
             let (tag, m, v) = match *c {
                 VTableComponent::VCallOffset(o) => (b'c', None, o),
                 VTableComponent::VBaseOffset(o) => (b'b', None, o),
@@ -436,11 +612,13 @@ impl LayoutSerializer<'_, '_> {
             let fd = ast.decls.function(m);
             if fd.is_some_and(|f| f.spec.is_pure()) {
                 out.push(b'p');
+                self.item(|| slot("__cxa_pure_virtual".to_owned()));
                 continue;
             }
             if ast.redecls_of(m).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_deleted()))
             {
                 out.push(b'x');
+                self.item(|| slot("__cxa_deleted_virtual".to_owned()));
                 continue;
             }
             // The overrider's class is this class or a base (they pass);
@@ -452,7 +630,9 @@ impl LayoutSerializer<'_, '_> {
                 return None;
             }
             out.push(tag);
-            put_str(out, &mangle::mangle_structor(ast, self.anon, m, s));
+            let name = mangle::mangle_structor(ast, self.anon, m, s);
+            put_str(out, &name);
+            self.item(|| slot(name));
         }
         Some(())
     }

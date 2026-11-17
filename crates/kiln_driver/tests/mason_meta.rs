@@ -151,7 +151,7 @@ fn summary_rows(b: &[u8]) -> Vec<(String, String, u32)> {
     assert_eq!(unit_size % 8, 0);
     assert_eq!(u32_at(b, 12), 32, "header_size");
     let blocks = u32_at(b, 16);
-    assert!((1..=3).contains(&blocks), "kind 1, and kinds 3 and 5 from level default up");
+    assert!((1..=4).contains(&blocks), "kind 1; kinds 3 and 5 from level default up, 4 at detail");
     let (st_off, st_size) = (u32_at(b, 20) as usize, u32_at(b, 24) as usize);
     assert!(st_off >= 32 && st_off + st_size <= unit_size);
     assert_eq!(b[st_off], 0, "the table starts with the empty string");
@@ -161,7 +161,7 @@ fn summary_rows(b: &[u8]) -> Vec<(String, String, u32)> {
     let mut last = 0;
     for _ in 0..blocks {
         let (kind, size) = (u16_at(b, at), u32_at(b, at + 4) as usize);
-        assert!(kind > last && [1, 3, 5].contains(&kind), "MT-11: sorted, one per kind");
+        assert!(kind > last && [1, 3, 4, 5].contains(&kind), "MT-11: sorted, one per kind");
         assert!(size % 8 == 0 && at + size <= st_off);
         last = kind;
         at += size;
@@ -925,7 +925,7 @@ fn c_and_cxx_units_agree() {
         ("f_vec", "FDv4_iDv4_iE"),
         ("f_i128", "FnoE"),
         ("f_vfp", "FvPFiPKczEE"),
-        ("f_parr", "FvPA4_iPA_iE"),
+        ("f_parr", "FvPA_iPA_iE"),
         ("f_vla", "FviPiPA_iE"),
         ("f_st", "FvPiPKiE"),
         ("f_nr", "FvvE"),
@@ -1125,6 +1125,54 @@ fn ruling_4_readings() {
     }
 }
 
+/// Mortar's answer A(i) to WP-1566 (C23 6.2.7: array types are
+/// compatible when their elements are and present constant bounds are
+/// equal): in the canonical C type a bound is erased on every array type
+/// that is not the element type of another array, so `int (*)[]` and
+/// `int (*)[4]` agree (and `[3]` against `[4]` behind a pointer is a
+/// documented miss), while an inner dimension still differs. C++-linkage
+/// rows keep the Itanium form (only a variable's own major bound erased).
+#[test]
+fn c_array_bounds_erased() {
+    let d = scratch("cbounds");
+    let unit = |ptr: &str, fun: &str, mat: &str| {
+        format!(
+            "extern int (*p){ptr};\nvoid f(int (*){fun});\nextern int m[2]{mat};\n\
+             typedef int row_t{ptr};\nextern row_t *t;\n\
+             int use(void) {{ f(0); return (*p)[0] + m[0][0] + (*t)[0]; }}\n"
+        )
+    };
+    let c_rows = |name: &str, src: &str| decls_of(&d, name, src, &[]).unwrap();
+    let ra = c_rows("a.c", &unit("[]", "[4]", "[3]"));
+    let rb = c_rows("b.c", &unit("[4]", "[]", "[3]"));
+    let re = c_rows("e.c", &unit("[3]", "[3]", "[4]"));
+    for sym in ["p", "f", "t", "m", "use"] {
+        assert_eq!(row(&ra, sym), row(&rb, sym), "{sym}");
+    }
+    assert_eq!(row(&ra, "p").unwrap().type_name, "PA_i");
+    assert_eq!(row(&ra, "t").unwrap().type_name, "PA_i");
+    assert_eq!(row(&ra, "f").unwrap().type_name, "FvPA_iE");
+    assert_eq!(row(&ra, "m").unwrap().type_name, "A_A3_i");
+    // `[3]` against `[4]` behind a pointer: a miss (mortar's X19).
+    assert_eq!(row(&ra, "p"), row(&re, "p"));
+    assert_eq!(row(&ra, "f"), row(&re, "f"));
+    // An inner dimension still differs.
+    assert_ne!(row(&ra, "m").unwrap().ty, row(&re, "m").unwrap().ty);
+    assert_eq!(row(&re, "m").unwrap().type_name, "A_A4_i");
+    // A C++ unit's `extern "C"` declarations agree with the C units.
+    let rx =
+        decls_of(&d, "x.cpp", &format!("extern \"C\" {{\n{}}}\n", unit("[4]", "[4]", "[3]")), &[])
+            .unwrap();
+    for sym in ["p", "f", "t", "m", "use"] {
+        assert_eq!(row(&ra, sym), row(&rx, sym), "{sym}");
+    }
+    // C++ linkage: the Itanium form, bounds behind a pointer kept.
+    let ry = decls_of(&d, "y.cpp", "int (*cp)[4];\nint (*cq)[];\n", &["-fmason-metadata=detail"])
+        .unwrap();
+    assert_eq!(row(&ry, "cp").unwrap().type_name, "PA4_i");
+    assert_eq!(row(&ry, "cq").unwrap().type_name, "PA_i");
+}
+
 fn cxx_rows(d: &Path) -> Vec<Decl> {
     decls_of(d, "x.cpp", XL_CXX, &["-std=c++20"]).unwrap()
 }
@@ -1164,6 +1212,7 @@ fn two_cxx_units() {
 
 // Record kind 3, the type rows (WP-1566; mortar `spec/odr.md` O-17, O-18).
 
+const T_ENUM: u16 = 1;
 const T_UNION: u16 = 2;
 const T_POLYMORPHIC: u16 = 4;
 const T_HAS_VBASES: u16 = 8;
@@ -1179,12 +1228,68 @@ struct TypeRow {
     flags: u16,
     file: String,
     line: u32,
+    /// The kind 4 entry (`None`: `details` is `0xffffffff`).
+    details: Option<Vec<Item>>,
+}
+
+/// One kind 4 item (O-19 as fixed for WP-1576): `{u32 name; u32 type;
+/// u64 value; u32 width; u32 flags}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Item {
+    name: String,
+    ty: String,
+    value: u64,
+    width: u32,
+    flags: u32,
+}
+
+const I_MEMBER: u32 = 0;
+const I_BASE: u32 = 1;
+const I_VPTR: u32 = 2;
+const I_SLOT: u32 = 3;
+const I_ENUMERATOR: u32 = 4;
+const I_UNDERLYING: u32 = 5;
+const I_BITFIELD: u32 = 16;
+const I_VIRTUAL: u32 = 32;
+
+/// The kind 4 entry at byte `at` of the kind 4 block's body: `{u32 count;
+/// u32 reserved}` then `count` 24-byte items, 8-aligned, inside the block.
+fn detail_entry(b: &[u8], at: u32) -> Vec<Item> {
+    let blk = block_at(b, 4).expect("a kind 4 block for a row with details");
+    assert_eq!(
+        (u16_at(b, blk + 2), u32_at(b, blk + 8), u32_at(b, blk + 12)),
+        (1, 0, 0),
+        "version 1, no rows"
+    );
+    let body = blk + 16;
+    let end = blk + u32_at(b, blk + 4) as usize;
+    assert_eq!(at % 8, 0, "entries are 8-aligned from the body start");
+    let e = body + at as usize;
+    let count = u32_at(b, e) as usize;
+    assert_eq!(u32_at(b, e + 4), 0, "reserved");
+    assert!(e + 8 + count * 24 <= end, "the entry is inside the block");
+    (0..count)
+        .map(|i| {
+            let o = e + 8 + i * 24;
+            let it = Item {
+                name: string_at(b, u32_at(b, o)),
+                ty: string_at(b, u32_at(b, o + 4)),
+                value: u64_at(b, o + 8),
+                width: u32_at(b, o + 16),
+                flags: u32_at(b, o + 20),
+            };
+            assert!(
+                it.flags & 15 <= I_UNDERLYING && it.flags & !(15 | I_BITFIELD | I_VIRTUAL) == 0
+            );
+            it
+        })
+        .collect()
 }
 
 /// The kind 3 rows of the unit in `b`, `None` without a kind 3 block,
 /// after checking the block and every row (O-17: 56 bytes, `hash` zero,
-/// `details` none, flags in bits 1, 2, 3, 5; sorted by key, then name,
-/// one row per name).
+/// flags in bits 0, 1, 2, 3, 5; sorted by key, then name, one row per
+/// name), with each row's kind 4 entry decoded.
 fn type_rows(b: &[u8]) -> Option<Vec<TypeRow>> {
     summary_rows(b);
     let st_off = u32_at(b, 20) as usize;
@@ -1199,7 +1304,7 @@ fn type_rows(b: &[u8]) -> Option<Vec<TypeRow>> {
         .map(|i| {
             let r = at + 16 + i * 56;
             assert!(b[r + 8..r + 24].iter().all(|&x| x == 0), "hash: not hashed");
-            assert_eq!(u32_at(b, r + 52), 0xffff_ffff, "details: no kind 4");
+            let details = u32_at(b, r + 52);
             let t = TypeRow {
                 name: string_at(b, u32_at(b, r + 32)),
                 layout: u64_at(b, r + 24),
@@ -1208,9 +1313,11 @@ fn type_rows(b: &[u8]) -> Option<Vec<TypeRow>> {
                 flags: u16_at(b, r + 42),
                 file: string_at(b, u32_at(b, r + 44)),
                 line: u32_at(b, r + 48),
+                details: (details != 0xffff_ffff).then(|| detail_entry(b, details)),
             };
             assert_eq!(u64_at(b, r), fnv(&t.name), "{t:?}");
-            assert_eq!(t.flags & !(T_UNION | T_POLYMORPHIC | T_HAS_VBASES | T_SYSTEM), 0, "{t:?}");
+            let all = T_ENUM | T_UNION | T_POLYMORPHIC | T_HAS_VBASES | T_SYSTEM;
+            assert_eq!(t.flags & !all, 0, "{t:?}");
             keys.push((u64_at(b, r), t.name.clone()));
             t
         })
@@ -1506,4 +1613,264 @@ fn library_rows_agree_across_units() {
         }
         assert!(shared > 10, "{lib}: {shared}");
     }
+}
+
+// Enumeration rows (WP-1576; mortar's answer B2 to WP-1566).
+
+/// Enumerations the test defines: every kind that gets a row, and every
+/// kind that does not.
+const ENUMS_CXX: &str = r"
+namespace ns {
+enum Plain { P0, P1, P2 = 7 };
+enum class Scoped : unsigned char { a, b = 200 };
+enum Fixed : long long { Neg = -2, Big = 0x7fffffffffff };
+enum Unused { U0 };
+enum Opaque : int;
+enum K7 { R, G, B };
+inline int isB(int e) { return e == B; }
+template <class T> struct Tpl { enum Inner : short { i0, i1 }; Inner in; };
+}
+namespace { enum Hidden { H }; }
+enum { Unnamed = 3 };
+int use(ns::Tpl<int> &t, ns::Scoped s) {
+  enum Local { L } l = L;
+  return ns::P2 + (int)s + (int)ns::Big + t.in + Unnamed + H + l;
+}
+";
+
+#[test]
+fn enumeration_rows() {
+    let d = scratch("enums");
+    let rows = types_of(&d, "e.cpp", ENUMS_CXX, &["-std=c++20"]).unwrap();
+    let mut got: Vec<(&str, u32, u16, u16, u32)> = rows
+        .iter()
+        .filter(|t| t.flags & T_ENUM != 0)
+        .map(|t| (t.name.as_str(), t.size, t.align, t.flags, t.line))
+        .collect();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        [
+            ("N2ns2K7E", 4, 4, T_ENUM, 8),
+            ("N2ns3TplIiE5InnerE", 2, 2, T_ENUM, 10),
+            ("N2ns5FixedE", 8, 8, T_ENUM, 5),
+            ("N2ns5PlainE", 4, 4, T_ENUM, 3),
+            ("N2ns6ScopedE", 1, 1, T_ENUM, 4),
+        ],
+        "no row: Unused (never referenced), Opaque (no definition), Hidden (unnamed \
+         namespace), the unnamed enumeration, Local (a function's)"
+    );
+    // The class template specialization holding an enumeration gets its
+    // own row; its layout hash covers the member's type by name.
+    assert!(trow(&rows, "N2ns3TplIiEE").is_some());
+    // The layout hashes are pinned (spec/codegen.md "The layout hash",
+    // the enumeration form).
+    let hashes: Vec<(&str, u64)> = rows
+        .iter()
+        .filter(|t| t.flags & T_ENUM != 0)
+        .map(|t| (t.name.as_str(), t.layout))
+        .collect();
+    assert_eq!(hashes, ENUM_GOLDEN);
+    // C units write no kind 3, enumerations included.
+    assert_eq!(types_of(&d, "e.c", "enum E { A };\nint f(void) { return A; }\n", &[]), None);
+}
+
+const ENUM_GOLDEN: &[(&str, u64)] = &[
+    ("N2ns6ScopedE", 0xa3c0_930a_26ea_bd07),
+    ("N2ns5PlainE", 0xb82c_ad72_ebf7_2c97),
+    ("N2ns2K7E", 0xa1a7_dff2_4d14_cb65),
+    ("N2ns3TplIiE5InnerE", 0x549c_fc8a_602e_f638),
+    ("N2ns5FixedE", 0xe8f1_29f4_51ad_0c20),
+];
+
+/// Two units disagreeing on an enumeration (an enumerator added under
+/// `#ifdef`) or on its underlying type write different layout hashes; the
+/// K7 shape (an enumerator used only as a constant in an inline function
+/// no unit emits) still writes the row.
+#[test]
+fn enumeration_rows_two_units() {
+    let d = scratch("enums2");
+    let src = "enum Color { Red, Green,\n#ifdef EXTRA\n Extra,\n#endif\n Blue };\n\
+               inline int isBlue(int c) { return c == Blue; }\n";
+    let ua = types_of(&d, "a.cpp", src, &[]).unwrap();
+    let ub = types_of(&d, "b.cpp", src, &[]).unwrap();
+    let ux = types_of(&d, "x.cpp", src, &["-DEXTRA"]).unwrap();
+    let (ra, rb, rx) =
+        (trow(&ua, "5Color").unwrap(), trow(&ub, "5Color").unwrap(), trow(&ux, "5Color").unwrap());
+    assert_eq!((&ra.name, ra.layout, ra.size, ra.flags), (&rb.name, rb.layout, rb.size, rb.flags));
+    assert_ne!(ra.layout, rx.layout);
+    assert_eq!((ra.size, ra.flags), (rx.size, rx.flags));
+    let fixed = types_of(&d, "f.cpp", &src.replace("enum Color", "enum Color : int"), &[]).unwrap();
+    assert_ne!(trow(&fixed, "5Color").unwrap().layout, ra.layout, "fixed underlying type");
+    let scoped = "enum class Color { Red, Green, Blue };\nint f() { return (int)Color::Blue; }\n";
+    let us = types_of(&d, "s.cpp", scoped, &[]).unwrap();
+    assert_ne!(trow(&us, "5Color").unwrap().layout, ra.layout, "scoped");
+    // At `detail` the items name the difference: Blue's value.
+    let da = types_of(&d, "a.cpp", src, &["-fmason-metadata=detail"]).unwrap();
+    let dx = types_of(&d, "x.cpp", src, &["-fmason-metadata=detail", "-DEXTRA"]).unwrap();
+    let ia = trow(&da, "5Color").unwrap().details.clone().unwrap();
+    let ix = trow(&dx, "5Color").unwrap().details.clone().unwrap();
+    let item = |name: &str, ty: &str, value, flags| Item {
+        name: name.into(),
+        ty: ty.into(),
+        value,
+        width: 0,
+        flags,
+    };
+    assert_eq!(
+        ia,
+        [
+            item("", "j", 0, I_UNDERLYING),
+            item("Red", "", 0, I_ENUMERATOR),
+            item("Green", "", 1, I_ENUMERATOR),
+            item("Blue", "", 2, I_ENUMERATOR),
+        ]
+    );
+    assert_eq!(ix[3], item("Extra", "", 2, I_ENUMERATOR));
+    assert_eq!(rehash_enum(&ia, 0), trow(&da, "5Color").unwrap().layout);
+}
+
+// Record kind 4, the layout details (WP-1576; mortar's answer B3).
+
+fn put_str(out: &mut Vec<u8>, s: &str) {
+    out.extend_from_slice(&u32::try_from(s.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+}
+
+/// The layout hash of an enumeration re-computed from its items and the
+/// one fact without an item (`bits`: scoped, fixed).
+fn rehash_enum(items: &[Item], bits: u8) -> u64 {
+    let mut out = vec![b'E', bits];
+    put_str(&mut out, &items[0].ty);
+    out.extend_from_slice(&u32::try_from(items.len() - 1).unwrap().to_le_bytes());
+    for it in &items[1..] {
+        put_str(&mut out, &it.name);
+        out.extend_from_slice(&it.value.to_le_bytes());
+    }
+    fnv_bytes(&out)
+}
+
+/// The layout hash of a class without bases, vptr or unnamed member
+/// types, re-computed from its row and items and the facts without an
+/// item (`attrs`).
+fn rehash_plain_class(t: &TypeRow, attrs: u8) -> u64 {
+    let items = t.details.as_ref().unwrap();
+    let mut out = vec![if t.flags & T_UNION != 0 { b'U' } else { b'C' }];
+    out.extend_from_slice(&u64::from(t.size).to_le_bytes());
+    out.extend_from_slice(&u32::from(t.align).to_le_bytes());
+    out.push(attrs);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&u32::try_from(items.len()).unwrap().to_le_bytes());
+    for it in items {
+        assert_eq!(it.flags & 15, I_MEMBER);
+        out.extend_from_slice(&it.value.to_le_bytes());
+        let w = if it.flags & I_BITFIELD != 0 { it.width } else { u32::MAX };
+        out.extend_from_slice(&w.to_le_bytes());
+        out.push(b'T');
+        put_str(&mut out, &it.ty);
+    }
+    out.push(0);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    fnv_bytes(&out)
+}
+
+fn fnv_bytes(b: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &x in b {
+        h ^= u64::from(x);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
+/// Kind 4 at `detail` and `all` only, built from the walk that feeds the
+/// layout hash: the items re-hash to the row's layout hash where every
+/// hashed fact has an item, and the class rows (and their hashes) are
+/// the same as at `default`.
+#[test]
+fn layout_details() {
+    let d = scratch("details");
+    let args = ["-std=c++20", "--target=x86_64-linux-gnu"];
+    let dflt = types_of(&d, "t.cpp", TYPES_CXX, &args).unwrap();
+    assert!(dflt.iter().all(|t| t.details.is_none()), "no kind 4 at default");
+    for level in ["-fmason-metadata=detail", "-fmason-metadata=all"] {
+        let mut a = args.to_vec();
+        a.push(level);
+        let rows = types_of(&d, "t.cpp", TYPES_CXX, &a).unwrap();
+        assert!(rows.iter().all(|t| t.details.is_some()), "{level}: an entry per row");
+        let strip: Vec<TypeRow> =
+            rows.iter().cloned().map(|t| TypeRow { details: None, ..t }).collect();
+        assert_eq!(strip, dflt, "{level}: the kind 3 rows are the level's same");
+        for (name, attrs) in [
+            ("N2ns5PlainE", 0),
+            ("N2ns1UE", 0),
+            ("N2ns4BitsE", 0),
+            ("N2ns6PackedE", 1),
+            ("N2ns3BoxIiEE", 0),
+            ("N2ns6HolderE", 0),
+        ] {
+            let t = trow(&rows, name).unwrap();
+            assert_eq!(rehash_plain_class(t, attrs), t.layout, "{name}");
+        }
+    }
+    let rows =
+        types_of(&d, "t.cpp", TYPES_CXX, &[&args[..], &["-fmason-metadata=detail"]].concat())
+            .unwrap();
+    let items = |n: &str| trow(&rows, n).unwrap().details.clone().unwrap();
+    let it = |name: &str, ty: &str, value, width, flags| Item {
+        name: name.into(),
+        ty: ty.into(),
+        value,
+        width,
+        flags,
+    };
+    assert_eq!(
+        items("N2ns4BitsE"),
+        [
+            it("a", "j", 0, 3, I_BITFIELD),
+            it("b", "j", 3, 5, I_BITFIELD),
+            it("", "i", 32, 0, I_BITFIELD),
+            it("c", "j", 32, 7, I_BITFIELD),
+        ]
+    );
+    assert_eq!(
+        items("N2ns4BaseE"),
+        [
+            it("b", "i", 64, 0, I_MEMBER),
+            it("", "", 0, 0, I_VPTR),
+            it("_ZN2ns4BaseD1Ev", "", 1, 0, I_SLOT),
+            it("_ZN2ns4BaseD0Ev", "", 2, 0, I_SLOT),
+            it("__cxa_pure_virtual", "", 3, 0, I_SLOT),
+        ],
+        "slot 0 is offset-to-top (no item kind); RTTI is not hashed"
+    );
+    assert_eq!(items("N2ns7DerivedE")[0], it("", "N2ns4BaseE", 0, 0, I_BASE));
+    let vb = items("N2ns2VBE");
+    assert_eq!(vb[0], it("", "N2ns4BaseE", 128, 0, I_BASE | I_VIRTUAL), "the direct base");
+    assert_eq!(vb[1], it("", "N2ns4BaseE", 128, 0, I_BASE | I_VIRTUAL), "the virtual bases");
+    // An anonymous union and a member of unnamed class type: the
+    // member's item (empty type), then the nested class's members.
+    assert_eq!(
+        items("N2ns4AnonE"),
+        [
+            it("", "", 0, 0, I_MEMBER),
+            it("i", "i", 0, 0, I_MEMBER),
+            it("f", "f", 0, 0, I_MEMBER),
+            it("named", "", 32, 0, I_MEMBER),
+            it("s", "s", 0, 0, I_MEMBER),
+            it("tail", "i", 64, 0, I_MEMBER),
+        ]
+    );
+    // Two classes whose hashes differ have a differing item.
+    let one = |src: &str| {
+        let r = types_of(&d, "c.cpp", src, &["-fmason-metadata=detail"]).unwrap();
+        trow(&r, "1S").unwrap().clone()
+    };
+    let (s1, s2) = (
+        one("struct S { int a; char c; }; int f(S &s) { return s.a; }\n"),
+        one("struct S { char c; int a; }; int f(S &s) { return s.a; }\n"),
+    );
+    assert_ne!(s1.layout, s2.layout);
+    assert_ne!(s1.details.as_ref().unwrap()[0], s2.details.as_ref().unwrap()[0]);
 }
