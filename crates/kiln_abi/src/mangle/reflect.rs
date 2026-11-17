@@ -453,13 +453,6 @@ fn expr_params(ast: &Ast, e: ExprId, depth: u16, dep: &[bool], seen: &mut [bool]
     }
 }
 
-/// The FNV-1a 128-bit hash of `s` (the `kiln-hashed` prototype).
-fn fnv1a_128(s: &str) -> u128 {
-    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
-    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
-    s.bytes().fold(OFFSET, |h, b| (h ^ u128::from(b)).wrapping_mul(PRIME))
-}
-
 impl Mangler<'_, '_> {
     fn gcc(&self) -> bool {
         self.anon.refl_mode == ReflectionMangling::Gcc
@@ -479,7 +472,7 @@ impl Mangler<'_, '_> {
                 m.reflection(r);
                 m.out
             };
-            let _ = write!(self.out, "h{:032x}", fnv1a_128(&body));
+            let _ = write!(self.out, "h{:032x}", crate::odr::fnv1a_128(&body));
         } else {
             self.reflection(r);
         }

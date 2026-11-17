@@ -188,7 +188,7 @@ impl<'a> NotTuLocal<'a> {
         }
     }
 
-    fn args(&mut self, list: kiln_ast::ids::ArgListId) -> bool {
+    pub(crate) fn args(&mut self, list: kiln_ast::ids::ArgListId) -> bool {
         let ast = self.ast;
         ast.types.args(list).iter().all(|a| match a.view() {
             ArgView::Type(q) => self.ty(q),
@@ -648,4 +648,12 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
+}
+
+/// The FNV-1a 128-bit hash of `s` (the `kiln-hashed` prototype).
+#[must_use]
+pub fn fnv1a_128(s: &str) -> u128 {
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    s.bytes().fold(OFFSET, |h, b| (h ^ u128::from(b)).wrapping_mul(PRIME))
 }

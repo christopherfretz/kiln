@@ -18,6 +18,7 @@ pub mod layout;
 pub mod mangle;
 pub mod mangle_decomp;
 pub mod odr;
+pub mod odr_def;
 pub mod target;
 pub mod vtable;
 
