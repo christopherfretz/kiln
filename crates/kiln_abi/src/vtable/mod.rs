@@ -261,6 +261,12 @@ impl<'a> VTableSession<'a> {
         }
     }
 
+    /// Every class layout the session's builders computed so far, keyed
+    /// by first declaration (in no particular order).
+    pub fn layouts(&self) -> impl Iterator<Item = (DeclId, &kiln_ast::types::RecordLayout)> + '_ {
+        self.cx.lay.layouts()
+    }
+
     /// [`vtable_layout`], cached by first declaration.
     pub fn vtable_layout(&mut self, record: DeclId) -> Result<Rc<VTableLayout>, VTableError> {
         let first = self.cx.ast().first(record);

@@ -2179,10 +2179,11 @@ Values that a macro holds are its integer value when its replacement list
 (object-like macros expanded) is an integer literal or `(`, `)`, `<<`,
 `|` over them (libc++'s `(1 << 2)`), else its tokens joined by spaces.
 Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
-`reloc-model` (hod's own unit, H-3), and `odr.scheme`: kiln writes no
-kind 2 or 3 rows, so there is no hash scheme to name (O-11 compares rows
-of kinds 2 and 3 only, and names units "without a scheme"). C units have
-no `abi.stdlib*` rows.
+`reloc-model` (hod's own unit, H-3). `odr.scheme` (O-11) is written,
+value `kiln-odr-1`, flags 0, exactly when the unit has kind 3 rows (O-11:
+"written by a unit that carries kind 2 or 3 rows and by no other"); its
+name changes with any change to the layout serialization below. C units
+have no `abi.stdlib*` rows.
 
 **Kind 5, the declarations** (O-35, O-33; WP-1564;
 `Cg::mason_decl_rows`, `declarations_block`): one 40-byte row per
@@ -2323,18 +2324,110 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | member pointer, any other type with no C form | no row |
 | `const int f(void)` | `FivE` |
 
+**Kind 3, the types** (O-17, O-18; WP-1566; `Cg::mason_type_rows`,
+`types_block`, `crates/kiln_abi/src/odr.rs`): one 56-byte row per class
+the TU defines whose layout the TU computed, if it passes the
+not-TU-local test below:
+
+| field | bytes | value |
+|---|---|---|
+| `key` | u64 @0 | FNV-1a 64 of `name` |
+| `hash` | 16 @8 | zero: no definition hash (O-17 allows it; kind 2 is not written) |
+| `layout` | u64 @24 | FNV-1a 64 of the layout serialization below |
+| `name` | u32 @32 | string-table offset of the Itanium `<type>` of the class (what `_ZTS` names: `N2ns3BoxIiEE`) |
+| `size` | u32 @36 | `sizeof` in bytes |
+| `align` | u16 @40 | `alignof` in bytes |
+| `flags` | u16 @42 | bit 1 `UNION`, bit 2 `POLYMORPHIC`, bit 3 `HAS_VBASES`, bit 5 `SYSTEM` (defined in a system header); bit 0 `ENUM` and bit 4 `PARTIAL` are never set |
+| `file` | u32 @44 | string-table offset of the presumed file of the definition, prefix maps applied |
+| `line` | u32 @48 | its presumed line (a template specialization: the line of the definition it was instantiated from) |
+| `details` | u32 @52 | `0xffffffff`: no kind 4 rows |
+
+Rows are sorted by `key`, then `name` bytes. A name with two different
+rows (it cannot happen in one TU; defensive) gets none.
+
+*Which classes.* The candidates are the classes whose layout one of the
+TU's three layout caches holds after module emission (the AST's
+`LayoutCache`, which a PCH carries, codegen's `IrTypes` and its vtable
+builder's): nothing is recorded while compiling, and no layout is
+computed for the metadata (a class whose layout the TU never needed has
+no row). A candidate needs a complete, valid definition, is a class or
+class template specialization (not a template pattern, not a partial
+specialization, not a member of either), is not one of the compiler's
+own classes (AArch64's `std::__va_list`), and passes the test.
+Enumerations get no row yet (O-17 asks for those "appearing in an
+emitted definition", a use kiln does not record).
+
+*The not-TU-local test* (O-17's syntactic test; `NotTuLocal`): a class
+passes when (1) it has a name of its own (not an unnamed class, not a
+typedef name for an unnamed class, not a closure type), (2) every
+enclosing scope is a named namespace (linkage specifications and export
+blocks looked through) or a class that passes, and it does not carry
+`[[clang::internal_linkage]]`, and (3) a template specialization's
+arguments are types built from fundamental types and passing classes and
+enumerations (pointers, references, arrays, member pointers and
+function types over them), or values of integral, enumeration (of a
+passing enumeration) or `nullptr_t` type; a pack passes if every element
+does. Anything else fails: an unnamed namespace, a local class, a
+template argument that is a template, a floating-point or pointer value,
+a vector type. A class that fails without being TU-local is an O-17
+"miss" (X18): allowed, it only loses checking. Test:
+`crates/kiln_codegen/tests/mason_tu_local.rs` cross-checks every verdict
+against the class's `<type>`: no passing class's encoding has a
+per-TU component (`_GLOBAL__N`, a local-entity `Z...E`, `Ut`/`Ul`).
+
+*The layout hash* (O-18; `LayoutSerializer`, version 1). Little-endian;
+a string is a u32 length and its bytes; a class key is FNV-1a 64 of its
+`<type>`:
+
+1. `C` (class, struct) or `U` (union); `size` u64; `align` u32.
+2. attributes u8: bit 0 `packed`, bit 1 `ms_struct` in effect, bit 2
+   `gcc_struct` written, bit 3 `trivial_abi`.
+3. direct bases, u32 count, then per base in declaration order: key
+   u64, offset u64 (bytes; a virtual base's offset in the complete
+   object), virtual u8.
+4. all virtual bases, u32 count, then key u64, offset u64 each, in the
+   layout's order.
+5. non-static data members, u32 count, then per member in declaration
+   order: bit offset u64; width u32 (`0xffffffff` when not a
+   bit-field); the member's type: `T` and its `<type>` encoding; `A`, the
+   bound u64 and the element's type (an array whose element is not a
+   named type); `S` and the nested serialization (a member of unnamed
+   class type declared in the class: anonymous unions and structs,
+   `struct { ... } x;`); `N` and the underlying type (a member of
+   unnamed enumeration type).
+6. the vptr: u8 0, or 1 and its offset u64.
+7. the vtable group's components in order (primary and secondary
+   vtables; RTTI slots are left out), u32 count, then per component: `c` (vcall), `b` (vbase), `o` (offset to
+   top) with an i64; `f`, `d` (complete destructor), `D` (deleting
+   destructor), `u` (an unused function) with the final overrider's
+   mangled name; `p` pure virtual; `x` deleted.
+
+A class gets no row when its layout cannot be serialized without a
+per-TU component: a base, member type or overrider's class that fails
+the test. `-frtti`, `-O` and `-g` change no hash (test). The hashes of a
+fixed corpus are checked in (`layout_hash_golden`): a change to the
+serialization changes them, and must come with a new `odr.scheme` name
+(O-11).
+
+**Kind 4** (O-19) is not written: its row encoding is still a proposal
+in mortar's spec. Under that proposal kiln would write, at `detail` and
+up, one row per member serialized in step 5, `{u32 name; u32 type; u64
+bit_offset; u32 width; u32 flags}`, and point `details` at the first.
+
 **Levels** (mortar's level table, K-1): `min` writes kind 1 (and kind 2,
-when it exists); `default`, `detail` and `all` add kind 5. At `default`
-a C++-linkage function's row has no type string (`type_name` 0; mortar's
-ruling 3 of 11-16, its 8 KB budget for a unit's kind 5 strings); `detail`
-and `all` write it. Variables and C-linkage rows have theirs at every
-level, and the `type` hash is FNV-1a 64 of the full string at every
-level. The kind 1 rows are the same at every level. **Not written yet** (later work
-packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), kind 3
-(type definitions, O-17), kind 4 (layout details, O-18; `detail` and up),
-and `all`'s rows for definitions inlined away. Kind 2 will need codegen
-to record the vague-linkage definitions it emits (their symbol names,
-linkage and comdat), which it does not keep today.
+when it exists); `default`, `detail` and `all` add kinds 3 and 5. At
+`default` a C++-linkage function's kind 5 row has no type string
+(`type_name` 0; mortar's ruling 3 of 11-16, its 8 KB budget for a unit's
+kind 5 strings); `detail` and `all` write it. Variables and C-linkage
+rows have theirs at every level, and the `type` hash is FNV-1a 64 of the
+full string at every level. Kind 3 rows are the same at every level. The
+kind 1 rows are the same at every level except `odr.scheme`, which
+follows kind 3. C units write no kind 3. **Not written yet** (later work
+packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), kind 4
+(above), enumeration rows, and `all`'s rows for definitions inlined
+away. Kind 2 will need codegen to record the vague-linkage definitions
+it emits (their symbol names, linkage and comdat), which it does not
+keep today.
 
 **Determinism** (MT-38): the unit is a function of the TU and its
 options: rows sorted, strings laid out in the order the sorted rows first
@@ -2361,8 +2454,12 @@ rows; kind 5 goldens for a small C++ and a small C unit, decoded with the
 test's own reader; the target's forms on x86-64 and AArch64; `min`
 without kind 5; a C and a C++ unit agreeing on every canonical-type
 rule, and deliberate mismatches; two C++ units; rows for entities a PCH
-declares; determinism; PCH and BMI either way), `codegen_flags.rs`
-`mason_metadata_levels`.
+declares; determinism; PCH and BMI either way; kind 3: a golden of
+which classes get rows and their sizes, flags and lines, the layout-hash
+golden, every O-18 change seen and RTTI/`-O`/`-g`/`-std` unseen, the N31
+shape, levels and C, a PCH's classes, two library-heavy units with
+libstdc++ and libc++ agreeing on every shared row), `codegen_flags.rs`
+`mason_metadata_levels`, `crates/kiln_codegen/tests/mason_tu_local.rs`.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
