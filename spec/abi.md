@@ -1947,7 +1947,7 @@ O-10..O-13). This section is its contract: a later kiln reproduces these
 bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
 (WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d2"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d3"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
@@ -1956,7 +1956,9 @@ every row `PARTIAL`; `d1` (K-3b) the serializer core: declarators,
 statements, names, literals, operators, calls, casts; `d2` (K-3c) the
 init area (below), ctor-initializers, synthesized members, a
 destructor's deallocation function, variable definitions, and
-`visibility` taken off the attribute list.
+`visibility` taken off the attribute list; `d3` (K-3d) closures and the
+rows of closure members, local classes and enumerations, the GNU,
+vector, atomic and coroutine forms, `asm`, constraints (below).
 
 **Digest.** `DefHasher::function(def) -> DefDigest { hash, partial }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
@@ -1987,6 +1989,13 @@ self-delimiting, so two different trees never give the same bytes.
 | `0xAC` | a ctor-initializer | `CtorInitKind` byte, target (base: a type item; member: `0xA8` item; delegating: nothing), initializer |
 | `0xAD` | a synthesized member | — (after the declarator) |
 | `0xAE` | a deallocation function | an entity item |
+| `0xB0` | a closure digest | FNV-1a 128 of the closure's serialization (16 bytes) |
+| `0xB1` | a captured entity, inside its closure | `u32` capture position |
+| `0xB2` | a local class, enumeration or closure type | shape count, (type-kind, qualifiers) per pointer or reference level, qualifiers, depth byte, `u32` index; a closure then its digest |
+| `0xB3` | a member of a local class or closure | the class's depth and index, operator byte or name, declaration kind, type |
+| `0xB4` | a local class or enumeration definition | index, kind, bases, members |
+| `0xB5` | a closure member's row | closure digest, then `0` or (`1`, function type, template arguments) |
+| `0xB6` | a local of an enclosing scope inside a closure | depth byte, `u32` index |
 
 Both kind enums are numbered stably (spec/ast.md); a new kind takes a new
 number and the exhaustive dispatch (no wildcard arm) does not compile
@@ -2114,10 +2123,12 @@ the types or operand; array traits: trait, type, value, dimension.
 | excluded (X16) | not hashed, not `partial` | `ContractAssertStmt` |
 | init (K-3c) | hashed | `InitListExpr` `ImplicitValueInitExpr` `CXXConstructExpr` `CXXTemporaryObjectExpr` `CXXInheritedCtorInitExpr` `CXXDefaultArgExpr` `CXXDefaultInitExpr` `CXXScalarValueInitExpr` `CXXParenListInitExpr` `ArrayInitLoopExpr` `ArrayInitIndexExpr` `CXXStdInitializerListExpr` `CompoundLiteralExpr` `NoInitExpr` `DesignatedInitUpdateExpr` `CXXNewExpr` `CXXDeleteExpr` `CXXThrowExpr` `CXXNoexceptExpr` `CXXTypeidExpr` `TypeTraitExpr` `ArrayTypeTraitExpr` `ExpressionTraitExpr`; constructors, destructors, implicit and defaulted members, variables |
 | init (K-3c) | `partial` | an exception specification sema had not computed when the unit ended (not on synthesized members, whose `noexcept` is not hashed) |
-| lambda (K-3d) | `partial` | `LambdaExpr` `CoawaitExpr` `CoyieldExpr` `CoroutineBodyStmt` `CoreturnStmt`; local classes, enumerations and templates |
-| misc (K-3d) | `partial` | `UserDefinedLiteral` `ImaginaryLiteral` `EmbedExpr` `BinaryConditionalOperator` `OffsetOfExpr` `SizeOfPackExpr` `RequiresExpr` `ConceptSpecializationExpr` `PackIndexingExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `CXXReflectExpr` `CXXSpliceExpr` `PseudoObjectExpr` `GenericSelectionExpr` `RecoveryExpr` `GCCAsmStmt` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
+| lambda (K-3d) | hashed | `LambdaExpr` `CoawaitExpr` `CoyieldExpr` `CoroutineBodyStmt` `CoreturnStmt`; local classes and enumerations; closure member rows |
+| lambda (K-3d) | `partial` | a local class template, member template or alias template; a member of a local class the rule above does not name |
+| misc (K-3d) | hashed | `ImaginaryLiteral` `BinaryConditionalOperator` `OffsetOfExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `PseudoObjectExpr` `GenericSelectionExpr` `GCCAsmStmt`; `RequiresExpr` `ConceptSpecializationExpr` outside a template |
+| misc (K-3d) | `partial` | `UserDefinedLiteral` (sema builds calls: not met) `EmbedExpr` `SizeOfPackExpr` `PackIndexingExpr` `CXXReflectExpr` `CXXSpliceExpr` `RecoveryExpr` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
 | attrs (K-3e) | `partial` | an attribute of O-10's closed list (`aligned`, `noreturn`, `target`, `target_clones`, `target_version`, `indeterminate`; NOT `visibility`, `exclude_from_explicit_instantiation` or `abi_tag`, mortar's ruling of 11-17) on the function, a variable or a local, `[[assume]]`, a default argument on any declaration of the function |
-| dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a template's own definition, a dependent `noexcept` or requires-clause |
+| dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a dependent `ChooseExpr`, `GenericSelectionExpr`, `CoyieldExpr`, `RequiresExpr` or `ConceptSpecializationExpr` (in a generic lambda's pattern); a template's own definition, a dependent `noexcept` or requires-clause |
 
 A skipped construct writes `0xA6`, its class and its kind's code in place
 of its subtree (one token per node kind, mortar's ruling 2), so equal
@@ -2133,8 +2144,99 @@ any hash-map order; source locations, comments, macro names and spelling;
 the types and value categories of nodes other than literals and casts
 (they follow from the operands and the resolved entities).
 
+**Closures** (`odr_def/lambda.rs`, K-3d). A lambda-expression is its tag,
+`1` and the closure type's index in the definition (a local entity,
+numbered at its first appearance like a variable, so a type mention
+before the lambda-expression numbers it) or `0` for a closure of another
+context (a default member initializer's or default argument's, hashed at
+the use), then `0xB0` and the closure's digest. Never a mangling number.
+The digest is FNV-1a 128 of the closure's own serialization: `0xB0`; the
+capture count, then per capture in sema's capture order (the closure's
+member order: explicit captures as written, then implicit ones in order
+of first odr-use) its kind byte (`this`, `*this`, by copy, by reference,
+VLA bound), a flag byte (init-capture, pack) and the captured entity as
+the ENCLOSING scope names it (a local by index, a capture of an
+enclosing closure by position) or `0xA0` (`this`, `*this`, an
+init-capture, a VLA bound); the capture members' initializers as
+expressions of the enclosing scope (an init-capture's initializer, the
+copy construction sema chose); then, in the closure's own scope (its
+call operator's locals, captured entities `0xB1`), the call operator's
+declarator (the rule above: `constexpr` never, `consteval`, `static` and
+an explicit object parameter as written, the effective `noexcept`),
+`mutable`, a generic lambda's template parameters (count; kind, pack, a
+non-type parameter's type, the type-constraint) and requires-clause or
+`0xA0`, and the body. The capture-default is not hashed (`[=]` and `[x]`
+capturing only `x` are equal; `[&]` and `[=]` differ by the kinds). A
+generic lambda's body is its pattern: its dependent nodes are the
+dependent kinds below. The digest is memoized per closure (a closure
+naming its own type meets a zero digest). A closure type named only as a
+type (`decltype([]{})`) is `0xB2` followed by its digest. A local entity
+of an enclosing scope named inside a closure without capture (an
+unevaluated operand, a constant) is `0xB6`.
+
+**Closure member rows** (O-14). The call operator's row, and each
+emitted specialization of a generic call operator's, hash `0xB5`, the
+closure's digest as its enclosing definition's walk computed it (the
+outermost function enclosing it through call operators and local
+classes is walked to fill the memo; a closure inside an instantiated
+generic call operator's body: that specialization), then `0`, or `1`,
+the specialization's function type and template arguments by encoding.
+A closure outside any function (a namespace-scope variable's initializer,
+a default member initializer, a default argument) is computed on its own:
+its context is the closure itself (none of these can capture a local).
+The static invoker and the conversion function have no row; a
+reference to the enclosing scope's captures from inside a
+specialization's own body is the placeholder (a miss).
+
+**Local classes and enumerations** are hashed where they are declared:
+`0xB4`, the index, the declaration kind, the bases (count; type, virtual
+and access bits) for a class, then the members in declaration order
+(implicit ones, typedefs and access specifiers left out): a field as
+kind, name, type, flags, bit-width, default member initializer; an
+enumerator as name and value; a member function as kind, operator or
+name and its definition inline (declarator, ctor-initializers or
+deallocation function, body; its parameters and locals share the
+enclosing numbering); a nested class recursively; anything else
+`partial`. A reference to a member is `0xB3`. Their member functions
+have no rows (the symbols are the enclosing function's, O-14 and ruling
+1). Static locals hash inside their function (above).
+
+**X15** (`lambda_in_declarator`). A function definition gets no row when
+its function type or its template arguments (on the definition or the
+template it was instantiated from) hold a closure type declared in a
+declarator (its mangling context is the definition or its template, or
+it has no mangling context and no function encloses it), or when a
+default argument or the trailing requires-clause holds a
+lambda-expression. Decided on the AST: the same on every route.
+
+**Misc area** (`odr_def/misc.rs`, K-3d). Statement expression: its block.
+Label address and `asm goto` labels: the label as a local. `__builtin_choose_expr`:
+the condition and the operand it selected. `_Generic`: the controlling
+type (a type operand, or the controlling expression's type) and the
+SELECTED association only (the others are never evaluated). GNU `?:`:
+the common operand, the condition over it, the false arm. Atomic
+builtins: the operation and the operands. `__builtin_shufflevector`: the
+operands and index expressions; `__builtin_convertvector` and an
+imaginary literal: the type and operand; an ext-vector element access:
+the accessor string and base; `va_arg`: the type and operand;
+`offsetof`: the type and the computed offset or its steps. A constraint
+outside a template (`ConceptSpecializationExpr`, `RequiresExpr`): its
+satisfaction value. A pseudo-object: its semantic result. Coroutines:
+`co_await`/`co_yield` the implicit bit, the suspend kind, the written
+operand, the awaiter and the resolved `await_ready`, `await_suspend` and
+`await_resume` calls; `co_return` its operand and the promise call; a
+coroutine body the promise variable, the initial suspend point, the
+written body, the final suspend point, `unhandled_exception`, the
+implicit `co_return;`, the frame allocation and deallocation calls,
+`get_return_object` and the allocation-failure return (the parameter
+copies and the returned-object plumbing follow from these: not hashed).
+`asm`: the flag bits, the output count, the template bytes, each operand
+(name, constraint bytes, expression), the clobbers, the labels. A
+file-scope `asm` is in no definition.
+
 **Walk.** An explicit work stack, never recursion: no depth of expression
-or statement nesting overflows the stack. No per-node allocation; the
+or statement nesting overflows the stack (a closure's digest recurses
+once per nesting level of lambdas, not of expressions). No per-node allocation; the
 hasher keeps one stream buffer, one stack and its memo maps per unit.
 
 ## 9. Open questions (with recommendation)

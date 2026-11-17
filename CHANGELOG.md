@@ -172,11 +172,18 @@ Planned as 1.3.0.
   whole definition: its declaration, body, constructor initializers,
   initializers of variables (as written, never their value), default
   arguments and default member initializers where they are used, and
-  `new`, `delete`, `throw` and traits (WP-1582, WP-1583; scheme
-  `kiln-odr-1.d2`). A row is marked partial only when the definition
-  holds a construct not hashed yet (lambdas, local classes, default
-  arguments of its own parameters, some GNU forms): about 2-5 % of the
-  rows of fmt and googletest
+  `new`, `delete`, `throw` and traits (WP-1582, WP-1583), lambdas
+  (numbered inside the enclosing definition, with their captures, call
+  operator and body), local classes and enumerations, coroutines,
+  statement expressions, `asm`, label addresses, `_Generic`,
+  `__builtin_choose_expr`, `offsetof` and the GNU vector and atomic
+  forms (WP-1584; scheme `kiln-odr-1.d3`). A closure's call operator row
+  is the closure's hash inside its enclosing definition; a function with
+  a lambda in its signature, and the member functions of a local class,
+  get no row. A row is marked partial only when the definition holds a
+  construct not hashed yet (default arguments of its own parameters,
+  some attributes, dependent forms): about 2 % of the rows of fmt and
+  googletest
   ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)").
 
 ### Changed
