@@ -439,7 +439,8 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         }
         // The later bounds, outermost last.
-        for &(n, at) in later.iter().rev() {
+        for (k, &(n, at)) in later.iter().enumerate().rev() {
+            let bracket = arrays.get(k + 1).map_or(at, |a| a.1);
             elem = match n {
                 Some(n) => {
                     if self.array_too_large(n, elem) {
@@ -449,10 +450,19 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return self.recover_err(&kids, loc);
                     }
+                    if self.check_array_element_alignment(elem, bracket) {
+                        return self.recover_err(&kids, loc);
+                    }
                     self.ast.types.constant_array(elem, n, None)
                 }
                 None => self.ast.types.incomplete_array(elem),
             };
+        }
+        // The first bound of `new T[n]` (WP-1595, clang `BuildCXXNew`'s
+        // `BuildArrayType` of the allocated type); clang reports it at
+        // the type-id.
+        if !arrays.is_empty() && self.check_array_element_alignment(elem, tid.loc) {
+            return self.recover_err(&kids, loc);
         }
         if self.new_array_args_rejected(
             &init,

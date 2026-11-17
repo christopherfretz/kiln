@@ -28,7 +28,7 @@ impl Sema<'_, '_> {
 
     /// Records function `f`, named as a non-type template argument in
     /// the definition of a templated function (`A<f>` in a function
-    /// template's body), for [`Sema::mark_template_arg_uses`]: the
+    /// template's body, or in a non-generic lambda's body there), for [`Sema::mark_template_arg_uses`]: the
     /// argument is converted once, in the definition, and an
     /// instantiation does not convert it again. Only a non-dependent
     /// specialization of a function template is recorded.
@@ -36,9 +36,21 @@ impl Sema<'_, '_> {
         if self.ast.spec_info(f).is_none() {
             return;
         }
-        let Some(cur) = self.func.as_ref().map(|s| s.decl) else { return };
+        let Some(mut cur) = self.func.as_ref().map(|s| s.decl) else { return };
         if self.ast.decls.get(f).ctx().is_some_and(|c| self.is_dependent_decl_context(c)) {
             return;
+        }
+        // The body of a non-generic lambda is instantiated with the
+        // enclosing definition's (WP-1591): record the use under that.
+        for _ in 0..64 {
+            if !self.is_lambda_call_op(cur) || self.ast.described_template(cur).is_some() {
+                break;
+            }
+            let outer = self.ast.decls.get(cur).ctx().and_then(|c| self.ast.decls.get(c).ctx());
+            match outer.and_then(|c| self.enclosing_function(c)) {
+                Some(o) => cur = o,
+                None => break,
+            }
         }
         let key = self.ast.first(cur);
         let uses = self.inst.template_arg_uses.entry(key).or_default();

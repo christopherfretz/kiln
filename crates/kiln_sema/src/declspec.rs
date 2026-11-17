@@ -831,6 +831,10 @@ pub struct Declarator {
     /// §2.4): where `noexcept` is. The `Chunk::Function`'s `exc` is
     /// `ExcSpec::None` meanwhile; sema makes it `ExcSpec::Deferred(f)`.
     pub late_noexcept: Option<Loc>,
+    /// The first `this`, written (`false`) or implicit (`true`), in the
+    /// trailing return type ([expr.prim.this]/3: an error when the
+    /// function is static; [`Sema::check_this_in_static_declarator`]).
+    pub this_use: Option<(Loc, bool)>,
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
@@ -1068,6 +1072,7 @@ impl Declarator {
             virt_final: None,
             pure: None,
             late_noexcept: None,
+            this_use: None,
             explicit_object: None,
             c_ellipsis_first: Vec::new(),
             fn_qual_locs: [None; 4],

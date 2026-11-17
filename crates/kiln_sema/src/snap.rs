@@ -180,7 +180,7 @@ macro_rules! sema_fields {
                 trailing_notes, omitted_inits, diag_capture, delayed_typos, typo_delay, open_specs,
                 spec_failures, spec_exempt, nc_strict_only, pending_alias_vla,
                 reverse_using_shadows, declarator_int_recovery, declarator_field,
-                declarator_distant_exc, pattern_member_access, base_annotation_packs, friend_tag,
+                declarator_distant_exc, this_watch, pattern_member_access, base_annotation_packs, friend_tag,
                 friend_class_template, extraneous_tag_head, nested_tag, inst_enable_if,
                 declspec_nulls, image_texprs, bmi, extensions_silenced,
                 temp_copy_second_step, vararg_copying],
@@ -276,6 +276,12 @@ impl<T: AtRest> AtRest for RefCell<T> {
 impl AtRest for crate::class::CleanupState {
     fn at_rest(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+impl AtRest for crate::class::ThisWatch {
+    fn at_rest(&self) -> bool {
+        *self == Self::Off
     }
 }
 

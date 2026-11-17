@@ -1056,6 +1056,7 @@ impl Sema<'_, '_> {
     /// A potentially-evaluated use of `this` at `loc` (written, or the
     /// implicit object of a member access) captures it.
     pub(crate) fn note_this_use(&mut self, loc: Loc) {
+        self.watch_this_use(loc, true);
         if self.unevaluated == 0 && !self.lambdas.is_empty() {
             let _ = self.capture_this(loc, None);
         }

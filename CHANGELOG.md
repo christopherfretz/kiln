@@ -1046,6 +1046,21 @@ Planned as 1.3.0.
   and GCC's `-ftemplate-depth-N` spelling is accepted as
   `-ftemplate-depth=N`.
 
+- Sema follow-ups from GCC's C++ testsuite (WP-1593, WP-1595, WP-1572,
+  WP-1588, WP-1591): a member of a nested anonymous union with a default
+  member initializer no longer deletes the enclosing union's default
+  constructor and is the active member in constant evaluation, and an
+  anonymous union object at namespace or block scope runs its default
+  member initializers (they were skipped at run time); an array whose
+  element size is not a multiple of its alignment is an error ([dcl.array]);
+  `this` in a static member function's trailing return type,
+  noexcept-specifier or requires-clause is an error ([expr.prim.this]/3); a
+  structured binding declaration in a condition whose variable is an array
+  is an error ([stmt.pre]/5) and the pre-C++26 extension warning uses clang
+  22's wording; a structured binding declaration at class scope gets one
+  error; a function template specialization named as a template argument
+  in a lambda body inside a template is instantiated.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

@@ -433,9 +433,80 @@ impl Sema<'_, '_> {
         if self.is_static_method(f)
             && let ExcSpec::NoexceptExpr { expr, .. } = spec
         {
-            self.check_this_in_static_exception_spec(expr);
+            let _ = self.check_this_in_static_exception_spec(expr);
         }
         self.set_member_exception_spec(f, spec);
+    }
+
+    /// Starts recording the first `this` used (the trailing return type
+    /// of a member function declarator, parsed with `this` in scope as
+    /// clang's `CXXThisScopeRAII` does whether or not the function is
+    /// static, which only the declaration, or for an out-of-line
+    /// definition the earlier one, says). Returns what
+    /// [`Sema::act_on_end_this_watch`] restores.
+    pub fn act_on_start_this_watch(&mut self) -> ThisWatch {
+        std::mem::replace(&mut self.this_watch, ThisWatch::On(None))
+    }
+
+    /// Ends [`Sema::act_on_start_this_watch`]: the first `this` used, and
+    /// whether it was implicit.
+    pub fn act_on_end_this_watch(&mut self, saved: ThisWatch) -> Option<(Loc, bool)> {
+        match std::mem::replace(&mut self.this_watch, saved) {
+            ThisWatch::On(used) => used,
+            ThisWatch::Off => None,
+        }
+    }
+
+    /// Records a use of `this` at `loc` for an active watch.
+    pub(crate) fn watch_this_use(&mut self, loc: Loc, implicit: bool) {
+        if self.this_watch == ThisWatch::On(None) {
+            self.this_watch = ThisWatch::On(Some((loc, implicit)));
+        }
+    }
+
+    /// [expr.prim.this]/3: `this` shall not appear in the declaration of
+    /// static member function `f` (clang
+    /// `checkThisInStaticMemberFunctionType`, run once the declaration
+    /// knows it is static, also for an out-of-line definition): the first
+    /// `this`, written or implicit, in the trailing return type
+    /// (`this_use`), then in a *noexcept-specifier* parsed in place (a
+    /// deferred one is checked when replayed,
+    /// [`Sema::act_on_exception_spec`]), then in the trailing
+    /// *requires-clause*, gets `'this' cannot be implicitly used in a
+    /// static member function declaration` (WP-1572).
+    pub(crate) fn check_this_in_static_declarator(
+        &mut self,
+        f: DeclId,
+        this_use: Option<(Loc, bool)>,
+        requires: Option<ExprId>,
+    ) {
+        if !self.is_static_method(f) && !self.is_static_method(self.ast.first(f)) {
+            return;
+        }
+        if let Some((loc, implicit)) = this_use {
+            self.report_this_in_static_declarator(loc, implicit);
+            return;
+        }
+        let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        if let Some(p) = self.ast.types.proto(ty)
+            && let ExcSpec::NoexceptExpr { expr, .. } = self.ast.types.exc_spec(p)
+            && self.check_this_in_static_exception_spec(expr)
+        {
+            return;
+        }
+        if let Some(r) = requires {
+            let _ = self.check_this_in_static_exception_spec(r);
+        }
+    }
+
+    /// `'this' cannot be [implicitly] used in a static member function
+    /// declaration` at `loc` (repeated in each instantiation, as clang).
+    pub(crate) fn report_this_in_static_declarator(&mut self, loc: Loc, implicit: bool) {
+        let msg = self
+            .diag(DiagId::sema_this_static_member_func, loc)
+            .arg(u32::from(implicit))
+            .per_instantiation();
+        self.emit(msg);
     }
 
     /// [expr.prim.this]/3: `this` shall not appear in a static member
@@ -445,7 +516,7 @@ impl Sema<'_, '_> {
     /// written or implicit, is diagnosed: `'this' cannot be implicitly
     /// used in a static member function declaration` (clang
     /// `checkThisInStaticMemberFunctionExceptionSpec`).
-    pub(crate) fn check_this_in_static_exception_spec(&mut self, e: ExprId) {
+    pub(crate) fn check_this_in_static_exception_spec(&mut self, e: ExprId) -> bool {
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             if self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr {
@@ -457,12 +528,13 @@ impl Sema<'_, '_> {
                     .arg(u32::from(implicit))
                     .per_instantiation();
                 self.emit(msg);
-                return;
+                return true;
             }
             let mut kids = self.ast.exprs.children(x, &self.ast.lists);
             kids.reverse();
             stack.extend(kids);
         }
+        false
     }
 
     /// Before the replayed *noexcept-specifier* of member function `f` is
@@ -624,6 +696,7 @@ impl Sema<'_, '_> {
     /// WP-066b).
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
         if let Some(t) = self.current_this() {
+            self.watch_this_use(loc, false);
             self.note_this_use(loc);
             self.build_this(t, false, loc)
         } else {
@@ -666,4 +739,14 @@ impl Sema<'_, '_> {
         // [expr.prim.this]/2: a pointer to const in a contract predicate.
         if self.contract_ctx.is_empty() { t } else { t.map(|t| self.contract_this(t)) }
     }
+}
+
+/// A watch for uses of `this` while a declarator part is parsed or
+/// substituted ([`Sema::act_on_start_this_watch`]): off, or on with the
+/// first use (its location, and whether it was implicit).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThisWatch {
+    #[default]
+    Off,
+    On(Option<(Loc, bool)>),
 }

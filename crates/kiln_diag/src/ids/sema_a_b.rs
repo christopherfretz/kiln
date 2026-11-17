@@ -88,6 +88,9 @@ sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}]
 sema_array_designator_negative = Error (1) "array designator value '{0}' is negative";
 sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
 sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
+// [dcl.array]/1, [basic.align]: an over-aligned typedef element (clang
+// `err_array_element_alignment`; WP-1595).
+sema_array_element_alignment = Error (3) "size of array element of type {0} ({1} bytes) isn't a multiple of its alignment ({2} bytes)";
 sema_array_incomplete_type = Error (1) "array has incomplete element type {0}";
 // [dcl.init.string]/1: the literal kind must match the element type (WP-823)
 // clang `ext_array_init_copy` (C, GNU; WP-1286).

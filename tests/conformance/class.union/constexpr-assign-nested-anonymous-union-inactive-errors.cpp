@@ -5,7 +5,6 @@
 // assignment is not a constant expression (clang 22 and GCC 16.1 reject it).
 //@ std: c++20
 //@ expect: compile-fail
-//@ xfail(kiln): WP-1574 remainder: an assignment through a member of a nested anonymous union is still taken to activate it (Sema does not initialize a nested anonymous union's default member initializer from the enclosing union's default constructor)
 constexpr int outer_then_inner() {
   union {
     union {

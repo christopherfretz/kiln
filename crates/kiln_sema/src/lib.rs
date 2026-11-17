@@ -20,6 +20,7 @@ mod alloc_decl;
 mod annot;
 mod annotate_attr;
 mod arm_builtins;
+mod array_align;
 mod asm;
 mod attr_cond;
 pub mod attr_triage;
@@ -845,6 +846,10 @@ pub struct Sema<'a, 'sm> {
     /// a single level of indirection`). Taken by the declaration and
     /// parameter actions right after the call.
     pub(crate) declarator_distant_exc: bool,
+    /// While a declarator part that may name `this` is parsed (a trailing
+    /// return type): `Some`, holding the first `this` used there
+    /// ([`Sema::act_on_start_this_watch`]).
+    pub(crate) this_watch: class::ThisWatch,
     /// The diagnostic an alias-declaration's type-id left for its name: a
     /// variable length array bound at namespace or class scope folded
     /// (`-Wgnu-folding-constant`) or rejected (clang
@@ -1616,6 +1621,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_int_recovery: false,
             declarator_field: false,
             declarator_distant_exc: false,
+            this_watch: class::ThisWatch::Off,
             pending_alias_vla: None,
             reverse_using_shadows: false,
             va_list_type: None,

@@ -787,6 +787,20 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_invalid_use_of_function_type, at);
             return (Some(v), self.recover_err(&[], loc));
         }
+        // [stmt.pre]/5: the declarator of a condition shall not specify an
+        // array; a structured binding declaration's (C++26, P0963R3) is
+        // the unnamed variable's, so `auto [a, b] = arr` is rejected and
+        // `auto& [a, b] = arr` is not (clang 22, "an array type is not
+        // allowed here" at the `[`; GCC 16.1 rejects both). No bool test
+        // is formed, so no `-Wpointer-bool-conversion` names the unnamed
+        // variable.
+        if self.ast.decls.is_decomposition(v)
+            && self.ast.decls.get(v).ty().is_some_and(|t| self.ast.types.is_array(t))
+        {
+            let at = self.decl_loc(v);
+            self.error(DiagId::sema_decomp_decl_cond_array, at);
+            return (Some(v), self.recover_err(&[], loc));
+        }
         let r = self.build_decl_ref(v, loc);
         if let Some(c) = self.refs_minus_assign.get_mut(&v) {
             c.1 = true;

@@ -1125,8 +1125,11 @@ impl Sema<'_, '_> {
                     fb = fb.with(DefinitionBits::LITERAL);
                     // P3074R7 [class.default.ctor]/3.4, [class.dtor]/8.3:
                     // a union's variant members do not make its default
-                    // constructor or destructor non-trivial.
-                    if self.trivial_unions() {
+                    // constructor or destructor non-trivial. An anonymous
+                    // union member is not a variant member
+                    // ([class.union.general]/2: its members are), so its
+                    // own (already C++26) triviality counts (WP-1593).
+                    if self.trivial_unions() && !self.is_anonymous_union_member(f) {
                         fb = fb
                             .with(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
                             .with(DefinitionBits::TRIVIAL_DTOR);

@@ -1817,6 +1817,7 @@ impl Substituter<'_, '_, '_> {
     fn this_expr(&mut self, implicit: bool, loc: Loc) -> ExprId {
         match self.sema.current_this() {
             Some(t) => {
+                self.sema.watch_this_use(loc, implicit);
                 self.sema.note_this_use(loc);
                 self.sema.builder().this_expr(t, implicit, loc)
             }

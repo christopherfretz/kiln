@@ -756,8 +756,13 @@ impl Sema<'_, '_> {
                     && !self.fn_spec(m).is_trivial()
                 {
                     let parent = self.ast.decls.get(f).ctx().map(|p| self.class_def(p));
+                    // "no variant member of the anonymous union containing
+                    // it has a default member initializer": the variant
+                    // members include those of nested anonymous unions
+                    // ([class.union.general]/2; WP-1593).
                     let parent_init = parent.is_some_and(|p| {
                         self.defn_bits(p).contains(DefinitionBits::HAS_IN_CLASS_INIT)
+                            || self.first_default_init(p).is_some()
                     });
                     if w.kind != SpecialKind::DefaultCtor || !parent_init {
                         (4, Some(m))
