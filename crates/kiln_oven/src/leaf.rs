@@ -616,14 +616,34 @@ impl Oven {
 }
 
 /// Whether a typedef in `q`'s sugar chain has attributes
-/// (`Compiler::typedef_align`, which then asks the ABI).
-fn typedef_attributed(ast: &kiln_ast::Ast, q: kiln_ast::QualType) -> bool {
+/// (`Compiler::typedef_align`, which then asks the ABI). A cv-qualified
+/// array (`const T` for an array typedef `T`) is a `QualifiedArray` node
+/// whose `desugar_once` is the canonical type; the walk continues into
+/// its base instead, which keeps the typedef (cv-qualifiers do not change
+/// alignment), and into the element type of an array, whose alignment is
+/// the element's (`T[2]`, `const T[3]`; WP-1567).
+pub(crate) fn typedef_attributed(ast: &kiln_ast::Ast, q: kiln_ast::QualType) -> bool {
     let mut x = q;
     loop {
-        if let TypeView::Typedef { decl, .. } = ast.types.view(x.ty())
-            && ast.decls.get(decl).has(kiln_ast::decl::DeclFlags::HAS_ATTRS)
-        {
-            return true;
+        match ast.types.view(x.ty()) {
+            TypeView::Typedef { decl, .. }
+                if ast.decls.get(decl).has(kiln_ast::decl::DeclFlags::HAS_ATTRS) =>
+            {
+                return true;
+            }
+            TypeView::QualifiedArray { base, .. } => {
+                x = kiln_ast::QualType::unqual(base);
+                continue;
+            }
+            TypeView::ConstantArray(a) => {
+                x = a.elem;
+                continue;
+            }
+            TypeView::IncompleteArray(elem) => {
+                x = elem;
+                continue;
+            }
+            _ => {}
         }
         let d = ast.types.desugar_once(x);
         if d.ty() == x.ty() {

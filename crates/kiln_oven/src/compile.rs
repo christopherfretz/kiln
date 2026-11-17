@@ -4026,21 +4026,7 @@ impl Compiler<'_> {
     /// object through `typedef _Tp _Aligned_Tp
     /// __attribute__((aligned(required_alignment)))`.
     pub(super) fn typedef_align(&mut self, q: QualType) -> Option<u32> {
-        let ast = self.ast();
-        let mut x = q;
-        let attributed = loop {
-            if let TypeView::Typedef { decl, .. } = ast.types.view(x.ty())
-                && ast.decls.get(decl).has(kiln_ast::decl::DeclFlags::HAS_ATTRS)
-            {
-                break true;
-            }
-            let d = ast.types.desugar_once(x);
-            if d.ty() == x.ty() {
-                break false;
-            }
-            x = d;
-        };
-        if !attributed {
+        if !crate::leaf::typedef_attributed(self.ast(), q) {
             return None;
         }
         let (size, align) = self.b.opaque_size_align(q);
@@ -5666,6 +5652,44 @@ impl Compiler<'_> {
         }
     }
 
+    /// Whether an assignment through a union member of type `ty` begins
+    /// its lifetime ([class.union.general]/6, the set S(E)): a non-class
+    /// type, or a class type (or array of one) whose default constructor
+    /// is trivial and not deleted. Compile time only. An anonymous struct
+    /// or union member is still activated as before WP-1575: a nested
+    /// anonymous union whose member has a default member initializer
+    /// makes the enclosing union's default constructor initialize it
+    /// ([class.union.general]/2: its members are variant members of the
+    /// enclosing union), which Sema does not model yet (the enclosing
+    /// union is left without an active member), so checking it would
+    /// reject valid code.
+    fn implicit_union_member(&self, ty: OTy) -> bool {
+        let mut t = ty;
+        while let TyKind::Array { elem, .. } = self.kind(t) {
+            t = elem;
+        }
+        let TyKind::Record { decl, .. } = self.kind(t) else { return true };
+        let ast = self.ast();
+        use kiln_ast::decl::DefinitionBits as B;
+        let bits = new_delete::record_bits(ast, decl);
+        if bits.contains(B::ANONYMOUS) {
+            return true;
+        }
+        if !bits.contains(B::TRIVIAL_DEFAULT_CTOR)
+            || bits.contains(B::NONTRIVIAL_DEFAULT_CTOR)
+            || bits.contains(B::DEFAULTED_DEFAULT_CTOR_DELETED)
+        {
+            return false;
+        }
+        // `X() = delete;` is trivial (not user-provided) but deleted.
+        let def = ast.definition(decl).unwrap_or(decl);
+        !ast.constructors(def).iter().any(|c| {
+            ast.decls
+                .function(c)
+                .is_some_and(|f| f.spec.is_deleted() && ast.lists.len(f.params) == 0)
+        })
+    }
+
     fn member(&mut self, e: ExprId, acc: Access) -> Place {
         let ast = self.ast();
         let n = *ast.exprs.get(e);
@@ -5733,6 +5757,16 @@ impl Compiler<'_> {
         };
         if union {
             match acc {
+                // [class.union.general]/6: an assignment begins the
+                // lifetime of member `m` named on its left side (S(E))
+                // only if `m` is of non-class type or of a class type
+                // with a non-deleted trivial default constructor (or an
+                // array of such); otherwise `m` must already be active
+                // (WP-1575; checked as a write to it).
+                Access::Write if !self.implicit_union_member(fi.ty) => {
+                    let loc = self.rmw_loc.unwrap_or_else(|| self.node(e).loc());
+                    self.emit_site(Op::ActiveCheck, ak::ASSIGN, &[p, idx as u32, rt.0], e, loc);
+                }
                 Access::Write => {
                     self.emit_at(Op::SetActive, 0, &[p, idx as u32, rt.0], e);
                 }
@@ -6336,6 +6370,17 @@ impl Compiler<'_> {
                 };
                 self.emit_at(Op::SetActive, 1, &[p, idx as u32, ty.0], e);
                 let fi = fields[idx];
+                // GNU: the elements of an initialized flexible array
+                // member lie past the union, as past a structure (below):
+                // the code generator folds and emits them on their own
+                // (WP-1547); the member is active and holds no byte of
+                // the union (WP-1569).
+                if let Some(&x) = inits.first()
+                    && !self.is_default_init(x)
+                    && self.is_flexible_elements_init(fi.decl, x)
+                {
+                    return;
+                }
                 if let Some(&x) = inits.first() {
                     // A default member initializer's `this` is the union
                     // being initialized ([class.mem.general]/11; WP-1468).

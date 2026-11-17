@@ -591,9 +591,8 @@ impl Compiler<'_> {
                             self.ctor_steps.push(step(pc, crate::CTOR_STEP_VBASE | j as u32));
                         }
                         let m = self.next;
-                        if let Some((q, vty)) = self.ctor_init_vbase(&ci, this, cls) {
-                            self.push_cleanup(q, vty, 2 | 4, loc);
-                        }
+                        let (q, vty) = self.ctor_init_vbase(&ci, this, cls);
+                        self.push_cleanup(q, vty, 2 | 4, loc);
                         self.next = m;
                     }
                     continue;
@@ -652,12 +651,19 @@ impl Compiler<'_> {
         if !self.base_obj {
             // The virtual bases, destroyed last, in the reverse of their
             // construction ([class.dtor]/13): registered first.
-            let vb = self.o.types.vbase_start(cls);
-            let vfields = self.o.types.fields(cls)[vb..].to_vec();
-            for fi in vfields {
+            // An empty virtual base has no field but is destroyed in
+            // its place in that order, on its address (WP-1568).
+            let vbases: Vec<(OTy, u64)> = match self.o.types.empty_vbase_order(cls) {
+                Some(all) => all.to_vec(),
+                None => {
+                    let vb = self.o.types.vbase_start(cls);
+                    self.o.types.fields(cls)[vb..].iter().map(|f| (f.ty, f.offset)).collect()
+                }
+            };
+            for (vty, off) in vbases {
                 let m = self.next;
-                let q = self.elem_ptr_loc(this, fi.offset, loc);
-                self.push_cleanup(q, fi.ty, 2, loc);
+                let q = self.elem_ptr_loc(this, off, loc);
+                self.push_cleanup(q, vty, 2, loc);
                 self.next = m;
             }
         }
@@ -845,11 +851,6 @@ impl Compiler<'_> {
         }
     }
 
-    /// Initializes the virtual base of the complete object at `this` (of
-    /// class `cls`) that ctor-initializer `ci` names, at its offset in
-    /// `cls`; its address and type (a base-subobject view if it has
-    /// virtual bases of its own), `None` for an empty one (not laid out:
-    /// its constructor still runs, on the object's address).
     /// The index among the virtual bases of `cls` (entries from
     /// `vbase_start`) of the one virtual-base initializer `ci` initializes.
     fn vbase_index(&mut self, ci: &CtorInit, cls: OTy) -> Option<usize> {
@@ -858,17 +859,29 @@ impl Compiler<'_> {
         t.fields(cls)[t.vbase_start(cls)..].iter().position(|f| t.same_class(f.ty, vty))
     }
 
-    fn ctor_init_vbase(&mut self, ci: &CtorInit, this: u32, cls: OTy) -> Option<(u32, OTy)> {
+    /// Initializes the virtual base of the complete object at `this` (of
+    /// class `cls`) that ctor-initializer `ci` names, at its offset in
+    /// `cls` (an empty one has no field: at its layout offset); its
+    /// address and type (a base-subobject view if it has virtual bases of
+    /// its own).
+    fn ctor_init_vbase(&mut self, ci: &CtorInit, this: u32, cls: OTy) -> (u32, OTy) {
         let vty = self.ty(QualType::unqual(TypeId::new(ci.target)));
         let vb = self.o.types.vbase_start(cls);
         let found = self.o.types.fields(cls)[vb..]
             .iter()
             .find(|f| self.o.types.same_class(f.ty, vty))
             .map(|f| (f.offset, f.ty));
-        let (off, ty) = found.unwrap_or((0, self.o.types.nv_view(vty)));
+        // An empty one is constructed on its address in the complete
+        // object, and destroyed there by the complete-object destructor
+        // (WP-1568): an exception after it destroys it, too.
+        let empty = || {
+            let order = self.o.types.empty_vbase_order(cls)?;
+            order.iter().find(|&&(t, _)| self.o.types.same_class(t, vty)).map(|&(t, o)| (o, t))
+        };
+        let (off, ty) = found.or_else(empty).unwrap_or((0, self.o.types.nv_view(vty)));
         let q = self.elem_ptr(this, off, ci.init);
         self.init(ci.init, q, ty);
-        found.map(|_| (q, ty))
+        (q, ty)
     }
 
     /// `p + off` (bytes), the site at `loc`.

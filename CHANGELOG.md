@@ -983,6 +983,20 @@ Planned as 1.3.0.
   prefix before C++17 is an extension warning. `inline template` keeps
   clang's warning; GCC rejects it.
 
+- Constant evaluation (WP-1574, WP-1568, WP-1575, WP-1569, WP-1567):
+  `std::optional::emplace` after an earlier `emplace` or `reset` is
+  constant again with libstdc++ 14 and libc++ at C++20 and C++23 (an empty
+  base class was taken as destroyed when the member at its address was);
+  the destructors of empty virtual bases run in constant evaluation
+  ([class.dtor]/13), so a constant-destruction variable of a class with
+  virtual bases is no longer guarded in code generation; an assignment
+  through an inactive union member of class type whose default
+  constructor is not trivial, or is deleted, is not a constant expression
+  ([class.union.general]/6); a union's flexible array member initializer
+  with elements of class type is accepted (GNU); and `alignof` of a
+  cv-qualified array typedef carrying `__attribute__((aligned))`, or of
+  an array of one, is the typedef's alignment.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

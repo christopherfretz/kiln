@@ -159,6 +159,11 @@ pub(crate) struct Types {
     /// with one: not in [`Types::fields`] (they hold no storage), but
     /// subobjects a pointer may designate ([`Types::has_subobject`]).
     empty_bases: FxHashMap<OTy, Vec<(OTy, u64)>>,
+    /// Every virtual base (base-subobject view, offset) of each complete
+    /// class with an EMPTY virtual base, in construction order: an empty
+    /// virtual base has no field, but its constructor and destructor run
+    /// on its address ([class.base.init]/13, [class.dtor]/13; WP-1568).
+    empty_vbase_order: FxHashMap<OTy, Vec<(OTy, u64)>>,
     /// Class slots interned while the class had no definition or was
     /// still being defined (`S*` in a constant expression inside `S`'s
     /// member-specification): kept `Opaque` and rebuilt in place once
@@ -320,6 +325,7 @@ impl Types {
             || !self.provisional.values().chain(self.provisional_slots.iter()).all(|&t| ok(t))
             || !self.nv_views.iter().chain(self.nv_class.iter()).all(|(&a, &b)| ok(a) && ok(b))
             || !self.empty_bases.iter().all(|(&t, v)| ok(t) && v.iter().all(|&(b, _)| ok(b)))
+            || !self.empty_vbase_order.iter().all(|(&t, v)| ok(t) && v.iter().all(|&(b, _)| ok(b)))
             || !self.data_sizes.keys().all(|&t| ok(t))
         {
             return Err("type table map names an unknown type");
@@ -485,6 +491,8 @@ impl Types {
             + map(&self.data_sizes)
             + map(&self.empty_bases)
             + self.empty_bases.values().map(cap).sum::<usize>()
+            + map(&self.empty_vbase_order)
+            + self.empty_vbase_order.values().map(cap).sum::<usize>()
             + map(&self.provisional)
             + self.provisional_slots.capacity() * (size_of::<OTy>() + 1)
             + map(&self.nv_views)
@@ -1250,7 +1258,9 @@ impl Types {
                 }),
             }
         }
-        if !vdecls.is_empty() && !union {
+        // A class with only empty virtual bases has a view too: its
+        // base-object destructor must skip them (`Compiler::dtor_of`).
+        if !vlist.is_empty() && !union {
             // Interned first: interning a class appends its own fields.
             let vtys: Vec<OTy> = vdecls
                 .iter()
@@ -1259,6 +1269,24 @@ impl Types {
                     self.nv_view(t)
                 })
                 .collect();
+            if vdecls.len() < vlist.len() {
+                let ast = bridge.ast();
+                let all: Vec<(QualType, u64)> = vlist
+                    .iter()
+                    .filter_map(|&(v, off)| {
+                        let vdef = ast.definition(v)?;
+                        Some((ast.decls.get(vdef).ty()?, off))
+                    })
+                    .collect();
+                let order = all
+                    .into_iter()
+                    .map(|(vq, off)| {
+                        let t = self.intern(bridge, vq);
+                        (self.nv_view(t), off)
+                    })
+                    .collect();
+                let _ = self.empty_vbase_order.insert(me, order);
+            }
             // The base-subobject view: the same fields up to the virtual
             // bases (a prefix of the complete class's field list).
             let mut nv_upos = upos.clone();
@@ -1433,10 +1461,54 @@ impl Types {
             })
     }
 
+    /// The innermost object (its offset in `root`, its type) that has an
+    /// empty base class subobject of class `p` (a direct non-virtual one,
+    /// [`Types::empty_bases`], or a virtual one,
+    /// [`Types::empty_vbase_order`]) at byte `off` of an object of type
+    /// `root` (through elements, members and bases). Cold paths only: a
+    /// walk of the fields covering `off`.
+    pub fn empty_base_owner(&self, mut root: OTy, mut off: u64, p: OTy) -> Option<(u64, OTy)> {
+        let mut at = 0;
+        while let TyKind::Array { elem, n } = self.kind(root) {
+            let es = self.size(elem);
+            if es == 0 || off / es >= n {
+                return None;
+            }
+            at += off / es * es;
+            (root, off) = (elem, off % es);
+        }
+        if !matches!(self.kind(root), TyKind::Record { .. }) {
+            return None;
+        }
+        let here = |v: &[(OTy, u64)]| v.iter().any(|&(t, o)| o == off && self.same_class(t, p));
+        let inner = self.near(root, off).find_map(|f| {
+            if off < f.offset || off >= f.offset + self.size(f.ty).max(1) {
+                return None;
+            }
+            let (o, t) = self.empty_base_owner(f.ty, off - f.offset, p)?;
+            Some((at + f.offset + o, t))
+        });
+        if inner.is_some() {
+            return inner;
+        }
+        (here(self.empty_bases(root)) || self.empty_vbase_order(root).is_some_and(here))
+            .then_some((at, root))
+    }
+
     /// The direct non-virtual empty bases (type, offset) of class `t`,
     /// which are not in [`Types::fields`].
     pub fn empty_bases(&self, t: OTy) -> &[(OTy, u64)] {
         self.empty_bases.get(&t).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every virtual base (view, offset) of the complete class `t` in
+    /// construction order, when one of them is empty (has no field);
+    /// `None` when the virtual base fields of `t` are all of them.
+    pub fn empty_vbase_order(&self, t: OTy) -> Option<&[(OTy, u64)]> {
+        if self.empty_vbase_order.is_empty() {
+            return None;
+        }
+        self.empty_vbase_order.get(&t).map(Vec::as_slice)
     }
 
     /// Whether an object of type `root` has a subobject of type `p` (the

@@ -4066,11 +4066,14 @@ it. The object the destructor sees:
 The destruction is manifestly constant-evaluated when the variable has
 static storage and is constant-initialized
 (`__builtin_is_constant_evaluated()` is then true). A leak or any
-failure keeps the call. A variable whose type has a subobject (itself,
-an element, a base or a member) of a class with virtual bases is never
-evaluated: clang's destructor of such a class is never `constexpr`, and
-the Oven's destruction of one skips the virtual bases (WP-1547; its
-C++26 implicit destructor is `constexpr`, so `Bar b;` lost its call).
+failure keeps the call. A variable whose type has a subobject of a
+class with virtual bases is evaluated like any other (C++26, P3533R2;
+clang's destructor of such a class is never `constexpr`): the Oven's
+complete-object destruction runs every virtual base's destructor, empty
+ones included, so `Bar b;` with `struct Bar : virtual Foo {}` and a
+non-constexpr `~Foo()` keeps its call (WP-1547 kept such variables out of
+this check until WP-1568 fixed the Oven;
+`tests/conformance/class.dtor/run-virtual-base-object-destroyed.cpp`).
 `tests/codegen/dtor_constant_destruction.cpp`
 checks every case above against clang on both triples.
 

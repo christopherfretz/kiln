@@ -41,6 +41,26 @@ impl Oven {
             && self.mem.ended(raw, self.types.size(ty))
             && (self.mem.unconstructed.is_empty()
                 || !self.mem.holds_unconstructed(raw, self.types.size(ty), ty))
+            && self.empty_base_ended(raw, ty) != Some(false)
+    }
+
+    /// Whether the `ty` object at `raw`, an empty class, is a base class
+    /// subobject whose derived object's lifetime has ended. An empty base
+    /// has no storage of its own (the byte under it is another
+    /// subobject's), so its lifetime is its derived object's
+    /// ([basic.life]/1): destroying the member that shares its address,
+    /// as `std::optional::reset` destroys the payload under libstdc++'s
+    /// empty `_Optional_base_impl` before C++26, leaves it alive
+    /// (WP-1574). `None`: not an empty base subobject. Only on the cold
+    /// path (its byte is dead).
+    fn empty_base_ended(&self, raw: u64, ty: OTy) -> Option<bool> {
+        if !matches!(self.types.kind(ty), TyKind::Record { count: 0, union: false, .. }) {
+            return None;
+        }
+        let p = Ptr::decode(raw);
+        let a = self.mem.alloc_of(p).ok()?;
+        let (off, owner) = self.types.empty_base_owner(a.ty, u64::from(p.off), ty)?;
+        Some(self.life_ended(Ptr::with_off(raw, off, false), owner))
     }
 
     /// The implicit destruction of the `ty` object at `raw`: arrays
