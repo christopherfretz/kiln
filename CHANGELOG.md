@@ -135,6 +135,13 @@ Planned as 1.3.0.
   summary of the translation unit's ABI-affecting options. Other linkers
   drop the section; output without the flag is unchanged
   ([spec/codegen.md](spec/codegen.md) §5.5).
+- `-fmason-metadata` (from level `default` up) also records the type of
+  every external function and variable an object defines or uses, so the
+  mortar linker can check at link time that the objects agree on it
+  (WP-1564); a C-linkage entity's type is written in one canonical form
+  that a C object and a C++ object share, and `abi.stdlib-abi` now lists
+  libc++'s layout-changing ABI switches
+  ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed
 

@@ -1261,6 +1261,31 @@ pub fn mangle_type(ast: &Ast, anon: &mut AnonIds, q: QualType) -> String {
     m.out
 }
 
+/// The <type> of a declaration's type `q` as the link-time metadata's
+/// declaration rows hash it (spec/codegen.md "Link-time metadata
+/// (`.mason.meta`)", kind 5; WP-1564): [`mangle_type`]'s encoding, except
+/// that a top-level array type has its major bound erased (`A_`, so that
+/// `int[4]` and `int[]` agree, [basic.link]/11) and a top-level function
+/// type has no exception specification (`noexcept` is the row's own flag).
+pub fn mangle_declared_type(ast: &Ast, anon: &mut AnonIds, q: QualType) -> String {
+    let mut m = Mangler::new(ast, anon, "");
+    let c = ast.types.canonical(q);
+    match ast.types.canonical_view(c) {
+        TypeView::ConstantArray(_)
+        | TypeView::IncompleteArray(_)
+        | TypeView::VariableArray { .. }
+        | TypeView::DependentSizedArray { .. } => {
+            m.out.push_str("A_");
+            if let Some(e) = ast.types.element(c) {
+                m.ty(e);
+            }
+        }
+        TypeView::Function(p) if c.quals().is_empty() => m.function_type(c, &p, true, false),
+        _ => m.ty(c),
+    }
+    m.out
+}
+
 /// `<special-name>` of a type: `prefix` (`_ZTI` / `_ZTS`) followed by its
 /// <type> (WP-080).
 pub fn mangle_rtti(ast: &Ast, anon: &mut AnonIds, q: QualType, prefix: &str) -> String {
@@ -3580,7 +3605,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             | TypeView::IncompleteArray(_)
             | TypeView::VariableArray { .. }
             | TypeView::DependentSizedArray { .. } => self.array_type(q, view),
-            TypeView::Function(p) => self.function_type(q, &p, true),
+            TypeView::Function(p) => self.function_type(q, &p, true, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
             TypeView::Complex(e) => {
                 self.out.push('C');
@@ -3702,7 +3727,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some(p) = ast.types.proto(pointee).copied() {
             let fkey = Sub::Type(pointee);
             if !self.try_sub(fkey) {
-                self.function_type(pointee, &p, true);
+                self.function_type(pointee, &p, true, true);
                 self.subs.push(fkey);
             }
         } else {
@@ -3729,8 +3754,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <function-type> ::= [U <cc>] [<CV>] [Do] F [Y] <return> <params>
     /// [<ref>] E. The `<CV>` are the function type's own method
     /// qualifiers, so a member pointer's pointee and an abominable type
-    /// mangle alike; `cc` is false where the caller wrote the convention.
-    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
+    /// mangle alike; `cc` is false where the caller wrote the convention;
+    /// `exc` false leaves out the exception specification (`Do`).
+    fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool, exc: bool) {
         let ast = self.ast;
         // clang 20 `mangleType(const FunctionProtoType *)`: the SME
         // attributes wrap the type as `11__SME_ATTRSI <type> Lj<bits>E E`
@@ -3755,7 +3781,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if mq.is_const() {
             self.out.push('K');
         }
-        if ast.types.exc_spec(p).is_nothrow() {
+        if exc && ast.types.exc_spec(p).is_nothrow() {
             self.out.push_str("Do");
         }
         self.out.push('F');

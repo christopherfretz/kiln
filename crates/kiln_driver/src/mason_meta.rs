@@ -28,35 +28,56 @@ pub(crate) fn options(
     })
 }
 
-/// The `abi.stdlib*` rows of a C++ unit built against `lib`.
+/// libc++'s vendor ABI switches that change the layout (or the
+/// representation) of a library type, in byte order of the names: each
+/// one defined at the end of the TU is appended to `abi.stdlib-abi` as
+/// `+<name>` (WP-1564). The classification of every `_LIBCPP_ABI_*` macro
+/// of libc++ 19 and 22, with its reason, is the table in spec/codegen.md
+/// "Link-time metadata (`.mason.meta`)".
+pub(crate) const LIBCXX_LAYOUT_SWITCHES: [&str; 15] = [
+    "_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT",
+    "_LIBCPP_ABI_BOUNDED_ITERATORS",
+    "_LIBCPP_ABI_BOUNDED_ITERATORS_IN_OPTIONAL",
+    "_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STD_ARRAY",
+    "_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STRING",
+    "_LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR",
+    "_LIBCPP_ABI_BOUNDED_UNIQUE_PTR",
+    "_LIBCPP_ABI_INCOMPLETE_TYPES_IN_DEQUE",
+    "_LIBCPP_ABI_IOS_ALLOW_ARBITRARY_FILL_VALUE",
+    "_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING",
+    "_LIBCPP_ABI_NO_ITERATOR_BASES",
+    "_LIBCPP_ABI_NO_RANDOM_DEVICE_COMPATIBILITY_LAYOUT",
+    "_LIBCPP_ABI_NO_REVERSE_ITERATOR_SECOND_MEMBER",
+    "_LIBCPP_ABI_OPTIMIZED_FUNCTION",
+    "_LIBCPP_ABI_VARIANT_INDEX_TYPE_OPTIMIZATION",
+];
+
+/// The `abi.stdlib*` rows of a C++ unit built against `lib` (mortar
+/// `spec/meta.md` MT-26 as amended for WP-1564).
 ///
 /// - libstdc++ (when `__GLIBCXX__` is defined): `abi.stdlib-abi` is the
 ///   value of `_GLIBCXX_USE_CXX11_ABI`; `abi.stdlib-debug` is
-///   `_GLIBCXX_DEBUG` (layout-changing), else `_GLIBCXX_ASSERTIONS`, else
-///   `off`.
+///   `_GLIBCXX_DEBUG` when defined, else `off` (`_GLIBCXX_ASSERTIONS`
+///   counts as `off` there); `abi.stdlib-hardening` is
+///   `_GLIBCXX_ASSERTIONS` when defined, else no row.
 /// - libc++ (when `_LIBCPP_VERSION` is defined): `abi.stdlib-abi` is the
-///   value of `_LIBCPP_ABI_VERSION`; `abi.stdlib-debug` is the hardening
-///   mode's macro name (`_LIBCPP_HARDENING_MODE_FAST`, `..._EXTENSIVE`,
-///   `..._DEBUG`), `off` for `_LIBCPP_HARDENING_MODE_NONE`; no hardening
-///   mode changes a layout.
+///   value of `_LIBCPP_ABI_VERSION` followed by `+<name>` for each
+///   defined switch of [`LIBCXX_LAYOUT_SWITCHES`]; `abi.stdlib-debug` is
+///   `off` (libc++ 17+ has no debug ABI); `abi.stdlib-hardening` is the
+///   hardening mode, `none`, `fast`, `extensive` or `debug` (no row when
+///   `_LIBCPP_HARDENING_MODE` names none of them).
 ///
-/// A TU that includes no library header has neither row.
+/// A TU that includes no library header has none of the three rows.
 fn stdlib_summary(lib: StdLib, m: &Macros<'_, '_, '_>) -> StdlibSummary {
     match lib {
         StdLib::LibStdCxx => {
             let present = m.defined("__GLIBCXX__");
+            let flag = |name: &str| m.defined(name).then(|| name.to_owned());
             StdlibSummary {
                 name: "libstdc++",
                 abi: if present { m.value("_GLIBCXX_USE_CXX11_ABI") } else { None },
-                debug: present.then(|| {
-                    if m.defined("_GLIBCXX_DEBUG") {
-                        ("_GLIBCXX_DEBUG".to_owned(), true)
-                    } else if m.defined("_GLIBCXX_ASSERTIONS") {
-                        ("_GLIBCXX_ASSERTIONS".to_owned(), false)
-                    } else {
-                        ("off".to_owned(), false)
-                    }
-                }),
+                debug: present.then(|| flag("_GLIBCXX_DEBUG").unwrap_or_else(|| "off".to_owned())),
+                hardening: if present { flag("_GLIBCXX_ASSERTIONS") } else { None },
             }
         }
         StdLib::LibCxx => {
@@ -66,16 +87,21 @@ fn stdlib_summary(lib: StdLib, m: &Macros<'_, '_, '_>) -> StdlibSummary {
                 let named = ["NONE", "FAST", "EXTENSIVE", "DEBUG"]
                     .into_iter()
                     .find(|k| m.eval(&format!("_LIBCPP_HARDENING_MODE_{k}")) == Some(v))?;
-                Some(if named == "NONE" {
-                    "off".to_owned()
-                } else {
-                    format!("_LIBCPP_HARDENING_MODE_{named}")
-                })
+                Some(named.to_ascii_lowercase())
+            };
+            let abi = || {
+                let mut v = m.value("_LIBCPP_ABI_VERSION")?;
+                for s in LIBCXX_LAYOUT_SWITCHES.iter().filter(|s| m.defined(s)) {
+                    v.push('+');
+                    v.push_str(s);
+                }
+                Some(v)
             };
             StdlibSummary {
                 name: "libc++",
-                abi: if present { m.value("_LIBCPP_ABI_VERSION") } else { None },
-                debug: if present { mode().map(|v| (v, false)) } else { None },
+                abi: if present { abi() } else { None },
+                debug: present.then(|| "off".to_owned()),
+                hardening: if present { mode() } else { None },
             }
         }
     }
@@ -193,6 +219,12 @@ mod tests {
         let mut p = Eval { toks: &toks, at: 0 };
         let v = p.or()?;
         (p.at == toks.len()).then_some(v)
+    }
+
+    #[test]
+    fn layout_switches_are_in_byte_order() {
+        let l = super::LIBCXX_LAYOUT_SWITCHES;
+        assert!(l.windows(2).all(|w| w[0].as_bytes() < w[1].as_bytes()));
     }
 
     #[test]

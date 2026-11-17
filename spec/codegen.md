@@ -2067,7 +2067,7 @@ with no coverage flag the IR is unchanged, byte for byte.
 flags"; off by default) puts metadata for the mortar linker's link-time
 checks into each object: one **unit** of mortar's container, whose bytes
 mortar's `spec/meta.md` fixes (rule ids MT-n below are that spec's, at
-mortar `afbdb15`); what the records mean is mortar's `spec/odr.md` (O-n).
+mortar `e3f9ed72`); what the records mean is mortar's `spec/odr.md` (O-n).
 Every other linker drops the section (`SHF_EXCLUDE`), so an object with it
 links as before.
 
@@ -2122,14 +2122,58 @@ name bytes, names unique, flag bit 0 `ENFORCE`:
 | `abi.rtti` | `on` / `off` | no (O-25 reads it; N24) | `CodegenOptions::rtti` |
 | `abi.short-enums` | `on` / `off` | yes | the driver's `-f[no-]short-enums` (the value sema used), `MasonMetaOptions::short_enums` |
 | `abi.stdlib` | `libc++` / `libstdc++` | yes | the driver's resolved `-stdlib=`; C++ units only |
-| `abi.stdlib-abi` | libstdc++: `_GLIBCXX_USE_CXX11_ABI`'s value; libc++: `_LIBCPP_ABI_VERSION`'s | yes | the preprocessor's macro table at the end of the TU; written only when the library's own macro (`__GLIBCXX__`, `_LIBCPP_VERSION`) is defined there, so a TU that includes no library header has no row |
-| `abi.stdlib-debug` | libstdc++: `_GLIBCXX_DEBUG`, else `_GLIBCXX_ASSERTIONS`, else `off`; libc++: the hardening mode's macro name (`_LIBCPP_HARDENING_MODE_FAST`, `..._EXTENSIVE`, `..._DEBUG`), `off` for `..._NONE` | yes only for `_GLIBCXX_DEBUG` (the one layout-changing mode; no libc++ hardening mode changes a layout) | as `abi.stdlib-abi` |
+| `abi.stdlib-abi` | libstdc++: `_GLIBCXX_USE_CXX11_ABI`'s value; libc++: `_LIBCPP_ABI_VERSION`'s, then `+<name>` for each layout-changing ABI switch of the table below defined at the end of the TU, in byte order of the names (`1+_LIBCPP_ABI_BOUNDED_ITERATORS`; WP-1564) | yes | the preprocessor's macro table at the end of the TU; written only when the library's own macro (`__GLIBCXX__`, `_LIBCPP_VERSION`) is defined there, so a TU that includes no library header has no row |
+| `abi.stdlib-debug` | libstdc++: `_GLIBCXX_DEBUG` when defined, else `off` (`_GLIBCXX_ASSERTIONS` counts as `off` here); libc++: `off` (libc++ 17 and later has no debug ABI) | yes, on every value, `off` included (the layout class; WP-1564, mortar's answer to WP-1557) | as `abi.stdlib-abi` |
+| `abi.stdlib-hardening` | libstdc++: `_GLIBCXX_ASSERTIONS` when defined, else no row; libc++: the hardening mode, `none`, `fast`, `extensive` or `debug` (no row when `_LIBCPP_HARDENING_MODE` equals none of the four mode macros) | no (no hardening mode changes a layout) | as `abi.stdlib-abi` (WP-1564) |
 | `abi.wchar` | size in bytes | yes | the target's builtin layout |
 | `isa` | the module's `target-features` string (the one a function without a `target` attribute gets) | no | `Cg::features_attr(None)` |
 | `lang` | `c` / `c++` | no | `CodegenOptions::c` |
 | `producer` | `kiln <version>` | no | the driver's version |
 | `source` | the main file's path as given on the command line, after `-ffile-prefix-map` / `-fdebug-prefix-map` (never made absolute) | no | `CodegenOptions::source_filename` through `DebugOptions::remap` |
 | `std` | the standard's base name (`c++20`, `c17`; `gnu++20` is `c++20`) | no | the driver's `LangStd::base` |
+
+**libc++'s ABI switches** (`LIBCXX_LAYOUT_SWITCHES` in
+`crates/kiln_driver/src/mason_meta.rs`): every `_LIBCPP_ABI_*` macro of
+the libc++ headers kiln is tested with (libc++ 19, `/usr/lib/llvm-19`,
+and libc++ 22, `.toolchain/libcxx-22-root`), classified. "Layout" means
+the size, members, bases or representation of a library type for the
+default allocator; a switch whose only effect is visible in a mangled
+name, a calling convention, a value or the dylib's exports is not one.
+
+| macro | layout-changing | reason |
+|---|---|---|
+| `_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT` | yes | `basic_string`'s representation |
+| `_LIBCPP_ABI_ATOMIC_WAIT_NATIVE_BY_SIZE` (22) | no | which types wait natively: a call protocol into the dylib |
+| `_LIBCPP_ABI_BAD_FUNCTION_CALL_GOOD_WHAT_MESSAGE` | no | the dylib's `what()` only |
+| `_LIBCPP_ABI_BITSET_VECTOR_BOOL_CONST_SUBSCRIPT_RETURN_BOOL` | no | a member function's return type (kind 5 sees it) |
+| `_LIBCPP_ABI_BOUNDED_ITERATORS` | yes | container iterators become bounded (bigger) |
+| `_LIBCPP_ABI_BOUNDED_ITERATORS_IN_OPTIONAL` (22) | yes | as above, `optional`'s iterator |
+| `_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STD_ARRAY` (22) | yes | as above, `array`'s iterator |
+| `_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STRING` | yes | as above, `basic_string`'s iterator |
+| `_LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR` | yes | as above, `vector`'s iterator |
+| `_LIBCPP_ABI_BOUNDED_UNIQUE_PTR` (22) | yes | `unique_ptr<T[]>` stores its bound (and the unordered containers that hold one) |
+| `_LIBCPP_ABI_DO_NOT_EXPORT_BASIC_STRING_COMMON`, `..._TO_CHARS_BASE_10`, `..._VECTOR_BASE_COMMON` | no | the dylib's exports |
+| `_LIBCPP_ABI_ENABLE_SHARED_PTR_TRIVIAL_ABI`, `_LIBCPP_ABI_ENABLE_UNIQUE_PTR_TRIVIAL_ABI` | no | `[[clang::trivial_abi]]`: how the smart pointer is passed, not its layout |
+| `_LIBCPP_ABI_FIX_CITYHASH_IMPLEMENTATION` | no | hash values |
+| `_LIBCPP_ABI_FIX_UNORDERED_CONTAINER_SIZE_TYPE` | no | `size_type` is `size_t` either way with `std::allocator` |
+| `_LIBCPP_ABI_FIX_UNORDERED_NODE_POINTER_UB`, `_LIBCPP_ABI_FORWARD_LIST_REMOVE_NODE_POINTER_UB`, `_LIBCPP_ABI_LIST_REMOVE_NODE_POINTER_UB`, `_LIBCPP_ABI_TREE_REMOVE_NODE_POINTER_UB` (19) | no | a node pointer's type: the same raw pointer with `std::allocator` |
+| `_LIBCPP_ABI_FORCE_ITANIUM`, `_LIBCPP_ABI_FORCE_MICROSOFT`, `_LIBCPP_ABI_ITANIUM`, `_LIBCPP_ABI_ITANIUM_WITH_ARM_DIFFERENCES`, `_LIBCPP_ABI_MICROSOFT`, `_LIBCPP_ABI_VCRUNTIME` | not a switch | the platform C++ ABI (Itanium on every target kiln writes records for) |
+| `_LIBCPP_ABI_INCOMPLETE_TYPES_IN_DEQUE` | yes | `deque`'s block size (0): the representation of every `deque` |
+| `_LIBCPP_ABI_IOS_ALLOW_ARBITRARY_FILL_VALUE` | yes | the type of `basic_ios::__fill_` |
+| `_LIBCPP_ABI_LLVM18_NO_UNIQUE_ADDRESS` | not a switch | always defined: an `abi_tag` attribute spelling |
+| `_LIBCPP_ABI_NAMESPACE`, `_LIBCPP_ABI_VERSION` | not a switch | the inline namespace; the version is the row's first part |
+| `_LIBCPP_ABI_NO_COMPRESSED_PAIR_PADDING` (22) | yes | the compressed pair's padding members |
+| `_LIBCPP_ABI_NO_FILESYSTEM_INLINE_NAMESPACE` | no | a namespace: visible in every mangled name |
+| `_LIBCPP_ABI_NO_ITERATOR_BASES` | yes | iterators lose their `std::iterator` base (a base-class change) |
+| `_LIBCPP_ABI_NO_RANDOM_DEVICE_COMPATIBILITY_LAYOUT` | yes | `random_device`'s members |
+| `_LIBCPP_ABI_NO_REVERSE_ITERATOR_SECOND_MEMBER` (22) | yes | `reverse_iterator` loses a member |
+| `_LIBCPP_ABI_OPTIMIZED_FUNCTION` | yes | `function`'s storage |
+| `_LIBCPP_ABI_OPTIMIZED_LOCALE_NUM_GET` (19) | no | static member functions only |
+| `_LIBCPP_ABI_REGEX_CONSTANTS_NONZERO` | no | enumerator values |
+| `_LIBCPP_ABI_STRING_OPTIMIZED_EXTERNAL_INSTANTIATION` | no | which members the dylib instantiates |
+| `_LIBCPP_ABI_TRIVIALLY_COPYABLE_BIT_ITERATOR` (22), `_LIBCPP_ABI_TRIVIALLY_COPYABLE_PAIR` (19) | no | triviality of copy operations: how a value is passed, not its layout |
+| `_LIBCPP_ABI_USE_WRAP_ITER_IN_STD_ARRAY`, `_LIBCPP_ABI_USE_WRAP_ITER_IN_STD_STRING_VIEW` | no | the iterator becomes `__wrap_iter<T*>`, laid out as `T*`; the type change is in every mangled name that uses it |
+| `_LIBCPP_ABI_VARIANT_INDEX_TYPE_OPTIMIZATION` | yes | `variant`'s index type is narrower |
 
 Values that a macro holds are its integer value when its replacement list
 (object-like macros expanded) is an integer literal or `(`, `)`, `<<`,
@@ -2140,14 +2184,134 @@ kind 2 or 3 rows, so there is no hash scheme to name (O-11 compares rows
 of kinds 2 and 3 only, and names units "without a scheme"). C units have
 no `abi.stdlib*` rows.
 
-**Levels.** `min`, `default`, `detail` and `all` are recorded
-(`MasonMetaOptions::level`) and today write the same unit, kind 1 alone.
-**Not written yet** (later work packages): kind 2 (ODR definitions,
-O-14/O-15, `min` and up), kind 3 (type definitions, O-17), kind 5
-(declarations, O-35; `default` and up), kind 4 (layout details, O-18;
-`detail` and up), and `all`'s rows for definitions inlined away. Kind 2
-will need codegen to record the vague-linkage definitions it emits
-(their symbol names, linkage and comdat), which it does not keep today.
+**Kind 5, the declarations** (O-35, O-33; WP-1564;
+`Cg::mason_decl_rows`, `declarations_block`): one 40-byte row per
+external symbol that a function or variable declared in the source
+defines or references in the module as emitted:
+
+| field | bytes | value |
+|---|---|---|
+| `key` | u64 | FNV-1a 64 (MT-13) of the symbol name as the symbol table spells it (the mangled name with its ABI tags, the asm label, a C name; LLVM's `\1` prefix removed) |
+| `type` | u64 | FNV-1a 64 of `type_name` |
+| `size` | u64 | the variable's size in bytes; 0 for a function, and for a variable whose type is incomplete (an unknown bound, an undefined class or enumeration; N15) |
+| `name` | u32 | 0: rows are anchored by `key` |
+| `type_name` | u32 | string-table offset of the type string below |
+| `flags` | u16 | bit 0 `DEFINITION`, bit 1 `VARIABLE`, bit 2 `EXTERN_C`, bit 3 `NOEXCEPT` |
+| reserved | u16, u32 | 0 |
+
+Rows are sorted by `key`, then `flags`, one per key: a symbol that the
+module both defines and references is one `DEFINITION` row, and a symbol
+whose declarations give different rows (two `extern "C"` declarations in
+different namespaces with different types, two declarations sharing an
+asm label) gets none. The type string is, for a C++-linkage entity, the
+Itanium `<type>` of its declared type (`mangle_declared_type`: a
+variable's major array bound erased as `A_`, since `int a[]` and
+`int a[4]` declare one entity ([basic.link]/11); a function's exception
+specification not written, `noexcept` is the `NOEXCEPT` flag; a member
+function's type with its cv- and ref-qualifiers, `KFiiE`); for a
+C-linkage entity (`EXTERN_C`: every row of a C unit, an `extern "C"` row
+of a C++ unit) the canonical C type below. `NOEXCEPT` is set on
+C++-linkage functions only. Which entities get a row:
+
+| entity | row |
+|---|---|
+| function or variable with external linkage, defined or used (also declared and not used, if codegen emitted its declaration) | yes |
+| internal linkage, anonymous namespace, `static` | no (not external) |
+| vague linkage: inline functions, templates, static data members of templates, `linkonce_odr`/`weak_odr` | yes, `DEFINITION` |
+| `available_externally` (an `extern template` definition kept for inlining) | yes, a reference |
+| weak definition (`__attribute__((weak))`) | yes, `DEFINITION` |
+| asm label (`int f() asm("g")`) | yes, key = the label |
+| `alias`, `ifunc`, `weakref` | no (not a declaration's own symbol) |
+| block-scope `extern` declaration | yes, as at namespace scope |
+| static data member | yes, `VARIABLE` |
+| constructors and destructors (`C1`/`C2`/`D0`/`D1`/`D2`) | no (no declared type of their own; O-35 names none) |
+| compiler-generated: vtables, VTTs, RTTI, guard variables, thunks, TLS wrappers, template parameter objects, decomposition holders (`_ZDC`), `llvm.*`, implicit declarations no source declares (C++'s implicit `operator new`) | no |
+| a library builtin the source declares (C's `abort` in `<stdlib.h>`; sema declares it first, implicitly) | yes, typed by the latest written declaration |
+| entity attached to a named module | yes, its key is its mangled name (`W` in it) |
+| unprototyped C function (`f()` before C23, K&R definition) | no (O-33) |
+| C-linkage entity whose type has no canonical C form (below) | no |
+
+The rows are read from the module's declaration maps (`Cg::fns`,
+`Cg::gvars`) after module emission: nothing is recorded while emitting,
+no field is added to a hot structure. Candidates are sorted by symbol
+before any is mangled, so numbering is the same in every run.
+
+**The canonical C type** (`crates/kiln_codegen/src/mason_ctype.rs`; O-33).
+A C unit and a C++ unit that declare one C function must write the same
+bytes, so the form erases every difference the two spellings of one
+declaration can have: typedefs resolved; every struct, union and class
+one token `R`; the target's `va_list` (`std::__va_list` on AArch64 C++,
+`__va_list_tag[1]` on x86-64, decayed to `__va_list_tag *` as a
+parameter) `V`; an enumeration its compatible integer type (the one
+kiln chose: the fixed underlying type, or the one computed from the
+enumerators, `-fshort-enums` included); C++'s `bool`, `char8_t`,
+`char16_t`, `char32_t`, `wchar_t` C's `_Bool`, `unsigned char`,
+`uint_least16_t`, `uint_least32_t` and the target's `wchar_t` type;
+references pointers; `noexcept` and `restrict` dropped at every level;
+top-level qualifiers of the return type and of every parameter dropped
+(an array parameter is already a pointer: `int a[static 4]`, `int a[n]`
+and `int a[*]` are `Pi`); every array bound erased; a `transparent_union`
+parameter its first member's type; `(void)` and C++'s `()` one form.
+The grammar, every token (a second producer must reproduce it byte for
+byte):
+
+```text
+<type>    ::= [K] [Q] <core>          const, volatile (of pointees, array
+                                      elements and variables; restrict never)
+<core>    ::= <builtin>
+            | R                       any struct, union or class
+            | V                       the target's va_list
+            | P <type>                pointer, lvalue or rvalue reference
+            | A <type>                array of any or unknown bound, VLA
+            | F <type> <params> E     prototyped function type
+            | U <type>                _Atomic
+            | C <builtin>             _Complex
+            | Dv <lanes> _ <type>     vector (vector_size, ext_vector_type)
+            | DB <bits> _ | DU <bits> _   _BitInt(N), unsigned _BitInt(N)
+            | Dn                      nullptr_t
+            | u <len> <name>          a sizeless vendor type (SVE)
+<params>  ::= v | <type>+ | <type>+ z | z
+<builtin> ::= v b c a h s t i j l m x y n o | f d e g Dh Db
+```
+
+`v` void, `b` `_Bool`, `c` char, `a` signed char, `h` unsigned char
+(and `char8_t`), `s` short, `t` unsigned short (and `char16_t`), `i`
+int, `j` unsigned int (and `char32_t`), `l` long, `m` unsigned long, `x`
+long long, `y` unsigned long long, `n` `__int128`, `o` unsigned
+`__int128`; `wchar_t` is `i` (x86-64) or `j` (AArch64). Floating types by
+format: `Dh` binary16 (`_Float16`, `__fp16`), `Db` bfloat16, `f` binary32
+(`float`, `_Float32`), `d` binary64 (`double`, `_Float64`, `_Float32x`),
+`e` x87 80-bit, `g` binary128 (`__float128`, `_Float128`); `long double`
+and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
+
+| form | canonical form |
+|---|---|
+| `_Atomic int` variable | `Ui` |
+| `_Complex double` | `Cd` |
+| `_BitInt(37) f(unsigned _BitInt(9))` | `FDB37_DU9_E` |
+| vector of 4 `int` | `Dv4_i` |
+| `_Float16 f(__float128, long double)` | `FDhg?E`, `?` by the target |
+| `__int128 f(unsigned __int128)` | `FnoE` |
+| `void f(int (*)(const char *, ...))` | `FvPFiPKczEE` |
+| `void f(int, ...)`; `void f(...)` (C23, C++) | `FvizE`; `FvzE` |
+| `void f(int (*)[4], int (*)[])` | `FvPAiPAiE` |
+| `void f(int n, int a[n], int b[*][n])` | `FviPiPAiE` |
+| `void f(int a[static 4], const int b[const 2])` | `FvPiPKiE` |
+| `_Noreturn` / `[[noreturn]]` | no mark: `FvvE` |
+| K&R definition; `f()` before C23 | no row |
+| a nested unprototyped function type (`void f(int (*)())` before C23) | no row (no form) |
+| a non-default calling convention (`preserve_most`, `vectorcall`, `aarch64_vector_pcs`, ...), `regparm`, `no_caller_saved_registers`, SME attributes | no row (C++ cannot spell all of them the same way) |
+| member pointer, any other type with no C form | no row |
+| `const int f(void)` | `FivE` |
+
+**Levels** (mortar's level table, K-1): `min` writes kind 1 (and kind 2,
+when it exists); `default`, `detail` and `all` add kind 5. The kind 1
+rows are the same at every level. **Not written yet** (later work
+packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), kind 3
+(type definitions, O-17), kind 4 (layout details, O-18; `detail` and up),
+and `all`'s rows for definitions inlined away. Kind 2 will need codegen
+to record the vague-linkage definitions it emits (their symbol names,
+linkage and comdat), which it does not keep today.
 
 **Determinism** (MT-38): the unit is a function of the TU and its
 options: rows sorted, strings laid out in the order the sorted rows first
@@ -2166,10 +2330,16 @@ hod declines the module and kiln falls back to `llc` with a warning. `-S -emit-l
 shows the global.
 
 Tests: `mason_meta.rs` unit tests (a decoder written from mortar's spec,
-every MT-14 validity rule asserted on the encoder's output),
+every MT-14 validity rule asserted on the encoder's output; FNV-1a 64
+vectors; the kind 5 block round trip; the levels),
 `crates/kiln_driver/tests/mason_meta.rs` (IR shape for C++, C and
-`-flto`; the object section; the rows; determinism; PCH and BMI either
-way), `codegen_flags.rs` `mason_metadata_levels`.
+`-flto`; the object section with a bigger unit at `-O0` and `-O2`; the
+rows; kind 5 goldens for a small C++ and a small C unit, decoded with the
+test's own reader; the target's forms on x86-64 and AArch64; `min`
+without kind 5; a C and a C++ unit agreeing on every canonical-type
+rule, and deliberate mismatches; two C++ units; rows for entities a PCH
+declares; determinism; PCH and BMI either way), `codegen_flags.rs`
+`mason_metadata_levels`.
 
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
