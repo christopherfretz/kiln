@@ -5180,8 +5180,8 @@ that prints the call it reports:
 | allocation and deallocation function of a new- or delete-expression (class-specific, array, placement), and the deallocation when the initialization of a new-expression throws | checked | checked (`emit_new_delete_call`) |
 | constructor, destructor (implicit or an explicit `t.~T()`) | not checked | not checked (`Cg::client_checked`) |
 | call through a pointer to function or member function, virtual call | not checked | not checked |
-| a member function template specialization declared in the unit but not defined there, directly or as a structured binding's `get` | checked | *not checked*: its assertions are instantiated with its definition only (`Substituter::function_contracts`) |
-| the same for a member of a class template | internal compiler error | *not checked*, as above |
+| a function or member function template specialization declared in the unit but not defined there (implicit or explicit specialization, or under an explicit instantiation declaration), directly or as a structured binding's `get` | a structured binding's `get` checked; a call with arguments: internal compiler error (`expand_expr_real_1`, in the caller-side wrapper) | checked (`Sema::instantiate_declared_contracts`, WP-1520) |
+| the same for a member of a class template | internal compiler error | checked |
 
 The checks bind each parameter to the argument the callee gets: a
 `_Complex` one is stored to a temporary of its type (`cx_store`), and a
@@ -5189,8 +5189,9 @@ The checks bind each parameter to the argument the callee gets: a
 across the checks (`emit_client_pre`, `emit_client_post`;
 `client_checks_of_complex_arguments_and_results` in
 `crates/kiln_codegen/tests/contracts.rs` on both targets,
-`basic.contract.eval/run-client-check-complex.cpp` and
-`run-client-check-new-delete.cpp`).
+`basic.contract.eval/run-client-check-complex.cpp`,
+`run-client-check-new-delete.cpp` and
+`run-client-check-declared-template*.cpp`).
 
 ### Freestanding `main` (WP-1456)
 Under `-ffreestanding` `main` is an ordinary function (clang's

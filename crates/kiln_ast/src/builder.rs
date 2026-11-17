@@ -1201,7 +1201,49 @@ impl<'a> AstBuilder<'a> {
 
     /// The dependence implied by type `ty` (§5.1).
     pub fn type_deps(&self, ty: QualType) -> ExprDeps {
-        deps_of_type_flags(self.ast.types.flags(ty.ty()))
+        let f = self.ast.types.flags(ty.ty());
+        let d = deps_of_type_flags(f);
+        if f.contains(TypeFlags::VARIABLY_MODIFIED) { d | self.vla_bound_deps(ty) } else { d }
+    }
+
+    /// The instantiation dependence of the variable length array bounds
+    /// of the variably modified type `q` (clang's `ArrayType` takes its
+    /// size expression's dependence): a bound naming a local entity of a
+    /// template (`sizeof(int[w])` in a function template) makes every
+    /// expression of that type, or naming it, instantiation-dependent,
+    /// so each specialization rebuilds it with its own bound.
+    fn vla_bound_deps(&self, q: QualType) -> ExprDeps {
+        use crate::types::TypeView;
+        let t = &self.ast.types;
+        let mut q = q;
+        let mut d = ExprDeps::NONE;
+        while t.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
+            q = match t.view(q.ty()) {
+                TypeView::VariableArray { elem, size } => {
+                    if self.deps(size).contains(ExprDeps::INSTANTIATION) {
+                        d |= ExprDeps::INSTANTIATION;
+                    }
+                    elem
+                }
+                TypeView::ConstantArray(a) => a.elem,
+                TypeView::IncompleteArray(e)
+                | TypeView::Pointer(e)
+                | TypeView::LValueRef(e)
+                | TypeView::RValueRef(e) => e,
+                _ => match t.canonical_view(q) {
+                    // Sugar (a typedef of the array type): its canonical
+                    // type has the same bound expressions.
+                    TypeView::VariableArray { .. }
+                    | TypeView::ConstantArray(_)
+                    | TypeView::IncompleteArray(_)
+                    | TypeView::Pointer(_)
+                    | TypeView::LValueRef(_)
+                    | TypeView::RValueRef(_) => t.canonical(q),
+                    _ => break,
+                },
+            };
+        }
+        d
     }
 
     pub(crate) fn deps(&self, e: ExprId) -> ExprDeps {

@@ -477,7 +477,17 @@ functions implement that across object files:
   any fragment, defines a namespace-scope variable that clang must emit
   (`DeclMustBeEmitted`: a definition that is not discardable, or one with
   a dynamic initializer or a non-trivial destructor), or one of its
-  named-module imports' initializers does something. A unit with only
+  named-module imports' initializers does something. An out-of-class
+  definition of a static data member initialized in its class (`const
+  int A::m;`, or the redundant `constexpr int A::n;` that makes an
+  inline member `weak_odr`) counts as a declaration there (clang
+  `ActOnUninitializedDecl`), so it gives the unit no initializer; the
+  importer exposes such an inline member's value as an
+  `available_externally` constant (clang `GetOrCreateLLVMGlobal`;
+  WP-1523, `tests/codegen/module_static_member_redecl_importer.cpp`).
+  A member's dynamic initialization is not repeated: the interface unit
+  and each importer run the same guarded initializer
+  (`class.static.data/inline-member-module-init-once-run.cpp`). A unit with only
   functions, such as libc++'s `std` (whose GMF is all inline/template
   code), has an empty initializer that importers do not call. Header
   units have no initializer.

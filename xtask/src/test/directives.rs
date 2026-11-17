@@ -348,6 +348,14 @@ pub struct TestSpec {
     /// any other TU) a `run` test compiles separately, against the module
     /// files, and links (`spec/harness.md` "Modules").
     pub units: Vec<PathBuf>,
+    /// Per `units` entry: it came from a `clang-unit:` line, so the
+    /// clang of [`crate::test::runner`]'s `foreign_clang` compiles it
+    /// whoever the compiler is (objects of two compilers in one program;
+    /// WP-1523).
+    pub unit_by_clang: Vec<bool>,
+    /// `link: fail`: the program must not link (every compile succeeds,
+    /// the link fails, nothing runs; WP-1523).
+    pub link_fails: bool,
     /// `header-unit: "<path>"` / `header-unit: <name>`: the header units
     /// the test imports, which a clang builds first with `-fmodule-header`
     /// and reads with `-fmodule-file=` (kiln builds them in-process;
@@ -585,8 +593,11 @@ struct Parser {
     /// Line of the first `module:` (0: none).
     module_line: usize,
     units: Vec<PathBuf>,
-    /// Line of the first `unit:` (0: none).
+    unit_by_clang: Vec<bool>,
+    /// Line of the first `unit:` or `clang-unit:` (0: none).
     unit_line: usize,
+    /// Line of `link: fail` (0: absent).
+    link_fail_line: usize,
     header_units: Vec<HeaderUnit>,
     /// Line of the first `header-unit:` (0: none).
     header_unit_line: usize,
@@ -661,6 +672,8 @@ impl Parser {
             modules: Vec::new(),
             module_line: 0,
             units: Vec::new(),
+            unit_by_clang: Vec::new(),
+            link_fail_line: 0,
             unit_line: 0,
             header_units: Vec::new(),
             header_unit_line: 0,
@@ -852,16 +865,26 @@ impl Parser {
             "requires" => self.requires_directive(line, value),
             "module" => self.module_directive(line, value),
             "header-unit" => self.header_unit_directive(line, value),
-            "unit" => {
+            "unit" | "clang-unit" => {
                 if value.is_empty() || value.contains(char::is_whitespace) {
-                    self.err(line, "expected `unit: <path>`");
+                    self.err(line, format!("expected `{name}: <path>`"));
                 } else if Path::new(value).is_absolute() {
-                    self.err(line, "a `unit` path is relative to the test's directory");
+                    self.err(line, format!("a `{name}` path is relative to the test's directory"));
                 } else {
                     if self.unit_line == 0 {
                         self.unit_line = line;
                     }
                     self.units.push(PathBuf::from(value));
+                    self.unit_by_clang.push(name == "clang-unit");
+                }
+            }
+            "link" => {
+                if value != "fail" {
+                    self.err(line, "expected `link: fail`");
+                } else if self.link_fail_line != 0 {
+                    self.err(line, "duplicate `link`");
+                } else {
+                    self.link_fail_line = line;
                 }
             }
             "pch" => {
@@ -1429,6 +1452,18 @@ impl Parser {
             }
         }
         let (stdin, stdout) = self.take_io();
+        if self.unit_by_clang.contains(&true)
+            && (self.module_line != 0 || self.header_unit_line != 0)
+        {
+            let line = self.unit_line;
+            self.err(line, "`clang-unit` does not combine with `module:` or `header-unit:`");
+        }
+        if self.link_fail_line != 0
+            && (self.unit_line == 0 || stdout.is_some() || self.exit.is_some())
+        {
+            let line = self.link_fail_line;
+            self.err(line, "`link: fail` needs `unit:` lines and no `stdout` or `exit`");
+        }
         if !self.errors.is_empty() {
             return Err(self.errors);
         }
@@ -1475,6 +1510,8 @@ impl Parser {
             requires_clang_below: self.requires_clang_below,
             modules: self.modules,
             units: self.units,
+            unit_by_clang: self.unit_by_clang,
+            link_fails: self.link_fail_line != 0,
             header_units: self.header_units,
             two_step: self.two_step_line != 0,
             pch: self.pch,
@@ -1960,6 +1997,19 @@ mod tests {
         assert_eq!(s.units, [PathBuf::from("u.cpp")]);
         let e = errs("//@ unit: u.cpp\n");
         assert!(e.iter().any(|e| e.contains("`unit` only applies")), "{e:?}");
+        // WP-1523: `clang-unit:` and `link: fail`.
+        let s = ok("//@ expect: run\n//@ clang-unit: a.cpp\n//@ unit: b.cpp\n//@ link: fail\n");
+        assert_eq!(s.units, [PathBuf::from("a.cpp"), PathBuf::from("b.cpp")]);
+        assert_eq!(s.unit_by_clang, [true, false]);
+        assert!(s.link_fails);
+        assert!(!ok("//@ expect: run\n//@ unit: b.cpp\n").link_fails);
+        for bad in [
+            "//@ expect: run\n//@ link: fail\n",
+            "//@ expect: run\n//@ unit: b.cpp\n//@ link: fail\n//@ exit: 1\n",
+            "//@ expect: run\n//@ unit: b.cpp\n//@ link: ok\n",
+        ] {
+            assert!(!errs(bad).is_empty(), "{bad}");
+        }
         let e = errs("//@ expect: run\n//@ module: a=x.cppm\n//@ two-step\n");
         assert!(e.iter().any(|e| e.contains("`two-step` needs")), "{e:?}");
         let e = errs("//@ two-step\n");

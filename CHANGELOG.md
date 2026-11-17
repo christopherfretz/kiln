@@ -1278,6 +1278,19 @@ Planned as 1.3.0.
   at instantiation; a friend redeclaration of an implicit special member
   without its exception specification. A class's using-declarator of its
   own enumerator is accepted, as clang 22 does (WP-1630, WP-1631).
+- `sizeof` of a variable length array type, and every other use of it, in
+  an instantiated function template is rebuilt per specialization (it
+  failed in code generation). A module importer no longer runs an
+  initializer for an out-of-class definition of a static data member
+  initialized in the class, and refers to an imported strong inline member
+  as `available_externally`, as clang does. Caller-side contract checks
+  now cover function template specializations that are only declared in
+  the unit, including explicit specializations. Before C++20 a captureless
+  closure is not trivial (no default constructor), so a local one is no
+  longer copied from a constant. Deep single-inheritance chains below a
+  virtual base compile faster (3.7x at depth 240). The test harness has
+  `clang-unit:` (a unit compiled by clang) and `link: fail`
+  (WP-1520, WP-1523, WP-1525).
 
 ## [1.2.1] - 2026-11-14
 

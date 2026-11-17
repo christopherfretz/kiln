@@ -464,6 +464,9 @@ impl Test<'_> {
         if let Some(reason) = unsupported_by(&spec, kind) {
             return (Status::Skip, Some(reason), String::new());
         }
+        if let Some(reason) = self.clang_unit_skip(&spec) {
+            return (Status::Skip, Some(reason), String::new());
+        }
         if kind == CompilerKind::Gcc
             && let Some(reason) = gcc_module_syntax(&spec, &source)
         {
@@ -989,6 +992,13 @@ impl Test<'_> {
         }
         for (i, unit) in spec.units.iter().enumerate() {
             let src = self.module_source(unit);
+            // A `clang-unit:` file is compiled by the foreign clang, as is
+            // (no kiln flags; WP-1523).
+            let foreign = spec.unit_by_clang.get(i).copied().unwrap_or(false);
+            let program = &match self.foreign_clang() {
+                Some(c) if foreign => c,
+                _ => program.to_owned(),
+            };
             let obj = self.unit_object(&format!("unit{i}"), oracle);
             // A unit in the other language (a `.c` unit of a C++ test, a
             // C++ unit of a `.c` test) is compiled as that language at its
@@ -1023,7 +1033,9 @@ impl Test<'_> {
             }
             c.args(self.gcc_stand_in(program));
             c.args(self.args_for(program, spec));
-            c.args(self.module_flags(program, spec, spec.modules.len()));
+            if !foreign {
+                c.args(self.module_flags(program, spec, spec.modules.len()));
+            }
             c.arg("-c").arg(&src).arg("-o").arg(&obj);
             let o = self.exec(who, &c, self.cfg.compile_timeout)?;
             if !o.success() {
@@ -1050,10 +1062,38 @@ impl Test<'_> {
             link.arg(GCC_LINK_LIB);
         }
         let o = self.exec(who, &link, self.cfg.compile_timeout)?;
+        if spec.link_fails {
+            // `link: fail`: the link failing is the expected outcome.
+            if o.success() {
+                let msg = format!("{who} linked the program; the test expects `link: fail`");
+                return Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) });
+            }
+            return Ok(main_out);
+        }
         if !o.success() {
             return Ok(o);
         }
         Ok(main_out)
+    }
+
+    /// Why a test with `clang-unit:` lines cannot run: no clang to
+    /// compile them ([`Self::foreign_clang`]).
+    fn clang_unit_skip(&self, spec: &TestSpec) -> Option<String> {
+        (spec.unit_by_clang.contains(&true) && self.foreign_clang().is_none())
+            .then(|| "`clang-unit:` needs a clang (the oracle or the compiler)".to_owned())
+    }
+
+    /// The clang that compiles a test's `clang-unit:` files (WP-1523):
+    /// the oracle when it is clang (what the oracle lanes run), else the
+    /// compiler under test when it is clang; `None` (the test SKIPs)
+    /// otherwise.
+    fn foreign_clang(&self) -> Option<PathBuf> {
+        if self.cfg.oracle_kind == CompilerKind::Clang
+            && let Some(o) = &self.cfg.oracle
+        {
+            return Some(o.clone());
+        }
+        (self.cfg.compiler_kind == CompilerKind::Clang).then(|| self.cfg.compiler.clone())
     }
 
     /// The `-fclang-compat=<major>` kiln is run with: the oracle clang's
@@ -1676,6 +1716,15 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
+        if spec.link_fails {
+            // Nothing runs; the oracle's link must fail as well.
+            if spec.oracle
+                && let Some(oracle) = self.cfg.oracle.clone()
+            {
+                self.compile_run_oracle(&oracle, spec, &self.dir.join("oracle.out"))?;
+            }
+            return Ok(());
+        }
         let stdin = self.stdin_bytes(spec)?;
         let got = self.execute_binary(&exe, spec, stdin.as_deref(), false)?;
         if got.code().is_none() {
@@ -2301,6 +2350,9 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     // compiles and links like any other (`build_two_step`; WP-1261).
     if !spec.units.is_empty() && !kind.speaks_clang() && kind != CompilerKind::Gcc {
         return needs("unit:", "kiln, clang or GCC");
+    }
+    if spec.unit_by_clang.contains(&true) && !kind.speaks_clang() {
+        return needs("clang-unit:", "kiln or clang");
     }
     if !spec.header_units.is_empty() && !kind.speaks_clang() {
         return needs("header-unit:", "kiln or clang");

@@ -6,6 +6,7 @@
 
 use kiln_ast::stmt::ContractKind;
 use kiln_ast::{DeclId, StmtId};
+use kiln_source::Loc;
 
 use super::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
@@ -61,5 +62,61 @@ impl Substituter<'_, '_, '_> {
             }
         }
         self.sema.install_instantiated_contracts(f, &out);
+    }
+}
+
+impl crate::Sema<'_, '_> {
+    /// The function contract assertions of the specialization `f` whose
+    /// pattern `pattern` has no definition in the translation unit (or
+    /// whose definition an explicit instantiation declaration keeps out
+    /// of it), instantiated without a body so that a caller-side check
+    /// (`-fcontracts-client-check=`, spec/contracts.md §6.1) finds them
+    /// (WP-1520; GCC 16.1 checks a structured binding's `get` so, and
+    /// fails on a call with arguments). Only under a client check:
+    /// otherwise nothing reads them, and the declaration is left as the
+    /// standard leaves it ([temp.inst]/5).
+    pub(crate) fn instantiate_declared_contracts(&mut self, f: DeclId, pattern: DeclId, poi: Loc) {
+        use crate::templ::stack::FrameKind;
+        if self.contract_checks.client == kiln_ast::stmt::ClientCheck::None
+            || self.ast.decls.cold.contracts.contains(f)
+            || self.pattern_contracts(pattern).is_none()
+        {
+            return;
+        }
+        let spec = self.is_function_spec(f);
+        let (args, entity, pairs, kind, from) = if spec {
+            let Some((tmpl, args)) = self.spec_args(f) else { return };
+            let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
+            (args, f, pairs, FrameKind::FunctionSpec, tmpl)
+        } else {
+            let Some(owner) = self.inst_owner(f) else { return };
+            let Some((tmpl, args)) = self.spec_args(owner) else { return };
+            let Some(pclass) = self.spec_pattern_class(owner, tmpl) else { return };
+            let mut pairs = self.inst_context_pairs(owner);
+            if pairs.first().is_none_or(|&(_, x)| x != owner) {
+                pairs.insert(0, (pclass, owner));
+            }
+            (args, owner, pairs, FrameKind::MemberFunction, pattern)
+        };
+        if self.inst.stack.contains(kind, f) || !self.push_inst_frame(kind, f, from, poi) {
+            return;
+        }
+        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(ctx, |s| {
+            let params = |s: &Self, d: DeclId| -> Vec<DeclId> {
+                s.ast
+                    .decls
+                    .function(d)
+                    .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
+                    .unwrap_or_default()
+            };
+            let (pp, fp) = (params(s, pattern), params(s, f));
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(entity);
+            sub.map_contexts(&pairs);
+            sub.map_params(&pp, &fp);
+            sub.function_contracts(f, pattern);
+        });
+        self.pop_inst_frame();
     }
 }

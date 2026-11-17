@@ -410,9 +410,15 @@ definition in the unit. The calls a new- or delete-expression makes
 to its allocation and deallocation functions are checked too
 (`emit_new_delete_call`); which implicit calls are checked, against
 GCC 16.1, is the table in spec/codegen.md, "Caller-side contract
-checks". *Gap:* a function template specialization whose definition
-is not instantiated in the unit has no assertions there, so its
-callers do not check them.
+checks". A function template specialization, or a member of a class
+template specialization, whose definition is not instantiated in the
+unit (its template has no definition there, or an explicit
+instantiation declaration keeps it out) gets its assertions
+instantiated from the template's declaration when it is used, without
+a body, and only under a client check
+(`Sema::instantiate_declared_contracts`, WP-1520); a call naming an
+explicit specialization's first declaration checks the assertions of
+its first written declaration (`Ast::contract_first`).
 
 - Preconditions are evaluated in order at function entry, after the
   parameters are initialised and before the body (and before a

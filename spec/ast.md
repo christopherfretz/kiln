@@ -386,6 +386,11 @@ struct ExprNode {        // 20 bytes
 - **Dependence** (`deps`) is computed at construction from children and
   the node's own rule ([temp.dep.expr], [temp.dep.constexpr]); it is never
   recomputed. `ERROR` propagates from `RecoveryExpr` and error types.
+  A variably modified type contributes the `INSTANTIATION` bit of its
+  variable length array bounds (`AstBuilder::type_deps`, clang's
+  `ArrayType` taking its size expression's dependence): `sizeof(int[w])`
+  in a function template is rebuilt by each specialization with its own
+  `w`, although `int[w]` depends on no template parameter (WP-1525).
 - Inline encodings: `IntegerLiteral` ≤ 64 bits stores the value in `a|b`
   (wider: `a` = `ConstValueId`); `CharacterLiteral`/`CXXBoolLiteral`
   in `a`; `FloatingLiteral` in `a` = `ConstValueId`; unary/cast: `a` =

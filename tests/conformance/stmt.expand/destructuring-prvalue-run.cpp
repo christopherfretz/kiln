@@ -9,6 +9,13 @@
 // at run time (one object, not a copy per element); without `constexpr`
 // the elements are read as usual. GCC 16.1 rejects the `constexpr` ones
 // (no P2686). The rejected side: `destructuring-prvalue-neg.cpp`.
+// Verdict for the empty prvalue range `E{}` (WP-1525): accepted. By
+// [stmt.expand] the expansion is `constexpr auto&& [u0, ..., uN-1] =
+// E{};` with N = 0 (the structured binding size of `E`); the reference
+// binds the lifetime-extended temporary, constexpr-referenceable in this
+// function ([expr.const.init]), so the declaration is a constant
+// initialization, and no element reads the temporary. GCC 16.1's
+// "'<anonymous>' is not a constant expression" is its missing P2686.
 extern "C" int printf(const char *, ...);
 struct E {};
 struct P { int a = 1; int b = 2; };
