@@ -1083,7 +1083,14 @@ impl Ast {
                 if let Some(k) = self.templates.member_spec(i).and_then(|m| explicit(m.kind)) {
                     return with(first, k);
                 }
-                if self.excluded_from_explicit_instantiation(first) {
+                // A friend function is not a member ([class.friend]/6):
+                // an explicit instantiation of the class that declares it
+                // does not cover it ([temp.explicit]/12), even when its
+                // first declaration is the instantiated friend (WP-1620).
+                if self.excluded_from_explicit_instantiation(first)
+                    || (self.decls.get(first).misc().friend() != FriendKind::None
+                        && self.decls.function(first).is_some())
+                {
                     return None;
                 }
                 let mut ctx = self.decls.get(first).ctx();

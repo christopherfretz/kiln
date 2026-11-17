@@ -378,6 +378,9 @@ pub struct Module {
     /// to ([`Module::replace_global_with_alias`]).
     replaced_globals: FxHashMap<GlobalId, Value>,
     last_unique: u32,
+    /// Every rename [`Module::unique_global_name`] made: (the new name,
+    /// the name asked for). Read by [`Module::external_name_collisions`].
+    renamed: Vec<(Box<str>, Box<str>)>,
     /// The LLVM release whose textual IR the module is written in (default
     /// 19). At 21 or later [`Module::attr_set`] writes `nocapture` as
     /// `captures(none)` (LLVM 21 replaced the attribute; LLVM 19 rejects the
@@ -415,6 +418,7 @@ impl Module {
             replaced: FxHashMap::default(),
             replaced_globals: FxHashMap::default(),
             last_unique: 0,
+            renamed: Vec::new(),
             ir_version: 19,
         }
     }
@@ -444,7 +448,9 @@ impl Module {
             self.last_unique += 1;
             let cand = format!("{name}.{}", self.last_unique);
             if !self.gnames.contains_key(cand.as_str()) {
-                return cand.into_boxed_str();
+                let cand = cand.into_boxed_str();
+                self.renamed.push((cand.clone(), name.into()));
+                return cand;
             }
         }
     }
@@ -453,6 +459,44 @@ impl Module {
         if !name.is_empty() {
             self.gnames.insert(name.into(), v);
         }
+    }
+
+    /// The linkage of the live function, variable or alias `v` (`None`
+    /// for another value or an erased declaration).
+    fn live_linkage(&self, v: Value) -> Option<Linkage> {
+        match v.get() {
+            ValueRef::Func(f) if !self.replaced.contains_key(&f) => {
+                Some(self.funcs[f.index()].linkage)
+            }
+            ValueRef::Global(g) if !self.replaced_globals.contains_key(&g) => {
+                Some(self.globals[g.index()].linkage)
+            }
+            ValueRef::Alias(a) => Some(self.aliases[a.index()].linkage),
+            _ => None,
+        }
+    }
+
+    /// Pairs (renamed, requested) of global value names where a value was
+    /// renamed `name.N` because `name` was taken and both values have
+    /// non-local linkage: two LLVM globals for one symbol, which links
+    /// as two symbols (the second under a name no other unit uses). A
+    /// private or internal value renamed beside another is legitimate
+    /// (`.str.1`, a second `static` of one name in C). Cost: one entry
+    /// per rename, read once per module.
+    pub fn external_name_collisions(&self) -> Vec<(&str, &str)> {
+        self.renamed
+            .iter()
+            .filter(|(new, orig)| {
+                let nonlocal = |n: &str| {
+                    self.gnames
+                        .get(n)
+                        .and_then(|&v| self.live_linkage(v))
+                        .is_some_and(|l| !l.is_local())
+                };
+                nonlocal(new) && nonlocal(orig)
+            })
+            .map(|(new, orig)| (&**new, &**orig))
+            .collect()
     }
 
     /// Look up a function, variable or alias by name.

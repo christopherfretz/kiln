@@ -3454,7 +3454,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   enclosing class decides), gets no definition at `-O0`, even when inline
   (clang would make it `available_externally` only when optimizing);
   references name the external symbol, structor calls the complete
-  variant (D1/C1). Implicitly declared special members are not
+  variant (D1/C1). A friend function is not a member ([class.friend]/6):
+  one first declared by a friend declaration of such a specialization and
+  defined outside the class is an ordinary definition, and an in-class
+  friend definition is emitted where used (WP-1620,
+  `tests/conformance/temp.explicit/ir-friend-of-extern-template-defined-outside.cpp`). Implicitly declared special members are not
   instantiations and are still emitted.
   An inline function carrying `always_inline` on any redeclaration
   (`Cg::is_always_inline_fn`) is the exception (WP-373, WP-389): as clang
@@ -3570,7 +3574,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   with flags and base offset words), pointers (`__pointer_type_info`,
   qualifier flags plus 8 for an incomplete pointee), enums, functions and
   arrays (`{vt, name}`). Fundamental types and (const) pointers to them
-  refer to the runtime's `external constant` objects. Vector types (GNU and
+  refer to the runtime's `external constant` objects, except in the unit
+  that defines them (below). Vector types (GNU and
   NEON) and `_Complex` types are not in the runtime: their
   `__fundamental_type_info` `{vt, name}` is emitted `linkonce_odr` where
   used (WP-709). RTTI of a type that
@@ -3590,6 +3595,58 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
     a clang `-fno-rtti` library (leveldb, docs/status/oss/leveldb.md).
     Tests: `tests/conformance/except.handle/ir-fno-rtti-type-info.cpp`
     (and its `-19` sibling), `fno-rtti-catch-by-base.cpp` (run).
+- **One global per symbol** (WP-1620): RTTI names the vtables of the
+  `__cxxabiv1` classes (`__class_type_info`, `__si_class_type_info`,
+  `__vmi_class_type_info`, `__fundamental_type_info`, `__array_type_info`,
+  `__function_type_info`, `__enum_type_info`, `__pointer_type_info`,
+  `__pointer_to_member_type_info`) by symbol (`external global [0 x ptr]`),
+  while a class's own vtable is created by entity. In a unit that also
+  declares or defines such a class (the C++ runtime itself), both are one
+  global under the class's symbol, whichever comes first: the entity's
+  creation (`Cg::vtable_global`, and a `_ZTI` definition in
+  `finish_rtti`/`reserve_rtti`) takes over a by-name declaration of its
+  symbol, retyped and moved to the end of the module as clang's
+  `CreateOrReplaceCXXRuntimeVariable`/`BuildTypeInfo` replace it
+  (`Cg::named_global_decl`, one map lookup); a later by-name reference
+  finds the entity's global. The same holds in a module unit and with a
+  PCH (the unification is by symbol in the unit's module). Runtime
+  functions (`__cxa_*`, `__dynamic_cast`, `__gxx_personality_v0`,
+  `std::terminate`, the allocation functions) are declared by name and a
+  definition in the unit takes over the declaration (`Cg::get_fn`); their
+  attributes may differ from clang's (clang keeps the runtime
+  declaration's), their symbols do not. *Guard*: debug builds assert in
+  the module trailer that no value was renamed `name.N` beside a `name`
+  while both have non-local linkage (`Module::external_name_collisions`;
+  one entry per rename, read once per module; private and internal
+  values are renamed legitimately). Tests:
+  `tests/conformance/expr.typeid/ir-abi-type-info-vtable-one-global.cpp`,
+  `pch-abi-type-info-one-global-run.cpp`,
+  `module-abi-type-info-one-global-run.cpp`,
+  `crates/kiln_driver/tests/one_global_per_symbol.rs`.
+- **The runtime's fundamental `type_info` objects** (Itanium C++ ABI
+  §2.9.2, clang `EmitFundamentalRTTIDescriptors`, WP-1620): where the
+  vtable of `::__cxxabiv1::__fundamental_type_info` is defined (not
+  `available_externally`), kiln defines `_ZTI`/`_ZTS` of every
+  fundamental type X and of `X*` and `const X*` (flags 0 and 1), in this
+  order: `void`, `std::nullptr_t`, `bool`, `wchar_t`, `char`,
+  `unsigned char`, `signed char`, `short`, `unsigned short`, `int`,
+  `unsigned`, `long`, `unsigned long`, `long long`, `unsigned long long`,
+  `__int128`, `unsigned __int128`, `__fp16`, `float`, `double`,
+  `long double`, `__float128`, `char8_t`, `char16_t`, `char32_t` (clang
+  22's list, the same on AArch64 and x86-64; no `_BitInt`, `_Float16`,
+  `std::bfloat16_t` or decimal types). They are `external`, with the
+  class's visibility (hidden only when the class is), also under
+  `-fno-rtti`; one already referenced in the unit (`typeid(int)`) is that
+  definition. The class matches when it is named so and its context is a
+  namespace `__cxxabiv1` whose context is the translation unit itself:
+  not through an inline namespace, a linkage specification or another
+  namespace, as clang 22. The trigger is the vtable definition: the key
+  function (the destructor, also `= default` out of line), or a use of a
+  class without one (`linkonce_odr` vtable, strong objects, as clang).
+  clang also emits them beside an `available_externally` vtable at -O1,
+  which would define the runtime's objects in a user unit; kiln does not.
+  Every other unit refers to the runtime's objects. Tests:
+  `tests/conformance/expr.typeid/ir-fundamental-type-info-*.cpp`.
 - **Constant objects of polymorphic classes** (`consts.rs`
   `record_elems`, WP-400): a constant initializer of a dynamic class
   gives each vptr field the vtable address point of its subobject in the
