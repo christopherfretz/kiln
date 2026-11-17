@@ -199,6 +199,11 @@ pub struct DeducedArgs {
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
     pub loc: Loc,
+    /// In a call deduction with explicitly given arguments: those
+    /// arguments, the state each (P, A) pair starts from when the bases
+    /// of `A` are searched ([temp.deduct.call]/5, `deduce_from_bases`);
+    /// `None` when nothing was given explicitly.
+    pub call_seed: Option<std::rc::Rc<[TemplateArg]>>,
 }
 
 impl DeducedArgs {
@@ -220,6 +225,7 @@ impl DeducedArgs {
             aggregate: false,
             nttp_mismatch: None,
             loc: Loc::INVALID,
+            call_seed: None,
         }
     }
 
@@ -1906,10 +1912,16 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [temp.deduct.call]/4.3: `P` against the bases of `A`, each from
-    /// the deductions `orig` made before `A` was tried; the successful
-    /// base must be unique, its deductions then replace `d`. `None` when
-    /// none matches. A class
+    /// [temp.deduct.call]/4.3: `P` against the bases of `A`; the
+    /// successful base must be unique (/5), its deductions from `orig`
+    /// (those made before `A` was tried) then replace `d`. `None` when
+    /// none matches. Deduction is done argument by argument, so the bases
+    /// are matched from the explicitly given arguments alone
+    /// (`call_seed`), not from what earlier (P, A) pairs deduced: `S<I, I,
+    /// I>` against a class with bases `S<0, 0, 0>` and `S<1, 1, 1>` has two
+    /// possible deduced `A`s and fails even when another argument deduced
+    /// `I = 0` (GCC's `try_class_unification`; clang 22 matches from the
+    /// earlier deductions and takes `S<0, 0, 0>`). A class
     /// template specialization `A` not yet instantiated is instantiated
     /// first, at the deduction's location, so that its bases exist
     /// ([temp.inst]/2; clang's `isCompleteType` in
@@ -1932,9 +1944,16 @@ impl Sema<'_, '_> {
         }
         let mut seen = vec![self.ast.first(r)];
         let mut work = vec![r];
+        // The state each base is matched from: `orig` with only the
+        // explicitly given arguments.
+        let mut start = orig.clone();
+        match &orig.call_seed {
+            Some(s) if s.len() == start.args.len() => start.args.clone_from_slice(s),
+            _ => start.args.fill(TemplateArg::NULL),
+        }
         // Every base that would be a valid deduced `A`; the walk does not
         // go below one, since the bases of a match can never win.
-        let mut found: Vec<(DeclId, DeducedArgs)> = Vec::new();
+        let mut found: Vec<(DeclId, QualType)> = Vec::new();
         while let Some(c) = work.pop() {
             let Some(def) = self.ast.definition(c) else { continue };
             let bases: Vec<QualType> =
@@ -1946,9 +1965,9 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 seen.push(first);
-                let mut trial = orig.clone();
+                let mut trial = start.clone();
                 if self.deduce_template_id(name, args, b, &mut trial, level) == Tdk::Success {
-                    found.push((first, trial));
+                    found.push((first, b));
                 } else {
                     work.push(br);
                 }
@@ -1972,9 +1991,12 @@ impl Sema<'_, '_> {
             }
             found = one.into_iter().collect();
         }
-        let (_, trial) = found.pop()?;
+        let (_, b) = found.pop()?;
+        // The unique match, now from the deductions of the earlier pairs.
+        let mut trial = orig.clone();
+        let r = self.deduce_template_id(name, args, b, &mut trial, level);
         *d = trial;
-        Some(Tdk::Success)
+        Some(r)
     }
 
     /// The clang-worded note for a failed deduction of `tmpl` (§10.4),

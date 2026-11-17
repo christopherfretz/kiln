@@ -745,8 +745,13 @@ than `ics2[k]` and the first applicable of:
    same_param_type_lists`), and `more_constrained(c1, c2)` (WP-073). A
    more constrained `operator<=>(const W&, const T&)` used reversed thus
    beats `operator<(const T&, const W&)` before /2.8 (WP-1111);
-7. /2.7 `c1` constructor of `D`, `c2` inherited from base `B`, same
-   parameter types;
+7. /2.7 `c1` constructor of `D`, `c2` inherited from base `B` (or both
+   inherited, `c1` from the more derived class), and for every argument
+   the corresponding parameters have the same type
+   (`same_guide_params`, tested only after the inherited precondition;
+   clang 22 omits the parameter condition, GCC 16 keeps it: `D(unsigned)`
+   and an inherited `B(int)` called with a `long` are ambiguous; WP-1532,
+   `tests/conformance/over.match.best/inherited-ctor-param-types*.cpp`);
 8. /2.8 `c2` rewritten, `c1` not;
 9. /2.9 both rewritten, `c2` reversed, `c1` not;
 10. /2.10–2.13 CTAD guides (§2.8): a guide not from an inherited
@@ -1488,6 +1493,25 @@ Where the code differs from (or details) the design above:
   and a deleted explicit template makes `T x(s)` ill-formed while `T x = s`
   is fine (`is_constructible` false, `is_convertible` true: libc++ tuple
   convert_move.pass.cpp `BonkersBananas`).
+  CWG2327 is open and [over.match.ctor]/1 makes only the constructors
+  candidates, so a winning conversion-function candidate is checked
+  against the constructors alone (`elision_against_ctors`, WP-1532): when
+  they are ambiguous between copy and move constructors only, the
+  initialization is ambiguous unless every ambiguous constructor is
+  reached through that same conversion function or through one whose
+  implicit object conversion is worse
+  ([over.ics.rank]/3.3: a copy constructor through `operator T&` and a
+  move constructor through `operator T() const` are indistinguishable;
+  GCC 16 and the text reject, clang 22 accepts;
+  `over.match.ctor/conversion-functions-ambiguous-cxx17.cpp`). When the
+  constructors alone select one, the conversion function still wins as in
+  clang (the libc++ PR31384 shape above; GCC 16 picks the constructor
+  there), and it elides a deleted move constructor reached through it
+  (`over.match.ctor/conversion-function-elision-ok-cxx17.cpp`). An
+  ambiguity that involves another constructor (`P(P&&)` and `P(S&&)`
+  both reached through a conversion function template) is ambiguous by
+  the text too, but GCC 16 and clang 22 let the conversion function win
+  and real code relies on it, so kiln does as well (same test).
 - **`IcsOptions::CANDIDATE_ARG`**: an argument of a candidate. In a
   reference binding, a deleted best [over.match.ref] conversion is no
   conversion (clang `FindConversionForRefInit`), so the candidate is not

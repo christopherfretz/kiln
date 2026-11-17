@@ -212,6 +212,7 @@ impl Sema<'_, '_> {
             // ([basic.scope.hiding]/2).
             if let Some(&p) = self.lookup_in(ctx, name, LookupKind::Ordinary).decls.first()
                 && !crate::lookup::is_tag_kind(self.kind_of(p))
+                && !self.found_through_using_shadow(DeclName::ident(name), p)
             {
                 let id = if self.kind_of(p) == DeclKind::Var
                     || self.kind_of(p) == DeclKind::Field

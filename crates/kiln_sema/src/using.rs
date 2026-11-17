@@ -850,6 +850,14 @@ impl Sema<'_, '_> {
                         return None;
                     }
                     prev = Some(e);
+                } else if in_class && self.kind_of(es) == DeclKind::EnumConstant {
+                    // [class.mem.general]/5: the enumerator of a member
+                    // enumeration is already a member of this class, and
+                    // the using-declarator would declare it a second time
+                    // (`enum E { A }; using E::A;` or `using enum E;` in
+                    // the class; GCC 16 rejects, clang 22 accepts).
+                    self.emit_using_conflict(loc, target, es);
+                    return None;
                 }
                 continue;
             }
@@ -880,11 +888,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if self.using_conflicts(target, es) {
-                let msg = self
-                    .diag(DiagId::sema_using_decl_conflict, loc)
-                    .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(target)))
-                    .with_note(self.diag(DiagId::note_using_decl_conflict, self.decl_loc(es)));
-                self.emit(msg);
+                self.emit_using_conflict(loc, target, es);
                 return None;
             }
         }
@@ -900,6 +904,16 @@ impl Sema<'_, '_> {
             }
         }
         Some(s)
+    }
+
+    /// "target of using declaration conflicts with declaration already in
+    /// scope" at `loc`, noting `target` and the conflicting `es`.
+    fn emit_using_conflict(&mut self, loc: Loc, target: DeclId, es: DeclId) {
+        let msg = self
+            .diag(DiagId::sema_using_decl_conflict, loc)
+            .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(target)))
+            .with_note(self.diag(DiagId::note_using_decl_conflict, self.decl_loc(es)));
+        self.emit(msg);
     }
 
     /// Where declaration `d` was declared (its name).
@@ -924,12 +938,22 @@ impl Sema<'_, '_> {
         if unresolved(ka) || unresolved(kb) {
             return false;
         }
+        let typedef = |k| matches!(k, DeclKind::Typedef | DeclKind::TypeAlias);
         if is_tag_kind(ka) || is_tag_kind(kb) {
+            // In a class, a class or enumeration and a typedef-name of
+            // another type correspond ([basic.scope.scope]/4 exempts
+            // only a variable, data member, enumerator or function), so
+            // they conflict ([namespace.udecl]/11; GCC 16; clang 22 lets a
+            // tag coexist with any non-tag). Elsewhere clang's rule is
+            // kept (GCC 16 accepts the namespace-scope case too).
+            if typedef(ka) || typedef(kb) {
+                let (tag, td) = if typedef(kb) { (a, b) } else { (b, a) };
+                return self.member_spec_class().is_some() && !self.typedef_names_tag(td, tag);
+            }
             return is_tag_kind(ka) && is_tag_kind(kb);
         }
         let ta = self.ast.decls.get(a).ty().unwrap_or(QualType::ERROR);
         let tb = self.ast.decls.get(b).ty().unwrap_or(QualType::ERROR);
-        let typedef = |k| matches!(k, DeclKind::Typedef | DeclKind::TypeAlias);
         if typedef(ka) && typedef(kb) {
             return !self.ast.types.same_type(ta, tb);
         }
@@ -962,6 +986,18 @@ impl Sema<'_, '_> {
             return ka == kb && self.equivalent_signatures(a, b);
         }
         true
+    }
+
+    /// Whether typedef-name `td` denotes the class or enumeration `tag`
+    /// declares (the same entity, so no conflict).
+    fn typedef_names_tag(&self, td: DeclId, tag: DeclId) -> bool {
+        let Some(u) = self.ast.decls.typedef(td).map(|x| x.underlying) else { return false };
+        let t = &self.ast.types;
+        if t.is_dependent(u) {
+            return true;
+        }
+        let named = t.as_record(u).or_else(|| t.as_enum(u));
+        named.is_some_and(|r| self.ast.first(r) == self.ast.first(tag))
     }
 
     /// [namespace.udecl]/14: whether member function (template) `own` of
@@ -1075,6 +1111,16 @@ impl Sema<'_, '_> {
         let ctx = self.ast.decls.get(d).ctx()?;
         (self.kind_of(ctx) == DeclKind::CXXRecord).then_some(())?;
         Some((d, self.spec_args(ctx)?.1))
+    }
+
+    /// Whether `found`, what a lookup of `name` in the current class
+    /// found, is the target of a using-declarator of that class: a new
+    /// member of that name is then checked by
+    /// [`Self::check_using_shadow_conflict`], not reported as a duplicate.
+    pub(crate) fn found_through_using_shadow(&self, name: DeclName, found: DeclId) -> bool {
+        self.current_scope_raw_dn(name)
+            .into_iter()
+            .any(|s| self.kind_of(s) == DeclKind::UsingShadow && self.ast.strip_shadow(s) == found)
     }
 
     /// Checks a new declaration `d` named `name` against the using-shadows

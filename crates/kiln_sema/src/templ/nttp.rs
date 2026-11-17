@@ -326,12 +326,25 @@ impl Sema<'_, '_> {
         Err(())
     }
 
+    /// [`Sema::note_template_arg_use`] for the function a reference
+    /// template argument `e`, converted to `c`, names in a template.
+    fn note_ref_template_arg_use(&mut self, c: ExprId, e: ExprId) {
+        if self.in_template()
+            && self.unevaluated == 0
+            && let Some(f) = self.referenced_decl_of_callee(c)
+            && self.kind_of(f).is_function()
+        {
+            self.note_template_arg_use(f, self.eloc(e));
+        }
+    }
+
     /// Converts argument `e` of a reference-typed non-type template
     /// parameter `pty` ([temp.arg.nontype]/2): the reference is bound as
     /// in copy-initialization and the result must be a constant
     /// expression designating an object or function with static storage;
     /// the argument value is that address (a pointer value), keyed at the
     /// canonical reference type.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn convert_ref_nttp_arg(
         &mut self,
         pty: QualType,
@@ -380,6 +393,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.has_errors_in(c) {
             return Err(());
         }
+        self.note_ref_template_arg_use(c, e);
         let mut inner = c;
         for _ in 0..MAX_DEPTH {
             match self.ast.exprs.get(inner).kind() {

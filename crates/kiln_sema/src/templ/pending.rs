@@ -26,6 +26,45 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records function `f`, named as a non-type template argument in
+    /// the definition of a templated function (`A<f>` in a function
+    /// template's body), for [`Sema::mark_template_arg_uses`]: the
+    /// argument is converted once, in the definition, and an
+    /// instantiation does not convert it again. Only a non-dependent
+    /// specialization of a function template is recorded.
+    pub(crate) fn note_template_arg_use(&mut self, f: DeclId, loc: Loc) {
+        if self.ast.spec_info(f).is_none() {
+            return;
+        }
+        let Some(cur) = self.func.as_ref().map(|s| s.decl) else { return };
+        if self.ast.decls.get(f).ctx().is_some_and(|c| self.is_dependent_decl_context(c)) {
+            return;
+        }
+        let key = self.ast.first(cur);
+        let uses = self.inst.template_arg_uses.entry(key).or_default();
+        if !uses.iter().any(|&(g, _)| g == f) {
+            uses.push((f, loc));
+        }
+    }
+
+    /// Marks referenced, for an instantiation of the definition of
+    /// `pdef`, the functions it names as non-type template arguments
+    /// ([`Sema::note_template_arg_use`]), which instantiates them; not
+    /// the ones named in a `discarded` branch of a constexpr `if`
+    /// ([stmt.if]/2).
+    pub(crate) fn mark_template_arg_uses(&mut self, pdef: DeclId, discarded: &[(Loc, Loc)]) {
+        let key = self.ast.first(pdef);
+        let Some(uses) = self.inst.template_arg_uses.get(&key) else { return };
+        let uses: Vec<(DeclId, Loc)> = uses
+            .iter()
+            .copied()
+            .filter(|&(_, l)| !discarded.iter().any(|&(b, e)| b <= l && l <= e))
+            .collect();
+        for (f, loc) in uses {
+            self.mark_function_referenced(f, loc);
+        }
+    }
+
     /// Queues explicitly instantiated `decl` at `poi` even when an
     /// implicit use queued it already: clang reports an undefined static
     /// data member at each (§4.5).

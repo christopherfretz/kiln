@@ -334,26 +334,29 @@ impl Sema<'_, '_> {
             }
         }
         // /2.7: a constructor of a derived class over an inherited
-        // constructor; of two inherited ones, the more derived class's
-        // (clang; the same-parameter-types condition is not checked).
+        // constructor; of two inherited ones, the more derived class's;
+        // only when, for every argument, the corresponding parameters
+        // of the two have the same type (clang 22 does not check that
+        // condition; GCC 16 does). Tested after the cheap precondition.
         let inh = |c: &Candidate| {
             c.found != c.func() && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow
         };
+        let same = || self.same_guide_params(x.func(), y.func(), set.args.len());
         match (inh(x), inh(y)) {
-            (false, true) => return true,
-            (true, false) => return false,
+            (false, true) if same() => return true,
+            (true, false) if same() => return false,
             (true, true) => {
                 let cls = |c: &Candidate| self.ast.decls.get(c.func()).ctx();
                 if let (Some(a), Some(b)) = (cls(x), cls(y)) {
-                    if a != b && crate::conv::bases::is_derived_from(self, a, b) {
+                    if a != b && crate::conv::bases::is_derived_from(self, a, b) && same() {
                         return true;
                     }
-                    if a != b && crate::conv::bases::is_derived_from(self, b, a) {
+                    if a != b && crate::conv::bases::is_derived_from(self, b, a) && same() {
                         return false;
                     }
                 }
             }
-            (false, false) => {}
+            _ => {}
         }
         // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
         // of two rewritten candidates, the one not reversed.

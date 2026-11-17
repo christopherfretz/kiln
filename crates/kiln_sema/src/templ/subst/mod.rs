@@ -102,6 +102,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
     /// so the function template specialization, is invalid; WP-145).
     pub(crate) stmt_failed: bool,
+    /// The source ranges of the discarded branches of constexpr `if`
+    /// statements this substitution skipped ([stmt.if]/2): template
+    /// arguments named there are not odr-used
+    /// (`Sema::mark_template_arg_uses`).
+    pub(crate) discarded: Vec<(Loc, Loc)>,
     /// A `return` of the lambda body being rebuilt failed in a call
     /// operator with a placeholder return type: the lambda-expression
     /// fails (clang marks the call operator invalid; WP-434).
@@ -215,6 +220,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
+            discarded: Vec::new(),
             lambda_return_failed: false,
             init_failures: 0,
             failed_inits: Vec::new(),

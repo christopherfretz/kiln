@@ -469,6 +469,14 @@ pub struct InstState {
     /// A default argument's deferred instantiations, keyed by the stored
     /// default argument: queued where a call uses it.
     pub(crate) deferred_default_uses: kiln_source::fx::FxHashMap<ExprId, Vec<(DeclId, Loc)>>,
+    /// The function template specializations a template function
+    /// definition names as non-type template arguments (`A<f>`), keyed
+    /// by the definition's first declaration: odr-used ([basic.def.odr]/7;
+    /// a template argument is potentially evaluated), so each
+    /// instantiation of the definition marks them referenced, which
+    /// instantiates them (the argument is not substituted again;
+    /// WP-1533).
+    pub(crate) template_arg_uses: kiln_source::fx::FxHashMap<DeclId, Vec<(DeclId, Loc)>>,
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,

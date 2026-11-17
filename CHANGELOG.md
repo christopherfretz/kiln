@@ -997,6 +997,21 @@ Planned as 1.3.0.
   cv-qualified array typedef carrying `__attribute__((aligned))`, or of
   an array of one, is the typedef's alignment.
 
+- Accepts-invalid cases found running GCC's C++ testsuite (WP-1532..WP-1535):
+  the inherited-constructor tie-break needs equal parameter types
+  ([over.match.best.general]/2.7); deduction from a derived class whose two
+  bases match with different template arguments fails
+  ([temp.deduct.call]/5); a copy and a move constructor reached through
+  different conversion functions stay ambiguous from C++17 although a
+  conversion function yields the class ([over.ics.rank]/3.3); a class-scope
+  using-declaration that conflicts with a member (a class and a typedef of
+  another type, an enumerator of the class's own enumeration) is an error;
+  a function template specialization named as a template argument in a
+  template body is instantiated with that body ([basic.def.odr]/7); a
+  discarded volatile glvalue of class type must be complete from C++11
+  ([expr.context]/2); a discarded constant is not odr-used, so a lambda
+  does not capture it.
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

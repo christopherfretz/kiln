@@ -7,8 +7,9 @@
 // lvalue-to-rvalue conversion of a non-volatile, non-class operand, is no
 // odr-use, so it is not captured. Odr-uses are captured: `&ca.v`, binding
 // a reference, a variable with a mutable member, a volatile glvalue read,
-// a discarded `(void)ca` (clang never applies the discarded-value bullet), a
-// class copy, `->`, the object of a static data member access, and a
+// a discarded `(void)ca` of class type (clang never applies the
+// discarded-value bullet; kiln applies it to non-class operands only,
+// WP-1535), a class copy, `->`, the object of a static data member access, and a
 // generic lambda's `return ca.v` (no conversion until instantiation).
 // clang 19 and 22 agree on every size; the program prints the sizes and
 // the values, compared with the oracle (closure layout and code).

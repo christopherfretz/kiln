@@ -431,12 +431,53 @@ impl Sema<'_, '_> {
     /// ([expr.context]/2): from C++11, a glvalue of volatile-qualified
     /// type of one of the forms [`Sema::is_read_if_discarded`] accepts
     /// undergoes the lvalue-to-rvalue conversion (so the object is read).
+    /// The conversion needs a complete type ([conv.lval]/1): a volatile
+    /// glvalue of class type is completed, instantiating a class template
+    /// specialization, and an incomplete one is `incomplete type 'T'
+    /// where a complete type is required` (GCC 16 instantiates too, and
+    /// only warns for a class that stays incomplete; clang 22 neither
+    /// completes nor diagnoses; the text decides).
     pub(crate) fn ignored_value_conversions(&mut self, e: ExprId) -> ExprId {
         self.discard_volatile_assign(e);
+        self.discarded_non_odr_uses(e);
         if self.std >= kiln_lex::Std::Cxx11 && self.is_read_if_discarded(e) {
+            let t = self.ast.exprs.get(e).ty();
+            if self.ast.types.as_record(t).is_some() && !self.is_complete(t) {
+                let loc = self.ast.exprs.get(e).loc();
+                if !self.instantiation_fails(t, loc) && !self.is_complete(t) {
+                    let msg =
+                        self.diag(DiagId::sema_incomplete_type_required, loc).arg(self.ty_arg(t));
+                    self.emit(msg);
+                    return e;
+                }
+            }
             conv::lvalue_to_rvalue(self, e)
         } else {
             e
+        }
+    }
+
+    /// [basic.def.odr]/5: a variable usable in constant expressions named
+    /// by an element of the potential results of a discarded-value
+    /// expression `e` is not odr-used by it (`n;`, `(void)n`, `n, 0`), so
+    /// a lambda does not capture it. Marked now, as the lvalue-to-rvalue
+    /// case is at the end of the full-expression; the same operand types
+    /// qualify (`l2r_potential_results`: no class, volatile or mutable
+    /// subobject case). clang 22 odr-uses (and captures) the variable;
+    /// GCC 16 follows the text.
+    fn discarded_non_odr_uses(&mut self, e: ExprId) {
+        if self.pending_odr.is_empty() || !self.ast.exprs.get(e).value_category().is_glvalue() {
+            return;
+        }
+        let mut rs = Vec::new();
+        self.l2r_potential_results(e, &mut rs);
+        for r in rs {
+            let Some(i) = self.pending_odr.iter().position(|&x| x == r) else { continue };
+            let d = self.ast.exprs.decl(r);
+            if self.usable_in_constant_expressions(d) {
+                self.pending_odr.remove(i);
+                let _ = self.ast.exprs.set_non_odr_use(r, kiln_ast::expr::NonOdrUse::Constant);
+            }
         }
     }
 

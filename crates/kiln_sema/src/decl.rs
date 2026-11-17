@@ -6506,6 +6506,7 @@ impl Sema<'_, '_> {
         if let Some(n) = name
             && let Some(&prev) = self.lookup_in(ctx, n, LookupKind::Ordinary).decls.first()
             && !is_tag_kind(self.kind_of(prev))
+            && !self.found_through_using_shadow(DeclName::ident(n), prev)
         {
             if independent {
                 self.diagnose_placeholder_redecl(d.name_loc());

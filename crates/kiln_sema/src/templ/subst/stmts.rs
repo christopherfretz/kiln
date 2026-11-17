@@ -687,6 +687,7 @@ impl Substituter<'_, '_, '_> {
                     let (l, r) = at.map_or((loc, loc), |x| {
                         (me.sema.ast.stmts.get(x).loc(), me.sema.uninit_stmt_end(x))
                     });
+                    me.discarded.push((l, r));
                     me.sema.act_on_compound(&[], l, r)
                 };
                 let then = match d.then {

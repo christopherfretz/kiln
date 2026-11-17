@@ -1060,6 +1060,11 @@ impl Sema<'_, '_> {
         // deduction from a call argument takes the argument's sugar.
         let undeduced: Vec<bool> =
             d.args.iter().map(|x| matches!(x.view(), ArgView::Null)).collect();
+        // [temp.deduct.call]/5: the bases of an argument's class are
+        // matched from the explicit arguments alone (`deduce_from_bases`).
+        if undeduced.iter().any(|&u| !u) {
+            d.call_seed = Some(d.args.as_slice().into());
+        }
         // [temp.deduct.call]/10: the (argument index, P) of each P that
         // takes no part in deduction, checked before substitution.
         let mut nondeduced: Vec<(usize, QualType)> = Vec::new();
