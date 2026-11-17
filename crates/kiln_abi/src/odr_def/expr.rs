@@ -31,7 +31,7 @@ impl DefHasher<'_> {
     }
 
     /// A count and the expressions of list `l`.
-    fn exprs(&mut self, l: ListId) {
+    pub(super) fn exprs(&mut self, l: ListId) {
         self.count(self.ast.lists.len(l));
         self.stack.extend(self.ast.lists.iter::<ExprId>(l).map(Work::Expr));
     }
@@ -39,7 +39,7 @@ impl DefHasher<'_> {
     /// A reference to declaration `d`: a local by index, an enumerator as
     /// (enumeration, name, value), a data member as (class, name), a
     /// function or variable by its mangled name.
-    fn decl_ref(&mut self, d: DeclId) {
+    pub(super) fn decl_ref(&mut self, d: DeclId) {
         let ast = self.ast;
         if let Some(i) = self.local(d) {
             self.byte(T_LOCAL);
@@ -89,7 +89,7 @@ impl DefHasher<'_> {
     }
 
     /// The class or enumeration enclosing `d` as a type item.
-    fn owner(&mut self, d: DeclId) {
+    pub(super) fn owner(&mut self, d: DeclId) {
         let r = self.ast.decls.get(d).ctx().and_then(|c| self.refs.tag(c, &mut self.stats));
         match r {
             Some(h) => {
@@ -101,7 +101,7 @@ impl DefHasher<'_> {
     }
 
     /// The identifier of `d` (empty for an unnamed one).
-    fn name(&mut self, d: DeclId) {
+    pub(super) fn name(&mut self, d: DeclId) {
         let ast = self.ast;
         let s = ast.decls.get(d).name().as_ident().map_or("", |s| ast.symbols().as_str(s));
         self.str(s);
@@ -299,8 +299,8 @@ impl DefHasher<'_> {
                 self.stack.push(Work::Expr(base));
             }
 
-            // ----- area: init (K-3c): initialization and object
-            // expressions, new/delete, traits, typeid, throw.
+            // ----- area: init (K-3c, `init.rs`): initialization and
+            // object expressions, new/delete, traits, typeid, throw.
             K::InitListExpr
             | K::ImplicitValueInitExpr
             | K::CXXConstructExpr
@@ -323,7 +323,7 @@ impl DefHasher<'_> {
             | K::CXXTypeidExpr
             | K::TypeTraitExpr
             | K::ArrayTypeTraitExpr
-            | K::ExpressionTraitExpr => self.partial(Area::Init, Site::Expr(k)),
+            | K::ExpressionTraitExpr => self.init_expr(e, k),
 
             // ----- area: lambda (K-3d): lambdas, coroutine operators.
             K::LambdaExpr | K::CoawaitExpr | K::CoyieldExpr => {

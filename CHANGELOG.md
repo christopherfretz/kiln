@@ -168,7 +168,16 @@ Planned as 1.3.0.
   definition hash. A C-linkage function whose type has a variable array
   bound no longer gets a declaration record, and at `detail` a member of
   unnamed class type records how many entries describe it (WP-1581)
-  ([spec/codegen.md](spec/codegen.md) §5.5).
+  ([spec/codegen.md](spec/codegen.md) §5.5). The hash now covers the
+  whole definition: its declaration, body, constructor initializers,
+  initializers of variables (as written, never their value), default
+  arguments and default member initializers where they are used, and
+  `new`, `delete`, `throw` and traits (WP-1582, WP-1583; scheme
+  `kiln-odr-1.d2`). A row is marked partial only when the definition
+  holds a construct not hashed yet (lambdas, local classes, default
+  arguments of its own parameters, some GNU forms): about 2-5 % of the
+  rows of fmt and googletest
+  ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)").
 
 ### Changed
 

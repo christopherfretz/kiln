@@ -27,6 +27,7 @@
 mod decl;
 pub use decl::is_templated_def;
 mod expr;
+mod init;
 mod refs;
 mod stmt;
 
@@ -43,8 +44,13 @@ use crate::mangle::AnonIds;
 /// `odr.scheme`, separate from the layout serialization's
 /// `odr.layout-scheme`). **Bump rule**: every change to what is
 /// serialized or how renames it (the golden test of
-/// `crates/kiln_codegen/tests/mason_def_hash.rs` guards it).
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d1";
+/// `crates/kiln_codegen/tests/mason_def_hash.rs` guards it). History:
+/// `d0` the declared type only (no body; K-3a's rows), `d1` the
+/// serializer core (declarators, statements, basic expressions; K-3b),
+/// `d2` initialization and object expressions, ctor-initializers,
+/// synthesized members, a destructor's deallocation function, variables'
+/// initializers, `visibility` off the attribute list (K-3c).
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d2";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.
@@ -72,6 +78,21 @@ const T_FIELD: u8 = 0xA8;
 const T_LOCAL_DECL: u8 = 0xA9;
 /// The declarator of a function definition.
 const T_FUNCTION: u8 = 0xAA;
+/// A variable definition: kind, type, bits, initializer.
+const T_VARIABLE: u8 = 0xAB;
+/// A synthesized (implicit or defaulted) member.
+const T_SYNTHESIZED: u8 = 0xAD;
+
+/// The names codegen already gave entities (deliverable 2 of K-3c): the
+/// hasher asks before mangling. An answer must be exactly the name
+/// [`crate::mangle::mangle_decl`] gives the first declaration (the
+/// caller leaves out asm labels, `weakref`s and uniqued names), so a
+/// digest never depends on whether the module had declared the entity.
+pub trait KnownNames {
+    /// The symbol name of the entity whose first declaration is `first`,
+    /// if the module holds it.
+    fn name(&self, first: DeclId) -> Option<&str>;
+}
 
 /// The digest of one definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -129,11 +150,12 @@ pub enum Item {
     Attributes,
     /// A default argument on some declaration (K-3e).
     DefaultArgs,
-    /// A constructor (its initializers, K-3c).
+    /// Unused since `d2` (a constructor's initializers are hashed); the
+    /// codes stay stable.
     Constructor,
-    /// A virtual destructor (the deallocation function it selects, K-3c).
+    /// Unused since `d2` (a destructor's deallocation function is hashed).
     VirtualDestructor,
-    /// An implicitly declared or defaulted member (as synthesized, K-3c).
+    /// Unused since `d2` (synthesized members are hashed).
     Synthesized,
     /// A `#pragma` floating-point override on a block.
     FpPragma,
@@ -160,6 +182,8 @@ pub struct DefStats {
     pub type_hits: u64,
     /// Types mangled (memo misses).
     pub type_misses: u64,
+    /// Entity names taken from [`KnownNames`] (of the misses).
+    pub entity_known: u64,
     /// `partial()` calls per site (at most one per definition and site).
     pub partial_sites: FxHashMap<(Area, Site), u64>,
 }
@@ -218,6 +242,13 @@ impl<'a> DefHasher<'a> {
         }
     }
 
+    /// Takes entity names from `known` before mangling them.
+    #[must_use]
+    pub fn with_names(mut self, known: &'a dyn KnownNames) -> Self {
+        self.refs.known = Some(known);
+        self
+    }
+
     /// Keeps every mangled name the hasher feeds (for tests that scan them).
     pub fn collect_names(&mut self) {
         self.refs.names = Some(Vec::new());
@@ -250,17 +281,75 @@ impl<'a> DefHasher<'a> {
     /// The digest of function definition `def` (a declaration with a
     /// body): its declarator and specifiers, then its body (mortar O-10).
     pub fn function(&mut self, def: DeclId) -> DefDigest {
+        self.start(def);
+        if decl::declarator(self, def) {
+            // A constructor: its ctor-initializers; a destructor: the
+            // deallocation function it selects; then the body.
+            match self.ast.decls.get(def).kind() {
+                DeclKind::CXXConstructor => self.ctor_inits(def),
+                DeclKind::CXXDestructor => self.dealloc(self.def),
+                _ => {}
+            }
+            let body = self.ast.decls.function(def).and_then(|f| f.body);
+            self.stack.push(Work::OptStmt(body));
+            self.run();
+        }
+        self.finish()
+    }
+
+    /// The digest of variable definition `def` (an inline variable, a
+    /// static data member of a class template, a variable template
+    /// specialization; O-10, K9, N22): its declaration kind, declared
+    /// type, thread-local kind, and the INITIALIZER as an expression
+    /// (never its evaluated value: constant and dynamic initialization of
+    /// one expression hash alike). Not hashed: `inline`, `constexpr`,
+    /// `constinit`, `static` (the row's key and kind 3 say where it
+    /// lives; an out-of-line definition need not repeat them).
+    pub fn variable(&mut self, def: DeclId) -> DefDigest {
+        self.start(def);
+        let ast = self.ast;
+        let n = ast.decls.get(def);
+        self.byte(T_VARIABLE);
+        self.byte(n.kind() as u8);
+        if is_templated_def(ast, def) {
+            self.partial(Area::Dependent, Site::Item(Item::Templated));
+            return self.finish();
+        }
+        match n.ty() {
+            Some(t) => self.ty(t),
+            None => self.byte(T_NONE),
+        }
+        // The declaration with the initializer (an in-class one for a
+        // static data member defined out of line).
+        let with_init = ast
+            .redecls_of(def)
+            .find_map(|r| ast.decls.var(r).and_then(|v| v.init.map(|i| (v.spec, i))));
+        let tls = ast.decls.var(def).map_or(0, |v| v.spec.tls() as u8);
+        self.byte(tls);
+        if ast.redecls_of(def).any(|r| decl::has_listed_attr(self, r)) {
+            self.partial(Area::Attrs, Site::Item(Item::Attributes));
+        }
+        match with_init {
+            Some((spec, init)) => {
+                self.byte(spec.init_style() as u8);
+                self.stack.push(Work::Expr(init));
+                self.run();
+            }
+            None => self.byte(T_NONE),
+        }
+        self.finish()
+    }
+
+    fn start(&mut self, def: DeclId) {
         self.out.clear();
         self.locals.clear();
         self.seen.clear();
         self.partial = false;
         self.stack.clear();
         self.def = self.ast.first(def);
-        if decl::declarator(self, def) {
-            let body = self.ast.decls.function(def).and_then(|f| f.body);
-            self.stack.push(Work::OptStmt(body));
-            self.run();
-        }
+    }
+
+    fn finish(&mut self) -> DefDigest {
         self.stats.definitions += 1;
         self.stats.partial_definitions += u64::from(self.partial);
         self.stats.bytes += self.out.len() as u64;

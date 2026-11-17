@@ -2191,9 +2191,10 @@ Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
 exactly when the unit has kind 3 rows (its name changes with any change
 to the layout serialization below), and `odr.scheme` (O-11), which names
-the definition hash of kind 2, value `kiln-odr-1.d0`
-(`mason_defs::DEF_SCHEME`; K-3c switches it to `kiln_abi`'s constant of
-the body serialization), exactly when the unit has kind 2 rows. So a
+the definition hash of kind 2, value `kiln-odr-1.d2`
+(`mason_defs::DEF_SCHEME` = `kiln_abi::odr_def::ODR_DEF_SCHEME`, renamed
+by every package that changes what is hashed; spec/abi.md "Definition
+hash" has its history), exactly when the unit has kind 2 rows. So a
 unit with kind 3 rows and no kind 2 rows writes no `odr.scheme`: mortar
 compares layouts by `odr.layout-scheme` once it reads that row, and
 until then treats the pair as incomparable (a miss, never a finding). C
@@ -2521,7 +2522,7 @@ Candidates whose rows differ for one symbol give it none.
 | `hash` | u128 @8 | below |
 | `name` | u32 @24 | 0 (anchored; `all`'s named rows are K-3f) |
 | `class` | u16 @28 | 1 function, 2 variable |
-| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 5 `PARTIAL` (every row: the body is not hashed yet), 8 `SYSTEM` (as kinds 3 and 5); bits 4, 6, 7 and 9-15 are 0 |
+| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kinds 3 and 5); bits 4, 6, 7 and 9-15 are 0 |
 | `module` | u32 @32 | 0 |
 | `file`, `line` | u32 @36, @40 | of the definition (MT-38's prefix maps): an instantiation's template definition, an implicitly defined member's class, an explicit specialization's own definition |
 | `reserved` | u32 @44 | 0 |
@@ -2546,13 +2547,31 @@ are internal. kiln rejects function multiversioning, so it has no clones
 to decide. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
-The hash (scheme `kiln-odr-1.d0`) is `kiln_abi::odr::fnv1a_128` over
-`<class tag>\0<type>\0body not hashed`: the tag `function` or
-`variable`, the declared type's `<type>` encoding (`?per-tu` when it has
-a per-TU component: an unnamed namespace, a local entity, an unnamed or
-closure type), and a fixed token. It tells two definitions with one key
-apart only by their type; K-3b and later packages hash the body and
-clear `PARTIAL`. `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
+The hash (scheme `kiln-odr-1.d2`, WP-1583, K-3c) is the definition
+digest of `kiln_abi::odr_def` (spec/abi.md "Definition hash"):
+`DefHasher::function` over a function definition (declarator,
+ctor-initializers, a destructor's deallocation function, body),
+`DefHasher::variable` over a variable definition (type, thread-local
+kind, initializer as an expression). One hasher per unit runs after
+emission, only with the flag on, over what the AST holds; each
+definition is hashed once and every symbol of it (structor variants,
+aliases) takes that digest and its `PARTIAL`. The hasher takes an
+entity's name from the module (`CgNames`: the symbol `Cg::fns` or
+`Cg::gvars` holds, unless it has an asm label, is a `weakref`, or the
+module uniqued it with a `.N` suffix) before mangling it itself, so the
+bytes never depend on which entities the module declared; the per-TU
+guard applies to both. Constructors and destructors are always mangled
+(their complete-object name): a unit may fold the complete-object
+variant into the base-object one, and its `Cg::sfns` entry then names
+the base-object symbol. Without
+a source manager (codegen unit tests) no kind 2 rows are written.
+`PARTIAL` is set exactly when the definition holds a construct of a
+later package (spec/abi.md's area table: lambdas, coroutines, local
+classes, GNU and builtin forms, listed attributes and declaration-level
+default arguments, a template's own definition, an exception
+specification sema had not computed); in the real-code oracle runs of
+WP-1583 most remaining `PARTIAL` rows are those default arguments and
+lambdas. `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
 oracle") is the must-equal check of every K-3 package.
 
 **Levels** (mortar's level table, K-1): `min` writes kinds 1 and 2;
@@ -2565,7 +2584,7 @@ full string at every level. Kind 3 rows are the same at every level
 (`details` aside), and so are kind 2's. The kind 1 rows are the same
 at every level except `odr.layout-scheme`, which follows kind 3. `detail`
 and `all` add kind 4. C units write no kind 2, 3 or 4. **Not written
-yet** (later K-3 packages): the body hash, `all`'s named rows and its
+yet** (later K-3 packages): full coverage of the hash, `all`'s named rows and its
 rows for definitions inlined away.
 
 **Determinism** (MT-38): the unit is a function of the TU and its

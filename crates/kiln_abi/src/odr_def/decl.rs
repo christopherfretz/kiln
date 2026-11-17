@@ -17,22 +17,18 @@ use kiln_ast::types::ExcSpec;
 use kiln_ast::types::NoexceptValue;
 use kiln_ast::{AttrId, DeclId, ExprId};
 
-use super::{Area, DefHasher, Item, Site, T_FUNCTION, T_LOCAL_DECL, T_NONE, Work};
+use super::{Area, DefHasher, Item, Site, T_FUNCTION, T_LOCAL_DECL, T_NONE, T_SYNTHESIZED, Work};
 use crate::odr::is_templated;
 
 /// The closed attribute list of O-10 (scheme 1) as kiln names it; the
 /// calling convention and GNU `noreturn` are hashed from the type.
-const LISTED: [kiln_ast::attr::AttrKind; 7] = {
+/// `visibility`, `exclude_from_explicit_instantiation` and `abi_tag` are
+/// NOT on it (mortar's ruling of 11-17 03:11 ET: the symbol carries the
+/// first, the second decides which symbols an explicit instantiation
+/// emits, the mangled name the third), like `weak` and `section`.
+const LISTED: [kiln_ast::attr::AttrKind; 6] = {
     use kiln_ast::attr::AttrKind as A;
-    [
-        A::ALIGNED,
-        A::NORETURN,
-        A::VISIBILITY,
-        A::TARGET,
-        A::TARGET_CLONES,
-        A::TARGET_VERSION,
-        A::INDETERMINATE,
-    ]
+    [A::ALIGNED, A::NORETURN, A::TARGET, A::TARGET_CLONES, A::TARGET_VERSION, A::INDETERMINATE]
 };
 
 /// Whether `d` itself carries an attribute of the closed list.
@@ -114,6 +110,11 @@ pub(super) fn declarator(h: &mut DefHasher<'_>, def: DeclId) -> bool {
             // return type was written trailing.
             h.u32(p.info().with_trailing_return(false).bits());
             match ast.types.exc_spec(&p) {
+                // A synthesized member's effective exception
+                // specification follows from its class and the members
+                // it calls, which the hash covers; sema computes it only
+                // when a unit needs it, so it is never hashed.
+                _ if synthesized => h.byte(2),
                 ExcSpec::Deferred(_) => h.partial(Area::Init, Site::Item(Item::UnresolvedNoexcept)),
                 ExcSpec::DependentNoexcept(_)
                 | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => {
@@ -153,15 +154,12 @@ pub(super) fn declarator(h: &mut DefHasher<'_>, def: DeclId) -> bool {
     if default_arg {
         h.partial(Area::Attrs, Site::Item(Item::DefaultArgs));
     }
+    // An implicit or defaulted member is synthesized: its token, then
+    // what sema built for it like any definition (the ctor-initializers
+    // and body it completed from the class and the special members
+    // overload resolution selected for each subobject).
     if synthesized {
-        h.partial(Area::Init, Site::Item(Item::Synthesized));
-    }
-    match n.kind() {
-        DeclKind::CXXConstructor => h.partial(Area::Init, Site::Item(Item::Constructor)),
-        DeclKind::CXXDestructor if spec.is_virtual() => {
-            h.partial(Area::Init, Site::Item(Item::VirtualDestructor));
-        }
-        _ => {}
+        h.byte(T_SYNTHESIZED);
     }
     true
 }

@@ -1737,8 +1737,11 @@ oracle of the `.mason.meta` definition rows (kind 2, spec/codegen.md §5.5
 groups the kind 2 rows of all units by key. It reports (a) keys whose
 rows disagree in `hash` among rows of one `odr.scheme` (rows of different
 schemes are not compared), (b) K13 pairs: a key with an `EXPLICIT_SPEC`
-row and an `IMPLICIT_INST` row, and (c) the row count of each flag and
-the share of `PARTIAL` rows. Its exit status is 1 when (a) or (b) is not
+row and an `IMPLICIT_INST` row, (c) the row count of each flag and
+the share of `PARTIAL` rows, and (d) how many keys of (a) disagree
+among their rows without `PARTIAL` alone (WP-1583: a complete hash that
+differs is a real difference or a hasher bug, never a skipped
+construct). Its exit status is 1 when (a) or (b) is not
 empty, 2 on a malformed section, else 0. `--names` names each reported
 key by the symbol of an object carrying it (FNV-1a 64 of the name);
 `--quiet` prints only the counts. It is not part of `ci`: each K-3

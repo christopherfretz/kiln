@@ -15,7 +15,10 @@ odr.md O-15), groups the kind 2 rows of all units by `key` and reports:
   (b) K13 pairs: a key with an `EXPLICIT_SPEC` row and an `IMPLICIT_INST`
       row (an explicit specialization declared after an implicit
       instantiation in another unit);
-  (c) per-flag row counts and the share of `PARTIAL` rows.
+  (c) per-flag row counts and the share of `PARTIAL` rows;
+  (d) of the keys of (a), those whose rows WITHOUT `PARTIAL` already
+      disagree (a complete hash differs: a real difference or a hasher
+      bug, never a skipped construct).
 
 The exit status is 1 when (a) or (b) is not empty, 2 on a malformed input,
 else 0. `--names` resolves each reported key back to a symbol name through
@@ -217,7 +220,7 @@ def main(argv):
     def show(k):
         return names.get(k, f"{k:#018x}") if args.names else f"{k:#018x}"
 
-    disagree, k13 = [], []
+    disagree, k13, full = [], [], 0
     counts = defaultdict(int)
     total = 0
     for key in sorted(by_key):
@@ -233,6 +236,9 @@ def main(argv):
         for scheme, hashes in sorted(per_scheme.items(), key=lambda x: str(x[0])):
             if len(hashes) > 1:
                 disagree.append((key, scheme, sorted(hashes.values())))
+                complete = {h for s, h, f, _w in rows if s == scheme and not f & PARTIAL}
+                if len(complete) > 1:
+                    full += 1
         spec = [w for _s, _h, f, w in rows if f & EXPLICIT_SPEC]
         inst = [w for _s, _h, f, w in rows if f & IMPLICIT_INST]
         if spec and inst:
@@ -248,7 +254,7 @@ def main(argv):
     print("flags: " + ", ".join(f"{n} {counts[b]}" for b, n in FLAGS))
     share = 100.0 * counts[PARTIAL] / total if total else 0.0
     print(f"PARTIAL share {share:.1f}%")
-    print(f"disagreeing keys {len(disagree)}, K13 pairs {len(k13)}")
+    print(f"disagreeing keys {len(disagree)} (non-PARTIAL {full}), K13 pairs {len(k13)}")
     return 1 if disagree or k13 else 0
 
 
