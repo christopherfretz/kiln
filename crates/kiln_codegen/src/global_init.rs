@@ -1081,6 +1081,11 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// clang `addCompilerUsedGlobal`.
+    pub(crate) fn gi_add_compiler_used(&mut self, v: Value) {
+        self.gi.compiler_used.push(v);
+    }
+
     /// clang `addUsedGlobal`.
     pub(crate) fn gi_add_used(&mut self, v: Value) {
         self.gi.used.push(v);

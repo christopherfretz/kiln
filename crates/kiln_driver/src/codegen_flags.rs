@@ -23,7 +23,8 @@
 //!    `-mtls-dialect=` (x86-64: `llc -enable-tlsdesc` for `gnu2`); WP-1422's
 //!    `-ftls-model=` and `-m[no-]outline`; WP-1419's `-mlarge-data-threshold=`
 //!    (x86-64), `-mcmodel=` being checked against the target and the PIC
-//!    mode, [`CodegenFlags::code_model_error`]), the
+//!    mode, [`CodegenFlags::code_model_error`]); WP-1557's kiln-only
+//!    `-f[no-]mason-metadata[=min|default|detail|all]`), the
 //!    target checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]common`, `-fstack-usage`, the default
@@ -199,6 +200,10 @@ pub struct CodegenFlags {
     /// the default TLS model ([`Self::tls_model`]), its value checked by
     /// [`Self::invocation_errors`].
     pub tls_model: Option<(String, String)>,
+    /// The last of `-fmason-metadata[=<level>]` / `-fno-mason-metadata`
+    /// (WP-1557; kiln only): the level of the `.mason.meta` unit for the
+    /// mortar linker, `None` (the default) for none.
+    pub mason_meta: Option<kiln_codegen::MasonMetaLevel>,
 }
 
 /// clang's `-fzero-call-used-regs=` values.
@@ -331,6 +336,8 @@ impl CodegenFlags {
             "-fno-xray-ignore-loops" => self.xray_ignore_loops = false,
             "-flto" => self.lto = Some(false),
             "-fno-lto" => self.lto = None,
+            "-fmason-metadata" => self.mason_meta = Some(kiln_codegen::MasonMetaLevel::Default),
+            "-fno-mason-metadata" => self.mason_meta = None,
             "-fsplit-lto-unit" => self.split_lto_unit = Some(true),
             "-fno-split-lto-unit" => self.split_lto_unit = Some(false),
             _ if IGNORED.contains(&arg) => {}
@@ -366,6 +373,13 @@ impl CodegenFlags {
                 _ => return unsupported(),
             },
             "-ftrapv-handler" => self.trapv_handler = Some(v.to_owned()),
+            // WP-1557: an unknown level is the usual invalid value.
+            "-fmason-metadata" => match kiln_codegen::MasonMetaLevel::from_name(v) {
+                Some(l) => self.mason_meta = Some(l),
+                None => {
+                    return Some(Err(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())));
+                }
+            },
             // WP-1411: clang's driver passes the last one to `-cc1`, which
             // checks it ([`Self::invocation_errors`]).
             "-mstack-probe-size" => self.stack_probe_size = Some((arg.to_owned(), v.to_owned())),
@@ -892,6 +906,30 @@ mod tests {
         let mut f = CodegenFlags::default();
         let r = args.iter().map(|a| f.parse_arg(a)).collect();
         (f, r)
+    }
+
+    /// WP-1557: `-fmason-metadata[=level]`, its negation, last wins, an
+    /// unknown level rejected; off by default.
+    #[test]
+    fn mason_metadata_levels() {
+        use kiln_codegen::MasonMetaLevel as L;
+        let level = |args: &[&str]| parse(args).0.mason_meta;
+        assert_eq!(CodegenFlags::default().mason_meta, None);
+        assert_eq!(level(&["-fmason-metadata"]), Some(L::Default));
+        assert_eq!(level(&["-fmason-metadata=min"]), Some(L::Min));
+        assert_eq!(level(&["-fmason-metadata=default"]), Some(L::Default));
+        assert_eq!(level(&["-fmason-metadata=detail"]), Some(L::Detail));
+        assert_eq!(level(&["-fmason-metadata=all"]), Some(L::All));
+        assert_eq!(level(&["-fmason-metadata=all", "-fno-mason-metadata"]), None);
+        assert_eq!(level(&["-fno-mason-metadata", "-fmason-metadata=min"]), Some(L::Min));
+        assert_eq!(level(&["-fmason-metadata=detail", "-fmason-metadata"]), Some(L::Default));
+        let (f, r) = parse(&["-fmason-metadata=min", "-fmason-metadata=max"]);
+        assert_eq!(f.mason_meta, Some(L::Min));
+        assert_eq!(
+            r[1],
+            Some(Err(ArgError::InvalidFlagValue("-fmason-metadata=max".into(), "max".into())))
+        );
+        assert_eq!(parse(&["-fmason-metadata="]).1[0].as_ref().map(Result::is_err), Some(true));
     }
 
     #[test]

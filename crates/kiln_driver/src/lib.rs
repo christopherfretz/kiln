@@ -26,6 +26,7 @@ mod help;
 pub mod hod;
 pub mod link;
 pub mod llvm;
+mod mason_meta;
 pub mod module_cache;
 mod pch;
 #[doc(hidden)]

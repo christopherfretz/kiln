@@ -47,6 +47,7 @@ pub mod ignorelist;
 mod lambda;
 mod lifetime;
 mod loop_md;
+mod mason_meta;
 mod memptr;
 mod module;
 mod module_init;
@@ -91,6 +92,7 @@ use kiln_llvm::Module;
 pub use kiln_llvm::{TlsModel, Visibility};
 use kiln_oven::Oven;
 use kiln_source::Loc;
+pub use mason_meta::{MasonMetaLevel, MasonMetaOptions, StdlibSummary};
 
 /// Options controlling code generation.
 #[derive(Clone, Debug)]
@@ -372,6 +374,11 @@ pub struct CodegenOptions {
     /// With [`Self::lto`], the module flags clang's backend pipeline adds
     /// (`ThinLTO`, `EnableSplitLTOUnit`); off under `-disable-llvm-passes`.
     pub lto_module_flags: bool,
+    /// `-fmason-metadata[=level]` (WP-1557): the module gets one
+    /// `.mason.meta` unit for the mortar linker's link-time checks
+    /// (spec/codegen.md "Link-time metadata (`.mason.meta`)"); `None`
+    /// (the default) writes none.
+    pub mason_meta: Option<MasonMetaOptions>,
 }
 
 /// The kind of LTO a module is compiled for (clang
@@ -827,6 +834,7 @@ impl Default for CodegenOptions {
             ignorelist: None,
             lto: None,
             lto_module_flags: true,
+            mason_meta: None,
         }
     }
 }

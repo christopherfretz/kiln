@@ -2061,6 +2061,116 @@ with no coverage flag the IR is unchanged, byte for byte.
   except the differences its `KNOWN` table names, which must stay
   different). Results and the compile-time overhead: spec/landed/codegen/WP-941.md.
 
+### 5.5 Link-time metadata (`.mason.meta`) (WP-1557; `mason_meta.rs`)
+
+`-fmason-metadata[=min|default|detail|all]` (spec/driver.md "Codegen
+flags"; off by default) puts metadata for the mortar linker's link-time
+checks into each object: one **unit** of mortar's container, whose bytes
+mortar's `spec/meta.md` fixes (rule ids MT-n below are that spec's, at
+mortar `afbdb15`); what the records mean is mortar's `spec/odr.md` (O-n).
+Every other linker drops the section (`SHF_EXCLUDE`), so an object with it
+links as before.
+
+**What is written, and when.** `CodegenOptions::mason_meta` (`None`: no
+unit, and the module is byte-identical to one built without the flag).
+With it, `Cg::emit_mason_meta` runs once per module at the end of module
+emission (after the deferred definitions, vtables and placeholders, right
+before the global-initializer trailer writes `@llvm.used` and
+`@llvm.compiler.used`) and adds exactly one global:
+
+```llvm
+@__mason_meta = private constant [N x i8] c"MASN...", section ".mason.meta", align 8, !exclude !0
+@llvm.compiler.used = appending global [1 x ptr] [ptr @__mason_meta], section "llvm.metadata"
+!0 = !{}
+```
+
+| property | why (mortar's rule) |
+|---|---|
+| section name `.mason.meta` | MT-1: a reader finds the container by name and type only |
+| `!exclude` with an empty node | llc lowers it to `SHF_EXCLUDE`, the section's only flag (MT-1, MT-6); every linker drops it from a final output (MT-3) |
+| in `@llvm.compiler.used`, not `@llvm.used` | keeps the unreferenced global through `opt` at every level; `@llvm.used` would add `SHF_GNU_RETAIN`, which fails MT-6's "flags exactly `SHF_EXCLUDE`" |
+| `private`, no `comdat` | no symbol, and in no group (MT-2, MT-20: a record survives whichever COMDAT copy the link keeps; a grouped section fails MT-6) |
+| an initializer of plain bytes | no relocation section can apply to it (MT-2, MT-2a: a relocated container is not one) |
+| `align 8` | MT-1's `sh_addralign` 8; units are 8-aligned and padded (MT-10) |
+| not thread-local; `no_sanitize_address` / `no_sanitize_hwaddress` under `-fsanitize=address` / `hwaddress` | a TLS or redzoned global would change the section's type, flags or size |
+
+The object then has one `.mason.meta` section: `SHT_PROGBITS`, flags
+exactly `SHF_EXCLUDE`, alignment 8, entry size, link and info 0, in no
+group, no `.rela.mason.meta` (checked at `-O0` and `-O2` by
+`crates/kiln_driver/tests/mason_meta.rs` with its own ELF reader).
+
+**The unit** (`encode_unit`, a pure function from blocks to bytes): the
+32-byte header of MT-10 (magic `MASN`, major 1, minor 0, `unit_size` a
+multiple of 8, `header_size` 32, `block_count`, the string table's offset
+and size, producer 1 = kiln, flags 0), then the blocks sorted by kind, at
+most one per kind (MT-11; each a 16-byte header, `row_count` rows of
+`row_size` bytes, padded to 8), then the string table (MT-12: offset 0 is
+the empty string, every string NUL-terminated, inside the unit after the
+blocks), then zero padding to a multiple of 8. All integers are
+little-endian on every target (§4). A later record kind adds a `Block`;
+the framing does not change.
+
+**Kind 1, the TU summary** (MT-26; `Cg::mason_summary_rows`): rows
+`{u32 name; u32 value; u32 flags; u32 reserved}`, both strings, sorted by
+name bytes, names unique, flag bit 0 `ENFORCE`:
+
+| name | value | `ENFORCE` | read from |
+|---|---|---|---|
+| `abi.char` | `signed` / `unsigned` | yes | the target's `char_signed` after `-f[un]signed-char` (`Target::types`) |
+| `abi.exceptions` | `on` / `off` | no | `CodegenOptions::exceptions` |
+| `abi.long-double` | size in bits (`sizeof(long double) * 8`) | yes | the target's builtin layout |
+| `abi.rtti` | `on` / `off` | no (O-25 reads it; N24) | `CodegenOptions::rtti` |
+| `abi.short-enums` | `on` / `off` | yes | the driver's `-f[no-]short-enums` (the value sema used), `MasonMetaOptions::short_enums` |
+| `abi.stdlib` | `libc++` / `libstdc++` | yes | the driver's resolved `-stdlib=`; C++ units only |
+| `abi.stdlib-abi` | libstdc++: `_GLIBCXX_USE_CXX11_ABI`'s value; libc++: `_LIBCPP_ABI_VERSION`'s | yes | the preprocessor's macro table at the end of the TU; written only when the library's own macro (`__GLIBCXX__`, `_LIBCPP_VERSION`) is defined there, so a TU that includes no library header has no row |
+| `abi.stdlib-debug` | libstdc++: `_GLIBCXX_DEBUG`, else `_GLIBCXX_ASSERTIONS`, else `off`; libc++: the hardening mode's macro name (`_LIBCPP_HARDENING_MODE_FAST`, `..._EXTENSIVE`, `..._DEBUG`), `off` for `..._NONE` | yes only for `_GLIBCXX_DEBUG` (the one layout-changing mode; no libc++ hardening mode changes a layout) | as `abi.stdlib-abi` |
+| `abi.wchar` | size in bytes | yes | the target's builtin layout |
+| `isa` | the module's `target-features` string (the one a function without a `target` attribute gets) | no | `Cg::features_attr(None)` |
+| `lang` | `c` / `c++` | no | `CodegenOptions::c` |
+| `producer` | `kiln <version>` | no | the driver's version |
+| `source` | the main file's path as given on the command line, after `-ffile-prefix-map` / `-fdebug-prefix-map` (never made absolute) | no | `CodegenOptions::source_filename` through `DebugOptions::remap` |
+| `std` | the standard's base name (`c++20`, `c17`; `gnu++20` is `c++20`) | no | the driver's `LangStd::base` |
+
+Values that a macro holds are its integer value when its replacement list
+(object-like macros expanded) is an integer literal or `(`, `)`, `<<`,
+`|` over them (libc++'s `(1 << 2)`), else its tokens joined by spaces.
+Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
+`reloc-model` (hod's own unit, H-3), and `odr.scheme`: kiln writes no
+kind 2 or 3 rows, so there is no hash scheme to name (O-11 compares rows
+of kinds 2 and 3 only, and names units "without a scheme"). C units have
+no `abi.stdlib*` rows.
+
+**Levels.** `min`, `default`, `detail` and `all` are recorded
+(`MasonMetaOptions::level`) and today write the same unit, kind 1 alone.
+**Not written yet** (later work packages): kind 2 (ODR definitions,
+O-14/O-15, `min` and up), kind 3 (type definitions, O-17), kind 5
+(declarations, O-35; `default` and up), kind 4 (layout details, O-18;
+`detail` and up), and `all`'s rows for definitions inlined away. Kind 2
+will need codegen to record the vague-linkage definitions it emits
+(their symbol names, linkage and comdat), which it does not keep today.
+
+**Determinism** (MT-38): the unit is a function of the TU and its
+options: rows sorted, strings laid out in the order the sorted rows first
+use them and stored once, zero padding, no pointer values, no time, no
+hash-map iteration order (the target features are a sorted map), and the
+source path rewritten by the prefix maps. Test: one TU compiled from two
+directories with `-ffile-prefix-map=<dir>=/src` gives identical sections
+(`mason_meta.rs` `same_bytes_from_two_directories`).
+
+**Routes.** The default route (`llc`) lowers the global to the section
+above at every `-O` level. `-flto` is a named non-goal (mortar has no LTO
+yet): the global is still written into the bitcode, and what the LTO link
+makes of it is not specified. The hod route (`-fkiln-backend=hod`) needs
+hod's lowering of `!exclude` (hod `a598555f` or later, its H-1); an older
+hod declines the module and kiln falls back to `llc` with a warning. `-S -emit-llvm`
+shows the global.
+
+Tests: `mason_meta.rs` unit tests (a decoder written from mortar's spec,
+every MT-14 validity rule asserted on the encoder's output),
+`crates/kiln_driver/tests/mason_meta.rs` (IR shape for C++, C and
+`-flto`; the object section; the rows; determinism; PCH and BMI either
+way), `codegen_flags.rs` `mason_metadata_levels`.
+
 ## 6. Validation
 - **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight

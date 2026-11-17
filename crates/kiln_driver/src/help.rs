@@ -130,6 +130,9 @@ CODE GENERATION:
                           Relocation model (default -fPIE)
   -flto[=<kind>]          Link-time optimization: full (default) or thin
   -fno-lto                No link-time optimization
+  -fmason-metadata[=<min|default|detail|all>], -fno-mason-metadata
+                          [kiln] Write metadata for the mortar linker's
+                          link-time checks into each object (off by default)
   -fvisibility=<visibility>
                           Default symbol visibility: default, hidden,
                           protected or internal
@@ -426,6 +429,7 @@ mod tests {
             "N" => "16",
             "none|pre|all" => "pre",
             "on|off" => "off",
+            "min|default|detail|all" => "detail",
             _ => panic!("{form}: no sample value for <{ph}>; add one to `sample`"),
         }
     }
@@ -516,6 +520,7 @@ mod tests {
             "--llvm-dir=<dir>",
             "-fkiln-backend=<backend>",
             "--hod=<file>",
+            "-fmason-metadata[=<min|default|detail|all>]",
             "-fconstexpr-memory=<size>",
             "-fkiln-instantiation-report[=<format>]",
             "-fconstexpr-stats",
@@ -535,6 +540,8 @@ mod tests {
                         "-fconstexpr-report=",
                         "-fconstexpr-stats",
                         "-fconstexpr-profile",
+                        "-fmason-metadata",
+                        "-fno-mason-metadata",
                     ]
                     .iter()
                     .any(|p| f.starts_with(p))

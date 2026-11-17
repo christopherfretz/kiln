@@ -563,6 +563,8 @@ impl<'a> Cg<'a> {
         }
         self.emit_vtables_opportunistically()?;
         self.resolve_placeholders()?;
+        // WP-1557: the `.mason.meta` unit, before the used lists.
+        self.emit_mason_meta();
         self.emit_global_init_trailer()?;
         self.emit_contract_defaults()?;
         self.check_aliases();
@@ -2980,7 +2982,7 @@ impl<'a> Cg<'a> {
     /// The `target-features` string of function `d`
     /// ([`Self::feature_map`]); clang lists the enabled features sorted,
     /// then the disabled ones sorted.
-    fn features_attr(&self, d: Option<DeclId>) -> String {
+    pub(crate) fn features_attr(&self, d: Option<DeclId>) -> String {
         let f = self.feature_map(d);
         let on = f.iter().filter(|e| *e.1).map(|e| format!("+{}", e.0));
         let off = f.iter().filter(|e| !*e.1).map(|e| format!("-{}", e.0));

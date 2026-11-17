@@ -129,6 +129,12 @@ Planned as 1.3.0.
   `is_nothrow_applicable_type` and `apply_result` (WP-1505, P1317), for a
   callable type and a tuple-like type
   ([spec/reflection-traits.md](spec/reflection-traits.md) §1.4).
+- `-fmason-metadata[=min|default|detail|all]` and `-fno-mason-metadata`
+  (WP-1557; kiln only, off by default): each object gets a `.mason.meta`
+  section of metadata for the mortar linker's link-time checks, today a
+  summary of the translation unit's ABI-affecting options. Other linkers
+  drop the section; output without the flag is unchanged
+  ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed
 
