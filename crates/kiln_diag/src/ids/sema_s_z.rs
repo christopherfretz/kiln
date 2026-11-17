@@ -246,6 +246,7 @@ sema_type_aware_operator_delete_dependent_param_type = Error (4) "type aware {1:
 sema_type_aware_operator_delete_param_type = Error (4) "{2} parameter of type aware{1:| destroying} '{0}' must have type {3}";
 sema_type_aware_operator_new_dependent_param_type = Error (4) "type aware '{0}' cannot take a dependent type as its {1} parameter; use {2} ({3}) instead";
 sema_type_aware_operator_new_param_type = Error (4) "type aware '{0}' takes type {2} ({3}) as {1} parameter";
+sema_type_constraint_missing_arguments = Error (1) "'{0}' requires more than 1 template argument; provide the remaining arguments explicitly to use it here";
 sema_type_defined_in_alias_template = Error (1) "{0} cannot be defined in a type alias template";
 sema_type_defined_in_condition = Error (1) "{0} cannot be defined in a condition";
 sema_type_defined_in_enum = Error (1) "{0} cannot be defined in an enumeration";

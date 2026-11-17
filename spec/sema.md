@@ -6401,8 +6401,13 @@ under its own name, the same signature, gating and codegen
     - `__builtin_ffsg(x)` / `__builtin_clrsbg(x)`: `x` a signed integer of
       any width, `_BitInt` included, not `bool` or an enumeration (`1st
       argument must be a scalar signed integer type`);
-      `__builtin_parityg(x)`: as `__builtin_popcountg`. The result is
-      `int`, constant when `x` is (the `ffs`/`clrsb`/`parity` rules).
+      `__builtin_parityg(x)`: an unsigned integer, not `bool` or an
+      enumeration (GCC's rule; clang's `__builtin_popcountg` takes both;
+      `1st argument must be a scalar unsigned integer type`; WP-1612). The
+      result is `int`, constant when `x` is (the `ffs`/`clrsb`/`parity`
+      rules). clang's `g` builtins (`clzg`, `ctzg`, `popcountg`) keep
+      clang's operand rule, `bool` and an unsigned unscoped enumeration
+      accepted (GCC rejects both; `expr.const/builtins-bits-generic-bool-enum.cpp`).
     - `__builtin_puts(s)`: a library row (`LIBC_FWD`), a call of `puts`,
       never constant. `__builtin_strstr`, `__builtin_index` and
       `__builtin_rindex` are clang's rows and, as in clang 22, are not

@@ -607,6 +607,9 @@ impl Sema<'_, '_> {
         range: Span,
     ) -> Result<crate::templ::args::ConvertedArgs, ()> {
         let name_loc = range.lo;
+        if self.spec_args_invalid(args) {
+            return Err(());
+        }
         let conv = self.check_template_args(tmpl, args, locs, name_loc)?;
         let types = &self.ast.types;
         // A member template of a templated class has a dependent name
@@ -674,6 +677,18 @@ impl Sema<'_, '_> {
             return Err(());
         }
         Ok(conv)
+    }
+
+    /// Whether a written argument of an explicit or partial
+    /// specialization's template-id holds an error (`A<decltype(f())>`
+    /// with `f` undeclared): the argument was diagnosed, and the whole
+    /// declaration is invalid and dropped, so neither it nor a later
+    /// declaration with an equally invalid argument list is reported again
+    /// (clang's `CheckTemplateArgumentList` failing in
+    /// `ActOnClassTemplateSpecialization` / `ActOnVarTemplateSpecialization`;
+    /// WP-1612).
+    pub(crate) fn spec_args_invalid(&self, args: &[TemplateArg]) -> bool {
+        args.iter().any(|&a| self.ast.types.arg_flags(a).contains(TypeFlags::CONTAINS_ERROR))
     }
 
     /// Whether argument `a` that names non-type parameter `p` of the
@@ -838,6 +853,9 @@ impl Sema<'_, '_> {
         range: Span,
     ) -> Result<DeclId, ()> {
         let name_loc = range.lo;
+        if self.spec_args_invalid(args) {
+            return Err(());
+        }
         let spec = self.get_class_spec(tmpl, args, locs, name_loc)?;
         if !self.check_spec_scope(tmpl, false, name_loc) {
             return Err(());

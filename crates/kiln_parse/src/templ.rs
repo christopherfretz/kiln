@@ -823,21 +823,54 @@ impl Parser<'_, '_> {
     /// ([temp.param]/4).
     fn parse_constrained_param(&mut self, concept: DeclId) -> bool {
         let loc = self.loc();
-        let Some((_, args)) = self.parse_concept_name() else { return false };
+        let Some((_, args, valid)) = self.parse_type_constraint(true) else { return false };
         let (pack, name, at) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_constrained_template_param(concept, &args, loc, pack, (name, at));
+        // An invalid type-constraint (diagnosed) leaves the parameter
+        // unconstrained, so its uses are not reported again.
+        let p = if valid {
+            self.s.act_on_constrained_template_param(concept, &args, loc, pack, (name, at))
+        } else {
+            self.s.act_on_type_template_param(false, loc, pack, name, at)
+        };
         self.parse_type_param_default(p)
     }
 
     /// A (qualified) concept name with optional template arguments: a
-    /// type-constraint ([temp.param]/2). Returns the concept and its
-    /// explicit arguments.
-    pub(crate) fn parse_concept_name(&mut self) -> Option<(DeclId, Vec<TemplateArg>)> {
-        self.parse_concept_name_or(DiagId::parse_expected_unqualified_id)
+    /// type-constraint ([temp.param]/2). Returns the concept, its explicit
+    /// arguments, and whether they are valid as the concept-id with the
+    /// constrained type first (`Sema::check_type_constraint_args`,
+    /// WP-1610; false after a diagnostic).
+    /// `full`: the list is checked now (`Sema::check_type_constraint_args`).
+    pub(crate) fn parse_type_constraint(
+        &mut self,
+        full: bool,
+    ) -> Option<(DeclId, Vec<TemplateArg>, bool)> {
+        self.parse_type_constraint_or(DiagId::parse_expected_unqualified_id, full)
     }
 
-    /// [`Self::parse_concept_name`], reporting `not_concept` at a name
-    /// that is not a concept.
+    fn parse_type_constraint_or(
+        &mut self,
+        not_concept: DiagId,
+        full: bool,
+    ) -> Option<(DeclId, Vec<TemplateArg>, bool)> {
+        let mut name_loc = self.loc();
+        let mut i = self.pos();
+        // The concept's name, after any qualifier (clang's location).
+        while self.ident_of(self.tok_at(i)).is_some()
+            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
+            || Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon)
+        {
+            i += if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) { 1 } else { 2 };
+            name_loc = self.tok_at(i).span.lo;
+        }
+        let written = Self::punct_of(self.tok_at(i + 1)) == Some(Punct::Less);
+        let (c, args) = self.parse_concept_name_or(not_concept)?;
+        let valid = self.s.check_type_constraint_args(c, &args, written, full, name_loc);
+        Some((c, args, valid))
+    }
+
+    /// [`Self::parse_type_constraint`]'s concept name and arguments,
+    /// reporting `not_concept` at a name that is not a concept.
     fn parse_concept_name_or(&mut self, not_concept: DiagId) -> Option<(DeclId, Vec<TemplateArg>)> {
         let qual = self.parse_nested_name().ok()?;
         let name = self.ident()?;
@@ -2142,8 +2175,10 @@ impl Parser<'_, '_> {
                     self.error_here(missing);
                     return None;
                 }
-                let (c, args) = self.parse_concept_name_or(missing)?;
-                constraint = Some(self.s.act_on_return_type_requirement(c, &args, loc));
+                let (c, args, valid) = self.parse_type_constraint_or(missing, true)?;
+                if valid {
+                    constraint = Some(self.s.act_on_return_type_requirement(c, &args, loc));
+                }
             }
             Requirement::Compound { expr, noexcept, constraint }
         } else if self.at_kw(Kw::Typename) && !self.typename_requirement_is_expression() {

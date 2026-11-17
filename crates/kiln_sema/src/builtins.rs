@@ -1281,17 +1281,15 @@ impl Sema<'_, '_> {
     /// GCC's `__builtin_clrsbg` / `__builtin_ffsg` (one signed integer of
     /// any width, not `bool` or an enumeration: GCC "has unsigned type",
     /// "has boolean type", "has enumerated type") and `__builtin_parityg`
-    /// (an unsigned integer, as [`Sema::builtin_popcountg`]); WP-1552. The
-    /// call is an `int` prvalue.
+    /// (an unsigned integer, not `bool` or an enumeration: GCC's rule,
+    /// stricter than clang's `__builtin_popcountg`, which takes both;
+    /// WP-1612); WP-1552. The call is an `int` prvalue.
     fn builtin_bits_generic(
         &mut self,
         id: u32,
         args: &[ExprId],
         rparen: Loc,
     ) -> Option<(Vec<ExprId>, QualType)> {
-        if id == builtin::PARITYG {
-            return self.builtin_popcountg(args, rparen);
-        }
         if !self.builtin_arg_count(args, 1, rparen) {
             return None;
         }
@@ -1300,15 +1298,18 @@ impl Sema<'_, '_> {
         if t == QualType::ERROR {
             return None;
         }
+        let signed = id != builtin::PARITYG;
         let ok = self.ast.types.is_integral(t)
             && self.ast.types.as_enum(t).is_none()
             && self.ast.types.builtin(t) != Some(BuiltinType::Bool)
-            && conv::rank::int_signed(self, t);
+            && conv::rank::int_signed(self, t) == signed;
         if !ok {
+            let what =
+                if signed { "scalar signed integer type" } else { "scalar unsigned integer type" };
             let msg = self
                 .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
                 .arg(0)
-                .arg("scalar signed integer type")
+                .arg(what)
                 .arg(self.ty_arg(t));
             self.emit(msg);
             return None;

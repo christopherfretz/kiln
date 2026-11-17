@@ -33,11 +33,13 @@ TranslationUnitDecl
 |   |     `-IntegerLiteral 'int' 0
 |   |-FunctionTemplateDecl tm
 |   | |-TemplateTypeParmDecl referenced class depth 1 index 0 U
-|   | `-CXXMethodDecl tm 'int (U)' implicit-inline
-|   |   |-ParmVarDecl 'U'
-|   |   `-CompoundStmt
-|   |     `-ReturnStmt
-|   |       `-IntegerLiteral 'int' 0
+|   | |-CXXMethodDecl tm 'int (U)' implicit-inline
+|   | | |-ParmVarDecl 'U'
+|   | | `-CompoundStmt
+|   | |   `-ReturnStmt
+|   | |     `-IntegerLiteral 'int' 0
+|   | `-CXXMethodDecl tm 'int (int)' implicit-inline
+|   |   `-ParmVarDecl 'int'
 |   |-CXXMethodDecl referenced d 'auto ()' implicit-inline
 |   | `-CompoundStmt
 |   |   `-ReturnStmt
@@ -64,11 +66,11 @@ TranslationUnitDecl
 |       |-CallExpr 'long' lvalue
 |       | `-MemberExpr '<bound member function type>' ->r
 |       |   `-CXXThisExpr 'A<T> *' implicit this
-|       |-CallExpr '<dependent type>'
+|       |-CallExpr 'int'
 |       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->ov
 |       | | `-CXXThisExpr 'A<T> *' this
 |       | `-IntegerLiteral 'int' 1
-|       |-CallExpr '<dependent type>'
+|       |-CallExpr 'int'
 |       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
 |       | | `-CXXThisExpr 'A<T> *' this
 |       | `-IntegerLiteral 'int' 1

@@ -386,6 +386,44 @@ parameter shall not have associated constraints; a requires-clause in its
 accepts both silently: kiln follows the wording here. A variable template
 template parameter's template-head may carry a requires-clause.
 
+**Type-constraint argument lists** ([temp.param]/4,
+[dcl.type.auto.deduct]/4, [expr.prim.req.compound]/1.3.1,
+[temp.arg.general]/1, [temp.variadic]; WP-1610). A type-constraint
+`C<A...>` names `C<X, A...>` with the constrained type `X` first, and its
+list is checked as that concept-id's (`Sema::check_type_constraint_args`,
+called from the parser's `parse_type_constraint`; clang's
+`CheckConceptTemplateId`): a pack expansion whose first element would
+take a non-pack parameter of the concept (`G<Us...>` and `G<Us..., int>`
+for `template<class T, class U> concept G`, `H<Us...>` for `template<class
+T, class U, class... Vs>`) is "pack expansion used as argument for
+non-pack parameter of concept" at the expansion with the parameter's note;
+an expansion past the last parameter of a concept without a pack, or too
+many arguments, is "too many template arguments for concept"; too few
+after a written `<...>` "too few", both at the concept's name with the
+concept's note; no list at all for a concept with a second parameter that
+is not a pack and has no default is clang's "'G' requires more than 1
+template argument; provide the remaining arguments explicitly to use it
+here" (`sema_type_constraint_missing_arguments`). An expansion that lands
+on the concept's pack (`F<Us...>`, `F<int, Us...>`, `F<Us..., int>` for
+`template<class T, class... Us> concept F`) or a concept whose first
+parameter is the pack is fine, empty packs included. When: a constrained
+template parameter, a function or lambda parameter's placeholder and a
+return-type-requirement at the type-constraint (clang 22 and GCC 16.1
+agree, except that GCC accepts `G<Us..., int>`; the text and clang reject
+it); a variable's or a return type's placeholder only for the missing list
+there, the rest when the placeholder is deduced
+(`check_placeholder_constraint`, at the placeholder's `auto`), with the
+substituted list in an instantiation: clang 22 does that, GCC 16.1 also
+rejects `G<Us...> auto f()` at the definition. After the error the
+parameter or placeholder is unconstrained and the requirement has no
+type-constraint, so nothing is reported twice. Remainder: a variable's
+placeholder in a template whose constraint is dependent but whose
+initializer is not (`G<Us...> auto y = 1;`) is deduced by clang at the
+definition, which reports the expansion there; kiln keeps it dependent and
+checks the substituted list at instantiation, where it may fit. Tests
+`temp.param/p4-type-constraint-argument-list-{reject,valid}.cpp`,
+`dcl.type.auto.deduct/p4-type-constraint-list-checked-at-deduction.cpp`.
+
 **Concept heads** ([temp.param]/14). A concept's template-head is checked
 like a primary class template's for packs: a template parameter pack
 before the last parameter is "template parameter pack must be the last
@@ -743,50 +781,83 @@ as an ambiguity with a member of the dependent base, is an error there
 `temp.dep.type/member-template-also-in-dependent-base.cpp`,
 `temp.names/p7-type-only-context-terminal-name-template-run.cpp`.
 
-A member *call* through the current instantiation (`this->fn(42)`, an
-implicit `this` calling `mf()`, `A0::nf()` of a non-dependent base) is
-not type-dependent by [temp.dep.expr]/5 when its result cannot change at
-instantiation, so `auto b = this->fn(42); b.bfn<int>()` needs no
-`template` (WP-1570, WP-1530's remainder; clang 22 keeps such calls
-dependent, GCC 16.1 accepts most: the text decides). The member access
-itself stays type-dependent (`kiln_ast` builder `member` drops the type
-dependence only for a field); the call does not
-(`Sema::current_instantiation_call_type` in `dependent_call`) when all of
-these hold:
-- no argument is type-dependent;
-- the callee (through parentheses) is a `MemberExpr` whose object is
-  `this`, explicit or implicit, naming one non-template member function
-  (no overload set, no explicit template arguments);
-- the function's type is not dependent and holds no placeholder;
-- the result (through a reference or a pointer) does not name an
-  incomplete class;
-- the class of `*this` is complete at the call (not on the
-  being-defined stack) and has no dependent base.
+#### Calls through `this` of the current instantiation
 
-The call then gets the function's return type and its value category
+A member *call* through the current instantiation (`this->fn(42)`, an
+implicit `this` calling `mf()`, `A0::nf()` of a non-dependent base,
+`this->ov(1)` naming an overload set, `this->ft(42)` naming a member
+template) is not type-dependent by [temp.dep.expr]/3 and /5 when its
+result cannot change at instantiation, so `auto b = this->fn(42);
+b.bfn<int>()` needs no `template` (WP-1570, WP-1530's remainder, WP-1609;
+clang 22 keeps such calls dependent, GCC 16.1 accepts most: the text
+decides). The member access itself stays type-dependent (`kiln_ast`
+builder `member` drops the type dependence only for a field); the call
+does not (`Sema::current_instantiation_call_type` in `dependent_call`,
+`templ/current_inst.rs`). The rule, cheap checks first (they decide
+before any lookup or overload resolution runs):
+1. no argument is type-dependent and none is a braced list;
+2. the callee (through parentheses) is a member access whose object is
+   `this`, explicit, implicit or as `(*this).`: a `MemberExpr` naming
+   one non-template member function, or a `CXXDependentScopeMemberExpr`
+   (an overload set or a member template); or a qualified
+   `UnresolvedLookupExpr` `C::f` without argument-dependent lookup whose
+   candidates are all static members of the current instantiation `C`;
+3. the class of `*this` (or `C`) is complete at the call (not on the
+   being-defined stack: a trailing return type or a member declaration
+   in the class body stays dependent, a default member initializer, a
+   default argument or a member function body does not) and has no
+   dependent base (any dependent base: a base may add a member or make
+   the lookup ambiguous at instantiation, [temp.dep.type]/7. Clang's
+   member lookup treats the name as a member of an unknown
+   specialization only when it finds nothing and a base is dependent,
+   but clang keeps every call through `this` type-dependent anyway; a
+   name declared in the class itself, which hides any base's, is a
+   possible later refinement);
+4. a qualifier names the class itself (`C::f`, `this->C::f`) or a
+   non-dependent base (`Q::f`); `A<T>::f` written as a template-id stays
+   dependent; explicit template arguments are not dependent;
+5. lookup of the name in that class finds only candidates instantiation
+   cannot change (`fixed_member_candidate`): valid member functions
+   without an explicit object parameter or a requires-clause, whose types
+   hold no placeholder; a non-template's type is not dependent; a member
+   template's function type, non-type parameter types and default
+   template arguments name no template parameter of an enclosing
+   template (`mark_used_type` at each outer depth), and it has no
+   type-constraint, no requires-clause and no template template
+   parameter. A conversion function name stays dependent;
+6. overload resolution against `*this` (clang 22's two-phase deferral of
+   templates included) succeeds: a call that is not viable, ambiguous or
+   deleted stays dependent and is diagnosed at instantiation, as clang
+   does for every call through `this` ([temp.res.general]/6 allows either;
+   GCC 16.1 waits too). The winner's type is not dependent and holds no
+   placeholder, and a specialization's template arguments are not
+   dependent: `template <class U> T f(U)` called as `f(1)` stays
+   dependent (the deduced specialization's type decides);
+7. the result (through a reference or a pointer) does not name an
+   incomplete class: a member access into it is checked at
+   instantiation, where the class may be complete, not rejected at
+   definition (GCC only warns; `g++.dg/template/incomplete8.C`).
+
+The call then gets the winner's return type and its value category
 ([expr.call]/14: an lvalue for an lvalue reference, an xvalue for an
-rvalue reference to an object), and stays VALUE | INST: it is not
-resolved or converted at definition (no new diagnostics there), but
-rebuilt by `act_on_call` at instantiation like any dependent call. The
-line is drawn where the result type is fixed by the definition alone;
-every excluded case keeps `<dependent type>`, which is always correct
-for valid code (it only requires `template` before a member template of
-the result):
-- an overload set or a member template would need overload resolution or
-  deduction at definition, which kiln does not do for a dependent
-  object (a dependent call is formed again anyway);
-- a deduced return type (`auto d()`) is not known before the member's
-  definition is instantiated;
-- a dependent base may add or hide a member at instantiation (a
-  using-declaration of the base's `f`, [temp.dep.type]);
-- an incomplete class (a trailing return type or a member declaration
-  in the class body) may still declare an overload a later lookup finds;
-- a result naming an incomplete class (`Heap *`) may be complete at
-  instantiation: a member access into it is checked there, not rejected
-  at definition (GCC only warns; `g++.dg/template/incomplete8.C`);
-- explicit specializations of a member function must keep the member's
-  type ([temp.expl.spec]), and default arguments do not change the
-  return type, so neither can change the result.
+rvalue reference to an object), and stays VALUE | INST: it keeps its
+callee as written, is not converted at definition (no new diagnostics
+there) and is rebuilt by `act_on_call` at instantiation like any
+dependent call, so overload resolution runs again in the specialization
+and calls an explicit specialization of the member declared after the
+template ([temp.expl.spec]: it keeps the member's type, so the result
+type agrees). Nothing a rule admits can change at instantiation: the
+candidates' types and the arguments' types are fixed, the class has all
+its members, and deduction of a member template whose signature names
+only its own parameters succeeds or fails alike. Every excluded case
+keeps `<dependent type>`, which is always correct for valid code (it only
+requires `template` before a member template of the result). Not yet
+admitted (WP-1609 remainder): an unqualified call of a static-only set
+(`so(1)`, an `UnresolvedLookupExpr`: the class whose scope the lookup
+reached is not recorded), and an unqualified template-id `tm<int>(1)`
+(built with argument-dependent lookup). A hidden friend of the class is
+not a candidate: class member lookup finding the member suppresses
+argument-dependent lookup ([basic.lookup.argdep]/3.1).
 
 With the object of `.v` no longer type-dependent, a `<` after a member
 template of the result begins a template argument list ([temp.names]/3):
@@ -795,7 +866,11 @@ at instantiation), and a now-redundant `template` stays valid
 ([temp.names]/7). Tests:
 `temp.dep.expr/p5-member-call-current-instantiation-not-type-dependent-run.cpp`,
 `temp.dep.expr/p5-member-call-current-instantiation-dependence-ast.cpp`
+and `temp.dep.expr/p5-member-call-current-instantiation-overload-set-ast.cpp`
 (where the line is drawn),
+`temp.dep.expr/p5-member-call-current-instantiation-overload-set-run.cpp`
+(every form, re-resolved at instantiation),
+`temp.dep.expr/p5-member-call-current-instantiation-overload-set-diagnosed-at-instantiation.cpp`,
 `temp.dep.expr/p5-member-call-current-instantiation-template-keyword-run.cpp`.
 
 At instantiation, `T::template f<A>` names a template when the lookup of
@@ -2117,6 +2192,14 @@ Out-of-class partial specializations of a member template (WP-150):
   Tests: `temp.spec.partial.general/pack-not-more-specialized.cpp`,
   `pack-does-not-specialize.cpp`, `var-does-not-specialize-wording.cpp`
   and `pack-partial-specializations-valid.cpp`.
+  **Invalid arguments (WP-1612).** A partial or explicit specialization
+  (class or variable template) whose written argument list holds an
+  error (`A<T, void_t<decltype(f())>>` with `f` undeclared: the argument
+  has `CONTAINS_ERROR`) is dropped before any check (`spec.rs`
+  `spec_args_invalid`, clang's failed `CheckTemplateArgumentList`): the
+  argument's own error is the only one, a second declaration with an
+  equally invalid list is no redefinition, and no use matches it
+  (`temp.spec.partial.general/invalid-argument-drops-declaration.cpp`).
 
 - *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
   the arguments are deduced from themselves; a parameter left undeduced
@@ -6927,8 +7010,8 @@ whose head the notes name. It evaluates:
     A pack expansion written before the pack's position is not split
     (the whole concept-id fails): written, it is ill-formed ("pack
     expansion used as argument for non-pack parameter of concept",
-    §3.2), so only a type-constraint's immediately-declared constraint
-    reaches it. A nested requirement whose constraint-expression
+    §3.2), and so is it in a type-constraint (below), so it no longer
+    reaches satisfaction. A nested requirement whose constraint-expression
     does not substitute as a whole is checked the same way, atom by
     atom ([expr.prim.req.nested]/1, `Sema::sat_nested_requirement`;
     clang 22 and GCC 16.1 agree). WP-1531,

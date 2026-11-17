@@ -963,8 +963,13 @@ impl Parser<'_, '_> {
                 && self.at_constrained_placeholder()
             {
                 ds.constraint_loc = self.loc();
-                match self.parse_concept_name() {
-                    Some(c) => ds.auto_constraint = Some(c),
+                // A function parameter's placeholder becomes a constrained
+                // template parameter: its list is checked now; a
+                // variable's or return type's when it is deduced. After
+                // an error the placeholder is unconstrained (WP-1610).
+                match self.parse_type_constraint(ctx == DeclaratorContext::Prototype) {
+                    Some((c, a, true)) => ds.auto_constraint = Some((c, a)),
+                    Some((_, _, false)) => {}
                     None => ds.invalid = true,
                 }
                 continue;

@@ -132,8 +132,10 @@ pub struct ConceptState {
     /// accepts; libc++ 22's `__product_iterator_traits`, WP-446).
     pub(crate) partial_access: Option<(DeclId, DeclId)>,
     /// The type-constraint location of a variable or function declared
-    /// with a constrained placeholder (`C auto x`, `C auto f()`).
-    pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
+    /// with a constrained placeholder (`C auto x`, `C auto f()`), and its
+    /// `auto` (the type-specifier; where an error in the type-constraint's
+    /// list found at deduction points, WP-1610).
+    pub(crate) placeholder_locs: FxHashMap<DeclId, (Loc, Loc)>,
     /// The requires-expressions a partial substitution left as their
     /// pattern ([`DeferredRequires`]), by the copy it returned.
     pub(crate) deferred_requires: FxHashMap<ExprId, DeferredRequires>,
