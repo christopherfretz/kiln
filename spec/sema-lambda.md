@@ -687,11 +687,19 @@ A closure object is an ordinary class object in the Oven's memory; the
   `(&ca)->v` in the body to the variable's value. A variable's
   reference is marked when its full-expression ends and shows it is an
   odr-use (`act_on_full_expr_at`; in a template definition
-  `resolve_potential_capture_list`), a binding's when it is built. A case
-  value is evaluated before its full-expression ends:
-  `mark_constant_non_odr_uses` first marks its constant uses, so `case
-  i:` in a `[=]` body reads the variable, and an odr-use there (`case
-  *&i:`) is still accepted outside a template. Reading it is
+  `resolve_potential_capture_list`), a binding's when it is built. Every
+  constant expression ends its full-expression before it is evaluated
+  (`act_on_constant_full_expr`; a case value too since WP-1606, as clang's
+  `EvaluateConvertedConstantExpression` finishes it first), so `case i:`
+  in a `[=]` body reads the variable and `case *&i:` is rejected, in and
+  outside a template (tests
+  `expr.prim.lambda.capture/odr-use-case-value{,-ok}.cpp`). The Oven
+  caches a compiled thunk per expression (`compile_thunk`): a fold of an
+  expression before its full-expression ends compiles it unmarked for
+  good. A non-type template argument's narrowing check folds it that early
+  (`templ/args.rs`), so `T<*&i>` in a `[=]` body still reads the variable;
+  clang 22 and GCC 16.1 accept it too, and it is left so (WP-1606's
+  handback). Reading it is
   diagnosed ("kiln: read of variable 'n' captured by copy is not allowed
   in a constant expression outside a call of the lambda": clang reads the
   variable and accepts), its address is not constant (clang's "pointer to

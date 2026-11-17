@@ -239,6 +239,14 @@ impl Sema<'_, '_> {
                         != IcsCompare::Better
                 }
                 _ => false,
+            })
+            && !marked.iter().any(|&c| match set.ics_of(c).first().copied() {
+                Some(Ics::UserDefined(u)) if u.func != Some(f) => {
+                    !self.is_deleted_fn(set.cand(c).func())
+                        && u.func
+                            .is_some_and(|g| self.lvalue_conversion_best(set, g, u.before, class))
+                }
+                _ => false,
             });
         for &i in &hidden {
             set.cands[i].viable = true;
@@ -250,6 +258,91 @@ impl Sema<'_, '_> {
             c.ambiguous_mark = m;
         }
         out
+    }
+
+    /// Whether conversion function `g`, through which a copy constructor
+    /// of `class` is reached, yields an lvalue reference and its implicit
+    /// object conversion `gobj` is better than that of every other
+    /// conversion function of the argument's class yielding `class` or a
+    /// class derived from it, by value or by reference. GCC 16 then binds
+    /// the move constructor's `T&&` through `g` too (it does not set the
+    /// lvalue-yielding functions aside first, as [over.match.ref]/1.1
+    /// does), so the move constructor is not viable and the copy
+    /// constructor alone is selected: clang 22 lets the conversion
+    /// function yielding the prvalue win, and kiln follows clang where
+    /// both accept (WP-1592; docs/status/deviations.md). The caller
+    /// requires that copy constructor not to be deleted (GCC selects it
+    /// and rejects). A conversion function template leaves the answer
+    /// open: not best.
+    fn lvalue_conversion_best(
+        &mut self,
+        set: &OverloadCandidateSet,
+        g: DeclId,
+        gobj: crate::conv::StandardConversion,
+        class: DeclId,
+    ) -> bool {
+        use crate::conv::IcsCompare;
+        use crate::overload::Ics;
+        let ret = self.conversion_result_type(g);
+        if !matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_)) {
+            return false;
+        }
+        let Some(&a) = set.args.first() else { return false };
+        let target = self.class_def(class);
+        let class_of = |s: &mut Self, t: QualType| {
+            let t = s.non_reference(t);
+            s.ast.types.as_record(t).map(|c| s.class_def(c))
+        };
+        let g_exact = class_of(self, ret) == Some(target);
+        for (_, h) in self.conversion_functions_all(a.ty) {
+            if h == g {
+                continue;
+            }
+            let hret = match self.kind_of(h) {
+                DeclKind::CXXConversion => self.conversion_result_type(h),
+                // A template that may yield the class leaves it open; one
+                // yielding a pointer, say, is no rival.
+                DeclKind::FunctionTemplate => {
+                    let Some(p) = self.templated_function(h) else { return false };
+                    let t = self.non_reference(self.conversion_result_type(p));
+                    let never_class = matches!(
+                        self.ast.types.canonical_view(t),
+                        TypeView::Pointer(_)
+                            | TypeView::MemberPointer { .. }
+                            | TypeView::Builtin(_)
+                    );
+                    if !never_class {
+                        return false;
+                    }
+                    continue;
+                }
+                _ => return false,
+            };
+            let Some(rc) = class_of(self, hret) else { continue };
+            if rc != target && !crate::conv::bases::is_derived_from(self, rc, target) {
+                continue;
+            }
+            match self.conv_object_ics(&a, h) {
+                Ics::Standard(hobj) => {
+                    match self.compare_ics(&Ics::Standard(gobj), &Ics::Standard(hobj)) {
+                        IcsCompare::Better => {}
+                        // GCC's tie-break on the result: an lvalue of the
+                        // class binds better than one of a derived class.
+                        IcsCompare::Indistinguishable
+                            if g_exact
+                                && rc != target
+                                && matches!(
+                                    self.ast.types.canonical_view(hret),
+                                    TypeView::LValueRef(_)
+                                ) => {}
+                        _ => return false,
+                    }
+                }
+                ics if ics.is_bad() => {}
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// The converting constructors of class `c` ([class.conv.ctor]; clang

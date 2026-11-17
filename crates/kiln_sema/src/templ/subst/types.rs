@@ -402,6 +402,15 @@ impl Substituter<'_, '_, '_> {
                     self.sema.error(DiagId::sema_zero_array_size_sfinae, loc);
                     return Err(SubstFail);
                 }
+                // [dcl.array]/1 (clang `BuildArrayType`): an element whose
+                // size is not a multiple of its alignment (an aligned
+                // enumeration as the argument; WP-1604). The argument's
+                // canonical type: an aligned typedef as the argument is
+                // not checked, as in clang and GCC.
+                let canon = self.sema.ast.types.canonical(e);
+                if self.sema.check_array_element_alignment(canon, at) {
+                    return Err(SubstFail);
+                }
                 // clang `BuildArrayType`: the substituted element may
                 // make the array exceed the maximum object size.
                 if self.sema.array_too_large(a.size, e) {

@@ -752,6 +752,28 @@ union at namespace or block scope is default-initialized
 default member initializers run (`class.union.anon/nested-anonymous-union-*`,
 `run-anonymous-union-object-default-member-init.cpp`). Anonymous
 unions are M2 (`IndirectField`).
+The member-specification of an anonymous union (or anonymous struct, the
+GNU extension) only defines public non-static data members
+([class.union.anon]/1; C++ only: a C11 anonymous union may declare a tag of
+the enclosing scope). `check_anonymous_record_members` (decl.rs, once the
+record is complete, after the `static` check and before "anonymous structs
+and classes must be class members", once for a template's pattern, as
+clang's `BuildAnonymousStructOrUnion`) reports each other member at its
+name: "types cannot be declared in an anonymous union" (a named class, any
+enumeration, a typedef or alias), "functions cannot be declared ...",
+"static members cannot be declared ..." (a static data member is already
+rejected as declared), "anonymous union can only contain non-static data
+members" (a template, a friend, a using-declaration or using-enum), and
+"anonymous union cannot contain a private data member". An unnamed class
+defined there is the extension `-Wnested-anon-types`; a tag an
+elaborated-type-specifier declares (another scope), an access specifier,
+`static_assert`, a consteval block and an empty declaration are fine
+(WP-1604; `class.union.anon/member-specification-*.cpp`,
+`nested-anonymous-type-extension.cpp`, `c/decl/anonymous-union-declares-tag.c`).
+kiln reports `-Wnested-anon-types` only when it is named: clang also
+reports it under `-pedantic`, together with `-Wgnu-anonymous-struct`
+(not implemented), and the two belong in that set together (GCC's
+testsuite runs with `-pedantic-errors`, where GCC is silent).
 
 ### 2.9 Definition data ([class.prop], [dcl.init.aggr])
 Computed at `}` in one pass over bases and members (O(members + bases)).

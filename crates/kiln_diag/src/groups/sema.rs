@@ -138,6 +138,7 @@ MissingDeclarations = "missing-declarations" [];
 MissingExceptionSpec = "missing-exception-spec" [];
 MissingNoreturn = "missing-noreturn" [];
 MissingTemplateKeyword = "missing-template-keyword" [];
+NestedAnonTypes = "nested-anon-types" [];
 NonLiteralNullConversion = "non-literal-null-conversion" [];
 NonNull = "nonnull" [];
 NonPodVarargs = "non-pod-varargs" [];

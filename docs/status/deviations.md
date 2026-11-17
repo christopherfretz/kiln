@@ -22,6 +22,19 @@ listed where they live (spec/codegen.md "Deviation" paragraphs).
 | [GNU] `noreturn`, [conv.fctptr]: GNU `noreturn` is part of a function type in clang's model, and a function pointer conversion may drop it; adding it is not a standard conversion (WP-1551) | in C++ an implicit conversion from a pointer to function to a pointer to the same function type with `noreturn` added is accepted with a `-Wincompatible-function-pointer-types` warning; explicit casts, comparisons, the conditional operator and template argument deduction follow clang, and overload resolution prefers the exact match; in C it is clang's error | clang 19 and 22 reject the conversion in C++; GCC 16.1 accepts it silently (the attribute is not part of its function type), and older C-style code relies on that | spec/sema-conv.md (function pointer conversions) | `tests/conformance/conv.fctptr/gnu-noreturn-add-run.cpp`, `tests/conformance/dcl.attr.noreturn/gnu-noreturn-function-type-conv.cpp` |
 | [GNU] `used`, [class.mem.general]/7, [except.spec]/13: a `used` destructor of a class template is not odr-used by the attribute, and its exception specification is needed only in a complete-class context, so `template<class T> struct A { __attribute__((used)) ~A() {} }; A<int> a;` is valid (WP-1448) | accepted; an undefined inline `used` member function (template) of an implicit or explicit instantiation is `-Wundefined-inline` at the class's point of instantiation, as clang | clang 19/22 (C++11 and later) mark the member referenced while the specialization's members are declared, before the class is complete, and so reject it: "exception specification needed for member of incomplete class 'A<int>'"; GCC 16.1 accepts | spec/landed/sema-templates/WP-1448.md | tests/conformance/dcl.attr/used-destructor-class-template.cpp |
 
+## Accepted against the text with clang and GCC
+
+Behaviours where the text makes a program ill-formed (or ambiguous) but
+clang 22 and GCC 16.1 both accept it and kiln does too, because real code
+depends on it or rejecting it would break code both compilers build. Each
+row names the paragraph, the three behaviours and the test that pins
+kiln's.
+
+| Rule | kiln | clang / GCC | Spec | Test |
+|---|---|---|---|---|
+| [over.match.ctor]/1, [over.ics.rank]/3.3 (CWG2327 open), C++17 on: `B b(u)` with `operator B() const` and `operator B&()`, the copy and move constructors reached through different conversion functions, is ambiguous (WP-1592) | accepted: `operator B() const` initializes `b` directly, as in clang (only when `operator B&` has the strictly best object conversion and the copy constructor is not deleted) | clang 22 accepts (its CWG2327 candidates); GCC 16.1 accepts and calls the copy constructor through `operator B&` (it binds the move constructor's `B&&` through `operator B&`, not viable); both reject before C++17 except GCC | spec/sema-overload.md (`elision_against_ctors`) | tests/conformance/over.match.ctor/conversion-function-beside-better-lvalue-cxx17-run.cpp |
+| [namespace.udecl]/11, [basic.scope.scope]/4: a class at namespace scope and a later using-declarator bringing in a typedef-name of the same name for another type correspond and are ill-formed (WP-1592) | both declarations accepted; a later unqualified use names the typedef (as GCC), an elaborated one the class | clang 22 and GCC 16.1 accept both declarations; clang then reports every use of the name ambiguous, GCC agrees with kiln; with the using-declarator first, both reject the class | spec/sema.md "Using-declaration conflicts" | tests/conformance/namespace.udecl/p11-class-beside-using-typedef.cpp |
+
 ## GCC 16.1 reflection divergences
 
 Behaviours where kiln's reflection follows the IS rather than GCC 16.1,

@@ -1873,7 +1873,7 @@ impl Sema<'_, '_> {
     /// object without user-defined conversions ([over.best.ics.general]/4,
     /// C++23; clang `TryObjectArgumentInitialization`), else the implicit
     /// object parameter's binding.
-    fn conv_object_ics(&mut self, a: &ArgInfo, f: DeclId) -> Ics {
+    pub(crate) fn conv_object_ics(&mut self, a: &ArgInfo, f: DeclId) -> Ics {
         if let Some(p) = self.explicit_object_param_type(f) {
             return self.try_implicit_conversion(a, p, IcsOptions::SUPPRESS_UDC);
         }

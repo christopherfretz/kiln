@@ -6,8 +6,8 @@
 use crate::class::SpecialKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec,
-    FnStorage, FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
+    Access, ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData,
+    FnSpec, FnStorage, FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
@@ -10969,7 +10969,7 @@ impl Sema<'_, '_> {
             let h = DeclHead::new(e, DeclName::ident(name), loc);
             let d = self.builder().enumerator(h, init);
             let access = self.ast.decls.get(e).misc().access();
-            if access != kiln_ast::decl::Access::None {
+            if access != Access::None {
                 self.ast.decls.set_access(d, access);
             }
             let mut attrs = attrs.to_vec();
@@ -11008,7 +11008,7 @@ impl Sema<'_, '_> {
         // An enumerator of a member enumeration has the enumeration's
         // access (clang `ActOnEnumConstant`; [class.access]/1).
         let access = self.ast.decls.get(e).misc().access();
-        if access != kiln_ast::decl::Access::None {
+        if access != Access::None {
             self.ast.decls.set_access(d, access);
         }
         let vty = build.fixed.unwrap_or(if self.fits(QualType::INT, v) {
@@ -11860,10 +11860,7 @@ impl Sema<'_, '_> {
         let in_class = self.ast.decls.get(ctx).kind() == DeclKind::CXXRecord;
         let local = self.in_local_scope();
         let mut invalid = false;
-        if !in_class && !union {
-            self.error(DiagId::sema_anon_struct_not_member, ds.loc);
-            invalid = true;
-        } else if !in_class && !local {
+        if union && !in_class && !local {
             let anon_ns = self.ast.decls.get(ctx).kind() == DeclKind::Namespace
                 && self.ast.decls.get(ctx).name() == DeclName::EMPTY;
             let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
@@ -11871,6 +11868,15 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_anon_union_not_static, ds.loc);
                 invalid = true;
             }
+        }
+        // [class.union.anon]/1, after the storage check as in clang
+        // (`BuildAnonymousStructOrUnion`), once for a template's pattern.
+        if !self.is_c() && self.inst.stack.is_empty() {
+            self.check_anonymous_record_members(rec, union);
+        }
+        if !in_class && !union {
+            self.error(DiagId::sema_anon_struct_not_member, ds.loc);
+            invalid = true;
         }
         // [dcl.pre]/5, [class.mem.general]/3: a member-declaration or
         // declaration without declarators declares at least one name; an
@@ -11964,6 +11970,69 @@ impl Sema<'_, '_> {
             self.register_local(name, ind);
         }
         obj
+    }
+
+    /// [class.union.anon]/1: the member-specification of an anonymous
+    /// union (and of an anonymous struct, the GNU extension) only defines
+    /// non-static data members, all public (clang
+    /// `BuildAnonymousStructOrUnion`, C++ only: a C11 anonymous union may
+    /// declare a tag, visible in the enclosing scope). Each other member
+    /// is an error at its name: a type (a class with a name, an
+    /// enumeration, a typedef or alias), a function, a static data member
+    /// (unless already rejected as declared), anything else (a template,
+    /// a friend, a using-declaration). An unnamed class (an anonymous
+    /// struct or union, or one with a declarator) is the extension
+    /// `-Wnested-anon-types`. A tag only named by an
+    /// elaborated-type-specifier belongs to the enclosing scope; an
+    /// access specifier, `static_assert`, a consteval block, an empty
+    /// declaration and the implicit members are fine.
+    fn check_anonymous_record_members(&mut self, rec: DeclId, union: bool) {
+        let what = if union { "union" } else { "struct" };
+        let members: Vec<DeclId> = self.ast.decls.members(rec).collect();
+        for m in members {
+            let n = *self.ast.decls.get(m);
+            // A friend's function (its `Friend` declaration is the
+            // member) and a tag an elaborated-type-specifier declares
+            // belong to another scope.
+            if n.has(DeclFlags::INVALID)
+                || n.has(DeclFlags::IMPLICIT)
+                || (n.kind() != DeclKind::Friend && n.ctx() != Some(rec))
+            {
+                continue;
+            }
+            let id = match n.kind() {
+                DeclKind::Field => {
+                    let access = n.misc().access();
+                    if matches!(access, Access::Private | Access::Protected) {
+                        let which = if access == Access::Private { "private" } else { "protected" };
+                        let d = self
+                            .diag(DiagId::sema_anon_record_nonpublic_member, n.loc())
+                            .arg(what)
+                            .arg(which);
+                        self.emit(d);
+                    }
+                    continue;
+                }
+                DeclKind::AccessSpec
+                | DeclKind::StaticAssert
+                | DeclKind::ConstevalBlock
+                | DeclKind::Empty
+                | DeclKind::IndirectField => continue,
+                DeclKind::CXXRecord if n.name() == DeclName::EMPTY => {
+                    DiagId::sema_anon_record_with_anonymous_type
+                }
+                DeclKind::CXXRecord
+                | DeclKind::Enum
+                | DeclKind::Typedef
+                | DeclKind::TypeAlias
+                | DeclKind::UnresolvedUsingTypename => DiagId::sema_anon_record_with_type,
+                k if k.is_function() => DiagId::sema_anon_record_with_function,
+                DeclKind::Var => DiagId::sema_anon_record_with_static,
+                _ => DiagId::sema_anon_record_bad_member,
+            };
+            let d = self.diag(id, n.loc()).arg(what);
+            self.emit(d);
+        }
     }
 
     /// The end of the decl-specifiers written before the type-specifier
