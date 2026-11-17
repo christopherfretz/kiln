@@ -217,7 +217,14 @@ pub fn is_templated(ast: &Ast, d: DeclId) -> bool {
     let mut c = Some(d);
     while let Some(x) = c {
         if ast.decls.get(x).kind() == DeclKind::ClassTemplatePartialSpecialization
-            || matches!(ast.templ_link(x).get(), Some((kiln_ast::decl::TemplLinkKind::Pattern, _)))
+            || matches!(
+                ast.templ_link(x).get(),
+                Some((
+                    kiln_ast::decl::TemplLinkKind::Pattern
+                        | kiln_ast::decl::TemplLinkKind::PartialSpecialization,
+                    _
+                ))
+            )
         {
             return true;
         }

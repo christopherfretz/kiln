@@ -180,10 +180,19 @@ Planned as 1.3.0.
   forms (WP-1584; scheme `kiln-odr-1.d3`). A closure's call operator row
   is the closure's hash inside its enclosing definition; a function with
   a lambda in its signature, and the member functions of a local class,
-  get no row. A row is marked partial only when the definition holds a
-  construct not hashed yet (default arguments of its own parameters,
-  some attributes, dependent forms): about 2 % of the rows of fmt and
-  googletest
+  get no row. A function template specialization the definition names
+  is hashed by its template, signature and template arguments rather
+  than by its symbol, so two units that spell an equivalent signature
+  differently agree (fmt's tests); the definition's default arguments,
+  `aligned`, `noreturn`, `target`, `target_version`, `indeterminate` and
+  `[[assume]]` are hashed; abi tags, visibility and
+  `exclude_from_explicit_instantiation` of the entities a definition
+  names are not, so a library built with its hiding macros empty
+  agrees with its users; a row that uses an internal-linkage entity or
+  a type local to its unit is marked `USES_INTERNAL` (WP-1585; scheme
+  `kiln-odr-1.d4`). A row is marked partial only when the definition
+  holds a construct not hashed yet (`target_clones`, some dependent
+  forms, reflection): about 1 % of the rows of fmt and googletest
   ([spec/abi.md](spec/abi.md) "Definition hash (`odr_def`)").
 
 ### Changed

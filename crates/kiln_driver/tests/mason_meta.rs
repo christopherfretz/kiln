@@ -1722,3 +1722,21 @@ fn layout_details() {
     assert_ne!(s1.layout, s2.layout);
     assert_ne!(s1.details.as_ref().unwrap()[0], s2.details.as_ref().unwrap()[0]);
 }
+
+/// WP-1597: one templated predicate for kind 2 and kind 3. A member class
+/// of a class template partial specialization is templated (its record
+/// links to the partial specialization without being of that kind): no
+/// kind 3 row, while the instantiations of both have rows.
+#[test]
+fn no_type_row_for_members_of_partial_specializations() {
+    let d = scratch("types-partial-spec");
+    let src = "template <class T> struct P { struct In { T t; }; };\n\
+               template <class T> struct P<T *> { struct In { T *p; int k; }; In m; };\n\
+               int f() { P<int *> p{}; P<int>::In i{1}; return int(sizeof(p)) + i.t; }\n";
+    let rows = types_of(&d, "t.cpp", src, &[]).unwrap();
+    for r in &rows {
+        assert!(!r.name.contains("T_"), "a templated class has a row: {r:?}");
+    }
+    assert!(trow(&rows, "N1PIPiE2InE").is_some(), "{rows:#?}");
+    assert!(trow(&rows, "N1PIiE2InE").is_some(), "{rows:#?}");
+}

@@ -66,6 +66,9 @@ pub struct AnonIds {
     /// constrained friend template's name has no class prefix
     /// ([`Mangler::member_like_friend_class`]).
     compat19: bool,
+    /// Names carry no `abi_tag`, explicit or implicit
+    /// ([`AnonIds::without_abi_tags`]).
+    untagged: bool,
 }
 
 impl AnonIds {
@@ -86,6 +89,22 @@ impl AnonIds {
     #[must_use]
     pub fn with_clang_compat(self, compat: u32) -> Self {
         AnonIds { compat19: compat < 20, ..self }
+    }
+
+    /// This table, mangling every name WITHOUT its abi tags (own,
+    /// implicit, or from an enclosing class or namespace), and a
+    /// global-scope variable that is mangled only for its tags under its
+    /// plain name. For the definition hash (spec/abi.md §"Definition
+    /// hash"): a tag is not part of an entity's identity there. Never
+    /// for emitted symbols.
+    #[must_use]
+    pub fn without_abi_tags(self) -> Self {
+        AnonIds { untagged: true, ..self }
+    }
+
+    /// Whether this table mangles without abi tags.
+    pub fn is_untagged(&self) -> bool {
+        self.untagged
     }
 
     /// The reflection mangling form of this table.
@@ -934,6 +953,11 @@ fn is_main_name(ast: &Ast, d: DeclId) -> bool {
 /// source name: `main`, `extern "C"` entities, and variables at global
 /// scope.
 pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
+    unmangled(ast, d, true)
+}
+
+/// [`is_unmangled`], ignoring abi tags when `tags` is false.
+fn unmangled(ast: &Ast, d: DeclId, tags: bool) -> bool {
     let n = ast.decls.get(d);
     if ast.decls.decomp_bindings(d).is_some() {
         return false;
@@ -958,12 +982,12 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         // libstdc++ is `_Z1sB5cxx11`.
         DeclKind::Var => {
             in_global_ns(ast, d)
-                && abi_tags(ast, d).is_none()
+                && (!tags || abi_tags(ast, d).is_none())
                 && !is_local(ast, d)
                 && !has_internal_linkage(ast, d)
                 && ast.spec_info(ast.first(d)).is_none()
                 && (!ast.modules.active || ast.module_attachment(ast.first(d)).is_none())
-                && !var_type_has_tags(ast, d)
+                && (!tags || !var_type_has_tags(ast, d))
         }
         _ => false,
     }
@@ -1119,7 +1143,7 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
     if let Some(l) = asm_label(ast, d) {
         return l;
     }
-    if is_unmangled(ast, d) {
+    if unmangled(ast, d, !anon.untagged) {
         // clang `getMangledNameImpl`: an unmangled `regcall` function is
         // still prefixed `__regcall3__` (WP-808).
         if is_regcall_fn(ast, d) {
@@ -1129,6 +1153,15 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
     }
     let mut m = Mangler::new(ast, anon, "_Z");
     m.encoding(d, v);
+    m.out
+}
+
+/// The `<template-args>` of argument list `list` on its own (`I ... E`,
+/// substitutions numbered within it): the definition hash's name of a
+/// function template specialization's arguments (`odr_def`).
+pub fn mangle_template_args(ast: &Ast, anon: &mut AnonIds, list: ArgListId) -> String {
+    let mut m = Mangler::new(ast, anon, "");
+    m.template_args(list);
     m.out
 }
 
@@ -1984,7 +2017,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// Whether the module has any `abi_tag` attribute.
     fn has_abi_tags(&mut self) -> bool {
         let ast = self.ast;
-        *self.anon.abi_tags.get_or_insert_with(|| ast.attrs.has_kind(AttrKind::ABI_TAG))
+        !self.anon.untagged
+            && *self.anon.abi_tags.get_or_insert_with(|| ast.attrs.has_kind(AttrKind::ABI_TAG))
     }
 
     /// The tags of the return type of function `d` (none while derived
@@ -2418,7 +2452,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// other names only implicitly, through a type that mentions it.
     fn write_abi_tags(&mut self, d: DeclId) {
         let ast = self.ast;
-        if self.untagged == Some(d) {
+        if self.untagged == Some(d) || self.anon.untagged {
             return;
         }
         if ast.decls.get(d).kind() == DeclKind::Namespace {

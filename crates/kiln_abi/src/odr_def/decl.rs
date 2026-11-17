@@ -15,48 +15,20 @@
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted, InitStyle, TlsKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::types::NoexceptValue;
-use kiln_ast::{AttrId, DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId};
 
-use super::{Area, DefHasher, Item, Site, T_FUNCTION, T_LOCAL_DECL, T_NONE, T_SYNTHESIZED, Work};
-use crate::odr::is_templated;
-
-/// The closed attribute list of O-10 (scheme 1) as kiln names it; the
-/// calling convention and GNU `noreturn` are hashed from the type.
-/// `visibility`, `exclude_from_explicit_instantiation` and `abi_tag` are
-/// NOT on it (mortar's ruling of 11-17 03:11 ET: the symbol carries the
-/// first, the second decides which symbols an explicit instantiation
-/// emits, the mangled name the third), like `weak` and `section`.
-const LISTED: [kiln_ast::attr::AttrKind; 6] = {
-    use kiln_ast::attr::AttrKind as A;
-    [A::ALIGNED, A::NORETURN, A::TARGET, A::TARGET_CLONES, A::TARGET_VERSION, A::INDETERMINATE]
+use super::{
+    Area, DefHasher, Item, Site, T_DEFAULT_ARGS, T_FUNCTION, T_LOCAL_DECL, T_NONE, T_SYNTHESIZED,
+    Work,
 };
-
-/// Whether `d` itself carries an attribute of the closed list.
-pub(super) fn has_listed_attr(h: &DefHasher<'_>, d: DeclId) -> bool {
-    let ast = h.ast;
-    if !ast.decls.get(d).has(DeclFlags::HAS_ATTRS) {
-        return false;
-    }
-    ast.lists
-        .get(ast.attrs.of_decl(d))
-        .iter()
-        .filter_map(|&raw| AttrId::try_new(raw))
-        .any(|a| LISTED.contains(&ast.attrs.get(a).kind))
-}
+use crate::odr::is_templated;
 
 /// Whether `d` is a template's own declaration or lies inside one: a
 /// pattern, a class template partial specialization (as its kind or as
 /// its record's link), or anything they enclose. Only instantiations and
 /// non-templates are hashed.
 pub fn is_templated_def(ast: &kiln_ast::Ast, d: DeclId) -> bool {
-    use kiln_ast::decl::TemplLinkKind as L;
-    let mut c = Some(d);
-    while let Some(x) = c {
-        if matches!(ast.templ_link(x).get(), Some((L::Pattern | L::PartialSpecialization, _))) {
-            return true;
-        }
-        c = ast.decls.get(x).ctx();
-    }
+    // One predicate with kind 3's (WP-1597).
     is_templated(ast, d)
 }
 
@@ -146,20 +118,8 @@ pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -
         None => h.byte(T_NONE),
     }
     // Items of later packages.
-    let redecls: Vec<DeclId> = ast.redecls_of(def).collect();
-    if redecls.iter().any(|&r| has_listed_attr(h, r)) {
-        h.partial(Area::Attrs, Site::Item(Item::Attributes));
-    }
-    let default_arg = redecls.iter().any(|&r| {
-        ast.decls.function(r).is_some_and(|g| {
-            ast.lists
-                .iter::<DeclId>(g.params)
-                .any(|p| ast.decls.param(p).is_some_and(|x| x.default_arg.is_some()))
-        })
-    });
-    if default_arg {
-        h.partial(Area::Attrs, Site::Item(Item::DefaultArgs));
-    }
+    h.listed_attrs(def, true);
+    default_args(h, def);
     // An implicit or defaulted member is synthesized: its token, then
     // what sema built for it like any definition (the ctor-initializers
     // and body it completed from the class and the special members
@@ -168,6 +128,50 @@ pub(super) fn declarator_as(h: &mut DefHasher<'_>, def: DeclId, pattern: bool) -
         h.byte(T_SYNTHESIZED);
     }
     true
+}
+
+/// The declaration's default arguments (O-10, K8; K-3e). The rule: each
+/// parameter hashes the default argument that a namespace- or class-scope
+/// declaration of the function's redeclaration chain gives it, as
+/// accumulated at the end of the unit (block-scope redeclarations have
+/// their own set and are skipped), and for an instantiation the pattern's
+/// default argument when it is not dependent (a dependent one is a fixed
+/// token: it is instantiated only where a call uses it, and that call
+/// hashes it). Default template arguments are not hashed (a use names the
+/// arguments it chose; the signature area leaves them out too).
+fn default_args(h: &mut DefHasher<'_>, def: DeclId) {
+    let ast = h.ast;
+    let from = ast.instantiated_from(ast.first(def));
+    let src = from.unwrap_or(def);
+    let block =
+        |r: DeclId| ast.decls.lexical_ctx(r).is_some_and(|c| ast.decls.function(c).is_some());
+    let chain: Vec<DeclId> = ast.redecls_of(src).filter(|&r| !block(r)).collect();
+    let default_of = |i: usize| {
+        chain.iter().find_map(|&r| {
+            let f = ast.decls.function(r)?;
+            let p = ast.lists.iter::<DeclId>(f.params).nth(i)?;
+            ast.decls.param(p)?.default_arg
+        })
+    };
+    let count = ast.decls.function(src).map_or(0, |f| ast.lists.len(f.params));
+    let defaults: Vec<Option<ExprId>> = (0..count).map(default_of).collect();
+    if defaults.iter().all(Option::is_none) {
+        return h.byte(T_NONE);
+    }
+    h.byte(T_DEFAULT_ARGS);
+    h.count(count);
+    for e in defaults {
+        match e {
+            None => h.byte(0),
+            Some(e) if from.is_some() && !ast.exprs.get(e).deps().is_none() => h.byte(2),
+            Some(e) => {
+                h.byte(1);
+                let base = h.stack.len();
+                h.stack.push(Work::Expr(e));
+                h.run_nested(base);
+            }
+        }
+    }
 }
 
 /// Whether a declaration in a statement is hashed: not a typedef or
@@ -219,9 +223,7 @@ impl DefHasher<'_> {
                     | u32::from(s.is_constinit()) << 8;
                 debug_assert!(TlsKind::Dynamic as u32 <= 3 && InitStyle::ParenList as u32 <= 3);
                 self.u32(bits);
-                if has_listed_attr(self, d) {
-                    self.partial(Area::Attrs, Site::Item(Item::Attributes));
-                }
+                self.listed_attrs(d, false);
                 if let Some(bs) = ast.decls.decomp_bindings(d) {
                     // A structured binding: each binding is a local; the
                     // binding expressions sema builds are implicit.

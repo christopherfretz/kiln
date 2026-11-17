@@ -24,6 +24,7 @@ const VAGUE: u16 = 1;
 const IMPLICIT_INST: u16 = 2;
 const EXPLICIT_INST: u16 = 4;
 const EXPLICIT_SPEC: u16 = 8;
+const USES_INTERNAL: u16 = 16;
 const PARTIAL: u16 = 32;
 const SYSTEM: u16 = 256;
 const FUNCTION: u16 = 1;
@@ -53,7 +54,7 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
     assert_eq!(row_size, 48);
     assert!(rows > 0, "no block without rows");
     assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
-    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d3"));
+    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d4"));
     let out: Vec<Def> = (0..rows)
         .map(|i| {
             let r = at + 16 + i * 48;
@@ -72,7 +73,13 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
             assert_ne!(d.hash, 0, "{d:?}");
             assert_eq!(
                 d.flags
-                    & !(VAGUE | IMPLICIT_INST | EXPLICIT_INST | EXPLICIT_SPEC | PARTIAL | SYSTEM),
+                    & !(VAGUE
+                        | IMPLICIT_INST
+                        | EXPLICIT_INST
+                        | EXPLICIT_SPEC
+                        | USES_INTERNAL
+                        | PARTIAL
+                        | SYSTEM),
                 0,
                 "{d:?}"
             );
@@ -605,15 +612,21 @@ fn textual_and_pch_rows_equal() {
                  struct M { int a = 4; int *p; M(int x) : p(new int(x)) {} virtual ~M() { delete p; } };\n\
                  inline int dm() { M m(ext()); int v[3] = {1}; return m.a + v[0] + *m.p; }\n\
                  template <class T> inline T lt(T t) { auto g = [t](auto u) { return [&] { return t + u; }(); }; struct L { T k; T get() { return k; } }; return g(1) + g(2L) + L{t}.get(); }\n\
-                 inline int lam() { int y = 1; auto l = [=, &y](int x) mutable { y += x; return [y] { return y; }(); }; return l(1) + lt(1) + lt(2L); }\n";
+                 inline int lam() { int y = 1; auto l = [=, &y](int x) mutable { y += x; return [y] { return y; }(); }; return l(1) + lt(1) + lt(2L); }\n\
+                 template <bool B> struct EI {}; template <> struct EI<true> { using type = int; };\n\
+                 template <class T, typename EI<(sizeof(T) > 1)>::type = 0> int sel(T) { return 1; }\n\
+                 template <class T, typename EI<(sizeof(T) <= 1)>::type = 0> int sel(T) { return 2; }\n\
+                 namespace { int hidden; }\n\
+                 [[gnu::aligned(16)]] inline int k3e(int a, int b = 3) { [[assume(a > 0)]]; return sel(a) + sel('c') + b + hidden; }\n";
     std::fs::write(d.join("h.h"), format!("{decls}{extra}")).unwrap();
     ok(&d, &["-std=c++20", "-x", "c++-header", "h.h", "-o", "h.pch"]);
-    let u = format!("{uses}int use2() {{ return dm() + lam(); }}\n");
+    let u = format!("{uses}int use2() {{ return dm() + lam() + k3e(1); }}\n");
     let with_pch = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include-pch", "h.pch"]).unwrap();
     let with_h = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include", "h.h"]).unwrap();
     assert_eq!(with_pch, with_h);
     assert!(with_h.len() > 25 && with_h.iter().all(|r| r.file.ends_with("h.h")), "{with_h:#?}");
-    for sym in ["_Z2dmv", "_ZN1MC2Ei", "_ZN1MD2Ev", "_Z3lamv", "_Z2ltIiET_S0_"] {
+    assert_ne!(row(&with_h, "_Z3k3eii").expect("k3e").flags & USES_INTERNAL, 0);
+    for sym in ["_Z2dmv", "_ZN1MC2Ei", "_ZN1MD2Ev", "_Z3lamv", "_Z2ltIiET_S0_", "_Z3k3eii"] {
         let r = row(&with_h, sym).unwrap_or_else(|| panic!("no row for {sym}"));
         assert_eq!(r.flags & PARTIAL, 0, "{sym}");
     }
@@ -768,4 +781,179 @@ fn instantiation_order_does_not_change_rows() {
         }
     }
     assert!(shared >= 8, "{shared}: {ra:#?}");
+}
+
+/// Two units that include the same definitions, the second after a
+/// declaration that spells a dependent name of their signatures
+/// otherwise: every key both units have gives one row (K-3e, the callee
+/// by entity), and `user` is not `PARTIAL`.
+fn same_rows_after_another_spelling(dir: &str, hdr: &str, other: &str, user: &str) -> usize {
+    let d = scratch(dir);
+    let one = format!("{hdr}{user}int a() {{ return user(); }}\n");
+    let two = format!("{hdr}{other}{user}int b() {{ return user(); }}\n");
+    let ra = defs_of(&d, "one.cpp", &one, &["-std=c++20"]).unwrap();
+    let rb = defs_of(&d, "two.cpp", &two, &["-std=c++20"]).unwrap();
+    let u = row(&ra, "_Z4userv").expect("user's row");
+    assert_eq!(u.flags & PARTIAL, 0, "{u:?}");
+    let mut shared = 0;
+    for r in &ra {
+        if let Some(s) = rb.iter().find(|s| s.key == r.key) {
+            assert_eq!((r.hash, r.flags), (s.hash, s.flags), "{r:?}\n{ra:#?}\n{rb:#?}");
+            shared += 1;
+        }
+    }
+    shared
+}
+
+const SIG_HDR: &str = "namespace ns {\n\
+    template <bool B, class T = void> struct enable_if {};\n\
+    template <class T> struct enable_if<true, T> { using type = T; };\n\
+    template <bool B, class T = void> using enable_if_t = typename enable_if<B, T>::type;\n\
+    template <class T> struct has { static constexpr bool value = sizeof(T) > 1; };\n\
+    }\n";
+
+/// fmt's shape (reduced from real code): overloads of a member template of
+/// a class template that differ in an `enable_if` condition. Without the
+/// callee by entity the unit that met `ns::has<T>::value` first mangles
+/// the callee otherwise and `user`'s rows disagree.
+#[test]
+fn callee_by_entity_fmt_shape() {
+    let hdr = format!(
+        "{SIG_HDR}namespace ns {{ template <class X> struct W {{\n\
+           template <class T, enable_if_t<has<T>::value, int> = 0> int on(T) {{ return 1; }}\n\
+           template <class T, enable_if_t<!has<T>::value, int> = 0> int on(T) {{ return 2; }}\n\
+         }}; }}\n"
+    );
+    let other = "template <class T, ns::enable_if_t<ns::has<T>::value, int> = 0> bool g(T) { return true; }\n";
+    let user = "inline int user() { return ns::W<int>().on(1) + ns::W<int>().on('c'); }\n";
+    assert!(same_rows_after_another_spelling("defs-k3e-fmt", &hdr, other, user) >= 2);
+}
+
+/// What names the other templated callees (K-3e): a member function of a
+/// class template specialization by its symbol (no dependent part), a
+/// variable template specialization by its symbol, a specialization of a
+/// member template by entity (its template, scope `C<int>`, signature).
+#[test]
+fn callee_forms_across_units() {
+    let other = "template <class T> int z(ns::enable_if_t<ns::has<T>::value, int>);\n\
+                 template <class T, ns::enable_if_t<ns::has<T>::value, int> = 0> bool g(T) { return true; }\n";
+    let member = format!(
+        "{SIG_HDR}template <class X> struct C {{ int f(ns::enable_if_t<ns::has<X>::value, int> i) {{ return i; }} }};\n"
+    );
+    let user = "inline int user() { return C<int>().f(1); }\n";
+    same_rows_after_another_spelling("defs-k3e-member", &member, other, user);
+    let var = format!(
+        "{SIG_HDR}template <class T> constexpr int v = ns::has<T>::value ? 1 : 2;\n\
+         template <class T> inline int vv = v<T> + 1;\n"
+    );
+    let user = "inline int user() { return vv<int> + vv<char>; }\n";
+    same_rows_after_another_spelling("defs-k3e-var", &var, other, user);
+    let mt = format!(
+        "{SIG_HDR}template <class X> struct C {{\n\
+           template <class T, ns::enable_if_t<ns::has<T>::value, int> = 0> int m(T) {{ return 1; }}\n\
+           template <class T, ns::enable_if_t<!ns::has<T>::value, int> = 0> int m(T) {{ return 2; }}\n\
+         }};\n"
+    );
+    let user = "inline int user() { return C<int>().m(1) + C<long>().m('c'); }\n";
+    assert!(same_rows_after_another_spelling("defs-k3e-mt", &mt, other, user) >= 2);
+}
+
+/// O-16 (K-3e): `USES_INTERNAL` on a row whose definition odr-uses an
+/// internal entity or names a TU-local one, in both units (K12); not on
+/// a constant read by value (N17), an unevaluated operand, or the
+/// definition's own local types. A per-TU placeholder (an
+/// unnamed-namespace type) sets it too; the hashes stay equal.
+#[test]
+fn uses_internal_across_units() {
+    let d = scratch("defs-k3e-internal");
+    let hdr = "namespace { int counter; struct Anon { int v; }; }\n\
+               static int helper() { return 1; }\n\
+               static const int k = 3;\n\
+               inline int k12() { return ++counter; }\n\
+               inline int stat() { return helper(); }\n\
+               inline int anon_type() { return sizeof(Anon); }\n\
+               inline int n17() { return k + 1; }\n\
+               inline int unevaluated() { return sizeof(helper()) + sizeof(counter); }\n\
+               inline int own() { struct L { int m = 2; }; return L().m; }\n\
+               inline const int *addr() { return &k; }\n";
+    let use_all =
+        "{ return k12() + stat() + anon_type() + n17() + unevaluated() + own() + *addr(); }\n";
+    let ra = defs_of(&d, "a.cpp", &format!("{hdr}int a() {use_all}"), &[]).unwrap();
+    let rb = defs_of(&d, "b.cpp", &format!("{hdr}int b() {use_all}"), &[]).unwrap();
+    for (sym, set) in [
+        ("_Z3k12v", true),
+        ("_Z4statv", true),
+        ("_Z9anon_typev", true),
+        ("_Z4addrv", true),
+        ("_Z3n17v", false),
+        ("_Z11unevaluatedv", false),
+        ("_Z3ownv", false),
+    ] {
+        let (x, y) = (row(&ra, sym).expect(sym), row(&rb, sym).expect(sym));
+        assert_eq!(x.flags & USES_INTERNAL != 0, set, "{sym}: {x:?}");
+        assert_eq!((x.hash, x.flags), (y.hash, y.flags), "{sym}");
+    }
+}
+
+/// O-10 applied to references (K-3e): an entity named in a definition
+/// contributes no abi tag, visibility or
+/// `exclude_from_explicit_instantiation`, its own or one inherited from
+/// an enclosing class or inline namespace. Found in downstream code: a
+/// library built with its hiding macro empty calls the untagged symbol
+/// where users call the tagged one. Unit A tags, unit B does not; equal
+/// tokens give equal rows, and a different callee overload still
+/// differs.
+#[test]
+fn abi_tags_and_visibility_not_hashed() {
+    let d = scratch("defs-k3e-abitag");
+    let src = |tag: bool| {
+        let (f, c, e) = if tag {
+            (
+                r#"__attribute__((__visibility__("hidden"), __exclude_from_explicit_instantiation__, __abi_tag__("t1")))"#,
+                r#"__attribute__((__visibility__("hidden"), __abi_tag__("t1")))"#,
+                r#"__attribute__((__visibility__("hidden")))"#,
+            )
+        } else {
+            ("", "", "")
+        };
+        format!(
+            "#define FTAG {f}\n#define CTAG {c}\n#define ETAG {e}\n\
+             template <class T> struct S {{ FTAG int f() {{ return 1; }} }};\n\
+             template <class T> struct CTAG S2 {{ int f() {{ return 2; }} }};\n\
+             inline namespace v1 CTAG {{ template <class T> int g(T t) {{ return sizeof(t); }}\n\
+               struct In {{ int m = 3; }}; inline In mk() {{ return In(); }} }}\n\
+             namespace o {{ inline v1::In mk2() {{ return {{}}; }} }}\n\
+             struct CTAG Tg {{}};\n\
+             template <class T> int sig(T, Tg) {{ return 4; }}\n\
+             namespace m {{ CTAG inline int gv = 5; }}\n\
+             CTAG inline int g2 = 6;\n\
+             struct CTAG Hold {{ enum ETAG E {{ e1 = 7 }}; }};\n\
+             inline int h(long) {{ return 8; }}\n\
+             {}\
+             inline int u1() {{ return S<int>().f(); }}\n\
+             inline int u2() {{ return S2<int>().f(); }}\n\
+             inline int u3() {{ return g(1) + In().m + mk().m + o::mk2().m; }}\n\
+             inline int u4() {{ return sig(1, Tg()); }}\n\
+             inline int u5() {{ return m::gv + g2; }}\n\
+             inline int u6() {{ Hold::E e = Hold::e1; return e + sizeof(Hold::E); }}\n\
+             inline int u7() {{ return h(1); }}\n\
+             int use() {{ return u1() + u2() + u3() + u4() + u5() + u6() + u7(); }}\n",
+            if tag { "inline int h(int) { return 9; }\n" } else { "" }
+        )
+    };
+    let ra = defs_of(&d, "a.cpp", &src(true), &[]).unwrap();
+    let rb = defs_of(&d, "b.cpp", &src(false), &[]).unwrap();
+    for (sym, equal) in [
+        ("_Z2u1v", true),
+        ("_Z2u2v", true),
+        ("_Z2u3v", true),
+        ("_Z2u4v", true),
+        ("_Z2u5v", true),
+        ("_Z2u6v", true),
+        ("_Z2u7v", false),
+    ] {
+        let (x, y) = (row(&ra, sym).expect(sym), row(&rb, sym).expect(sym));
+        assert_eq!(x.flags & PARTIAL, 0, "{sym}: {x:?}");
+        assert_eq!(x.hash == y.hash, equal, "{sym}: {x:?} {y:?}");
+    }
 }

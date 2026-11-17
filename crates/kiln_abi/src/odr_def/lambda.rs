@@ -59,13 +59,15 @@ impl<'a> DefHasher<'a> {
         let key = ast.first(data.closure);
         if let Some(&d) = self.closures.get(&key) {
             self.partial |= d.partial;
+            self.uses_internal |= d.uses_internal;
             return d;
         }
         // A closure naming its own type (an explicit object parameter)
         // meets this entry while its digest is computed.
-        self.closures.insert(key, DefDigest { hash: 0, partial: false });
+        self.closures.insert(key, DefDigest { hash: 0, partial: false, uses_internal: false });
         let start = self.out.len();
         let outer_partial = std::mem::replace(&mut self.partial, false);
+        let outer_internal = std::mem::replace(&mut self.uses_internal, false);
         let base = self.stack.len();
         let floor = std::mem::replace(&mut self.floor, base);
         self.byte(T_CLOSURE);
@@ -105,9 +107,14 @@ impl<'a> DefHasher<'a> {
             }
             None => self.partial(Area::Lambda, Site::Expr(K::LambdaExpr)),
         }
-        let d = DefDigest { hash: fnv1a_128_bytes(&self.out[start..]), partial: self.partial };
+        let d = DefDigest {
+            hash: fnv1a_128_bytes(&self.out[start..]),
+            partial: self.partial,
+            uses_internal: self.uses_internal,
+        };
         self.out.truncate(start);
         self.partial = outer_partial | d.partial;
+        self.uses_internal = outer_internal | d.uses_internal;
         self.floor = floor;
         self.closures.insert(key, d);
         d
@@ -202,6 +209,7 @@ impl<'a> DefHasher<'a> {
         self.byte(T_CALL_OP_ROW);
         self.out.extend_from_slice(&d.hash.to_le_bytes());
         self.partial = d.partial;
+        self.uses_internal = d.uses_internal;
         let spec = data.call_op.is_some_and(|op| ast.first(op) != ast.first(def));
         if spec {
             self.byte(1);
@@ -304,20 +312,21 @@ impl<'a> DefHasher<'a> {
                 _ => break,
             }
         }
+        self.tu_local_type(record_of(ast, t));
         self.byte(T_TU_PLACEHOLDER);
     }
 
     /// Class or enumeration `c` the memo could not name, as a type item
     /// (the owner of an enumerator or a member).
     pub(super) fn local_tag(&mut self, c: DeclId) {
-        match self.scoped_index(self.ast.first(c)) {
-            Some(ix) => {
-                self.byte(T_LOCAL_TYPE);
-                self.byte(0);
-                self.byte(0);
-                self.write_index(ix);
-            }
-            None => self.byte(T_TU_PLACEHOLDER),
+        if let Some(ix) = self.scoped_index(self.ast.first(c)) {
+            self.byte(T_LOCAL_TYPE);
+            self.byte(0);
+            self.byte(0);
+            self.write_index(ix);
+        } else {
+            self.tu_local_type(Some(c));
+            self.byte(T_TU_PLACEHOLDER);
         }
     }
 
@@ -331,9 +340,11 @@ impl<'a> DefHasher<'a> {
             .ctx()
             .filter(|&c| matches!(ast.decls.get(c).kind(), DeclKind::CXXRecord | DeclKind::Enum))
         else {
+            self.tu_local_entity(d);
             return self.byte(T_TU_PLACEHOLDER);
         };
         let Some(ix) = self.scoped_index(ast.first(c)) else {
+            self.tu_local_entity(d);
             return self.byte(T_TU_PLACEHOLDER);
         };
         self.byte(T_LOCAL_MEMBER);
@@ -608,4 +619,12 @@ fn declarator_closure(ast: &Ast, rec: DeclId, related: &[DeclId; 3]) -> bool {
         }
     }
     false
+}
+
+/// The class or enumeration canonical type `t` names, if it names one.
+fn record_of(ast: &Ast, t: QualType) -> Option<DeclId> {
+    match ast.types.canonical_view(t) {
+        TypeView::Record(d) | TypeView::Enum(d) => Some(d),
+        _ => None,
+    }
 }

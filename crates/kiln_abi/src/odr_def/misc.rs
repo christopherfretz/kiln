@@ -155,6 +155,9 @@ impl DefHasher<'_> {
                     self.expr_tag(k);
                     self.byte(u8::from(v));
                 }
+                // A dependent concept-id: the concept and its arguments
+                // (signature.rs).
+                _ if k == K::ConceptSpecializationExpr => self.dep_expr(e, k),
                 _ => self.partial(Area::Dependent, Site::Expr(k)),
             },
             // The semantic result (what is evaluated).

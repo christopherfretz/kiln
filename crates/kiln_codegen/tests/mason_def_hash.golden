@@ -1,37 +1,37 @@
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d3).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d4).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md "Definition hash"), then regenerate with KILN_BLESS=1.
 # case<TAB>scheme<TAB>digest<TAB>partial
-empty	kiln-odr-1.d3	dd8e31a8ac1e8d9431f15b5c262818a0	false
-literals	kiln-odr-1.d3	d9e24e5e53ed3bf433301018436e21ab	false
-string	kiln-odr-1.d3	64500a37f11d233d70f8c4bb29b5c251	false
-placeholders	kiln-odr-1.d3	6f20d752cd80847bee0c3cb32071bbd5	false
-operators	kiln-odr-1.d3	28a2da75ed4f52df74299d61246860a9	false
-calls	kiln-odr-1.d3	43c1929978879846d90269e85b0cf57d	false
-members	kiln-odr-1.d3	ce59b22e37810b46dada5135b8590171	false
-enumerator	kiln-odr-1.d3	c0978a33ce042249c69edaf3bb7f2b06	false
-casts	kiln-odr-1.d3	f8fcab5d99dab9cf512a6989e32ff3cf	false
-locals	kiln-odr-1.d3	0e4652bb0130a6777169a236d13f4b2b	false
-if	kiln-odr-1.d3	e8e855ba3e93cc46ff5299674a4610e1	false
-loops	kiln-odr-1.d3	ed7f5df76cc09e8b87168f61d9cafcc3	false
-range-for	kiln-odr-1.d3	e882560c5657d4695cf8bb2d9544d545	false
-switch	kiln-odr-1.d3	b8c57dde21ce9ce5051e96f292cee530	false
-goto	kiln-odr-1.d3	2b70bfafc1b61017e646a4e043ff97a2	false
-try	kiln-odr-1.d3	2dcf5004e2ee7c028062cc9948226417	false
-conditional	kiln-odr-1.d3	a6f1dd07ff6f5c9fe2bf7c1af69e62fd	false
-sizeof	kiln-odr-1.d3	4409e1a7ba904c581ea21455426bdc29	false
-noexcept	kiln-odr-1.d3	aa911a56931690b87c0f3de459af207e	false
-constexpr	kiln-odr-1.d3	bb9421ceed23e58efec8927129a35ec8	false
-method	kiln-odr-1.d3	84124de6b28ac2761668f71c15d28b70	false
-new	kiln-odr-1.d3	37b4667dc774441decc567de893c3789	false
-lambda	kiln-odr-1.d3	a714a5972816883df77de82646a59512	false
-generic lambda	kiln-odr-1.d3	40c1f6841451de516485f0e55e5ed137	false
-local class	kiln-odr-1.d3	13514f309f594c10813894bdbbe56d6f	false
-gnu forms	kiln-odr-1.d3	b2b6260609efc9f7860e4d0593880dc4	false
-asm	kiln-odr-1.d3	9b9ce30540fd2f15211d938904261281	false
-construct	kiln-odr-1.d3	57f63a2edc189f1d018ce91ab3408f5e	false
-init list	kiln-odr-1.d3	04ef9a172e4006fd1b11248b057aab2a	false
-new and delete	kiln-odr-1.d3	4fd7d47713713e58e14dc76201bdc543	false
-throw	kiln-odr-1.d3	f24eea3ba8f59aeb6a12c5d5eff451a4	false
-traits	kiln-odr-1.d3	3fa1a61b5f1a90fe6d49a35824b15e03	false
+empty	kiln-odr-1.d4	f1b53e1fb849a50f0d27fb1622cc1da8	false
+literals	kiln-odr-1.d4	758e5eeb8a97727ece4d0567c437d883	false
+string	kiln-odr-1.d4	6aac9df042fb3c0de4486e3c92092861	false
+placeholders	kiln-odr-1.d4	a32d1aa2764674d32b17ae689e10877d	false
+operators	kiln-odr-1.d4	7f52c8cb3a43640db5616cb576de6ee1	false
+calls	kiln-odr-1.d4	56d41971acc87eefbe54b41367e24c25	false
+members	kiln-odr-1.d4	2063e6baf05304880618485c3cafd4d9	false
+enumerator	kiln-odr-1.d4	0c6363f19a2ceceb0936ff04c40d1aae	false
+casts	kiln-odr-1.d4	55a8223c59c20d9216eef51f6b4b7d9f	false
+locals	kiln-odr-1.d4	58ebdfa336eab73e782db6cf9279dc1f	false
+if	kiln-odr-1.d4	c290ed4721b48609a58e5f229369971b	false
+loops	kiln-odr-1.d4	5faa5583072793edcc29ca9181bf620f	false
+range-for	kiln-odr-1.d4	dde4ed71c77e944f45350083b3470027	false
+switch	kiln-odr-1.d4	4ef15cbc9b88fbabcd1a6cf143871cf0	false
+goto	kiln-odr-1.d4	1a815b09af3c9cbd0639190a3e8c1fd2	false
+try	kiln-odr-1.d4	400ca1b95ce42dc30f5565d5cfabace7	false
+conditional	kiln-odr-1.d4	e79090721c897ebae7e3eb7a803d78d5	false
+sizeof	kiln-odr-1.d4	3c3a667a921995dccc0a6fb7a4e0d1f1	false
+noexcept	kiln-odr-1.d4	cd551649c97736a80dfaca93543c90ce	false
+constexpr	kiln-odr-1.d4	69ac8e4eaf5333b3a05990defeb04ba8	false
+method	kiln-odr-1.d4	33ec598a6f04450bd6db0d18e8e6f1f0	false
+new	kiln-odr-1.d4	d7fc14e6be8839170c8b4cd76db8acb9	false
+lambda	kiln-odr-1.d4	26acbdbca43fad0945828b475a6d44ae	false
+generic lambda	kiln-odr-1.d4	a5a0cf75c2555ad31fef470027d3ae09	false
+local class	kiln-odr-1.d4	911535c5743b68dbfd2503dea6c42f47	false
+gnu forms	kiln-odr-1.d4	b9784d0b3637b423b9e6e0f28f571444	false
+asm	kiln-odr-1.d4	0bced107006995d6786c28bb15447e2b	false
+construct	kiln-odr-1.d4	cf882b33c463bd4f45f4d98b4c6c569e	false
+init list	kiln-odr-1.d4	10bbc0d80baa117f89ba5e468609dcf6	false
+new and delete	kiln-odr-1.d4	10f5e5430a85526f713b40f235faa78b	false
+throw	kiln-odr-1.d4	525213c6090faf91c85b5311cbb72b74	false
+traits	kiln-odr-1.d4	507f0e78b1545e80d78f8278c936962b	false

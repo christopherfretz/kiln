@@ -8,7 +8,7 @@
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{ExprFlags, ExprKind as K};
+use kiln_ast::expr::{ExprFlags, ExprKind as K, NonOdrUse};
 use kiln_ast::ids::ListId;
 use kiln_ast::{DeclId, ExprId};
 use kiln_source::Loc;
@@ -41,6 +41,25 @@ impl DefHasher<'_> {
     /// function or variable by its mangled name.
     pub(super) fn decl_ref(&mut self, d: DeclId) {
         let ast = self.ast;
+        let k = ast.decls.get(d).kind();
+        let odr_use = std::mem::replace(&mut self.odr_use, true);
+        self.cur_odr_use = odr_use;
+        // Inside an equivalence class's expression or a signature: a
+        // function parameter by position, a template parameter by depth
+        // and index (signature.rs).
+        if self.positional > 0 && k == DeclKind::ParmVar {
+            return self.parm_pos(d);
+        }
+        if matches!(k, DeclKind::NonTypeTemplateParm | DeclKind::TemplateTemplateParm) {
+            return self.tparm(d);
+        }
+        // A function template specialization by entity (signature.rs).
+        if ast.decls.function(d).is_some() && ast.spec_info(ast.first(d)).is_some() {
+            if self.refs.passes(d) {
+                return self.template_callee(d);
+            }
+            return self.local_member(d);
+        }
         if let Some(&(_, p)) = self.captures.iter().find(|c| c.0 == d) {
             self.byte(super::T_CAPTURE);
             return self.u32(p);
@@ -57,7 +76,6 @@ impl DefHasher<'_> {
             self.byte(super::T_OUTER_LOCAL);
             return self.write_index(ix);
         }
-        let k = ast.decls.get(d).kind();
         match k {
             DeclKind::Function
             | DeclKind::CXXMethod
@@ -67,6 +85,7 @@ impl DefHasher<'_> {
             | DeclKind::Var
             | DeclKind::VarTemplateSpecialization => match self.refs.entity(d, &mut self.stats) {
                 Some(h) => {
+                    self.named_entity(d, odr_use);
                     self.byte(T_ENTITY);
                     self.out.extend_from_slice(&h.to_le_bytes());
                 }
@@ -219,6 +238,7 @@ impl DefHasher<'_> {
             // ----- area: expr. Names.
             K::DeclRefExpr => {
                 self.expr_tag(k);
+                self.odr_use = x.non_odr_use(e) == NonOdrUse::None;
                 self.decl_ref(x.decl(e));
             }
             K::MemberExpr => {
@@ -231,6 +251,7 @@ impl DefHasher<'_> {
                 let qualified = x.decl_ref_extra(e).is_some_and(|r| r.qualifier.is_some());
                 let virt = ast.decls.function(d).is_some_and(|f| f.spec.is_virtual());
                 self.byte(u8::from(n.has(ExprFlags::ARROW)) | u8::from(qualified && virt) << 1);
+                self.odr_use = x.non_odr_use(e) == NonOdrUse::None;
                 self.decl_ref(d);
                 self.stack.push(Work::OptExpr(id(n.a())));
             }
@@ -359,30 +380,34 @@ impl DefHasher<'_> {
             | K::ExtVectorElementExpr
             | K::PseudoObjectExpr
             | K::GenericSelectionExpr => self.misc_expr(e, k),
+            // `sizeof...` of a pack: dependent, by the pack's position.
+            K::SizeOfPackExpr if !n.deps().is_none() => self.dep_expr(e, k),
             // ----- still partial (fixed token): literal operators (sema
             // builds calls), `#embed`, packs met outside a pattern,
             // reflection, recovery.
-            K::UserDefinedLiteral
+            K::SizeOfPackExpr
+            | K::UserDefinedLiteral
             | K::EmbedExpr
-            | K::SizeOfPackExpr
             | K::PackIndexingExpr
             | K::CXXReflectExpr
             | K::CXXSpliceExpr
             | K::RecoveryExpr => self.partial(Area::Misc, Site::Expr(k)),
 
-            // ----- dependent only: a function template's own body is never
-            // hashed; these wait for modules (K-6).
+            // ----- area: signature (K-3e, `signature.rs`): the dependent
+            // kinds of signatures and of a generic lambda's pattern.
             K::UnresolvedLookupExpr
-            | K::UnresolvedMemberExpr
             | K::DependentScopeDeclRefExpr
             | K::CXXDependentScopeMemberExpr
+            | K::PackExpansionExpr
+            | K::CXXFoldExpr
+            | K::CXXUnresolvedConstructExpr => self.dep_expr(e, k),
+            // ----- dependent only: a function template's own body is never
+            // hashed; these wait for modules (K-6).
+            K::UnresolvedMemberExpr
             | K::SubstNonTypeTemplateParmPackExpr
             | K::FunctionParmPackExpr
             | K::ParenListExpr
             | K::DesignatedInitExpr
-            | K::PackExpansionExpr
-            | K::CXXFoldExpr
-            | K::CXXUnresolvedConstructExpr
             | K::DependentCoawaitExpr
             | K::CXXExpansionSelectExpr => self.partial(Area::Dependent, Site::Expr(k)),
         }

@@ -16,7 +16,8 @@
 //! computed once per definition after emission (every symbol of one
 //! definition, structor variants and aliases among them, gets the same
 //! digest and flags: mortar's ruling 1); a row is `PARTIAL` exactly when
-//! the hasher skipped a construct its scheme covers. Entity names come
+//! the hasher skipped a construct its scheme covers, and `USES_INTERNAL`
+//! when the walk met an internal or TU-local entity (O-16). Entity names come
 //! from the module's own symbols where it has them ([`CgNames`]).
 
 use std::collections::BTreeMap;
@@ -55,6 +56,9 @@ pub const DEF_EXPLICIT_INST: u16 = 4;
 /// Bit 3: an explicit specialization (or a member of an explicitly
 /// specialized class).
 pub const DEF_EXPLICIT_SPEC: u16 = 8;
+/// Bit 4: the definition odr-uses an internal entity or names a TU-local
+/// one (O-16; K-3e).
+pub const DEF_USES_INTERNAL: u16 = 16;
 /// Bit 5: the hasher skipped something its scheme covers.
 pub const DEF_PARTIAL: u16 = 32;
 /// Bit 8: defined in a system header.
@@ -254,6 +258,9 @@ impl Cg<'_> {
             row.hash = d.hash;
             if !d.partial {
                 row.flags &= !DEF_PARTIAL;
+            }
+            if d.uses_internal {
+                row.flags |= DEF_USES_INTERNAL;
             }
             match by_symbol.get_mut(&name) {
                 None => {

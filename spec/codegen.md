@@ -2217,7 +2217,7 @@ Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
 exactly when the unit has kind 3 rows (its name changes with any change
 to the layout serialization below), and `odr.scheme` (O-11), which names
-the definition hash of kind 2, value `kiln-odr-1.d3`
+the definition hash of kind 2, value `kiln-odr-1.d4`
 (`mason_defs::DEF_SCHEME` = `kiln_abi::odr_def::ODR_DEF_SCHEME`, renamed
 by every package that changes what is hashed; spec/abi.md "Definition
 hash" has its history), exactly when the unit has kind 2 rows. So a
@@ -2548,7 +2548,7 @@ Candidates whose rows differ for one symbol give it none.
 | `hash` | u128 @8 | below |
 | `name` | u32 @24 | 0 (anchored; `all`'s named rows are K-3f) |
 | `class` | u16 @28 | 1 function, 2 variable |
-| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kinds 3 and 5); bits 4, 6, 7 and 9-15 are 0 |
+| `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 4 `USES_INTERNAL` (O-16: the definition odr-uses an internal-linkage entity or names a TU-local type; spec/abi.md "`USES_INTERNAL`"), 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kinds 3 and 5); bits 6, 7 and 9-15 are 0 |
 | `module` | u32 @32 | 0 |
 | `file`, `line` | u32 @36, @40 | of the definition (MT-38's prefix maps): an instantiation's template definition, an implicitly defined member's class, an explicit specialization's own definition |
 | `reserved` | u32 @44 | 0 |
@@ -2578,7 +2578,7 @@ rows"); a closure outside a function is its own context. kiln rejects function m
 to decide. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
-The hash (scheme `kiln-odr-1.d3`, WP-1583 K-3c, WP-1584 K-3d) is the definition
+The hash (scheme `kiln-odr-1.d4`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e) is the definition
 digest of `kiln_abi::odr_def` (spec/abi.md "Definition hash"):
 `DefHasher::function` over a function definition (declarator,
 ctor-initializers, a destructor's deallocation function, body),
@@ -2589,7 +2589,9 @@ definition is hashed once and every symbol of it (structor variants,
 aliases) takes that digest and its `PARTIAL`. The hasher takes an
 entity's name from the module (`CgNames`: the symbol `Cg::fns` or
 `Cg::gvars` holds, unless it has an asm label, is a `weakref`, or the
-module uniqued it with a `.N` suffix) before mangling it itself, so the
+module uniqued it with a `.N` suffix, and only in a module without an
+`abi_tag` attribute: the hash names entities without their tags) before
+mangling it itself, so the
 bytes never depend on which entities the module declared; the per-TU
 guard applies to both. Constructors and destructors are always mangled
 (their complete-object name): a unit may fold the complete-object
@@ -2597,9 +2599,9 @@ variant into the base-object one, and its `Cg::sfns` entry then names
 the base-object symbol. Without
 a source manager (codegen unit tests) no kind 2 rows are written.
 `PARTIAL` is set exactly when the definition holds a construct of a
-later package (spec/abi.md's area table: listed attributes and
-declaration-level default arguments, reflection, `#embed`, expansion
-statements, dependent nodes of a generic lambda's pattern, a template's
+later package (spec/abi.md's area table: `target_clones`, reflection,
+`#embed`, expansion statements, dependent nodes the signature area does
+not cover, a short-form callee of an overloaded template, a template's
 own definition, an exception specification sema had not computed). `scripts/mason/odr_oracle.py` (spec/harness.md "The ODR
 oracle") is the must-equal check of every K-3 package.
 
