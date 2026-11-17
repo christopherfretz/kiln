@@ -69,7 +69,7 @@ impl Sema<'_, '_> {
             let Ok(es) = sub.expand_exprs(&[e]) else { continue };
             let mut best: Option<(ExprId, i128)> = None;
             for e in es {
-                let Some(e) = self.check_alignment_expr(e, node.loc) else { continue };
+                let Some(e) = self.check_alignment_expr(e, node.loc, node.syntax) else { continue };
                 let at = self.begin_loc(e);
                 let v = self.eval_int(e, EvalContext::new(EvalKind::Other, at)).unwrap_or(0);
                 if best.is_none_or(|(_, b)| v > b) {

@@ -1291,6 +1291,17 @@ Planned as 1.3.0.
   virtual base compile faster (3.7x at depth 240). The test harness has
   `clang-unit:` (a unit compiled by clang) and `link: fail`
   (WP-1520, WP-1523, WP-1525).
+- Found running GCC's C++ testsuite, siblings of fixed cases: `alignof`
+  of a typedef of an aligned array; a discarded `(void)c` of a constexpr
+  class object no longer captures it in a lambda; keyword `alignas(*&i)`
+  reading a by-copy capture is accepted where clang 22 and GCC 16.1
+  accept it; a function template specialization named as a template
+  argument in a generic lambda's body is instantiated and diagnosed; a
+  dependent variable placeholder's type-constraint argument list is
+  checked at definition, as clang 22 does; unqualified calls of a
+  static-only member set or a member template of the current
+  instantiation resolve at definition (WP-1547, WP-1603, WP-1640,
+  WP-1533, WP-1629, WP-1628).
 
 ## [1.2.1] - 2026-11-14
 

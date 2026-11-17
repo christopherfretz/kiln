@@ -834,7 +834,7 @@ impl Sema<'_, '_> {
             self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
             if self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
-                && !self.template_arg_full_expr
+                && !self.capture_reads_variable
                 && self.odr_use_names_closure_copy(d)
             {
                 self.ast.exprs.mark_names_closure_copy(r);

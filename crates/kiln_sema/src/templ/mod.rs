@@ -596,6 +596,13 @@ impl Sema<'_, '_> {
         std::mem::replace(&mut self.templ.entering_context, on)
     }
 
+    /// The locations of the arguments of the template argument list just
+    /// parsed, when it had `n` of them; else empty.
+    #[must_use]
+    pub fn template_arg_locs_of(&self, n: usize) -> Vec<Loc> {
+        if self.templ.arg_locs.len() == n { self.templ.arg_locs.clone() } else { Vec::new() }
+    }
+
     /// Records where each argument of the next template-id starts (the
     /// kind and conversion diagnostics point there, as clang's do) and
     /// where its `>` is.

@@ -7672,6 +7672,9 @@ impl Sema<'_, '_> {
         if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here.
             self.inst.concepts.placeholder_locs.insert(v, (l, Self::placeholder_auto_loc(ds, l)));
+            if !ds.constraint_arg_locs.is_empty() {
+                self.inst.concepts.placeholder_arg_locs.insert(v, ds.constraint_arg_locs.clone());
+            }
         }
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);
@@ -8243,6 +8246,7 @@ impl Sema<'_, '_> {
         });
         let paren_braces = self.auto_paren_braces(init, direct);
         let fail = match (overload, paren_braces) {
+            _ if !self.placeholder_list_ok_at_def(v, declared, &items, loc) => AutoFail::Error,
             (_, Some(nested)) => AutoFail::ParenBraces(nested),
             (Some(e), None) => AutoFail::Incompatible(e),
             (None, None) => match self.deduce_auto(declared, &items, kind) {
@@ -13699,7 +13703,7 @@ impl Sema<'_, '_> {
         let (mut a, mut b) = (0u32, 0u32);
         match (kind, args.first()) {
             (AttrKind::ALIGNED, Some(AttrArg::Expr(e))) => {
-                let e = self.check_alignment_expr(*e, loc)?;
+                let e = self.check_alignment_expr(*e, loc, syntax)?;
                 a = e.raw();
             }
             (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
@@ -14199,13 +14203,28 @@ impl Sema<'_, '_> {
 
     /// An alignment argument ([dcl.align]/2): an integral constant
     /// expression whose value is a power of two (0 is ignored).
-    pub(crate) fn check_alignment_expr(&mut self, e: ExprId, at: Loc) -> Option<ExprId> {
+    pub(crate) fn check_alignment_expr(
+        &mut self,
+        e: ExprId,
+        at: Loc,
+        syntax: AttrSyntax,
+    ) -> Option<ExprId> {
         if self.expr_is_value_dependent(e) {
             return Some(e);
         }
         let loc = self.ast.exprs.get(e).loc();
         let c = conv::lvalue_to_rvalue(self, e);
+        // `alignas(*&i)` in a `[=]` body reads `i`, as a non-type template
+        // argument does, where clang 22 and GCC 16.1 both accept: the
+        // keyword form outside any enclosing template other than a generic
+        // lambda's call operator (GCC rejects GNU `aligned` and every
+        // templated case, as the text does; WP-1640,
+        // docs/status/deviations.md).
+        let reads = syntax == AttrSyntax::Keyword && !self.lambda_in_enclosing_template();
+        let next = self.capture_reads_variable || reads;
+        let outer = std::mem::replace(&mut self.capture_reads_variable, next);
         let c = self.act_on_constant_full_expr(c);
+        self.capture_reads_variable = outer;
         let r = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e)));
         if let Ok(v) = r {
             // Reported at the attribute (clang's `AddAlignedAttr`).

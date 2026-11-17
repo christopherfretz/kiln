@@ -312,6 +312,10 @@ pub struct DeclSpec {
     pub auto_constraint: Option<(DeclId, Vec<kiln_ast::types::TemplateArg>)>,
     /// Where that type-constraint's concept name starts.
     pub constraint_loc: Loc,
+    /// Where each of that type-constraint's written arguments is (empty
+    /// when unknown): a list error found at a variable's deduction points
+    /// at its argument, as clang's does at the definition (WP-1629).
+    pub constraint_arg_locs: Vec<Loc>,
 }
 
 impl DeclSpec {

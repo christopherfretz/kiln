@@ -101,6 +101,9 @@ impl Substituter<'_, '_, '_> {
         // A generic lambda's dependent access checks are replayed by the
         // instantiations of the new call operator.
         self.sema.copy_dependent_access(call_op, new_op);
+        if head.is_some() {
+            self.sema.copy_template_arg_uses(call_op, new_op);
+        }
         if self.lambda_constraints(head.map(|h| h.0), call_op, new_op, loc).is_err() {
             self.sema.act_on_lambda_error(lambda);
             self.forget_pattern_params(call_op);

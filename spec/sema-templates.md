@@ -433,13 +433,19 @@ there, the rest when the placeholder is deduced
 substituted list in an instantiation: clang 22 does that, GCC 16.1 also
 rejects `G<Us...> auto f()` at the definition. After the error the
 parameter or placeholder is unconstrained and the requirement has no
-type-constraint, so nothing is reported twice. Remainder: a variable's
-placeholder in a template whose constraint is dependent but whose
-initializer is not (`G<Us...> auto y = 1;`) is deduced by clang at the
-definition, which reports the expansion there; kiln keeps it dependent and
-checks the substituted list at instantiation, where it may fit. Tests
+type-constraint, so nothing is reported twice. A variable's placeholder
+in a template whose constraint is dependent but whose initializer is not
+(`G<Us...> auto y = 1;`, `G<T, T> auto v = 0;`, a static local, a lambda
+body, a member template) has its written list checked at the definition,
+as clang 22 deduces it there (WP-1629, `deduce_var_auto` →
+`dependent_placeholder_constraint_list_ok`; the argument locations are
+kept per variable, `ConceptState::placeholder_arg_locs`, so the expansion
+error points at the argument as clang's does); after an error the
+variable is invalid and its instantiation says nothing more. Satisfaction
+still waits for the arguments (the deduced type stays dependent), and a
+type-dependent initializer waits for the instantiation. Tests
 `temp.param/p4-type-constraint-argument-list-{reject,valid}.cpp`,
-`dcl.type.auto.deduct/p4-type-constraint-list-checked-at-deduction.cpp`.
+`dcl.type.auto.deduct/p4-type-constraint-list-checked-at-{deduction,definition}.cpp`.
 
 **Concept heads** ([temp.param]/14). A concept's template-head is checked
 like a primary class template's for packs: a template parameter pack
@@ -830,9 +836,17 @@ before any lookup or overload resolution runs):
    the lookup ambiguous at instantiation, [temp.dep.type]/7. Clang's
    member lookup treats the name as a member of an unknown
    specialization only when it finds nothing and a base is dependent,
-   but clang keeps every call through `this` type-dependent anyway; a
-   name declared in the class itself, which hides any base's, is a
-   possible later refinement);
+   but clang keeps every call through `this` type-dependent anyway). The
+   text would allow more (WP-1628 (c)): a name declared in the class
+   itself is found there and hides every base's ([class.member.lookup]/3:
+   the lookup set of a class that declares the name is its own
+   declarations, the bases are not searched), so it is a member of the
+   current instantiation ([temp.dep.type]/4) whatever a dependent base
+   declares, and `this->mf(1)` or `mf(1)` of `template <class T> struct S
+   : T { R mf(int); ... }` need not be type-dependent: `auto a = mf(1);
+   a.bfn<int>()` would be accepted without `template`. clang 22 and GCC
+   16.1 both reject that, so kiln keeps any dependent base dependent
+   until a test or a library needs the refinement;
 4. a qualifier names the class itself (`C::f`, `this->C::f`) or a
    non-dependent base (`Q::f`); `A<T>::f` written as a template-id stays
    dependent; explicit template arguments are not dependent;
@@ -872,12 +886,17 @@ its members, and deduction of a member template whose signature names
 only its own parameters succeeds or fails alike. Every excluded case
 keeps `<dependent type>`, which is always correct for valid code (it only
 requires `template` before a member template of the result). Not yet
-admitted (WP-1609 remainder): an unqualified call of a static-only set
-(`so(1)`, an `UnresolvedLookupExpr`: the class whose scope the lookup
-reached is not recorded), and an unqualified template-id `tm<int>(1)`
-(built with argument-dependent lookup). A hidden friend of the class is
-not a candidate: class member lookup finding the member suppresses
-argument-dependent lookup ([basic.lookup.argdep]/3.1).
+An unqualified call naming a static-only set (`so(1)`) or a member
+template by a template-id (`tm<int>(1)`) is an `UnresolvedLookupExpr`,
+not a member access; it is decided by what the name denotes, as the
+member access is (WP-1628, `current_instantiation_unqualified_call_type`):
+every candidate must be a member of one class that encloses the call and
+satisfies rule 3 (rules 1 and 4 to 7 apply as above), an instance member
+only with `*this` of that class itself (not of a class nested in it).
+Unqualified lookup found the candidates in that class's scope, so
+argument-dependent lookup adds nothing ([basic.lookup.argdep]/3.1); a
+hidden friend, a namespace-scope function or a member brought in by a
+using-declaration among them keeps the call dependent.
 
 With the object of `.v` no longer type-dependent, a `<` after a member
 template of the result begins a template argument list ([temp.names]/3):
@@ -2759,11 +2778,22 @@ reports a dropped statement, part or declaration lookup.
   the innermost enclosing function that is not such a lambda, whose
   instantiation instantiates the lambda's body (WP-1591,
   `temp.inst/function-template-argument-in-lambda.cpp`); a generic
-  lambda's keeps its own key. Not covered: an argument in a class
+  lambda's keeps its own key, its call operator's, and the call operator
+  rebuilt as a pattern in an instantiation of the enclosing function gets
+  a copy of the uses (`copy_template_arg_uses` from `subst/lambda.rs`;
+  WP-1533 (a), `temp.inst/function-template-argument-in-generic-lambda.cpp`).
+  An argument inside an unevaluated operand (`decltype(A<&f<int>>{})`)
+  is a subexpression of it, not potentially evaluated ([basic.def.odr]/3),
+  so not odr-used, and is not recorded: the text does not require the
+  instantiation, clang 22 does not instantiate it in a template, GCC 16.1
+  does (WP-1533 (c), recorded). Not covered: an argument in a class
   template's member declaration (outside a member function body). GCC 16
   instantiates it only when the definition completes the class naming it
   (`A<&f> m;`, not `A<&f>* p;`), clang 22 never; recording it per class
-  instantiation would reject code both accept.
+  instantiation would reject code both accept, so kiln keeps clang's
+  behaviour (a recorded decision, WP-1603 (1), docs/status/deviations.md
+  "Template argument in a member declaration",
+  `temp.inst/function-template-argument-member-declaration.cpp`).
 - Each definition the drain instantiates is recorded in
   `TemplateTables::end_of_tu_defs` for codegen (spec/codegen.md §2a),
   in clang's order ([temp.point]/7: the end of the TU is a point of

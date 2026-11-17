@@ -469,18 +469,26 @@ impl Sema<'_, '_> {
 
     /// [basic.def.odr]/5: a variable usable in constant expressions named
     /// by an element of the potential results of a discarded-value
-    /// expression `e` is not odr-used by it (`n;`, `(void)n`, `n, 0`), so
-    /// a lambda does not capture it. Marked now, as the lvalue-to-rvalue
-    /// case is at the end of the full-expression; the same operand types
-    /// qualify (`l2r_potential_results`: no class, volatile or mutable
-    /// subobject case). clang 22 odr-uses (and captures) the variable;
-    /// GCC 16 follows the text.
+    /// expression `e` to which the lvalue-to-rvalue conversion is not
+    /// applied is not odr-used by it (`n;`, `(void)n`, `n, 0`), so a lambda
+    /// does not capture it (spec/sema-lambda.md, discarded constants).
+    /// Marked now, as the lvalue-to-rvalue case is at the end of the
+    /// full-expression. A non-class operand qualifies as there
+    /// (`l2r_potential_results`: not volatile, no mutable subobject); a
+    /// class-type operand (`(void)ca` for a `constexpr` object, WP-1603 (2))
+    /// unless it is volatile and so read ([expr.context]/2). clang 22
+    /// odr-uses (and captures) a class-type or discarded scalar operand;
+    /// GCC 16.1 follows the text (docs/status/deviations.md).
     fn discarded_non_odr_uses(&mut self, e: ExprId) {
         if self.pending_odr.is_empty() || !self.ast.exprs.get(e).value_category().is_glvalue() {
             return;
         }
         let mut rs = Vec::new();
-        self.l2r_potential_results(e, &mut rs);
+        if self.ast.types.as_record(self.ast.exprs.get(e).ty()).is_none() {
+            self.l2r_potential_results(e, &mut rs);
+        } else if !self.is_read_if_discarded(e) {
+            self.potential_results(e, &mut rs);
+        }
         for r in rs {
             let Some(i) = self.pending_odr.iter().position(|&x| x == r) else { continue };
             let d = self.ast.exprs.decl(r);

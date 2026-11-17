@@ -88,7 +88,9 @@ impl Sema<'_, '_> {
         args: &[ExprId],
     ) -> Option<(QualType, ValueCategory)> {
         let n = *self.ast.exprs.get(x);
-        let q = self.ast.templates.expr_nns.get(x).copied()?;
+        let Some(q) = self.ast.templates.expr_nns.get(x).copied() else {
+            return self.current_instantiation_unqualified_call_type(x, args);
+        };
         if n.aux() & 1 != 0 {
             return None;
         }
@@ -105,6 +107,70 @@ impl Sema<'_, '_> {
         let name = self.ast.unresolved_name(x);
         let targs = self.ast.templates.expr_targs.get(x).copied();
         self.resolve_fixed_members(None, class, name, targs, args, n.loc())
+    }
+
+    /// [`Self::current_instantiation_set_call_type`] for an unqualified
+    /// `UnresolvedLookupExpr` (`so(1)` of a set of static members,
+    /// `tm<int>(1)` of a member template, WP-1628): [temp.dep.expr]
+    /// decides by what the name denotes, not by its spelling. Every
+    /// candidate must be a member of one class `C` that encloses the call
+    /// (the current instantiation): unqualified lookup found them in
+    /// `C`'s scope, so argument-dependent lookup adds nothing
+    /// ([basic.lookup.argdep]/3.1) and instantiation finds the same set. A
+    /// hidden friend or a namespace-scope function among them keeps the
+    /// call dependent, as does a member found through a using-declaration
+    /// or of a class with a dependent base. An instance member needs the
+    /// implicit object `*this` of `C` itself (not of a class nested in
+    /// it).
+    fn current_instantiation_unqualified_call_type(
+        &mut self,
+        x: ExprId,
+        args: &[ExprId],
+    ) -> Option<(QualType, ValueCategory)> {
+        let n = *self.ast.exprs.get(x);
+        let decls = self.ast.unresolved_decls(x).clone();
+        let class = self.ast.decls.get(*decls.first()?).ctx()?;
+        if self.kind_of(class) != DeclKind::CXXRecord {
+            return None;
+        }
+        let class = self.ast.definition(class)?;
+        let key = self.ast.first(class);
+        if !decls
+            .iter()
+            .all(|&d| self.ast.decls.get(d).ctx().map(|c| self.ast.first(c)) == Some(key))
+            || !self.encloses_current_context(key)
+            || !self.current_instantiation_complete(class)
+        {
+            return None;
+        }
+        let object = if decls.iter().any(|&d| self.is_instance_member(self.templated_or_self(d))) {
+            let (t, c) = self.this_class()?;
+            if self.ast.first(c) != key {
+                return None;
+            }
+            let quals = self.ast.types.effective_quals(self.pointee_sugared(t)?);
+            Some(self.ast.types.qualify(self.tag_type(class), quals))
+        } else {
+            None
+        };
+        let name = self.ast.unresolved_name(x);
+        let targs = self.ast.templates.expr_targs.get(x).copied();
+        self.resolve_fixed_members(object, class, name, targs, args, n.loc())
+    }
+
+    /// Whether the class whose first declaration is `key` is the current
+    /// context or encloses it.
+    fn encloses_current_context(&self, key: DeclId) -> bool {
+        let mut c = Some(self.ctx);
+        // Bounded like `capture_chain`.
+        for _ in 0..4096 {
+            let Some(d) = c else { return false };
+            if self.ast.first(d) == key {
+                return true;
+            }
+            c = self.ast.decls.lexical_ctx(d).or_else(|| self.ast.decls.get(d).ctx());
+        }
+        false
     }
 
     /// The class the qualifier `q` of a member of the current

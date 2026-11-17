@@ -2144,7 +2144,9 @@ impl Cg<'_> {
                 });
                 return aligned.then(|| self.size_align(q).1);
             }
-            let d = ast.types.desugar_once(q);
+            // A function or variable template's substituted argument is
+            // canonical (`Ast::layout_desugar_once`, as clang instantiates).
+            let d = ast.layout_desugar_once(q);
             if d.ty() == q.ty() {
                 return None;
             }

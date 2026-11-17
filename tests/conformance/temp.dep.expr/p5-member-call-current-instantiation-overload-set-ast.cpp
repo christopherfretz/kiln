@@ -4,17 +4,16 @@
 // [temp.dep.expr]/3, /5, [temp.dep.type]/7: which calls naming members of
 // the current instantiation get their type at definition (WP-1609). `g`:
 // an overload set, a member template whose deduced specialization is not
-// dependent, a static set named `A::`, explicit template arguments: the
-// return type. `h`: everything that stays `<dependent type>`: a member
+// dependent, a static set named `A::` or unqualified (`so(1)`, an
+// `UnresolvedLookupExpr`), explicit template arguments, also on an
+// unqualified template-id (`tm<long>(1)`; WP-1628): the return type. `h`: everything that stays `<dependent type>`: a member
 // template whose result (`dep`), default template argument (`dflt`) or
 // parameter (`ptp`) names `T`, a constrained one (`con`, `rq`), a deduced
 // return type (`ded`), an explicit object parameter (`ex`), a template
 // template parameter (`tt`), a candidate whose type names `T` (`ov`), a
 // type-dependent argument, an ambiguous or non-viable call (diagnosed at
 // instantiation, as clang does), a conversion function name, and every
-// call in a class with a dependent base (`D`). Not yet resolved at
-// definition (WP-1628): an unqualified static set `so(1)` and an
-// unqualified template-id `tm<long>(1)`.
+// call in a class with a dependent base (`D`).
 template <class> concept C = true;
 template <class> struct B { int fb(int); };
 template <class T> struct A {
@@ -36,6 +35,8 @@ template <class T> struct A {
     tm(1);
     A::so(1);
     this->tm<long>(1);
+    so(1);
+    tm<long>(1);
   }
   void h(T t) {
     dep(1);
@@ -51,8 +52,6 @@ template <class T> struct A {
     st(1.0);
     st("");
     this->operator int();
-    so(1);
-    tm<long>(1);
   }
 };
 template <class T> struct D : B<T> {
