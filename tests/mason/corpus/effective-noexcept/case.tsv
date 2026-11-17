@@ -1,0 +1,1 @@
+excluded	_ZN1XD2Ev	2	min	synthesized-noexcept	a.cpp c++20 -DSPEC=	b.cpp c++20 -DSPEC=noexcept(false)

@@ -20,118 +20,6 @@ use std::path::Path;
 
 use mason_common::*;
 
-const VAGUE: u16 = 1;
-const IMPLICIT_INST: u16 = 2;
-const EXPLICIT_INST: u16 = 4;
-const EXPLICIT_SPEC: u16 = 8;
-const USES_INTERNAL: u16 = 16;
-const PARTIAL: u16 = 32;
-const SYSTEM: u16 = 256;
-const FUNCTION: u16 = 1;
-const VARIABLE: u16 = 2;
-
-/// One kind 2 row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Def {
-    key: u64,
-    hash: u128,
-    class: u16,
-    flags: u16,
-    file: String,
-    line: u32,
-}
-
-/// The kind 2 rows of the unit in `b`, `None` without a kind 2 block,
-/// after checking the framing, the block and every row (O-15: `name` 0,
-/// `module` 0, reserved 0, a hash, no flag kiln does not write,
-/// sorted by key, one row per key).
-fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
-    let summary = summary_rows(b);
-    let at = block_at(b, 2)?;
-    assert_eq!((u16_at(b, at), u16_at(b, at + 2)), (2, 1), "kind 2, version 1");
-    let (block_size, row_size, rows) =
-        (u32_at(b, at + 4) as usize, u32_at(b, at + 8) as usize, u32_at(b, at + 12) as usize);
-    assert_eq!(row_size, 48);
-    assert!(rows > 0, "no block without rows");
-    assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
-    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d5"));
-    let out: Vec<Def> = (0..rows)
-        .map(|i| {
-            let r = at + 16 + i * 48;
-            assert_eq!(u32_at(b, r + 24), 0, "name: anchored rows only");
-            assert_eq!(u32_at(b, r + 32), 0, "module");
-            assert_eq!(u32_at(b, r + 44), 0, "reserved");
-            let d = Def {
-                key: u64_at(b, r),
-                hash: u128::from_le_bytes(b[r + 8..r + 24].try_into().unwrap()),
-                class: u16_at(b, r + 28),
-                flags: u16_at(b, r + 30),
-                file: string_at(b, u32_at(b, r + 36)),
-                line: u32_at(b, r + 40),
-            };
-            assert!(d.class == FUNCTION || d.class == VARIABLE, "{d:?}");
-            assert_ne!(d.hash, 0, "{d:?}");
-            assert_eq!(
-                d.flags
-                    & !(VAGUE
-                        | IMPLICIT_INST
-                        | EXPLICIT_INST
-                        | EXPLICIT_SPEC
-                        | USES_INTERNAL
-                        | PARTIAL
-                        | SYSTEM),
-                0,
-                "{d:?}"
-            );
-            d
-        })
-        .collect();
-    for w in out.windows(2) {
-        assert!(w[0].key < w[1].key, "sorted by key, one row per key: {w:?}");
-    }
-    Some(out)
-}
-
-/// The IR of `src` compiled with `-fmason-metadata` and `args`.
-fn ir_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> String {
-    std::fs::write(dir.join(file), src).unwrap();
-    let mut a = vec!["-fmason-metadata", "-S", "-emit-llvm", "-o", "-"];
-    a.extend(args);
-    a.push(file);
-    ok(dir, &a)
-}
-
-/// The kind 2 rows of `src` compiled with `args` (through the IR).
-fn defs_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> Option<Vec<Def>> {
-    def_rows(&ir_bytes(meta_line(&ir_of(dir, file, src, args)).expect("the global")))
-}
-
-/// The row of `symbol`, if any.
-fn row<'r>(rows: &'r [Def], symbol: &str) -> Option<&'r Def> {
-    rows.iter().find(|d| d.key == fnv(symbol))
-}
-
-/// The symbols IR `ir` defines (functions, variables, aliases).
-fn defined(ir: &str) -> Vec<String> {
-    ir.lines()
-        .filter_map(|l| {
-            let rest = if l.starts_with("define ") {
-                l.split_once(" @")?.1
-            } else if let Some(r) = l.strip_prefix('@') {
-                let (_, init) = r.split_once(" = ")?;
-                if init.starts_with("external ") || init.contains("declare ") {
-                    return None;
-                }
-                r
-            } else {
-                return None;
-            };
-            let rest = rest.trim_start_matches('"');
-            Some(rest[..rest.find(['(', ' ', '"']).unwrap_or(rest.len())].to_owned())
-        })
-        .collect()
-}
-
 /// One definition of each kind of O-14, and definitions with no row.
 const KINDS: &str = r"inline int inl(int a) { return a; }
 inline int ivar = 3;
@@ -299,22 +187,6 @@ fn units_and_definitions_without_rows() {
         let rows = defs_of(&d, "x.cpp", x15, &["-std=c++20", &format!("-fmason-metadata={l}")]);
         assert_eq!(rows.map(|r| r.iter().filter(|r| r.line == 3).count()), Some(1), "{l}");
     }
-}
-
-/// The objects of `units` (name, source), compiled with `args` in `d`.
-fn objects(d: &Path, units: &[(&str, &str)], args: &[&str]) -> Vec<Vec<u8>> {
-    units
-        .iter()
-        .map(|(name, src)| {
-            std::fs::write(d.join(name), src).unwrap();
-            let out = format!("{name}.o");
-            let mut a = vec!["-fmason-metadata", "-c", "-o", &out];
-            a.extend(args);
-            a.push(name);
-            ok(d, &a);
-            container(&std::fs::read(d.join(&out)).unwrap())
-        })
-        .collect()
 }
 
 /// N9 (explicit instantiation in one unit, implicit in the other), N22
@@ -1035,4 +907,51 @@ fn visible_closures_are_not_internal() {
         let r = row(&rows, "_Z1kv").expect("k");
         assert_eq!(r.flags & USES_INTERNAL != 0, set, "{spec}: {r:?}");
     }
+}
+
+/// `-fmason-metadata=all` (mortar's ruling (c), K-3f): every `VAGUE` row
+/// carries its symbol as `name`, also when the optimizer deletes the
+/// definition (an inline function inlined into its only caller at `-O2`);
+/// strong rows stay anchored; `INLINED_ONLY` is never set; the rows are
+/// otherwise those of `default`, whose rows are all anchored.
+#[test]
+fn all_names_every_vague_row() {
+    let d = scratch("defs-all");
+    let src = "inline int sq(int a) { return a * a; }\n\
+               template <class T> T twice(T t) { return t + t; }\n\
+               inline int g = sq(3);\n\
+               int strong(int a) { return sq(a) + twice(a); }\n\
+               template <> long twice(long t) { return t; }\n";
+    let at = |level: &str| {
+        let o = objects(&d, &[("u.cpp", src)], &["-std=c++20", "-O2", level]);
+        let b = o.into_iter().next().unwrap();
+        (def_rows(&b).unwrap(), def_names(&b), b)
+    };
+    let (rows, names, _) = at("-fmason-metadata=all");
+    let (dflt, dnames, _) = at("-fmason-metadata");
+    assert_eq!(rows, dflt, "the same rows apart from `name`");
+    assert!(dnames.is_empty(), "default: anchored rows only: {dnames:?}");
+    for r in &rows {
+        assert_eq!(r.flags & 64, 0, "INLINED_ONLY");
+        let name = names.iter().find(|(k, _)| *k == r.key).map(|(_, n)| n.as_str());
+        if r.flags & VAGUE != 0 {
+            assert!(name.is_some_and(|n| fnv(n) == r.key), "{r:?} {name:?}");
+        } else {
+            assert_eq!(name, None, "{r:?}");
+        }
+    }
+    let written: Vec<&str> = names.iter().map(|(_, n)| n.as_str()).collect();
+    for sym in ["_Z2sqi", "_Z5twiceIiET_S0_", "g"] {
+        assert!(written.contains(&sym), "{sym}: {written:?}");
+    }
+    // A strong row (an explicit specialization, K13) stays anchored.
+    assert!(row(&rows, "_Z5twiceIlET_S0_").is_some_and(|r| r.flags & VAGUE == 0));
+    // The optimizer deleted sq and twice: only their rows name them.
+    let obj = std::fs::read(d.join("u.cpp.o")).unwrap();
+    let syms: Vec<String> = sections(&obj)
+        .iter()
+        .filter(|s| s.name == ".strtab")
+        .flat_map(|s| s.data.split(|&c| c == 0).map(|x| String::from_utf8_lossy(x).into_owned()))
+        .collect();
+    assert!(!syms.iter().any(|s| s == "_Z2sqi"), "sq inlined away at -O2: {syms:?}");
 }

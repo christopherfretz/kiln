@@ -896,6 +896,13 @@ path kiln's consumer took and judges kiln on memory only against
 `docs/status/pch.md`. It runs by hand after a PCH change and before a
 release, not in CI. The contract is `spec/bench.md`.
 
+`-fmason-metadata`'s kind 2 (the definition hash) has a cost limit the
+harness does not record: at most 3% of the front end's callgrind
+instructions with the flag off, measured on `bench/frontend` and small
+`libcxx-slice` units under `ulimit -v 3000000` (the table and the method
+are in spec/codegen.md §5.5 "Cost", WP-1586). It is re-measured by hand
+whenever kind 2's hash changes.
+
 ## Release candidates
 
 An RC is a tag on `main` where all of these are green in CI on a clean

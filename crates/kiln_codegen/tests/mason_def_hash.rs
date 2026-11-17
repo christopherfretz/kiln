@@ -624,7 +624,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d5).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -1668,5 +1668,35 @@ fn names_system_through_memos() {
     // A fresh hasher gives every definition the same bit (no memo state).
     for (name, bit) in want {
         assert_eq!(digest_of(&sm, ast, name).names_system, bit, "{name}");
+    }
+}
+
+/// WP-1586: the documented misses of the attribute area (spec/abi.md
+/// "Misses and exclusions"): definitions equal in meaning whose digests
+/// differ, because the attribute is hashed as written. When one of them
+/// agrees, the miss is gone: update the table.
+#[test]
+fn attribute_misses_split_equal_meaning() {
+    let features = if host_arch() == Arch::AArch64 {
+        ["crc,aes", "aes,crc"]
+    } else {
+        ["avx2,sse4.2", "sse4.2,avx2"]
+    };
+    let pairs = [
+        (
+            "alignas(T) against alignas(alignof(T))",
+            "int f() { alignas(long) int a = 1; return a; }".to_owned(),
+            "int f() { alignas(alignof(long)) int a = 1; return a; }".to_owned(),
+        ),
+        (
+            "target string not normalized",
+            format!("[[gnu::target(\"{}\")]] int f() {{ return 1; }}", features[0]),
+            format!("[[gnu::target(\"{}\")]] int f() {{ return 1; }}", features[1]),
+        ),
+    ];
+    for (case, a, b) in &pairs {
+        let (x, y) = (digest_in(a, "f"), digest_in(b, "f"));
+        assert!(!x.partial && !y.partial, "{case}");
+        assert_ne!(x.hash, y.hash, "{case}: the miss is gone");
     }
 }

@@ -69,8 +69,8 @@ pub const DEF_SYSTEM: u16 = 256;
 /// scheme (spec/abi.md "Definition hash", its history).
 pub const DEF_SCHEME: &str = ODR_DEF_SCHEME;
 
-/// One kind 2 row before encoding (O-15). `name` and `module` are 0 in
-/// this package (anchored rows; no named modules yet), `reserved` 0.
+/// One kind 2 row before encoding (O-15). `module` is 0 (no named modules
+/// yet), `reserved` 0; `name` is written only at `all` (ruling (c), K-3f).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DefRow {
     /// FNV-1a 64 of the symbol's name (MT-13).
@@ -85,22 +85,30 @@ pub struct DefRow {
     pub file: String,
     /// The definition's line (0: unknown).
     pub line: u32,
+    /// The symbol `key` is the FNV-1a 64 of; written as the row's `name`
+    /// on a `VAGUE` row at `-fmason-metadata=all` only.
+    pub symbol: String,
 }
 
 /// The kind 2 block of `rows` (O-15, MT-11): sorted by `key`, then the
-/// remaining fields (a total order; exact duplicates dropped), files
-/// added to `st` in row order.
+/// remaining fields (a total order; exact duplicates dropped), strings
+/// added to `st` in row order. With `named` (`-fmason-metadata=all`,
+/// mortar's ruling (c)) every `VAGUE` row's `name` is its symbol, so a
+/// definition the optimizer deletes is still named; otherwise `name` is 0
+/// (anchored) and the bytes are those of the other levels. `INLINED_ONLY`
+/// (bit 6) is never set.
 #[must_use]
-pub fn definitions_block(rows: &[DefRow], st: &mut StrTab) -> Block {
+pub fn definitions_block(rows: &[DefRow], st: &mut StrTab, named: bool) -> Block {
     let mut rows: Vec<&DefRow> = rows.iter().collect();
     rows.sort();
     rows.dedup();
     let mut body = Vec::with_capacity(rows.len() * DEFINITION_ROW_SIZE as usize);
     for r in &rows {
+        let name = if named && r.flags & DEF_VAGUE != 0 { st.add(r.symbol.as_bytes()) } else { 0 };
         let file = st.add(r.file.as_bytes());
         body.extend_from_slice(&r.key.to_le_bytes());
         body.extend_from_slice(&r.hash.to_le_bytes());
-        body.extend_from_slice(&0u32.to_le_bytes()); // name: anchored
+        body.extend_from_slice(&name.to_le_bytes());
         body.extend_from_slice(&r.class.to_le_bytes());
         body.extend_from_slice(&r.flags.to_le_bytes());
         body.extend_from_slice(&0u32.to_le_bytes()); // module
@@ -406,7 +414,18 @@ impl Cg<'_> {
         if system {
             flags |= DEF_SYSTEM;
         }
-        Some((def, DefRow { key: fnv1a64(name.as_bytes()), class, flags, hash: 0, file, line }))
+        Some((
+            def,
+            DefRow {
+                key: fnv1a64(name.as_bytes()),
+                class,
+                flags,
+                hash: 0,
+                file,
+                line,
+                symbol: name.to_owned(),
+            },
+        ))
     }
 
     /// `IMPLICIT_INST`, `EXPLICIT_INST` or `EXPLICIT_SPEC` of the
@@ -545,9 +564,10 @@ mod tests {
             hash: 0x1112_1314_1516_1718_191a_1b1c_1d1e_1f20,
             file: "a.h".to_owned(),
             line: 7,
+            symbol: "v".to_owned(),
         };
         let mut st = StrTab::default();
-        let b = definitions_block(&[r.clone(), r.clone()], &mut st);
+        let b = definitions_block(&[r.clone(), r.clone()], &mut st, false);
         assert_eq!((b.kind, b.version, b.row_size, b.row_count), (2, 1, 48, 1));
         let x = &b.body;
         assert_eq!(x.len(), 48);
@@ -560,5 +580,15 @@ mod tests {
         assert_eq!(u32::from_le_bytes(x[36..40].try_into().unwrap()), 1, "the file string");
         assert_eq!(u32::from_le_bytes(x[40..44].try_into().unwrap()), 7);
         assert_eq!(&x[44..48], &[0; 4], "reserved");
+        // `all`: the vague row is named, a strong one is not (rows by key:
+        // the strong row's file is added first, then the vague row's name).
+        let mut st = StrTab::default();
+        let strong = DefRow { flags: 0, key: 1, ..r.clone() };
+        let b = definitions_block(&[r.clone(), strong], &mut st, true);
+        let x = &b.body;
+        assert_eq!(u32::from_le_bytes(x[24..28].try_into().unwrap()), 0, "strong: anchored");
+        assert_eq!(u32::from_le_bytes(x[48 + 24..48 + 28].try_into().unwrap()), 5, "vague: named");
+        assert_eq!(u32::from_le_bytes(x[48 + 36..48 + 40].try_into().unwrap()), 1, "the same file");
+        assert_eq!(x[48 + 30] & 64, 0, "INLINED_ONLY never");
     }
 }

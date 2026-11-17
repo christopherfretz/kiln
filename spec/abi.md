@@ -1959,7 +1959,7 @@ O-10..O-13). This section is its contract: a later kiln reproduces these
 bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
 (WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d5"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
@@ -1981,7 +1981,14 @@ narrower overload test of the short form, and `target_clones`' clone
 list; and (WP-1636..1638, mortar's probe of 11-17) an empty attribute
 area that no longer depends on the rest of the unit, the `noreturn`
 type bit left to the attribute record, and no `USES_INTERNAL` for an
-externally visible closure under a function type.
+externally visible closure under a function type. `kiln-odr-1`
+(WP-1586, K-3f): `d5`'s serialization frozen and renamed, not one byte
+changed (the golden digests are those of `d5`). Any later change to what
+is serialized or how is `kiln-odr-2`. Objects written under a `d`
+scheme (`kiln-odr-1.d0` .. `kiln-odr-1.d5`) are incomparable with
+`kiln-odr-1` objects: the scheme names differ, so mortar treats such a
+pair as incomparable (a miss, never a finding) even where `d5`'s bytes
+are equal.
 
 **Digest.** `DefHasher::function(def) -> DefDigest { hash, partial, uses_internal }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
@@ -2289,15 +2296,33 @@ digest nothing sets it (the signature names no definition's use). A
 row with the flag still hashes its tokens: two units' rows may be
 equal.
 
-**Misses** (equal definitions that differ, or ill-formed ones that do
-not): an attribute written only on a later redeclaration the other unit
-does not see; `alignas(T)` against `alignas(alignof(T))`; unnormalized
-`target` strings; a default argument added by a redeclaration only one
-unit sees; a short-form callee of a template with an overload that could
-share its short form (`partial`); a `noreturn` that reaches a function
-only through a typedef'd function type (`typedef void F()
-__attribute__((noreturn)); F f;`), which has no attribute record while
-the type bit is not hashed (WP-1637).
+**Misses and exclusions** (WP-1586, K-3f; each row pinned by the test
+named, so a change of behaviour fails it; the O-13 corpus case, when
+there is one, is `tests/mason/corpus/<case>/`, spec/harness.md "The O-13
+corpus"). A *split* is two equal definitions whose rows differ (a report
+on equal meaning); a *pass* is two different definitions whose rows agree
+(no report); *no row* means the symbol is not compared at all.
+
+| # | what | effect | why | pinned by |
+|---|---|---|---|---|
+| 1 | an attribute (`noreturn`, `indeterminate`) written only on a later redeclaration the other unit does not see | split | hashed as written on the chain; `noreturn` missing from a first declaration in another unit is ill-formed, no diagnostic required | `mason_def_hash::mutations_move_the_digest` ("noreturn on a redeclaration", "indeterminate on a redeclaration") |
+| 2 | a default argument added by a later redeclaration only one unit sees | split | the defaults accumulated at the end of the unit are hashed | `mason_def_hash::mutations_move_the_digest` ("default argument on a later redeclaration") |
+| 3 | `alignas(T)` against `alignas(alignof(T))` | split | the type and the expression are hashed apart | `mason_def_hash::attribute_misses_split_equal_meaning` |
+| 4 | `target` strings not normalized (`"avx2,sse4.2"`, `"sse4.2,avx2"`) | split | the string bytes are hashed | `mason_def_hash::attribute_misses_split_equal_meaning` |
+| 5 | a short-form callee of a template with an overload that could share its short form | pass, the row `PARTIAL` | the callee is not fully named | `mason_def_hash::short_form_with_overloads_is_partial` |
+| 6 | a dependent node of the K-6 kinds | pass, the row `PARTIAL` | a token per kind (mortar's ruling 2) | `mason_def_hash::partial_tokens_are_per_kind` |
+| 7 | `noreturn` reaching a function only through a typedef'd function type | pass | no attribute record; the type bit is not hashed (WP-1637) | `mason_defs::noreturn_spellings_agree`; corpus `typedef-noreturn` |
+| 8 | a synthesized member's effective exception specification (a `noexcept(false)` member destructor makes the implicit destructor potentially throwing) | pass | a synthesized member's declarator is the fixed byte `2`, and its callees are named by symbol only. WP-1586 remainder: hash a synthesized member's effective noexcept | corpus `effective-noexcept` |
+| 9 | `__FILE__` and the source-location builtins inside one literal (`"at " __FILE__` against `"in " __FILE__`) | pass | the whole literal is the value placeholder (X17, mortar's ruling (b): must-equal across routes outranks detection) | corpus `file-provenance`; `mason_def_hash::golden_digests` ("placeholders") |
+| 10 | contract assertions | pass | not hashed (X16) | `mason_def_hash::must_equal_pairs` ("contract assertion (X16)") |
+| 11 | a reference to the enclosing scope's captures from inside a generic lambda specialization's own body | pass | the placeholder | `mason_defs::closure_rows` |
+| 12 | a TU-local component (unnamed namespace, internal entity) | `USES_INTERNAL`, its part the per-TU placeholder (O-2) | not comparable across units | `mason_defs::uses_internal_across_units`; `mason_tu_local::named_cases` |
+| 13 | `alignas` or `packed` on a class | carried by kind 3 (the layout), not kind 2 | layout is kind 3's | corpus `alignas-changed`, `packed-changed` |
+| 14 | a lambda in a declarator, a default argument or a trailing requires-clause (X15) | no row | the closure type has no stable name across units | `mason_defs::units_and_definitions_without_rows`; corpus `lambda-in-declarator` |
+| 15 | a C unit (N21) | no row | kind 2 is C++ only | `mason_defs::units_and_definitions_without_rows` |
+| 16 | internal linkage, `weak` (N5), `gnu_inline` / `available_externally` (N7), an ordinary strong definition | no row | not a vague definition a linker merges | `mason_defs::definition_rows_golden` |
+| 17 | an `alias` or `ifunc` symbol (the aliasee has the row), a coroutine's outlined parts, an `always_inline` inline function | no row | decided forms (O-14) | `mason_defs::decided_forms` |
+| 18 | a closure's static invoker and conversion function; a local class's members | no row | their definitions are the enclosing function's (O-14, ruling 1) | `mason_defs::closure_rows` |
 
 A skipped construct writes `0xA6`, its class and its kind's code in place
 of its subtree (one token per node kind, mortar's ruling 2), so equal
