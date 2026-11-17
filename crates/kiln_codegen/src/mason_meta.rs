@@ -79,6 +79,15 @@ impl MasonMetaLevel {
         self != MasonMetaLevel::Min
     }
 
+    /// The level writes the type string of a C++-linkage function's kind 5
+    /// row (mortar's ruling of 11-16: `detail` and up; at `default` its
+    /// `type_name` is the empty string, its `type` hash is written all the
+    /// same). Variables and C-linkage rows keep theirs at every level.
+    #[must_use]
+    pub fn writes_cxx_function_type_names(self) -> bool {
+        matches!(self, MasonMetaLevel::Detail | MasonMetaLevel::All)
+    }
+
     /// The level named `name` on the command line.
     #[must_use]
     pub fn from_name(name: &str) -> Option<MasonMetaLevel> {
@@ -248,7 +257,8 @@ pub struct DeclRow {
     /// unknown size.
     pub size: u64,
     /// The hashed type string (Itanium `<type>` for C++ linkage, the
-    /// canonical C type for C linkage), for the message.
+    /// canonical C type for C linkage), for the message; empty (string
+    /// offset 0) for a C++-linkage function below `detail`.
     pub type_name: String,
 }
 
@@ -414,8 +424,9 @@ impl Cg<'_> {
     /// a function or variable declared in the source defines or references
     /// in the module as emitted, read from the declaration maps
     /// ([`Cg::fns`], [`Cg::gvars`]) at the end of module emission: nothing
-    /// is recorded while emitting. A symbol whose declarations give
-    /// different rows gets none.
+    /// is recorded while emitting. A unit holds at most one row per key: a
+    /// symbol whose declarations give different rows (or one of which has
+    /// no row) gets none.
     pub(crate) fn mason_decl_rows(&mut self) -> Vec<DeclRow> {
         let ast = self.ast;
         let mut cands: Vec<(String, DeclId, bool, bool)> = Vec::new();
@@ -470,8 +481,10 @@ impl Cg<'_> {
                 Some(slot) => {
                     // One symbol from several declarations (an asm label
                     // shared, an `extern "C"` function declared in two
-                    // namespaces): one row if they agree up to
-                    // `DEFINITION`, else none.
+                    // namespaces, block-scope `extern` declarations): one
+                    // row if type hash, size and flags agree up to
+                    // `DEFINITION` (which is or-ed), else none; `NOEXCEPT`
+                    // must agree (mortar's ruling 1(a) of 11-16).
                     *slot = match (slot.take(), row) {
                         (Some(a), Some(b))
                             if (a.flags | DECL_DEFINITION) == (b.flags | DECL_DEFINITION)
@@ -491,7 +504,9 @@ impl Cg<'_> {
     /// The row of symbol `name` for the function or variable whose first
     /// declaration is `first`, or `None` when its type has no encoding
     /// (an unprototyped C function, a C-linkage type with no canonical C
-    /// form).
+    /// form) or its name is not a function of its declaration (a
+    /// C++-linkage entity named by an asm label: glibc's `extern "C++"`
+    /// overloads of `strchr` share one; mortar's ruling 1(a)).
     fn mason_decl_row(
         &mut self,
         name: &str,
@@ -502,6 +517,9 @@ impl Cg<'_> {
     ) -> Option<DeclRow> {
         let ast = self.ast;
         let extern_c = ast.lang_c || mangle::is_extern_c(ast, first);
+        if !extern_c && mangle::asm_label(ast, first).is_some() {
+            return None;
+        }
         let decl = if var || !extern_c {
             ast.definition(first).or_else(|| {
                 ast.redecls_of(first).find(|&x| !ast.decls.get(x).has(DeclFlags::IMPLICIT))
@@ -594,7 +612,14 @@ impl Cg<'_> {
         let mut st = StrTab::default();
         let mut blocks = vec![tu_summary_block(&rows, &mut st)];
         if m.level.writes_declarations() {
-            let decls = self.mason_decl_rows();
+            let mut decls = self.mason_decl_rows();
+            if !m.level.writes_cxx_function_type_names() {
+                for r in &mut decls {
+                    if r.flags & (DECL_EXTERN_C | DECL_VARIABLE) == 0 {
+                        r.type_name.clear();
+                    }
+                }
+            }
             blocks.push(declarations_block(&decls, &mut st));
         }
         let bytes = encode_unit(PRODUCER_KILN, &blocks, &st);
@@ -900,6 +925,7 @@ mod tests {
         assert!(!MasonMetaLevel::Min.writes_declarations());
         for l in [MasonMetaLevel::Default, MasonMetaLevel::Detail, MasonMetaLevel::All] {
             assert!(l.writes_declarations());
+            assert_eq!(l.writes_cxx_function_type_names(), l != MasonMetaLevel::Default);
         }
         // An empty kind 5 block is still a valid block.
         let mut st = StrTab::default();

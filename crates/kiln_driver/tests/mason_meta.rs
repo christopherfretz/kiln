@@ -235,7 +235,12 @@ fn decl_rows(b: &[u8]) -> Option<Vec<Decl>> {
                 flags: u16_at(b, r + 32),
             };
             assert_eq!(d.flags & !0xf, 0, "{d:?}");
-            assert_eq!(d.ty, fnv(&d.type_name), "{d:?}");
+            // An empty type string: a C++-linkage function below `detail`.
+            if d.type_name.is_empty() {
+                assert_eq!(d.flags & (VARIABLE | EXTERN_C), 0, "{d:?}");
+            } else {
+                assert_eq!(d.ty, fnv(&d.type_name), "{d:?}");
+            }
             d
         })
         .collect();
@@ -269,6 +274,17 @@ fn golden(rows: &[(&str, u16, u64, &str)]) -> Vec<Decl> {
         .collect();
     v.sort_by_key(|d| d.key);
     v
+}
+
+/// `rows` as level `default` writes them: no type string for a
+/// C++-linkage function, its `type` hash kept.
+fn at_default(mut rows: Vec<Decl>) -> Vec<Decl> {
+    for r in &mut rows {
+        if r.flags & (VARIABLE | EXTERN_C) == 0 {
+            r.type_name.clear();
+        }
+    }
+    rows
 }
 
 /// The row of `symbol`, if any.
@@ -599,12 +615,12 @@ fn pch_bmi_and_front_end_unaffected() {
             if want {
                 // Entities declared in the PCH and used by the TU get rows.
                 let rows = decl_rows(&container(&obj)).unwrap();
-                let want = golden(&[
+                let want = at_default(golden(&[
                     ("_Z1fv", DEFINITION, 0, "FivE"),
                     ("_Z1hv", DEFINITION, 0, "FivE"),
                     ("_Z8from_pchi", 0, 0, "FiiE"),
                     ("pch_var", VARIABLE, 4, "i"),
-                ]);
+                ]));
                 assert_eq!(rows, want, "{a:?}");
             }
         }
@@ -620,7 +636,7 @@ fn pch_bmi_and_front_end_unaffected() {
     // A module-attached entity's key is its mangled name, `W` in it.
     let rows = decl_rows(&container(&std::fs::read(d.join("i.o")).unwrap())).unwrap();
     let k = row(&rows, "_ZW1m1kv").expect("k's row");
-    assert_eq!((k.flags, k.type_name.as_str()), (DEFINITION, "FivE"));
+    assert_eq!((k.flags, k.ty, k.type_name.as_str()), (DEFINITION, fnv("FivE"), ""));
     let pp = |flag: &[&str]| {
         let mut a = vec!["-E", "u.cpp"];
         a.extend(flag);
@@ -648,7 +664,8 @@ fn invalid_level_is_rejected() {
 #[test]
 fn declaration_rows_golden() {
     let d = scratch("decls");
-    let rows = decls_of(&d, "t.cpp", DECLS_CXX, &["-std=c++20"]).unwrap();
+    let detail = ["-std=c++20", "-fmason-metadata=detail"];
+    let rows = decls_of(&d, "t.cpp", DECLS_CXX, &detail).unwrap();
     let want = golden(&[
         ("_Z10defined_fni", DEFINITION | NOEXCEPT, 0, "FiiE"),
         ("_Z11declared_fnl", 0, 0, "FilE"),
@@ -658,7 +675,6 @@ fn declaration_rows_golden() {
         ("arr2", DEFINITION | VARIABLE, 16, "A_i"),
         ("cvar", VARIABLE | EXTERN_C, 4, "i"),
         ("cfun", EXTERN_C, 0, "FiPKczE"),
-        ("renamed_label", 0, 0, "FivE"),
         ("_Z8weak_defv", DEFINITION, 0, "FivE"),
         ("_Z3inlv", DEFINITION, 0, "FivE"),
         ("_Z2tfIiET_S0_", DEFINITION, 0, "FiiE"),
@@ -666,16 +682,18 @@ fn declaration_rows_golden() {
         ("inc_v", VARIABLE, 0, "3Inc"),
         ("_Z3usev", DEFINITION, 0, "FivE"),
     ]);
-    assert_eq!(rows, want, "no row: internal, anonymous namespace, structors");
+    assert_eq!(rows, want, "no row: internal, anonymous namespace, structors, asm label");
+    let rows = decls_of(&d, "t.cpp", DECLS_CXX, &["-std=c++20"]).unwrap();
+    assert_eq!(rows, at_default(want), "default: no type string for C++ functions");
     let rows =
         decls_of(&d, "t.c", DECLS_C, &["-std=c17", "-Wno-deprecated-non-prototype"]).unwrap();
     let want = golden(&[
         ("c_def", DEFINITION | EXTERN_C, 0, "FiiPKcE"),
-        ("c_ref", EXTERN_C, 0, "FijlPRPdE"),
-        ("c_arr", VARIABLE | EXTERN_C, 0, "Ai"),
+        ("c_ref", EXTERN_C, 0, "FiilPRPdE"),
+        ("c_arr", VARIABLE | EXTERN_C, 0, "A_i"),
         ("c_var", DEFINITION | VARIABLE | EXTERN_C, 4, "i"),
         ("c_at", DEFINITION | VARIABLE | EXTERN_C, 8, "Ul"),
-        ("c_d", DEFINITION | VARIABLE | EXTERN_C, 24, "Ad"),
+        ("c_d", DEFINITION | VARIABLE | EXTERN_C, 24, "A_d"),
         ("c_use", DEFINITION | EXTERN_C, 0, "FivE"),
         // Library builtins the source declares (sema declared them first).
         ("abort", EXTERN_C, 0, "FvvE"),
@@ -697,13 +715,13 @@ fn target_forms() {
              long double t_ld(long double);\nextern void *const tab[];\n}}\n{}",
         c.lines().last().unwrap()
     );
-    for (target, w, ld) in [("x86_64-linux-gnu", "i", "e"), ("aarch64-linux-gnu", "j", "g")] {
+    for (target, w, ld) in [("x86_64-linux-gnu", "i", "e"), ("aarch64-linux-gnu", "i", "g")] {
         let t = format!("--target={target}");
         let want = golden(&[
             ("t_va", EXTERN_C, 0, "FvVE"),
             ("t_w", EXTERN_C, 0, &format!("FvP{w}E")),
             ("t_ld", EXTERN_C, 0, &format!("F{ld}{ld}E")),
-            ("tab", DEFINITION | VARIABLE | EXTERN_C, 24, "AKPv"),
+            ("tab", DEFINITION | VARIABLE | EXTERN_C, 24, "A_KPv"),
         ]);
         assert_eq!(decls_of(&d, "t.c", c, &[&t]).unwrap(), want, "{target} C");
         assert_eq!(decls_of(&d, "t.cpp", &cxx, &[&t]).unwrap(), want, "{target} C++");
@@ -716,12 +734,25 @@ fn levels_write_kind_5_from_default() {
     assert_eq!(decls_of(&d, "t.cpp", CXX, &["-fmason-metadata=min"]), None, "min: kinds 1, 2");
     let base = decls_of(&d, "t.cpp", CXX, &[]).unwrap();
     assert_eq!(base.len(), 2);
-    for l in ["default", "detail", "all"] {
-        assert_eq!(
-            decls_of(&d, "t.cpp", CXX, &[&format!("-fmason-metadata={l}")]),
-            Some(base.clone())
-        );
+    assert_eq!(decls_of(&d, "t.cpp", CXX, &["-fmason-metadata=default"]), Some(base.clone()));
+    // `detail` and `all` add the type strings of C++-linkage functions;
+    // the `type` hash is the same at every level, row by row.
+    let detail = decls_of(&d, "t.cpp", CXX, &["-fmason-metadata=detail"]).unwrap();
+    assert!(base.iter().all(|r| r.type_name.is_empty()));
+    assert_eq!(at_default(detail.clone()), base);
+    assert_eq!(decls_of(&d, "t.cpp", CXX, &["-fmason-metadata=all"]), Some(detail));
+    let full = decls_of(&d, "d.cpp", DECLS_CXX, &["-fmason-metadata=detail"]).unwrap();
+    let dflt = decls_of(&d, "d.cpp", DECLS_CXX, &[]).unwrap();
+    assert_eq!(full.len(), dflt.len());
+    for (a, b) in full.iter().zip(&dflt) {
+        assert_eq!((a.key, a.ty, a.size, a.flags), (b.key, b.ty, b.size, b.flags));
     }
+    // Variables and C-linkage rows keep their strings at `default`.
+    assert!(
+        dflt.iter()
+            .filter(|r| r.flags & (VARIABLE | EXTERN_C) != 0)
+            .all(|r| !r.type_name.is_empty())
+    );
 }
 
 /// The C side of the cross-language pairs: one declaration per rule of
@@ -814,7 +845,7 @@ _Float16 f_h(__float128, long double);
 __int128 f_i128(unsigned __int128);
 void f_vfp(int (*)(const char *, ...) noexcept);
 void f_parr(int (*)[4], int (*)[]);
-void f_vla(int n, int *a, int (*b)[2]);
+void f_vla(int n, int *a, int (*b)[]);
 void f_st(int *, const int *const);
 [[noreturn]] void f_nr();
 [[noreturn]] void f_nr2(void);
@@ -858,7 +889,7 @@ fn c_and_cxx_units_agree() {
     for (sym, t) in [
         ("f_q", "FiilE"),
         ("f_td", "FvlE"),
-        ("f_c16", "FvtjE"),
+        ("f_c16", "FvtiE"),
         ("f_c8", "FvPhE"),
         ("f_bool", "FvbE"),
         ("f_rec", "FvPRRE"),
@@ -876,13 +907,13 @@ fn c_and_cxx_units_agree() {
         ("f_vec", "FDv4_iDv4_iE"),
         ("f_i128", "FnoE"),
         ("f_vfp", "FvPFiPKczEE"),
-        ("f_parr", "FvPAiPAiE"),
-        ("f_vla", "FviPiPAiE"),
+        ("f_parr", "FvPA4_iPA_iE"),
+        ("f_vla", "FviPiPA_iE"),
         ("f_st", "FvPiPKiE"),
         ("f_nr", "FvvE"),
         ("f_vz", "FvizE"),
         ("v_i", "i"),
-        ("v_arr", "Al"),
+        ("v_arr", "A_l"),
     ] {
         assert_eq!(row(&rows, sym).map(|r| r.type_name.as_str()), Some(t), "{sym}");
     }
@@ -908,6 +939,172 @@ fn c_and_cxx_units_agree() {
     assert_ne!((cx.ty, cx.size), (xx.ty, xx.size));
     assert_eq!((cx.size, xx.size), (4, 8));
     assert_eq!(row(&c, "mm_u"), row(&cxx, "mm_u"));
+}
+
+/// Mortar's ruling 2 (WP-1565): `int` and `unsigned int` are one token
+/// `i` in the canonical C type, at every level, and so is an enumeration
+/// whose compatible type is either; every other integer type keeps its
+/// own, and so does an enumeration of another width.
+#[test]
+fn int_signedness_erased() {
+    let d = scratch("intsign");
+    let c = "enum U { UA }; enum N { NA = -1 };\n\
+             int s_f(unsigned);\n\
+             unsigned s_g(unsigned *, enum U (*)(unsigned), const unsigned[]);\n\
+             enum N s_e(enum U);\n\
+             long k_l(unsigned long); int k_il(int); unsigned short k_s(short);\n\
+             void *const tab[] = { (void *)s_f, (void *)s_g, (void *)s_e, (void *)k_l,\n\
+                                   (void *)k_il, (void *)k_s };\n";
+    let cxx = "extern \"C\" {\nint s_f(int);\nint s_g(int *, int (*)(int), const int *);\n\
+               int s_e(int);\nlong k_l(long); int k_il(long); short k_s(unsigned short);\n\
+               extern void *const tab[];\n\
+               void *const tab[] = { (void *)s_f, (void *)s_g, (void *)s_e, (void *)k_l,\n\
+                                     (void *)k_il, (void *)k_s };\n}\n";
+    let (cr, xr) = (decls_of(&d, "s.c", c, &[]).unwrap(), decls_of(&d, "s.cpp", cxx, &[]).unwrap());
+    for (sym, t) in [("s_f", "FiiE"), ("s_g", "FiPiPFiiEPKiE"), ("s_e", "FiiE")] {
+        assert_eq!(row(&cr, sym).map(|r| r.type_name.as_str()), Some(t), "{sym}");
+        assert_eq!(row(&cr, sym), row(&xr, sym), "{sym}: accepted");
+    }
+    for (sym, ct, xt) in
+        [("k_l", "FlmE", "FllE"), ("k_il", "FiiE", "FilE"), ("k_s", "FtsE", "FstE")]
+    {
+        let (a, b) = (row(&cr, sym).unwrap(), row(&xr, sym).unwrap());
+        assert_eq!((a.type_name.as_str(), b.type_name.as_str()), (ct, xt), "{sym}: kept");
+        assert_ne!(a.ty, b.ty);
+    }
+    // Enumerations of another width keep the type kiln chose.
+    let e = "enum B { BA = 1 }; enum W { WA = 0x100000000 };\n\
+             enum F : unsigned char { FA }; enum G : unsigned { GA };\n\
+             void e_b(enum B); void e_w(enum W); void e_f(enum F); void e_g(enum G);\n\
+             void *const tab[] = { (void *)e_b, (void *)e_w, (void *)e_f, (void *)e_g };\n";
+    for (args, b) in [(&["-std=c23"][..], "i"), (&["-std=c23", "-fshort-enums"][..], "h")] {
+        let r = decls_of(&d, "e.c", e, args).unwrap();
+        for (sym, t) in [("e_b", b), ("e_w", "m"), ("e_f", "h"), ("e_g", "i")] {
+            let want = format!("Fv{t}E");
+            assert_eq!(row(&r, sym).map(|r| r.type_name.as_str()), Some(&*want), "{sym} {args:?}");
+        }
+    }
+    // C++-linkage rows keep the Itanium encoding.
+    let r = decls_of(
+        &d,
+        "i.cpp",
+        "int u_f(unsigned); int u() { return u_f(1); }\n",
+        &["-fmason-metadata=detail"],
+    )
+    .unwrap();
+    assert_eq!(row(&r, "_Z3u_fj").map(|r| r.type_name.as_str()), Some("FijE"));
+}
+
+/// Mortar's ruling 1(a) (WP-1565): no row for a C++-linkage entity named
+/// by an asm label; C-linkage asm labels keep theirs, keyed by the label;
+/// at most one row per key, none when a unit's declarations of one symbol
+/// disagree.
+#[test]
+fn one_row_per_key() {
+    let d = scratch("perkey");
+    // glibc's const-correct `<string.h>` overloads in C++.
+    let cxx = "extern \"C++\" char *strchr(char *, int) __asm__(\"strchr\");\n\
+               extern \"C++\" const char *strchr(const char *, int) __asm__(\"strchr\");\n\
+               extern \"C++\" int lbl_v __asm__(\"lbl_v_sym\");\n\
+               extern \"C\" int scanf_r(const char *, ...) __asm__(\"__isoc23_scanf_r\");\n\
+               int use(char *p) { return !!strchr(p, 1) + !!strchr((const char *)p, 1)\n\
+                 + lbl_v + scanf_r(\"\"); }\n";
+    let xr = decls_of(&d, "g.cpp", cxx, &["-fmason-metadata=detail"]).unwrap();
+    assert!(row(&xr, "strchr").is_none() && row(&xr, "lbl_v_sym").is_none(), "{xr:?}");
+    let want = golden(&[("__isoc23_scanf_r", EXTERN_C, 0, "FiPKczE")]);
+    assert_eq!(row(&xr, "__isoc23_scanf_r"), want.first());
+    // The C side: both keep their rows.
+    let c_src = "char *strchr(const char *, int);\n\
+             int scanf_r(const char *, ...) __asm__(\"__isoc23_scanf_r\");\n\
+             int use(char *p) { return !!strchr(p, 1) + scanf_r(\"\"); }\n";
+    let cr = decls_of(&d, "g.c", c_src, &[]).unwrap();
+    assert_eq!(
+        row(&cr, "strchr").map(|x| (x.flags, x.type_name.as_str())),
+        Some((EXTERN_C, "FPcPKciE"))
+    );
+    assert_eq!(row(&cr, "__isoc23_scanf_r"), want.first());
+    // An `extern "C"` declaration in another C++ unit keeps its row too.
+    let other = decls_of(
+        &d,
+        "x.cpp",
+        "extern \"C\" char *strchr(const char *, int);\nint use() { return !!strchr(\"\", 1); }\n",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(row(&other, "strchr"), row(&cr, "strchr"));
+    // Block-scope declarations of one symbol: disagreeing ones give no
+    // row, agreeing ones one; a definition and a matching declaration one
+    // `DEFINITION` row.
+    let blk = "int u1(void) { extern int bx1 __asm__(\"bx\"); extern int bf1(int) __asm__(\"bf\");\n\
+               return bx1 + bf1(1); }\n\
+             long u2(void) { extern long bx2 __asm__(\"bx\"); extern long bf2(long) __asm__(\"bf\");\n\
+               return bx2 + bf2(1); }\n\
+             int u3(void) { extern int ax1 __asm__(\"ax\"); return ax1; }\n\
+             int u4(void) { extern int ax2 __asm__(\"ax\"); return ax2; }\n\
+             int ad __asm__(\"ad_sym\") = 1;\n\
+             int u5(void) { extern int ad2 __asm__(\"ad_sym\"); return ad2; }\n\
+             extern int rv; extern int rv; int rv = 2;\n\
+             int rf(int); int rf(int); int rf(int a) { return a + rv; }\n";
+    let br = decls_of(&d, "b.c", blk, &[]).unwrap();
+    assert!(row(&br, "bx").is_none() && row(&br, "bf").is_none(), "{br:?}");
+    let want = golden(&[
+        ("ax", VARIABLE | EXTERN_C, 4, "i"),
+        ("ad_sym", DEFINITION | VARIABLE | EXTERN_C, 4, "i"),
+        ("rv", DEFINITION | VARIABLE | EXTERN_C, 4, "i"),
+        ("rf", DEFINITION | EXTERN_C, 0, "FiiE"),
+    ]);
+    for w in &want {
+        assert_eq!(br.iter().find(|x| x.key == w.key), Some(w));
+    }
+}
+
+/// Mortar's ruling 4 (WP-1565): only the major bound of a variable's own
+/// type is erased, in C and C++ alike; member function types carry their
+/// cv- and ref-qualifiers; calls the compiler introduces get no row.
+#[test]
+fn ruling_4_readings() {
+    let d = scratch("ruling4");
+    let decl =
+        "extern int a2[][3]; extern int a3[][3]; int use(void) { return a2[0][0] + a3[0][0]; }\n";
+    let def = "int a2[2][3]; int a3[2][4];\n";
+    for (ext, args) in [("c", &[][..]), ("cpp", &["-fmason-metadata=detail"][..])] {
+        let r1 = decls_of(&d, &format!("u.{ext}"), decl, args).unwrap();
+        let r2 = decls_of(&d, &format!("v.{ext}"), def, args).unwrap();
+        let (x, y) = (row(&r1, "a2").unwrap(), row(&r2, "a2").unwrap());
+        assert_eq!((x.type_name.as_str(), x.size, y.size), ("A_A3_i", 0, 24), "{ext}");
+        assert_eq!(x.ty, y.ty, "{ext}");
+        let (x, y) = (row(&r1, "a3").unwrap(), row(&r2, "a3").unwrap());
+        assert_eq!((x.type_name.as_str(), y.type_name.as_str()), ("A_A3_i", "A_A4_i"), "{ext}");
+    }
+    let q = "struct Q { int c() const; int v() volatile; int l() &; int r() &&; int cl() const &; };\n\
+             int use(Q &q) { return q.c() + q.v() + q.l() + Q().r() + q.cl(); }\n";
+    let r = decls_of(&d, "q.cpp", q, &["-fmason-metadata=detail"]).unwrap();
+    for (sym, t) in [
+        ("_ZNK1Q1cEv", "KFivE"),
+        ("_ZNV1Q1vEv", "VFivE"),
+        ("_ZNR1Q1lEv", "FivRE"),
+        ("_ZNO1Q1rEv", "FivOE"),
+        ("_ZNKR1Q2clEv", "KFivRE"),
+    ] {
+        assert_eq!(row(&r, sym).map(|r| r.type_name.as_str()), Some(t), "{sym}");
+    }
+    // A struct copy (`memcpy`) and a zeroing loop (`memset` at -O2): no
+    // row unless the source declares the function.
+    let b = "struct big { char b[4096]; };\n\
+             void cp(struct big *a, const struct big *b) { *a = *b; }\n\
+             void z(int *p) { for (int i = 0; i < 1024; i++) p[i] = 0; }\n";
+    let with = format!(
+        "void *memcpy(void *, const void *, unsigned long);\n{b}\n\
+                        void *(*mp)(void *, const void *, unsigned long) = memcpy;\n"
+    );
+    for o in ["-O0", "-O2"] {
+        for (ext, src) in [("c", b), ("cpp", b)] {
+            let r = decls_of(&d, &format!("m.{ext}"), src, &[o]).unwrap();
+            assert!(row(&r, "memcpy").is_none() && row(&r, "memset").is_none(), "{o} {ext}: {r:?}");
+        }
+        let r = decls_of(&d, "w.c", &with, &[o]).unwrap();
+        assert!(row(&r, "memcpy").is_some() && row(&r, "memset").is_none(), "{o}: {r:?}");
+    }
 }
 
 fn cxx_rows(d: &Path) -> Vec<Decl> {

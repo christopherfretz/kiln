@@ -7,10 +7,11 @@
 //! same bytes, so the form erases every difference that the C and the
 //! C++ spelling of one declaration can legitimately have: typedefs are
 //! resolved, every record type is one opaque token `R`, the target's
-//! `va_list` is `V`, an enumeration is its integer type, C++'s character
-//! and `bool` types are C's, references are pointers, `noexcept` and
+//! `va_list` is `V`, an enumeration is its integer type, `int` and
+//! `unsigned int` are one token, C++'s character and `bool` types are C's, references are pointers, `noexcept` and
 //! `restrict` are dropped, top-level qualifiers of parameters and of the
-//! return type are dropped, array bounds are erased, and a
+//! return type are dropped, a variable's own major array bound is
+//! erased (inner bounds and pointee arrays keep theirs), and a
 //! `transparent_union` parameter is its first member's type. A type with
 //! no C form (a member pointer, a non-default calling convention, an
 //! unprototyped function type inside a type) has no canonical form:
@@ -25,7 +26,8 @@
 //!             | R                       any struct, union or class
 //!             | V                       the target's va_list
 //!             | P <type>                pointer, lvalue or rvalue reference
-//!             | A <type>                array of any or unknown bound, VLA
+//!             | A [<bound>] _ <type>    array; no bound: a variable's own
+//!                                       major bound, unknown bound, VLA
 //!             | F <type> <params> E     prototyped function type
 //!             | U <type>                _Atomic
 //!             | C <builtin>             _Complex
@@ -34,15 +36,16 @@
 //!             | Dn                      nullptr_t
 //!             | u <len> <name>          a sizeless vendor type (SVE)
 //! <params>  ::= v | <type>+ | <type>+ z | z
-//! <builtin> ::= v b c a h s t i j l m x y n o | f d e g Dh Db
+//! <builtin> ::= v b c a h s t i l m x y n o | f d e g Dh Db
 //! ```
 //!
 //! Builtins: `v` void, `b` `_Bool`/`bool`, `c` char, `a` signed char, `h`
 //! unsigned char and `char8_t`, `s` short, `t` unsigned short and
-//! `char16_t`, `i` int, `j` unsigned int and `char32_t`, `l` long, `m`
-//! unsigned long, `x` long long, `y` unsigned long long, `n` `__int128`,
-//! `o` unsigned `__int128`; `wchar_t` is the target's `wchar_t` typedef
-//! type (`i` or `j`). Floating types by format: `Dh` binary16 (`_Float16`,
+//! `char16_t`, `i` int AND unsigned int (mortar's ruling of 11-16: the
+//! signedness of `int` is erased, at every level; `char32_t` and a 32-bit
+//! `wchar_t` too), `l` long, `m` unsigned long, `x` long long, `y`
+//! unsigned long long, `n` `__int128`, `o` unsigned `__int128`; every
+//! other integer type keeps its own token. Floating types by format: `Dh` binary16 (`_Float16`,
 //! `__fp16`), `Db` bfloat16, `f` binary32 (`float`, `_Float32`), `d`
 //! binary64 (`double`, `_Float64`, `_Float32x`), `e` x87 80-bit, `g`
 //! binary128 (`__float128`, `_Float128`; `long double` and `_Float64x` are
@@ -178,7 +181,18 @@ impl Writer<'_> {
                 {
                     self.out.push('V');
                 } else {
+                    // `A [<bound>] _`: only the major bound of a
+                    // variable's own type (depth 0) is erased, as in the
+                    // Itanium form of C++ rows; inner bounds and arrays
+                    // behind pointers keep theirs, an unknown or variable
+                    // bound is empty (mortar's ruling 4 of 11-16).
                     self.out.push('A');
+                    if depth > 0
+                        && let Some(n) = ast.types.array_size(q)
+                    {
+                        self.out.push_str(&n.to_string());
+                    }
+                    self.out.push('_');
                     self.ty(elem, true, d)?;
                 }
             }
@@ -213,13 +227,13 @@ impl Writer<'_> {
             B::UChar | B::Char8 => "h",
             B::Short => "s",
             B::UShort | B::Char16 => "t",
-            B::Int => "i",
-            B::UInt | B::Char32 => "j",
+            // One token for `int` and `unsigned int` (WP-1565).
+            B::Int | B::UInt | B::Char32 => "i",
             B::WChar => {
-                if self.target.types.wchar_signed {
-                    "i"
-                } else {
-                    "j"
+                match (self.target.types.builtin_size_align(b).0, self.target.types.wchar_signed) {
+                    (2, true) => "s",
+                    (2, false) => "t",
+                    _ => "i",
                 }
             }
             B::Long => "l",

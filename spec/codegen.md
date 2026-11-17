@@ -2195,20 +2195,26 @@ defines or references in the module as emitted:
 | `type` | u64 | FNV-1a 64 of `type_name` |
 | `size` | u64 | the variable's size in bytes; 0 for a function, and for a variable whose type is incomplete (an unknown bound, an undefined class or enumeration; N15) |
 | `name` | u32 | 0: rows are anchored by `key` |
-| `type_name` | u32 | string-table offset of the type string below |
+| `type_name` | u32 | string-table offset of the type string below; 0 (the empty string) for a C++-linkage function at level `default` |
 | `flags` | u16 | bit 0 `DEFINITION`, bit 1 `VARIABLE`, bit 2 `EXTERN_C`, bit 3 `NOEXCEPT` |
 | reserved | u16, u32 | 0 |
 
-Rows are sorted by `key`, then `flags`, one per key: a symbol that the
-module both defines and references is one `DEFINITION` row, and a symbol
-whose declarations give different rows (two `extern "C"` declarations in
-different namespaces with different types, two declarations sharing an
-asm label) gets none. The type string is, for a C++-linkage entity, the
-Itanium `<type>` of its declared type (`mangle_declared_type`: a
-variable's major array bound erased as `A_`, since `int a[]` and
-`int a[4]` declare one entity ([basic.link]/11); a function's exception
+Rows are sorted by `key`, then `flags`. A unit holds at most one row per
+key (mortar's ruling 1(a) of 11-16): the declarations of one symbol
+(several entities sharing an asm label, block-scope `extern`
+declarations, `extern "C"` declarations in different namespaces) give
+one row when their `type` hash, `size` and `VARIABLE`, `EXTERN_C` and
+`NOEXCEPT` flags agree, with `DEFINITION` set when any of them is a
+definition (a symbol the module both defines and references is one
+`DEFINITION` row); when they disagree, or one of them has no row of its
+own (below), the key gets none. The type string is, for a C++-linkage
+entity, the Itanium `<type>` of its declared type (`mangle_declared_type`:
+only the major array bound of a variable's own type is erased, as `A_`,
+since `int a[]` and `int a[4]` declare one entity ([basic.link]/11);
+inner bounds and arrays behind pointers keep theirs (ruling 4); a function's exception
 specification not written, `noexcept` is the `NOEXCEPT` flag; a member
-function's type with its cv- and ref-qualifiers, `KFiiE`); for a
+function's type with its cv- and ref-qualifiers in Itanium form, `KFiiE`,
+`VFivE`, `FivRE`, `FivOE`); for a
 C-linkage entity (`EXTERN_C`: every row of a C unit, an `extern "C"` row
 of a C++ unit) the canonical C type below. `NOEXCEPT` is set on
 C++-linkage functions only. Which entities get a row:
@@ -2220,13 +2226,15 @@ C++-linkage functions only. Which entities get a row:
 | vague linkage: inline functions, templates, static data members of templates, `linkonce_odr`/`weak_odr` | yes, `DEFINITION` |
 | `available_externally` (an `extern template` definition kept for inlining) | yes, a reference |
 | weak definition (`__attribute__((weak))`) | yes, `DEFINITION` |
-| asm label (`int f() asm("g")`) | yes, key = the label |
+| C-linkage asm label (`int f() asm("g")` in `extern "C"` or in C, glibc's `__REDIRECT`) | yes, key = the label |
+| C++-linkage asm label (glibc's `extern "C++"` overloads of `strchr` sharing `asm("strchr")`, also a variable) | no: its name is not a function of its declaration (ruling 1(a)); it also suppresses a C-linkage row of the same symbol in the same unit |
 | `alias`, `ifunc`, `weakref` | no (not a declaration's own symbol) |
 | block-scope `extern` declaration | yes, as at namespace scope |
 | static data member | yes, `VARIABLE` |
 | constructors and destructors (`C1`/`C2`/`D0`/`D1`/`D2`) | no (no declared type of their own; O-35 names none) |
 | compiler-generated: vtables, VTTs, RTTI, guard variables, thunks, TLS wrappers, template parameter objects, decomposition holders (`_ZDC`), `llvm.*`, implicit declarations no source declares (C++'s implicit `operator new`) | no |
 | a library builtin the source declares (C's `abort` in `<stdlib.h>`; sema declares it first, implicitly) | yes, typed by the latest written declaration |
+| a library function the compiler introduces (`memcpy` for a struct copy, `memset` for a loop, at any `-O`) | no, unless the source declares it and the module references it (ruling 4: rows are read before LLVM's passes; kiln's own copies are `llvm.*` intrinsics) |
 | entity attached to a named module | yes, its key is its mangled name (`W` in it) |
 | unprototyped C function (`f()` before C23, K&R definition) | no (O-33) |
 | C-linkage entity whose type has no canonical C form (below) | no |
@@ -2242,15 +2250,22 @@ bytes, so the form erases every difference the two spellings of one
 declaration can have: typedefs resolved; every struct, union and class
 one token `R`; the target's `va_list` (`std::__va_list` on AArch64 C++,
 `__va_list_tag[1]` on x86-64, decayed to `__va_list_tag *` as a
-parameter) `V`; an enumeration its compatible integer type (the one
-kiln chose: the fixed underlying type, or the one computed from the
-enumerators, `-fshort-enums` included); C++'s `bool`, `char8_t`,
+parameter) `V`; `int` and `unsigned int` one token `i` at every level
+(mortar's ruling 2 of 11-16: glibc types `getitimer`'s parameter as an
+enumeration in GNU C and as `int` in C++); an enumeration its compatible
+integer type (the one kiln chose: the fixed underlying type, or the one
+computed from the enumerators, `-fshort-enums` included; so `i` when
+that is `int` or `unsigned int`, its own token for any other width);
+C++'s `bool`, `char8_t`,
 `char16_t`, `char32_t`, `wchar_t` C's `_Bool`, `unsigned char`,
 `uint_least16_t`, `uint_least32_t` and the target's `wchar_t` type;
 references pointers; `noexcept` and `restrict` dropped at every level;
 top-level qualifiers of the return type and of every parameter dropped
 (an array parameter is already a pointer: `int a[static 4]`, `int a[n]`
-and `int a[*]` are `Pi`); every array bound erased; a `transparent_union`
+and `int a[*]` are `Pi`); the major bound of a variable's own type
+erased (`A_`), every other bound kept (`int (*)[4]` is `PA4_i`, an
+unknown or variable bound `A_`), as in the Itanium form of C++ rows
+(ruling 4); a `transparent_union`
 parameter its first member's type; `(void)` and C++'s `()` one form.
 The grammar, every token (a second producer must reproduce it byte for
 byte):
@@ -2262,7 +2277,8 @@ byte):
             | R                       any struct, union or class
             | V                       the target's va_list
             | P <type>                pointer, lvalue or rvalue reference
-            | A <type>                array of any or unknown bound, VLA
+            | A [<bound>] _ <type>    array; no bound: a variable's own
+                                      major bound, an unknown bound, a VLA
             | F <type> <params> E     prototyped function type
             | U <type>                _Atomic
             | C <builtin>             _Complex
@@ -2271,14 +2287,15 @@ byte):
             | Dn                      nullptr_t
             | u <len> <name>          a sizeless vendor type (SVE)
 <params>  ::= v | <type>+ | <type>+ z | z
-<builtin> ::= v b c a h s t i j l m x y n o | f d e g Dh Db
+<builtin> ::= v b c a h s t i l m x y n o | f d e g Dh Db
 ```
 
 `v` void, `b` `_Bool`, `c` char, `a` signed char, `h` unsigned char
 (and `char8_t`), `s` short, `t` unsigned short (and `char16_t`), `i`
-int, `j` unsigned int (and `char32_t`), `l` long, `m` unsigned long, `x`
-long long, `y` unsigned long long, `n` `__int128`, `o` unsigned
-`__int128`; `wchar_t` is `i` (x86-64) or `j` (AArch64). Floating types by
+int and unsigned int (and `char32_t`, and `wchar_t` on both targets),
+`l` long, `m` unsigned long, `x` long long, `y` unsigned long long, `n`
+`__int128`, `o` unsigned `__int128` (only `int`'s signedness is erased:
+`unsigned long` is not `long`). Floating types by
 format: `Dh` binary16 (`_Float16`, `__fp16`), `Db` bfloat16, `f` binary32
 (`float`, `_Float32`), `d` binary64 (`double`, `_Float64`, `_Float32x`),
 `e` x87 80-bit, `g` binary128 (`__float128`, `_Float128`); `long double`
@@ -2294,8 +2311,10 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | `__int128 f(unsigned __int128)` | `FnoE` |
 | `void f(int (*)(const char *, ...))` | `FvPFiPKczEE` |
 | `void f(int, ...)`; `void f(...)` (C23, C++) | `FvizE`; `FvzE` |
-| `void f(int (*)[4], int (*)[])` | `FvPAiPAiE` |
-| `void f(int n, int a[n], int b[*][n])` | `FviPiPAiE` |
+| `void f(int (*)[4], int (*)[])` | `FvPA4_iPA_iE` |
+| `void f(int n, int a[n], int b[*][n])` | `FviPiPA_iE` |
+| `extern int a[][3];`, `int a[2][3];` (sizes 0, 24) | `A_A3_i` |
+| `unsigned f(unsigned, enum E)` (`E` of `unsigned int`) | `FiiiE` |
 | `void f(int a[static 4], const int b[const 2])` | `FvPiPKiE` |
 | `_Noreturn` / `[[noreturn]]` | no mark: `FvvE` |
 | K&R definition; `f()` before C23 | no row |
@@ -2305,8 +2324,12 @@ and `_Float64x` are `e` on x86-64 and `g` on AArch64. The long tail:
 | `const int f(void)` | `FivE` |
 
 **Levels** (mortar's level table, K-1): `min` writes kind 1 (and kind 2,
-when it exists); `default`, `detail` and `all` add kind 5. The kind 1
-rows are the same at every level. **Not written yet** (later work
+when it exists); `default`, `detail` and `all` add kind 5. At `default`
+a C++-linkage function's row has no type string (`type_name` 0; mortar's
+ruling 3 of 11-16, its 8 KB budget for a unit's kind 5 strings); `detail`
+and `all` write it. Variables and C-linkage rows have theirs at every
+level, and the `type` hash is FNV-1a 64 of the full string at every
+level. The kind 1 rows are the same at every level. **Not written yet** (later work
 packages): kind 2 (ODR definitions, O-14/O-15, `min` and up), kind 3
 (type definitions, O-17), kind 4 (layout details, O-18; `detail` and up),
 and `all`'s rows for definitions inlined away. Kind 2 will need codegen

@@ -139,8 +139,10 @@ Planned as 1.3.0.
   every external function and variable an object defines or uses, so the
   mortar linker can check at link time that the objects agree on it
   (WP-1564); a C-linkage entity's type is written in one canonical form
-  that a C object and a C++ object share, and `abi.stdlib-abi` now lists
-  libc++'s layout-changing ABI switches
+  that a C object and a C++ object share (WP-1565, after mortar's rulings:
+  `int` and `unsigned int` alike, no record for C++ functions renamed by
+  an asm label, C++ function types as hashes only at `default`), and
+  `abi.stdlib-abi` now lists libc++'s layout-changing ABI switches
   ([spec/codegen.md](spec/codegen.md) §5.5).
 
 ### Changed
