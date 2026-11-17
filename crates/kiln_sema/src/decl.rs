@@ -10831,12 +10831,12 @@ impl Sema<'_, '_> {
             // [expr.prim.lambda.closure]/2: a closure type is not an
             // aggregate.
             bits = bits.without(DefinitionBits::AGGREGATE);
-            if self
+            let captures = self
                 .ast
                 .decls
                 .record(r)
-                .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES))
-            {
+                .is_some_and(|x| x.defn.contains(DefinitionBits::LAMBDA_CAPTURES));
+            if captures {
                 // A closure with a capture has no default constructor
                 // ([expr.prim.lambda.closure]/13), so it is not trivial
                 // (clang `hasTrivialDefaultConstructor` needs
@@ -10844,6 +10844,14 @@ impl Sema<'_, '_> {
                 bits = bits
                     .with(DefinitionBits::LAMBDA_CAPTURES)
                     .without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
+            } else if self.std < kiln_lex::Std::Cxx20 {
+                // Before C++20 no closure type has a default constructor
+                // (C++17 [expr.prim.lambda.closure]), so a captureless
+                // closure is not trivial and not POD either: `__is_trivial`
+                // is false and a local closure variable is not initialized
+                // by a copy from a constant (clang `IsConstantAggregate`;
+                // WP-1520).
+                bits = bits.without(DefinitionBits::TRIVIAL_DEFAULT_CTOR);
             }
         }
         let (mut bits, invalid_field) = self.record_field_bits(r, bits);

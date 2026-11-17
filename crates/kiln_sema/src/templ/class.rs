@@ -1568,10 +1568,12 @@ impl Sema<'_, '_> {
         }
         let Some(pdef) = self.ast.definition(pattern) else {
             self.instantiate_out_of_line_defaulted(f, pattern, poi);
+            self.instantiate_declared_contracts(f, pattern, poi);
             return;
         };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
         if self.suppressed_by_explicit_inst_declaration(f, pattern) {
+            self.instantiate_declared_contracts(f, pdef, poi);
             return;
         }
         // clang `InstantiateFunctionDefinition`: the function is located

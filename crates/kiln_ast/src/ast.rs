@@ -526,15 +526,23 @@ impl Ast {
     pub fn contract_first(&self, f: DeclId) -> DeclId {
         use crate::templates::SpecKind;
         let first = self.first(f);
-        if first == f {
-            return f;
-        }
-        let explicit =
+        let explicit = |first: DeclId| {
             self.spec_info(first).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
                 || self
                     .member_spec_info(first)
-                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization);
-        if !explicit {
+                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        };
+        if first == f {
+            // A call names the specialization's first declaration, the
+            // one made before it was explicitly specialized: its
+            // assertions are those of the first written declaration
+            // (WP-1520; a caller-side check needs them).
+            if self.latest(f) != f && explicit(first) {
+                return self.redecls_of(f).find(|&r| self.prev(r) == Some(first)).unwrap_or(f);
+            }
+            return f;
+        }
+        if !explicit(first) {
             return first;
         }
         let mut d = f;

@@ -87,6 +87,22 @@ impl Cg<'_> {
         {
             return false;
         }
+        // An out-of-class definition of a static data member whose
+        // initializer is in the class (`const int A::m;`, and the
+        // redundant `constexpr int A::n;` of an inline member) is checked
+        // as a declaration (clang `ActOnUninitializedDecl`, which then
+        // skips `CheckCompleteVariableDeclaration` and its
+        // `addModuleInitializer`; WP-1523).
+        let first = ast.first(d);
+        if d != first
+            && v.init.is_none()
+            && ast.decls.var(first).is_some_and(|f| f.init.is_some())
+            && ast.decls.get(first).ctx().is_some_and(|c| {
+                ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record
+            })
+        {
+            return false;
+        }
         !self.discardable_var(d) || self.var_must_emit(d)
     }
 

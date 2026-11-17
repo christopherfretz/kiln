@@ -714,14 +714,20 @@ points, thunks and method indices are clang's.
     it is declared in the last primary base (the chain case) and from
     `all_overridden` otherwise; `add_methods` keeps its primary bases in a
     set beside the list.
-  - The final-overrider map (`overriders.rs` `OvMap`) of a subtree nothing
-    was merged into (a single-inheritance chain) replaces only the
+  - The final-overrider map (`overriders.rs` `OvMap`) in which every
+    method has one entry with one overrider (a single-inheritance chain,
+    also below a virtual base merged into it; WP-1520) replaces only the
     entries of the methods an overrider directly overrides; an entry
     naming an overrider whose own entry was replaced later forwards to
     it, resolved once (`OvMap::materialize`) before a merge and before
-    the map is read. clang's eager walk over every transitively
-    overridden method is quadratic in the depth; maps with merges
-    (multiple or virtual bases) still replace eagerly.
+    the map is read. With single entries this is what the eager walk
+    writes. clang's eager walk over every transitively overridden method
+    is quadratic in the depth; once a merge gives some method a second
+    entry or overrider (`OvMap::multi`: a class reached along two paths)
+    the map replaces eagerly. Every construction vtable computes the
+    final overriders of its base anew, so a chain of depth n below a
+    virtual base still costs O(n) per construction vtable, O(n^3) over
+    the chain's n^2/2 construction vtables (WP-1520 remainder).
   None of this is stored on `ClassInfo`: a class without virtual
   functions has the same record as before.
   `Incomplete` covers a missing definition, a missing override-list

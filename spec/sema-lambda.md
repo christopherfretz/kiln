@@ -227,7 +227,13 @@ capture also loses `TRIVIAL_DEFAULT_CTOR` when its definition completes
 (clang `hasTrivialDefaultConstructor` needs a default constructor), so it
 is neither trivial nor POD, and codegen initializes it member-wise rather
 than copying a constant (WP-162, test
-`expr.prim.lambda/closure-triviality.cpp`).
+`expr.prim.lambda/closure-triviality.cpp`). Before C++20 no closure type
+has a default constructor (C++17 [expr.prim.lambda.closure]), so every
+closure loses `TRIVIAL_DEFAULT_CTOR` there, the captureless one too: it is
+neither trivial nor POD, and a local closure variable is not copied from
+a constant, as in clang (WP-1520, tests
+`expr.prim.lambda/closure-triviality-cxx17.cpp`,
+`tests/codegen/lambda_empty_closure_local_cxx17.cpp`).
 
 ### 3.4 Names in diagnostics and dumps
 

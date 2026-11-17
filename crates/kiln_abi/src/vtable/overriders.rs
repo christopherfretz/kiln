@@ -31,9 +31,10 @@ struct Uvm {
 /// clang `CXXFinalOverriderMap`: per virtual function, per subobject
 /// number, the overriders.
 ///
-/// A map nothing was merged into (the subtree of a single-inheritance
-/// chain: every class one subobject, every key one entry) takes the
-/// overriders' replacements lazily: a method's walk replaces only the
+/// A map whose every key has one entry with one overrider (the subtree
+/// of a single-inheritance chain: every class one subobject, also below
+/// a virtual base merged in, WP-1520) takes the overriders' replacements
+/// lazily: a method's walk replaces only the
 /// entries of the methods it directly overrides, and each entry that
 /// names an overrider whose own entry was replaced later forwards to it
 /// ([`OvMap::materialize`]). clang's eager walk replaces every method it
@@ -41,8 +42,9 @@ struct Uvm {
 #[derive(Default)]
 struct OvMap {
     map: FxHashMap<DeclId, Vec<(u32, Vec<Uvm>)>>,
-    /// Another map was merged into this one: replacements are eager.
-    merged: bool,
+    /// Some key got a second entry or a second overrider (a merge of
+    /// another subobject's map): replacements are eager from then on.
+    multi: bool,
     /// Some replacement was lazy: entries may forward.
     lazy: bool,
 }
@@ -117,13 +119,14 @@ impl OvMap {
 
 fn add(map: &mut OvMap, m: DeclId, sub: u32, uvm: Uvm) {
     let entries = map.map.entry(m).or_default();
-    match entries.iter_mut().find(|(s, _)| *s == sub) {
-        Some((_, list)) => {
-            if !list.contains(&uvm) {
-                list.push(uvm);
-            }
+    if let Some((_, list)) = entries.iter_mut().find(|(s, _)| *s == sub) {
+        if !list.contains(&uvm) {
+            list.push(uvm);
+            map.multi |= list.len() > 1;
         }
-        None => entries.push((sub, vec![uvm])),
+    } else {
+        entries.push((sub, vec![uvm]));
+        map.multi |= entries.len() > 1;
     }
 }
 
@@ -323,7 +326,7 @@ impl Collector {
             let direct = super::classes::overridden(ast, m);
             // Lazy: only the direct overrides, when each has one entry
             // (`OvMap::materialize` forwards the rest).
-            if !out.merged && direct.iter().all(|&om| out.single(om).is_some()) {
+            if !out.multi && direct.iter().all(|&om| out.single(om).is_some()) {
                 for &om in &direct {
                     replace_all(out, om, me(m));
                 }
@@ -347,11 +350,10 @@ impl Collector {
     }
 }
 
-/// Merges `from` (materialized) into `out`, which replaces eagerly from
-/// then on.
+/// Merges `from` (materialized) into `out`; `out` replaces eagerly from
+/// then on if that gives some key a second entry or overrider.
 fn merge(out: &mut OvMap, from: &OvMap) {
     out.materialize();
-    out.merged = true;
     for (&m, entries) in &from.map {
         for (sub, list) in entries {
             for &uvm in list {

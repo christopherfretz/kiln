@@ -3524,14 +3524,23 @@ impl<'a> Cg<'a> {
     /// clang `GetOrCreateLLVMGlobal`: a `const` static data member with
     /// an in-class initializer and no definition in this translation
     /// unit exposes its value as an `available_externally` constant.
+    /// Also (clang 22, WP-1523) an inline static data member that an
+    /// imported named-module unit defines `weak_odr` in its purview
+    /// because of its redundant redeclaration (`constexpr int A::n;`).
     fn available_externally(&mut self, first: DeclId, g: GlobalId, ty: QualType) -> R<()> {
         let ast = self.ast;
-        if !ast.decls.get(first).ctx().is_some_and(|c| {
+        let in_record = ast.decls.get(first).ctx().is_some_and(|c| {
             ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record
-        }) {
+        });
+        if !in_record {
             return Ok(());
         }
-        if ast.redecls_of(first).count() > 1 || self.var_is_inline(first) {
+        let owner = ast.modules.owner(first);
+        let imported = owner.purview
+            && ast.modules.is_imported_named_unit(owner.unit)
+            && self.var_strong_inline(first)
+            && !mangle::is_internal_symbol(ast, first);
+        if !imported && (ast.redecls_of(first).count() > 1 || self.var_is_inline(first)) {
             return Ok(());
         }
         // A specialization of a member variable template that has an
