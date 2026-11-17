@@ -17,6 +17,8 @@ sema_c_assign_incompatible_pointer_default_error = WarningError [IncompatiblePoi
 sema_c_assign_int_to_pointer = WarningError [IntConversion] (4) "incompatible integer to pointer conversion {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
 sema_c_assign_pointer_sign = ExtWarn [PointerSign] (4) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} converts between pointers to integer types {3:with different sign|where one is of the unique plain 'char' type and the other is not}";
 sema_c_assign_pointer_to_int = WarningError [IntConversion] (4) "incompatible pointer to integer conversion {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+// WP-1550: clang `warn_builtin_unknown` (`ImplicitlyDefineFunction`).
+sema_c_builtin_unknown = WarningError [ImplicitFunctionDeclaration] (1) "use of unknown builtin '{0}'";
 // WP-1276: C functions without a prototype (clang `warn_strict_uses_without_prototype`, `warn_non_prototype_changes_behavior`, `note_conflicting_prototype`).
 sema_c_call_without_prototype = Warning [DeprecatedNonPrototype] (2) "passing arguments to {0:a function|'{1}'} without a prototype is deprecated in all versions of C and is not supported in C23";
 sema_c_cast_non_int_to_pointer = Error (1) "operand of type {0} cannot be cast to a pointer type";
@@ -25,6 +27,11 @@ sema_c_cast_non_int_to_pointer = Error (1) "operand of type {0} cannot be cast t
 sema_c_cast_nonscalar_same = Extension (1) "C99 forbids casting nonscalar type {0} to the same type";
 // C 6.5.4p4: a pointer and a floating type do not convert by a cast
 sema_c_cast_pointer_to_non_int = Error (1) "pointer cannot be cast to type {0}";
+// GNU cast to union (WP-1587): `(union U)x` where `x` has a member's
+// type (clang `ext_typecheck_cast_to_union`,
+// `err_typecheck_cast_to_union_no_type`).
+sema_c_cast_to_union = Extension [GnuUnionCast] (0) "cast to union type is a GNU extension";
+sema_c_cast_to_union_no_type = Error (1) "cast to union type from type {0} not present in union";
 sema_c_compare_complete_incomplete_pointers = Extension [C11Extensions] (4) "pointer comparisons before C11 need to be between two complete or two incomplete types; {0} is {2:|in}complete and {1} is {3:|in}complete";
 // C 6.5.8/6.5.9 constraint violations that clang (and GCC) accept with a
 // warning in C (WP-1285)

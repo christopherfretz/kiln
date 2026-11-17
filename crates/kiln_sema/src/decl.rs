@@ -8964,9 +8964,24 @@ impl Sema<'_, '_> {
             && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
             && !self.c_can_redefine_function(prev)
         {
-            let msg = self
-                .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
-                .arg(self.name_for_diagnostic(self.ast.first(f)));
+            // clang `CheckForFunctionRedefinition`: in a GNU dialect, an
+            // `extern inline` definition followed by another (GNU89
+            // semantics, which C99 inline and C++ do not have; GCC
+            // accepts it in C++ with `gnu_inline`, WP-1550).
+            let extern_inline =
+                self.gnu
+                    && self.ast.decls.function(prev).is_some_and(|x| {
+                        x.spec.is_inline() && x.spec.storage() == FnStorage::Extern
+                    });
+            let loc = self.ast.decls.get(f).loc();
+            let name = self.name_for_diagnostic(self.ast.first(f));
+            let msg = if extern_inline {
+                self.diag(DiagId::sema_redefinition_extern_inline, loc)
+                    .arg(name)
+                    .arg(if self.is_c() { "0" } else { "1" })
+            } else {
+                self.diag(DiagId::sema_redefinition, loc).arg(name)
+            };
             let msg = self.note_prev(msg, prev, true);
             self.emit(msg);
             // clang `CheckForFunctionRedefinition` invalidates the

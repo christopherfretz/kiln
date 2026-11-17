@@ -106,6 +106,44 @@ impl Cg<'_> {
         Ok(carry)
     }
 
+    /// GCC's `__builtin_{add,sub,mul}_overflow_p(x, y, c)` (WP-1549): the
+    /// overflow flag of the generic checked operation into `c`'s type
+    /// (sema made a bit-field `c` its `_BitInt`), nothing stored. The
+    /// operands are widened to clang's `EncompassingIntegerType` of the
+    /// three types, the `llvm.*.with.overflow` flag is OR-ed with the
+    /// truncation check against `c`'s width; `c` is evaluated for its side
+    /// effects only, after `x` and `y`.
+    pub(crate) fn emit_overflow_p(&mut self, b: u32, e: ExprId, args: &[ExprId]) -> R<V> {
+        let (Some(op), &[x, y, r]) = (id::overflow_p_op(b), args) else {
+            return err(self.loc_of(e), "malformed overflow predicate builtin");
+        };
+        let ast = self.ast;
+        let (xq, yq, rq) = (ast.exprs.get(x).ty(), ast.exprs.get(y).ty(), ast.exprs.get(r).ty());
+        let (xi, yi, ri) = (self.ws(xq), self.ws(yq), self.ws(rq));
+        let signed = xi.signed || yi.signed || ri.signed;
+        let w = [xi, yi, ri].iter().map(|t| t.w + u32::from(signed && !t.signed)).max();
+        let w = w.unwrap_or(1);
+        let ety = self.m.types.int(w);
+        let xv = self.emit_scalar(x)?;
+        let yv = self.emit_scalar(y)?;
+        self.emit_ignored(r)?;
+        let xv = self.int_cast(xv, ety, xi.signed);
+        let yv = self.int_cast(yv, ety, yi.signed);
+        let (v, mut carry) = if op == 2 && signed && w > 64 {
+            self.wide_signed_mul(xv, yv)
+        } else {
+            self.overflow_intrinsic(ovf_op(op, signed), xv, yv)
+        };
+        if w > ri.w {
+            let rty = self.m.types.int(ri.w);
+            let t = self.cast(CastOp::Trunc, v, rty);
+            let back = self.int_cast(t, ety, ri.signed);
+            let lost = self.icmp(IntPredicate::Ne, v, back);
+            carry = self.bin(BinOp::Or, Flags::NONE, carry, lost);
+        }
+        Ok(carry)
+    }
+
     /// The carry builtin `b` of [`id::carry_op`] (WP-557; clang
     /// `EmitBuiltinExpr` `BI__builtin_addcb`..): two
     /// `llvm.u{add,sub}.with.overflow` steps, `x op y` then `op carryin`;

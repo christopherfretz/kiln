@@ -5385,6 +5385,9 @@ pub mod builtin {
         row(ADD_OVERFLOW, "__builtin_add_overflow", "b.", N | T),
         row(SUB_OVERFLOW, "__builtin_sub_overflow", "b.", N | T),
         row(MUL_OVERFLOW, "__builtin_mul_overflow", "b.", N | T),
+        row(ADD_OVERFLOW_P, "__builtin_add_overflow_p", "b.", N | T),
+        row(SUB_OVERFLOW_P, "__builtin_sub_overflow_p", "b.", N | T),
+        row(MUL_OVERFLOW_P, "__builtin_mul_overflow_p", "b.", N | T),
         row(SADD_OVERFLOW, "__builtin_sadd_overflow", "biCiCi*", N),
         row(SADDL_OVERFLOW, "__builtin_saddl_overflow", "bLiCLiCLi*", N),
         row(SADDLL_OVERFLOW, "__builtin_saddll_overflow", "bLLiCLLiCLLi*", N),
@@ -5443,6 +5446,17 @@ pub mod builtin {
             | UMULLL_OVERFLOW => (2, true),
             _ => return None,
         })
+    }
+
+    /// The operation of an overflow predicate builtin (WP-1549): 0 add,
+    /// 1 sub, 2 mul ([`ADD_OVERFLOW_P`]).
+    pub fn overflow_p_op(id: u32) -> Option<u8> {
+        match id {
+            ADD_OVERFLOW_P => Some(0),
+            SUB_OVERFLOW_P => Some(1),
+            MUL_OVERFLOW_P => Some(2),
+            _ => None,
+        }
     }
 
     /// Whether builtin `id` is a carry builtin (WP-557): `Some(false)` for
@@ -6001,6 +6015,18 @@ pub mod builtin {
     /// `void __builtin__exit(int)` (GCC `BUILT_IN__EXIT`): the POSIX
     /// `_exit`, as [`EXIT`].
     pub const LEXIT: u32 = 2464;
+    // ---- WP-1549 (GCC's overflow predicates; clang 22 has none).
+    /// `bool __builtin_add_overflow_p(a, b, c)` (GCC "Integer Overflow
+    /// Builtins"; custom type-checking): whether `a + b`, computed in
+    /// infinite precision, does not fit the type of `c` (the width and
+    /// signedness of a bit-field `c`); `c`'s value is never used. A
+    /// constant expression when `a` and `b` are. `__has_builtin` answers
+    /// clang's 0 ([`EXIT`]). Kiln-private id.
+    pub const ADD_OVERFLOW_P: u32 = 2465;
+    /// `__builtin_sub_overflow_p` (as [`ADD_OVERFLOW_P`]).
+    pub const SUB_OVERFLOW_P: u32 = 2466;
+    /// `__builtin_mul_overflow_p` (as [`ADD_OVERFLOW_P`]).
+    pub const MUL_OVERFLOW_P: u32 = 2467;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[

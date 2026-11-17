@@ -719,7 +719,11 @@ impl Sema<'_, '_> {
                 return p;
             }
         }
-        let id = if self.c_at_least(kiln_lex::CStd::C99) {
+        // clang: a `__builtin_` name kiln does not know (GCC's
+        // `__builtin_va_arg_pack`, WP-1550) is an unknown builtin.
+        let id = if self.ast.symbols().as_str(name).starts_with("__builtin_") {
+            DiagId::sema_c_builtin_unknown
+        } else if self.c_at_least(kiln_lex::CStd::C99) {
             DiagId::sema_c_implicit_function_decl_c99
         } else {
             DiagId::sema_c_implicit_function_decl
@@ -1079,6 +1083,9 @@ impl Sema<'_, '_> {
             // WP-270: the generic checked-arithmetic builtins.
             builtin::ADD_OVERFLOW | builtin::SUB_OVERFLOW | builtin::MUL_OVERFLOW => {
                 self.builtin_overflow(args, rparen)
+            }
+            builtin::ADD_OVERFLOW_P | builtin::SUB_OVERFLOW_P | builtin::MUL_OVERFLOW_P => {
+                self.builtin_overflow_p(args, rparen)
             }
             builtin::ISFINITE
             | builtin::ISINF
@@ -1795,6 +1802,98 @@ impl Sema<'_, '_> {
             out.push(a);
         }
         Some((out, QualType::BOOL))
+    }
+
+    /// GCC's `__builtin_{add,sub,mul}_overflow_p(a, b, c)` (WP-1549; clang
+    /// has none): `a` and `b` as for [`Sema::builtin_overflow`]; `c` an
+    /// integer expression of a type other than `bool` or an enumeration
+    /// (GCC "has boolean type" / "has enumerated type"), not promoted,
+    /// whose value is never used: only its type, the width and signedness
+    /// of a bit-field `c` instead (GCC's manual). A bit-field `c` is
+    /// converted to the `_BitInt` of its width and signedness so that the
+    /// Oven and codegen read the result type off the argument alone. The
+    /// call is a `bool` prvalue.
+    fn builtin_overflow_p(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 3, rparen) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(3);
+        for (i, &a) in args.iter().enumerate() {
+            let w = (i == 2).then(|| conv::bit_field_width(self, a)).flatten();
+            let a = conv::decay(self, a);
+            let t = self.ety(a);
+            if t == QualType::ERROR {
+                return None;
+            }
+            let ok = self.is_integer_type(t)
+                && (i < 2
+                    || (self.ast.types.builtin(t) != Some(BuiltinType::Bool)
+                        && self.ast.types.as_enum(t).is_none()));
+            if !ok {
+                let id = if i < 2 {
+                    DiagId::sema_overflow_builtin_int
+                } else {
+                    DiagId::sema_overflow_p_builtin_result
+                };
+                let msg = self.diag(id, self.begin_loc(a)).arg(self.ty_arg(t));
+                self.emit(msg);
+                return None;
+            }
+            let a = match w {
+                Some(w) if w > 0 => {
+                    let signed = conv::rank::int_signed(self, t);
+                    let bt = self.ast.types.bit_int(signed, w);
+                    conv::cast_to(self, CastKind::IntegralCast, a, bt, None)
+                }
+                _ => a,
+            };
+            out.push(a);
+        }
+        Some((out, QualType::BOOL))
+    }
+
+    /// Whether `e` is a call of GCC's `__builtin_*_overflow_p` (WP-1549),
+    /// whose third argument contributes only its type.
+    pub(crate) fn overflow_p_call(&self, e: ExprId) -> bool {
+        if self.ast.exprs.get(e).kind() != ExprKind::CallExpr {
+            return false;
+        }
+        let callee = self.ignore_paren_imp_casts(self.ast.exprs.callee(e));
+        self.ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr
+            && self
+                .ast
+                .decls
+                .builtin_id(self.ast.exprs.decl(callee))
+                .is_some_and(|b| builtin::overflow_p_op(b).is_some())
+    }
+
+    /// Whether the third argument `r` of `__builtin_*_overflow_p` is
+    /// evaluated, as GCC does when it has side effects or calls a
+    /// function (WP-1549); otherwise only its type is used.
+    pub(crate) fn overflow_p_result_evaluated(&self, r: ExprId) -> bool {
+        if self.has_side_effects(r) {
+            return true;
+        }
+        let exprs = &self.ast.exprs;
+        let mut stack = vec![r];
+        while let Some(x) = stack.pop() {
+            match exprs.get(x).kind() {
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::UserDefinedLiteral => return true,
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::LambdaExpr
+                | ExprKind::RequiresExpr => {}
+                _ => exprs.children_into(x, &self.ast.lists, &mut stack),
+            }
+        }
+        false
     }
 
     /// clang's `isIntegerType`: an integral type (`bool`, the character

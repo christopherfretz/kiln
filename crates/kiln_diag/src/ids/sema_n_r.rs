@@ -130,6 +130,9 @@ sema_ordered_pointer_zero = Error (2) "ordered comparison between pointer and ze
 sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
 sema_overflow_builtin_int = Error (1) "operand argument to overflow builtin must be an integer type ({0} invalid)";
 sema_overflow_builtin_ptr_int = Error (1) "result argument to overflow builtin must be a pointer to a non-const integer type ({0} invalid)";
+// WP-1549: GCC's `__builtin_*_overflow_p` (GCC: "argument 3 ... has
+// boolean type" / "has enumerated type" / "does not have integral type").
+sema_overflow_p_builtin_result = Error (1) "result argument to overflow builtin must be an integer type other than 'bool' or an enumeration ({0} invalid)";
 sema_override_exception_spec = Error (0) "exception specification of overriding function is more lax than base version";
 sema_override_exception_spec_ext = ExtWarn [MicrosoftExceptionSpec] (0) "exception specification of overriding function is more lax than base version";
 sema_override_not_overriding = Error (1) "'{0}' marked 'override' but does not override any member functions";
@@ -235,6 +238,8 @@ sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different
 sema_redefinition_different_namespace_alias = Error (1) "redefinition of '{0}' as an alias for a different namespace";
 sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
 sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias|type alias template} redefinition with different types ({1} vs {2})";
+// WP-1550: clang `err_redefinition_extern_inline` (a GNU dialect only).
+sema_redefinition_extern_inline = Error (2) "redefinition of a 'extern inline' function '{0}' is not supported in {1:C99 mode|C++}";
 sema_redefinition_of_enumerator = Error (1) "redefinition of enumerator '{0}'";
 sema_redefinition_of_label = Error (1) "redefinition of label '{0}'";
 sema_redundant_constexpr_static_def = WarningOff [DeprecatedRedundantConstexprStaticDef] (0) "out-of-line definition of constexpr static data member is redundant in C++17 and is deprecated";

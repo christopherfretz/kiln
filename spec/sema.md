@@ -2853,6 +2853,18 @@ instantiation unless stated.
     definition not externally visible (codegen rule in spec/codegen.md
     "GNU inline functions"). Test:
     `tests/conformance/ext.gnu.inline/attribute-diags.cpp`.
+    A later definition of the same function (WP-1550): in C a GNU89
+    (`gnu_inline` or `-fgnu89-inline`) `extern inline` body is
+    inline-only and the later definition replaces it (clang
+    `canRedefineFunction`, `c_can_redefine_function`). In C++ it is a
+    redefinition, as in clang (GCC accepts it and emits the second);
+    in a GNU dialect (`-std=gnu++NN`, `-std=gnuNN`) after any `extern
+    inline` definition the wording is clang's
+    `err_redefinition_extern_inline`, `redefinition of a 'extern
+    inline' function 'f' is not supported in C++` (`C99 mode` in C),
+    elsewhere `redefinition of 'f'`. Tests:
+    `tests/conformance/ext.gnu.inline/extern-inline-redefinition-{gnu,std}.cpp`,
+    `tests/c/decl/extern-inline-redefinition-gnu99.c`.
   - `artificial` (GNU syntax or `gnu::`; WP-789, clang `ArtificialAttr`,
     `SubjectList<[InlineFunction]>`; `AttrKind::ARTIFICIAL`): kept on a
     function whose declaration spells `inline`; elsewhere (a
@@ -9498,6 +9510,27 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   `-Wint-to-void-pointer-cast`). The casts are `IntegralToPointer`,
   `PointerToIntegral` and `PointerToBoolean`. A floating or complex type
   on either side of a pointer is an error at the operand (6.5.4p4).
+- **Cast to a union type** (GNU, WP-1587; `c_union_cast`). `(union U)x`
+  whose operand, after its lvalue, array and function conversions, has
+  the unqualified type of a member of the complete union `U` (the first
+  such member, unnamed bit-fields skipped; clang
+  `getTargetFieldForToUnionCast`, so `short` does not match an `int`
+  member and `char *` not a `const char *` one) is a prvalue `U` with
+  that member active, warned "cast to union type is a GNU extension"
+  (`-Wgnu-union-cast`, only under `-pedantic`). Any other operand is the
+  error "cast to union type from type {0} not present in union" at the
+  `(`. clang's AST marks it `ToUnion`; kiln builds a `NoOp` C-style cast
+  of an `InitListExpr` of `U` with that `union_field`, so the Oven,
+  constant emission (a static initializer `(union U)1` is a constant, as
+  in clang and GCC) and codegen treat it as `(union U){ .m = x }` (so a
+  non-constant cast at `-fclang-compat=20` and later also zeroes the
+  union's bytes past the member, which clang's `CK_ToUnion` emission
+  leaves alone: an IR difference only, padding values being
+  unspecified; a constant matches clang 22 exactly). The
+  result is not an integer constant expression (`((union U)1).i` as a
+  file-scope array bound is a VLA error, as clang). In C++ the cast does
+  not exist (`CheckCXXCStyleCast`). A same-type structure or union cast
+  is the separate `c_record_self_cast` (codegen.md "C specifics").
 - **`void *` and function-pointer arithmetic** (GNU). `+`, `-`, `++`,
   `--`, compound assignment and a pointer difference on a pointer to
   `void` or to a function take element size 1; they warn only under

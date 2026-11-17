@@ -93,6 +93,7 @@ GnuImaginaryConstant = "gnu-imaginary-constant" [];
 GnuInlineCppWithoutExtern = "gnu-inline-cpp-without-extern" [];
 GnuPointerArith = "gnu-pointer-arith" [];
 GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
+GnuUnionCast = "gnu-union-cast" [];
 GnuVariableSizedTypeNotAtEnd = "gnu-variable-sized-type-not-at-end" [];
 IgnoredAttributes = "ignored-attributes" [];
 ImplicitConstIntFloatConversion = "implicit-const-int-float-conversion" [];

@@ -77,7 +77,19 @@ pub fn apply_standard_conversion(
             let u = s.ast.types.unqualified(to);
             e = cast_to(s, CastKind::NoOp, e, u, None);
         }
-        ThirdStep::FunctionPointer => e = cast_to(s, CastKind::NoOp, e, to, None),
+        ThirdStep::FunctionPointer => {
+            let from = ty(s, e);
+            if super::qual::adds_gnu_noreturn(s, from, to) {
+                let at = s.begin_loc(e);
+                let d = s
+                    .diag(DiagId::sema_fnptr_adds_noreturn, at)
+                    .arg(s.ty_arg(from))
+                    .arg(s.ty_arg(to))
+                    .range(s.expr_range(e));
+                s.emit(d);
+            }
+            e = cast_to(s, CastKind::NoOp, e, to, None);
+        }
     }
     if let Some((at, _)) = atomic_to {
         let at = s.ast.types.unqualified(at);

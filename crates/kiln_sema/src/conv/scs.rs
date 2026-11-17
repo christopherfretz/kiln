@@ -538,7 +538,22 @@ fn third_step(
         {
             Some(ThirdStep::Qualification)
         }
-        _ => s.ast.types.same_unqualified(conv, to).then_some(ThirdStep::Identity),
+        _ if s.ast.types.same_unqualified(conv, to) => Some(ThirdStep::Identity),
+        // GNU: a plain function pointer to one whose function type adds
+        // `noreturn` (GCC accepts it; kiln warns when applying it,
+        // `conv::apply`). Ranked as the [conv.fctptr] conversion, so the
+        // identity still wins an overload between the two pointer types.
+        // Implicit conversions only: an explicit cast keeps clang's
+        // rules (`static_cast` rejects it, a C-style cast reinterprets),
+        // and a composite pointer type ([expr.type]/4) stays clang's,
+        // the type without `noreturn`.
+        _ if !s.is_c()
+            && !matches!(ctx, ConvCtx::Comparison | ConvCtx::Cast | ConvCtx::CStyleCast)
+            && super::qual::adds_gnu_noreturn(s, conv, to) =>
+        {
+            Some(ThirdStep::FunctionPointer)
+        }
+        _ => None,
     }
 }
 

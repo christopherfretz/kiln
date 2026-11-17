@@ -1683,6 +1683,12 @@ literal is one instruction and one step, not an interpreted loop.
   `bool` result clang 19's evaluator truncates to 8 bits (it stores 2 for
   `1 + 1`), while its codegen and GCC use 1 bit; kiln uses 1 bit in both
   (value `0`, overflow `true`).
+  WP-1549: GCC's `__builtin_{add,sub,mul}_overflow_p(a, b, c)`
+  (`builtin::overflow_p_op`) evaluate `a` and `b`, then `c` only when it
+  has side effects or contains a call (GCC's `(c, flag)` fold, so a call
+  of a non-constexpr function is not constant), and emit `bi::OVERFLOW`
+  once, without `VALUE`, with `c`'s type (its `_BitInt` width for a
+  bit-field) as the result type.
   WP-557: the carry builtins `__builtin_{add,sub}c{b,s,,l,ll}`
   (`builtin::carry_op`; clang 19 `ExprConstant` `BI__builtin_addcb`..)
   evaluate the three operands, then the carry-out pointer, then emit

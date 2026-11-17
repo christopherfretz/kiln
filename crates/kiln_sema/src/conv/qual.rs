@@ -390,6 +390,37 @@ pub fn is_function_pointer_conversion(s: &mut Sema<'_, '_>, from: QualType, to: 
     is_function_conversion(s, pf, pt)
 }
 
+/// GNU (GCC; WP-1551): true if `to` is `from`, a pointer (or pointer to
+/// member) to a function type without GNU `noreturn`, with `noreturn`
+/// added to that function type and nothing else changed. The reverse of
+/// the [conv.fctptr]-like conversion [`is_function_conversion`] allows;
+/// clang rejects it, GCC accepts it silently in C++ (it models `noreturn`
+/// as a qualifier of the function type), and older code passes a plain
+/// function to a `void (*)(...) __attribute__((noreturn))` parameter.
+/// Only the C++ conversion sequence uses it (spec/sema-conv.md).
+pub(crate) fn adds_gnu_noreturn(s: &mut Sema<'_, '_>, from: QualType, to: QualType) -> bool {
+    let (cf, ct) = (s.ast.types.canonical(from), s.ast.types.canonical(to));
+    let (pf, pt) = match (s.ast.types.view(cf.ty()), s.ast.types.view(ct.ty())) {
+        (TypeView::Pointer(a), TypeView::Pointer(b)) => (a, b),
+        (
+            TypeView::MemberPointer { pointee: a, class: x },
+            TypeView::MemberPointer { pointee: b, class: y },
+        ) if s.ast.types.same_type(QualType::unqual(x), QualType::unqual(y)) => (a, b),
+        _ => return false,
+    };
+    let (Some(f), Some(t)) = (s.ast.types.proto(pf).copied(), s.ast.types.proto(pt).copied())
+    else {
+        return false;
+    };
+    if f.info().noreturn() || !t.info().noreturn() {
+        return false;
+    }
+    let params = s.ast.types.params(&f).to_vec();
+    let exc = s.ast.types.exc_spec(&f);
+    let g = s.ast.types.function(f.ret(), &params, f.info().with_noreturn(true), exc);
+    s.ast.types.same_type(g, pt)
+}
+
 /// How a pointer conversion casts away constness (clang
 /// `CastAwayConstnessKind`), ordered from harmless to worst.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]

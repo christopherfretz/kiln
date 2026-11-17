@@ -7167,6 +7167,14 @@ impl Sema<'_, '_> {
         {
             return r;
         }
+        // GNU cast to union (C only; C++ has no such cast, clang
+        // `CheckCXXCStyleCast`).
+        if self.is_c()
+            && style == CastStyle::CStyle
+            && let Some(r) = self.c_union_cast(e, ty, loc, rparen)
+        {
+            return r;
+        }
         // [expr.static.cast]/4 with a class target: direct-initialization
         // of a temporary from an object of the same or a derived class
         // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).

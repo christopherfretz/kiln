@@ -244,6 +244,27 @@ fn side_effects_outside(ast: &Ast, e: ExprId, skip: &[ExprId]) -> bool {
     false
 }
 
+/// Whether `e` calls a function anywhere outside unevaluated operands
+/// (the third argument of `__builtin_*_overflow_p`, WP-1549).
+fn contains_call(ast: &Ast, e: ExprId) -> bool {
+    let exprs = &ast.exprs;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match exprs.get(x).kind() {
+            ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::UserDefinedLiteral => return true,
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => {}
+            _ => exprs.children_into(x, &ast.lists, &mut stack),
+        }
+    }
+    false
+}
+
 /// `StringRef::getAsInteger(0, APInt)`: an unsigned integer whose radix
 /// is sensed from its prefix (`0x`, `0b`, `0o`, a leading `0`), modulo
 /// 2^128 (only the low bits of a NaN payload are kept).
@@ -1409,6 +1430,33 @@ impl Compiler<'_> {
                 );
                 op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
                 self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
+            }
+            // WP-1549: GCC's overflow predicates: the overflow flag of
+            // `bi::OVERFLOW` (the same infinite-precision check) against
+            // the third argument's type (sema made a bit-field one its
+            // `_BitInt`); that argument is evaluated only for its side
+            // effects, so `(T)0` or a non-constant object does not stop
+            // folding.
+            _ if id::overflow_p_op(bid).is_some() => {
+                let k = id::overflow_p_op(bid)?;
+                let (x, y, r) = (arg(0)?, arg(1)?, arg(2)?);
+                let sa = self.int_ws(x).1;
+                let sb = self.int_ws(y).1;
+                let (wr, sr) = self.int_ws(r);
+                let a = self.rv(x);
+                let b = self.rv(y);
+                // GCC folds the call to `(r, flag)` when `r` has side
+                // effects (TREE_SIDE_EFFECTS, calls included): then `r` is
+                // evaluated, and a non-constant one makes the call so.
+                if has_side_effects(self.ast(), r) || contains_call(self.ast(), r) {
+                    self.effect(r);
+                }
+                let sub = u32::from(k)
+                    | u32::from(sa) << 2
+                    | u32::from(sb) << 3
+                    | u32::from(sr) << 4
+                    | wr << 6;
+                op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
             }
             // WP-557: the carry builtins (clang `IntExprEvaluator`
             // `BI__builtin_addcb`..): the three operands, then the

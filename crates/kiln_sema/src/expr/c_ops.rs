@@ -58,6 +58,57 @@ impl Sema<'_, '_> {
         Some(self.explicit_cast(CastStyle::CStyle, CastKind::NoOp, x, to, loc, rparen))
     }
 
+    /// The GNU cast to a union type (GCC's "Cast to a Union Type", clang
+    /// `CheckCStyleCast`, C only): `(union U)x`, where the operand after
+    /// its lvalue, array and function conversions has the unqualified type
+    /// of a member of `U` (clang `getTargetFieldForToUnionCast`: the first
+    /// such member, no unnamed bit-field), is a prvalue `U` whose active
+    /// member is initialized from `x`, warned under `-Wgnu-union-cast`
+    /// (`-pedantic`). Any other operand is an error. clang marks it
+    /// `CK_ToUnion`; kiln builds the union's initializer list with that
+    /// member under a `NoOp` cast, so constant evaluation, constant
+    /// emission and code generation take the path of `(union U){.m = x}`
+    /// (spec/sema.md "C casts"). `None` when `ty` is not a complete union.
+    pub(super) fn c_union_cast(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        let r = self.ast.types.as_record(ty)?;
+        if !self.is_union(r) {
+            return None;
+        }
+        let def = self.ast.definition(r)?;
+        let x = conv::decay(self, e);
+        let from = self.ety(x);
+        let field = self.ast.decls.members(def).find(|&f| {
+            self.kind_of(f) == kiln_ast::decl::DeclKind::Field
+                && !self.is_unnamed_bit_field(f)
+                && self
+                    .ast
+                    .decls
+                    .get(f)
+                    .ty()
+                    .is_some_and(|t| self.ast.types.same_unqualified(t, from))
+        });
+        let Some(field) = field else {
+            let msg = self
+                .diag(DiagId::sema_c_cast_to_union_no_type, loc)
+                .arg(self.ty_arg(from))
+                .range(self.expr_range(e));
+            self.emit(msg);
+            return Some(self.recover(ty, &[e], loc));
+        };
+        let msg = self.diag(DiagId::sema_c_cast_to_union, loc).range(self.expr_range(e));
+        self.emit(msg);
+        self.mark_explicit(x, e);
+        let to = conv::strip_cv(self, ty);
+        let list = self.builder().init_list(to, &[x], None, Some(field), loc, rparen);
+        Some(self.explicit_cast(CastStyle::CStyle, CastKind::NoOp, list, to, loc, rparen))
+    }
+
     /// A C-style cast between a pointer and a non-pointer scalar (clang
     /// `CheckCStyleCast`): a pointer to an integer narrower than a pointer
     /// warns `-Wpointer-to-int-cast` (C17 6.3.2.3p6: implementation-defined,
