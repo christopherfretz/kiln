@@ -133,6 +133,10 @@ CODE GENERATION:
   -fmason-metadata[=<min|default|detail|all>], -fno-mason-metadata
                           [kiln] Write metadata for the mortar linker's
                           link-time checks into each object (off by default)
+  -fmason-metadata-system-unit, -fno-mason-metadata-system-unit
+                          [kiln] Treat this translation unit as part of the
+                          implementation: every definition and type row of
+                          .mason.meta is marked SYSTEM (off by default)
   -fvisibility=<visibility>
                           Default symbol visibility: default, hidden,
                           protected or internal
@@ -521,6 +525,7 @@ mod tests {
             "-fkiln-backend=<backend>",
             "--hod=<file>",
             "-fmason-metadata[=<min|default|detail|all>]",
+            "-fmason-metadata-system-unit",
             "-fconstexpr-memory=<size>",
             "-fkiln-instantiation-report[=<format>]",
             "-fconstexpr-stats",

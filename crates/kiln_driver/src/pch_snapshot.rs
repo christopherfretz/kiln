@@ -228,7 +228,12 @@ fn excluded(args: &Args) -> Args {
         // stay as spelled (their predefines are a component too).
         opt_flag: args.opt_flag.clone().filter(|f| f != "-O0"),
         // WP-1557: the `.mason.meta` unit is written after the front end.
-        codegen: crate::codegen_flags::CodegenFlags { mason_meta: None, ..args.codegen.clone() },
+        // WP-1619: so is `-fmason-metadata-system-unit`.
+        codegen: crate::codegen_flags::CodegenFlags {
+            mason_meta: None,
+            mason_system_unit: false,
+            ..args.codegen.clone()
+        },
         ..args.clone()
     }
 }
@@ -1856,6 +1861,8 @@ mod tests {
         // WP-1557: the `.mason.meta` unit is written after the front end.
         same(BASE, &with(&["-fmason-metadata"]));
         same(&with(&["-fmason-metadata=all"]), BASE);
+        same(BASE, &with(&["-fmason-metadata", "-fmason-metadata-system-unit"]));
+        same(&with(&["-fmason-metadata-system-unit"]), BASE);
         named(
             &["-std=c++20", "-Wall", "-Wno-unused-variable", "t.cpp"],
             &["-std=c++20", "-Wno-unused-variable", "-Wall", "t.cpp"],

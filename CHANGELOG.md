@@ -12,6 +12,14 @@ Planned as 1.3.0.
 
 ### Added
 
+- `-fmason-metadata-system-unit` (WP-1619): with `-fmason-metadata`,
+  marks every definition and type row of the unit's `.mason.meta` section
+  as coming from a system header, for building a standard library such as
+  libc++ and libc++abi from its sources, so the mortar linker treats those
+  rows as it treats the library's own. Hashes, keys, the other flags and
+  diagnostics are unchanged; a PCH or module file serves units with and
+  without it.
+
 - `cargo xtask gxx-dg` (WP-1443): GCC 16.1's C++ testsuite (`g++.dg`
   with `g++.dg/torture`, `c-c++-common`, `g++.old-deja`) through kiln++,
   with GCC and clang as oracles. It reads the `dg-` directives (errors and
