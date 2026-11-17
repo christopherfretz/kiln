@@ -645,7 +645,7 @@ The full list is spec/driver.md, "Options".
 | `-fkiln-pch-validate=mtime\|content` | how a PCH's input files are checked (default `mtime`: size and time, then content) |
 | `-f[no-]kiln-bmi-image` | experimental, off by default: write and use the declaration image in module files (see [Modules](#modules)) |
 | `-f[no-]kiln-debug-source-checksum` | MD5 checksums of source files in the DWARF 5 line table (default on; see [Debug information](#debug-information)) |
-| `-fmason-metadata[=min\|default\|detail\|all]`, `-fno-mason-metadata` | off by default: write a `.mason.meta` section of metadata for the mortar linker's link-time checks into each object (today a summary of the translation unit's ABI-affecting options); other linkers drop it |
+| `-fmason-metadata[=min\|default\|detail\|all]`, `-fno-mason-metadata` | off by default: write a `.mason.meta` section of metadata for the mortar linker's link-time checks into each object (today a summary of the translation unit's ABI-affecting options and, from `default` up, the type of every external function and variable the object defines or uses); other linkers drop it |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |
 | `-fkiln-outline-expansions=N`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=N` | internal tuning and debugging of the codegen CFG |
 
