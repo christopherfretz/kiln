@@ -2593,6 +2593,24 @@ reports a dropped statement, part or declaration lookup.
   the `pending` worklist with their POI. `end_of_tu_instantiations()`
   drains the worklist with a loop; an instantiation may push more entries
   onto it.
+- A function named as a non-type template argument is odr-used
+  ([basic.def.odr]/3, /7: a template argument is potentially evaluated), so
+  a function template specialization named so is instantiated
+  ([temp.inst]/11), not only outside templates (WP-1533). An argument
+  written in a templated function's body is converted once, at the
+  definition, where nothing is instantiated: `convert_nttp_arg` (pointer
+  and pointer to member) and `convert_ref_nttp_arg` (reference) record
+  the specialization it names, outside unevaluated operands, in
+  `InstState::template_arg_uses` keyed by the definition's first
+  declaration (`note_template_arg_use`), and each instantiation of that
+  definition marks the recorded functions referenced after its body
+  (`mark_template_arg_uses`), except those in a constexpr `if` branch
+  the substitution discarded (`Substituter::discarded`, [stmt.if]/2).
+  clang 22 does not instantiate them; GCC 16 does
+  (`temp.inst/function-template-argument-instantiated.cpp`). Not covered:
+  an argument in a lambda body or in a class template member
+  declaration (outside a member function body), which GCC 16 also
+  instantiates.
 - Each definition the drain instantiates is recorded in
   `TemplateTables::end_of_tu_defs` for codegen (spec/codegen.md §2a),
   in clang's order ([temp.point]/7: the end of the TU is a point of
@@ -4886,7 +4904,18 @@ A class template-id P with a class A tries A first. If that fails and
 ([temp.deduct.call]/4.3), each from the deductions made before A was
 tried (clang's `DeducedOrig`): what the failed match of A deduced
 (`I = ref` from `I<B>` against `ref<iface>`) is dropped (WP-789,
-`tests/conformance/temp.deduct.call/base-after-template-template-mismatch-run.cpp`). An `A` that is a class template specialization
+`tests/conformance/temp.deduct.call/base-after-template-template-mismatch-run.cpp`).
+Whether a base is a possible deduced A is decided per argument
+([temp.deduct.call]/5, "deduction is done argument by argument"): each
+base is matched from the explicitly given arguments alone
+(`DeducedArgs::call_seed`), not from what other (P, A) pairs deduced, and
+more than one match left after the CWG2303 filter fails; the unique match
+is then deduced from the state before A was tried, and a conflict with
+the earlier pairs fails there (GCC's `try_class_unification`; clang 22
+matches from the earlier deductions, so `S<I, I, I>` against bases
+`S<0, 0, 0>` and `S<1, 1, 1>` takes the first when another argument gave
+`I = 0`; WP-1532, `tests/conformance/temp.deduct.call/two-bases-per-argument*.cpp`).
+An `A` that is a class template specialization
 not yet instantiated is instantiated first, at the deduction's location
 and without the undefined-template diagnostic, so its bases exist
 ([temp.inst]/2; clang's `isCompleteType` in `DeduceTemplateBases`; WP-682,

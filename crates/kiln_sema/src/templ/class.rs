@@ -2292,6 +2292,8 @@ impl Substituter<'_, '_, '_> {
             sub.sema.act_on_mem_initializers(f, &[], colon);
         }
         let b = sub.body(body);
+        let discarded = std::mem::take(&mut sub.discarded);
+        sub.sema.mark_template_arg_uses(pdef, &discarded);
         // After the body: a deduced return type is known
         // ([dcl.contract.res]/2).
         sub.function_contracts(f, pdef);

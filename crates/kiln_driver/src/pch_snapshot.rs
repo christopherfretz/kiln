@@ -131,7 +131,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 41;
+pub(crate) const FORMAT_VERSION: u32 = 42;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

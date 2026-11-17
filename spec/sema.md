@@ -4921,7 +4921,21 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     assumed to name functions that overload, and a conflict is found at
     instantiation (clang `CheckOverload`; Boost.Cobalt's promises, WP-812,
     `namespace.udecl/dependent-member-using-overloads-run.cpp`);
-  - a tag conflicts only with a tag;
+  - a tag conflicts with a tag; in a class, also with a typedef-name
+    that does not name that tag (a class and a typedef-name correspond,
+    [basic.scope.scope]/4 exempts only a variable, data member,
+    enumerator or function; GCC 16; clang 22 lets a tag coexist with
+    any non-tag, and outside a class kiln keeps clang's rule, which GCC
+    16 shares at namespace scope; WP-1534);
+  - in a class, a using-declarator (or `using enum`) naming an
+    enumerator of a member enumeration of that class names a member
+    already declared there, a second declaration of it
+    ([class.mem.general]/5; GCC 16, clang 22 accepts): `target of using
+    declaration conflicts with declaration already in scope` (WP-1534,
+    `namespace.udecl/class-scope-member-conflict*.cpp`). At block and
+    namespace scope the same entity is no conflict (P1787);
+  - a data or static data member declared after a shadow of the same
+    name reports only the conflict below, not `duplicate member`;
   - two typedefs conflict unless they name the same type;
   - two functions conflict iff their types are the same ignoring
     exception specifications (else they overload);
@@ -5700,11 +5714,26 @@ Names there are not odr-used.
     recurses into its first operand only (clang rebuilds the LHS twice,
     so the RHS stays an odr-use); a variable whose class type has a
     mutable member stays an odr-use, but only the variable's own type is
-    checked (an array of such a class is not); the discarded-value
-    bullet is never applied (clang leaves `NOUR_Discarded` unused), so
-    `(void)ca` odr-uses `ca`; in a generic lambda with a deduced return
+    checked (an array of such a class is not); in a generic lambda with a deduced return
     type `return ca.v` has no conversion until instantiation, so `ca` is
     captured.
+  - The discarded-value bullet ([basic.def.odr]/5, "or E is a
+    discarded-value expression") is applied, unlike clang 19/22 (which
+    leave `NOUR_Discarded` unused and capture): `ignored_value_conversions`
+    (an expression statement, a `for` increment, the left operand of a
+    comma, the operand of a cast to void) takes the same potential
+    results of `e` as above and marks the queued references to variables
+    usable in constant expressions `non_odr_use_constant` at once, so
+    `[=] { n; }` and `[=] { (void)n; }` do not capture `n` (GCC 16 agrees;
+    WP-1535, `expr.prim.lambda.capture/discarded-constant-not-captured.cpp`).
+    Not done for a generic lambda's potential captures (resolved at the
+    end of the full-expression, which does not know `e` was discarded).
+  - Known gap (WP-1535 remainder): a by-copy capture named in a
+    constant expression evaluated in the lambda body (`constexpr int j =
+    *&n;` under `[=]`) is evaluated as the enclosing variable by the
+    Oven, which should fail without the closure object
+    ([expr.prim.lambda.capture]/8 example); xfail
+    `expr.prim.lambda.capture/odr-use-address-in-constexpr-init.cpp`.
   - Codegen (spec/codegen.md): a non-odr-used local named from a
     lambda or local class reads the variable's `__const` global.
   - Tests `basic.def.odr/potential-results-closure-run.cpp` (closure
@@ -10267,7 +10296,14 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   increment (before `act_on_full_expr`), the left operand of a built-in
   comma, and the operand of a cast to `void`. A call returning a volatile
   reference is not read. Such a `.*` / `->*` is not `expression result
-  unused` (clang sees the cast).
+  unused` (clang sees the cast). The conversion needs a complete type
+  ([conv.lval]/1): a volatile glvalue of class type is completed first
+  (a class template specialization is instantiated, its errors
+  reported), and one that stays incomplete is `incomplete type 'volatile
+  I' where a complete type is required` at the expression; nothing is
+  converted then (clang 22 neither completes nor diagnoses; GCC 16
+  instantiates and only warns for a plain incomplete class; WP-1533,
+  `expr.context/discarded-volatile-incomplete*.cpp`).
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`). A condition variable of function type

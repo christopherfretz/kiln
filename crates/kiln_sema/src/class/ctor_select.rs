@@ -180,7 +180,76 @@ impl Sema<'_, '_> {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
         let out = self.resolve_set(&mut set);
+        let out = self.elision_against_ctors(&mut set, out, c);
         (set, out)
+    }
+
+    /// [over.match.ctor]/1 makes only the constructors candidates
+    /// (CWG2327 is open): a winning conversion-function candidate of
+    /// [`Self::add_elision_candidates`] does not stand when the
+    /// constructors alone are ambiguous between copy and move
+    /// constructors only, unless its implicit object conversion is better
+    /// than that of every other conversion function they are reached
+    /// through. An ambiguity involving another constructor (`P(string&&)`
+    /// beside `P(P&&)`, both through a conversion function template)
+    /// leaves the conversion function winning, as in GCC 16 and clang 22,
+    /// although the text makes it ambiguous too. A copy and a move
+    /// constructor reached through two different conversion functions
+    /// are indistinguishable ([over.ics.rank]/3.3), and a third
+    /// conversion function no better than those cannot resolve that (GCC
+    /// 16; clang 22 lets the conversion function win). When the
+    /// constructors alone select one, the conversion function still wins
+    /// as in clang (libc++ tuple tests rely on it; GCC 16 picks the
+    /// constructor there).
+    fn elision_against_ctors(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        out: OvlOutcome,
+        class: DeclId,
+    ) -> OvlOutcome {
+        use crate::conv::IcsCompare;
+        use crate::overload::{CandidateKind, Ics};
+        let (OvlOutcome::Success(b) | OvlOutcome::Deleted(b)) = out else { return out };
+        if set.cand(b).kind != CandidateKind::ConvFn {
+            return out;
+        }
+        let Some(Ics::Standard(fobj)) = set.ics_of(b).first().copied() else { return out };
+        let f = set.cand(b).func();
+        let hidden: Vec<usize> = (0..set.cands.len())
+            .filter(|&i| set.cands[i].viable && set.cands[i].kind == CandidateKind::ConvFn)
+            .collect();
+        for &i in &hidden {
+            set.cands[i].viable = false;
+        }
+        let marks: Vec<bool> = set.cands.iter().map(|c| c.ambiguous_mark).collect();
+        for c in &mut set.cands {
+            c.ambiguous_mark = false;
+        }
+        let r = self.best_viable(set);
+        let marked: Vec<u32> = (0..set.cands.len())
+            .filter(|&i| set.cands[i].ambiguous_mark)
+            .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+            .collect();
+        let ambiguous = r == OvlOutcome::Ambiguous
+            && marked.iter().all(|&c| self.copy_or_move_ctor_param(set.cand(c).func(), class))
+            && marked.iter().any(|&c| match set.ics_of(c).first() {
+                Some(Ics::UserDefined(u)) if u.func == Some(f) => false,
+                Some(Ics::UserDefined(u)) => {
+                    self.compare_ics(&Ics::Standard(fobj), &Ics::Standard(u.before))
+                        != IcsCompare::Better
+                }
+                _ => false,
+            });
+        for &i in &hidden {
+            set.cands[i].viable = true;
+        }
+        if ambiguous {
+            return r;
+        }
+        for (c, m) in set.cands.iter_mut().zip(marks) {
+            c.ambiguous_mark = m;
+        }
+        out
     }
 
     /// The converting constructors of class `c` ([class.conv.ctor]; clang

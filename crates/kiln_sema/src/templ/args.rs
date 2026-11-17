@@ -1195,7 +1195,6 @@ impl Sema<'_, '_> {
     /// `e` converted to the type of non-type parameter `p` as a
     /// converted constant expression ([temp.arg.nontype]/2) and
     /// evaluated: a `Value` argument.
-    #[allow(clippy::too_many_lines)]
     fn convert_nttp_arg(
         &mut self,
         tmpl: DeclId,
@@ -1204,6 +1203,29 @@ impl Sema<'_, '_> {
         e: ExprId,
         at: Loc,
         prior: &[TemplateArg],
+    ) -> Result<TemplateArg, ()> {
+        let mut named = None;
+        let r = self.convert_nttp_arg_inner(tmpl, depth, p, e, at, prior, &mut named);
+        if r.is_ok()
+            && let Some(f) = named
+        {
+            // Converted here once: an instantiation of the enclosing
+            // definition replays the odr-use.
+            self.note_template_arg_use(f, self.eloc(e));
+        }
+        r
+    }
+
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    fn convert_nttp_arg_inner(
+        &mut self,
+        tmpl: DeclId,
+        depth: u16,
+        p: DeclId,
+        e: ExprId,
+        at: Loc,
+        prior: &[TemplateArg],
+        named: &mut Option<DeclId>,
     ) -> Result<TemplateArg, ()> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("convert_nttp_arg");
@@ -1331,6 +1353,9 @@ impl Sema<'_, '_> {
         } else {
             (e, ety)
         };
+        if self.in_template() && self.unevaluated == 0 {
+            *named = self.referenced_decl_of_callee(e).filter(|&f| self.kind_of(f).is_function());
+        }
         let t = &self.ast.types;
         // clang `CheckConvertedConstantExpression`: an argument with no
         // implicit conversion sequence to the parameter's type

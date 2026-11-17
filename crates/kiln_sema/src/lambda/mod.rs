@@ -409,7 +409,7 @@ impl Sema<'_, '_> {
     /// Whether declaration context `d` is dependent (clang
     /// `DeclContext::isDependentContext`): a template's pattern, a
     /// declaration in one, or a dependent closure type.
-    fn is_dependent_decl_context(&self, d: DeclId) -> bool {
+    pub(crate) fn is_dependent_decl_context(&self, d: DeclId) -> bool {
         let decl = self.ast.decls.get(d);
         if self.ast.closure_lambda(d).is_some() {
             return decl.ty().is_some_and(|t| self.is_dependent_type(t));
