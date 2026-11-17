@@ -7,12 +7,13 @@
 //@ expect: compile-ok
 //@ oracle: gcc
 //@ xfail(clang): clang 22 does not implement CWG2262 at namespace scope
+//@ requires: clang>=22
 //@ strict-diags
-//@ diag: 17:3 warning "'maybe_unused' attribute ignored"
-//@ diag: 18:3 warning "'foo::bar' attribute ignored"
-//@ diag: 18:16 warning "'bar::baz' attribute ignored"
-//@ diag: 19:1 warning "'alignas' attribute ignored"
-//@ diag: 20:17 warning "'deprecated' attribute ignored"
+//@ diag: 18:3 warning "'maybe_unused' attribute ignored"
+//@ diag: 19:3 warning "'foo::bar' attribute ignored"
+//@ diag: 19:16 warning "'bar::baz' attribute ignored"
+//@ diag: 20:1 warning "'alignas' attribute ignored"
+//@ diag: 21:17 warning "'deprecated' attribute ignored"
 [[]] asm("");
 [[maybe_unused]] asm("");
 [[foo::bar]] [[bar::baz(1)]] asm("");

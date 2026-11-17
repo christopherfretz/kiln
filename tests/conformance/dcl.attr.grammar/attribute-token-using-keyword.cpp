@@ -8,14 +8,15 @@
 //@ std: c++20
 //@ oracle: gcc
 //@ xfail(clang): clang 22 reads every 'using' after '[[' as an attribute-using-prefix
+//@ requires: clang>=22
 //@ strict-diags
-//@ diag: 19:3 warning "unknown attribute 'using' ignored"
-//@ diag: 20:3 warning "unknown attribute 'using::x' ignored"
-//@ diag: 20:13 warning "unknown attribute 'x::using' ignored"
-//@ diag: 22:11 warning "unknown attribute 'using' ignored"
-//@ diag: 22:18 warning "unknown attribute 'using::baz' ignored"
-//@ diag: 22:30 warning "unknown attribute 'bar::using' ignored"
-//@ diag: 22:42 warning "unknown attribute 'using::using' ignored"
+//@ diag: 20:3 warning "unknown attribute 'using' ignored"
+//@ diag: 21:3 warning "unknown attribute 'using::x' ignored"
+//@ diag: 21:13 warning "unknown attribute 'x::using' ignored"
+//@ diag: 23:11 warning "unknown attribute 'using' ignored"
+//@ diag: 23:18 warning "unknown attribute 'using::baz' ignored"
+//@ diag: 23:30 warning "unknown attribute 'bar::using' ignored"
+//@ diag: 23:42 warning "unknown attribute 'using::using' ignored"
 [[using]] int a1;
 [[using::x, x::using]] int a2;
 int g() {
