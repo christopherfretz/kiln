@@ -3870,7 +3870,12 @@ it. The object the destructor sees:
 The destruction is manifestly constant-evaluated when the variable has
 static storage and is constant-initialized
 (`__builtin_is_constant_evaluated()` is then true). A leak or any
-failure keeps the call. `tests/codegen/dtor_constant_destruction.cpp`
+failure keeps the call. A variable whose type has a subobject (itself,
+an element, a base or a member) of a class with virtual bases is never
+evaluated: clang's destructor of such a class is never `constexpr`, and
+the Oven's destruction of one skips the virtual bases (WP-1547; its
+C++26 implicit destructor is `constexpr`, so `Bar b;` lost its call).
+`tests/codegen/dtor_constant_destruction.cpp`
 checks every case above against clang on both triples.
 
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
@@ -5193,6 +5198,20 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   through a constexpr value computed in that function) is a codegen
   error "address of a label of another function in a constant" (clang
   crashes there).
+- A static local with such an initializer in a body emitted twice (the
+  complete and base variants of a constructor or destructor of a class
+  with a virtual base) is one global, so its label addresses name one
+  variant's blocks: the complete variant's, whatever the emission order
+  (`Cg::label_statics` records the function whose blocks they name;
+  `relabel_static_local` emits the initializer again, adding the labels
+  to that variant's dispatch block, when the complete variant comes
+  second). clang emits it again at every emission, so the last variant
+  wins: the complete one for a constructor defined out of its class, the
+  base one (and a crash constructing a complete object) for one defined
+  in it. The base variant jumping through the static still lands in the
+  complete one (as with clang; GCC emits one body). WP-1547; tests:
+  `tests/conformance/ext.gnu.label.value/run-static-label-table-variants.cpp`,
+  `run-static-label-in-class-constructor.cpp` (clang skipped).
 - Tests: `tests/codegen/computed_goto.cpp` (exact IR on both triples at
   both oracles: a static table, a conditional target, a duplicate
   address, an unused dispatch block, `goto *&&l` through a destructor, a

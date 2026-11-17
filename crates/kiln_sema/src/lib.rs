@@ -1171,6 +1171,11 @@ pub struct Sema<'a, 'sm> {
     /// range-based `for` from `getCurScope()`); set by the outermost
     /// `in_inst_context`.
     pub(crate) range_for_outer_depth: Option<usize>,
+    /// The variadic argument whose copy ([conv.lval]/3.2) is being
+    /// initialized ([`Sema::check_variadic_args`]): copying it again while
+    /// that runs is the copy selecting a variadic constructor that takes
+    /// the object through its ellipsis, which never ends.
+    pub(crate) vararg_copying: Option<ExprId>,
     /// The location of a condition that is clang 19's speculative typo
     /// correction: clang converts the uncorrected `TypoExpr` to `bool`
     /// (a no-op) and so never checks the corrected expression's
@@ -1694,6 +1699,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             spec_failures: Vec::new(),
             spec_exempt: kiln_source::fx::FxHashSet::default(),
             range_for_outer_depth: None,
+            vararg_copying: None,
             cond_typo_at: Loc::INVALID,
             pending_cond_typo: Loc::INVALID,
             expr_errors: kiln_source::fx::FxHashSet::default(),
