@@ -1202,6 +1202,18 @@ Planned as 1.3.0.
   template naming a non-class in a nested-name-specifier, and a repeated
   `using E::x;` in a class; x86-64 `"+f"` asm outputs are rejected as clang
   22 does instead of crashing the backend.
+- `<stddef.h>` declares `::nullptr_t` in C++11 and later; floating and
+  complex floating `static const` members with an in-class initializer at
+  C++98 are accepted as the GNU extension (`-Wgnu-static-float-init`); a
+  by-copy capture odr-used in a local class's or enumeration's scope
+  (enumerator values, bit-field widths, member array bounds) is diagnosed;
+  a template argument's narrowing check no longer folds it before its
+  full-expression ends; a class declared after a using-declarator naming a
+  type of the same name in that scope is rejected; an rvalue reference
+  bound through a conversion function yielding a derived class beside a
+  better lvalue conversion function now selects the copy constructor or
+  `const T&` overload as clang and GCC do (WP-1615, WP-1616, WP-1621,
+  WP-1622, WP-1624, WP-1625).
 
 ## [1.2.1] - 2026-11-14
 

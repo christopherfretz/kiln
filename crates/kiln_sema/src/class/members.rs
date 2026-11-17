@@ -545,11 +545,23 @@ impl Sema<'_, '_> {
                 }
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
             }
-        } else if self.is_literal_type(ty) {
-            if self.ast.types.is_floating(ty) {
-                let msg = self
-                    .diag(DiagId::sema_static_float_init, self.begin_loc(e))
-                    .arg(self.ty_arg(ty));
+        } else if self.is_floating_or_complex_floating(ty) && self.std < kiln_lex::Std::Cxx11 {
+            // C++98: a floating (or complex floating) member's in-class
+            // initializer is a GNU extension when it folds to a constant
+            // (clang `ext_in_class_initializer_float_type`, GCC accepts too).
+            let msg = self.diag(DiagId::sema_static_float_init_gnu, vn.loc()).arg(self.ty_arg(ty));
+            self.emit(msg);
+            let loc = self.begin_loc(e);
+            let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
+            if self.eval_const(e, ctx).is_err() {
+                let at = self.culprit_loc(e);
+                self.error(DiagId::sema_static_member_init_not_ice, at);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            }
+        } else if self.std >= kiln_lex::Std::Cxx11 && self.is_literal_type(ty) {
+            if self.is_floating_or_complex_floating(ty) {
+                // clang reports at the member's name (both 19 and 22).
+                let msg = self.diag(DiagId::sema_static_float_init, vn.loc()).arg(self.ty_arg(ty));
                 // clang points the note at the declaration's start; the
                 // decl-specifiers' location is gone by now (spec gap).
                 let msg = msg.with_note(self.diag(DiagId::note_add_constexpr, vn.loc()));
@@ -566,6 +578,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+    }
+
+    /// A floating type or a complex floating type (clang's
+    /// `isFloatingType`, which the in-class initializer checks use).
+    fn is_floating_or_complex_floating(&self, ty: QualType) -> bool {
+        let t = &self.ast.types;
+        t.is_floating(ty) || t.as_complex(ty).is_some_and(|el| t.is_floating(el))
     }
 
     /// The base-clause of class `r` (clang's `CheckBaseSpecifier` and

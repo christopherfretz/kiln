@@ -964,15 +964,17 @@ impl Sema<'_, '_> {
         }
         let typedef = |k| matches!(k, DeclKind::Typedef | DeclKind::TypeAlias);
         if is_tag_kind(ka) || is_tag_kind(kb) {
-            // In a class, a class or enumeration and a typedef-name of
-            // another type correspond ([basic.scope.scope]/4 exempts
-            // only a variable, data member, enumerator or function), so
-            // they conflict ([namespace.udecl]/11; GCC 16; clang 22 lets a
-            // tag coexist with any non-tag). Elsewhere clang's rule is
-            // kept (GCC 16 accepts the namespace-scope case too).
+            // In a class or a block, a class or enumeration and a
+            // typedef-name of another type correspond
+            // ([basic.scope.scope]/4 exempts only a variable, data
+            // member, enumerator or function), so they conflict
+            // ([namespace.udecl]/11; GCC 16; clang 22 lets a tag coexist
+            // with any non-tag). At namespace scope clang's rule is kept
+            // (GCC 16 accepts that case too; docs/status/deviations.md).
             if typedef(ka) || typedef(kb) {
                 let (tag, td) = if typedef(kb) { (a, b) } else { (b, a) };
-                return self.member_spec_class().is_some() && !self.typedef_names_tag(td, tag);
+                return (self.member_spec_class().is_some() || self.in_local_scope())
+                    && !self.typedef_names_tag(td, tag);
             }
             return is_tag_kind(ka) && is_tag_kind(kb);
         }
@@ -1151,6 +1153,18 @@ impl Sema<'_, '_> {
     /// of the current scope ([namespace.udecl]/11); on a conflict, reports
     /// it, marks `d` invalid and returns true.
     pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: DeclName) -> bool {
+        self.check_using_shadow_conflict_at(d, name, None)
+    }
+
+    /// [`Self::check_using_shadow_conflict`] for a declaration whose
+    /// conflict is reported at `at` (a class or enumeration declaration:
+    /// its class-key, clang's `KWLoc`) instead of at its name.
+    pub(crate) fn check_using_shadow_conflict_at(
+        &mut self,
+        d: DeclId,
+        name: DeclName,
+        at: Option<Loc>,
+    ) -> bool {
         let mut shadows = self.current_scope_raw_dn(name);
         shadows.retain(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         for s in shadows.into_iter().rev() {
@@ -1163,6 +1177,9 @@ impl Sema<'_, '_> {
                 k.is_function() || k == DeclKind::FunctionTemplate
             };
             let in_class = self.member_spec_class().is_some();
+            if is_tag_kind(self.kind_of(d)) && self.tag_conflicts_with_using_target(t) {
+                return self.report_using_shadow_conflict(d, s, t, at);
+            }
             if in_class && fnlike(self, d) && fnlike(self, t) {
                 // [namespace.udecl]/14: a member function (template)
                 // hides a corresponding one the shadow introduced;
@@ -1194,21 +1211,49 @@ impl Sema<'_, '_> {
             if !self.using_conflicts(t, d) {
                 continue;
             }
-            if in_class && fnlike(self, d) {
-                // [namespace.udecl]/14: in a class the member hides the
-                // shadow instead of conflicting with it.
-                let _ = self.ast.decls.set_hidden_shadow(s, d);
-                continue;
-            }
-            let msg = self
-                .diag(DiagId::sema_using_decl_conflict_reverse, self.decl_loc(d))
-                .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(t)))
-                .with_note(self.diag(DiagId::note_using_decl, self.decl_loc(s)));
-            self.emit(msg);
-            self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
-            return true;
+            return self.report_using_shadow_conflict(d, s, t, at);
         }
         false
+    }
+
+    /// Reports new declaration `d` conflicting with target `t` of
+    /// using-shadow `s` and marks `d` invalid; true.
+    fn report_using_shadow_conflict(
+        &mut self,
+        d: DeclId,
+        s: DeclId,
+        t: DeclId,
+        at: Option<Loc>,
+    ) -> bool {
+        let msg = self
+            .diag(DiagId::sema_using_decl_conflict_reverse, at.unwrap_or(self.decl_loc(d)))
+            .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(t)))
+            .with_note(self.diag(DiagId::note_using_decl, self.decl_loc(s)));
+        self.emit(msg);
+        self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+        true
+    }
+
+    /// Whether a class or enumeration declared in the scope of a
+    /// using-declarator conflicts with the declarator's target `t` that
+    /// is no class or enumeration: they correspond unless `t` is a
+    /// variable, data member, enumerator, function or function template
+    /// ([basic.scope.scope]/4.2), so a typedef-name, an alias, a class,
+    /// alias or variable template or a concept conflicts
+    /// ([namespace.udecl]/11; clang's `ActOnTag` finds them by tag lookup;
+    /// GCC 16 accepts the templates and concepts but for a class
+    /// template outside a class). A class or enumeration target is
+    /// checked by [`Self::using_conflicts`].
+    fn tag_conflicts_with_using_target(&self, t: DeclId) -> bool {
+        matches!(
+            self.kind_of(t),
+            DeclKind::Typedef
+                | DeclKind::TypeAlias
+                | DeclKind::ClassTemplate
+                | DeclKind::TypeAliasTemplate
+                | DeclKind::VarTemplate
+                | DeclKind::Concept
+        )
     }
 
     /// A use of a name whose lookup found only an unresolved

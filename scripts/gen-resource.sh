@@ -82,6 +82,8 @@ for f in "${EXCLUDE_FILES[@]}"; do name_args+=( ! -name "$f" ); done
     chmod 0644 "$DST_INC/$f"
   done
 )
+# kiln's local changes to imported headers (listed in resource/include/README.md).
+patch -s -p1 -d "$DST_INC" < "$WS/scripts/resource-include.patch"
 # Any kept header that #includes an excluded resource header would be broken.
 # (Only report; #include_next and arch-guarded includes are legitimate.)
 for f in "$DST_INC"/*.h; do

@@ -581,6 +581,9 @@ impl Sema<'_, '_> {
             && !suppress
             && let Some(x) = self.ref_conversion(a, to, false, ref_opts)
         {
+            if !lref && self.lvalue_conversion_preempts(a, t1, &x) {
+                return Ics::bad(BadKind::NoConversion, a.ty, to);
+            }
             return x;
         }
         // /5.4.4: an rvalue reference to a related lvalue.
@@ -2107,6 +2110,88 @@ impl Sema<'_, '_> {
             Some(s) => s.second == SecondStep::Identity && s.first == conv::FirstStep::Identity,
             None => false,
         }
+    }
+
+    /// Whether rvalue reference binding `x` to `t1`, through a conversion
+    /// function yielding a prvalue of a class strictly derived from
+    /// `t1`'s, is preempted by a non-explicit, unconstrained conversion
+    /// function yielding an lvalue of `t1`'s class or of a class derived
+    /// from it that would win against it ([over.match.best]/2.1–2.2: a
+    /// better implicit object conversion, or an equal one and the
+    /// identity final conversion of an lvalue of `t1`'s class).
+    /// [over.match.ref]/1.1 sets the lvalue-yielding functions aside for
+    /// an rvalue reference, so by the text the binding stands and
+    /// `B b(u)` is ambiguous between the copy and move constructors
+    /// ([over.ics.rank]/3.3); clang 22 and GCC 16 both weigh them, find
+    /// the binding not viable and select the copy constructor, and kiln
+    /// follows both (WP-1625; docs/status/deviations.md). Where they
+    /// part (an xvalue result, a function yielding `t1`'s own class by
+    /// value) the text decides: no preemption. A template rival leaves
+    /// it open: none. Only reached for a binding through a conversion
+    /// function.
+    fn lvalue_conversion_preempts(&mut self, a: &ArgInfo, t1: QualType, x: &Ics) -> bool {
+        let Ics::UserDefined(u) = x else { return false };
+        let (UdcVia::ConvFn, Some(f)) = (u.via, u.func) else { return false };
+        let class_of = |s: &mut Self, t: QualType| {
+            let t = s.non_reference(t);
+            s.ast.types.as_record(t).map(|c| s.class_def(c))
+        };
+        let fret = self.conversion_result_type(f);
+        if matches!(
+            self.ast.types.canonical_view(fret),
+            TypeView::LValueRef(_) | TypeView::RValueRef(_)
+        ) {
+            return false;
+        }
+        let (Some(target), Some(fc)) = (class_of(self, t1), class_of(self, fret)) else {
+            return false;
+        };
+        if fc == target || !is_derived_from(self, fc, target) {
+            return false;
+        }
+        let fobj = Ics::Standard(u.before);
+        let mut preempted = false;
+        for (_, h) in self.conversion_functions_all(a.ty) {
+            if h == f {
+                continue;
+            }
+            if self.kind_of(h) != DeclKind::CXXConversion {
+                return false;
+            }
+            let hret = self.conversion_result_type(h);
+            let Some(hc) = class_of(self, hret) else { continue };
+            match self.ast.types.canonical_view(hret) {
+                TypeView::LValueRef(_) => {}
+                TypeView::RValueRef(_) => continue,
+                // A rival yielding `t1`'s class by value: clang keeps the
+                // binding, GCC drops it; the text decides.
+                _ if hc == target => return false,
+                _ => continue,
+            }
+            if preempted {
+                continue;
+            }
+            if hc != target && !is_derived_from(self, hc, target) {
+                continue;
+            }
+            // Its cv-qualification does not matter: `operator const B &()`
+            // preempts too (clang, GCC).
+            if self.fn_spec(h).is_explicit()
+                || self.ast.templates.trailing_requires.get(h).is_some()
+            {
+                continue;
+            }
+            let hobj = self.conv_object_ics(a, h);
+            if hobj.is_bad() {
+                continue;
+            }
+            preempted = match self.compare_ics(&hobj, &fobj) {
+                IcsCompare::Better => true,
+                IcsCompare::Indistinguishable => hc == target,
+                IcsCompare::Worse => false,
+            };
+        }
+        preempted
     }
 
     /// [over.match.ref]: binding reference `to` to the result of a

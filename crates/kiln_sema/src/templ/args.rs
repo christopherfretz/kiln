@@ -1555,11 +1555,12 @@ impl Sema<'_, '_> {
         // converts as an initialization, narrowing allowed ([temp.arg.nontype]/5
         // in C++03; clang checks narrowing only since C++11).
         let cxx11 = self.std >= kiln_lex::Std::Cxx11;
-        let narrowed = if cxx11 && t.is_integral(pty) && int_like(cty) {
-            self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw))
-        } else {
-            None
-        };
+        // The operand whose value a narrowing check reads; folded only
+        // once the full-expression has ended (below), when its odr-uses
+        // are decided and its temporaries' cleanups are attached (as a
+        // case value, WP-1606): a fold before would compile the operand
+        // as it stood then.
+        let narrow_from = (cxx11 && t.is_integral(pty) && int_like(cty)).then_some(c);
         let c = match self.in_cce(|s| conv::implicit_convert(s, c, pty, ConvCtx::Initialization)) {
             Ok(c) => c,
             Err(err) => {
@@ -1571,28 +1572,37 @@ impl Sema<'_, '_> {
         // follows it narrows from the conversion function's result
         // (`Z<CI{}>` with `operator int` to `bool`; clang
         // `getNarrowingKind` on `ICS.UserDefined.After`).
-        if cxx11 && self.ast.types.as_record(cty).is_some() && self.ast.types.is_integral(pty) {
+        let udc_from = if cxx11
+            && self.ast.types.as_record(cty).is_some()
+            && self.ast.types.is_integral(pty)
+        {
             let from = self.ignore_paren_imp_casts(c);
             let t = &self.ast.types;
             let fty = conv::strip_cv(self, self.ast.exprs.get(from).ty());
-            if from != c
-                && (t.is_integral(fty) || t.as_enum(fty).is_some())
-                && let Some(raw) = self.fold_int(from)
-                && !self.int_fits(pty, raw)
-            {
-                let d = self
-                    .diag(DiagId::sema_cce_narrowing_value, at)
-                    .arg("non-type template argument")
-                    .arg(raw.to_string())
-                    .arg(self.ty_arg(pty));
-                self.emit(d);
-            }
-        }
+            (from != c && (t.is_integral(fty) || t.as_enum(fty).is_some())).then_some(from)
+        } else {
+            None
+        };
+        let outer = std::mem::replace(&mut self.template_arg_full_expr, true);
         let c = self.act_on_constant_full_expr(c);
+        self.template_arg_full_expr = outer;
+        if let Some(from) = udc_from
+            && let Some(raw) = self.fold_int(from)
+            && !self.int_fits(pty, raw)
+        {
+            let d = self
+                .diag(DiagId::sema_cce_narrowing_value, at)
+                .arg("non-type template argument")
+                .arg(raw.to_string())
+                .arg(self.ty_arg(pty));
+            self.emit(d);
+        }
         // After the full-expression's conversion warnings, as in clang
         // (`BuildConvertedConstantExpression`): `ext_cce_narrowing` (a
         // `-Wc++11-narrowing` error by default) recovers with the
         // converted value.
+        let narrowed =
+            narrow_from.and_then(|n| self.fold_int(n)).filter(|&r| !self.int_fits(pty, r));
         if let Some(raw) = narrowed {
             let d = self
                 .diag(DiagId::sema_cce_narrowing_value, at)

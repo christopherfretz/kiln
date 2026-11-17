@@ -10126,8 +10126,9 @@ impl Sema<'_, '_> {
             && qualifier.is_none()
             && prev.is_none()
             && !conflict
+            && use_ != TagUse::Reference
         {
-            self.check_using_shadow_conflict(d, DeclName::ident(n));
+            self.check_using_shadow_conflict_at(d, DeclName::ident(n), Some(loc));
         }
         d
     }

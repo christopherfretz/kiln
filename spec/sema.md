@@ -5020,8 +5020,20 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     and tag declarations, including operator, literal-operator and
     conversion function names, WP-146) reports `declaration conflicts with
     target of using declaration already in scope`, and is marked invalid;
-    in a class a member function instead hides the shadow
-    ([namespace.udecl]/14, `Decls::hidden_shadow`).
+    in a class a member function instead hides a shadow of a function or
+    function template ([namespace.udecl]/14, `Decls::hidden_shadow`) and
+    conflicts with any other (a type, data member or enumerator). A class
+    or enumeration declared or defined (not an elaborated-type-specifier
+    that only refers) after a shadow of a typedef-name, alias, class,
+    alias or variable template or concept conflicts with it at namespace,
+    block and class scope ([basic.scope.scope]/4.2 exempts only
+    variables, data members, enumerators, functions and function
+    templates; `tag_conflicts_with_using_target`, clang's `ActOnTag`), and
+    is reported at its class-key (WP-1624,
+    namespace.udecl/p11-tag-after-using-declarator*.cpp).
+  - A class or enumeration and a typedef-name of another type in one
+    block scope conflict in either order (GCC 16.1 and the text; clang 22
+    accepts the class first; namespace.udecl/p11-block-tag-beside-using-typedef.cpp).
   - **Member hiding** ([namespace.udecl]/14, WP-612). In a class, a
     member function or member function template and a base member
     function (template) a using-declarator introduces never conflict:
