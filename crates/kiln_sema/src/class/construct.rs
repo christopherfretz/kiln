@@ -8,7 +8,9 @@
 //! is, the class) ranked by their reference bindings. A selection that
 //! needs full overload resolution (WP-068a) reports `sema_unsupported`.
 
-use kiln_ast::expr::{ConstructInfo, ConstructionKind, ExprFlags, ExprKind, ValueCategory};
+use kiln_ast::expr::{
+    CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, ValueCategory,
+};
 use kiln_ast::{ExprId, QualType};
 use kiln_source::Loc;
 
@@ -389,11 +391,33 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // The temporary a converting constructor makes is of the
+        // cv-unqualified destination type ([dcl.init]/17.6.3 in C++14: "a
+        // temporary of the cv-unqualified version of the destination
+        // type"), so `const T t = u;` copies a `T` prvalue (the move
+        // constructor, not a `const T&&` template or a deleted copy
+        // constructor). `x` is built at `to` (clang's `NoOp` to `const T`
+        // folded in): the copy is checked from a `T` view of it, and
+        // reported as a copy of a `T`, as clang does.
+        let ty = self.ety(x);
+        let unq = conv::strip_cv(self, ty);
+        let arg = if unq == ty {
+            x
+        } else {
+            conv::raw_cast(self, CastKind::NoOp, x, unq, ValueCategory::PRValue, None)
+        };
         // Checked only: the copy of this second step is not built (the
         // elidable copy node `check_elided_ctor` returns is dropped).
         self.temp_copy_second_step = true;
-        let _ = self.check_elided_ctor(x, to, ctx, at, deleted_as);
+        let to = conv::strip_cv(self, to);
+        let _ = self.check_elided_ctor(arg, to, ctx, at, deleted_as);
         self.temp_copy_second_step = false;
+        // The copy's constructor stays recorded on `x` (`noexcept`).
+        if arg != x
+            && let Some(c) = self.elided_ctors.remove(&arg)
+        {
+            let _ = self.elided_ctors.insert(x, c);
+        }
     }
 
     /// [`Sema::convert_to_class`] for any source `e` (a class source of
@@ -427,7 +451,7 @@ impl Sema<'_, '_> {
         }
         let x = conv::raw_cast(
             self,
-            kiln_ast::expr::CastKind::ConstructorConversion,
+            CastKind::ConstructorConversion,
             c,
             to,
             ValueCategory::PRValue,

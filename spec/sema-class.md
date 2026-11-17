@@ -2308,7 +2308,12 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   ends a copy-initialization by user-defined conversion (C++14
   [dcl.init]/17.6.3, `check_temp_copy`) direct-initializes: an explicit
   copy constructor is a candidate (WP-1473,
-  `dcl.init.general/copy-init-explicit-copy-ctor-cxx98-run.cpp`).
+  `dcl.init.general/copy-init-explicit-copy-ctor-cxx98-run.cpp`). Its
+  source is a prvalue of the cv-unqualified destination type, the
+  temporary's type, so a `const T&&` forwarding constructor template or a
+  deleted `T(const T&)` is not chosen over `T(T&&)` for `const T x = ...;`
+  and the copy is reported as copying a `T` (WP-1571,
+  `dcl.init.general/temp-copy-second-step-cv-destination{,-reject}.cpp`).
   Unevaluated operands are checked too, as clang builds the elidable
   `CXXConstructExpr` there, and the selected constructor is recorded
   against the prvalue (`Sema::elided_ctors`, empty from C++17 on) so
