@@ -1944,14 +1944,19 @@ holding a pointer. A run-time `info` always holds the null reflection
 function definition for the link-time ODR checks: record kind 2 of
 `.mason.meta` (spec/codegen.md "Link-time metadata"; mortar `spec/odr.md`
 O-10..O-13). This section is its contract: a later kiln reproduces these
-bytes, or changes `ODR_DEF_SCHEME`. In this package nothing outside the
-tests calls it (rows are wired by a later package).
+bytes, or changes `ODR_DEF_SCHEME`. Codegen's kind 2 rows call it
+(WP-1583, K-3c; spec/codegen.md §5.5 "Kind 2").
 
-**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d1"`, separate from the layout
+**Scheme.** `ODR_DEF_SCHEME = "kiln-odr-1.d2"`, separate from the layout
 serialization's scheme. Bump rule (O-11): every change to what is
 serialized or how changes the constant; the golden test
 `crates/kiln_codegen/tests/mason_def_hash.golden` pins the bytes and says
-so when it fails.
+so when it fails. History: `d0` (K-3a) the class and declared type only,
+every row `PARTIAL`; `d1` (K-3b) the serializer core: declarators,
+statements, names, literals, operators, calls, casts; `d2` (K-3c) the
+init area (below), ctor-initializers, synthesized members, a
+destructor's deallocation function, variable definitions, and
+`visibility` taken off the attribute list.
 
 **Digest.** `DefHasher::function(def) -> DefDigest { hash, partial }`:
 `hash` is the FNV-1a 128 (offset `0x6c62272e07bb014262b821756295c58d`,
@@ -1978,6 +1983,10 @@ self-delimiting, so two different trees never give the same bytes.
 | `0xA8` | a non-static data member | class (`0xA3`/`0xA4`), name |
 | `0xA9` | a local declaration | index, type, specifier bits, bindings, initializer |
 | `0xAA` | the declarator | below |
+| `0xAB` | a variable definition | declaration kind, type, thread-local kind, initialization style and initializer, or `0xA0` |
+| `0xAC` | a ctor-initializer | `CtorInitKind` byte, target (base: a type item; member: `0xA8` item; delegating: nothing), initializer |
+| `0xAD` | a synthesized member | — (after the declarator) |
+| `0xAE` | a deallocation function | an entity item |
 
 Both kind enums are numbered stably (spec/ast.md); a new kind takes a new
 number and the exhaustive dispatch (no wildcard arm) does not compile
@@ -1993,7 +2002,32 @@ trailing" (variadic, ref-qualifier, `this` qualifiers, calling
 convention, `noreturn`), the EFFECTIVE `noexcept` as one byte, the
 trailing requires-clause (an expression) or `0xA0`. Then the body
 statement. Parameters are locals 0..n-1; parameter names and the
-function's own name are not hashed.
+function's own name are not hashed. An implicit or defaulted member
+(synthesized) writes `0xAD` after the declarator and its effective
+`noexcept` byte is the fixed `2` (sema computes it only when a unit needs
+it; it follows from the class and the members it calls). Between the
+declarator and the body: a constructor writes its ctor-initializers
+(count, then `0xAC` items in initialization order as sema completed them:
+virtual bases once, direct bases, members from their mem-initializer,
+default member initializer or the implicit rule, or the delegating
+call); a destructor writes `0xAE` and the `operator delete` its deleting
+destructor calls (sema's `dtor_delete`, recorded with every virtual
+destructor's definition), or `0xA0`. A synthesized member is hashed as
+the ctor-initializers and body sema built for it: they are a function
+of the class definition (whose layout kind 3 covers) and of the special
+members overload resolution selected for each subobject (hashed by
+name), so two units that agree on the class agree on it; it is built
+whenever the member is defined, so no row depends on how a unit used it.
+
+**Variables.** `DefHasher::variable` (inline variables, static data
+members of class templates, variable template specializations): `0xAB`,
+the declaration kind, the declared type, the thread-local kind, a
+listed attribute (`partial`), then the initialization style and the
+INITIALIZER as an expression from the declaration that holds it (the
+in-class one of a member defined out of line), or `0xA0`. Never the
+evaluated value (K9): constant and dynamic initialization of one
+expression hash alike; `inline`, `constexpr`, `constinit` and `static`
+are not hashed (an out-of-line definition need not repeat them, N22).
 
 **Names and types.** A referenced function or variable is its mangled
 name, memoized per first declaration; a type is its canonical type's
@@ -2044,6 +2078,32 @@ rewritten comparison: the written operator and the semantic form.
 written in the source: the cast kind sema chose, the value category, the
 type, the operand.
 
+**Init area** (`odr_def/init.rs`, K-3c). A construct expression: an
+ELIDABLE copy or move (`Ast::elidable_copy_source`) is transparent, its
+source in its place (`return T();` at C++14 equals C++17); else the
+kind, the construction bits (complete, base, delegating or virtual base;
+list; `std::initializer_list`; zeroing; never immediate-escalation), the
+type, the constructor, the arguments. An inherited constructor call: the
+construction kind, virtual bit, constructor. An initializer list and a
+parenthesized aggregate initialization: the SEMANTIC form (type, the
+union member initialized or `0xA0`, the elements in field order, so a
+designated initializer is its resolved field and a skipped field its
+value-initialization, the array filler). Value-initialization
+(`ImplicitValueInitExpr`, `T()`): the type. `NoInitExpr`, the array
+index: the tag. An array init loop, a designated-init update: both
+operands. `std::initializer_list` construction and a compound literal:
+the type and the operand. A default argument (`CXXDefaultArgExpr`) and a
+default member initializer (`CXXDefaultInitExpr`): their expression
+hashed AT THE USE (O-13 K1, K2). `new`: global and array bits, the
+initialization style (`()`, `{}`, none), the allocated type, the
+allocation and deallocation functions, the placement arguments (count or
+`0xA0`), the array bound, the initializer. `delete`: global and array
+bits, the deallocation function, the operand. `throw`: the operand or
+`0xA0`. `noexcept(e)`: the operand only (its value reads exception
+specifications computed lazily). `typeid`: type or expression form and
+its operand. Type traits and expression traits: the trait, the value,
+the types or operand; array traits: trait, type, value, dimension.
+
 **Areas and states.** Every expression and statement kind is one of:
 
 | area | state | kinds |
@@ -2052,10 +2112,11 @@ type, the operand.
 | stmt | hashed | `CompoundStmt` `DeclStmt` `ExprStmt` `NullStmt` `BreakStmt` `ContinueStmt` `IfStmt` `SwitchStmt` `CaseStmt` `DefaultStmt` `WhileStmt` `DoStmt` `ForStmt` `CXXForRangeStmt` `ReturnStmt` `LabelStmt` `GotoStmt` `IndirectGotoStmt` `CXXTryStmt` `CXXCatchStmt` |
 | expr | hashed | `IntegerLiteral` `FloatingLiteral` `CharacterLiteral` `StringLiteral` `CXXBoolLiteralExpr` `CXXNullPtrLiteralExpr` `GNUNullExpr` `CXXThisExpr` `PredefinedExpr` `SourceLocExpr` `DeclRefExpr` `MemberExpr` `UnaryOperator` `BinaryOperator` `CompoundAssignOperator` `ConditionalOperator` `ArraySubscriptExpr` `CallExpr` `CXXMemberCallExpr` `CXXOperatorCallExpr` `CXXRewrittenBinaryOperator` `UnaryExprOrTypeTraitExpr` `CStyleCastExpr` `CXXFunctionalCastExpr` `CXXStaticCastExpr` `CXXConstCastExpr` `CXXReinterpretCastExpr` `CXXDynamicCastExpr` `BuiltinBitCastExpr` `CXXPseudoDestructorExpr` |
 | excluded (X16) | not hashed, not `partial` | `ContractAssertStmt` |
-| init (K-3c) | `partial` | `InitListExpr` `ImplicitValueInitExpr` `CXXConstructExpr` `CXXTemporaryObjectExpr` `CXXInheritedCtorInitExpr` `CXXDefaultArgExpr` `CXXDefaultInitExpr` `CXXScalarValueInitExpr` `CXXParenListInitExpr` `ArrayInitLoopExpr` `ArrayInitIndexExpr` `CXXStdInitializerListExpr` `CompoundLiteralExpr` `NoInitExpr` `DesignatedInitUpdateExpr` `CXXNewExpr` `CXXDeleteExpr` `CXXThrowExpr` `CXXNoexceptExpr` `CXXTypeidExpr` `TypeTraitExpr` `ArrayTypeTraitExpr` `ExpressionTraitExpr`; constructors, virtual destructors, implicit and defaulted members; an exception specification not yet computed |
+| init (K-3c) | hashed | `InitListExpr` `ImplicitValueInitExpr` `CXXConstructExpr` `CXXTemporaryObjectExpr` `CXXInheritedCtorInitExpr` `CXXDefaultArgExpr` `CXXDefaultInitExpr` `CXXScalarValueInitExpr` `CXXParenListInitExpr` `ArrayInitLoopExpr` `ArrayInitIndexExpr` `CXXStdInitializerListExpr` `CompoundLiteralExpr` `NoInitExpr` `DesignatedInitUpdateExpr` `CXXNewExpr` `CXXDeleteExpr` `CXXThrowExpr` `CXXNoexceptExpr` `CXXTypeidExpr` `TypeTraitExpr` `ArrayTypeTraitExpr` `ExpressionTraitExpr`; constructors, destructors, implicit and defaulted members, variables |
+| init (K-3c) | `partial` | an exception specification sema had not computed when the unit ended (not on synthesized members, whose `noexcept` is not hashed) |
 | lambda (K-3d) | `partial` | `LambdaExpr` `CoawaitExpr` `CoyieldExpr` `CoroutineBodyStmt` `CoreturnStmt`; local classes, enumerations and templates |
 | misc (K-3d) | `partial` | `UserDefinedLiteral` `ImaginaryLiteral` `EmbedExpr` `BinaryConditionalOperator` `OffsetOfExpr` `SizeOfPackExpr` `RequiresExpr` `ConceptSpecializationExpr` `PackIndexingExpr` `StmtExpr` `AddrLabelExpr` `ChooseExpr` `VAArgExpr` `AtomicExpr` `ShuffleVectorExpr` `ConvertVectorExpr` `ExtVectorElementExpr` `CXXReflectExpr` `CXXSpliceExpr` `PseudoObjectExpr` `GenericSelectionExpr` `RecoveryExpr` `GCCAsmStmt` `CXXExpansionStmt`; a block under a floating-point `#pragma` |
-| attrs (K-3e) | `partial` | an attribute of O-10's closed list on the function or a local, `[[assume]]`, a default argument on any declaration of the function |
+| attrs (K-3e) | `partial` | an attribute of O-10's closed list (`aligned`, `noreturn`, `target`, `target_clones`, `target_version`, `indeterminate`; NOT `visibility`, `exclude_from_explicit_instantiation` or `abi_tag`, mortar's ruling of 11-17) on the function, a variable or a local, `[[assume]]`, a default argument on any declaration of the function |
 | dependent (K-6) | `partial` | `UnresolvedLookupExpr` `UnresolvedMemberExpr` `DependentScopeDeclRefExpr` `CXXDependentScopeMemberExpr` `SubstNonTypeTemplateParmPackExpr` `FunctionParmPackExpr` `ParenListExpr` `DesignatedInitExpr` `PackExpansionExpr` `CXXFoldExpr` `CXXUnresolvedConstructExpr` `DependentCoawaitExpr` `CXXExpansionSelectExpr`; a template's own definition, a dependent `noexcept` or requires-clause |
 
 A skipped construct writes `0xA6`, its class and its kind's code in place

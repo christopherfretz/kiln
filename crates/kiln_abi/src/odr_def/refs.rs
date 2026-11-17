@@ -9,7 +9,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::FxHashMap;
 
-use super::DefStats;
+use super::{DefStats, KnownNames};
 use crate::mangle::{self, AnonIds};
 use crate::odr::{NotTuLocal, fnv1a_128};
 
@@ -25,6 +25,14 @@ pub(super) struct Refs<'a> {
     types: FxHashMap<QualType, Option<u128>>,
     /// Every string hashed, when a test asks.
     pub(super) names: Option<Vec<String>>,
+    /// The names codegen already produced.
+    pub(super) known: Option<&'a dyn KnownNames>,
+}
+
+impl std::fmt::Debug for dyn KnownNames + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KnownNames")
+    }
 }
 
 impl<'a> Refs<'a> {
@@ -37,6 +45,7 @@ impl<'a> Refs<'a> {
             tags: FxHashMap::default(),
             types: FxHashMap::default(),
             names: None,
+            known: None,
         }
     }
 
@@ -47,10 +56,10 @@ impl<'a> Refs<'a> {
             + self.types.capacity() * (size_of::<(QualType, Option<u128>)>() + 1)
     }
 
-    fn digest(&mut self, s: String) -> u128 {
-        let h = fnv1a_128(&s);
+    fn digest(&mut self, s: &str) -> u128 {
+        let h = fnv1a_128(s);
         if let Some(n) = &mut self.names {
-            n.push(s);
+            n.push(s.to_owned());
         }
         h
     }
@@ -69,7 +78,7 @@ impl<'a> Refs<'a> {
         st.type_misses += 1;
         let r = if self.test.member_ty(c) {
             let s = mangle::mangle_type(self.ast, &mut self.anon, c);
-            Some(self.digest(s))
+            Some(self.digest(&s))
         } else {
             None
         };
@@ -88,7 +97,7 @@ impl<'a> Refs<'a> {
         st.type_misses += 1;
         let r = if self.test.tag(first) {
             let s = mangle::mangle_class_special(self.ast, &mut self.anon, "", first);
-            Some(self.digest(s))
+            Some(self.digest(&s))
         } else {
             None
         };
@@ -106,14 +115,28 @@ impl<'a> Refs<'a> {
         }
         st.entity_misses += 1;
         let r = if self.entity_passes(first) {
-            let s = mangle::mangle_decl(self.ast, &mut self.anon, first);
+            // The name codegen gave the symbol, else a mangling of our own
+            // (the guard above applies to both).
+            let known = self.known.and_then(|k| k.name(first));
+            st.entity_known += u64::from(known.is_some());
+            let owned;
+            let s = if let Some(s) = known {
+                s
+            } else {
+                owned = mangle::mangle_decl(self.ast, &mut self.anon, first);
+                owned.as_str()
+            };
             // A function template specialization's encoding is the
             // template's signature, whose dependent parts the AST of the
             // specialization does not show: read it.
-            if self.is_function_spec(first) && has_per_tu_component(&s) {
+            if self.is_function_spec(first) && has_per_tu_component(s) {
                 None
             } else {
-                Some(self.digest(s))
+                let h = fnv1a_128(s);
+                if let Some(n) = &mut self.names {
+                    n.push(s.to_owned());
+                }
+                Some(h)
             }
         } else {
             None

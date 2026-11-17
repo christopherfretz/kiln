@@ -12,19 +12,23 @@
 //! when O-14 names it (an explicit specialization, K13; the out-of-line
 //! definition of a `static constexpr` data member, N22).
 //!
-//! The hash of this package covers the declared type only and every row
-//! is `PARTIAL`: the definition's body is K-3b's serializer, wired in by
-//! K-3c.
+//! The hash is `kiln_abi::odr_def`'s definition digest (K-3c, WP-1583),
+//! computed once per definition after emission (every symbol of one
+//! definition, structor variants and aliases among them, gets the same
+//! digest and flags: mortar's ruling 1); a row is `PARTIAL` exactly when
+//! the hasher skipped a construct its scheme covers. Entity names come
+//! from the module's own symbols where it has them ([`CgNames`]).
 
 use std::collections::BTreeMap;
 
-use kiln_abi::mangle;
-use kiln_abi::odr::{fnv1a_128, fnv1a64};
+use kiln_abi::mangle::{self, AnonIds};
+use kiln_abi::odr::fnv1a64;
+use kiln_abi::odr_def::{DefDigest, DefHasher, KnownNames, ODR_DEF_SCHEME};
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::{DeclId, QualType};
-use kiln_llvm::{Attr, AttrKind, Linkage, Value, ValueRef};
+use kiln_ast::{Ast, DeclId};
+use kiln_llvm::{Attr, AttrKind, FuncId, GlobalId, Linkage, Module, Value, ValueRef};
 use kiln_source::fx::FxHashMap;
 
 use crate::mason_meta::{Block, StrTab};
@@ -52,23 +56,15 @@ pub const DEF_EXPLICIT_INST: u16 = 4;
 /// Bit 3: an explicit specialization (or a member of an explicitly
 /// specialized class).
 pub const DEF_EXPLICIT_SPEC: u16 = 8;
-/// Bit 5: the hasher skipped something its scheme covers (every row of
-/// this package: the body is not hashed yet).
+/// Bit 5: the hasher skipped something its scheme covers.
 pub const DEF_PARTIAL: u16 = 32;
 /// Bit 8: defined in a system header.
 pub const DEF_SYSTEM: u16 = 256;
 
 /// Kind 1's `odr.scheme` (O-11, mortar's ruling 3 of 11-17): the
-/// definition serialization of the kind 2 `hash`. `d0`: the declared
-/// type only, every row `PARTIAL`. K-3c switches this to `kiln_abi`'s
-/// constant of the body serialization.
-pub const DEF_SCHEME: &str = "kiln-odr-1.d0";
-
-/// What a type with a per-TU-numbered component hashes as (O-10: one
-/// placeholder, a miss).
-const PER_TU_PLACEHOLDER: &str = "?per-tu";
-/// The token that stands for the body this scheme does not hash.
-const BODY_NOT_HASHED: &str = "body not hashed";
+/// definition serialization of the kind 2 `hash`, the hasher's own
+/// scheme (spec/abi.md "Definition hash", its history).
+pub const DEF_SCHEME: &str = ODR_DEF_SCHEME;
 
 /// One kind 2 row before encoding (O-15). `name` and `module` are 0 in
 /// this package (anchored rows; no named modules yet), `reserved` 0.
@@ -118,59 +114,43 @@ pub fn definitions_block(rows: &[DefRow], st: &mut StrTab) -> Block {
     }
 }
 
-/// Whether `enc` (a `<type>` encoding or a symbol name) has a component
-/// numbered or named per TU: `_GLOBAL__N`, kiln's `$_N`, a local entity
-/// `Z...E`, an unnamed `Ut`/`Ul` (conservative: any of them makes the
-/// type hash as the placeholder, a miss, never a false finding).
-fn has_per_tu_component(enc: &str) -> bool {
-    let b = enc.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i].is_ascii_digit() {
-            let start = i;
-            while i < b.len() && b[i].is_ascii_digit() {
-                i += 1;
-            }
-            let n: usize = enc[start..i].parse().unwrap_or(0);
-            let name = &b[i..(i + n).min(b.len())];
-            if name.starts_with(b"_GLOBAL__N") || name.starts_with(b"$") {
-                return true;
-            }
-            i += n;
-            continue;
-        }
-        match b[i] {
-            b'Z' => return true,
-            b'U' if matches!(b.get(i + 1), Some(b't' | b'l')) => return true,
-            // `L_Z <encoding> E`: the encoding's own `Z` is not a local
-            // name.
-            b'L' if b.get(i + 1) == Some(&b'_') && b.get(i + 2) == Some(&b'Z') => i += 2,
-            // A literal `L <type> <value> E`: skip the value's digits.
-            b'L' if b.get(i + 1).is_some_and(u8::is_ascii_lowercase) => {
-                while i < b.len() && b[i] != b'E' {
-                    i += 1;
-                }
-            }
-            b'$' => return true,
-            _ => {}
-        }
-        i += 1;
-    }
-    false
-}
-
-/// The hash of this package (scheme `d0`): FNV-1a 128 over the class tag,
-/// the declared type's encoding (or the placeholder) and one fixed token
-/// for the body.
-fn def_hash(class: u16, ty: &str) -> u128 {
-    let tag = if class == CLASS_FUNCTION { "function" } else { "variable" };
-    let ty = if has_per_tu_component(ty) { PER_TU_PLACEHOLDER } else { ty };
-    fnv1a_128(&format!("{tag}\0{ty}\0{BODY_NOT_HASHED}"))
-}
-
 /// A candidate symbol: (name as the symbol table spells it, the first
 /// declaration of the definition, variable, vague).
 type Cand = (String, DeclId, bool, bool);
+
+/// The names the module already gave entities ([`KnownNames`]; K-3c
+/// deliverable 2): read-only views of codegen's declaration maps, alive
+/// only while the rows are computed. A name is given only when it is
+/// exactly [`mangle::mangle_decl`]'s (no asm label, no `weakref` target,
+/// no name the module uniqued with a `.N` suffix, no compound literal),
+/// so a digest never depends on whether the module declared the entity.
+struct CgNames<'b> {
+    ast: &'b Ast,
+    m: &'b Module,
+    fns: &'b FxHashMap<DeclId, FuncId>,
+    gvars: &'b FxHashMap<DeclId, GlobalId>,
+}
+
+impl KnownNames for CgNames<'_> {
+    fn name(&self, first: DeclId) -> Option<&str> {
+        let ast = self.ast;
+        if mangle::asm_label(ast, first).is_some() || ast.weakref_target(first).is_some() {
+            return None;
+        }
+        let name = match ast.decls.get(first).kind() {
+            // `mangle_decl` names a structor's complete-object variant,
+            // which a unit may fold into the base-object one (its map
+            // entry then names the C2/D2 symbol) or not emit: mangled
+            // here, a name never depends on what the unit emits.
+            DeclKind::CXXConstructor | DeclKind::CXXDestructor => return None,
+            DeclKind::Var | DeclKind::VarTemplateSpecialization => {
+                self.m.global(*self.gvars.get(&first)?).name()
+            }
+            _ => self.m.func(*self.fns.get(&first)?).name(),
+        };
+        (!name.is_empty() && !name.contains('.') && !name.starts_with('\u{1}')).then_some(name)
+    }
+}
 
 /// Prefixes of owned and compiler-generated symbols, which get no row
 /// (ruling 1: static locals, guards, reference temporaries; for every
@@ -254,13 +234,28 @@ impl Cg<'_> {
         // Symbol order, so that anything the mangler numbers is numbered
         // the same way in every run (MT-38).
         cands.sort();
-        let mut types: FxHashMap<QualType, String> = FxHashMap::default();
+        // The hasher (one per unit, only here: with the flag on and at a
+        // level that writes kind 2): its own mangling state configured as
+        // the module's, codegen's names first.
+        let Some(sm) = self.sm else { return Vec::new() };
+        let names = CgNames { ast: self.ast, m: &self.m, fns: &self.fns, gvars: &self.gvars };
+        let anon = AnonIds::with_reflection_mangling(self.opts.reflection_mangling)
+            .with_clang_compat(self.opts.clang_compat);
+        let mut hasher = DefHasher::new(self.ast, sm, anon).with_names(&names);
+        let mut digests: FxHashMap<DeclId, DefDigest> = FxHashMap::default();
         let mut by_symbol: BTreeMap<String, Option<DefRow>> = BTreeMap::new();
         for (name, first, var, vague) in cands {
             let name = name.strip_prefix('\u{1}').unwrap_or(&name).to_owned();
-            let Some(row) = self.mason_def_row(&name, first, var, vague, &mut types) else {
+            let Some((def, mut row)) = self.mason_def_row(&name, first, var, vague) else {
                 continue;
             };
+            let d = *digests
+                .entry(def)
+                .or_insert_with(|| if var { hasher.variable(def) } else { hasher.function(def) });
+            row.hash = d.hash;
+            if !d.partial {
+                row.flags &= !DEF_PARTIAL;
+            }
             match by_symbol.get_mut(&name) {
                 None => {
                     by_symbol.insert(name, Some(row));
@@ -279,20 +274,20 @@ impl Cg<'_> {
     /// the always-inliner deletes it at every `-O` once its calls are
     /// inlined, so the object does not define it (a miss when its address
     /// is taken).
-    fn always_inline(&self, f: kiln_llvm::FuncId) -> bool {
+    fn always_inline(&self, f: FuncId) -> bool {
         self.m.attrs_of(self.m.func(f).attrs.func).contains(&Attr::Flag(AttrKind::AlwaysInline))
     }
 
-    /// The row of symbol `name` for the definition whose first
-    /// declaration is `first`, or `None` when O-14 gives it none.
+    /// The definition to hash and the row (hash 0, `PARTIAL` set) of
+    /// symbol `name` for the definition whose first declaration is
+    /// `first`, or `None` when O-14 gives it none.
     fn mason_def_row(
-        &mut self,
+        &self,
         name: &str,
         first: DeclId,
         var: bool,
         vague: bool,
-        types: &mut FxHashMap<QualType, String>,
-    ) -> Option<DefRow> {
+    ) -> Option<(DeclId, DefRow)> {
         let ast = self.ast;
         // Names numbered per TU: X15 (a lambda in a declarator gives `$_N`).
         if name.is_empty()
@@ -355,14 +350,7 @@ impl Cg<'_> {
                 return None;
             }
         }
-        let ty = ast.decls.get(def).ty()?;
-        let enc = if let Some(t) = types.get(&ty) {
-            t.clone()
-        } else {
-            let t = mangle::mangle_declared_type(ast, &mut self.anon, ty);
-            types.insert(ty, t.clone());
-            t
-        };
+        ast.decls.get(def).ty()?;
         let class = if var { CLASS_VARIABLE } else { CLASS_FUNCTION };
         // The place: an instantiation's template definition; an
         // implicitly defined member's class; an explicit specialization's
@@ -381,14 +369,7 @@ impl Cg<'_> {
         if system {
             flags |= DEF_SYSTEM;
         }
-        Some(DefRow {
-            key: fnv1a64(name.as_bytes()),
-            class,
-            flags,
-            hash: def_hash(class, &enc),
-            file,
-            line,
-        })
+        Some((def, DefRow { key: fnv1a64(name.as_bytes()), class, flags, hash: 0, file, line }))
     }
 
     /// `IMPLICIT_INST`, `EXPLICIT_INST` or `EXPLICIT_SPEC` of the
@@ -523,31 +504,6 @@ fn row_linkage(l: Linkage) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn per_tu_components() {
-        assert!(!has_per_tu_component("FivE"));
-        assert!(!has_per_tu_component("FvRKN2ns3BoxIiEEE"));
-        assert!(has_per_tu_component("FvN12_GLOBAL__N_11AE"));
-        assert!(has_per_tu_component("FvN3$_0E"));
-        assert!(has_per_tu_component("FvZ1fvE1SE"));
-        assert!(has_per_tu_component("FvN1AUt_E"));
-        // A source name that only contains the letters is not one.
-        assert!(!has_per_tu_component("Fv3UtZE"));
-        assert!(!has_per_tu_component("FvN1AILi5EEE"));
-    }
-
-    #[test]
-    fn hash_is_the_type_and_the_class() {
-        assert_eq!(def_hash(CLASS_FUNCTION, "FivE"), def_hash(CLASS_FUNCTION, "FivE"));
-        assert_ne!(def_hash(CLASS_FUNCTION, "FivE"), def_hash(CLASS_FUNCTION, "FlvE"));
-        assert_ne!(def_hash(CLASS_FUNCTION, "i"), def_hash(CLASS_VARIABLE, "i"));
-        // Every per-TU type hashes as the one placeholder.
-        assert_eq!(def_hash(CLASS_FUNCTION, "FvN3$_0E"), def_hash(CLASS_FUNCTION, "FvN3$_1E"));
-        // The scheme's own golden: K-3c changes it with the scheme name.
-        assert_eq!(DEF_SCHEME, "kiln-odr-1.d0");
-        assert_eq!(def_hash(CLASS_FUNCTION, "FivE"), fnv1a_128("function\0FivE\0body not hashed"));
-    }
 
     #[test]
     fn row_layout() {

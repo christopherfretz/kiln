@@ -42,7 +42,7 @@ struct Def {
 
 /// The kind 2 rows of the unit in `b`, `None` without a kind 2 block,
 /// after checking the framing, the block and every row (O-15: `name` 0,
-/// `module` 0, reserved 0, `PARTIAL` set, no flag kiln does not write,
+/// `module` 0, reserved 0, a hash, no flag kiln does not write,
 /// sorted by key, one row per key).
 fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
     let summary = summary_rows(b);
@@ -53,7 +53,7 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
     assert_eq!(row_size, 48);
     assert!(rows > 0, "no block without rows");
     assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
-    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d0"));
+    assert_eq!(value(&summary, "odr.scheme"), Some("kiln-odr-1.d2"));
     let out: Vec<Def> = (0..rows)
         .map(|i| {
             let r = at + 16 + i * 48;
@@ -69,7 +69,7 @@ fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
                 line: u32_at(b, r + 40),
             };
             assert!(d.class == FUNCTION || d.class == VARIABLE, "{d:?}");
-            assert_ne!(d.flags & PARTIAL, 0, "{d:?}");
+            assert_ne!(d.hash, 0, "{d:?}");
             assert_eq!(
                 d.flags
                     & !(VAGUE | IMPLICIT_INST | EXPLICIT_INST | EXPLICIT_SPEC | PARTIAL | SYSTEM),
@@ -97,21 +97,6 @@ fn ir_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> String {
 /// The kind 2 rows of `src` compiled with `args` (through the IR).
 fn defs_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> Option<Vec<Def>> {
     def_rows(&ir_bytes(meta_line(&ir_of(dir, file, src, args)).expect("the global")))
-}
-
-/// FNV-1a 128, written here from its definition.
-fn fnv128(s: &str) -> u128 {
-    let prime: u128 = (1 << 88) + 0x13b;
-    s.bytes().fold(0x6c62_272e_07bb_0142_62b8_2175_6295_c58d, |h, b| {
-        (h ^ u128::from(b)).wrapping_mul(prime)
-    })
-}
-
-/// The hash of scheme `kiln-odr-1.d0`: the class, the declared type's
-/// `<type>` encoding, and a fixed token for the body.
-fn hash_of(class: u16, ty: &str) -> u128 {
-    let tag = if class == FUNCTION { "function" } else { "variable" };
-    fnv128(&format!("{tag}\0{ty}\0body not hashed"))
 }
 
 /// The row of `symbol`, if any.
@@ -177,8 +162,8 @@ int use() {
 
 const F: u16 = FUNCTION;
 const V: u16 = VARIABLE;
-/// `VAGUE | PARTIAL`, the flags of a plain inline definition.
-const IN: u16 = VAGUE | PARTIAL;
+/// `VAGUE`, the flags of a plain inline definition.
+const IN: u16 = VAGUE;
 
 /// T-O-14: a row per definition kind, each symbol the object defines
 /// for one, and nothing else.
@@ -188,64 +173,61 @@ fn definition_rows_golden() {
     let ir = ir_of(&d, "k.cpp", KINDS, &["-std=c++20"]);
     let rows = def_rows(&ir_bytes(meta_line(&ir).unwrap())).unwrap();
     #[rustfmt::skip]
-    let golden: &[(&str, u16, u16, u32, &str)] = &[
+    let golden: &[(&str, u16, u16, u32)] = &[
         // Inline function and variable; a thread_local inline variable.
-        ("_Z3inli", F, IN, 1, "FiiE"),
-        ("ivar", V, IN, 2, "i"),
-        ("tl", V, IN, 25, "i"),
+        ("_Z3inli", F, IN, 1),
+        ("ivar", V, IN, 2),
+        ("tl", V, IN, 25),
         // Implicit instantiations: function, member function, static data
         // member, member template, variable template, an inline member.
-        ("_Z2tfIiET_S0_", F, IN | IMPLICIT_INST, 3, "FiiE"),
-        ("_ZNK3BoxIiE3getEv", F, IN | IMPLICIT_INST, 5, "KFivE"),
-        ("_ZN3BoxIiE2smE", V, IN | IMPLICIT_INST, 4, "i"),
-        ("_ZN3BoxIiE2mtIiEET_S2_", F, IN | IMPLICIT_INST, 4, "FiiE"),
-        ("_Z2vtIiE", V, IN | IMPLICIT_INST, 7, "Ki"),
-        ("_ZN3BoxIiE5inl_mEv", F, IN | IMPLICIT_INST, 4, "FvvE"),
+        ("_Z2tfIiET_S0_", F, IN | IMPLICIT_INST, 3),
+        ("_ZNK3BoxIiE3getEv", F, IN | IMPLICIT_INST, 5),
+        ("_ZN3BoxIiE2smE", V, IN | IMPLICIT_INST, 4),
+        ("_ZN3BoxIiE2mtIiEET_S2_", F, IN | IMPLICIT_INST, 4),
+        ("_Z2vtIiE", V, IN | IMPLICIT_INST, 7),
+        ("_ZN3BoxIiE5inl_mEv", F, IN | IMPLICIT_INST, 4),
         // Explicit instantiation definitions: a function and a class's
         // members (weak_odr: vague). The place is the template's.
-        ("_Z2tfIcET_S0_", F, IN | EXPLICIT_INST, 3, "FccE"),
-        ("_ZNK3BoxIcE3getEv", F, IN | EXPLICIT_INST, 5, "KFivE"),
-        ("_ZN3BoxIcE2smE", V, IN | EXPLICIT_INST, 4, "i"),
-        ("_ZN3BoxIcE5inl_mEv", F, IN | EXPLICIT_INST, 4, "FvvE"),
+        ("_Z2tfIcET_S0_", F, IN | EXPLICIT_INST, 3),
+        ("_ZNK3BoxIcE3getEv", F, IN | EXPLICIT_INST, 5),
+        ("_ZN3BoxIcE2smE", V, IN | EXPLICIT_INST, 4),
+        ("_ZN3BoxIcE5inl_mEv", F, IN | EXPLICIT_INST, 4),
         // Explicit specializations: strong (K13) and inline; a member of
         // an explicitly specialized class (decided: EXPLICIT_SPEC, since
         // [temp.expl.spec]/5 defines it as the specialization's member,
         // never instantiated); an explicitly specialized member.
-        ("_Z2tfIlET_S0_", F, PARTIAL | EXPLICIT_SPEC, 8, "FllE"),
-        ("_Z2tfIsET_S0_", F, IN | EXPLICIT_SPEC, 9, "FssE"),
-        ("_ZNK3BoxIdE3getEv", F, PARTIAL | EXPLICIT_SPEC, 13, "KFivE"),
-        ("_ZNK3BoxIfE3getEv", F, PARTIAL | EXPLICIT_SPEC, 14, "KFivE"),
+        ("_Z2tfIlET_S0_", F, EXPLICIT_SPEC, 8),
+        ("_Z2tfIsET_S0_", F, IN | EXPLICIT_SPEC, 9),
+        ("_ZNK3BoxIdE3getEv", F, EXPLICIT_SPEC, 13),
+        ("_ZNK3BoxIfE3getEv", F, EXPLICIT_SPEC, 14),
         // A static constexpr data member (inline since C++17).
-        ("_ZN1A1nE", V, IN, 15, "Ki"),
+        ("_ZN1A1nE", V, IN, 15),
         // Inline members and structors; implicitly defined structors
         // (the place is the class).
-        ("_ZN1DC2Ev", F, IN, 16, "FvvE"),
-        ("_ZN1DD2Ev", F, IN, 16, "FvvE"),
-        ("_ZN1D1vEv", F, IN, 16, "FvvE"),
-        ("_ZN3ImpC2Ev", F, IN, 17, "FvvE"),
-        ("_ZN3ImpD2Ev", F, IN, 17, "FvvE"),
+        ("_ZN1DC2Ev", F, IN, 16),
+        ("_ZN1DD2Ev", F, IN, 16),
+        ("_ZN1D1vEv", F, IN, 16),
+        ("_ZN3ImpC2Ev", F, IN, 17),
+        ("_ZN3ImpD2Ev", F, IN, 17),
         // A closure's `operator()` (an inline variable's lambda) and a
         // generic lambda's specialization; the variables themselves (a
-        // closure type is numbered per scope: hashed as per TU).
-        ("_ZNK2fpMUliE_clEi", F, IN, 27, "KFiiE"),
-        ("_ZNK2glMUlT_E_clIiEEDaS0_", F, IN | IMPLICIT_INST, 24, "KFiiE"),
-        ("fp", V, IN, 27, "PFiiE"),
-        ("gl", V, IN, 24, "?per-tu"),
+        // lambda initializer is not hashed yet: PARTIAL).
+        ("_ZNK2fpMUliE_clEi", F, IN, 27),
+        ("_ZNK2glMUlT_E_clIiEEDaS0_", F, IN | IMPLICIT_INST, 24),
+        ("fp", V, IN | PARTIAL, 27),
+        ("gl", V, IN | PARTIAL, 24),
         // A function with a static local (the local and its guard: none).
-        ("_Z2slv", F, IN, 26, "FivE"),
+        ("_Z2slv", F, IN, 26),
     ];
-    for &(sym, class, flags, line, ty) in golden {
+    let mut wrong = Vec::new();
+    for &(sym, class, flags, line) in golden {
         let r = row(&rows, sym).unwrap_or_else(|| panic!("no row for {sym}"));
-        let want = Def {
-            key: fnv(sym),
-            hash: hash_of(class, ty),
-            class,
-            flags,
-            file: "k.cpp".into(),
-            line,
-        };
-        assert_eq!(r, &want, "{sym}");
+        let want = Def { key: fnv(sym), hash: r.hash, class, flags, file: "k.cpp".into(), line };
+        if r != &want {
+            wrong.push(format!("{sym}: got {r:?}"));
+        }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
     assert_eq!(rows.len(), golden.len(), "{rows:#?}");
     let defs = defined(&ir);
     for sym in [
@@ -325,9 +307,9 @@ fn objects(d: &Path, units: &[(&str, &str)], args: &[&str]) -> Vec<Vec<u8>> {
 
 /// N9 (explicit instantiation in one unit, implicit in the other), N22
 /// (the strong C++14 definition of a `static constexpr` member against
-/// C++17's inline one), K13 (an explicit specialization against an
-/// implicit instantiation): one key, equal hashes, the flags tell them
-/// apart.
+/// C++17's inline one): one key, equal hashes, the flags tell them
+/// apart. K13 (an explicit specialization against an implicit
+/// instantiation): one key, the flags and the hashes differ.
 #[test]
 fn n9_n22_k13_across_units() {
     let dir = scratch("defs-pairs");
@@ -370,7 +352,7 @@ fn n9_n22_k13_across_units() {
     )
     .unwrap();
     let (rs, rv) = (row(&strong, "_ZN1A1nE").unwrap(), row(&vague, "_ZN1A1nE").unwrap());
-    assert_eq!((rs.flags, rv.flags), (PARTIAL, IN), "N22: the strong row and the vague row");
+    assert_eq!((rs.flags, rv.flags), (0, IN), "N22: the strong row and the vague row");
     assert_eq!((rs.hash, rs.class), (rv.hash, rv.class));
 
     let tf = "template <class T> int tf(T) { return 1; }\n";
@@ -390,8 +372,8 @@ fn n9_n22_k13_across_units() {
     let (spec_rows, inst_rows) = (def_rows(&k13[0]).unwrap(), def_rows(&k13[1]).unwrap());
     let (ra, rb) =
         (row(&spec_rows, "_Z2tfIiEiT_").unwrap(), row(&inst_rows, "_Z2tfIiEiT_").unwrap());
-    assert_eq!((ra.flags, rb.flags), (PARTIAL | EXPLICIT_SPEC, IN | IMPLICIT_INST));
-    assert_eq!(ra.hash, rb.hash, "the body is not hashed yet: only the flags tell");
+    assert_eq!((ra.flags, rb.flags), (EXPLICIT_SPEC, IN | IMPLICIT_INST));
+    assert_ne!(ra.hash, rb.hash, "the bodies differ");
 
     // The oracle reports the K13 pair and nothing for N9.
     let oracle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/mason/odr_oracle.py");
@@ -410,12 +392,41 @@ fn n9_n22_k13_across_units() {
         out.contains("K13: _Z2tfIiEiT_: EXPLICIT_SPEC in k13a.cpp.o, IMPLICIT_INST in k13b.cpp.o"),
         "{out}"
     );
-    assert!(out.contains("disagreeing keys 0, K13 pairs 1"), "{out}");
+    assert!(out.contains("disagreeing keys 1 (non-PARTIAL 1), K13 pairs 1"), "{out}");
     let n9_out = py(&["n9a.cpp.o", "n9b.cpp.o"]).unwrap();
     let out = text(&n9_out.stdout);
     assert_eq!(n9_out.status.code(), Some(0), "{out}{}", text(&n9_out.stderr));
     assert!(out.contains("kind 2 rows 2, keys 1"), "{out}");
-    assert!(out.contains("PARTIAL share 100.0%"), "{out}");
+    assert!(out.contains("PARTIAL share 0.0%"), "{out}");
+    assert!(out.contains("disagreeing keys 0 (non-PARTIAL 0), K13 pairs 0"), "{out}");
+}
+
+/// A definition's hash names the structors it calls by their
+/// complete-object symbol whatever the unit emits: one unit constructs
+/// the base alone (its complete-object constructor is emitted, at `-O0`
+/// folded into the base-object one), the other only through the derived
+/// class (found in fmt's tests, where `std::bad_alloc()` disagreed).
+#[test]
+fn structor_names_do_not_depend_on_emission() {
+    let dir = scratch("defs-structor-names");
+    let h = "struct E { E() {} ~E() {} };\nstruct X : E { X() {} ~X() {} };\n";
+    // At `-O0` (the complete-object variant folded; at `-O2` both
+    // structors are inlined away and the derived class has no rows).
+    for o in ["-O0"] {
+        let objs = objects(
+            &dir,
+            &[
+                ("sa.cpp", &format!("{h}void a() {{ X x; }}\n")),
+                ("sb.cpp", &format!("{h}void b() {{ X x; E e; }}\n")),
+            ],
+            &[o],
+        );
+        let (ra, rb) = (def_rows(&objs[0]).unwrap(), def_rows(&objs[1]).unwrap());
+        for sym in ["_ZN1XC2Ev", "_ZN1XD2Ev"] {
+            let (x, y) = (row(&ra, sym).unwrap(), row(&rb, sym).unwrap());
+            assert_eq!((x.hash, x.flags), (y.hash, y.flags), "{o} {sym}");
+        }
+    }
 }
 
 /// The structor variants (ruling 1): every symbol a structor is emitted
@@ -503,7 +514,7 @@ fn decided_forms() {
         int use() { co(); AI x; return lbl() + ali() + ifn() + ai() + ali_t(); }\n";
     let ir = ir_of(&d, "d.cpp", src, &["-std=c++20", "--target=x86_64-linux-gnu"]);
     let rows = def_rows(&ir_bytes(meta_line(&ir).unwrap())).unwrap();
-    assert_eq!(row(&rows, "my_label").map(|r| (r.flags, r.hash)), Some((IN, hash_of(F, "FivE"))));
+    assert_eq!(row(&rows, "my_label").map(|r| r.flags), Some(IN));
     assert_eq!(row(&rows, "_Z3lblv"), None);
     assert_eq!(row(&rows, "ali_t").map(|r| r.line), Some(6));
     for none in [
@@ -519,7 +530,11 @@ fn decided_forms() {
     ] {
         assert_eq!(row(&rows, none), None, "{none}");
     }
-    assert_eq!(row(&rows, "_Z2cov").map(|r| (r.flags, r.line)), Some((IN, 3)), "the ramp");
+    assert_eq!(
+        row(&rows, "_Z2cov").map(|r| (r.flags, r.line)),
+        Some((IN | PARTIAL, 3)),
+        "the ramp (a coroutine body: not hashed yet)"
+    );
     std::fs::write(
         d.join("mv.cpp"),
         "__attribute__((target(\"default\"))) int mv() { return 1; }\n\
@@ -571,6 +586,29 @@ fn library_rows_agree_across_units() {
             assert!(r.flags & EXPLICIT_SPEC == 0 || r.flags & IMPLICIT_INST == 0, "{lib}: {r:?}");
         }
         assert!(ra.iter().filter(|r| r.flags & SYSTEM != 0).count() > ra.len() / 2, "{lib}");
+    }
+}
+
+/// Must-equal across routes (mortar's counter-proposal b): a header
+/// included textually and the same header through a PCH give
+/// byte-equal kind 2 rows: same keys, hashes, flags and places.
+#[test]
+fn textual_and_pch_rows_equal() {
+    let d = scratch("defs-pch");
+    let (decls, uses) = KINDS.split_at(KINDS.find("int use()").unwrap());
+    let extra = "int ext(int x = 2);\n\
+                 struct M { int a = 4; int *p; M(int x) : p(new int(x)) {} virtual ~M() { delete p; } };\n\
+                 inline int dm() { M m(ext()); int v[3] = {1}; return m.a + v[0] + *m.p; }\n";
+    std::fs::write(d.join("h.h"), format!("{decls}{extra}")).unwrap();
+    ok(&d, &["-std=c++20", "-x", "c++-header", "h.h", "-o", "h.pch"]);
+    let u = format!("{uses}int use2() {{ return dm(); }}\n");
+    let with_pch = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include-pch", "h.pch"]).unwrap();
+    let with_h = defs_of(&d, "u.cpp", &u, &["-std=c++20", "-include", "h.h"]).unwrap();
+    assert_eq!(with_pch, with_h);
+    assert!(with_h.len() > 25 && with_h.iter().all(|r| r.file.ends_with("h.h")), "{with_h:#?}");
+    for sym in ["_Z2dmv", "_ZN1MC2Ei", "_ZN1MD2Ev"] {
+        let r = row(&with_h, sym).unwrap_or_else(|| panic!("no row for {sym}"));
+        assert_eq!(r.flags & PARTIAL, 0, "{sym}");
     }
 }
 

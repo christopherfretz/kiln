@@ -462,9 +462,13 @@ const GOLDEN_CASES: &[(&str, &str)] = &[
     ("noexcept", "int f() noexcept { return 1; }"),
     ("constexpr", "constexpr int f(int a) { return a; }"),
     ("method", "struct T { int m; int f() const &; }; int T::f() const & { return m; }"),
-    ("partial: new", "int *f() { return new int(1); }"),
+    ("new", "int *f() { return new int(1); }"),
     ("partial: lambda", "int f() { return [] { return 1; }(); }"),
-    ("partial: construct", "S f() { return S(); }"),
+    ("construct", "S f() { return S(); }"),
+    ("init list", "int f() { int a[3] = {1}; int b[2]{1, 2}; return a[2] + b[0]; }"),
+    ("new and delete", "void f(int n) { int *p = new int[n]{1, 2}; delete[] p; delete new S; }"),
+    ("throw", "void f(int a) { if (a) throw a; throw; }"),
+    ("traits", "bool f() { return __is_class(S) && !__is_union(S) && noexcept(g(1)); }"),
 ];
 
 fn golden_path() -> PathBuf {
@@ -472,7 +476,7 @@ fn golden_path() -> PathBuf {
 }
 
 const GOLDEN_HEADER: &str = "\
-# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d1).
+# The definition hash's golden digests (kiln_abi::odr_def, scheme kiln-odr-1.d2).
 # BUMP RULE (mortar O-11): a changed digest here means the serialization
 # changed; bump ODR_DEF_SCHEME in crates/kiln_abi/src/odr_def/mod.rs (and
 # spec/abi.md \"Definition hash\"), then regenerate with KILN_BLESS=1.
@@ -515,9 +519,9 @@ fn golden_digests() {
 /// different reasons differ.
 #[test]
 fn partial_tokens_are_per_kind() {
-    let a = digest_in(&format!("{PRELUDE}int *f() {{ return new int(1); }}"), "f");
-    let b = digest_in(&format!("{PRELUDE}int *f() {{ return new int[1]; }}"), "f");
-    let c = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 1; }}(); }}"), "f");
+    let a = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 1; }}(); }}"), "f");
+    let b = digest_in(&format!("{PRELUDE}int f() {{ return [] {{ return 2; }}(); }}"), "f");
+    let c = digest_in(&format!("{PRELUDE}int f() {{ return ({{ 1; }}); }}"), "f");
     assert!(a.partial && b.partial && c.partial);
     assert_eq!(a, b, "the same partial token for the same kind (subtree not hashed)");
     assert_ne!(a.hash, c.hash);
@@ -849,5 +853,309 @@ fn cost_report() {
                 s.partial_definitions,
             );
         });
+    }
+}
+
+// ------------------------------------------------- K-3c (WP-1583): init
+
+/// The definition picked by `pick` in `src` parsed at `std`: a function
+/// definition (by [`DefHasher::function`]) or a variable definition (by
+/// [`DefHasher::variable`]).
+fn digest_pick(src: &str, std: Std, pick: &dyn Fn(&Ast, DeclId) -> bool) -> DefDigest {
+    let opts = ParseOptions { std, ..ParseOptions::default() };
+    let (sm, tu) = parse_opts("t.cpp", src.to_owned(), &opts);
+    let ast = &tu.ast;
+    let mut h = DefHasher::new(ast, &sm, AnonIds::new());
+    let funcs: Vec<DeclId> = definitions(ast).into_iter().filter(|&d| pick(ast, d)).collect();
+    if let [f] = funcs[..] {
+        return h.function(f);
+    }
+    assert!(funcs.is_empty(), "several definitions picked");
+    let mut vars: Vec<DeclId> = ast
+        .decls
+        .ids()
+        .filter(|&d| ast.decls.var(d).is_some() && pick(ast, d))
+        .map(|d| ast.first(d))
+        .collect();
+    vars.sort();
+    vars.dedup();
+    assert_eq!(vars.len(), 1, "one definition picked");
+    // As the rows do: the definition of the first declaration.
+    h.variable(ast.definition(vars[0]).unwrap_or(vars[0]))
+}
+
+/// The function or variable named `name`.
+fn named(name: &'static str) -> impl Fn(&Ast, DeclId) -> bool {
+    move |ast, d| ident(ast, d) == name
+}
+
+/// The constructor (`kind` `CXXConstructor`) or destructor of class
+/// `class` with `params` parameters.
+fn structor(
+    class: &'static str,
+    kind: kiln_ast::decl::DeclKind,
+    params: usize,
+) -> impl Fn(&Ast, DeclId) -> bool {
+    move |ast, d| {
+        let n = ast.decls.get(d);
+        n.kind() == kind
+            && n.ctx().is_some_and(|c| ident(ast, c) == class)
+            && ast.decls.function(d).is_some_and(|f| ast.lists.len(f.params) == params)
+    }
+}
+
+/// What the init rows below see besides [`PRELUDE`].
+const INIT_PRELUDE: &str = "namespace std { class type_info { public: virtual ~type_info(); \
+     const char *name() const; };\n\
+     template <class E> class initializer_list { const E *b; decltype(sizeof 0) n; \
+     public: constexpr initializer_list() : b(nullptr), n(0) {} }; }\n\
+     void *operator new(decltype(sizeof 0), void *) noexcept;\n\
+     struct P { int x; int y; };\nunion U { int i; float f; };\n\
+     struct C { C(); C(int); C(long); C(const C &); ~C(); int v = 1; };\n\
+     struct L { L(std::initializer_list<int>); };\n";
+
+/// Rows that must differ (after [`PRELUDE`] and [`INIT_PRELUDE`]), one a
+/// line: a case, two definitions of `f`.
+const MUST_DIFFER_INIT: &str = r"
+constructor selected | C f() { return C(1); } | C f() { return C(1L); }
+constructor argument | C f() { return C(1); } | C f() { return C(2); }
+construct vs default | int f() { C c(1); return c.v; } | int f() { C c; return c.v; }
+copy kept | C f(C &c) { C d(c); return d; } | C f(C &c) { C d(1); return d; }
+new value | int *f() { return new int(1); } | int *f() { return new int(2); }
+new array bound | int *f() { return new int[2]; } | int *f() { return new int[3]; }
+new init | int *f() { return new int; } | int *f() { return new int(); }
+new placement | int *f(void *p) { return new (p) int(1); } | int *f(void *p) { return new int(1); }
+new global | C *f() { return new C; } | C *f() { return ::new C; }
+new parens vs braces | C *f() { return new C(1); } | C *f() { return new C{1}; }
+delete form | void f(int *p) { delete p; } | void f(int *p) { delete[] p; }
+throw value | void f() { throw 1; } | void f() { throw 2; }
+throw vs rethrow | void f() { throw 1; } | void f() { throw; }
+typeid type | const std::type_info &f() { return typeid(int); } | const std::type_info &f() { return typeid(long); }
+typeid type vs expr | const std::type_info &f(int a) { return typeid(int); } | const std::type_info &f(int a) { return typeid(a); }
+trait kind | bool f() { return __is_class(P); } | bool f() { return __is_union(P); }
+trait type | bool f() { return __is_class(P); } | bool f() { return __is_class(U); }
+array trait | unsigned long f() { return __array_extent(int[2][3], 1); } | unsigned long f() { return __array_extent(int[2][4], 1); }
+noexcept operand | bool f() { return noexcept(g(1)); } | bool f() { return noexcept(h(1)); }
+init list order | int f() { P p{1, 2}; return p.x; } | int f() { P p{2, 1}; return p.x; }
+init list size | int f() { P p{1}; return p.x; } | int f() { P p{1, 0}; return p.x; }
+designated field | int f() { P p{.y = 1}; return p.x; } | int f() { P p{.x = 1}; return p.x; }
+union member | int f() { U u{.i = 1}; return u.i; } | int f() { U u{.f = 1}; return u.i; }
+array filler | int f() { int a[3] = {1}; return a[0]; } | int f() { int a[3] = {2}; return a[0]; }
+value init | int f() { return int(); } | int f() { return long(); }
+braces vs parens | int f() { P p{1, 2}; return p.x; } | int f() { P p(1, 2); return p.x; }
+initializer_list | void f() { L l{1, 2}; } | void f() { L l{1, 3}; }
+compound literal | int f() { return (P){1, 2}.x; } | int f() { return (P){2, 1}.x; }
+";
+
+/// Deliverable 9: every init kind's operands move the digest.
+#[test]
+fn init_mutations_move_the_digest() {
+    let mut bad = Vec::new();
+    for l in MUST_DIFFER_INIT.lines().filter(|l| !l.trim().is_empty()) {
+        let p: Vec<&str> = l.split(" | ").collect();
+        assert_eq!(p.len(), 3, "row: {l}");
+        let x = digest_pick(&format!("{PRELUDE}{INIT_PRELUDE}{}", p[1]), Std::Cxx20, &named("f"));
+        let y = digest_pick(&format!("{PRELUDE}{INIT_PRELUDE}{}", p[2]), Std::Cxx20, &named("f"));
+        assert!(!x.partial && !y.partial, "{}: partial", p[0]);
+        if x.hash == y.hash {
+            bad.push(p[0]);
+        }
+    }
+    assert!(bad.is_empty(), "init mutations kept the digest: {bad:?}");
+}
+
+/// Pairs (after both preludes) that must hash alike: elidable copies,
+/// parentheses, designators by resolved field.
+const MUST_EQUAL_INIT: &[(&str, &str, &str)] = &[
+    ("parenthesized construct", "C f() { return (C(1)); }", "C f() { return C(1); }"),
+    (
+        "designated by resolved field",
+        "int f() { P p{.x = 1, .y = 2}; return p.x; }",
+        "int f() { P p{1, 2}; return p.x; }",
+    ),
+];
+
+#[test]
+fn init_must_equal_pairs() {
+    for &(case, a, b) in MUST_EQUAL_INIT {
+        let x = digest_pick(&format!("{PRELUDE}{INIT_PRELUDE}{a}"), Std::Cxx20, &named("f"));
+        let y = digest_pick(&format!("{PRELUDE}{INIT_PRELUDE}{b}"), Std::Cxx20, &named("f"));
+        assert_eq!(x, y, "{case}");
+    }
+}
+
+/// Elidable copies are transparent: `return T();` and `T x = T(1);` at
+/// C++14 (a move from a temporary, elided) equal C++17 (no copy).
+#[test]
+fn elidable_copies_across_standards() {
+    let src = "struct T { T(); T(int); T(const T &); T(T &&); int m; };\n\
+               T f() { return T(); }\nint g() { T x = T(1); return x.m; }\n\
+               T h(T t) { return T(t); }\n";
+    for name in ["f", "g", "h"] {
+        let a = digest_pick(src, Std::Cxx14, &named(name));
+        let b = digest_pick(src, Std::Cxx17, &named(name));
+        assert!(!a.partial, "{name}");
+        assert_eq!(a, b, "{name}");
+    }
+}
+
+/// O-13 K1: a default argument is hashed at the use, so the caller
+/// differs when the default does; equal when it is the same.
+#[test]
+fn default_argument_at_the_use() {
+    let a = digest_pick("int d(int a = 1);\nint f() { return d(); }", Std::Cxx20, &named("f"));
+    let b = digest_pick("int d(int a = 2);\nint f() { return d(); }", Std::Cxx20, &named("f"));
+    let c = digest_pick("int d(int = 1);\n\nint f() { return d(); }", Std::Cxx20, &named("f"));
+    assert!(!a.partial);
+    assert_ne!(a.hash, b.hash);
+    assert_eq!(a, c);
+}
+
+/// O-13 K2: a default member initializer is hashed at the constructor
+/// that uses it (here the implicit default constructor, synthesized).
+#[test]
+fn default_member_initializer_at_the_use() {
+    use kiln_ast::decl::DeclKind::CXXConstructor;
+    let use_it = "struct N { int v = 1; };\nint f() { N n; return n.v; }\n";
+    let a = digest_pick(use_it, Std::Cxx20, &structor("N", CXXConstructor, 0));
+    let b =
+        digest_pick(&use_it.replace("= 1", "= 2"), Std::Cxx20, &structor("N", CXXConstructor, 0));
+    assert!(!a.partial);
+    assert_ne!(a.hash, b.hash);
+}
+
+/// Constructors: the ctor-initializers in initialization order with
+/// their targets, then the body.
+#[test]
+fn constructor_initializers() {
+    use kiln_ast::decl::DeclKind::CXXConstructor;
+    let k = |src: &str| {
+        digest_pick(
+            &format!("struct B {{ B(int); }};\nstruct V {{ V(int); }};\n{src}"),
+            Std::Cxx20,
+            &structor("X", CXXConstructor, 1),
+        )
+    };
+    let base = k("struct X : B { int a, b; X(int); };\nX::X(int i) : B(i), a(1), b(2) {}");
+    for other in [
+        "struct X : B { int a, b; X(int); };\nX::X(int i) : B(i), a(2), b(2) {}",
+        "struct X : B { int a, b; X(int); };\nX::X(int i) : B(1), a(1), b(2) {}",
+        "struct X : B { int a, b; X(int); };\nX::X(int i) : B(i), a(1), b(2) { a = 3; }",
+        "struct X : B { int b, a; X(int); };\nX::X(int i) : B(i), a(1), b(2) {}",
+        "struct X : virtual V, B { int a, b; X(int); };\nX::X(int i) : V(i), B(i), a(1), b(2) {}",
+        "struct X : B { int a, b; X(int); X(int, int); };\nX::X(int i) : X(i, i) {}\nX::X(int, int) : B(0) {}",
+    ] {
+        let d = k(other);
+        assert!(!d.partial, "{other}");
+        assert_ne!(base.hash, d.hash, "{other}");
+    }
+    assert!(!base.partial);
+}
+
+/// A virtual destructor hashes the deallocation function it selects.
+#[test]
+fn destructor_deallocation_function() {
+    use kiln_ast::decl::DeclKind::CXXDestructor;
+    let a = "struct Y { virtual ~Y(); };\nY::~Y() {}\n";
+    let b = "struct Y { virtual ~Y(); void operator delete(void *); };\nY::~Y() {}\n";
+    let x = digest_pick(a, Std::Cxx20, &structor("Y", CXXDestructor, 0));
+    let y = digest_pick(b, Std::Cxx20, &structor("Y", CXXDestructor, 0));
+    assert!(!x.partial && !y.partial);
+    assert_ne!(x.hash, y.hash);
+}
+
+/// A predicate picking one declaration.
+type Pick = Box<dyn Fn(&Ast, DeclId) -> bool>;
+
+/// Synthesized members: not `partial`, and not moved by sema state a unit
+/// computes only when it needs it (the exception specification, a
+/// constant evaluation).
+#[test]
+fn synthesized_members_ignore_lazy_state() {
+    use kiln_ast::decl::DeclKind::{CXXConstructor, CXXDestructor, CXXMethod};
+    let class = "struct M { M(); M(const M &); M &operator=(const M &); ~M(); };\n\
+                 struct X { M m; int i = 4; };\n";
+    let plain = format!("{class}void f(X &a) {{ X b; X c(b); a = c; }}\n");
+    let lazy = format!(
+        "{class}void f(X &a) {{ X b; X c(b); a = c; }}\n\
+         static_assert(!noexcept(X()) && !noexcept(X(X())));\n"
+    );
+    let picks: [(&str, Pick); 4] = [
+        ("default ctor", Box::new(structor("X", CXXConstructor, 0))),
+        ("copy ctor", Box::new(structor("X", CXXConstructor, 1))),
+        ("dtor", Box::new(structor("X", CXXDestructor, 0))),
+        (
+            "assign",
+            Box::new(|ast: &Ast, d: DeclId| {
+                ast.decls.get(d).kind() == CXXMethod
+                    && ast.decls.get(d).ctx().is_some_and(|c| ident(ast, c) == "X")
+            }),
+        ),
+    ];
+    for (what, pick) in &picks {
+        let a = digest_pick(&plain, Std::Cxx20, &**pick);
+        let b = digest_pick(&lazy, Std::Cxx20, &**pick);
+        assert!(!a.partial, "{what}");
+        assert_eq!(a, b, "{what}");
+    }
+}
+
+/// Variables: the initializer as an expression, never its value (K9);
+/// constant and dynamic initialization of one expression alike; N22's
+/// out-of-line definition (C++14) equals the inline one (C++17).
+#[test]
+fn variable_initializers() {
+    let var = |src: &str| digest_pick(src, Std::Cxx20, &named("v"));
+    let one = var("inline int v = 2;");
+    assert!(!one.partial);
+    assert_ne!(one.hash, var("inline int v = 1 + 1;").hash, "K9: the expression, not the value");
+    assert_ne!(one.hash, var("inline long v = 2;").hash);
+    assert_ne!(one.hash, var("inline thread_local int v = 2;").hash);
+    assert_eq!(
+        var("constexpr int k() { return 1; }\ninline int v = k();"),
+        var("int k();\ninline int v = k();"),
+        "constant and dynamic initialization of one expression"
+    );
+    let n22 = "struct A { static constexpr int v = 5; };\n";
+    let a = digest_pick(&format!("{n22}constexpr int A::v;\n"), Std::Cxx14, &named("v"));
+    let b = digest_pick(n22, Std::Cxx17, &named("v"));
+    assert!(!a.partial);
+    assert_eq!(a, b, "N22");
+    let t =
+        "template <class T> struct Q { static inline int v = sizeof(T); };\nint u = Q<int>::v;\n";
+    let q = digest_pick(t, Std::Cxx20, &|ast: &Ast, d: DeclId| {
+        ident(ast, d) == "v" && !is_templated_def(ast, d)
+    });
+    assert!(!q.partial);
+}
+
+/// Deliverable 4 (mortar's request): parentheses are transparent, so
+/// these pairs must differ through type, value category or callee.
+#[test]
+fn parentheses_pairs_differ_by_meaning() {
+    let f = |src: &str| digest_pick(src, Std::Cxx20, &named("f"));
+    let pairs = [
+        (
+            "decltype((x)) vs decltype(x)",
+            "int gx;\nlong f() { decltype((gx)) r = gx; return r; }",
+            "int gx;\nlong f() { decltype(gx) r = gx; return r; }",
+        ),
+        (
+            "return (x) vs return x in decltype(auto)",
+            "int gx;\ndecltype(auto) f() { return (gx); }",
+            "int gx;\ndecltype(auto) f() { return gx; }",
+        ),
+        (
+            "(q)(a) vs q(a) with argument-dependent lookup",
+            "namespace n { struct T {}; int q(T); }\ntemplate <class U> int q(U);\n\
+             int f(n::T a) { return (q)(a); }",
+            "namespace n { struct T {}; int q(T); }\ntemplate <class U> int q(U);\n\
+             int f(n::T a) { return q(a); }",
+        ),
+    ];
+    for (case, a, b) in pairs {
+        let (x, y) = (f(a), f(b));
+        assert!(!x.partial && !y.partial, "{case}");
+        assert_ne!(x.hash, y.hash, "{case}: hashed equal");
     }
 }
