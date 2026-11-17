@@ -67,7 +67,9 @@ use crate::mangle::AnonIds;
 /// dependent `noexcept` and trailing requires-clause by structure, the
 /// narrower overload test of the short form, `target_clones`' clone list
 /// (WP-1608, WP-1626).
-pub const ODR_DEF_SCHEME: &str = "kiln-odr-1.d5";
+/// `kiln-odr-1` (WP-1586, K-3f): `d5`'s serialization, frozen and renamed
+/// with no byte changed. Any later change is `kiln-odr-2`.
+pub const ODR_DEF_SCHEME: &str = "kiln-odr-1";
 
 // Tags. Statement kinds are `1 + StmtKind`, expression kinds
 // `0x21 + ExprKind` (both enums' numbering is stable); the rest follow.

@@ -1,0 +1,1 @@
+differ	_Z1fi	2	min	-	a.cpp c++20 -DSPEC=inline	b.cpp c++20 -DSPEC=constexpr

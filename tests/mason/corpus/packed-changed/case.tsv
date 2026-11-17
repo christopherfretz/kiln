@@ -1,0 +1,1 @@
+differ	type:1S	3	default	-	a.cpp c++20 -DPACKED=	b.cpp c++20 -DPACKED=__attribute__((packed))

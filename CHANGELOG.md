@@ -12,6 +12,14 @@ Planned as 1.3.0.
 
 ### Added
 
+- `-fmason-metadata=all` names every vague definition row: its `name`
+  is the symbol, so a linker can name a definition the optimizer deleted
+  (WP-1586). The other levels are unchanged byte for byte.
+  `scripts/mason/odr_corpus.py` builds the must-equal and must-differ
+  corpus of definition hashes (`tests/mason/corpus/`, 51 cases) and its
+  `manifest.tsv` for a linker's test lane
+  ([spec/harness.md](spec/harness.md) "The O-13 corpus").
+
 - `-fmason-metadata-system-unit` (WP-1619): with `-fmason-metadata`,
   marks every definition and type row of the unit's `.mason.meta` section
   as coming from a system header, for building a standard library such as
@@ -220,6 +228,13 @@ Planned as 1.3.0.
   `ENFORCE`.
 
 ### Changed
+
+- The `.mason.meta` definition hash's scheme is `kiln-odr-1` (WP-1586):
+  `kiln-odr-1.d5` frozen and renamed, no digest changed. Objects written
+  under a `kiln-odr-1.dN` scheme are incomparable with `kiln-odr-1` ones;
+  any later change to the hash is `kiln-odr-2`. The known misses and
+  exclusions are one table, each row with the test that pins it
+  ([spec/abi.md](spec/abi.md) "Misses and exclusions").
 
 - The PCH snapshot format changed several times since 1.2.0 (new
   diagnostics, options and AST data changed the schema; the current

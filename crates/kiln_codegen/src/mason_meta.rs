@@ -99,8 +99,7 @@ pub const ODR_LAYOUT_SCHEME: &str = "kiln-odr-1";
 /// K-1: `min` kinds 1 and 2; `default` 1, 2, 3, 5; `detail` + 4; `all` +
 /// rows for definitions inlined away). Kiln writes kinds 1 and 2 at every
 /// level (kind 2 in C++ units), kinds 3 and 5 from `default` up and kind
-/// 4 from `detail` up; `all`'s rows for definitions inlined away are later
-/// work (K-3f).
+/// 4 from `detail` up; `all` also names every vague kind 2 row (K-3f).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MasonMetaLevel {
     /// `min`.
@@ -142,6 +141,13 @@ impl MasonMetaLevel {
     #[must_use]
     pub fn writes_cxx_function_type_names(self) -> bool {
         matches!(self, MasonMetaLevel::Detail | MasonMetaLevel::All)
+    }
+
+    /// The level writes `name` on every vague kind 2 row (mortar's ruling
+    /// (c) of 11-17: `all` only; `INLINED_ONLY` is never set).
+    #[must_use]
+    pub fn names_definitions(self) -> bool {
+        self == MasonMetaLevel::All
     }
 
     /// The level named `name` on the command line.
@@ -987,7 +993,7 @@ impl Cg<'_> {
         let mut st = StrTab::default();
         let mut blocks = vec![tu_summary_block(&rows, &mut st)];
         if !defs.is_empty() {
-            blocks.push(definitions_block(&defs, &mut st));
+            blocks.push(definitions_block(&defs, &mut st, m.level.names_definitions()));
         }
         if let Some(types) = &types {
             let (types, details) = types_block(types, &mut st);

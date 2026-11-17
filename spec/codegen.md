@@ -2247,7 +2247,7 @@ Never written: `abi.struct-return` (i386 only; kiln has no i386 target),
 of 11-17, WP-1581), flags 0: `odr.layout-scheme`, value `kiln-odr-1`,
 exactly when the unit has kind 3 rows (its name changes with any change
 to the layout serialization below), and `odr.scheme` (O-11), which names
-the definition hash of kind 2, value `kiln-odr-1.d5`
+the definition hash of kind 2, value `kiln-odr-1`
 (`mason_defs::DEF_SCHEME` = `kiln_abi::odr_def::ODR_DEF_SCHEME`, renamed
 by every package that changes what is hashed; spec/abi.md "Definition
 hash" has its history), exactly when the unit has kind 2 rows. So a
@@ -2577,7 +2577,7 @@ Candidates whose rows differ for one symbol give it none.
 |---|---|---|
 | `key` | u64 @0 | FNV-1a 64 of the symbol name as emitted (the asm label, LLVM's `\1` removed) |
 | `hash` | u128 @8 | below |
-| `name` | u32 @24 | 0 (anchored; `all`'s named rows are K-3f) |
+| `name` | u32 @24 | 0 (anchored) at `min`, `default` and `detail`; at `all` a `VAGUE` row's symbol (the string `key` hashes), a strong row 0 (K-3f, mortar's ruling (c) of 11-17) |
 | `class` | u16 @28 | 1 function, 2 variable |
 | `flags` | u16 @30 | bit 0 `VAGUE` (vague linkage), 1 `IMPLICIT_INST`, 2 `EXPLICIT_INST` (an explicit instantiation definition governs it), 3 `EXPLICIT_SPEC`, 4 `USES_INTERNAL` (O-16: the definition odr-uses an internal-linkage entity or names a TU-local type; spec/abi.md "`USES_INTERNAL`"), 5 `PARTIAL` (the hasher skipped a construct its scheme covers), 8 `SYSTEM` (as kind 3: "`SYSTEM`" above); bits 6, 7 and 9-15 are 0 |
 | `module` | u32 @32 | 0 |
@@ -2609,7 +2609,7 @@ rows"); a closure outside a function is its own context. kiln rejects function m
 to decide. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
-The hash (scheme `kiln-odr-1.d5`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e, WP-1608, WP-1626, WP-1636, WP-1637, WP-1638) is the definition
+The hash (scheme `kiln-odr-1`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e, WP-1608, WP-1626, WP-1636, WP-1637, WP-1638, frozen by WP-1586 K-3f) is the definition
 digest of `kiln_abi::odr_def` (spec/abi.md "Definition hash"):
 `DefHasher::function` over a function definition (declarator,
 ctor-initializers, a destructor's deallocation function, body),
@@ -2664,11 +2664,22 @@ driver reports them as `KILN_STATS_LOG`'s `mason_defs` field
 kind 5 strings); `detail` and `all` write it. Variables and C-linkage
 rows have theirs at every level, and the `type` hash is FNV-1a 64 of the
 full string at every level. Kind 3 rows are the same at every level
-(`details` aside), and so are kind 2's. The kind 1 rows are the same
+(`details` aside), and so are kind 2's, except that `all` writes `name`
+on every `VAGUE` row. The kind 1 rows are the same
 at every level except `odr.layout-scheme`, which follows kind 3. `detail`
-and `all` add kind 4. C units write no kind 2, 3 or 4. **Not written
-yet** (later K-3 packages): full coverage of the hash, `all`'s named rows and its
-rows for definitions inlined away.
+and `all` add kind 4. C units write no kind 2, 3 or 4.
+
+**`all`'s named rows** (WP-1586, mortar's ruling (c)). Kind 2 rows are
+the front end's, taken before the optimizer runs, so a vague
+definition the optimizer deletes (inlined into every caller) has a row at
+every level, and its object no symbol of that name. At `all` every
+`VAGUE` row's `name` is its symbol, so a linker can compare such a row
+without the symbol (mortar's rule, strict mode only; a symbol renamed by
+`objcopy`, N12, is then compared by its old name). `INLINED_ONLY` (bit 6)
+is never set: the row does not say whether the symbol survived.
+`definitions_block(.., named)`; `MasonMetaLevel::names_definitions`. The
+other levels write `name` 0, their bytes unchanged by K-3f. Test:
+`crates/kiln_driver/tests/mason_defs.rs` `all_names_every_vague_row`.
 
 **Determinism** (MT-38): the unit is a function of the TU and its
 options: rows sorted, strings laid out in the order the sorted rows first
@@ -2677,6 +2688,37 @@ hash-map iteration order (the target features are a sorted map), and the
 source path rewritten by the prefix maps. Test: one TU compiled from two
 directories with `-ffile-prefix-map=<dir>=/src` gives identical sections
 (`mason_meta.rs` `same_bytes_from_two_directories`).
+
+**Cost** (WP-1586, K-3f; mortar's ruling (e)). Limit: kind 2's
+increment, `-fmason-metadata` (`default`) with kind 2 against the same
+without it, is at most 3% of the front end's cost with the flag off.
+Measured by callgrind instructions (primary, `-std=c++20 -O0 -S
+-emit-llvm`, under `ulimit -v 3000000`) on `bench/frontend` units and
+small `bench/libcxx-slice` units (libc++ 22); the whole flag against no
+flag is information. The without-kind-2 build was a temporary,
+uncommitted switch returning no rows from `Cg::mason_def_rows`.
+Measured 2026-11-17 on commit `8e6c25659` (aarch64, release build).
+
+| unit | flag off (instructions) | kind 2 | whole flag |
+|---|---|---|---|
+| `frontend/format-like-g.cpp` | 4645M | 1.07% | 1.99% |
+| `frontend/templates.cpp` (no vague definitions) | 3730M | 0.00% | 2.01% |
+| `frontend/virtual-lattice.cpp` | 1998M | 0.21% | 1.61% |
+| `map.observers/value_comp.pass.cpp` | 4058M | 0.35% | 0.94% |
+| `vector.cons/assign_copy.pass.cpp` | 3958M | 0.65% | 1.32% |
+| `string_append/push_back.pass.cpp` | 4104M | 0.45% | 1.01% |
+
+The secondary measure, the minimum of 10 alternating wall-clock runs per
+mode on the shared host, moved between -5.4% and +4.5% for kind 2: noise
+larger than the effect, consistent with the counts. With the flag off
+nothing runs: the driver's options are `None`
+(`kiln_driver::mason_meta::options`), `Cg::emit_mason_meta` returns
+before any row is built, and no hasher exists (`mason_defs.rs`
+`flag_off_changes_nothing`: the IR without the flag equals the IR with
+`-fmason-metadata -fno-mason-metadata`, and the flag adds only the
+container). The bench harness records no per-entry
+limit of this kind; the gate is re-measured by hand when kind 2's hash
+changes (docs/VALIDATION.md "Performance tracking").
 
 **Routes.** The default route (`llc`) lowers the global to the section
 above at every `-O` level. `-flto` is a named non-goal (mortar has no LTO

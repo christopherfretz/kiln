@@ -1791,6 +1791,80 @@ built with `KILN_OSS_CXX` set to a wrapper that adds the flag), and
 expects zero of (a) and (b). `crates/kiln_driver/tests/mason_defs.rs`
 runs it on a K13 pair when `python3` is on `PATH`.
 
+### Context independence of kind 2 rows
+
+No byte of a kind 2 row depends on anything else in its unit (spec/abi.md
+"Definition hash"; WP-1586). `tests/mason/context/defs.h` holds one
+definition of each row kind and each area of the hash (functions, member
+functions, constructors, virtuals, templates and their instantiations,
+variables, closures, contracts, attributes, statements, expressions);
+`tests/mason/context/preambles/*.h` are the contexts. A preamble starts
+with directive comment lines:
+
+- `// sides: pre post|pre|post|wrap`: placed before the unit's text, after
+  it (the trailer side), or around it (a `wrap` file splits at a line
+  `//@ include`); default `pre post`.
+- `// scope: any|defs`: `defs` names `defs.h`'s entities (a
+  redeclaration, an explicit instantiation), so it applies to `defs.h`
+  only; `any` applies to every unit; default `any`.
+- `// expect: differ SYMBOL...`: the redeclaration may change those rows
+  (a default argument or `[[noreturn]]` added: a must-differ case); they
+  must differ and no other row may.
+
+`crates/kiln_driver/tests/mason_context.rs` compiles `defs.h` plain and
+with each preamble on each side at `-std=c++20` and `-std=c++26` (and the
+standard-header preamble with libc++ when it is installed), and requires
+equal hash and flags for every shared key; a failure names the preamble,
+the side and the symbol.
+`scripts/mason/odr_preamble.py --kiln PATH [--std S]... [--stdlib L]...
+[--arg A]... [--all-scopes] UNIT...` does the same for arbitrary units
+(the `scope: any` preambles; `--all-scopes` adds the others) and prints a
+`MISMATCH` line per row (unit, standard, library, preamble, side,
+symbol, both (hash, flags)); exit 1 on a mismatch, 2 when a plain unit
+does not compile. `tests/mason/` is not a default root of the
+conformance runner, so these files are not run as tests on their own.
+
+### The O-13 corpus
+
+mortar's O-13 lists the must-equal and must-differ cases of the definition
+hash (WP-1586). Each is one directory of `tests/mason/corpus/`, named by
+its O-13 id (`N1`, `K7`) or by a short name for the cases without one
+(`literal-base`), holding its units, any headers, and `case.tsv`: one
+tab-separated line
+
+```
+expect  symbols  kinds  level  reason  unit...
+```
+
+| column | value |
+|---|---|
+| `expect` | `equal` (must not be reported), `differ` (must be reported), `excluded` (a documented miss or exclusion, spec/abi.md "Misses and exclusions": not reported) |
+| `symbols` | the symbols compared, space-separated; `type:NAME` is the kind 3 row of the type whose Itanium `<type>` is NAME |
+| `kinds` | the row kinds that carry the expected difference or equality, comma-separated (`2`; `2,3`; `3`) |
+| `level` | the lowest `-fmason-metadata` level writing those rows (`min` for kind 2, `default` with kind 3) |
+| `reason` | a stable id for an `excluded` case (`X15`, `X17`, `typedef-noreturn`, `synthesized-noexcept`); `-` otherwise |
+| `unit` | `FILE STD [FLAG...]`, space-separated: the source, its `-std` value, its other flags; `{dir}` in a flag is the case's absolute directory; `@pch:H` builds a PCH of `H` with the unit's flags and adds `-include-pch` |
+
+kiln++ runs in the case's directory. `differ` holds when the hashes
+differ, or the rows form an `EXPLICIT_SPEC` + `IMPLICIT_INST` pair (K13),
+or a row has `USES_INTERNAL` (K12); `equal` needs one hash, no such pair,
+and flags equal apart from `VAGUE`, `IMPLICIT_INST` and `EXPLICIT_INST`
+(N22, N9); `excluded` needs one hash (the miss), or no row at all for
+`X15`. `crates/kiln_driver/tests/mason_corpus.rs` checks every case.
+`python3 -I scripts/mason/odr_corpus.py --kiln PATH --out DIR [--level
+L] [--check] [CASE...]` builds every case's objects into `DIR/CASE/`
+(with `-fmason-metadata=L`, default `default`) and writes
+`DIR/manifest.tsv` for a linker's test lane, one line per case after a
+`#` header:
+
+```
+case  expect  symbols  kinds  level  reason  (object  std  flags)...
+```
+
+with one (`object` relative to DIR, `std`, `flags` space-separated with
+`{dir}` expanded, `-` when none) triple per unit, in the case's order;
+`--check` also verifies the expectations as above (exit 1 on a failure).
+
 ## CI
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a

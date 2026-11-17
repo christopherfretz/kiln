@@ -238,3 +238,153 @@ pub fn container(obj: &[u8]) -> Vec<u8> {
     }
     s.data.clone()
 }
+
+/// The definition hash's scheme (kind 1 `odr.scheme`) the kind 2 tests
+/// expect.
+pub const DEF_SCHEME: &str = "kiln-odr-1";
+
+/// Kind 2 row flags (O-15) and classes.
+pub const VAGUE: u16 = 1;
+pub const IMPLICIT_INST: u16 = 2;
+pub const EXPLICIT_INST: u16 = 4;
+pub const EXPLICIT_SPEC: u16 = 8;
+pub const USES_INTERNAL: u16 = 16;
+pub const PARTIAL: u16 = 32;
+pub const SYSTEM: u16 = 256;
+pub const FUNCTION: u16 = 1;
+pub const VARIABLE: u16 = 2;
+
+/// One kind 2 row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Def {
+    pub key: u64,
+    pub hash: u128,
+    pub class: u16,
+    pub flags: u16,
+    pub file: String,
+    pub line: u32,
+}
+
+/// The `name` strings of the kind 2 rows of `b` by key (0 rows: none).
+pub fn def_names(b: &[u8]) -> Vec<(u64, String)> {
+    let Some(at) = block_at(b, 2) else { return Vec::new() };
+    (0..u32_at(b, at + 12) as usize)
+        .map(|i| at + 16 + i * 48)
+        .filter(|&r| u32_at(b, r + 24) != 0)
+        .map(|r| (u64_at(b, r), string_at(b, u32_at(b, r + 24))))
+        .collect()
+}
+
+/// The kind 2 rows of the unit in `b`, `None` without a kind 2 block,
+/// after checking the framing, the block and every row (O-15: `name` 0
+/// or, at `all`, the symbol of a vague row,
+/// `module` 0, reserved 0, a hash, no flag kiln does not write,
+/// sorted by key, one row per key).
+pub fn def_rows(b: &[u8]) -> Option<Vec<Def>> {
+    let summary = summary_rows(b);
+    let at = block_at(b, 2)?;
+    assert_eq!((u16_at(b, at), u16_at(b, at + 2)), (2, 1), "kind 2, version 1");
+    let (block_size, row_size, rows) =
+        (u32_at(b, at + 4) as usize, u32_at(b, at + 8) as usize, u32_at(b, at + 12) as usize);
+    assert_eq!(row_size, 48);
+    assert!(rows > 0, "no block without rows");
+    assert!(16 + rows * 48 <= block_size && at + block_size <= u32_at(b, 20) as usize);
+    assert_eq!(value(&summary, "odr.scheme"), Some(DEF_SCHEME));
+    let out: Vec<Def> = (0..rows)
+        .map(|i| {
+            let r = at + 16 + i * 48;
+            // `name`: 0 (anchored), or at `all` a vague row's symbol (K-3f).
+            let name = u32_at(b, r + 24);
+            assert!(
+                name == 0
+                    || (u16_at(b, r + 30) & VAGUE != 0 && fnv(&string_at(b, name)) == u64_at(b, r)),
+                "name {name} of row {i}"
+            );
+            assert_eq!(u32_at(b, r + 32), 0, "module");
+            assert_eq!(u32_at(b, r + 44), 0, "reserved");
+            let d = Def {
+                key: u64_at(b, r),
+                hash: u128::from_le_bytes(b[r + 8..r + 24].try_into().unwrap()),
+                class: u16_at(b, r + 28),
+                flags: u16_at(b, r + 30),
+                file: string_at(b, u32_at(b, r + 36)),
+                line: u32_at(b, r + 40),
+            };
+            assert!(d.class == FUNCTION || d.class == VARIABLE, "{d:?}");
+            assert_ne!(d.hash, 0, "{d:?}");
+            assert_eq!(
+                d.flags
+                    & !(VAGUE
+                        | IMPLICIT_INST
+                        | EXPLICIT_INST
+                        | EXPLICIT_SPEC
+                        | USES_INTERNAL
+                        | PARTIAL
+                        | SYSTEM),
+                0,
+                "{d:?}"
+            );
+            d
+        })
+        .collect();
+    for w in out.windows(2) {
+        assert!(w[0].key < w[1].key, "sorted by key, one row per key: {w:?}");
+    }
+    Some(out)
+}
+
+/// The IR of `src` compiled with `-fmason-metadata` and `args`.
+pub fn ir_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> String {
+    std::fs::write(dir.join(file), src).unwrap();
+    let mut a = vec!["-fmason-metadata", "-S", "-emit-llvm", "-o", "-"];
+    a.extend(args);
+    a.push(file);
+    ok(dir, &a)
+}
+
+/// The kind 2 rows of `src` compiled with `args` (through the IR).
+pub fn defs_of(dir: &Path, file: &str, src: &str, args: &[&str]) -> Option<Vec<Def>> {
+    def_rows(&ir_bytes(meta_line(&ir_of(dir, file, src, args)).expect("the global")))
+}
+
+/// The row of `symbol`, if any.
+pub fn row<'r>(rows: &'r [Def], symbol: &str) -> Option<&'r Def> {
+    rows.iter().find(|d| d.key == fnv(symbol))
+}
+
+/// The symbols IR `ir` defines (functions, variables, aliases).
+pub fn defined(ir: &str) -> Vec<String> {
+    ir.lines()
+        .filter_map(|l| {
+            let rest = if l.starts_with("define ") {
+                l.split_once(" @")?.1
+            } else if let Some(r) = l.strip_prefix('@') {
+                let (_, init) = r.split_once(" = ")?;
+                if init.starts_with("external ") || init.contains("declare ") {
+                    return None;
+                }
+                r
+            } else {
+                return None;
+            };
+            let rest = rest.trim_start_matches('"');
+            Some(rest[..rest.find(['(', ' ', '"']).unwrap_or(rest.len())].to_owned())
+        })
+        .collect()
+}
+
+/// The objects of `units` (name, source), compiled with `args` in `d`.
+pub fn objects(d: &Path, units: &[(&str, &str)], args: &[&str]) -> Vec<Vec<u8>> {
+    units
+        .iter()
+        .map(|(name, src)| {
+            std::fs::write(d.join(name), src).unwrap();
+            let out = format!("{name}.o");
+            let mut a = vec!["-fmason-metadata", "-c", "-o", &out];
+            a.extend(args);
+            a.push(name);
+            ok(d, &a);
+            container(&std::fs::read(d.join(&out)).unwrap())
+        })
+        .collect()
+}
