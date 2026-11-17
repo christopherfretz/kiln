@@ -523,7 +523,7 @@ impl Cg<'_> {
                 if subs.len() == 2 {
                     return Ok(Some(self.shuffle_by_mask(a, b)));
                 }
-                self.shuffle(a, Some(b), mask)
+                self.shuffle_mixed(a, b, mask)
             }
             ExprKind::ConvertVectorExpr => {
                 let src = ast.exprs.operand(e);

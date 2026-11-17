@@ -1081,6 +1081,18 @@ Planned as 1.3.0.
   22's wording; a structured binding declaration at class scope gets one
   error; a function template specialization named as a template argument
   in a lambda body inside a template is instantiated.
+- GCC builtins found running GCC's C++ testsuite: `__builtin_shuffle`
+  with one or two vectors and a mask that need not be constant (one
+  `pshufb`/`tbl` at -O2 for 16 bytes), `__builtin_shufflevector` with
+  vectors of different lengths, `__builtin_speculation_safe_value` (with
+  GCC's speculation barrier: `lfence` on x86_64, `isb; dsb sy` on
+  AArch64), `__builtin_assoc_barrier` (an arithmetic fence under
+  `-ffast-math`), `__builtin_ffsg`, `__builtin_clrsbg`,
+  `__builtin_parityg` and `__builtin_puts`. clang lacks the new names, so
+  `__has_builtin` answers 0 for them, as clang does. A deprecated or
+  unavailable conversion function is diagnosed where it is used
+  implicitly, and so is an enumerator of an instantiated class
+  template's member enumeration.
 
 - Oven fixes found running GCC's C++ testsuite (WP-1590, WP-1594,
   WP-1573): an odr-use of a by-copy capture in a constant expression

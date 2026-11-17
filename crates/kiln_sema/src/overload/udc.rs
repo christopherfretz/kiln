@@ -200,6 +200,9 @@ impl Sema<'_, '_> {
         let src = self.ety(e);
         let class = self.ast.types.as_record(src).and_then(|r| self.ast.definition(r)).unwrap_or(f);
         self.check_member_access(found, class, Some(class), at);
+        // clang `BuildCXXCastArgument`'s `DiagnoseUseOfDecl`: a deprecated
+        // or unavailable conversion function (WP-1552).
+        self.warn_deprecated_use(found, at);
         if self.ovl_deleted(f) {
             let mut err = ConvError::new(DiagId::sema_conv_deleted_ctor, {
                 let (a, b) = self.ty_diff(src, target);

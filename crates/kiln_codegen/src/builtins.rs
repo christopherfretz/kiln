@@ -7,6 +7,7 @@
 //! calls). The rest lower to LLVM intrinsics, inline IR, or a call to the
 //! library function the builtin names (`__builtin_strlen` → `strlen`).
 
+use kiln_abi::Arch;
 use kiln_ast::decl::builtin as id;
 use kiln_ast::decl::{DeclKind, builtin::attr};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
@@ -20,6 +21,7 @@ use kiln_llvm::{
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg};
 use crate::module::{Cg, R, err};
+use kiln_llvm::intrinsics::TargetMem;
 
 /// The builtin `e` calls directly, if it is a call of one: its declaration
 /// and id.
@@ -213,6 +215,7 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::SPRINTF
         | id::VSNPRINTF
         | id::PRINTF
+        | id::PUTS
         | id::VPRINTF
         | id::VSPRINTF
         | id::SCANF
@@ -1030,6 +1033,63 @@ impl Cg<'_> {
             }
             // clang `BI__builtin_elementwise_abs`: `llvm.abs(x, false)` for
             // integers, `llvm.fabs` for floating point (lane-wise on vectors).
+            // WP-1548: GCC's `__builtin_shuffle(a[, b], mask)`.
+            id::SHUFFLE => {
+                let mut vs = Vec::with_capacity(args.len());
+                for &x in &args {
+                    vs.push(self.emit_scalar(x)?);
+                }
+                match vs[..] {
+                    [a, m] => self.gcc_shuffle(a, None, m),
+                    [a, b, m] => self.gcc_shuffle(a, Some(b), m),
+                    _ => return err(self.loc_of(e), "malformed __builtin_shuffle"),
+                }
+            }
+            // WP-1552: GCC's `__builtin_speculation_safe_value(v[, f])`:
+            // `v`, then `f` for its side effects only, then the target's
+            // speculation barrier (GCC 16.1 `speculation_barrier`: x86-64
+            // `lfence`, AArch64 `isb; dsb sy`); the value is `v`.
+            id::SPECULATION_SAFE_VALUE => {
+                let x = self.emit_scalar(a0)?;
+                if let Some(&f) = args.get(1) {
+                    self.emit_scalar(f)?;
+                }
+                let bar: &[(&str, Option<i128>)] = match self.target.triple.arch {
+                    Arch::X86_64 => &[("llvm.x86.sse2.lfence", None)],
+                    Arch::AArch64 => {
+                        &[("llvm.aarch64.isb", Some(15)), ("llvm.aarch64.dsb", Some(15))]
+                    }
+                };
+                for &(name, imm) in bar {
+                    let ps: &[(LTy, bool)] = if imm.is_some() { &[(LTy::I32, false)] } else { &[] };
+                    let f = kiln_llvm::intrinsics::target_intrinsic(
+                        &mut self.m,
+                        name,
+                        LTy::VOID,
+                        ps,
+                        TargetMem::Unknown,
+                    );
+                    let a = imm.map(|i| V::C(self.m.const_int(LTy::I32, i))).into_iter().collect();
+                    self.intrinsic_call(f, a);
+                }
+                x
+            }
+            // WP-1552: GCC's `__builtin_assoc_barrier(x)`: `llvm.arithmetic.fence`
+            // on floating point (as clang's `__arithmetic_fence`), so
+            // `-ffast-math` reassociation does not cross it; other types
+            // have no reassociation to stop.
+            id::ASSOC_BARRIER => {
+                let x = self.emit_scalar(a0)?;
+                let eq = self.scalar_of(ast.exprs.get(a0).ty());
+                if ast.types.is_floating(eq) {
+                    let ty = self.f.fir.ty(&self.m, x);
+                    let f =
+                        kiln_llvm::intrinsics::fp_op(&mut self.m, "llvm.arithmetic.fence", ty, 1);
+                    self.intrinsic_call(f, vec![x])
+                } else {
+                    x
+                }
+            }
             id::ELEMENTWISE_ABS => {
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);
@@ -1425,7 +1485,7 @@ impl Cg<'_> {
                 self.f.calls.push((Fir::last_inst(c), Some(f), true));
                 dv
             }
-            id::FFS | id::FFSL | id::FFSLL => {
+            id::FFS | id::FFSL | id::FFSLL | id::FFSG => {
                 // `x ? cttz(x, true) + 1 : 0`.
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);
@@ -1440,7 +1500,7 @@ impl Cg<'_> {
                 let rt = self.lty(q);
                 self.int_cast(r, rt, false)
             }
-            id::PARITY | id::PARITYL | id::PARITYLL => {
+            id::PARITY | id::PARITYL | id::PARITYLL | id::PARITYG => {
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);
                 let f = kiln_llvm::intrinsics::ctpop(&mut self.m, ty);
@@ -1450,7 +1510,7 @@ impl Cg<'_> {
                 let rt = self.lty(q);
                 self.int_cast(r, rt, false)
             }
-            id::CLRSB | id::CLRSBL | id::CLRSBLL => {
+            id::CLRSB | id::CLRSBL | id::CLRSBLL | id::CLRSBG => {
                 // `ctlz(x < 0 ? ~x : x, false) - 1`.
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);

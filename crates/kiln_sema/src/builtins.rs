@@ -1136,6 +1136,13 @@ impl Sema<'_, '_> {
             builtin::ALIGN_UP | builtin::ALIGN_DOWN | builtin::IS_ALIGNED => {
                 self.builtin_align(id, args, rparen)
             }
+            builtin::SHUFFLE => self.builtin_shuffle(args, rparen),
+            // WP-1552: GCC's builtins clang lacks.
+            builtin::SPECULATION_SAFE_VALUE => self.builtin_speculation_safe_value(args, rparen),
+            builtin::ASSOC_BARRIER => self.builtin_assoc_barrier(args, rparen),
+            builtin::CLRSBG | builtin::FFSG | builtin::PARITYG => {
+                self.builtin_bits_generic(id, args, rparen)
+            }
             builtin::ELEMENTWISE_ABS => self.builtin_elementwise_abs(args, rparen),
             builtin::ELEMENTWISE_MAX | builtin::ELEMENTWISE_MIN => {
                 self.builtin_elementwise_minmax(args, rparen)
@@ -1269,6 +1276,155 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::INT))
+    }
+
+    /// GCC's `__builtin_clrsbg` / `__builtin_ffsg` (one signed integer of
+    /// any width, not `bool` or an enumeration: GCC "has unsigned type",
+    /// "has boolean type", "has enumerated type") and `__builtin_parityg`
+    /// (an unsigned integer, as [`Sema::builtin_popcountg`]); WP-1552. The
+    /// call is an `int` prvalue.
+    fn builtin_bits_generic(
+        &mut self,
+        id: u32,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if id == builtin::PARITYG {
+            return self.builtin_popcountg(args, rparen);
+        }
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::lvalue_to_rvalue(self, args[0]);
+        let t = self.ety(a);
+        if t == QualType::ERROR {
+            return None;
+        }
+        let ok = self.ast.types.is_integral(t)
+            && self.ast.types.as_enum(t).is_none()
+            && self.ast.types.builtin(t) != Some(BuiltinType::Bool)
+            && conv::rank::int_signed(self, t);
+        if !ok {
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                .arg(0)
+                .arg("scalar signed integer type")
+                .arg(self.ty_arg(t));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], QualType::INT))
+    }
+
+    /// GCC's `__builtin_speculation_safe_value(val[, failval])` (WP-1552;
+    /// GCC `speculation_safe_value_resolve_params`): `val` after the
+    /// array-to-pointer and lvalue-to-rvalue conversions, an integer type
+    /// (not `bool` or an enumeration) of at most 128 bits or a pointer
+    /// type (GCC "expecting argument of type pointer or of type
+    /// integer"); `failval` of the same type, or any pointer type for a
+    /// pointer `val`, converted to `val`'s type (GCC "both arguments must
+    /// be compatible"). The call is a prvalue of `val`'s type.
+    fn builtin_speculation_safe_value(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        let (id, n) = match args.len() {
+            1 | 2 => (None, 0),
+            0 => (Some(DiagId::sema_call_too_few_args_at_least), 1),
+            _ => (Some(DiagId::sema_call_too_many_args_at_most), 2),
+        };
+        if let Some(id) = id {
+            let msg = self.diag(id, rparen).arg(n).arg(args.len());
+            self.emit(msg);
+            return None;
+        }
+        let mut out = Vec::with_capacity(args.len());
+        let mut vt = QualType::ERROR;
+        for (i, &a) in args.iter().enumerate() {
+            if self.ast.types.is_function(self.ety(a)) {
+                let msg = self
+                    .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                    .arg(i)
+                    .arg("scalar integer or pointer type")
+                    .arg(self.ty_arg(self.ety(a)));
+                self.emit(msg);
+                return None;
+            }
+            let a = conv::decay(self, a);
+            let t = conv::strip_cv(self, self.ety(a));
+            if t == QualType::ERROR {
+                return None;
+            }
+            let ptr = self.ast.types.is_pointer(t);
+            let int = self.ast.types.is_integral(t)
+                && self.ast.types.as_enum(t).is_none()
+                && self.ast.types.builtin(t) != Some(BuiltinType::Bool)
+                && self.scalar_bits(t).is_some_and(|b| b <= 128);
+            if i == 0 {
+                if !ptr && !int {
+                    let msg = self
+                        .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                        .arg(0)
+                        .arg("scalar integer or pointer type")
+                        .arg(self.ty_arg(t));
+                    self.emit(msg);
+                    return None;
+                }
+                vt = t;
+                out.push(a);
+                continue;
+            }
+            let vptr = self.ast.types.is_pointer(vt);
+            if !(if vptr { ptr } else { self.ast.types.same_unqualified(t, vt) }) {
+                let (x, y) = self.ty_arg_pair(t, vt);
+                let msg =
+                    self.diag(DiagId::sema_speculation_safe_value_mismatch, self.begin_loc(a));
+                let msg = msg.arg(x).arg(y);
+                self.emit(msg);
+                return None;
+            }
+            let a = if vptr && !self.ast.types.same_unqualified(t, vt) {
+                conv::cast_to(self, CastKind::BitCast, a, vt, None)
+            } else {
+                a
+            };
+            out.push(a);
+        }
+        Some((out, vt))
+    }
+
+    /// GCC's `__builtin_assoc_barrier(x)` (WP-1552): `x` after the
+    /// array-to-pointer and lvalue-to-rvalue conversions, of arithmetic,
+    /// enumeration, pointer or vector type; the call is a prvalue of its
+    /// type.
+    fn builtin_assoc_barrier(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        let t = conv::strip_cv(self, self.ety(a));
+        if t == QualType::ERROR {
+            return None;
+        }
+        let ok = self.ast.types.is_arithmetic(t)
+            || self.ast.types.as_enum(t).is_some()
+            || self.ast.types.is_pointer(t)
+            || self.is_vector_type(t);
+        if !ok {
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                .arg(0)
+                .arg("scalar or vector type")
+                .arg(self.ty_arg(t));
+            self.emit(msg);
+            return None;
+        }
+        Some((vec![a], t))
     }
 
     /// `__builtin_align_up` / `__builtin_align_down` /

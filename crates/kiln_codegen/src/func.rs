@@ -2478,6 +2478,115 @@ impl Cg<'_> {
         self.m.const_cast(CastOp::BitCast, c, to).ok().map(V::C)
     }
 
+    /// `__builtin_shufflevector(a, b, i...)` with `mask` indexing the lanes
+    /// of `a` then `b`. GCC lets the two have different lengths (WP-1548):
+    /// the shorter is widened with poison lanes to the longer one's length
+    /// `m` and the indices into `b` move up by `m - len(a)`.
+    pub fn shuffle_mixed(&mut self, a: V, b: V, mut mask: Vec<u32>) -> V {
+        let len = |s: &Self, v: V| {
+            let t = s.f.fir.ty(&s.m, v);
+            s.m.types.vector_info(t).map_or(0, |x| x.1)
+        };
+        let (na, nb) = (len(self, a), len(self, b));
+        if na == nb {
+            return self.shuffle(a, Some(b), mask);
+        }
+        let m = na.max(nb);
+        let widen = |s: &mut Self, v: V, n: u32| {
+            if n == m {
+                return v;
+            }
+            let w = (0..m).map(|i| if i < n { i } else { kiln_llvm::SHUFFLE_POISON }).collect();
+            s.shuffle(v, None, w)
+        };
+        let a = widen(self, a, na);
+        let b = widen(self, b, nb);
+        for k in &mut mask {
+            if *k != kiln_llvm::SHUFFLE_POISON && *k >= na {
+                *k = *k - na + m;
+            }
+        }
+        self.shuffle(a, Some(b), mask)
+    }
+
+    /// GCC's `__builtin_shuffle(a, mask)` / `(a, b, mask)` (WP-1548): lane
+    /// `i` is lane `mask[i] mod t` of `a` then `b` (`t` = the lanes in
+    /// all). A constant mask is one `shufflevector` with the reduced
+    /// indices; otherwise the mask is reduced (`and t-1` when `t` is a
+    /// power of two, as for every GNU vector; `urem` for an odd ext
+    /// vector) and each lane extracted from `a` at its index and inserted
+    /// in turn, which LLVM recognizes as a variable permute (`pshufb`,
+    /// `tbl`); with `b`, both are permuted and a lane-wise `select` picks.
+    pub fn gcc_shuffle(&mut self, a: V, b: Option<V>, mask: V) -> V {
+        let vt = self.f.fir.ty(&self.m, a);
+        let mt = self.f.fir.ty(&self.m, mask);
+        let n = self.m.types.vector_info(vt).map_or(0, |x| x.1);
+        let (mi, w) = self
+            .m
+            .types
+            .vector_info(mt)
+            .map_or((LTy::I32, 32), |x| (x.0, self.m.types.int_width(x.0).unwrap_or(32)));
+        let t = if b.is_some() { 2 * n } else { n };
+        if let V::C(c) = mask
+            && let Some(lanes) = self.const_lanes(c, mi, n)
+        {
+            let bits = if w >= 128 { u128::MAX } else { (1u128 << w) - 1 };
+            let idx: Option<Vec<u32>> = lanes
+                .iter()
+                .map(|&l| self.cint(V::C(l)).map(|(_, x, _)| ((x & bits) % u128::from(t)) as u32))
+                .collect();
+            if let Some(idx) = idx {
+                return self.shuffle(a, b, idx);
+            }
+        }
+        let splat = |s: &mut Self, v: u32| {
+            let k = s.m.const_int(mi, i128::from(v));
+            s.m.const_vector(&vec![k; n as usize]).map_or(V::C(k), V::C)
+        };
+        // `mask mod m`: an `and` for a power of two.
+        let reduce = |s: &mut Self, x: V, m: u32| {
+            if m.is_power_of_two() {
+                let k = splat(s, m - 1);
+                s.bin(BinOp::And, Flags::NONE, x, k)
+            } else {
+                let k = splat(s, m);
+                s.bin(BinOp::URem, Flags::NONE, x, k)
+            }
+        };
+        let permute = |s: &mut Self, v: V, idx: V| {
+            let mut out = V::C(s.m.const_poison(vt));
+            for i in 0..n {
+                let ii = V::C(s.m.const_int(LTy::I64, i128::from(i)));
+                let j = s.extract_elt(idx, ii);
+                let elt = s.extract_elt(v, j);
+                out = s.insert_elt(out, elt, ii);
+            }
+            out
+        };
+        let Some(b) = b else {
+            let idx = reduce(self, mask, n);
+            return permute(self, a, idx);
+        };
+        // Two operands: both permuted by the index within one operand,
+        // then a lane-wise select on whether it was past `a` (GCC's own
+        // expansion; LLVM folds each permute to `pshufb`/`tbl`).
+        let (lo, hi) = if t.is_power_of_two() {
+            let lo = reduce(self, mask, n);
+            let kn = splat(self, n);
+            let bit = self.bin(BinOp::And, Flags::NONE, mask, kn);
+            let zero = splat(self, 0);
+            (lo, self.icmp(IntPredicate::Ne, bit, zero))
+        } else {
+            let m2 = reduce(self, mask, t);
+            let lo = reduce(self, m2, n);
+            let kn = splat(self, n);
+            (lo, self.icmp(IntPredicate::Uge, m2, kn))
+        };
+        let pa = permute(self, a, lo);
+        let pb = permute(self, b, lo);
+        self.select(hi, pb, pa)
+    }
+
     /// The unary `__builtin_shufflevector(v, mask)` (clang
     /// `ScalarExprEmitter::VisitShuffleVectorExpr` with two operands): the
     /// mask's lanes are masked to the next power of two of `v`'s length,

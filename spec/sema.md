@@ -6337,6 +6337,63 @@ under its own name, the same signature, gating and codegen
     to '__builtin_shufflevector' must have the same type`), and the
     result is `v1`'s type; the `ShuffleVectorExpr` has no indices
     (`ext.gnu.builtins/shufflevector-mask-form.cpp`).
+    WP-1548: operands of different lane counts with the same element
+    type are GCC's form (clang 19/22 reject it): the indices count over
+    `v1`'s lanes then `v2`'s, the bound is the sum of the two counts, and
+    the result has one lane per index (GCC also requires a power-of-two
+    index count; kiln does not). Codegen widens the shorter operand with
+    `poison` lanes first (spec/codegen.md)
+    (`ext.vector/gcc-shufflevector-mixed-*.cpp`).
+  - GCC-only builtins (WP-1548, WP-1552). `__has_builtin` answers clang
+    22's question: 0 for a builtin clang lacks, whether or not kiln
+    implements it, and 1 for one clang also has (`__builtin_index`,
+    `__builtin_rindex`, `__builtin_strstr`), so a library that probes for
+    a clang builtin never takes a path clang would not. The only
+    exceptions are the `gcc_only` rows (`templ/builtins/table.rs`), which
+    answer 1 because libstdc++ probes for them
+    (`templates/builtins/has-builtin-gcc-only.cpp`). The builtins, all
+    custom-checked (`builtin_custom_call`):
+    - `__builtin_shuffle(v, mask)` / `__builtin_shuffle(v0, v1, mask)`
+      (`vector_ops.rs` `builtin_shuffle`): two or three arguments; the
+      operands vectors (`first argument to '__builtin_shuffle' must be a
+      vector`, `first two arguments ... must be vectors`) of the same
+      type (`... must have the same type`); the mask an integer (not
+      `bool`) vector with the operands' lane count and lane size, not
+      necessarily constant (`mask argument to '__builtin_shuffle' must be
+      a vector of integers with as many elements as V, each of the same
+      size (M invalid)`). Lane `i` of the result, of the operands' type,
+      is lane `mask[i] mod N` (one operand) or `mod 2N` (`v0` then `v1`).
+      Dependent arguments are checked at instantiation.
+    - `__builtin_speculation_safe_value(v[, f])`: `v` decays and must be
+      an integer (not `bool` or an enumeration) of at most 128 bits or a
+      pointer (`1st argument must be a scalar integer or pointer type`;
+      a function is rejected, as GCC does); `f` of `v`'s type, or any
+      pointer converted to `v`'s pointer type
+      (`sema_speculation_safe_value_mismatch`); one or two arguments. The
+      result is `v`'s type, and the call is never a constant expression
+      (GCC). Security meaning: the call returns `v` and emits the
+      target's speculation barrier after evaluating it, so a value loaded
+      under a mispredicted bounds check is not used speculatively
+      (spec/codegen.md); `f` is evaluated for its side effects only.
+    - `__builtin_assoc_barrier(x)`: one argument, decayed, of arithmetic,
+      enumeration, pointer or vector type (GCC also takes a class; kiln
+      rejects it, `1st argument must be a scalar or vector type`); the
+      result is `x`'s value and type, constant when `x` is.
+    - `__builtin_ffsg(x)` / `__builtin_clrsbg(x)`: `x` a signed integer of
+      any width, `_BitInt` included, not `bool` or an enumeration (`1st
+      argument must be a scalar signed integer type`);
+      `__builtin_parityg(x)`: as `__builtin_popcountg`. The result is
+      `int`, constant when `x` is (the `ffs`/`clrsb`/`parity` rules).
+    - `__builtin_puts(s)`: a library row (`LIBC_FWD`), a call of `puts`,
+      never constant. `__builtin_strstr`, `__builtin_index` and
+      `__builtin_rindex` are clang's rows and, as in clang 22, are not
+      folded in constant expressions.
+    Not implemented (WP-1552 remainder): `__builtin_has_attribute`; the
+    GCC trait spellings `__remove_reference` and `__is_invocable`
+    (libstdc++ 14 declares a class template `std::__is_invocable`, and
+    under a compiler that defines `__is_identifier` it takes the trait
+    path for any trait name that is not an identifier, so adding them
+    would change which `<type_traits>` code compiles); `__integer_pack`.
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
   - The `__fp16` libm builtins (WP-403; `kiln_ast` `builtin::F16_INTR`
