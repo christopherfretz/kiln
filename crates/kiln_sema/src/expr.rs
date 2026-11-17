@@ -6453,9 +6453,17 @@ impl Sema<'_, '_> {
         // instantiation is formed again with the member it found, without
         // a completeness check (clang `TreeTransform::RebuildMemberExpr`):
         // a friend's trailing `decltype(l.base())` on the class being
-        // instantiated.
+        // instantiated. Also where the class's definition is set aside by
+        // an instantiation it triggered ([expr.ref]/4: the access appears
+        // in the definition of that class; a member template's trailing
+        // `decltype(m_)` deduced from a member declaration of the class
+        // being instantiated, WP-1571).
         let resolved = std::mem::take(&mut self.pattern_member_access)
-            && self.defining.iter().any(|&d| self.ast.first(d) == self.ast.first(rec));
+            && self
+                .defining
+                .iter()
+                .chain(&self.suspended_defining)
+                .any(|&d| self.ast.first(d) == self.ast.first(rec));
         let complete =
             resolved || self.this_outside_member_body(rec) || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {

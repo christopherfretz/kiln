@@ -5390,7 +5390,11 @@ immediate context: errors are hard.
   substitution rebuilds the list's elements and hands them to
   `act_on_param_default_list`, which list-initializes the instantiated
   parameter's type (the same path as a non-template braced default
-  argument; WP-136).
+  argument; WP-136). Before C++17 the temporaries of a dependent template
+  argument in the parameter's type (`enable_if_t<f(Nil{}) && N == 0> =
+  {}`) can leave the stored `void` list wrapped in an `ExprWithCleanups`;
+  substitution unwraps it and treats it as the list (WP-1571,
+  `dcl.fct.default/dependent-braced-default-after-temporary-cxx14{,-reject}.cpp`).
 - A default argument of a parameter whose type is, or is a reference to,
   a dependent class ([temp.dep.type]/7: a nested class of a class
   template) is stored as written, unconverted (a braced one as the
@@ -6815,7 +6819,13 @@ whose head the notes name. It evaluates:
     `ConceptState::poisoned`; `sat_atom` answers an atom that uses a
     poisoned parameter (or whose use is unknown) as not satisfied
     without substituting it, and a nested concept-id atom passes the
-    poison on per argument. The first failure is the
+    poison on per argument; a nested concept-id it cannot split (a
+    pack parameter, as in `cf<T, T>` of `template<class T, class...
+    A> concept cf`) is checked by its use of the poisoned parameters
+    like any other atom, so it is not satisfied when it names one
+    (WP-1571,
+    `temp.constr.normal/concept-id-pack-concept-argument-substitution-failure{,-reject}.cpp`).
+    The first failure is the
     "substituted constraint expression is ill-formed" note. Tests:
     `temp.constr.normal/concept-id-unused-argument-substitution-failure.cpp`,
     `temp.constr.normal/type-constraint-unused-argument-substitution-failure.cpp`.

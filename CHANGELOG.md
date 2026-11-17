@@ -942,6 +942,18 @@ Planned as 1.3.0.
   `this->C::f<int>()` / `this->B::f<int>()` naming an overloaded member
   template of the current instantiation or of a non-dependent base, take
   a template argument list without `template`.
+- nlohmann_json 3.12.0 and range-v3 0.12.0 build again (WP-1571); they
+  failed after unreleased changes made for GCC's C++ testsuite (WP-1470,
+  WP-1509, WP-1513), and no released version was affected. Before C++17
+  the copy of the temporary in a copy-initialization by conversion copies
+  the cv-unqualified temporary, so `const T x = ...;` no longer picks a
+  `const T&&` constructor template or a deleted copy constructor; a member
+  access from a template pattern into a class still being instantiated is
+  accepted again; a dependent `= {}` default argument after a temporary in
+  the parameter's type is not converted from `void`; and a nested
+  concept-id with a pack parameter under an argument that fails to
+  substitute is unsatisfied instead of "an atomic constraint that stays
+  value-dependent".
 
 - Constant evaluation, found running GCC's C++ testsuite (WP-1526..WP-1529):
   P2280 (references of unknown value) applies in every mode from C++11, as a

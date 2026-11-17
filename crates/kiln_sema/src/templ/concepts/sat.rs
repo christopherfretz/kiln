@@ -488,16 +488,20 @@ impl Sema<'_, '_> {
             // mapping: one naming a failed parameter is not satisfied
             // (its substitution failed, [temp.constr.atomic]/3; the
             // failure's note is the concept-id's); a concept-id passes
-            // the mapping on argument by argument.
-            if self.is_concept_id_atom(e) {
-                if let Some(ok) = self.sat_concept_id_partial(entity, e, levels, None, recs) {
-                    return ok;
-                }
-            } else {
-                let level = self.template_param_depth(c);
-                if self.used_template_params(e, level).is_none_or(|u| u & mask != 0) {
-                    return false;
-                }
+            // the mapping on argument by argument. A concept-id of a form
+            // that does not (a parameter pack: `C<T, T>` of
+            // `template<class T, class... A> concept C`) is one atom for
+            // this: naming a failed parameter, it is not satisfied, rather
+            // than substituted with the failed argument (which left it
+            // value-dependent; WP-1571).
+            if self.is_concept_id_atom(e)
+                && let Some(ok) = self.sat_concept_id_partial(entity, e, levels, None, recs)
+            {
+                return ok;
+            }
+            let level = self.template_param_depth(c);
+            if self.used_template_params(e, level).is_none_or(|u| u & mask != 0) {
+                return false;
             }
         }
         let key: Option<AtomKey> = (!self.levels_dependent(levels)).then(|| {

@@ -1669,6 +1669,13 @@ Redeclaration and linkage rules:
   `definition of 'S' is not complete until the closing '}'` (clang's
   `isThisOutsideMemberFunctionBody`; `Sema::this_outside_member_body`;
   WP-280; test `expr.ref/member-access-class-being-defined.cpp`).
+  A member access re-formed from a template pattern
+  (`pattern_member_access`) into a class whose definition is still
+  open, including one set aside by the instantiation it triggered
+  (`suspended_defining`, WP-1470), was already checked in the pattern
+  ([expr.ref]/4 applies to the access as written there) and is accepted
+  (WP-1571,
+  `expr.ref/member-access-in-deduction-from-class-being-instantiated{,-reject}.cpp`).
   A member of incomplete type (`field has incomplete type`, the class
   itself or another incomplete class) makes the class invalid
   (`Sema::invalid_defining`, clang's `CheckFieldDecl` marking the record
