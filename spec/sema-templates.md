@@ -699,6 +699,61 @@ by `>` or begins with an unambiguous type-id (clang's
 values (`parse_nested_name_upto`; WP-804,
 `tests/conformance/temp.names/dependent-member-less-than-before-scope.cpp`).
 
+**Member access followed by `<`** (WP-1530; working draft
+[temp.names]/7, [basic.lookup.qual.general]/2-3, [temp.dep.type]/7,
+[temp.dep.expr]/5). The name after `.`/`->` (and the `N` of `E.N::m`) is
+a *member-qualified name*, a qualified name: [temp.names]/7.3.3 (an
+unqualified name finding nothing or functions) never applies to it. Its
+lookup context is the object type, dependent when the object is
+type-dependent; the name after `N::` has `N` as its lookup context. A
+qualified name is looked up where it appears unless its lookup context is
+dependent and not the current instantiation. For `E.name<`,
+`E->name<`, `E.N::name<` in a template:
+
+| type of `E` (or `N`) | looked up at the definition | type-dependent access | `<` without `template` | missing `template` |
+|---|---|---|---|---|
+| (a) non-dependent | yes | no | a list if a template is found | n/a |
+| (b) the current instantiation (`this->`, implicit `this`, `C`/`C<T>`/`C*`/`C&` inside `C<T>`, from a nested class), or `N` naming it or a non-dependent base | yes, in it and its non-dependent bases | only if the member's type is dependent (an overload set or template stays a dependent access, formed again at instantiation) | a list if a template is found | n/a |
+| (c) the current instantiation with a dependent base, name not found (a member of an unknown specialization) | yes, finds nothing | yes | less-than | ill-formed where only a list fits (`f<int>()`, `f<>`) |
+| (d) dependent, not the current instantiation | no | yes | less-than | as (c) |
+| `E.N::name<` with `E` dependent and `N` a non-dependent class (found by the unqualified-lookup fallback of [basic.lookup.qual.general]/3) | yes, in `N` | yes (the object) | a list if a template is found | n/a |
+
+In (c) and (d) `f<int>()` does not parse as a comparison, so it is
+ill-formed by the grammar; clang's "use 'template' keyword to treat 'f'
+as a dependent template name" (`parse_missing_dependent_template_kw`)
+reports it and recovers as a list. GCC 16.1 warns
+(`-Wmissing-template-keyword`) and then reports the syntax error. `E.v <
+0` with a data member, and `t.a < c > d`, stay comparisons. The
+classification is `Sema::dependent_member_names_template` (the
+qualifier's context passed by the parser; no instantiation, one lookup in
+an already complete class). Clang 22 keeps the pre-P1787 rule for the
+last row and asks for `template` there (GCC 16.1 agrees with the text),
+and also asks for it in (b) when the class has a dependent base even
+though the lookup found the name in a non-dependent base. In a type-only
+context the terminal name of a qualified name takes a list without
+`template` ([temp.names]/7.3.4: `A<U>::SubA<int> m;` as a member
+declaration, `typename A<U>::SubA<int>`); clang 22 and GCC 16.1 both ask
+for `template` there, kiln follows the text. After instantiation the
+name is looked up again in the complete class: a different result, such
+as an ambiguity with a member of the dependent base, is an error there
+([temp.res.general]/6). Tests:
+`basic.lookup.qual.general/p3-dependent-object-nondependent-qualifier-template-run.cpp`,
+`temp.names/p7-member-template-current-instantiation-run.cpp`,
+`temp.names/p7-missing-template-unknown-specialization.cpp`,
+`temp.dep.type/member-template-also-in-dependent-base.cpp`,
+`temp.names/p7-type-only-context-terminal-name-template-run.cpp`.
+
+Gap (WP-1530 remainder): a member *call* through the current
+instantiation whose callee has a non-dependent type (`this->fn(42)`,
+an implicit `this` calling `mf()`, `A0::nf()` of a non-dependent base)
+is not type-dependent by [temp.dep.expr]/5, so `auto b = this->fn(42);
+b.bfn<int>()` needs no `template`. Kiln (like clang) keeps the
+`MemberExpr` of a member function type-dependent through `this`
+(`kiln_ast` builder `member`: only a field of the current instantiation
+drops the type dependence), so the call and `b` are dependent. Test:
+`temp.dep.expr/p5-member-call-current-instantiation-not-type-dependent-run.cpp`
+(xfail).
+
 At instantiation, `T::template f<A>` names a template when the lookup of
 `f` in the substituted `T` finds any template: an overload set that also
 has non-template functions resolves the template-id over the whole set

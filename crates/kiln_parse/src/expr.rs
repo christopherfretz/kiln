@@ -1708,7 +1708,9 @@ impl Parser<'_, '_> {
             let (args, _, _) = self.parse_template_arg_list()?;
             let l = self.s.ast.types.arg_list(&args);
             e = self.s.act_on_member_template_args(e, l);
-        } else if self.at(Punct::Less) && self.s.dependent_member_names_template(e) {
+        } else if self.at(Punct::Less)
+            && self.s.dependent_member_names_template(e, qual.map(|q| q.ctx))
+        {
             // `this->f<args>` with `f` a member template of the current
             // instantiation that stays a dependent access
             // ([temp.names]/3.2).

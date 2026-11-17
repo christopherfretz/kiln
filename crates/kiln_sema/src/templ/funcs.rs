@@ -1815,20 +1815,44 @@ impl Sema<'_, '_> {
         self.emit(d);
     }
 
-    /// [temp.names]/3.2: whether the dependent member access `e`
+    /// [temp.names]/7.3.2: whether the dependent member access `e`
     /// (`this->f`, `x.f` on an object of type `X<P...>` inside `X`, an unqualified name that lookup in the current
     /// instantiation finds with more than one declaration, so the access
     /// stays dependent) names a member template, so a `<` after it starts
     /// a template argument list without `template` (libstdc++ variant's
     /// `this->emplace<__index>(...)`).
-    pub fn dependent_member_names_template(&self, e: ExprId) -> bool {
+    ///
+    /// `qual` is the context the access's nested-name-specifier
+    /// nominates (`e.N::f`). The name is then a qualified name whose
+    /// lookup context is `N` ([basic.lookup.qual.general]/2), looked up
+    /// where it appears unless `N` is dependent and not the current
+    /// instantiation (/3): `p->impl::create<U>()` with a type-dependent
+    /// `p` and a non-dependent class `impl`, or `this->C::f<int>()` /
+    /// `this->B::f<int>()` naming an overloaded member template of the
+    /// current instantiation or of a non-dependent base (WP-1530).
+    pub fn dependent_member_names_template(&self, e: ExprId, qual: Option<DeclId>) -> bool {
         let n = self.ast.exprs.get(e);
         if n.kind() != kiln_ast::expr::ExprKind::CXXDependentScopeMemberExpr
             || n.aux() & 2 != 0
             || self.ast.templates.expr_targs.get(e).is_some()
-            || self.ast.templates.expr_nns.get(e).is_some()
         {
             return false;
+        }
+        if self.ast.templates.expr_nns.get(e).is_some() {
+            let Some(q) = qual else { return false };
+            let c = self.type_name_qualifier(q);
+            if self.kind_of(c) != DeclKind::CXXRecord
+                || self.is_dependent_ctx(q)
+                || self.is_unentered_dependent_class(c)
+            {
+                return false;
+            }
+            let name = self.ast.dependent_member_name(e);
+            return self
+                .lookup_qualified_dn(c, name, crate::lookup::LookupKind::Ordinary)
+                .decls
+                .iter()
+                .any(|&d| self.is_member_template_decl(d));
         }
         let Some(base) = ExprId::from_raw(n.a()) else { return false };
         let bt = self.ety(base);
@@ -1847,16 +1871,21 @@ impl Sema<'_, '_> {
         });
         let Some(rec) = rec else { return false };
         let name = self.ast.dependent_member_name(e);
-        self.lookup_in_class_dn(rec, name, crate::lookup::LookupKind::Ordinary).decls.iter().any(
-            |&d| {
-                matches!(
-                    self.kind_of(d),
-                    DeclKind::FunctionTemplate
-                        | DeclKind::ClassTemplate
-                        | DeclKind::VarTemplate
-                        | DeclKind::TypeAliasTemplate
-                )
-            },
+        self.lookup_in_class_dn(rec, name, crate::lookup::LookupKind::Ordinary)
+            .decls
+            .iter()
+            .any(|&d| self.is_member_template_decl(d))
+    }
+
+    /// A declaration whose name followed by `<` starts a template
+    /// argument list ([temp.names]/7.3.2).
+    fn is_member_template_decl(&self, d: DeclId) -> bool {
+        matches!(
+            self.kind_of(d),
+            DeclKind::FunctionTemplate
+                | DeclKind::ClassTemplate
+                | DeclKind::VarTemplate
+                | DeclKind::TypeAliasTemplate
         )
     }
 
@@ -1868,9 +1897,14 @@ impl Sema<'_, '_> {
         let (base, arrow, loc) = (ExprId::from_raw(n.a()), n.aux() & 1 != 0, n.loc());
         let name = self.ast.dependent_member_name(e);
         let op = self.ast.templates.member_op_loc.get(e).copied();
-        let x = self.builder().dependent_member(base, arrow, name, false, None, Some(targs), loc);
+        let nns = self.ast.templates.expr_nns.get(e).copied();
+        let begin = self.ast.templates.expr_begin.get(e).copied();
+        let x = self.builder().dependent_member(base, arrow, name, false, nns, Some(targs), loc);
         if let Some(op) = op {
             let _ = self.ast.templates.member_op_loc.insert(x, op);
+        }
+        if let Some(b) = begin {
+            let _ = self.ast.templates.expr_begin.insert(x, b);
         }
         x
     }

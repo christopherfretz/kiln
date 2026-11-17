@@ -99,6 +99,7 @@ own subset; their BACKLOG rows have the detail).
 - WP-1517: constexpr static data members before C++17 are not inline.
 - WP-1473 (this run): the regressions below.
 - WP-1547, WP-1542, WP-1545 (after this run): `label13a`, `fam-in-union-alone-in-struct-2`, `delete5`, `udlit-char-template-vs-std-literal-operator`, `ellipsis3` and `pr53011` from the crash, wrong-code and regression lists; `attr-aligned-1` is left (an Oven typedef-alignment bug).
+- WP-1530 (after this run): `p->N::f<U>()` with a dependent `p` and a non-dependent class `N`, and an overloaded member template named through a qualifier of the current instantiation or a non-dependent base, take a template argument list without `template` (`decltype34`, 3 cases; `member3`-`member5` need member calls through `this` to be non-dependent, left as a remainder); `nested3` (WP-1546) is right as it is: its member declaration is a type-only context where `<` starts a list ([temp.names]/7.3.4), and its L14 error is WP-1470's incomplete-class rule.
 
 ### Cases that went from pass to a failing class (99)
 

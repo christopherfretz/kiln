@@ -927,6 +927,13 @@ Planned as 1.3.0.
   candidate that needs no string-literal-to-`char*` conversion beats
   one that does, so `s != "x"` with `s` converting to `char*` is no
   longer ambiguous.
+- Member templates named after a qualifier in a class member access
+  (WP-1530, [temp.names]/7, [basic.lookup.qual.general]/3):
+  `p->N::f<U>()` with a type-dependent `p` and a non-dependent class `N`
+  (as in `decltype(impl::create<T>()->impl::create<U>())`), and
+  `this->C::f<int>()` / `this->B::f<int>()` naming an overloaded member
+  template of the current instantiation or of a non-dependent base, take
+  a template argument list without `template`.
 
 ## [1.2.1] - 2026-11-14
 
