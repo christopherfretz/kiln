@@ -702,10 +702,10 @@ pub(crate) fn driver_diag_options(opts: &DiagOptions) -> DiagOptions {
 enum Step<'a> {
     /// Run the frontend on an input; the IR goes to `dest`. With `hod`
     /// (`-fkiln-backend=hod`, spec/driver.md "Back-end selection") the
-    /// module goes to that command first, when the route predicate
-    /// holds ([`hod_takes`]); the `opt` runs and the next `llc` step are
-    /// the fallback.
-    Frontend { input: &'a Input, dest: Dest, hod: Option<Command> },
+    /// module goes to that route first, when the route predicate holds
+    /// ([`hod_takes`]); the `opt` runs and the next `llc` step are the
+    /// fallback.
+    Frontend { input: &'a Input, dest: Dest, hod: Option<HodRoute> },
     /// An external command (`llc`, `llvm-as`, `clang++`), with the IR of
     /// the preceding frontend step on its standard input if `piped`.
     External { cmd: Command, piped: bool },
@@ -715,6 +715,45 @@ enum Step<'a> {
     /// Assemble (`clang++ -c -x assembler`); skipped when `after_pp` and
     /// the preceding [`Step::Preprocess`] failed.
     Assemble { cmd: Command, after_pp: bool },
+}
+
+/// The hod route of a frontend step (spec/driver.md "Back-end selection").
+#[derive(Debug)]
+enum HodRoute {
+    /// The external executable: this command ([`crate::hod::command`]).
+    External(Command),
+    /// The registered in-process back end ([`crate::backend_hook`]),
+    /// given the arguments of this `llc` command (WP-1559).
+    InProcess(Command),
+}
+
+/// What the hod route runs, when it is planned.
+#[derive(Debug)]
+enum HodTarget {
+    /// The external executable found ([`crate::hod::find`]).
+    Executable(PathBuf),
+    /// The registered in-process back end.
+    InProcess,
+}
+
+impl HodTarget {
+    /// The route of an object job whose `llc` command is `llc`.
+    fn route(&self, llc: &Command) -> HodRoute {
+        match self {
+            HodTarget::Executable(h) => HodRoute::External(crate::hod::command(h, llc)),
+            HodTarget::InProcess => HodRoute::InProcess(llc.clone()),
+        }
+    }
+}
+
+/// `-###` (`quote_all`) and `-v`'s line for the in-process back end's
+/// step over the job of `llc`: ` (in-process) hod` then `llc`'s
+/// arguments, in the style of the frontend's line.
+fn in_process_line(llc: &Command, quote_all: bool) -> String {
+    let full = llc.render(quote_all);
+    let program = Command { args: Vec::new(), ..llc.clone() }.render(quote_all);
+    let args = full.strip_prefix(program.trim_end_matches('\n')).unwrap_or(&full);
+    format!(" (in-process) hod{args}")
 }
 
 /// Where a frontend step's IR goes.
@@ -761,21 +800,26 @@ pub fn compile(
         return 1;
     }
     // spec/driver.md "Back-end selection": an executable is required
-    // only where the hod route is planned.
+    // only where the hod route is planned, and never when a back end is
+    // registered in process (WP-1559: it replaces the executable).
     let hod = if hod_planned(args, tc) {
-        match crate::hod::find(args, tc) {
-            Ok(p) => Some(p),
-            Err(searched) => {
-                Diag::new(DiagId::drv_hod_not_found, Span::INVALID).arg(searched).emit(&drv);
-                drv.flush();
-                return 1;
+        if crate::backend_hook::registered().is_some() {
+            Some(HodTarget::InProcess)
+        } else {
+            match crate::hod::find(args, tc) {
+                Ok(p) => Some(HodTarget::Executable(p)),
+                Err(searched) => {
+                    Diag::new(DiagId::drv_hod_not_found, Span::INVALID).arg(searched).emit(&drv);
+                    drv.flush();
+                    return 1;
+                }
             }
         }
     } else {
         None
     };
     let temp = TempDir::new();
-    let plan = plan(args, tc, inputs, phase, &temp, hod.as_deref());
+    let plan = plan(args, tc, inputs, phase, &temp, hod.as_ref());
     if args.deps.cdb_fragment.is_some() {
         let jobs: Vec<_> = inputs
             .iter()
@@ -808,7 +852,11 @@ pub fn compile(
                 // The hod run, then a marker: the next `llc` is its
                 // fallback (spec/driver.md "Back-end selection").
                 if let Some(h) = hod {
-                    let _ = err.write_all(h.render(true).as_bytes());
+                    let line = match h {
+                        HodRoute::External(c) => c.render(true),
+                        HodRoute::InProcess(llc) => in_process_line(llc, true),
+                    };
+                    let _ = err.write_all(line.as_bytes());
                     let _ = err.write_all(HOD_FALLBACK_MARK.as_bytes());
                 }
             }
@@ -931,15 +979,15 @@ impl TempDir {
     }
 }
 
-/// The steps for `inputs`, in order. `hod`: the hod executable, when
-/// the hod route is planned ([`hod_planned`]).
+/// The steps for `inputs`, in order. `hod`: what the hod route runs,
+/// when it is planned ([`hod_planned`]).
 fn plan<'a>(
     args: &Args,
     tc: &Toolchain,
     inputs: &[&'a Input],
     phase: Phase,
     temp: &TempDir,
-    hod: Option<&Path>,
+    hod: Option<&HodTarget>,
 ) -> Vec<Step<'a>> {
     let mut steps = Vec::new();
     let mut link_inputs: Vec<(usize, String)> = Vec::new();
@@ -976,8 +1024,7 @@ fn plan<'a>(
             }
             Phase::Assembly | Phase::Object => {
                 let cmd = llc(args, tc, phase, out(), &input.path);
-                let hod =
-                    hod.filter(|_| phase == Phase::Object).map(|h| crate::hod::command(h, &cmd));
+                let hod = hod.filter(|_| phase == Phase::Object).map(|h| h.route(&cmd));
                 steps.push(Step::Frontend { input, dest: Dest::Pipe, hod });
                 steps.push(Step::External { cmd, piped: true });
                 // `-gz`: `llc` cannot compress, so the object's debug
@@ -999,8 +1046,7 @@ fn plan<'a>(
                 } else {
                     llc(args, tc, phase, obj.clone(), &input.path)
                 };
-                let hod =
-                    hod.filter(|_| cmd.tool == Tool::Llc).map(|h| crate::hod::command(h, &cmd));
+                let hod = hod.filter(|_| cmd.tool == Tool::Llc).map(|h| h.route(&cmd));
                 steps.push(Step::Frontend { input, dest: Dest::Pipe, hod });
                 steps.push(Step::External { cmd, piped: true });
                 link_inputs.push((pos, obj));
@@ -1229,48 +1275,123 @@ pub fn needs_always_inline(ir: &str) -> bool {
 /// directly: local value names do not reach an object, and the second
 /// process and the text round trip were most of the `-O0`
 /// always-inliner's cost (spec/codegen.md §6 "Always-inliner").
-fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
+///
+/// The module's part of the decision is `facts` ([`IrFacts`]: read from
+/// the module, WP-1559).
+fn ir_passes(args: &Args, tc: &Toolchain, facts: IrFacts) -> Option<Vec<Command>> {
     if args.codegen.lto.is_some() {
         return lto_passes(args, tc);
     }
     if args.disable_llvm_passes {
         return None;
     }
-    let ir = code_part(ir);
     let passes = match opt_pipeline(args.opt_flag.as_deref()) {
         Some(p) => p,
         // WP-675: the sanitizer passes run at every level.
         None if sanitizer_passes(args, tc).is_some() => "default<O0>",
         // WP-941: so do the coverage passes.
         None if coverage_passes(args).is_some() => "default<O0>",
-        None if needs_always_inline(ir) => "default<O0>",
+        None if facts.always_inline => "default<O0>",
         // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
         // exit attributes into `__cyg_profile_func_*` calls.
-        None if needs_entry_instrumentation(ir) => "default<O0>",
-        None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
+        None if facts.entry_instrumentation => "default<O0>",
+        None if facts.coro => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
         None => return None,
     };
     Some(opt_commands(args, tc, passes))
 }
 
-/// The conditions that make [`ir_passes`] schedule `opt` for the IR
-/// text `ir`, each by its stable name (spec/driver.md "Compile
+/// What a module holds that makes `opt` run at `-O0` (spec/driver.md
+/// "IR optimization"; WP-1559): the module's half of [`ir_passes`] and
+/// [`opt_triggers`], the options being the other. Computed from the
+/// module before it is printed ([`IrFacts::of_module`], one pass over
+/// its attribute table, function headers and call records: `kiln_llvm`
+/// `query.rs`), and equal by contract to the scan of its printed text
+/// ([`IrFacts::of_text`]), which the checked mode verifies
+/// ([`check_opt_predicate`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct IrFacts {
+    /// An `alwaysinline` function attribute group, on a definition or a
+    /// call site ([`needs_always_inline`]).
+    pub(crate) always_inline: bool,
+    /// The entry or exit instrumentation attributes
+    /// ([`needs_entry_instrumentation`]).
+    pub(crate) entry_instrumentation: bool,
+    /// A declared `llvm.coro.*` intrinsic ([`needs_coro_lowering`]).
+    pub(crate) coro: bool,
+}
+
+impl IrFacts {
+    /// The facts of the module text `ir` (the whole printed module).
+    pub(crate) fn of_text(ir: &str) -> IrFacts {
+        let ir = code_part(ir);
+        IrFacts {
+            always_inline: needs_always_inline(ir),
+            entry_instrumentation: needs_entry_instrumentation(ir),
+            coro: needs_coro_lowering(ir),
+        }
+    }
+
+    /// The facts of `m`, without printing it.
+    pub(crate) fn of_module(m: &Module) -> IrFacts {
+        IrFacts {
+            always_inline: m.has_fn_attr_group(|a| {
+                *a == kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::AlwaysInline)
+            }),
+            entry_instrumentation: m.has_fn_attr_key(&ENTRY_EXIT_ATTRS),
+            coro: m.declares_prefixed("llvm.coro."),
+        }
+    }
+}
+
+/// `KILN_CHECK_OPT_PREDICATE=1`: the checked mode of the `opt` predicate
+/// in a build without debug assertions.
+pub const ENV_CHECK_OPT_PREDICATE: &str = "KILN_CHECK_OPT_PREDICATE";
+
+/// Whether the checked mode of the `opt` predicate is on (spec/driver.md
+/// "In-process back end", WP-1559): in a build with debug assertions
+/// (the one `cargo xtask test` and `ci` run the corpus with, so every
+/// corpus compile that prints a module is checked), or with
+/// `KILN_CHECK_OPT_PREDICATE=1` (a release or harness-profile build: a
+/// libc++ run, say).
+pub(crate) fn check_opt_predicate() -> bool {
+    cfg!(debug_assertions) || std::env::var_os(ENV_CHECK_OPT_PREDICATE).is_some_and(|v| v == "1")
+}
+
+/// Prints `module` ([`print_ir`]); in the checked mode, compares the
+/// facts read from the module before the print (`facts`) with the scan
+/// of the text, and panics on a difference (an internal compiler error:
+/// the module predicate disagrees with the text scan it replaces).
+pub(crate) fn print_checked(module: Module, facts: IrFacts) -> String {
+    let text = print_ir(module);
+    if check_opt_predicate() {
+        let scanned = IrFacts::of_text(&text);
+        assert!(
+            scanned == facts,
+            "the opt predicate read from the module ({facts:?}) differs from the scan of its \
+             text ({scanned:?})"
+        );
+    }
+    text
+}
+
+/// The conditions that make [`ir_passes`] schedule `opt` for a module
+/// with `facts`, each by its stable name (spec/driver.md "Compile
 /// statistics log"): every one that holds, in this order, any one of
 /// which alone schedules it; empty when `opt` does not run. Only the
-/// statistics log and the hod route ask (each walks the text once more).
-pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'static str> {
+/// statistics log and the hod routes ask.
+pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, facts: IrFacts) -> Vec<&'static str> {
     if args.disable_llvm_passes {
         return Vec::new();
     }
-    let ir = code_part(ir);
     let checks = [
         ("opt-level", opt_pipeline(args.opt_flag.as_deref()).is_some()),
         ("lto", args.codegen.lto.is_some()),
         ("sanitizer", sanitizer_passes(args, tc).is_some()),
         ("coverage", coverage_passes(args).is_some()),
-        ("alwaysinline", needs_always_inline(ir)),
-        ("instrument-entry", needs_entry_instrumentation(ir)),
-        ("coro", needs_coro_lowering(ir)),
+        ("alwaysinline", facts.always_inline),
+        ("instrument-entry", facts.entry_instrumentation),
+        ("coro", facts.coro),
     ];
     checks.into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
 }
@@ -1326,29 +1447,40 @@ fn hod_static_skip(args: &Args, tc: &Toolchain) -> Option<&'static str> {
 const HOD_TRIGGERS: [&str; 2] = ["alwaysinline", "coro"];
 
 /// The dynamic half of the hod route's predicate: the `opt` trigger
-/// set of the module ([`opt_triggers`], read from the text that goes to
-/// hod's standard input) is a subset of {`alwaysinline`, `coro`}. An
-/// instrumented module (`instrument-entry`: after [`hod_static_skip`],
-/// only an IR input carrying the attributes) takes the LLVM route.
-fn hod_takes(args: &Args, tc: &Toolchain, ir: &str) -> bool {
-    opt_triggers(args, tc, ir).iter().all(|t| HOD_TRIGGERS.contains(t))
+/// set of the module ([`opt_triggers`], from the module's
+/// [`IrFacts`]) is a subset of the triggers the route accepts
+/// ([`hod_triggers`]). An instrumented module (`instrument-entry`: after
+/// [`hod_static_skip`], only an IR input carrying the attributes) takes
+/// the LLVM route.
+fn hod_takes(args: &Args, tc: &Toolchain, facts: IrFacts, in_process: bool) -> bool {
+    opt_triggers(args, tc, facts).iter().all(|t| hod_triggers(in_process).contains(t))
+}
+
+/// The `opt` triggers a route accepts in a module: the external hod
+/// executable {`alwaysinline`, `coro`} ([`HOD_TRIGGERS`]); the in-process
+/// back end none (WP-1559, design 0004 §10: a module that needs `opt` is
+/// not handed over in process).
+fn hod_triggers(in_process: bool) -> &'static [&'static str] {
+    if in_process { &[] } else { &HOD_TRIGGERS }
 }
 
 /// The statistics log's `hod_skip` of a job whose module has the `opt`
 /// triggers `triggers` (empty without a module): `None` unless the back
 /// end is hod and the job is not offered to hod; then the first static
-/// reason ([`hod_static_skip`]), else the first trigger outside
-/// [`HOD_TRIGGERS`], by its name.
+/// reason ([`hod_static_skip`]), else the first trigger outside the
+/// route's ([`hod_triggers`]; `in_process`: the in-process back end is
+/// registered), by its name.
 pub(crate) fn hod_skip(
     args: &Args,
     tc: &Toolchain,
     triggers: &[&'static str],
+    in_process: bool,
 ) -> Option<&'static str> {
     if crate::hod::selected(args).unwrap_or_default() != crate::hod::Backend::Hod {
         return None;
     }
     hod_static_skip(args, tc)
-        .or_else(|| triggers.iter().copied().find(|t| !HOD_TRIGGERS.contains(t)))
+        .or_else(|| triggers.iter().copied().find(|t| !hod_triggers(in_process).contains(t)))
 }
 
 /// `-###`'s line between the hod command and the `llc` command that is
@@ -1846,25 +1978,72 @@ fn execute(
                 traced_inputs += 1;
                 trace =
                     trace_settings.map(|s| start_trace(args, s, &input.path, temp, traced_inputs));
-                let text = {
+                let in_process = matches!(hod, Some(HodRoute::InProcess(_)));
+                // The module's `opt` facts are read before it is printed
+                // (WP-1559); the module is printed inside `Frontend`, as
+                // before, unless the in-process back end gets it first.
+                let (kept, mut text, facts) = {
                     let _frontend = kiln_source::trace::Phase::new("Frontend");
-                    frontend(args, tc, input, stdin_text, diag_opts, io)
+                    let module = frontend(args, tc, input, stdin_text, diag_opts, io);
+                    let facts = module.as_ref().map(IrFacts::of_module);
+                    match (module, facts) {
+                        (Some(m), Some(f)) if in_process && hod_takes(args, tc, f, true) => {
+                            (Some(m), None, facts)
+                        }
+                        (m, f) => (None, m.map(|m| print_checked(m, f.unwrap_or_default())), f),
+                    }
                 };
+                let produced = kept.is_some() || text.is_some();
+                let facts = facts.unwrap_or_default();
                 if let Some(t) = trace.as_mut() {
-                    t.failed |= text.is_none();
+                    t.failed |= !produced;
                     t.begin_backend();
                 }
                 if let Some(j) = stats.as_mut() {
-                    j.failed |= text.is_none();
-                    if let Some(t) = &text {
-                        j.module(args, tc, t);
+                    j.failed |= !produced;
+                    if produced {
+                        j.triggers = opt_triggers(args, tc, facts);
                     }
-                    j.hod_skip = hod_skip(args, tc, &j.triggers);
+                    j.counts = text.as_deref().map(crate::stats::IrCounts::of);
+                    j.hod_skip = hod_skip(args, tc, &j.triggers, in_process);
+                }
+                // spec/driver.md "In-process back end": the registered
+                // back end first, on the module before it is printed; on
+                // any answer but done, the module is printed now and takes
+                // the LLVM route below.
+                if let (Some(HodRoute::InProcess(llc)), Some(m)) = (hod, kept) {
+                    match run_in_process(llc, &m, args, &mut stats, diag_opts, drv, io, temp) {
+                        HodStep::Done => {
+                            hod_done = true;
+                            skip_piped = false;
+                            ir = None;
+                            continue;
+                        }
+                        HodStep::Fallback => {
+                            let t = print_checked(m, facts);
+                            if let Some(j) = stats.as_mut() {
+                                j.counts = Some(crate::stats::IrCounts::of(&t));
+                            }
+                            text = Some(t);
+                        }
+                        HodStep::Failed => {
+                            if let Some(t) = trace.as_mut() {
+                                t.failed = true;
+                            }
+                            if let Some(j) = stats.as_mut() {
+                                j.failed = true;
+                            }
+                            failed = true;
+                            skip_piped = true;
+                            ir = None;
+                            continue;
+                        }
+                    }
                 }
                 // spec/driver.md "Back-end selection": hod first, on the
                 // module before `opt`.
-                if let (Some(h), Some(t)) = (hod, &text)
-                    && hod_takes(args, tc, t)
+                if let (Some(HodRoute::External(h)), Some(t)) = (hod, &text)
+                    && hod_takes(args, tc, facts, false)
                 {
                     match run_hod(h, t, args, &mut stats, drv, io, temp) {
                         HodStep::Done => {
@@ -1890,7 +2069,7 @@ fn execute(
                 }
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
-                let Some(cmds) = text.as_deref().and_then(|t| ir_passes(args, tc, t)) else {
+                let Some(cmds) = text.as_ref().and_then(|_| ir_passes(args, tc, facts)) else {
                     // The frontend's own text is written as is: no UTF-8
                     // re-validation of a (`-g`: mostly metadata) module.
                     if let (Some(t), Dest::File(f)) = (&text, dest)
@@ -2080,6 +2259,101 @@ fn run_hod(
         }
         return HodStep::Done;
     }
+    not_done(outcome, obj, args, drv, io)
+}
+
+/// The in-process back end's status in the `-Whod-fallback` warning.
+const IN_PROCESS_STATUS: &str = "in process";
+
+/// Hands the module `module` to the registered in-process back end
+/// ([`crate::backend_hook`]) with the arguments of the job's `llc`
+/// command `llc`, inside a contained-panic scope ([`crate::crash::contained`];
+/// spec/driver.md "In-process back end", WP-1559). Done: the object is
+/// written where `llc -o` would have written it. Declined, failed or
+/// panicked (reason `internal-panic`): as hod's status 2, and 1
+/// ([`run_hod`]), the `-o` file removed. The back end's time is the
+/// `CodeGenPasses` event (detail `in-process`) and the statistics
+/// log's `in-process-backend` child.
+#[allow(clippy::too_many_arguments)]
+fn run_in_process(
+    llc: &Command,
+    module: &Module,
+    args: &Args,
+    stats: &mut Option<crate::stats::Job>,
+    diag_opts: &DiagOptions,
+    drv: &DiagEngine<'_>,
+    io: &mut Io,
+    temp: &TempDir,
+) -> HodStep {
+    use crate::backend_hook::Answer;
+    use crate::hod::Outcome;
+    let Some(backend) = crate::backend_hook::registered() else { return HodStep::Fallback };
+    if Phase::of(args) == Phase::Link && temp.create().is_err() {
+        return HodStep::Fallback;
+    }
+    let obj = crate::hod::output(llc).filter(|o| *o != "-");
+    if args.verbose {
+        let mut err = io.stderr.clone();
+        let _ = err.write_all(in_process_line(llc, false).as_bytes());
+    }
+    let mut out = Vec::new();
+    let start = std::time::Instant::now();
+    let answer = crate::crash::contained(|| backend.compile(module, &llc.args, &mut out));
+    let end = std::time::Instant::now();
+    kiln_source::trace::complete("CodeGenPasses", start, end, || "in-process".to_owned());
+    kiln_source::trace::phase_add("in-process-backend", start, end);
+    let (outcome, reason) = match answer {
+        Ok(Answer::Done) => (Outcome::Compiled, None),
+        Ok(Answer::Declined(r)) => (Outcome::Declined(r.clone()), Some(r)),
+        Ok(Answer::Failed(m)) => {
+            let reason = crate::hod::failure_reason(&format!("hod: error: {m}"))
+                .unwrap_or("internal-error")
+                .to_owned();
+            (Outcome::Failed { status: IN_PROCESS_STATUS.to_owned(), message: m }, Some(reason))
+        }
+        Err(panic) => {
+            let message = format!("internal-panic: {}", panic.lines().next().unwrap_or(""));
+            let failed = Outcome::Failed { status: IN_PROCESS_STATUS.to_owned(), message };
+            (failed, Some("internal-panic".to_owned()))
+        }
+    };
+    if let Some(j) = stats.as_mut() {
+        j.backend = Some(outcome.backend());
+        j.hod_reason = reason;
+        j.in_process = true;
+    }
+    if outcome == Outcome::Compiled {
+        let written = match obj {
+            Some(o) => std::fs::write(o, &out).map_err(|e| (o, e.to_string())),
+            None => io
+                .stdout
+                .write_all(&out)
+                .and_then(|()| io.stdout.flush())
+                .map_err(|e| ("-", e.to_string())),
+        };
+        return match written {
+            Ok(()) => HodStep::Done,
+            Err((path, e)) => {
+                report_output_error(diag_opts, &io.stderr, path, &e);
+                HodStep::Failed
+            }
+        };
+    }
+    drop(out);
+    not_done(outcome, obj, args, drv, io)
+}
+
+/// A hod answer other than done ([`run_hod`], [`run_in_process`]): the
+/// `-o` file `obj` removed, then the decline's `-v` line, or the failure's
+/// warning (an error under `KILN_HOD_STRICT=1` / `-Werror=hod-fallback`).
+fn not_done(
+    outcome: crate::hod::Outcome,
+    obj: Option<&str>,
+    args: &Args,
+    drv: &DiagEngine<'_>,
+    io: &mut Io,
+) -> HodStep {
+    use crate::hod::Outcome;
     if let Some(o) = obj
         && Path::new(o).exists()
     {
@@ -2190,8 +2464,9 @@ fn preprocess_asm(
     true
 }
 
-/// The frontend on one source input; `None` after an error. Writes the
-/// input's `-MD` / `-MMD` dependency file, errors or not
+/// The frontend on one source input: its module (the caller prints it,
+/// [`print_checked`]); `None` after an error. Writes the input's `-MD` /
+/// `-MMD` dependency file, errors or not
 /// ([`crate::deps::write_side_file`]).
 fn frontend(
     args: &Args,
@@ -2200,7 +2475,7 @@ fn frontend(
     stdin_text: Option<&str>,
     diag_opts: &DiagOptions,
     io: &mut Io,
-) -> Option<String> {
+) -> Option<Module> {
     let lang = args.input_lang(input);
     let report = |d: Diag| {
         let sm = SourceManager::new();
@@ -2242,18 +2517,17 @@ fn frontend(
         Some(replay) => Job { args: replay, ..job },
         None => job,
     };
-    let (module, _, deps) = CodegenJob(job).run();
-    let mut ir = module.map(print_ir);
+    let (mut module, _, deps) = CodegenJob(job).run();
     if let Some(d) = snap_diff {
         crate::pch_snapshot::report_mismatch(args, diag_opts, &io.stderr, &d);
-        ir = None;
+        module = None;
     }
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
     {
         return None;
     }
-    ir
+    module
 }
 
 #[cfg(test)]

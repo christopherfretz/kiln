@@ -12,7 +12,9 @@
 //! summed per name by [`kiln_source::trace::phase_add`]; no trace file is
 //! started. **Counts** are of the IR text the frontend produced (before
 //! `opt`), read in one pass over its code part (the metadata section holds
-//! no function or attribute group): exact for kiln's printer.
+//! no function or attribute group): exact for kiln's printer; none when
+//! the module was never printed (the in-process back end took it). The
+//! `opt` triggers come from the module (`codegen_cmd::IrFacts`).
 use crate::args::Args;
 use crate::codegen_cmd::Phase;
 use kiln_source::trace;
@@ -140,6 +142,9 @@ pub struct Job {
     /// Why the job was not offered to hod although hod is the selected
     /// back end (`codegen_cmd::hod_skip`); `None` otherwise.
     pub hod_skip: Option<&'static str>,
+    /// The module was handed to the in-process back end
+    /// (`crate::backend_hook`, WP-1559).
+    pub in_process: bool,
 }
 
 impl Job {
@@ -155,13 +160,8 @@ impl Job {
             backend: None,
             hod_reason: None,
             hod_skip: None,
+            in_process: false,
         }
-    }
-
-    /// Records the frontend's IR text: its counts and `opt` triggers.
-    pub fn module(&mut self, args: &Args, tc: &crate::toolchain::Toolchain, ir: &str) {
-        self.counts = Some(IrCounts::of(ir));
-        self.triggers = crate::codegen_cmd::opt_triggers(args, tc, ir);
     }
 
     /// Ends the job and appends its line to `log`. A log that cannot be
@@ -274,6 +274,9 @@ impl Job {
                 let _ = write!(o, ",\"hod_skip\":\"{s}\"");
             }
             None => o.push_str(",\"hod_skip\":null"),
+        }
+        if self.in_process {
+            o.push_str(",\"in_process\":true");
         }
         if truncated {
             o.push_str(",\"truncated\":true");

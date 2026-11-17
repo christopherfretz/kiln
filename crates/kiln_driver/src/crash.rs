@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::ThreadId;
 
@@ -76,8 +76,28 @@ struct CrashInput {
     stdin: Option<String>,
 }
 
+/// An open [`contained`] scope.
+struct Scope {
+    /// Unique per scope, to close the right one.
+    id: u64,
+    /// The thread that opened it.
+    owner: ThreadId,
+    /// The first panic it caught (any thread), its message.
+    first: Option<String>,
+    /// The first panic it caught on another thread.
+    foreign: Option<Record>,
+}
+
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static RECORD: Mutex<Option<Record>> = Mutex::new(None);
+/// The open contained scopes, in opening order (process-wide: a thread
+/// a back end starts has none of the caller's thread-locals).
+static SCOPES: Mutex<Vec<Scope>> = Mutex::new(Vec::new());
+static SCOPE_IDS: AtomicU64 = AtomicU64::new(0);
+/// The first panic a scope caught from a thread other than its own when
+/// the scope itself ended without a panic: possibly an unrelated thread's,
+/// so it is the report's record only if no other panic is recorded.
+static UNCLAIMED: Mutex<Option<Record>> = Mutex::new(None);
 static INPUT: Mutex<Option<CrashInput>> = Mutex::new(None);
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -97,6 +117,12 @@ pub fn install_hook() {
 
 fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)
+}
+
+/// The message of the panic recorded as the process's first (the one
+/// [`report`] will describe), if any: for embedders and tests.
+pub fn recorded_message() -> Option<String> {
+    RECORD.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|r| r.message.clone())
 }
 
 /// `RUST_BACKTRACE` (not `0`) or `KILN_BACKTRACE` (not `0`).
@@ -130,12 +156,81 @@ fn hook(info: &PanicHookInfo<'_>) {
         phase: a.phase,
         loc: a.loc,
         source_loc: None,
+        backtrace: None,
+    };
+    let Some(record) = contain(record) else { return };
+    let record = Record {
         backtrace: backtrace_enabled().then(|| Backtrace::force_capture().to_string()),
+        ..record
     };
     let mut slot = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
     let prog = std::env::args().next().unwrap_or_else(|| "kiln".to_owned());
     if let Some(text) = funnel(&mut slot, record, &program_name(&prog)) {
         let _ = std::io::stderr().lock().write_all(text.as_bytes());
+    }
+}
+
+/// Hands a panic to the open [`contained`] scope it belongs to (`None`)
+/// or back to the caller (`Some`, no scope is open). A panic on a scope's
+/// own thread belongs to the innermost scope that thread opened; a panic
+/// on any other thread, while a scope is open, to the most recently
+/// opened scope (the hook cannot tell a thread the back end started from
+/// an unrelated one: spec/driver.md "In-process back end").
+fn contain(record: Record) -> Option<Record> {
+    let mut scopes = SCOPES.lock().unwrap_or_else(PoisonError::into_inner);
+    let own = scopes.iter().rposition(|s| s.owner == record.thread);
+    let Some(at) = own.or_else(|| scopes.len().checked_sub(1)) else {
+        return Some(record);
+    };
+    let s = &mut scopes[at];
+    if s.first.is_none() {
+        s.first = Some(record.message.clone());
+    }
+    if own.is_none() && s.foreign.is_none() {
+        s.foreign = Some(record);
+    }
+    None
+}
+
+/// Runs `f` in a contained-panic scope (spec/driver.md "In-process back
+/// end", WP-1559): a panic inside it, on the calling thread or on any
+/// thread that panics while the scope is open, is not the process's
+/// first panic and prints nothing (with the hook installed); the scope
+/// returns `Err` with the first such panic's message when the unwind
+/// reaches it. A panic recorded before the scope stays the recorded one,
+/// and a panic after it is recorded as its own crash. Scopes nest (on one
+/// thread or several). Panics on threads other than the caller's, when
+/// `f` itself returns normally (a back end that joined its worker and
+/// answered), are kept aside: one is the crash report's record only if
+/// the process later crashes with no panic recorded at all.
+///
+/// # Errors
+///
+/// `f` panicked (or re-raised a panic of a thread it started): the
+/// message of the first panic the scope saw.
+pub fn contained<R>(f: impl FnOnce() -> R) -> Result<R, String> {
+    let id = SCOPE_IDS.fetch_add(1, Ordering::Relaxed);
+    let owner = std::thread::current().id();
+    SCOPES.lock().unwrap_or_else(PoisonError::into_inner).push(Scope {
+        id,
+        owner,
+        first: None,
+        foreign: None,
+    });
+    let r = std::panic::catch_unwind(AssertUnwindSafe(f));
+    let scope = {
+        let mut scopes = SCOPES.lock().unwrap_or_else(PoisonError::into_inner);
+        scopes.iter().rposition(|s| s.id == id).map(|i| scopes.remove(i))
+    };
+    let (first, foreign) = scope.map_or((None, None), |s| (s.first, s.foreign));
+    match r {
+        Ok(v) => {
+            if let Some(f) = foreign {
+                UNCLAIMED.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(f);
+            }
+            Ok(v)
+        }
+        Err(payload) => Err(first.unwrap_or_else(|| payload_text(&*payload))),
     }
 }
 
@@ -264,6 +359,9 @@ fn banner(prog: &str, r: &Record) -> String {
 pub fn report(argv0: &str, command_line: &[String]) -> i32 {
     let prog = program_name(argv0);
     let record = RECORD.lock().unwrap_or_else(PoisonError::into_inner).take();
+    // No panic recorded: a contained scope's panic of another thread, if
+    // one was set aside, is the best account of the crash.
+    let record = record.or_else(|| UNCLAIMED.lock().unwrap_or_else(PoisonError::into_inner).take());
     let record = record.unwrap_or_else(|| Record {
         message: "unknown panic".to_owned(),
         rust_loc: None,

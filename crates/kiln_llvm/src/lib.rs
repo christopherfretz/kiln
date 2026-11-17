@@ -24,6 +24,7 @@ pub mod intrinsics;
 mod metadata;
 mod module;
 mod print;
+mod query;
 mod types;
 mod value;
 mod verify;
