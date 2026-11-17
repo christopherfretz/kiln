@@ -3497,7 +3497,11 @@ supported` at the temporary (`CheckLValueConstantExpression`; WP-231), so
 `const D& r = D{1};` is dynamically initialized. Reading one later
 thaws it from `LetData.value` when it is usable in constant expressions
 ([expr.const]/4: const non-volatile type, extended by a variable usable
-in constant expressions); otherwise it is an external object and a read
+in constant expressions; or, whatever its constness, extended by the
+`constexpr` holding variable of a tuple-like structured binding, which
+the text makes an object of type T_i when `get<i>` is a prvalue,
+[dcl.struct.bind]/4, so the temporary is that `constexpr` object;
+`DeclArena::is_holding_var`, tested last); otherwise it is an external object and a read
 is clang's `read of temporary is not allowed in a constant expression
 outside the expression that created the temporary` with `temporary
 created here` (`MemFault::Temporary`). A reference variable counts as
@@ -4379,6 +4383,13 @@ calls that do not read it are constant
 - a constant result referring to it (a namespace-scope reference's
   initializer): the clang 22 "reference to ... is not a constant
   expression" form.
+A reference to a *function* binds an unspecified function the same way
+(an unbacked object of the function type, interned with size 1): its
+address compares as above, calling it is clang 22's invalid
+subexpression folded into the error (`Op::CallInd` of a pointer that is
+not a function pointer, `Fault::Invalid`), and freezing it fails, so
+`reflect_function` of it throws (WP-1614;
+`expr.const/p2280-unknown-function-reference.cpp`).
 The same holds before C++23 (`expr.const/p2280-unknown-reference-cxx20.cpp`,
 `p2280-unknown-reference-cxx11.cpp`, `p2280-unknown-reference-cxx11-errors.cpp`).
 As in clang 22, only a *variable* of reference type binds to an unknown

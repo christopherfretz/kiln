@@ -6,7 +6,6 @@
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc
-//@ xfail(kiln): WP-1524: a namespace alias of a dependent splice-specifier is not instantiated
 #include <meta>
 
 namespace N { constexpr int v = 7; }

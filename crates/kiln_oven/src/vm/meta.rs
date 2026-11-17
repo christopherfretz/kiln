@@ -136,7 +136,10 @@ impl Oven {
         // queries may instantiate and evaluate (WP-538). A `Mutating` op
         // still fails under any checkpoint: a rollback cannot undo it.
         let trial = self.run.fold || self.mem.in_speculative_trial();
-        let no_mutation = trial || self.mem.in_trial();
+        // Not under the innermost checkpoint when `substitute` opened it
+        // for an instantiation's own evaluations
+        // (`Oven::trial_begin_injecting`).
+        let no_mutation = trial || self.trial_forbids_effects();
         // A value op, or `type_order` (its `strong_ordering` copied whole).
         let value_op = matches!(op, MetaOp::Value(_) | MetaOp::Trait(crate::TraitOp::TypeOrder));
         // A value op's range argument: its element type (WP-479); a
@@ -159,6 +162,12 @@ impl Oven {
             });
         // The function whose body holds the call (thunks have none).
         let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
+        // The function holding the innermost constexpr local initializer
+        // that is running (a nested evaluation's point of evaluation).
+        let nested_point = (self.run.nested_frame as usize)
+            .checked_sub(1)
+            .and_then(|i| self.stack.get(i))
+            .and_then(|f| self.funcs[f.func as usize].decl);
         // The first register above the calling frame's: where anything
         // the bridge has the Oven evaluate or thaw runs.
         let cur = self.stack[self.stack.len() - 1].func;
@@ -172,6 +181,7 @@ impl Oven {
             elem,
             elems_inline,
             callee: site.map(|s| s.callee),
+            nested_point,
             top,
         };
         match op.purity() {
@@ -193,6 +203,9 @@ impl Oven {
                         vec![Note::new(ctx.loc, msg)]
                     };
                     return Err(self.meta_trap(notes));
+                }
+                if self.inject_depth != 0 {
+                    self.injected = true;
                 }
             }
         }

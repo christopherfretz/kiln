@@ -275,6 +275,12 @@ pub struct MetaCtx {
     /// gives a function template's `T` (`extract<T>`, `reflect_constant`;
     /// WP-479).
     pub callee: Option<DeclId>,
+    /// The function whose body holds the innermost manifestly
+    /// constant-evaluated expression nested in the running evaluation (a
+    /// constexpr local's initializer): its point of evaluation is in
+    /// that function ([expr.const.reflect] "evaluation context",
+    /// CWG3162). `None` outside one.
+    pub nested_point: Option<DeclId>,
     /// The first register above the calling frame's (where a global
     /// thawed for [`crate::Oven::meta_freeze_at`] is evaluated).
     pub(crate) top: u32,

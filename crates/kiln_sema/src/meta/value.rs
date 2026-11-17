@@ -8,7 +8,7 @@
 //! picks the reflectee. `T` is read off the call's specialization.
 
 use kiln_ast::consts::{ConstValue, IntBits, MemberKind, PtrBase, Scalar};
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{BuiltinType, Quals, TypeView};
 use kiln_ast::{ConstValueId, DeclId, QualType, ReflectionId};
@@ -202,7 +202,79 @@ impl Sema<'_, '_> {
             return fail(loc, format!("'{}' is not a structural type", self.ty_str(t)));
         }
         let cv = self.bridge(|b| oven.meta_freeze(b, v, t, loc))?;
+        let cv = match self.ast.types.as_record(t) {
+            Some(r) if !self.copies_trivially(r) => {
+                self.lend_oven(oven, |s| s.tparam_object_value(cv, t, loc))?
+            }
+            _ => cv,
+        };
         self.constant_reflection(cv, loc)
+    }
+
+    /// Whether class `r`'s copies are its bytes: its copy constructors
+    /// are trivial (a trivial copy keeps template-argument equivalence).
+    fn copies_trivially(&self, r: DeclId) -> bool {
+        let bits = self.defn_bits(r);
+        bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
+            && !bits.contains(DefinitionBits::NONTRIVIAL_COPY_CTOR)
+    }
+
+    /// The value of the template parameter object of `TCls<V>`
+    /// ([meta.reflection.result] `reflect_constant`) for class value `cv`
+    /// of type `t` ([temp.arg.nontype]/4): `constexpr T v = V;` copies
+    /// `V`, the object is copied from `v`, and it must be
+    /// template-argument-equivalent to `v`, whose value it has; else
+    /// `TCls<V>` is not valid and the call throws. Evaluated nested
+    /// (sema holds the Oven).
+    fn tparam_object_value(
+        &mut self,
+        cv: ConstValueId,
+        t: QualType,
+        loc: Loc,
+    ) -> Result<ConstValueId, MetaError> {
+        let t = self.unqual(t);
+        let v = self.tparam_copy(cv, t, loc)?;
+        let p = self.tparam_copy(v, t, loc)?;
+        if p != v {
+            return fail(
+                loc,
+                format!(
+                    "a template parameter object copied from a value of type '{}' is not \
+                     template-argument-equivalent to it",
+                    self.ty_str(t)
+                ),
+            );
+        }
+        Ok(v)
+    }
+
+    /// The value of `const T` copy-initialized from an object holding
+    /// class value `cv` (an lvalue: that value's template parameter
+    /// object).
+    fn tparam_copy(
+        &mut self,
+        cv: ConstValueId,
+        t: QualType,
+        loc: Loc,
+    ) -> Result<ConstValueId, MetaError> {
+        let cv = self.retyped(cv, t)?;
+        let ct = self.ast.types.qualify(t, Quals::CONST);
+        let o = self.builder().template_param_object(ct, cv);
+        let e = self.builder().decl_ref(
+            o,
+            ct,
+            loc,
+            None,
+            kiln_ast::expr::NonOdrUse::None,
+            kiln_ast::expr::ExprFlags::NONE,
+        );
+        let c = self.perform_init(ct, crate::init::Initializer::Expr(e), loc, false);
+        if self.is_err_expr(c) || self.has_errors_in(c) {
+            return Err(MetaError::invalid());
+        }
+        let c = self.act_on_constant_full_expr(c);
+        self.eval_const(c, kiln_oven::EvalContext::converted(loc))
+            .map_err(|f| MetaError::failed(f.notes))
     }
 
     /// The reflection of annotation `a`'s underlying constant

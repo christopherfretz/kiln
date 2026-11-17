@@ -257,7 +257,7 @@ impl Sema<'_, '_> {
                 self.meta_subst.hits += 1;
                 Ok(Ok(x))
             }
-            (Ok(()), None) => self.substitute_uncached(n, td, &key[1..], loc, oven),
+            (Ok(()), None) => self.substitute_uncached(n, td, &key[1..], probe, loc, oven),
         };
         let res = match res {
             Ok(r) => r,
@@ -292,12 +292,14 @@ impl Sema<'_, '_> {
     /// The substitution of `n` (template `td`) with the reflections
     /// `bits`, not memoized: the result, or the reason it fails. An
     /// argument that cannot be a template argument at all is an error
-    /// (of `can_substitute` too: its *Constant When*).
+    /// (of `can_substitute` too: its *Constant When*). `probe`:
+    /// `can_substitute`.
     fn substitute_uncached(
         &mut self,
         n: TemplateNameId,
         td: DeclId,
         bits: &[u64],
+        probe: bool,
         loc: Loc,
         oven: &mut Oven,
     ) -> Result<Result<ReflectionId, String>, MetaError> {
@@ -306,7 +308,13 @@ impl Sema<'_, '_> {
             let a = ReflectionId::from_bits(u128::from(b)).ok_or_else(MetaError::invalid)?;
             targs.push(self.reflection_template_arg(a, loc)?);
         }
-        oven.trial_begin();
+        // `substitute` lets the evaluations of what it instantiates
+        // inject (outside its immediate context); `can_substitute` does
+        // not, so a failed or probing attempt leaves no declaration.
+        let saved = (!probe).then(|| oven.trial_begin_injecting());
+        if probe {
+            oven.trial_begin();
+        }
         self.inst.report.begin_trial();
         let res = self.lend_oven(oven, |s| {
             s.in_sfinae(FrameKind::MetaSubstitution, td, None, loc, |s| {
@@ -326,7 +334,21 @@ impl Sema<'_, '_> {
             Some((_, Err(d))) => Err(substitution_reason(d.as_ref())),
             Some((Err(None), Ok(()))) => Err("substitution failure".to_owned()),
         };
-        oven.trial_end(res.is_ok());
+        match saved {
+            Some(saved) => {
+                // A declaration injected is not undone: the attempt that
+                // failed after it is an error, not a `false`.
+                if oven.trial_end_injecting(res.is_ok(), saved) && res.is_err() {
+                    self.inst.report.end_trial(false);
+                    return Err(MetaError::note(
+                        loc,
+                        "a declaration was injected while the substitution was tried, \
+                         which then failed",
+                    ));
+                }
+            }
+            None => oven.trial_end(res.is_ok()),
+        }
         self.inst.report.end_trial(res.is_ok());
         match res {
             Ok(x) => Ok(Ok(self.intern_reflection(x, loc)?)),

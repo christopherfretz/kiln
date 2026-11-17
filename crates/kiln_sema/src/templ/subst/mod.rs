@@ -411,16 +411,16 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 // temporaries end with it, and the enclosing
                 // full-expression's cleanups stay pending
                 // (spec/sema-class.md §5.3).
-                let outer = self.sema.cleanup;
+                // Manifestly constant-evaluated as where it was written
+                // ([expr.const]/22, [temp.arg.nontype]/1): an immediate
+                // invocation in it is part of the one constant
+                // expression, not one of its own (`use<parameters_of(
+                // ^^f<N>)[0]>()`: the vector is not a result of it).
                 // Evaluated even inside an unevaluated operand
                 // (`sizeof(f<(T(), 0)>())`, [expr.context]/1; clang's
                 // `ConstantEvaluated` context).
-                let unevaluated = std::mem::take(&mut self.sema.unevaluated);
-                let e = self.expr(expr);
-                self.sema.unevaluated = unevaluated;
-                let e = e?;
-                self.sema.end_constant_operand(e, outer);
-                Ok(self.sema.ast.builder().template_arg_expr(e))
+                let e = self.constant_operand(expr);
+                Ok(self.sema.ast.builder().template_arg_expr(e?))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
             // A converted argument pack (a partial specialization's
@@ -431,7 +431,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             // stands for it (an implicit deduction guide's, WP-134).
             ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
                 let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
-                let e = self.expr(e)?;
+                let e = self.constant_operand(e)?;
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
@@ -439,6 +439,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),
         }
+    }
+
+    /// Substitutes into constant-expression `expr` of a template
+    /// argument: manifestly constant-evaluated and potentially evaluated
+    /// (`Sema::enter_constant_expression`), a full-expression of its own
+    /// whose temporaries end with it.
+    fn constant_operand(&mut self, expr: kiln_ast::ExprId) -> SubstResult<kiln_ast::ExprId> {
+        let unevaluated = self.sema.enter_constant_expression();
+        let e = self.expr(expr);
+        self.sema.exit_constant_expression(e.as_ref().ok().copied(), unevaluated);
+        e
     }
 
     /// Substitutes into an argument list, expanding pack expansions
@@ -523,7 +534,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 // level not substituted (`B<P<Ts, Us>::value...>` in a
                 // member template, only `Ts` known) keeps the expansion
                 // (§7.2).
-                match self.expand_pattern_rewrap(None, |s| s.element_expr(p))? {
+                // Each element is a constant-expression, as in
+                // `template_arg`.
+                let unevaluated = self.sema.enter_constant_expression();
+                let r = self.expand_pattern_rewrap(None, |s| s.element_expr(p));
+                self.sema.exit_constant_expression(None, unevaluated);
+                match r? {
                     Expansion::Elements(v) => {
                         let rw = self.take_rewrap();
                         v.into_iter()

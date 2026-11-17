@@ -2208,6 +2208,11 @@ impl Memory {
         !self.trial.cps.is_empty()
     }
 
+    /// How many checkpoints are open. O(1).
+    pub fn trial_depth(&self) -> usize {
+        self.trial.cps.len()
+    }
+
     /// Whether a [`TrialMode::Speculative`] checkpoint is open: the
     /// evaluation's result may be discarded, so it must not instantiate
     /// or mutate (spec/reflection.md §4.3). A Transactional checkpoint

@@ -484,7 +484,11 @@ impl Sema<'_, '_> {
             self.trait_incomplete(DiagId::sema_incomplete_type_trait, at, q);
             return None;
         }
-        if self.ast.types.is_void(a.0) || self.ast.types.is_void(b.0) {
+        if self.ast.types.is_void(a.0)
+            || self.ast.types.is_void(b.0)
+            || !self.declval_formable(a.0)
+            || !self.declval_formable(b.0)
+        {
             return Some(false);
         }
         // `declval<T>()`: an lvalue for an lvalue reference (or a
@@ -546,7 +550,7 @@ impl Sema<'_, '_> {
             || matches!(tys.canonical_view(ty), TypeView::IncompleteArray(_))
             || tys.is_function(ty)
             || self.record_bit(ty, DefinitionBits::ABSTRACT)
-            || args[1..].iter().any(|a| self.ast.types.is_void(a.0))
+            || args[1..].iter().any(|a| self.ast.types.is_void(a.0) || !self.declval_formable(a.0))
         {
             return Some(false);
         }
@@ -603,6 +607,17 @@ impl Sema<'_, '_> {
             return Some(self.is_destructible(TypeTrait::IsTriviallyDestructible, ty, loc));
         }
         Some(ok)
+    }
+
+    /// Whether `declval<T>()` can be formed ([declval], [dcl.fct]/6): its
+    /// return type `add_rvalue_reference_t<T>` is `T` itself for an
+    /// abominable function type (`void() const`, `void() &`), and a
+    /// function cannot return a function, so every trait defined by an
+    /// expression on `declval<T>()` is false for one (clang 22 builds the
+    /// expression on an lvalue of it and answers true; GCC 16.1 answers
+    /// false except for `is_constructible`).
+    fn declval_formable(&self, q: QualType) -> bool {
+        !self.ast.types.is_function(q) || self.referenceable(q)
     }
 
     /// The extra requirement of the nothrow / trivially form of an
@@ -689,7 +704,11 @@ impl Sema<'_, '_> {
         if tys.is_void(to.0) {
             return Some(tys.is_void(from.0));
         }
-        if tys.is_function(to.0) || tys.is_array(to.0) || tys.is_void(from.0) {
+        if tys.is_function(to.0)
+            || tys.is_array(to.0)
+            || tys.is_void(from.0)
+            || !self.declval_formable(from.0)
+        {
             return Some(false);
         }
         for (q, at) in [from, to] {
@@ -746,7 +765,10 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> bool {
-        if !self.ast.types.is_reference(to.0) || self.ast.types.is_void(from.0) {
+        if !self.ast.types.is_reference(to.0)
+            || self.ast.types.is_void(from.0)
+            || !self.declval_formable(from.0)
+        {
             return false;
         }
         if !self.ast.types.is_reference(from.0)

@@ -3,7 +3,6 @@
 // (no reference to it can be formed), so is_assignable<T, U> is false even
 // for a class assignable from anything. Found running GCC's C++
 // testsuite.
-//@ xfail(kiln): WP-1613: __is_assignable forms the assignment from an abominable function type (templ/builtins/traits)
 //@ skip(clang): clang 22 gives the same wrong result
 //@ oracle: gcc
 //@ expect: compile-ok

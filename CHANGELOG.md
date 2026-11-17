@@ -1214,6 +1214,25 @@ Planned as 1.3.0.
   better lvalue conversion function now selects the copy constructor or
   `const T&` overload as clang and GCC do (WP-1615, WP-1616, WP-1621,
   WP-1622, WP-1624, WP-1625).
+- Reflection inside templates and in constant evaluation (WP-1613,
+  WP-1614; found running GCC's C++ testsuite): a member splice in a
+  template is substituted from the member it names, not looked up again
+  by name; a namespace alias of a dependent splice-specifier; a
+  block-scope opaque enumeration and its later definition are one
+  enumeration per instantiation; `declval` of an abominable function
+  type is not formed in a type trait; a substituted constant template
+  argument is manifestly constant-evaluated; a constexpr structured
+  binding whose `get` returns a prvalue, and constexpr expansion
+  statements over such elements, work in templates ([dcl.struct.bind]/4);
+  `reflect_constant` of a class value copies it as a template parameter
+  object and throws when the copy is not template-argument-equivalent
+  ([temp.arg.nontype]/4); a constexpr-unknown function reference binds an
+  unspecified function ([expr.const]/10), so `reflect_function` and
+  `reflect_object` of one work and calling through it is diagnosed as
+  clang 22 does; `define_aggregate` runs in what `substitute` instantiates;
+  `variable_of` in a nested evaluation sees the function of that
+  evaluation's point (CWG3162). A nested evaluation still sees classes
+  the enclosing evaluation completed with `define_aggregate`.
 
 ## [1.2.1] - 2026-11-14
 

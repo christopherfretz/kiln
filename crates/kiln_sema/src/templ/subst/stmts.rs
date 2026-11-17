@@ -872,6 +872,12 @@ impl Substituter<'_, '_, '_> {
             }
             DeclKind::CXXRecord => Ok(self.local_class(d, None)),
             DeclKind::Enum => {
+                // An opaque-enum-declaration after the definition names
+                // the defined enumeration in the pattern: it redeclares
+                // the instantiated one ([dcl.enum]/3), nothing more.
+                if let Some(super::DeclOrPack::Decl(x)) = self.locals.get(&d) {
+                    return Ok(*x);
+                }
                 let x = self.enum_decl(d)?;
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
@@ -886,14 +892,25 @@ impl Substituter<'_, '_, '_> {
                 Ok(x)
             }
             // A block-scope namespace alias ([namespace.alias]; clang
-            // `TemplateDeclInstantiator::VisitNamespaceAliasDecl`): its
-            // target is never dependent, so the alias is redeclared in the
-            // instantiation's block scope with the same (or the mapped
-            // local alias) target.
+            // `TemplateDeclInstantiator::VisitNamespaceAliasDecl`): the
+            // alias is redeclared in the instantiation's block scope with
+            // the same (or the mapped local alias) target.
             DeclKind::NamespaceAlias => {
                 let dname = self.sema.ast.decls.get(d).name();
                 let name = dname.as_ident().ok_or(SubstFail)?;
                 let t = self.sema.ast.using_target(d).ok_or(SubstFail)?;
+                // A dependent namespace alias ([temp.dep.namespace]/1):
+                // its splice-specifier, substituted, must designate a
+                // namespace other than the global one ([namespace.alias]/2),
+                // diagnosed here, in the instantiation.
+                if let Some(e) = self.sema.dependent_alias_splice(t) {
+                    let e = self.expr(e)?;
+                    let ns =
+                        self.sema.act_on_splice_namespace(e, "namespace alias").ok_or(SubstFail)?;
+                    let x = self.sema.act_on_namespace_alias_to(name, loc, ns).ok_or(SubstFail)?;
+                    self.locals.insert(d, super::DeclOrPack::Decl(x));
+                    return Ok(x);
+                }
                 let t = match self.locals.get(&t) {
                     Some(super::DeclOrPack::Decl(x)) => *x,
                     _ => t,

@@ -53,6 +53,11 @@ impl Sema<'_, '_> {
     ) -> NnsId {
         let n = match self.kind_of(spelled) {
             DeclKind::Namespace => Nns::Namespace { prefix, ns: self.ast.first(spelled) },
+            // A dependent namespace alias ([temp.dep.namespace]/1) is the
+            // dependent `[: e :]::` it stands for, substituted as one.
+            DeclKind::NamespaceAlias if let Some(e) = self.dependent_alias_splice(resolved) => {
+                Nns::Splice(e)
+            }
             DeclKind::NamespaceAlias => {
                 Nns::NamespaceAlias { prefix, alias: spelled, ns: resolved }
             }

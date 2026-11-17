@@ -2,9 +2,9 @@
 // (P2996R13): substitute() of an alias template whose type is a member of
 // a class template specialization instantiates that specialization (not
 // in the immediate context of the substitution), and a consteval block of
-// it may complete a class with define_aggregate. Found running GCC's C++
-// testsuite (the parse_json example of P2996).
-//@ xfail(kiln): WP-1614: define_aggregate is refused while std::meta::substitute is trying a substitution, even outside its immediate context
+// it may complete a class with define_aggregate. The same substitution
+// again is the same class; another argument list another class. Found
+// running GCC's C++ testsuite (the parse_json example of P2996).
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc
@@ -21,3 +21,12 @@ consteval std::meta::info make() {
 }
 using T = [:make():];
 static_assert(T{5}.x == 5);
+consteval std::meta::info make2(const char *n) {
+  auto m = std::meta::data_member_spec(^^long, {.name = n});
+  return std::meta::substitute(^^Cls, {std::meta::reflect_constant(m)});
+}
+static_assert(make() == make());
+static_assert(make2("y") == make2("y"));
+static_assert(make2("y") != make());
+using U = [:make2("y"):];
+static_assert(U{7}.y == 7 && sizeof(U) == sizeof(long));

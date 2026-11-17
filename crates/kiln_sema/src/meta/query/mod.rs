@@ -104,7 +104,9 @@ impl Sema<'_, '_> {
             },
             QueryOp::Dealias => MetaOut::Info(self.dealias(r, loc)?),
             QueryOp::OperatorOf => MetaOut::Scalar(u128::from(self.reflect_operator_of(r, loc)?)),
-            QueryOp::VariableOf => MetaOut::Info(self.reflect_variable_of(r, loc)?),
+            QueryOp::VariableOf => {
+                MetaOut::Info(self.reflect_variable_of(r, ctx.nested_point, loc)?)
+            }
             QueryOp::ReturnTypeOf => MetaOut::Info(self.reflect_return_type_of(r, loc)?),
             _ => return Err(MetaError::not_implemented(MetaOp::Query(q), loc)),
         };

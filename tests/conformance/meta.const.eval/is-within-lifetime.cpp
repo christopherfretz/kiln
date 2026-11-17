@@ -80,9 +80,8 @@ consteval bool heap() {
 static_assert(heap());
 
 // A constexpr function template calling it escalates to an immediate
-// function ([expr.const]/20), so its address cannot be taken outside an
-// immediate function context and a SFINAE default argument rejects it.
-template <class T> constexpr void escalates(T p) { std::is_within_lifetime(p); }
-template <class T, void (*)(T) = &escalates<T>> constexpr bool check(int) { return false; }
-template <class T> constexpr bool check(long) { return true; }
-static_assert(check<int*>(0) && check<void*>(0));
+// function ([expr.const.imm]/4); a call of it in a constant expression is
+// an immediate invocation. (Its address as a substituted default template
+// argument: expr.const.const/p3-immediate-function-default-template-argument.cpp.)
+template <class T> constexpr bool escalates(T p) { return std::is_within_lifetime(p); }
+static_assert(escalates(&g));

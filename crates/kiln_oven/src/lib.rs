@@ -573,6 +573,11 @@ pub struct Oven {
     /// The next outermost evaluation checks for undefined behaviour
     /// ([`Oven::fold_for_overflow`]).
     ub_check_next: bool,
+    /// The depth of the open trial whose nested evaluations may run
+    /// `Mutating` reflection ops ([`Oven::trial_begin_injecting`]; 0:
+    /// none), and whether one ran under it.
+    pub(crate) inject_depth: usize,
+    pub(crate) injected: bool,
     /// The next outermost evaluation ignores every contract assertion
     /// (`vm::RunState::contracts_off`).
     contracts_off_next: bool,
@@ -773,6 +778,8 @@ impl Oven {
             cxx_year: 2026,
             cev_warn_next: false,
             ub_check_next: false,
+            inject_depth: 0,
+            injected: false,
             contracts_off_next: false,
             contract_violated: false,
             potential_next: None,
@@ -952,7 +959,15 @@ impl Oven {
     /// trial (`__builtin_constant_p`'s operand, [`Oven::try_fold`],
     /// codegen's folds). The gate of every injecting operation.
     pub fn plain(&self) -> bool {
-        self.run.plain && !self.run.fold && !self.mem.in_trial()
+        self.run.plain && !self.run.fold && !self.trial_forbids_effects()
+    }
+
+    /// Whether an open trial forbids the running evaluation effects no
+    /// rollback undoes (injecting a declaration): any trial but the one
+    /// [`Oven::trial_begin_injecting`] opened innermost. O(1).
+    pub(crate) fn trial_forbids_effects(&self) -> bool {
+        self.mem.in_trial()
+            && (self.inject_depth == 0 || self.inject_depth != self.mem.trial_depth())
     }
 
     /// The limits.
@@ -982,6 +997,32 @@ impl Oven {
     /// allowed; [`Oven::trial_end`] keeps or undoes them. O(1).
     pub fn trial_begin(&mut self) {
         self.mem.checkpoint(mem::TrialMode::Transactional);
+    }
+
+    /// [`Oven::trial_begin`] for `std::meta::substitute`: a class
+    /// template specialization it instantiates is instantiated outside
+    /// the substitution's immediate context, so the evaluations that
+    /// instantiation runs (a `consteval` block) are no part of the trial
+    /// and may inject declarations (`define_aggregate`;
+    /// [meta.reflection.substitute], WP-1614). Returns the previous
+    /// state, for [`Oven::trial_end_injecting`]. O(1).
+    pub fn trial_begin_injecting(&mut self) -> (usize, bool) {
+        self.mem.checkpoint(mem::TrialMode::Transactional);
+        let saved = (self.inject_depth, self.injected);
+        self.inject_depth = self.mem.trial_depth();
+        self.injected = false;
+        saved
+    }
+
+    /// Closes the trial [`Oven::trial_begin_injecting`] opened, as
+    /// [`Oven::trial_end`]; true if a declaration was injected under it
+    /// (which no rollback undoes). O(log entries since the trial).
+    pub fn trial_end_injecting(&mut self, keep: bool, saved: (usize, bool)) -> bool {
+        self.trial_end(keep);
+        let injected = self.injected;
+        (self.inject_depth, self.injected) = saved;
+        self.injected |= injected;
+        injected
     }
 
     /// Closes the innermost trial [`Oven::trial_begin`] opened: `keep`

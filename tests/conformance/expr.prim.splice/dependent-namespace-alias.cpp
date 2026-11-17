@@ -1,7 +1,6 @@
 // [temp.dep.namespace] (P2996R13): a namespace alias whose
 // splice-specifier is dependent is a dependent namespace alias, resolved
 // in each instantiation. Found running GCC's C++ testsuite.
-//@ xfail(kiln): WP-1613: a namespace alias of a dependent splice-specifier is not supported
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc

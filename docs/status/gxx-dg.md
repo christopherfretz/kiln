@@ -507,6 +507,8 @@ elements (`cwg3149`, now G only).
 | U | display strings (`display_string_of1`), `eh5` `what()` texts, `source_location_of1`, `source_location_of2`, `reflect_constant7` |
 | T | `::nullptr_t` without `<cstddef>` (`extract1` L9-11, `reflect_constant5`, `type_trait1`), `variable_of3` (`__integer_pack`), `members_of11` (`__builtin_constexpr_diag`), `init17` and `has_identifier1` L223 (statement expressions) |
 
+After WP-1613 and WP-1614: 468 of 565 g++.dg/reflect cases pass (8 compile-reject cases now pass: `member15`, `member17`, `enumerators_of1`, `is_enumerable_type1`, `p2996-7`, `reflect_function2`, `variable_of2`, `visibility1`; none regressed in g++.dg/reflect, g++.dg/template or g++.dg/ext/is_*). Of the K row, `define_aggregate10` (CWG3162 injected declarations) is left; `type_trait6`, `reflect_constant9` and `parse2` now fail only on their G lines, and `json-parser` only on `#embed` pedantic.
+
 ### x86-64
 
 The first x86-64 run: the opt-in `gxx-dg` jobs of `.github/workflows/sweep.yml`
