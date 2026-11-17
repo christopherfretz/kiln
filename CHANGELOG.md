@@ -1011,6 +1011,17 @@ Planned as 1.3.0.
   discarded volatile glvalue of class type must be complete from C++11
   ([expr.context]/2); a discarded constant is not odr-used, so a lambda
   does not capture it.
+- Concepts, found running GCC's C++ testsuite (WP-1531, WP-1579, WP-1553):
+  a requires-expression in a generic lambda checks its requirements in
+  order, so a requirement after one that fails is no longer substituted
+  early into a hard error ([expr.prim.req.general]/5); a concept-id whose
+  default template argument fails to substitute leaves the atoms that do
+  not name that parameter to be evaluated as usual, including in a nested
+  requirement ([temp.constr.atomic]/1, /3); a concept with a trailing pack
+  parameter gets the same per-atom treatment, so a disjunction with a
+  satisfied alternative is satisfied and the notes name the failing atom;
+  and GCC's `-ftemplate-depth-N` spelling is accepted as
+  `-ftemplate-depth=N`.
 
 ## [1.2.1] - 2026-11-14
 
