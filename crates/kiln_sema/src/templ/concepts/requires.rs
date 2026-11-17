@@ -15,8 +15,10 @@ use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
+use super::DeferredRequires;
 use super::{SatRecord, Satisfaction};
 use crate::Sema;
+use crate::templ::args::LevelMode;
 use crate::templ::pack::Expansion;
 use crate::templ::stack::{FrameKind, SfinaeState};
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
@@ -148,6 +150,9 @@ impl Substituter<'_, '_, '_> {
 
     /// Substitutes into requires-expression `e` and evaluates it.
     pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        if let Some(d) = self.sema.inst.concepts.deferred_requires.get(&e).cloned() {
+            return self.deferred_requires_expr(&d, loc);
+        }
         let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
         let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
         let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
@@ -173,12 +178,25 @@ impl Substituter<'_, '_, '_> {
         let mut dependent = false;
         let mut new_reqs = Vec::with_capacity(items.len());
         if ok {
-            for r in items {
+            let n = items.len();
+            for (i, &r) in items.iter().enumerate() {
+                let was = dependent;
                 if let Some(r) = self.requirement(rq.body, r, at, &mut recs, &mut dependent) {
                     new_reqs.push(r);
                 } else {
                     ok = false;
                     break;
+                }
+                // The first requirement left dependent decides nothing
+                // yet: the ones after it are substituted only once it is
+                // known ([expr.prim.req.general]/5), with the final
+                // arguments (`typename U::type; typename S<T>::type;` in a
+                // generic lambda of `f<int>`: `S<int>` is not formed when
+                // `U::type` fails).
+                if !was && dependent && i + 1 < n && self.can_defer_requires(e) {
+                    self.sema.exit_unevaluated();
+                    self.sema.srcloc.satisfying = srcloc;
+                    return Ok(self.defer_requires(e, &rq, at, rbrace));
                 }
             }
         }
@@ -232,6 +250,111 @@ impl Substituter<'_, '_, '_> {
         }
         let _ = loc;
         Ok(x)
+    }
+
+    /// Whether requires-expression `e`, substituted partially (some level
+    /// retained), may be left as its pattern for the final substitution
+    /// ([`DeferredRequires`]; a requirement stayed dependent, so some
+    /// level is still to come): not while a pack is expanded element by
+    /// element (the element index is this substitution's), and not when
+    /// it names an enclosing pack unexpanded.
+    fn can_defer_requires(&self, e: ExprId) -> bool {
+        self.pack_index.is_none()
+            && !self.sema.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK)
+    }
+
+    /// A copy of pattern `e` (requirements `rq`), value-dependent, recorded
+    /// with this substitution's levels, locals and context pairs.
+    fn defer_requires(
+        &mut self,
+        e: ExprId,
+        rq: &kiln_ast::templates::RequiresData,
+        at: Loc,
+        rbrace: Loc,
+    ) -> ExprId {
+        let items: Vec<Requirement> = self.sema.ast.templates.requirements(rq).to_vec();
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
+        let x =
+            self.sema.builder().requires_expr(rq.body, &params, &items, QualType::BOOL, at, rbrace);
+        self.sema.ast.exprs.mark_value_dependent(x);
+        let mut locals: Vec<(DeclId, DeclOrPack)> =
+            self.locals.iter().map(|(&k, &v)| (k, v)).collect();
+        locals.sort_unstable_by_key(|&(k, _)| k.raw());
+        let d = DeferredRequires {
+            pattern: e,
+            levels: self.args.clone(),
+            locals,
+            pairs: self.pairs.clone(),
+        };
+        self.sema.inst.concepts.deferred_requires.insert(x, d);
+        x
+    }
+
+    /// The final substitution of a requires-expression left as its pattern
+    /// by a partial one ([`DeferredRequires`]): the pattern with the saved
+    /// levels, their retained levels and the deeper ones this
+    /// substitution's, the saved locals mapped on through this
+    /// substitution's. When the levels do not line up (more retained
+    /// levels than this substitution has), the two substitutions run one
+    /// after the other, as without the deferral.
+    fn deferred_requires_expr(&mut self, d: &DeferredRequires, loc: Loc) -> SubstResult<ExprId> {
+        let retained = d.levels.levels.iter().filter(|l| l.mode == LevelMode::Retain).count();
+        let pairs: Vec<(DeclId, DeclId)> = d.pairs.iter().chain(&self.pairs).copied().collect();
+        if retained > self.args.levels.len() {
+            let mid = {
+                let mut s = Substituter::new(&mut *self.sema, &d.levels);
+                s.locals = d.locals.iter().copied().collect();
+                s.pairs.clone_from(&pairs);
+                s.entity = self.entity;
+                s.requires_expr(d.pattern, loc)?
+            };
+            return self.expr(mid);
+        }
+        // The levels deeper than the saved ones (a generic lambda's own,
+        // one level shallower once the enclosing levels are substituted)
+        // follow them.
+        let mut levels = d.levels.clone();
+        let mut now = self.args.levels.iter();
+        for l in &mut levels.levels {
+            if l.mode == LevelMode::Retain
+                && let Some(&n) = now.next()
+            {
+                *l = n;
+            }
+        }
+        levels.levels.extend(now.copied());
+        let mut locals = self.locals.clone();
+        for &(k, v) in &d.locals {
+            let v = match v {
+                DeclOrPack::Decl(m) => self.locals.get(&m).copied().unwrap_or(v),
+                DeclOrPack::Pack(l) => {
+                    let elems: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l).collect();
+                    let mapped: Vec<DeclId> = elems
+                        .iter()
+                        .map(|m| match self.locals.get(m) {
+                            Some(&DeclOrPack::Decl(f)) => f,
+                            _ => *m,
+                        })
+                        .collect();
+                    if mapped == elems {
+                        v
+                    } else {
+                        DeclOrPack::Pack(self.sema.ast.lists.push(&mapped))
+                    }
+                }
+            };
+            locals.insert(k, v);
+        }
+        let entity = self.entity;
+        let final_subst = self.final_subst;
+        let lambda_bodies = self.lambda_bodies;
+        let mut s = Substituter::new(&mut *self.sema, &levels);
+        s.locals = locals;
+        s.pairs.clone_from(&pairs);
+        s.entity = entity;
+        s.final_subst = final_subst;
+        s.lambda_bodies = lambda_bodies;
+        s.requires_expr(d.pattern, loc)
     }
 
     /// Checks requirement `r` ([expr.prim.req.simple] to
@@ -313,7 +436,15 @@ impl Substituter<'_, '_, '_> {
                 let loc = self.sema.begin_loc(e);
                 let Some(x) = self.req_subst(body, e, loc) else {
                     // A substitution failure in a nested requirement's
-                    // constraint makes it unsatisfied.
+                    // constraint makes it unsatisfied, unless its atoms
+                    // checked one by one are satisfied (an argument no
+                    // atom's parameter mapping names failed).
+                    if !self.sema.levels_dependent(self.args)
+                        && self.sema.sat_nested_requirement(body, e, self.args)
+                    {
+                        let t = self.sema.builder().bool_literal(QualType::BOOL, true, loc);
+                        return Some(Requirement::Nested(t));
+                    }
                     recs.push(SatRecord {
                         id: DiagId::note_atomic_constraint_false,
                         loc,

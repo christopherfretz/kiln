@@ -1,7 +1,8 @@
 //! The template instantiation flags (spec/sema-templates.md §10, §11.3):
 //!
 //! - `-ftemplate-depth=N`: nested instantiations (clang's flag and
-//!   default, 1024);
+//!   default, 1024); GCC's older spelling `-ftemplate-depth-N` is the
+//!   same flag (clang's alias, reported as `-ftemplate-depth=N`);
 //! - `-ftemplate-backtrace-limit=N`: instantiation contexts shown in a
 //!   diagnostic's notes (clang's, 10; 0 shows all);
 //! - `-fkiln-instantiation-report[=all|json]`: the per-template report on
@@ -38,6 +39,16 @@ impl TemplOpts {
             self.report = ReportFormat::Text;
             return Some(Ok(()));
         }
+        // GCC's `-ftemplate-depth-N`, clang's alias of `-ftemplate-depth=N`
+        // (its errors name the `=` spelling, as clang's).
+        let canonical;
+        let arg = match arg.strip_prefix("-ftemplate-depth-") {
+            Some(n) => {
+                canonical = format!("-ftemplate-depth={n}");
+                canonical.as_str()
+            }
+            None => arg,
+        };
         let (flag, v) = arg.split_once('=')?;
         let ok = match flag {
             "-ftemplate-depth" => set(&mut self.depth, v.parse().ok()),
@@ -123,6 +134,9 @@ mod tests {
             assert_eq!(o.parse_arg(a), Some(Ok(())), "{a}");
         }
         assert_eq!((o.limits().depth, o.limits().backtrace), (128, 0));
+        // GCC's spelling (WP-1553).
+        assert_eq!(o.parse_arg("-ftemplate-depth-50"), Some(Ok(())));
+        assert_eq!(o.limits().depth, 50);
         assert_eq!(o.report, ReportFormat::Text);
         assert_eq!(o.parse_arg("-fkiln-instantiation-report=json"), Some(Ok(())));
         assert_eq!(o.report, ReportFormat::Json);
@@ -149,6 +163,10 @@ mod tests {
         let mut o = TemplOpts::default();
         assert!(matches!(o.parse_arg("-ftemplate-depth=x"), Some(Err(_))));
         assert!(matches!(o.parse_arg("-fkiln-instantiation-report=yaml"), Some(Err(_))));
+        assert_eq!(
+            o.parse_arg("-ftemplate-depth-x"),
+            Some(Err(ArgError::InvalidInt("-ftemplate-depth=x".into(), "x".into())))
+        );
         assert_eq!(o.parse_arg("-ftemplate-foo=1"), None);
         assert_eq!(o, TemplOpts::default());
     }

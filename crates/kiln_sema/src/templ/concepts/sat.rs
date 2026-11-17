@@ -676,6 +676,23 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether the constraint-expression `e` of a nested requirement
+    /// ([expr.prim.req.nested]/1) is satisfied for `levels` when it did not
+    /// substitute as a whole: it is checked by the rules of satisfaction
+    /// ([temp.constr.constr]), atom by atom, so a concept-id whose failed
+    /// argument no atom names is satisfied (`requires C<T>;` with an
+    /// invalid default argument of `C` its atoms do not use; clang 22
+    /// and GCC 16.1 agree). `body` is the requires-expression's body.
+    pub(crate) fn sat_nested_requirement(
+        &mut self,
+        body: DeclId,
+        e: ExprId,
+        levels: &MultiLevelArgs,
+    ) -> bool {
+        let mut recs = Vec::new();
+        self.sat_expr(body, e, levels, &mut recs, 0)
+    }
+
     /// Whether atom `e` is a concept-id of a concept (not of a concept
     /// template parameter).
     fn is_concept_id_atom(&self, e: ExprId) -> bool {
@@ -700,10 +717,20 @@ impl Sema<'_, '_> {
     /// fails too, unsubstituted), then `C`'s constraint is checked with
     /// the failed parameters marked. On failure the substitution note
     /// comes first, then the notes of the other false atoms, as clang's.
+    /// A defaulted argument is substituted from the concept's default
+    /// with the arguments before it ([temp.arg.general]/9), so an invalid
+    /// default makes only the atoms naming its parameter unsatisfied
+    /// (`template<class T, class U = typename T::type> concept C = true`
+    /// is satisfied by `C auto` for `int`, GCC 16.1; clang 22 rejects).
+    /// A trailing parameter pack takes the remaining arguments as one
+    /// group: when one fails, or names a failed parameter of the
+    /// enclosing concept, the atoms naming the pack are unsatisfied and
+    /// the others are evaluated (WP-1579).
     /// `None` when no argument fails on its own, or the concept-id has a
-    /// form this does not cover (a pack, a non-type parameter, defaulted
-    /// arguments): the caller keeps the whole-atom answer. Only reached
-    /// after a substitution failure, so the satisfied path is unchanged.
+    /// form this does not cover (a non-type parameter, a pack expansion
+    /// before the pack's position): the caller keeps the whole-atom
+    /// answer. Only reached after a substitution failure, so the
+    /// satisfied path is unchanged.
     fn sat_concept_id_partial(
         &mut self,
         entity: DeclId,
@@ -721,13 +748,21 @@ impl Sema<'_, '_> {
         let c = self.ast.first(DeclId::from_raw(n.a())?);
         let written: Vec<TemplateArg> = self.ast.types.args(ArgListId::from_raw(n.b())?).to_vec();
         let params = self.template_params(c).clone();
-        if params.len() != written.len()
+        // The parameters before a trailing pack take one argument each,
+        // written or defaulted; the pack takes the rest, substituted as
+        // one group (expanding a pack expansion among them).
+        let pack =
+            params.last().is_some_and(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack));
+        let fixed = params.len() - usize::from(pack);
+        if params.len() > 64
             || written.len() > 64
-            || params.iter().any(|&p| {
-                self.kind_of(p) == DeclKind::NonTypeTemplateParm
-                    || self.ast.template_parm(p).is_some_and(|i| i.pack)
-            })
-            || written.iter().any(|&a| self.is_pack_expansion_arg(a))
+            || (!pack && written.len() > params.len())
+            || params.iter().any(|&p| self.kind_of(p) == DeclKind::NonTypeTemplateParm)
+            || params[..fixed].iter().any(|&p| self.ast.template_parm(p).is_some_and(|i| i.pack))
+            || written.iter().take(fixed).any(|&a| self.is_pack_expansion_arg(a))
+            || params[written.len().min(fixed)..fixed]
+                .iter()
+                .any(|&p| self.template_default(p).is_none())
         {
             return None;
         }
@@ -735,23 +770,46 @@ impl Sema<'_, '_> {
         let at = loc.unwrap_or_else(|| self.begin_loc(e));
         let outer = self.inst.concepts.poisoned.last().copied().filter(|&(p, _)| p == entity);
         let outer_level = outer.map(|(p, _)| self.template_param_depth(p));
+        let poisoned = |s: &Self, a: TemplateArg| match (outer, outer_level) {
+            (Some((_, m)), Some(level)) => {
+                s.used_template_params_in_arg(a, level).is_none_or(|u| u & m != 0)
+            }
+            _ => false,
+        };
+        let depth = self.template_param_depth(c);
         let mut mask = 0u64;
         let mut first: Option<Diag> = None;
-        let mut args = Vec::with_capacity(written.len());
-        for (i, &a) in written.iter().enumerate() {
-            if let (Some((_, m)), Some(level)) = (outer, outer_level)
-                && self.used_template_params_in_arg(a, level).is_none_or(|u| u & m != 0)
-            {
-                mask |= 1 << i;
-                args.push(TemplateArg::NULL);
-                continue;
-            }
-            let one = self.ast.types.arg_list(&[a]);
-            let r = self.constraint_subst(entity, levels, at, |sub| sub.args(one, at).ok());
-            match r {
-                Some((Some(l), Ok(()))) if self.ast.types.args(l).len() == 1 => {
-                    args.push(self.ast.types.args(l)[0]);
+        let mut args = Vec::with_capacity(params.len());
+        for (i, &p) in params.iter().enumerate() {
+            let group: &[TemplateArg] = if i < fixed {
+                written.get(i).map_or(&[], std::slice::from_ref)
+            } else {
+                written.get(fixed..).unwrap_or(&[])
+            };
+            let r = if i < fixed && group.is_empty() {
+                // A default argument ([temp.arg.general]/9) is substituted
+                // with the concept's arguments before it; one naming a
+                // failed parameter fails too.
+                let def = self.template_default(p)?;
+                if self.used_template_params_in_arg(def, depth).is_none_or(|u| u & mask != 0) {
+                    mask |= 1 << i;
+                    args.push(TemplateArg::NULL);
+                    continue;
                 }
+                let prior = args.clone();
+                self.in_sfinae(FrameKind::ConstraintSubstitution, c, None, at, |s| {
+                    s.default_template_arg(c, depth, p, def, at, &prior).ok()
+                })
+            } else {
+                if group.iter().any(|&a| poisoned(self, a)) {
+                    mask |= 1 << i;
+                    args.push(TemplateArg::NULL);
+                    continue;
+                }
+                self.subst_concept_arg_group(entity, levels, at, group, i >= fixed)
+            };
+            match r {
+                Some((Some(a), Ok(()))) => args.push(a),
                 Some((_, st)) => {
                     if first.is_none() {
                         first = st.err().flatten();
@@ -765,7 +823,6 @@ impl Sema<'_, '_> {
         if mask == 0 {
             return None;
         }
-        let depth = self.template_param_depth(c);
         let c_levels = self.prior_levels(c, depth, &args);
         let shown = self.ast.types.arg_list(&args);
         self.inst.concepts.poisoned.push((c, mask));
@@ -786,6 +843,41 @@ impl Sema<'_, '_> {
         }
         recs.extend(s.records);
         Some(false)
+    }
+
+    /// The written arguments `group` of one parameter of a concept-id in
+    /// [`Self::sat_concept_id_partial`], substituted with `levels`: one
+    /// argument, or (`pack`) the trailing pack's group as one pack
+    /// argument (a group written as a single pack stays that pack).
+    fn subst_concept_arg_group(
+        &mut self,
+        entity: DeclId,
+        levels: &MultiLevelArgs,
+        at: Loc,
+        group: &[TemplateArg],
+        pack: bool,
+    ) -> Option<SubstOutcome<TemplateArg>> {
+        let list = self.ast.types.arg_list(group);
+        let r = self.constraint_subst(entity, levels, at, |sub| sub.args(list, at).ok());
+        r.map(|(l, st)| {
+            let l = l.and_then(|l| {
+                let xs = self.ast.types.args(l);
+                if pack {
+                    match (group, xs) {
+                        ([g], [x])
+                            if matches!(g.view(), ArgView::Pack(_))
+                                && matches!(x.view(), ArgView::Pack(_)) =>
+                        {
+                            Some(*x)
+                        }
+                        _ => Some(TemplateArg::pack(l)),
+                    }
+                } else {
+                    (xs.len() == 1).then(|| xs[0])
+                }
+            });
+            (l, st)
+        })
     }
 
     /// Runs `f` on a [`Substituter`] for the constraints of `entity`

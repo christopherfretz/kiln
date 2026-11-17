@@ -42,7 +42,7 @@ pub type SubstResult<T> = Result<T, SubstFail>;
 
 /// What a local declaration of the pattern became (§5.6): one
 /// declaration, or the expansion of a function parameter pack (WP-072).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum DeclOrPack {
     /// The instantiated declaration.
     Decl(DeclId),

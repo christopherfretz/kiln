@@ -6848,12 +6848,29 @@ whose head the notes name. It evaluates:
     `ConceptState::poisoned`; `sat_atom` answers an atom that uses a
     poisoned parameter (or whose use is unknown) as not satisfied
     without substituting it, and a nested concept-id atom passes the
-    poison on per argument; a nested concept-id it cannot split (a
-    pack parameter, as in `cf<T, T>` of `template<class T, class...
-    A> concept cf`) is checked by its use of the poisoned parameters
-    like any other atom, so it is not satisfied when it names one
-    (WP-1571,
-    `temp.constr.normal/concept-id-pack-concept-argument-substitution-failure{,-reject}.cpp`).
+    poison on per argument. A trailing parameter pack takes the
+    remaining arguments as one group (a pack expansion among them
+    expanded): when the group fails, or names a poisoned parameter of
+    the enclosing concept (`cf<T, T>` of `template<class T, class...
+    A> concept cf` inside a concept whose `T` failed), the pack's
+    parameter is poisoned, so only the atoms that name the pack (a
+    fold, a fold expanded constraint) are unsatisfied and a
+    disjunction with a satisfied alternative is satisfied (WP-1571,
+    WP-1579; `temp.constr.normal/concept-id-pack-concept-argument-substitution-failure{,-reject}.cpp`,
+    `concept-id-pack-parameter-partial-satisfaction{,-reject}.cpp`).
+    A parameter with no written argument takes the concept's default
+    argument ([temp.arg.general]/9), substituted with the arguments
+    before it; an invalid default poisons its parameter, and one naming
+    a poisoned parameter is poisoned unsubstituted: `C auto` for `int`
+    with `template<class T, class U = typename T::type> concept C =
+    true` is satisfied (`true` has an empty mapping; GCC 16.1 agrees,
+    clang 19/22 reject; the text decides). Non-type parameters and a
+    pack expansion before the pack's position are not split (the whole
+    concept-id fails). A nested requirement whose constraint-expression
+    does not substitute as a whole is checked the same way, atom by
+    atom ([expr.prim.req.nested]/1, `Sema::sat_nested_requirement`;
+    clang 22 and GCC 16.1 agree). WP-1531,
+    `temp.constr.normal/concept-id-default-argument-substitution-failure{,-reject}.cpp`.
     The first failure is the
     "substituted constraint expression is ill-formed" note. Tests:
     `temp.constr.normal/concept-id-unused-argument-substitution-failure.cpp`,
@@ -7076,6 +7093,28 @@ a parameter's type or a requirement is ([temp.variadic]/5, WP-398); a
 requirement that already fails settles it `false`, and the result then
 drops parameters whose types still name a retained level so it is not
 substituted again.
+
+The requirements AFTER the first dependent one are not substituted by
+the partial substitution ([expr.prim.req.general]/5: lexical order,
+stopping at the requirement that decides the result). In a generic
+lambda of `f<int>`, `requires { typename U::type; typename S<T>::type; }`
+must not form `S<int>` (a hard error inside it) when `U::type` fails.
+The partial substitution then returns a value-dependent copy of the
+pattern, recorded in `ConceptState::deferred_requires`
+(`DeferredRequires`: the pattern, the partial substitution's levels,
+locals and context pairs). The final substitution substitutes the
+pattern once, with the saved levels whose retained levels, and the
+deeper ones (the lambda's own, one level shallower after the partial
+substitution), are its own, and the saved locals mapped on through its
+own (a lambda parameter, a capture, a local of the lambda body). When
+the levels do not line up (more retained levels than the final
+substitution has) the two substitutions run one after the other, as
+before. Not deferred while a pack is expanded element by element or
+when the expression names an enclosing pack unexpanded. clang 19/22
+substitute the later requirements early and reject; GCC 16.1 agrees
+with the text. Tests:
+`expr.prim.req.general/p5-generic-lambda-requirement-order{,-reject}.cpp`.
+WP-1531.
 
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.

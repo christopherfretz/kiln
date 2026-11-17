@@ -273,6 +273,8 @@ Two caveats:
 The c verdicts are rows WP-1526 to WP-1538; the b verdicts worth adding
 for GCC compatibility are WP-1548 to WP-1552 and WP-1553.
 
+WP-1531 fixed, after this run: the generic-lambda requirement order (#30's c 3, `concepts-lambda13`) and a concept's invalid default argument outside the atoms' parameter mappings (#8's c 3, `concepts-defarg2`); both are clang deviations (docs/status/deviations.md). `concepts-return-req1` (accepts-invalid #6) is satisfaction-correct in kiln; the expected ambiguity is GCC's partial ordering of `f()` against `f(...)`, which clang and kiln resolve by constraints. WP-1553 accepts `-ftemplate-depth-N`.
+
 #### Rejects-valid, clang rejects too (2520 cases): 30 largest clusters (1093 cases)
 
 | # | cluster (short pattern) | cases | verdict | reason |

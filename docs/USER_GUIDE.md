@@ -464,6 +464,7 @@ frames.
 | `-fconstexpr-memory=N[k\|m\|g]` | live abstract memory per evaluation (kiln only) | 256 MiB |
 | `-fconstexpr-backtrace-limit=N` | frames in the note backtrace; 0 shows all | 10 |
 | `-ftemplate-depth=N` | template instantiation depth | 1024 |
+| `-ftemplate-depth-N` | GCC's spelling of `-ftemplate-depth=N` (clang accepts it too) | — |
 | `-fkiln-stack-size=N[k\|m\|g]` | the compiling thread's stack (kiln only; at least 4 MiB) | 1 GiB |
 
 For example, hitting the memory budget looks like this:

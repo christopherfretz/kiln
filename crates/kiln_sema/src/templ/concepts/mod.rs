@@ -67,6 +67,23 @@ pub struct SatCounters {
 /// level.
 pub(crate) type AtomKey = (ExprId, Vec<ArgListId>);
 
+/// A requires-expression whose substitution a partial substitution (an
+/// enclosing generic lambda's levels retained) stopped at its first
+/// dependent requirement ([expr.prim.req.general]/5: substitution
+/// proceeds in lexical order and stops at the requirement that decides
+/// the result, so a later requirement is not substituted before the
+/// earlier one is known; spec/sema-templates.md §8.5). The copy keeps
+/// the pattern's requirements; the final substitution substitutes
+/// `pattern` with `levels` (its retained levels replaced by the final
+/// ones) and `locals` (composed with the final substitution's).
+#[derive(Clone, Debug, kiln_snap::Snap)]
+pub struct DeferredRequires {
+    pub(crate) pattern: ExprId,
+    pub(crate) levels: crate::templ::args::MultiLevelArgs,
+    pub(crate) locals: Vec<(DeclId, crate::templ::subst::DeclOrPack)>,
+    pub(crate) pairs: Vec<(DeclId, DeclId)>,
+}
+
 /// The concept engine's state (§11.2).
 #[derive(Debug, Default, kiln_snap::Snap)]
 pub struct ConceptState {
@@ -111,6 +128,9 @@ pub struct ConceptState {
     /// The type-constraint location of a variable or function declared
     /// with a constrained placeholder (`C auto x`, `C auto f()`).
     pub(crate) placeholder_locs: FxHashMap<DeclId, Loc>,
+    /// The requires-expressions a partial substitution left as their
+    /// pattern ([`DeferredRequires`]), by the copy it returned.
+    pub(crate) deferred_requires: FxHashMap<ExprId, DeferredRequires>,
     /// While a concept's constraint is checked with a parameter mapping
     /// whose substitution failed for some parameters (§8.3): the concept
     /// and the failed parameters, one bit per index. An atom naming one is
