@@ -11,6 +11,20 @@
 //!
 //! See `docs/ARCHITECTURE.md` and `spec/llvm.md` for the contract this crate
 //! implements.
+//!
+//! # Reading a module
+//!
+//! Everything the printer prints is reachable through `&Module` with
+//! accessors and borrowed slices (`spec/llvm.md` "Read view"): the print
+//! order ([`Module::functions`], [`Module::global_ids`],
+//! [`Module::alias_ids`]), headers, [`Inst::kind`] ([`InstKind`]), the
+//! operand and index pools ([`Function::ops`], [`Function::idx`]), call and
+//! landing-pad side data ([`Function::call_data`],
+//! [`Function::landing_pad`]), metadata attachments, debug records, the
+//! constant, attribute, metadata and inline-asm tables, named metadata and
+//! the id-to-name lookups. Nothing reachable from `&Module` can change it.
+//! The view is a kiln-internal surface with no stability promise: it
+//! changes with the model, and its readers are built in kiln's CI.
 #![forbid(unsafe_code)]
 
 mod attr;
@@ -34,14 +48,15 @@ pub use constant::{ConstData, IntValue};
 pub use error::{IrError, IrErrorKind, IrResult};
 pub use function::{DbgRecord, DbgRecordKind, Function};
 pub use inst::{
-    Align, BinOp, CallConv, CastOp, Clause, FastMath, Flags, FloatPredicate, GepFlags, Inst,
-    IntPredicate, Opcode, OperandBundle, Ordering, RmwOp, SyncScope, TailKind,
+    Align, BinOp, CallConv, CallData, CastOp, Clause, FastMath, Flags, FloatPredicate, GepFlags,
+    Inst, InstKind, IntPredicate, LandingPadData, OpRange, Opcode, OperandBundle, Ordering, RmwOp,
+    SyncScope, TailKind,
 };
 pub use metadata::{MdField, MdNode};
 pub use module::*;
 pub use types::{TypeData, TypeId, TypeTable};
 pub use value::{
-    AliasId, AsmId, AttrSetId, BlockId, ConstId, FuncId, GlobalId, InstId, MdKindId, MetadataId,
-    Value, ValueRef,
+    AliasId, AsmId, AttrSetId, BlockId, ComdatId, ConstId, FuncId, GlobalId, InstId, MdKindId,
+    MetadataId, Value, ValueRef,
 };
 pub use verify::verify_function;

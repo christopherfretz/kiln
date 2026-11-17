@@ -62,8 +62,9 @@ pub enum MdNode {
 
 impl MdNode {
     /// True if the node gets a `!N` slot (tuples and specialized nodes
-    /// other than `DIExpression`/`DIArgList`).
-    pub(crate) fn is_numbered(&self) -> bool {
+    /// other than `DIExpression`/`DIArgList`); strings, values and the two
+    /// inline kinds print in place at every use.
+    pub fn is_numbered(&self) -> bool {
         match self {
             MdNode::Tuple { .. } => true,
             MdNode::Specialized { name, .. } => !is_inline_specialized(name),
@@ -71,7 +72,8 @@ impl MdNode {
         }
     }
 
-    pub(crate) fn is_distinct(&self) -> bool {
+    /// True for a `distinct` tuple or specialized node.
+    pub fn is_distinct(&self) -> bool {
         matches!(
             self,
             MdNode::Tuple { distinct: true, .. } | MdNode::Specialized { distinct: true, .. }

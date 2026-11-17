@@ -13,6 +13,8 @@ use std::process::{Command, Stdio};
 
 use kiln_llvm::Module;
 
+pub mod view_print;
+
 /// Locate an LLVM 19 tool (`llvm-as`, `opt`, `clang`).
 pub fn tool(name: &str) -> Option<PathBuf> {
     let versioned = format!("{name}-19");
@@ -92,6 +94,7 @@ pub fn check(m: &Module, expect: &[&str]) -> String {
     m.print(&mut buf).expect("print to Vec");
     let text = String::from_utf8(buf).expect("printer emits UTF-8");
     assert_eq!(text, m.to_text(), "print() and to_text() agree");
+    assert_same_text("view printer vs to_text()", &view_print::print(m), &text);
     let mut from = 0;
     for e in expect {
         match text[from..].find(e) {

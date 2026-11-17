@@ -329,6 +329,12 @@ impl SyncScope {
     pub const SYSTEM: SyncScope = SyncScope(0);
     /// `syncscope("singlethread")`.
     pub const SINGLE_THREAD: SyncScope = SyncScope(1);
+
+    /// Dense index into the module's scope table (0 and 1 are the two
+    /// fixed scopes; [`crate::Module::sync_scope_name`]).
+    pub fn index(self) -> usize {
+        usize::from(self.0)
+    }
 }
 
 /// `atomicrmw` operations.
@@ -444,9 +450,9 @@ impl CallConv {
     /// `aarch64_sve_vector_pcs`.
     pub const AARCH64_SVE_VECTOR_PCS: CallConv = CallConv(98);
 
-    /// The textual keyword (`None` for ccc; `cc N` is used for unknown
-    /// numbers).
-    pub(crate) fn keyword(self) -> Option<&'static str> {
+    /// The textual keyword: `None` for `ccc` (not printed), the empty
+    /// string for a number without a keyword (printed `cc N`).
+    pub fn keyword(self) -> Option<&'static str> {
         Some(match self.0 {
             0 => return None,
             8 => "fastcc",
@@ -505,7 +511,9 @@ impl Align {
     }
 }
 
-/// A range in a function operand pool.
+/// A range in a function's operand pool ([`crate::Function::ops`]) or index
+/// pool ([`crate::Function::idx`]); which pool is fixed by the
+/// [`InstKind`] field that holds it.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 pub struct OpRange {
     pub(crate) start: u32,
@@ -513,6 +521,16 @@ pub struct OpRange {
 }
 
 impl OpRange {
+    /// Number of entries.
+    pub fn len(self) -> usize {
+        self.len as usize
+    }
+
+    /// True when the range is empty.
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
     pub(crate) fn range(self) -> std::ops::Range<usize> {
         self.start as usize..(self.start + self.len) as usize
     }
@@ -582,183 +600,321 @@ impl Opcode {
     }
 }
 
-/// Compact instruction payload.
+/// An instruction's payload (part of the read view, `spec/llvm.md` "Read
+/// view"; [`Inst::kind`]).
+///
+/// The enum is exhaustive on purpose: a reader that matches it fails to
+/// build when a kind is added, instead of skipping it. Operands are
+/// [`Value`]s; [`OpRange`]s are ranges of the function's operand pool
+/// ([`crate::Function::ops`]) or index pool ([`crate::Function::idx`]);
+/// `Call`, `Invoke`, `CallBr` and `LandingPad` carry the index of their
+/// side data ([`crate::Function::call_data`],
+/// [`crate::Function::landing_pad`]). An absent optional operand is a value
+/// for which [`Value::is_none`] holds. Operands are stored as built: a use
+/// of an erased declaration reads through [`crate::Module::resolve`].
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum InstKind {
+pub enum InstKind {
+    /// A binary operator (`add`, `fmul`, ...).
     Binary {
+        /// Operator.
         op: BinOp,
+        /// `nuw`/`nsw`/`exact`/`disjoint` (only those the operator allows).
         flags: Flags,
+        /// Fast-math flags (floating-point operators).
         fmf: FastMath,
+        /// Left operand.
         lhs: Value,
+        /// Right operand.
         rhs: Value,
     },
+    /// `fneg`.
     FNeg {
+        /// Fast-math flags.
         fmf: FastMath,
+        /// Operand.
         val: Value,
     },
+    /// `icmp`.
     ICmp {
+        /// Predicate.
         pred: IntPredicate,
+        /// Left operand.
         lhs: Value,
+        /// Right operand.
         rhs: Value,
     },
+    /// `fcmp`.
     FCmp {
+        /// Predicate.
         pred: FloatPredicate,
+        /// Fast-math flags.
         fmf: FastMath,
+        /// Left operand.
         lhs: Value,
+        /// Right operand.
         rhs: Value,
     },
+    /// A conversion; the destination type is the instruction's type.
     Cast {
+        /// Conversion.
         op: CastOp,
+        /// `nuw`/`nsw` (`trunc`), `nneg` (`zext`, `uitofp`).
         flags: Flags,
         /// Fast-math flags (`fpext`/`fptrunc`, LLVM 20+).
         fmf: FastMath,
+        /// Operand.
         val: Value,
     },
+    /// `alloca`.
     Alloca {
+        /// The allocated type.
         allocated: TypeId,
+        /// The element count; `is_none` when absent (one element).
         count: Value,
+        /// Alignment.
         align: Align,
+        /// `inalloca`.
         inalloca: bool,
     },
+    /// `load`; the loaded type is the instruction's type.
     Load {
+        /// Address.
         ptr: Value,
+        /// Alignment.
         align: Align,
+        /// `volatile`.
         volatile: bool,
+        /// Atomic ordering ([`Ordering::NotAtomic`] for a plain load).
         ordering: Ordering,
+        /// Synchronization scope (atomic loads).
         scope: SyncScope,
     },
+    /// `store`.
     Store {
+        /// Stored value.
         val: Value,
+        /// Address.
         ptr: Value,
+        /// Alignment.
         align: Align,
+        /// `volatile`.
         volatile: bool,
+        /// Atomic ordering ([`Ordering::NotAtomic`] for a plain store).
         ordering: Ordering,
+        /// Synchronization scope (atomic stores).
         scope: SyncScope,
     },
+    /// `fence`.
     Fence {
+        /// Ordering.
         ordering: Ordering,
+        /// Synchronization scope.
         scope: SyncScope,
     },
+    /// `cmpxchg`.
     CmpXchg {
+        /// Address.
         ptr: Value,
+        /// Expected value.
         cmp: Value,
+        /// New value.
         new: Value,
+        /// Alignment.
         align: Align,
+        /// Success ordering.
         success: Ordering,
+        /// Failure ordering.
         failure: Ordering,
+        /// `weak`.
         weak: bool,
+        /// `volatile`.
         volatile: bool,
+        /// Synchronization scope.
         scope: SyncScope,
     },
+    /// `atomicrmw`.
     AtomicRmw {
+        /// Operation.
         op: RmwOp,
+        /// Address.
         ptr: Value,
+        /// Operand.
         val: Value,
+        /// Alignment.
         align: Align,
+        /// Ordering.
         ordering: Ordering,
+        /// `volatile`.
         volatile: bool,
+        /// Synchronization scope.
         scope: SyncScope,
     },
-    /// `ops[0]` is the base pointer.
+    /// `getelementptr`.
     Gep {
+        /// Source element type.
         source: TypeId,
+        /// `inbounds`/`nusw`/`nuw`.
         flags: GepFlags,
+        /// Operand pool: the base pointer, then the indices.
         ops: OpRange,
     },
-    /// `idx` ranges into the index pool.
+    /// `extractvalue`.
     ExtractValue {
+        /// Aggregate.
         agg: Value,
+        /// Index pool: the indices.
         idx: OpRange,
     },
+    /// `insertvalue`.
     InsertValue {
+        /// Aggregate.
         agg: Value,
+        /// Inserted value.
         val: Value,
+        /// Index pool: the indices.
         idx: OpRange,
     },
+    /// `extractelement`.
     ExtractElement {
+        /// Vector.
         vec: Value,
+        /// Lane index.
         idx: Value,
     },
+    /// `insertelement`.
     InsertElement {
+        /// Vector.
         vec: Value,
+        /// Inserted element.
         elt: Value,
+        /// Lane index.
         idx: Value,
     },
-    /// `mask` ranges into the index pool; `u32::MAX` is a poison element.
+    /// `shufflevector`.
     ShuffleVector {
+        /// First vector.
         a: Value,
+        /// Second vector.
         b: Value,
+        /// Index pool: the mask; [`crate::SHUFFLE_POISON`] (`u32::MAX`) is a
+        /// poison lane.
         mask: OpRange,
     },
-    /// Pairs `(value, block)` in the operand pool.
+    /// `phi`.
     Phi {
+        /// Fast-math flags.
         fmf: FastMath,
+        /// Operand pool: pairs `(value, block)`, the block a
+        /// [`crate::ValueRef::Block`].
         incoming: OpRange,
     },
+    /// `select`.
     Select {
+        /// Fast-math flags.
         fmf: FastMath,
+        /// Condition.
         cond: Value,
+        /// Value if true.
         t: Value,
+        /// Value if false.
         f: Value,
     },
+    /// `call`: the index of its [`CallData`].
     Call(u32),
+    /// `invoke`: the index of its [`CallData`] (with `normal` and `unwind`).
     Invoke(u32),
-    /// `callbr` (`asm goto`): `normal` is the fallthrough, `indirect` the
-    /// label destinations of its `CallData`.
+    /// `callbr` (`asm goto`): the index of its [`CallData`], whose `normal`
+    /// is the fallthrough and `indirect` the label destinations.
     CallBr(u32),
+    /// `landingpad`: the index of its [`LandingPadData`].
     LandingPad(u32),
+    /// `resume`.
     Resume {
+        /// The exception value.
         val: Value,
     },
-    /// `handlers` are blocks; `unwind` is `Value::NONE` for "to caller".
+    /// `catchswitch`.
     CatchSwitch {
+        /// Parent pad; `is_none` for `within none`.
         parent: Value,
+        /// Operand pool: the handler blocks.
         handlers: OpRange,
+        /// Unwind block; `is_none` for "to caller".
         unwind: Value,
     },
+    /// `catchpad`.
     CatchPad {
+        /// The `catchswitch`.
         parent: Value,
+        /// Operand pool: the arguments.
         args: OpRange,
     },
-    /// `parent` is `Value::NONE` for `within none`.
+    /// `cleanuppad`.
     CleanupPad {
+        /// Parent pad; `is_none` for `within none`.
         parent: Value,
+        /// Operand pool: the arguments.
         args: OpRange,
     },
+    /// `catchret`.
     CatchRet {
+        /// The `catchpad`.
         pad: Value,
+        /// Destination.
         dest: BlockId,
     },
+    /// `cleanupret`.
     CleanupRet {
+        /// The `cleanuppad`.
         pad: Value,
+        /// Unwind block; `is_none` for "to caller".
         unwind: Value,
     },
+    /// Unconditional `br`.
     Br {
+        /// Destination.
         dest: BlockId,
     },
+    /// Conditional `br`.
     CondBr {
+        /// Condition.
         cond: Value,
+        /// Destination if true.
         t: BlockId,
+        /// Destination if false.
         f: BlockId,
     },
-    /// Pairs `(constant, block)` in the operand pool.
+    /// `switch`.
     Switch {
+        /// Condition.
         cond: Value,
+        /// Default destination.
         default: BlockId,
+        /// Operand pool: pairs `(constant, block)`.
         cases: OpRange,
     },
+    /// `indirectbr`.
     IndirectBr {
+        /// Address.
         addr: Value,
+        /// Operand pool: the possible destinations (blocks).
         dests: OpRange,
     },
+    /// `ret`.
     Ret {
+        /// Returned value; `is_none` for `ret void`.
         val: Value,
     },
+    /// `unreachable`.
     Unreachable,
+    /// `freeze`.
     Freeze {
+        /// Operand.
         val: Value,
     },
+    /// `va_arg`; the result type is the instruction's type.
     VaArg {
+        /// The `va_list` pointer.
         list: Value,
     },
 }
@@ -772,6 +928,11 @@ pub struct Inst {
 }
 
 impl Inst {
+    /// The payload: opcode, flags and operands.
+    pub fn kind(&self) -> &InstKind {
+        &self.kind
+    }
+
     /// Result type (`void` if none).
     pub fn ty(&self) -> TypeId {
         self.ty
@@ -826,9 +987,10 @@ impl Inst {
     }
 }
 
-/// Side data of `call`/`invoke`.
+/// Side data of `call`, `invoke` and `callbr` ([`InstKind::Call`],
+/// [`crate::Function::call_data`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct CallData {
+pub struct CallData {
     pub(crate) callee: Value,
     pub(crate) fn_ty: TypeId,
     pub(crate) args: OpRange,
@@ -842,6 +1004,64 @@ pub(crate) struct CallData {
     /// `callbr` indirect destinations.
     pub(crate) indirect: Vec<BlockId>,
     pub(crate) bundles: Vec<OperandBundle>,
+}
+
+impl CallData {
+    /// The callee: a function, an alias, inline asm
+    /// ([`crate::ValueRef::Asm`]) or any pointer value.
+    pub fn callee(&self) -> Value {
+        self.callee
+    }
+
+    /// The function type of the call.
+    pub fn fn_ty(&self) -> TypeId {
+        self.fn_ty
+    }
+
+    /// Operand pool: the arguments.
+    pub fn args(&self) -> OpRange {
+        self.args
+    }
+
+    /// Call-site attributes (function, return, parameters).
+    pub fn attrs(&self) -> &crate::attr::AttrList {
+        &self.attrs
+    }
+
+    /// Calling convention.
+    pub fn cc(&self) -> CallConv {
+        self.cc
+    }
+
+    /// Tail marker (`call` only).
+    pub fn tail(&self) -> TailKind {
+        self.tail
+    }
+
+    /// Fast-math flags.
+    pub fn fmf(&self) -> FastMath {
+        self.fmf
+    }
+
+    /// `invoke`: the normal destination; `callbr`: the fallthrough.
+    pub fn normal(&self) -> Option<BlockId> {
+        self.normal
+    }
+
+    /// `invoke`: the unwind destination.
+    pub fn unwind(&self) -> Option<BlockId> {
+        self.unwind
+    }
+
+    /// `callbr`: the indirect (label) destinations.
+    pub fn indirect(&self) -> &[BlockId] {
+        &self.indirect
+    }
+
+    /// Operand bundles, in order.
+    pub fn bundles(&self) -> &[OperandBundle] {
+        &self.bundles
+    }
 }
 
 /// An operand bundle `"tag"(ty val, ...)` on a call.
@@ -862,9 +1082,22 @@ pub enum Clause {
     Filter(Value),
 }
 
-/// Side data of `landingpad`.
+/// Side data of `landingpad` ([`InstKind::LandingPad`],
+/// [`crate::Function::landing_pad`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct LandingPadData {
+pub struct LandingPadData {
     pub(crate) cleanup: bool,
     pub(crate) clauses: Vec<Clause>,
+}
+
+impl LandingPadData {
+    /// `cleanup`.
+    pub fn cleanup(&self) -> bool {
+        self.cleanup
+    }
+
+    /// The clauses, in order.
+    pub fn clauses(&self) -> &[Clause] {
+        &self.clauses
+    }
 }
