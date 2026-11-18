@@ -1,0 +1,81 @@
+# The `kiln_hod` workspace (spec/driver.md "In-process back end"; hod's
+# design 0004 section 10): a `kiln++` with hod linked in, compiling in
+# process. It is its OWN workspace, excluded from kiln's root workspace,
+# because it depends on hod by git revision: kiln's root `Cargo.lock` keeps
+# crates.io sources only, so that kiln builds offline from vendored crates.
+# Nothing in the root workspace depends on anything here.
+#
+# Build: `cargo build --release --manifest-path kiln_hod/Cargo.toml`
+# (fetches hod at the locked revision). Test: `cargo xtask kiln-hod test`.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# No version: nothing here is published, and the wrapper prints kiln's
+# (kiln_driver's, the root workspace's) as the stock driver does.
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/christopherfretz/kiln"
+publish = false
+
+[workspace.dependencies]
+kiln_driver = { path = "../crates/kiln_driver" }
+kiln_llvm   = { path = "../crates/kiln_llvm" }
+kiln_hod    = { path = "crates/kiln_hod" }
+# hod (public, MIT OR Apache-2.0), pinned to an exact revision: tag v1.1.0,
+# `hod::EMBED_API` 1. The pin moves in ONE commit: this `rev`, the lock,
+# `kiln_hod::HOD_REV` and the `EMBED_API` assertion (kiln_hod/README.md).
+# Default features (`readers`): this first form compiles the printed text.
+hod = { git = "https://github.com/christopherfretz/hod", rev = "d789a92ab0513dc330124645bd28d8f62532c23c" }
+
+# The root workspace's lint levels, unchanged (kiln's `Cargo.toml`).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+collapsible_match = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+
+# The root workspace's profiles, unchanged (profiles are the workspace
+# root's: these apply to kiln's crates and hod's when built from here).
+# Every profile keeps `panic = "unwind"`: kiln's crash hook and the
+# contained-panic scope of the in-process route rely on it (hod's own
+# release profile aborts; it does not apply here).
+[profile.release]
+debug = 1
+lto = "thin"
+codegen-units = 4
+
+[profile.release.package.kiln_lex]
+codegen-units = 1
+
+[profile.release.package.kiln_source]
+codegen-units = 1
+
+[profile.release.package.kiln_pp]
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+
+[profile.harness]
+inherits = "release"
+opt-level = 3
+debug = 1
+lto = false
+codegen-units = 16
+incremental = true
+debug-assertions = false
+overflow-checks = false

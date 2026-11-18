@@ -42,6 +42,27 @@ pub fn long_version() -> String {
     with_sha(VERSION, GIT_SHA)
 }
 
+/// The `--version` / `-v` line naming a back end built into the binary.
+static BUILT_IN_BACKEND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Sets the one line `--version` and `-v` print after the `LLVM backend:`
+/// line: a wrapper binary that registers an in-process back end names it
+/// and its revision (spec/driver.md "In-process back end"). The stock
+/// `kiln` sets none, so its output is unchanged. Once, before the driver
+/// runs.
+///
+/// # Errors
+///
+/// A line is already set: `line` is handed back.
+pub fn set_built_in_backend(line: String) -> Result<(), String> {
+    BUILT_IN_BACKEND.set(line)
+}
+
+/// The line [`set_built_in_backend`] set, if any.
+pub fn built_in_backend() -> Option<&'static str> {
+    BUILT_IN_BACKEND.get().map(String::as_str)
+}
+
 fn with_sha(version: &str, sha: Option<&str>) -> String {
     match sha {
         Some(s) if !s.is_empty() => format!("{version} ({s})"),

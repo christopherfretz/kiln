@@ -21,6 +21,7 @@ pub mod coverage_flags;
 pub mod crash;
 pub mod debug_flags;
 pub mod deps;
+pub mod entry;
 pub mod features;
 pub mod fp_flags;
 mod help;
@@ -317,6 +318,11 @@ pub(crate) fn print_version(w: &mut dyn Write, tc: &Toolchain, verbose: bool) {
         Ok(i) => writeln!(w, "LLVM backend: {} ({})", i.major, i.dir.display()),
         Err(_) => writeln!(w, "LLVM backend: none (kiln supports LLVM {})", llvm::supported_text()),
     };
+    // A wrapper with an in-process back end names it (spec/driver.md
+    // "In-process back end"); the stock binary sets none.
+    if let Some(l) = version::built_in_backend() {
+        let _ = writeln!(w, "{l}");
+    }
     if verbose && let Some(g) = &tc.gcc {
         for c in &tc.gcc_candidates {
             let _ = writeln!(w, "Found candidate GCC installation: {c}");

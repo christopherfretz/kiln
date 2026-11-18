@@ -2503,6 +2503,54 @@ later crash reported as its own, the rule's exclusions, `-###`, `-v`,
 the trace and the statistics), `tests/contained_panic.rs` (the scope),
 `kiln_llvm` `query.rs` unit tests.
 
+#### The `kiln_hod` workspace (WP-1703)
+
+The wrapper that registers hod lives in this repository as a separate
+cargo workspace, `kiln_hod/` (excluded from the root workspace, its own
+`Cargo.lock`; hod by git revision, pinned in `kiln_hod/Cargo.toml`, so
+the root workspace and its lock never name hod). Crates: `kiln_hod` (the
+library: `Hod`, the `InProcessBackend`) and `kiln-hod-driver` (the binary
+`kiln`; kiln_driver's build script adds `kiln++` beside it). Root-side
+support, used only by it: `kiln_driver::entry::main` (the stock `main`'s
+whole body, so the wrapper runs exactly the stock driver after
+registering) and `version::set_built_in_backend` (one extra `--version`
+line, `In-process back end: hod <tag> (<12-digit revision>)`). The
+library asserts at compile time that hod's `EMBED_API` is the one it was
+written against (1).
+
+**`Hod::compile`** prints the module (`Module::to_text`; the dialect is
+the module's, so the text is what `llc` would have read) and calls hod's
+`compile_object` on it, with options from `Options::from_llc_args(llc_args)`
+and settings read once per process from the environment
+(`Environment::from_process`: hod's jobserver client, `HOD_*`; the
+compression of debug sections for `-gz`). Answers: `Ok` is `Done`;
+hod's `Unsupported` is `Declined(<hod's reason>)`; an `llc` argument
+hod does not know is `Declined(unknown-option)`; every other error
+(malformed input, invalid options, hod's own contained panic
+`internal-panic`, an internal error, an unwritable output) is
+`Failed(<hod's display>)`. hod contains its own panics; `Hod` adds no
+`catch_unwind` (the driver's contained-panic scope covers the call).
+With `HOD_COVERAGE_LOG` set, the record the external executable would
+append (outcome, reason, input kind `text` and size, target, output) is
+appended in process; a log that cannot be written fails the job, as it
+fails the executable. `.mason.meta`: hod appends its own unit (producer
+2) after kiln's, whose bytes are unchanged (hod's spec/codegen.md
+§9.7.5); `kiln_hod/crates/kiln-hod-driver/tests/mason_meta.rs` checks
+that against the LLVM route (WP-1561).
+
+`KILN_HOD_IN_PROCESS=0` leaves the back end unregistered: the wrapper is
+then the stock driver (external route included), for comparisons and
+timings from one build. `cargo xtask kiln-hod build|test|sweep` builds
+the workspace (`--locked`, into `<target>/kiln_hod`), runs its tests, and
+sweeps test files: each compiled with the stock `kiln++` driving hod's
+executable (built from the same revision) and with the wrapper in
+process, for each LLVM dialect, with and without `-g`; the two routes
+must give the same answer and the same object bytes (jobs with `opt`
+triggers, which only the external route takes, are counted apart). Not
+part of `cargo xtask ci`: CI runs it in the `kiln-hod` job of `ci.yml`,
+outside the required set. `kiln_hod/README.md` has the layout and the
+pin update.
+
 ## Compile statistics log
 
 `KILN_STATS_LOG=<path>` (WP-1370; kiln only, read once per run, unset or

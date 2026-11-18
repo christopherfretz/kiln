@@ -50,3 +50,26 @@ jobs:
         run: |
           echo "x86_64 lane: ${{ needs.x86_64.result }}"
           test "${{ needs.x86_64.result }}" = success
+  # The kiln_hod workspace (WP-1703, K6; spec/driver.md "In-process back
+  # end"): kiln++ with hod linked in process, built --locked from its own
+  # lock (hod by git revision), its tests (programs run, a decline falls
+  # back, a contained panic, `.mason.meta` through hod, the stock compiler
+  # without the flag) and the equality sweep of tests/codegen against the
+  # stock kiln++ driving hod's executable. NOT in the required set: no
+  # `check` job needs it, so a fetch of hod that fails cannot hold the
+  # merge queue; a red run is still shown on the PR.
+  kiln-hod:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    container: gcc:16.1.0-trixie
+    env:
+      KILN_REQUIRE_LLVM: "1"
+      KILN_GCC: /usr/local/bin/g++
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: kiln-hod-arm, save-cache: "true" }
+      - run: cargo xtask kiln-hod test
+      - run: cargo xtask kiln-hod sweep tests/codegen
