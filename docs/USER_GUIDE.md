@@ -689,6 +689,15 @@ building kiln, to compile in an LLVM directory to try before the search
 or a GCC driver outside `/usr` (spec/driver.md, "LLVM discovery" and
 "Toolchain").
 
+Experimental: `cargo xtask kiln-hod build --profile release` builds a
+`kiln`/`kiln++` with the hod back end linked in (the `kiln_hod/`
+workspace; it fetches hod from GitHub at a pinned revision). With
+`-fkiln-backend=hod` it compiles objects in its own process instead of
+running a `hod` executable; without the flag it is the stock compiler.
+`--version` names the built-in back end, a module hod declines takes the
+`llc` route as before, and `KILN_HOD_STRICT` and `-Whod-fallback` work
+as for the external route (spec/driver.md, "In-process back end").
+
 ## Debugging, sanitizers and coverage
 
 ### Debug information

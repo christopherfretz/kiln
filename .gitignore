@@ -13,3 +13,6 @@
 # OSS build harness checkouts, build trees and reports (scripts/oss/)
 /.oss/
 __pycache__/
+
+# the kiln_hod workspace's build output, if built without CARGO_TARGET_DIR
+/kiln_hod/target/

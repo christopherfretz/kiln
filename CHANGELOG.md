@@ -12,6 +12,15 @@ Planned as 1.3.0.
 
 ### Added
 
+- Experimental: a `kiln++` with the hod back end linked in (WP-1703;
+  `kiln_hod/`, a separate workspace, so the stock build and its lock are
+  unchanged). With `-fkiln-backend=hod` it compiles objects in process
+  instead of running a `hod` executable, with the same objects, answers
+  and fallback (checked over `tests/codegen` and `tests/conformance`);
+  `--version` names the built-in back end. `cargo xtask kiln-hod
+  build|test|sweep`; CI job `kiln-hod`. `.mason.meta` keeps kiln's bytes
+  through hod (WP-1561).
+
 - `-fmason-metadata=all` names every vague definition row: its `name`
   is the symbol, so a linker can name a definition the optimizer deleted
   (WP-1586). The other levels are unchanged byte for byte.

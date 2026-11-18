@@ -18,6 +18,7 @@ mod gcc_tests;
 mod gen_pp;
 mod gen_reflect;
 mod jobs;
+mod kiln_hod;
 mod landed;
 mod libcxx;
 mod libstdcxx;
@@ -127,6 +128,7 @@ fn command() -> ExitCode {
         Some("pgo-train") => pgo::train_main(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
+        Some("kiln-hod") => kiln_hod::main(args),
         _ => {
             eprint!("{USAGE}");
             ExitCode::FAILURE

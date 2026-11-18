@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
+# A separate workspace with its own lock (hod by git revision): spec/driver.md
+# "In-process back end".
+exclude = ["kiln_hod"]
 
 [workspace.package]
 version = "1.2.1"
