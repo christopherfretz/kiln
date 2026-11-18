@@ -360,6 +360,34 @@ belong, for that unit, to another translation unit (WP-1156). Both are
 The new definition is not checked against the old for ODR equivalence
 (clang checks with its ODR hash): a documented deviation (§10, item 11).
 
+**Exposures (WP-1669).** [basic.link]/17 makes a declaration of an
+entity that is not TU-local, in the purview of a module interface unit
+or module partition outside its private module fragment, ill-formed when
+it is an exposure. kiln checks one of /15's two kinds: the definition of
+a constexpr variable (namespace scope or a static data member; external
+or module linkage, so exported or not, [basic.link]/3.2.1) whose value
+is TU-local, that is, is or points to (a reference: is bound to) a
+variable or function with internal linkage, or is an object holding one
+in a subobject ([basic.link]/16): "constexpr variable 'p' is initialized
+to a TU-local value: it exposes TU-local entity 'hidden'", at the
+variable, after its value is computed (`module_check_constexpr_exposure`;
+kiln's wording: clang 22 accepts, GCC 16.1 rejects with its own text at
+the same column). A `const` variable that is not constexpr has its
+initializer ignored (/15.2) and is not checked; a TU-local constexpr
+variable (static, in an unnamed namespace) may hold such a value; in the
+private module fragment the rule does not apply (/17: deprecated
+elsewhere; GCC 16.1 rejects there too, kiln follows the text). Not
+checked yet (`basic.link/exposure-names-tu-local-entity.cpp`, xfail):
+the other kind, a declaration that names a TU-local entity outside what
+/15 ignores (an inline function's body, a signature, a constexpr local
+of an inline function), which GCC 16.1 rejects and clang 22 warns about
+(`-WTU-local-entity-exposure`). Not clear from the text, so not
+checked: an inline (not constexpr) variable whose initializer names a
+TU-local entity (`export inline int *ip = &hidden;`): /15.2 ignores the
+initializer of every variable, yet both compilers diagnose it. Tests:
+`basic.link/exposure-constexpr-tu-local-value.cpp`,
+`basic.link/exposure-constexpr-not-tu-local.cpp`.
+
 ## 7. Code generation and mangling
 
 Codegen treats a declaration owned by an imported named-module unit
@@ -418,8 +446,19 @@ variables and implicit instantiations are the importer's own
 followed: a `thread_local` one is a strong definition in the importer
 (a duplicate symbol at the link), and a value naming an internal-linkage
 variable points at the importer's own copy of it (a different object;
-the exported declaration is an exposure, [basic.link]/15-17, which
-neither compiler diagnoses); kiln keeps both `external`. A
+the exported declaration is an exposure, [basic.link]/15-17: GCC 16.1
+and, for a constexpr one, kiln reject it, §5 "Exposures"); kiln keeps
+both `external`. For `thread_local` (WP-1669) clang 22 defines every
+such variable again in each importer, constant or not, with the
+`_ZTH` alias of its own `__tls_init`, which the module object also
+defines: the program does not link. kiln's importer does what it does
+for an `extern thread_local` declaration (Itanium ABI §3.4 "Thread-local
+storage"; clang's own non-module output): an `external thread_local`
+declaration, a `linkonce_odr hidden` comdat `_ZTW` wrapper when the
+variable may have a dynamic initializer, and an `extern_weak` `_ZTH`
+declaration; a constant-initialized one with constant destruction is
+accessed directly (`module.import/thread-local-vars-run.cpp`, a module
+and two importers). A
 lifetime-extended temporary bound to such a variable's reference is an
 `external` symbol of the module unit (clang 22: `internal`, deviation
 12), which an importer declares, `available_externally` with its value
@@ -543,6 +582,25 @@ functions implement that across object files:
   functions, such as libc++'s `std` (whose GMF is all inline/template
   code), has an empty initializer that importers do not call. Header
   units have no initializer.
+  **Instantiated members (WP-1669).** A static data member of a class
+  template specialization, or a variable template specialization, that
+  the unit instantiated (by an explicit instantiation definition of the
+  class or of the member, or implicitly) counts too, when its
+  initialization or destruction does something (clang
+  `InstantiateVariableDefinition` → `CheckCompleteVariableDeclaration`):
+  one under an explicit instantiation declaration does not, nor one with
+  a constant initializer, except a variable template specialization an
+  explicit instantiation definition names (`template int vt<int>;`:
+  `weak_odr`, not discardable; clang 22 counts it, but not `template
+  int V<int>::v;`; `tests/codegen/module_init_const_inst_member.cpp`). A member the importer instantiates again
+  counts for the unit that created the specialization. Its
+  initialization is unordered ([basic.start.dynamic]/1): nothing orders
+  it against the importer's initializers, it is only complete before
+  `main` and done once (the definitions of an explicit instantiation are
+  the module's, an implicit one's copies are comdat-keyed and test one
+  guard). The call is clang's choice again
+  (`tests/codegen/module_init_inst_member.cpp`;
+  `basic.start.dynamic/inst-member-module-{once,order}-run.cpp`).
 
 Mangling (Itanium `<module-name>`, clang 22): an entity at namespace scope
 attached to named module `A.B` with linkage gets `W1AW1B` before its

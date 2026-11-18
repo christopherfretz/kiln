@@ -1099,14 +1099,54 @@ impl Sema<'_, '_> {
     /// not the reverse. The reference-binding tie-breaker
     /// ([temp.deduct.partial]/9) is not applied.
     pub fn more_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
-        let side = |n| Side::Call { nargs: n, object: false, reverse: false };
+        let side = |n| Side::Call { nargs: n, object: ObjectParam::None, reverse: false };
         self.more_specialized_in(a, side(nargs), b, side(nargs))
     }
 
     /// [`Self::more_specialized`] for two conversion function templates
     /// ([temp.deduct.partial]/3.2: their return types are compared).
     pub fn more_specialized_conversion(&mut self, a: DeclId, b: DeclId) -> bool {
-        self.more_specialized_in(a, Side::Conversion, b, Side::Conversion)
+        let side = Side::Conversion { object: None };
+        self.more_specialized_in(a, side, b, side)
+    }
+
+    /// [`Self::more_specialized_conversion`] for an implicit object
+    /// conversion function template against an explicit object one, with
+    /// the object parameter each gets ([`ObjectParam::Ref`] for the
+    /// implicit object one, [`ObjectParam::None`] for the other): their
+    /// return types are compared, and /6.2.2 compares the object
+    /// parameters too.
+    pub(crate) fn more_specialized_conversion_objects(
+        &mut self,
+        a: DeclId,
+        oa: ObjectParam,
+        b: DeclId,
+        ob: ObjectParam,
+    ) -> bool {
+        let side = |o| Side::Conversion { object: Some(o) };
+        self.more_specialized_in(a, side(oa), b, side(ob))
+    }
+
+    /// [`Self::more_specialized`] for two member call candidates of which
+    /// at least one has an explicit object parameter, or two operator
+    /// candidates: each with its object parameter `o*` (inserted or
+    /// skipped), its count of compared declared parameters `n*` (after a
+    /// skipped one), and the parameters of `b` reversed when exactly one
+    /// candidate is a reversed rewritten candidate (`reversed`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn more_specialized_objects(
+        &mut self,
+        a: DeclId,
+        oa: ObjectParam,
+        na: usize,
+        b: DeclId,
+        ob: ObjectParam,
+        nb: usize,
+        reversed: bool,
+    ) -> bool {
+        let sa = Side::Call { nargs: na, object: oa, reverse: false };
+        let sb = Side::Call { nargs: nb, object: ob, reverse: reversed };
+        self.more_specialized_in(a, sa, b, sb)
     }
 
     /// [`Self::more_specialized`] for two operator candidates, each
@@ -1128,9 +1168,9 @@ impl Sema<'_, '_> {
                 .is_some_and(|f| s.kind_of(f) == DeclKind::CXXMethod && !s.has_explicit_object(f))
         };
         let (ma, mb) = (member(self, a), member(self, b));
-        let sa = Side::Call { nargs: nargs_a, object: ma && !mb, reverse: false };
-        let sb = Side::Call { nargs: nargs_b, object: mb && !ma, reverse: reversed };
-        self.more_specialized_in(a, sa, b, sb)
+        let class = |x: bool| if x { ObjectParam::Class } else { ObjectParam::None };
+        let (oa, ob) = (class(ma && !mb), class(mb && !ma));
+        self.more_specialized_objects(a, oa, nargs_a, b, ob, nargs_b, reversed)
     }
 
     fn more_specialized_in(&mut self, a: DeclId, sa: Side, b: DeclId, sb: Side) -> bool {
@@ -1213,7 +1253,7 @@ impl Sema<'_, '_> {
     fn constraints_comparable(&mut self, a: DeclId, sa: Side, b: DeclId, sb: Side) -> bool {
         let unreversed = |s: Side| match s {
             Side::Call { nargs, object, .. } => Side::Call { nargs, object, reverse: false },
-            Side::Conversion => Side::Conversion,
+            c @ Side::Conversion { .. } => c,
         };
         let (sa, sb) = (unreversed(sa), unreversed(sb));
         let heads = |s: &Self, t: DeclId| {
@@ -1246,16 +1286,42 @@ impl Sema<'_, '_> {
         match side {
             Side::Call { object, reverse, .. } => {
                 let mut v = self.proto_param_types(f).0;
-                if object {
-                    let c = self.ast.decls.get(f).ctx()?;
-                    v.insert(0, self.class_type(c));
+                if let Some(o) = self.declared_object_param(f, object) {
+                    v.insert(0, o);
                 }
                 if reverse {
                     v.reverse();
                 }
                 Some(v)
             }
-            Side::Conversion => Some(vec![self.conversion_result_type(f)]),
+            Side::Conversion { object: None } => Some(vec![self.conversion_result_type(f)]),
+            Side::Conversion { object: Some(object) } => {
+                let mut v = self.proto_param_types(f).0;
+                if let Some(o) = self.declared_object_param(f, object) {
+                    v.insert(0, o);
+                }
+                v.push(self.conversion_result_type(f));
+                Some(v)
+            }
+        }
+    }
+
+    /// The parameter type [`Self::declared_param_types`] inserts for
+    /// member `f`'s object parameter: the class type, or X(M), a
+    /// reference to the class with `f`'s cv-qualifiers
+    /// ([temp.func.order]/3).
+    fn declared_object_param(&mut self, f: DeclId, object: ObjectParam) -> Option<QualType> {
+        let class = |s: &Self| s.ast.decls.get(f).ctx().map(|c| s.class_type(c));
+        match object {
+            ObjectParam::None | ObjectParam::Skip => None,
+            ObjectParam::Class | ObjectParam::StaticClass => class(self),
+            ObjectParam::Ref(rvalue) => {
+                let cv = self.method_object_quals(f).0;
+                let c = class(self)?;
+                let t = &mut self.ast.types;
+                let q = t.qualify(c, cv);
+                Some(if rvalue { t.rvalue_ref_to(q) } else { t.lvalue_ref_to(q) })
+            }
         }
     }
 
@@ -1316,48 +1382,60 @@ impl Sema<'_, '_> {
     /// ([temp.deduct.partial]/5-7): references and top-level cv dropped.
     fn ordering_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<OrderingType>> {
         let f = self.templated_function(ft)?;
-        let mut ptys = match side {
+        let mut x_m = None;
+        let ptys = match side {
             Side::Call { nargs, object, .. } => {
                 let mut v = self.proto_param_types(f).0;
+                if object == ObjectParam::Skip && !v.is_empty() {
+                    v.remove(0);
+                }
                 v.truncate(nargs);
-                if object {
+                match object {
                     // The class of the member stands for its object
                     // parameter (cv and reference are dropped below).
-                    let c = self.ast.decls.get(f).ctx()?;
-                    v.insert(0, self.class_type(c));
+                    ObjectParam::Class => {
+                        let c = self.ast.decls.get(f).ctx()?;
+                        v.insert(0, self.class_type(c));
+                    }
+                    // X(M): the class, a reference for /9, with no
+                    // reference type built.
+                    ObjectParam::Ref(rvalue) => {
+                        let c = self.ast.decls.get(f).ctx()?;
+                        let cv = self.method_object_quals(f).0;
+                        let class = self.class_type(c);
+                        let ty = self.ast.types.canonical(class);
+                        x_m = Some(OrderingType { ty, pack: false, refq: Some((!rvalue, cv)) });
+                    }
+                    ObjectParam::None | ObjectParam::Skip | ObjectParam::StaticClass => {}
                 }
                 v
             }
-            Side::Conversion => vec![self.conversion_result_type(f)],
+            Side::Conversion { .. } => vec![self.conversion_result_type(f)],
         };
-        if matches!(side, Side::Call { reverse: true, .. }) {
-            ptys.reverse();
-        }
         let t = &mut self.ast.types;
-        Some(
-            ptys.into_iter()
-                .map(|p| {
-                    let p = t.canonical(p);
-                    // A function parameter pack is compared through its
-                    // pattern ([temp.deduct.partial]/8).
-                    let (p, pack) = match t.view(p.ty()) {
-                        TypeView::PackExpansion { pattern, .. } => (t.canonical(pattern), true),
-                        _ => (p, false),
-                    };
-                    let (p, refq) = match t.canonical_view(p) {
-                        TypeView::LValueRef(x) => {
-                            (t.canonical(x), Some((true, t.effective_quals(x))))
-                        }
-                        TypeView::RValueRef(x) => {
-                            (t.canonical(x), Some((false, t.effective_quals(x))))
-                        }
-                        _ => (p, None),
-                    };
-                    let u = t.unqualified(p);
-                    OrderingType { ty: t.canonical(u), pack, refq }
-                })
-                .collect(),
-        )
+        let mut v: Vec<OrderingType> = x_m
+            .into_iter()
+            .chain(ptys.into_iter().map(|p| {
+                let p = t.canonical(p);
+                // A function parameter pack is compared through its
+                // pattern ([temp.deduct.partial]/8).
+                let (p, pack) = match t.view(p.ty()) {
+                    TypeView::PackExpansion { pattern, .. } => (t.canonical(pattern), true),
+                    _ => (p, false),
+                };
+                let (p, refq) = match t.canonical_view(p) {
+                    TypeView::LValueRef(x) => (t.canonical(x), Some((true, t.effective_quals(x)))),
+                    TypeView::RValueRef(x) => (t.canonical(x), Some((false, t.effective_quals(x)))),
+                    _ => (p, None),
+                };
+                let u = t.unqualified(p);
+                OrderingType { ty: t.canonical(u), pack, refq }
+            }))
+            .collect();
+        if matches!(side, Side::Call { reverse: true, .. }) {
+            v.reverse();
+        }
+        Some(v)
     }
 
     /// Whether the template with ordering types `pa` is at least as
@@ -1730,10 +1808,40 @@ struct OrderingType {
 /// ([temp.deduct.partial]/3).
 #[derive(Clone, Copy, Debug)]
 enum Side {
-    /// A call: the first `nargs` parameter types, after an inserted
-    /// object parameter (`object`), reversed for a reversed rewritten
-    /// candidate (`reverse`).
-    Call { nargs: usize, object: bool, reverse: bool },
-    /// A conversion: the conversion type.
-    Conversion,
+    /// A call: the first `nargs` parameter types (after a skipped
+    /// explicit object parameter), after an inserted object parameter
+    /// (`object`), reversed for a reversed rewritten candidate
+    /// (`reverse`).
+    Call { nargs: usize, object: ObjectParam, reverse: bool },
+    /// A conversion: the conversion type; with `Some(object)` (an
+    /// implicit object conversion function template against an explicit
+    /// object one), [temp.func.order]/6.2.2 also compares the object
+    /// parameters.
+    Conversion { object: Option<ObjectParam> },
+}
+
+/// What partial ordering does with the object parameter of a member
+/// function template compared with a template of another kind
+/// ([temp.func.order]/3, CWG2834; spec/sema-templates.md §6.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ObjectParam {
+    /// Nothing: the declared parameters as they are (an explicit object
+    /// parameter included).
+    None,
+    /// An implicit object member against a non-member operator: the
+    /// class type stands for its object parameter.
+    Class,
+    /// An implicit object member against an explicit object one: the
+    /// inserted parameter X(M), a reference to the class with the
+    /// member's cv-qualifiers, an rvalue reference (`true`) for a `&&`
+    /// member or for one without a ref-qualifier against an rvalue
+    /// reference explicit object parameter.
+    Ref(bool),
+    /// An explicit object member against a static one: its object
+    /// parameter is not compared by deduction; /6.2.2 counts it.
+    Skip,
+    /// A static member against an explicit object one: no parameter is
+    /// inserted for deduction; /6.2.2 compares the class type with the
+    /// other's object parameter.
+    StaticClass,
 }

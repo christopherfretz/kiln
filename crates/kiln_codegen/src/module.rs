@@ -1748,7 +1748,7 @@ impl<'a> Cg<'a> {
 
     /// Whether member `m` of a class template specialization is an
     /// explicit specialization (`template<> void X<int>::f() {}`).
-    fn is_member_explicit_spec(&self, m: DeclId) -> bool {
+    pub(crate) fn is_member_explicit_spec(&self, m: DeclId) -> bool {
         let ast = self.ast;
         ast.member_spec_info(ast.first(m))
             .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)

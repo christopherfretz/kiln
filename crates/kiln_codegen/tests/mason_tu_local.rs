@@ -240,7 +240,9 @@ fn named_cases() {
     assert!(!pass("N2ns6WidgetIN12_GLOBAL__N_11EEEE"));
     assert!(!pass("N2ns6WidgetIN12_GLOBAL__N_15inner4DeepEEE"));
     assert!(!pass("N2ns6WidgetINS_12_GLOBAL__N_16HiddenEEE"));
-    assert!(!pass("N2ns6WidgetI3$_0EE"), "a closure type argument");
+    // `$_1`: the unnamed enumeration above, without linkage, is `$_0`
+    // (clang's numbering; WP-1651).
+    assert!(!pass("N2ns6WidgetI3$_1EE"), "a closure type argument");
     assert!(pass("N2ns6WidgetINSt4__v13inlEEE"));
     assert!(pass("N2ns6WidgetI13InLinkageSpecEE"));
     assert!(!pass("N2ns6WidgetINS0_IN12_GLOBAL__N_14ImplEEEEE"));

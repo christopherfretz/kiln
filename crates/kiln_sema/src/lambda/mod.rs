@@ -1142,20 +1142,26 @@ impl Sema<'_, '_> {
         if let Some(depth) = top.saved_dependent_depth {
             self.ast.templates.dependent_depth = depth;
         }
-        // C++11 [expr.prim.lambda]/2, C++14 [expr.const]/2.6: before C++17
-        // a lambda-expression is never a core constant expression; clang
-        // reports one written directly in a constant-evaluated context
-        // (`PopExpressionEvaluationContext`) outside a dependent context
-        // (a template's default argument is not in one), at its `[`,
+        // Before C++20 a lambda-expression shall not appear in an
+        // unevaluated operand (C++11-17 [expr.prim.lambda]/2) or, from
+        // C++17, in a template-argument; before C++17 it is never a core
+        // constant expression (C++14 [expr.const]/2.6). clang reports one
+        // written directly in such a context (`PopExpressionEvaluationContext`:
+        // not in a lambda body or nested context inside it) outside a
+        // dependent context (a template's default argument is not in
+        // one; a template is checked as instantiated), at its `[`,
         // whatever the evaluation would do (`([]{}, true)`). The
-        // initializer of a constexpr variable is not such a context.
-        // WP-1666.
-        if self.std < kiln_lex::Std::Cxx17
-            && self.in_constant_evaluated()
-            && self.unevaluated == 0
-            && !self.is_dependent_decl_context(self.ctx)
-        {
-            self.error(DiagId::sema_lambda_in_constant_expression, lbracket);
+        // initializer of a constexpr variable is not a constant-evaluated
+        // context, nor a default template argument a template-argument.
+        // WP-1666, WP-1671.
+        if self.std < kiln_lex::Std::Cxx20 && !self.is_dependent_decl_context(self.ctx) {
+            if self.unevaluated > 0 {
+                self.error(DiagId::sema_lambda_unevaluated_operand, lbracket);
+            } else if self.std < kiln_lex::Std::Cxx17 && self.in_constant_evaluated() {
+                self.error(DiagId::sema_lambda_in_constant_expression, lbracket);
+            } else if self.std == kiln_lex::Std::Cxx17 && self.in_template_argument() {
+                self.error(DiagId::sema_lambda_in_invalid_context, lbracket);
+            }
         }
         if top.capture_failed {
             return self.act_on_error_expr(&[], lbracket);

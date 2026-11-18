@@ -14,6 +14,7 @@
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind, TemplLinkKind, VarStorage};
 use kiln_ast::modules::UnitKind;
+use kiln_ast::templates::SpecKind;
 use kiln_llvm::{FuncId, TypeId as LTy};
 
 use crate::module::Cg;
@@ -68,18 +69,46 @@ impl Cg<'_> {
                     DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
                         stack.push(d);
                     }
+                    // Instantiated static data members (an implicit or
+                    // explicit instantiation's) count where sema
+                    // instantiated their definitions (clang
+                    // `InstantiateVariableDefinition` →
+                    // `CheckCompleteVariableDeclaration`; WP-1669): the
+                    // specializations of a class or variable template.
+                    DeclKind::ClassTemplate => {
+                        stack.extend(ast.templates.specs_of(ast.first(d)).iter().copied());
+                    }
+                    DeclKind::VarTemplate => {
+                        for &s in ast.templates.specs_of(ast.first(d)) {
+                            let u = usize::from(ast.modules.owner(s).unit);
+                            if u != 0
+                                && ast.decls.get(s).kind() == DeclKind::VarTemplateSpecialization
+                                && !ast.decls.get(s).has(DeclFlags::INVALID)
+                                && self.var_is_module_initializer(s)
+                            {
+                                own[u] = true;
+                            }
+                        }
+                    }
                     DeclKind::Var => {
-                        let u = usize::from(ast.modules.owner(d).unit);
+                        let in_class = ast.decls.get(ctx).kind().payload()
+                            == kiln_ast::decl::PayloadClass::Record;
+                        // A member of a specialization the importer
+                        // instantiated again counts for the unit that
+                        // created the specialization.
+                        let u = match usize::from(ast.modules.owner(d).unit) {
+                            0 if in_class => usize::from(ast.modules.owner(ctx).unit),
+                            u => u,
+                        };
                         // In its class only an inline member whose
                         // initialization or destruction does something
                         // (a redundant out-of-class redeclaration that
                         // makes it `weak_odr` comes later, WP-1523).
-                        let in_class = ast.decls.get(ctx).kind().payload()
-                            == kiln_ast::decl::PayloadClass::Record;
                         if u != 0
                             && !own[u]
                             && if in_class {
-                                self.var_is_inline(d) && self.var_must_emit(d)
+                                (self.var_is_inline(d) && self.var_must_emit(d))
+                                    || self.instantiated_member_initializer(d)
                             } else {
                                 self.var_is_module_initializer(d)
                             }
@@ -94,6 +123,28 @@ impl Cg<'_> {
         own
     }
 
+    /// A static data member `d` of a class template specialization that
+    /// is not inline, whose definition sema instantiated (implicitly, or
+    /// by an explicit instantiation definition of the class or of the
+    /// member) with an initialization or destruction that does something
+    /// (WP-1669). Its initialization is unordered ([basic.start.dynamic]/1)
+    /// and stays its comdat `global_ctors` entry, guarded by its `_ZGV`;
+    /// counting it only makes importers call `_ZGIW`, as clang 22's do.
+    /// Not an explicit specialization (an ordinary definition, counted at
+    /// namespace scope) nor one under an explicit instantiation
+    /// declaration (not instantiated here).
+    fn instantiated_member_initializer(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let first = ast.first(d);
+        matches!(ast.templ_link(first).get(), Some((TemplLinkKind::MemberOfSpecialization, _)))
+            && !self.var_is_inline(first)
+            && !self.is_member_explicit_spec(first)
+            && self.explicit_inst_kind(first) != Some(SpecKind::ExplicitInstantiationDeclaration)
+            && ast.redecls_of(first).any(|r| {
+                ast.decls.var(r).is_some_and(|v| v.init.is_some()) && self.var_must_emit(r)
+            })
+    }
+
     /// clang `DeclMustBeEmitted` for namespace-scope variable `d`: a
     /// definition that is not discardable, or whose initialization or
     /// destruction has side effects.
@@ -104,7 +155,10 @@ impl Cg<'_> {
         if (ext && v.init.is_none())
             || matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
             || self.is_templated(d)
-            || self.is_explicit_inst_declaration(ast.first(d))
+            // An explicit instantiation definition in an imported unit
+            // counts there (WP-1669); only `extern template` does not.
+            || self.explicit_inst_kind(ast.first(d))
+                == Some(SpecKind::ExplicitInstantiationDeclaration)
         {
             return false;
         }
@@ -123,6 +177,20 @@ impl Cg<'_> {
             })
         {
             return false;
+        }
+        // An instantiation counts only when its initialization or
+        // destruction does something (WP-1669), except a variable
+        // template specialization an explicit instantiation definition
+        // names (`template int vt<int>;`: `weak_odr`, not discardable, so
+        // clang 22 counts it even constant-initialized; a static data
+        // member's, `template int V<int>::v;`, it does not).
+        let named_var_spec =
+            !matches!(
+                ast.templ_link(first).get(),
+                Some((TemplLinkKind::MemberOfSpecialization, _))
+            ) && ast.governing_explicit_inst(first).is_some_and(|(g, _)| g == first);
+        if self.var_instantiation_linkage(first).is_some() && !named_var_spec {
+            return self.var_must_emit(d);
         }
         !self.discardable_var(d) || self.var_must_emit(d)
     }

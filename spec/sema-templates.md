@@ -5898,6 +5898,42 @@ guides.
 2. **Pick the types.** For `Call`, only the parameters that have explicit
    call args (the first `nargs`). For `Conversion`, the return types. For
    `Address`, the function types.
+   **Object parameters** ([temp.func.order]/3; `order.rs::ObjectParam`,
+   chosen by `deduce_call.rs::object_params` from flags the declarations
+   carry: member, explicit object parameter, static, ref-qualifier). The
+   text gives every member function template the inserted parameter X(M),
+   which says nothing sensible for an explicit object member function (two
+   object parameters) or a static one; CWG2834 is open. kiln follows
+   CWG2834's direction as clang 22 (`getMoreSpecializedTemplate`) reads it,
+   accepting exactly what clang 22 and GCC 16.1 both accept (WP-1670):
+   - an explicit object parameter is compared like any parameter (it takes
+     the object argument, [over.match.funcs.general]/4);
+   - an implicit object member against an explicit object member, or
+     against a non-member operator, gets X(M): a reference to its class
+     with its cv-qualifiers, an rvalue reference for a `&&` member or for
+     one without a ref-qualifier whose rival's first parameter is an rvalue
+     reference, else an lvalue reference. Deduction sees the class type
+     with the reference remembered for /9 (no type is built); the
+     /6.2.2 comparison of step 5 sees the reference type. So
+     `int f(C auto)` against `int f(this S &, auto)` is decided by the
+     constraints, and against `int f(this S, auto)` it is ambiguous;
+   - a static member against an explicit object member: no parameter is
+     inserted and the explicit object parameter is skipped by deduction
+     (the static function takes the other's object parameter type). For
+     /6.2.2 the static function's object parameter is the class type, so
+     the constraints decide only against `this S` by value. clang 22
+     never lets the constraints decide such a pair, GCC 16.1 always does;
+     kiln keeps the answer it gave before (deviations.md);
+   - an implicit object conversion function template against an explicit
+     object one: the return types are compared, and /6.2.2 also compares
+     X(M) with the explicit object parameter (GCC 16.1; clang 22 never
+     lets the constraints decide);
+   - two implicit object members, two explicit object members, a static
+     member against an implicit object one and two non-members: unchanged
+     (nothing inserted; this path builds nothing).
+   Tests: `tests/conformance/temp.func.order/p3-implicit-against-explicit-object-run.cpp`,
+   `-ambiguous.cpp`, `p3-static-against-explicit-object-run.cpp`,
+   `-kept.cpp`.
 3. **Adjust** ([temp.deduct.partial]/5–7): remove references and
    top-level cv, but remember for the /9 tie-breaker which side was a
    reference and how it was qualified.

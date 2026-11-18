@@ -1317,8 +1317,10 @@ impl Parser<'_, '_> {
             let e = self.s.act_on_braced_template_arg(&l);
             self.s.builder().template_arg_expr(e)
         } else {
-            let e = self.with_greater_op(false, Self::parse_constant_expr)?;
-            self.s.builder().template_arg_expr(e)
+            let saved = self.s.enter_template_argument();
+            let e = self.with_greater_op(false, Self::parse_constant_expr);
+            self.s.exit_template_argument(saved);
+            self.s.builder().template_arg_expr(e?)
         };
         match self.eat(Punct::Ellipsis) {
             Some(l) => Some(self.s.act_pack_expansion_arg(a, l)),

@@ -118,6 +118,13 @@ pub struct CodegenOptions {
     /// function ([expr.new]/8, C++11 and later; the default). Off (C++98)
     /// the allocation function is passed `SIZE_MAX`, as clang does.
     pub bad_array_new_length: bool,
+    /// GCC's `*` in front of the `type_info` name (`_ZTS`) of a type local
+    /// to the unit, so that libstdc++ compares its `type_info` by address
+    /// only (spec/abi.md "RTTI names of unit-local types", WP-1651). The
+    /// driver sets it when the C++ standard library is libstdc++
+    /// (`-fkiln-rtti-local-marker` / `-fno-kiln-rtti-local-marker`
+    /// override); off by default here.
+    pub rtti_local_name_marker: bool,
     /// `-fcheck-new` (WP-1487, clang `LangOptions::CheckNew`): every
     /// new-expression with an initializer (or of class type) checks the
     /// allocation function's result for null before initializing, the
@@ -776,6 +783,7 @@ impl Default for CodegenOptions {
             c: None,
             exceptions: true,
             bad_array_new_length: true,
+            rtti_local_name_marker: false,
             check_new: false,
             contract_checks: kiln_ast::stmt::ContractChecks::default(),
             elide_constructors: true,

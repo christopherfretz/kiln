@@ -1322,9 +1322,27 @@ pub fn mangle_declared_type(ast: &Ast, anon: &mut AnonIds, q: QualType) -> Strin
 /// `<special-name>` of a type: `prefix` (`_ZTI` / `_ZTS`) followed by its
 /// <type> (WP-080).
 pub fn mangle_rtti(ast: &Ast, anon: &mut AnonIds, q: QualType, prefix: &str) -> String {
+    mangle_rtti_with_marker_check(ast, anon, q, prefix).0
+}
+
+/// [`mangle_rtti`], and whether the mangling names a class without
+/// linkage outside a function by clang's `$_N` (a closure type without a
+/// mangling number, or an unnamed class or enumeration without a typedef
+/// name for linkage at namespace or class scope), or an entity that has
+/// internal linkage only by clang's `internal_linkage` attribute. GCC
+/// 16.1 names the first differently and marks only some of them
+/// unit-local, and ignores the attribute, so kiln never writes the `*`
+/// marker of a `type_info` name that contains one (spec/abi.md "RTTI
+/// names of unit-local types", WP-1651).
+pub fn mangle_rtti_with_marker_check(
+    ast: &Ast,
+    anon: &mut AnonIds,
+    q: QualType,
+    prefix: &str,
+) -> (String, bool) {
     let mut m = Mangler::new(ast, anon, prefix);
     m.ty(q);
-    m.out
+    (m.out, m.no_marker)
 }
 
 /// `prefix` followed by the pointer to member type `M <class> <pointee>`
@@ -1458,6 +1476,12 @@ struct Mangler<'a, 'b> {
     /// <abi-tags> are not written (clang mangles the `TemplateDecl`,
     /// which carries no `abi_tag`; the attribute is on its pattern).
     untagged: Option<DeclId>,
+    /// A name GCC 16.1 does not mark unit-local, or one whose marking
+    /// cannot be established, was written: a `$_N` class without linkage
+    /// whose context is not a function, or an entity with internal
+    /// linkage only by clang's `internal_linkage` attribute, which GCC
+    /// ignores ([`mangle_rtti_with_marker_check`]).
+    no_marker: bool,
 }
 
 /// The structor-variant spelling of one [`Mangler`] run.
@@ -1573,6 +1597,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             ttp_scope: Vec::new(),
             class_scope: Vec::new(),
             untagged: None,
+            no_marker: false,
         }
     }
 
@@ -2282,6 +2307,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// `L` for an internal-linkage name at namespace scope outside an
     /// unnamed namespace (clang `isInternalLinkageDecl`).
     fn l_prefix(&mut self, d: DeclId) {
+        self.no_marker |= self.ast.has_internal_linkage_attr(self.ast.first(d));
         if internal_by_storage(self.ast, d)
             && !in_anon_ns(self.ast, d)
             && self.ast.decls.decomp_bindings(d).is_none()
@@ -2422,6 +2448,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let ast = self.ast;
         let first = ast.first(p);
         if ast.decls.get(first).kind() == DeclKind::Var {
+            self.no_marker |= ast.has_internal_linkage_attr(first);
             let internal = ast.has_internal_linkage_attr(first)
                 || ast.decls.var(first).is_some_and(|v| v.spec.storage() == VarStorage::Static);
             if internal && is_file_context(ast, first) && !in_anon_ns(ast, first) {
@@ -2614,6 +2641,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     // `mangleUnqualifiedName`, no `L`).
                     let fname = decl_name(ast, f);
                     self.source_name(&fname);
+                } else if nm.is_empty() && !tag_externally_visible(ast, ast.first(d)) {
+                    // One without linkage (at namespace scope, in an
+                    // unnamed namespace, or in a class or function without
+                    // linkage) has no mangling number: clang's `$_N`
+                    // (`mangleUnqualifiedName` checks `isExternallyVisible`
+                    // first), not `Ut_`, which two of them would share.
+                    self.anon_struct_id(d);
                 } else if nm.is_empty() {
                     // An unnamed class or enumeration without a typedef
                     // name for linkage: `Ut [ <number> ] _`, the n-th
@@ -2645,9 +2679,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let data = ast.exprs.lambdas.get(l);
         let number = data.mangling.number;
         if number == 0 {
-            let func = self.parent(d).filter(|&p| is_function_kind(ast.decls.get(p).kind()));
-            let n = self.anon.id(ast.first(d), func);
-            self.source_name(&format!("$_{n}"));
+            self.anon_struct_id(d);
             return;
         }
         self.out.push_str("Ul");
@@ -2657,6 +2689,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.out.push_str(&(number - 2).to_string());
         }
         self.out.push('_');
+    }
+
+    /// clang's `$_N` name of an unnamed class or closure type `d` that has
+    /// no mangling number ([`AnonIds`]).
+    fn anon_struct_id(&mut self, d: DeclId) {
+        let ast = self.ast;
+        let func = self.parent(d).filter(|&p| is_function_kind(ast.decls.get(p).kind()));
+        self.no_marker |= func.is_none();
+        let n = self.anon.id(ast.first(d), func);
+        self.source_name(&format!("$_{n}"));
     }
 
     /// <lambda-sig> (clang `mangleLambdaSig`) of a lambda with call

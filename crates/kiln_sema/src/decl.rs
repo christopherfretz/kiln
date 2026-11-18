@@ -8507,6 +8507,7 @@ impl Sema<'_, '_> {
             Ok(cv) => {
                 self.ast.decls.finish_eval(v, Some(cv));
                 self.report_early_odr_uses(v);
+                self.module_check_constexpr_exposure(v, cv);
             }
             Err(_) if self.refers_to_invalid_var(e) => self.ast.decls.finish_eval(v, None),
             Err(mut f) => {

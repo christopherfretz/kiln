@@ -198,6 +198,8 @@ sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declarati
 sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
 sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
 sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
+// [basic.link]/15.2, /17: a constexpr variable of a module interface initialized to a TU-local value is an exposure (GCC 16.1 rejects; clang 22 has no diagnostic; WP-1669).
+sema_constexpr_var_tu_local_value = Error (2) "constexpr variable '{0}' is initialized to a TU-local value: it exposes TU-local entity '{1}'";
 sema_constexpr_virtual_base = Error (3) "constexpr {0:member function|constructor} not allowed in {1:struct|interface|class} with virtual base {2:class|classes}";
 sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
 sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";

@@ -553,6 +553,10 @@ impl CodegenJob<'_> {
             opts.bad_array_new_length = job.std.cplusplus
                 && job.std.lex >= kiln_lex::Std::Cxx11
                 && a.new_bound_check.unwrap_or(true);
+            // WP-1651: GCC's unit-local `type_info` name marker, for
+            // libstdc++'s `type_info` comparison.
+            opts.rtti_local_name_marker = job.std.cplusplus
+                && a.rtti_local_marker.unwrap_or(a.stdlib.unwrap_or_default() == StdLib::LibStdCxx);
             opts.check_new = a.check_new;
             opts.contract_checks = a.contract_checks;
             opts.mason_meta = mason_meta;

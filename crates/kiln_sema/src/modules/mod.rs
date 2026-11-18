@@ -417,6 +417,63 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [basic.link]/15.2, /17: the definition of constexpr variable `v`,
+    /// not TU-local, in the purview of a module interface unit or module
+    /// partition (not its private module fragment), whose value `cv` is
+    /// TU-local, is an exposure, and the program is ill-formed (GCC 16.1;
+    /// clang 22 accepts; WP-1669). A value is TU-local when it is, or
+    /// points to, a function or variable with internal linkage, or is an
+    /// object with such a subobject ([basic.link]/16). Only that rule is
+    /// checked: a declaration that names a TU-local entity (an inline
+    /// function's body, a signature) is not yet (spec/modules.md §5
+    /// "Exposures").
+    pub(crate) fn module_check_constexpr_exposure(
+        &mut self,
+        v: DeclId,
+        cv: kiln_ast::ids::ConstValueId,
+    ) {
+        let Some(f) = self.modules.frames.last() else { return };
+        let kind = self.ast.modules.units.get(usize::from(f.unit)).map(|u| u.kind);
+        if f.phase != Phase::Purview
+            || !kind.is_some_and(|k| k.is_interface() || k == UnitKind::PartitionImplementation)
+            || !self.has_external_linkage(v)
+        {
+            return;
+        }
+        let Some(e) = self.tu_local_referent(cv) else { return };
+        let (name, what) = (self.decl_name(v), self.decl_name(e));
+        let msg = self
+            .diag(DiagId::sema_constexpr_var_tu_local_value, self.ast.decls.get(v).loc())
+            .arg(name)
+            .arg(what);
+        self.emit(msg);
+    }
+
+    /// The internal-linkage function or variable constant value `cv`
+    /// points to, itself or through a subobject.
+    fn tu_local_referent(&self, cv: kiln_ast::ids::ConstValueId) -> Option<DeclId> {
+        use kiln_ast::consts::{ConstValue, PtrBase, Scalar};
+        let mut work = vec![cv];
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        while let Some(c) = work.pop() {
+            if !seen.insert(c) {
+                continue;
+            }
+            match self.ast.consts.get(c) {
+                ConstValue::Scalar(Scalar::Pointer { base, .. }) => match base {
+                    PtrBase::Decl(d) | PtrBase::Function(d) if self.has_internal_linkage(d) => {
+                        return Some(d);
+                    }
+                    PtrBase::Const(c) => work.push(c),
+                    _ => {}
+                },
+                ConstValue::Aggregate(img) => work.extend(img.relocs.iter().map(|r| r.value)),
+                ConstValue::Scalar(_) => {}
+            }
+        }
+        None
+    }
+
     fn module_unit_is_interface(&self) -> bool {
         let cur = usize::from(self.modules.cur());
         self.ast.modules.units.get(cur).is_some_and(|u| u.kind.is_interface())

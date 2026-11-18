@@ -33,6 +33,8 @@
 //!   leave the old declarations in a different place.
 //! - [`coro_end_llvm22`] likewise gives an unlowered coroutine's
 //!   `llvm.coro.end` LLVM 22's form (a `-disable-llvm-passes` case).
+//! - [`strip_rtti_local_marker`] removes GCC's unit-local marker from
+//!   kiln's `type_info` names (`RTTI_LOCAL_MARKER_CASES`, WP-1651).
 //! - [`coro_params_clang19`] drops the `!coro.outside.frame` kiln puts on
 //!   a coroutine's parameter allocas at every compat level (WP-1374,
 //!   clang 22's marking; clang 19 has none and reads freed memory).
@@ -714,6 +716,31 @@ fn md_refs(ir: &str) -> impl Iterator<Item = (usize, u32, usize)> + '_ {
         let n = ir.get(at + 1..at + 1 + digits)?.parse().ok()?;
         Some((at, n, digits + 1))
     })
+}
+
+/// Removes the `*` kiln writes in front of the `type_info` name of a type
+/// local to the unit under libstdc++ (spec/abi.md "RTTI names of
+/// unit-local types", WP-1651; clang never writes it): an `internal`
+/// `@_ZTS...` (or `@"_ZTS..."`) global's `[N x i8] c"*...` becomes
+/// `[N-1 x i8] c"...`. Nothing else changes.
+pub fn strip_rtti_local_marker(ir: &str) -> String {
+    let mut out = String::with_capacity(ir.len());
+    for line in ir.lines() {
+        out.push_str(&strip_marker_line(line).unwrap_or_else(|| line.to_owned()));
+        out.push('\n');
+    }
+    out
+}
+
+fn strip_marker_line(line: &str) -> Option<String> {
+    if !(line.starts_with("@_ZTS") || line.starts_with("@\"_ZTS")) || !line.contains(" internal ") {
+        return None;
+    }
+    let open = line.find(" x i8] c\"*")?;
+    let lb = line[..open].rfind('[')?;
+    let n: usize = line[lb + 1..open].parse().ok()?;
+    let star = open + " x i8] c\"".len();
+    Some(format!("{}[{} x i8] c\"{}", &line[..lb], n - 1, &line[star + 1..]))
 }
 
 #[cfg(test)]

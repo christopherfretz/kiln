@@ -887,6 +887,10 @@ points, thunks and method indices are clang's.
   (the component for that subobject at address point 0 of the group).
   The base-object structor of a class with virtual bases takes the VTT
   as a second, implicit `ptr` parameter after `this`.
+- **RTTI names of unit-local types** (WP-1651): under libstdc++ the
+  `_ZTS` string of a type local to the unit starts with GCC's `*`, so the
+  library compares its `type_info` by address; the rule, its exceptions
+  and the switch are spec/landed/abi/WP-1651.md.
 - **Member function pointers to virtual functions**: see 8.6 (x86-64
   `ptr = offset + 1`; AArch64 `adj = 2 * adj + 1`).
 
@@ -1814,6 +1818,10 @@ differential matrix that gates it are spec/landed/abi/WP-766.md.
   keyed by the empty name. The first mangles `Ut_`, the second `Ut0_`,
   the k-th `Ut{k-2}_` (`_ZN1AUt0_E`, `_ZZ1hvENUt0_1fEv`). The table is
   built in one pass over the declarations on first use.
+- **Without linkage** (WP-1651): one that is not externally visible (at
+  namespace scope, in an unnamed namespace, local to a function whose
+  local entities have no linkage) has no mangling number and is clang's
+  `$_N` (`AnonIds::id`), not `Ut_`.
 - **Linkage** (`tag_externally_visible`): only a namespace-scope unnamed
   class without a typedef name lacks linkage outright (clang
   `getLVForNamespaceScopeDecl` `hasNameForLinkage`); a member one takes

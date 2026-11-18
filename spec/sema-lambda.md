@@ -147,6 +147,30 @@ and the conversion being non-constexpr, no call of them is constant. Run
 time is unchanged. Tests `expr.prim.lambda.closure/p5-*`. Its parameters may have
 default arguments; the [dcl.fct.default]/4 check is the ordinary one.
 
+**Before C++20** (WP-1671; C++11-17 [expr.prim.lambda]/2, removed by
+P0315R4): a lambda-expression shall not appear in an unevaluated operand
+(`sizeof`, `alignof`, `noexcept`, `typeid`, `decltype`, so also in a type
+template argument, an alias, a typedef, a trailing return type or a
+parameter written with `decltype`), nor, from C++17, in a
+template-argument. Checked in `act_on_lambda_end` as clang's
+`PopExpressionEvaluationContext` does, for a lambda written directly in
+the context (not in a lambda body or a nested constant-expression inside
+it) outside a dependent context (so at instantiation in a template), at its
+`[`, in this order: an unevaluated operand
+(`sema_lambda_unevaluated_operand`, "lambda expression in an unevaluated
+operand"), before C++17 a constant-evaluated context (above), at C++17 a
+template-argument (`sema_lambda_in_invalid_context`, "a lambda expression
+cannot appear in this context"; the parser and the substituter mark a
+non-type template argument with `Sema::enter_template_argument`, a default
+template argument only when it is substituted for a use). The other
+C++14/17 places of the rule (an alias-declaration, a typedef, a function
+declaration outside its body and default arguments) are reached only
+through those contexts, as in clang. GCC 16.1 also rejects such lambdas in
+a template never instantiated and `[]() constexpr` at C++14; kiln follows
+clang 22 (docs/status/deviations.md). Tests
+`expr.prim.lambda/unevaluated-operand-*.cpp`,
+`expr.prim.lambda/template-argument-cxx17.cpp`.
+
 **Explicit object parameter** (P0847, WP-356). When the first parameter
 is declared `this T` (`lambda_explicit_object`, clang
 `CheckExplicitObjectLambda`), the call operator is an explicit object

@@ -73,6 +73,10 @@ pub(crate) struct ImmPending {
     /// Depth of manifestly constant-evaluated contexts ([expr.const]/22)
     /// entered by the parser.
     const_eval: u32,
+    /// The [`ImmPending::const_eval`] depth of the innermost
+    /// template-argument being parsed, 0 outside one (clang's
+    /// `EK_TemplateArgument` context; [`Sema::in_template_argument`]).
+    template_arg: u32,
     /// The variable whose initializer the next full-expression is.
     var_init: Option<DeclId>,
     /// Its failed invocations are reported after its constant
@@ -289,6 +293,28 @@ impl Sema<'_, '_> {
         self.imm.pending.const_eval > 0
     }
 
+    /// Marks the constant-expression parsed next as a template-argument
+    /// ([temp.arg]); returns the state for
+    /// [`Sema::exit_template_argument`].
+    pub fn enter_template_argument(&mut self) -> u32 {
+        let p = &mut self.imm.pending;
+        std::mem::replace(&mut p.template_arg, p.const_eval + 1)
+    }
+
+    /// Leaves a template-argument entered with
+    /// [`Sema::enter_template_argument`].
+    pub fn exit_template_argument(&mut self, saved: u32) {
+        self.imm.pending.template_arg = saved;
+    }
+
+    /// Whether the expression being built is directly in a
+    /// template-argument: not in a constant-expression, lambda body or
+    /// other nested context inside it.
+    pub(crate) fn in_template_argument(&self) -> bool {
+        let p = &self.imm.pending;
+        p.template_arg != 0 && p.template_arg == p.const_eval
+    }
+
     /// Leaves a context entered with [`Sema::enter_constant_evaluated`];
     /// `e` is the constant-expression parsed in it, if any.
     pub fn exit_constant_evaluated(&mut self, e: Option<ExprId>) {
@@ -346,7 +372,9 @@ impl Sema<'_, '_> {
         let mut pending = std::mem::take(&mut self.imm.pending);
         if !reset_context {
             self.imm.pending.const_eval = pending.const_eval;
+            self.imm.pending.template_arg = pending.template_arg;
             pending.const_eval = 0;
+            pending.template_arg = 0;
         }
         let immediate = reset_context.then(|| std::mem::take(&mut self.immediate));
         SavedImm { pending, immediate }
@@ -363,6 +391,7 @@ impl Sema<'_, '_> {
         pending.default_uses.extend(inner.default_uses);
         if immediate.is_none() {
             pending.const_eval = inner.const_eval;
+            pending.template_arg = inner.template_arg;
         }
         self.imm.pending = pending;
         if let Some(i) = immediate {

@@ -641,6 +641,7 @@ The full list is spec/driver.md, "Options".
 | `-fkiln-instantiation-report[=all\|json\|text]`, `-fkiln-memory-report` | reports (above) |
 | `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | constexpr profile (above) |
 | `-f[no-]kiln-module-cache` | use the `std` module cache (default on; see [The `std` module cache](#the-std-module-cache)) |
+| `-f[no-]kiln-rtti-local-marker` | GCC's `*` in front of the `type_info` name of a type local to the translation unit (one in an unnamed namespace, a local class of a non-inline function, ...), so that libstdc++ never takes two units' same-named local types for one type in `==`, `catch` or `dynamic_cast`; default: on with libstdc++, off with `-stdlib=libc++`. Use it when the driver cannot see which library you use (`-nostdinc++` with your own include path) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
 | `-f[no-]kiln-pch-snapshot[=write\|load\|check]` | the PCH snapshot (default on; see [Precompiled headers](#precompiled-headers)) |
 | `-fkiln-pch-validate=mtime\|content` | how a PCH's input files are checked (default `mtime`: size and time, then content) |
