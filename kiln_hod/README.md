@@ -35,14 +35,17 @@ cargo xtask kiln-hod bridge-eq tests/codegen     # the bridge's IR against hod's
 ```
 
 The bridge (`crates/kiln_hod/src/bridge/`) copies `kiln_llvm::Module` into
-`hod_ir` for every module without debug information; the others take the
-text path (spec/driver.md "The `kiln_hod` workspace"). `bridge-eq` is its
+`hod_ir` for every module, debug information included
+(`bridge/debug.rs`); a module the bridge does not map takes the text path
+(spec/driver.md "The `kiln_hod` workspace"). `bridge-eq` is its
 specification as a test: what the bridge builds and what `hod_ll` reads from
 the printed module must print the same (`hod_ir`'s printer, byte for byte)
 and record the same unsupported constructs. A difference fails the run
 unless `bridge-eq-expected.txt` lists the file with its reason (it is
-empty). `--report <file>` writes one line per job. `KILN_HOD_BRIDGE=0`
-turns the bridge off, `KILN_HOD_DUAL=1` compares objects in process, and
+empty). `--report <file>` writes one line per job. Each file runs with and without `-g`
+(`--no-g`: without only). `KILN_HOD_BRIDGE=0`
+turns the bridge off, `KILN_HOD_BRIDGE_DEBUG=0` keeps `-g` modules on the
+text path, `KILN_HOD_DUAL=1` compares objects in process, and
 `KILN_HOD_BRIDGE_LOG=<file>` logs each module's route.
 The last equality numbers and the timing of the four routes are in
 [docs/status/kiln-hod.md](../docs/status/kiln-hod.md).

@@ -44,7 +44,7 @@ usage: cargo xtask kiln-hod build [--profile <dev|release|harness>]
        cargo xtask kiln-hod test
        cargo xtask kiln-hod sweep [-j N] [--llvm-dir <dir>]... [--no-g] [--dual]
                                   [--report <file>] <dir|file>...
-       cargo xtask kiln-hod bridge-eq [-j N] [--llvm-dir <dir>]... [--report <file>]
+       cargo xtask kiln-hod bridge-eq [-j N] [--llvm-dir <dir>]... [--no-g] [--report <file>]
                                       <dir|file>...
 
 The kiln_hod workspace (kiln_hod/, its own Cargo.lock, hod by git revision):
@@ -59,7 +59,8 @@ sweep   object equality of the in-process route against the stock kiln++ driving
         --dual: the wrapper also compares the bridged object with the text path's
 bridge-eq
         IR equality of the bridge (kiln_llvm::Module into hod_ir) with hod's text
-        reader on every module of the test files given, printed by hod_ir; without -g
+        reader on every module of the test files given, printed by hod_ir; each
+        dialect, with and without -g (--no-g: without only)
 ";
 
 /// The expected differences of `bridge-eq`: one test file per line (from
@@ -254,9 +255,6 @@ impl Sweep {
             return Err("no LLVM directory (--llvm-dir)".into());
         }
         s.jobs = s.jobs.max(1);
-        if s.mode == Mode::BridgeEq {
-            s.with_g = false;
-        }
         Ok(s)
     }
 
@@ -304,7 +302,8 @@ impl Sweep {
                     loop {
                         let i = next.fetch_add(1, Ordering::SeqCst);
                         let Some(job) = jobs.get(i) else { break };
-                        let _token = crate::jobs::global().acquire();
+                        // Each child process takes its own token
+                        // (`process::run`); a worker holds none.
                         let v = job.run(&tools, i);
                         results
                             .lock()
@@ -767,9 +766,10 @@ impl Sweep {
             }
             let target = job.file.args.iter().find(|a| a.starts_with("--target="));
             let line = format!(
-                "{} {}\t{}\t{kind}\t{eq}",
+                "{} {}{}\t{}\t{kind}\t{eq}",
                 file.display(),
                 target.map_or("", String::as_str),
+                if job.g { " -g" } else { "" },
                 job.llvm.display(),
             );
             let _ = writeln!(tsv, "{line}");

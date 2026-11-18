@@ -24,6 +24,10 @@ Planned as 1.3.0.
   it into hod's IR, and it is checked by comparing what it builds with
   what hod's text reader builds from the printed module (`cargo xtask
   kiln-hod bridge-eq`, `sweep --dual`); `KILN_HOD_BRIDGE=0` turns it off.
+  Modules with debug information (`-g`) take the bridge too (WP-1707):
+  DWARF nodes, locations and debug records are copied with the ids hod's
+  reader gives them, checked the same way with and without `-g`;
+  `KILN_HOD_BRIDGE_DEBUG=0` keeps them on the text path.
 
 - `-fmason-metadata=all` names every vague definition row: its `name`
   is the symbol, so a linker can name a definition the optimizer deleted
