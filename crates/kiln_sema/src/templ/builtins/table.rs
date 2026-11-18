@@ -116,9 +116,11 @@ pub fn arity(t: TypeTrait) -> Arity {
         | T::ReferenceConvertsFromTemporary
         | T::TypesCompatible
         | T::ArrayExtent => Arity::Exact(2),
-        T::IsConstructible | T::IsNothrowConstructible | T::IsTriviallyConstructible => {
-            Arity::AtLeast(1)
-        }
+        T::IsConstructible
+        | T::IsNothrowConstructible
+        | T::IsTriviallyConstructible
+        | T::IsInvocable
+        | T::IsNothrowInvocable => Arity::AtLeast(1),
         _ => Arity::Exact(1),
     }
 }

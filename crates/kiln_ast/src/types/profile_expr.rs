@@ -730,6 +730,10 @@ impl Ast {
                 out.push(tag(k, aux));
                 stack.push(Work::Expr(x.expression_trait_operand(e)));
             }
+            K::IntegerPackExpr => {
+                out.push(tag(k, 0));
+                stack.push(Work::Opt(id(n.a())));
+            }
             K::RequiresExpr => match self.requires_of(e) {
                 Some(r) => {
                     out.extend([tag(k, 0), self.lists.len(r.params) as u32]);

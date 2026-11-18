@@ -50,12 +50,13 @@ const GCC_ONLY_ATTRS: &[&str] = &[
 impl Sema<'_, '_> {
     /// `__builtin_has_attribute (op, name args)` at `loc`, closed at
     /// `rparen`. `op` is the first operand (a type-id or an unevaluated
-    /// expression); `name` / `args` the attribute as written at
+    /// expression) and the attributes written in a type-id's
+    /// decl-specifier-seq; `name` / `args` the attribute as written at
     /// `name_loc`.
     pub fn act_on_builtin_has_attribute(
         &mut self,
         loc: Loc,
-        op: GenericControl,
+        (op, written): (GenericControl, &[AttrId]),
         name: Symbol,
         name_loc: Loc,
         args: &[AttrArg],
@@ -89,13 +90,14 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_builtin_has_attribute_dependent, loc);
             return self.recover_err(&[], loc);
         }
-        let v = self.has_attribute_value(op, name, name_loc, args);
+        let v = self.has_attribute_value(op, written, name, name_loc, args);
         self.builder().bool_literal(QualType::BOOL, v, loc)
     }
 
     fn has_attribute_value(
         &mut self,
         op: GenericControl,
+        written: &[AttrId],
         name: Symbol,
         name_loc: Loc,
         args: &[AttrArg],
@@ -139,6 +141,12 @@ impl Sema<'_, '_> {
             }
         };
         let kind = probe.map_or(kind, |p| self.ast.attrs.get(p).kind);
+        // GCC keeps the attributes written in a type-id operand on the
+        // type it builds (`ATTR (aligned (8)) int`); kiln, as clang, drops
+        // them from the type, so they are asked here first (WP-1667).
+        if self.written_has_attr(written, kind, probe) {
+            return true;
+        }
         if kind == AttrKind::ALIGNED {
             return self.has_aligned(op, probe);
         }
@@ -162,6 +170,29 @@ impl Sema<'_, '_> {
                 }
             }
         }
+    }
+
+    /// Whether one of `written`, the attributes of a type-id operand's
+    /// decl-specifier-seq, is a `kind` that `probe` matches (`aligned`:
+    /// the requested alignment).
+    fn written_has_attr(
+        &mut self,
+        written: &[AttrId],
+        kind: AttrKind,
+        probe: Option<AttrId>,
+    ) -> bool {
+        written.iter().any(|&a| {
+            if self.ast.attrs.get(a).kind != kind {
+                return false;
+            }
+            match probe {
+                Some(p) if kind == AttrKind::ALIGNED => {
+                    let want = self.requested_align(p);
+                    want.is_some() && self.requested_align(a) == want
+                }
+                _ => self.attr_matches(a, kind, probe),
+            }
+        })
     }
 
     /// The declaration an expression operand names: a name or a member
@@ -269,11 +300,14 @@ impl Sema<'_, '_> {
                     || (!probed.is_empty() && probed.iter().all(|x| stored.contains(x)))
             }
             AttrKind::VISIBILITY => {
+                // `internal` is stored as hidden with `b` = 1: GCC tells
+                // the two apart (WP-1667).
                 let vis = |s: &mut Self, n: kiln_ast::attr::AttrNode| {
                     if n.a == crate::visibility::UNCHECKED {
-                        s.visibility_value(DeclKind::Function, n)
+                        let internal = s.visibility_is_internal(n);
+                        s.visibility_value(DeclKind::Function, n).map(|v| (v, internal))
                     } else {
-                        Some(n.a)
+                        Some((n.a, n.b == 1))
                     }
                 };
                 let want = vis(self, p);

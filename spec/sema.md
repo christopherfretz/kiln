@@ -6624,13 +6624,18 @@ under its own name, the same signature, gating and codegen
       `destructor` the priority, `alloc_size` a subset of the positions,
       `nonnull(i)` a stored `nonnull` naming `i` or every parameter (a
       bare `nonnull` only the latter), `section` / `alias` the string,
-      `visibility` the value (`internal` is stored as `hidden`, so the two
-      answer alike), `cleanup` the function, `vector_size(N)` a GNU vector
+      `visibility` the value (`internal` emits as `hidden` but is
+      remembered, so the two answer apart; WP-1667), `cleanup` the function, `vector_size(N)` a GNU vector
       of `N` bytes (consumed into the type); others the stored words. A
-      bare name matches any arguments and may omit required ones. An
-      attribute kiln parses and drops (clang's ignored and rejected ones,
-      GCC-only names, attributes in a type-id) answers 0; a name neither
-      GCC nor clang knows is `unknown attribute`. A dependent operand or
+      bare name matches any arguments and may omit required ones. A
+      type-id operand first asks the attributes written in its
+      decl-specifier-seq (GCC keeps them on the type it builds; kiln
+      drops most from the type), e.g. `__attribute__((aligned(8))) int`
+      has `aligned(8)` (WP-1667). An attribute kiln parses and drops
+      (clang's ignored and rejected ones, GCC-only names such as
+      `externally_visible` / `warn_if_not_aligned`, `nonstring`, and
+      `nocommon`, which has no effect in codegen) answers 0; a name
+      neither GCC nor clang knows is `unknown attribute`. A dependent operand or
       attribute argument is an error, as in GCC 16.1 ("sorry,
       unimplemented"), and so is a class member access in a template
       definition, dependent or not (GCC's own refusal). `__has_builtin(__builtin_has_attribute)` is 0, as
@@ -6644,12 +6649,49 @@ under its own name, the same signature, gating and codegen
       (`__is_identifier` unchanged), so neither changes path
       (`kiln++ -E` of `<type_traits>` and `<utility>` identical at every
       `-std`; `ext.gnu.builtins/remove-reference-gcc-spelling.cpp`).
-    Not implemented: `__is_invocable(F, Args...)` (WP-1611: libstdc++
-    declares and uses `std::__is_invocable<...>`; a trait that is one
-    only before `(` would leave it alone, but the trait itself is not
-    built: remainder); `__integer_pack(N)...` (WP-1611 remainder: it
-    needs a pack whose size is computed at substitution in the shared
-    pack-expansion path).
+    - `__integer_pack(N)` (WP-1667; GCC's `CP_BUILT_IN_INTEGER_PACK`,
+      behind libstdc++'s `make_integer_sequence` when `__make_integer_seq`
+      is missing): a builtin only before `(` (as the transforms), C++
+      only; `__has_builtin(__integer_pack)` stays 0 and `__is_identifier`
+      1, as in clang 22, so libstdc++ keeps `__make_integer_seq`. In a
+      template it is an `IntegerPackExpr`, an `int` prvalue naming an
+      unexpanded built-in pack (always value-dependent); outside one,
+      `use of built-in parameter pack '__integer_pack' outside of a
+      template`. A pack expansion whose pattern contains it expands to
+      one element per value `0, ..., N-1` (the `int` literal of the
+      index; GCC's elements are its internal `sizetype`): substitution
+      evaluates `N` once per expansion and reaches the pack like a pack
+      argument (§7 of spec/sema-templates.md), so it may stand beside
+      other packs of the same length (else the length-mismatch error
+      names `'__integer_pack'`) and inside a larger pattern (GCC 16.1
+      says "sorry" there, a bug its testsuite marks xfail). Not
+      expanded, it is "contains unexpanded parameter pack
+      '__integer_pack'". `N` must have integral or unscoped enumeration
+      type (`sema_ice_not_integral`) and be an integral constant
+      expression (`expression is not an integral constant expression`, a
+      substitution failure in deduction), taken in its own type (GCC
+      converts it to `int`, so `1L << 33` would be 0 there): negative is
+      `integer sequences must have non-negative sequence length`, above
+      2^20 (`__make_integer_seq`'s limit) `integer sequence length N
+      exceeds the implementation limit of 1048576`. In a signature it
+      mangles as GCC's call by name, `cl14__integer_pack<N>E`
+      (`ext.gnu.builtins/integer-pack*.cpp`).
+    - `__is_invocable(F, Args...)` / `__is_nothrow_invocable(F,
+      Args...)` (WP-1667; GCC's; `TypeTrait::IsInvocable`,
+      `traits/invocable.rs`): `INVOKE(declval<F>(), declval<Args>()...)`
+      ([func.require]/1) is well-formed as an unevaluated operand, built
+      in a SFINAE context like `__is_constructible`'s initialization: for
+      a pointer to member of class `C`, the object `t1` is used as is when
+      its class is `C` or derived from it, as an lvalue of `T` for
+      `std::reference_wrapper<T>`, else as `*t1`; a data member takes no
+      further argument. The nothrow form also needs the expression not to
+      throw. Every operand must be complete, `void` or an array of unknown
+      bound ("incomplete type 'X' used in type trait expression"); a
+      `void` or abominable-function operand answers false. Both are
+      identifiers unless followed by `(` (libstdc++ 14 names class
+      templates `std::__is_invocable`), and `__has_builtin` answers 0, as
+      clang 22 (which lacks them) does, so libstdc++ 16 keeps its library
+      `std::is_invocable` at every `-std` (`ext.gnu.builtins/is-invocable*.cpp`).
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
   - The `__fp16` libm builtins (WP-403; `kiln_ast` `builtin::F16_INTR`

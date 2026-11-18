@@ -299,6 +299,7 @@ sema_int_literal_too_large_signed = Error (0) "integer literal is too large to b
 sema_integer_complex = Extension [GnuComplexInteger] (0) "complex integer types are a GNU extension";
 sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";
 sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstantCompare] (0) "converting the result of '?:' with integer constants to a boolean always evaluates to 'true'";
+sema_integer_pack_outside_template = Error (0) "use of built-in parameter pack '__integer_pack' outside of a template";
 sema_integer_seq_integral_element_type = Error (0) "integer sequences must have integral element type";
 sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
 sema_integer_seq_too_long = Error (2) "integer sequence length {0} exceeds the implementation limit of {1}";

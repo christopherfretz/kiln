@@ -24,7 +24,7 @@ pub(crate) const TYPE_PACK_ELEMENT: u32 = 1;
 
 /// The longest sequence `__make_integer_seq` builds (kiln's limit; the
 /// arguments are built eagerly, one per element).
-const MAX_SEQ_LEN: i128 = 1 << 20;
+pub(crate) const MAX_SEQ_LEN: i128 = 1 << 20;
 
 /// Declares the builtin templates in `ast`'s translation unit.
 pub(crate) fn declare_builtin_templates(ast: &mut Ast) {

@@ -2920,6 +2920,26 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// GCC's `__integer_pack(n)` in a template pattern: an `int` prvalue
+    /// (`ty`) that names an unexpanded built-in pack, so it is always
+    /// value- and instantiation-dependent (WP-1667).
+    pub fn integer_pack_expr(&mut self, n: ExprId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps =
+            self.deps(n).without(ExprDeps::TYPE) | ExprDeps::VALUE_INST | ExprDeps::UNEXPANDED_PACK;
+        let e = self.simple(
+            ExprKind::IntegerPackExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            n.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
+        e
+    }
+
     /// A semantic `InitListExpr` ([dcl.init.list], §5.6): a prvalue whose
     /// explicit initializers are `inits`; `array_filler` initializes the
     /// remaining elements; `union_field` is the initialized union member.

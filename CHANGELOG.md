@@ -1409,6 +1409,13 @@ Planned as 1.3.0.
   operator, as the text says, instead of being rejected. `decltype` of a
   splice that designates a template parameter object is `const T`
   (WP-1660).
+- GCC's `__integer_pack(N)` built-in pack (libstdc++'s
+  `make_integer_sequence` without `__make_integer_seq`), mangled as GCC
+  mangles it, and GCC's `__is_invocable` / `__is_nothrow_invocable`
+  traits are implemented; `__has_builtin` still answers 0 for the traits,
+  as clang 22, so libstdc++ keeps its library path. `__builtin_has_attribute`
+  answers attributes written in a type-id operand and tells
+  `visibility("internal")` from `hidden` (WP-1667).
 
 ## [1.2.1] - 2026-11-14
 

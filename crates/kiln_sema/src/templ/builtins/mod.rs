@@ -5,6 +5,7 @@
 //! ([`table`]).
 
 mod builtin_templates;
+mod integer_pack;
 pub mod table;
 mod traits;
 mod transforms;

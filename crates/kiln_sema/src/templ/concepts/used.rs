@@ -159,6 +159,7 @@ impl Sema<'_, '_> {
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXNoexceptExpr
             | ExprKind::ExpressionTraitExpr
+            | ExprKind::IntegerPackExpr
             | ExprKind::PackExpansionExpr
             | ExprKind::CXXFoldExpr
             | ExprKind::CXXUnresolvedConstructExpr

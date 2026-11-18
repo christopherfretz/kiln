@@ -802,6 +802,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ExprWithCleanups
             | ExprKind::CXXNoexceptExpr
             | ExprKind::ExpressionTraitExpr
+            | ExprKind::IntegerPackExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::ConvertVectorExpr
