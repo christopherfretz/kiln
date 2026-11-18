@@ -344,12 +344,16 @@ impl Tool {
                 }
             }
         }
+        // An expected link error (g++.dg, `Expected::link_error`): the
+        // link must fail, and its failure is the pass.
+        let mut link_error = None;
         if let Some(exp) = case.expect {
             let diags = expect::diagnostics(&stderr);
             if let Some(v) = expect::judge(exp, &diags, compiled) {
                 return done(v);
             }
-            if exp.negative() || !compiled {
+            link_error = exp.link_error(&diags).filter(|_| compiled);
+            if link_error.is_none() && (exp.negative() || !compiled) {
                 return done(Verdict::pass());
             }
         } else if case.negative {
@@ -363,9 +367,18 @@ impl Tool {
         args.extend(objects.iter().map(Into::into));
         args.extend(case.link_flags.iter().map(Into::into));
         args.extend(["-o".into(), exe.clone().into()]);
-        match self.step(&args, dir, case, "link") {
-            Err(v) | Ok((Some(v), _)) => return done(v),
-            Ok((None, _)) => {}
+        match (self.step(&args, dir, case, "link"), link_error) {
+            (Ok((Some(v), _)), Some(_)) if v.class == Class::CompileReject => {
+                return done(Verdict::pass());
+            }
+            (Err(v) | Ok((Some(v), _)), _) => return done(v),
+            (Ok((None, _)), Some(d)) => {
+                return done(Verdict::new(
+                    Class::AcceptInvalid,
+                    format!("linked (expected a link error: {d})"),
+                ));
+            }
+            (Ok((None, _)), None) => {}
         }
         if case.action != Action::Run {
             return done(Verdict::pass());

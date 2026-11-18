@@ -41,27 +41,43 @@ pub struct Expect {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Expected {
     pub expects: Vec<Expect>,
-    /// `dg-excess-errors` or `dg-prune-output` applies: errors on lines
-    /// nothing expects are not held against the compiler (a prune pattern
-    /// is GCC's wording, which cannot be applied to kiln's).
+    /// `dg-excess-errors`, or a `dg-prune-output` that may match an error
+    /// line, applies: errors on lines nothing expects are not held against
+    /// the compiler (a prune pattern is GCC's wording, which cannot be
+    /// applied to kiln's).
     pub excess_ok: bool,
     /// The lines (0: anywhere) of the non-xfail `dg-message`s whose regexp
     /// names no severity, each with the directive as shown: GCC's output
     /// holds a diagnostic of a kind the file does not say there.
     pub any_kind: Vec<(usize, String)>,
     /// The first directive that lets GCC's output hold errors at lines the
-    /// file does not give: `dg-excess-errors`, a `dg-prune-output` or
-    /// `dg-regexp` whose regexp names no severity other than an error.
+    /// file does not give: `dg-excess-errors`, a `dg-prune-output` that
+    /// may match an error line, or a `dg-regexp` naming no severity.
     pub unlocated: Option<String>,
     /// The case links (`dg-do link` or `run`): GCC must compile it, so an
     /// error nothing requires is never one the file may expect.
     pub links: bool,
+    /// The first non-xfail `dg-error`, or `dg-message` naming an error or
+    /// no severity, with line 0, as shown: in a case that links, a clean
+    /// compile leaves it to the link's output (an expected link error).
+    pub lineless: Option<String>,
 }
 
 impl Expected {
     /// Whether an error is required somewhere (the test is negative).
     pub fn negative(&self) -> bool {
         self.expects.iter().any(|e| e.sev == Sev::Error && !e.xfail)
+    }
+
+    /// The link error the case expects (the directive, as shown): it
+    /// links, the compile reported no error and no diagnostic without a
+    /// line (which could meet the directive), and a [`Self::lineless`]
+    /// directive is left for the link's output to meet.
+    pub fn link_error(&self, diags: &[Diag]) -> Option<&str> {
+        if !self.links || diags.iter().any(|d| d.sev == Sev::Error || d.line == 0) {
+            return None;
+        }
+        self.lineless.as_deref()
     }
 
     /// The regexp of the first required error on `line` (any line for
@@ -166,14 +182,24 @@ pub fn expectations(dirs: &[Directive], target: &Target) -> Result<Expected, Str
             "dg-warning" => Sev::Warning,
             "dg-message" => Sev::Message,
             "dg-bogus" => Sev::Bogus,
-            "dg-excess-errors" | "dg-prune-output" => {
+            "dg-excess-errors" => {
                 if selector_applies(target, d.args.get(1), &d.name)?.is_some() {
                     out.excess_ok = true;
                     let pattern = d.args.first().map_or("", Word::text);
-                    if d.name == "dg-excess-errors" || severity_named(pattern) != Some(Named::Other)
-                    {
-                        out.unlocated.get_or_insert_with(|| shown(&d.name, pattern));
-                    }
+                    out.unlocated.get_or_insert_with(|| shown(&d.name, pattern));
+                }
+                continue;
+            }
+            // `lib/gcc-dg.exp` removes every output line holding a match
+            // before the excess-errors check: only a pattern that may
+            // match an error line can hide one (WP-1617).
+            "dg-prune-output" => {
+                if selector_applies(target, d.args.get(1), &d.name)?.is_some()
+                    && let Some(w) = d.args.first()
+                    && prune_may_match_error(w)
+                {
+                    out.excess_ok = true;
+                    out.unlocated.get_or_insert_with(|| shown(&d.name, w.text()));
                 }
                 continue;
             }
@@ -206,7 +232,8 @@ pub fn expectations(dirs: &[Directive], target: &Target) -> Result<Expected, Str
         };
         let pattern = d.args.first().map_or("", Word::text).trim().to_owned();
         // `dg-message` takes the severity its regexp names, if any.
-        let sev = match (sev, severity_named(&pattern)) {
+        let named = severity_named(&pattern);
+        let sev = match (sev, named) {
             (Sev::Message, Some(Named::Error)) => Sev::Error,
             (Sev::Message, None) if !state => {
                 out.any_kind.push((line, shown(&d.name, &pattern)));
@@ -214,6 +241,9 @@ pub fn expectations(dirs: &[Directive], target: &Target) -> Result<Expected, Str
             }
             (s, _) => s,
         };
+        if line == 0 && !state && (sev == Sev::Error || (sev == Sev::Message && named.is_none())) {
+            out.lineless.get_or_insert_with(|| shown(&d.name, &pattern));
+        }
         out.expects.push(Expect { line, sev, xfail: state, pattern });
     }
     Ok(out)
@@ -229,8 +259,8 @@ enum Named {
     Other,
 }
 
-/// The severity `pattern` names, `None` for none (or both kinds). A
-/// prune pattern that names no other kind may match an error line.
+/// The severity a `dg-message` or `dg-regexp` pattern names, `None` for
+/// none (or both kinds).
 fn severity_named(pattern: &str) -> Option<Named> {
     let p = pattern.replace('\\', "");
     let error = p.contains("error:") || p.contains("sorry, unimplemented");
@@ -240,6 +270,158 @@ fn severity_named(pattern: &str) -> Option<Named> {
         (false, true) => Some(Named::Other),
         _ => None,
     }
+}
+
+/// Whether a `dg-prune-output` pattern may match an error line of GCC's
+/// output (`<file>:<line>:<col>: error: <text>`; `lib/gcc-dg.exp`
+/// removes each line holding a match of `[^\n]*<p>[^\n]*`), decided from
+/// the pattern alone (spec/harness.md "Severities the file names"). It
+/// cannot only when the pattern names no error (`error`, `sorry`) and
+/// every match must hold `warning:` or `note:`: the pattern has no `|`,
+/// and outside groups and bracket expressions it has `warning:` or
+/// `note:` as a run of literal characters none of which a `*`, `?` or
+/// `{m,n}` makes optional (GCC's error lines never hold either word with
+/// its colon after the severity). Anything else, an empty pattern, a
+/// quoted word with a Tcl substitution (`[` or `$`), or an escape the
+/// reader does not know, may match one.
+fn prune_may_match_error(w: &Word) -> bool {
+    let Some(re) = tcl_substituted(w) else { return true };
+    if re.is_empty() || re.contains('|') || re.contains("error") || re.contains("sorry") {
+        return true;
+    }
+    !literal_runs(&re)
+        .is_some_and(|runs| runs.iter().any(|r| r.contains("warning:") || r.contains("note:")))
+}
+
+/// The text Tcl hands the directive: a braced word as written; a quoted
+/// or bare one with its backslash substitutions (`\n`, `\t`, `\\`, `\X`
+/// for punctuation X). `None` for a command or variable substitution or
+/// an unknown escape.
+fn tcl_substituted(w: &Word) -> Option<String> {
+    let raw = match w {
+        Word::Braced(s) => return Some(s.clone()),
+        Word::Quoted(s) | Word::Bare(s) => s,
+    };
+    let mut out = String::new();
+    let mut it = raw.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '[' | '$' => return None,
+            '\\' => match it.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                c if c.is_ascii_alphanumeric() => return None,
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// The runs of literal characters every match of the regexp `re` (Tcl's
+/// ARE, without `|`) holds: characters outside groups and bracket
+/// expressions, split at anything else, without a character a `*`, `?`
+/// or bound makes optional. `None` for a form the reader does not know
+/// (a director `***`, an embedded option `(?`, unbalanced brackets).
+fn literal_runs(re: &str) -> Option<Vec<String>> {
+    if re.starts_with("***") || re.contains("(?") {
+        return None;
+    }
+    let c: Vec<char> = re.chars().collect();
+    let mut runs = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    let mut i = 0;
+    let end = |cur: &mut String, runs: &mut Vec<String>| {
+        if !cur.is_empty() {
+            runs.push(std::mem::take(cur));
+        }
+    };
+    while i < c.len() {
+        let ch = c[i];
+        i += 1;
+        // The atom just read, if it is a literal character (pushed to
+        // `cur` below only at depth 0).
+        let lit = match ch {
+            '(' => {
+                depth += 1;
+                None
+            }
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                None
+            }
+            '[' => {
+                // A bracket expression: `]` first (after `^`) is literal.
+                if c.get(i) == Some(&'^') {
+                    i += 1;
+                }
+                if c.get(i) == Some(&']') {
+                    i += 1;
+                }
+                while c.get(i)? != &']' {
+                    if c[i] == '[' && matches!(c.get(i + 1), Some(':' | '.' | '=')) {
+                        let close = c[i + 1];
+                        i += 2;
+                        while !(c.get(i)? == &close && c.get(i + 1) == Some(&']')) {
+                            i += 1;
+                        }
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                i += 1;
+                None
+            }
+            '\\' => {
+                let e = *c.get(i)?;
+                i += 1;
+                (!e.is_ascii_alphanumeric()).then_some(e)
+            }
+            '.' | '^' | '$' | '*' | '+' | '?' | '{' | '}' => None,
+            ch => Some(ch),
+        };
+        // A quantifier after the atom: `*`, `?` and a bound make it
+        // optional (`{1}`, `{1,}` would not, but the reader does not
+        // tell them apart); `+` keeps it but ends the run.
+        let quant = c.get(i).copied();
+        match quant {
+            Some('*' | '?' | '{') => {
+                if quant == Some('{') {
+                    while c.get(i)? != &'}' {
+                        i += 1;
+                    }
+                }
+                i += 1;
+                if c.get(i) == Some(&'?') {
+                    i += 1;
+                }
+                end(&mut cur, &mut runs);
+            }
+            Some('+') => {
+                if let (Some(l), 0) = (lit, depth) {
+                    cur.push(l);
+                }
+                i += 1;
+                if c.get(i) == Some(&'?') {
+                    i += 1;
+                }
+                end(&mut cur, &mut runs);
+            }
+            _ => match (lit, depth) {
+                (Some(l), 0) => cur.push(l),
+                _ => end(&mut cur, &mut runs),
+            },
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    end(&mut cur, &mut runs);
+    Some(runs)
 }
 
 /// A directive as a failure detail shows it: `dg-message ""`.
@@ -344,6 +526,10 @@ pub fn judge(exp: &Expected, diags: &[Diag], compiled: bool) -> Option<Verdict> 
         return Some(Verdict::new(Class::CompileReject, detail));
     }
     if errors.is_empty() && compiled {
+        if exp.link_error(diags).is_some() && required.iter().all(|&l| l == 0) {
+            // The link's output is left to meet it (`run_case`).
+            return None;
+        }
         return Some(Verdict::new(
             Class::AcceptInvalid,
             format!("no error (expected: {})", exp.pattern_at(None)),
@@ -553,20 +739,125 @@ mod tests {
     }
 
     /// `dg-prune-output` and `dg-excess-errors` change what is unexpected:
-    /// errors may hide in the output unless the prune pattern names only
-    /// a warning or a note.
+    /// errors may hide in the output unless the prune pattern can only
+    /// match a warning or a note line, which then changes nothing (WP-1617).
     #[test]
     fn prunes_and_excess_errors_may_hide_errors() {
         let t = Target::for_arch("aarch64", false).with_cxx(26);
         let e =
             exp("// { dg-prune-output \"note: x\" }\n// { dg-prune-output \"warning: y\" }\n", &t);
-        assert!(e.excess_ok && e.unlocated.is_none());
+        assert!(!e.excess_ok && e.unlocated.is_none());
         let e = exp("// { dg-prune-output \"expected\" }\n// { dg-excess-errors \"\" }\n", &t);
         assert_eq!(e.unlocated.as_deref(), Some("dg-prune-output \"expected\""));
         let e = exp("// { dg-excess-errors \"crash\" }\n", &t);
         assert_eq!(e.unlocated.as_deref(), Some("dg-excess-errors \"crash\""));
         let e = exp("// { dg-excess-errors \"crash\" { target c++11_only } }\n", &t);
         assert!(e.unlocated.is_none() && !e.excess_ok);
+    }
+
+    /// Which prune patterns can match an error line (WP-1617): only one
+    /// whose every match holds `warning:` or `note:` cannot.
+    #[test]
+    fn prune_patterns_that_cannot_match_an_error() {
+        let q = |s: &str| prune_may_match_error(&Word::Quoted(s.into()));
+        let b = |s: &str| prune_may_match_error(&Word::Braced(s.into()));
+        // Certainly a warning or a note line.
+        assert!(!q("note:"));
+        assert!(!q("warning: unused"));
+        assert!(!q("\\[^\\n\\r\\]*note: candidate"));
+        assert!(!b("note: here 'x\\.[0-9]+' is"));
+        assert!(!q("x*note: y"), "the starred atom is before the run");
+        // May match an error line.
+        assert!(q(""), "empty");
+        assert!(q("note"), "the word alone may sit in an error's text");
+        assert!(q("warning"));
+        assert!(q("In function"));
+        assert!(q("note:|ld: symbol"), "an alternative");
+        assert!(q("(note: )?x"), "inside a group");
+        assert!(q("[n]ote:"), "a bracket expression");
+        assert!(q("note:?"), "the colon is optional");
+        assert!(q("warn+ing: x"), "a repeat ends the run (`warnning:`)");
+        assert!(q("note{0,1}:"));
+        assert!(q("error: x note: y"), "names an error");
+        assert!(q("sorry, unimplemented: note: x"));
+        assert!(q("[^\\n]*note: x"), "a Tcl command substitution");
+        assert!(q("$x note: y"), "a Tcl variable");
+        assert!(q("\\d note: x") && !q("\\. note: x"), "an escape the reader does not know");
+        assert!(q("(?i)note: x"), "an embedded option");
+        assert!(q("note: (x"), "unbalanced");
+        // A bracket holding `]` first, and a class.
+        assert!(!b("[]x] note: [[:alpha:]]+"));
+    }
+
+    /// A prune that cannot match an error line neither hides an extra
+    /// error nor leaves a rejection open (WP-1617).
+    #[test]
+    fn warning_and_note_prunes_decide() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let e = |s: &str| exp(s, &t);
+        let err = |line: usize| Diag { line, sev: Sev::Error, text: "error: e".into() };
+        let note = e("int a;\n// { dg-prune-output \"note: x\" }\n");
+        assert_eq!(judge(&note, &[err(1)], false).unwrap().class, Class::CompileReject);
+        let neg = e("int a; // { dg-error \"x\" }\n// { dg-prune-output \"warning: w\" }\n");
+        assert_eq!(judge(&neg, &[err(1)], false), None);
+        assert_eq!(judge(&neg, &[err(1), err(2)], false).unwrap().class, Class::WrongLine);
+        let open = e("int a; // { dg-error \"x\" }\n// { dg-prune-output \"note\" }\n");
+        assert_eq!(judge(&open, &[err(1), err(2)], false), None, "\"note\" may hide it");
+        let open = e("int a;\n// { dg-prune-output \"note\" }\n");
+        let v = judge(&open, &[err(1)], false).unwrap();
+        assert_eq!(
+            (v.class, v.detail.as_str()),
+            (Class::ExpectUnknown, "dg-prune-output \"note\": error: e")
+        );
+    }
+
+    /// An expected link error (WP-1664): a line-0 `dg-error`, or a line-0
+    /// `dg-message` naming an error or no severity, in a case that links
+    /// is left to the link when the compile is clean.
+    #[test]
+    fn line_zero_expectations_in_a_linking_case_are_link_errors() {
+        let t = Target::for_arch("aarch64", false).with_cxx(26);
+        let linking = |s: &str| {
+            let mut e = exp(s, &t);
+            e.links = true;
+            e
+        };
+        let warn0 = Diag { line: 0, sev: Sev::Warning, text: "warning: w".into() };
+        let warn3 = Diag { line: 3, sev: Sev::Warning, text: "warning: w".into() };
+        let err3 = Diag { line: 3, sev: Sev::Error, text: "error: e".into() };
+
+        let msg = linking("// { dg-message \"undefined\" \"\" { target *-*-* } 0 }\n");
+        assert_eq!(msg.lineless.as_deref(), Some("dg-message \"undefined\""));
+        assert_eq!(msg.link_error(&[]), Some("dg-message \"undefined\""));
+        assert_eq!(msg.link_error(std::slice::from_ref(&warn3)), Some("dg-message \"undefined\""));
+        assert_eq!(msg.link_error(std::slice::from_ref(&warn0)), None, "the compile may meet it");
+        assert_eq!(msg.link_error(std::slice::from_ref(&err3)), None);
+        assert_eq!(judge(&msg, &[], true), None);
+
+        let err = linking("// { dg-error \"undefined\" \"\" { target *-*-* } 0 }\n");
+        assert!(err.negative());
+        assert_eq!(judge(&err, &[], true), None, "left to the link");
+        assert_eq!(judge(&err, &[warn0], true).unwrap().class, Class::AcceptInvalid);
+        assert_eq!(judge(&err, &[err3], false), None, "a compile error meets it");
+        let mut compiled_only = err.clone();
+        compiled_only.links = false;
+        assert_eq!(compiled_only.link_error(&[]), None);
+        assert_eq!(judge(&compiled_only, &[], true).unwrap().class, Class::AcceptInvalid);
+
+        // Not link errors: a line, a named warning or note, an xfail, a
+        // required error on a line as well.
+        for s in [
+            "int a; // { dg-message \"undefined\" }\n",
+            "// { dg-message \"note: x\" \"\" { target *-*-* } 0 }\n",
+            "// { dg-warning \"x\" \"\" { target *-*-* } 0 }\n",
+            "// { dg-error \"x\" \"\" { xfail *-*-* } 0 }\n",
+        ] {
+            assert_eq!(linking(s).link_error(&[]), None, "{s}");
+        }
+        let both = linking(
+            "int a; // { dg-error \"x\" }\n// { dg-error \"y\" \"\" { target *-*-* } 0 }\n",
+        );
+        assert_eq!(judge(&both, &[], true).unwrap().class, Class::AcceptInvalid);
     }
 
     /// The judgement of the forms: a decided case stays pass or
