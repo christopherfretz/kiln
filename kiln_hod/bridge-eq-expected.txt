@@ -1,0 +1,3 @@
+# The expected differences of `cargo xtask kiln-hod bridge-eq`: one test
+# file per line (from the repository root), a tab, and why it differs.
+# Empty: the bridge and the text reader agree on every module.

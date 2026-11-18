@@ -11,6 +11,8 @@ publish.workspace = true
 kiln_driver.workspace = true
 kiln_llvm.workspace = true
 hod.workspace = true
+hod_ir.workspace = true
+hod_ll.workspace = true
 
 [lints]
 workspace = true

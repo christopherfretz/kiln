@@ -19,7 +19,11 @@ Planned as 1.3.0.
   and fallback (checked over `tests/codegen` and `tests/conformance`);
   `--version` names the built-in back end. `cargo xtask kiln-hod
   build|test|sweep`; CI job `kiln-hod`. `.mason.meta` keeps kiln's bytes
-  through hod (WP-1561).
+  through hod (WP-1561). A module without debug information now reaches
+  hod without being printed and read back (WP-1704): the bridge copies
+  it into hod's IR, and it is checked by comparing what it builds with
+  what hod's text reader builds from the printed module (`cargo xtask
+  kiln-hod bridge-eq`, `sweep --dual`); `KILN_HOD_BRIDGE=0` turns it off.
 
 - `-fmason-metadata=all` names every vague definition row: its `name`
   is the symbol, so a linker can name a definition the optimizer deleted

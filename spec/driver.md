@@ -2518,8 +2518,9 @@ line, `In-process back end: hod <tag> (<12-digit revision>)`). The
 library asserts at compile time that hod's `EMBED_API` is the one it was
 written against (1).
 
-**`Hod::compile`** prints the module (`Module::to_text`; the dialect is
-the module's, so the text is what `llc` would have read) and calls hod's
+**`Hod::compile`** takes one of two paths per module (below). On the
+text path it prints the module (`Module::to_text`; the dialect is the
+module's, so the text is what `llc` would have read) and calls hod's
 `compile_object` on it, with options from `Options::from_llc_args(llc_args)`
 and settings read once per process from the environment
 (`Environment::from_process`: hod's jobserver client, `HOD_*`; the
@@ -2537,6 +2538,51 @@ fails the executable. `.mason.meta`: hod appends its own unit (producer
 2) after kiln's, whose bytes are unchanged (hod's spec/codegen.md
 §9.7.5); `kiln_hod/crates/kiln-hod-driver/tests/mason_meta.rs` checks
 that against the LLVM route (WP-1561).
+
+**The two paths (WP-1704, hod's design 0004 seam K3a).** A module with
+no debug information (no `!llvm.dbg.cu`, no `!dbg` attachment, no debug
+record) takes the *bridge*: `kiln_hod::bridge` copies the
+`kiln_llvm::Module` into `hod_ir` (types, constants, symbols, COMDATs,
+attribute sets, module flags, every global's description, then each
+body) and feeds a `hod::Session` in order (`with_module`, `end_module`,
+`body` / `unsupported_body` per function, `finish`); nothing is printed.
+Every other module takes the *text path*. The choice is made per module
+before the session starts: what the bridge does not map (an opaque named
+struct, a `splat` constant, a constant expression `hod_ir` does not fold,
+a funclet instruction, a target's own sync scope, a shape the reader
+would reject) sends the whole module to the text path, never half of it,
+and is counted (`KILN_HOD_BRIDGE_LOG`). The bridge records what hod
+cannot represent with the text reader's own construct names
+(`Module::record_unsupported`), so answers and reasons are the text
+path's. The record's input kind is `module` on the bridge.
+
+*The equivalence* that specifies the bridge: for every module M it
+takes, `hod_ir`'s print of what it builds equals the print of what hod's
+text reader (`hod_ll`) builds from `M.to_text()`, bodies included, and
+the recorded unsupported constructs are equal, in order, against the
+same symbols. Not transmitted, as the reader drops them too: local value
+and block names, and `source_filename`. The one difference the design
+names is an unlabelled `blockaddress`, which the bridge can represent
+and the text cannot name; kiln labels every block it prints, so it does
+not arise. Two tests hold it: `cargo xtask kiln-hod bridge-eq <dir>...`
+(each module compared, `KILN_HOD_BRIDGE_EQ=1`: equal, refused equally by
+reason, not bridged by reason, different; a difference fails unless
+listed with its reason in `kiln_hod/bridge-eq-expected.txt`, which is
+empty) and `cargo xtask kiln-hod sweep --dual <dir>...` (the objects of
+the external route, the bridge and, in process, the text path are the
+same bytes).
+
+Switches, read once per process: `KILN_HOD_BRIDGE=0` sends every module
+to the text path; `KILN_HOD_DUAL=1` also compiles each bridged module on
+the text path and compares the objects (a difference is
+`Failed(the bridge and the text path disagree: section '<name>')`, an
+error under `KILN_HOD_STRICT=1`); `KILN_HOD_BRIDGE_EQ=1` runs the
+equality check per module; `KILN_HOD_BRIDGE_LOG=<path>` appends one JSON
+line per module (`output`, `route` `bridge` or `text`, `reason`
+`disabled`, `debug` or `fallback:<why>`, `eq`, `dual`, `bridge_us` and
+`session_us` = hod's `Report.bridge` and `Report.session` on the bridge,
+`phases_us` = when each of hod's phases ended from the route's start,
+`total_us`).
 
 `KILN_HOD_IN_PROCESS=0` leaves the back end unregistered: the wrapper is
 then the stock driver (external route included), for comparisons and

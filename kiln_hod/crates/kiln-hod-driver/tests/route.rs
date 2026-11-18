@@ -215,8 +215,9 @@ fn without_the_flag_it_is_the_stock_compiler() {
 /// `HOD_COVERAGE_LOG`: the in-process route appends the record the
 /// external executable appends for the same job (outcome, reason, input
 /// kind `text` and size, output, target), all but hod's time, for a job
-/// hod takes and one it declines. Needs `KILN_HOD_EXTERNAL` (hod's
-/// executable) for the external half.
+/// hod takes and one it declines. On the bridge (WP-1704) the input is
+/// hod's kind `module`, with no size; the rest is the same. Needs
+/// `KILN_HOD_EXTERNAL` (hod's executable) for the external half.
 #[test]
 fn the_coverage_log_is_the_executables() {
     let Some(hod) = std::env::var_os("KILN_HOD_EXTERNAL").filter(|p| !p.is_empty()) else {
@@ -228,7 +229,7 @@ fn the_coverage_log_is_the_executables() {
     }
     let dir = scratch("coverage");
     let src = program("virtual.cpp");
-    let log = |name: &str, external: bool| {
+    let log = |name: &str, external: bool, bridge: bool| {
         let log = dir.join(name);
         for extra in [&[][..], &["-gsplit-dwarf", "-gdwarf-4"][..]] {
             let mut cmd = Command::new(wrapper());
@@ -237,6 +238,7 @@ fn the_coverage_log_is_the_executables() {
             if external {
                 cmd.env("KILN_HOD_IN_PROCESS", "0").env("KILN_HOD", &hod);
             }
+            cmd.env("KILN_HOD_BRIDGE", if bridge { "1" } else { "0" });
             ok(&mut cmd);
         }
         // Field 7 is hod's time.
@@ -250,9 +252,15 @@ fn the_coverage_log_is_the_executables() {
             })
             .collect::<Vec<_>>()
     };
-    let external = log("external.tsv", true);
-    let in_process = log("in-process.tsv", false);
+    let external = log("external.tsv", true, false);
+    let text = log("text.tsv", false, false);
     assert_eq!(external.len(), 2, "{external:?}");
-    assert_eq!(in_process, external);
+    assert_eq!(text, external);
+    // The job without debug information takes the bridge; the other
+    // (`-g`) the text path.
+    let mut expected = external.clone();
+    expected[0][2] = "module".to_owned();
+    expected[0][3] = "-".to_owned();
+    assert_eq!(log("bridge.tsv", false, true), expected);
     let _ = std::fs::remove_dir_all(&dir);
 }

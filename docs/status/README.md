@@ -122,6 +122,8 @@ Correctness and diagnostics:
 
 Design records:
 
+- `kiln-hod.md`: the `kiln_hod` workspace's bridge (WP-1704): its IR
+  and object equality numbers and the timing of the four routes.
 - `reflection-spike.md`: the WP-267 P2996 design spike.
 - `wp-184-oracle-switch.md`: the clang/LLVM 19 to 22 oracle switch.
 - `cxx-features.md`: moved to `../STANDARD_SUPPORT.md`.

@@ -28,6 +28,9 @@
 //! `.dwo` file of `-split-dwarf-output` (hod's own code, as `llc`).
 #![forbid(unsafe_code)]
 
+pub mod bridge;
+mod route;
+
 use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -81,7 +84,47 @@ struct Process {
     /// of `MAKEFLAGS`, else one) and census (`HOD_CENSUS=1`), or the
     /// variable hod does not accept.
     settings: Result<Settings, String>,
+    /// The bridge's switches (spec/driver.md "The `kiln_hod` workspace").
+    switches: Switches,
 }
+
+/// The bridge's environment switches, read once per process.
+#[derive(Debug, Default)]
+struct Switches {
+    /// Not `KILN_HOD_BRIDGE=0`: a module without debug information takes
+    /// the bridge.
+    bridge: bool,
+    /// `KILN_HOD_DUAL=1`: a bridged object is compared with the text
+    /// path's.
+    dual: bool,
+    /// `KILN_HOD_BRIDGE_EQ=1`: each module's bridge is compared with the
+    /// text reader (the IR-equality test), into the log.
+    eq: bool,
+    /// `KILN_HOD_BRIDGE_LOG=<path>`: one JSON line per module.
+    log: Option<std::path::PathBuf>,
+}
+
+impl Switches {
+    fn from_env() -> Switches {
+        let on = |name: &str| std::env::var_os(name).is_some_and(|v| v == "1");
+        Switches {
+            bridge: std::env::var_os(ENV_BRIDGE).is_none_or(|v| v != "0"),
+            dual: on(ENV_DUAL),
+            eq: on(ENV_BRIDGE_EQ),
+            log: std::env::var_os(ENV_BRIDGE_LOG).filter(|p| !p.is_empty()).map(Into::into),
+        }
+    }
+}
+
+/// `KILN_HOD_BRIDGE=0`: every module takes the text path.
+pub const ENV_BRIDGE: &str = "KILN_HOD_BRIDGE";
+/// `KILN_HOD_DUAL=1`: the bridged object is compared with the text
+/// path's; a difference is a failure naming the first differing section.
+pub const ENV_DUAL: &str = "KILN_HOD_DUAL";
+/// `KILN_HOD_BRIDGE_EQ=1`: the IR-equality check of each module.
+pub const ENV_BRIDGE_EQ: &str = "KILN_HOD_BRIDGE_EQ";
+/// `KILN_HOD_BRIDGE_LOG=<path>`: the route of each module, one JSON line.
+pub const ENV_BRIDGE_LOG: &str = "KILN_HOD_BRIDGE_LOG";
 
 /// hod, in process.
 #[derive(Debug, Default)]
@@ -94,7 +137,7 @@ impl Hod {
         self.process.get_or_init(|| {
             let env = Environment::from_process();
             let settings = env.settings().map_err(|e| e.to_string());
-            Process { env, settings }
+            Process { env, settings, switches: Switches::from_env() }
         })
     }
 }
@@ -200,6 +243,64 @@ fn compile(
     options.debug_compression = process.env.compress_debug_sections.unwrap_or_default();
     record.target.clone_from(&options.triple);
 
+    let started = Instant::now();
+    let route = route::choose(&process.switches, module, &options);
+    let mut line = route::Line::new(output_of(llc_args), &route);
+    if process.switches.eq {
+        line.eq = Some(route::equality(module, &options));
+    }
+    let answer = match route {
+        route::Route::Bridge => match route::bridged(module, &options, settings, object, record) {
+            Ok((answer, report)) => {
+                line.report(&report, started);
+                if process.switches.dual && matches!(answer, Answer::Done) {
+                    let mut text = Vec::new();
+                    let mut shadow = record.clone();
+                    let mut ignored = Report::default();
+                    let other =
+                        text_path(module, &options, settings, &mut text, &mut shadow, &mut ignored);
+                    let dual = route::compare_objects(&answer, object, &other, &text);
+                    line.dual = Some(dual.clone().unwrap_or_else(|| "equal".to_owned()));
+                    if let Some(difference) = dual {
+                        object.clear();
+                        record.reason = Some("bridge-dual-mismatch".into());
+                        route::log(&process.switches, &line, started);
+                        return Answer::Failed(format!(
+                            "the bridge and the text path disagree: {difference}"
+                        ));
+                    }
+                }
+                Some(answer)
+            }
+            Err(fallback) => {
+                object.clear();
+                line.route = "text";
+                line.reason = Some(format!("fallback:{fallback}"));
+                None
+            }
+        },
+        route::Route::Text(_) => None,
+    };
+    let answer = answer.unwrap_or_else(|| {
+        let mut report = Report::default();
+        let answer = text_path(module, &options, settings, object, record, &mut report);
+        line.report(&report, started);
+        answer
+    });
+    route::log(&process.switches, &line, started);
+    answer
+}
+
+/// The text path: the module printed and compiled as the `hod`
+/// executable compiles text.
+fn text_path(
+    module: &kiln_llvm::Module,
+    options: &Options,
+    settings: &Settings,
+    object: &mut Vec<u8>,
+    record: &mut Record,
+    report: &mut Report,
+) -> Answer {
     let text = module.to_text().into_bytes();
     // The record is the executable's for the same text (kind `text`, its
     // size): hod reads exactly the bytes `llc` would have (`module` is
@@ -207,17 +308,29 @@ fn compile(
     record.input_kind = Some(InputKind::Text);
     record.input_bytes = Some(text.len());
     if record.target.is_none() {
-        record.target = hod::effective_triple(&text, &options).map(str::to_owned);
+        record.target = hod::effective_triple(&text, options).map(str::to_owned);
     }
-    let mut report = Report::default();
-    let compiled = hod::compile_object(&mut Cow::Owned(text), &options, settings, &mut report);
+    let compiled = hod::compile_object(&mut Cow::Owned(text), options, settings, report);
     if report.target.is_some() {
-        record.target = report.target;
+        record.target.clone_from(&report.target);
     }
     if settings.census {
-        record.reasons = Some(report.reasons);
+        record.reasons = Some(std::mem::take(&mut report.reasons));
     }
-    let error = match compiled.map(|file| file.write_to(object)) {
+    finish_answer(compiled.map(|file| file.write_to(object)), object, record)
+}
+
+/// The answer of a compile, with `record` filled.
+pub(crate) fn finish_answer(
+    written: Result<Result<std::io::Result<u64>, CompileError>, CompileError>,
+    object: &mut Vec<u8>,
+    record: &mut Record,
+) -> Answer {
+    let fail = |record: &mut Record, reason: Cow<'static, str>, message: String| {
+        record.reason = Some(reason);
+        Answer::Failed(message)
+    };
+    let error = match written {
         Ok(Ok(Ok(_))) => {
             record.outcome = Outcome::Hod;
             return Answer::Done;
