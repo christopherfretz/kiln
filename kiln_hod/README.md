@@ -16,7 +16,7 @@ kiln_hod/
   Cargo.lock                  its own lock (the root's packages plus hod's crates)
   crates/kiln_hod/            library: `Hod`, the `InProcessBackend` over hod's `compile_object`
   crates/kiln-hod-driver/     binary `kiln` (+ `kiln++` beside it): registers `Hod`, then the stock `main`
-    tests/route.rs            programs run, a decline falls back, `--version`, the stock compiler without the flag
+    tests/route.rs            programs run (pre-opt ones too), a decline falls back, `--version`, the stock compiler without the flag
     tests/panic.rs            a panic in front of hod is contained; the next compile is hod's again
     tests/mason_meta.rs       `.mason.meta` through hod against the LLVM route
     tests/programs/           the run programs
@@ -43,10 +43,18 @@ the printed module must print the same (`hod_ir`'s printer, byte for byte)
 and record the same unsupported constructs. A difference fails the run
 unless `bridge-eq-expected.txt` lists the file with its reason (it is
 empty). `--report <file>` writes one line per job. Each file runs with and without `-g`
-(`--no-g`: without only). `KILN_HOD_BRIDGE=0`
+(`--no-g`: without only). Every compile of `sweep` and `bridge-eq` runs
+under an address-space cap (`--mem-limit <MiB>`, default 3072 plus
+kiln's stack reservation; `0` none) with at most 8 workers by default
+(`-j N`): some stress files make a runaway `-g` compile (a pre-existing
+frontend cost, not the back end's), which then fails alone. `KILN_HOD_BRIDGE=0`
 turns the bridge off, `KILN_HOD_BRIDGE_DEBUG=0` keeps `-g` modules on the
 text path, `KILN_HOD_DUAL=1` compares objects in process, and
 `KILN_HOD_BRIDGE_LOG=<file>` logs each module's route.
+Modules that need `opt` at `-O0` only for `alwaysinline` or coroutines
+(hod's "pre-opt modules") are compiled in process, as the external route
+compiles them (WP-1562); `KILN_HOD_PREOPT=0` declines them
+(`preopt:off`), so they take `opt` and `llc` as before, for bisecting.
 The last equality numbers and the timing of the four routes are in
 [docs/status/kiln-hod.md](../docs/status/kiln-hod.md).
 
@@ -55,6 +63,24 @@ the sweep is built from the same locked checkout into
 `<target>/kiln_hod_hod_cli`. The first build fetches hod from GitHub; with
 no network (or a revision that is gone) the xtask says so. CI runs `test`,
 `bridge-eq` and the dual codegen sweep in the `kiln-hod` job of `.github/workflows/ci.yml`.
+
+The corpus's run tests through the wrapper, against the stock compiler
+(WP-1562; from the repository root, about 15 minutes each at `-j 3`):
+
+```
+cargo xtask test -j 3 --mem-limit 2048 tests/conformance tests/codegen tests/stress
+KILN_BACKEND=hod KILN_STATS_LOG=<file> cargo xtask test -j 3 --mem-limit 2048 \
+    --compiler <target>/kiln_hod/debug/kiln++ tests/conformance tests/codegen tests/stress
+```
+
+Every test that passes with the stock compiler must pass with the wrapper,
+with one known exception that is the wrapper's build, not its back end:
+`tests/conformance/driver.crash/ice-parse.cpp` expects the crash report's
+`note: in compiler source crates/...`, and the wrapper names the source
+by its absolute path (cargo gives a path dependency outside the
+`kiln_hod` workspace, which every root crate is, its absolute path);
+the comparison leaves that line out. `<file>` shows which jobs went
+through hod in process (`"in_process":true`).
 
 `KILN_HOD_IN_PROCESS=0` leaves the back end unregistered, so one build also
 gives the external route for comparisons.

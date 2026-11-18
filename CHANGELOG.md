@@ -27,7 +27,13 @@ Planned as 1.3.0.
   Modules with debug information (`-g`) take the bridge too (WP-1707):
   DWARF nodes, locations and debug records are copied with the ids hod's
   reader gives them, checked the same way with and without `-g`;
-  `KILN_HOD_BRIDGE_DEBUG=0` keeps them on the text path.
+  `KILN_HOD_BRIDGE_DEBUG=0` keeps them on the text path. Modules that
+  need `opt` at `-O0` only for `alwaysinline` functions or call sites or
+  for coroutines (most units that include standard-library headers) are
+  now compiled in process too, as the external `hod` route compiles them
+  (WP-1562); a module hod declines takes `opt` and `llc`, and
+  `KILN_HOD_PREOPT=0` declines them all, for bisecting. The stock
+  binary's behaviour is unchanged.
 
 - `-fmason-metadata=all` names every vague definition row: its `name`
   is the symbol, so a linker can name a definition the optimizer deleted
@@ -295,6 +301,13 @@ Planned as 1.3.0.
   longer holds the merge queue for six hours (WP-1600).
 
 ### Fixed
+
+- Debug information (WP-1709): with `-g`, a virtual destructor (or any
+  constructor or destructor) with a GNU asm label, whose variants are
+  built into one function, gave the later variant's body a second
+  subprogram; LLVM's verifier rejected the locations and the back end
+  dropped the debug information of the whole module. The variants now
+  share the function's subprogram.
 
 - Reflection (WP-1673, WP-1674): a constexpr local's value is
   evaluated once, at the local's point, and the constant evaluator reuses

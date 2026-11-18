@@ -2856,6 +2856,66 @@ fn explicit_instantiation_one_body_per_function() {
     }
 }
 
+/// WP-1709 ([dcl.asm], spec/codegen.md debug information): with `-g`,
+/// structor variants that a GNU asm label gives one symbol (WP-492: the
+/// deleting variant of a labelled virtual destructor is appended to the
+/// function) share the function's one subprogram, so LLVM's verifier
+/// accepts the module with its debug information (it used to report
+/// "!dbg attachment points at wrong subprogram for function" and drop all
+/// of it; clang 22 has the same defect). When optimizing, the variables
+/// of both bodies stay in its `retainedNodes`.
+#[test]
+fn asm_label_structor_variants_share_a_subprogram() {
+    let src = "struct B { int b; };\n\
+               template <class T> struct V { virtual ~V() asm(\"vdtor_t\"); T v; };\n\
+               template <class T> V<T>::~V() { int local = 1; (void)local; }\n\
+               template struct V<int>;\n\
+               struct P { virtual ~P() asm(\"vdtor\"); int v; };\n\
+               P::~P() {}\n\
+               struct X : virtual B { X(int) asm(\"ctor_x\"); virtual ~X() asm(\"vdtor_x\"); };\n\
+               X::X(int k) { int q = k; (void)q; }\n\
+               X::~X() { int z = 2; (void)z; }\n\
+               struct Y { Y(int) asm(\"ctor_y\"); ~Y() asm(\"dtor_y\"); int y; };\n\
+               Y::Y(int k) : y(k) {}\n\
+               Y::~Y() {}\n\
+               struct Z : X { using X::X; };\n\
+               int use() { P *p = new P; delete p; X x(1); Y y(2); Z z(3); return 0; }\n";
+    let d = scratch("asm-label-subprogram");
+    std::fs::write(d.join("a.cpp"), src).unwrap();
+    for major in [19, 22] {
+        let dir = PathBuf::from(format!("/usr/lib/llvm-{major}"));
+        if !dir.join("bin").join("opt").exists() {
+            eprintln!("skipping LLVM {major}: {} not found", dir.display());
+            continue;
+        }
+        for opt in ["-O0", "-O1"] {
+            let out = format!("a{major}{opt}.ll");
+            let o = Command::new(kilnpp())
+                .args(["-std=c++26", "-S", "-emit-llvm", "-g", opt, "a.cpp", "-o", &out])
+                .env("KILN_LLVM_DIR", &dir)
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+            let ll = std::fs::read_to_string(d.join(&out)).unwrap();
+            for var in ["local", "q", "z"] {
+                let decl = format!("!DILocalVariable(name: \"{var}\"");
+                assert!(ll.contains(&decl), "LLVM {major} {opt}: no {var}:\n{ll}");
+            }
+            let v = Command::new(dir.join("bin").join("opt"))
+                .args(["-passes=verify", "-disable-output", &out])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(
+                (v.status.code(), text(&v.stderr).as_str()),
+                (Some(0), ""),
+                "opt-{major} -passes=verify {opt}"
+            );
+        }
+    }
+}
+
 /// spec/driver.md "Debug information flags" (WP-1488):
 /// `-fno-kiln-debug-source-checksum` leaves the MD5 off every `DIFile`
 /// (the unit's, an included header's, a `#line` file's), so a comment
