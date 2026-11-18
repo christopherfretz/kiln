@@ -2,15 +2,15 @@
 // a TU-local entity outside the parts /15 ignores is an exposure: an
 // inline function's body (exported or not), a function's return type, a
 // constexpr local of an inline function. GCC 16.1 rejects each; clang 22
-// warns (-WTU-local-entity-exposure). kiln does not check names yet.
+// warns (-WTU-local-entity-exposure); kiln follows the text and GCC.
 //@ expect: compile-fail
 //@ std: c++20
 //@ skip(clang): clang 22 only warns
-//@ xfail: WP-1651 remainder: exposures by naming a TU-local entity are not diagnosed
-//@ diag: 18:19 error "exposes TU-local entity"
-//@ diag: 19:12 error "exposes TU-local entity"
-//@ diag: 20:17 error "exposes TU-local entity"
-//@ diag: 21:20 error "exposes TU-local entity"
+//@ strict-diags
+//@ diag: 18:19 error "declaration of 'f' exposes TU-local entity 'helper'"
+//@ diag: 19:12 error "declaration of 'g' exposes TU-local entity 'helper'"
+//@ diag: 20:17 error "declaration of 'mk' exposes TU-local entity 'S'"
+//@ diag: 21:20 error "declaration of 'lp' exposes TU-local entity 'target'"
 export module M;
 static int helper() { return 1; }
 static int target;

@@ -436,6 +436,10 @@ sema_module_export_non_namespace_scope_name = Error (1) "cannot export '{0}' as 
 sema_module_export_not_interface = Error (0) "export declaration can only be used within a module interface";
 sema_module_export_redecl_module_linkage = Error (1) "cannot export redeclaration '{0}' here since the previous declaration has module linkage";
 sema_module_export_using_internal = Error (2) "using declaration referring to '{0}' with {1:internal|module} linkage cannot be exported";
+// [basic.link]/15, /17: a declaration in a module interface that names a TU-local entity (GCC 16.1 rejects; clang 22 warns -WTU-local-entity-exposure; WP-1678).
+sema_module_exposure = Error (2) "declaration of '{0}' exposes TU-local entity '{1}'";
+// [basic.link]/15.1.2: a use in an inline variable's initializer in a module interface (clang 22's -WTU-local-entity-exposure warning, its text; WP-1678).
+sema_module_tu_local_exposed = Warning [TULocalEntityExposure] (1) "TU local entity '{0}' is exposed";
 sema_module_gmf_not_first = Error (0) "'module;' introducing a global module fragment can appear only at the start of the translation unit";
 sema_module_import_not_file_scope = Error (2) "import of module '{0}' appears within {1}";
 sema_module_import_not_first = Error (0) "imports must immediately follow the module declaration";

@@ -419,6 +419,7 @@ impl Sema<'_, '_> {
         };
         let e = self.discarded_value_checks(e);
         let e = self.act_on_full_expr(e);
+        self.module_discarded_exposures(e);
         self.builder().expr_stmt(e)
     }
 
@@ -989,6 +990,9 @@ impl Sema<'_, '_> {
         } else {
             let pending = std::mem::take(&mut self.volatile_assigns);
             self.warn_volatile_assigns(pending);
+        }
+        if let Some(v) = self.depr_init {
+            self.module_flush_exposures(v);
         }
         self.depr_init = depr;
     }

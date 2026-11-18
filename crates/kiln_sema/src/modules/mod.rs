@@ -15,6 +15,8 @@ use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 
 use crate::Sema;
+
+mod exposure;
 use crate::lookup::{Found, LookupKind};
 use crate::scope::{Scope, ScopeKind};
 
@@ -85,6 +87,12 @@ pub(crate) struct ModSema {
     frames: Vec<Frame>,
     /// Unit index by key.
     keys: FxHashMap<String, u16>,
+    /// The declarations already reported as exposures ([basic.link]/17;
+    /// `exposure.rs`): one error each.
+    exposed: kiln_source::fx::FxHashSet<DeclId>,
+    /// Uses of TU-local entities waiting for the end of their
+    /// full-expression or declaration (`exposure.rs`).
+    pending_exposures: Vec<exposure::PendingExposure>,
     /// Per unit: visible (imported, directly or transitively) from the
     /// current unit.
     visible: Vec<bool>,
@@ -424,23 +432,21 @@ impl Sema<'_, '_> {
     /// clang 22 accepts; WP-1669). A value is TU-local when it is, or
     /// points to, a function or variable with internal linkage, or is an
     /// object with such a subobject ([basic.link]/16). Only that rule is
-    /// checked: a declaration that names a TU-local entity (an inline
-    /// function's body, a signature) is not yet (spec/modules.md §5
-    /// "Exposures").
+    /// checked here; a declaration that names a TU-local entity is
+    /// `exposure.rs`'s (spec/modules.md §5 "Exposures").
     pub(crate) fn module_check_constexpr_exposure(
         &mut self,
         v: DeclId,
         cv: kiln_ast::ids::ConstValueId,
     ) {
-        let Some(f) = self.modules.frames.last() else { return };
-        let kind = self.ast.modules.units.get(usize::from(f.unit)).map(|u| u.kind);
-        if f.phase != Phase::Purview
-            || !kind.is_some_and(|k| k.is_interface() || k == UnitKind::PartitionImplementation)
+        if !self.module_exposure_purview()
             || !self.has_external_linkage(v)
+            || self.modules.exposed.contains(&v)
         {
             return;
         }
         let Some(e) = self.tu_local_referent(cv) else { return };
+        self.modules.exposed.insert(v);
         let (name, what) = (self.decl_name(v), self.decl_name(e));
         let msg = self
             .diag(DiagId::sema_constexpr_var_tu_local_value, self.ast.decls.get(v).loc())
@@ -451,7 +457,7 @@ impl Sema<'_, '_> {
 
     /// The internal-linkage function or variable constant value `cv`
     /// points to, itself or through a subobject.
-    fn tu_local_referent(&self, cv: kiln_ast::ids::ConstValueId) -> Option<DeclId> {
+    pub(super) fn tu_local_referent(&self, cv: kiln_ast::ids::ConstValueId) -> Option<DeclId> {
         use kiln_ast::consts::{ConstValue, PtrBase, Scalar};
         let mut work = vec![cv];
         let mut seen = kiln_source::fx::FxHashSet::default();

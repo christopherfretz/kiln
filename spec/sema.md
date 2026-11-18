@@ -8657,6 +8657,23 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   `tests/conformance/dcl.constexpr/constexpr-asm-{try-cxx17,evaluated,never-constant}.cpp`
   (the last an xfail: the never-constant check only tries parameterless
   functions).
+  Before C++20 ([dcl.constexpr]/3 in C++17; [diff.cpp17.dcl.dcl], P1331R2)
+  each variable definition for which no initialization is performed (a
+  scalar or an array of scalars without an initializer, in any nested
+  block or a `for` init-statement, also a `static` or `thread_local` one,
+  which then gets both warnings at the same location; not a class type,
+  whose default constructor initializes even when trivial; not a
+  range-`for` variable, an `extern` declaration, a structured binding, or
+  a variable of dependent type) gets "uninitialized variable in a
+  constexpr {function|constructor} is a C++20 extension"
+  (`-Wc++20-extensions`, an error under `-pedantic-errors`; clang
+  `ext_constexpr_local_var_no_init`), in source order with the static
+  ones, before the first error; in a template at the definition only. An
+  implicitly constexpr lambda with one is not constexpr before C++20.
+  GCC 16.1 rejects all of these, and also a class type with a trivial
+  default constructor; kiln follows clang 22 and the text
+  ([dcl.init.general]/7). WP-1677. Tests
+  `tests/conformance/dcl.constexpr/uninit-var-cxx17*.cpp`.
   In C++11 an iteration statement or `continue` is not allowed in the
   body at all (clang does not take them as C++14 extensions): "statement
   not allowed in constexpr function", the function made invalid (WP-455).

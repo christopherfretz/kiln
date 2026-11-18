@@ -801,6 +801,7 @@ impl Sema<'_, '_> {
         if !self.misaligned.is_empty() {
             self.diagnose_misaligned_members(e);
         }
+        self.module_full_expr_exposures(e);
         if self.pending_odr.is_empty() && self.potential_caps.is_empty() {
             return e;
         }

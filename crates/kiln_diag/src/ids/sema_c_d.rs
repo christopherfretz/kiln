@@ -180,6 +180,8 @@ sema_constexpr_body_no_return = Error (1) "no return statement in {0:constexpr|c
 sema_constexpr_dtor = Error (0) "destructor cannot be declared constexpr";
 sema_constexpr_function_try_block_cxx20 = ExtWarn [Cxx20Extensions] (1) "function try block in constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_invalid_template_arg = Error (3) "{0} to {1}{2} is not allowed in a template argument";
+// WP-1677: clang ext_constexpr_local_var_no_init ([dcl.constexpr]/3 before C++20, P1331R2).
+sema_constexpr_local_var_no_init = ExtWarn [Cxx20Extensions] (1) "uninitialized variable in a constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_local_var_non_literal = Error (2) "variable of non-literal type {1} cannot be defined in a constexpr {0:function|constructor} before C++23";
 sema_constexpr_main = Error (1) "'main' is not allowed to be declared {0:constexpr|consteval}";
 sema_constexpr_never_constant = WarningError [InvalidConstexpr] (2) "{1:constexpr|consteval} {0:function|constructor} never produces a constant expression";

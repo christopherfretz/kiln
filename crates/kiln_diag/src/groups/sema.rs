@@ -189,6 +189,7 @@ TautologicalPointerCompare = "tautological-pointer-compare" [];
 TautologicalUndefinedCompare = "tautological-undefined-compare" [];
 TentativeDefinitionArray = "tentative-definition-array" [];
 TentativeDefinitionIncompleteType = "tentative-definition-incomplete-type" [];
+TULocalEntityExposure = "TU-local-entity-exposure" [];
 UndefinedBoolConversion = "undefined-bool-conversion" [];
 UndefinedInline = "undefined-inline" [];
 UndefinedInternal = "undefined-internal" [];
