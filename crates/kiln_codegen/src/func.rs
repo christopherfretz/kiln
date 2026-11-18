@@ -475,6 +475,13 @@ impl Cg<'_> {
             debug_assert!(self.dup_reported, "second body for {} (WP-1425)", self.m.func(f).name());
             return Ok(());
         }
+        // A function forwarding to a defined global another entity holds
+        // under its symbol: the definition was diagnosed
+        // ([`Cg::take_symbol_for_definition`], WP-1663).
+        if self.m.resolve(Value::func(f)) != Value::func(f) {
+            debug_assert!(self.dup_reported, "body for a forwarding function (WP-1663)");
+            return Ok(());
+        }
         // clang `FunctionDecl::isMain`: never under `-ffreestanding`.
         let is_main = !ast.freestanding
             && mangle::decl_name(ast, first) == "main"
@@ -1019,6 +1026,8 @@ impl Cg<'_> {
         if thunk.is_none() {
             self.class_b_prolog_params(d, attr_sig, &mut params);
         }
+        // A thunk's prolog is its method's (clang `StartThunk`).
+        self.restrict_noalias_params(d, &sig, &mut params);
         {
             let func = self.m.func_mut(f);
             func.attrs.func = fa;
@@ -1097,7 +1106,15 @@ impl Cg<'_> {
         self.f.calls.iter().all(|&(i, callee, site)| {
             self.f.fir.inst_block(i).is_none()
                 || site
-                || callee.is_some_and(|c| self.nounwind.get(&c).copied().unwrap_or(false))
+                || callee.is_some_and(|c| {
+                    // A declaration forwarding to another entity's
+                    // symbol is that function (WP-1663).
+                    let c = match self.m.resolve(Value::func(c)).get() {
+                        kiln_llvm::ValueRef::Func(r) => r,
+                        _ => c,
+                    };
+                    self.nounwind.get(&c).copied().unwrap_or(false)
+                })
         })
     }
 

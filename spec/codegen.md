@@ -2915,6 +2915,22 @@ the variable-bound rule of kind 5: `variable_bounds_have_no_row`.
   operands are pinned to `{reg}` (§7c). Tests:
   `tests/codegen/naked_sret{,_o1}.cpp`, `tests/codegen/naked_asm_regvar.cpp`
   (per-target register names: AArch64 `x0`/`w1`, x86-64 `rdi`/`esi`).
+- A definition's directly passed pointer parameter whose
+  type in that definition is top-level restrict-qualified (GNU
+  `__restrict`, C `restrict`, through a typedef or a template argument,
+  a C array parameter with `restrict` in its brackets, an old-style C
+  parameter) is `noalias`, and so is `this` of a `__restrict` member
+  function (`Cg::restrict_noalias_params`, clang `EmitFunctionProlog`'s
+  `isRestrictQualified` check; WP-1663). This holds for thunks, lambdas
+  and constructors, not for inheriting constructors or naked
+  definitions. Declarations and call sites get none, a restrict only on
+  a non-defining declaration does not count, and a nested restrict
+  (`int *restrict *`) does not either. One check per parameter. A
+  `__restrict` reference parameter is `noalias` for clang too, but
+  kiln's types drop qualifiers on a reference (WP-1663 remainder). Tests:
+  `tests/codegen/restrict_noalias_params.cpp`,
+  `tests/c/dcl/restrict-noalias-params-ir.c`, the -O2 run tests in
+  `tests/conformance/ext.gnu.restrict/`.
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
@@ -3717,6 +3733,25 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `pch-abi-type-info-one-global-run.cpp`,
   `module-abi-type-info-one-global-run.cpp`,
   `crates/kiln_driver/tests/one_global_per_symbol.rs`.
+  *Entities of different kinds* (WP-1663, [dcl.link]: a C-linkage name
+  may equal another entity's mangled name, Itanium C++ ABI §5.1): a
+  function declared under a symbol a variable, an alias or another
+  entity's function already holds is a nameless function forwarding to
+  that global (`Module::add_function_unless_held`, the one name lookup
+  the module's table did before; `add_forwarding_function`), as clang's
+  `GetOrCreateLLVMFunction` returns the entry; a variable likewise
+  (`add_global_unless_held`, `add_forwarding_global`). Calls and uses
+  print the global's name with their own types. A definition takes the
+  symbol over a declaration (`Cg::take_symbol_for_definition`: a
+  function declaration of another type is retyped at the end of the
+  module, a variable declaration replaced by a function that takes its
+  name and uses; `Cg::var_def_over_symbol` the reverse), and a defined
+  holder is "Duplicate mangled names" below. The complete-object alias
+  of a constructor or destructor follows clang
+  `emitConstructorDestructorAlias`: a symbol another entity defines is
+  left alone (calls go to it), a declaration of it is replaced by the
+  alias. Tests: `tests/codegen/extern_c_name_equal_to_mangled.cpp`,
+  `tests/conformance/dcl.link/extern-c-name-equal-to-mangled-constructor.cpp`.
 - **The runtime's fundamental `type_info` objects** (Itanium C++ ABI
   §2.9.2, clang `EmitFundamentalRTTIDescriptors`, WP-1620): where the
   vtable of `::__cxxabiv1::__fundamental_type_info` is defined (not
@@ -6015,9 +6050,13 @@ categories, compared with clang 22 and clang 19 on both targets).
   `note: previous definition is here` at the representative's
   definition; it is reported once (clang emits no later declaration
   after an error) and no output is written. Structor variants sharing a
-  label are one entity. A function defined under the symbol of a defined
-  variable (clang's error) is not detected
-  (`crates/kiln_driver/tests/codegen.rs` `duplicate_mangled_name`).
+  label are one entity. A function or constructor variant defined under
+  the symbol of a defined variable or alias is the same error (WP-1663),
+  and so is a variable defined under the symbol of a defined function:
+  clang 22 accepts that one and silently drops the function's body, GCC
+  16.1's assembler rejects the unit; kiln diagnoses rather than drop code
+  (`crates/kiln_driver/tests/codegen.rs` `duplicate_mangled_name`,
+  `variable_defined_over_function_symbol`).
 - **Incomplete class in a signature**: a function first referenced while
   a class parameter or return type is incomplete (never defined, or
   defined later in the TU) is declared `void ()` with no attributes, as

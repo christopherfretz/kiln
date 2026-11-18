@@ -104,6 +104,16 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // slice.
     ("module_gmf_vtable", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
     ("module_gmf_vtable", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
+    // An importer's copy of an imported inline static data member's
+    // guarded initialization: kiln emits it at the import, ahead of the
+    // importer's own functions, for every such member (the required
+    // initialization order); clang only for a referenced one, after the
+    // function that first references it (spec/modules.md §7, WP-1653):
+    // the order of the `define`s differs, so the ABI slice too.
+    ("module_init_inline_member", "aarch64-unknown-linux-gnu", "22", Allow::Abi),
+    ("module_init_inline_member", "x86_64-unknown-linux-gnu", "22", Allow::Abi),
+    ("module_init_inline_member", "aarch64-unknown-linux-gnu", "19", Allow::Abi),
+    ("module_init_inline_member", "x86_64-unknown-linux-gnu", "19", Allow::Abi),
     // clang 22 names members of an unnamed class `(unnamed struct)::N` in
     // IR type names (19: `(anonymous struct)`).
     ("lambda_names", "aarch64-unknown-linux-gnu", "22", Allow::Abi),

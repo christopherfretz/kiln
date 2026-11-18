@@ -402,6 +402,32 @@ complete-object alias this unit would define later). The implicit global
 module ([basic.stc.dynamic.general]/2) even when the first use is in a
 purview, so they are never `_ZW`-mangled.
 
+**Imported constants (WP-1653).** A namespace-scope variable an
+imported unit defines in its purview, not inline, not an instantiation
+and not `thread_local`, has its one strong definition in that unit's
+object. The importer declares it; when it is `const` with no `mutable`
+member, its destruction is constant and its initializer folds to a value
+naming no internal-linkage entity, the declaration is
+`available_externally` with that value (clang 22
+`GetOrCreateLLVMGlobal`: no definition here, an initializer), so
+optimization can fold through it: constexpr and `const` scalars,
+pointers, arrays, class objects, an explicit specialization of a
+variable template, `constinit const`, `volatile const`. Inline
+variables and implicit instantiations are the importer's own
+`linkonce_odr` copies, as before. Two clang 22 results are not
+followed: a `thread_local` one is a strong definition in the importer
+(a duplicate symbol at the link), and a value naming an internal-linkage
+variable points at the importer's own copy of it (a different object;
+the exported declaration is an exposure, [basic.link]/15-17, which
+neither compiler diagnoses); kiln keeps both `external`. A
+lifetime-extended temporary bound to such a variable's reference is an
+`external` symbol of the module unit (clang 22: `internal`, deviation
+12), which an importer declares, `available_externally` with its value
+when constant (as clang 22). Tests:
+`tests/codegen/module_const_var_importer.cpp`,
+`module.import/const-var-address-run.cpp`,
+`module.import/const-ref-temporary-address-run.cpp`.
+
 **Explicit instantiations** ([temp.explicit], [temp.spec.general]/5,
 WP-1354; the PCH and module-file image side is WP-1307 in §11.11). The
 unit that writes an explicit instantiation definition owns the
@@ -474,7 +500,9 @@ functions implement that across object files:
 - An imported unit's initializer is declared (`declare void @_ZGIW...()`,
   no attributes, created just before the calling function) and called
   only when it does something (clang `NamedModuleHasInit`): the unit, in
-  any fragment, defines a namespace-scope variable that clang must emit
+  any fragment, defines a namespace-scope variable, or an inline static
+  data member in its class (clang `addModuleInitializer`, WP-1653), that
+  clang must emit
   (`DeclMustBeEmitted`: a definition that is not discardable, or one with
   a dynamic initializer or a non-trivial destructor), or one of its
   named-module imports' initializers does something. An out-of-class
@@ -487,7 +515,31 @@ functions implement that across object files:
   WP-1523, `tests/codegen/module_static_member_redecl_importer.cpp`).
   A member's dynamic initialization is not repeated: the interface unit
   and each importer run the same guarded initializer
-  (`class.static.data/inline-member-module-init-once-run.cpp`). A unit with only
+  (`class.static.data/inline-member-module-init-once-run.cpp`;
+  three units: `basic.start.dynamic/inline-member-module-once-run.cpp`).
+  **Order (WP-1653).** Such a variable (an inline variable or inline
+  static data member with a dynamic initializer) has partially-ordered
+  initialization, and its definition in the interface is
+  appearance-ordered before every definition in an importer
+  ([basic.start.dynamic]/3: the importer has an interface dependency on
+  the unit), so it must be initialized before the importer's ordered and
+  partially-ordered variables, whether or not the importer names it
+  (their initializers can have side effects). The `_ZGIW` call does not
+  do it: clang's `_ZGIW` runs only the ordered initializers, and kiln's
+  is the same. What does it is the importer's own comdat-keyed copy of
+  the guarded initialization, placed in `@llvm.global_ctors` ahead of the
+  importer's own entries: whichever object's copy the linker keeps is
+  linked, and so runs, no later than the importer
+  (`basic.start.dynamic/inline-member-module-order-run.cpp`). kiln emits
+  that copy in every importer, at the import, before the importer's own
+  definitions; clang 22 emits it only when the importer references the
+  variable, and then after the function that first does (so with no
+  reference, an importer linked ahead of the module object initializes
+  its own variables first). The text order of the functions therefore
+  differs from clang's (`tests/codegen/module_init_inline_member.cpp`, an
+  `Abi` deviation). Calling `_ZGIW` for a unit whose only
+  initializers are such members is clang's choice, followed because it
+  costs a call to an empty function. A unit with only
   functions, such as libc++'s `std` (whose GMF is all inline/template
   code), has an empty initializer that importers do not call. Header
   units have no initializer.
@@ -606,6 +658,16 @@ files; dependency scanning and CMake are §11.9 (WP-982).
     ill-formed, no diagnostic required ([basic.def.odr]/15), so kiln
     conforms; the reference repro is
     `module.global.frag/gmf-merge-importer.cpp`.
+12. **Deliberate, at every compat level (WP-1653).** The
+    lifetime-extended temporary of a reference variable that another
+    unit can import (a non-inline, non-template, non-`thread_local`
+    variable with external or module linkage in the purview of an
+    interface or partition unit) is an `external` symbol of that unit
+    (`_ZGR...`), not `internal` as in clang 22. An importer that names
+    the temporary (`&r` of `export constexpr int &&r = 3;`) declares it,
+    as clang 22's importer does, so the program links and `&r` is one
+    address in every unit; with clang 22 it fails to link
+    (`module.import/const-ref-temporary-address-run.cpp`).
 
 ## 11. Part B: module files and separate compilation (WP-917)
 
