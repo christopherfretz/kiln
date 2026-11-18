@@ -178,6 +178,10 @@ impl Sema<'_, '_> {
         }
         match r {
             Reflectee::Decl(d) => match self.kind_of(d) {
+                DeclKind::Field if self.is_unnamed_bit_field(d) => {
+                    self.error(DiagId::sema_splice_unnamed_bit_field, at);
+                    self.recover_err(&[e], open)
+                }
                 DeclKind::Field | DeclKind::IndirectField => {
                     let Ok(d) = self.anon_member_as_indirect(d) else {
                         let name = self.decl_name(d);
@@ -202,7 +206,8 @@ impl Sema<'_, '_> {
                 // as for an id-expression (P3598R0, /2.5;
                 // `contract_constify`).
                 DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding
-                    if self.splice_local_across_lambda(d, open) =>
+                    if self.splice_local_across_lambda(d, open)
+                        || self.splice_local_elsewhere(d, open) =>
                 {
                     self.recover_err(&[e], open)
                 }
@@ -574,6 +579,12 @@ impl Sema<'_, '_> {
                 ) =>
             {
                 self.splice_special_member(d, at);
+                self.recover_err(&[b], open)
+            }
+            Reflectee::Decl(d)
+                if self.kind_of(d) == DeclKind::Field && self.is_unnamed_bit_field(d) =>
+            {
+                self.error(DiagId::sema_splice_unnamed_bit_field, at);
                 self.recover_err(&[b], open)
             }
             Reflectee::Decl(d)

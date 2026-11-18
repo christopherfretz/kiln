@@ -1736,7 +1736,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// [`Parser::decltype_scope_end`] for `T ... [ expression ] ::` with
     /// `T` a type name (C++26 [dcl.type.pack.index]).
-    fn pack_index_scope_end(&self, i: usize) -> Option<usize> {
+    pub(crate) fn pack_index_scope_end(&self, i: usize) -> Option<usize> {
         if self.tok_at(i + 1).kind != TokKind::Punct(Punct::Ellipsis)
             || self.tok_at(i + 2).kind != TokKind::Punct(Punct::LSquare)
             || !matches!(self.scan_name(i), Some((e, NameClass::Type(..), _)) if e == i + 1)

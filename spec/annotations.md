@@ -90,6 +90,10 @@ target scope" or (1.2) X is a non-defining friend declaration.
   `extern` variable (host scope is the block, target scope the namespace:
   [basic.scope.scope]/2 "the host scope of a declaration is the inhabited
   scope if that scope is a block scope and the target scope otherwise"),
+  a parameter of such a function declaration or of a non-defining friend
+  declaration (/1: for a parameter, X is the function declaration; the
+  friend case is checked by the parser once the declaration is known not
+  to be a definition, `reject_friend_param_annotations`, WP-1524),
   a friend declaration that is not a definition (/1.2; a defining friend
   is allowed: its inhabited scope is the class, so host = target), a
   `void` parameter list, a using-directive, a using-declaration, a
@@ -132,7 +136,10 @@ target scope" or (1.2) X is a non-defining friend declaration.
 - `annotation_value(e)`: `T` = the operand's type, arrays and functions
   decayed, cv-qualifiers dropped; `T` must be complete, not `void`, and
   structural ([temp.param]/8; `sema_annotation_not_structural` with the
-  same notes as a non-structural NTTP type). The value is a `const T`
+  same notes as a non-structural NTTP type), and a class `T` must be
+  constructible from `const T&` (`reflect_constant` mandates
+  `is_copy_constructible_v<T>`, also for a prvalue operand that needs no
+  copy: `sema_annotation_not_copy_constructible`, WP-1524). The value is a `const T`
   copy-initialized from `e`, checked as a converted constant expression
   and evaluated with `EvalKind::TemplateArg`; a class value is frozen as
   its template parameter object ([meta.reflection.result]/2.1, /4). A
@@ -231,6 +238,7 @@ target scope" or (1.2) X is a non-defining friend declaration.
 | `sema_annotation_non_declaration` | on a statement, type or other non-declaration |
 | `sema_annotation_not_allowed` | on a declaration /1 excludes (§3) |
 | `sema_annotation_not_structural` | `T` not structural |
+| `sema_annotation_not_copy_constructible` | class `T` not copy constructible (WP-1524) |
 | `sema_annotation_invalid_value` | the value is, or points into, a string literal, a temporary, a `typeid` result or a label: not a valid constant template argument ([temp.arg.nontype]/6; WP-830) |
 | `sema_expr_not_cce` ("annotation") | the operand is not a constant expression |
 | `note_template_annotation_here` | instantiation note for a lazy substitution |

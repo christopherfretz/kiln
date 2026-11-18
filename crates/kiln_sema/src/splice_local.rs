@@ -117,6 +117,43 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// [basic.def.odr]/10: a potentially-evaluated splice-expression at
+    /// `at` designating local entity `d` from a scope that is not nested
+    /// in `d`'s function (a reflection passed as a template argument)
+    /// odr-uses `d` where it is not odr-usable. A variable usable in
+    /// constant expressions is let through: its uses may be no odr-use.
+    /// Diagnosed (true), as GCC 16.1.
+    pub(crate) fn splice_local_elsewhere(&mut self, d: DeclId, at: Loc) -> bool {
+        if !self.evaluated_but_for_typeid() || !self.has_local_storage(d) {
+            return false;
+        }
+        let Some(home) = self.ast.decls.get(d).ctx() else { return false };
+        let mut c = Some(self.ctx);
+        for _ in 0..4096 {
+            let Some(x) = c else { break };
+            if x == home {
+                return false;
+            }
+            c = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
+        }
+        if self.usable_in_constant_expressions(d) {
+            return false;
+        }
+        let what = if self.lambda_of_call_op(home).is_some() {
+            "a lambda expression".to_string()
+        } else {
+            format!("function '{}'", self.decl_name(home))
+        };
+        let name = self.decl_name(d);
+        let msg =
+            self.diag(DiagId::sema_splice_local_other_function, at).arg(name.clone()).arg(what);
+        let note = self
+            .diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
+            .arg(format!("'{name}'"));
+        self.emit(msg.with_note(note));
+        true
+    }
+
     /// [basic.def.odr]/5: splice operand `e` is a converted constant
     /// expression, so each potential result of it naming a variable
     /// usable in constant expressions is not odr-used. The operand is not

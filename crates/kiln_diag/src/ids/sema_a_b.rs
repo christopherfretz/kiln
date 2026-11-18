@@ -55,6 +55,8 @@ sema_analysis_skipped = Remark [KilnAnalysisSkipped] (2) "flow-sensitive warning
 sema_annotation_invalid_value = Error (1) "annotation value refers to {0}, which is not a valid constant template argument";
 sema_annotation_non_declaration = Error (0) "an annotation can appertain only to a declaration";
 sema_annotation_not_allowed = Error (1) "an annotation cannot appertain to {0}";
+// [meta.reflection.result] reflect_constant Mandates (WP-1524)
+sema_annotation_not_copy_constructible = Error (1) "annotation has type {0}, which is not copy constructible";
 sema_annotation_not_structural = Error (1) "annotation has non-structural type {0}";
 sema_anon_bitfield_negative_width = Error (1) "anonymous bit-field has negative width ({0})";
 sema_anon_bitfield_non_integral = Error (1) "anonymous bit-field has non-integral type {0}";

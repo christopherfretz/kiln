@@ -352,6 +352,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         if self.ident_at(self.i).is_none() && !self.at(Punct::ColonColon) {
             return Tpr::False;
         }
+        // `T...[i]::name` ([dcl.type.pack.index]): a dependent scope, so
+        // the name after it is a type only where one must be (no
+        // `typename`: `^^Ts...[0]::sx` reflects a member).
+        if let Some(cc) = self.p.pack_index_scope_end(self.i) {
+            return self.dependent_scope_rest(cc);
+        }
         let Some((end, class)) = self.name_here() else {
             return Tpr::False;
         };
@@ -494,6 +500,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             Some((_, NameClass::Value(_))) => return Tpr::False,
             _ => {}
         }
+        self.dependent_scope_rest(cc)
+    }
+
+    /// After an unclassified computed scope `X::` (`::` at `cc`): what
+    /// follows the qualified name decides, as for a dependent one.
+    fn dependent_scope_rest(&self, cc: usize) -> Tpr {
         let Some(end) = self.p.skip_qualified_rest(cc) else { return Tpr::Error };
         let after = |n: usize| self.punct_at(end + n);
         match self.punct_at(end) {

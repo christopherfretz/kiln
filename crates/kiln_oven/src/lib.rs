@@ -984,6 +984,37 @@ impl Oven {
         self.run.impure += 1;
     }
 
+    /// Records that `define_aggregate` completed the class whose first
+    /// declaration is `record` during the running evaluation (the
+    /// completion log, spec/reflection.md §6.2). O(1).
+    pub fn note_injected_completion(&mut self, record: DeclId) {
+        let n = u32::try_from(self.run.injected.len()).unwrap_or(u32::MAX);
+        self.run.injected.entry(record).or_insert(n);
+    }
+
+    /// Whether `define_aggregate` completed a class during the running
+    /// evaluation: when not, no class is hidden from any nested
+    /// evaluation and [`Oven::injected_completion_hidden`] need not be
+    /// asked. O(1).
+    pub fn has_injected_completions(&self) -> bool {
+        !self.run.injected.is_empty()
+    }
+
+    /// Whether the class whose first declaration is `record`, completed
+    /// by `define_aggregate` during the running evaluation, is incomplete
+    /// in the evaluation context of the running nested evaluation
+    /// ([expr.const.reflect], CWG3162: a constexpr local's initializer
+    /// does not see what its enclosing evaluation injected). `None`: the
+    /// class was not completed so during the running evaluation. An
+    /// answer about such a class depends on where it is asked, so the
+    /// evaluation is marked impure (never memoized: the memo must not
+    /// hand the nested answer to an outer use or the reverse). O(1).
+    pub fn injected_completion_hidden(&mut self, record: DeclId) -> Option<bool> {
+        let &i = self.run.injected.get(&record)?;
+        self.run.impure += 1;
+        Some(self.run.inj_lo <= i && i < self.run.inj_hi)
+    }
+
     /// How many times an evaluation was marked impure so far (monotonic):
     /// a caller compares it around an evaluation to learn whether the
     /// value depends on where it ran. O(1).
@@ -1828,6 +1859,10 @@ impl Oven {
         self.run.counters = vm::Counters::default();
         self.run.nesting = 0;
         self.run.depth_base = 0;
+        if !self.run.injected.is_empty() {
+            self.run.injected.clear();
+        }
+        (self.run.inj_lo, self.run.inj_hi, self.run.inj_anchor) = (0, 0, 0);
         self.mem.allocated = 0;
         self.mem.peak = 0;
         self.mem.fold_peak();
@@ -1904,6 +1939,7 @@ impl Oven {
             self.run.maxd,
             self.run.depth_base,
             self.run.ub_check,
+            self.run.inj_anchor,
         );
         let mem = (
             self.mem.allocated,
@@ -1936,6 +1972,11 @@ impl Oven {
         self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
+        // An instantiation the enclosing evaluation needs sees what that
+        // evaluation sees (its context's hidden completions stay hidden);
+        // a constexpr local's initializer in it hides only the
+        // completions from here on (spec/reflection.md §6.2).
+        self.run.inj_anchor = self.run.injected.len() as u32;
         self.mem.allocated = 0;
         self.mem.peak = live0;
         self.mem.arena_peak = arena0;
@@ -1973,6 +2014,7 @@ impl Oven {
             self.run.maxd,
             self.run.depth_base,
             self.run.ub_check,
+            self.run.inj_anchor,
         ) = run;
         self.run.counters = vm::Counters { steps: steps1, ..counters };
         (

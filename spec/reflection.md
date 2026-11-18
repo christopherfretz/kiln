@@ -688,6 +688,10 @@ before. Tested by
 - A call that ran a non-`Stable` op has `run.impure` raised, so neither it
   nor any call whose span contains it is cached (implemented:
   `reflection/memo-purity.cpp`, which checks `memo_hits` per evaluation).
+- A call that took the reflection of an automatic variable (`^^x` of a
+  local or parameter) is not cached, nor is any call containing it: an
+  escaped reflection of a local must meet the same lifetime check on
+  every evaluation (spec/oven.md "Memoization", WP-1524).
 - A `Mutating` call is never replayed. This is the property
   `reflection/define-member-neg.cpp` depends on.
 - Functions returning `vector<info>` allocate, so the memo refuses them
@@ -998,13 +1002,27 @@ before. Tested by
   `Oven::trial_forbids_effects`: any checkpoint but that one, innermost,
   forbids it). The injection is not undone; an attempt that injected and
   then failed fails the call ("a declaration was injected while the
-  substitution was tried, which then failed"). Under `can_substitute`'s
-  checkpoint, or any other, a `Mutating` op still fails (kiln's probe
-  leaves no declaration behind; GCC 16.1 lets it define), with the note
+  substitution was tried, which then failed"). **`can_substitute` runs
+  the same attempt** (WP-1644): [meta.reflection.substitute] defines it
+  by the validity of the same template-id `substitute` forms, and nothing
+  in it or in [expr.const] exempts the instantiations that forming
+  causes, so its consteval blocks may inject, the class stays complete
+  after a `true`, and `substitute` of the same arguments then succeeds
+  (GCC 16.1 agrees; WP-1614 had refused it). The two share the result
+  cache too (`meta_subst`), so they cannot disagree
+  (`meta.reflection.substitute/can-substitute-define-aggregate.cpp`).
+  Under any other checkpoint a `Mutating` op still fails, with the note
   "'X' cannot run while a substitution is being tried
-  (std::meta::substitute)" when no trial hides it
-  (`meta.reflection.substitute/substitute-instantiates-define-aggregate.cpp`,
-  `can-substitute-define-aggregate-neg.cpp`).
+  (std::meta::substitute)" when no trial hides it.
+- **A fold does not substitute.** `substitute`/`can_substitute` with no
+  cached result fail silently in a trial (`MetaCtx::trial`) or outside a
+  manifestly constant-evaluated evaluation, like every query that would
+  instantiate: the instantiation would be made where the TU stands when
+  the fold runs, not where the evaluation it anticipates runs (a constant
+  `if` condition in a consteval block is folded before the block runs,
+  and a variable template specialization instantiated then kept the
+  value it had before the block completed its class; WP-1642,
+  `meta.reflection.define.aggregate/define-aggregate-nested-instantiation.cpp`).
 - A bridge failure with no note outside a trial gets the Oven's note
   "kiln: internal: 'X' failed without a reason": a silent failure is
   only for a trial, whose notes are dropped.
@@ -1053,7 +1071,17 @@ position's operand).
   argument list does not designate a template"
   (`sema_splice_not_template`). A constructor or destructor is
   ill-formed in any splice-expression, the member access form included
-  (`sema_splice_special_member`, [expr.prim.splice]/2). A splice-scope-
+  (`sema_splice_special_member`, [expr.prim.splice]/2), and so is an
+  unnamed bit-field (`sema_splice_unnamed_bit_field`, /2.1, WP-1524). A
+  potentially-evaluated splice-expression designating an automatic local
+  from outside its function (a reflection passed to a template as its
+  argument; a member of a local class) odr-uses a local that is not
+  odr-usable there ([basic.def.odr]/5, /10): "use of local variable 'b'
+  with automatic storage from function 'g'"
+  (`sema_splice_local_other_function`; a local of a class member
+  function gets clang's "declared in enclosing function"); a variable
+  usable in constant expressions is let through
+  (`expr.prim.splice/p2-local-other-function.cpp`, WP-1524). A splice-scope-
   specifier in a declarative nested-name-specifier (an out-of-line
   definition's declarator-id, a class-head-name or enum-head-name) gets
   `sema_splice_declarative_scope` ([expr.prim.id.qual]/3; GCC 16.1 accepts
@@ -1352,16 +1380,57 @@ evaluations run during Y and sequenced before X. So:
 - The *values* of the enclosing call's objects are not readable in Y
   unless usable in constant expressions (as anywhere).
 - A class V completed by `define_aggregate` before Y started is *not*
-  complete in Y unless it was complete from Y's point anyway: Y sees the
-  classes completed before V began and those completed during Y. The
-  completion log gives this without copying: Y records the log length
-  at its start (`e_Y`) and V's (`e_V`); a record whose completion entry
-  lies in `[e_V, e_Y)` reads as incomplete in Y (`is_complete_type`, the
-  member and layout queries, `define_aggregate`'s "already complete"
-  check). *Not implemented* (WP-1642; the queries read the
-  AST's completion directly):
-  `meta.reflection.define.aggregate/define-aggregate-nested-evaluation.cpp`
-  is `xfail(kiln)`.
+  complete in Y (the example of CWG3162): Y sees the classes completed
+  before V began and those completed during Y. **The completion log**
+  (implemented, WP-1642): sema's `define_aggregate` records the class's
+  first declaration with its position in `RunState::injected` (an
+  `FxHashMap<DeclId, u32>`, cleared when an outermost evaluation
+  begins); `Op::IsConstEval` 4 saves the hidden window
+  `inj_lo..inj_hi` with `plain` and `nested_frame` and, only when the
+  log is non-empty, sets it to `inj_anchor..len` (or keeps `inj_lo` when
+  a window is already open: two levels hide everything from the outer
+  level's start); 8 restores it. A class whose position lies in the
+  window is incomplete there (`Oven::injected_completion_hidden`, read
+  by sema's `meta_hidden_completion`): `is_complete_type`,
+  `is_enumerable_type`, the member queries (`complete_class_of`) and
+  `size_of`/`alignment_of`/`bit_size_of` ("reflection with incomplete
+  type in size_of"). An evaluation that completes no class pays one
+  length check per constexpr local initializer and per completeness
+  query, nothing else.
+- **Instantiations see their evaluation's context.** An implicit
+  instantiation that results from an evaluation has the evaluation
+  context in its instantiation context ([module.context]), so the
+  nested evaluations sema runs through the bridge while instantiating
+  (a variable template specialization `substitute` instantiates, a
+  function body `ensure_body` defines) keep the enclosing window
+  (`eval_nested` saves `inj_anchor` and sets it to the log's length): a
+  constant they evaluate sees the classes completed before the
+  instantiation (GCC 16.1 agrees;
+  `define-aggregate-nested-instantiation.cpp`). A constexpr local
+  evaluated inside such an instantiation hides from the anchor on; when
+  the enclosing context had a window open, it keeps that window's start,
+  so the completions between the window and the anchor are hidden too
+  (an approximation, three levels deep).
+- **Memo.** An answer about a class in the log depends on where it is
+  asked, so `injected_completion_hidden` raises `run.impure` whenever the
+  class is in the log, hidden or not: no call that asked it is memoized
+  during that outermost evaluation, so the memo never hands the nested
+  answer to an outer use or the reverse; after the evaluation the log is
+  empty and the class is complete everywhere, so the same `Stable` call
+  is memoized again (`define-aggregate-nested-memo.cpp`).
+- `define_aggregate`'s "already complete" check reads the AST: a second
+  definition of a class V completed would be two definitions of one
+  entity ([basic.def.odr]), and a nested evaluation that may inject is a
+  consteval block of an instantiation (any other is not a core constant
+  expression once it would inject, [expr.const]).
+- **Not modeled:** the point of evaluation of a nested evaluation is
+  in the function whose body holds it, so a class completed (by a
+  definition or an injected declaration) *after* that point, by an
+  earlier outermost evaluation or in the source, is complete in kiln's
+  nested evaluation and incomplete by the text (GCC 16.1 freezes the
+  constexpr local at the function's definition, which agrees here).
+  `define-aggregate-nested-later-point.cpp` is `xfail(kiln)` (WP-1642
+  remainder).
 
 **This is the one exception** to "a class is frozen at its closing `}`"
 (spec/ast.md §2.4). It is serialized through sema, so the Oven never

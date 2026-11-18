@@ -3729,8 +3729,23 @@ impl Compiler<'_> {
                 self.konst(dst, u128::from(v));
             }
             // spec/reflection.md §2.1: the interned id's value.
+            // A reflection of an automatic variable may escape the call
+            // whose frame holds the variable, and `extract`/`constant_of`
+            // of it then depend on whether that frame ran in this
+            // evaluation (spec/oven.md "Reflected locals"): no call that
+            // reaches it is memoized (`IsConstEval` aux 32). Only such a
+            // reflect-expression pays; the memo of every other call is
+            // unchanged (WP-1524 item 7).
             ExprKind::CXXReflectExpr => match self.ast().exprs.reflect_value(e) {
-                Some(id) => self.konst(dst, u128::from(id.bits())),
+                Some(id) => {
+                    self.konst(dst, u128::from(id.bits()));
+                    let ast = self.ast();
+                    if let kiln_ast::reflect::Reflectee::Decl(d) = ast.exprs.reflect_operand(e)
+                        && is_local_var(ast, d)
+                    {
+                        self.emit(Op::IsConstEval, 32, &[dst]);
+                    }
+                }
                 None => self.unsupported(e),
             },
             ExprKind::ArrayTypeTraitExpr => {
