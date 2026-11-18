@@ -812,7 +812,12 @@ sweep compiles every positive test (`compile-ok`, `run`, `ir`, `layout`,
 `vtables`, `debugger`) to an object with and without `-g` and runs
 `llvm-dwarfdump --verify` on the `-g` object (spec/harness.md
 "Debug-info sweep"). A test that compiles without `-g` and fails with it
-is a FAIL:
+is a FAIL, and so is one whose compile without `-g` crashes (a panic, an
+internal compiler error, a signal: WP-1563); an IR test is compiled with
+its own arguments minus `-disable-llvm-passes`. On `tests/codegen` the
+sweep went from 645 passed, 25 failed, 19 skipped to 668 passed, 0
+failed, 21 skipped (the two new skips name LLVM: clang crashes on the
+same test, or `llvm-dwarfdump` rejects clang's object too):
 
 ```sh
 source scripts/env.sh
@@ -905,22 +910,17 @@ whenever kind 2's hash changes.
 
 ## Release candidates
 
-An RC is a tag on `main` where all of these are green in CI on a clean
-container: fmt, clippy (deny warnings), unit, conformance (no `xfail`
-regressions), differential, libc++ pass-rate not lower than the previous RC,
-bench within thresholds, and the x86_64 sweep (`.github/workflows/sweep.yml`,
-"x86_64 sweep" above) on the RC commit shows no x86_64-only failure. The
-supervisor agent signs off in `docs/status/`.
-
-The PCH snapshot, kiln's default PCH path since 1.2.0 (WP-1404), has its
-own part of the gate, run by hand on the RC binary because it needs a
-large scratch area: `scripts/pch-release-gate.sh <kiln++> <out-dir>`
-runs the whole corpus with `--pch-diff snapshot --pch-diff-require-restore
---pch-diff-synthetic` (0 failures, every replay on the allow-list) and the
-libc++ pair (six `std/` directories without and with `--pch-diff
-snapshot`, the same outcome for every test). The corpus sweep needs about
-50 GB of scratch and the script refuses to start it with less than 90 GB
-free (exit 2). The last results are in `docs/status/pch-snapshot-gates.md`.
+Every tag is preceded by the release gate: the release archive, both
+halves of the merge gate, the precompiled-header sweep, gcc.c-torture,
+the libc++ suite and GCC's C++ testsuite on aarch64 and x86-64, every
+open-source project row, and the downstream build, each compared with
+the previous release. The procedure from the freeze to the tag is
+[RELEASING.md](RELEASING.md); `cargo xtask release-gate` runs the gate
+and writes its record (contract: [../spec/harness.md](../spec/harness.md)
+"Release gate"). The PCH snapshot sweep, one of its steps, is
+`scripts/pch-release-gate.sh <kiln++> <out-dir>`; it needs about 50 GB
+of scratch and refuses to start with less than 90 GB free (exit 2); the
+last results are in `docs/status/pch-snapshot-gates.md`.
 
 ### Patch releases
 
@@ -932,11 +932,13 @@ from `main`:
 2. Each fix is a commit on that branch with its test. A fix that is
    already on `main` is cherry-picked (`git cherry-pick -x`); a fix that
    is new goes onto the branch first.
-3. The branch has no pull request, so both halves of the merge gate are
-   run on it by hand: `cargo xtask ci` and
-   `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`.
-4. The release gate above runs on the branch head, and its results go
-   into `docs/status/release-X.Y.Z.md`. The tag `vX.Y.Z` is made on the
+3. The branch has no pull request, so both halves of the merge gate run
+   on it as steps of the release gate (`merge-gate`: `cargo xtask ci`;
+   `oracle19`: `KILN_ORACLE=19 cargo xtask ci --oracle-only --step
+   kiln`).
+4. The release gate ([RELEASING.md](RELEASING.md)) runs on the branch
+   head, and `cargo xtask release-gate record` writes its results into
+   `docs/status/release-X.Y.Z.md`. The tag `vX.Y.Z` is made on the
    branch.
 5. After the tag the branch is merged forward into `main` through one
    pull request (a merge commit; in a conflict over the version or the

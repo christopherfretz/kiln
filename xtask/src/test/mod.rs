@@ -593,6 +593,9 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         require_sanitizer_runtime: opts.require_sanitizer_runtime,
         debug_sweep: opts.debug_sweep.then(|| runner::DebugSweep {
             dwarfdump: debug_sweep_dwarfdump(&toolchain.llvm_dir()),
+            control: crate::util::identify(Path::new(&toolchain.clang()))
+                .is_ok()
+                .then(|| PathBuf::from(toolchain.clang())),
         }),
         bmi_kind: opts.bmi_kind,
         bmi_image: opts.bmi_image,

@@ -1,0 +1,6 @@
+# The release gate's explained pass-to-failing g++.dg cases (WP-1219;
+# docs/RELEASING.md, spec/harness.md "Release gate"). One line per case:
+#   <test id> [<option set>] <reason, naming the row or the status page>
+# A case that went from pass in docs/status/gxx-dg-baseline.txt to a
+# failing class fails the gate unless it is listed here; the record prints
+# this list. Emptied when the baseline is refreshed at a release.
