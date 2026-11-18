@@ -268,6 +268,25 @@ fn is_plain_binary(ast: &kiln_ast::Ast, e: ExprId) -> bool {
         })
 }
 
+/// The lambda-expression `e` (a variable's initializer) initializes the
+/// variable with, through cleanups, an elidable copy or move, a
+/// materialized temporary, parentheses and no-op casts.
+fn decl_lambda(ast: &kiln_ast::Ast, mut e: ExprId) -> Option<ExprId> {
+    loop {
+        e = match ast.exprs.get(e).kind() {
+            ExprKind::LambdaExpr => return Some(e),
+            ExprKind::ExprWithCleanups
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ParenExpr => ast.exprs.operand(e),
+            ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::NoOp => {
+                ast.exprs.operand(e)
+            }
+            _ => ast.elidable_copy_source(e)?,
+        };
+    }
+}
+
 pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
@@ -481,6 +500,9 @@ impl Oven {
         let ty = c.ety(e);
         if let Some(d) = object {
             c.begin_static_extended(e, d);
+            if ref_ty.is_none() {
+                c.decl_lambda = decl_lambda(c.b.ast(), e);
+            }
         }
 
         let ret = if let Some(q) = ref_ty {
@@ -927,6 +949,11 @@ impl Oven {
         // invoker; the invoker runs the call operator's body without `this`.
         let thunk = ast.closure_thunk(ast.latest(d));
         if let Some(ClosureThunk::Conversion { target }) = thunk {
+            // Not constexpr before C++17 (WP-1666).
+            if spec.constexpr_kind() == ConstexprKind::None {
+                self.funcs[idx as usize].state = FState::NotConstexpr;
+                return;
+            }
             self.compile_closure_conversion(b, idx, d, target);
             return;
         }
@@ -1209,6 +1236,12 @@ pub(crate) struct Compiler<'a> {
     /// source-location builtin: the builtins in it take the values of
     /// that use (clang `SourceLocExprScopeGuard`; spec/oven.md, Builtins).
     srcloc: Option<ExprId>,
+    /// The lambda-expression initializing the variable a top-level thunk
+    /// evaluates (through cleanups, an elidable copy, a materialized
+    /// temporary and parentheses): at C++14 the one closure object of
+    /// non-literal type the evaluation may create (clang
+    /// `CheckLiteralType`'s `EvaluatingDecl` exception). WP-1666.
+    decl_lambda: Option<ExprId>,
     /// Comma left operands not evaluated: the ignored values of the
     /// `__builtin_object_size` trial being compiled (WP-302).
     skip_effects: Vec<ExprId>,
@@ -1285,6 +1318,7 @@ impl<'a> Compiler<'a> {
             cur_params: Vec::new(),
             array_index: None,
             srcloc: None,
+            decl_lambda: None,
             skip_effects: Vec::new(),
             ctor_steps: Vec::new(),
             elem_track: None,
@@ -6160,6 +6194,42 @@ impl Compiler<'_> {
             // [expr.prim.lambda.capture]/15: the closure's members are
             // direct-initialized from the captures, in order.
             ExprKind::LambdaExpr => {
+                // C++14 [expr.const]/2.6 (C++11 /2): before C++17 evaluating a
+                // lambda-expression is never constant, even discarded
+                // (`([]{}, 0)`: GCC 16.1 rejects, clang 22 accepts it;
+                // deviations.md); the note is clang `CheckLiteralType`'s,
+                // the closure type being non-literal then (P0170R1). Sema
+                // reports one written in a constant-evaluated context.
+                // From C++14 clang lets the variable being initialized be
+                // one (its `EvaluatingDecl` exception): a static
+                // initialization ([basic.start.static]/3), as clang's.
+                // WP-1666.
+                // At C++11 clang's evaluation fails there too, but its code
+                // generation still emits a closure without captures as a
+                // constant (`ConstExprEmitter`): exempt that one as well.
+                let year = self.b.cxx_year();
+                let root = self.cur_fn.is_none()
+                    && self.decl_lambda == Some(e)
+                    && (year >= 2014 || self.ast().exprs.lambda(e).captures.is_empty());
+                if year < 2017 && !root {
+                    let ast = self.b.ast();
+                    let q = ast.exprs.get(e).ty().without_quals();
+                    // `(lambda at F:L:C)`, as clang prints it.
+                    let t = match self.b.sources() {
+                        Some(sm) => kiln_ast::types::print_type(
+                            &ast.types,
+                            &kiln_ast::dump::AstNames::with_sources(ast, sm),
+                            q,
+                            kiln_ast::types::PrintOptions::SUGARED,
+                        ),
+                        None => Oven::type_name(ast, q),
+                    };
+                    self.trap(
+                        e,
+                        &format!("non-literal type '{t}' cannot be used in a constant expression"),
+                    );
+                    return;
+                }
                 let ast = self.ast();
                 // A captured variable length array bound (GNU extension)
                 // is not a constant: clang's generic note at the lambda.

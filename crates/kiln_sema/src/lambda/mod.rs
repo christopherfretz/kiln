@@ -603,11 +603,16 @@ impl Sema<'_, '_> {
         }
         let ty = self.adjust_lambda_call_type(ty, specs, &d);
         // [dcl.constexpr]/1: `consteval` makes the call operator an
-        // immediate function; otherwise it is constexpr if it can be.
+        // immediate function; otherwise it is constexpr if it can be
+        // ([expr.prim.lambda.closure]/5), from C++17 (P0170R1): before,
+        // only when `constexpr` was written (a C++17 extension; clang
+        // `ActOnStartOfLambdaDefinition`). WP-1666.
         let kind = if specs.consteval.is_some() {
             ConstexprKind::Consteval
-        } else {
+        } else if self.std >= kiln_lex::Std::Cxx17 || specs.constexpr.is_some() {
             ConstexprKind::Constexpr
+        } else {
+            ConstexprKind::None
         };
         let mut spec = FnSpec::new().with_inline(true).with_constexpr_kind(kind);
         if is_static {
@@ -1131,6 +1136,21 @@ impl Sema<'_, '_> {
         if let Some(depth) = top.saved_dependent_depth {
             self.ast.templates.dependent_depth = depth;
         }
+        // C++11 [expr.prim.lambda]/2, C++14 [expr.const]/2.6: before C++17
+        // a lambda-expression is never a core constant expression; clang
+        // reports one written directly in a constant-evaluated context
+        // (`PopExpressionEvaluationContext`) outside a dependent context
+        // (a template's default argument is not in one), at its `[`,
+        // whatever the evaluation would do (`([]{}, true)`). The
+        // initializer of a constexpr variable is not such a context.
+        // WP-1666.
+        if self.std < kiln_lex::Std::Cxx17
+            && self.in_constant_evaluated()
+            && self.unevaluated == 0
+            && !self.is_dependent_decl_context(self.ctx)
+        {
+            self.error(DiagId::sema_lambda_in_constant_expression, lbracket);
+        }
         if top.capture_failed {
             return self.act_on_error_expr(&[], lbracket);
         }
@@ -1286,7 +1306,16 @@ impl Sema<'_, '_> {
             .decls
             .function(call_op)
             .is_some_and(|x| x.spec.constexpr_kind() == ConstexprKind::Consteval);
-        let kind = if consteval { ConstexprKind::Consteval } else { ConstexprKind::Constexpr };
+        // [expr.prim.lambda.closure]/8: constexpr from C++17 (P0170R1);
+        // before, never, even after a written `constexpr` (clang
+        // `addFunctionPointerConversion`). WP-1666.
+        let kind = if consteval {
+            ConstexprKind::Consteval
+        } else if self.std >= kiln_lex::Std::Cxx17 {
+            ConstexprKind::Constexpr
+        } else {
+            ConstexprKind::None
+        };
         // P2564 / [expr.prim.lambda.closure]/10: an escalated call
         // operator makes the conversion immediate too (clang 19 marks only
         // the invoker and rejects every use of the conversion instead).

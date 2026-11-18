@@ -1291,9 +1291,28 @@ impl Sema<'_, '_> {
         &mut self,
         qualifier: Option<DeclId>,
     ) -> Option<TemplateParamListId> {
+        self.take_template_head_of(qualifier, false)
+    }
+
+    /// [`Self::take_template_head`] for a declaration that is a `friend`
+    /// when `friend`: a head matching an implicitly instantiated class of
+    /// the qualifier is diagnosed in a class too (`template<class U>
+    /// friend void A<int>::g(U);`, clang's
+    /// `MatchTemplateParametersToScopeSpecifier` with `IsFriend`).
+    pub(crate) fn take_template_head_of(
+        &mut self,
+        qualifier: Option<DeclId>,
+        friend: bool,
+    ) -> Option<TemplateParamListId> {
         self.templ.cur = None;
         self.templ.head_mismatch = false;
         self.templ.local_template = false;
+        // As written only, not as instantiated (`A<T>::` becoming
+        // `A<int>::`); a friend after `template<>` (`template<>
+        // template<class U> friend void A<int>::g(U);`) is left as it was.
+        let friend = friend
+            && self.templ.spec_headers.is_empty()
+            && self.inst.stack.len() == self.templ.explicit_depth;
         // The untaken heads directly around this declaration. A
         // declaration in a lambda body takes none of the heads outside
         // the lambda: they await the declaration whose declarator holds
@@ -1313,7 +1332,11 @@ impl Sema<'_, '_> {
         if open.is_empty() {
             return None;
         }
-        let check_empty = self.checks_member_spec_headers();
+        let check_empty = self.checks_member_spec_headers()
+            || (friend
+                && self.templ.explicit_spec.is_none()
+                && self.templ.explicit_inst.is_none()
+                && self.templ.member_spec.is_none());
         let mut it = open.iter().copied().peekable();
         let mut member_of_template = false;
         for slot in self.scope_slots(qualifier) {

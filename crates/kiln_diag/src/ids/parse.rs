@@ -102,6 +102,7 @@ parse_ext_annotations = ExtWarn [Cxx26Extensions] (0) "annotations are a C++26 e
 parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs are a C++2c extension";
 parse_ext_concept_template_param = Error (0) "concept template parameter is a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
+parse_ext_constexpr_on_lambda = ExtWarn [Cxx17Extensions] (0) "'constexpr' on lambda expressions is a C++17 extension";
 parse_ext_decl_attrs_on_lambda = ExtWarn [Cxx23LambdaAttributes] (0) "an attribute specifier sequence in this position is a C++23 extension";
 // WP-1645: clang ext_enumerator_list_comma_cxx ([dcl.enum]/1, C++11).
 parse_ext_enumerator_list_comma = Extension [Cxx11Extensions] (0) "commas at the end of enumerator lists are a C++11 extension";

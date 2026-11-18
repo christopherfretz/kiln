@@ -1356,6 +1356,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return Err(());
         }
+        self.extra_parens_template_arg(e, pty);
         Ok(())
     }
 
@@ -1734,9 +1735,13 @@ impl Sema<'_, '_> {
     /// an id-expression of array or function type, or for a reference an
     /// id-expression (clang `CheckTemplateArgumentAddressOfObjectOrFunction`:
     /// "does not refer to any declaration", "must have its address
-    /// taken", noting the parameter at `ploc`), checked where it is
-    /// written, not when substituted. True when diagnosed. From C++20 on
-    /// nothing is checked.
+    /// taken", noting the parameter at `ploc`), and before C++11 no null
+    /// pointer; a substituted parameter stands for its argument's form
+    /// (`&x`), so a value-dependent argument is checked once
+    /// substituted (`*q` for `int& R`). Before C++17 a pointer to member
+    /// is checked by [`Self::pre_cxx17_member_pointer_arg`]; before C++11
+    /// extra parentheses are an extension. True when diagnosed. From C++20
+    /// on nothing is checked.
     pub(crate) fn pre_cxx20_address_arg(
         &mut self,
         v: kiln_ast::ids::ConstValueId,
@@ -1745,13 +1750,27 @@ impl Sema<'_, '_> {
         ploc: Option<Loc>,
     ) -> bool {
         use kiln_ast::consts::{PtrBase, Scalar};
-        use kiln_ast::expr::{ExprKind, UnaryOp};
+        use kiln_ast::expr::ExprKind;
         if self.std >= kiln_lex::Std::Cxx20 {
             return false;
         }
-        let Some(Scalar::Pointer { ty, base, offset, past, designated }) =
-            self.ast.consts.scalar(v)
-        else {
+        self.extra_parens_template_arg(e, pty);
+        if self.std < kiln_lex::Std::Cxx17 && self.is_member_pointer(pty) {
+            return self.pre_cxx17_member_pointer_arg(v, e);
+        }
+        let scalar = self.ast.consts.scalar(v);
+        if self.std < kiln_lex::Std::Cxx11
+            && matches!(scalar, Some(Scalar::Null { .. }))
+            && self.ast.types.is_pointer(pty)
+        {
+            // C++03 [temp.arg.nontype]/1 has no null pointer form.
+            let x = self.address_arg_operand(e, false).0;
+            let d = self.diag(DiagId::sema_template_arg_not_decl_ref, self.begin_loc(x));
+            let d = self.note_nttp_param(d, ploc);
+            self.emit(d);
+            return true;
+        }
+        let Some(Scalar::Pointer { ty, base, offset, past, designated }) = scalar else {
             return false;
         };
         let t = &self.ast.types;
@@ -1778,18 +1797,10 @@ impl Sema<'_, '_> {
             self.emit(d);
             return true;
         }
-        if !matches!(base, PtrBase::Decl(_) | PtrBase::Function(_)) || !self.inst.stack.is_empty() {
+        if !matches!(base, PtrBase::Decl(_) | PtrBase::Function(_)) {
             return false;
         }
-        let mut x = self.ignore_parens(e);
-        let mut address_taken = false;
-        if !reference
-            && self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
-            && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
-        {
-            x = self.ast.exprs.operand(x);
-            address_taken = true;
-        }
+        let (x, address_taken) = self.address_arg_operand(e, !reference);
         let at = self.begin_loc(x);
         let id = self.ignore_paren_imp_casts(x);
         // An overload set names a function too (resolved against the
@@ -1812,6 +1823,117 @@ impl Sema<'_, '_> {
         }
         let d = self.diag(DiagId::sema_template_arg_not_decl_ref, at);
         let d = self.note_nttp_param(d, ploc);
+        self.emit(d);
+        true
+    }
+
+    /// The operand of the address form of a pointer, reference or pointer
+    /// to member argument `e` ([temp.arg.nontype]/1 before C++17, "ignoring
+    /// parentheses"; clang `CheckTemplateArgumentAddressOfObjectOrFunction`):
+    /// implicit conversions and parentheses dropped, a substituted
+    /// parameter replaced by its argument, and with `addr` a leading `&`
+    /// taken off (then substituted parameters again). The flag is whether
+    /// the `&` was there.
+    fn address_arg_operand(&self, e: ExprId, addr: bool) -> (ExprId, bool) {
+        use kiln_ast::expr::{ExprKind, UnaryOp};
+        let mut x = self.ignore_parens(self.ignore_imp_casts_only(e));
+        x = self.strip_subst_nttp(x);
+        let mut taken = false;
+        if addr
+            && self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
+        {
+            x = self.strip_subst_nttp(self.ast.exprs.operand(x));
+            taken = true;
+        }
+        (x, taken)
+    }
+
+    /// `e` with its implicit casts (and `ConstantExpr` wrappers) dropped,
+    /// parentheses kept (clang `IgnoreImpCasts`).
+    fn ignore_imp_casts_only(&self, e: ExprId) -> ExprId {
+        use kiln_ast::expr::ExprKind;
+        let mut e = e;
+        for _ in 0..256 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
+                    e = self.ast.exprs.operand(e);
+                }
+                _ => break,
+            }
+        }
+        e
+    }
+
+    /// A substituted non-type parameter replaced by its argument, the
+    /// argument's implicit casts dropped, repeatedly.
+    fn strip_subst_nttp(&self, e: ExprId) -> ExprId {
+        use kiln_ast::expr::ExprKind;
+        let mut e = e;
+        for _ in 0..256 {
+            if self.ast.exprs.get(e).kind() != ExprKind::SubstNonTypeTemplateParmExpr {
+                break;
+            }
+            e = self.ignore_imp_casts_only(self.ast.exprs.subst_replacement(e));
+        }
+        e
+    }
+
+    /// Before C++11, parentheses around a pointer, reference or pointer
+    /// to member argument `e` (C++03 [temp.arg.nontype]/1 has none; C++11
+    /// allows them): clang's `ext_template_arg_extra_parens`, once, at the
+    /// outermost parenthesis. Also for a value-dependent argument, which
+    /// is checked again once substituted.
+    pub(crate) fn extra_parens_template_arg(&mut self, e: ExprId, pty: QualType) {
+        if self.std >= kiln_lex::Std::Cxx11 {
+            return;
+        }
+        let t = &self.ast.types;
+        if !(t.is_pointer(pty) || t.is_reference(pty) || self.is_member_pointer(pty)) {
+            return;
+        }
+        let x = self.ignore_imp_casts_only(e);
+        if self.ast.exprs.get(x).kind() == kiln_ast::expr::ExprKind::ParenExpr {
+            let d = self
+                .diag(DiagId::sema_ext_template_arg_extra_parens, self.begin_loc(x))
+                .per_instantiation();
+            self.emit(d);
+        }
+    }
+
+    /// Before C++17, a pointer to member argument `e` of value `v`
+    /// ([temp.arg.nontype]/1: "a pointer to member expressed as described
+    /// in [expr.unary.op]", i.e. `&C::m`, or the name of a non-type
+    /// template parameter; from C++11 also a null member pointer value;
+    /// clang `CheckTemplateArgumentPointerToMember`): any other form is
+    /// clang's `err_template_arg_not_pointer_to_member_form` at the
+    /// argument. A substituted parameter stands for its argument. True
+    /// when diagnosed.
+    fn pre_cxx17_member_pointer_arg(&mut self, v: kiln_ast::ids::ConstValueId, e: ExprId) -> bool {
+        use kiln_ast::consts::Scalar;
+        use kiln_ast::expr::{ExprKind, UnaryOp};
+        let x0 = self.ignore_parens(self.ignore_imp_casts_only(e));
+        let x = self.strip_subst_nttp(x0);
+        if x != x0 {
+            return false;
+        }
+        let ok = match self.ast.exprs.get(x).kind() {
+            ExprKind::UnaryOperator if self.ast.exprs.unary_op(x) == UnaryOp::AddrOf => {
+                let r = self.ast.exprs.operand(x);
+                self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                    && self.ast.exprs.decl_ref_extra(r).is_some_and(|x| x.qualifier.is_some())
+            }
+            ExprKind::DeclRefExpr => {
+                self.kind_of(self.ast.exprs.decl(x)) == DeclKind::NonTypeTemplateParm
+            }
+            _ => false,
+        };
+        let null = self.std >= kiln_lex::Std::Cxx11
+            && matches!(self.ast.consts.scalar(v), Some(Scalar::Null { .. }));
+        if ok || null {
+            return false;
+        }
+        let d = self.diag(DiagId::sema_template_arg_not_pointer_to_member_form, self.begin_loc(x));
         self.emit(d);
         true
     }

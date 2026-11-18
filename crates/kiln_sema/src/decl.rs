@@ -3389,9 +3389,37 @@ impl Sema<'_, '_> {
             self.declare_implicit_named(q, dname);
         }
         let found = self.prev_candidates_dn(dname, qualifier);
-        let p = self.pick_prev_function(&found, new);
+        let p = self.pick_prev_function(&found, new).map(|p| self.skip_friend_redecls(p));
         let other = if other_kind { self.non_function_member(&found) } else { None };
         (p, other)
+    }
+
+    /// The latest declaration of member function `p`'s entity that is not
+    /// a friend declaration of another class: what redeclaration lookup in
+    /// the member's class finds (clang `LookupQualifiedName`, friends not
+    /// visible there, [class.friend]/7), so the declaration a later friend
+    /// or out-of-line declaration is compared to and whose location and
+    /// exception specification its diagnostics name. The new declaration
+    /// still joins the chain after the latest one.
+    fn skip_friend_redecls(&self, p: DeclId) -> DeclId {
+        let friend = |d: DeclId| {
+            let ctx = self.ast.decls.get(d).ctx();
+            self.ast
+                .decls
+                .lexical_ctx(d)
+                .is_some_and(|l| Some(l) != ctx && is_tag_kind(self.kind_of(l)))
+        };
+        let mut x = p;
+        for _ in 0..100_000 {
+            if !friend(x) {
+                return x;
+            }
+            match self.ast.prev(x) {
+                Some(q) => x = q,
+                None => return p,
+            }
+        }
+        p
     }
 
     /// The declarations of `dname` in namespace `ctx` an unqualified friend

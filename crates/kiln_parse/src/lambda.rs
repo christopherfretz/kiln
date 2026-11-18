@@ -370,6 +370,12 @@ impl Parser<'_, '_> {
                 self.emit(d);
             } else {
                 *slot = Some(loc);
+                // P0170R1: clang `ext_constexpr_on_lambda_cxx17`, at the
+                // keyword. WP-1666.
+                if kw == Some(Kw::Constexpr) && self.std < Std::Cxx17 {
+                    let w = self.s.diag(DiagId::parse_ext_constexpr_on_lambda, loc);
+                    self.emit(w);
+                }
             }
             self.bump();
         }
