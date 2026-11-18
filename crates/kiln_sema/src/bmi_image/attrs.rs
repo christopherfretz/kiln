@@ -157,6 +157,9 @@ const TABLE: &[(AttrKind, Op)] = &[
     (AttrKind::UNAVAILABLE, Op::Exprs),
     (AttrKind::REQUIRE_CONSTANT_INIT, FLAG),
     (AttrKind::NONNULL, Op::Ints),
+    // WP-1675: kept only for `__builtin_has_attribute`.
+    (AttrKind::NONSTRING, FLAG),
+    (AttrKind::NOCOMMON, FLAG),
     // WP-1310: the alignment expression (`__attribute__((aligned(E)))`,
     // `alignas(E)`), checked when it was written.
     (AttrKind::ALIGNED, Op::ExprA),

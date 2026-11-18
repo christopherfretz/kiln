@@ -483,6 +483,15 @@ impl AttrKind {
     /// `__arm_new("za", "zt0")` on a function definition (WP-1426): `a`
     /// bit 0 is ZA, bit 1 ZT0 (`"aarch64_new_za"`, `"aarch64_new_zt0"`).
     pub const ARM_NEW: AttrKind = AttrKind(281);
+    /// GNU `nonstring` (clang 22 `NonStringAttr`), kept only so that
+    /// `__builtin_has_attribute` can answer it (WP-1675): on a variable,
+    /// parameter or member whose type is an array of (or pointer to) a
+    /// narrow character type, as GCC keeps it. No other effect.
+    pub const NONSTRING: AttrKind = AttrKind(282);
+    /// GNU `nocommon` (clang `NoCommonAttr`) on a variable that is not a
+    /// parameter, kept only for `__builtin_has_attribute` (WP-1675): kiln
+    /// never emits common symbols, so it has no effect.
+    pub const NOCOMMON: AttrKind = AttrKind(283);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
