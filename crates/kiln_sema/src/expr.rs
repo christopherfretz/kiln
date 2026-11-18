@@ -8,12 +8,12 @@
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{IntBits, Scalar};
 use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle};
-use kiln_ast::lambda::CaptureKind;
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, ExprFlags, ExprKind, NonOdrUse, ObjectKind, Radix, StringKind,
     TraitKind, UnaryOp, ValueCategory,
 };
 use kiln_ast::ids::RawId;
+use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{BuiltinType, TypeView};
@@ -948,7 +948,8 @@ impl Sema<'_, '_> {
                 ExprKind::LambdaExpr => {
                     let data = x.lambda(e);
                     if let Some(inits) = data.inits {
-                        for (c, a) in data.captures.iter().zip(self.ast.lists.iter::<ExprId>(inits)) {
+                        for (c, a) in data.captures.iter().zip(self.ast.lists.iter::<ExprId>(inits))
+                        {
                             if c.kind == CaptureKind::ByRef {
                                 self.call_operand_name(a, &mut out);
                             }
@@ -1017,9 +1018,11 @@ impl Sema<'_, '_> {
                     x.operand(e)
                 }
                 ExprKind::ArraySubscriptExpr => {
-                    let Some(a) = x.operands(e).into_iter().find(|&o| {
-                        self.ast.types.is_array(x.get(self.ignore_implicit(o)).ty())
-                    }) else {
+                    let Some(a) = x
+                        .operands(e)
+                        .into_iter()
+                        .find(|&o| self.ast.types.is_array(x.get(self.ignore_implicit(o)).ty()))
+                    else {
                         return;
                     };
                     self.ignore_implicit(a)
@@ -8087,4 +8090,3 @@ mod constant_candidates_tests {
         assert!(!ConstantCandidates::new(Vec::new()).contains(id(1)));
     }
 }
-

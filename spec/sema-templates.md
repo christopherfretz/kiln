@@ -3915,7 +3915,10 @@ here because the GCC cases reaching them are template tests:
   included), with clang's `-Wconstexpr-not-const`; the written prototype
   is rebuilt, so a trailing `-> decltype(this->m)` keeps its `this`, and
   an out-of-line definition of a static member function is not adjusted
-  (`dcl.constexpr/p8-cxx11-implicit-const.cpp`).
+  (`dcl.constexpr/p8-cxx11-implicit-const.cpp`). A friend declaration
+  of a member is adjusted too, as in clang, so `friend constexpr int
+  C::k();` does not match a non-const `int k();` (WP-1656,
+  `class.friend/friend-constexpr-member-implicit-const-cxx11.cpp`).
 - C++11: a class with a default member initializer is not an aggregate
   ([dcl.init.aggr]/1 in C++11; `over.ics.list/aggregate-default-member-init-cxx11.cpp`).
 - [over.ics.list]/8: in the aggregate walk a string literal of a

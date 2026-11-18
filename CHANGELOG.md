@@ -1360,6 +1360,14 @@ Planned as 1.3.0.
   function defined in a class template and used before the instantiation
   that defines it, and the destructor named by a `delete` in a template
   member, are now emitted (WP-1645, WP-1652, WP-1519, WP-1518).
+- A constant expression in a lambda body that passes a by-copy captured
+  constexpr object to a call (`constexpr P p{3}; [=]{ constexpr int j =
+  p.get(); }`, `get(p)`, a copy) reads the captured variable, as clang 22
+  and GCC 16.1 do; the capture and the closure are unchanged. A friend
+  declaration of a member function checks its exception specification
+  against the member's (with `-Wimplicit-exception-spec-mismatch`), and
+  at C++11 a friend's constexpr member function is implicitly `const`, as
+  in clang 22 (WP-1655, WP-1656).
 
 ## [1.2.1] - 2026-11-14
 

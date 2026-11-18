@@ -5031,7 +5031,6 @@ impl Sema<'_, '_> {
         let ty = if self.std < kiln_lex::Std::Cxx14
             && method
             && ds.constexpr.is_some()
-            && !friend
             && !explicit_object
             && spec.storage() != FnStorage::Static
         {
