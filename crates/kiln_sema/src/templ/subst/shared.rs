@@ -137,11 +137,7 @@ impl Sema<'_, '_> {
                     callees.extend(self.invocation_callee_ref(x));
                     self.recheck_shared_invocation(x);
                 }
-                ExprKind::CXXDeleteExpr => {
-                    if let Some(f) = self.ast.exprs.operator_delete(x) {
-                        self.mark_function_referenced(f, loc);
-                    }
-                }
+                ExprKind::CXXDeleteExpr => self.mark_delete_referenced(x, loc),
                 _ => {}
             }
             // The children, pushed onto the stack: `stack[base..]`.

@@ -708,7 +708,7 @@ impl Parser<'_, '_> {
             }
         }
         if self.at_greater() {
-            return self.split_greater();
+            return self.close_angle_list();
         }
         let d = self
             .s
@@ -1168,6 +1168,17 @@ impl Parser<'_, '_> {
 
     // -- template argument lists -------------------------------------------------------
 
+    /// The `>` closing a template parameter or argument list. Before
+    /// C++11 a `>>` there is two tokens' worth of brackets written as one
+    /// (C++03 [temp.names]/3): clang's
+    /// `err_two_right_angle_brackets_need_space`, then split as from C++11.
+    fn close_angle_list(&mut self) -> Loc {
+        if self.std < Std::Cxx11 && !self.s.is_c() && self.at(Punct::GreaterGreater) {
+            self.error_here(DiagId::parse_two_right_angle_brackets_need_space);
+        }
+        self.split_greater()
+    }
+
     /// `< template-argument-list? >` at the `<` ([temp.names]/1).
     /// Returns the arguments and the `<` and `>` locations; `None` after
     /// a syntax error, recovered past the list.
@@ -1227,7 +1238,7 @@ impl Parser<'_, '_> {
             }
         }
         if ok && self.at_greater() {
-            let r = self.split_greater();
+            let r = self.close_angle_list();
             self.s.set_template_arg_locs(locs, r);
             return Some((args, l, r));
         }

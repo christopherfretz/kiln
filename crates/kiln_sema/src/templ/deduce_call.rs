@@ -2716,14 +2716,26 @@ impl Sema<'_, '_> {
         if conv(self, t1) && conv(self, t2) {
             return self.more_specialized_conversion(t1, t2);
         }
+        // An explicit object parameter takes the object argument
+        // ([over.match.funcs.general]/4), so it is compared like any
+        // parameter, and an implicit object member compared with such a
+        // template gets its object parameter inserted ([temp.func.order]/3:
+        // only a member with an implicit object parameter does).
+        let explicit =
+            |s: &Self, t: DeclId| s.templated_function(t).is_some_and(|f| s.has_explicit_object(f));
+        let (e1, e2) = (explicit(self, t1), explicit(self, t2));
         if !set.oper {
-            return self.more_specialized(t1, t2, nargs);
+            if set.object.is_none() || !(e1 || e2) {
+                return self.more_specialized(t1, t2, nargs);
+            }
+            let n = |e: bool| nargs + usize::from(e);
+            return self.more_specialized_operator(t1, n(e1), t2, n(e2), false);
         }
-        let n = |k: CandidateKind| {
-            nargs + usize::from(k == CandidateKind::Function && set.object.is_some())
+        let n = |k: CandidateKind, e: bool| {
+            nargs + usize::from((k == CandidateKind::Function || e) && set.object.is_some())
         };
         let reversed = x.rewrite.is_reversed() != y.rewrite.is_reversed();
-        self.more_specialized_operator(t1, n(x.kind), t2, n(y.kind), reversed)
+        self.more_specialized_operator(t1, n(x.kind, e1), t2, n(y.kind, e2), reversed)
     }
 
     /// A rewritten or reversed operator function template candidate

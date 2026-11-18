@@ -14,6 +14,7 @@ sema_nested_name_spec_non_tag = Error (1) "type {0} cannot be used prior to '::'
 sema_new_array_init_args = Error (0) "array 'new' cannot have initialization arguments";
 sema_new_array_of_auto = Error (0) "cannot allocate array of 'auto'";
 sema_new_array_size_unknown = Error (0) "array size must be specified in new expression with no initializer";
+sema_new_array_size_unknown_from_init = Error (0) "cannot determine allocated array size from initializer";
 // ----- WP-1135 (clang `err_auto_new_deduction_failure`)
 sema_new_auto_incompatible_arg = Error (2) "new expression for type {0} has incompatible constructor argument of type {1}";
 sema_new_auto_multiple_args = Error (1) "new expression for type {0} contains multiple constructor arguments";

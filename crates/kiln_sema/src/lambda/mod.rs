@@ -291,7 +291,24 @@ impl Sema<'_, '_> {
     /// unnamed class in the innermost enclosing context
     /// ([expr.prim.lambda.closure]/1-2), and starts its definition.
     pub fn act_on_lambda_start(&mut self, intro: &LambdaIntroducer) -> LambdaId {
+        self.check_non_local_capture_default(intro);
         self.act_on_lambda_start_in(intro, false)
+    }
+
+    /// [expr.prim.lambda.capture]/3: a *capture-default* only in a
+    /// lambda-expression whose innermost enclosing scope is a block
+    /// scope, or in a default member initializer (CWG1632: where `this`
+    /// could be captured). Clang's `ActOnLambdaExpressionAfterIntroducer`
+    /// test: the closure's parent is not a function and `this` is not
+    /// capturable here. Checked once, at the definition (a simple-capture
+    /// there fails as a capture of a non-automatic variable).
+    fn check_non_local_capture_default(&mut self, intro: &LambdaIntroducer) {
+        if intro.default != CaptureDefault::None
+            && !is_function(self.kind_of(self.ctx))
+            && !self.this_capturable()
+        {
+            self.error(DiagId::sema_lambda_capture_default_non_local, intro.default_loc);
+        }
     }
 
     /// [`Sema::act_on_lambda_start`]; `never_dependent` for a lambda

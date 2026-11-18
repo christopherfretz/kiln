@@ -83,7 +83,19 @@ sema_ext_decomp_decl_spec = ExtWarn [Cxx20Extensions] (1) "structured binding de
 sema_ext_decomp_decl_spec_19 = ExtWarn [Cxx20Extensions] (1) "decomposition declaration declared {0} is a C++20 extension";
 sema_ext_defaulted_comparison = ExtWarn [Cxx20Extensions] (0) "defaulted comparison operators are a C++20 extension";
 sema_ext_inline_variable = ExtWarn [Cxx17Extensions] (0) "inline variables are a C++17 extension";
+// WP-1645: clang ext_nonclass_type_friend ([class.friend]/3, C++11).
+sema_ext_nonclass_type_friend = ExtWarn [Cxx11Extensions] (1) "non-class friend type {0} is a C++11 extension";
 sema_ext_placeholder_var = ExtWarn [Cxx26Extensions] (0) "placeholder variables are a C++2c extension";
+// WP-1645: clang ext_templ_default_in_function_templ ([temp.param]/14, C++11).
+sema_ext_templ_default_in_function_templ = ExtWarn [Cxx11Extensions] (0) "default template arguments for a function template are a C++11 extension";
+// WP-1645: clang ext_template_arg_local_type ([temp.arg.type], C++11 N2657).
+sema_ext_template_arg_local_type = ExtWarn [LocalTypeTemplateArgs] (1) "template argument uses local type {0}";
+// WP-1645: clang ext_template_arg_unnamed_type ([temp.arg.type], C++11 N2657).
+sema_ext_template_arg_unnamed_type = ExtWarn [UnnamedTypeTemplateArgs] (0) "template argument uses unnamed type";
+// WP-1645: clang ext_unelaborated_friend_type ([class.friend]/3, C++11).
+sema_ext_unelaborated_friend_type = ExtWarn [Cxx11Extensions] (2) "unelaborated friend declaration is a C++11 extension; specify '{0}' to befriend {1}";
+// WP-1645: clang ext_variable_template ([temp.pre], C++14).
+sema_ext_variable_template = ExtWarn [Cxx14Extensions] (0) "variable templates are a C++14 extension";
 sema_ext_vector_component_exceeds_length = Error (1) "vector component access exceeds type {0}";
 sema_ext_vector_component_name_illegal = Error (1) "illegal vector component name '{0}'";
 sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
@@ -319,6 +331,7 @@ sema_keyword_not_supported_on_target = Error (1) "{0} is not supported on this t
 sema_keyword_wrong_decl_type = Error (2) "{0} only applies to {1}";
 sema_lambda_capture_anonymous_var = Error (0) "unnamed variable cannot be implicitly captured in a lambda expression";
 sema_lambda_capture_default_arg = Error (0) "lambda expression in default argument cannot capture any entity";
+sema_lambda_capture_default_non_local = Error (0) "non-local lambda expression cannot have a capture-default";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
 sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";

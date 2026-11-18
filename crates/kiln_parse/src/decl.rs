@@ -285,9 +285,7 @@ impl Parser<'_, '_> {
             return;
         }
         match (Self::punct_of(self.tok()), self.kw()) {
-            (Some(Punct::Semi), _) => {
-                self.bump();
-            }
+            (Some(Punct::Semi), _) => self.extra_semi_outside_function(loc),
             (Some(Punct::RBrace), _) => {
                 self.error_here(DiagId::parse_extraneous_closing_brace);
                 self.bump();
@@ -1160,6 +1158,11 @@ impl Parser<'_, '_> {
                 Kw::Auto if self.s.is_c() && !self.c23_auto_deduces() => {
                     ds.set_storage(StorageSpec::Auto, loc)
                 }
+                // C++98 `auto` is a storage class ([dcl.stc] in C++03): a
+                // type-specifier keyword after it is the type (`auto int
+                // x;`, `auto union { ... };`); without one, clang deduces
+                // as in C++11 (`-Wc++11-extensions`).
+                Kw::Auto if self.cxx98_auto_storage() => ds.set_storage(StorageSpec::Auto, loc),
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::GnuAutoType => {
                     // clang `ext_auto_type` (`-Wgnu-auto-type`).
@@ -2555,6 +2558,9 @@ impl Parser<'_, '_> {
             && qualifier.is_none()
             && self.parse_ttp_elaborated(ds, kw_loc, ctx)
         {
+            // Elaborated all the same (a friend of it is no C++98
+            // extension).
+            ds.keyword = keyword;
             return;
         }
         // [dcl.type.elab]/1: `class-key nested-name-specifier template
@@ -2564,6 +2570,7 @@ impl Parser<'_, '_> {
             && self.at_kw(Kw::Template)
             && self.parse_tag_template_kw(ds, q, keyword, kw_loc)
         {
+            ds.keyword = keyword;
             return;
         }
         let name = self.ident().map(|n| (n, self.bump().span.lo));
@@ -3010,7 +3017,7 @@ impl Parser<'_, '_> {
                 }
             }
             self.s.act_on_enumerator(name, loc, init, &attrs);
-            if self.eat(Punct::Comma).is_none() {
+            if self.eat_enumerator_comma().is_none() {
                 if !self.at(Punct::RBrace) {
                     let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("',' or '}'");
                     self.emit(d);
@@ -3872,6 +3879,58 @@ impl Parser<'_, '_> {
         self.s.c_at_least(kiln_lex::CStd::C23)
             && !self.kw_of(self.tok_at(next)).is_some_and(is_type_specifier_kw)
             && !self.names_type_at(next)
+    }
+
+    /// Before C++11 (in C++), the `;`s that follow on the same line as an
+    /// extra `;` just consumed: true if they make one C++11-extension
+    /// report (clang `ConsumeExtraSemi`), all consumed.
+    pub(crate) fn cxx98_extra_semis(&mut self) -> bool {
+        if self.std >= Std::Cxx11 || self.s.is_c() {
+            return false;
+        }
+        while self.at(Punct::Semi) && !self.tok().flags.contains(TokFlags::START_OF_LINE) {
+            self.bump();
+        }
+        true
+    }
+
+    /// Consumes an empty-declaration `;` at `loc`. C++11 added it
+    /// ([dcl.pre]/1); before it clang's `ConsumeExtraSemi(OutsideFunction)`.
+    fn extra_semi_outside_function(&mut self, loc: Loc) {
+        self.bump();
+        if self.cxx98_extra_semis() {
+            self.s.error(DiagId::parse_ext_extra_semi_cxx11, loc);
+        }
+    }
+
+    /// The `,` after an enumerator. C++11 allows a trailing comma
+    /// ([dcl.enum]/1); before it clang's `ext_enumerator_list_comma_cxx`
+    /// at the comma.
+    fn eat_enumerator_comma(&mut self) -> Option<Loc> {
+        let comma = self.eat(Punct::Comma);
+        if let Some(c) = comma
+            && self.at(Punct::RBrace)
+            && self.std < Std::Cxx11
+            && !self.s.is_c()
+        {
+            self.s.error(DiagId::parse_ext_enumerator_list_comma, c);
+        }
+        comma
+    }
+
+    /// C++ before C++11: `auto` followed by a type-specifier keyword other
+    /// than a cv-qualifier is the storage class (clang `ParseDeclarationSpecifiers`
+    /// sets `SCS_auto` and recovers to `TST_auto` when no type follows).
+    fn cxx98_auto_storage(&self) -> bool {
+        !self.s.is_c()
+            && self.std < Std::Cxx11
+            && self.kw_of(self.tok_at(self.pos() + 1)).is_some_and(|k| {
+                is_type_specifier_kw(k)
+                    && !matches!(
+                        k,
+                        Kw::Const | Kw::Volatile | Kw::Restrict | Kw::Auto | Kw::Nonnull
+                    )
+            })
     }
 
     /// C17 6.9.1p6: a K&R definition's declaration list, before its body

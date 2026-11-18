@@ -2736,6 +2736,13 @@ impl Sema<'_, '_> {
         if lit.suffix.size == kiln_lex::literal::IntSize::BitInt {
             return self.bit_int_literal(lit, radix, loc);
         }
+        // An `ll` suffix before C++11: clang's `ext_cxx11_longlong`.
+        if lit.suffix.size == kiln_lex::literal::IntSize::LongLong
+            && self.std < kiln_lex::Std::Cxx11
+            && !self.is_c()
+        {
+            self.error(DiagId::pp_long_long_ext, loc);
+        }
         match literal::classify_integer_literal(self, lit) {
             Ok(t) => {
                 if let Some(w) = &t.warning {

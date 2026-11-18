@@ -929,6 +929,46 @@ impl Sema<'_, '_> {
         d.note(DiagId::note_template_param_here, Span::empty(self.ast.decls.get(p).loc()))
     }
 
+    /// C++03 [temp.arg.type]/2: no local or unnamed type, or a type
+    /// compounded from one, is a template argument; C++11 allows them.
+    /// Before C++11 clang's `ext_template_arg_local_type` (a tag declared
+    /// directly in a function) or `ext_template_arg_unnamed_type` (a tag
+    /// without a name for linkage purposes, with a note at it), at the
+    /// argument (clang `UnnamedLocalNoLinkageFinder`, through pointers,
+    /// references, arrays and function return types). Checked where
+    /// written; clang repeats it on instantiation.
+    fn check_cxx98_type_arg(&mut self, t: QualType, at: Loc) {
+        if self.std >= kiln_lex::Std::Cxx11 || self.is_c() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let ty = &self.ast.types;
+        let mut q = ty.canonical(t);
+        let tag = loop {
+            if let Some(p) = ty.pointee(q).or_else(|| ty.element(q)) {
+                q = p;
+            } else if let Some(f) = ty.proto(q) {
+                q = f.ret();
+            } else {
+                break ty.as_record(q).or_else(|| ty.as_enum(q));
+            }
+        };
+        let Some(tag) = tag else { return };
+        let parent = self.ast.decls.get(tag).ctx();
+        let d = if parent.is_some_and(|c| self.kind_of(c).is_function()) {
+            self.diag(DiagId::sema_ext_template_arg_local_type, at).arg(self.ty_arg(q))
+        } else if self.decl_name(tag).is_empty()
+            && self.ast.decls.typedef_for_anon(tag).is_none()
+            && self.ast.closure_lambda(tag).is_none()
+        {
+            let note_at = self.ast.decls.get(tag).loc();
+            self.diag(DiagId::sema_ext_template_arg_unnamed_type, at)
+                .with_note(self.diag(DiagId::note_template_unnamed_type_here, note_at))
+        } else {
+            return;
+        };
+        self.emit(d);
+    }
+
     /// Checks and converts one written argument for parameter `p`
     /// (§3.2). `prior` holds the converted arguments of the parameters
     /// before `p` (a non-type parameter's type may name them).
@@ -957,6 +997,7 @@ impl Sema<'_, '_> {
                 Err(())
             }
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => {
+                self.check_cxx98_type_arg(t, at);
                 // Before C++17 an argument's exception specification is
                 // not part of it (spec/types.md §5.4).
                 Ok(TemplateArg::ty(self.ast.types.without_exc_sugar(t)))

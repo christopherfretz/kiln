@@ -10053,6 +10053,14 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   valid. From C++20 a constant bound with fewer arguments needs no
   default constructor beyond them (no filler for the tail). Tests:
   `expr.new/paren-array-init-*.cpp`.
+- **An omitted array bound with `()`** ([expr.new]/7,
+  [dcl.init.general]/16.4): `new T[]()` supplies no initial element, so
+  no bound: "cannot determine allocated array size from initializer" in
+  every language mode at the end of the element type as written (the
+  parser leaves it in the new-type-id's `Declarator::end`; a
+  parenthesized type-id and an instantiation report the type's start),
+  as clang's `BuildCXXNew`; GCC 16.1 accepts an array of no elements.
+  Tests: `expr.new/array-size-unknown-*.cpp` (WP-1518).
 - **Default template arguments on out-of-line members** ([temp.param]/12):
   a head of the definition of a member of a class template outside its
   class (the heads matched to the qualifier and the member template's

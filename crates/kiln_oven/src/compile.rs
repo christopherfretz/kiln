@@ -6069,6 +6069,16 @@ impl Compiler<'_> {
                 let init = self.ast().exprs.compound_literal_init(e);
                 return self.init_inner(init, p, ty);
             }
+            // A class-type constant template argument named in a
+            // substituted declaration (`A<T, []{}>` through an alias
+            // template's deduction guide, WP-1519): its replacement. A
+            // scalar one (a `_Complex` value) is evaluated as an rvalue.
+            ExprKind::SubstNonTypeTemplateParmExpr
+                if self.ast().types.as_record(n.ty()).is_some() =>
+            {
+                let op = self.ast().exprs.subst_replacement(e);
+                return self.init_inner(op, p, ty);
+            }
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.

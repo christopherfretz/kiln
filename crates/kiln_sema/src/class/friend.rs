@@ -5,7 +5,7 @@ use kiln_ast::QualType;
 use kiln_ast::decl::{ConstexprKind, DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{TemplateArg, TypeView};
+use kiln_ast::types::{TagKeyword, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -963,6 +963,7 @@ impl Sema<'_, '_> {
         } else {
             self.reject_qualified_fn_type(base, ds.loc, false)
         };
+        self.check_cxx98_friend_type(ds, base, owned);
         let loc = ds.type_loc.unwrap_or(friend_loc);
         // `template<class T> friend class A<T>::Member;` ([temp.friend]/5).
         if owned.is_none()
@@ -982,6 +983,39 @@ impl Sema<'_, '_> {
             self.push_friend(c);
         }
         Some(fd)
+    }
+
+    /// C++11 [class.friend]/3 allows a friend type declaration without a
+    /// class-key; before it clang's `ext_unelaborated_friend_type` (a
+    /// class) or `ext_nonclass_type_friend` (anything else) at the start of
+    /// the declaration. Checked in the pattern only.
+    fn check_cxx98_friend_type(&mut self, ds: &DeclSpec, base: QualType, owned: Option<DeclId>) {
+        if self.std >= kiln_lex::Std::Cxx11
+            || owned.is_some()
+            || ds.tag.is_some()
+            || ds.dependent_tag_name.is_some()
+            || matches!(
+                ds.keyword,
+                TagKeyword::Struct | TagKeyword::Class | TagKeyword::Union | TagKeyword::Enum
+            )
+            || self.inst.stack.in_instantiation_record()
+            || self.is_error_type(base)
+            || matches!(
+                self.ast.types.view(base.ty()),
+                TypeView::Elaborated { keyword, .. }
+                    if !matches!(keyword, TagKeyword::None | TagKeyword::Typename)
+            )
+        {
+            return;
+        }
+        let d = if let Some(r) = self.ast.types.as_record(base) {
+            let key = self.tag_keyword(r);
+            self.diag(DiagId::sema_ext_unelaborated_friend_type, ds.loc).arg(key)
+        } else {
+            self.diag(DiagId::sema_ext_nonclass_type_friend, ds.loc)
+        };
+        let d = d.arg(self.ty_arg(base));
+        self.emit(d);
     }
 
     /// [class.friend]/3: a friend-type-specifier is a simple-, elaborated-

@@ -103,11 +103,19 @@ parse_ext_binding_pack = ExtWarn [Cxx26Extensions] (0) "structured binding packs
 parse_ext_concept_template_param = Error (0) "concept template parameter is a C++2c extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_decl_attrs_on_lambda = ExtWarn [Cxx23LambdaAttributes] (0) "an attribute specifier sequence in this position is a C++23 extension";
+// WP-1645: clang ext_enumerator_list_comma_cxx ([dcl.enum]/1, C++11).
+parse_ext_enumerator_list_comma = Extension [Cxx11Extensions] (0) "commas at the end of enumerator lists are a C++11 extension";
 // WP-1471: clang ext_equals_this_lambda_capture_cxx20 ([expr.prim.lambda.capture]/2, P0409R2).
 parse_ext_equals_this_lambda_capture = ExtWarn [Cxx20Extensions] (0) "explicit capture of 'this' with a capture default of '=' is a C++20 extension";
 parse_ext_expansion_statements = ExtWarn [Cxx26Extensions] (0) "expansion statements are a C++26 extension";
 parse_ext_expansion_stmt_body_attr = Extension [ExpansionStmtMissingBraces] (0) "ISO C++ forbids attributes before the compound statement of an expansion statement";
 parse_ext_expansion_stmt_body_not_compound_stmt = Extension [ExpansionStmtMissingBraces] (0) "ISO C++ requires the body of an expansion statement to be a compound statement";
+// WP-1645: clang ext_extra_semi with AfterMemberFunctionDefinition, two or more `;`; only before C++11 here.
+parse_ext_extra_semi_after_mem_fn_def = Extension [ExtraSemi] (0) "extra ';' after member function definition";
+// WP-1645: clang ext_extra_semi_cxx11 ([dcl.pre]/1 empty-declaration, C++11).
+parse_ext_extra_semi_cxx11 = Extension [Cxx11ExtraSemi] (0) "extra ';' outside of a function is a C++11 extension";
+// WP-1645: clang ext_extra_semi with InsideStruct; only before C++11 here (GCC: C++11 allows it).
+parse_ext_extra_semi_in_class = Extension [ExtraSemi] (1) "extra ';' inside a {0}";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
 // WP-1471: clang ext_init_capture_pack ([expr.prim.lambda.capture]/1, P0780R2).
 parse_ext_init_capture_pack = ExtWarn [Cxx20Extensions] (0) "initialized lambda pack captures are a C++20 extension";
@@ -118,6 +126,8 @@ parse_ext_lambda_template_parameter_list = ExtWarn [Cxx20Extensions] (0) "explic
 // WP-1630: clang ext_implicit_typename ([temp.res.general]/4, P0634R3) before C++20; clang 19 words it as `_19`.
 parse_ext_missing_typename = ExtWarn [Cxx20Extensions] (1) "missing 'typename' prior to dependent type name '{0}' is a C++20 extension";
 parse_ext_missing_typename_19 = ExtWarn [Cxx20Extensions] (1) "missing 'typename' prior to dependent type name {0}; implicit 'typename' is a C++20 extension";
+// WP-1645: clang ext_nonstatic_member_init ([class.mem.general], C++11 N2756).
+parse_ext_nonstatic_member_init = ExtWarn [Cxx11Extensions] (0) "default member initializer for non-static data member is a C++11 extension";
 parse_ext_pack_indexing = ExtWarn [Cxx26Extensions] (0) "pack indexing is a C++2c extension";
 parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_ext_using_attribute_ns = ExtWarn [Cxx17Extensions] (0) "default scope specifier for attributes is a C++17 extension";
@@ -209,6 +219,8 @@ parse_template_defn_explicit_instantiation = Error (1) "{0:function|class|variab
 parse_template_kw_missing = Error (1) "missing 'template' keyword prior to dependent template name '{0}'";
 parse_template_template_param_typename = ExtWarn [Cxx17Extensions] (0) "template template parameter using 'typename' is a C++17 extension";
 parse_this_captured_by_reference = Error (0) "'this' cannot be captured by reference";
+// WP-1645: clang err_two_right_angle_brackets_need_space (C++03 [temp.names]/3).
+parse_two_right_angle_brackets_need_space = Error (0) "a space is required between consecutive right angle brackets (use '> >')";
 parse_typename_constexpr = Error (1) "type name does not allow {0} specifier to be specified";
 parse_typename_function_spec = Error (0) "type name does not allow function specifier to be specified";
 parse_typename_storage_class = Error (0) "type name does not allow storage class to be specified";

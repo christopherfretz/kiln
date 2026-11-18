@@ -1345,6 +1345,21 @@ Planned as 1.3.0.
   class is attached to the global module ([basic.link]/11). `cargo xtask
   libstdcxx` names the reference compiler it ran (WP-1522, WP-1634,
   WP-1646, WP-1647, WP-1648).
+- C++98 under `-pedantic-errors` reports the C++11 extensions clang 22
+  reports, with clang's wording and warning groups: default member
+  initializers, extra `;`, a trailing enumerator comma, `>>` closing a
+  template argument list, `long long` (`-Wno-long-long` silences it),
+  non-class and unelaborated friend types, default template arguments of
+  function templates, variable templates, and local or unnamed types as
+  template arguments. In C++98 `auto` before a type-specifier is the
+  storage class. An anonymous union at class scope with a storage class,
+  `mutable` on an anonymous union outside a class, a non-local lambda
+  with a capture-default and `new T[]()` are rejected. Explicit object
+  parameters take part in partial ordering; a lambda can be an alias
+  template's argument in class template argument deduction. A friend
+  function defined in a class template and used before the instantiation
+  that defines it, and the destructor named by a `delete` in a template
+  member, are now emitted (WP-1645, WP-1652, WP-1519, WP-1518).
 
 ## [1.2.1] - 2026-11-14
 

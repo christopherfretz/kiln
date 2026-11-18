@@ -121,7 +121,7 @@ impl Sema<'_, '_> {
         None
     }
 
-    fn tag_keyword(&self, r: DeclId) -> &'static str {
+    pub(crate) fn tag_keyword(&self, r: DeclId) -> &'static str {
         match self.ast.decls.record(r).map(|x| x.tag) {
             Some(TagKind::Class) => "class",
             Some(TagKind::Union) => "union",

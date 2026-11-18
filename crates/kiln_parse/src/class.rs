@@ -1239,6 +1239,15 @@ impl Parser<'_, '_> {
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
                 self.bump();
+                // clang `ConsumeExtraSemi(InsideStruct)`: one report for the
+                // `;`s of a line. Only before C++11, where GCC rejects it too.
+                if self.cxx98_extra_semis() {
+                    let d = self
+                        .s
+                        .diag(DiagId::parse_ext_extra_semi_in_class, loc)
+                        .arg(self.class_key_name());
+                    self.emit(d);
+                }
                 true
             }
             (_, Some(k @ (Kw::Public | Kw::Private | Kw::Protected))) => {
@@ -1653,6 +1662,15 @@ impl Parser<'_, '_> {
     /// `err_incomplete_array_member_init`), at the initializer; the member
     /// is invalid (no flexible array member checks, spec/sema.md §5.8).
     fn save_member_nsdmi(&mut self, unbounded: bool, decl: Option<DeclId>) {
+        // C++11 added default member initializers; before it clang's
+        // `ext_nonstatic_member_init` at the `=` or `{`. A function declared
+        // through a typedef of function type takes `= 0` as its
+        // pure-specifier (clang `isDeclarationOfFunction`).
+        if self.std < kiln_lex::Std::Cxx11
+            && !decl.is_some_and(|x| self.s.ast.decls.get(x).kind().is_function())
+        {
+            self.error_here(DiagId::parse_ext_nonstatic_member_init);
+        }
         if !unbounded {
             self.save_nsdmi(decl);
             return;
@@ -1968,7 +1986,16 @@ impl Parser<'_, '_> {
                 self.push_late(LateItem::Contracts { f, toks });
             }
         }
-        self.eat(Punct::Semi);
+        // One `;` may follow a member function definition; before C++11
+        // clang's `ConsumeExtraSemi(AfterMemberFunctionDefinition)` reports
+        // more on the same line, at the first.
+        if let Some(at) = self.eat(Punct::Semi)
+            && self.at(Punct::Semi)
+            && !self.tok().flags.contains(TokFlags::START_OF_LINE)
+            && self.cxx98_extra_semis()
+        {
+            self.s.error(DiagId::parse_ext_extra_semi_after_mem_fn_def, at);
+        }
     }
 
     /// Declares a member declarator (or a friend function): returns the

@@ -2131,7 +2131,24 @@ impl Sema<'_, '_> {
             return f;
         }
         let first = self.ast.first(f);
-        if first != f && self.ast.instantiated_from(first).is_some() { first } else { f }
+        if first != f && self.ast.instantiated_from(first).is_some() {
+            return first;
+        }
+        // A namespace-scope function a friend definition of a class
+        // template specialization redeclares ([temp.inst]/4): the friend.
+        if self.kind_of(f) == DeclKind::Function
+            && let Some(y) = self.ast.redecls_of(f).find(|&y| {
+                y != f
+                    && self
+                        .ast
+                        .instantiated_from(y)
+                        .and_then(|p| self.ast.decls.function(p))
+                        .is_some_and(|x| x.body.is_some())
+            })
+        {
+            return y;
+        }
+        f
     }
 
     pub(crate) fn inst_owner(&self, f: DeclId) -> Option<DeclId> {

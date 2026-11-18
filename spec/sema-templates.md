@@ -5684,6 +5684,12 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+A constant template argument of class type there (a lambda-expression,
+`template<class T> using AT = A<T, []{}>`) is substituted into each guide
+and evaluated as a prvalue of class type; the Oven's `init_inner` takes
+the replacement of a `SubstNonTypeTemplateParmExpr` as its other paths do
+(WP-1519, `over.match.class.deduct/p3-alias-lambda-template-argument.cpp`;
+clang 19 finds no viable guide).
 Access in an implicit guide (from a constructor or constructor template)
 is checked as in the class ([over.match.class.deduct]/1: the guide's
 signature is the constructor's), so a parameter naming a private or
