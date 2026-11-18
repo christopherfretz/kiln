@@ -152,6 +152,15 @@ the IS equality ([expr.eq]):
   int == ^^int const` and `^^decltype(1) == ^^int`, but `^^Alias !=
   ^^int`, and `dealias(^^Alias) == ^^int` ([meta.reflection.queries];
   GCC 16.1 agrees; `expr.reflect/alias-vs-dealias-identity.cpp`).
+  A type alias is kept only where [expr.reflect]/6 says the operand
+  represents it: a reflection-name (`^^A`, `^^N::A`, `^^S::T`) or a
+  simple-template-id naming an alias template (`^^AT<int>`). A
+  non-dependent typename-specifier is a type-id that is neither, so
+  `^^typename S::T == ^^int` (`act_on_reflect_type`; GCC 16.1 agrees;
+  WP-1674, `expr.reflect/reflect-typename-denoted-type.cpp`). A dependent
+  one (`^^typename T::type` in a template) still keeps the alias its
+  substitution finds, as GCC 16.1 does, against the text
+  (`act_on_reflect_type_substituted`; docs/status/deviations.md).
 - **Namespace aliases** reflect the alias declaration
   (`NamespaceAlias`), never the namespace it names: `^^M != ^^N` for
   `namespace M = N;`, two aliases of one namespace (or an alias of an
@@ -1014,6 +1023,31 @@ before. Tested by
   Under any other checkpoint a `Mutating` op still fails, with the note
   "'X' cannot run while a substitution is being tried
   (std::meta::substitute)" when no trial hides it.
+- **A placeholder return type is deduced** (WP-1674;
+  [meta.reflection.substitute]/2 and its example, [dcl.spec.auto.general]/12
+  and its note). A function template specialization whose type still
+  contains an undeduced placeholder (`auto`, `decltype(auto)`, a
+  constrained placeholder) has its definition instantiated by the
+  substitution (`instantiate_function_definition`, in an instantiation
+  frame, so outside the SFINAE frame), the same for every kind of function
+  template: namespace scope, member, a generic lambda's call operator. The
+  result is the deduced specialization (`type_of`, `return_type_of`, a
+  splice call and `extract` see the deduced type). Only a specialization
+  with no reachable definition stays undeduced: `can_substitute` is false
+  and `substitute` throws "the specialization's type contains an
+  undeduced placeholder type" (the example's fn1); a definition seen later
+  makes the same substitution succeed there (a failure is not memoized).
+  An error in the instantiated body (a `static_assert`, inconsistent
+  return statements, a deduced type that does not satisfy the
+  type-constraint) is a hard error with the "in instantiation of function
+  template specialization" note at the call, under `can_substitute` too
+  (the example's fn2); the answer then follows the type the instantiation
+  left (deduced: true), so `can_substitute` and `substitute` still agree
+  and a later query asks the same question. GCC 16.1 answers false for a
+  namespace-scope template and does not deduce a member template's return
+  type (docs/status/deviations.md). Tests:
+  `meta.reflection.substitute/substitute-placeholder-return{,-lambda,-neg}.cpp`,
+  `is-substitute-fn2.cpp`.
 - **A fold does not substitute.** `substitute`/`can_substitute` with no
   cached result fail silently in a trial (`MetaCtx::trial`) or outside a
   manifestly constant-evaluated evaluation, like every query that would
@@ -1434,18 +1468,20 @@ evaluations run during Y and sequenced before X. So:
   entity ([basic.def.odr]), and a nested evaluation that may inject is a
   consteval block of an instantiation (any other is not a core constant
   expression once it would inject, [expr.const]).
-- **Not modeled:** the point of evaluation of a nested evaluation is
-  in the function whose body holds it, so a class completed (by a
-  definition or an injected declaration) *after* that point, by an
-  earlier outermost evaluation or in the source, is complete in kiln's
-  nested evaluation and incomplete by the text (GCC 16.1 freezes the
-  constexpr local at the function's definition, which agrees here).
-  `define-aggregate-nested-later-point.cpp` is `xfail(kiln)` (WP-1660
-  remainder). Comparing points inside the inline evaluation would need a
-  memo-hit check for every call inside a constexpr local's initializer;
-  the alternative is GCC's model: the Oven materializes the value sema
-  recorded when it checked the initializer at Y's point
-  (`Sema::check_constexpr_init`) instead of re-running it.
+- **The point of a nested evaluation** (WP-1673). A constexpr local's
+  initializer is evaluated once, by sema, at the local's point (the
+  function's definition, or the instantiation of the enclosing
+  specialization: `Sema::check_constexpr_init` records
+  `VarEvalState::Value`); the Oven materializes that recorded value
+  instead of re-running the initializer (spec/oven.md "Constexpr
+  locals"). So a class completed *after* that point, by an earlier
+  outermost evaluation or in the source, is incomplete in the nested
+  evaluation, as the text says (GCC 16.1 agrees;
+  `define-aggregate-nested-later-point.cpp`,
+  `define-aggregate-nested-later-point-siblings.cpp`). The window above
+  still applies to the constexpr locals the Oven re-runs: those without
+  a recorded value and the excluded kinds (spec/oven.md); for them the
+  point is still the inline evaluation (WP-1682).
 
 **This is the one exception** to "a class is frozen at its closing `}`"
 (spec/ast.md §2.4). It is serialized through sema, so the Oven never

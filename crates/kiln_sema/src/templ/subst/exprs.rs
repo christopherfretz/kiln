@@ -1189,7 +1189,7 @@ impl Substituter<'_, '_, '_> {
                 Reflectee::Type(q) => {
                     let q = self.expansion_dealias(q);
                     let q = self.ty(q, loc)?;
-                    Ok(self.sema.act_on_reflect_type(q, loc, end))
+                    Ok(self.sema.act_on_reflect_type_substituted(q, loc, end))
                 }
                 Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
                     let d = self.find_instantiated_decl(d, loc)?;

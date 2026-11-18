@@ -12,6 +12,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::reflect::Reflectee;
+use kiln_ast::types::{TagKeyword, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -30,7 +31,46 @@ impl Sema<'_, '_> {
         if ty == QualType::ERROR {
             return self.recover(info, &[], loc);
         }
+        let ty = self.typename_denoted_type(ty);
         self.make_reflect_expr(Reflectee::Type(ty), loc, end)
+    }
+
+    /// `^^type-id` re-formed at substitution: the substituted type as is.
+    /// A non-dependent operand was already resolved when the pattern was
+    /// parsed; a dependent `typename` operand keeps the alias its
+    /// substitution finds (GCC 16.1 does the same; the text says the type
+    /// denoted; spec/reflection.md §2.2, docs/status/deviations.md).
+    pub fn act_on_reflect_type_substituted(&mut self, ty: QualType, loc: Loc, end: Loc) -> ExprId {
+        let info = self.meta_info_type();
+        if ty == QualType::ERROR {
+            return self.recover(info, &[], loc);
+        }
+        self.make_reflect_expr(Reflectee::Type(ty), loc, end)
+    }
+
+    /// [expr.reflect]/6: a `typename`-prefixed operand (`^^typename S::T`)
+    /// is a type-id that is not a reflection-name, so it represents the
+    /// type it denotes, not the type alias its terminal name names; only a
+    /// simple-template-id naming an alias template keeps the alias
+    /// (WP-1674). Only a non-dependent operand: see
+    /// `act_on_reflect_type_substituted`.
+    fn typename_denoted_type(&self, ty: QualType) -> QualType {
+        let types = &self.ast.types;
+        if types.is_dependent(ty) {
+            return ty;
+        }
+        let TypeView::Elaborated { keyword: TagKeyword::Typename, named, .. } = types.view(ty.ty())
+        else {
+            return ty;
+        };
+        let mut cur = named;
+        loop {
+            match types.view(cur.ty()) {
+                TypeView::Paren(inner) | TypeView::Elaborated { named: inner, .. } => cur = inner,
+                TypeView::Typedef { .. } | TypeView::Using { .. } => return types.canonical(ty),
+                _ => return ty,
+            }
+        }
     }
 
     /// `^^::` ([expr.reflect]/4): the global namespace.

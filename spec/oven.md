@@ -4642,6 +4642,39 @@ and hands the result to the full-expression's finish (WP-1171). Tests:
 `crates/kiln_driver/tests/constexpr_profile.rs`
 (`immediate_invocations_are_not_folded_again`).
 
+### Constexpr locals — Landed (WP-1673)
+A block-scope `constexpr` variable's initializer is evaluated once, by
+sema, at the variable's point: the enclosing function's definition, or
+the instantiation of the enclosing specialization
+(`Sema::check_constexpr_init` records `VarEvalState::Value`). The
+compiler materializes that value instead of compiling the initializer
+again (`Compiler::decl_one`: `recorded_local` decides,
+`decl_materialized` emits), with the WP-1140 machinery:
+- a scalar with bits (`scalar_bits`) is a constant (`konst`, kept in a
+  register or stored with `InitStore`);
+- a pointer to a static object, a string literal, a function, or one
+  past the end is the address its value thaws to (`THAW_PTR`): a
+  global's own object (`global_index`), the per-origin literal, `fn_ptr`;
+- a class or array is copied (`Op::Copy`, aux 1) from its thawed static
+  object (`THAW_OBJ`) into the local's own frame object: no constructor
+  runs, as for a valued leaf.
+
+Allocation, const-ness, the destructor cleanup (`end_local_init`) and the
+reflected-local object are unchanged: every call still has its own
+object, only its bytes come from the recorded value. Nothing is
+evaluated, so no nested evaluation is opened (no `Op::IsConstEval` 4/8
+bracket) and the point of evaluation is the one the text names
+(spec/reflection.md §6.2). Re-run as before (the initializer is compiled
+inline in its own nested evaluation): a local with no recorded value
+(sema's check failed and was diagnosed, a dependent initializer), a
+structured binding or its holding variable, a reference, a member
+pointer, a vector, complex or wide integer, a class with a `mutable`
+member or a virtual table pointer (or a register-held class), and a
+pointer to a temporary, a label or another local. The memo key and the
+completion log are unchanged. Tests:
+`tests/conformance/dcl.constexpr/constexpr-local-materialized.cpp`,
+`tests/conformance/meta.reflection.define.aggregate/define-aggregate-nested-later-point*.cpp`.
+
 ### Reflection runtime (M6; `-freflection`)
 Specified in **`spec/reflection.md`** §3:
 - the `info` value (`TyKind::Reflection`, bits `index - 1`) and the
@@ -4906,7 +4939,8 @@ sema.
   every other trial read false. `Op::IsConstEval` aux 2 reads it
   (`__kiln_plainly_constant_evaluated()`); aux 4 / aux 8 save-and-clear
   / restore it around a constexpr local's initializer, which is its own
-  manifestly constant-evaluated expression. The call memo key carries
+  manifestly constant-evaluated expression (only a local the Oven re-runs;
+  one with a recorded value is materialized, "Constexpr locals"). The call memo key carries
   `Oven::plain()` at bit 30 next to `const_context` at bit 31.
 
 - **Nested evaluation** (R-OVEN-1, spec/sema-templates.md §4.11). The

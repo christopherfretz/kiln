@@ -5,12 +5,16 @@
 // consteval block: no memo hit), neither the outer answer nor the nested
 // one. Once that evaluation ended the class is complete everywhere and
 // the same Stable call is memoized again (the second static_assert).
+// nested()'s constexpr local is the value sema recorded at its point (in
+// nested's body, where S is incomplete; spec/oven.md "Constexpr locals",
+// WP-1673): nested() asks nothing about S, so its second call is the one
+// memo hit of the block; size(^^S) is never memoized there.
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc
 //@ expect: compile-ok
-//@ oven: 24 memo_hits<=0
-//@ oven: 33 memo_hits>=1
+//@ oven: 28 memo_hits<=1
+//@ oven: 37 memo_hits>=1
 #include <meta>
 struct S;
 consteval std::size_t size(std::meta::info r) { return std::meta::size_of(r); }

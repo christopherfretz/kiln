@@ -325,7 +325,7 @@ impl Sema<'_, '_> {
                 let r = s.act_template_id(n, &targs, loc, loc);
                 s.templ.arg_locs = saved;
                 match r {
-                    Ok(id) => s.template_id_reflectee(id),
+                    Ok(id) => s.template_id_reflectee(id, loc),
                     Err(()) => Err(None),
                 }
             })
@@ -398,12 +398,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether function `spec`'s type still contains an undeduced
+    /// placeholder type.
+    fn spec_type_undeduced(&self, spec: DeclId) -> bool {
+        self.ast.decls.get(spec).ty().is_some_and(|t| self.contains_undeduced_auto(t))
+    }
+
     /// The reflectee of the entity template-id `id` names: the type, the
     /// variable or function template specialization, or the value of a
     /// concept-id. `Err(Some(reason))` when it names none.
     fn template_id_reflectee(
         &mut self,
         id: TemplateIdRef,
+        loc: Loc,
     ) -> Result<Reflectee, Option<&'static str>> {
         match id {
             TemplateIdRef::Type(t) => {
@@ -427,17 +434,25 @@ impl Sema<'_, '_> {
             },
             TemplateIdRef::Overload(ule) => match self.single_template_spec(ule) {
                 // [meta.reflection.substitute]/2: not a function whose type
-                // contains an undeduced placeholder type (its body is not
-                // instantiated to deduce it; as GCC).
-                Some((spec, _))
-                    if self
-                        .ast
-                        .decls
-                        .get(spec)
-                        .ty()
-                        .is_some_and(|t| self.contains_undeduced_auto(t)) =>
-                {
-                    Err(Some("the specialization's type contains an undeduced placeholder type"))
+                // contains an undeduced placeholder type. Naming the
+                // specialization is a use, and the return type of a
+                // templated function is deduced when its definition is
+                // instantiated ([dcl.spec.auto.general]/12 and its note:
+                // any use instantiates), so the body is instantiated
+                // here, outside the immediate context (the example's fn2:
+                // an error there makes the program ill-formed). Only a
+                // specialization with no reachable definition (the
+                // example's fn1) stays undeduced. WP-1674.
+                Some((spec, _)) if self.spec_type_undeduced(spec) => {
+                    self.instantiate_function_definition(spec, loc);
+                    if self.spec_type_undeduced(spec) {
+                        Err(Some(
+                            "the specialization's type contains an undeduced placeholder type",
+                        ))
+                    } else {
+                        self.reflectee_of_decl(spec)
+                            .ok_or(Some("the specialization has no reflection"))
+                    }
                 }
                 Some((spec, _)) => {
                     self.reflectee_of_decl(spec).ok_or(Some("the specialization has no reflection"))
