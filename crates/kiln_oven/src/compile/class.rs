@@ -1044,6 +1044,9 @@ impl Compiler<'_> {
             self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
         }
         if trivial {
+            if !zeroing {
+                self.trivial_ctor_constexpr_check(e);
+            }
             if !zeroing && self.default_inits_info(ty, 0) {
                 let loc = self.ctor_loc(e);
                 self.default_init_info(p, ty, loc, 0);
@@ -1051,6 +1054,46 @@ impl Compiler<'_> {
             return;
         }
         self.construct_obj(e, p, ty);
+    }
+
+    /// Default-initialization `e` by a trivial default constructor that
+    /// is not constexpr: before C++20 the implicit (or defaulted) one of a
+    /// class with a subobject it leaves uninitialized
+    /// ([class.ctor]/7 and [dcl.constexpr]/4 in C++17;
+    /// `Sema::defaulted_default_ctor_constexpr`). Its invocation is not a
+    /// core constant expression ([expr.const]/2.2 in C++17), a note a
+    /// fold continues past (`Op::Cce`), as clang
+    /// `CheckTrivialDefaultConstructor`'s `CCEDiag`. Value-initialization
+    /// calls no trivial constructor (the caller skips it). From C++20 on
+    /// every trivial default constructor is constexpr (P1331R2): one test.
+    fn trivial_ctor_constexpr_check(&mut self, e: ExprId) {
+        let year = self.b.cxx_year();
+        if year >= 2020 {
+            return;
+        }
+        let ast = self.ast();
+        let ctor = ast.exprs.constructor(e);
+        if ast
+            .decls
+            .function(ast.latest(ctor))
+            .is_none_or(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
+        {
+            return;
+        }
+        let loc = self.ctor_loc(e);
+        let t = if year >= 2011 {
+            let name = crate::notes::name_of(ast, ctor);
+            let at = ast.decls.get(ast.latest(ctor)).loc();
+            let msg = format!(
+                "non-constexpr constructor '{name}' cannot be used in a constant expression"
+            );
+            let t = self.trap_index(loc, msg);
+            self.o.traps[t as usize].extra.push(crate::failure::Note::new(at, "declared here"));
+            t
+        } else {
+            self.trap_index(loc, "subexpression not valid in a constant expression".into())
+        };
+        self.emit_loc(Op::Cce, crate::kbc::cce::CHECK, &[0, 0, t], loc);
     }
 
     /// Whether default-initializing an object of `ty` by trivial default

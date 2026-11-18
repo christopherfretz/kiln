@@ -615,6 +615,7 @@ impl Sema<'_, '_> {
             }
             let _ = self.ast.decls.set_field_init(field, e);
         }
+        self.module_field_init_exposures(field);
         if self.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
             self.nsdmi_this.pop();
         }

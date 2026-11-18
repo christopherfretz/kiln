@@ -8708,6 +8708,28 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   default constructor; kiln follows clang 22 and the text
   ([dcl.init.general]/7). WP-1677. Tests
   `tests/conformance/dcl.constexpr/uninit-var-cxx17*.cpp`.
+  Before C++20 ([dcl.constexpr]/4 in C++17, P1331R2) a constexpr
+  constructor that is not delegating, of a class that is not dependent,
+  must initialize every non-variant non-static data member (a
+  mem-initializer, a default member initializer, or a class type,
+  default-constructed; not an unnamed bit-field, nor an anonymous struct
+  or union without members), one member of each anonymous union member
+  it initializes, and every member of an anonymous struct member it
+  initializes: otherwise "constexpr constructor that does not initialize
+  all members is a C++20 extension" (`-Wc++20-extensions`) at the
+  constructor with "member not initialized by constructor" at each
+  member left out; a union's constructor that initializes none of its
+  members gets "constexpr union constructor that does not initialize any
+  member is a C++20 extension" (clang `ext_constexpr_ctor_missing_init`,
+  `ext_constexpr_union_ctor_no_init`, after the statement rules). GCC
+  16.1 rejects. The same rule decides whether an implicit or defaulted
+  default constructor is constexpr (`defaulted_default_ctor_constexpr`,
+  [class.ctor]/7 in C++17): one that leaves a scalar uninitialized is
+  not, and default-initializing an object by it in a constant evaluation
+  is "non-constexpr constructor 'T' cannot be used in a constant
+  expression" also when it is trivial (spec/oven.md "Trivial default
+  construction before C++20"). WP-1685. Tests
+  `tests/conformance/dcl.constexpr/{trivial-default-ctor-*,ctor-missing-init-cxx17}.cpp`.
   In C++11 an iteration statement or `continue` is not allowed in the
   body at all (clang does not take them as C++14 extensions): "statement
   not allowed in constexpr function", the function made invalid (WP-455).

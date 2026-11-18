@@ -826,6 +826,7 @@ impl Sema<'_, '_> {
             self.resolve_potential_captures(e, &constant, &mut by_call);
         }
         let pending = std::mem::take(&mut self.pending_odr);
+        let mut held = false;
         for r in pending {
             let d = self.ast.exprs.decl(r);
             // A structured binding named through a by-copy capture
@@ -844,6 +845,7 @@ impl Sema<'_, '_> {
             }
             self.mark_used(d);
             let at = self.eloc(r);
+            held |= self.module_note_odr_use(d, at);
             self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
             if self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
@@ -853,6 +855,11 @@ impl Sema<'_, '_> {
             {
                 self.ast.exprs.mark_names_closure_copy(r);
             }
+        }
+        if held {
+            // A full-expression folding to a value that is not TU-local
+            // (`&K != nullptr`) exposes nothing.
+            self.module_full_expr_exposures(e);
         }
         e
     }

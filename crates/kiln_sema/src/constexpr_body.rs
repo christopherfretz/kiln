@@ -34,7 +34,7 @@
 //! (`void` is not before C++14), checked at the written definition only,
 //! never for a dependent or incomplete type (WP-1123).
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, VarStorage};
+use kiln_ast::decl::{ConstexprKind, CtorInitKind, DeclFlags, DeclKind, VarStorage};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, StmtId};
 use kiln_diag::DiagId;
@@ -264,6 +264,9 @@ impl Sema<'_, '_> {
                 let msg = self.diag(id, loc).arg(u8::from(ctor));
                 self.emit(msg);
             }
+            if ctor && self.std < kiln_lex::Std::Cxx20 {
+                self.check_constexpr_ctor_inits(f);
+            }
             if !ctor && !stmts.has_return {
                 self.check_constexpr_missing_return(f, kind);
             }
@@ -279,6 +282,135 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(f, DeclFlags::INVALID);
         // A template's deduction still runs (`TemplState::body_invalid`).
         self.templ.body_invalid.insert(f);
+    }
+
+    /// [dcl.constexpr]/4 before C++20 (P1331R2 lifts it): a constexpr
+    /// constructor initializes every non-variant non-static data member
+    /// (a union's, exactly one variant member; an anonymous union
+    /// member's, one of its members). clang `CheckConstexprFunctionBody`
+    /// makes a breach a C++20 extension warning at the constructor, "...
+    /// does not initialize all members" with a note at each member left
+    /// out (an anonymous struct or union member at itself, unless it has
+    /// none to initialize), or for a union "... does not initialize any
+    /// member". A member is initialized by a mem-initializer, a default
+    /// member initializer, or (class type, not anonymous) default
+    /// construction; a delegating constructor and a constructor of a
+    /// dependent class are not checked (WP-1685).
+    fn check_constexpr_ctor_inits(&mut self, f: DeclId) {
+        let Some(class) = self.ast.decls.get(f).ctx() else { return };
+        // clang checks a constructor that is not in a dependent context
+        // (a template's pattern), and an instantiation only for validity,
+        // silently.
+        if self.is_dependent_decl_context(class)
+            || self.is_dependent_decl_context(f)
+            || !self.inst.stack.frames.is_empty()
+            || self.is_invalid_decl(class)
+        {
+            return;
+        }
+        let mut inited = std::collections::HashSet::new();
+        for ci in self.ast.ctor_inits(f) {
+            match ci.kind {
+                CtorInitKind::Delegating => return,
+                CtorInitKind::Field => {
+                    inited.insert(DeclId::new(ci.target));
+                }
+                CtorInitKind::IndirectField => {
+                    let chain = self.ast.indirect_field_chain(DeclId::new(ci.target));
+                    inited.extend(self.ast.lists.iter::<DeclId>(chain));
+                }
+                CtorInitKind::Base | CtorInitKind::VirtualBase => {}
+            }
+        }
+        let loc = self.ast.decls.get(f).loc();
+        if self.is_union(class) {
+            let fields = self.special_fields(class);
+            if !fields.is_empty() && !fields.iter().any(|&m| self.ctor_member_inited(m, &inited, 0))
+            {
+                let msg = self.diag(DiagId::sema_constexpr_union_ctor_no_init, loc);
+                self.emit(msg);
+            }
+            return;
+        }
+        let mut missing = Vec::new();
+        for m in self.special_fields(class) {
+            self.ctor_missing_members(m, &inited, &mut missing, 0);
+        }
+        if missing.is_empty() {
+            return;
+        }
+        let mut msg = self.diag(DiagId::sema_constexpr_ctor_missing_init, loc);
+        for m in missing {
+            let at = self.ast.decls.get(m).loc();
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_ctor_missing_init, at));
+        }
+        self.emit(msg);
+    }
+
+    /// The anonymous struct or union a field's type is, if it is one.
+    fn anonymous_member_record(&self, m: DeclId) -> Option<DeclId> {
+        if !self.is_anonymous_member(m) {
+            return None;
+        }
+        self.ast.decls.get(m).ty().and_then(|t| self.ast.types.as_record(t))
+    }
+
+    /// Whether member `m` of a constexpr constructor's class is
+    /// initialized ([`Sema::check_constexpr_ctor_inits`]): named by a
+    /// mem-initializer (`inited`), with a default member initializer, of
+    /// a class type default-constructed, or an anonymous struct or union
+    /// one of whose members is.
+    fn ctor_member_inited(
+        &self,
+        m: DeclId,
+        inited: &std::collections::HashSet<DeclId>,
+        depth: usize,
+    ) -> bool {
+        if inited.contains(&m) || self.field_has_nsdmi(m) {
+            return true;
+        }
+        if let Some(r) = self.anonymous_member_record(m) {
+            return depth < 32
+                && self
+                    .special_fields_iter(r)
+                    .any(|x| self.ctor_member_inited(x, inited, depth + 1));
+        }
+        let Some(t) = self.ast.decls.get(m).ty() else { return true };
+        !self.ast.types.is_reference(t) && self.element_class(t).is_some()
+    }
+
+    /// clang `CheckConstexprCtorInitializer` for member `m`: the members
+    /// left out, into `out`.
+    fn ctor_missing_members(
+        &self,
+        m: DeclId,
+        inited: &std::collections::HashSet<DeclId>,
+        out: &mut Vec<DeclId>,
+        depth: usize,
+    ) {
+        if self.is_invalid_decl(m) || depth > 32 {
+            return;
+        }
+        let anon = self.anonymous_member_record(m);
+        // An anonymous union without members, or an anonymous struct
+        // without any, needs no initializer.
+        if let Some(r) = anon
+            && self.special_fields_iter(r).next().is_none()
+        {
+            return;
+        }
+        if !self.ctor_member_inited(m, inited, depth) {
+            out.push(m);
+            return;
+        }
+        if let Some(r) = anon {
+            let union = self.is_union(r);
+            for x in self.special_fields(r) {
+                if !union || self.ctor_member_inited(x, inited, depth + 1) {
+                    self.ctor_missing_members(x, inited, out, depth + 1);
+                }
+            }
+        }
     }
 
     /// clang `CheckConstexprMissingReturn` ([dcl.constexpr]/3 in C++11;

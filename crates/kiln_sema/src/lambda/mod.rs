@@ -725,9 +725,13 @@ impl Sema<'_, '_> {
         self.lambda_mangle.default_arg = Some(p);
     }
 
-    /// After a delayed default argument.
+    /// After a delayed default argument: one naming a TU-local entity
+    /// exposes its member function
+    /// ([`Self::module_check_delayed_default_arg`]).
     pub fn act_on_end_delayed_default_arg(&mut self) {
-        self.lambda_mangle.default_arg = None;
+        if let Some(p) = self.lambda_mangle.default_arg.take() {
+            self.module_check_delayed_default_arg(p);
+        }
     }
 
     /// Before the default argument of a template parameter is parsed

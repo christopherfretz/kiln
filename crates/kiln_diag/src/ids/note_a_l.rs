@@ -45,6 +45,7 @@ note_checking_constraints_here = Note (1) "while checking constraint satisfactio
 note_compat_assoc = Note (1) "compatible type {0} specified here";
 note_conflicting_attribute = Note (0) "conflicting attribute is here";
 note_constexpr_array_index = Note (2) "cannot refer to element {0} of array of {1} elements in a constant expression";
+note_constexpr_ctor_missing_init = Note (0) "member not initialized by constructor";
 note_constexpr_function_param_value_unknown = Note (1) "function parameter '{0}' with unknown value cannot be used in a constant expression";
 note_constexpr_invalid_function = Note (1) "non-constexpr function '{0}' cannot be used in a constant expression";
 note_constexpr_large_shift = Note (4) "shift count {0} >= width of type {1} ({2} bit{3})";

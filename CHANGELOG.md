@@ -1486,6 +1486,15 @@ Planned as 1.3.0.
   unnamed-namespace variable's initializer, of an unnamed class at
   namespace scope and of an incomplete class in an unnamed namespace
   starts with GCC's `*`, so two units' twins compare unequal (WP-1679).
+- Before C++20, default-initializing a class whose implicit default
+  constructor leaves a member uninitialized (`struct T { int a; }; T
+  t;`) in a constant evaluation is rejected, as clang does; a
+  constexpr constructor that leaves a member uninitialized gets clang's
+  C++20-extension warning. In a module interface, a default member
+  initializer, a member function's default argument, an odr-use of a
+  TU-local constant (`return &K;`) and the lambda a variable of closure
+  type is initialized with are checked for exposures, as GCC does
+  (WP-1685, WP-1684).
 
 ## [1.2.1] - 2026-11-14
 
