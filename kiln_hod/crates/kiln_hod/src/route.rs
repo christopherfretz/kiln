@@ -1,8 +1,8 @@
 //! The route of each module (spec/driver.md "The `kiln_hod` workspace"):
-//! a module without debug information takes the bridge (`hod_ir` built in
-//! process, fed to a `hod::Session`); any other module, one the bridge
-//! does not take, and every module under `KILN_HOD_BRIDGE=0` takes the
-//! text path. The choice is made per module and before the session
+//! a module takes the bridge (`hod_ir` built in process, fed to a
+//! `hod::Session`); a module the bridge does not take, every module under
+//! `KILN_HOD_BRIDGE=0` and a module with debug information under
+//! `KILN_HOD_BRIDGE_DEBUG=0` take the text path. The choice is made per module and before the session
 //! starts: a module is never half bridged.
 
 use std::fmt::Write as _;
@@ -30,7 +30,7 @@ pub(crate) enum Route {
 pub(crate) fn choose(switches: &Switches, module: &kiln_llvm::Module, _: &Options) -> Route {
     if !switches.bridge {
         Route::Text("disabled")
-    } else if bridge::has_debug_info(module) {
+    } else if !switches.bridge_debug && bridge::has_debug_info(module) {
         Route::Text("debug")
     } else {
         Route::Bridge
@@ -133,8 +133,12 @@ pub(crate) fn bridged(
 /// The IR-equality check of `module`, as the log writes it: `equal`,
 /// `refused:<reason>`, `different:<where>`, `reader:<error>`,
 /// `fallback:<reason>` or `debug`.
-pub(crate) fn equality(module: &kiln_llvm::Module, options: &Options) -> String {
-    if bridge::has_debug_info(module) {
+pub(crate) fn equality(
+    switches: &Switches,
+    module: &kiln_llvm::Module,
+    options: &Options,
+) -> String {
+    if !switches.bridge_debug && bridge::has_debug_info(module) {
         return "debug".to_owned();
     }
     let target = match forced(options) {

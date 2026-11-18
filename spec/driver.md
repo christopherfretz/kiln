@@ -2539,13 +2539,25 @@ fails the executable. `.mason.meta`: hod appends its own unit (producer
 §9.7.5); `kiln_hod/crates/kiln-hod-driver/tests/mason_meta.rs` checks
 that against the LLVM route (WP-1561).
 
-**The two paths (WP-1704, hod's design 0004 seam K3a).** A module with
-no debug information (no `!llvm.dbg.cu`, no `!dbg` attachment, no debug
-record) takes the *bridge*: `kiln_hod::bridge` copies the
+**The two paths (WP-1704, hod's design 0004 seams K3a and K3b).** A
+module takes the *bridge*: `kiln_hod::bridge` copies the
 `kiln_llvm::Module` into `hod_ir` (types, constants, symbols, COMDATs,
 attribute sets, module flags, every global's description, then each
 body) and feeds a `hod::Session` in order (`with_module`, `end_module`,
 `body` / `unsupported_body` per function, `finish`); nothing is printed.
+Debug information (WP-1707, seam K3b) is bridged too: `!llvm.dbg.cu`,
+every DI node kind, `!dbg` on instructions, functions and variables,
+debug records (`#dbg_declare`, `#dbg_value`, `#dbg_label`) and the debug
+module flags. Each node and location gets the id hod's debug reader
+gives it (its numbering follows kiln's printer: the nodes in printed
+order, each field left to right, a tuple named as a node defined after
+the node that names it, then `!llvm.dbg.cu`, then equal nodes merged),
+memoized per `MetadataId`; what the reader refuses is recorded with the
+reader's own `debug:*` reason, what it drops is dropped. A module with
+debug information takes the text path only under
+`KILN_HOD_BRIDGE_DEBUG=0` (reason `debug`), or when its debug
+information has a shape the bridge does not read (a fallback
+`debug:<what>`, decided before the session starts like any other).
 Every other module takes the *text path*. The choice is made per module
 before the session starts: what the bridge does not map (an opaque named
 struct, a `splat` constant, a constant expression `hod_ir` does not fold,
@@ -2565,7 +2577,8 @@ and block names, and `source_filename`. The one difference the design
 names is an unlabelled `blockaddress`, which the bridge can represent
 and the text cannot name; kiln labels every block it prints, so it does
 not arise. Two tests hold it: `cargo xtask kiln-hod bridge-eq <dir>...`
-(each module compared, `KILN_HOD_BRIDGE_EQ=1`: equal, refused equally by
+(each module compared, each file with and without `-g` unless
+`--no-g`, `KILN_HOD_BRIDGE_EQ=1`: equal, refused equally by
 reason, not bridged by reason, different; a difference fails unless
 listed with its reason in `kiln_hod/bridge-eq-expected.txt`, which is
 empty) and `cargo xtask kiln-hod sweep --dual <dir>...` (the objects of
@@ -2573,7 +2586,8 @@ the external route, the bridge and, in process, the text path are the
 same bytes).
 
 Switches, read once per process: `KILN_HOD_BRIDGE=0` sends every module
-to the text path; `KILN_HOD_DUAL=1` also compiles each bridged module on
+to the text path; `KILN_HOD_BRIDGE_DEBUG=0` sends every module with
+debug information to it; `KILN_HOD_DUAL=1` also compiles each bridged module on
 the text path and compares the objects (a difference is
 `Failed(the bridge and the text path disagree: section '<name>')`, an
 error under `KILN_HOD_STRICT=1`); `KILN_HOD_BRIDGE_EQ=1` runs the

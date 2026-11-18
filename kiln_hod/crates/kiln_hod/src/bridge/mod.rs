@@ -23,6 +23,7 @@
 #![allow(clippy::too_many_lines, reason = "one mapping per construct, as the reader's")]
 
 mod body;
+mod debug;
 pub mod eq;
 
 use std::borrow::Cow;
@@ -92,10 +93,13 @@ pub struct Bridge<'k> {
     upgraded: Vec<(FnAttrsId, FnAttrsId)>,
     /// The functions with a body, in module order, and their symbols.
     defined: Vec<(k::FuncId, SymId)>,
+    /// Debug information (seam K3b).
+    dbg: debug::DebugState<'k>,
 }
 
-/// Whether `m` carries debug information, which the bridge does not map
-/// (seam K3b): `!llvm.dbg.cu`, any `!dbg` attachment, or a debug record.
+/// Whether `m` carries debug information: `!llvm.dbg.cu`, any `!dbg`
+/// attachment, or a debug record. Such a module keeps the text path under
+/// `KILN_HOD_BRIDGE_DEBUG=0`.
 pub fn has_debug_info(m: &k::Module) -> bool {
     let dbg = |kind: k::MdKindId| m.md_kind_name(kind) == "dbg";
     if m.named_metadata().any(|(name, _)| name == "llvm.dbg.cu") {
@@ -152,6 +156,7 @@ impl<'k> Bridge<'k> {
             upgrade: None,
             upgraded: Vec::new(),
             defined: Vec::new(),
+            dbg: debug::DebugState::default(),
         };
         // The printer writes a chunk's lines as one `module asm` line
         // each, and the reader appends each line.
@@ -165,8 +170,11 @@ impl<'k> Bridge<'k> {
         b.define_comdats()?;
         b.define_groups()?;
         b.named_metadata()?;
+        b.build_debug()?;
+        b.flush(None);
         b.items()?;
-        ir(kit::finish_debug(&mut b.module, false))?;
+        let listed = b.dbg.units.is_some();
+        ir(kit::finish_debug(&mut b.module, listed))?;
         ir(b.module.verify_symbols())?;
         Ok(b)
     }
@@ -573,7 +581,7 @@ impl<'k> Bridge<'k> {
                     }
                 }
                 NamedMetadataKind::Dropped => {}
-                NamedMetadataKind::DebugCompileUnits => return Err(Fallback::new("debug")),
+                NamedMetadataKind::DebugCompileUnits => self.dbg.units = Some(ops),
                 NamedMetadataKind::Unsupported => {
                     let construct = kit::named_metadata_construct(name.as_bytes());
                     self.module.record_unsupported(&construct, None);
@@ -783,12 +791,15 @@ impl<'k> Bridge<'k> {
         }
     }
 
-    fn attachments(&mut self, md: &[(k::MdKindId, k::MetadataId)]) -> R<Option<k::MetadataId>> {
+    /// A global value's attachments: its `!exclude` returned, its `!dbg`
+    /// nodes collected to `dbg.attached`.
+    fn attachments(&mut self, md: &[(k::MdKindId, k::MetadataId)]) -> Option<k::MetadataId> {
         let mut exclude = None;
+        self.dbg.attached.clear();
         for &(kind, node) in md {
             let name = self.k.md_kind_name(kind);
             match GlobalAttachment::of(name.as_bytes()) {
-                GlobalAttachment::Debug => return Err(Fallback::new("debug")),
+                GlobalAttachment::Debug => self.dbg.attached.push(node),
                 GlobalAttachment::Dropped => {}
                 GlobalAttachment::Exclude => {
                     exclude.get_or_insert(node);
@@ -798,7 +809,7 @@ impl<'k> Bridge<'k> {
                 }
             }
         }
-        Ok(exclude)
+        exclude
     }
 
     fn variable(&mut self, g: k::GlobalId, specials_seen: &mut u8) -> R<()> {
@@ -817,7 +828,7 @@ impl<'k> Bridge<'k> {
         if v.sanitizer.memtag {
             self.note("global-sanitize-memtag");
         }
-        let exclude = self.attachments(v.metadata())?;
+        let exclude = self.attachments(v.metadata());
         if let Some(special) = SpecialGlobal::from_name(v.name().as_bytes()) {
             if *specials_seen & special.bit() != 0 {
                 return Err(Fallback::new("special-redefined"));
@@ -871,6 +882,7 @@ impl<'k> Bridge<'k> {
                 _ => self.note(kit::global_attachment_construct(b"exclude")),
             }
         }
+        self.variable_dbg(sym)?;
         self.flush(Some(sym));
         Ok(())
     }
@@ -931,7 +943,7 @@ impl<'k> Bridge<'k> {
         let f = m.func(fid);
         let defined = !f.is_declaration();
         if !defined {
-            self.attachments(f.metadata())?;
+            self.attachments(f.metadata());
         }
         self.prefix(f.dll_storage);
         let cc = call_conv(f.cc)?;
@@ -963,8 +975,9 @@ impl<'k> Bridge<'k> {
             }
         }
         if defined {
-            self.attachments(f.metadata())?;
+            self.attachments(f.metadata());
         }
+        let subprogram = self.function_dbg()?;
         let sym = self.funcs[fid.index()].ok_or_else(|| Fallback::new("symbol"))?;
         let desc = FunctionDesc {
             linkage: linkage(f.linkage),
@@ -980,7 +993,7 @@ impl<'k> Bridge<'k> {
             param_attrs: &param_attrs,
             attrs,
             personality,
-            subprogram: None,
+            subprogram,
             addr_space: f.addrspace,
             has_body: defined,
         };

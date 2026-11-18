@@ -99,6 +99,13 @@ impl Bridge<'_> {
         walked?;
         if br.pending.is_empty() {
             match b.finish() {
+                // Debug information breaking a rule of LLVM's verifier:
+                // the reader drops the body.
+                Ok(body)
+                    if !br.module.debug.is_empty() && body.verify_debug(&br.module).is_err() =>
+                {
+                    br.note(hod_ir::kit::DEBUG_INVALID);
+                }
                 Ok(body) => return Ok(Built::Body(body)),
                 Err(e) if e.kind == IrErrorKind::UndefinedValue => br.note("no-code-cycle"),
                 Err(e) => return ir(Err(e)),
@@ -124,23 +131,45 @@ impl Fx<'_, '_> {
             let id = self.block_id(n as u32)?;
             ir(self.b.begin_block(id))?;
             for &i in f.block_insts(bb) {
-                if f.debug_records(i).next().is_some() {
-                    return Err(Fallback::new("debug"));
+                for r in f.debug_records(i) {
+                    self.record(r)?;
                 }
+                let before = self.b.inst_count();
                 let (ty, value, _) = self.inst(i)?;
                 let mut outside_frame = false;
-                for &(_, kind, _) in f.inst_metadata(i) {
-                    match self.br.k.md_kind_name(kind) {
-                        "dbg" => return Err(Fallback::new("debug")),
-                        "coro.outside.frame" => outside_frame = true,
+                let mut loc = None;
+                for &(_, kind, md) in f.inst_metadata(i) {
+                    match self.br.attachment_class(kind) {
+                        1 => loc = self.br.body_loc(md)?,
+                        2 => outside_frame = true,
                         _ => {}
                     }
                 }
                 if outside_frame && let ValueKind::Slot(slot) = value.kind() {
                     ir(self.b.set_slot_outside_frame(slot))?;
                 }
+                if let Some(loc) = loc {
+                    self.b.set_loc_since(before, loc);
+                }
                 self.define(i, ty, value)?;
             }
+        }
+        Ok(())
+    }
+
+    /// A debug record, printed before its instruction (the reader's
+    /// `debug_record`).
+    fn record(&mut self, r: &k::DbgRecord) -> R<()> {
+        let mut values = [Value::NONE];
+        let mut n = 0;
+        if r.kind != k::DbgRecordKind::Label {
+            values[0] = self.typed(r.addr)?.1;
+            n = 1;
+        }
+        let record = self.br.record_head(r)?;
+        let Some(loc) = self.br.body_loc(r.loc)? else { return Ok(()) };
+        if !ir(hod_ir::kit::emit_debug_record(&mut self.b, &record, &values[..n], loc))? {
+            self.br.note(hod_ir::kit::DEBUG_INVALID);
         }
         Ok(())
     }
@@ -735,7 +764,7 @@ impl Fx<'_, '_> {
             _ => Callee::Plain,
         };
         if let Callee::NoCode(NoCode::DebugRecord) = info {
-            return Err(Fallback::new("debug"));
+            return Err(Fallback::new("debug:intrinsic-call"));
         }
 
         // The arguments.

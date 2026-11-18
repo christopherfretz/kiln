@@ -157,6 +157,49 @@ fn a_decline_falls_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The LLVM directory the wrapper found (`--version`'s `LLVM backend:`
+/// line, `22 (/usr/lib/llvm-22)`).
+fn llvm_dir() -> Option<PathBuf> {
+    let out = Command::new(wrapper()).arg("--version").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let line = text.lines().find_map(|l| l.strip_prefix("LLVM backend: "))?;
+    let dir = line.split_once(" (")?.1.strip_suffix(')')?;
+    Some(PathBuf::from(dir))
+}
+
+/// A `-g` program through the bridge (WP-1707): the route log says
+/// `bridge`, the object is the text path's byte for byte
+/// (`KILN_HOD_BRIDGE_DEBUG=0`), its DWARF passes `llvm-dwarfdump
+/// --verify` (skipped without the tool), and it runs.
+#[test]
+fn a_debug_program_takes_the_bridge() {
+    if !tools() {
+        return;
+    }
+    let dir = scratch("debug");
+    let src = program("virtual.cpp");
+    let route_log = dir.join("route.jsonl");
+    let route = route_log.to_str().unwrap();
+    let args = ["-fkiln-backend=hod", "-g"];
+    let strict = ("KILN_HOD_STRICT", "1");
+    let line = compile(&dir, &src, "b.o", &args, &[strict, ("KILN_HOD_BRIDGE_LOG", route)]);
+    assert!(line.contains("\"backend\":\"hod\""), "{line}");
+    let logged = std::fs::read_to_string(&route_log).unwrap();
+    assert!(logged.contains("\"route\":\"bridge\""), "{logged}");
+    compile(&dir, &src, "t.o", &args, &[strict, ("KILN_HOD_BRIDGE_DEBUG", "0")]);
+    let bridged = std::fs::read(dir.join("b.o")).unwrap();
+    assert!(bridged == std::fs::read(dir.join("t.o")).unwrap(), "bridge against text path");
+    match llvm_dir().map(|d| d.join("bin/llvm-dwarfdump")).filter(|t| t.is_file()) {
+        Some(tool) => {
+            ok(Command::new(tool).current_dir(&dir).args(["--verify", "b.o"]));
+        }
+        None => eprintln!("skipping the DWARF check: no llvm-dwarfdump"),
+    }
+    let (out, status) = link_and_run(&dir, "b.o", "b");
+    assert_eq!((out.as_str(), status), ("square 9\nshape 10\n~Shape\n~Shape\n", Some(0)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--version`: the stock binary's lines, then one naming the built-in
 /// back end and its revision.
 #[test]
@@ -256,11 +299,12 @@ fn the_coverage_log_is_the_executables() {
     let text = log("text.tsv", false, false);
     assert_eq!(external.len(), 2, "{external:?}");
     assert_eq!(text, external);
-    // The job without debug information takes the bridge; the other
-    // (`-g`) the text path.
+    // Both jobs take the bridge, the `-g` one too (WP-1707).
     let mut expected = external.clone();
-    expected[0][2] = "module".to_owned();
-    expected[0][3] = "-".to_owned();
+    for row in &mut expected {
+        row[2] = "module".to_owned();
+        row[3] = "-".to_owned();
+    }
     assert_eq!(log("bridge.tsv", false, true), expected);
     let _ = std::fs::remove_dir_all(&dir);
 }

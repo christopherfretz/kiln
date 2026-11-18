@@ -90,10 +90,13 @@ struct Process {
 
 /// The bridge's environment switches, read once per process.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "one per environment switch")]
 struct Switches {
-    /// Not `KILN_HOD_BRIDGE=0`: a module without debug information takes
-    /// the bridge.
+    /// Not `KILN_HOD_BRIDGE=0`: a module takes the bridge.
     bridge: bool,
+    /// Not `KILN_HOD_BRIDGE_DEBUG=0`: a module with debug information
+    /// takes the bridge too.
+    bridge_debug: bool,
     /// `KILN_HOD_DUAL=1`: a bridged object is compared with the text
     /// path's.
     dual: bool,
@@ -109,6 +112,7 @@ impl Switches {
         let on = |name: &str| std::env::var_os(name).is_some_and(|v| v == "1");
         Switches {
             bridge: std::env::var_os(ENV_BRIDGE).is_none_or(|v| v != "0"),
+            bridge_debug: std::env::var_os(ENV_BRIDGE_DEBUG).is_none_or(|v| v != "0"),
             dual: on(ENV_DUAL),
             eq: on(ENV_BRIDGE_EQ),
             log: std::env::var_os(ENV_BRIDGE_LOG).filter(|p| !p.is_empty()).map(Into::into),
@@ -118,6 +122,9 @@ impl Switches {
 
 /// `KILN_HOD_BRIDGE=0`: every module takes the text path.
 pub const ENV_BRIDGE: &str = "KILN_HOD_BRIDGE";
+/// `KILN_HOD_BRIDGE_DEBUG=0`: a module with debug information (`-g`)
+/// takes the text path.
+pub const ENV_BRIDGE_DEBUG: &str = "KILN_HOD_BRIDGE_DEBUG";
 /// `KILN_HOD_DUAL=1`: the bridged object is compared with the text
 /// path's; a difference is a failure naming the first differing section.
 pub const ENV_DUAL: &str = "KILN_HOD_DUAL";
@@ -247,7 +254,7 @@ fn compile(
     let route = route::choose(&process.switches, module, &options);
     let mut line = route::Line::new(output_of(llc_args), &route);
     if process.switches.eq {
-        line.eq = Some(route::equality(module, &options));
+        line.eq = Some(route::equality(&process.switches, module, &options));
     }
     let answer = match route {
         route::Route::Bridge => match route::bridged(module, &options, settings, object, record) {
