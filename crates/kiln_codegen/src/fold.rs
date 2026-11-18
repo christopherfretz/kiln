@@ -157,7 +157,7 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists) = {
+    let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists, fams) = {
         let mut c = Collect {
             ast,
             compat: oven.clang_compat(),
@@ -170,10 +170,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             dtors: FxHashMap::default(),
             ps_args: Vec::new(),
             arr_lists: Vec::new(),
+            fams: Vec::new(),
             cover: None,
         };
         c.tu();
-        (c.out, c.inits, c.c_static, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists)
+        (c.out, c.inits, c.c_static, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists, c.fams)
     };
     let mut b =
         Bridge { ast, abi: target, cxx_year: oven.cxx_year(), aligns: FxHashMap::default() };
@@ -257,6 +258,16 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             })
         {
             folds.expr.insert(e, v);
+        }
+    }
+    // GNU: a list whose flexible array member's elements do not fold
+    // (`static A s = {1, {i}};`) is a dynamic initialization: the
+    // object's value lacks them, so it is no constant (WP-1694: the
+    // elements were dropped). A union's list folded only through its
+    // elements (above) is kept.
+    for (e, x) in fams {
+        if folds.get(x).is_none() {
+            folds.expr.remove(&e);
         }
     }
     array_lists(&mut b, oven, &mut folds, &tried, arr_lists);
@@ -473,6 +484,10 @@ struct Collect<'a> {
     /// nearest enclosing initializer whose folded value would be emitted
     /// in its place ([`Collect::cover`]).
     arr_lists: Vec<(ExprId, Option<ExprId>)>,
+    /// GNU: the variable initializers that give a flexible array member
+    /// elements, each with those elements' initializer
+    /// ([`flexible_elements_init`]).
+    fams: Vec<(ExprId, ExprId)>,
     /// The innermost enclosing initializer that covers the expressions
     /// being walked: an array list, or a variable initializer whose value
     /// is emitted as a constant when it folds.
@@ -581,6 +596,7 @@ impl Collect<'_> {
             self.out.push(init);
             if let Some(x) = flexible_elements_init(ast, init) {
                 self.out.push(x);
+                self.fams.push((init, x));
             }
         }
         if constant_init {

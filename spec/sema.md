@@ -11751,8 +11751,20 @@ not supported yet`.
     lifetime of the reference it initializes, "if any": a glvalue range
     without `constexpr` extends them (`extend_init_temporaries`); a prvalue
     initializes `__range` itself and its temporaries end with that
-    declaration. GCC 16.1 extends them for a prvalue too (its
-    expansion-stmt38 expects that); kiln follows the text.
+    declaration. kiln deviates there as GCC 16.1 does (its
+    expansion-stmt38 expects that): a prvalue's temporaries are left to
+    the statement's scope and end with the statement
+    (docs/status/deviations.md). A glvalue initializer was built before
+    `__range`'s declaration, so its temporaries are noted for that
+    declaration's full-expression (`note_shared_temporaries`, as the
+    destructuring form does): without the `ExprWithCleanups` the extended
+    ones ended with the enclosing block (WP-1694,
+    `stmt.expand/iterating-initializer-temporaries-run.cpp`). A by-value
+    class argument of a glvalue range's call, or of the destructuring
+    form's, is a parameter, not a temporary: it ends with the
+    initializer's full-expression ([expr.call]/7,
+    implementation-defined, as clang 22 does for a range-based for; GCC
+    16.1 extends it, which `g++.dg/cpp26/expansion-stmt17` expects).
     N is the first i for which `__begin + i != __end` is false
     ([stmt.expand]/5.2 counts with `++` in a consteval lambda; `__begin +
     i` is what each element uses). Every expression the paragraph names

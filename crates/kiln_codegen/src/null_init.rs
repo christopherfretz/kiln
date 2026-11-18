@@ -11,7 +11,7 @@
 use kiln_abi::irtype::IrType;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::types::TypeView;
-use kiln_ast::{DeclId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{GlobalId, Linkage, TypeId as LTy, Value};
 
 use crate::consts::ir_err;
@@ -24,6 +24,41 @@ impl Cg<'_> {
     /// all-zero bytes.
     pub(crate) fn zero_init(&mut self, q: QualType) -> bool {
         self.tys.is_zero_initializable(q)
+    }
+
+    /// The value of a static object of type `q` with initializer `init`
+    /// before its dynamic initialization runs: its null value
+    /// ([`Cg::null_const`]), followed by zero bytes for the elements
+    /// `init` gives its flexible array member (GNU; GCC emits the object
+    /// with room for them, and the initialization stores them,
+    /// `Cg::emit_record_init`). WP-1694: the object was emitted without
+    /// them and the elements were dropped.
+    pub(crate) fn dynamic_storage_const(&mut self, q: QualType, init: Option<ExprId>) -> R<Value> {
+        let z = self.null_const(q)?;
+        let Some(x) = init.and_then(|e| crate::fold::flexible_elements_init(self.ast, e)) else {
+            return Ok(z);
+        };
+        let need = self.flexible_elements_end(q, x);
+        let size = self.size_align(q).0;
+        if need <= size {
+            return Ok(z);
+        }
+        let pad = self.m.types.array(LTy::I8, need - size);
+        let tail = self.m.const_zero(pad);
+        self.m.const_anon_struct(&[z, tail], false).map_err(|e| ir_err(&e))
+    }
+
+    /// One past the last byte of the elements `x` (an initializer of
+    /// the flexible array member of class type `q`) give it.
+    pub(crate) fn flexible_elements_end(&mut self, q: QualType, x: ExprId) -> u64 {
+        let ast = self.ast;
+        let Some(def) = ast.types.as_record(q).and_then(|r| ast.definition(r)) else { return 0 };
+        let idx =
+            ast.decls.members(def).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).count();
+        let at =
+            self.tys.layouter().record(def).fields.get(idx.wrapping_sub(1)).copied().unwrap_or(0)
+                / 8;
+        at + self.size_align(ast.exprs.get(x).ty()).0
     }
 
     /// clang `CodeGenModule::EmitNullConstant`: the in-memory null value

@@ -229,7 +229,8 @@ rules are GCC's `__builtin_clear_padding` (`gimple-fold.cc`
 `clear_padding_type`), the only consumer (spec/codegen.md "Clearing
 padding"). A bit is a value bit when the value representation of some
 scalar subobject covers it:
-- every byte of a scalar is a value byte, `bool`, `std::nullptr_t`,
+- every byte of a scalar is a value byte, `bool`, a `std::nullptr_t`
+  that is not inside a class (the object itself, or an array of them),
   enumerations, pointers, member pointers, `__fp16`, `_Complex` and
   vectors included. The exceptions are x87 `long double` / `_Float64x`
   (80 value bits of 128) and `_BitInt(N)` (N value bits);
@@ -242,6 +243,9 @@ Everything else is padding:
   the derived class does not reuse. A base is its non-virtual part;
   virtual bases count only in a complete object;
 - unnamed bit-fields;
+- a `std::nullptr_t` member, or one in a member or base at any depth
+  (GCC 16.1: its bytes hold no value, [conv.lval]/3.1 never reads them;
+  `g++.dg/torture/builtin-clear-padding-2`, WP-1694);
 - the byte of an empty class, and empty bases and empty
   `[[no_unique_address]]` members (a non-empty one is laid out as a base
   subobject);

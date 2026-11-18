@@ -440,6 +440,16 @@ impl Sema<'_, '_> {
         // A `constexpr` range that is not constant-initialized is
         // diagnosed and not marked invalid: stop there too.
         let (ok, stash) = self.capturing(|s| {
+            // `e` was parsed (or substituted) before this declaration,
+            // whose full-expression it ends: a glvalue's temporaries are
+            // this initializer's cleanups (an `ExprWithCleanups`), so the
+            // extended ones end with the expansion statement
+            // ([class.temporary]/9), not with the enclosing block. A
+            // prvalue's are left to the statement's scope, as GCC 16.1
+            // does (docs/status/deviations.md).
+            if glvalue {
+                s.note_shared_temporaries(e);
+            }
             s.note_expansion_uses(e);
             s.init_expansion_var(range, e, range_loc, DiagId::sema_for_range_deduction_failure)
         });

@@ -5143,9 +5143,21 @@ impl Sema<'_, '_> {
     /// [expr.cond]/4 and /5: glvalues of the same type and value category
     /// give that glvalue; an lvalue of a less cv-qualified type binds to a
     /// reference to the other operand's type (/4.1).
+    ///
+    /// Only for ordinary and bit-field objects (clang
+    /// `isOrdinaryOrBitFieldObject`): a conditional of GNU vector
+    /// elements (`c ? v[0] : w[1]`) is a prvalue, so it is not assignable
+    /// and binds no non-const reference, as in clang 22 (GCC 16.1 makes it
+    /// an lvalue; kiln accepted the store and wrote the wrong element,
+    /// WP-1700).
     fn same_category_conditional(&mut self, o: CondOps) -> Option<ExprId> {
         let CondOps { c2, t, f, loc, .. } = o;
         let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
+        if tn.object_kind() == ObjectKind::VectorComponent
+            || fnn.object_kind() == ObjectKind::VectorComponent
+        {
+            return None;
+        }
         let (tt, ft) = (tn.ty(), fnn.ty());
         if tn.value_category().is_glvalue()
             && tn.value_category() == fnn.value_category()

@@ -4198,6 +4198,10 @@ are flattened to their innermost element type `E` and a count `n`:
   for each element;
 - otherwise a loop over the elements (an `i64` byte-offset phi stepping by
   `sizeof(E)`, exit on `icmp eq` against the total, as `array_init_loop`).
+- a pointer to a variable length array (GCC clears each element; kiln
+  cleared nothing before WP-1694): the same loop over its run-time element
+  count (`vla_size` times the constant dimensions under it), behind an
+  `icmp eq 0` guard since a VLA may have no element.
 Within an element, each run of whole padding bytes is one `llvm.memset`
 to 0 (a lone byte is a `store i8 0`). A byte holding both value and
 padding bits, as in a bit-field's storage unit, is loaded, `and`ed with
@@ -4444,6 +4448,17 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   `module.rs` `has_mutable`, also for static locals and the static data
   members emitted with their class; `tests/codegen/const_mutable_fields.cpp`).
   Constant-initialized variables keep the constant path unchanged.
+  GNU flexible array members (WP-1694): a list whose flexible array
+  member's elements do not fold (`static A s = {1, {i}};`) is not a
+  constant even when the Oven folded the object without them (`fold.rs`
+  drops that fold), so the variable, or static local, is zero storage
+  with room for the elements (`Cg::dynamic_storage_const`: the null
+  value then `[k x i8]` up to the elements' end, an anonymous struct)
+  and its initialization stores them as an array of the initializer's
+  type at the member (`record_init_fields`, a union's member alike).
+  Only a static object reaches this: Sema rejects elements anywhere
+  else. GCC 16.1 behaves so; clang 22 rejects the form
+  (`ext.gnu.flexible.array/run-dynamic-elements-static-init.cpp`).
 - **Init functions.** Each such variable gets an internal
   `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
   under `-fno-exceptions`, `uwtable`, the target attributes, x86

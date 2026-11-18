@@ -5,13 +5,16 @@
 //! sees them.
 //!
 //! A bit is a value bit when some scalar subobject's value representation
-//! covers it: the bytes of a scalar (all of them, `bool` and
-//! `std::nullptr_t` included, except the 6 trailing bytes of x87
-//! `long double` and the bits above a `_BitInt`'s width), the declared
-//! bits of a named bit-field, and the vtable pointer. Everything else is
-//! padding: gaps between and after members, unnamed bit-fields, the byte
-//! of an empty class, and in a union the bits no member's value covers
-//! (a bit that is padding in every member).
+//! covers it: the bytes of a scalar (all of them, `bool` included, except
+//! the 6 trailing bytes of x87 `long double` and the bits above a
+//! `_BitInt`'s width), the declared bits of a named bit-field, and the
+//! vtable pointer. Everything else is padding: gaps between and after
+//! members, unnamed bit-fields, the byte of an empty class, a
+//! `std::nullptr_t` subobject of a class (GCC: its bytes hold no value,
+//! [conv.lval]/3.1 never reads them; an object that is not inside a class
+//! keeps them, as GCC's `clear_padding_type_may_have_padding_p` stops
+//! there), and in a union the bits no member's value covers (a bit that is
+//! padding in every member).
 
 use kiln_ast::types::{BuiltinType, FloatFormat, TypeView};
 use kiln_ast::{DeclId, QualType};
@@ -33,7 +36,7 @@ pub fn padding_mask(lay: &mut Layouter<'_>, q: QualType) -> Option<Vec<u8>> {
         return None;
     }
     let mut v = vec![0u8; usize::try_from(size).ok()?];
-    let mut p = Padding { lay, records: FxHashMap::default() };
+    let mut p = Padding { lay, records: FxHashMap::default(), in_class: false };
     p.value(q, &mut v);
     for b in &mut v {
         *b = !*b;
@@ -45,6 +48,8 @@ struct Padding<'l, 'a> {
     lay: &'l mut Layouter<'a>,
     /// Value-bit masks of classes, complete (`true`) or as a base.
     records: FxHashMap<(DeclId, bool), Vec<u8>>,
+    /// Inside a class: a `std::nullptr_t` is padding there.
+    in_class: bool,
 }
 
 /// Sets bits `[from, from + n)` of `out` (little-endian bit numbering).
@@ -75,6 +80,7 @@ impl Padding<'_, '_> {
         let ast = self.lay.ast();
         let size = out.len() as u64;
         match ast.types.canonical_view(q) {
+            TypeView::Builtin(BuiltinType::NullPtr) if self.in_class => {}
             TypeView::Builtin(b) => {
                 let fmt = ast.types.target().long_double;
                 let ld = matches!(b, BuiltinType::LongDouble | BuiltinType::Float64x);
@@ -143,6 +149,7 @@ impl Padding<'_, '_> {
         if let Some(m) = self.records.get(&key) {
             return m.clone();
         }
+        self.in_class = true;
         let l = self.lay.record(rd).clone();
         let size = if complete { l.size } else { l.nv_size };
         let mut out = vec![0u8; usize::try_from(size).unwrap_or(0)];

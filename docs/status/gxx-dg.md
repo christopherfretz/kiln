@@ -39,7 +39,7 @@ follows, compared case by case with the second (2026-11-16, kiln
 test at one standard (or one optimization level). Same 20571 tests and
 56766 applicable cases on aarch64 in all three runs (57070 on x86-64).
 
-Fixed since this run: WP-1692 (stores through a glvalue conditional of bit-fields, `torture/pr37146-1`), WP-1693 (the explicit instantiation scope check at C++98, `template/explicit8`) and WP-1689 (`new` and `delete` in a constant evaluation before C++20).
+Fixed since this run: WP-1692 (stores through a glvalue conditional of bit-fields, `torture/pr37146-1`), WP-1693 (the explicit instantiation scope check at C++98, `template/explicit8`) and WP-1689 (`new` and `delete` in a constant evaluation before C++20). WP-1694: `ext/flexary39`, `flexary40`, `torture/builtin-clear-padding-2` and `c-c++-common/torture/builtin-clear-padding-4` (static flexible array members with dynamic elements; `__builtin_clear_padding` of `std::nullptr_t` members and VLAs), with verdicts for the rest of the run-time group under "Wrong code".
 
 | run | kiln | aarch64: pass of decided | x86-64: pass of decided | expect-unknown (aarch64 / x86-64) |
 |---|---|---:|---:|---:|
@@ -290,7 +290,32 @@ class. WP-1695.
    `flexary40` (flexible array members), `auto-init-padding-3`
    (`-ftrivial-auto-var-init` and padding), `torture/builtin-clear-padding-2`,
    `c-c++-common/torture/builtin-clear-padding-4`, `builtin-assoc-barrier-1`.
-   No oracle but GCC; WP-1694: reduce each and fix or document.
+   No oracle but GCC. WP-1694 verdicts:
+   - `expansion-stmt17`: GCC-only. The test's by-value class arguments
+     of the range's call are parameters, whose lifetime ends at the
+     initializer or the statement as the implementation defines
+     ([expr.call]/7); kiln ends them with the initializer, as clang 22
+     does for the range-based `for`, and GCC extends them. Fixed on the
+     way, a kiln bug by [stmt.expand]/5.2 and [class.temporary]/7: a
+     temporary bound by an iterating expansion statement's range
+     reference was destroyed at the end of the enclosing block, not of
+     the statement (`stmt.expand/iterating-initializer-temporaries-run.cpp`).
+   - `flexary39`, `flexary40`: kiln bug, fixed. A static flexible array
+     member initialized with non-constant elements was emitted without
+     them (codegen; `ext.gnu.flexible.array/run-dynamic-elements-static-init.cpp`).
+   - `builtin-clear-padding-2`, `-4`: kiln bugs against the GCC builtin,
+     fixed. A `std::nullptr_t` member is padding to GCC's
+     `__builtin_clear_padding`, and a pointer to a VLA clears every
+     element (ABI and codegen; `ext.gnu.clear_padding/run-clear-padding-nullptr-vla.cpp`;
+     through libstdc++'s `atomic::compare_exchange_strong` too,
+     `run-atomic-cas-nullptr-member.cpp`).
+   - `auto-init-padding-3`: GCC-only. `-ftrivial-auto-var-init=pattern`
+     fills padding with the pattern in kiln, byte for byte as clang 22;
+     the GCC manual zeroes padding.
+   - `builtin-assoc-barrier-1`: GCC-only. `__builtin_assoc_barrier` is
+     kept under `-ffast-math` (`llvm.arithmetic.fence`), also in templates
+     and constant evaluation; the test's difference comes from GCC's
+     `optimize` attribute, which kiln ignores as unknown, as clang 22 does.
 3. **Clang 22 is wrong too** (100 cases): GCC builtins and options
    (`__builtin_object_size` and `__builtin_dynamic_object_size`,
    `cleanup` with exceptions, `-flifetime-dse`, identical-code-folding

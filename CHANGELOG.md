@@ -1513,6 +1513,18 @@ Planned as 1.3.0.
   class scope is rejected in every mode (WP-1693). Before C++20 a `new`
   or `delete` in a constant evaluation is rejected with clang's note
   (WP-1689).
+- Wrong code found running GCC's C++ testsuite (WP-1694, WP-1700): a
+  static flexible array member initialized with non-constant elements
+  was emitted without them; `__builtin_clear_padding` left a
+  `std::nullptr_t` member uncleared (so libstdc++'s
+  `atomic::compare_exchange_strong` of such a struct failed) and cleared
+  only the first element through a pointer to a VLA; the temporaries an
+  iterating expansion statement's range reference extends lived to the
+  end of the enclosing block instead of the statement; a conditional
+  whose operands are vector elements was an lvalue that stored to the
+  wrong element (now a prvalue, as clang makes it). A conditional of
+  bit-fields of a `_BitInt` wider than 128 bits is evaluated in a
+  constant expression.
 
 ## [1.2.1] - 2026-11-14
 
