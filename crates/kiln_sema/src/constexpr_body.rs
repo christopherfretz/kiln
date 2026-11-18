@@ -170,13 +170,15 @@ impl Sema<'_, '_> {
     }
 
     /// Before C++23, a body with none of the statements or static
-    /// variables a constexpr function may hold only as an extension
-    /// (clang `CheckConstexprKind::CheckValid` fails on each).
+    /// variables a constexpr function may hold only as an extension, nor
+    /// before C++20 a variable without an initializer (clang
+    /// `CheckConstexprKind::CheckValid` fails on each).
     fn pre23_body_valid(&self, body: StmtId) -> bool {
         let stmts = self.body_stmts(body);
+        let pre20 = self.std < kiln_lex::Std::Cxx20;
         stmts.cxx23.is_none()
-            && stmts.statics.is_empty()
-            && (self.std >= kiln_lex::Std::Cxx20 || stmts.cxx20.is_none())
+            && stmts.var_exts.iter().all(|&(_, e)| e == VarExt::NoInit && !pre20)
+            && (!pre20 || stmts.cxx20.is_none())
     }
 
     fn constexpr_body_vars(&mut self, f: DeclId, body: StmtId) {
@@ -205,7 +207,9 @@ impl Sema<'_, '_> {
         let stmts = self.body_stmts(body);
         let var = if pre23 { self.first_non_literal_var(body) } else { None };
         // clang `CheckConstexprDeclStmt`: each static or thread_local
-        // variable before the first error is a C++23 extension.
+        // variable before the first error is a C++23 extension, and
+        // before C++20 each variable defined without an initializer a
+        // C++20 one, in source order (WP-1677).
         if pre23 {
             let stop = [
                 stmts.invalid.map(|s| self.ast.stmts.get(s).loc()),
@@ -215,14 +219,20 @@ impl Sema<'_, '_> {
             .flatten()
             .map(kiln_source::Loc::to_raw)
             .min();
-            for &(loc, thread) in &stmts.statics {
+            for &(loc, ext) in &stmts.var_exts {
                 if stop.is_some_and(|m| loc.to_raw() >= m) {
                     break;
                 }
-                let msg = self
-                    .diag(DiagId::sema_constexpr_static_var, loc)
-                    .arg(u8::from(ctor))
-                    .arg(u8::from(thread));
+                let msg = match ext {
+                    VarExt::Static(thread) => self
+                        .diag(DiagId::sema_constexpr_static_var, loc)
+                        .arg(u8::from(ctor))
+                        .arg(u8::from(thread)),
+                    VarExt::NoInit if self.std < kiln_lex::Std::Cxx20 => {
+                        self.diag(DiagId::sema_constexpr_local_var_no_init, loc).arg(u8::from(ctor))
+                    }
+                    VarExt::NoInit => continue,
+                };
                 self.emit(msg);
             }
         }
@@ -331,8 +341,12 @@ impl Sema<'_, '_> {
                 StmtKind::ReturnStmt => out.has_return = true,
                 StmtKind::DeclStmt => {
                     for v in self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)) {
+                        let loc = self.ast.decls.get(v).loc();
                         if let Some(thread) = self.local_static_kind(v) {
-                            out.statics.push((self.ast.decls.get(v).loc(), thread));
+                            out.var_exts.push((loc, VarExt::Static(thread)));
+                        }
+                        if self.is_uninit_local(v) {
+                            out.var_exts.push((loc, VarExt::NoInit));
                         }
                     }
                 }
@@ -345,8 +359,19 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
+            // clang walks the children of an iteration or `switch`
+            // statement, its init-statement first (not an `if`'s: only
+            // its branches); a condition variable and a range-`for`
+            // variable are always initialized.
+            let init = match st.get(s).kind() {
+                StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => st.loop_data(s).init,
+                StmtKind::SwitchStmt => st.switch_data(s).init,
+                StmtKind::CXXForRangeStmt => st.range_for_data(s).init,
+                _ => None,
+            };
             let children = self.children(s);
             stack.extend(children.into_iter().rev());
+            stack.extend(init);
         }
         out
     }
@@ -420,6 +445,24 @@ impl Sema<'_, '_> {
         (spec.storage() == VarStorage::Static).then_some(false)
     }
 
+    /// Whether `v` is a block-scope variable definition of a
+    /// non-dependent type for which no initialization is performed
+    /// ([dcl.init.general]/7.3: a scalar, or an array of them; a class
+    /// type's default constructor is initialization even when trivial,
+    /// as clang's `hasInit`), allowed in a constexpr function from C++20
+    /// (P1331R2; clang `ext_constexpr_local_var_no_init`).
+    fn is_uninit_local(&self, v: DeclId) -> bool {
+        let node = self.ast.decls.get(v);
+        if node.kind() != DeclKind::Var || node.has(DeclFlags::INVALID) {
+            return false;
+        }
+        let Some(data) = self.ast.decls.var(v) else { return false };
+        if data.init.is_some() || data.spec.storage() == VarStorage::Extern {
+            return false;
+        }
+        node.ty().is_some_and(|ty| !self.is_error_type(ty) && !self.is_dependent_type(ty))
+    }
+
     /// Whether `v` is a local variable definition of a complete,
     /// non-dependent, non-literal type.
     fn is_non_literal_local(&self, v: DeclId) -> bool {
@@ -449,8 +492,17 @@ struct BodyStmts {
     cxx20: Option<kiln_source::Loc>,
     /// A `return` statement was seen (clang's `ReturnStmts`).
     has_return: bool,
-    /// Each variable of static or thread storage duration defined, in
-    /// source order: its location and whether it is `thread_local`
-    /// (allowed from C++23).
-    statics: Vec<(kiln_source::Loc, bool)>,
+    /// Each variable of static or thread storage duration defined
+    /// (allowed from C++23) and each defined without an initializer
+    /// (allowed from C++20), in source order: its location and which.
+    var_exts: Vec<(kiln_source::Loc, VarExt)>,
+}
+
+/// A variable a constexpr function body may define only as an extension.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VarExt {
+    /// Of static (`false`) or thread (`true`) storage duration.
+    Static(bool),
+    /// With no initialization performed.
+    NoInit,
 }

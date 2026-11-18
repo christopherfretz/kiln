@@ -1459,6 +1459,14 @@ Planned as 1.3.0.
   case; a `dg-prune-output` that can only match a warning or note line
   no longer lifts the extra-error check or leaves a rejection
   `expect-unknown` (WP-1664, WP-1617).
+- An uninitialized variable in a constexpr function or constructor
+  before C++20 gets clang's C++20-extension warning (an error under
+  `-pedantic-errors`). In a module interface, a declaration that names
+  a TU-local entity (a signature, a variable's, member's or base's
+  type, a default argument, the body of an inline function) is an
+  error, as in GCC; clang only warns (docs/status/deviations.md). A use
+  in an inline variable's initializer gets clang's
+  `-WTU-local-entity-exposure` warning (WP-1677, WP-1678, WP-1676).
 
 ## [1.2.1] - 2026-11-14
 

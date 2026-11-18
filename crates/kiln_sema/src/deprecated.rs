@@ -171,6 +171,9 @@ impl Sema<'_, '_> {
     /// declarator, at parse time) the warning waits for the declaration
     /// ([`Sema::flush_delayed_deprecations`]).
     pub(crate) fn diagnose_deprecated(&mut self, d: DeclId, loc: Loc) {
+        // [basic.link]/15: in a module interface, a use may make its
+        // declaration an exposure (`modules/exposure.rs`).
+        self.module_note_use(d, loc);
         // clang's `DiagnoseUseOfDecl` reports a specialization's held-back
         // substitution warnings first (spec/sema-templates.md §5.7).
         self.emit_suppressed_diags(d, loc);

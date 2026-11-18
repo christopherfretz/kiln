@@ -376,17 +376,55 @@ the same column). A `const` variable that is not constexpr has its
 initializer ignored (/15.2) and is not checked; a TU-local constexpr
 variable (static, in an unnamed namespace) may hold such a value; in the
 private module fragment the rule does not apply (/17: deprecated
-elsewhere; GCC 16.1 rejects there too, kiln follows the text). Not
-checked yet (`basic.link/exposure-names-tu-local-entity.cpp`, xfail):
-the other kind, a declaration that names a TU-local entity outside what
-/15 ignores (an inline function's body, a signature, a constexpr local
-of an inline function), which GCC 16.1 rejects and clang 22 warns about
-(`-WTU-local-entity-exposure`). Not clear from the text, so not
-checked: an inline (not constexpr) variable whose initializer names a
-TU-local entity (`export inline int *ip = &hidden;`): /15.2 ignores the
-initializer of every variable, yet both compilers diagnose it. Tests:
+elsewhere; GCC 16.1 rejects there too, kiln follows the text). Tests:
 `basic.link/exposure-constexpr-tu-local-value.cpp`,
 `basic.link/exposure-constexpr-not-tu-local.cpp`.
+
+The other kind (WP-1678): a declaration that names a TU-local entity
+outside what /15 ignores, "declaration of 'f' exposes TU-local entity
+'helper'" (an error; GCC 16.1 rejects with its own text, clang 22 only
+warns, `-WTU-local-entity-exposure`: a deviation from the oracle,
+docs/status/deviations.md). A TU-local entity here is a function,
+variable, class, enumeration or template with internal linkage (in an
+unnamed namespace too), or a class template specialization with a
+TU-local type argument (/16.1, /16.4). Checked, once per declaration,
+at its name (`modules/exposure.rs`):
+- a function's return and parameter types and a default argument, a
+  variable's type, a base class, a non-static data member's type (the
+  error at its class), when the declaration is written;
+- a use in the body of an inline function (`inline`, `constexpr`,
+  `consteval`, a member defined in a class not attached to a named
+  module, an inline function template), including a lambda there (the
+  error at the lambda) and a call to a TU-local inline function. Uses
+  GCC 16.1 folds away before its check are not exposures: an
+  unevaluated operand, a discarded statement, a full-expression that
+  folds to a value that is not TU-local (a constant read, `sizeof`), a
+  discarded-value expression that only names a function or variable or
+  takes its address.
+
+The initializer of a variable is not an exposure (/15.1.2; /17 makes
+only a constexpr variable's TU-local value one, above). For each use of
+a TU-local entity in the initializer of an inline variable that is not
+constexpr (exported or not, also in a lambda there), kiln gives clang
+22's warning at the use, "TU local entity 'hidden' is exposed"
+(`-WTU-local-entity-exposure`, on by default; from
+`-fclang-compat=22`). GCC 16.1 rejects such a variable when it is
+constant-initialized to a TU-local value (`export inline int *ip =
+&hidden;`): kiln follows the text and clang (docs/status/deviations.md).
+
+Not checked (GCC 16.1 accepts each, or kiln does not yet): a friend
+declaration (/15.3), a local class, an enumerator, a variable that
+might be usable in constant expressions, a function or variable from
+the global module fragment (GCC 16.1 only warns,
+`-Wexpose-global-module-tu-local`), a template instantiation, a
+non-module or implementation unit, a header unit, the private module
+fragment. Gaps against GCC 16.1 (it rejects, kiln accepts): a default
+member initializer, the default argument of a member function declared
+in its class, an odr-use of a constant (`return &K;`), a static data
+member of a class template, a variable template's initializer.
+Tests: `basic.link/exposure-names-tu-local-entity.cpp`,
+`-declarations.cpp`, `-bodies.cpp`, `-accepted.cpp`,
+`basic.link/exposure-inline-var-initializer.cpp`.
 
 ## 7. Code generation and mangling
 
@@ -4750,7 +4788,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 38` since WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 41` since WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

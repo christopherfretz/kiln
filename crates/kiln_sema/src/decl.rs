@@ -3684,8 +3684,22 @@ impl Sema<'_, '_> {
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
     /// [`Sema::act_on_uninit`]) or the function body.
-    #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
     pub fn act_on_declarator(
+        &mut self,
+        ds: &DeclSpec,
+        base: QualType,
+        d: &Declarator,
+    ) -> Option<DeclId> {
+        let r = self.act_on_declarator_impl(ds, base, d);
+        // [basic.link]/15: its declared type may make it an exposure.
+        if let Some(x) = r {
+            self.module_check_decl_exposure(x, ds.friend.is_some());
+        }
+        r
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
+    fn act_on_declarator_impl(
         &mut self,
         ds: &DeclSpec,
         base: QualType,
@@ -9403,6 +9417,7 @@ impl Sema<'_, '_> {
             Some(_) => {}
         }
         self.check_constexpr_body_vars(f, body);
+        self.module_flush_exposures(f);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()
@@ -10876,6 +10891,7 @@ impl Sema<'_, '_> {
 
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
         self.check_field_named_as_class(r);
+        self.module_check_class_exposure(r);
         self.scopes.pop();
         let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);

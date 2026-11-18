@@ -184,6 +184,7 @@ SwitchBool = "switch-bool" [];
 SwitchDefault = "switch-default" [];
 SwitchEnum = "switch-enum" [];
 SyncFetchAndNandSemanticsChanged = "sync-fetch-and-nand-semantics-changed" [];
+TULocalEntityExposure = "TU-local-entity-exposure" [];
 TautologicalConstantCompare = "tautological-constant-compare" [];
 TautologicalPointerCompare = "tautological-pointer-compare" [];
 TautologicalUndefinedCompare = "tautological-undefined-compare" [];
