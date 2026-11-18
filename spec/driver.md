@@ -2422,14 +2422,26 @@ file, the driver writes `object` where `llc -o` would have.
    `-fpatchable-function-entry=` (`hod_static_skip`; decided before the
    module);
 4. the module's `opt` triggers (statistics log `triggers`, from the
-   module's facts below) are a subset of the route's set: {`alwaysinline`,
-   `coro`} for the external executable, **none** for the in-process back
-   end (a module `opt` would change is not handed over in process: design
-   0004 §10's conservative first version).
+   module's facts below) are a subset of {`alwaysinline`, `coro`}, the
+   same set on both routes (WP-1562; until then the in-process back end
+   took none, design 0004 §10's conservative first version): hod's
+   "pre-opt modules", whose `-O0` pipeline hod replaces itself (an
+   `alwaysinline` call compiled out of line, a switch-resumed coroutine
+   lowered by hod). Both routes therefore agree on every module, and
+   `codegen_cmd::hod_takes` / `hod_skip` take no route argument.
 
 With a back end registered, the in-process route replaces the external
 one: the `hod` executable is never searched for or run, and a job that
-fails rule 4 takes the LLVM route directly.
+fails rule 4 takes the LLVM route directly. **A declined pre-`opt`
+module** (hod's `available_externally` `alwaysinline` body it does not
+copy, a coroutine shape it does not lower, the wrapper's
+`KILN_HOD_PREOPT=0`) is printed and takes the LLVM route WITH `opt` as
+the module needs (`ir_passes`: the always-inliner, the coroutine
+passes), then `llc`, exactly as the external route's fallback; the
+object is byte-identical to `-fkiln-backend=llvm`'s
+(`tests/backend_hook.rs` `a_declined_pre_opt_module_runs_opt`). The
+stock binary registers no back end, so rule 4 there is the external
+route's, unchanged.
 
 **The route** (`codegen_cmd::run_in_process`). Inside the frontend the
 driver reads the module's facts; when the rules hold, the module is kept
@@ -2500,7 +2512,9 @@ and with `KILN_CHECK_OPT_PREDICATE=1` in any build (the release and
 harness profiles, a libc++ run). Tests: `crates/kiln_driver/tests/backend_hook.rs`
 (fake back ends in a re-executed wrapper: every answer, both panics, a
 later crash reported as its own, the rule's exclusions, `-###`, `-v`,
-the trace and the statistics), `tests/contained_panic.rs` (the scope),
+the trace and the statistics, pre-`opt` modules taken and declined
+with `opt` in the fallback), `codegen_cmd` unit test
+`hod_predicate_is_the_external_routes` (every fact combination), `tests/contained_panic.rs` (the scope),
 `kiln_llvm` `query.rs` unit tests.
 
 #### The `kiln_hod` workspace (WP-1703)
@@ -2596,7 +2610,12 @@ line per module (`output`, `route` `bridge` or `text`, `reason`
 `disabled`, `debug` or `fallback:<why>`, `eq`, `dual`, `bridge_us` and
 `session_us` = hod's `Report.bridge` and `Report.session` on the bridge,
 `phases_us` = when each of hod's phases ended from the route's start,
-`total_us`).
+`total_us`). `KILN_HOD_PREOPT=0` (WP-1562, for bisecting) declines,
+before anything else, every module with an `alwaysinline` attribute set
+or a declared `llvm.coro.*` function (the driver's facts, read again
+from the module) as `preopt:off`, so the driver runs `opt` and `llc` on
+it as before WP-1562 (the statistics line then says `hod-declined`
+where it said `hod_skip` `alwaysinline` or `coro`).
 
 `KILN_HOD_IN_PROCESS=0` leaves the back end unregistered: the wrapper is
 then the stock driver (external route included), for comparisons and

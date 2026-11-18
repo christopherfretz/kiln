@@ -42,10 +42,10 @@ use crate::util::{self, process};
 const USAGE: &str = "\
 usage: cargo xtask kiln-hod build [--profile <dev|release|harness>]
        cargo xtask kiln-hod test
-       cargo xtask kiln-hod sweep [-j N] [--llvm-dir <dir>]... [--no-g] [--dual]
-                                  [--report <file>] <dir|file>...
-       cargo xtask kiln-hod bridge-eq [-j N] [--llvm-dir <dir>]... [--no-g] [--report <file>]
-                                      <dir|file>...
+       cargo xtask kiln-hod sweep [-j N] [--mem-limit MiB] [--llvm-dir <dir>]... [--no-g]
+                                  [--dual] [--report <file>] <dir|file>...
+       cargo xtask kiln-hod bridge-eq [-j N] [--mem-limit MiB] [--llvm-dir <dir>]... [--no-g]
+                                      [--report <file>] <dir|file>...
 
 The kiln_hod workspace (kiln_hod/, its own Cargo.lock, hod by git revision):
 a kiln++ with hod in process (spec/driver.md \"In-process back end\").
@@ -212,6 +212,9 @@ enum Mode {
 struct Sweep {
     mode: Mode,
     jobs: usize,
+    /// `--mem-limit <MiB>`: the address-space cap of every compile (plus
+    /// kiln's stack reservation, as the harness adds it); `0` none.
+    mem_limit: Option<process::MemLimit>,
     llvm_dirs: Vec<PathBuf>,
     with_g: bool,
     report: Option<PathBuf>,
@@ -222,7 +225,8 @@ impl Sweep {
     fn parse(args: impl Iterator<Item = String>, mode: Mode) -> Result<Sweep, String> {
         let mut s = Sweep {
             mode,
-            jobs: std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
+            jobs: std::thread::available_parallelism().map_or(4, std::num::NonZero::get).min(8),
+            mem_limit: process::MemLimit::from_mib(3072),
             llvm_dirs: Vec::new(),
             with_g: true,
             report: None,
@@ -233,6 +237,10 @@ impl Sweep {
             let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
             match a.as_str() {
                 "-j" => s.jobs = value("-j")?.parse().map_err(|_| "-j needs a number")?,
+                "--mem-limit" => {
+                    let mib = value("--mem-limit")?.parse().map_err(|_| "--mem-limit needs MiB")?;
+                    s.mem_limit = process::MemLimit::from_mib(mib);
+                }
                 "--llvm-dir" => s.llvm_dirs.push(PathBuf::from(value("--llvm-dir")?)),
                 "--no-g" => s.with_g = false,
                 "--dual" if s.mode == Mode::Objects => s.mode = Mode::Dual,
@@ -289,6 +297,7 @@ impl Sweep {
         std::fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
         let tools = Tools {
             mode: self.mode,
+            mem_limit: self.mem_limit,
             stock: &stock,
             wrapper: &wrapper,
             hod: &hod,
@@ -531,6 +540,7 @@ struct Job<'a> {
 
 struct Tools<'a> {
     mode: Mode,
+    mem_limit: Option<process::MemLimit>,
     stock: &'a Path,
     wrapper: &'a Path,
     hod: &'a Path,
@@ -571,6 +581,8 @@ impl Stats {
 /// What one compile left: its status, statistics line and object.
 struct Ran {
     ok: bool,
+    /// The compile ran out of its `--mem-limit` cap.
+    capped: bool,
     stats: Option<Stats>,
     object: Option<Vec<u8>>,
 }
@@ -622,10 +634,14 @@ impl Job<'_> {
             }
         }
         util::isolate_caches(&mut cmd);
-        let ok = process::run(&mut cmd, Duration::from_secs(600)).is_ok_and(|o| o.success());
+        let stack = process::kiln_stack_reservation_mib(&self.file.args);
+        let mut cmd = process::limited(&cmd, t.mem_limit.map(|l| l.plus(stack)));
+        let out = process::run(&mut cmd, Duration::from_secs(600));
+        let ok = out.as_ref().is_ok_and(process::Output::success);
+        let capped = out.as_ref().is_ok_and(process::Output::out_of_memory);
         let object = std::fs::read(dir.join("out.o")).ok();
         let _ = std::fs::remove_file(dir.join("out.o"));
-        Ran { ok, stats: Stats::read(&log), object }
+        Ran { ok, capped, stats: Stats::read(&log), object }
     }
 
     fn run(&self, t: &Tools<'_>, n: usize) -> Verdict {
@@ -653,24 +669,29 @@ impl Job<'_> {
         };
         let a = self.compile(t, dir, t.stock, "external");
         let Some(sa) = a.stats.as_ref().filter(|_| a.ok) else {
-            return verdict("compile failed (stock)", None, &a, None, false);
+            let kind = if a.capped {
+                "compile failed (stock, memory cap)"
+            } else {
+                "compile failed (stock)"
+            };
+            return verdict(kind, None, &a, None, false);
         };
         if sa.skip.is_some() || !sa.backend.starts_with("hod") {
             return verdict("not offered to hod", None, &a, None, false);
         }
         let b = self.compile(t, dir, t.wrapper, "in-process");
         let Some(sb) = b.stats.as_ref().filter(|_| b.ok) else {
-            return verdict("DIFF: the wrapper failed", None, &a, Some(&b), true);
+            let kind = if b.capped {
+                "DIFF: the wrapper failed (memory cap)"
+            } else {
+                "DIFF: the wrapper failed"
+            };
+            return verdict(kind, None, &a, Some(&b), true);
         };
         if !sb.in_process {
-            // Rule 4: the in-process route takes no module `opt` would
-            // change (its triggers are reported as `hod_skip`).
-            let kind = if sb.skip.is_some() && sb.backend == "llvm" {
-                "external only (opt triggers)"
-            } else {
-                "DIFF: not offered in process"
-            };
-            return verdict(kind, None, &a, Some(&b), kind.starts_with("DIFF"));
+            // WP-1562: both routes take the same modules, the pre-`opt`
+            // ones (`alwaysinline`, coroutines) included.
+            return verdict("DIFF: not offered in process", None, &a, Some(&b), true);
         }
         if sa.backend != sb.backend || sa.reason != sb.reason {
             return verdict("DIFF: answers differ", None, &a, Some(&b), true);
@@ -691,6 +712,7 @@ impl Job<'_> {
         let b = self.compile(t, dir, t.wrapper, "in-process");
         let eq = route(&dir.join("bridge.jsonl"), "eq");
         let (kind, bad) = match eq.as_deref() {
+            None if b.capped => ("not in process, memory cap", false),
             None if !b.ok => ("not in process, compile failed", false),
             None => ("not in process", false),
             Some("equal") => ("equal", false),

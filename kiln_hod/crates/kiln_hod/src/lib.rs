@@ -105,6 +105,9 @@ struct Switches {
     eq: bool,
     /// `KILN_HOD_BRIDGE_LOG=<path>`: one JSON line per module.
     log: Option<std::path::PathBuf>,
+    /// Not `KILN_HOD_PREOPT=0`: a module that needs `opt` at `-O0` for
+    /// `alwaysinline` or coroutines only is compiled by hod (WP-1562).
+    preopt: bool,
 }
 
 impl Switches {
@@ -116,6 +119,7 @@ impl Switches {
             dual: on(ENV_DUAL),
             eq: on(ENV_BRIDGE_EQ),
             log: std::env::var_os(ENV_BRIDGE_LOG).filter(|p| !p.is_empty()).map(Into::into),
+            preopt: std::env::var_os(ENV_PREOPT).is_none_or(|v| v != "0"),
         }
     }
 }
@@ -132,6 +136,19 @@ pub const ENV_DUAL: &str = "KILN_HOD_DUAL";
 pub const ENV_BRIDGE_EQ: &str = "KILN_HOD_BRIDGE_EQ";
 /// `KILN_HOD_BRIDGE_LOG=<path>`: the route of each module, one JSON line.
 pub const ENV_BRIDGE_LOG: &str = "KILN_HOD_BRIDGE_LOG";
+/// `KILN_HOD_PREOPT=0`: a module with an `alwaysinline` attribute set or
+/// a declared `llvm.coro.*` function is declined ([`PREOPT_OFF`]), so the
+/// driver runs `opt` and `llc` on it as before WP-1562 (for bisecting).
+pub const ENV_PREOPT: &str = "KILN_HOD_PREOPT";
+/// The decline under `KILN_HOD_PREOPT=0`.
+pub const PREOPT_OFF: &str = "preopt:off";
+
+/// Whether `module` needs `opt` at `-O0` for `alwaysinline` or coroutines
+/// (the driver's `IrFacts`: hod's "Pre-opt modules" trigger set).
+fn pre_opt(module: &kiln_llvm::Module) -> bool {
+    module.has_fn_attr_group(|a| *a == kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::AlwaysInline))
+        || module.declares_prefixed("llvm.coro.")
+}
 
 /// hod, in process.
 #[derive(Debug, Default)]
@@ -230,6 +247,10 @@ fn compile(
         Ok(s) => s,
         Err(message) => return fail(record, "usage".into(), message.clone()),
     };
+    if !process.switches.preopt && pre_opt(module) {
+        record.reason = Some(PREOPT_OFF.into());
+        return Answer::Declined(PREOPT_OFF.to_owned());
+    }
     // hod's own parser over `llc`'s arguments. An option hod does not
     // know is a decline (`unknown-option`: `llc` may know it), as the
     // executable answers it in strict mode; any other mistake an error.

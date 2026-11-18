@@ -20,30 +20,46 @@ does not map takes the *text path* (printed, read by hod's text reader).
   `hod` of the same revision; `--dual` also has the wrapper compile each
   bridged module on the text path and compare the objects.
 
-Last numbers (2026-11-18, WP-1707, aarch64 host, dialects LLVM 19 and
-22, both targets, each file with and without `-g`; counts are jobs):
+Last numbers (2026-11-18, WP-1562, aarch64 host, dialects LLVM 19 and
+22, both targets, each file with and without `-g`; counts are jobs).
+Since WP-1562 the pre-`opt` modules (`alwaysinline`, coroutines) are
+offered in process too, so they are in these runs; every compile runs
+under the sweep's memory cap (`--mem-limit 2048` here):
 
-| Run | `-g` | Compared | Equal | Refused equally | Different |
-|---|---|---:|---:|---:|---:|
-| `bridge-eq tests/codegen` | no | 2318 | 2282 | 36 | 0 |
-| `bridge-eq tests/codegen` | yes | 2036 | 1994 | 42 | 0 |
-| `bridge-eq tests/conformance tests/stress` | no | 7052 | 7014 | 38 | 0 |
-| `bridge-eq tests/conformance tests/stress` | yes | 7036 | 6996 | 40 | 0 |
+| Run | Jobs | Compared | Equal | Refused equally | Not bridged | Different |
+|---|---:|---:|---:|---:|---:|---:|
+| `bridge-eq tests/codegen` | 5036 | 4442 | 4352 | 90 | 2 | 0 |
+| `bridge-eq tests/conformance` | 16102 | 14416 | 14340 | 76 | 12 | 0 |
+| `bridge-eq tests/stress` | 116 | 72 | 72 | 0 | 0 | 0 |
 
-(A file whose own arguments have `-g` runs once, in the `no` row.)
-Refused equally, by first construct, over both runs:
-`attr:speculative_load_hardening` 44, `alloca:scalable` 26,
-`debug:DW_OP_bregx` 28 (SVE locals), `attr:nonlazybind` 16,
-`attr:llvm.assume` 8, `global-metadata:callback` 8,
-`attr:aarch64_pstate_sm_enabled` 8, `attr:fn_ret_thunk_extern` 8,
-`debug:invalid` 6, `attr:no_caller_saved_registers` 4. Left to the text
-path: `splat` constants (12 jobs) and a scalable `alloca` the bridge
-does not type (2, `debug_sve.cpp`); no module for its debug information.
+Compared modules against WP-1707's runs: 488 more (4442 against 4354 in
+tests/codegen, 14488 against 14088 in tests/conformance and
+tests/stress), the pre-`opt` modules newly in process. `debug:invalid`
+(4 jobs in tests/codegen) is gone: it was the asm-labelled destructor of
+WP-1709. Not bridged: `const:splat` (12) and a scalable `alloca` (2).
+Not compiled: tests that do not compile to an object (1320 in
+tests/conformance, 156 in tests/codegen, 40 in tests/stress) and 4 jobs
+that hit the memory cap on both routes: `tests/stress/linkage-pack-dag-36x17.cpp`
+and `tests/stress/linkage-type-dag-10x10.cpp` with `-g` (a runaway `-g`
+compile in the front end, the same on the stock route; clang 22 runs
+away too).
 
-`sweep --dual tests/codegen tests/conformance` (with and without `-g`):
-21138 jobs, 0 object differences, 0 dual mismatches; 17932 taken in
-process with the same bytes, 414 declined alike; the wrapper's modules:
-18340 bridged (`-g` included), 6 text path (`splat`).
+`sweep --dual` (with and without `-g`): tests/codegen 5036 jobs (4174
+taken in process with the same bytes, 232 declined alike), tests/conformance
+16102 (14208, 212), tests/stress 116 (72, 0): 0 object differences, 0
+dual mismatches, 0 jobs offered to one route only. hod's declines of
+pre-`opt` modules: `alwaysinline:frame-address` (8 jobs) and
+`attr:coro_only_destroy_when_complete` (8); both fall back to `opt` and
+`llc` with the same bytes as the external route's fallback.
+
+The corpus's run tests through the wrapper (`KILN_BACKEND=hod`, the
+commands in kiln_hod/README.md) over tests/conformance, tests/codegen
+and tests/stress: 8359 tests, 8199 passed against 8200 with the stock
+compiler; the one difference is `driver.crash/ice-parse.cpp` (the crash
+report names the compiler source by its absolute path in the wrapper's
+build, README). 1905 jobs went to the in-process back end, 1902 compiled
+by hod (1880 inputs; 75 of them pre-`opt` modules), 3 declined
+(`alwaysinline:frame-address` 2, `a64:atomic-type` 1).
 
 ## Timing
 
@@ -65,14 +81,49 @@ at `-O0` without `-g`: 26.7, 19.6 and 13.6 MB).
 | registration-wide-obj | yes | 5464 / 594 | 1820 / 342 | 1628 / 427 | 1543 / 392 |
 | trial-folds | no | 2538 / 179 | 1375 / 177 | 1354 / 179 | 1259 / 178 |
 | trial-folds | yes | 3982 / 295 | 1896 / 242 | 1814 / 245 | 1671 / 245 |
-| accessor-wide-emit | no | 1990 / 137 | 972 / 91 | 2059 / 137 (llvm) | 2097 / 137 (llvm) |
-| accessor-wide-emit | yes | 3140 / 232 | 1262 / 147 | 3099 / 233 (llvm) | 3068 / 233 (llvm) |
+| accessor-wide-emit | no | 2263 / 132 | 1113 / 90 | 1141 / 90 | 1070 / 90 |
+| accessor-wide-emit | yes | 3613 / 226 | 1413 / 141 | 1358 / 158 | 1314 / 154 |
+| stl (below) | no | 329 / 62 | 329 / 37 | 321 / 37 | 324 / 37 |
+| stl (below) | yes | 434 / 66 | 379 / 40 | 311 / 40 | 302 / 40 |
 
 The two wrapper columns of the `-g` rows were re-measured at WP-1707
 (the bridge now takes `-g` modules; same host, load average 8 to 9;
-the other columns are WP-1704's). `accessor-wide-emit` has `alwaysinline`: the wrapper
-leaves it to `opt` and `llc` (WP-1703's rule for in-process modules),
-while the stock driver hands it to the external `hod` unoptimized.
+the other columns are WP-1704's). The `accessor-wide-emit` and `stl` rows
+were measured at WP-1562 (kiln at WP-1562's head, hod `d789a92`, release
+builds; "stock" is the release wrapper with `KILN_HOD_IN_PROCESS=0`, the
+stock compiler; load average 10): both modules have `alwaysinline`
+(statistics `triggers`), which until WP-1562 the wrapper left to `opt`
+and `llc` (WP-1703's rule) while the stock driver handed them to the
+external `hod` unoptimized; now every hod column compiles the module
+before `opt` (statistics `backend` `hod`, `in_process` in the wrapper's).
+`stl` is a translation unit that includes `<vector>`, `<string>`, `<map>`
+and `<algorithm>` and uses each (a sort, a map of strings, `find`,
+`to_string`; libstdc++'s `always_inline` functions are its only trigger),
+its front end takes most of the time. Its source:
+
+```cpp
+#include <algorithm>
+#include <map>
+#include <string>
+#include <vector>
+
+int main() {
+  std::vector<int> v;
+  for (int i = 0; i < 100; ++i) v.push_back((i * 37) % 101);
+  std::sort(v.begin(), v.end());
+  std::map<std::string, int> m;
+  for (int x : v) m[std::to_string(x % 10)] += x;
+  std::string s;
+  for (const auto &[k, n] : m) s += k + "=" + std::to_string(n) + ";";
+  auto it = std::find(v.begin(), v.end(), 50);
+  return static_cast<int>(s.size() + (it != v.end()));
+}
+```
+
+Command per route: `kiln++ -std=c++26 -freflection -fconstexpr-steps=1000000000 [-g] -O0 -c <unit>`
+with `KILN_BACKEND=llvm|hod` (`KILN_HOD=<hod>` for the external route,
+`KILN_HOD_IN_PROCESS=0` for the stock columns, `KILN_HOD_BRIDGE=0` for
+the text path).
 
 hod's own times on the two bridged units (milliseconds, from
 `KILN_HOD_BRIDGE_LOG`: the back end's call from its start; on the text

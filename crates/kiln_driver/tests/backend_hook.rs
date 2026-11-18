@@ -103,6 +103,42 @@ const INLINE: &str = "[[gnu::always_inline]] inline int twice(int x) { return 2 
 const CALL_SITE: &str = "int g(int x) { return x + 1; }\n\
                          int f(int x) { [[clang::always_inline]] return g(x); }\n";
 
+/// A coroutine (`llvm.coro.*` declared), with the few library pieces it
+/// needs written by hand.
+const CORO: &str = "namespace std {\n\
+    template <class R, class...> struct coroutine_traits { using promise_type = typename R::promise_type; };\n\
+    template <class P = void> struct coroutine_handle;\n\
+    template <> struct coroutine_handle<void> {\n\
+      static coroutine_handle from_address(void *a) noexcept { coroutine_handle h; h.p = a; return h; }\n\
+      void *address() const noexcept { return p; }\n\
+      void *p = nullptr;\n\
+    };\n\
+    template <class P> struct coroutine_handle {\n\
+      static coroutine_handle from_address(void *a) noexcept { coroutine_handle h; h.p = a; return h; }\n\
+      static coroutine_handle from_promise(P &pr) noexcept {\n\
+        return from_address(__builtin_coro_promise(&pr, alignof(P), true));\n\
+      }\n\
+      void *address() const noexcept { return p; }\n\
+      operator coroutine_handle<void>() const noexcept { return coroutine_handle<void>::from_address(p); }\n\
+      void *p = nullptr;\n\
+    };\n\
+    struct suspend_never {\n\
+      bool await_ready() const noexcept { return true; }\n\
+      void await_suspend(coroutine_handle<>) const noexcept {}\n\
+      void await_resume() const noexcept {}\n\
+    };\n\
+    }\n\
+    struct task {\n\
+      struct promise_type {\n\
+        task get_return_object() { return {}; }\n\
+        std::suspend_never initial_suspend() noexcept { return {}; }\n\
+        std::suspend_never final_suspend() noexcept { return {}; }\n\
+        void return_void() {}\n\
+        void unhandled_exception() {}\n\
+      };\n\
+    };\n\
+    task run() { co_return; }\n";
+
 fn scratch(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("kiln-hook-test-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -110,6 +146,7 @@ fn scratch(name: &str) -> PathBuf {
     std::fs::write(d.join("plain.cpp"), PLAIN).unwrap();
     std::fs::write(d.join("inline.cpp"), INLINE).unwrap();
     std::fs::write(d.join("call_site.cpp"), CALL_SITE).unwrap();
+    std::fs::write(d.join("coro.cpp"), CORO).unwrap();
     d
 }
 
@@ -232,37 +269,116 @@ fn takes_the_job() {
 }
 
 /// Jobs outside the selection rule never reach the hook: an `-O` level
-/// above 0, a sanitizer, `-S`, an `always_inline` function and an
-/// `always_inline` call site (`opt` would run).
+/// above 0, a sanitizer, `-S`.
 #[test]
 fn outside_the_rule_never_reaches_the_hook() {
     if !tools() {
         return;
     }
     let d = scratch("outside");
-    for extra in [
-        &["-O2", "plain.cpp"][..],
-        &["-fsanitize=address", "plain.cpp"],
-        &["-S", "plain.cpp"],
-        &["inline.cpp"],
-        &["call_site.cpp"],
-    ] {
+    for extra in
+        [&["-O2", "plain.cpp"][..], &["-fsanitize=address", "plain.cpp"], &["-S", "plain.cpp"]]
+    {
         let args = [&["-c", "-fkiln-backend=hod", "-o", "x.o"][..], extra].concat();
         let o = wrap(&d, "take", &[], &[&args]);
         assert!(o.status.success(), "{extra:?}: {}", text(&o.stderr));
         assert!(!d.join("fake.log").exists(), "{extra:?}");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1562: a module that needs `opt` only for `alwaysinline` (on a
+/// definition or a call site) or coroutines reaches the hook, as it
+/// reaches the external `hod`: no `opt`, no `llc`, the statistics line has
+/// the trigger and no `hod_skip`.
+#[test]
+fn pre_opt_modules_reach_the_hook() {
+    let d = scratch("preopt");
+    let llvm = stub_llvm(&d);
     let log = d.join("s.jsonl");
     let env = [("KILN_STATS_LOG", log.to_str().unwrap())];
-    let o = wrap(&d, "take", &env, &[&["-c", "-fkiln-backend=hod", "call_site.cpp", "-o", "x.o"]]);
-    assert!(o.status.success(), "{}", text(&o.stderr));
-    let line = text(&read(&log));
-    assert!(line.contains("\"triggers\":[\"alwaysinline\"]"), "{line}");
-    assert!(
-        line.ends_with(
-            ",\"backend\":\"llvm\",\"hod_reason\":null,\"hod_skip\":\"alwaysinline\"}\n"
-        )
-    );
+    // A coroutine body has both: its `await_suspend` wrappers are
+    // `alwaysinline`.
+    for (src, triggers) in [
+        ("inline.cpp", "\"alwaysinline\""),
+        ("call_site.cpp", "\"alwaysinline\""),
+        ("coro.cpp", "\"alwaysinline\",\"coro\""),
+    ] {
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(d.join("fake.log"));
+        let o = wrap(
+            &d,
+            "take",
+            &env,
+            &[&["-std=c++20", "-c", "-fkiln-backend=hod", &llvm, src, "-o", "x.o"]],
+        );
+        assert!(o.status.success(), "{src}: {}", text(&o.stderr));
+        assert_eq!(read(&d.join("x.o")), b"FAKEOBJ", "{src}");
+        assert_eq!(text(&read(&d.join("fake.log"))).lines().count(), 1, "{src}");
+        assert!(!d.join("llvm.ran").exists(), "{src}");
+        let line = text(&read(&log));
+        assert!(line.contains(&format!("\"triggers\":[{triggers}]")), "{src}: {line}");
+        assert!(line.contains("\"ir_bytes\":null"), "{src}: {line}");
+        assert!(
+            line.ends_with(
+                ",\"backend\":\"hod\",\"hod_reason\":null,\"hod_skip\":null,\"in_process\":true}\n"
+            ),
+            "{src}: {line}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1562: when the back end declines a pre-`opt` module, the fallback
+/// runs `opt` before `llc` (the always-inliner, the coroutine passes: a
+/// fallback without them would miscompile), as the LLVM route does; a
+/// module without triggers falls back to `llc` alone. With the real LLVM
+/// tools the fallback's object is the LLVM route's, byte for byte.
+#[test]
+fn a_declined_pre_opt_module_runs_opt() {
+    let d = scratch("preopt-decline");
+    let llvm = stub_llvm(&d);
+    let ran = d.join("llvm.ran");
+    for (src, want) in [
+        ("inline.cpp", "opt\nllc\n"),
+        ("call_site.cpp", "opt\nllc\n"),
+        ("coro.cpp", "opt\nllc\n"),
+        ("plain.cpp", "llc\n"),
+    ] {
+        for backend in ["-fkiln-backend=llvm", "-fkiln-backend=hod"] {
+            let _ = std::fs::remove_file(&ran);
+            let o = wrap(
+                &d,
+                "decline",
+                &[],
+                &[&["-std=c++20", "-c", backend, &llvm, src, "-o", "x.o"]],
+            );
+            assert!(o.status.success(), "{src} {backend}: {}", text(&o.stderr));
+            assert_eq!(text(&read(&ran)), want, "{src} {backend}");
+        }
+        let o = wrap(
+            &d,
+            "decline",
+            &[],
+            &[&["-std=c++20", "-v", "-c", "-fkiln-backend=hod", &llvm, src]],
+        );
+        let err = text(&o.stderr);
+        let at = |s: &str| err.find(s).unwrap_or_else(|| panic!("{s}: {err}"));
+        let reason = at(" (hod declined 'fake:declined'; falling back to llc)\n");
+        if want.starts_with("opt") {
+            assert!(reason < at("/opt\""), "{src}: {err}");
+        }
+    }
+    if tools() {
+        for src in ["inline.cpp", "call_site.cpp", "coro.cpp"] {
+            let llvm = ["-std=c++20", "-c", "-fkiln-backend=llvm", src, "-o", "llvm.o"];
+            let hod = ["-std=c++20", "-c", "-fkiln-backend=hod", src, "-o", "hod.o"];
+            let o = wrap(&d, "decline", &[], &[&llvm, &hod]);
+            assert!(o.status.success(), "{src}: {}", text(&o.stderr));
+            assert!(!read(&d.join("llvm.o")).is_empty(), "{src}");
+            assert_eq!(read(&d.join("llvm.o")), read(&d.join("hod.o")), "{src}");
+        }
+    }
     let _ = std::fs::remove_dir_all(&d);
 }
 

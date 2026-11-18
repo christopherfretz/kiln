@@ -2,7 +2,8 @@
 //! "In-process back end"): programs compiled through the in-process route
 //! run as the LLVM route's do, a decline falls back and still links,
 //! `KILN_HOD_STRICT=1` leaves a decline a silent fallback, the statistics
-//! line names the route, and without `-fkiln-backend=hod` the wrapper is
+//! line names the route, pre-`opt` modules are taken (and declined under
+//! `KILN_HOD_PREOPT=0`), and without `-fkiln-backend=hod` the wrapper is
 //! the stock compiler.
 //!
 //! The tests need the wrapper's LLVM (its `llc` is the fallback) and a
@@ -117,6 +118,41 @@ fn programs_run_in_process() {
         let reference = link_and_run(&dir, "llvm.o", "llvm");
         assert_eq!(hod, reference, "{name}: in process against LLVM");
         assert_eq!(hod, (stdout.to_owned(), Some(status)), "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A pre-`opt` module (`always_inline`, a coroutine; WP-1562) is compiled
+/// in process, its triggers in the statistics line and no `hod_skip`, and
+/// runs as the LLVM route's object does; under `KILN_HOD_PREOPT=0` it is
+/// declined (`preopt:off`) and takes `opt` and `llc`, and still runs.
+#[test]
+fn pre_opt_modules_run_in_process() {
+    if !tools() {
+        return;
+    }
+    let dir = scratch("preopt");
+    let src = program("preopt.cpp");
+    let want = ("yielded 4 sum 16\n".to_owned(), Some(0));
+    for g in [&[][..], &["-g"]] {
+        let args = [&["-std=c++20", "-fkiln-backend=hod"][..], g].concat();
+        let line = compile(&dir, &src, "hod.o", &args, &[("KILN_HOD_STRICT", "1")]);
+        assert!(line.contains("\"triggers\":[\"alwaysinline\",\"coro\"]"), "{line}");
+        assert!(line.contains("\"backend\":\"hod\""), "{line}");
+        assert!(line.contains("\"hod_skip\":null,\"in_process\":true"), "{line}");
+        assert_eq!(link_and_run(&dir, "hod.o", "hod"), want, "{g:?}");
+        let off = compile(&dir, &src, "off.o", &args, &[("KILN_HOD_PREOPT", "0")]);
+        assert!(off.contains("\"backend\":\"hod-declined\""), "{off}");
+        assert!(off.contains("\"hod_reason\":\"preopt:off\""), "{off}");
+        assert!(off.contains("\"children_ms\":{\"in-process-backend\":"), "{off}");
+        assert!(off.contains("\"opt\":"), "{off}");
+        assert_eq!(link_and_run(&dir, "off.o", "off"), want, "{g:?}");
+        let llvm = compile(&dir, &src, "llvm.o", &[&["-std=c++20"][..], g].concat(), &[]);
+        assert!(llvm.contains("\"backend\":\"llvm\""), "{llvm}");
+        assert_eq!(
+            std::fs::read(dir.join("off.o")).unwrap(),
+            std::fs::read(dir.join("llvm.o")).unwrap()
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

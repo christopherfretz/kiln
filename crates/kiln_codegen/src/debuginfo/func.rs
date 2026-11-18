@@ -38,8 +38,23 @@ impl Cg<'_> {
         if self.has_fn_attr(d, AttrKind::NODEBUG) {
             return;
         }
-        let reduced = self.di_reduced();
         let first = ast.first(d);
+        // WP-1709: a defined function that already has a subprogram is one whose
+        // structor variants an asm label gives one symbol (WP-492): the
+        // later variant's body is appended to it, and its locations and
+        // variables take the function's subprogram. A second one (clang
+        // attaches the later variant's, leaving the first body's
+        // locations in another) fails LLVM's verifier, which then drops
+        // the module's debug information.
+        let func = self.m.func(f);
+        let had = func.metadata().iter().find(|(k, _)| *k == dbg).map(|&(_, s)| s);
+        if let Some(s) = had.filter(|_| !func.is_declaration()) {
+            let mut fd = FirDbg::new(dbg, s);
+            fd.eh_loc = self.di_body_end(body);
+            self.f.fir.dbg = Some(Box::new(fd));
+            return;
+        }
+        let reduced = self.di_reduced();
         let n = ast.decls.get(d);
         let loc = n.loc();
         let unit = self.di_file(loc);
@@ -676,9 +691,32 @@ impl Cg<'_> {
             return;
         }
         let (sp, vars, labels) = (x.sp, std::mem::take(&mut x.vars), std::mem::take(&mut x.labels));
-        let ops: Vec<Option<MetadataId>> = vars.into_iter().chain(labels).map(Some).collect();
+        // WP-1709: a body appended to a function with a subprogram (asm-
+        // labelled structor variants) adds its nodes to the list the
+        // earlier body left.
+        let mut ops: Vec<Option<MetadataId>> = self.di_retained(sp);
+        for n in vars.into_iter().chain(labels) {
+            if !ops.contains(&Some(n)) {
+                ops.push(Some(n));
+            }
+        }
         let t = self.m.md_tuple(&ops);
         let _ = self.m.md_set_field(sp, "retainedNodes", MdField::Node(Some(t)));
+    }
+
+    /// The `retainedNodes` subprogram `sp` has already, in order.
+    fn di_retained(&self, sp: MetadataId) -> Vec<Option<MetadataId>> {
+        let kiln_llvm::MdNode::Specialized { fields, .. } = self.m.md_node(sp) else {
+            return Vec::new();
+        };
+        let list = fields.iter().find_map(|(k, v)| match v {
+            MdField::Node(Some(t)) if *k == "retainedNodes" => Some(*t),
+            _ => None,
+        });
+        match list.map(|t| self.m.md_node(t)) {
+            Some(kiln_llvm::MdNode::Tuple { ops, .. }) => ops.to_vec(),
+            _ => Vec::new(),
+        }
     }
 
     /// clang `EmitGlobalVariable(llvm::GlobalVariable *, const VarDecl *)`:

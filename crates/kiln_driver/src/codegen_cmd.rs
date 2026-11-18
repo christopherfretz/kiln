@@ -1491,43 +1491,36 @@ fn hod_static_skip(args: &Args, tc: &Toolchain) -> Option<&'static str> {
 /// `spec/cli.md` "Pre-opt modules"): it compiles an `alwaysinline` call
 /// out of line and a switch-resumed coroutine body once, with its frame
 /// in the heap, in place of the always-inliner and the coroutine passes.
+/// Both hod routes accept them (WP-1562): the external executable and the
+/// in-process back end agree on every module.
 const HOD_TRIGGERS: [&str; 2] = ["alwaysinline", "coro"];
 
-/// The dynamic half of the hod route's predicate: the `opt` trigger
-/// set of the module ([`opt_triggers`], from the module's
-/// [`IrFacts`]) is a subset of the triggers the route accepts
-/// ([`hod_triggers`]). An instrumented module (`instrument-entry`: after
-/// [`hod_static_skip`], only an IR input carrying the attributes) takes
-/// the LLVM route.
-fn hod_takes(args: &Args, tc: &Toolchain, facts: IrFacts, in_process: bool) -> bool {
-    opt_triggers(args, tc, facts).iter().all(|t| hod_triggers(in_process).contains(t))
-}
-
-/// The `opt` triggers a route accepts in a module: the external hod
-/// executable {`alwaysinline`, `coro`} ([`HOD_TRIGGERS`]); the in-process
-/// back end none (WP-1559, design 0004 §10: a module that needs `opt` is
-/// not handed over in process).
-fn hod_triggers(in_process: bool) -> &'static [&'static str] {
-    if in_process { &[] } else { &HOD_TRIGGERS }
+/// The dynamic half of the hod route's predicate, the same on both
+/// routes: the `opt` trigger set of the module ([`opt_triggers`], from
+/// the module's [`IrFacts`]) is a subset of [`HOD_TRIGGERS`]. An
+/// instrumented module (`instrument-entry`: after [`hod_static_skip`],
+/// only an IR input carrying the attributes) takes the LLVM route. When
+/// hod declines a module with triggers, the fallback runs `opt` as the
+/// module needs ([`ir_passes`]), then `llc`.
+fn hod_takes(args: &Args, tc: &Toolchain, facts: IrFacts) -> bool {
+    opt_triggers(args, tc, facts).iter().all(|t| HOD_TRIGGERS.contains(t))
 }
 
 /// The statistics log's `hod_skip` of a job whose module has the `opt`
 /// triggers `triggers` (empty without a module): `None` unless the back
 /// end is hod and the job is not offered to hod; then the first static
-/// reason ([`hod_static_skip`]), else the first trigger outside the
-/// route's ([`hod_triggers`]; `in_process`: the in-process back end is
-/// registered), by its name.
+/// reason ([`hod_static_skip`]), else the first trigger outside
+/// [`HOD_TRIGGERS`], by its name.
 pub(crate) fn hod_skip(
     args: &Args,
     tc: &Toolchain,
     triggers: &[&'static str],
-    in_process: bool,
 ) -> Option<&'static str> {
     if crate::hod::selected(args).unwrap_or_default() != crate::hod::Backend::Hod {
         return None;
     }
     hod_static_skip(args, tc)
-        .or_else(|| triggers.iter().copied().find(|t| !hod_triggers(in_process).contains(t)))
+        .or_else(|| triggers.iter().copied().find(|t| !HOD_TRIGGERS.contains(t)))
 }
 
 /// `-###`'s line between the hod command and the `llc` command that is
@@ -2034,7 +2027,7 @@ fn execute(
                     let module = frontend(args, tc, input, stdin_text, diag_opts, io);
                     let facts = module.as_ref().map(IrFacts::of_module);
                     match (module, facts) {
-                        (Some(m), Some(f)) if in_process && hod_takes(args, tc, f, true) => {
+                        (Some(m), Some(f)) if in_process && hod_takes(args, tc, f) => {
                             (Some(m), None, facts)
                         }
                         (m, f) => (None, m.map(|m| print_checked(m, f.unwrap_or_default())), f),
@@ -2052,7 +2045,7 @@ fn execute(
                         j.triggers = opt_triggers(args, tc, facts);
                     }
                     j.counts = text.as_deref().map(crate::stats::IrCounts::of);
-                    j.hod_skip = hod_skip(args, tc, &j.triggers, in_process);
+                    j.hod_skip = hod_skip(args, tc, &j.triggers);
                 }
                 // spec/driver.md "In-process back end": the registered
                 // back end first, on the module before it is printed; on
@@ -2090,7 +2083,7 @@ fn execute(
                 // spec/driver.md "Back-end selection": hod first, on the
                 // module before `opt`.
                 if let (Some(HodRoute::External(h)), Some(t)) = (hod, &text)
-                    && hod_takes(args, tc, facts, false)
+                    && hod_takes(args, tc, facts)
                 {
                     match run_hod(h, t, args, &mut stats, drv, io, temp) {
                         HodStep::Done => {
@@ -2864,5 +2857,57 @@ mod tests {
         let a = args(&["--gcc-install-dir=/x", "a.o"]);
         let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
         assert_eq!(cmd.args, ["--gcc-install-dir=/x", "a.o", "-o", "a.out"]);
+    }
+
+    /// WP-1562: the hod route's predicate over every combination of the
+    /// module's facts, under the arguments that decide it. The expected
+    /// answers are the external route's before WP-1562, written out (the
+    /// stock binary's decisions, bit for bit); the in-process route now
+    /// shares them (one trigger set, no route argument).
+    #[test]
+    fn hod_predicate_is_the_external_routes() {
+        let tc = Toolchain::new(crate::toolchain::Target::host(), None, None, None);
+        let all_facts = (0..8u8).map(|b| IrFacts {
+            always_inline: b & 1 != 0,
+            entry_instrumentation: b & 2 != 0,
+            coro: b & 4 != 0,
+        });
+        for facts in all_facts {
+            let name = |f: bool, n: &'static str| f.then_some(n);
+            let triggers: Vec<&str> = [
+                name(facts.always_inline, "alwaysinline"),
+                name(facts.entry_instrumentation, "instrument-entry"),
+                name(facts.coro, "coro"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            // `-c` with hod: taken unless `instrument-entry` holds; the skip
+            // names it, and only it.
+            let a = args(&["-c", "-fkiln-backend=hod", "a.cpp"]);
+            assert_eq!(opt_triggers(&a, &tc, facts), triggers, "{facts:?}");
+            assert_eq!(hod_takes(&a, &tc, facts), !facts.entry_instrumentation, "{facts:?}");
+            let skip = facts.entry_instrumentation.then_some("instrument-entry");
+            assert_eq!(hod_skip(&a, &tc, &triggers), skip, "{facts:?}");
+            // `-disable-llvm-passes`: no trigger, always taken.
+            let a = args(&["-c", "-fkiln-backend=hod", "-Xclang", "-disable-llvm-passes", "a.cpp"]);
+            assert!(hod_takes(&a, &tc, facts), "{facts:?}");
+            // The static reasons come first, whatever the module has.
+            for (extra, why) in [
+                ("-O2", "opt-level"),
+                ("-fsanitize=address", "sanitizer"),
+                ("-S", "output-kind"),
+                ("-flto", "lto"),
+            ] {
+                let a = args(&["-c", "-fkiln-backend=hod", extra, "a.cpp"]);
+                assert_eq!(hod_skip(&a, &tc, &triggers), Some(why), "{extra} {facts:?}");
+                assert!(!hod_planned(&a, &tc), "{extra}");
+            }
+            // The LLVM back end: no skip is recorded.
+            for a in [args(&["-c", "a.cpp"]), args(&["-c", "-fkiln-backend=llvm", "a.cpp"])] {
+                assert_eq!(hod_skip(&a, &tc, &triggers), None, "{facts:?}");
+                assert!(!hod_planned(&a, &tc));
+            }
+        }
     }
 }
