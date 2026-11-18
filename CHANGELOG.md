@@ -279,6 +279,16 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Reflection (WP-1673, WP-1674): a constexpr local's value is
+  evaluated once, at the local's point, and the constant evaluator reuses
+  it, so a nested evaluation no longer sees a class completed after that
+  point (CWG3162) and hot constexpr locals cost less;
+  `substitute` / `can_substitute` of a function template whose return type
+  is a placeholder instantiates the definition to deduce it, as the
+  standard's example says (GCC 16.1 answers false at namespace scope);
+  `^^typename S::T` reflects the type denoted, not the alias
+  ([spec/reflection.md](spec/reflection.md), [spec/oven.md](spec/oven.md)).
+
 - Reflection (WP-1642, WP-1644, WP-1524): a nested constant evaluation
   (a constexpr local's initializer) no longer sees the classes its
   enclosing evaluation completed with `define_aggregate`, while the

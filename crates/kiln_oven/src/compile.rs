@@ -9,7 +9,7 @@
 //! function is rejected only when control actually reaches the construct
 //! ([expr.const]/10 is about evaluation, not about the function).
 
-use kiln_ast::consts::{FloatKind, Scalar};
+use kiln_ast::consts::{FloatKind, PtrBase, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, StorageDuration, TraitKind, UnaryOp};
 use kiln_ast::lambda::ClosureThunk;
@@ -3429,6 +3429,14 @@ impl Compiler<'_> {
         if !constexpr_local {
             return self.decl_one_var(d);
         }
+        // The value sema recorded when it checked the initializer at its
+        // point (`check_constexpr_init`): materialized, the initializer is
+        // not evaluated again (spec/oven.md "Constexpr locals", WP-1673).
+        if let Some(how) = self.recorded_local(d)
+            && self.decl_materialized(d, how)
+        {
+            return;
+        }
         let saved = self.reg();
         self.emit(Op::IsConstEval, 4, &[saved]);
         self.decl_one_var(d);
@@ -3567,6 +3575,151 @@ impl Compiler<'_> {
             }
         }
     }
+
+    /// How constexpr local `d` is materialized from the value sema
+    /// recorded for it (spec/oven.md "Constexpr locals", WP-1673), or
+    /// `None` for one compiled from its initializer as before: no recorded
+    /// value (a dependent initializer, a failed check, an image without
+    /// it), a reference, a structured binding's variable, an invalid or
+    /// non-literal declaration, and the values whose copy is not
+    /// certainly the object the initializer would make: a vector, complex
+    /// or wide integer, a member pointer, a class with a `mutable` member
+    /// or a virtual table pointer, and a pointer to a temporary or a
+    /// label.
+    fn recorded_local(&mut self, d: DeclId) -> Option<Recorded> {
+        let ast = self.b.ast();
+        let n = *ast.decls.get(d);
+        if n.has(kiln_ast::decl::DeclFlags::INVALID)
+            || ast.decls.is_decomposition(d)
+            || ast.decls.is_holding_var(d)
+            || is_reference_var(ast, d)
+        {
+            return None;
+        }
+        let v = ast.decls.var(d)?;
+        v.init?;
+        let kiln_ast::decl::VarEvalState::Value(cv) = v.eval.state() else { return None };
+        let q = n.ty()?;
+        if !is_literal_type(ast, q) {
+            return None;
+        }
+        let ty = self.ty(q);
+        let ast = self.b.ast();
+        // A pointer to an automatic object (the local itself, which sema
+        // evaluated as an object of its own) is not one the copy can
+        // reproduce: each call has its own.
+        let plain_ptr = |c: kiln_ast::ConstValueId| match ast.consts.scalar(c) {
+            Some(Scalar::Pointer { base: PtrBase::Decl(x), .. }) => !is_local_var(ast, x),
+            Some(Scalar::Pointer { base, .. }) => !matches!(
+                base,
+                PtrBase::Temporary(_) | PtrBase::Label { .. } | PtrBase::LabelDiff { .. }
+            ),
+            _ => true,
+        };
+        if let Some(s) = ast.consts.scalar(cv) {
+            if self.o.types.is_aggregate(ty)
+                || self.o.types.wide(ty).is_some()
+                || self.lanes(ty).is_some()
+                || self.cx_elem(ty).is_some()
+            {
+                return None;
+            }
+            return match s {
+                Scalar::Pointer { .. } if plain_ptr(cv) => Some(Recorded::Ptr(cv)),
+                Scalar::Pointer { .. } => None,
+                s => scalar_bits(&s).map(Recorded::Bits),
+            };
+        }
+        let img = ast.consts.aggregate(cv)?;
+        let info = self.o.types.info(ty);
+        let shape = matches!(info.kind, TyKind::Record { .. } | TyKind::Array { .. });
+        (shape
+            && !info.has_mutable
+            && !info.has_vptr
+            && img.relocs.iter().all(|r| plain_ptr(r.value)))
+        .then_some(Recorded::Obj(cv))
+    }
+
+    /// Defines constexpr local `d` from its recorded value `how`: the
+    /// object is allocated (or the register taken) as for an initializer,
+    /// and filled from the value; no part of the initializer runs, so no
+    /// nested evaluation is opened. False, with nothing emitted, for an
+    /// object value of a variable kept in a register.
+    fn decl_materialized(&mut self, d: DeclId, how: Recorded) -> bool {
+        let ast = self.b.ast();
+        let n = *ast.decls.get(d);
+        let Some(init) = ast.decls.var(d).and_then(|v| v.init) else { return false };
+        let q = n.ty().unwrap_or(QualType::INT);
+        let ty = self.ty(q);
+        let p = match self.locals.get(&d).copied() {
+            Some(Local::Mem(p)) => p,
+            _ if self.needs_mem(d, ty) => {
+                // Not hoisted (a condition variable of a loop iteration).
+                let mut is_const = const_object(self.b.ast(), q);
+                if is_const && self.is_late_const(ty) {
+                    is_const = false;
+                    self.late_const.insert(d);
+                }
+                let p = self.reg();
+                self.alloc_var(p, ty, d, is_const);
+                self.locals.insert(d, Local::Mem(p));
+                p
+            }
+            _ => {
+                let r = self.reg();
+                match how {
+                    Recorded::Bits(v) => self.konst(r, v),
+                    Recorded::Ptr(cv) => self.thaw_ptr_into(init, cv, r, ty),
+                    Recorded::Obj(_) => return false,
+                }
+                self.locals.insert(d, Local::Reg(r));
+                return true;
+            }
+        };
+        let m = self.next;
+        match how {
+            Recorded::Obj(cv) => self.thaw_obj_init(init, cv, p, ty),
+            Recorded::Bits(v) => {
+                let r = self.reg();
+                self.konst(r, v);
+                self.emit_at(Op::InitStore, 0, &[p, r, ty.0], init);
+            }
+            Recorded::Ptr(cv) => {
+                let r = self.reg();
+                self.thaw_ptr_into(init, cv, r, ty);
+                self.emit_at(Op::InitStore, 0, &[p, r, ty.0], init);
+            }
+        }
+        self.end_local_init(d, p, ty);
+        self.next = m;
+        true
+    }
+
+    /// `dst` = the pointer stored as constant `cv`, of pointer type `ty`,
+    /// thawed (`bi::THAW_PTR`).
+    fn thaw_ptr_into(&mut self, e: ExprId, cv: kiln_ast::ConstValueId, dst: u32, ty: OTy) {
+        let raw = kiln_ast::RawId::raw(cv);
+        let loc = self.begin(e);
+        self.emit_site(
+            Op::Builtin,
+            crate::kbc::bi::THAW_PTR,
+            &[dst, dst, dst, dst, raw, ty.0],
+            e,
+            loc,
+        );
+    }
+}
+
+/// How a constexpr local is materialized from its recorded value
+/// ([`Compiler::recorded_local`]).
+#[derive(Clone, Copy)]
+enum Recorded {
+    /// A scalar with these bits.
+    Bits(u128),
+    /// A pointer, thawed (`bi::THAW_PTR`).
+    Ptr(kiln_ast::ConstValueId),
+    /// A class or array object, copied from its thawed static object.
+    Obj(kiln_ast::ConstValueId),
 }
 
 // ---- expressions ---------------------------------------------------------
