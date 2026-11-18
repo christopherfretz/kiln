@@ -607,6 +607,53 @@ impl Cg<'_> {
         idx.is_empty() || idx.iter().any(|&v| v.checked_sub(1 + this) == Some(i as u32))
     }
 
+    /// clang `EmitFunctionProlog`: `noalias` on each argument of
+    /// definition (or thunk) `d` passed as a direct pointer whose
+    /// declared type is `restrict`-qualified (GNU `__restrict__`, C
+    /// `restrict`; through a typedef too): a pointer or reference
+    /// parameter of the definition's own declarator (not another
+    /// redeclaration's), and `this` of a `__restrict` member function
+    /// (its type is `X *__restrict`). Never on a declaration or a call,
+    /// and not in a naked function (no prolog). WP-1663; spec/codegen.md
+    /// "Parameter attributes".
+    pub(crate) fn restrict_noalias_params(
+        &mut self,
+        d: DeclId,
+        sig: &Sig,
+        params: &mut [AttrSetId],
+    ) {
+        let ast = self.ast;
+        if self.f.naked {
+            return;
+        }
+        let first = ast.first(d);
+        let fty = ast.decls.get(first).ty();
+        if sig.this.is_some()
+            && fty
+                .and_then(|t| ast.types.proto(t))
+                .is_some_and(|p| p.info().this_quals().is_restrict())
+        {
+            let at = usize::from(sig.sret());
+            self.add_param_attr(params, at, Attr::Flag(AttrKind::NoAlias));
+        }
+        // An inheriting constructor's parameters are not its own
+        // declarators (clang gives them the base constructor's
+        // prototype types, which carry no top-level qualifier).
+        if ast.decls.inheriting_ctor_shadow(first).is_some() {
+            return;
+        }
+        let Some(f) = ast.decls.function(d) else { return };
+        let own: Vec<DeclId> = ast.lists.iter::<DeclId>(f.params).collect();
+        for (i, (slot, direct_ptr)) in Self::arg_slots(sig).into_iter().enumerate() {
+            let (Some(at), true) = (slot, direct_ptr) else { continue };
+            let Some(&p) = own.get(i) else { break };
+            let Some(pty) = ast.decls.get(p).ty() else { continue };
+            if ast.types.canonical(pty).quals().is_restrict() {
+                self.add_param_attr(params, at, Attr::Flag(AttrKind::NoAlias));
+            }
+        }
+    }
+
     /// clang `EmitFunctionProlog`'s parameter facts of definition `d`:
     /// `nonnull` on a pointer parameter named by `nonnull` (the
     /// function's, by one-based index, or none for every pointer; or the

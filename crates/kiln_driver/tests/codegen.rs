@@ -1169,6 +1169,23 @@ fn duplicate_mangled_name() {
              2 | void af() {}\n      |      ^\n1 error generated.\n",
         ),
         ("struct S { S() asm(\"s\"); ~S() asm(\"t\"); };\nS::S() {}\nS::~S() {}\n", ""),
+        // WP-1663: a C function defining a constructor variant's symbol
+        // after the constructor, and a function defined over a C
+        // variable's symbol (`GetOrCreateLLVMFunction` with an entry that
+        // is an alias or a variable definition).
+        (
+            "struct G { G(int*); };\nG::G(int*) {}\nextern \"C\" void _ZN1GC1EPi(int*) {}\n",
+            "t.cpp:3:17: error: definition with same mangled name '_ZN1GC1EPi' as another \
+             definition\n    3 | extern \"C\" void _ZN1GC1EPi(int*) {}\n      |                 \
+             ^\nt.cpp:2:4: note: previous definition is here\n    2 | G::G(int*) {}\n      |    \
+             ^\n1 error generated.\n",
+        ),
+        (
+            "extern \"C\" int _Z1fi = 3;\nvoid f(int) {}\n",
+            "t.cpp:2:6: error: definition with same mangled name '_Z1fi' as another definition\n    \
+             2 | void f(int) {}\n      |      ^\nt.cpp:1:16: note: previous definition is here\n    \
+             1 | extern \"C\" int _Z1fi = 3;\n      |                ^\n1 error generated.\n",
+        ),
     ];
     for (src, want) in cases {
         std::fs::write(d.join("t.cpp"), src).unwrap();
@@ -1186,6 +1203,28 @@ fn duplicate_mangled_name() {
             assert_eq!(text(&c.stderr), want, "clang++-19: {src}");
         }
     }
+}
+
+/// spec/codegen.md "One global per symbol" (WP-1663): a C variable
+/// defined under the symbol of a function defined before it is the same
+/// error. clang 22 accepts it and silently drops the function's body
+/// (`GetOrCreateLLVMGlobal` diagnoses only an earlier variable
+/// definition); GCC 16.1's assembler rejects the unit ("symbol already
+/// defined"), so kiln diagnoses it rather than drop code.
+#[test]
+fn variable_defined_over_function_symbol() {
+    let d = scratch("dupname-var");
+    let src = "void f(int) {}\nextern \"C\" int _Z1fi = 3;\n";
+    let want = "t.cpp:2:16: error: definition with same mangled name '_Z1fi' as another \
+                definition\n    2 | extern \"C\" int _Z1fi = 3;\n      |                ^\n\
+                t.cpp:1:6: note: previous definition is here\n    1 | void f(int) {}\n      \
+                |      ^\n1 error generated.\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let _ = std::fs::remove_file(d.join("t.ll"));
+    let o = kiln_in(&d, &["-S", "-emit-llvm", "t.cpp"]);
+    assert_eq!(text(&o.stderr), want);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!d.join("t.ll").exists());
 }
 
 /// `-fPIC` and `-fvisibility=` through the whole driver (spec/codegen.md

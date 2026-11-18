@@ -1376,6 +1376,17 @@ Planned as 1.3.0.
   `__builtin_assoc_barrier` takes a class operand. The driver accepts
   `--start-no-unused-arguments`/`--end-no-unused-arguments` and
   `--unwindlib=`, as clang does (WP-1611, WP-1633).
+- A C-linkage function whose name equals the mangled name of a C++
+  function in the same unit no longer stops code generation; both names
+  refer to one symbol. `__restrict` pointer parameters, and `this` in a
+  `__restrict` member function, are `noalias` in the IR, as in clang 22.
+  An importer of a module's `export constexpr` or `const` variable sees
+  its initializer (`available_externally`), and the temporary bound to an
+  exported constexpr reference is one symbol for the module and all its
+  importers, so its address is the same in every unit. An in-class
+  inline static data member with a dynamic initializer is initialized
+  before an importer's own variables, once per program (WP-1663,
+  WP-1653).
 
 ## [1.2.1] - 2026-11-14
 

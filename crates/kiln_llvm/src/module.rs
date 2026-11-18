@@ -441,7 +441,13 @@ impl Module {
     }
 
     fn unique_global_name(&mut self, name: &str) -> Box<str> {
-        if name.is_empty() || !self.gnames.contains_key(name) {
+        let taken = !name.is_empty() && self.gnames.contains_key(name);
+        self.unique_global_name_known(name, taken)
+    }
+
+    /// [`Module::unique_global_name`] when the caller looked `name` up.
+    fn unique_global_name_known(&mut self, name: &str, taken: bool) -> Box<str> {
+        if !taken {
             return name.into();
         }
         loop {
@@ -507,6 +513,32 @@ impl Module {
     /// Add a function declaration of type `fn_ty`; the name is uniqued
     /// (`name.N`) if taken. Errors unless `fn_ty` is a function type.
     pub fn add_function(&mut self, name: &str, fn_ty: TypeId) -> IrResult<FuncId> {
+        let taken = !name.is_empty() && self.gnames.contains_key(name);
+        self.add_function_known(name, fn_ty, taken)
+    }
+
+    /// [`Module::add_function`] unless [`Module::live_symbol`] of `name`
+    /// is some value: then `Ok(Err(value))`, the global the symbol
+    /// denotes (one name lookup either way).
+    ///
+    /// # Errors
+    ///
+    /// As [`Module::add_function`].
+    pub fn add_function_unless_held(
+        &mut self,
+        name: &str,
+        fn_ty: TypeId,
+    ) -> IrResult<Result<FuncId, Value>> {
+        let held = if name.is_empty() { None } else { self.gnames.get(name).copied() };
+        if let Some(v) = held
+            && self.live_linkage(v).is_some_and(|l| !l.is_local())
+        {
+            return Ok(Err(v));
+        }
+        self.add_function_known(name, fn_ty, held.is_some()).map(Ok)
+    }
+
+    fn add_function_known(&mut self, name: &str, fn_ty: TypeId, taken: bool) -> IrResult<FuncId> {
         let Some((ret, params, varargs)) = self.types.function_info(fn_ty) else {
             return Err(IrError::new(
                 IrErrorKind::InvalidType,
@@ -514,7 +546,7 @@ impl Module {
             ));
         };
         let params: Vec<TypeId> = params.to_vec();
-        let name = self.unique_global_name(name);
+        let name = self.unique_global_name_known(name, taken);
         let id = FuncId(self.funcs.len() as u32);
         self.register_global_name(&name, Value::func(id));
         self.funcs.push(Function::new(name, fn_ty, ret, &params, varargs));
@@ -761,6 +793,112 @@ impl Module {
         Ok(a)
     }
 
+    /// The live function, variable or alias named `name` when its linkage
+    /// is not local: the one global value that symbol denotes (clang
+    /// `GetGlobalValue`; spec/codegen.md "One global per symbol").
+    pub fn live_symbol(&self, name: &str) -> Option<Value> {
+        let v = self.lookup(name)?;
+        self.live_linkage(v).filter(|l| !l.is_local()).map(|_| v)
+    }
+
+    /// Whether the live value `v` (function, variable or alias) is a
+    /// declaration (LLVM `GlobalValue::isDeclaration`: an alias never is).
+    pub fn is_declaration_value(&self, v: Value) -> bool {
+        match v.get() {
+            ValueRef::Func(f) => self.funcs[f.index()].is_declaration(),
+            ValueRef::Global(g) => self.globals[g.index()].init.is_none(),
+            _ => false,
+        }
+    }
+
+    /// A nameless global variable declaration whose every use denotes
+    /// `to` (a variable declared under a symbol a function or alias
+    /// already holds: clang `GetOrCreateLLVMGlobal` returns that entry).
+    /// It is never printed.
+    pub fn add_forwarding_global(&mut self, value_type: TypeId, to: Value) -> GlobalId {
+        let g = self.add_global("", value_type);
+        if let Some(i) = self.global_order.iter().position(|&x| x == g) {
+            let _ = self.global_order.remove(i);
+        }
+        self.replaced_globals.insert(g, to);
+        g
+    }
+
+    /// A nameless function declaration of type `fn_ty` whose every use
+    /// denotes `to` (a function declared under a symbol another global
+    /// already holds: clang `GetOrCreateLLVMFunction` returns that
+    /// entry). It is never printed; `to` keeps its place.
+    ///
+    /// # Errors
+    ///
+    /// `fn_ty` is not a function type.
+    pub fn add_forwarding_function(&mut self, fn_ty: TypeId, to: Value) -> IrResult<FuncId> {
+        let f = self.add_function("", fn_ty)?;
+        if let Some(i) = self.func_order.iter().position(|&x| x == f) {
+            let _ = self.func_order.remove(i);
+        }
+        self.replaced.insert(f, to);
+        Ok(f)
+    }
+
+    /// Replace the global variable declaration `old` by a new function
+    /// declaration of type `fn_ty` that takes its name and its uses
+    /// (clang `GetOrCreateLLVMFunction` for a definition under a symbol a
+    /// variable declaration holds: `takeName`, `replaceAllUsesWith`,
+    /// `eraseFromParent`).
+    ///
+    /// # Errors
+    ///
+    /// `old` has an initializer or is replaced, or `fn_ty` is not a
+    /// function type.
+    pub fn replace_global_with_function(
+        &mut self,
+        old: GlobalId,
+        fn_ty: TypeId,
+    ) -> IrResult<FuncId> {
+        if self.globals[old.index()].init.is_some() || self.replaced_globals.contains_key(&old) {
+            return Err(IrError::new(
+                IrErrorKind::BadGlobal,
+                "only a live global declaration can be replaced",
+            ));
+        }
+        let f = self.add_function("", fn_ty)?;
+        if let Some(i) = self.global_order.iter().position(|&x| x == old) {
+            let _ = self.global_order.remove(i);
+        }
+        let name = std::mem::take(&mut self.globals[old.index()].name);
+        self.replaced_globals.insert(old, Value::func(f));
+        self.register_global_name(&name, Value::func(f));
+        self.funcs[f.index()].name = name;
+        Ok(f)
+    }
+
+    /// Replace the function declaration `old` by a new global variable
+    /// declaration of type `value_type` that takes its name and its uses
+    /// (clang `GetOrCreateLLVMGlobal` for a definition under a symbol a
+    /// function declaration holds).
+    ///
+    /// # Errors
+    ///
+    /// As [`Module::replace_function`].
+    pub fn replace_function_with_global(
+        &mut self,
+        old: FuncId,
+        value_type: TypeId,
+    ) -> IrResult<GlobalId> {
+        let g = self.add_global("", value_type);
+        if let Err(e) = self.check_replaceable(old, Value::global(g)) {
+            let _ = self.globals.pop();
+            let _ = self.global_order.pop();
+            return Err(e);
+        }
+        let name = std::mem::take(&mut self.funcs[old.index()].name);
+        self.erase_replaced(old, Value::global(g));
+        self.register_global_name(&name, Value::global(g));
+        self.globals[g.index()].name = name;
+        Ok(g)
+    }
+
     /// Point alias (or ifunc) `a` at `aliasee` instead (clang
     /// `GlobalAlias::setAliasee` / `GlobalIFunc::setResolver`).
     ///
@@ -816,7 +954,28 @@ impl Module {
     /// Add a global variable declaration (`external global T`); set an
     /// initializer with [`Module::set_initializer`] to define it.
     pub fn add_global(&mut self, name: &str, value_type: TypeId) -> GlobalId {
-        let name = self.unique_global_name(name);
+        let taken = !name.is_empty() && self.gnames.contains_key(name);
+        self.add_global_known(name, value_type, taken)
+    }
+
+    /// [`Module::add_global`] unless [`Module::live_symbol`] of `name`
+    /// is some value: then `Err(value)` (one name lookup either way).
+    pub fn add_global_unless_held(
+        &mut self,
+        name: &str,
+        value_type: TypeId,
+    ) -> Result<GlobalId, Value> {
+        let held = if name.is_empty() { None } else { self.gnames.get(name).copied() };
+        if let Some(v) = held
+            && self.live_linkage(v).is_some_and(|l| !l.is_local())
+        {
+            return Err(v);
+        }
+        Ok(self.add_global_known(name, value_type, held.is_some()))
+    }
+
+    fn add_global_known(&mut self, name: &str, value_type: TypeId, taken: bool) -> GlobalId {
+        let name = self.unique_global_name_known(name, taken);
         let id = GlobalId(self.globals.len() as u32);
         self.register_global_name(&name, Value::global(id));
         self.globals.push(GlobalVar {

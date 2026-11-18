@@ -3168,8 +3168,23 @@ impl<'a> Cg<'a> {
 
     pub(crate) fn declare_fn(&mut self, name: &str, first: DeclId, sig: &Sig) -> R<FuncId> {
         let ast = self.ast;
-        let f = match self.m.add_function(name, sig.fn_ty) {
-            Ok(f) => f,
+        // spec/codegen.md "One global per symbol" (WP-1663): a symbol
+        // another entity's variable, alias or function already holds (a
+        // C-linkage name equal to a mangled one) is that global (clang
+        // `GetOrCreateLLVMFunction` returns the entry): this declaration
+        // is a nameless function forwarding to it, which a definition
+        // replaces ([`Cg::fn_for_definition`]).
+        let f = match self.m.add_function_unless_held(name, sig.fn_ty) {
+            Ok(Ok(f)) => f,
+            Ok(Err(v)) => {
+                return match self.m.add_forwarding_function(sig.fn_ty, v) {
+                    Ok(f) => Ok(f),
+                    Err(e) => err(
+                        Some(ast.decls.get(first).loc()),
+                        format!("cannot declare {name}: {e:?}"),
+                    ),
+                };
+            }
             Err(e) => {
                 return err(
                     Some(ast.decls.get(first).loc()),
@@ -3188,6 +3203,12 @@ impl<'a> Cg<'a> {
     /// `GetOrCreateLLVMFunction` with `IsForDefinition`).
     pub(crate) fn fn_for_definition(&mut self, d: DeclId, f: FuncId) -> R<FuncId> {
         let first = self.ast.first(d);
+        if self.m.resolve(Value::func(f)) != Value::func(f) {
+            let sig = self.decl_sig(first)?;
+            let g = self.take_symbol_for_definition(d, f, &sig)?;
+            self.fns.insert(first, g);
+            return Ok(g);
+        }
         self.check_duplicate_def(d, f);
         let sig = self.decl_sig(first)?;
         if self.m.func(f).ty() == sig.fn_ty || !self.m.func(f).is_declaration() {
@@ -3198,6 +3219,123 @@ impl<'a> Cg<'a> {
         }
         self.set_decl_attrs(f, first, &sig);
         Ok(f)
+    }
+
+    /// The function to define `d` into when its declaration `f` forwards
+    /// to the global another entity holds under its symbol
+    /// ([`Cg::declare_fn`]; clang `GetOrCreateLLVMFunction` with
+    /// `IsForDefinition`): a function declaration is retyped in place, a
+    /// variable declaration is replaced by a function that takes its
+    /// name and uses; a defined entry is `err_duplicate_mangled_name`
+    /// and `f` itself is returned, whose body is not built
+    /// ([`Cg::gen_code`] skips a forwarding function). The caller maps
+    /// the declaration to the result.
+    pub(crate) fn take_symbol_for_definition(
+        &mut self,
+        d: DeclId,
+        f: FuncId,
+        sig: &Sig,
+    ) -> R<FuncId> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let target = self.m.resolve(Value::func(f));
+        if !self.m.is_declaration_value(target) {
+            self.report_duplicate_symbol(d, target);
+            return Ok(f);
+        }
+        let loc = Some(ast.decls.get(d).loc());
+        let g = match target.get() {
+            kiln_llvm::ValueRef::Func(g) if self.m.func(g).ty() == sig.fn_ty => return Ok(g),
+            kiln_llvm::ValueRef::Func(g) => {
+                if let Err(e) = self.m.retype_function_to_end(g, sig.fn_ty) {
+                    return err(loc, format!("cannot define {e:?}"));
+                }
+                g
+            }
+            kiln_llvm::ValueRef::Global(gv) => {
+                match self.m.replace_global_with_function(gv, sig.fn_ty) {
+                    Ok(g) => g,
+                    Err(e) => return err(loc, format!("cannot define {e:?}")),
+                }
+            }
+            _ => return err(loc, "cannot define a function over this symbol"),
+        };
+        self.set_decl_attrs(g, first, sig);
+        Ok(g)
+    }
+
+    /// The global to define variable `d` (initializer type `ity`) into
+    /// when another entity's global `h` holds its symbol (WP-1663; clang
+    /// `GetOrCreateLLVMGlobal` with `IsForDefinition`): a variable
+    /// declaration is reused (retyped at the end of the module if its
+    /// type differs), a function declaration is replaced by a variable
+    /// that takes its name and uses. A defined `h` is
+    /// `err_duplicate_mangled_name` and `None` (clang diagnoses only a
+    /// variable defined first, and replaces a defined function silently,
+    /// dropping its body; GCC's assembler rejects both: kiln diagnoses
+    /// both).
+    fn var_def_over_symbol(&mut self, d: DeclId, h: Value, ity: LTy) -> R<Option<GlobalId>> {
+        let loc = Some(self.ast.decls.get(d).loc());
+        match h.get() {
+            kiln_llvm::ValueRef::Func(fh) if self.m.func(fh).is_declaration() => {
+                match self.m.replace_function_with_global(fh, ity) {
+                    Ok(g) => Ok(Some(g)),
+                    Err(e) => err(loc, format!("cannot define {e:?}")),
+                }
+            }
+            kiln_llvm::ValueRef::Global(g) if self.m.global(g).initializer().is_none() => {
+                if self.m.global(g).value_type() != ity {
+                    self.m.retype_global_to_end(g, ity);
+                }
+                Ok(Some(g))
+            }
+            _ => {
+                self.report_duplicate_symbol(d, h);
+                Ok(None)
+            }
+        }
+    }
+
+    /// `err_duplicate_mangled_name` for the definition `d` under the
+    /// symbol of the defined global `held` (once per translation unit;
+    /// the note names the symbol's representative declaration).
+    pub(crate) fn report_duplicate_symbol(&mut self, d: DeclId, held: Value) {
+        if self.dup_reported {
+            return;
+        }
+        let ast = self.ast;
+        let name = match held.get() {
+            kiln_llvm::ValueRef::Func(g) => self.m.func(g).name().to_owned(),
+            kiln_llvm::ValueRef::Global(g) => self.m.global(g).name().to_owned(),
+            kiln_llvm::ValueRef::Alias(a) => self.m.alias(a).name().to_owned(),
+            _ => return,
+        };
+        let mut diag =
+            Diag::new(DiagId::cg_duplicate_mangled_name, Span::empty(ast.decls.get(d).loc()))
+                .arg(&name);
+        // Variables record no representative (and a function's own
+        // reference may have recorded it first): the variable whose
+        // global is `held` (searched on this error path only).
+        let own = ast.first(d);
+        let rep = self.reps.get(&name).copied().filter(|&r| r != own).or_else(|| {
+            let mut vs: Vec<DeclId> = self
+                .gvars
+                .iter()
+                .filter(|&(_, &g)| self.m.resolve(Value::global(g)) == held)
+                .map(|(&v, _)| v)
+                .collect();
+            vs.sort_unstable();
+            vs.first().copied()
+        });
+        if let Some(rep) = rep
+            && rep != own
+        {
+            let prev = ast.definition(rep).unwrap_or(rep);
+            diag =
+                diag.note(DiagId::note_previous_definition, Span::empty(ast.decls.get(prev).loc()));
+        }
+        self.diags.push(diag);
+        self.dup_reported = true;
     }
 
     /// Records `first` as the representative declaration of symbol
@@ -3495,11 +3633,23 @@ impl<'a> Cg<'a> {
             self.gvars.insert(first, g);
             return Ok(g);
         }
+        // A symbol a function or alias of another entity holds (a
+        // C-linkage name equal to a mangled one) is that global (clang
+        // `GetOrCreateLLVMGlobal` returns the entry; spec/codegen.md "One
+        // global per symbol", WP-1663): a nameless variable forwards to
+        // it until a definition takes the symbol ([`Cg::emit_var_def`]).
         // A symbol an alias declared by name (an aliasee defined after
         // the alias) is this variable's global.
         let g = match self.m.get_global(&name) {
             Some(g) if self.alias.targets.contains(&name) => g,
-            _ => self.m.add_global(&name, lt),
+            _ => match self.m.add_global_unless_held(&name, lt) {
+                Ok(g) => g,
+                Err(v) => {
+                    let g = self.m.add_forwarding_global(lt, v);
+                    self.gvars.insert(first, g);
+                    return Ok(g);
+                }
+            },
         };
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
@@ -3527,19 +3677,41 @@ impl<'a> Cg<'a> {
     /// Also (clang 22, WP-1523) an inline static data member that an
     /// imported named-module unit defines `weak_odr` in its purview
     /// because of its redundant redeclaration (`constexpr int A::n;`).
+    /// And (WP-1653) a namespace-scope variable an imported named-module
+    /// unit defines in its purview, not inline and not an implicit or
+    /// explicit instantiation (so the module's object holds its one
+    /// strong definition): clang `GetOrCreateLLVMGlobal`'s
+    /// `!D->hasDefinition() && D->hasInit()` holds for it, so a `const`
+    /// one (`export constexpr int c = 5;`, `export const int c = 5;`, an
+    /// explicit specialization of a variable template, a class object
+    /// with constant destruction) is `available_externally` with its
+    /// value. Not followed where clang's result is not link-equivalent:
+    /// a `thread_local` one (clang 22 emits a strong definition in the
+    /// importer) and a value naming an internal-linkage entity (clang
+    /// points it at the importer's own copy); both stay `external`.
     fn available_externally(&mut self, first: DeclId, g: GlobalId, ty: QualType) -> R<()> {
         let ast = self.ast;
         let in_record = ast.decls.get(first).ctx().is_some_and(|c| {
             ast.decls.get(c).kind().payload() == kiln_ast::decl::PayloadClass::Record
         });
+        let owner = ast.modules.owner(first);
+        let from_module = owner.purview
+            && ast.modules.is_imported_named_unit(owner.unit)
+            && !mangle::is_internal_symbol(ast, first);
         if !in_record {
+            let strong = from_module
+                && !self.var_is_inline(first)
+                && self.var_instantiation_linkage(first).is_none()
+                && ast
+                    .decls
+                    .var(first)
+                    .is_some_and(|v| v.spec.tls() == kiln_ast::decl::TlsKind::None);
+            if strong {
+                return self.available_externally_value(first, g, ty, true);
+            }
             return Ok(());
         }
-        let owner = ast.modules.owner(first);
-        let imported = owner.purview
-            && ast.modules.is_imported_named_unit(owner.unit)
-            && self.var_strong_inline(first)
-            && !mangle::is_internal_symbol(ast, first);
+        let imported = from_module && self.var_strong_inline(first);
         if !imported && (ast.redecls_of(first).count() > 1 || self.var_is_inline(first)) {
             return Ok(());
         }
@@ -3555,16 +3727,47 @@ impl<'a> Cg<'a> {
         {
             return Ok(());
         }
+        self.available_externally_value(first, g, ty, false)
+    }
+
+    /// The value part of [`Self::available_externally`]: a `const`
+    /// variable without `mutable` members whose initializer folded
+    /// gets it as an `available_externally` constant. For a
+    /// namespace-scope variable of a module (`ns`) the initializer may
+    /// be on any redeclaration (`export extern const int c; const int
+    /// c = 1;`), its destruction must be constant (clang's constant
+    /// emitter fails otherwise, as the module's own definition is then
+    /// not `constant`), and the value must name no internal-linkage
+    /// entity.
+    fn available_externally_value(
+        &mut self,
+        first: DeclId,
+        g: GlobalId,
+        ty: QualType,
+        ns: bool,
+    ) -> R<()> {
+        let ast = self.ast;
         if !ast.types.effective_quals(ty).is_const() || has_mutable(ast, ty) {
+            return Ok(());
+        }
+        if ns && self.var_destructed_class(first, ty).is_some() {
             return Ok(());
         }
         // A member of a class with internal linkage too (clang: its
         // odr-use without a definition is ill-formed, no diagnostic
         // required, and fails to link either way; WP-1517).
-        let Some(init) = ast.decls.var(first).and_then(|v| v.init) else { return Ok(()) };
+        let init = if ns {
+            ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|v| v.init))
+        } else {
+            ast.decls.var(first).and_then(|v| v.init)
+        };
+        let Some(init) = init else { return Ok(()) };
         let Some(c) = self.folds.get(init) else { return Ok(()) };
         let c = self.const_value(c, ty, Some(init), true)?;
         if self.m.const_type(c) != self.m.global(g).value_type() {
+            return Ok(());
+        }
+        if ns && self.names_local_global(c) {
             return Ok(());
         }
         if let Err(e) = self.m.set_initializer(g, Some(c)) {
@@ -3574,6 +3777,48 @@ impl<'a> Cg<'a> {
         gv.is_constant = true;
         gv.linkage = Linkage::AvailableExternally;
         Ok(())
+    }
+
+    /// Whether constant `c` refers to a private or internal global (one
+    /// a unit's copy of would differ from the defining unit's).
+    fn names_local_global(&self, c: Value) -> bool {
+        use kiln_llvm::ConstData as K;
+        let mut stack = vec![c];
+        let mut seen = 0usize;
+        while let Some(v) = stack.pop() {
+            seen += 1;
+            if seen > 4096 {
+                return true;
+            }
+            let v = self.m.resolve(v);
+            let local = match v.get() {
+                kiln_llvm::ValueRef::Global(g) => self.m.global(g).linkage.is_local(),
+                kiln_llvm::ValueRef::Func(f) => self.m.func(f).linkage.is_local(),
+                kiln_llvm::ValueRef::Alias(a) => self.m.alias(a).linkage.is_local(),
+                _ => false,
+            };
+            if local {
+                return true;
+            }
+            match self.m.const_of(v) {
+                Some(
+                    K::Array { elems, .. } | K::Struct { elems, .. } | K::Vector { elems, .. },
+                ) => {
+                    stack.extend(elems.iter().copied());
+                }
+                Some(K::Gep { ops, .. }) => stack.extend(ops.iter().copied()),
+                Some(
+                    K::Splat { elem: x, .. }
+                    | K::Cast { val: x, .. }
+                    | K::DsoLocalEquivalent(x)
+                    | K::NoCfi(x),
+                ) => stack.push(*x),
+                Some(K::Binary { lhs, rhs, .. }) => stack.extend([*lhs, *rhs]),
+                Some(K::BlockAddress { .. }) => return true,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// The alignment of global variable of type `ty`.
@@ -3659,6 +3904,21 @@ impl<'a> Cg<'a> {
         let is_ref = ast.types.is_reference(ty);
         let needs_dtor = !is_ref && self.var_destructed_class(first, ty).is_some();
         let ity = self.m.const_type(init);
+        // The symbol is held by a function or alias of another entity
+        // (WP-1663): a declaration of it is replaced by this variable
+        // ([`Cg::var_def_over_symbol`]; spec/codegen.md "One global per
+        // symbol").
+        let held = match self.gvars.get(&first) {
+            Some(&g) if self.m.resolve(Value::global(g)) != Value::global(g) => {
+                Some(self.m.resolve(Value::global(g)))
+            }
+            _ => None,
+        };
+        if let Some(h) = held {
+            let Some(g) = self.var_def_over_symbol(d, h, ity)? else { return Ok(()) };
+            self.gvars.insert(first, g);
+            self.mark_tls(first, g, false);
+        }
         let g = if let Some(&g) = self.gvars.get(&first) {
             // A declaration created by an earlier use has the memory type;
             // a union initialized through a non-largest member (or a
@@ -3686,7 +3946,14 @@ impl<'a> Cg<'a> {
                     self.m.retype_global_to_end(g, ity);
                     g
                 }
-                None => self.m.add_global(&name, ity),
+                None => match self.m.add_global_unless_held(&name, ity) {
+                    Ok(g) => g,
+                    // The symbol is held (WP-1663): as above.
+                    Err(h) => match self.var_def_over_symbol(d, h, ity)? {
+                        Some(g) => g,
+                        None => return Ok(()),
+                    },
+                },
             };
             self.gvars.insert(first, g);
             self.mark_tls(first, g, false);

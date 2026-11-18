@@ -514,6 +514,18 @@ impl Cg<'_> {
         v: Structor,
         f: FuncId,
     ) -> R<FuncId> {
+        // A variant whose symbol another entity holds (an `extern "C"`
+        // function named by the mangled name, WP-1663).
+        if self.m.resolve(Value::func(f)) != Value::func(f) {
+            let sig = self.structor_sig(first, Some(v))?;
+            let g = self.take_symbol_for_definition(d, f, &sig)?;
+            if g != f {
+                // clang `SetLLVMFunctionAttributesForDefinition`.
+                self.m.func_mut(g).unnamed_addr = UnnamedAddr::Global;
+                self.sfns.insert((first, v), (Value::func(g), g));
+            }
+            return Ok(g);
+        }
         if !self.labelled_structor(first) {
             return Ok(f);
         }
@@ -599,8 +611,11 @@ impl Cg<'_> {
             return Ok((V::C(Value::func(f)), Some(f)));
         }
         let Some(def) = self.structor_def(first) else {
-            let (val, _) = self.declare_structor(first, v)?;
-            return Ok((V::C(val), None));
+            let (val, f) = self.declare_structor(first, v)?;
+            // A declaration forwarding to another entity's symbol names
+            // that function to `TryMarkNoThrow` (WP-1663).
+            let fid = (self.m.resolve(val) != val).then_some(f);
+            return Ok((V::C(val), fid));
         };
         let first_ref = self.c1_decl.insert(first);
         if self.structor_has_vbases(first) {
@@ -770,8 +785,32 @@ impl Cg<'_> {
                 let target =
                     self.sfns.get(&(first, Structor::Base)).map_or(Value::func(f), |e| e.0);
                 let name = mangle::mangle_structor(ast, &mut self.anon, first, v);
+                self.note_rep(&name, first);
                 let fty = self.m.func(f).ty();
-                let a = match self.m.add_alias(&name, fty, target) {
+                // clang `emitConstructorDestructorAlias`: a symbol another
+                // entity defines already (an `extern "C"` function named by
+                // the mangled name) is left as it is, a declaration of it
+                // is replaced by the alias (WP-1663).
+                let held = self.m.live_symbol(&name);
+                if let Some(h) = held
+                    && !self.m.is_declaration_value(h)
+                {
+                    self.sfns.insert((first, v), (h, f));
+                    if let Some(&p) = self.ph_of.get(&(first, v)) {
+                        self.phs[p as usize] = Some(h);
+                    }
+                    return self.emit_thunks(d, Some(v));
+                }
+                let r = match held.map(Value::get) {
+                    Some(kiln_llvm::ValueRef::Func(g)) => {
+                        self.m.replace_function_with_alias(g, fty, target)
+                    }
+                    Some(kiln_llvm::ValueRef::Global(g)) => {
+                        self.m.replace_global_with_alias(g, fty, target)
+                    }
+                    _ => self.m.add_alias(&name, fty, target),
+                };
+                let a = match r {
                     Ok(a) => a,
                     Err(e) => {
                         return err(

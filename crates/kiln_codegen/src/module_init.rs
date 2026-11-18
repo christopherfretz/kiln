@@ -60,9 +60,30 @@ impl Cg<'_> {
                     DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
                         stack.push(d);
                     }
+                    // An inline static data member defined in its class
+                    // counts too (clang `addModuleInitializer` from
+                    // `CheckCompleteVariableDeclaration`): it makes the
+                    // importer call `_ZGIW`, though its own initialization
+                    // stays the comdat `global_ctors` entry (WP-1653).
+                    DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                        stack.push(d);
+                    }
                     DeclKind::Var => {
                         let u = usize::from(ast.modules.owner(d).unit);
-                        if u != 0 && !own[u] && self.var_is_module_initializer(d) {
+                        // In its class only an inline member whose
+                        // initialization or destruction does something
+                        // (a redundant out-of-class redeclaration that
+                        // makes it `weak_odr` comes later, WP-1523).
+                        let in_class = ast.decls.get(ctx).kind().payload()
+                            == kiln_ast::decl::PayloadClass::Record;
+                        if u != 0
+                            && !own[u]
+                            && if in_class {
+                                self.var_is_inline(d) && self.var_must_emit(d)
+                            } else {
+                                self.var_is_module_initializer(d)
+                            }
+                        {
                             own[u] = true;
                         }
                     }

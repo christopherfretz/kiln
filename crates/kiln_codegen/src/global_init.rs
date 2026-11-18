@@ -18,6 +18,7 @@ use kiln_abi::mangle::{self, Structor};
 use kiln_ast::attr::{AttrKind as AstAttr, AttrNode};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
+use kiln_ast::modules::UnitKind;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, BinOp, CallOpts, ComdatKind, Flags, FuncId, GlobalId, IntPredicate, Linkage,
@@ -828,8 +829,19 @@ impl Cg<'_> {
             None => self.mty(ty),
         };
         // The extending variable's definition linkage; an external one
-        // becomes internal.
-        let lin = if let Some(&sg) = self.static_locals.get(&vfirst) {
+        // becomes internal, except for a variable another unit can import
+        // (WP-1653, spec/modules.md §7).
+        // An imported unit's object defines the temporary; here it is a
+        // declaration, its constant value `available_externally` (clang
+        // 22), so `&r` is one address in every unit.
+        let shared = self.module_shared_temporary(vfirst);
+        let lin = if let Some(imported) = shared {
+            if imported && init.is_some() {
+                Linkage::AvailableExternally
+            } else {
+                Linkage::External
+            }
+        } else if let Some(&sg) = self.static_locals.get(&vfirst) {
             self.m.global(sg).linkage
         } else if mangle::is_internal_symbol(ast, vfirst) {
             Linkage::Internal
@@ -856,10 +868,12 @@ impl Cg<'_> {
             self.m.global_mut(g).thread_local = Some(self.tls_model(vfirst));
         }
         let value = match init {
-            Some(k) => k,
-            None => self.null_const(ty)?,
+            Some(k) => Some(k),
+            // An imported unit's dynamically initialized temporary.
+            None if shared == Some(true) => None,
+            None => Some(self.null_const(ty)?),
         };
-        if let Err(e) = self.m.set_initializer(g, Some(value)) {
+        if let Err(e) = self.m.set_initializer(g, value) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
         let weak = matches!(
@@ -888,8 +902,44 @@ impl Cg<'_> {
         gv.comdat = comdat;
         // `setGVProperties` runs on the global before it has an
         // initializer unless the value is constant.
-        gv.dso_local = !matches!(lin, Linkage::Internal | Linkage::Private) && init.is_some();
+        gv.dso_local =
+            !matches!(lin, Linkage::Internal | Linkage::Private | Linkage::AvailableExternally)
+                && init.is_some();
         Ok(g)
+    }
+
+    /// For the extending variable `vfirst` of a lifetime-extended
+    /// temporary: `Some(true)` when an imported named-module unit defines
+    /// it, `Some(false)` when this unit, a module unit other units can
+    /// import, does; then the temporary is one external symbol rather than
+    /// a copy per unit (clang 22 makes it `internal` in the module unit and
+    /// `available_externally` in an importer, which then fails to link;
+    /// WP-1653). `None` otherwise, and for an internal, inline, templated
+    /// or `thread_local` variable.
+    fn module_shared_temporary(&self, vfirst: DeclId) -> Option<bool> {
+        let ast = self.ast;
+        let mt = &ast.modules;
+        if !mt.active {
+            return None;
+        }
+        let owner = mt.owner(vfirst);
+        if !owner.purview
+            || self.static_locals.contains_key(&vfirst)
+            || mangle::is_internal_symbol(ast, vfirst)
+            || self.var_is_inline(vfirst)
+            || self.var_instantiation_linkage(vfirst).is_some()
+            || self.var_is_tls(vfirst)
+        {
+            return None;
+        }
+        if mt.is_imported_named_unit(owner.unit) {
+            return Some(true);
+        }
+        let importable = owner.unit == 0
+            && mt.units.first().is_some_and(|u| {
+                u.kind.is_interface() || u.kind == UnitKind::PartitionImplementation
+            });
+        importable.then_some(false)
     }
 
     /// clang `GetAddrOfGlobalTemporary`'s `MaterializedType` for
