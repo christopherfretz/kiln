@@ -5968,10 +5968,51 @@ Names there are not odr-used.
     accepts). The sibling forms (address, reference binding, nested and
     generic lambdas, init-capture, `this`, an explicit capture read)
     agree with GCC: `expr.prim.lambda.capture/odr-use-address-in-constexpr-init.cpp`,
-    `constexpr-init-by-copy-capture-siblings.cpp` (WP-1535). Open: a
-    member call on a constexpr class object (`p.get()`) odr-uses `p`, so
-    the text rejects it; clang 22 and GCC 16.1 accept it, and kiln
-    rejects it.
+    `constexpr-init-by-copy-capture-siblings.cpp` (WP-1535).
+  - A by-copy capture that a call receives in such a constant expression
+    reads the captured variable (WP-1655, a deviation from the text that
+    follows clang 22 and GCC 16.1, which both accept these forms;
+    docs/status/deviations.md): `constexpr P p{3}; [=] { constexpr int j
+    = p.get(); }` odr-uses `p` and captures it as before, but its name is
+    not marked `NAMES_CLOSURE_COPY`, so the Oven reads the variable there
+    (spec/sema-lambda.md). The same holds, in any form, for a name the
+    innermost lambda captures by reference (a capture of an enclosing
+    lambda's copy, `[=] { [&] { constexpr int j = *&n; }(); }`: the
+    address forms fail anyway, the variable being automatic) and for a
+    structured binding read by an lvalue-to-rvalue conversion
+    (`constexpr int j = a;`, also in a generic lambda; `*&a` stays
+    rejected). Otherwise the name reads the variable when a call receives
+    it. All is decided at the end of the full-expression for a name that
+    would be marked (`Sema::closure_copy_reads_variable`; the
+    full-expression is walked once, only when such a name is met, so a
+    lambda body without one pays nothing). A call receives the name when
+    it is an argument of a function or operator
+    call or of a constructor, the implied object argument of a member
+    function call (also `(p.*pmf)()`), or the initializer of a
+    by-reference capture of a lambda the full-expression creates (`[&] {
+    return p.get(); }()`), looking through parentheses, no-op, base and
+    array-to-pointer conversions (implicit or explicit), `&`, `*`, the
+    object of a `.` naming a non-static data member, the array operand of
+    a subscript, both arms of a conditional and a comma's right operand
+    (`id(p.v)`, `first(a)`, `getp(&p)`, `(*&p).get()`). Excepted, keeping
+    the text's reading as GCC 16.1 does (clang 22 accepts them): a name in
+    the body of a generic lambda (the innermost call operator is a
+    template or its specialization), and the argument of a trivial copy
+    or move constructor that is a variable's whole parenthesized
+    initializer (`constexpr P c(p);`; `= p`, `{p}` and `P(p)` read the
+    variable in both). A read in place (`(*&p).v`, `*a` for an array, a
+    reference member `V{p}.r`) is not received by a call and stays
+    rejected (GCC rejects, clang accepts). A structured binding named
+    through a by-copy capture is decided at the end of its
+    full-expression too (it was marked when built; in a template
+    definition it joins the potential captures, and a node an
+    instantiation shares with its pattern joins the instantiation's
+    pending odr-uses, as a variable's does). Run-time code is
+    unchanged: inside a call of the closure the name is the member
+    (`captured_var_place`), so a `mutable` lambda reads its own copy.
+    Tests `expr.prim.lambda.capture/constexpr-call-reads-by-copy-capture-run.cpp`
+    (every accepted form), `-binding-run.cpp`, `-rejected.cpp`,
+    `-binding-rejected.cpp`.
   - Codegen (spec/codegen.md): a non-odr-used local named from a
     lambda or local class reads the variable's `__const` global.
   - Tests `basic.def.odr/potential-results-closure-run.cpp` (closure

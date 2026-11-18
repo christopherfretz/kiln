@@ -828,6 +828,25 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether the lambda whose body is the current context captures
+    /// entity `d` by reference, explicitly or by its `&` default (when
+    /// [`Sema::odr_use_names_closure_copy`] holds, an enclosing lambda's
+    /// copy: [expr.prim.lambda.capture]/12).
+    pub(crate) fn innermost_capture_by_ref(&self, d: DeclId) -> bool {
+        let c = self.ctx;
+        let Some(l) = self
+            .lambda_of_call_op(c)
+            .or_else(|| self.ast.instantiated_from(c).and_then(|p| self.lambda_of_call_op(p)))
+        else {
+            return false;
+        };
+        let data = self.ast.exprs.lambdas.get(l);
+        match data.captures.iter().find(|x| x.var == Some(d)) {
+            Some(x) => x.kind == CaptureKind::ByRef,
+            None => data.default == CaptureDefault::ByRef,
+        }
+    }
+
     /// Whether `e` (parentheses and implicit casts looked through) names
     /// a local of an enclosing function that the lambdas in between
     /// cannot capture: its use is (or will be) `err_lambda_impcap`, so a
@@ -885,20 +904,23 @@ impl Sema<'_, '_> {
         &mut self,
         full: ExprId,
         constant: &crate::expr::ConstantCandidates,
+        by_call: &mut crate::expr::CallOperands,
     ) {
         let dependent = self.ast.exprs.get(full).deps().intersects(ExprDeps::TYPE_VALUE_INST);
         let caps = std::mem::take(&mut self.potential_caps);
-        self.resolve_potential_capture_list(caps, dependent, constant);
+        self.resolve_potential_capture_list(caps, dependent, constant, Some((full, by_call)));
     }
 
     /// [`Sema::resolve_potential_captures`] of the potential captures
     /// `caps`, as those of a full-expression that is `dependent` and
-    /// whose lvalue-to-rvalue operands are `constant`.
+    /// whose lvalue-to-rvalue operands are `constant`; `full` the
+    /// full-expression, when known.
     pub(crate) fn resolve_potential_capture_list(
         &mut self,
         caps: Vec<ExprId>,
         dependent: bool,
         constant: &crate::expr::ConstantCandidates,
+        mut full: Option<(ExprId, &mut crate::expr::CallOperands)>,
     ) {
         for r in caps {
             let d = self.ast.exprs.decl(r);
@@ -912,6 +934,9 @@ impl Sema<'_, '_> {
                 && self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && self.odr_use_names_closure_copy(d)
+                && !full
+                    .as_mut()
+                    .is_some_and(|(f, c)| self.closure_copy_reads_variable(*f, r, constant, c))
             {
                 self.ast.exprs.mark_names_closure_copy(r);
             }
