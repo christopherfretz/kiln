@@ -5,7 +5,7 @@ use kiln_ast::QualType;
 use kiln_ast::decl::{ConstexprKind, DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{TemplateArg, TypeView};
+use kiln_ast::types::{TagKeyword, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -608,10 +608,9 @@ impl Sema<'_, '_> {
                     let note_at = self.ast.spec_info(target).is_some().then_some(at);
                     self.check_friend_access_noted(target, at, note_at);
                 }
-                let exc_error = kind != SpecialFriendKind::Dtor
-                    && self.check_friend_missing_exc_spec(target, ty, at);
+                let missing_exc = self.check_friend_exc_spec(target, kind, ty, at);
                 if let Some(cx) = cx
-                    && !exc_error
+                    && !missing_exc
                     && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
                 {
                     self.check_friend_constexpr_redecl(target, cx, at);
@@ -634,29 +633,40 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// [except.spec]/5: a friend redeclaration `ty` of constructor or
-    /// conversion function `target` written without an exception
-    /// specification is potentially throwing, so it conflicts with a
-    /// non-throwing `target`, an implicitly-declared or defaulted one
-    /// included (clang `CheckEquivalentExceptionSpec` through
-    /// `MergeFunctionDecl`; a destructor's is the implicit one).
-    /// Whether the error was given.
-    fn check_friend_missing_exc_spec(&mut self, target: DeclId, ty: QualType, at: Loc) -> bool {
-        // Ignored under `-fno-exceptions` before C++17 (clang).
-        if self.written_exc_spec(ty) != kiln_ast::types::ExcSpec::None
-            || !(self.exceptions || self.std >= kiln_lex::Std::Cxx17)
-            || self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
-        {
+    /// [except.spec]/5: a friend declaration `ty` of constructor,
+    /// destructor or conversion function `target` redeclares it, so its
+    /// exception specification is checked as an out-of-line
+    /// redeclaration's ([`Sema::check_special_redecl_exc`], clang
+    /// `CheckEquivalentExceptionSpec` through `MergeFunctionDecl`): one
+    /// written without a specification is potentially throwing (a
+    /// destructor's is the implicit one, [except.spec]/8), a written one
+    /// must match, and `-Wimplicit-exception-spec-mismatch` notes an
+    /// implicit specification on one side only. Whether the "missing
+    /// exception specification" error was given, after which clang does
+    /// not check `constexpr` agreement (it does after a mismatch).
+    fn check_friend_exc_spec(
+        &mut self,
+        target: DeclId,
+        kind: SpecialFriendKind,
+        ty: QualType,
+        at: Loc,
+    ) -> bool {
+        if self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID) {
             return false;
         }
         self.resolve_exc_for_type(target, at);
         let Some(pty) = self.declared_fn_type(target) else { return false };
-        let pe = self.written_exc_spec(pty);
-        if !pe.is_nothrow() || matches!(pe, kiln_ast::types::ExcSpec::Deferred(_)) {
-            return false;
-        }
         let name = self.decl_name(target);
-        self.merge_missing_exc_spec(target, pty, ty, (at, &name, None), false).1
+        let missing = kind != SpecialFriendKind::Dtor
+            && self.written_exc_spec(ty) == kiln_ast::types::ExcSpec::None;
+        let error = self
+            .check_special_redecl_exc(
+                (target, pty, ty),
+                kind == SpecialFriendKind::Dtor,
+                (at, &name, None),
+            )
+            .1;
+        missing && error
     }
 
     /// [dcl.constexpr]/1: a friend redeclaring special member `target`
@@ -963,6 +973,7 @@ impl Sema<'_, '_> {
         } else {
             self.reject_qualified_fn_type(base, ds.loc, false)
         };
+        self.check_cxx98_friend_type(ds, base, owned);
         let loc = ds.type_loc.unwrap_or(friend_loc);
         // `template<class T> friend class A<T>::Member;` ([temp.friend]/5).
         if owned.is_none()
@@ -982,6 +993,39 @@ impl Sema<'_, '_> {
             self.push_friend(c);
         }
         Some(fd)
+    }
+
+    /// C++11 [class.friend]/3 allows a friend type declaration without a
+    /// class-key; before it clang's `ext_unelaborated_friend_type` (a
+    /// class) or `ext_nonclass_type_friend` (anything else) at the start of
+    /// the declaration. Checked in the pattern only.
+    fn check_cxx98_friend_type(&mut self, ds: &DeclSpec, base: QualType, owned: Option<DeclId>) {
+        if self.std >= kiln_lex::Std::Cxx11
+            || owned.is_some()
+            || ds.tag.is_some()
+            || ds.dependent_tag_name.is_some()
+            || matches!(
+                ds.keyword,
+                TagKeyword::Struct | TagKeyword::Class | TagKeyword::Union | TagKeyword::Enum
+            )
+            || self.inst.stack.in_instantiation_record()
+            || self.is_error_type(base)
+            || matches!(
+                self.ast.types.view(base.ty()),
+                TypeView::Elaborated { keyword, .. }
+                    if !matches!(keyword, TagKeyword::None | TagKeyword::Typename)
+            )
+        {
+            return;
+        }
+        let d = if let Some(r) = self.ast.types.as_record(base) {
+            let key = self.tag_keyword(r);
+            self.diag(DiagId::sema_ext_unelaborated_friend_type, ds.loc).arg(key)
+        } else {
+            self.diag(DiagId::sema_ext_nonclass_type_friend, ds.loc)
+        };
+        let d = d.arg(self.ty_arg(base));
+        self.emit(d);
     }
 
     /// [class.friend]/3: a friend-type-specifier is a simple-, elaborated-

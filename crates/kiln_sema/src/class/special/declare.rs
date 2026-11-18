@@ -527,11 +527,13 @@ impl Sema<'_, '_> {
                     // inherited.
                     let fname = self.decl_name_str(name);
                     let fix_at = crate::except::missing_exc_spec_fixit_loc(d);
-                    ty = self.check_special_redecl_exc(
-                        (p, pty, ty),
-                        shape == Shape::Dtor,
-                        (sloc, &fname, fix_at),
-                    );
+                    ty = self
+                        .check_special_redecl_exc(
+                            (p, pty, ty),
+                            shape == Shape::Dtor,
+                            (sloc, &fname, fix_at),
+                        )
+                        .0;
                 }
                 // A declarator with an invalid parameter (a type defined in
                 // the parameter clause, [dcl.fct]/17) was diagnosed already

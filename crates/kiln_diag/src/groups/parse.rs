@@ -5,6 +5,7 @@
 AmbiguousEllipsis = "ambiguous-ellipsis" [];
 BitIntExtension = "bit-int-extension" [];
 C11Extensions = "c11-extensions" [];
+Cxx11ExtraSemi = "c++11-extra-semi" [];
 Cxx20Extensions = "c++20-extensions" [];
 Cxx23LambdaAttributes = "c++23-lambda-attributes" [];
 Cxx26Extensions = "c++26-extensions" [];

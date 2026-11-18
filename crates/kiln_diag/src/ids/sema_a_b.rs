@@ -71,6 +71,8 @@ sema_anon_record_with_static = Error (1) "static members cannot be declared in a
 sema_anon_record_with_type = Error (1) "types cannot be declared in an anonymous {0}";
 sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be class members";
 sema_anon_union_not_static = Error (0) "anonymous unions at namespace or global scope must be declared 'static'";
+// WP-1645: clang err_anonymous_union_with_storage_spec ([class.union.anon]/2).
+sema_anon_union_with_storage_spec = Error (0) "anonymous union at class scope must not have a storage specifier";
 sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
 sema_argument_outside_range = WarningError [ArgumentOutsideRange] (3) "argument value {0} is outside the valid range [{1}, {2}]";
 sema_arith_anon_enum_enum_deprecated = Warning [DeprecatedAnonEnumEnumConversion] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";
@@ -308,6 +310,8 @@ sema_builtin_definition = Error (1) "definition of builtin function '{0}'";
 sema_builtin_fn_use = Error (0) "builtin functions must be directly called";
 sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
 sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
+sema_builtin_has_attribute_dependent = Error (0) "'__builtin_has_attribute' with a dependent operand or attribute argument is not supported";
+sema_builtin_has_attribute_unknown = Error (1) "unknown attribute '{0}'";
 sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:a scalar unsigned integer type|a scalar 'int' type} (was {2})";
 sema_builtin_invalid_arg_type_19 = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
 sema_builtin_is_string_literal_arg = Error (0) "argument to '__builtin_is_string_literal' must be a pointer to a character type";

@@ -3915,7 +3915,10 @@ here because the GCC cases reaching them are template tests:
   included), with clang's `-Wconstexpr-not-const`; the written prototype
   is rebuilt, so a trailing `-> decltype(this->m)` keeps its `this`, and
   an out-of-line definition of a static member function is not adjusted
-  (`dcl.constexpr/p8-cxx11-implicit-const.cpp`).
+  (`dcl.constexpr/p8-cxx11-implicit-const.cpp`). A friend declaration
+  of a member is adjusted too, as in clang, so `friend constexpr int
+  C::k();` does not match a non-const `int k();` (WP-1656,
+  `class.friend/friend-constexpr-member-implicit-const-cxx11.cpp`).
 - C++11: a class with a default member initializer is not an aggregate
   ([dcl.init.aggr]/1 in C++11; `over.ics.list/aggregate-default-member-init-cxx11.cpp`).
 - [over.ics.list]/8: in the aggregate walk a string literal of a
@@ -5684,6 +5687,12 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+A constant template argument of class type there (a lambda-expression,
+`template<class T> using AT = A<T, []{}>`) is substituted into each guide
+and evaluated as a prvalue of class type; the Oven's `init_inner` takes
+the replacement of a `SubstNonTypeTemplateParmExpr` as its other paths do
+(WP-1519, `over.match.class.deduct/p3-alias-lambda-template-argument.cpp`;
+clang 19 finds no viable guide).
 Access in an implicit guide (from a constructor or constructor template)
 is checked as in the class ([over.match.class.deduct]/1: the guide's
 signature is the constructor's), so a parameter naming a private or

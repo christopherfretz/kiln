@@ -256,6 +256,9 @@ pub struct DeclSpec {
     pub base_loc: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
+    /// Where the first `short`/`long` was written (clang's
+    /// `getTypeSpecWidthLoc`).
+    pub width_loc: Option<Loc>,
     /// `signed`/`unsigned`.
     pub sign: Sign,
     /// The base type.
@@ -444,7 +447,10 @@ impl DeclSpec {
             return Ok(()); // after an unknown type name, as `set_base`
         }
         let new = match (self.width, w) {
-            (Width::None, w) => w,
+            (Width::None, w) => {
+                self.width_loc = Some(loc);
+                w
+            }
             (Width::Long, Width::Long) => Width::LongLong,
             (Width::LongLong, Width::Long) => {
                 return Err(SpecError::new(DiagId::parse_long_long_long, &[]));
@@ -794,7 +800,9 @@ pub struct Declarator {
     /// The start of its last token, counting a trailing requires-clause,
     /// an asm label, GNU attributes and the last virt-specifier but not
     /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
-    /// the parser set it (member declarators only, for now).
+    /// the parser set it (member declarators only, for now). In a
+    /// new-type-id: the end of the allocated element type (the token
+    /// before the first `[`, or the last `]` of a later bound).
     pub end: Loc,
     /// An error was already reported.
     pub invalid: bool,

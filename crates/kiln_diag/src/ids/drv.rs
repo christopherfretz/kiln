@@ -35,6 +35,8 @@ drv_invalid_argument_to_option = Error (2) "invalid argument '{0}' to -{1}";
 drv_invalid_gcc_install_dir = Error (1) "'{0}' does not contain a GCC installation";
 drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
 drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
+// WP-1633: clang `err_drv_invalid_unwindlib_name`.
+drv_invalid_unwindlib_name = Error (1) "invalid unwind library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
 // WP-1419: clang `warn_drv_large_data_threshold_invalid_code_model` (x86-64).
@@ -109,6 +111,8 @@ drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-1633: clang `err_drv_incompatible_unwindlib` (kiln links with libgcc).
+drv_rtlib_requires_unwindlib = Error (0) "--rtlib=libgcc requires --unwindlib=libgcc";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 // WP-1138: clang `SanitizerArgs::addArgs`, `-fsanitize=memtag-stack` on

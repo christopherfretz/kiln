@@ -233,7 +233,13 @@ closure loses `TRIVIAL_DEFAULT_CTOR` there, the captureless one too: it is
 neither trivial nor POD, and a local closure variable is not copied from
 a constant, as in clang (WP-1520, tests
 `expr.prim.lambda/closure-triviality-cxx17.cpp`,
-`tests/codegen/lambda_empty_closure_local_cxx17.cpp`).
+`tests/codegen/lambda_empty_closure_local_cxx17.cpp`). Before C++20 every
+form of the question agrees: `__is_constructible(T)`, its trivially and
+nothrow forms, `std::is_default_constructible` and SFINAE on `T()` are
+false for a captureless closure, as in clang 22, clang 19 and GCC 16.1
+(clang 22 only adds a stray "no matching constructor" error under a failed
+`static_assert` of the trait; WP-1652, test
+`expr.prim.lambda.closure/p13-default-constructible-traits-cxx17.cpp`).
 
 ### 3.4 Names in diagnostics and dumps
 
@@ -383,6 +389,22 @@ checked.
 ## 4. Captures
 
 ### 4.1 Explicit captures ([expr.prim.lambda.capture]/1-8)
+
+**Capture-default by scope** ([expr.prim.lambda.capture]/3, WP-1652). A
+capture-default is allowed only where the lambda's innermost enclosing
+scope is a block scope, or in a default member initializer (CWG1632).
+`act_on_lambda_start` (the parser's action, once at the definition; not
+on instantiation) applies clang's test from
+`ActOnLambdaExpressionAfterIntroducer`: the context the closure is
+created in is not a function and `this` is not capturable there
+(`this_capturable`); then "non-local lambda expression cannot have a
+capture-default" at the `=` or `&`. So it is rejected at namespace scope,
+in a default argument, a template argument, a requires-clause, a static
+data member's initializer and a member's declared type, and accepted in a
+lambda nested in another lambda's body and in a (local or template)
+class's default member initializer. A simple-capture there fails as a
+capture of a variable without automatic storage duration; an init-capture
+alone is allowed (tests `expr.prim.lambda.capture/capture-default-*.cpp`).
 
 `act_on_explicit_captures` checks each capture as written, in order,
 with clang's diagnostics: duplicates (`'x' can appear only once`),
@@ -744,13 +766,15 @@ A closure object is an ordinary class object in the Oven's memory; the
   constant, as for an object of unknown value ([expr.const]/10). A
   by-reference capture names the variable and is unchanged; an
   init-capture is a variable of the lambda and is unchanged. A structured
-  binding is always odr-used ([basic.def.odr]/5), so `[=] { constexpr int
-  j = a; }` with `constexpr auto [a, b] = ...` is rejected. GCC 16.1
-  rejects `*&n` and the address only; clang 22 only the address: both
-  accept reading the member through a reference parameter or `this`
-  (`rd(n)`, `s.val()`), the capture of a capture and the binding, which
-  the text rejects (`expr.prim.lambda.capture/odr-use-closure-member-constexpr*.cpp`,
-  `by-copy-capture-member-run.cpp`).
+  binding is always odr-used ([basic.def.odr]/5), so by the text `[=] {
+  constexpr int j = a; }` with `constexpr auto [a, b] = ...` is rejected.
+  clang 22 and GCC 16.1 both accept reading the member through a
+  reference parameter or `this` (`rd(n)`, `s.val()`), the capture of a
+  capture and the binding's read, which the text rejects; kiln follows
+  them (WP-1655): sema leaves those names unmarked (spec/sema.md, the
+  by-copy capture a call receives), so they read the variable here
+  (`expr.prim.lambda.capture/constexpr-call-reads-by-copy-capture-*.cpp`,
+  `odr-use-closure-member-constexpr*.cpp`, `by-copy-capture-member-run.cpp`).
 - **Thunks**: the conversion function returns the address of its target;
   the static invoker runs the call operator's body with no object
   (its body never uses `this`: the lambda has no captures). Notes print

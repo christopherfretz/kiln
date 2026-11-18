@@ -788,6 +788,18 @@ pub fn compile(
         drv.flush();
         return 1;
     }
+    if phase == Phase::Link
+        && let Some(id) = unwindlib_error(args)
+    {
+        let arg = args.link.iter().rev().find(|o| is_unwindlib(&o.arg)).map(|o| o.arg.clone());
+        let mut d = Diag::new(id, Span::INVALID);
+        if id == DiagId::drv_invalid_unwindlib_name {
+            d = d.arg(arg.unwrap_or_default());
+        }
+        d.emit(&drv);
+        drv.flush();
+        return 1;
+    }
     let sources = inputs.iter().filter(|i| is_source(i)).count();
     if phase != Phase::Link {
         if sources > 1 && args.output.is_some() {
@@ -893,19 +905,43 @@ fn check_asm_opts(args: &Args, phase: Phase, sources: usize, drv: &DiagEngine<'_
         return !errors.is_empty();
     }
     if !args.quiet_unused_arguments {
-        for o in args.asm.iter().filter(|o| phase == Phase::Object || o.opt == "-Wa,") {
+        for o in args
+            .asm
+            .iter()
+            .filter(|o| phase == Phase::Object || o.opt == "-Wa,")
+            .filter(|o| !args.no_unused.quiet(&o.arg))
+        {
             Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(&o.arg).emit(drv);
         }
     }
     false
 }
 
+fn is_unwindlib(arg: &str) -> bool {
+    arg.starts_with("--unwindlib=") || arg.starts_with("-unwindlib=")
+}
+
+/// clang's check of the last `--unwindlib=` when linking (WP-1633):
+/// `libgcc`, `platform` (libgcc on Linux) and `none` are accepted and
+/// passed to the linking clang++; `libunwind` contradicts the runtime
+/// library kiln links (libgcc, clang's default; kiln has no `--rtlib=`);
+/// any other value is not a name.
+fn unwindlib_error(args: &Args) -> Option<DiagId> {
+    let o = args.link.iter().rev().find(|o| is_unwindlib(&o.arg))?;
+    let v = o.arg.split_once('=').map_or("", |(_, v)| v);
+    match v {
+        "libgcc" | "platform" | "none" | "" => None,
+        "libunwind" => Some(DiagId::drv_rtlib_requires_unwindlib),
+        _ => Some(DiagId::drv_invalid_unwindlib_name),
+    }
+}
+
 /// `<x>: 'linker' input unused` and `argument unused during compilation`
 /// for a compile-only run, in command-line order.
 fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], phase: Phase, drv: &DiagEngine<'_>) {
     let report_opts = |pos: usize| {
-        for o in args.link.iter().filter(|o| o.pos == pos) {
-            if o.kind == LinkOptKind::Silent {
+        for (i, o) in args.link.iter().enumerate().filter(|(_, o)| o.pos == pos) {
+            if o.kind == LinkOptKind::Silent || args.no_unused.link.contains(&i) {
                 continue;
             }
             let text = match o.kind.separate() {
@@ -924,6 +960,9 @@ fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], phase: Phase, drv: &D
     for (pos, input) in args.inputs.iter().enumerate() {
         report_opts(pos);
         let existing = inputs.iter().any(|i| std::ptr::eq(*i, input));
+        if args.no_unused.quiet(&input.path) {
+            continue;
+        }
         if existing && !is_source(input) {
             Diag::new(DiagId::drv_linker_input_unused, Span::INVALID).arg(&input.path).emit(drv);
         }

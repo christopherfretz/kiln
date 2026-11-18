@@ -5968,10 +5968,51 @@ Names there are not odr-used.
     accepts). The sibling forms (address, reference binding, nested and
     generic lambdas, init-capture, `this`, an explicit capture read)
     agree with GCC: `expr.prim.lambda.capture/odr-use-address-in-constexpr-init.cpp`,
-    `constexpr-init-by-copy-capture-siblings.cpp` (WP-1535). Open: a
-    member call on a constexpr class object (`p.get()`) odr-uses `p`, so
-    the text rejects it; clang 22 and GCC 16.1 accept it, and kiln
-    rejects it.
+    `constexpr-init-by-copy-capture-siblings.cpp` (WP-1535).
+  - A by-copy capture that a call receives in such a constant expression
+    reads the captured variable (WP-1655, a deviation from the text that
+    follows clang 22 and GCC 16.1, which both accept these forms;
+    docs/status/deviations.md): `constexpr P p{3}; [=] { constexpr int j
+    = p.get(); }` odr-uses `p` and captures it as before, but its name is
+    not marked `NAMES_CLOSURE_COPY`, so the Oven reads the variable there
+    (spec/sema-lambda.md). The same holds, in any form, for a name the
+    innermost lambda captures by reference (a capture of an enclosing
+    lambda's copy, `[=] { [&] { constexpr int j = *&n; }(); }`: the
+    address forms fail anyway, the variable being automatic) and for a
+    structured binding read by an lvalue-to-rvalue conversion
+    (`constexpr int j = a;`, also in a generic lambda; `*&a` stays
+    rejected). Otherwise the name reads the variable when a call receives
+    it. All is decided at the end of the full-expression for a name that
+    would be marked (`Sema::closure_copy_reads_variable`; the
+    full-expression is walked once, only when such a name is met, so a
+    lambda body without one pays nothing). A call receives the name when
+    it is an argument of a function or operator
+    call or of a constructor, the implied object argument of a member
+    function call (also `(p.*pmf)()`), or the initializer of a
+    by-reference capture of a lambda the full-expression creates (`[&] {
+    return p.get(); }()`), looking through parentheses, no-op, base and
+    array-to-pointer conversions (implicit or explicit), `&`, `*`, the
+    object of a `.` naming a non-static data member, the array operand of
+    a subscript, both arms of a conditional and a comma's right operand
+    (`id(p.v)`, `first(a)`, `getp(&p)`, `(*&p).get()`). Excepted, keeping
+    the text's reading as GCC 16.1 does (clang 22 accepts them): a name in
+    the body of a generic lambda (the innermost call operator is a
+    template or its specialization), and the argument of a trivial copy
+    or move constructor that is a variable's whole parenthesized
+    initializer (`constexpr P c(p);`; `= p`, `{p}` and `P(p)` read the
+    variable in both). A read in place (`(*&p).v`, `*a` for an array, a
+    reference member `V{p}.r`) is not received by a call and stays
+    rejected (GCC rejects, clang accepts). A structured binding named
+    through a by-copy capture is decided at the end of its
+    full-expression too (it was marked when built; in a template
+    definition it joins the potential captures, and a node an
+    instantiation shares with its pattern joins the instantiation's
+    pending odr-uses, as a variable's does). Run-time code is
+    unchanged: inside a call of the closure the name is the member
+    (`captured_var_place`), so a `mutable` lambda reads its own copy.
+    Tests `expr.prim.lambda.capture/constexpr-call-reads-by-copy-capture-run.cpp`
+    (every accepted form), `-binding-run.cpp`, `-rejected.cpp`,
+    `-binding-rejected.cpp`.
   - Codegen (spec/codegen.md): a non-odr-used local named from a
     lambda or local class reads the variable's `__const` global.
   - Tests `basic.def.odr/potential-results-closure-run.cpp` (closure
@@ -6545,9 +6586,15 @@ under its own name, the same signature, gating and codegen
       under a mispredicted bounds check is not used speculatively
       (spec/codegen.md); `f` is evaluated for its side effects only.
     - `__builtin_assoc_barrier(x)`: one argument, decayed, of arithmetic,
-      enumeration, pointer or vector type (GCC also takes a class; kiln
-      rejects it, `1st argument must be a scalar or vector type`); the
-      result is `x`'s value and type, constant when `x` is.
+      enumeration, pointer or vector type (`1st argument must be a scalar
+      or vector type`; GCC also takes `void` and `std::nullptr_t`, kiln
+      does not); the result is `x`'s value and type, constant when `x`
+      is. On a class operand (WP-1611; GCC 16.1 builds a `PAREN_EXPR` of
+      the operand: no copy, a deleted copy constructor is accepted) the
+      call is a glvalue of `x`'s type naming `x`'s object: an lvalue for
+      an lvalue, else an xvalue (a prvalue is materialized,
+      [conv.rval]); codegen and the Oven use the operand's address
+      (`ext.gnu.builtins/assoc-barrier-class-*.cpp`).
     - `__builtin_ffsg(x)` / `__builtin_clrsbg(x)`: `x` a signed integer of
       any width, `_BitInt` included, not `bool` or an enumeration (`1st
       argument must be a scalar signed integer type`);
@@ -6562,12 +6609,47 @@ under its own name, the same signature, gating and codegen
       never constant. `__builtin_strstr`, `__builtin_index` and
       `__builtin_rindex` are clang's rows and, as in clang 22, are not
       folded in constant expressions.
-    Not implemented (WP-1552 remainder): `__builtin_has_attribute`; the
-    GCC trait spellings `__remove_reference` and `__is_invocable`
-    (libstdc++ 14 declares a class template `std::__is_invocable`, and
-    under a compiler that defines `__is_identifier` it takes the trait
-    path for any trait name that is not an identifier, so adding them
-    would change which `<type_traits>` code compiles); `__integer_pack`.
+    - `__builtin_has_attribute(op, attr)` (WP-1611; GCC `has_attribute`;
+      a keyword parsed as a primary expression, `has_attribute.rs`): `op`
+      a type-id or an unevaluated expression, `attr` one GNU attribute
+      (`x` or `__x__`, arguments without the double parentheses). The
+      result is a `bool` constant answered from the attributes kiln
+      stores: a name or member access asks every declaration of its
+      entity, then the entity's type; another expression asks its type;
+      a type asks the typedefs it is named by, then its class or
+      enumeration (a pointer, reference or array stops the walk, so a
+      pointer's attribute is not its pointee's). With arguments they
+      must match: `aligned(N)` the user-requested alignment `N` (an
+      array has its element's, GCC's `TYPE_USER_ALIGN`), `constructor` /
+      `destructor` the priority, `alloc_size` a subset of the positions,
+      `nonnull(i)` a stored `nonnull` naming `i` or every parameter (a
+      bare `nonnull` only the latter), `section` / `alias` the string,
+      `visibility` the value (`internal` is stored as `hidden`, so the two
+      answer alike), `cleanup` the function, `vector_size(N)` a GNU vector
+      of `N` bytes (consumed into the type); others the stored words. A
+      bare name matches any arguments and may omit required ones. An
+      attribute kiln parses and drops (clang's ignored and rejected ones,
+      GCC-only names, attributes in a type-id) answers 0; a name neither
+      GCC nor clang knows is `unknown attribute`. A dependent operand or
+      attribute argument is an error, as in GCC 16.1 ("sorry,
+      unimplemented"), and so is a class member access in a template
+      definition, dependent or not (GCC's own refusal). `__has_builtin(__builtin_has_attribute)` is 0, as
+      in clang 22 (`ext.gnu.builtins/has-attribute*.cpp`,
+      `c/expr/builtin-has-attribute.c`).
+    - `__remove_reference(T)` (WP-1611): GCC's spelling of clang's
+      `__remove_reference_t(T)`, a type transform like it, so a keyword
+      only before `(`: libstdc++ 14 names it only under
+      `_GLIBCXX_USE_BUILTIN_TRAIT(__remove_reference)` and libc++ under
+      `__has_builtin(__remove_reference)`, both 0 as in clang 22
+      (`__is_identifier` unchanged), so neither changes path
+      (`kiln++ -E` of `<type_traits>` and `<utility>` identical at every
+      `-std`; `ext.gnu.builtins/remove-reference-gcc-spelling.cpp`).
+    Not implemented: `__is_invocable(F, Args...)` (WP-1611: libstdc++
+    declares and uses `std::__is_invocable<...>`; a trait that is one
+    only before `(` would leave it alone, but the trait itself is not
+    built: remainder); `__integer_pack(N)...` (WP-1611 remainder: it
+    needs a pack whose size is computed at substitution in the shared
+    pack-expansion path).
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
   - The `__fp16` libm builtins (WP-403; `kiln_ast` `builtin::F16_INTR`
@@ -10053,6 +10135,14 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   valid. From C++20 a constant bound with fewer arguments needs no
   default constructor beyond them (no filler for the tail). Tests:
   `expr.new/paren-array-init-*.cpp`.
+- **An omitted array bound with `()`** ([expr.new]/7,
+  [dcl.init.general]/16.4): `new T[]()` supplies no initial element, so
+  no bound: "cannot determine allocated array size from initializer" in
+  every language mode at the end of the element type as written (the
+  parser leaves it in the new-type-id's `Declarator::end`; a
+  parenthesized type-id and an instantiation report the type's start),
+  as clang's `BuildCXXNew`; GCC 16.1 accepts an array of no elements.
+  Tests: `expr.new/array-size-unknown-*.cpp` (WP-1518).
 - **Default template arguments on out-of-line members** ([temp.param]/12):
   a head of the definition of a member of a class template outside its
   class (the heads matched to the qualifier and the member template's

@@ -155,6 +155,7 @@ keywords! {
     BuiltinBitCast = "__builtin_bit_cast";
     BuiltinVaArg = "__builtin_va_arg";
     BuiltinConvertVector = "__builtin_convertvector";
+    BuiltinHasAttribute = "__builtin_has_attribute";
     BuiltinFile = "__builtin_FILE";
     BuiltinFileName = "__builtin_FILE_NAME";
     BuiltinFunction = "__builtin_FUNCTION";
@@ -309,6 +310,12 @@ impl Keywords {
             let Some(k) = UnaryTransformKind::from_u8(v) else { break };
             slot(&mut table, interner.intern(k.spelling())).builtin = Some(BuiltinKw::Transform(k));
         }
+        // GCC's spelling of `__remove_reference_t` (WP-1611). Like every
+        // transform it is one only before `(`, so libstdc++'s and
+        // libc++'s `__has_builtin(__remove_reference)` (0, as in clang 22)
+        // and their own names are unaffected.
+        slot(&mut table, interner.intern("__remove_reference")).builtin =
+            Some(BuiltinKw::Transform(UnaryTransformKind::RemoveReference));
         table.shrink_to_fit();
         Keywords {
             table,

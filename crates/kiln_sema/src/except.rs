@@ -1330,18 +1330,22 @@ impl Sema<'_, '_> {
     /// (`-Wimplicit-exception-spec-mismatch`) when only one of the two
     /// declarations has the implicit one. A redeclaration without a
     /// specification of a function with one is `missing` it. Returns
-    /// the redeclaration's type: an unwritten specification is the
-    /// previous declaration's.
+    /// the redeclaration's type (an unwritten specification is the
+    /// previous declaration's) and whether an error was given. A friend
+    /// declaration of the member is such a redeclaration too
+    /// (`class/friend.rs`).
     pub(crate) fn check_special_redecl_exc(
         &mut self,
         (p, pty, ty): (DeclId, QualType, QualType),
         dtor: bool,
         (loc, fname, fix_at): (Loc, &str, Option<Loc>),
-    ) -> QualType {
+    ) -> (QualType, bool) {
         let (pe, ne) = (self.written_exc_spec(pty), self.written_exc_spec(ty));
         let first = self.ast.first(p);
-        // Written without one, whether or not it was computed since.
+        // Written without one, whether or not it was computed since; an
+        // implicitly-declared one (named by a friend) too.
         let computed = self.implicit_exc_dtors.contains(&first)
+            || self.ast.decls.get(first).has(DeclFlags::IMPLICIT)
             || (matches!(pe, ExcSpec::Deferred(_))
                 && !self.uninstantiated_exc.contains_key(&first)
                 && !self.unparsed_exc.contains(&first));
@@ -1385,30 +1389,30 @@ impl Sema<'_, '_> {
                     let m = self.note_prev(m, p, false);
                     self.emit(m);
                 }
-                if ne == ExcSpec::None { pty } else { ty }
+                (if ne == ExcSpec::None { pty } else { ty }, false)
             }
             ExcEquiv::Missing => {
-                self.merge_missing_exc_spec(p, pty, ty, (loc, fname, fix_at), false).0
+                self.merge_missing_exc_spec(p, pty, ty, (loc, fname, fix_at), false)
             }
             ExcEquiv::Mismatch => {
                 let m = self.diag(DiagId::sema_exception_spec_mismatch, loc);
                 let m = self.note_prev(m, p, false);
                 self.emit(m);
-                if ne == ExcSpec::None { pty } else { ty }
+                (if ne == ExcSpec::None { pty } else { ty }, true)
             }
             // Not compared here (a specification that is dependent or not
             // yet known, or `-fno-exceptions` before C++17): only the
             // non-throwing-or-not identity of the types.
             ExcEquiv::Unknown => {
                 if self.ast.types.same_type(pty, ty) {
-                    ty
+                    (ty, false)
                 } else if ne == ExcSpec::None || matches!(pe, ExcSpec::Deferred(_)) {
-                    if ne == ExcSpec::None { pty } else { ty }
+                    (if ne == ExcSpec::None { pty } else { ty }, false)
                 } else {
                     let m = self.diag(DiagId::sema_exception_spec_mismatch, loc);
                     let m = self.note_prev(m, p, false);
                     self.emit(m);
-                    ty
+                    (ty, true)
                 }
             }
         }

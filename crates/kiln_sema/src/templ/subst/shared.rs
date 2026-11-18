@@ -17,7 +17,7 @@
 
 use kiln_ast::ExprId;
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{ExprKind, NonOdrUse};
+use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -44,6 +44,14 @@ impl Sema<'_, '_> {
             // A variable named in the pattern is odr-used by
             // the instantiation, decided at its full-expression
             // as for a fresh reference ([basic.def.odr]/5).
+            self.pending_odr.push(x);
+        } else if kind == ExprKind::DeclRefExpr
+            && self.ast.decls.get(d).kind() == DeclKind::Binding
+            && self.ast.exprs.get(x).has(ExprFlags::REFERS_TO_ENCLOSING)
+            && self.odr_use_names_closure_copy(d)
+        {
+            // A binding named through a by-copy capture, decided at the
+            // instantiation's full-expression (`build_decl_ref`).
             self.pending_odr.push(x);
         }
     }
@@ -137,11 +145,7 @@ impl Sema<'_, '_> {
                     callees.extend(self.invocation_callee_ref(x));
                     self.recheck_shared_invocation(x);
                 }
-                ExprKind::CXXDeleteExpr => {
-                    if let Some(f) = self.ast.exprs.operator_delete(x) {
-                        self.mark_function_referenced(f, loc);
-                    }
-                }
+                ExprKind::CXXDeleteExpr => self.mark_delete_referenced(x, loc),
                 _ => {}
             }
             // The children, pushed onto the stack: `stack[base..]`.

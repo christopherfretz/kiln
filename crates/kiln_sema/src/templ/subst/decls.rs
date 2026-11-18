@@ -1029,6 +1029,13 @@ impl Substituter<'_, '_, '_> {
             self.sema.emit(msg);
         } else if self.sema.ast.instantiated_from(f).is_none() {
             self.member_link(f, d);
+            // [temp.inst]/4: a function already odr-used (through an
+            // earlier declaration) gets its definition now.
+            let first = self.sema.ast.first(f);
+            if self.sema.ast.decls.get(first).has(DeclFlags::USED) {
+                let loc = self.sema.ast.decls.get(f).loc();
+                self.sema.note_used_for_instantiation(f, loc);
+            }
         }
     }
 

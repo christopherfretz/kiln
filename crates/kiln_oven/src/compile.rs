@@ -6069,6 +6069,16 @@ impl Compiler<'_> {
                 let init = self.ast().exprs.compound_literal_init(e);
                 return self.init_inner(init, p, ty);
             }
+            // A class-type constant template argument named in a
+            // substituted declaration (`A<T, []{}>` through an alias
+            // template's deduction guide, WP-1519): its replacement. A
+            // scalar one (a `_Complex` value) is evaluated as an rvalue.
+            ExprKind::SubstNonTypeTemplateParmExpr
+                if self.ast().types.as_record(n.ty()).is_some() =>
+            {
+                let op = self.ast().exprs.subst_replacement(e);
+                return self.init_inner(op, p, ty);
+            }
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.
@@ -6920,9 +6930,13 @@ impl Compiler<'_> {
         // `move_if_noexcept`, `as_const`, `addressof` or `__addressof` is
         // its argument's lvalue (or address), evaluated without a call:
         // no frame, no step, no depth, as clang's `VisitCallExpr` does.
+        // WP-1611: GCC's `__builtin_assoc_barrier` on a class operand is
+        // a glvalue naming the operand's object, as `std::move` is.
         if let Some(d) = direct
             && let [x] = args[..]
-            && is_std_builtin(ast, d)
+            && (is_std_builtin(ast, d)
+                || (ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::ASSOC_BARRIER)
+                    && ast.exprs.get(e).value_category().is_glvalue()))
         {
             let x0 = skip_parens(ast, x);
             let xty = self.ety(x0);

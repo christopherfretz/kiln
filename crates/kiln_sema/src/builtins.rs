@@ -1077,6 +1077,12 @@ impl Sema<'_, '_> {
                 None => self.recover_err(&kids, loc),
             };
         }
+        if id == builtin::ASSOC_BARRIER
+            && let [x] = args[..]
+            && self.ast.types.as_record(self.ety(x)).is_some()
+        {
+            return self.builtin_assoc_barrier_class(callee, b, x, loc, rparen);
+        }
         let r = match id {
             builtin::CLZG | builtin::CTZG => self.builtin_count_zeros_generic(args, rparen),
             builtin::POPCOUNTG => self.builtin_popcountg(args, rparen),
@@ -1426,6 +1432,33 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], t))
+    }
+
+    /// GCC's `__builtin_assoc_barrier(x)` on a class operand (WP-1611):
+    /// GCC accepts any class and passes the object through without a
+    /// copy (`build1 (PAREN_EXPR, TREE_TYPE (x), x)`: a class with a
+    /// deleted copy constructor is accepted, the call is a glvalue). The
+    /// call is a glvalue of `x`'s type naming `x`'s object: an lvalue for
+    /// an lvalue, an xvalue otherwise (a prvalue is materialized first,
+    /// [conv.rval]). There is nothing to reassociate in a class, so
+    /// codegen and the Oven use the operand's address.
+    fn builtin_assoc_barrier_class(
+        &mut self,
+        callee: ExprId,
+        b: DeclId,
+        x: ExprId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let x = self.materialize_object(x);
+        let n = *self.ast.exprs.get(x);
+        let vk = if n.value_category() == ValueCategory::LValue {
+            ValueCategory::LValue
+        } else {
+            ValueCategory::XValue
+        };
+        let f = self.builtin_fn_to_ptr(callee, b);
+        self.builder().call(f, &[x], n.ty(), vk, loc, rparen, ExprFlags::NONE)
     }
 
     /// `__builtin_align_up` / `__builtin_align_down` /

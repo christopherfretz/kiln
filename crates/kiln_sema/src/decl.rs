@@ -241,6 +241,16 @@ impl Sema<'_, '_> {
         base
     }
 
+    /// C++11 added `long long` ([basic.fundamental]/2); before it clang's
+    /// `ext_cxx11_longlong`, once per declarator, at the first `long`.
+    /// Returns the integer type of `ds`.
+    fn cxx98_long_long(&mut self, ds: &DeclSpec, loc: Loc, unsigned: bool) -> QualType {
+        if ds.width == Width::LongLong && self.std < kiln_lex::Std::Cxx11 && !self.is_c() {
+            self.error(DiagId::pp_long_long_ext, ds.width_loc.unwrap_or(loc));
+        }
+        Self::int_declspec_type(ds.width, unsigned)
+    }
+
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
@@ -257,7 +267,7 @@ impl Sema<'_, '_> {
                 }
                 QualType::INT
             }
-            TypeSpecKind::None | TypeSpecKind::Int => Self::int_declspec_type(ds.width, unsigned),
+            TypeSpecKind::None | TypeSpecKind::Int => self.cxx98_long_long(ds, loc, unsigned),
             TypeSpecKind::Void => QualType::VOID,
             TypeSpecKind::Bool => QualType::BOOL,
             TypeSpecKind::Char => match ds.sign {
@@ -3611,6 +3621,37 @@ impl Sema<'_, '_> {
         format!(" = {zero}")
     }
 
+    /// Before C++11 a function template has no default template argument
+    /// (C++03 [temp.param]/9) and before C++14 there is no variable
+    /// template: clang's `ext_templ_default_in_function_templ` at each
+    /// defaulted parameter and `ext_variable_template` at the name (not
+    /// for a specialization, whose name is a template-id). Only before
+    /// C++11: clang also warns for a variable template at C++11.
+    fn check_cxx98_template_declarator(
+        &mut self,
+        head: Option<kiln_ast::ids::TemplateParamListId>,
+        d: &Declarator,
+        ty: QualType,
+    ) {
+        let Some(list) = head else { return };
+        if self.is_c() || self.std >= kiln_lex::Std::Cxx11 {
+            return;
+        }
+        if !self.ast.types.is_function(ty) {
+            if d.spec_id.is_none() {
+                self.error(DiagId::sema_ext_variable_template, d.name_loc());
+            }
+            return;
+        }
+        let l = *self.ast.templates.param_list(list);
+        for p in self.ast.lists.iter::<DeclId>(l.params) {
+            if self.templ.default_locs.contains_key(&p) {
+                let at = self.ast.decls.get(p).loc();
+                self.error(DiagId::sema_ext_templ_default_in_function_templ, at);
+            }
+        }
+    }
+
     /// A declarator in a simple-declaration or member-declaration: creates
     /// the variable, function, typedef or field (spec/sema.md §4.2). The
     /// caller then supplies the initializer ([`Sema::act_on_init`] /
@@ -3712,6 +3753,8 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_member_template_field, d.name_loc()).arg(n);
                 self.emit(msg);
                 self.templ.cur = None;
+            } else {
+                self.check_cxx98_template_declarator(head, d, ty);
             }
         }
         let mut invalid = ds.invalid || d.invalid || distant_invalid || self.is_error_type(ty);
@@ -4988,7 +5031,6 @@ impl Sema<'_, '_> {
         let ty = if self.std < kiln_lex::Std::Cxx14
             && method
             && ds.constexpr.is_some()
-            && !friend
             && !explicit_object
             && spec.storage() != FnStorage::Static
         {
@@ -12092,15 +12134,19 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// An anonymous union (or, in a class, an anonymous struct)
-    /// ([class.union.anon]): declares an unnamed object of the record's
-    /// type and injects each member's name into the enclosing scope as an
-    /// `IndirectField` (spec/sema.md §4.4).
-    fn act_on_anonymous_record(&mut self, ds: &DeclSpec, rec: DeclId) -> DeclId {
+    /// The storage class of an anonymous record `rec`: an anonymous union
+    /// at namespace scope is `static` ([class.union.anon]/2), one at
+    /// class scope has none, and `mutable` needs a class. True if the
+    /// unnamed object is invalid.
+    fn anon_record_storage_invalid(
+        &mut self,
+        ds: &DeclSpec,
+        rec: DeclId,
+        in_class: bool,
+        local: bool,
+    ) -> bool {
         let ctx = self.ctx;
         let union = ds.keyword == TagKeyword::Union;
-        let in_class = self.ast.decls.get(ctx).kind() == DeclKind::CXXRecord;
-        let local = self.in_local_scope();
         let mut invalid = false;
         if union && !in_class && !local {
             let anon_ns = self.ast.decls.get(ctx).kind() == DeclKind::Namespace
@@ -12110,7 +12156,34 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_anon_union_not_static, ds.loc);
                 invalid = true;
             }
+        } else if union && in_class && !self.is_c() {
+            // [class.union.anon]/2: no storage class at class scope (clang
+            // `err_anonymous_union_with_storage_spec`, at the specifier;
+            // the member is kept without it).
+            if let Some((_, l)) = ds.storage {
+                self.error(DiagId::sema_anon_union_with_storage_spec, l);
+            }
         }
+        // [dcl.stc]/9: `mutable` outside a class (clang
+        // `err_mutable_nonmember`, at the record; the object is invalid).
+        if !in_class && matches!(ds.storage, Some((StorageSpec::Mutable, _))) {
+            let l = self.ast.decls.get(rec).loc();
+            self.error(DiagId::sema_mutable_nonmember, l);
+            invalid = true;
+        }
+        invalid
+    }
+
+    /// An anonymous union (or, in a class, an anonymous struct)
+    /// ([class.union.anon]): declares an unnamed object of the record's
+    /// type and injects each member's name into the enclosing scope as an
+    /// `IndirectField` (spec/sema.md §4.4).
+    fn act_on_anonymous_record(&mut self, ds: &DeclSpec, rec: DeclId) -> DeclId {
+        let ctx = self.ctx;
+        let union = ds.keyword == TagKeyword::Union;
+        let in_class = self.ast.decls.get(ctx).kind() == DeclKind::CXXRecord;
+        let local = self.in_local_scope();
+        let mut invalid = self.anon_record_storage_invalid(ds, rec, in_class, local);
         // [class.union.anon]/1, after the storage check as in clang
         // (`BuildAnonymousStructOrUnion`), once for a template's pattern.
         if !self.is_c() && self.inst.stack.is_empty() {

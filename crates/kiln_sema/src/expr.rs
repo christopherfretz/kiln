@@ -7,12 +7,13 @@
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{IntBits, Scalar};
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle};
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, ExprFlags, ExprKind, NonOdrUse, ObjectKind, Radix, StringKind,
     TraitKind, UnaryOp, ValueCategory,
 };
 use kiln_ast::ids::RawId;
+use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{BuiltinType, TypeView};
@@ -767,6 +768,9 @@ impl Sema<'_, '_> {
     /// implicit-conversion warnings (clang's `CheckCompletedExpr`
     /// location: the declared variable, `return`).
     pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
+        // The names a call reads through ([`Sema::closure_copy_reads_variable`]),
+        // walked for once a name of a by-copy capture is met.
+        let mut by_call = CallOperands::new(self.pending_var_init());
         if !self.lambdas.is_empty()
             && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
             && let Some(r) = self.diagnose_unexpanded_full_expr(e)
@@ -818,11 +822,19 @@ impl Sema<'_, '_> {
         }
         let constant = ConstantCandidates::new(constant);
         if !self.potential_caps.is_empty() && self.in_template() {
-            self.resolve_potential_captures(e, &constant);
+            self.resolve_potential_captures(e, &constant, &mut by_call);
         }
         let pending = std::mem::take(&mut self.pending_odr);
         for r in pending {
             let d = self.ast.exprs.decl(r);
+            // A structured binding named through a by-copy capture
+            // (pushed by `build_decl_ref`; already odr-used).
+            if self.ast.decls.get(d).kind() == DeclKind::Binding {
+                if !self.closure_copy_reads_variable(e, r, &constant, &mut by_call) {
+                    self.ast.exprs.mark_names_closure_copy(r);
+                }
+                continue;
+            }
             let is_ref =
                 self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
             if (is_ref || constant.contains(r)) && self.usable_in_constant_expressions(d) {
@@ -836,11 +848,188 @@ impl Sema<'_, '_> {
             if self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && !self.capture_reads_variable
                 && self.odr_use_names_closure_copy(d)
+                && !self.closure_copy_reads_variable(e, r, &constant, &mut by_call)
             {
                 self.ast.exprs.mark_names_closure_copy(r);
             }
         }
         e
+    }
+
+    /// Whether `r`, an odr-use of a by-copy capture in full-expression
+    /// `full` (spec/sema.md, "A by-copy capture odr-used in a constant
+    /// expression"), denotes the captured variable when it is evaluated
+    /// outside a call of the closure, where clang 22 and GCC 16.1 both
+    /// evaluate it so (WP-1655, docs/status/deviations.md): the innermost
+    /// lambda captures it by reference (a capture of an enclosing lambda's
+    /// copy), or it names a structured binding read by an
+    /// lvalue-to-rvalue conversion (among `constant`), or a call receives
+    /// it ([`Sema::call_operand_names`]) and the innermost lambda is not
+    /// generic (GCC reads the closure member there, as the text does).
+    /// `cache` holds the walk of `full`, made once, the first time a name
+    /// of a by-copy capture is met; a full-expression without one costs
+    /// nothing.
+    pub(crate) fn closure_copy_reads_variable(
+        &self,
+        full: ExprId,
+        r: ExprId,
+        constant: &ConstantCandidates,
+        cache: &mut CallOperands,
+    ) -> bool {
+        let d = self.ast.exprs.decl(r);
+        if self.innermost_capture_by_ref(d)
+            || (self.ast.decls.get(d).kind() == DeclKind::Binding && constant.contains(r))
+        {
+            return true;
+        }
+        let c = self.ctx;
+        let op = self.ast.instantiated_from(c).unwrap_or(c);
+        if self.lambda_of_call_op(op).is_some() && self.ast.described_template(op).is_some() {
+            return false;
+        }
+        let var_init = cache.var_init;
+        cache
+            .names
+            .get_or_insert_with(|| {
+                let mut v = self.call_operand_names(full, var_init);
+                v.sort_unstable();
+                v
+            })
+            .binary_search(&r)
+            .is_ok()
+    }
+
+    /// The `DeclRefExpr`s whose object a call in `full` receives: an
+    /// argument of a function or operator call or of a constructor (a
+    /// trivial copy in a variable's parenthesized initializer excepted,
+    /// which GCC 16.1 evaluates as a read in place), the implied object
+    /// argument of a member function call (also through `.*`), the
+    /// initializer of a by-reference capture of a lambda the full
+    /// expression creates; through [`Sema::call_operand_name`]. Lambda
+    /// bodies are their own full-expressions and are not entered.
+    fn call_operand_names(&self, full: ExprId, var_init: Option<DeclId>) -> Vec<ExprId> {
+        let x = &self.ast.exprs;
+        let mut out = Vec::new();
+        let mut stack = self.take_walk_stack(full);
+        let direct_trivial_copy = var_init.is_some_and(|v| {
+            self.ast.decls.var(v).is_some_and(|vd| vd.spec.init_style() == InitStyle::Call)
+        });
+        let root = self.ignore_implicit(full);
+        let mut seen = 0usize;
+        while let Some(e) = stack.pop() {
+            seen += 1;
+            if seen > 1_000_000 {
+                break;
+            }
+            match x.get(e).kind() {
+                ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                    for a in self.ast.lists.iter::<ExprId>(x.call_args(e)) {
+                        self.call_operand_name(a, &mut out);
+                    }
+                }
+                ExprKind::CXXMemberCallExpr => {
+                    self.call_operand_name(x.member_call_object(e), &mut out);
+                    for a in self.ast.lists.iter::<ExprId>(x.call_args(e)) {
+                        self.call_operand_name(a, &mut out);
+                    }
+                }
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                    let trivial = self
+                        .ast
+                        .decls
+                        .function(x.constructor(e))
+                        .is_some_and(|f| f.spec.is_trivial());
+                    if !(direct_trivial_copy && e == root && trivial && !x.construct_info(e).list) {
+                        for a in self.ast.lists.iter::<ExprId>(x.construct_args(e)) {
+                            self.call_operand_name(a, &mut out);
+                        }
+                    }
+                }
+                ExprKind::LambdaExpr => {
+                    let data = x.lambda(e);
+                    if let Some(inits) = data.inits {
+                        for (c, a) in data.captures.iter().zip(self.ast.lists.iter::<ExprId>(inits))
+                        {
+                            if c.kind == CaptureKind::ByRef {
+                                self.call_operand_name(a, &mut out);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            x.children_into(e, &self.ast.lists, &mut stack);
+        }
+        self.put_walk_stack(stack);
+        out
+    }
+
+    /// The names whose object operand `e` of a call designates: through
+    /// parentheses, conversions that keep the object or name a base
+    /// subobject or decay an array, `&` and `*`, the object expression of
+    /// a `.` naming a non-static data member, the array operand of a
+    /// subscript, both arms of a conditional and the right operand of a
+    /// comma. A name read by an lvalue-to-rvalue conversion is not one
+    /// (it is no odr-use when constant).
+    fn call_operand_name(&self, e: ExprId, out: &mut Vec<ExprId>) {
+        let x = &self.ast.exprs;
+        let mut e = e;
+        // Bounded: each step descends one node.
+        for _ in 0..4096 {
+            let n = x.get(e);
+            e = match n.kind() {
+                ExprKind::DeclRefExpr => {
+                    out.push(e);
+                    return;
+                }
+                ExprKind::ParenExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr => x.operand(e),
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                    if matches!(
+                        x.cast_kind(e),
+                        CastKind::NoOp
+                            | CastKind::DerivedToBase
+                            | CastKind::UncheckedDerivedToBase
+                            | CastKind::ArrayToPointerDecay
+                    ) =>
+                {
+                    x.operand(e)
+                }
+                ExprKind::UnaryOperator
+                    if matches!(x.unary_op(e), UnaryOp::AddrOf | UnaryOp::Deref) =>
+                {
+                    x.operand(e)
+                }
+                ExprKind::ConditionalOperator => {
+                    let [t, f] = x.cond_arms(e);
+                    self.call_operand_name(t, out);
+                    f
+                }
+                ExprKind::BinaryOperator if x.binary_op(e) == BinaryOp::Comma => x.operands(e)[1],
+                ExprKind::MemberExpr
+                    if !n.has(ExprFlags::ARROW)
+                        && self.ast.decls.get(x.decl(e)).kind() == DeclKind::Field =>
+                {
+                    x.operand(e)
+                }
+                ExprKind::ArraySubscriptExpr => {
+                    let Some(a) = x
+                        .operands(e)
+                        .into_iter()
+                        .find(|&o| self.ast.types.is_array(x.get(self.ignore_implicit(o)).ty()))
+                    else {
+                        return;
+                    };
+                    self.ignore_implicit(a)
+                }
+                _ => return,
+            };
+        }
     }
 
     /// The `DeclRefExpr`s among the potential results of the operand `e`
@@ -2598,12 +2787,20 @@ impl Sema<'_, '_> {
         // variable only once its full-expression shows the lvalue-to-rvalue
         // conversion does not make the reference a constant use
         // (`act_on_full_expr_at`), which every constant expression ends
-        // before it is evaluated.
+        // before it is evaluated. A binding waits for the end of its
+        // full-expression too, which leaves it unmarked when it is read or
+        // a call receives it (`closure_copy_reads_variable`); in a
+        // template definition, with the potential captures.
         if flags == ExprFlags::REFERS_TO_ENCLOSING
             && n.kind() == DeclKind::Binding
+            && self.unevaluated == 0
             && self.odr_use_names_closure_copy(d)
         {
-            self.ast.exprs.mark_names_closure_copy(e);
+            if self.in_template() {
+                self.potential_caps.push(e);
+            } else {
+                self.pending_odr.push(e);
+            }
         }
         // A binding to a bit-field designates it (clang `BuildDeclRefExpr`).
         if n.kind() == DeclKind::Binding
@@ -2735,6 +2932,13 @@ impl Sema<'_, '_> {
         let radix = ast_radix(lit.radix);
         if lit.suffix.size == kiln_lex::literal::IntSize::BitInt {
             return self.bit_int_literal(lit, radix, loc);
+        }
+        // An `ll` suffix before C++11: clang's `ext_cxx11_longlong`.
+        if lit.suffix.size == kiln_lex::literal::IntSize::LongLong
+            && self.std < kiln_lex::Std::Cxx11
+            && !self.is_c()
+        {
+            self.error(DiagId::pp_long_long_ext, loc);
         }
         match literal::classify_integer_literal(self, lit) {
             Ok(t) => {
@@ -7846,6 +8050,22 @@ impl ConstantCandidates {
     /// Whether `r` is a candidate (a binary search).
     pub(crate) fn contains(&self, r: ExprId) -> bool {
         self.0.binary_search(&r).is_ok()
+    }
+}
+
+/// The operands calls receive in one full-expression, for
+/// [`Sema::closure_copy_reads_variable`]: walked lazily.
+pub(crate) struct CallOperands {
+    /// The variable the full-expression initializes, if any.
+    pub(crate) var_init: Option<DeclId>,
+    /// [`Sema::call_operand_names`] of the full-expression, once walked.
+    names: Option<Vec<ExprId>>,
+}
+
+impl CallOperands {
+    /// For a full-expression initializing `var_init`, not yet walked.
+    pub(crate) const fn new(var_init: Option<DeclId>) -> Self {
+        CallOperands { var_init, names: None }
     }
 }
 

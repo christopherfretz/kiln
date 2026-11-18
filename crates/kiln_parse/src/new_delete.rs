@@ -293,9 +293,14 @@ impl Parser<'_, '_> {
 
     /// noptr-new-declarator: `[` expression(opt) `]` followed by
     /// `[` constant-expression `]`s.
+    ///
+    /// `d.end` is left at the last token of the allocated element type
+    /// (clang's `TypeRange` end after the first bound is dropped): the
+    /// token before the first `[`, or the last `]` with later bounds.
     fn parse_direct_new_declarator(&mut self, d: &mut Declarator) {
         let mut first = true;
         while self.at(Punct::LSquare) && !self.at_cxx11_attr() {
+            let elem_end = self.prev_lo();
             let open = self.bump().span.lo;
             let size = if first {
                 if self.at(Punct::RSquare) {
@@ -320,6 +325,7 @@ impl Parser<'_, '_> {
             self.parse_attributes(&mut attrs);
             self.s.reject_annotations_in(&attrs, None);
             d.chunks.push(Chunk::Array { size, loc: open });
+            d.end = if d.chunks.len() == 1 { elem_end } else { self.prev_lo() };
         }
     }
 

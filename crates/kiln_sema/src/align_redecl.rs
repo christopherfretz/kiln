@@ -37,7 +37,7 @@ struct AlignSet {
 impl Sema<'_, '_> {
     /// The alignment one `ALIGNED` attribute requests, in bytes (`alignas(0)`
     /// requests 0, ignored by [dcl.align]/4); `None` if dependent.
-    fn requested_align(&mut self, a: AttrId) -> Option<u64> {
+    pub(crate) fn requested_align(&mut self, a: AttrId) -> Option<u64> {
         let node = *self.ast.attrs.get(a);
         if let Some(t) = QualType::from_raw(node.b) {
             if self.ast.types.is_dependent(t) {

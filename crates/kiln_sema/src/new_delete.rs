@@ -300,6 +300,14 @@ impl Sema<'_, '_> {
             NewInit::List(l) => kids.extend(list_exprs(l)),
             NewInit::None => {}
         }
+        // The end of the allocated element type as written (clang's
+        // `TypeRange` end; the parser sets it, an instantiation has the
+        // type's start).
+        let type_end = match tid.declarator.end {
+            e if e == Loc::INVALID || tid.parenthesized => tid.loc,
+            e => e,
+        };
+        let empty_parens = matches!(&init, NewInit::Paren(v, ..) if v.is_empty());
         let mut d = tid.declarator;
         self.warn_redundant_parens(None, &d);
         // The noptr-new-declarator: the leading array chunks (innermost
@@ -737,6 +745,16 @@ impl Sema<'_, '_> {
                         let size_t = self.size_type();
                         array_size =
                             Some(self.builder().int_literal(size_t, n, Radix::Decimal, tid.loc));
+                    } else if empty_parens
+                        && matches!(first, Some((None, _)))
+                        && array_size.is_none()
+                    {
+                        // [expr.new]/7: an omitted bound needs an initializer
+                        // that gives it, and `()` value-initializes no
+                        // element ([dcl.init.general]/16.4; clang
+                        // `BuildCXXNew`, every language mode).
+                        self.error(DiagId::sema_new_array_size_unknown_from_init, type_end);
+                        return self.recover_err(&kids, loc);
                     }
                     e
                 }
@@ -2486,6 +2504,36 @@ impl Sema<'_, '_> {
             return false;
         };
         self.ast.destructor(def).is_some_and(|d| crate::class::is_virtual(&self.ast, d))
+    }
+
+    /// A delete-expression `x` shared by an instantiation from its
+    /// template (not rebuilt): its deallocation function and destructor
+    /// are odr-used here too ([expr.delete]/6, [basic.def.odr]/8; clang's
+    /// rebuilt `CXXDeleteExpr`), so an implicit destructor gets defined.
+    /// Diagnosed where written.
+    pub(crate) fn mark_delete_referenced(&mut self, x: ExprId, loc: Loc) {
+        if let Some(f) = self.ast.exprs.operator_delete(x) {
+            self.mark_function_referenced(f, loc);
+        }
+        let o = self.ast.exprs.delete_operand(x);
+        let Some(mut elem) = self.ast.types.pointee(self.ast.exprs.get(o).ty()) else { return };
+        while let Some(e) = self.ast.types.element(elem) {
+            elem = e;
+        }
+        let Some(def) = self.ast.types.as_record(elem).and_then(|r| self.ast.definition(r)) else {
+            return;
+        };
+        let trivial = self
+            .ast
+            .decls
+            .record(def)
+            .is_some_and(|r| r.defn.contains(DefinitionBits::TRIVIAL_DTOR));
+        if !trivial
+            && let Selected::Found(m) =
+                self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            self.mark_function_referenced(m, loc);
+        }
     }
 
     /// Marks the destructor of `elem`'s innermost element class as

@@ -164,7 +164,7 @@ impl Sema<'_, '_> {
         if self.potential_caps.len() > mark.potential && self.in_template() {
             let caps = self.potential_caps.split_off(mark.potential);
             let none = crate::expr::ConstantCandidates::new(Vec::new());
-            self.resolve_potential_capture_list(caps, true, &none);
+            self.resolve_potential_capture_list(caps, true, &none, None);
         }
     }
 

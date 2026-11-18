@@ -163,12 +163,23 @@ for the BMI image to fall back to replay). Each specialization substitutes
 the specifier and the type and matches them in the class named
 (`befriend_special_member`, `templ/subst/decls.rs` `friend_decl`): the
 same rule and the same no-match error, then with the instantiation note.
-A matched constructor or conversion function written without an
-exception specification is a potentially-throwing redeclaration of a
-non-throwing member, implicit or defaulted ones included: clang's
-"is missing exception specification" ([except.spec]/5,
-`check_friend_missing_exc_spec`; a destructor's is implicit; WP-1631,
-`except.spec/p5-friend-special-member-missing-spec.cpp`). Otherwise its
+A matched member is redeclared, so its exception specification is
+checked as an out-of-line redeclaration's ([except.spec]/5,
+`check_friend_exc_spec` → `check_special_redecl_exc`, clang's
+`CheckEquivalentExceptionSpec`): one written without a specification
+is a potentially-throwing redeclaration of a non-throwing member,
+implicit or defaulted ones included (clang's "is missing exception
+specification"; WP-1631,
+`except.spec/p5-friend-special-member-missing-spec.cpp`); a written
+`noexcept`, `noexcept(expr)` or `throw()` must match ("exception
+specification in declaration does not match previous declaration"); a
+destructor's specification is implicit when not written, on either side
+(an implicitly-declared or defaulted one), and an implicit specification
+on one side only is `-Wimplicit-exception-spec-mismatch` (WP-1656,
+`class.friend/friend-redecl-exception-spec.cpp`, also ordinary members
+and member templates through the function redeclaration check). GCC
+does not check friends. After a missing specification, as in clang, the
+`constexpr` agreement is not checked; after a mismatch it is. Its
 `constexpr` or `consteval` specifier must be the member's, an implicitly
 constexpr one counting as declared so: clang's "non-constexpr declaration
 of 'B' follows constexpr declaration" ([dcl.constexpr]/1,

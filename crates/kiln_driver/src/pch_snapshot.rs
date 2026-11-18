@@ -131,7 +131,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 57;
+pub(crate) const FORMAT_VERSION: u32 = 59;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -190,6 +190,7 @@ fn excluded(args: &Args) -> Args {
         asm: d.asm,
         link: d.link,
         quiet_unused_arguments: d.quiet_unused_arguments,
+        no_unused: d.no_unused,
         modules_prune_interval: d.modules_prune_interval,
         modules_prune_after: d.modules_prune_after,
         // How diagnostics are shown, and the warning policy (compared by

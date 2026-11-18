@@ -1078,6 +1078,9 @@ impl Cg<'_> {
             // on floating point (as clang's `__arithmetic_fence`), so
             // `-ffast-math` reassociation does not cross it; other types
             // have no reassociation to stop.
+            // WP-1611: on a class operand the call is a glvalue naming
+            // the operand's object: its address.
+            id::ASSOC_BARRIER if self.is_glvalue(e) => self.emit_lvalue(a0)?.addr.v,
             id::ASSOC_BARRIER => {
                 let x = self.emit_scalar(a0)?;
                 let eq = self.scalar_of(ast.exprs.get(a0).ty());
