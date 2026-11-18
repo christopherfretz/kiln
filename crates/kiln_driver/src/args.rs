@@ -742,6 +742,12 @@ pub struct Args {
     /// the allocation function ([expr.new]/8; on by default from C++11).
     /// Off, the allocation function is passed `SIZE_MAX`, as clang does.
     pub new_bound_check: Option<bool>,
+    /// `-fno-kiln-rtti-local-marker` (false) / `-fkiln-rtti-local-marker`
+    /// (true), the last one: whether the `type_info` name of a type local
+    /// to the unit starts with GCC's `*` (spec/abi.md "RTTI names of
+    /// unit-local types"; WP-1651). Unset, it follows `-stdlib=`: on with
+    /// libstdc++, off with libc++.
+    pub rtti_local_marker: Option<bool>,
     /// The last of `-fcheck-new` / `-fno-check-new` (GCC, clang; WP-1487):
     /// every allocation function may return null, so a new-expression
     /// checks the result before initializing the object and yields null
@@ -1687,6 +1693,8 @@ impl Args {
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-fkiln-new-bound-check" => self.new_bound_check = Some(true),
             "-fno-kiln-new-bound-check" => self.new_bound_check = Some(false),
+            "-fkiln-rtti-local-marker" => self.rtti_local_marker = Some(true),
+            "-fno-kiln-rtti-local-marker" => self.rtti_local_marker = Some(false),
             "-fcheck-new" => self.check_new = true,
             "-fno-check-new" => self.check_new = false,
             "-felide-constructors" => self.elide_constructors = Some(true),

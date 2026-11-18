@@ -2160,6 +2160,11 @@ impl Cg<'_> {
         if internal(ast.types.as_record(t).or_else(|| ast.types.as_enum(t))) {
             return VtLinkage::Internal;
         }
+        // An array or function type built from a type without linkage has
+        // none either (clang `Type::getLinkage`).
+        if !mangle::type_externally_visible(ast, q) {
+            return VtLinkage::Internal;
+        }
         VtLinkage::LinkOnce
     }
 
@@ -2194,7 +2199,12 @@ impl Cg<'_> {
         let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);
         let mut fields = vec![self.abi_vtable("_ZTVN10__cxxabiv120__function_type_infoE")?];
-        fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage, q));
+        let marker = self.opts.rtti_local_name_marker && linkage == VtLinkage::Internal && {
+            let (_, no_marker) =
+                mangle::mangle_rtti_with_marker_check(ast, &mut self.anon, q, "_ZTS");
+            self.local_name_marker(q, linkage, no_marker)
+        };
+        fields.push(self.rtti_name_global(&format!("_ZTS{}", &name[4..]), linkage, q, marker));
         Ok((flags, self.finish_rtti(pre, &name, &fields, linkage, q)?))
     }
 
@@ -2237,18 +2247,43 @@ impl Cg<'_> {
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
     fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
-        let ts_name = mangle::mangle_rtti(self.ast, &mut self.anon, q, "_ZTS");
-        self.rtti_name_global(&ts_name, linkage, q)
+        let (ts_name, no_marker) =
+            mangle::mangle_rtti_with_marker_check(self.ast, &mut self.anon, q, "_ZTS");
+        let marker = self.local_name_marker(q, linkage, no_marker);
+        self.rtti_name_global(&ts_name, linkage, q, marker)
+    }
+
+    /// Whether the `type_info` name of `q` (of `type_info` linkage
+    /// `linkage`) starts with GCC's `*` (spec/abi.md "RTTI names of
+    /// unit-local types", WP-1651): libstdc++ then compares the
+    /// `type_info` by address only. Only under
+    /// [`CodegenOptions::rtti_local_name_marker`], for a type local to the
+    /// unit: internal linkage and no incomplete class in it (the ABI
+    /// compares those by name, GCC marks none of them unless declared in
+    /// an unnamed namespace, which kiln leaves unmarked), and nothing in
+    /// its mangling GCC disagrees on (`no_marker`: a class named `$_N`
+    /// outside a function, clang's `internal_linkage` attribute).
+    fn local_name_marker(&self, q: QualType, linkage: VtLinkage, no_marker: bool) -> bool {
+        self.opts.rtti_local_name_marker
+            && linkage == VtLinkage::Internal
+            && !no_marker
+            && !self.contains_incomplete_class(q)
     }
 
     /// The `_ZTS` global `ts_name` (its string is the mangling after the
-    /// prefix).
-    fn rtti_name_global(&mut self, ts_name: &str, linkage: VtLinkage, q: QualType) -> Value {
+    /// prefix, after a `*` when `marker`).
+    fn rtti_name_global(
+        &mut self,
+        ts_name: &str,
+        linkage: VtLinkage,
+        q: QualType,
+        marker: bool,
+    ) -> Value {
         if let Some(g) = self.m.get_global(ts_name) {
             return Value::global(g);
         }
         let vis = self.rtti_visibility(q, linkage);
-        self.rtti_name_global_vis(ts_name, linkage, vis)
+        self.rtti_name_global_vis(ts_name, linkage, vis, marker)
     }
 
     /// [`Self::rtti_name_global`] with visibility `vis`.
@@ -2257,12 +2292,19 @@ impl Cg<'_> {
         ts_name: &str,
         linkage: VtLinkage,
         vis: Visibility,
+        marker: bool,
     ) -> Value {
         let ts_name = ts_name.to_owned();
         if let Some(g) = self.m.get_global(&ts_name) {
             return Value::global(g);
         }
-        let init = self.m.const_cstring(&ts_name.as_bytes()[4..]);
+        // GCC's unit-local marker (`tinfo_name`'s `mark_private`): one
+        // byte in front of the string; the symbol is unchanged.
+        let init = if marker {
+            self.m.const_cstring(format!("*{}", &ts_name[4..]).as_bytes())
+        } else {
+            self.m.const_cstring(&ts_name.as_bytes()[4..])
+        };
         let ty = self.m.const_type(init);
         let g = self.m.add_global(&ts_name, ty);
         let _ = self.m.set_initializer(g, Some(init));
@@ -2389,7 +2431,12 @@ impl Cg<'_> {
             Some(_) => "_ZTVN10__cxxabiv119__pointer_type_infoE",
         };
         let mut fields = vec![self.abi_vtable(vt)?];
-        fields.push(self.rtti_name_global_vis(&format!("_ZTS{code}"), VtLinkage::Strong, vis));
+        fields.push(self.rtti_name_global_vis(
+            &format!("_ZTS{code}"),
+            VtLinkage::Strong,
+            vis,
+            false,
+        ));
         if let Some((flags, pti)) = pointee {
             fields.push(self.m.const_int(LTy::I32, i128::from(flags)));
             fields.push(pti);

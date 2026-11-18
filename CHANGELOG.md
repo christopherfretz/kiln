@@ -1426,6 +1426,21 @@ Planned as 1.3.0.
   rejected, and at C++17 a lambda in a template argument is rejected, with
   clang 22's diagnostics (WP-1670, WP-1671).
 
+- Under libstdc++ (the default) the `type_info` name of a type local to
+  the translation unit (in an unnamed namespace, a local class of a
+  non-inline function, and types built from them) starts with GCC's `*`,
+  so two units' types of the same name no longer compare equal, a handler
+  no longer catches the other unit's type and a `dynamic_cast` to it
+  fails, as with GCC; with `-stdlib=libc++` nothing changes
+  (`-f[no-]kiln-rtti-local-marker` forces it). Array and function types
+  of such types get `internal` RTTI, and an unnamed class or enumeration
+  without linkage mangles as clang's `$_N` (WP-1651). In modules: an
+  instantiated static data member or variable template specialization
+  with dynamic initialization is a module initializer (clang 22); a
+  constexpr variable of a module interface initialized to a TU-local
+  value is rejected ([basic.link]/15); imported `thread_local` variables
+  keep their one definition in the module's object (WP-1669).
+
 ## [1.2.1] - 2026-11-14
 
 A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.

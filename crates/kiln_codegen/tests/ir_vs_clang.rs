@@ -78,6 +78,20 @@ enum Allow {
     LoopCanon,
 }
 
+/// Cases whose `type_info` names of unit-local types start with GCC's
+/// `*` (spec/abi.md "RTTI names of unit-local types", WP-1651): kiln
+/// writes it under libstdc++, the default here, and clang never does
+/// (spec/codegen.md "Deviations"). Under every triple and oracle, kiln's
+/// IR is compared after [`ir_norm::strip_rtti_local_marker`], which must
+/// find a marker to strip.
+const RTTI_LOCAL_MARKER_CASES: &[&str] = &[
+    "linkage_internal_nttp",
+    "lto_full",
+    "lto_thin_split",
+    "rtti_local_names",
+    "virtual_rtti_memptr",
+];
+
 /// `(case, triple, oracle, allow)`: pairs whose IR differs from clang
 /// `oracle`'s by a documented deviation (spec/codegen.md "Deviations").
 const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
@@ -471,6 +485,15 @@ fn run_case(name: &str, file: &Path, triple: &str, canon: bool) -> Result<Option
     let mut ours = checked.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
     if canon {
         ours = loop_canon(&ours).map_err(|e| format!("loop canonicalization failed: {e}"))?;
+    }
+    if RTTI_LOCAL_MARKER_CASES.contains(&name) {
+        let stripped = ir_norm::strip_rtti_local_marker(&ours);
+        if stripped == ours {
+            return Err("no unit-local `type_info` name marker: drop it from \
+                        RTTI_LOCAL_MARKER_CASES"
+                .to_owned());
+        }
+        ours = stripped;
     }
     if min_oracle(file).is_some_and(|n| oracle_version().parse::<u32>().is_ok_and(|o| o < n)) {
         return Ok(None);

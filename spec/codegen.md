@@ -3689,8 +3689,13 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   NEON) and `_Complex` types are not in the runtime: their
   `__fundamental_type_info` `{vt, name}` is emitted `linkonce_odr` where
   used (WP-709). RTTI of a type that
-  involves an incomplete class has `internal` linkage. Linkage of class
-  RTTI follows the vtable.
+  involves an incomplete class has `internal` linkage, as has RTTI of a
+  type without linkage or built from one (arrays and function types
+  included, clang `getTypeInfoLinkage`). Linkage of class
+  RTTI follows the vtable. Under `CodegenOptions::rtti_local_name_marker`
+  (libstdc++) the name string of a unit-local type starts with GCC's `*`
+  (`Cg::local_name_marker`, spec/landed/abi/WP-1651.md); clang never
+  writes it (§6 `RTTI_LOCAL_MARKER_CASES`, deviations).
   - *Under `-fno-rtti`* (`CodegenOptions::rtti` false; WP-720): a
     vtable's (and construction vtable's) RTTI slot is `ptr null`, as is
     any `typeid`/`dynamic_cast` operand sema let through (clang
