@@ -1305,7 +1305,9 @@ impl Sema<'_, '_> {
             return msg.with_note(note);
         }
         let mut implicit = true;
-        let child = self.immediate_child(first, t.declaring);
+        // Noted at a redeclaration outside the class (a friend), clang
+        // finds no member before it: any access-specifier counts.
+        let child = if at.is_some() { None } else { self.immediate_child(first, t.declaring) };
         for c in self.ast.decls.members(t.declaring) {
             if Some(c) == child {
                 break;

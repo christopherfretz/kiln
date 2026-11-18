@@ -140,7 +140,9 @@ an out-of-line member declaration is: the name is formed as for
 a non-template member of `A` with the same type (ignoring the exception
 specification) is befriended, else a specialization of a constructor or
 conversion function template deduced from the type ([temp.deduct.decl]).
-The befriended member must be accessible ([class.friend]/9). No match is
+The befriended member must be accessible ([class.friend]/9), checked at
+the declaration, in a class template's definition too (a deduced
+specialization noted at the friend, as clang does; WP-1522). No match is
 `friend declaration of 'A' does not match any declaration in 'A'`, with a
 note per candidate as clang gives (`with_friend_candidate_notes`, WP-1495):
 the type mismatch note of an out-of-line definition
@@ -166,7 +168,13 @@ exception specification is a potentially-throwing redeclaration of a
 non-throwing member, implicit or defaulted ones included: clang's
 "is missing exception specification" ([except.spec]/5,
 `check_friend_missing_exc_spec`; a destructor's is implicit; WP-1631,
-`except.spec/p5-friend-special-member-missing-spec.cpp`).
+`except.spec/p5-friend-special-member-missing-spec.cpp`). Otherwise its
+`constexpr` or `consteval` specifier must be the member's, an implicitly
+constexpr one counting as declared so: clang's "non-constexpr declaration
+of 'B' follows constexpr declaration" ([dcl.constexpr]/1,
+`check_friend_constexpr_redecl`; GCC does not check; not per
+specialization, where clang compares inconsistently; WP-1648,
+`class.friend/friend-special-member-constexpr-redecl.cpp`).
 A match in the pattern itself (a member class of the current
 instantiation, `friend M::M(T);`) is also befriended in the pattern, for
 the access checks of the template definition (WP-1507,
@@ -177,8 +185,17 @@ template naming a constructor template or conversion function template
 Z::operator U*();`, [temp.friend]/1) befriends the member template of the
 same kind whose head is equivalent (`heads_equivalent`) and whose
 pattern's type is the friend's (`befriend_special_template`), so every
-specialization of it, and no non-template member; none matching
-befriends nothing, silently. In a templated class the `SpecialFriend`
+specialization of it, and no non-template member. It must be accessible
+(noted at the friend, as clang does for a friend template naming any
+member template), and none matching is the same no-match error without
+notes (WP-1522, `class.friend/friend-special-member-access-and-no-match.cpp`,
+`friend-member-template-access-ok-run.cpp`); a friend template in a
+templated class is checked for neither, as in clang (whose matching there
+compares the friend's deeper parameters and rejects a valid conversion
+function template), and befriends nothing when it matches nothing
+(its parameters are one level deeper than the member's: a constructor
+template befriended there is not found, clang and GCC 16.1 befriend
+nothing either). In a templated class the `SpecialFriend`
 entry also keeps the friend's head and each specialization matches the
 substituted type in the instantiated class (its head is the pattern's:
 equivalence does not compare depths). A friend of every specialization
@@ -434,7 +451,17 @@ by private inheritance here` + `member is declared here`); selected
 constructors, destructors and conversion functions; subobject members used by
 implicit definitions (failure deletes the member, §4.2); derived-to-base
 conversions (§3.3); `operator delete` of virtual dtors. Overriding ignores
-access.
+access. A qualified member function template-id (`C::f<int>`) keeps its
+naming class, also when an instantiation rebuilds it (`B::f<T>`, the naming
+class instantiated with it: `keep_ule_found`), and the specialization it
+resolves to is checked: called, with a target type, or with none
+(`(void)&C::f<int>;`, `sizeof`, `decltype`, [over.over]/3; clang 22 checks
+none of the last, GCC 16.1 does: docs/status/deviations.md,
+`class.access/member-template-id-address-without-target.cpp`). As the whole
+operand of `&` it forms a pointer to member, so [class.protected] wants the
+naming class, not `*this`'s, to be the context's class or derived from it
+(`resolve_single_template_id_in`, `finish_overload_ref`; WP-1522,
+`class.protected/member-template-id-pointer-to-member.cpp`).
 
 **Delayed checks.** Checks raised while parsing the decl-specifiers and first
 declarator of a namespace- or block-scope simple-declaration (with the
@@ -2411,8 +2438,18 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   an aggregate conditional's cleanups); under
   `-fno-elide-constructors` codegen makes the copy, as clang does
   (`class.copy.elision/elidable-copy-counts-*-run.cpp`, C++98/11/14
-  with and without the flag). From C++17 on nothing is built, and
-  before it only where a copy can be elided.
+  with and without the flag). The second step's copy (`check_temp_copy`,
+  from `convert_to_class` and the user-defined conversion of
+  `overload/udc.rs`) is built the same way, so under
+  `-fno-elide-constructors` the temporary is copied and destroyed as
+  clang does (WP-1522,
+  `class.copy.elision/temp-copy-second-step-*-run.cpp`). Deviation: the
+  Oven elides every such copy, under `-fno-elide-constructors` too, as
+  clang does, though [class.copy.elision]/1 forbids elision in constant
+  initialization (GCC copies under the flag; WP-1648,
+  `class.copy.elision/constant-init-elided-copy-no-elide-cxx14.cpp`,
+  docs/status/deviations.md). From C++17 on
+  nothing is built, and before it only where a copy can be elided.
 - **No elision into a base or delegating target** (CWG2403; clang
   `RequireActualConstructor`, WP-158): a prvalue initializing a base
   subobject (a mem-initializer, or an aggregate's base element, whose

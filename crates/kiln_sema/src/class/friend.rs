@@ -2,7 +2,7 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::QualType;
-use kiln_ast::decl::{DeclKind, FriendTarget};
+use kiln_ast::decl::{ConstexprKind, DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{TemplateArg, TypeView};
@@ -437,7 +437,9 @@ impl Sema<'_, '_> {
         }
         let target = self.finish_template_pattern(f).unwrap_or(f);
         if d.qualifier.is_some() && !local && self.friend_needs_access_check(target) {
-            self.check_friend_access(target, d.name_loc());
+            // clang notes a member template at the friend redeclaring it.
+            let note_at = head.is_some().then(|| d.name_loc());
+            self.check_friend_access_noted(target, d.name_loc(), note_at);
         }
         let fd = self.builder().friend(record, d.name_loc(), FriendTarget::Decl(target));
         let first = self.ast.first(target);
@@ -499,6 +501,13 @@ impl Sema<'_, '_> {
             _ => return None,
         };
         let at = d.name_loc();
+        let constexpr = if ds.consteval.is_some() {
+            ConstexprKind::Consteval
+        } else if ds.constexpr.is_some() {
+            ConstexprKind::Constexpr
+        } else {
+            ConstexprKind::None
+        };
         let kind = match sp {
             SpecialName::Constructor(_) => SpecialFriendKind::Ctor,
             SpecialName::Destructor(_) => SpecialFriendKind::Dtor,
@@ -512,7 +521,34 @@ impl Sema<'_, '_> {
         if let Some(h) = head
             && concrete
         {
-            return Some(self.befriend_special_template(record, class, kind, ty, h, at));
+            // [class.friend]/4: a friend template naming a member template
+            // that does not exist (clang `err_qualified_friend_no_match`,
+            // without notes). Not in a templated class, whose friend's
+            // parameters are one level deeper than the member's: clang
+            // matches those by depth (rejecting a valid conversion
+            // function template), kiln befriends nothing.
+            let t = self.match_special_template(class, kind, ty, h);
+            if self.in_dependent_class(record) {
+                return Some(self.befriend_matched_template(record, t, ty, at));
+            }
+            let Some(t) = t else {
+                let def = self.ast.definition(class).unwrap_or(class);
+                let name = self.special_friend_name(def, kind, ty);
+                let fname = self.decl_name_str(name);
+                let msg = self
+                    .diag(DiagId::sema_friend_def_no_match, at)
+                    .arg(fname)
+                    .arg(self.qualifier_desc(def));
+                self.emit(msg);
+                return None;
+            };
+            // [class.friend]/9: it must be accessible.
+            if self.inst.stack.is_empty()
+                && !self.ast.decls.get(t).has(kiln_ast::decl::DeclFlags::INVALID)
+            {
+                self.check_friend_access_noted(t, at, Some(at));
+            }
+            return Some(self.befriend_matched_template(record, Some(t), ty, at));
         }
         if head.is_some() || !concrete || self.ast.types.is_dependent(ty) {
             // A member of the current instantiation (`friend M::M(T);`
@@ -536,7 +572,7 @@ impl Sema<'_, '_> {
             self.special_friends.insert(fd, SpecialFriend { kind, ty, class, nns, head });
             return Some(fd);
         }
-        self.befriend_special_member(record, class, kind, ty, at)
+        self.befriend_special_member(record, class, (kind, Some(constexpr)), ty, at)
     }
 
     /// The special member `kind` of `class` whose type is `ty` befriended
@@ -545,23 +581,40 @@ impl Sema<'_, '_> {
     /// ([temp.friend]/1.2, [temp.deduct.decl]); no match is "friend
     /// declaration of 'A' does not match any declaration in 'A'", with
     /// clang's candidate notes. The befriended member must be accessible
-    /// ([class.friend]/9). Also each specialization's match of a
+    /// ([class.friend]/9), and the friend is a redeclaration: its
+    /// exception specification ([except.spec]/5) and then its `constexpr`
+    /// or `consteval` specifier `cx` ([dcl.constexpr]/1) match the
+    /// member's, an implicitly-declared one's included (clang
+    /// `MergeFunctionDecl`). `cx` is None per specialization, where clang
+    /// compares a dependent friend with the member inconsistently. Also each specialization's match of a
     /// [`SpecialFriend`] (`templ/subst/decls.rs` `friend_decl`).
     pub(crate) fn befriend_special_member(
         &mut self,
         record: DeclId,
         class: DeclId,
-        kind: SpecialFriendKind,
+        (kind, cx): (SpecialFriendKind, Option<ConstexprKind>),
         ty: QualType,
         at: Loc,
     ) -> Option<DeclId> {
         let (found, name) = match self.match_special_member(class, kind, ty, at, true) {
             Ok(target) => {
-                if self.friend_needs_access_check(target) {
-                    self.check_friend_access(target, at);
+                // [class.friend]/9: the member itself, not a redeclaration,
+                // so checked in a class template's definition too (clang);
+                // a deduced specialization is noted at the friend.
+                if self.inst.stack.is_empty()
+                    && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
+                    && self.declaring_class(target).is_some_and(|c| !self.in_dependent_class(c))
+                {
+                    let note_at = self.ast.spec_info(target).is_some().then_some(at);
+                    self.check_friend_access_noted(target, at, note_at);
                 }
-                if kind != SpecialFriendKind::Dtor {
-                    self.check_friend_missing_exc_spec(target, ty, at);
+                let exc_error = kind != SpecialFriendKind::Dtor
+                    && self.check_friend_missing_exc_spec(target, ty, at);
+                if let Some(cx) = cx
+                    && !exc_error
+                    && !self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
+                {
+                    self.check_friend_constexpr_redecl(target, cx, at);
                 }
                 let fd = self.builder().friend(record, at, FriendTarget::Decl(target));
                 let first = self.ast.first(target);
@@ -587,22 +640,43 @@ impl Sema<'_, '_> {
     /// non-throwing `target`, an implicitly-declared or defaulted one
     /// included (clang `CheckEquivalentExceptionSpec` through
     /// `MergeFunctionDecl`; a destructor's is the implicit one).
-    fn check_friend_missing_exc_spec(&mut self, target: DeclId, ty: QualType, at: Loc) {
+    /// Whether the error was given.
+    fn check_friend_missing_exc_spec(&mut self, target: DeclId, ty: QualType, at: Loc) -> bool {
         // Ignored under `-fno-exceptions` before C++17 (clang).
         if self.written_exc_spec(ty) != kiln_ast::types::ExcSpec::None
             || !(self.exceptions || self.std >= kiln_lex::Std::Cxx17)
             || self.ast.decls.get(target).has(kiln_ast::decl::DeclFlags::INVALID)
         {
-            return;
+            return false;
         }
         self.resolve_exc_for_type(target, at);
-        let Some(pty) = self.declared_fn_type(target) else { return };
+        let Some(pty) = self.declared_fn_type(target) else { return false };
         let pe = self.written_exc_spec(pty);
         if !pe.is_nothrow() || matches!(pe, kiln_ast::types::ExcSpec::Deferred(_)) {
+            return false;
+        }
+        let name = self.decl_name(target);
+        self.merge_missing_exc_spec(target, pty, ty, (at, &name, None), false).1
+    }
+
+    /// [dcl.constexpr]/1: a friend redeclaring special member `target`
+    /// with the `constexpr` or `consteval` specifier `cx` agrees with it;
+    /// an implicitly-declared or defaulted member that is constexpr
+    /// counts as declared so (clang `err_constexpr_redecl_mismatch`; GCC
+    /// does not check friends).
+    fn check_friend_constexpr_redecl(&mut self, target: DeclId, cx: ConstexprKind, at: Loc) {
+        let ok = self.fn_spec(target).constexpr_kind();
+        if ok == cx {
             return;
         }
         let name = self.decl_name(target);
-        let _ = self.merge_missing_exc_spec(target, pty, ty, (at, &name, None), false);
+        let msg = self
+            .diag(DiagId::sema_constexpr_redecl_mismatch, at)
+            .arg(cx as u8)
+            .arg(name)
+            .arg(ok as u8);
+        let msg = self.note_prev(msg, target, false);
+        self.emit(msg);
     }
 
     /// `template<class U> friend Z::Z(U);` in `record`: befriends the
@@ -620,13 +694,48 @@ impl Sema<'_, '_> {
         head: TemplateParamListId,
         at: Loc,
     ) -> DeclId {
-        let Some(t) = self.match_special_template(class, kind, ty, head) else {
+        let t = self.match_special_template(class, kind, ty, head);
+        self.befriend_matched_template(record, t, ty, at)
+    }
+
+    /// The friend of [`Sema::befriend_special_template`] once matched.
+    fn befriend_matched_template(
+        &mut self,
+        record: DeclId,
+        t: Option<DeclId>,
+        ty: QualType,
+        at: Loc,
+    ) -> DeclId {
+        let Some(t) = t else {
             return self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
         };
         let fd = self.builder().friend(record, at, FriendTarget::Decl(t));
         let first = self.ast.first(t);
         self.push_friend(first);
         fd
+    }
+
+    /// The name a special member friend of kind `kind` and type `ty` of
+    /// class `def` declares.
+    fn special_friend_name(
+        &mut self,
+        def: DeclId,
+        kind: SpecialFriendKind,
+        ty: QualType,
+    ) -> DeclName {
+        let canon = self.ast.types.canonical(self.class_type(def)).ty();
+        match kind {
+            SpecialFriendKind::Ctor => self.ast.names.constructor(canon),
+            SpecialFriendKind::Dtor => self.ast.names.destructor(canon),
+            SpecialFriendKind::Conversion => {
+                let ret = self
+                    .ast
+                    .types
+                    .proto(ty)
+                    .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+                self.ast.names.conversion(self.ast.types.canonical(ret))
+            }
+        }
     }
 
     /// The member template of `class` of kind `kind` with a head

@@ -1317,6 +1317,20 @@ Planned as 1.3.0.
   static-only member set or a member template of the current
   instantiation resolve at definition (WP-1547, WP-1603, WP-1640,
   WP-1533, WP-1629, WP-1628).
+- Friends, copies before C++17, template arguments and module
+  attachment: a befriended member template is access-checked
+  ([class.friend]/9), a templated friend naming no special member is
+  diagnosed, and `&V::h<int>` is accepted as clang accepts it. The copy of
+  the temporary in a copy-initialization by user-defined conversion is
+  built as an elidable copy before C++17, so `-fno-elide-constructors`
+  makes it. A friend special member's constexpr must match its
+  declaration. Before C++17 an address template argument must be `&x` or
+  an array or function name, and in C++17 it must not name a subobject. A
+  trivial assignment is not constexpr in C++11 constant evaluation. An
+  out-of-line member definition in a module purview is diagnosed when the
+  class is attached to the global module ([basic.link]/11). `cargo xtask
+  libstdcxx` names the reference compiler it ran (WP-1522, WP-1634,
+  WP-1646, WP-1647, WP-1648).
 
 ## [1.2.1] - 2026-11-14
 

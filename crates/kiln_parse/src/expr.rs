@@ -2207,7 +2207,7 @@ impl Parser<'_, '_> {
         &mut self,
         qual: Option<kiln_sema::using::Qualifier>,
         (class, name, nl): (NameClass, kiln_source::symbol::Symbol, Loc),
-        begin: Loc,
+        (begin, start): (Loc, usize),
         template_loc: Option<Loc>,
     ) -> ExprId {
         if let (NameClass::VarTemplate(d), Some(q)) = (class, qual) {
@@ -2225,7 +2225,8 @@ impl Parser<'_, '_> {
                     self.s.set_template_kw(e, template_loc);
                 }
                 if !self.template_id_is_callee(begin) {
-                    let r = self.s.resolve_single_template_id(e);
+                    let addr = qual.is_some() && self.whole_addr_operand(start);
+                    let r = self.s.resolve_single_template_id_in(e, addr);
                     self.s.set_template_id_end(r, r_angle);
                     return r;
                 }
@@ -2445,7 +2446,12 @@ impl Parser<'_, '_> {
             self.s.diag_missing_template_arg_list(nl);
         }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
-            return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
+            return Some(self.template_id_expr(
+                qual,
+                (class, name, nl),
+                (begin, start),
+                template_loc,
+            ));
         }
         // [temp.names]/3 (P0846): an unqualified name that lookup finds
         // nothing or only functions for, followed by `<`, is a

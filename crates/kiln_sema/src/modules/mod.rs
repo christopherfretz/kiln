@@ -1146,16 +1146,33 @@ impl Sema<'_, '_> {
             if dn.kind() == DeclKind::Namespace
                 || dn.has(DeclFlags::IMPLICIT)
                 || pn.has(DeclFlags::IMPLICIT)
-                || self.module_scope_decl(d).is_none()
             {
                 continue;
             }
+            // An out-of-line member is compared with its class: the member
+            // declared in the class is attached like the class.
+            let member_of = if self.module_scope_decl(d).is_some() {
+                None
+            } else if let Some(c) = self.out_of_line_member(d) {
+                // An exported one already has "cannot export" (clang 22);
+                // an explicit instantiation is not checked (spec/modules.md
+                // §7 "Explicit instantiations").
+                if self.ast.modules.owner(d).exported || self.ast.instantiated_from(d).is_some() {
+                    continue;
+                }
+                Some(c)
+            } else {
+                continue;
+            };
             // A declaration an instantiation made (a befriended function
             // of `It<char>`, instantiated in an importer) is attached
             // like the template's declaration it was instantiated from
             // ([module.unit]/7, [temp.friend]/1; WP-1314).
             let from = self.ast.instantiated_from(d).unwrap_or(d);
-            let (a, b) = (self.module_attachment(from), self.module_attachment(prev));
+            let (a, b) = (
+                self.module_attachment(from),
+                self.module_attachment(member_of.map_or(prev, |c| self.ast.first(c))),
+            );
             let name = self.decl_name_str(dn.name());
             if a != b {
                 let say = |m: &Option<String>| {
@@ -1171,6 +1188,9 @@ impl Sema<'_, '_> {
                 self.emit(m.with_note(note));
                 continue;
             }
+            if member_of.is_some() {
+                continue;
+            }
             let mt = &self.ast.modules;
             let (od, op) = (mt.owner(d), mt.owner(self.ast.first(prev)));
             if od.exported && op.purview && !op.exported && a.is_some() {
@@ -1180,6 +1200,22 @@ impl Sema<'_, '_> {
                 self.emit(m.with_note(note));
             }
         }
+    }
+
+    /// Whether `d` redeclares a member of a class outside it (`void
+    /// X::f() {}`, `int X::s;`, `struct X::N {}`): attached where it is
+    /// written ([module.unit]/7), so [basic.link]/11 compares it with the
+    /// member's declaration in the class (clang and GCC; WP-1634).
+    /// Returns the class.
+    fn out_of_line_member(&self, d: DeclId) -> Option<DeclId> {
+        let c = self.ast.decls.get(d).ctx()?;
+        (matches!(
+            self.ast.decls.get(c).kind(),
+            DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+        ) && self.ast.decls.lexical_ctx(d) != Some(c))
+        .then_some(c)
     }
 
     /// The named module `d` is attached to ([module.unit]/7): its purview's

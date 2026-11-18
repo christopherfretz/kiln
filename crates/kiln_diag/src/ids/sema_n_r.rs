@@ -57,6 +57,7 @@ sema_non_static_static = Error (1) "non-static declaration of '{0}' follows stat
 sema_non_temp_friend_decl_with_requires_clause_must_be_def = Error (0) "non-template friend declaration with a requires clause must be a definition";
 sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but is followed by template arguments";
 sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
+sema_non_type_template_arg_subobject = Error (1) "non-type template argument refers to subobject '{0}'";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
 sema_nondeterministic_value_arg = Error (1) "1st argument must be a vector, integer or floating-point type (was {0})";
 sema_nondeterministic_value_arg_19 = Error (1) "1st argument must be a vector, integer or floating point type (was {0})";

@@ -340,7 +340,7 @@ fn execute(opts: &Options) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&scratch);
 
     let summary = report::Summary::of(&results);
-    println!("\n{}", summary.line(&opts.std));
+    println!("\n{}", summary.line(&opts.std, &cfg.reference_label()));
     let clusters = report::clusters_of(&results);
     println!("\nTop first-error clusters:");
     for (k, c) in clusters.ranked().into_iter().take(10) {
@@ -373,7 +373,11 @@ fn run_all(cfg: &Config, headers: &[String], jobs: usize, verbose: bool) -> Vec<
                     let r = run::run_header(cfg, h, i);
                     let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
                     if verbose || !r.kiln.status.is_ok() {
-                        println!("[{finished}/{}] {}", headers.len(), r.console_line());
+                        println!(
+                            "[{finished}/{}] {}",
+                            headers.len(),
+                            r.console_line(&cfg.reference_label())
+                        );
                     }
                     slots.lock().expect("no worker panics while holding the lock")[i] = Some(r);
                 }
@@ -415,8 +419,12 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     if let Some(f) = &opts.filter {
         let _ = write!(command, " --filter '{f}'");
     }
-    if cfg.clang.is_none() {
-        command.push_str(" --no-clang");
+    match &cfg.clang {
+        None => command.push_str(" --no-clang"),
+        Some(c) if c != Path::new("clang++-19") => {
+            let _ = write!(command, " --clang {}", c.display());
+        }
+        Some(_) => {}
     }
     match &opts.compiler {
         Some(_) => command.push_str(" --compiler <kiln++>"),
@@ -429,6 +437,7 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         kiln_version: version(&cfg.kiln),
         kiln_commit: commit,
         clang_version: cfg.clang.as_deref().map_or_else(|| "not run".to_owned(), version),
+        reference: cfg.reference_label(),
         libstdcxx: run::libstdcxx_version(cfg),
         headers_dir: cfg.headers_dir.display().to_string(),
         selection: selection_note(),

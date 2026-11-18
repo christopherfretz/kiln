@@ -1619,6 +1619,9 @@ impl Sema<'_, '_> {
         }
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) if self.invalid_template_arg_base(v, false, at) => Err(()),
+            Ok(v) if self.pre_cxx20_address_arg(v, e, pty, Some(self.ast.decls.get(p).loc())) => {
+                Err(())
+            }
             Ok(v) => {
                 // Integral values are re-interned at the canonical type so
                 // equal arguments have equal ids (the specialization key).
@@ -1677,6 +1680,97 @@ impl Sema<'_, '_> {
             .arg(if reference { "reference" } else { "pointer" })
             .arg(if sub { "subobject of " } else { "" })
             .arg(what);
+        self.emit(d);
+        true
+    }
+
+    /// Before C++20, the address a pointer or reference argument `v`
+    /// (written as `e`, for a parameter of type `pty`) designates: C++17
+    /// [temp.arg.nontype]/2 forbids a subobject (a base, a member, an
+    /// array element other than the first one an array decays to, one
+    /// past the end; clang `err_non_type_template_arg_subobject`); C++98
+    /// to C++14 [temp.arg.nontype]/1 require the form `&`id-expression,
+    /// an id-expression of array or function type, or for a reference an
+    /// id-expression (clang `CheckTemplateArgumentAddressOfObjectOrFunction`:
+    /// "does not refer to any declaration", "must have its address
+    /// taken", noting the parameter at `ploc`), checked where it is
+    /// written, not when substituted. True when diagnosed. From C++20 on
+    /// nothing is checked.
+    pub(crate) fn pre_cxx20_address_arg(
+        &mut self,
+        v: kiln_ast::ids::ConstValueId,
+        e: ExprId,
+        pty: QualType,
+        ploc: Option<Loc>,
+    ) -> bool {
+        use kiln_ast::consts::{PtrBase, Scalar};
+        use kiln_ast::expr::{ExprKind, UnaryOp};
+        if self.std >= kiln_lex::Std::Cxx20 {
+            return false;
+        }
+        let Some(Scalar::Pointer { ty, base, offset, past, designated }) =
+            self.ast.consts.scalar(v)
+        else {
+            return false;
+        };
+        let t = &self.ast.types;
+        let reference = t.is_reference(pty);
+        if self.std >= kiln_lex::Std::Cxx17 {
+            let PtrBase::Decl(d) = base else { return false };
+            let Some(whole) = self.ast.decls.get(d).ty() else { return false };
+            let whole = t.canonical(whole).without_quals();
+            let Some(obj) = designated.or_else(|| t.pointee(ty)) else { return false };
+            let obj = t.canonical(obj).without_quals();
+            let decayed = !reference
+                && t.element(whole).is_some_and(|el| t.canonical(el).without_quals() == obj);
+            if offset == 0 && !past && (obj == whole || decayed) {
+                return false;
+            }
+            let mut what = String::new();
+            let opts = kiln_ast::consts::PrintOptions::with_style(
+                kiln_ast::consts::PrintStyle::TemplateArg,
+            );
+            self.ast.consts.print(v, &self.ast.strings, &self.ast, &opts, &mut what);
+            let d = self
+                .diag(DiagId::sema_non_type_template_arg_subobject, self.begin_loc(e))
+                .arg(what);
+            self.emit(d);
+            return true;
+        }
+        if !matches!(base, PtrBase::Decl(_) | PtrBase::Function(_)) || !self.inst.stack.is_empty() {
+            return false;
+        }
+        let mut x = self.ignore_parens(e);
+        let mut address_taken = false;
+        if !reference
+            && self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+            && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
+        {
+            x = self.ast.exprs.operand(x);
+            address_taken = true;
+        }
+        let at = self.begin_loc(x);
+        let id = self.ignore_paren_imp_casts(x);
+        // An overload set names a function too (resolved against the
+        // parameter after this form is read, for a reference).
+        let names = |k| matches!(k, ExprKind::DeclRefExpr | ExprKind::UnresolvedLookupExpr);
+        if address_taken {
+            if names(self.ast.exprs.get(x).kind()) {
+                return false;
+            }
+        } else if names(self.ast.exprs.get(id).kind()) {
+            let xty = self.ast.exprs.get(id).ty();
+            let t = &self.ast.types;
+            if reference || xty == QualType::OVERLOAD || t.is_array(xty) || t.is_function(xty) {
+                return false;
+            }
+            let d = self.diag(DiagId::sema_template_arg_not_address_of, at).arg(self.ty_arg(pty));
+            let d = self.note_nttp_param(d, ploc);
+            self.emit(d);
+            return true;
+        }
+        let d = self.diag(DiagId::sema_template_arg_not_decl_ref, at);
+        let d = self.note_nttp_param(d, ploc);
         self.emit(d);
         true
     }

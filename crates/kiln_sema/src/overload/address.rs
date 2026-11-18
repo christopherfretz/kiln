@@ -648,6 +648,18 @@ impl Sema<'_, '_> {
         self.most_specialized_spec(&found)
     }
 
+    /// [`Sema::resolve_single_template_id`] of a template-id that is the
+    /// whole operand of a unary `&` when `address_operand` (`&C::f<A>`):
+    /// a non-static member's access is then checked as for forming a
+    /// pointer to member ([class.protected]: the naming class, not
+    /// `*this`'s, must be the context's class or derived from it).
+    pub fn resolve_single_template_id_in(&mut self, e: ExprId, address_operand: bool) -> ExprId {
+        let saved = std::mem::replace(&mut self.address_operand, address_operand);
+        let r = self.resolve_single_template_id(e);
+        self.address_operand = saved;
+        r
+    }
+
     /// `e`, a function template-id not called: the `DeclRefExpr` naming
     /// the one specialization it names ([over.over]/3), else `e`.
     pub fn resolve_single_template_id(&mut self, e: ExprId) -> ExprId {
@@ -926,7 +938,7 @@ impl Sema<'_, '_> {
             }
             (x, matches)
         } else {
-            let Some((ule, _)) = self.overload_operand(e) else {
+            let Some((ule, addr)) = self.overload_operand(e) else {
                 if let Some(x) = self.member_overload(e) {
                     return self.resolve_member_address(e, x, target, complain, ctx, at);
                 }
@@ -946,7 +958,10 @@ impl Sema<'_, '_> {
                 let naming = self.ovl.ule_found.get(&ule).and_then(|x| x.naming);
                 let nns = self.ast.templates.expr_nns.get(ule).copied();
                 let loc = self.ast.exprs.get(ule).loc();
+                // `&C::f` names a pointer to member ([class.protected]).
+                let saved = std::mem::replace(&mut self.address_operand, addr);
                 let r = self.finish_overload_ref(d, f, naming, loc, nns, ule, false);
+                self.address_operand = saved;
                 // clang diagnoses a deleted function at the start of the
                 // whole operand (its `&` or parenthesis).
                 let at = self.begin_loc(e);

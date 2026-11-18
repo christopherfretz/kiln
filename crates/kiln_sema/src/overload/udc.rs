@@ -157,8 +157,7 @@ impl Sema<'_, '_> {
             && self.ast.types.as_record(to).is_some()
             && self.ast.types.same_unqualified(self.ety(x), to);
         if class_temp && self.std < kiln_lex::Std::Cxx17 {
-            self.check_temp_copy(x, to, ctx, at, DeletedAs::Call);
-            return Ok(x);
+            return Ok(self.check_temp_copy(x, to, ctx, at, DeletedAs::Call).unwrap_or(x));
         }
         conv::implicit_convert(self, x, to, ctx)
     }

@@ -2552,7 +2552,13 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
 - *Trivial copies.* A trivial copy/move constructor runs inline as
   `Copy [p, src, T]` aux 1, and a trivial copy/move assignment operator,
   called by either syntax, as `Copy [this, src, T]` (clang's
-  `handleTrivialCopy`; no frame). For a class (not a union, whose object
+  `handleTrivialCopy`; no frame). Before C++14 the implicit assignment
+  operator is not constexpr (C++11 [class.copy]/26), so there it is
+  called like any non-constexpr function ("non-constexpr function
+  'operator=' cannot be used in a constant expression"); the shortcut
+  tests the year first, so C++14 on pays nothing (WP-1647,
+  `tests/conformance/class.copy.assign/trivial-assignment-*-cxx1{1,4}.cpp`).
+  For a class (not a union, whose object
   representation is copied) the instruction carries aux 2: the source is
   read whole, so every subobject of its value must be initialized
   (`first_uninit`, the walk freezing does: bases walked into, arrays by

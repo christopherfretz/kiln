@@ -109,6 +109,15 @@ instantiates a `D<int>` named so far only through references or pointers;
 WP-381, `tests/conformance/dcl.init.ref/derived-to-base-instantiates-derived.cpp`),
 and static_cast up and down (`class_relation`, `static_downcast`).
 
+Deviation (CWG2310, [conv.ptr]/3 "where D is a complete class type"): a
+class being defined is not complete, yet its bases are known, and kiln
+converts `D*` to `B*` inside `D`'s definition as clang 22 does (a static
+member's initializer, a template instantiated from there, a trait).
+GCC 16.1 rejects only a constant-evaluated conversion ("because 'D' is
+incomplete") and accepts the trait; enforcing the text would flip
+`__is_convertible` and differ from both (WP-1648,
+`conv.ptr/derived-to-base-in-own-definition.cpp`, docs/status/deviations.md).
+
 A C-style or functional cast converts between a derived class and its
 base even when the base is inaccessible ([expr.cast]/4, clang's
 `IgnoreBaseAccess`). Pointers and references, upcasts and downcasts are

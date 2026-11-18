@@ -804,8 +804,13 @@ impl Sema<'_, '_> {
         let instance = self.is_class_member_ref(d);
         if let Some(naming) = naming {
             // [class.access.base]/5: the object is `*this` for an
-            // implicit member access.
-            let object = if instance { self.implicit_object_class(d) } else { None };
+            // implicit member access; `&C::f` has none ([class.protected]:
+            // forming a pointer to member).
+            let object = if instance && !(self.address_operand && nns.is_some()) {
+                self.implicit_object_class(d)
+            } else {
+                None
+            };
             self.check_member_access(found, naming, object, loc);
         }
         let shadow = (found != d).then_some(found);
