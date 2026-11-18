@@ -5126,7 +5126,9 @@ that is a bit-field, [expr.cond]/5, compiles to `Place::Cond`: the
 condition copied to a register and each operand's place, every read and
 write branching on it to the selected operand's access, WP-1692;
 `tests/conformance/expr.cond/p5-bit-field-glvalue-constexpr.cpp`; a wide
-`_BitInt` one is unsupported); all C control flow (if,
+`_BitInt` one is read into one temporary from the selected operand and
+written back to it, `compile/wide.rs` `wide_read_into`/`wide_store`,
+WP-1700, `tests/conformance/expr.cond/p5-bit-field-glvalue-wide-bitint.cpp`); all C control flow (if,
 loops, switch incl. fallthrough, break/continue, return); labels and
 `goto` (diagnosed as clang does); calls and recursion; constexpr variables
 and functions; `static_assert`; compound assignment, comma, conditional,

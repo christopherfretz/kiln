@@ -3897,7 +3897,7 @@ impl<'a> Cg<'a> {
                     // Dynamic initialization ([basic.start.dynamic]): zero
                     // until the initialization function runs.
                     needs_init = true;
-                    self.null_const(ty)?
+                    self.dynamic_storage_const(ty, Some(e))?
                 }
             }
         };
@@ -4129,7 +4129,7 @@ impl<'a> Cg<'a> {
         // statement ([stmt.dcl]/3; `static_local_init`).
         let labels = self.label_addrs;
         let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
-            None => self.null_const(ty)?,
+            None => self.dynamic_storage_const(ty, init_expr)?,
             Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
         if self.label_addrs != labels

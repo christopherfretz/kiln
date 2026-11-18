@@ -69,19 +69,60 @@ impl Compiler<'_> {
                 self.trap(e, "kiln: internal: the address of a register value was taken");
                 self.reg()
             }
-            Place::Cond { .. } => {
-                self.unsupported(e);
-                self.reg()
+            // A bit-field conditional ([expr.cond]/5): the selected
+            // operand is read into one temporary.
+            Place::Cond { c, i } => {
+                let [pt, pf] = self.cond_places[i as usize];
+                let t = self.wide_temp(ty, e);
+                let j = self.jmp_if(c, false);
+                self.wide_read_into(pt, t, ty, k, rmw, e);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.wide_read_into(pf, t, ty, k, rmw, e);
+                self.patch_here(end);
+                t
             }
+        }
+    }
+
+    /// Reads the wide value at `place` into the temporary `t`.
+    fn wide_read_into(&mut self, place: Place, t: u32, ty: OTy, k: u32, rmw: bool, e: ExprId) {
+        if let Place::Bits { p, bit, width } = place {
+            let f = if rmw { wide::RMW } else { 0 };
+            self.wide(wide::LOAD_BITS | wide::INIT | f, k, [t, p, 0], ty, bit | width << 3, e);
+        } else {
+            let q = self.wide_read_place(place, ty, k, rmw, e);
+            self.wide(wide::MOV | wide::INIT, 0, [t, q, 0], ty, 0, e);
         }
     }
 
     /// Writes the wide value at `src` back to bit-field `place` (a no-op
     /// for an object, which the operation wrote in place).
     fn wide_write_bits(&mut self, place: Place, src: u32, ty: OTy, k: u32, init: bool, e: ExprId) {
-        if let Place::Bits { p, bit, width } = place {
-            let f = if init { wide::INIT } else { 0 };
-            self.wide(wide::STORE_BITS | f, k, [p, src, 0], ty, bit | width << 3, e);
+        if matches!(place, Place::Bits { .. } | Place::Cond { .. }) {
+            self.wide_store(place, src, ty, k, init, e);
+        }
+    }
+
+    /// Stores the wide value at `src` to `place` (access kind `k`): a
+    /// conditional's to the operand its condition selected.
+    fn wide_store(&mut self, place: Place, src: u32, ty: OTy, k: u32, init: bool, e: ExprId) {
+        let f = if init { wide::INIT } else { 0 };
+        match place {
+            Place::Mem(dst) => self.wide(wide::MOV | f, k, [dst, src, 0], ty, 0, e),
+            Place::Bits { p, bit, width } => {
+                self.wide(wide::STORE_BITS | f, k, [p, src, 0], ty, bit | width << 3, e);
+            }
+            Place::Cond { c, i } => {
+                let [pt, pf] = self.cond_places[i as usize];
+                let j = self.jmp_if(c, false);
+                self.wide_store(pt, src, ty, k, init, e);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.wide_store(pf, src, ty, k, init, e);
+                self.patch_here(end);
+            }
+            Place::Reg(_) | Place::Lane { .. } => self.unsupported(e),
         }
     }
 
@@ -287,11 +328,7 @@ impl Compiler<'_> {
         let saved = self.rmw_loc.replace(self.node(e).loc());
         let place = self.lv(a, Access::Write);
         self.rmw_loc = saved;
-        match place {
-            Place::Mem(dst) => self.wide(wide::MOV, ak::ASSIGN, [dst, src, 0], ty, 0, e),
-            Place::Bits { .. } => self.wide_write_bits(place, src, ty, ak::ASSIGN, false, e),
-            Place::Reg(_) | Place::Lane { .. } | Place::Cond { .. } => self.unsupported(e),
-        }
+        self.wide_store(place, src, ty, ak::ASSIGN, false, e);
         place
     }
 
@@ -337,7 +374,8 @@ impl Compiler<'_> {
         };
         let place = self.lv_rmw(lhs, e);
         // A wide bit-field: computed in a temporary, written back.
-        let bits = matches!(place, Place::Bits { .. }) && self.o.types.wide(lty).is_some();
+        let bits = matches!(place, Place::Bits { .. } | Place::Cond { .. })
+            && self.o.types.wide(lty).is_some();
         let (place, bf) = if bits {
             (Place::Mem(self.wide_read_place(place, lty, k, true, e)), Some(place))
         } else {
@@ -414,7 +452,7 @@ impl Compiler<'_> {
         let bf = self.lv_rmw(lhs, e);
         let a = self.reg();
         let wide_lhs = self.o.types.wide(lty).is_some();
-        let place = if wide_lhs && matches!(bf, Place::Bits { .. }) {
+        let place = if wide_lhs && matches!(bf, Place::Bits { .. } | Place::Cond { .. }) {
             Place::Mem(self.wide_read_place(bf, lty, k, true, e))
         } else {
             bf

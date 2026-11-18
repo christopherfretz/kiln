@@ -32,6 +32,15 @@ impl Cg<'_> {
             return err(self.loc_of(p), "__builtin_clear_padding of a non-pointer");
         };
         let volatile = ast.types.effective_quals(t).is_volatile();
+        // A variable length array (GCC clears each element of `*p` for
+        // a pointer to one too): its run-time element count.
+        let (t, dyn_n) = if self.is_vla(t) {
+            self.emit_vla_bounds(t)?;
+            let (n, e) = self.vla_size(t)?;
+            (e, Some(n))
+        } else {
+            (t, None)
+        };
         // The innermost element type of nested constant arrays and their
         // total count.
         let (mut elem, mut n) = (t, 1u64);
@@ -49,16 +58,29 @@ impl Cg<'_> {
         if mask.iter().all(|&b| b == 0) {
             return Ok(());
         }
-        if n == 1 || n.saturating_mul(esz) <= UNROLL_BYTES {
-            for i in 0..n {
-                self.clear_masked(v, align, i * esz, &mask, volatile);
+        let total = match dyn_n {
+            None if n == 1 || n.saturating_mul(esz) <= UNROLL_BYTES => {
+                for i in 0..n {
+                    self.clear_masked(v, align, i * esz, &mask, volatile);
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
+            None => self.i64c(i128::from(n.saturating_mul(esz))),
+            Some(dn) => {
+                let bytes = self.i64c(i128::from(n.saturating_mul(esz)));
+                self.bin(BinOp::Mul, Flags::NUW, dn, bytes)
+            }
+        };
         // for (off = 0; off != n * esz; off += esz) clear(p + off)
         let zero = self.i64c(0);
-        let entry = self.f.fir.cur().expect("insertion point");
+        let end = self.f.fir.create_block();
         let body = self.f.fir.create_block();
+        let entry = self.f.fir.cur().expect("insertion point");
+        if dyn_n.is_some() {
+            // A variable length array may have no element.
+            let empty = self.icmp(IntPredicate::Eq, total, zero);
+            self.cond_br(empty, end, body);
+        }
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::I64, inc: vec![(zero, entry)] }, LTy::I64);
         let el = self.gep(LTy::I8, v, vec![phi], true);
@@ -67,9 +89,7 @@ impl Cg<'_> {
         let next = self.bin(BinOp::Add, Flags::NUW, phi, step);
         let cur = self.f.fir.cur().expect("insertion point");
         self.f.fir.add_incoming(Fir::last_inst(phi), next, cur);
-        let total = self.i64c(i128::from(n.saturating_mul(esz)));
         let done = self.icmp(IntPredicate::Eq, next, total);
-        let end = self.f.fir.create_block();
         self.cond_br(done, end, body);
         self.emit_block(end, false);
         Ok(())

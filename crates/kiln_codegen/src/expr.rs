@@ -5331,7 +5331,14 @@ impl Cg<'_> {
                 let uq = self.ast.exprs.get(e).ty();
                 return self.emit_null_init(base, uq, size);
             }
-            let lv = self.init_field_lvalue(base, f, fq)?;
+            // GNU: a flexible array member is stored as an array of its
+            // initializer's type (as for a structure's, below).
+            let fam =
+                crate::fold::flexible_elements_init(ast, e).filter(|x| inits.first() == Some(x));
+            let lv = match fam {
+                Some(x) => self.field_lvalue(base, f, ast.exprs.get(x).ty())?,
+                None => self.init_field_lvalue(base, f, fq)?,
+            };
             return match inits.first() {
                 Some(&i) => {
                     self.init_to_lvalue(i, lv, zeroed)?;
@@ -5393,8 +5400,17 @@ impl Cg<'_> {
             let fd = ast.decls.field(f);
             let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
             // clang: "We're done once we hit the flexible array member."
+            // GNU: unless the list gives it elements (a static object,
+            // emitted with room for them: `Cg::dynamic_storage_const`);
+            // they are stored as an array of the initializer's type.
             if matches!(ast.types.canonical_view(fq), kiln_ast::types::TypeView::IncompleteArray(_))
             {
+                if let Some(x) = crate::fold::flexible_elements_init(ast, e)
+                    && inits.get(k) == Some(&x)
+                {
+                    let lv = self.field_lvalue(base, f, ast.exprs.get(x).ty())?;
+                    self.init_to_lvalue(x, lv, zeroed)?;
+                }
                 break;
             }
             let unnamed_bf =
