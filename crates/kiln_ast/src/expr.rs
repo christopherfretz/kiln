@@ -168,6 +168,11 @@ pub enum ExprKind {
     /// the selection is result-dependent). [`ExprFlags::ARG_IS_TYPE`]
     /// marks the type-operand form (`_Generic(type-name, ...)`).
     GenericSelectionExpr,
+    /// GCC's `__integer_pack(N)` (template patterns only; WP-1667): an
+    /// `int` prvalue naming the built-in pack `0, 1, ..., N-1`, so
+    /// always value-dependent with an unexpanded pack; `a` is `N`.
+    /// Substitution expands it (spec/sema.md §5.4).
+    IntegerPackExpr,
 }
 
 /// The controlling operand of a `GenericSelectionExpr`.
@@ -924,6 +929,12 @@ u8_enum!(
         /// GCC 16's `__builtin_is_structural` (`std::is_structural`,
         /// [meta.unary.prop]; libstdc++ 16.1 tests `__has_builtin` for it).
         IsStructural = "__builtin_is_structural",
+        /// GCC's `__is_invocable(F, Args...)` (`std::is_invocable`;
+        /// libstdc++ 16 uses it only when `__has_builtin` says so, which
+        /// kiln does not: WP-1667).
+        IsInvocable = "__is_invocable",
+        /// GCC's `__is_nothrow_invocable(F, Args...)` (WP-1667).
+        IsNothrowInvocable = "__is_nothrow_invocable",
     }
 );
 
@@ -2733,6 +2744,11 @@ impl ExprArena {
         ExprId::new(self.expect_kind(e, ExprKind::ExpressionTraitExpr).a)
     }
 
+    /// The length operand of an `IntegerPackExpr` (GCC's `__integer_pack`).
+    pub fn integer_pack_operand(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::IntegerPackExpr).a)
+    }
+
     /// The value of a `TypeTraitExpr` or `ExpressionTraitExpr` (`false`
     /// while value-dependent).
     pub fn type_trait_value(&self, e: ExprId) -> bool {
@@ -3202,6 +3218,7 @@ impl ExprArena {
             | ExprKind::CXXDependentScopeMemberExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::PackExpansionExpr
+            | ExprKind::IntegerPackExpr
             | ExprKind::DependentCoawaitExpr
             | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {

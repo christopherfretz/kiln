@@ -75,6 +75,9 @@ pub struct PackState {
     /// The sweep reached a pack of another length: its length, name and
     /// where, diagnosed once the sweep ends.
     pub sweep_mismatch: Option<(u32, PackName, Loc)>,
+    /// The length of the `__integer_pack(N)` node (WP-1667) the probe
+    /// evaluated, so the elements do not evaluate `N` again.
+    pub integer_pack: Option<(ExprId, u32)>,
 }
 
 /// A pack as the length-mismatch diagnostic names it: its name and,
@@ -990,7 +993,9 @@ impl Sema<'_, '_> {
         let names: Vec<String> = packs.iter().map(|&d| self.decl_name(d)).collect();
         let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
         let list = match quoted.as_slice() {
-            [] => String::new(),
+            // The one unexpanded pack that is no declaration: GCC's
+            // built-in `__integer_pack(N)` (WP-1667).
+            [] => " '__integer_pack'".to_owned(),
             [a] => format!(" {a}"),
             [a, b] => format!("s {a} and {b}"),
             [a, b, ..] => format!("s {a}, {b}, ..."),

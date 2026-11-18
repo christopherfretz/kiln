@@ -251,6 +251,8 @@ pub enum BuiltinKw {
     Trait(TypeTrait),
     /// A `UnaryTransform` type-specifier.
     Transform(UnaryTransformKind),
+    /// GCC's `__integer_pack(N)`, a primary expression (WP-1667).
+    IntegerPack,
 }
 
 impl Keywords {
@@ -316,6 +318,10 @@ impl Keywords {
         // and their own names are unaffected.
         slot(&mut table, interner.intern("__remove_reference")).builtin =
             Some(BuiltinKw::Transform(UnaryTransformKind::RemoveReference));
+        // GCC's `__integer_pack(N)` (WP-1667): a builtin only before `(`,
+        // as the transforms; `__has_builtin(__integer_pack)` stays 0 (as
+        // in clang 22), so libstdc++ keeps `__make_integer_seq`.
+        slot(&mut table, interner.intern("__integer_pack")).builtin = Some(BuiltinKw::IntegerPack);
         table.shrink_to_fit();
         Keywords {
             table,
@@ -363,7 +369,7 @@ impl Keywords {
         for e in &mut self.table {
             e.trait_kw = TraitKw::Ident;
             if matches!(e.builtin, Some(BuiltinKw::Trait(t)) if !C_TYPE_TRAITS.contains(&t))
-                || matches!(e.builtin, Some(BuiltinKw::Transform(_)))
+                || matches!(e.builtin, Some(BuiltinKw::Transform(_) | BuiltinKw::IntegerPack))
             {
                 e.builtin = None;
             }
@@ -494,7 +500,8 @@ const REVERTIBLE_TRAITS: [&str; 56] = [
 /// The builtin traits that clang 22 does not make keywords in C++: plain
 /// identifiers unless followed by `(`. (`__is_referenceable` at `compat`
 /// 22 and `__builtin_types_compatible_p` are not C++ traits at all.)
-const NON_KEYWORD_TRAITS: [&str; 2] = ["__builtin_is_structural", "__is_nullptr"];
+const NON_KEYWORD_TRAITS: [&str; 4] =
+    ["__builtin_is_structural", "__is_invocable", "__is_nothrow_invocable", "__is_nullptr"];
 
 /// The builtin traits that are keywords in C too (clang `KEYALL` in
 /// TokenKinds.def; the others are `KEYCXX`). `__builtin_types_compatible_p`

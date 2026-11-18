@@ -165,8 +165,8 @@ trait name followed by `(` is always the trait. Otherwise
 - every other trait (`__has_trivial_copy`, `__is_trivially_destructible`,
   `__is_layout_compatible`, `__builtin_is_implicit_lifetime`, ... ) is a
   keyword everywhere;
-- `__builtin_is_structural` and `__is_nullptr`
-  (`keywords::NON_KEYWORD_TRAITS`), and the type transforms
+- `__builtin_is_structural`, `__is_invocable`, `__is_nothrow_invocable`
+  and `__is_nullptr` (`keywords::NON_KEYWORD_TRAITS`), and the type transforms
   (`__remove_cv`, ...), stay identifiers unless followed by `(`.
 `Parser::ident_of` is the one check (`Keywords::is_ident`). Test:
 `lex.key/trait-keywords.cpp`.

@@ -186,6 +186,10 @@ pub struct Parser<'a, 'sm> {
     /// The type-id about to be parsed is a named cast's (clang builds it
     /// without `ActOnTypeName`: no ignored-`mode` warning).
     pub(crate) named_cast_type_id: bool,
+    /// `Some` while `__builtin_has_attribute`'s type-id operand is
+    /// parsed: the attributes of its decl-specifier-seq land here (GCC
+    /// answers from them; WP-1667).
+    pub(crate) type_id_attrs: Option<Vec<AttrId>>,
     /// The decl-specifier-seq of a parameter-declaration being parsed is
     /// not one where a dependent qualified name is implicitly a type
     /// ([temp.res.general]/4: a parameter of a function declared at
@@ -404,6 +408,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             in_exception_decl: false,
             type_id_constraint: Loc::INVALID,
             named_cast_type_id: false,
+            type_id_attrs: None,
             param_typename: ParamTypename::Implicit,
             base_type_name: false,
             param_recovery: None,
@@ -460,7 +465,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
-    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
     /// | `trace` | transient | test-only parse trace |
     ///
     /// No field is state: the late-parse lists end with their class, and
@@ -508,6 +513,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             in_exception_decl: _,
             type_id_constraint: _,
             named_cast_type_id: _,
+            type_id_attrs: _,
             param_typename: _,
             base_type_name: _,
             param_recovery: _,
@@ -876,7 +882,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     pub(crate) fn transform_at(&self, i: usize) -> Option<UnaryTransformKind> {
         match self.builtin_kw_at(i)? {
             crate::keywords::BuiltinKw::Transform(k) => Some(k),
-            crate::keywords::BuiltinKw::Trait(_) => None,
+            crate::keywords::BuiltinKw::Trait(_) | crate::keywords::BuiltinKw::IntegerPack => None,
         }
     }
 

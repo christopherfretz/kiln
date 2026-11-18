@@ -4689,7 +4689,12 @@ impl Parser<'_, '_> {
         site: DeclSite,
     ) -> Option<QualType> {
         let warn_mode = !std::mem::take(&mut self.named_cast_type_id);
+        let keep_attrs = self.type_id_attrs.take();
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        if let Some(mut kept) = keep_attrs {
+            kept.extend(ds.attrs.iter().copied());
+            self.type_id_attrs = Some(kept);
+        }
         let vec_out = out.is_some();
         if let Some(out) = out {
             let ast = &self.s.ast;

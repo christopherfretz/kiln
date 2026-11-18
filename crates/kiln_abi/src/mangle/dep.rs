@@ -1049,6 +1049,15 @@ impl Mangler<'_, '_> {
             // GCC 16's `DS <expression> [<template-args>] E` (P2996 has no
             // Itanium encoding yet).
             ExprKind::CXXSpliceExpr => return self.splice_expression(expr),
+            // GCC's `__integer_pack(N)` (WP-1667): GCC mangles it as a
+            // call of the builtin by name, `cl 14__integer_pack <N> E`.
+            ExprKind::IntegerPackExpr => {
+                self.out.push_str("cl14__integer_pack");
+                if !self.expression(ast.exprs.integer_pack_operand(expr)) {
+                    return false;
+                }
+                self.out.push('E');
+            }
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));

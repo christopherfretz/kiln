@@ -2,6 +2,8 @@
 // _Bool, usable in _Static_assert; a name asks its declaration, then its
 // type; a type asks its typedefs and its tag. Found running GCC's C++
 // testsuite (its c-c++-common cases run in both languages). WP-1611.
+// Attributes written in a type-id operand and visibility "internal" (stored
+// as hidden) are answered too (WP-1667).
 //@ std: c17
 //@ expect: compile-ok
 //@ oracle: gcc
@@ -22,3 +24,8 @@ _Static_assert(__builtin_has_attribute(struct P, packed), "P");
 _Static_assert(__builtin_has_attribute(f, noreturn), "f");
 _Static_assert(_Generic(__builtin_has_attribute(f, noreturn), _Bool: 1), "_Bool");
 int arr[__builtin_has_attribute(i8, aligned) + 1];
+_Static_assert(__builtin_has_attribute(__attribute__((aligned(4))) int, aligned(4)), "type-id");
+_Static_assert(!__builtin_has_attribute(int __attribute__((aligned(4))), aligned(8)), "type-id 8");
+__attribute__((visibility("internal"))) void fi(void);
+_Static_assert(__builtin_has_attribute(fi, visibility("internal")), "internal");
+_Static_assert(!__builtin_has_attribute(fi, visibility("hidden")), "not hidden");

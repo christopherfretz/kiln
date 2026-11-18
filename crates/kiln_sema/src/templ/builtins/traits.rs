@@ -25,6 +25,7 @@ use crate::target;
 use crate::templ::stack::FrameKind;
 
 mod cxx26;
+mod invocable;
 mod library;
 pub(crate) use library::LibFailure;
 mod explain;
@@ -186,6 +187,8 @@ impl Sema<'_, '_> {
                 | TypeTrait::IsTriviallyConstructible
         ) {
             self.eval_constructible(t, args, loc, rparen)?
+        } else if matches!(t, TypeTrait::IsInvocable | TypeTrait::IsNothrowInvocable) {
+            self.eval_invocable(t, args, loc)?
         } else if let [(q, _)] = *args {
             if !self.check_trait_completeness(t, q, loc) {
                 return None;
@@ -563,18 +566,6 @@ impl Sema<'_, '_> {
         {
             return Some(false);
         }
-        // `declval<A>()`: an lvalue for an lvalue reference (or a function
-        // type), else an xvalue.
-        let operand = |s: &mut Self, q: QualType, at: Loc| {
-            let (ty, vc) = match s.ast.types.canonical_view(q) {
-                TypeView::LValueRef(p) => (p, ValueCategory::LValue),
-                TypeView::RValueRef(p) if s.ast.types.is_function(p) => (p, ValueCategory::LValue),
-                TypeView::RValueRef(p) => (p, ValueCategory::XValue),
-                _ if s.ast.types.is_function(q) => (q, ValueCategory::LValue),
-                _ => (q, ValueCategory::XValue),
-            };
-            s.builder().opaque_value_of(ty, vc, at)
-        };
         let check = match t {
             TypeTrait::IsNothrowConstructible => InitCheck::Nothrow,
             TypeTrait::IsTriviallyConstructible => InitCheck::Trivial,
@@ -584,7 +575,8 @@ impl Sema<'_, '_> {
         let saved = std::mem::replace(&mut self.ctx, tu);
         let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
             s.enter_unevaluated();
-            let ops: Vec<ExprId> = args[1..].iter().map(|&(q, at)| operand(s, q, at)).collect();
+            let ops: Vec<ExprId> =
+                args[1..].iter().map(|&(q, at)| s.declval_operand(q, at)).collect();
             let e = if ops.is_empty() {
                 s.paren_value_init(ty, loc)
             } else {
@@ -616,7 +608,7 @@ impl Sema<'_, '_> {
     /// expression on `declval<T>()` is false for one (clang 22 builds the
     /// expression on an lvalue of it and answers true; GCC 16.1 answers
     /// false except for `is_constructible`).
-    fn declval_formable(&self, q: QualType) -> bool {
+    pub(super) fn declval_formable(&self, q: QualType) -> bool {
         !self.ast.types.is_function(q) || self.referenceable(q)
     }
 

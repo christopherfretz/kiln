@@ -92,7 +92,11 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(v) = self.visibility_value(kind, node) else { continue };
-            let checked = self.ast.attrs.push(AttrNode { a: v, b: 0, ..node });
+            // `b`: 1 for `"internal"`, stored as hidden (as clang, so the
+            // IR is hidden's) but answered apart by
+            // `__builtin_has_attribute` (WP-1667).
+            let internal = u32::from(v == 1 && self.visibility_is_internal(node));
+            let checked = self.ast.attrs.push(AttrNode { a: v, b: internal, ..node });
             // clang `mergeVisibilityAttr` on the same declaration.
             if let Some(i) = out.iter().position(|&o| self.ast.attrs.get(o).kind == node.kind) {
                 let old = *self.ast.attrs.get(out[i]);
@@ -107,6 +111,13 @@ impl Sema<'_, '_> {
             out.push(checked);
         }
         *attrs = out;
+    }
+
+    /// Whether unchecked visibility attribute `node` names `"internal"`.
+    pub(crate) fn visibility_is_internal(&self, node: AttrNode) -> bool {
+        ExprId::from_raw(node.b).and_then(|e| self.string_lit_of(e)).is_some_and(|lit| {
+            self.ast.strings.bytes(self.ast.exprs.string_lit(lit)) == b"internal"
+        })
     }
 
     /// The visibility of attribute `node` on a declaration of kind

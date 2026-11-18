@@ -1091,9 +1091,13 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
+        let mut written = Vec::new();
         let op = if self.is_cxx_type_id(TypeIdContext::AsGenericSelectionArgument).0 {
             let at = self.type_loc_begin();
-            let Some(t) = self.parse_type_id() else {
+            self.type_id_attrs = Some(Vec::new());
+            let t = self.parse_type_id();
+            written = self.type_id_attrs.take().unwrap_or_default();
+            let Some(t) = t else {
                 self.skip_until(&[Punct::RParen], true, true);
                 return None;
             };
@@ -1125,7 +1129,25 @@ impl Parser<'_, '_> {
         };
         let ok = self.at(Punct::RParen);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        ok.then(|| self.s.act_on_builtin_has_attribute(loc, op, name, name_loc, &args, rparen))
+        ok.then(|| {
+            self.s.act_on_builtin_has_attribute(loc, (op, &written), name, name_loc, &args, rparen)
+        })
+    }
+
+    /// GCC's `__integer_pack ( assignment-expression )` (GCC
+    /// `CP_BUILT_IN_INTEGER_PACK`; spec/sema.md §5.4): the current token
+    /// is the name, the next `(`. WP-1667.
+    fn parse_integer_pack(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let open = self.eat(Punct::LParen)?;
+        let e = self.with_greater_op(true, Self::parse_assignment_expr);
+        let Some(e) = e else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        ok.then(|| self.s.act_on_integer_pack(e, loc, rparen))
     }
 
     /// `__builtin_convertvector ( assignment-expression , type-id )`
@@ -2127,6 +2149,9 @@ impl Parser<'_, '_> {
                 return self.parse_splice_expr();
             }
             _ => {}
+        }
+        if self.builtin_kw_at(self.pos()) == Some(crate::keywords::BuiltinKw::IntegerPack) {
+            return self.parse_integer_pack();
         }
         // `decltype(e)::name` (WP-119): the qualifier is parsed first.
         if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {

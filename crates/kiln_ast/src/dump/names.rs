@@ -1295,6 +1295,11 @@ impl<'a> AstNames<'a> {
                 self.expr(ExprId::new(n.a()), d, out);
                 out.push(')');
             }
+            ExprKind::IntegerPackExpr => {
+                out.push_str("__integer_pack(");
+                self.expr(ExprId::new(n.a()), d, out);
+                out.push(')');
+            }
             ExprKind::AtomicExpr => {
                 // clang's `StmtPrinter::VisitAtomicExpr`: the builtin's
                 // name and the operands in source order.

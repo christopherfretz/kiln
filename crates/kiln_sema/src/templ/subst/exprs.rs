@@ -1249,6 +1249,7 @@ impl Substituter<'_, '_, '_> {
                 let o = self.unevaluated_operand(o)?;
                 Ok(self.sema.build_expression_trait(t, o, loc, end))
             }
+            ExprKind::IntegerPackExpr => self.integer_pack(e, loc, end),
             ExprKind::CXXNoexceptExpr => {
                 let o = ex(self).noexcept_operand(e);
                 let o = self.unevaluated_operand(o)?;

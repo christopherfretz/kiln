@@ -391,6 +391,7 @@ impl DefHasher<'_> {
             | K::PackIndexingExpr
             | K::CXXReflectExpr
             | K::CXXSpliceExpr
+            | K::IntegerPackExpr
             | K::RecoveryExpr => self.partial(Area::Misc, Site::Expr(k)),
 
             // ----- area: signature (K-3e, `signature.rs`): the dependent

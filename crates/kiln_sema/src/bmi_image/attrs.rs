@@ -95,9 +95,10 @@ const TABLE: &[(AttrKind, Op)] = &[
     (AttrKind::USED, FLAG),
     (AttrKind::UNUSED, FLAG),
     (AttrKind::WEAK, FLAG),
-    // 0 default, 1 hidden, 2 protected (an unchecked one, in a template,
-    // holds its argument expression: not carried).
-    (AttrKind::VISIBILITY, Op::Words(2, 0)),
+    // 0 default, 1 hidden, 2 protected; `b` 1 for hidden written as
+    // `internal` (an unchecked one, in a template, holds its argument
+    // expression: not carried).
+    (AttrKind::VISIBILITY, Op::Words(2, 1)),
     // The archetype, and the format and first data argument indices.
     (AttrKind::FORMAT, Op::Words(ANY, ANY)),
     (AttrKind::CONST, FLAG),

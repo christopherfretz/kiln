@@ -346,7 +346,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     None => Tpr::Error,
                 };
             }
-            Some(crate::keywords::BuiltinKw::Trait(_)) => return Tpr::False,
+            Some(
+                crate::keywords::BuiltinKw::Trait(_) | crate::keywords::BuiltinKw::IntegerPack,
+            ) => return Tpr::False,
             None => {}
         }
         if self.ident_at(self.i).is_none() && !self.at(Punct::ColonColon) {
