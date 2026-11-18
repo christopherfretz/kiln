@@ -6586,9 +6586,15 @@ under its own name, the same signature, gating and codegen
       under a mispredicted bounds check is not used speculatively
       (spec/codegen.md); `f` is evaluated for its side effects only.
     - `__builtin_assoc_barrier(x)`: one argument, decayed, of arithmetic,
-      enumeration, pointer or vector type (GCC also takes a class; kiln
-      rejects it, `1st argument must be a scalar or vector type`); the
-      result is `x`'s value and type, constant when `x` is.
+      enumeration, pointer or vector type (`1st argument must be a scalar
+      or vector type`; GCC also takes `void` and `std::nullptr_t`, kiln
+      does not); the result is `x`'s value and type, constant when `x`
+      is. On a class operand (WP-1611; GCC 16.1 builds a `PAREN_EXPR` of
+      the operand: no copy, a deleted copy constructor is accepted) the
+      call is a glvalue of `x`'s type naming `x`'s object: an lvalue for
+      an lvalue, else an xvalue (a prvalue is materialized,
+      [conv.rval]); codegen and the Oven use the operand's address
+      (`ext.gnu.builtins/assoc-barrier-class-*.cpp`).
     - `__builtin_ffsg(x)` / `__builtin_clrsbg(x)`: `x` a signed integer of
       any width, `_BitInt` included, not `bool` or an enumeration (`1st
       argument must be a scalar signed integer type`);
@@ -6603,12 +6609,47 @@ under its own name, the same signature, gating and codegen
       never constant. `__builtin_strstr`, `__builtin_index` and
       `__builtin_rindex` are clang's rows and, as in clang 22, are not
       folded in constant expressions.
-    Not implemented (WP-1552 remainder): `__builtin_has_attribute`; the
-    GCC trait spellings `__remove_reference` and `__is_invocable`
-    (libstdc++ 14 declares a class template `std::__is_invocable`, and
-    under a compiler that defines `__is_identifier` it takes the trait
-    path for any trait name that is not an identifier, so adding them
-    would change which `<type_traits>` code compiles); `__integer_pack`.
+    - `__builtin_has_attribute(op, attr)` (WP-1611; GCC `has_attribute`;
+      a keyword parsed as a primary expression, `has_attribute.rs`): `op`
+      a type-id or an unevaluated expression, `attr` one GNU attribute
+      (`x` or `__x__`, arguments without the double parentheses). The
+      result is a `bool` constant answered from the attributes kiln
+      stores: a name or member access asks every declaration of its
+      entity, then the entity's type; another expression asks its type;
+      a type asks the typedefs it is named by, then its class or
+      enumeration (a pointer, reference or array stops the walk, so a
+      pointer's attribute is not its pointee's). With arguments they
+      must match: `aligned(N)` the user-requested alignment `N` (an
+      array has its element's, GCC's `TYPE_USER_ALIGN`), `constructor` /
+      `destructor` the priority, `alloc_size` a subset of the positions,
+      `nonnull(i)` a stored `nonnull` naming `i` or every parameter (a
+      bare `nonnull` only the latter), `section` / `alias` the string,
+      `visibility` the value (`internal` is stored as `hidden`, so the two
+      answer alike), `cleanup` the function, `vector_size(N)` a GNU vector
+      of `N` bytes (consumed into the type); others the stored words. A
+      bare name matches any arguments and may omit required ones. An
+      attribute kiln parses and drops (clang's ignored and rejected ones,
+      GCC-only names, attributes in a type-id) answers 0; a name neither
+      GCC nor clang knows is `unknown attribute`. A dependent operand or
+      attribute argument is an error, as in GCC 16.1 ("sorry,
+      unimplemented"), and so is a class member access in a template
+      definition, dependent or not (GCC's own refusal). `__has_builtin(__builtin_has_attribute)` is 0, as
+      in clang 22 (`ext.gnu.builtins/has-attribute*.cpp`,
+      `c/expr/builtin-has-attribute.c`).
+    - `__remove_reference(T)` (WP-1611): GCC's spelling of clang's
+      `__remove_reference_t(T)`, a type transform like it, so a keyword
+      only before `(`: libstdc++ 14 names it only under
+      `_GLIBCXX_USE_BUILTIN_TRAIT(__remove_reference)` and libc++ under
+      `__has_builtin(__remove_reference)`, both 0 as in clang 22
+      (`__is_identifier` unchanged), so neither changes path
+      (`kiln++ -E` of `<type_traits>` and `<utility>` identical at every
+      `-std`; `ext.gnu.builtins/remove-reference-gcc-spelling.cpp`).
+    Not implemented: `__is_invocable(F, Args...)` (WP-1611: libstdc++
+    declares and uses `std::__is_invocable<...>`; a trait that is one
+    only before `(` would leave it alone, but the trait itself is not
+    built: remainder); `__integer_pack(N)...` (WP-1611 remainder: it
+    needs a pack whose size is computed at substitution in the shared
+    pack-expansion path).
   - `__builtin_powi{,f,l}`, `__builtin_copysignf16` and the `*f128` math
     family are ordinary calls (table rows in spec/sema-templates.md §9.5).
   - The `__fp16` libm builtins (WP-403; `kiln_ast` `builtin::F16_INTR`

@@ -268,6 +268,56 @@ fn link_mode_options_unused_when_compiling() {
     );
 }
 
+/// WP-1633: the options `CMake` passes when the compiler identifies as
+/// clang. `--start-no-unused-arguments` ... `--end-no-unused-arguments`
+/// silences the unused-argument warnings of what it encloses (linker
+/// inputs and options, assembler options); `--unwindlib=` reaches the
+/// linking clang++, warns as unused when compiling, and is checked when
+/// linking as clang checks it (kiln links libgcc).
+#[test]
+fn no_unused_region_and_unwindlib() {
+    let d = setup("no-unused");
+    std::fs::write(d.join("x.o"), "").unwrap();
+    let w = |m: &str| format!("kiln++: warning: {m} [-Wunused-command-line-argument]\n");
+    let region = [
+        "-c",
+        "add.cpp",
+        "--start-no-unused-arguments",
+        "x.o",
+        "-lm",
+        "-L/nowhere",
+        "-Wl,-z,now",
+        "-fuse-ld=lld",
+        "--unwindlib=libgcc",
+        "-Wa,--noexecstack",
+        "--end-no-unused-arguments",
+        "-lz",
+        "--start-no-unused-arguments",
+    ];
+    let o = kiln_in(&d, &region);
+    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), w("-lz: 'linker' input unused")));
+    let o = kiln_in(&d, &["-c", "add.cpp", "--unwindlib=none", "-unwindlib=platform"]);
+    let expected = [
+        w("argument unused during compilation: '--unwindlib=none'"),
+        w("argument unused during compilation: '-unwindlib=platform'"),
+    ]
+    .concat();
+    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), expected));
+    for (v, err) in [
+        ("bogus", "invalid unwind library name in argument '--unwindlib=bogus'"),
+        ("libunwind", "--rtlib=libgcc requires --unwindlib=libgcc"),
+    ] {
+        let o = kiln_in(&d, &["-###", "x.o", &format!("--unwindlib={v}")]);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {err}\n"))
+        );
+    }
+    let o = kiln_in(&d, &["-###", "x.o", "--unwindlib=none"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains(" \"x.o\" \"--unwindlib=none\""), "{}", text(&o.stderr));
+}
+
 /// The arguments of a `-###` command line (every one quoted, `"`, `\`
 /// and `$` escaped).
 fn unquote_command(line: &str) -> Vec<String> {

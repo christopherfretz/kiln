@@ -449,6 +449,25 @@ pub struct LinkOpt {
     pub kind: LinkOptKind,
 }
 
+/// The arguments between `--start-no-unused-arguments` and
+/// `--end-no-unused-arguments` (clang claims them, so none is reported
+/// unused; an unmatched marker is accepted and ends nothing). WP-1633.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoUnused {
+    /// The arguments as written, the inputs' paths and the assembler
+    /// options' texts.
+    pub texts: Vec<String>,
+    /// Indices into [`Args::link`].
+    pub link: Vec<usize>,
+}
+
+impl NoUnused {
+    /// Whether the unused-argument warning for `text` is suppressed.
+    pub fn quiet(&self, text: &str) -> bool {
+        self.texts.iter().any(|t| t == text)
+    }
+}
+
 /// How a compile-only run reports an unused [`LinkOpt`], as clang does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkOptKind {
@@ -853,6 +872,9 @@ pub struct Args {
     /// `-Qunused-arguments`: no `-Wunused-command-line-argument` warning
     /// for an unused linker input or link option (clang's driver option).
     pub quiet_unused_arguments: bool,
+    /// What `--start-no-unused-arguments` ... `--end-no-unused-arguments`
+    /// encloses: no unused-argument warning for any of it (WP-1633).
+    pub no_unused: NoUnused,
     /// The `-f[no-]sanitize-merge[=<list>]` flags as written: clang 19
     /// has none of them, so at `-fclang-compat=19` each is an unknown
     /// argument (WP-1044).
@@ -1207,6 +1229,18 @@ impl Args {
         Args::parse_as("kiln++", argv)
     }
 
+    /// Records what one argument inside `--start-no-unused-arguments`
+    /// added (`m`: its `argv` index and the lengths of the link options,
+    /// inputs and assembler options before it; `written`: the argument
+    /// with its separate value) as never reported unused.
+    fn claim_no_unused(&mut self, m: (usize, usize, usize, usize), written: &[String]) {
+        let (_, link, inputs, asm) = m;
+        self.no_unused.link.extend(link..self.link.len());
+        self.no_unused.texts.extend(written.iter().cloned());
+        self.no_unused.texts.extend(self.inputs[inputs..].iter().map(|i| i.path.clone()));
+        self.no_unused.texts.extend(self.asm[asm..].iter().map(|o| o.arg.clone()));
+    }
+
     /// Parses `argv` (without the program name) for the program `argv0`,
     /// which sets [`Args::program`] and the default [`Args::mode`].
     #[allow(clippy::too_many_lines, reason = "one pass over argv, in clang's order")]
@@ -1223,9 +1257,25 @@ impl Args {
         let mut x: Option<XType> = None;
         let mut verify = VerifyRaw::default();
         let mut i = 0;
+        let mut no_unused = false;
+        let mut quiet_from: Option<(usize, usize, usize, usize)> = None;
         while i < argv.len() {
+            if let Some(m) = quiet_from.take() {
+                a.claim_no_unused(m, &argv[m.0..i]);
+            }
             let mut arg = argv[i].as_str();
+            match arg {
+                "--start-no-unused-arguments" => no_unused = true,
+                "--end-no-unused-arguments" => no_unused = false,
+                _ if no_unused => {
+                    quiet_from = Some((i, a.link.len(), a.inputs.len(), a.asm.len()));
+                }
+                _ => {}
+            }
             i += 1;
+            if matches!(arg, "--start-no-unused-arguments" | "--end-no-unused-arguments") {
+                continue;
+            }
             // `-Xclang <arg>`: kiln has no separate frontend command line;
             // the argument is parsed like any other. A separate value of a
             // frontend option comes in its own `-Xclang` (`-Xclang
@@ -1374,6 +1424,9 @@ impl Args {
             {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));
             }
+        }
+        if let Some(m) = quiet_from.take() {
+            a.claim_no_unused(m, &argv[m.0..]);
         }
         a.verify = verify.finish(&mut a.errors);
         // WP-1151: the shadow call stack's register.
@@ -1904,7 +1957,11 @@ impl Args {
                         opt: "-Wa,",
                         values: v.split(',').map(str::to_owned).collect(),
                     });
-                } else if arg.starts_with("-Wl,") || arg.starts_with("-fuse-ld=") {
+                } else if arg.starts_with("-Wl,")
+                    || arg.starts_with("-fuse-ld=")
+                    || arg.starts_with("--unwindlib=")
+                    || arg.starts_with("-unwindlib=")
+                {
                     self.link.push(LinkOpt {
                         pos: self.inputs.len(),
                         arg: arg.to_owned(),
@@ -2363,7 +2420,8 @@ fn separate_link_opt(arg: &str) -> Option<LinkOptKind> {
     if arg == "-z" {
         return Some(LinkOptKind::Z);
     }
-    if arg.starts_with("-u") && arg != "-undef" {
+    // (`-unwindlib=` is clang's alias of `--unwindlib=`, WP-1633.)
+    if arg.starts_with("-u") && arg != "-undef" && !arg.starts_with("-unwindlib=") {
         return Some(LinkOptKind::Undefined);
     }
     if arg.starts_with("-T") && !["-Tbss", "-Tdata", "-Ttext"].iter().any(|p| arg.starts_with(p)) {

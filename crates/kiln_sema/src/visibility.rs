@@ -29,7 +29,7 @@ use crate::decl::AttrArg;
 
 /// The `a` word of a visibility node whose argument is not checked yet
 /// (`b` holds the argument expression).
-const UNCHECKED: u32 = u32::MAX;
+pub(crate) const UNCHECKED: u32 = u32::MAX;
 
 impl Sema<'_, '_> {
     /// `visibility(S)` / `type_visibility(S)` as written: exactly one
@@ -111,7 +111,7 @@ impl Sema<'_, '_> {
 
     /// The visibility of attribute `node` on a declaration of kind
     /// `kind`, or `None` after a diagnostic.
-    fn visibility_value(&mut self, kind: DeclKind, node: AttrNode) -> Option<u32> {
+    pub(crate) fn visibility_value(&mut self, kind: DeclKind, node: AttrNode) -> Option<u32> {
         let type_vis = node.kind == AttrKind::TYPE_VISIBILITY;
         let shown = self.attr_shown(&node, if type_vis { "type_visibility" } else { "visibility" });
         if matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias) {

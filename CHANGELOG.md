@@ -1368,6 +1368,14 @@ Planned as 1.3.0.
   against the member's (with `-Wimplicit-exception-spec-mismatch`), and
   at C++11 a friend's constexpr member function is implicitly `const`, as
   in clang 22 (WP-1655, WP-1656).
+- GCC's `__builtin_has_attribute(type-or-expression, attribute)` is
+  supported. It answers from the attributes stored on the operand's
+  declaration and type, with matching arguments. A dependent operand,
+  and a class member access in a template definition, are errors, as in
+  GCC 16.1. GCC's `__remove_reference(T)` spelling is accepted, and
+  `__builtin_assoc_barrier` takes a class operand. The driver accepts
+  `--start-no-unused-arguments`/`--end-no-unused-arguments` and
+  `--unwindlib=`, as clang does (WP-1611, WP-1633).
 
 ## [1.2.1] - 2026-11-14
 

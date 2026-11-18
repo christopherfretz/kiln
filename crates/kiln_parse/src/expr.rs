@@ -713,6 +713,7 @@ impl Parser<'_, '_> {
                         | Kw::BuiltinBitCast
                         | Kw::BuiltinVaArg
                         | Kw::BuiltinConvertVector
+                        | Kw::BuiltinHasAttribute
                         | Kw::BuiltinFile
                         | Kw::BuiltinFileName
                         | Kw::BuiltinFunction
@@ -1071,6 +1072,60 @@ impl Parser<'_, '_> {
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (e, ty) = (e?, ty?);
         ok.then(|| self.s.act_on_va_arg(e, ty, ty_loc, loc, rparen))
+    }
+
+    /// GCC's `__builtin_has_attribute ( type-id-or-expression ,
+    /// attribute )` (GCC `c_parser_has_attribute_expression`,
+    /// `cp_parser_has_attribute_expression`; spec/sema.md §5.4): the
+    /// first operand a type-id or an unevaluated assignment-expression,
+    /// the second one GNU attribute (a name, `__x__` or `x`, with its
+    /// arguments, no double parentheses). WP-1611.
+    fn parse_builtin_has_attribute(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_has_attribute'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let op = if self.is_cxx_type_id(TypeIdContext::AsGenericSelectionArgument).0 {
+            let at = self.type_loc_begin();
+            let Some(t) = self.parse_type_id() else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            GenericControl::Type(t, at)
+        } else {
+            self.s.enter_unevaluated();
+            let e = self.parse_assignment_expr();
+            self.s.exit_unevaluated();
+            let Some(e) = e else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            GenericControl::Expr(e)
+        };
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let Some(name) = self.attr_name() else {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        let name_loc = self.bump().span.lo;
+        let Some(args) = self.parse_attr_args(name) else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        ok.then(|| self.s.act_on_builtin_has_attribute(loc, op, name, name_loc, &args, rparen))
     }
 
     /// `__builtin_convertvector ( assignment-expression , type-id )`
@@ -2036,6 +2091,17 @@ impl Parser<'_, '_> {
 
     // -- primary expressions ----------------------------------------------------------------
 
+    /// `__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__` ([dcl.fct.def.general]/8).
+    fn parse_predefined_expr(&mut self, k: Kw) -> ExprId {
+        let loc = self.bump().span.lo;
+        let kind = match k {
+            Kw::Func => PredefinedKind::Func,
+            Kw::FunctionName => PredefinedKind::Function,
+            _ => PredefinedKind::PrettyFunction,
+        };
+        self.s.act_on_predefined_expr(kind, loc)
+    }
+
     /// primary-expression ([expr.prim]), named casts and functional casts.
     pub(crate) fn parse_primary_expr(&mut self) -> PExpr {
         let t = self.tok();
@@ -2108,14 +2174,9 @@ impl Parser<'_, '_> {
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
                 Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
                 Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),
+                Kw::BuiltinHasAttribute => self.parse_builtin_has_attribute(),
                 Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
-                    self.bump();
-                    let kind = match k {
-                        Kw::Func => PredefinedKind::Func,
-                        Kw::FunctionName => PredefinedKind::Function,
-                        _ => PredefinedKind::PrettyFunction,
-                    };
-                    Some(self.s.act_on_predefined_expr(kind, loc))
+                    Some(self.parse_predefined_expr(k))
                 }
                 Kw::BuiltinFile => self.parse_source_loc_expr(SourceLocKind::File),
                 Kw::BuiltinFileName => self.parse_source_loc_expr(SourceLocKind::FileName),

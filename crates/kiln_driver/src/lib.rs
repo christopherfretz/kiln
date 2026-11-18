@@ -643,7 +643,7 @@ fn driver_warnings(
     if let Some(flag) = image {
         Diag::new(DiagId::drv_pch_image_ignored, Span::INVALID).arg(flag).emit(&e);
     }
-    for x in unused_xray {
+    for x in unused_xray.iter().filter(|x| !args.no_unused.quiet(x)) {
         Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(x).emit(&e);
     }
     for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
@@ -956,7 +956,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         // spec/driver.md "Assembler inputs": `-E`, `-M` and
         // `-fsyntax-only` stop before a plain `.s` is assembled.
         if input.asm == Some(args::AsmKind::Plain) {
-            if !args.quiet_unused_arguments {
+            if !args.quiet_unused_arguments && !args.no_unused.quiet(&input.path) {
                 let sm = SourceManager::new();
                 let e = make_engine(
                     &sm,

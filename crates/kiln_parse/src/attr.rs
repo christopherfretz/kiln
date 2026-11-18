@@ -725,7 +725,7 @@ impl Parser<'_, '_> {
     }
 
     /// The name of a GNU attribute: an identifier or keyword.
-    fn attr_name(&self) -> Option<Symbol> {
+    pub(crate) fn attr_name(&self) -> Option<Symbol> {
         match self.tok().kind {
             TokKind::Identifier(s) => Some(s),
             _ => None,

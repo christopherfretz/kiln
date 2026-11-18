@@ -6930,9 +6930,13 @@ impl Compiler<'_> {
         // `move_if_noexcept`, `as_const`, `addressof` or `__addressof` is
         // its argument's lvalue (or address), evaluated without a call:
         // no frame, no step, no depth, as clang's `VisitCallExpr` does.
+        // WP-1611: GCC's `__builtin_assoc_barrier` on a class operand is
+        // a glvalue naming the operand's object, as `std::move` is.
         if let Some(d) = direct
             && let [x] = args[..]
-            && is_std_builtin(ast, d)
+            && (is_std_builtin(ast, d)
+                || (ast.decls.builtin_id(d) == Some(kiln_ast::decl::builtin::ASSOC_BARRIER)
+                    && ast.exprs.get(e).value_category().is_glvalue()))
         {
             let x0 = skip_parens(ast, x);
             let xty = self.ety(x0);

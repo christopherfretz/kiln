@@ -70,6 +70,7 @@ mod generic_sel;
 mod gnu;
 mod gnu_null;
 mod gnu_typeof;
+mod has_attribute;
 mod impcast;
 mod implicit_fallthrough;
 mod infinite_recursion;

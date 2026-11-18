@@ -191,6 +191,8 @@ on the linker's command line; compile-only: what `-c`, `-S`, `-E`,
 | `-Wl,`, `-Xlinker` | to the linker in order; `'linker' input unused` | same | as clang | as clang |
 | `-z <arg>` | `-z <arg>` to the linker; `'linker' input unused` | same | unknown argument | as clang |
 | `-u <sym>`, `-T <file>` | to the linker; `argument unused: '-u <sym>'` | same | unknown argument | as clang |
+| `--unwindlib=<lib>` (also `-unwindlib=`; WP-1633) | the unwinder clang links: `libgcc`, `platform` (libgcc on Linux) and `none` (no `-lgcc_s`/`-lgcc_eh`) pass on; when linking, `libunwind` is `--rtlib=libgcc requires --unwindlib=libgcc` (kiln links libgcc and has no `--rtlib=`) and another value `invalid unwind library name in argument '<arg>'`; `argument unused` when compiling | unrecognized | unknown argument | as clang, passed on (test added) |
+| `--start-no-unused-arguments`, `--end-no-unused-arguments` (WP-1633) | no unused-argument warning for any argument between them (linker inputs, link and assembler options, the claimed driver options); unmatched markers are accepted | unrecognized | unknown argument | as clang (`Args::no_unused`; test added) |
 | `-fuse-ld=lld\|bfd\|gold\|mold\|<path>` | picks the linker (clang checks the name when linking); `argument unused` | accepted | passed on | passed on (test added) |
 | `--sysroot` at link | the sysroot of the linker's search | same | passed on (`toolchain_link_args`) | unchanged (test added) |
 | `-print-file-name=`, `-print-prog-name=`, `-print-libgcc-file-name`, `-print-search-dirs` | the answer | same | "Toolchain probes" | unchanged |
@@ -1658,7 +1660,9 @@ the current directory (standard input is `-`). `-o -` is standard output.
   (WP-1453). Under `-E` and `-fsyntax-only` kiln warns about none of the
   link options, unlike clang (which warns as for `-c`). `-Qunused-arguments`
   (anywhere on the command line) silences all of them, as in clang
-  (doctest's CMake build passes it; WP-683).
+  (doctest's CMake build passes it; WP-683); `--start-no-unused-arguments`
+  ... `--end-no-unused-arguments` silences the ones between them (CMake
+  passes it around its link flags when the compiler is clang; WP-1633).
 - **Errors.** `-o` with several sources in a compile-only phase is an
   error, as is `-emit-llvm` when linking. A tool that is missing, cannot
   start, fails or is killed is a driver error (below); the exit status is
