@@ -1325,8 +1325,18 @@ case's standard (the last `-std=` of the run's flags or the test's options)
 answers the `c++NN` (NN or later), `c++NN_only`, `c++NN_down` (NN or
 earlier), `c++` and `c` effective targets (`target.rs`).
 
-**Directives** beyond the torture runner's: `dg-additional-sources`
-(compiled with the test's flags and linked with it); `dg-shouldfail` (a run
+**Directives** beyond the torture runner's: `dg-additional-sources
+"<files>" [{ target <sel> } | linkonly]` (`lib/gcc-defs.exp`; WP-1664):
+each word a file relative to the test's directory, every directive
+whose selector matches, a `linkonly` one only when the case links; each
+source is compiled with the test's flags and the objects are linked
+together for `dg-do link` and `run`. For `dg-do compile` or `assemble`
+each source is compiled on its own (DejaGnu hands them all to one driver
+run with `-o`, which GCC rejects; no test in the tree outside a
+`linkonly` source does this). An `xfail` or unknown selector skips the
+case with the reason, a source that is not there skips it as `missing
+source <name>`; directives in an additional source are not read
+(DejaGnu reads only the test's). `dg-shouldfail` (a run
 test passes when the program fails and is `wrong` when it exits 0);
 `dg-ice` marks the case xfail; any `dg-module-*` skips the test as
 `modules (dg-module-*)`, counted, not run. `dg-final` checks
@@ -1338,8 +1348,14 @@ the torture runner, each C++ tool probing a unit after the case's `-std=`
 (GCC 16 takes `-freflection` only at C++26); a unit is a flag and, for
 `-D`, `-U`, `-I`, `-isystem`, `-idirafter`, `-iquote`, `-include`,
 `-imacros`, `--embed-directory`, `--param`, `-Xlinker` and `-mllvm`, the
-word after it. `${srcdir}` in a test's flags
-is the checkout's `gcc/testsuite`.
+word after it. In a test's options (the Tcl evaluation of the directive)
+`${srcdir}` / `$srcdir` is the checkout's `gcc/testsuite` and `${subdir}`
+/ `$subdir` the directory of the driver under it (`g++.dg` for `dg` and
+`common`, `g++.dg/torture`, `g++.old-deja`). A unit that is a single
+word, not a flag, with a C, C++ or object extension (`.c`, `.C`, `.cc`,
+`.cpp`, `.cxx`, `.c++`, `.o`) is an input file the driver compiles with
+the test (`dg-options "-O3 ${srcdir}/g++.dg/x/y-1.C"`): it joins the
+sources after the test instead of being probed as a flag.
 
 **Diagnostic matching** (`xtask/src/gcc_tests/expect.rs`). The
 expectations of a case are its applicable `dg-error`, `dg-warning`,
@@ -1370,9 +1386,9 @@ the non-xfail `dg-error`s:
   with line 0 satisfy a line-0 expectation and are never extra; a line-0
   `dg-error` or `dg-message` (DejaGnu matches it on every line of the
   output) accounts for an error on any line.
-  `dg-excess-errors` or `dg-prune-output` (whose patterns are GCC's
-  wording, which cannot be applied to other compilers' output) turns the
-  extra-error check off for the case.
+  `dg-excess-errors`, or a `dg-prune-output` that may match an error
+  line (below; its pattern is GCC's wording, which cannot be applied to
+  other compilers' output), turns the extra-error check off for the case.
 
 **Severities the file names** (WP-1554, from GCC 16.1's `lib/gcc-dg.exp`,
 `lib/gcc-defs.exp`, `lib/prune.exp` and DejaGnu's `dg.exp`). `dg-error`'s
@@ -1394,8 +1410,30 @@ another kind; anything else, `""` included, names none. So:
 - a `dg-regexp` naming an error requires an error with no line (any
   line); one naming another kind expects nothing the runner checks; one
   naming none may hold errors anywhere;
-- `dg-excess-errors`, and a `dg-prune-output` whose regexp does not name
-  only a warning or a note, may hold errors anywhere.
+- `dg-excess-errors`, and a `dg-prune-output` that may match an error
+  line, may hold errors anywhere.
+
+**Which prunes may match an error line** (WP-1617). `lib/gcc-dg.exp`
+removes every output line holding a match of the pattern (`[^\n]*<p>[^\n]*`)
+before the excess-errors check; pruning never makes an expected error. A
+GCC error line is `<file>:<line>:<col>: error: <text>` with any text, so
+the runner decides from the pattern alone, and a prune that cannot match
+one changes nothing (no extra-error exemption, no `expect-unknown`). It
+cannot when all of these hold: the word as Tcl hands it over (braced:
+as written; quoted or bare: `\n`, `\t`, `\r` and `\X` for punctuation
+X substituted) has no command or variable substitution (`[`, `$`) and
+no other letter escape; the regexp holds no `|`, no `error`, no `sorry`,
+no `(?` and no `***` director, and its groups and bracket expressions
+balance; and outside groups and bracket expressions it holds `warning:`
+or `note:` as a run of literal characters (`\X` for punctuation X is
+literal; `.`, `^`, `$`, an escape class, a group or a bracket expression
+ends a run; a character under `*`, `?` or a bound `{...}` is not in a
+run, and one under `+` ends it). That a GCC error's text never holds
+`warning:` or `note:` is the one assumption, the same the severity
+reading of `dg-message` makes. Every other pattern may match an error
+line: `"note"`, `"warning"` and `"In function"` (the word may sit in an
+error's text), `"note:|x"`, `"(note: )?x"`, `"note:?"`, an empty
+pattern.
 
 When no error is required and the compiler reports errors (or fails
 without an error line), the case is `expect-unknown` instead of
@@ -1408,6 +1446,19 @@ its line) before the first error. `expect-unknown` is neither a pass nor
 a failure: it is counted apart (the headline's pass rate is over the
 decided cases), has no triage bucket, and the oracles run on it as on a
 failure; GCC's result there is evidence for the triage, never the rule.
+
+**Expected link errors** (WP-1664). A case that links and has a
+non-xfail `dg-error`, or a `dg-message` naming an error or no severity,
+at line 0 (`// { dg-message "i" "" { target *-*-* } 0 }` in a `dg-do
+link` test: GCC's linker output, "undefined reference to ...", is what
+meets it) expects a link error when its compile reports no error and no
+diagnostic without a line (such a diagnostic could meet the directive
+itself, and the case is judged as before). The line-0 directive is then
+left to the link: a link that fails (`compile-reject` of the link step)
+is the pass, and a link that succeeds is `accept-invalid` (`linked
+(expected a link error: <directive>)`), the classes of the compile's
+"error expected, none" and "error, none expected"; a link that fails in
+a case without such a directive stays `compile-reject` (`link: ...`).
 
 Missing warnings and messages are not failures. A negative case that passes stops after
 the compile; a positive one goes on to link and run as its action says,

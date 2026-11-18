@@ -555,9 +555,77 @@ fn srcdir_of(test: &Test) -> String {
     p.strip_suffix(&test.id).map_or_else(|| ".".to_owned(), |s| s.trim_end_matches('/').to_owned())
 }
 
-/// `${srcdir}` / `$srcdir` in a flag replaced by the testsuite directory.
-fn with_srcdir(flag: &str, srcdir: &str) -> String {
-    flag.replace("${srcdir}", srcdir).replace("$srcdir", srcdir)
+/// `$subdir`: the directory of the `.exp` driver that runs the test,
+/// relative to `$srcdir` (`g++.dg/dg.exp` runs `dg` and `common`).
+fn subdir_of(suite: Suite) -> &'static str {
+    match suite {
+        Suite::Dg | Suite::Common => "g++.dg",
+        Suite::Torture => "g++.dg/torture",
+        Suite::OldDeja => "g++.old-deja",
+    }
+}
+
+/// `${srcdir}` / `$srcdir` and `${subdir}` / `$subdir` in a flag replaced
+/// as the Tcl evaluation of the directive replaces them: the testsuite
+/// directory and the driver's directory under it.
+fn with_srcdir(flag: &str, srcdir: &str, subdir: &str) -> String {
+    flag.replace("${srcdir}", srcdir)
+        .replace("$srcdir", srcdir)
+        .replace("${subdir}", subdir)
+        .replace("$subdir", subdir)
+}
+
+/// Whether a word of a test's options is an input file the driver
+/// compiles and links with the test (`dg-options "-O2 ${srcdir}/x/y.C"`):
+/// a unit of its own (not the value of `-include` and the like), not a
+/// flag, with a C, C++ or object file's extension.
+fn input_file(unit: &[String]) -> Option<&str> {
+    let [w] = unit else { return None };
+    let ext = Path::new(w).extension()?.to_str()?;
+    (!w.starts_with('-') && matches!(ext, "c" | "C" | "cc" | "cpp" | "cxx" | "c++" | "o"))
+        .then_some(w.as_str())
+}
+
+/// The sources `dg-additional-sources` adds at `target`
+/// (`lib/gcc-defs.exp`): each directive's words, relative to the test's
+/// directory, under its `{ target <sel> }`; one marked `linkonly` only
+/// when the case links. `Err` for a selector the runner cannot read.
+fn additional_sources(
+    dirs: &[Directive],
+    dir: &Path,
+    target: &Target,
+    links: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    for d in dirs.iter().filter(|d| d.name == "dg-additional-sources") {
+        if let Some(sel) = d.args.get(1) {
+            let words = tcl::list(sel.text());
+            if words.first().is_some_and(|w| w.text() == "linkonly") {
+                if words.len() > 1 {
+                    return Err("dg-additional-sources: a selector after linkonly".into());
+                }
+                if !links {
+                    continue;
+                }
+            } else {
+                match target.keyword_selector(sel.text()) {
+                    Some((kw, Ok(m))) if kw == "target" => {
+                        if !m {
+                            continue;
+                        }
+                    }
+                    Some((_, Err(e))) => return Err(format!("dg-additional-sources: {e}")),
+                    _ => {
+                        return Err(format!("dg-additional-sources: selector `{}`", sel.text()));
+                    }
+                }
+            }
+        }
+        for f in dg::split_flags(d.args.first().map_or("", tcl::Word::text)) {
+            out.push(dir.join(f));
+        }
+    }
+    Ok(out)
 }
 
 /// A test's cases (or skips), one per standard and option set.
@@ -595,12 +663,7 @@ pub fn plan_test(
     let ice = dirs.iter().any(|d| d.name == "dg-ice");
     let dir = test.path.parent().unwrap_or(Path::new("."));
     let srcdir = srcdir_of(test);
-    let mut sources = vec![test.path.clone()];
-    for d in dirs.iter().filter(|d| d.name == "dg-additional-sources") {
-        for f in dg::split_flags(d.args.first().map_or("", tcl::Word::text)) {
-            sources.push(dir.join(f));
-        }
-    }
+    let subdir = subdir_of(test.suite);
     let mut out = Vec::new();
     for (label, run) in runs {
         let mut lead = run.clone();
@@ -612,24 +675,40 @@ pub fn plan_test(
         let label = if label.is_empty() { "-".to_owned() } else { label };
         let r = match dg::resolve(&dirs, &defaults, &target, &lead) {
             Plan::Skip(w) => Err(w),
-            Plan::Run(mut plan) => match expect::expectations(&dirs, &target.with_option(&lead)) {
-                Err(e) => Err(e),
-                Ok(mut expected) => {
-                    expected.links = plan.action.links();
-                    plan.negative = expected.negative();
-                    plan.xfail |= ice;
-                    let mut flags = lead.clone();
-                    flags.extend(plan.flags.iter().map(|f| with_srcdir(f, &srcdir)));
-                    Ok(CasePlan {
-                        opt: label.clone(),
-                        plan,
-                        flags,
-                        expected,
-                        sources: sources.clone(),
-                        shouldfail,
-                    })
+            Plan::Run(mut plan) => {
+                let t = target.with_option(&lead);
+                match expect::expectations(&dirs, &t)
+                    .and_then(|e| Ok((e, additional_sources(&dirs, dir, &t, plan.action.links())?)))
+                {
+                    Err(e) => Err(e),
+                    Ok((mut expected, extra)) => {
+                        expected.links = plan.action.links();
+                        plan.negative = expected.negative();
+                        plan.xfail |= ice;
+                        // Input files among the options join the sources,
+                        // after the test (the driver's order).
+                        let mut sources = vec![test.path.clone()];
+                        let mut flags = lead.clone();
+                        let own: Vec<String> =
+                            plan.flags.iter().map(|f| with_srcdir(f, &srcdir, subdir)).collect();
+                        for unit in super::flag_units(&own) {
+                            match input_file(&unit) {
+                                Some(f) => sources.push(dir.join(f)),
+                                None => flags.extend(unit),
+                            }
+                        }
+                        sources.extend(extra);
+                        Ok(CasePlan {
+                            opt: label.clone(),
+                            plan,
+                            flags,
+                            expected,
+                            sources,
+                            shouldfail,
+                        })
+                    }
                 }
-            },
+            }
         };
         out.push((label, r));
     }
@@ -684,7 +763,19 @@ pub fn plan_all(
             negative: false,
             results: BTreeMap::new(),
         };
-        let cases = plan_test(test, body, stds, opts, t);
+        let mut cases = plan_test(test, body, stds, opts, t);
+        // A source the test names that is not there (DejaGnu's compile
+        // would fail for every compiler): counted, not run.
+        for (_, c) in &mut cases {
+            if let Ok(case) = c
+                && let Some(m) = case.sources.iter().find(|p| !p.is_file())
+            {
+                let name = m
+                    .file_name()
+                    .map_or_else(|| m.display().to_string(), |n| n.to_string_lossy().into_owned());
+                *c = Err(format!("missing source {name}"));
+            }
+        }
         let first_skip = match cases.first() {
             Some((_, Err(w))) => Some(w.clone()),
             _ => None,
@@ -1754,6 +1845,161 @@ mod tests {
         assert_eq!(c.flags, args(&["-std=gnu++26", "--embed-directory", "/ts/c-c++-common/cpp/d"]));
         assert_eq!(should_fail(Verdict::new(Class::Wrong, "exit 1")), Verdict::pass());
         assert_eq!(should_fail(Verdict::pass()).class, Class::Wrong);
+    }
+
+    /// Several sources and options with paths (WP-1664): input files in
+    /// the options join the sources, `$srcdir` and `$subdir` are
+    /// substituted, `dg-additional-sources` takes selectors and `linkonly`.
+    #[test]
+    fn sources_and_substitutions() {
+        let t = Target::for_arch("x86_64", false);
+        let ok = |id: &str, suite: Suite, body: &str| {
+            let p = plan_test(&test(id, suite), body, &args(&["26"]), &[], &t);
+            match p.into_iter().next() {
+                Some((_, Ok(c))) => c,
+                other => panic!("{other:?}"),
+            }
+        };
+        let c = ok(
+            "g++.dg/ipa/a-2.C",
+            Suite::Dg,
+            "/* { dg-do run } */\n/* { dg-options \"-O3 ${srcdir}/g++.dg/ipa/a-1.C\" } */\n",
+        );
+        assert_eq!(c.flags, args(&["-std=gnu++26", "-O3"]));
+        assert_eq!(
+            c.sources,
+            [PathBuf::from("/ts/g++.dg/ipa/a-2.C"), PathBuf::from("/ts/g++.dg/ipa/a-1.C")]
+        );
+        // A path that is the value of a flag stays a flag.
+        let c = ok(
+            "c-c++-common/cpp/i.c",
+            Suite::Common,
+            "// { dg-options \"-include $srcdir/c-c++-common/cpp/i.h -I$subdir/x\" }\n\
+             // { dg-additional-options \"-imacros ${srcdir}/m.c\" }\n",
+        );
+        assert_eq!(
+            c.flags,
+            args(&[
+                "-std=gnu++26",
+                "-include",
+                "/ts/c-c++-common/cpp/i.h",
+                "-Ig++.dg/x",
+                "-imacros",
+                "/ts/m.c"
+            ])
+        );
+        assert_eq!(c.sources.len(), 1);
+        assert_eq!(with_srcdir("${subdir}/a", "/s", subdir_of(Suite::OldDeja)), "g++.old-deja/a");
+        assert_eq!(with_srcdir("$subdir", "/s", subdir_of(Suite::Torture)), "g++.dg/torture");
+        // Several words, several directives, a selector, linkonly.
+        let body = "// { dg-do link }\n\
+                    // { dg-additional-sources \"b.cc c.cc\" }\n\
+                    // { dg-additional-sources \"d.cc\" { target c++20 } }\n\
+                    // { dg-additional-sources \"e.cc\" { target c++11_only } }\n\
+                    // { dg-additional-sources \"f.cc\" linkonly }\n";
+        let c = ok("g++.dg/x/a.C", Suite::Dg, body);
+        let names: Vec<_> =
+            c.sources.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(names, ["a.C", "b.cc", "c.cc", "d.cc", "f.cc"]);
+        let c = ok("g++.dg/x/a.C", Suite::Dg, &body.replace("dg-do link", "dg-do compile"));
+        assert_eq!(c.sources.len(), 4, "linkonly: only when the case links");
+        let p = plan_test(
+            &test("g++.dg/a.C", Suite::Dg),
+            "// { dg-additional-sources \"b.cc\" { xfail *-*-* } }\n",
+            &args(&["26"]),
+            &[],
+            &t,
+        );
+        assert!(matches!(&p[0].1, Err(e) if e.starts_with("dg-additional-sources")), "{p:?}");
+        assert_eq!(input_file(&args(&["x.o"])), Some("x.o"));
+        assert_eq!(input_file(&args(&["-include", "x.c"])), None);
+        assert_eq!(input_file(&args(&["-fx.c"])), None);
+        assert_eq!(input_file(&args(&["dir"])), None);
+    }
+
+    /// A missing source is a skip, not a failure (WP-1664).
+    #[test]
+    fn missing_sources_skip() {
+        let d = std::env::temp_dir().join(format!("xtask-gxx-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let a = d.join("a.C");
+        std::fs::write(&a, "// { dg-do run }\n// { dg-additional-sources \"gone.cc\" }\n").unwrap();
+        let tests = [Test { suite: Suite::Dg, id: "g++.dg/a.C".into(), path: a }];
+        let bodies = [std::fs::read_to_string(&tests[0].path).unwrap()];
+        let t = Target::for_arch("x86_64", false);
+        let (jobs, skips, _) = plan_all(&tests, &bodies, &args(&["26"]), &[], &t);
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(jobs.is_empty());
+        assert_eq!(skips[0].skip.as_deref(), Some("missing source gone.cc"));
+    }
+
+    /// Two sources compiled and linked, run; an expected link error
+    /// (WP-1664), through a real compiler.
+    #[test]
+    fn links_several_sources_and_expects_link_errors() {
+        let cxx = PathBuf::from("clang++-19");
+        if std::process::Command::new(&cxx).arg("--version").output().is_err() {
+            eprintln!("skipping: clang++-19 not available");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("xtask-gxx-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |n: &str, s: &str| std::fs::write(dir.join(n), s).unwrap();
+        write("def.cc", "int helper() { return 7; }\n");
+        write(
+            "run.C",
+            "// { dg-do run }\n// { dg-additional-sources \"def.cc\" }\n\
+             int helper();\nint main() { return helper() == 7 ? 0 : 1; }\n",
+        );
+        write("undef.C", "// { dg-do link }\nint helper();\nint main() { return helper(); }\n");
+        write(
+            "linkerr.C",
+            "// { dg-do link }\n// { dg-message \"helper\" \"\" { target *-*-* } 0 }\n\
+             int helper();\nint main() { return helper(); }\n",
+        );
+        write(
+            "linked.C",
+            "// { dg-do link }\n// { dg-additional-sources \"def.cc\" }\n\
+             // { dg-error \"helper\" \"\" { target *-*-* } 0 }\n\
+             int helper();\nint main() { return helper(); }\n",
+        );
+        let tool = Tool::new_for(Role::Clang, cxx, Vec::new(), &dir, "probe.cc").unwrap();
+        let t = Target::host();
+        let class = |name: &str| {
+            let test =
+                Test { suite: Suite::Dg, id: format!("g++.dg/{name}"), path: dir.join(name) };
+            let body = std::fs::read_to_string(&test.path).unwrap();
+            let p = plan_test(&test, &body, &args(&["17"]), &[], &t);
+            let Some((_, Ok(c))) = p.into_iter().next() else { panic!("{name}") };
+            let link = args(&["-lm"]);
+            let case = Case {
+                sources: &c.sources,
+                action: c.plan.action,
+                flags: &c.flags,
+                link_flags: &link,
+                negative: c.plan.negative,
+                compile_timeout: Duration::from_secs(60),
+                run_timeout: Duration::from_secs(10),
+                mem: None,
+                lang: None,
+                expect: Some(&c.expected),
+            };
+            let v = tool.run_case(&case, &dir.join(format!("w-{name}"))).verdict;
+            (v.class, v.detail)
+        };
+        let got = [class("run.C"), class("undef.C"), class("linkerr.C"), class("linked.C")];
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(got[0].0, Class::Pass, "{:?}", got[0]);
+        assert_eq!(got[1].0, Class::CompileReject, "{:?}", got[1]);
+        assert!(got[1].1.starts_with("link:"), "{:?}", got[1]);
+        assert_eq!(got[2].0, Class::Pass, "the expected link error: {:?}", got[2]);
+        assert_eq!(
+            got[3],
+            (
+                Class::AcceptInvalid,
+                "linked (expected a link error: dg-error \"helper\")".to_owned()
+            )
+        );
     }
 
     #[test]

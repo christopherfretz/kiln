@@ -1450,6 +1450,15 @@ Planned as 1.3.0.
   constexpr variable of a module interface initialized to a TU-local
   value is rejected ([basic.link]/15); imported `thread_local` variables
   keep their one definition in the module's object (WP-1669).
+- `cargo xtask gxx-dg`: an input file named in a test's options is
+  compiled and linked with it instead of being probed as a flag; a
+  line-0 `dg-error` or `dg-message` in a `dg-do link` test is read as an
+  expected link error (a failing link passes, a linking one is
+  `accept-invalid`); `dg-additional-sources` honours its selector and
+  `linkonly`, `$subdir` is substituted and a missing source skips the
+  case; a `dg-prune-output` that can only match a warning or note line
+  no longer lifts the extra-error check or leaves a rejection
+  `expect-unknown` (WP-1664, WP-1617).
 
 ## [1.2.1] - 2026-11-14
 
