@@ -5495,7 +5495,17 @@ diagnostics and IR.
   tuple-adl-get}.cpp` run at the default std against clang). That case
   waits for an oracle: neither clang 22 nor GCC 16 implements P2686's
   automatic references (clang 22 only the structured-binding part), so the
-  tests of the constexpr cases are `skip(clang)`. A value read through
+  tests of the constexpr cases are `skip(clang)`. The variable being
+  initialized is one of these objects ([expr.const.init]/4.2 checks its
+  value "immediately after the initializing declaration", where it is
+  constexpr-referenceable from itself; WP-1680): a `constexpr` local whose
+  value points into itself (`struct S { const S* self = this; };
+  constexpr S s{};`, a reference member bound to `*this`, a pointer to
+  its own member, array elements pointing to each other) is
+  constant-initialized at C++26 and rejected before it with clang's notes,
+  by the same freeze; no check of its own (docs/status/deviations.md;
+  `tests/conformance/expr.const/constexpr-local-self-pointer{,-run,-errors,-cxx23}.cpp`).
+  A value read through
   such a reference still needs a constant referent ([expr.const]/10:
   `constexpr int& r = i; static_assert(r == 3);` reads non-const `i`).
   Codegen does not fold an initializer or load whose value designates an
@@ -6632,15 +6642,39 @@ under its own name, the same signature, gating and codegen
       decl-specifier-seq (GCC keeps them on the type it builds; kiln
       drops most from the type), e.g. `__attribute__((aligned(8))) int`
       has `aligned(8)` (WP-1667). An attribute kiln parses and drops
-      (clang's ignored and rejected ones, GCC-only names such as
-      `externally_visible` / `warn_if_not_aligned`, `nonstring`, and
-      `nocommon`, which has no effect in codegen) answers 0; a name
+      (clang's ignored and rejected ones, and GCC-only names such as
+      `externally_visible` / `warn_if_not_aligned`) answers 0. The rule
+      (WP-1675): an attribute kiln accepts silently answers 1 where GCC
+      answers 1, so `nonstring` (clang 22; unknown at
+      `-fclang-compat=19`) and `nocommon` are kept as `NONSTRING` /
+      `NOCOMMON` nodes, with no other effect, where GCC keeps them
+      (`nonstring` on a variable, parameter or member whose type is an
+      array of, or a pointer to, a narrow character type; `nocommon` on
+      a variable that is not a parameter) and silently dropped elsewhere;
+      one kiln warns about as ignored (`externally_visible`,
+      `warn_if_not_aligned`: unknown to clang; `transparent_union` on a
+      typedef in C++) may answer 0. `nonnull` on a typedef, alias,
+      variable or member of prototyped function, or pointer or reference
+      to function, type is kept as clang 22 keeps it (no warning;
+      `nonnull.rs`), and answered through the typedef; written on a
+      pointer or reference to function it answers 0 for the pointer, as
+      GCC keeps it on the pointee's type (kiln answers 0 for `*p` too,
+      where GCC answers 1). `format` may give only its leading arguments
+      (`format(printf)`, `format(printf, 2)`); those given must match, as
+      GCC's manual states ("matched up to the provided number"): GCC 16.1
+      compares only the archetype, so `format(printf, 3)` against
+      `format(printf, 2, 3)` is 1 there and 0 in kiln, and `__printf__`
+      matches `printf` in kiln and not in GCC
+      (`has-attribute-format-partial-manual.cpp`). `common` in C++ is
+      clang's error, so GCC's `builtin-has-attribute-4.c` differs there
+      by design. A name
       neither GCC nor clang knows is `unknown attribute`. A dependent operand or
       attribute argument is an error, as in GCC 16.1 ("sorry,
       unimplemented"), and so is a class member access in a template
       definition, dependent or not (GCC's own refusal). `__has_builtin(__builtin_has_attribute)` is 0, as
       in clang 22 (`ext.gnu.builtins/has-attribute*.cpp`,
-      `c/expr/builtin-has-attribute.c`).
+      `c/expr/builtin-has-attribute{,-kept}.c`,
+      `dcl.attr/nonnull-attribute-function-type.cpp`).
     - `__remove_reference(T)` (WP-1611): GCC's spelling of clang's
       `__remove_reference_t(T)`, a type transform like it, so a keyword
       only before `(`: libstdc++ 14 names it only under

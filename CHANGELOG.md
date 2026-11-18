@@ -1467,6 +1467,15 @@ Planned as 1.3.0.
   error, as in GCC; clang only warns (docs/status/deviations.md). A use
   in an inline variable's initializer gets clang's
   `-WTU-local-entity-exposure` warning (WP-1677, WP-1678, WP-1676).
+- A constexpr local whose value points into itself (a `this`
+  default member initializer, a reference member, an element pointing
+  at another element) is accepted at C++26, as [expr.const.init]/2-4
+  makes it constexpr-referenceable from itself; clang 22 and GCC 16.1
+  reject it (docs/status/deviations.md). Before C++26 it is rejected
+  with clang's diagnostics. `__builtin_has_attribute` answers 1 for
+  `nonstring` and `nocommon` where GCC keeps them, for `nonnull` on a
+  function typedef or alias, and for `format` probed with only some
+  of its arguments (WP-1680, WP-1675).
 
 ## [1.2.1] - 2026-11-14
 

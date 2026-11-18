@@ -369,8 +369,23 @@ impl Sema<'_, '_> {
         args: &[AttrArg],
         loc: Loc,
     ) -> Option<AttrId> {
+        self.format_attribute_n(syntax, args, loc, false)
+    }
+
+    /// [`Sema::format_attribute`], or with `partial` the probe of
+    /// `__builtin_has_attribute (x, format (archetype[, F[, A]]))`, which
+    /// may give only the leading arguments (GCC's manual: "matched up to
+    /// the provided number"): `flags` holds how many were given when
+    /// fewer than three (WP-1675). The probe is never attached.
+    pub(crate) fn format_attribute_n(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+        partial: bool,
+    ) -> Option<AttrId> {
         let name = "'format'";
-        if args.len() != 3 {
+        if args.len() != 3 && !(partial && (1..3).contains(&args.len())) {
             let msg =
                 self.diag(DiagId::sema_attribute_wrong_number_arguments, loc).arg(name).arg("3");
             self.emit(msg);
@@ -421,8 +436,9 @@ impl Sema<'_, '_> {
             };
             idx[i] = u32::try_from(v).map_or(0xfffe, |v| v.min(0xfffe));
         }
+        let flags = if args.len() < 3 { u8::try_from(args.len()).unwrap_or(0) } else { 0 };
         let node =
-            AttrNode { kind: AttrKind::FORMAT, syntax, flags: 0, loc, a, b: idx[0] | idx[1] << 16 };
+            AttrNode { kind: AttrKind::FORMAT, syntax, flags, loc, a, b: idx[0] | idx[1] << 16 };
         Some(self.ast.attrs.push(node))
     }
 

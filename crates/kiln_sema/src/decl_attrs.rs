@@ -581,6 +581,37 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// GCC's `nonstring` subject: a variable, parameter or member whose
+    /// type is an array of (arrays of) a narrow character type, or a
+    /// pointer to one (WP-1675).
+    pub(crate) fn nonstring_subject(&self, d: DeclId, kind: DeclKind) -> bool {
+        use kiln_ast::types::BuiltinType as B;
+        if !matches!(
+            kind,
+            DeclKind::Var
+                | DeclKind::VarTemplateSpecialization
+                | DeclKind::ParmVar
+                | DeclKind::Field
+        ) {
+            return false;
+        }
+        let Some(mut t) = self.ast.decls.get(d).ty() else { return false };
+        if self.ast.types.is_pointer(t) {
+            t = self.ast.types.pointee(t).unwrap_or(t);
+        } else if self.ast.types.is_array(t) {
+            for _ in 0..256 {
+                if !self.ast.types.is_array(t) {
+                    break;
+                }
+                t = self.ast.types.element(t).unwrap_or(t);
+            }
+        } else {
+            return false;
+        }
+        let t = self.ast.types.canonical(t).without_quals();
+        matches!(self.ast.types.builtin(t), Some(B::Char | B::SChar | B::UChar))
+    }
+
     /// One attribute of [`Sema::check_decl_attrs`]; false drops it.
     // One flat match arm per attribute kind's subject rule.
     #[allow(clippy::too_many_lines)]
@@ -616,6 +647,12 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NODISCARD => self.check_nodiscard_subject(d, kind, node),
+            // Kept only where GCC keeps them, silently dropped elsewhere
+            // (WP-1675; `__builtin_has_attribute`).
+            AttrKind::NONSTRING => self.nonstring_subject(d, kind),
+            AttrKind::NOCOMMON => {
+                matches!(kind, DeclKind::Var | DeclKind::VarTemplateSpecialization)
+            }
             // clang `Section`: `SubjectList<[Function, GlobalVar,
             // ObjCMethod, ObjCProperty], ErrorDiag>`.
             AttrKind::SECTION => {

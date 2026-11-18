@@ -60,7 +60,9 @@ impl Sema<'_, '_> {
     }
 
     /// clang `handleNonNullAttr` for `nonnull` attribute `a` on
-    /// declaration `d` of kind `kind`: a function (or method); each
+    /// declaration `d` of kind `kind`: a function (or method), or a
+    /// typedef, alias, variable or member of prototyped function (pointer
+    /// or reference) type (clang `HasFunctionProto`, WP-1675); each
     /// index names a parameter (one-based; 1 is `this` in an implicit
     /// object member function, which is an error), a variadic function
     /// takes any positive index. An index naming a non-pointer parameter
@@ -79,8 +81,22 @@ impl Sema<'_, '_> {
         if kind == DeclKind::ParmVar {
             return true;
         }
-        let proto = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t));
-        let Some(proto) = proto.filter(|_| kind.is_function()) else {
+        let ty = self.ast.decls.get(d).ty();
+        let proto = if kind.is_function() {
+            ty.and_then(|t| self.ast.types.proto(t))
+        } else {
+            // clang `HasFunctionProto` (`getFunctionType`): a typedef,
+            // alias, variable or member whose type is a prototyped
+            // function, or a pointer or reference to one (WP-1675).
+            ty.and_then(|t| {
+                let f = match self.ast.types.pointee(t) {
+                    Some(p) if !self.is_member_pointer(t) => p,
+                    _ => t,
+                };
+                self.ast.types.proto(f).filter(|p| !p.info().no_proto())
+            })
+        };
+        let Some(proto) = proto else {
             let msg = self
                 .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
                 .arg(shown)
@@ -90,7 +106,7 @@ impl Sema<'_, '_> {
         };
         let params = self.ast.types.params(proto).to_vec();
         let variadic = proto.variadic();
-        let this = u64::from(self.is_implicit_object_member(d));
+        let this = u64::from(kind.is_function() && self.is_implicit_object_member(d));
         let written = ListId::from_raw(node.a).unwrap_or(ListId::EMPTY);
         let written: Vec<ExprId> = self.ast.lists.iter::<ExprId>(written).collect();
         let mut kept = Vec::with_capacity(written.len());

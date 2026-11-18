@@ -6317,6 +6317,33 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// Whether a parameter keeps attribute `a` ([`Sema::create_params`]):
+    /// the subject rules of the attributes valid on other declarations.
+    fn keep_param_attr(&mut self, pd: DeclId, a: AttrId) -> bool {
+        let node = *self.ast.attrs.get(a);
+        if node.kind.is_class_b() {
+            return self.check_class_b_attr(pd, DeclKind::ParmVar, a, node);
+        }
+        // GCC ignores `nocommon` on a parameter (WP-1675).
+        if node.kind == AttrKind::NOCOMMON {
+            return false;
+        }
+        if node.kind == AttrKind::NONSTRING {
+            return self.nonstring_subject(pd, DeclKind::ParmVar);
+        }
+        if node.kind == AttrKind::REQUIRE_CONSTANT_INIT {
+            // Not a global variable (WP-954).
+            return self.check_require_constant_init_attr(pd, DeclKind::ParmVar, node);
+        }
+        if node.kind != AttrKind::RETURNS_TWICE {
+            return true;
+        }
+        let shown = format!("'{}'", self.attr_shown(&node, "returns_twice"));
+        let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc);
+        self.emit(msg.arg(shown).arg("functions"));
+        false
+    }
+
     /// Creates the parameter declarations of function `f` from the
     /// declarator's `params` (adopting those created at their point of
     /// declaration, [`Sema::act_on_prototype_param`]), with the merged `defaults`
@@ -6401,23 +6428,7 @@ impl Sema<'_, '_> {
                 self.check_cleanup_attrs(pd, &mut attrs);
                 self.check_internal_linkage_attrs(pd, &mut attrs);
                 self.check_tls_model_attrs(pd, &mut attrs);
-                attrs.retain(|&a| {
-                    let node = *self.ast.attrs.get(a);
-                    if node.kind.is_class_b() {
-                        return self.check_class_b_attr(pd, DeclKind::ParmVar, a, node);
-                    }
-                    if node.kind == AttrKind::REQUIRE_CONSTANT_INIT {
-                        // Not a global variable (WP-954).
-                        return self.check_require_constant_init_attr(pd, DeclKind::ParmVar, node);
-                    }
-                    if node.kind != AttrKind::RETURNS_TWICE {
-                        return true;
-                    }
-                    let shown = format!("'{}'", self.attr_shown(&node, "returns_twice"));
-                    let msg = self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc);
-                    self.emit(msg.arg(shown).arg("functions"));
-                    false
-                });
+                attrs.retain(|&a| self.keep_param_attr(pd, a));
                 self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
@@ -13671,7 +13682,21 @@ impl Sema<'_, '_> {
         );
         let kind = match support {
             crate::attr_triage::Support::Implemented(k) => k,
-            crate::attr_triage::Support::Ignored(_) => return None,
+            crate::attr_triage::Support::Ignored(_) => {
+                // Kept only for `__builtin_has_attribute`, which answers
+                // what GCC answers for an attribute kiln accepts silently
+                // (WP-1675); its subject is checked in `check_decl_attr`.
+                let kind = match n.as_str() {
+                    "nonstring" => AttrKind::NONSTRING,
+                    "nocommon" => AttrKind::NOCOMMON,
+                    _ => return None,
+                };
+                if !args.is_empty() {
+                    return None;
+                }
+                let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: 0 };
+                return Some(self.ast.attrs.push(node));
+            }
             crate::attr_triage::Support::Unsupported => {
                 let msg = self.diag(DiagId::sema_attribute_unsupported_by_kiln, loc).arg(shown);
                 self.emit(msg);

@@ -90,6 +90,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NAKED => "Naked",
         AttrKind::INIT_PRIORITY => "InitPriority",
         AttrKind::NONNULL => "NonNull",
+        AttrKind::NONSTRING => "NonString",
+        AttrKind::NOCOMMON => "NoCommon",
         AttrKind::RETURNS_NONNULL => "ReturnsNonNull",
         AttrKind::LOOP_HINT => "LoopHint",
         _ => return None,

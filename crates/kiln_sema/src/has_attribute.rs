@@ -12,7 +12,8 @@
 //! sugar: the typedefs it was named by, then its class or enumeration;
 //! pointers, references and functions stop the walk (the attribute of a
 //! pointer is not the pointee's). An attribute kiln parses and drops
-//! answers 0.
+//! answers 0; of those it accepts silently, `nonstring` and `nocommon`
+//! are kept for this query where GCC keeps them (WP-1675).
 
 use kiln_ast::QualType;
 use kiln_ast::attr::{AttrKind, AttrSyntax};
@@ -126,6 +127,9 @@ impl Sema<'_, '_> {
                 }
                 return false;
             }
+            // Accepted silently and kept only for this query (WP-1675).
+            (None, Support::Ignored(_)) if n == "nonstring" => AttrKind::NONSTRING,
+            (None, Support::Ignored(_)) if n == "nocommon" => AttrKind::NOCOMMON,
             // Parsed and dropped (or rejected when written): never stored.
             (None, Support::Ignored(_) | Support::Unsupported) => return false,
         };
@@ -134,6 +138,11 @@ impl Sema<'_, '_> {
         // arguments are checked as on a declaration.
         let probe = if args.is_empty() {
             None
+        } else if kind == AttrKind::FORMAT && args.len() < 3 {
+            match self.format_attribute_n(AttrSyntax::Gnu, args, name_loc, true) {
+                Some(p) => Some(p),
+                None => return false,
+            }
         } else {
             match self.act_on_attribute(AttrSyntax::Gnu, None, name, args, name_loc) {
                 Some(p) => Some(p),
@@ -230,6 +239,15 @@ impl Sema<'_, '_> {
     }
 
     fn decl_has_attr(&mut self, d: DeclId, kind: AttrKind, probe: Option<AttrId>) -> bool {
+        // GCC puts a `nonnull` written on a pointer (or reference) to
+        // function on the function type, which the walk does not reach:
+        // the variable, member or typedef answers 0 (WP-1675).
+        if kind == AttrKind::NONNULL
+            && !self.ast.decls.get(d).kind().is_function()
+            && self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.pointee(t).is_some())
+        {
+            return false;
+        }
         let attrs = self.has_attr_decl_attrs(d);
         attrs.into_iter().any(|a| self.attr_matches(a, kind, probe))
     }
@@ -319,6 +337,14 @@ impl Sema<'_, '_> {
                 ExprId::from_raw(p.a)
                     .and_then(|e| self.has_attr_operand_decl(e))
                     .is_some_and(|d| d.raw() == s.a)
+            }
+            AttrKind::FORMAT => {
+                // The archetype, then as many indices as the probe gives
+                // (`flags`: 1 or 2 given; 0: all three).
+                let n = if p.flags == 0 { 3 } else { p.flags };
+                s.a == p.a
+                    && (n < 2 || s.b & 0xffff == p.b & 0xffff)
+                    && (n < 3 || s.b >> 16 == p.b >> 16)
             }
             AttrKind::SECTION | AttrKind::ALIAS => {
                 let str_of = |w: u32| StringLitId::from_raw(w).map(|i| self.ast.strings.bytes(i));
