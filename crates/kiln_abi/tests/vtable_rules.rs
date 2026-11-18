@@ -19,7 +19,7 @@ use common::{
 use kiln_abi::subobjects;
 use kiln_abi::target::{Target, target};
 use kiln_abi::vtable::{
-    SubobjectId, Thunk, VTableComponent, VTableLayout, construction_vtable,
+    SubobjectId, Thunk, VTableComponent, VTableLayout, VTableSession, construction_vtable,
     dump_construction_vtable, dump_vtable_layout, vtable_layout, vtt, vtt_vtables,
 };
 use kiln_ast::decl::TagKind;
@@ -440,5 +440,47 @@ fn destructor_slots() {
             method_indices: named(&[("X::f", 0), ("Y::g", 3), ("Y::~Y", 1)]),
         };
         assert_eq!(layout_shape(&m, t, y), want_y, "{t}");
+    }
+}
+
+/// WP-1650: one session reuses a class's construction group recorded in
+/// one layout class for the next layout class whose parameters keep every
+/// decision (spec/abi.md §8.5 "Per-class and per-method memos"). The same
+/// base `L` (a nearly empty virtual primary base `E`, a virtual base `V`
+/// with data, one level of chain `M` below it) is a base of layout
+/// classes that place `V` at other offsets, place `L` itself at a nonzero
+/// offset, and share `E` with another base so that `E` is no longer at
+/// `L`'s offset (a recorded comparison flips): every construction group
+/// of the shared session equals the one a fresh session builds, and each
+/// dumps as clang's.
+#[test]
+fn construction_groups_reused_across_layout_classes() {
+    let mut m = Model::default();
+    let v = class(&mut m, "V", &[], &[], vec![vm("g")], vec![int("v")]);
+    let e = class(&mut m, "E", &[], &[], vec![vm("h")], vec![]);
+    let l = class(&mut m, "L", &[e, v], &[e, v], vec![vm("g"), vm("h")], vec![int("l")]);
+    let mm = class(&mut m, "M", &[l], &[], vec![vm("g")], vec![int("m")]);
+    let x = class(&mut m, "X", &[], &[], vec![], vec![int("x")]);
+    let y = class(&mut m, "Y", &[e], &[e], vec![vm("h")], vec![]);
+    let d1 = class(&mut m, "D1", &[mm], &[], vec![], vec![]);
+    let d2 = class(&mut m, "D2", &[x, mm], &[], vec![vm("g")], vec![int("d")]);
+    let d3 = class(&mut m, "D3", &[y, mm], &[], vec![vm("h")], vec![]);
+    let d4 = class(&mut m, "D4", &[d2, d1], &[], vec![vm("g"), vm("h")], vec![int("w")]);
+    for t in BOTH {
+        cross_check(&m, t);
+        let tgt = target(t).expect("target");
+        let (ast, decls) = m.ast(&tgt);
+        let mut session = VTableSession::new(&ast, &tgt);
+        let mut n = 0;
+        for &i in &[d1, d2, d3, d4, mm, d1, d3] {
+            let md = decls[i];
+            for sub in vtt_vtables(&ast, md, &tgt).expect("vtt").into_iter().skip(1) {
+                let shared = session.construction_vtable(md, sub).expect("shared session");
+                let fresh = construction_vtable(&ast, md, sub, &tgt).expect("fresh session");
+                assert_eq!(*shared, fresh, "{t} {} {sub:?}", name(&ast, md));
+                n += 1;
+            }
+        }
+        assert!(n >= 10, "{t}: {n} construction groups");
     }
 }

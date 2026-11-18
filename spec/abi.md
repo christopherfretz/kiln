@@ -745,10 +745,35 @@ points, thunks and method indices are clang's.
     writes. clang's eager walk over every transitively overridden method
     is quadratic in the depth; once a merge gives some method a second
     entry or overrider (`OvMap::multi`: a class reached along two paths)
-    the map replaces eagerly. Every construction vtable computes the
-    final overriders of its base anew, so a chain of depth n below a
-    virtual base still costs O(n) per construction vtable, O(n^3) over
-    the chain's n^2/2 construction vtables (WP-1520 remainder).
+    the map replaces eagerly.
+  - Construction groups (`template.rs`, WP-1650). The construction
+    group of class `B` laid out at `off` in layout class `L` depends on
+    `L` only through `P = (off, L's offset of each virtual base of B)`:
+    every layout-class offset the builders compute is `P[s] + c` for one
+    symbol `s` (`Off`, which also carries its value; every decision and
+    every hash key uses the value, so a build is unchanged). A
+    construction build records the vcall, vbase and offset-to-top
+    components and the address points as such forms, and each
+    comparison between forms of two different symbols (a nearly empty
+    virtual primary base at its derived class's offset or not, a
+    `this` adjustment's base offset, an overrider at its slot's
+    subobject) with its outcome. `Classes` keeps the last recorded group
+    per class (at most one per class); a later construction group of
+    the same class with the same virtual-ness whose `P` gives every
+    recorded comparison the same outcome is that group with the forms
+    evaluated at `P`, without final overriders or a walk. A form that
+    names a virtual base outside `B`'s (not expected) disables the
+    record. Complete groups record nothing. `check_depth` is answered
+    once per class, and a class's subobject table is built once per
+    session (`Classes::subobject_table`, which `VTableSession` shares).
+    So a single-inheritance chain of depth n below a virtual base builds
+    each class's group once (O(n) each) and evaluates the others: the
+    cost of a construction group is its size, the j+1 address points
+    of class `S_j`'s group (its primary chain shares one vptr; clang
+    lists them all, and its builder is cubic over such a chain). The
+    -O0 IR of the chain is O(n^2) by the ABI and is now what the time
+    follows (a 300-deep chain with a virtual destructor, release: 7.2 s
+    before, 0.85 s after; 92.9 G instructions before, 8.2 G after).
   None of this is stored on `ClassInfo`: a class without virtual
   functions has the same record as before.
   `Incomplete` covers a missing definition, a missing override-list

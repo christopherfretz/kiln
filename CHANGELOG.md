@@ -1476,6 +1476,16 @@ Planned as 1.3.0.
   `nonstring` and `nocommon` where GCC keeps them, for `nonnull` on a
   function typedef or alias, and for `format` probed with only some
   of its arguments (WP-1680, WP-1675).
+- Construction vtables of a deep single-inheritance chain below a
+  virtual base are computed in time proportional to what they hold: a
+  300-deep chain with a virtual destructor compiles in 0.7 s instead of
+  6.8 s (release), with the same IR and vtable layouts (WP-1650). C
+  parameters declared `int a[static 2]` get clang's `align` and
+  `dereferenceable` (or `nonnull`) attributes (WP-1668). Under libstdc++
+  the `type_info` name of a closure created by a `static`, `const` or
+  unnamed-namespace variable's initializer, of an unnamed class at
+  namespace scope and of an incomplete class in an unnamed namespace
+  starts with GCC's `*`, so two units' twins compare unequal (WP-1679).
 
 ## [1.2.1] - 2026-11-14
 
