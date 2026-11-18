@@ -391,7 +391,15 @@ TU-local type argument (/16.1, /16.4). Checked, once per declaration,
 at its name (`modules/exposure.rs`):
 - a function's return and parameter types and a default argument, a
   variable's type, a base class, a non-static data member's type (the
-  error at its class), when the declaration is written;
+  error at its class), when the declaration is written; a member
+  function's default argument at its end, in the complete-class context
+  (WP-1684). In a default argument a TU-local type written in a `sizeof`
+  or `alignof` operand or an explicit type conversion counts, and so does
+  an odr-use of a TU-local constant (below);
+- a default member initializer (WP-1684): a use there is held and the
+  error is at its class (at the lambda, for a use in one), when the class
+  is not TU-local; for a member of an anonymous struct or union, the named
+  class around it; a local class's only in an inline function;
 - a use in the body of an inline function (`inline`, `constexpr`,
   `consteval`, a member defined in a class not attached to a named
   module, an inline function template), including a lambda there (the
@@ -402,29 +410,53 @@ at its name (`modules/exposure.rs`):
   discarded-value expression that only names a function or variable or
   takes its address.
 
-The initializer of a variable is not an exposure (/15.1.2; /17 makes
-only a constexpr variable's TU-local value one, above). For each use of
-a TU-local entity in the initializer of an inline variable that is not
-constexpr (exported or not, also in a lambda there), kiln gives clang
-22's warning at the use, "TU local entity 'hidden' is exposed"
+A variable usable in constant expressions with internal linkage is
+TU-local, but /15.4 ignores a reference to it that is not an odr-use.
+An odr-use of one (`return &K;`, a reference bound to `K`, found where
+the full-expression marks its odr-uses, `module_note_odr_use`) is held
+as any other use (WP-1684): an exposure in an inline function's body, a
+default member initializer and a default argument, unless the
+full-expression is a prvalue that folds to a value that is not TU-local
+(`&K != nullptr`).
+
+A lambda's body is part of its closure type, whose function call
+operator is inline: a use there is held for the variable being
+initialized, whatever its specifiers, and is an exposure when the
+variable's type is that closure type (`export inline auto f = [] {
+return helper(); };`, the error at the lambda; WP-1684). A
+full-expression containing the whole lambda does not drop the uses in
+its body.
+
+The initializer of a variable is otherwise not an exposure (/15.1.2;
+/17 makes only a constexpr variable's TU-local value one, above). For
+each use of a TU-local entity in the initializer of an inline variable
+that is not constexpr (exported or not, also in a lambda there whose
+closure type is not the variable's type), except an odr-use of a
+constant, kiln gives clang 22's warning at the use, "TU local entity 'hidden' is exposed"
 (`-WTU-local-entity-exposure`, on by default; from
 `-fclang-compat=22`). GCC 16.1 rejects such a variable when it is
 constant-initialized to a TU-local value (`export inline int *ip =
 &hidden;`): kiln follows the text and clang (docs/status/deviations.md).
 
 Not checked (GCC 16.1 accepts each, or kiln does not yet): a friend
-declaration (/15.3), a local class, an enumerator, a variable that
-might be usable in constant expressions, a function or variable from
+declaration (/15.3), a local class (except its default member
+initializer in an inline function), an enumerator, a variable that
+might be usable in constant expressions except an odr-use of one, a
+function or variable from
 the global module fragment (GCC 16.1 only warns,
 `-Wexpose-global-module-tu-local`), a template instantiation, a
 non-module or implementation unit, a header unit, the private module
-fragment. Gaps against GCC 16.1 (it rejects, kiln accepts): a default
-member initializer, the default argument of a member function declared
-in its class, an odr-use of a constant (`return &K;`), a static data
-member of a class template, a variable template's initializer.
+fragment. Kept against GCC 16.1 (it rejects, the text exempts; clang 22
+accepts, docs/status/deviations.md): a default argument that only reads
+a TU-local constant (/15.4), the initializer of a class template's static
+inline data member or of a variable template, an inline variable
+initialized to `&K` (/15.1.2).
 Tests: `basic.link/exposure-names-tu-local-entity.cpp`,
 `-declarations.cpp`, `-bodies.cpp`, `-accepted.cpp`,
-`basic.link/exposure-inline-var-initializer.cpp`.
+`basic.link/exposure-inline-var-initializer.cpp`,
+`basic.link/exposure-member-init-default-arg.cpp`, `-accepted.cpp`,
+`basic.link/exposure-odr-use-and-closure.cpp`,
+`basic.link/exposure-initializer-gcc-rejects.cpp`.
 
 ## 7. Code generation and mangling
 

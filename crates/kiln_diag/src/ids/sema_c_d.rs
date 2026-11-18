@@ -177,6 +177,8 @@ sema_constexpr_body_invalid_stmt = Error (2) "statement not allowed in {1:conste
 sema_constexpr_body_invalid_stmt_cxx20 = ExtWarn [Cxx20Extensions] (1) "use of this statement in a constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_body_invalid_stmt_cxx23 = ExtWarn [Cxx23Extensions] (1) "use of this statement in a constexpr {0:function|constructor} is a C++23 extension";
 sema_constexpr_body_no_return = Error (1) "no return statement in {0:constexpr|consteval} function";
+// WP-1685: clang ext_constexpr_ctor_missing_init ([dcl.constexpr]/4 before C++20, P1331R2).
+sema_constexpr_ctor_missing_init = ExtWarn [Cxx20Extensions] (0) "constexpr constructor that does not initialize all members is a C++20 extension";
 sema_constexpr_dtor = Error (0) "destructor cannot be declared constexpr";
 sema_constexpr_function_try_block_cxx20 = ExtWarn [Cxx20Extensions] (1) "function try block in constexpr {0:function|constructor} is a C++20 extension";
 sema_constexpr_invalid_template_arg = Error (3) "{0} to {1}{2} is not allowed in a template argument";
@@ -195,6 +197,8 @@ sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval
 // WP-1630: clang ext_constexpr_static_var ([dcl.constexpr]/3 before C++23).
 sema_constexpr_static_var = ExtWarn [Cxx23Extensions] (2) "definition of a {1:static|thread_local} variable in a constexpr {0:function|constructor} is a C++23 extension";
 sema_constexpr_tag = Error (2) "{0:class|struct|interface|union|enum|enum class|enum struct} cannot be marked {1:constexpr|consteval|constinit}";
+// WP-1685: clang ext_constexpr_union_ctor_no_init ([dcl.constexpr]/4 before C++20, P1331R2).
+sema_constexpr_union_ctor_no_init = ExtWarn [Cxx20Extensions] (0) "constexpr union constructor that does not initialize any member is a C++20 extension";
 // [dcl.constexpr]/1: a constexpr variable declaration shall be a definition (clang err_invalid_constexpr_var_decl).
 sema_constexpr_var_decl_not_definition = Error (0) "constexpr variable declaration must be a definition";
 sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";

@@ -76,7 +76,7 @@ fn resolve_locs(sources: Option<&kiln_source::SourceManager>, msg: &str) -> Stri
     out
 }
 
-fn name_of(ast: &Ast, d: DeclId) -> String {
+pub(crate) fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);
     s

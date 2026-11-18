@@ -3618,6 +3618,21 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   Oven; offsets suffice for non-virtual paths, and a path through a
   virtual base is an index into `Virt`'s subobject list (`Op::VBase`,
   "Virtual bases").
+- Trivial default construction before C++20 (WP-1685). A default-
+  initialization (not a value-initialization, which zero-initializes and
+  calls no trivial default constructor) by a trivial default constructor
+  is compiled inline, without a call; when the constructor is not
+  constexpr (before C++20 the implicit or defaulted one of a class that
+  leaves a subobject uninitialized, spec/sema.md "Before C++20 ... a
+  constexpr constructor"), an `Op::Cce` at the construction notes
+  "non-constexpr constructor 'T' cannot be used in a constant expression"
+  with "declared here" at the constructor (before C++11 "subexpression
+  not valid"): an evaluation fails ([expr.const]/2.2 in C++17), a fold
+  goes on, as clang `CheckTrivialDefaultConstructor`'s `CCEDiag`. The
+  test is made at compile time only before C++20 (one comparison of the
+  language year otherwise); the instruction runs only where the
+  construction does
+  (`tests/conformance/dcl.constexpr/trivial-default-ctor-cxx17.cpp`).
 
 ### Dynamic types — Landed (WP-077)
 
