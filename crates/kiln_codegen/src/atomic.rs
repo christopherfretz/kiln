@@ -131,7 +131,10 @@ impl Cg<'_> {
             // clang `EmitAtomicInit`: a plain initialization.
             let Some(v1) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
             let addr = Addr { v: pv, ty: self.mty(atomic_q), align: palign };
-            self.atomic_init(v1, LV { addr, q: atomic_q, bf: None, vidx: None, tb: Tb::Type })?;
+            self.atomic_init(
+                v1,
+                LV { addr, q: atomic_q, bf: None, vidx: None, sel: None, tb: Tb::Type },
+            )?;
             return Ok(None);
         }
         self.atomic_alignment_warnings(e, size, palign);

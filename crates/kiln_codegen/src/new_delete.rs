@@ -862,6 +862,7 @@ impl Cg<'_> {
                 q: x.allocated_ty,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             };
             self.ub_checked(|s| s.init_to_lvalue(init, lv, false))?;
@@ -1159,6 +1160,7 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             };
             self.init_to_lvalue(init0, lv, false)?;
@@ -1207,6 +1209,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    sel: None,
                     tb: Tb::Type,
                 };
                 self.ub_checked(|s| s.init_to_lvalue(ie, lv, false))?;
@@ -1313,6 +1316,7 @@ impl Cg<'_> {
             q: iq,
             bf: None,
             vidx: None,
+            sel: None,
             tb: Tb::Type,
         };
         self.ub_checked(|s| s.init_to_lvalue(init, lv, false))?;

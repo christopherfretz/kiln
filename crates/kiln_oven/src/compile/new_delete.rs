@@ -126,8 +126,25 @@ impl Compiler<'_> {
         dst
     }
 
+    /// Before C++20 a new-expression or a delete-expression is not a core
+    /// constant expression (C++17 [expr.const]/2.18-2.19; P0784R7 made
+    /// them constant): clang 22's `CCEDiag` `note_constexpr_new` at the
+    /// expression, before its other checks, which a fold continues past
+    /// (`Op::Cce`, as `trivial_ctor_constexpr_check`). Placement forms
+    /// (`std::construct_at`) included. From C++20 on: one test.
+    fn pre_cxx20_alloc_check(&mut self, e: ExprId) {
+        if self.b.cxx_year() >= 2020 {
+            return;
+        }
+        let loc = self.ast().exprs.get(e).loc();
+        let msg = "dynamic memory allocation is not permitted in constant expressions until C++20";
+        let t = self.trap_index(loc, msg.into());
+        self.emit_loc(Op::Cce, crate::kbc::cce::CHECK, &[0, 0, t], loc);
+    }
+
     /// `new T`, `new T(init)`, `new T{init}`, `new T[n]...` into `dst`.
     pub(super) fn new_expr(&mut self, e: ExprId, dst: u32) {
+        self.pre_cxx20_alloc_check(e);
         let ast = self.ast();
         let x = *ast.exprs.new_extra(e);
         let Some(op_new) = x.operator_new else {
@@ -414,6 +431,7 @@ impl Compiler<'_> {
 
     /// `delete p` / `delete[] p`.
     pub(super) fn delete_expr(&mut self, e: ExprId) {
+        self.pre_cxx20_alloc_check(e);
         let ast = self.ast();
         let Some(op_del) = ast.exprs.operator_delete(e) else {
             self.unsupported(e);

@@ -445,7 +445,12 @@ impl Sema<'_, '_> {
     /// still reject it; docs/status/deviations.md). Diagnosed, the
     /// instantiation still takes effect, as clang's
     /// `CheckExplicitInstantiationScope` recovers. A class or block
-    /// scope is rejected by the parser.
+    /// scope is rejected by the parser. In C++98 the same rule applies
+    /// (WP-1692): C++03 [temp.explicit]/5 asked for the template's own
+    /// namespace, and DR 275 relaxed it to the C++11 rule; GCC 16.1
+    /// rejects exactly these cases in C++98, where clang 22 gives its
+    /// off-by-default `-Wc++11-compat` warnings
+    /// (`warn_explicit_instantiation_*_0x`) instead.
     pub(crate) fn check_explicit_inst_scope(
         &mut self,
         pattern: DeclId,
@@ -453,10 +458,7 @@ impl Sema<'_, '_> {
         qualified: bool,
         loc: Loc,
     ) {
-        // In C++98 clang reports these as its off-by-default
-        // `-Wc++11-compat` warnings (`warn_explicit_instantiation_*_0x`),
-        // which kiln does not have: nothing is reported.
-        if self.inst.stack.len() != self.templ.explicit_depth || self.std < kiln_lex::Std::Cxx11 {
+        if self.inst.stack.len() != self.templ.explicit_depth {
             return;
         }
         let cur = self.ast.redecl_context(self.ctx);

@@ -4295,6 +4295,27 @@ clang 19 `CGAtomic` at -O0, mirrored:
   that is a reference-returning call is loaded through its lvalue
   (`Cg::emit_arm`, `emit_glvalue_load`), never merged as its address
   (`tests/codegen/cond_glvalue_ref_call.cpp`).
+- **Glvalue conditionals of bit-fields (WP-1692).** By [expr.cond]/5 a
+  glvalue `?:` is a bit-field if either operand is one, and clang 19
+  and 22 do not generate code for one ("cannot compile this conditional
+  operator yet"); kiln follows the text, compared with GCC 16.1.
+  `cond_lvalue` compares the operands' accesses (one test, after both
+  are emitted): operands with the same access (no bit-field, or the
+  same bit-field description and storage type) keep the one `phi` of
+  the addresses, with that bit-field; otherwise the result `LV` carries
+  `sel`, a `BfSel` in the function's `bf_sels`: an `i32` `phi` numbering
+  the selected operand and each operand's access (bit-field or plain,
+  storage type, alignment, TBAA), a nested conditional's operands
+  flattened in. `load_lv` and `store_lv` (so assignment, compound
+  assignment, `++`/`--`, the value of an assignment re-read from the
+  bit-field, a `volatile` re-read) `switch` on it to one block per
+  operand doing that operand's access at the merged address, and merge
+  the value in a `phi`. A constant condition emits only the live
+  operand's lvalue, with its bit-field. A vector-element operand is not
+  selected this way (left as before). Reads were right already (the
+  prvalue form above). `crates/kiln_codegen/tests/lower.rs`
+  `bit_field_conditional_store_is_masked`,
+  `tests/conformance/expr.cond/p5-bit-field-glvalue-*-run.cpp`.
 - **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
   aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
   `getEvaluationKind`) for a `return` operand, a parameter, an argument

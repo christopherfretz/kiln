@@ -39,6 +39,8 @@ follows, compared case by case with the second (2026-11-16, kiln
 test at one standard (or one optimization level). Same 20571 tests and
 56766 applicable cases on aarch64 in all three runs (57070 on x86-64).
 
+Fixed since this run: WP-1692 (stores through a glvalue conditional of bit-fields, `torture/pr37146-1`), WP-1693 (the explicit instantiation scope check at C++98, `template/explicit8`) and WP-1689 (`new` and `delete` in a constant evaluation before C++20).
+
 | run | kiln | aarch64: pass of decided | x86-64: pass of decided | expect-unknown (aarch64 / x86-64) |
 |---|---|---:|---:|---:|
 | first (2026-11-15, WP-1443) | `604edce44` | 47950 of 56766 (84.5%) | not run | 0 / - |

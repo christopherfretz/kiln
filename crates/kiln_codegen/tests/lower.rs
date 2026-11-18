@@ -470,6 +470,42 @@ fn observable_checkpoint_is_an_opaque_barrier() {
     assert!(!body("_Z7withoutv").contains("store"), "{out}");
 }
 
+/// [expr.cond]/5: a glvalue conditional is a bit-field if either operand
+/// is one, so a store through `c ? s.p : s.q` is a read-modify-write of
+/// the selected bit-field's storage unit (load, mask, or, store), chosen
+/// by a `switch` on the selected operand, and never a plain store of the
+/// whole `int` (spec/codegen.md "Glvalue conditionals of bit-fields").
+/// clang 19 and 22 do not generate code for it, so `tests/codegen`
+/// cannot hold it; found running GCC's C++ testsuite.
+#[test]
+fn bit_field_conditional_store_is_masked() {
+    let src = "struct S { int p : 4; int q : 12; int w; } s;\n\
+               void st(bool c, int v) { (c ? s.p : s.q) = v; }\n\
+               void same(bool c, int v) { (c ? s.p : s.p) = v; }\n\
+               void plain(bool c, int v) { (c ? s.w : s.w) = v; }\n";
+    let ir = kiln_ir(src).unwrap_or_else(|e| panic!("kiln failed: {e}"));
+    let body = |name: &str| {
+        let start = ir.find(&format!("@{name}(")).unwrap_or_else(|| panic!("{ir}"));
+        ir[start..].split("\n}").next().unwrap_or_default().to_owned()
+    };
+    let st = body("_Z2stbi");
+    assert!(st.contains("switch i32 "), "{st}");
+    // The `i16` unit: p is bits 0-3 (kept bits -16), q bits 4-15 (`shl`
+    // by 4, kept bits 15); the one `i32` store spills the parameter.
+    assert!(st.contains("and i16 %") && st.contains(", -16\n"), "{st}");
+    assert!(st.contains(", 4095\n") && st.contains("shl i16 %"), "{st}");
+    assert_eq!(st.matches("or i16 ").count(), 2, "{st}");
+    assert_eq!(st.matches("store i16 ").count(), 2, "{st}");
+    assert_eq!(st.matches("store i32 ").count(), 1, "{st}");
+    // Operands with the same bit-field keep one access, without a switch.
+    let same = body("_Z4samebi");
+    assert!(!same.contains("switch") && same.contains("or i16 "), "{same}");
+    // No bit-field: the pointer and one plain store, as before.
+    let plain = body("_Z5plainbi");
+    assert!(!plain.contains("switch") && !plain.contains(" and "), "{plain}");
+    assert_eq!(plain.matches("store i32 ").count(), 2, "{plain}");
+}
+
 /// (name, mode, program).
 const CASES: &[(&str, Mode, &str)] = &[
     ("int_lit_return", Exact, "int f() { return 42; }"),

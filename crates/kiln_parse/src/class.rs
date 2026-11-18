@@ -1286,6 +1286,20 @@ impl Parser<'_, '_> {
                 self.parse_attributed_using();
                 true
             }
+            (_, Some(Kw::Template))
+                if !self.peek_is(1, Punct::SpliceOpen) && !self.peek_is(1, Punct::Less) =>
+            {
+                // A member-declaration has no explicit instantiation
+                // ([class.mem.general]/1, [temp.explicit]/3: it appears
+                // in a namespace scope); clang parses a template head and
+                // reports the missing `<` (WP-1692).
+                self.bump();
+                let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg("'template'");
+                let d = d.arg("'<'");
+                self.emit(d);
+                self.skip_unsupported_declaration();
+                true
+            }
             (_, Some(Kw::Template)) if !self.peek_is(1, Punct::SpliceOpen) => {
                 self.parse_template_declaration(DeclaratorContext::Member);
                 self.s.act_on_end_abbreviated();

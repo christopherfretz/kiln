@@ -10839,7 +10839,8 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   I' where a complete type is required` at the expression; nothing is
   converted then (clang 22 neither completes nor diagnoses; GCC 16
   instantiates and only warns for a plain incomplete class; WP-1533,
-  `expr.context/discarded-volatile-incomplete*.cpp`).
+  `expr.context/discarded-volatile-incomplete*.cpp`; a recorded
+  deviation, docs/status/deviations.md, WP-1692).
 - **`if`, `while`, `for`:** condition conversion to `bool` (contextual
   conversion), plus `cond_var` for condition declarations
   (`act_on_condition_var`). A condition variable of function type
