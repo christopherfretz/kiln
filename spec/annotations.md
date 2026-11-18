@@ -100,9 +100,8 @@ target scope" or (1.2) X is a non-defining friend declaration.
   namespace alias, a concept, a deduction guide, a template parameter, a
   structured binding written after its identifier, an asm-declaration, an
   attribute-declaration, a declaration with no declarator, an unnamed
-  bit-field (not a member, [class.bit]/2; WP-1505), a label, and a
-  lambda's call operator (none of these declares an entity of the listed
-  kinds). `static_assert` takes no attribute-specifier-seq at all.
+  bit-field (not a member, [class.bit]/2; WP-1505), and a label (none of
+  these declares an entity of the listed kinds). `static_assert` takes no attribute-specifier-seq at all.
 - **Non-declarations** (`sema_annotation_non_declaration`, "an annotation
   can appertain only to a declaration"): a statement, a type
   (type-specifier-seq or declarator-chunk position: after `*`, `&`, `&&`,
@@ -127,6 +126,19 @@ target scope" or (1.2) X is a non-defining friend declaration.
   (`Sema::check_base_annotation_packs`). GCC 16.1 crashes on both forms
   (docs/status/deviations.md).
   Tests: `meta.reflection.annotation/base-specifier*.cpp` (WP-830, WP-867).
+- **A lambda's call operator** ([expr.prim.lambda.closure]/7): the
+  attribute-specifier-seq before the lambda-declarator (`[] [[=1]] ()
+  {}`, also after a template-parameter-list) appertains to the call
+  operator or operator template, a function whose host and target scope
+  are the closure class, so its annotations are the call operator's
+  (`annotations_of(^^decltype(l)::operator())`, the call operator
+  `members_of` lists; each specialization of a generic lambda's operator
+  template has them; in a template the operands are substituted with the
+  lambda). The seq after the parameter list or noexcept-specifier
+  appertains to the call operator's type: "an annotation can appertain
+  only to a declaration". GCC 16.1 agrees (WP-1660; it was rejected
+  before). Tests: `dcl.attr.annotation/lambda-call-operator*.cpp`,
+  `non-declaration.cpp`.
 - A structured binding declaration's leading annotations appertain to the
   declaration, i.e. the unnamed variable `e` ([dcl.struct.bind]/1): kiln
   accepts them there (open question §9).

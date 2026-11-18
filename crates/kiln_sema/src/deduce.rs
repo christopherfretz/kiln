@@ -236,6 +236,13 @@ impl Sema<'_, '_> {
                 return t;
             }
         }
+        // An unparenthesized splice-expression designating an object: the
+        // object's type ([dcl.type.decltype]/1.4), not a reference to it.
+        // A variable or a member subobject is named by a reference above
+        // and has its declared type.
+        if self.splice_objects.contains(&e) {
+            return n.ty();
+        }
         if n.kind() == ExprKind::SubstNonTypeTemplateParmExpr
             && self.ast.types.as_record(n.ty()).is_some()
             && !n.has(ExprFlags::REFERENCE_PARAMETER)

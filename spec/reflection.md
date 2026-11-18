@@ -124,7 +124,7 @@ Section references in brackets are to the C++26 IS.
 |---|---|---|---|
 | `Null` | — | the null reflection | implemented |
 | `Type(QualType)` | the type, alias sugar kept at the top (§2.3) | a type, or a type alias | implemented, dependent `^^typename T::type` included (WP-519) |
-| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, literal operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2; literal operator pinned by `meta.reflection.queries/functions.cpp`, WP-830); a member name in `^^C::m` is access-checked ([class.access]/4; `expr.reflect/member-access*.cpp`, WP-830) |
+| `Decl(DeclId)` | first declaration | variable, function, data member, enumerator, structured binding | implemented: operator, literal operator, conversion and destructor functions and dependent qualified names (`^^T::x`) included (WP-519; spec/reflection-repr.md §2; literal operator pinned by `meta.reflection.queries/functions.cpp`, WP-830); a member name in `^^C::m` is access-checked ([class.access]/4; `expr.reflect/member-access*.cpp`, WP-830); after a computed scope (`decltype(e)::`, `T...[i]::`, `[: r :]::`) an operator-, conversion-function-id or destructor name makes the operand an id-expression, never a type-id, so `^^decltype(a)::operator()` reflects a closure's call operator (a function template for a generic lambda; `Parser::reflect_computed_scope_special_name`, `expr.reflect/computed-scope-special-names*.cpp`, WP-1660) |
 | `Namespace(DeclId)` | first declaration | a namespace (`^^::` is the TU) | implemented |
 | `NamespaceAlias(DeclId)` | the alias declaration | a namespace alias | implemented |
 | `Template(TemplateNameId)` | the template name | a class, function, variable or alias template, or a concept | implemented, dependent `^^T::template m<U>` included (WP-519) |
@@ -1088,6 +1088,17 @@ position's operand).
   some of these). A dependent using-directive splice gets
   `sema_splice_dependent_namespace` at the template definition (GCC 16.1
   accepts it) and the global namespace `sema_splice_global_namespace`.
+- **`decltype` of a splice** ([dcl.type.decltype]/1.4): an
+  unparenthesized splice-expression gives the type of the entity, object
+  or value designated, never a reference. A variable or member subobject
+  is spliced as a `DeclRefExpr` / `MemberExpr`, which `decltype_of`
+  already answers with the declared type; any other object splice (an
+  element, `*p` of a template parameter object) is recorded in
+  `Sema::splice_objects` (snapshot state), for which `decltype_of` gives
+  the expression's type (`const T` for a template parameter object), also
+  for `decltype(auto)`. Parenthesized: `T&` (WP-1660,
+  `dcl.type.decltype/splice-object.cpp`; GCC 16.1 drops the `const` of a
+  template parameter object, docs/status/deviations.md).
 - **Value and object splices** (`splice_object.rs`; WP-550). A value
   reflection splices to a prvalue of the value's type: the expression a
   constant template argument of that value is substituted as
@@ -1429,8 +1440,12 @@ evaluations run during Y and sequenced before X. So:
   earlier outermost evaluation or in the source, is complete in kiln's
   nested evaluation and incomplete by the text (GCC 16.1 freezes the
   constexpr local at the function's definition, which agrees here).
-  `define-aggregate-nested-later-point.cpp` is `xfail(kiln)` (WP-1642
-  remainder).
+  `define-aggregate-nested-later-point.cpp` is `xfail(kiln)` (WP-1660
+  remainder). Comparing points inside the inline evaluation would need a
+  memo-hit check for every call inside a constexpr local's initializer;
+  the alternative is GCC's model: the Oven materializes the value sema
+  recorded when it checked the initializer at Y's point
+  (`Sema::check_constexpr_init`) instead of re-running it.
 
 **This is the one exception** to "a class is frozen at its closing `}`"
 (spec/ast.md §2.4). It is serialized through sema, so the Oven never

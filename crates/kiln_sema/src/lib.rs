@@ -1266,6 +1266,12 @@ pub struct Sema<'a, 'sm> {
     /// they appear in (spec/sema-class.md §2.5/§2.6): `&C::m` forms a
     /// pointer to member, anything else needs an object.
     pub(crate) member_refs: kiln_source::fx::FxHashMap<ExprId, class::MemberRef>,
+    /// The expressions a splice-expression designating an object built
+    /// other than as a variable or member reference (an element, a
+    /// template parameter object): `decltype` of the unparenthesized
+    /// splice is the object's type, not a reference ([dcl.type.decltype]/1.4;
+    /// `Sema::decltype_of`). Filled only by object splices.
+    pub(crate) splice_objects: kiln_source::fx::FxHashSet<ExprId>,
     /// The non-member operator functions the unqualified lookup of a
     /// dependent operator expression's operator name found at the
     /// template's definition ([temp.dep.candidate], [over.match.oper]/3.2;
@@ -1735,6 +1741,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             annot_copyable: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
+            splice_objects: kiln_source::fx::FxHashSet::default(),
             oper_lookups: kiln_source::fx::FxHashMap::default(),
             oper_override: None,
             elided_ctors: kiln_source::fx::FxHashMap::default(),

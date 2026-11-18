@@ -10,7 +10,7 @@
 //@ diag: 36:13 error "an annotation cannot appertain to a parameter of type 'void'"
 //@ diag: 38:31 error "an annotation cannot appertain to a friend declaration that is not a definition"
 //@ diag: 40:28 error "an annotation can appertain only to a declaration"
-//@ diag: 41:20 error "an annotation cannot appertain to a lambda call operator"
+//@ diag: 41:23 error "an annotation can appertain only to a declaration"
 //@ diag: 43:12 error "an annotation cannot appertain to a structured binding"
 //@ diag: 45:5 error "an annotation can appertain only to a declaration"
 //@ diag: 48:5 error "an annotation cannot appertain to a label"
@@ -38,7 +38,7 @@ struct Friendly {
   friend void declared_only [[=8]] ();
 };
 int in_type = sizeof(int [[=9]]);
-auto lambda = [] [[=10]] () { };
+auto lambda = [] () [[=10]] { };
 struct Pair { int x, y; };
 auto [px [[=11]], py] = Pair{1, 2};
 void statements() {

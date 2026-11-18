@@ -1401,6 +1401,14 @@ Planned as 1.3.0.
   non-empty template header. Once a member has been redeclared by a
   friend, the "previous declaration" for later friends is still the
   member (WP-1657, WP-1666, WP-1665, WP-1662).
+- `^^decltype(l)::operator()` reflects a closure type's call operator.
+  The other names that can follow a computed scope (`decltype(e)::`,
+  `T...[i]::`) also work: a conversion function, a destructor and a
+  `template` template-id. An annotation written before a
+  lambda-declarator (`[] [[=1]] () {}`) now appertains to the call
+  operator, as the text says, instead of being rejected. `decltype` of a
+  splice that designates a template parameter object is `const T`
+  (WP-1660).
 
 ## [1.2.1] - 2026-11-14
 

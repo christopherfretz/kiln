@@ -38,6 +38,7 @@ impl Parser<'_, '_> {
         // unless it is a bare template-name.
         let ahead = self.reflect_lookahead();
         if ahead.is_none()
+            && !self.reflect_computed_scope_special_name()
             && self.is_cxx_type_id_at(self.pos(), TypeIdContext::InTrailingReturnType).0
         {
             let ty = self.parse_type_id_into(None, DeclSite::Reflect)?;
@@ -194,6 +195,42 @@ impl Parser<'_, '_> {
         }
         let (args, _, _) = self.parse_template_arg_list().ok_or(())?;
         Ok(Some(self.s.ast.types.arg_list(&args)))
+    }
+
+    /// At a computed nested-name-specifier (`decltype(e)::`, `T...[i]::`,
+    /// `[: r :]::`, [expr.prim.id.qual]/1) whose qualified name ends in an
+    /// operator-, literal-operator- or conversion-function-id or a
+    /// destructor name (`^^decltype(a)::operator()`, `^^Ts...[0]::~X`):
+    /// the operand is an id-expression ([expr.reflect]/1, /7), never a
+    /// type-id. The scope is not parsed ahead here, so the type-id test
+    /// alone cannot tell (it sees an unknown scope; WP-1660).
+    fn reflect_computed_scope_special_name(&self) -> bool {
+        let Some(cc) = self.decltype_scope_end(self.pos()) else { return false };
+        let mut i = cc + 1;
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Operator)
+                || Self::punct_of(self.tok_at(i)) == Some(Punct::Tilde)
+            {
+                return true;
+            }
+            if self.ident_of(self.tok_at(i)).is_none() {
+                return false;
+            }
+            i += 1;
+            if Self::punct_of(self.tok_at(i)) == Some(Punct::Less) {
+                match self.skip_template_args(i) {
+                    Some((close, false)) => i = close + 1,
+                    _ => return false,
+                }
+            }
+            if Self::punct_of(self.tok_at(i)) != Some(Punct::ColonColon) {
+                return false;
+            }
+            i += 1;
+        }
     }
 
     /// At `name` / `nns name` not followed by `<`: whether it names a

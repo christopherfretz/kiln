@@ -145,7 +145,7 @@ macro_rules! sema_fields {
                 undefined_used_seen, typo_count, typo_exprs, dropped_typos, cond_typo_at,
                 pending_cond_typo, expr_errors, delete_cxx26, unparsed_exc, delayed_exc_equiv,
                 unparsed_default_args, uninstantiated_exc, dyn_exc_rparen, implicit_exc_dtors,
-                uninstantiated_annots, annot_of_attr, annot_copyable, member_refs, oper_lookups, elided_ctors,
+                uninstantiated_annots, annot_of_attr, annot_copyable, member_refs, splice_objects, oper_lookups, elided_ctors,
                 declarator_type_invalid,
                 declspec_restrict_error, friend_specs, special_friends, member_friends, inherited_defaults,
                 inherited_aligned, inh_ctors, inh_ctor_base, anon_namespaces, has_contracts,

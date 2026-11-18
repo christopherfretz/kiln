@@ -643,8 +643,14 @@ impl Sema<'_, '_> {
         // the enclosing function).
         self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {
-            // Nothing here an annotation appertains to ([dcl.attr.annotation]/1).
-            self.reject_annotations(&mut attrs, Some("a lambda call operator"));
+            // [expr.prim.lambda.closure]/7: the attribute-specifier-seq
+            // before the lambda-declarator appertains to the call operator
+            // (or operator template), a function whose host and target
+            // scope are the closure class: its annotations are the call
+            // operator's ([dcl.attr.annotation]/1; WP-1660). The seq after
+            // the declarator's noexcept-specifier appertains to its type
+            // and lost its annotations in `act_on_type_position_attrs`.
+            self.take_annotations(f, &mut attrs);
             self.check_alignas_subject(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }
