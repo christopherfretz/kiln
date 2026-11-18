@@ -336,6 +336,11 @@ cast" note. The message renders the constant as clang does (`%e`-style for
 floating, `format_e6`). Both underline the initializer, and the note
 carries clang's two insertions `static_cast<T>(` at its start and `)` after
 its last token (only for a spellable `T`, a typedef or builtin; WP-421).
+Being a warning, it is not shown in a system header (spec/diag.md, without
+`-Wsystem-headers`), so a narrowing there, constant or not, gets no
+diagnostic, as in clang 22; GCC 16.1 rejects a constant one (a recorded
+decision, WP-1538, docs/status/deviations.md "Narrowing in a system
+header", `dcl.init.list/narrowing-in-system-header.cpp`).
 
 The full-expression's -Wliteral-conversion / -Wconstant-conversion
 (§9 item 3) still checks a narrowed element, so `S{3.5, 'x'}` reports

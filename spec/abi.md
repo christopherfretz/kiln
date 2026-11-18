@@ -169,6 +169,27 @@ A GCC `aligned` attribute on a typedef or an enum **replaces** the
 alignment and may lower it. `typedef int A1 __attribute__((aligned(1)))`
 has alignment 1.
 
+**Typedef-carried alignment** (one rule, `kiln_ast` `layout_sugar.rs`,
+WP-1567, WP-1547). Which sugar carries such an alignment is decided in
+one place, `Ast::layout_desugar_once` and `Ast::layout_attributed_typedef`,
+asked by this table's walk (`type_info`), by the Oven's `alignof`
+(`typedef_attributed`: only when it holds does the Oven ask the ABI
+instead of its canonical type table), by Sema's over-aligned array
+element check and by codegen's known pointee alignment
+(`typedef_align_attr`). The walk follows every sugar node and goes
+through a cv-qualified array to its base and through an array to its
+element (`alignof(const T)`, `alignof(T[2])` for an aligned array
+typedef `T`). A type substituted for a template type parameter of a
+function, variable or class template is read canonical: clang
+instantiates them from the canonical converted arguments, so in
+`f<D>()` with `typedef double D __attribute__((aligned(32)))`,
+`alignof(U)`, a local `U` and a load through `U*` are 8-aligned, as in
+clang 22 and GCC 16.1 (kiln keeps the first use's sugar in a function
+specialization's arguments for diagnostics; without the rule the result
+depended on that spelling). An alias template's substituted arguments
+keep their sugar (`alignof(AL<D>)` is 32 with clang 22; canonical at
+`-fclang-compat=19`, as clang 19 substitutes).
+
 ### 3.1 Alignment attributes on declarations (encoding)
 An `ALIGNED` `AttrNode` stores its argument in two fields:
 - `a` is the argument's `ExprId`; 0 means "no argument", i.e. the

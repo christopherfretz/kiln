@@ -578,11 +578,12 @@ pub struct Sema<'a, 'sm> {
     /// ending is a manifestly constant-evaluated constant-expression (no
     /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
     pub(crate) constant_full_expr: u32,
-    /// Ending the full-expression of a non-type template argument: an
-    /// odr-use of a by-copy capture there reads the captured variable, as
-    /// clang 22 and GCC 16.1 do (the text names the closure member;
-    /// docs/status/deviations.md, WP-1622).
-    pub(crate) template_arg_full_expr: bool,
+    /// Ending the full-expression of a non-type template argument or of an
+    /// alignment-specifier's (or `aligned`'s) argument: an odr-use of a
+    /// by-copy capture there reads the captured variable, as clang 22 and
+    /// GCC 16.1 do (the text names the closure member;
+    /// docs/status/deviations.md, WP-1622, WP-1640).
+    pub(crate) capture_reads_variable: bool,
     /// Inside the full-expressions of an initializer dropped after its
     /// diagnostic: an unexpanded pack in them is not reported again
     /// (clang's `AddInitializerToDecl` returns for an invalid variable;
@@ -1568,7 +1569,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             agg_excess: std::cell::Cell::new(false),
             immediate: 0,
             constant_full_expr: 0,
-            template_arg_full_expr: false,
+            capture_reads_variable: false,
             discarding_init: false,
             std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),

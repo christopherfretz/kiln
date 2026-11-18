@@ -80,6 +80,44 @@ impl Sema<'_, '_> {
         self.ast.call_op_lambda(f)
     }
 
+    /// Whether the current context is a lambda body nested in a templated
+    /// entity other than a generic lambda's call operator: a function or
+    /// class template, a member of one, or an instantiation of either
+    /// (WP-1640: where GCC 16.1 rejects `alignas(*&i)` under `[=]`).
+    pub(crate) fn lambda_in_enclosing_template(&self) -> bool {
+        let mut c = self.ctx;
+        let mut in_lambda = false;
+        // Bounded like `capture_chain`.
+        for _ in 0..4096 {
+            let call_op = self
+                .lambda_of_call_op(c)
+                .or_else(|| self.ast.instantiated_from(c).and_then(|p| self.lambda_of_call_op(p)));
+            if let Some(l) = call_op {
+                in_lambda = true;
+                let Some(p) = self.lambda_parent(l) else { return false };
+                c = p;
+                continue;
+            }
+            match self.ast.decls.get(c).kind() {
+                DeclKind::TranslationUnit | DeclKind::Namespace => return false,
+                DeclKind::ClassTemplatePartialSpecialization => return in_lambda,
+                _ if self.ast.described_template(c).is_some()
+                    || self.ast.instantiated_from(c).is_some()
+                    || self.ast.partial_spec_info(c).is_some() =>
+                {
+                    return in_lambda;
+                }
+                _ => {}
+            }
+            let Some(p) = self.ast.decls.lexical_ctx(c).or_else(|| self.ast.decls.get(c).ctx())
+            else {
+                return false;
+            };
+            c = p;
+        }
+        false
+    }
+
     /// The context enclosing lambda `l`'s closure type.
     fn lambda_parent(&self, l: LambdaId) -> Option<DeclId> {
         self.ast.decls.get(self.ast.exprs.lambdas.get(l).closure).ctx()
@@ -870,7 +908,7 @@ impl Sema<'_, '_> {
             // An odr-use in a template definition, as at the end of a
             // full-expression outside one (`act_on_full_expr_at`).
             if !dependent
-                && !self.template_arg_full_expr
+                && !self.capture_reads_variable
                 && self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && self.odr_use_names_closure_copy(d)

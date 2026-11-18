@@ -136,6 +136,10 @@ pub struct ConceptState {
     /// `auto` (the type-specifier; where an error in the type-constraint's
     /// list found at deduction points, WP-1610).
     pub(crate) placeholder_locs: FxHashMap<DeclId, (Loc, Loc)>,
+    /// The locations of the written arguments of such a variable's
+    /// type-constraint, where a list error found when a non-dependent
+    /// initializer is deduced in a template points (WP-1629).
+    pub(crate) placeholder_arg_locs: FxHashMap<DeclId, Vec<Loc>>,
     /// The requires-expressions a partial substitution left as their
     /// pattern ([`DeferredRequires`]), by the copy it returned.
     pub(crate) deferred_requires: FxHashMap<ExprId, DeferredRequires>,

@@ -93,9 +93,16 @@ TranslationUnitDecl
 |   |   |-CallExpr 'int'
 |   |   | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'so'
 |   |   | `-IntegerLiteral 'int' 1
+|   |   |-CallExpr 'int'
+|   |   | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
+|   |   | | `-CXXThisExpr 'A<T> *' this
+|   |   | `-IntegerLiteral 'int' 1
+|   |   |-CallExpr 'int'
+|   |   | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'so'
+|   |   | `-IntegerLiteral 'int' 1
 |   |   `-CallExpr 'int'
-|   |     |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->tm
-|   |     | `-CXXThisExpr 'A<T> *' this
+|   |     |-UnresolvedLookupExpr '<dependent type>' lvalue (ADL) = 'tm'
+|   |     | `-TemplateArgument type 'long'
 |   |     `-IntegerLiteral 'int' 1
 |   `-CXXMethodDecl h 'void (T)' implicit-inline
 |     |-ParmVarDecl referenced t 'T'
@@ -149,16 +156,9 @@ TranslationUnitDecl
 |       | |-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->st
 |       | | `-CXXThisExpr 'A<T> *' implicit this
 |       | `-StringLiteral 'const char[1]' lvalue ""
-|       |-CallExpr '<dependent type>'
-|       | `-MemberExpr '<bound member function type>' ->operator int
-|       |   `-CXXThisExpr 'A<T> *' this
-|       |-CallExpr '<dependent type>'
-|       | |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'so'
-|       | `-IntegerLiteral 'int' 1
 |       `-CallExpr '<dependent type>'
-|         |-UnresolvedLookupExpr '<dependent type>' lvalue (ADL) = 'tm'
-|         | `-TemplateArgument type 'long'
-|         `-IntegerLiteral 'int' 1
+|         `-MemberExpr '<bound member function type>' ->operator int
+|           `-CXXThisExpr 'A<T> *' this
 `-ClassTemplateDecl D
   |-TemplateTypeParmDecl referenced class depth 0 index 0 T
   `-CXXRecordDecl struct D definition

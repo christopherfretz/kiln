@@ -287,7 +287,8 @@ impl Substituter<'_, '_, '_> {
                 } else if let Some(e) = ExprId::from_raw(node.a) {
                     let Ok(es) = self.expand_exprs(&[e]) else { continue };
                     for e in es {
-                        let Some(e) = self.sema.check_alignment_expr(e, node.loc) else {
+                        let Some(e) = self.sema.check_alignment_expr(e, node.loc, node.syntax)
+                        else {
                             continue;
                         };
                         let n = AttrNode { a: e.raw(), ..node };

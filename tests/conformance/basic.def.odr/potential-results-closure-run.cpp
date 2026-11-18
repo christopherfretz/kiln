@@ -7,10 +7,11 @@
 // lvalue-to-rvalue conversion of a non-volatile, non-class operand, is no
 // odr-use, so it is not captured. Odr-uses are captured: `&ca.v`, binding
 // a reference, a variable with a mutable member, a volatile glvalue read,
-// a discarded `(void)ca` of class type (clang never applies the
-// discarded-value bullet; kiln applies it to non-class operands only,
-// WP-1535), a class copy, `->`, the object of a static data member access, and a
+// a class copy, `->`, the object of a static data member access, and a
 // generic lambda's `return ca.v` (no conversion until instantiation).
+// A discarded `(void)ca` of class type, which clang captures, is not
+// captured by kiln (a recorded deviation, WP-1603 (2):
+// expr.prim.lambda.capture/discarded-class-constant-not-captured.cpp).
 // clang 19 and 22 agree on every size; the program prints the sizes and
 // the values, compared with the oracle (closure layout and code).
 //@ expect: run
@@ -85,10 +86,6 @@ int main() {
     const int &r = ca.v;
     return r;
   };
-  auto c4 = [=] {
-    (void)ca;
-    return 0;
-  };
   auto c5 = [=] {
     A x = ca;
     return x.v;
@@ -99,7 +96,7 @@ int main() {
   auto c9 = [=](auto) { return ca.v; };
   auto c10 = [=](auto) { return carr[1]; };
   static_assert(sizeof(c1) == sizeof(M) && sizeof(c2) == sizeof(A));
-  static_assert(sizeof(c3) == sizeof(A) && sizeof(c4) == sizeof(A));
+  static_assert(sizeof(c3) == sizeof(A));
   static_assert(sizeof(c5) == sizeof(A) && sizeof(c6) == sizeof(A));
   static_assert(sizeof(c7) == sizeof(S) && sizeof(c8) == sizeof(V));
   static_assert(sizeof(c9) == sizeof(A) && sizeof(c10) == sizeof(carr));
@@ -121,7 +118,6 @@ int main() {
   SHOW(c1);
   SHOW(c2);
   SHOW(c3);
-  SHOW(c4);
   SHOW(c5);
   SHOW(c6);
   SHOW(c7);

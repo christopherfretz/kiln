@@ -28,7 +28,8 @@ impl Sema<'_, '_> {
 
     /// Records function `f`, named as a non-type template argument in
     /// the definition of a templated function (`A<f>` in a function
-    /// template's body, or in a non-generic lambda's body there), for [`Sema::mark_template_arg_uses`]: the
+    /// template's body, or in a lambda's body there), for
+    /// [`Sema::mark_template_arg_uses`]: the
     /// argument is converted once, in the definition, and an
     /// instantiation does not convert it again. Only a non-dependent
     /// specialization of a function template is recorded.
@@ -56,6 +57,25 @@ impl Sema<'_, '_> {
         let uses = self.inst.template_arg_uses.entry(key).or_default();
         if !uses.iter().any(|&(g, _)| g == f) {
             uses.push((f, loc));
+        }
+    }
+
+    /// Gives a generic lambda's call operator `new_op`, rebuilt as a
+    /// pattern in an instantiation of the enclosing function, the uses
+    /// recorded under its pattern `call_op` (`[](auto) { A<&f<int>> a; }`
+    /// in a function template, also in a lambda nested in it): the rebuilt
+    /// body's arguments are not converted again (WP-1533 (a)).
+    pub(crate) fn copy_template_arg_uses(&mut self, call_op: DeclId, new_op: DeclId) {
+        let (from, to) = (self.ast.first(call_op), self.ast.first(new_op));
+        if from == to {
+            return;
+        }
+        let Some(uses) = self.inst.template_arg_uses.get(&from).cloned() else { return };
+        let dst = self.inst.template_arg_uses.entry(to).or_default();
+        for u in uses {
+            if !dst.iter().any(|&(g, _)| g == u.0) {
+                dst.push(u);
+            }
         }
     }
 

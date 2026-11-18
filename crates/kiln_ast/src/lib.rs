@@ -26,6 +26,7 @@ pub mod fp;
 pub mod ids;
 pub mod journal;
 pub mod lambda;
+mod layout_sugar;
 pub mod lists;
 pub mod lookup;
 pub mod mem;

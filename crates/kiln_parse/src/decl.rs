@@ -968,7 +968,10 @@ impl Parser<'_, '_> {
                 // variable's or return type's when it is deduced. After
                 // an error the placeholder is unconstrained (WP-1610).
                 match self.parse_type_constraint(ctx == DeclaratorContext::Prototype) {
-                    Some((c, a, true)) => ds.auto_constraint = Some((c, a)),
+                    Some((c, a, true)) => {
+                        ds.constraint_arg_locs = self.s.template_arg_locs_of(a.len());
+                        ds.auto_constraint = Some((c, a));
+                    }
                     Some((_, _, false)) => {}
                     None => ds.invalid = true,
                 }

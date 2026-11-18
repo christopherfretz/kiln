@@ -5229,7 +5229,10 @@ diagnostics and IR.
     decomposed variable of array type (`auto [a, b] = arr`, not
     `auto& [a, b] = arr`) with `an array type is not allowed here` at
     its `[` and forms no condition (as clang 22; GCC 16.1 rejects the
-    reference too; WP-1588, `dcl.struct.bind/condition-array-errors.cpp`).
+    reference too; WP-1588, `dcl.struct.bind/condition-array-errors.cpp`;
+    the reading is a recorded decision, docs/status/deviations.md
+    "Structured binding of an array in a condition", WP-1603 (3),
+    `condition-array-reference-run.cpp`).
     The condition's value is the decomposed object `e`
     contextually converted to `bool`, and it is evaluated **before** the
     bindings are initialized: codegen (`emit_cond_var_decl`, then the
@@ -5942,14 +5945,33 @@ Names there are not odr-used.
     usable in constant expressions `non_odr_use_constant` at once, so
     `[=] { n; }` and `[=] { (void)n; }` do not capture `n` (GCC 16 agrees;
     WP-1535, `expr.prim.lambda.capture/discarded-constant-not-captured.cpp`).
+    A discarded operand of class type takes its potential results too,
+    unless it is a volatile glvalue that [expr.context]/2 reads: the
+    bullet asks only that no lvalue-to-rvalue conversion is applied, so
+    `[=] { (void)ca; }` for a `constexpr` object `ca` of class type does
+    not capture `ca` (WP-1603 (2), decided: follow the text; GCC 16.1
+    agrees, clang 22 captures; the closure's size and layout differ from
+    clang's, docs/status/deviations.md;
+    `expr.prim.lambda.capture/discarded-class-constant-not-captured.cpp`).
+    The text still captures it syntactically ([expr.prim.lambda.capture]/7)
+    and lets the closure omit the member ([expr.prim.lambda.closure]/2:
+    only its size and layout change); the member access `ca.m` read by
+    lvalue-to-rvalue conversion drops it in clang, GCC and kiln alike,
+    even where the class's copy constructor has effects.
     Not done for a generic lambda's potential captures (resolved at the
     end of the full-expression, which does not know `e` was discarded).
-  - Known gap (WP-1535 remainder): a by-copy capture named in a
-    constant expression evaluated in the lambda body (`constexpr int j =
-    *&n;` under `[=]`) is evaluated as the enclosing variable by the
-    Oven, which should fail without the closure object
-    ([expr.prim.lambda.capture]/8 example); xfail
-    `expr.prim.lambda.capture/odr-use-address-in-constexpr-init.cpp`.
+  - A by-copy capture odr-used in a constant expression evaluated in
+    the lambda body (`constexpr int j = *&n;` under `[=]`, the
+    [expr.prim.lambda.capture]/8 example) names the closure member, which
+    the Oven cannot read without the closure object (spec/sema-lambda.md,
+    `NAMES_CLOSURE_COPY`): no constant expression, as in GCC 16.1 (clang
+    accepts). The sibling forms (address, reference binding, nested and
+    generic lambdas, init-capture, `this`, an explicit capture read)
+    agree with GCC: `expr.prim.lambda.capture/odr-use-address-in-constexpr-init.cpp`,
+    `constexpr-init-by-copy-capture-siblings.cpp` (WP-1535). Open: a
+    member call on a constexpr class object (`p.get()`) odr-uses `p`, so
+    the text rejects it; clang 22 and GCC 16.1 accept it, and kiln
+    rejects it.
   - Codegen (spec/codegen.md): a non-odr-used local named from a
     lambda or local class reads the variable's `__const` global.
   - Tests `basic.def.odr/potential-results-closure-run.cpp` (closure

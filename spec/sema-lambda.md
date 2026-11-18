@@ -726,10 +726,16 @@ A closure object is an ordinary class object in the Oven's memory; the
   before, a temporary's destructor and the odr-use marking were missing
   from the thunk the evaluation reused). `T<*&i>` in a `[=]` body reads
   the variable by a rule of its own: while a non-type template
-  argument's full-expression ends (`Sema::template_arg_full_expr`), an
+  argument's full-expression ends (`Sema::capture_reads_variable`), an
   odr-use still captures but is not marked `NAMES_CLOSURE_COPY`, as clang
   22 and GCC 16.1 read the variable (docs/status/deviations.md;
-  `temp.arg.nontype/closure-copy-odr-use-*.cpp`). Reading it is
+  `temp.arg.nontype/closure-copy-odr-use-*.cpp`). The keyword `alignas`
+  argument shares the rule (`check_alignment_expr`, WP-1640) where both
+  accept: in a lambda whose enclosing entities are not templated other
+  than generic lambdas' call operators
+  (`Sema::lambda_in_enclosing_template`); GNU `aligned(*&i)` and a lambda
+  in a function or class template keep the text's reading, as GCC does
+  (`dcl.align/closure-copy-odr-use-*.cpp`). Reading it is
   diagnosed ("kiln: read of variable 'n' captured by copy is not allowed
   in a constant expression outside a call of the lambda": clang reads the
   variable and accepts), its address is not constant (clang's "pointer to

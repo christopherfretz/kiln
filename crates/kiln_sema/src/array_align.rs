@@ -61,24 +61,10 @@ impl Sema<'_, '_> {
         [self.ast.first(d), def].iter().any(|&x| self.ast.decls.get(x).has(DeclFlags::HAS_ATTRS))
     }
 
-    /// Whether the desugaring chain of `q` names a typedef or alias that
-    /// carries attributes (bounded).
-    fn has_attributed_typedef(&self, mut q: QualType) -> bool {
-        for _ in 0..64 {
-            if self.ast.types.is_canonical(q.ty()) {
-                return false;
-            }
-            if let TypeView::Typedef { decl, .. } = self.ast.types.view(q.ty())
-                && self.ast.decls.get(decl).has(DeclFlags::HAS_ATTRS)
-            {
-                return true;
-            }
-            let d = self.ast.types.desugar_once(q);
-            if d.ty() == q.ty() {
-                return false;
-            }
-            q = d;
-        }
-        false
+    /// Whether the layout sugar of `q` names a typedef or alias that
+    /// carries attributes (`Ast::layout_attributed_typedef`, the rule
+    /// layout and the Oven share).
+    fn has_attributed_typedef(&self, q: QualType) -> bool {
+        self.ast.layout_attributed_typedef(q)
     }
 }

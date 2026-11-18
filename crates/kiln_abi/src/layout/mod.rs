@@ -451,7 +451,10 @@ impl<'a> Layouter<'a> {
             TypeView::ExtQual { base, .. } => self.type_info(base),
             TypeView::Function(_) | TypeView::Invalid => Info::DEGENERATE,
             _ => {
-                let d = ast.types.desugar_once(q);
+                // `Ast::layout_desugar_once`: a function, variable or class
+                // template's substituted argument is canonical (its typedef
+                // carries no alignment into the specialization, as in clang).
+                let d = ast.layout_desugar_once(q);
                 if d.ty() != q.ty() {
                     return self.type_info(d);
                 }

@@ -1583,9 +1583,9 @@ impl Sema<'_, '_> {
         } else {
             None
         };
-        let outer = std::mem::replace(&mut self.template_arg_full_expr, true);
+        let outer = std::mem::replace(&mut self.capture_reads_variable, true);
         let c = self.act_on_constant_full_expr(c);
-        self.template_arg_full_expr = outer;
+        self.capture_reads_variable = outer;
         if let Some(from) = udc_from
             && let Some(raw) = self.fold_int(from)
             && !self.int_fits(pty, raw)

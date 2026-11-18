@@ -650,6 +650,55 @@ impl Sema<'_, '_> {
         self.ast.types.auto_type(kw, None, None, None, false)
     }
 
+    /// [temp.arg.general]/1, [temp.variadic]/10: the argument list of a
+    /// dependent type-constraint of the placeholder in `declared`, as the
+    /// concept-id with the deduced type first, checked at a definition
+    /// whose initializer is not type-dependent (`C<Ts...> auto v = 0;` in
+    /// a template, WP-1629): clang 22 deduces such a placeholder at the
+    /// definition and checks the list there (`CheckConceptTemplateId`);
+    /// satisfaction waits for the arguments. False after a diagnostic at
+    /// `auto_at`; the variable is then invalid and its instantiation says
+    /// nothing more.
+    pub(crate) fn dependent_placeholder_constraint_list_ok(
+        &mut self,
+        declared: QualType,
+        arg_locs: &[Loc],
+        auto_at: Loc,
+    ) -> bool {
+        let found = self.contained_placeholder(declared).and_then(|leaf| {
+            match self.ast.types.canonical_view(leaf) {
+                TypeView::Auto { concept: Some(c), args: Some(x), .. } => Some((c, x)),
+                _ => None,
+            }
+        });
+        let Some((c, x)) = found else { return true };
+        let written = self.ast.types.args(x).to_vec();
+        self.type_constraint_args_ok(c, &written, true, arg_locs, auto_at)
+    }
+
+    /// The definition-time check of
+    /// [`Sema::dependent_placeholder_constraint_list_ok`] for variable `v`
+    /// declared `declared` with initializer expressions `items`: runs only
+    /// for a dependent type-constraint and an initializer that is not
+    /// type-dependent. False after a diagnostic (the variable's type is
+    /// then the error type, through `AutoFail::Error`).
+    pub(crate) fn placeholder_list_ok_at_def(
+        &mut self,
+        v: DeclId,
+        declared: QualType,
+        items: &[Option<ExprId>],
+        loc: Loc,
+    ) -> bool {
+        if !self.placeholder_constraint_dependent(declared)
+            || items.iter().flatten().any(|&e| self.expr_is_type_dependent(e))
+        {
+            return true;
+        }
+        let at = self.inst.concepts.placeholder_locs.get(&v).map_or(loc, |&(_, a)| a);
+        let locs = self.inst.concepts.placeholder_arg_locs.get(&v).cloned().unwrap_or_default();
+        self.dependent_placeholder_constraint_list_ok(declared, &locs, at)
+    }
+
     /// The placeholder in `declared` has a type-constraint with
     /// dependent template arguments (`C<T> auto`).
     pub(crate) fn placeholder_constraint_dependent(&self, declared: QualType) -> bool {
