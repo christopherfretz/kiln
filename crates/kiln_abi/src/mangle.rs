@@ -294,6 +294,34 @@ fn closure_signature_fn(ast: &Ast, d: DeclId) -> Option<DeclId> {
     is_function_kind(ast.decls.get(c).kind()).then_some(c)
 }
 
+/// True if `$_N` class `d` (semantic parent `parent`, not a function) is
+/// one of the forms whose `type_info` GCC 16.1 marks unit-local and that
+/// no other unit can name (WP-1679): an unnamed class (not an
+/// enumeration) declared at namespace scope, or a closure type created by
+/// the initializer of a namespace-scope variable with internal linkage
+/// (`static`, `const`, or in an unnamed namespace) whose type it is. That
+/// variable is declared before the closure; a later variable of the
+/// closure type (`static auto c = l;`) is a copy, not its creator.
+fn anon_marker_provable(ast: &Ast, d: DeclId, parent: Option<DeclId>) -> bool {
+    let Some(ns) = parent else { return false };
+    if !matches!(ast.decls.get(ns).kind(), DeclKind::Namespace | DeclKind::TranslationUnit) {
+        return false;
+    }
+    let first = ast.first(d);
+    if ast.closure_lambda(first).is_none() {
+        return ast.decls.get(first).kind() == DeclKind::CXXRecord;
+    }
+    let ctx = ast.decls.get(first).ctx();
+    ctx.is_some_and(|c| {
+        ast.members(c).any(|v| {
+            v < first
+                && ast.decls.get(v).kind() == DeclKind::Var
+                && ast.decls.get(v).ty().and_then(|t| ast.types.as_record(t)) == Some(first)
+                && has_internal_linkage(ast, v)
+        })
+    })
+}
+
 /// True if `r` is a closure type without a mangling number: it has no
 /// linkage, and its members are internal.
 fn is_unnumbered_closure(ast: &Ast, r: DeclId) -> bool {
@@ -454,7 +482,8 @@ fn is_anon_ns(ast: &Ast, ns: DeclId) -> bool {
 }
 
 /// True if some enclosing namespace of `d` is unnamed.
-fn in_anon_ns(ast: &Ast, d: DeclId) -> bool {
+#[must_use]
+pub fn in_anon_ns(ast: &Ast, d: DeclId) -> bool {
     let mut c = ast.decls.get(d).ctx();
     while let Some(ctx) = c {
         if ast.decls.get(ctx).kind() == DeclKind::Namespace && is_anon_ns(ast, ctx) {
@@ -1341,6 +1370,7 @@ pub fn mangle_rtti_with_marker_check(
     prefix: &str,
 ) -> (String, bool) {
     let mut m = Mangler::new(ast, anon, prefix);
+    m.marker_check = true;
     m.ty(q);
     (m.out, m.no_marker)
 }
@@ -1425,6 +1455,7 @@ fn push_call_offset(s: &mut String, (nv, virt): (i64, i64)) {
 }
 
 /// The Itanium mangler state for one symbol.
+#[allow(clippy::struct_excessive_bools, reason = "independent per-run flags")]
 struct Mangler<'a, 'b> {
     ast: &'a Ast,
     anon: &'b mut AnonIds,
@@ -1482,6 +1513,9 @@ struct Mangler<'a, 'b> {
     /// linkage only by clang's `internal_linkage` attribute, which GCC
     /// ignores ([`mangle_rtti_with_marker_check`]).
     no_marker: bool,
+    /// The run decides [`Self::no_marker`] ([`mangle_rtti_with_marker_check`]):
+    /// only then is a `$_N` class tested for the forms GCC marks.
+    marker_check: bool,
 }
 
 /// The structor-variant spelling of one [`Mangler`] run.
@@ -1598,6 +1632,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             class_scope: Vec::new(),
             untagged: None,
             no_marker: false,
+            marker_check: false,
         }
     }
 
@@ -2695,8 +2730,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// no mangling number ([`AnonIds`]).
     fn anon_struct_id(&mut self, d: DeclId) {
         let ast = self.ast;
-        let func = self.parent(d).filter(|&p| is_function_kind(ast.decls.get(p).kind()));
-        self.no_marker |= func.is_none();
+        let parent = self.parent(d);
+        let func = parent.filter(|&p| is_function_kind(ast.decls.get(p).kind()));
+        if func.is_none() && !(self.marker_check && anon_marker_provable(ast, d, parent)) {
+            self.no_marker = true;
+        }
         let n = self.anon.id(ast.first(d), func);
         self.source_name(&format!("$_{n}"));
     }

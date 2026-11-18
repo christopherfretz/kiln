@@ -22,8 +22,8 @@ use common::{
 use kiln_abi::subobjects;
 use kiln_abi::target::{Target, target};
 use kiln_abi::vtable::{
-    VTableError, VTableLayout, construction_vtable, dump_construction_vtable, dump_vtable_layout,
-    vtable_layout, vtt, vtt_vtables,
+    VTableError, VTableLayout, VTableSession, construction_vtable, dump_construction_vtable,
+    dump_vtable_layout, vtable_layout, vtt, vtt_vtables,
 };
 use kiln_ast::decl::TagKind;
 use kiln_ast::dump::AstNames;
@@ -475,14 +475,91 @@ fn kiln_ir_vtt(ast: &Ast, md: DeclId, tgt: &Target) -> Result<Vec<IrVttEntry>, V
         .collect()
 }
 
-/// Compares one translation unit; returns `(vtables checked, failures)`.
-fn check(job: &Job) -> (usize, Vec<String>) {
+/// What one translation unit's check found.
+#[derive(Default)]
+struct Outcome {
+    /// Vtables and VTTs compared with clang.
+    checked: usize,
+    /// Construction groups of the shared session compared with fresh ones.
+    reused: usize,
+    /// Of those, served by re-evaluating a per-class record.
+    instantiated: u32,
+    /// And built.
+    rebuilt: u32,
+    failures: Vec<String>,
+}
+
+/// Construction-group records (`template.rs`): one session shared by
+/// every class of the unit is asked for every construction group of
+/// every class in declaration order, in reverse, and in a seeded
+/// shuffled order (bypassing its cache of results, so a group's record
+/// is made under one layout class and re-evaluated, rejected or replaced
+/// under others); each answer, layout and dump, must equal a fresh
+/// session's.
+fn check_reuse(job: &Job, ast: &Ast, decls: &[DeclId], tgt: &Target, out: &mut Outcome) {
+    let ctx = |what: &str| format!("{} seed {:#x}: {what}", job.triple, job.seed);
+    let mut groups = Vec::new();
+    for (i, r) in job.model.records() {
+        let Ok(subs) = vtt_vtables(ast, decls[i], tgt) else { continue };
+        for &sub in subs.iter().skip(1) {
+            let fresh = construction_vtable(ast, decls[i], sub, tgt);
+            let dump = dump_construction_vtable(ast, decls[i], sub, tgt);
+            groups.push((r.name.clone(), decls[i], sub, fresh, dump));
+        }
+    }
+    let n = groups.len();
+    let mut orders: Vec<Vec<usize>> = vec![(0..n).collect(), (0..n).rev().collect()];
+    let mut rng = Rng(job.seed ^ 0x0072_6575_7365);
+    let mut shuffled: Vec<usize> = (0..n).collect();
+    for i in (1..n).rev() {
+        shuffled.swap(i, rng.index(i + 1));
+    }
+    orders.push(shuffled);
+    let mut session = VTableSession::new(ast, tgt);
+    for order in &orders {
+        for &k in order {
+            let (name, md, sub, fresh, dump) = &groups[k];
+            out.reused += 1;
+            let shared = session.construction_vtable_uncached(*md, *sub);
+            let same = match (&shared, fresh, dump) {
+                (Ok((l, d)), Ok(fl), Ok(fd)) => l == fl && d == fd,
+                (Err(e), Err(fe), Err(_)) => e == fe,
+                _ => false,
+            };
+            if !same {
+                out.failures.push(ctx(&format!(
+                    "class {name} {sub:?}: shared-session construction group differs\n\
+                     --- shared ---\n{shared:?}\n--- fresh ---\n{fresh:?}\n{dump:?}"
+                )));
+            }
+        }
+    }
+    let (i, b) = session.construction_counts();
+    out.instantiated += i;
+    out.rebuilt += b;
+}
+
+/// Compares one translation unit.
+fn check(job: &Job) -> Outcome {
+    let (checked, failures, reuse) = check_clang(job);
+    let mut out = reuse;
+    out.checked = checked;
+    out.failures.extend(failures);
+    out
+}
+
+/// Compares one translation unit with clang; returns `(vtables checked,
+/// failures, the construction-group reuse outcome)`.
+fn check_clang(job: &Job) -> (usize, Vec<String>, Outcome) {
     let tgt = target(job.triple).expect("target");
     let src = job.model.cpp();
     let ctx = |what: &str| format!("{} seed {:#x}: {what}", job.triple, job.seed);
     let (clang, mut clang_vtts) = match run_clang_vtables(job.triple, &src) {
         Ok(s) => (vtable_blocks(&s), ir_vtts(&s)),
-        Err(e) => return (0, vec![ctx(&format!("clang failed:\n{e}\n--- source ---\n{src}"))]),
+        Err(e) => {
+            let f = vec![ctx(&format!("clang failed:\n{e}\n--- source ---\n{src}"))];
+            return (0, f, Outcome::default());
+        }
     };
     let show = std::env::var_os("KILN_ABI_DIFF_SHOW").is_some();
     if show {
@@ -539,6 +616,8 @@ fn check(job: &Job) -> (usize, Vec<String>) {
             }
         }
     }
+    let mut reuse = Outcome::default();
+    check_reuse(job, &ast, &decls, &tgt, &mut reuse);
     // VTTs: every class clang emitted a VTT for, entry by entry.
     for (i, r) in job.model.records() {
         let Some(theirs) = clang_vtts.remove(&source_name(&ast, decls[i])) else { continue };
@@ -563,10 +642,10 @@ fn check(job: &Job) -> (usize, Vec<String>) {
     for h in missing {
         failures.push(ctx(&format!("kiln did not produce {h}\n{}", clang[h])));
     }
-    if !failures.is_empty() {
+    if !failures.is_empty() || !reuse.failures.is_empty() {
         failures.push(ctx(&format!("--- source ---\n{src}")));
     }
-    (checked, failures)
+    (checked, failures, reuse)
 }
 
 #[test]
@@ -590,23 +669,29 @@ fn vtables_match_clang() {
             jobs.push(Job { triple, seed: s, model: generate(s, PER_TU) });
         }
     }
-    let results: Vec<(usize, Vec<String>)> = std::thread::scope(|scope| {
+    let results: Vec<Outcome> = std::thread::scope(|scope| {
         let chunks: Vec<_> = jobs
             .chunks(jobs.len().div_ceil(JOBS))
             .map(|chunk| scope.spawn(move || chunk.iter().map(check).collect::<Vec<_>>()))
             .collect();
         chunks.into_iter().flat_map(|h| h.join().expect("worker")).collect()
     });
-    let checked: usize = results.iter().map(|r| r.0).sum();
-    let failures: Vec<&String> = results.iter().flat_map(|r| &r.1).collect();
+    let checked: usize = results.iter().map(|r| r.checked).sum();
+    let reused: usize = results.iter().map(|r| r.reused).sum();
+    let instantiated: u32 = results.iter().map(|r| r.instantiated).sum();
+    let rebuilt: u32 = results.iter().map(|r| r.rebuilt).sum();
+    let failures: Vec<&String> = results.iter().flat_map(|r| &r.failures).collect();
     let classes = jobs.len() * PER_TU;
     eprintln!(
-        "vtable_vs_clang: {classes} classes, {checked} vtables and VTTs checked, {} failures, {} xfail",
+        "vtable_vs_clang: {classes} classes, {checked} vtables and VTTs checked, {} failures, {} xfail; \
+         shared session: {reused} construction groups compared with fresh ones, \
+         {instantiated} re-evaluated from a record, {rebuilt} built",
         failures.len(),
         XFAIL.len()
     );
     for f in &failures {
         eprintln!("{f}");
     }
+    assert!(instantiated > 0, "no construction group was re-evaluated: the reuse check is vacuous");
     assert!(failures.is_empty(), "{} vtable dumps differ from clang", failures.len());
 }

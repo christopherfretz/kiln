@@ -22,6 +22,7 @@ mod classes;
 mod overriders;
 mod print;
 pub use print::pretty_function;
+mod template;
 mod vtt;
 
 pub use kiln_ast::class::{
@@ -71,16 +72,14 @@ fn dynamic_class(cx: &mut Classes<'_>, record: DeclId) -> Result<DeclId, VTableE
     Ok(first)
 }
 
-/// `(class, offset)` of each subobject of `class` → its [`SubobjectId`]
-/// (the first, in numbering order).
-fn subobject_ids(cx: &mut Classes<'_>, class: DeclId) -> FxHashMap<(DeclId, i64), SubobjectId> {
-    let mut map = FxHashMap::default();
-    for (i, (s, off)) in cx.lay.subobjects(class).into_iter().enumerate() {
-        let Ok(id) = u16::try_from(i) else { break };
-        let off = i64::try_from(off).unwrap_or(i64::MAX);
-        map.entry((s.class, off)).or_insert(SubobjectId(id));
-    }
-    map
+/// The [`SubobjectId`] of subobject `(class, offset)` of the class whose
+/// table `t` is (the first, in numbering order).
+fn subobject_id(
+    cx: &Classes<'_>,
+    t: &SubobjectTable,
+    (class, off): (DeclId, i64),
+) -> Option<SubobjectId> {
+    t.id(cx.ast().first(class), u64::try_from(off).ok()?)
 }
 
 fn complete_built(cx: &mut Classes<'_>, record: DeclId) -> Result<Built, VTableError> {
@@ -99,8 +98,8 @@ fn construction_built(
     if base == SubobjectId::COMPLETE {
         return builder::build(cx, md, 0, false, md);
     }
-    let subs = cx.lay.subobjects(md);
-    let &(sub, off) = subs.get(base.index()).ok_or(VTableError::Incomplete)?;
+    let subs = cx.subobject_table(md);
+    let &(sub, off) = subs.list.get(base.index()).ok_or(VTableError::Incomplete)?;
     if !cx.get(sub.class).dynamic {
         return Err(VTableError::NotDynamic);
     }
@@ -109,9 +108,12 @@ fn construction_built(
 }
 
 fn to_layout(cx: &mut Classes<'_>, b: Built) -> VTableLayout {
-    let ids = subobject_ids(cx, b.layout_class);
-    let mut address_points: Vec<(SubobjectId, u32)> =
-        b.address_points.iter().filter_map(|(k, ap)| Some((*ids.get(k)?, *ap))).collect();
+    let ids = cx.subobject_table(b.layout_class);
+    let mut address_points: Vec<(SubobjectId, u32)> = b
+        .address_points
+        .iter()
+        .filter_map(|&(k, ap)| Some((subobject_id(cx, &ids, k)?, ap)))
+        .collect();
     address_points.sort_unstable();
     let thunks: Vec<(u32, Thunk)> =
         b.slot_thunks.iter().filter(|(_, t)| !t.is_empty()).map(|(&i, &t)| (i, t)).collect();
@@ -236,7 +238,6 @@ pub struct VTableSession<'a> {
     groups: FxHashMap<DeclId, Result<Rc<VTableLayout>, VTableError>>,
     construction: FxHashMap<(DeclId, SubobjectId), Result<Rc<VTableLayout>, VTableError>>,
     vtts: FxHashMap<DeclId, Result<Rc<VttLayout>, VTableError>>,
-    tables: FxHashMap<DeclId, Rc<SubobjectTable>>,
 }
 
 impl std::fmt::Debug for VTableSession<'_> {
@@ -257,7 +258,6 @@ impl<'a> VTableSession<'a> {
             groups: FxHashMap::default(),
             construction: FxHashMap::default(),
             vtts: FxHashMap::default(),
-            tables: FxHashMap::default(),
         }
     }
 
@@ -313,38 +313,49 @@ impl<'a> VTableSession<'a> {
 
     /// The base-subobject table of `record` (any declaration), cached.
     pub fn subobjects(&mut self, record: DeclId) -> Rc<SubobjectTable> {
-        let ast = self.cx.ast();
-        let first = ast.first(record);
-        if let Some(t) = self.tables.get(&first) {
-            return Rc::clone(t);
-        }
-        let list = self.cx.lay.subobjects(first);
-        let mut ids = FxHashMap::default();
-        for (i, (s, off)) in list.iter().enumerate() {
-            let Ok(id) = u16::try_from(i) else { break };
-            ids.entry((ast.first(s.class), *off)).or_insert(SubobjectId(id));
-        }
-        let t = Rc::new(SubobjectTable { list, ids });
-        self.tables.insert(first, Rc::clone(&t));
-        t
+        self.cx.subobject_table(record)
+    }
+
+    /// [`construction_vtable`] and [`dump_construction_vtable`] of one
+    /// construction group computed now: not taken from (nor stored in)
+    /// the session's cache of results, but through its per-class
+    /// construction-group records (`template.rs`), so the group may be
+    /// re-evaluated from another layout class's. For tests.
+    pub fn construction_vtable_uncached(
+        &mut self,
+        most_derived: DeclId,
+        base: SubobjectId,
+    ) -> Result<(VTableLayout, String), VTableError> {
+        self.cx.refuel();
+        let b = construction_built(&mut self.cx, most_derived, base)?;
+        let mut dump = String::new();
+        print::write_built(&mut self.cx, &b, &mut dump);
+        Ok((to_layout(&mut self.cx, b), dump))
+    }
+
+    /// How many construction groups this session re-evaluated from a
+    /// per-class record, and how many it built (`template.rs`).
+    pub fn construction_counts(&self) -> (u32, u32) {
+        self.cx.template_counts
     }
 }
 
 fn vtt_layout(cx: &mut Classes<'_>, record: DeclId) -> Result<VttLayout, VTableError> {
     let md = dynamic_class(cx, record)?;
     let plan = vtt::plan(cx, md)?;
-    let ids = subobject_ids(cx, md);
+    let ids = cx.subobject_table(md);
     let components = plan
         .components
         .iter()
         .map(|&(i, b)| {
-            Ok(VttComponent { vtable_index: i, base: *ids.get(&b).ok_or(VTableError::Incomplete)? })
+            let base = subobject_id(cx, &ids, b).ok_or(VTableError::Incomplete)?;
+            Ok(VttComponent { vtable_index: i, base })
         })
         .collect::<Result<_, _>>()?;
     let vtables = plan
         .vtables
         .iter()
-        .map(|(b, _)| ids.get(b).copied().ok_or(VTableError::Incomplete))
+        .map(|&(b, _)| subobject_id(cx, &ids, b).ok_or(VTableError::Incomplete))
         .collect::<Result<_, _>>()?;
     Ok(VttLayout { components, vtables })
 }

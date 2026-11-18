@@ -2258,16 +2258,34 @@ impl Cg<'_> {
     /// unit-local types", WP-1651): libstdc++ then compares the
     /// `type_info` by address only. Only under
     /// [`CodegenOptions::rtti_local_name_marker`], for a type local to the
-    /// unit: internal linkage and no incomplete class in it (the ABI
-    /// compares those by name, GCC marks none of them unless declared in
-    /// an unnamed namespace, which kiln leaves unmarked), and nothing in
-    /// its mangling GCC disagrees on (`no_marker`: a class named `$_N`
-    /// outside a function, clang's `internal_linkage` attribute).
+    /// unit: internal linkage and no incomplete class in it outside an
+    /// unnamed namespace (the ABI compares those by name; one in an
+    /// unnamed namespace no other unit can name, and GCC marks it,
+    /// WP-1679), and nothing in its mangling GCC disagrees on
+    /// (`no_marker`: a class named `$_N` outside a function other than
+    /// the forms `mangle` proves unit-local, clang's `internal_linkage`
+    /// attribute).
     fn local_name_marker(&self, q: QualType, linkage: VtLinkage, no_marker: bool) -> bool {
         self.opts.rtti_local_name_marker
             && linkage == VtLinkage::Internal
             && !no_marker
-            && !self.contains_incomplete_class(q)
+            && !self.contains_shared_incomplete_class(q)
+    }
+
+    /// [`Self::contains_incomplete_class`], not counting a class in an
+    /// unnamed namespace.
+    fn contains_shared_incomplete_class(&self, q: QualType) -> bool {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Record(rd) => {
+                self.class_def(rd).is_none() && !mangle::in_anon_ns(self.ast, self.ast.first(rd))
+            }
+            TypeView::Pointer(p) => self.contains_shared_incomplete_class(p),
+            TypeView::MemberPointer { pointee, class } => {
+                self.contains_shared_incomplete_class(QualType::unqual(class))
+                    || self.contains_shared_incomplete_class(pointee)
+            }
+            _ => false,
+        }
     }
 
     /// The `_ZTS` global `ts_name` (its string is the mangling after the

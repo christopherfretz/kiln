@@ -57,10 +57,12 @@ void use() {
 }
 "#;
 
-/// `(@ symbol of the name, marked)`: GCC 16.1's marker for the form (`$_N`
-/// closures and unnamed classes outside a function, incomplete classes
-/// and clang's `internal_linkage` are left unmarked by kiln whatever GCC
-/// does: the rule's conservative side).
+/// `(@ symbol of the name, marked)`: GCC 16.1's marker for the form. A
+/// `$_N` class outside a function is marked only as the closure of a
+/// `static` (`const`, unnamed-namespace) variable's initializer or an
+/// unnamed class at namespace scope, an incomplete class only in an
+/// unnamed namespace (WP-1679); clang's `internal_linkage` is left
+/// unmarked whatever GCC does: the rule's conservative side.
 const FORMS: &[(&str, bool)] = &[
     ("_ZTSN12_GLOBAL__N_11AE", true),
     ("_ZTSN12_GLOBAL__N_12EAE", true),
@@ -84,7 +86,11 @@ const FORMS: &[(&str, bool)] = &[
     ("_ZTS6DerivA", false),
     ("_ZTS3Ext", false),
     ("_ZTSP3Inc", false),
-    ("_ZTSPN12_GLOBAL__N_14IncAE", false),
+    ("_ZTSPN12_GLOBAL__N_14IncAE", true),
+    ("_ZTSN12_GLOBAL__N_14IncAE", true),
+    ("\"_ZTS3$_0\"", false),
+    ("\"_ZTS3$_1\"", true),
+    ("\"_ZTS3$_2\"", true),
     ("_ZTSM3Inci", false),
     ("_ZTS3Hid", false),
     ("_ZTSL2IL", false),

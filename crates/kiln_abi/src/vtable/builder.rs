@@ -17,6 +17,7 @@ use super::classes::{
     record_of, return_type,
 };
 use super::overriders::{FinalOverriders, OverriderInfo};
+use super::template::{Diff, Off, Syms};
 
 /// clang `VCallOffsetMap`: methods and their vcall-offset offsets.
 #[derive(Clone, Debug, Default)]
@@ -48,6 +49,8 @@ impl VCallOffsetMap {
 pub(crate) struct OffsetsResult {
     /// In vtable order (clang's `components_begin..end`, reversed).
     pub components: Vec<VTableComponent>,
+    /// Per component, its value as a form (recording builds only).
+    pub diffs: Vec<Option<Diff>>,
     pub vcall: VCallOffsetMap,
     pub vbase_offset_offsets: Vec<(DeclId, i64)>,
 }
@@ -55,9 +58,10 @@ pub(crate) struct OffsetsResult {
 /// clang `VCallAndVBaseOffsetBuilder`.
 struct OffsetsBuilder<'o> {
     md: DeclId,
-    layout_class: DeclId,
+    syms: &'o Syms,
     ov: Option<&'o FinalOverriders>,
     components: Vec<VTableComponent>,
+    diffs: Vec<Option<Diff>>,
     vcall: VCallOffsetMap,
     vbase_oo: Vec<(DeclId, i64)>,
     visited_vbases: FxHashSet<DeclId>,
@@ -66,21 +70,23 @@ struct OffsetsBuilder<'o> {
     ptr: i64,
 }
 
-/// Runs clang's `VCallAndVBaseOffsetBuilder` constructor.
+/// Runs clang's `VCallAndVBaseOffsetBuilder` constructor (offsets in
+/// the layout class of `syms`).
 pub(crate) fn build_offsets(
     cx: &mut Classes<'_>,
     md: DeclId,
-    layout_class: DeclId,
+    syms: &Syms,
     ov: Option<&FinalOverriders>,
     base: (DeclId, i64),
     base_is_virtual: bool,
-    off_in_layout: i64,
+    off_in_layout: Off,
 ) -> Result<OffsetsResult, VTableError> {
     let mut b = OffsetsBuilder {
         md,
-        layout_class,
+        syms,
         ov,
         components: Vec::new(),
+        diffs: Vec::new(),
         vcall: VCallOffsetMap::default(),
         vbase_oo: Vec::new(),
         visited_vbases: FxHashSet::default(),
@@ -89,7 +95,24 @@ pub(crate) fn build_offsets(
     };
     b.add_vcall_and_vbase_offsets(cx, base, base_is_virtual, off_in_layout)?;
     b.components.reverse();
-    Ok(OffsetsResult { components: b.components, vcall: b.vcall, vbase_offset_offsets: b.vbase_oo })
+    b.diffs.reverse();
+    Ok(OffsetsResult {
+        components: b.components,
+        diffs: b.diffs,
+        vcall: b.vcall,
+        vbase_offset_offsets: b.vbase_oo,
+    })
+}
+
+/// [`build_offsets`] with `rd` as its own layout class, for the vcall and
+/// vbase-offset offsets alone (no recording).
+fn own_offsets(
+    cx: &mut Classes<'_>,
+    rd: DeclId,
+    base: DeclId,
+    base_is_virtual: bool,
+) -> Result<OffsetsResult, VTableError> {
+    build_offsets(cx, rd, &Syms::concrete(rd), None, (base, 0), base_is_virtual, Off::abs(0))
 }
 
 impl OffsetsBuilder<'_> {
@@ -103,7 +126,7 @@ impl OffsetsBuilder<'_> {
         cx: &mut Classes<'_>,
         base: (DeclId, i64),
         base_is_virtual: bool,
-        real_offset: i64,
+        real_offset: Off,
     ) -> Result<(), VTableError> {
         cx.tick()?;
         let info = cx.get(base.0);
@@ -122,7 +145,7 @@ impl OffsetsBuilder<'_> {
         &mut self,
         cx: &mut Classes<'_>,
         base: (DeclId, i64),
-        vbase_offset: i64,
+        vbase_offset: Off,
     ) -> Result<(), VTableError> {
         cx.tick()?;
         let info = cx.get(base.0);
@@ -134,11 +157,14 @@ impl OffsetsBuilder<'_> {
             if !self.vcall.add(cx, m, oo) {
                 continue;
             }
-            let offset = match self.ov {
-                Some(ov) => ov.get(m, base.1)?.offset - vbase_offset,
-                None => 0,
+            let (offset, diff) = match self.ov {
+                Some(ov) => {
+                    let o = ov.get(m, base.1)?.offset;
+                    (o.val_minus(vbase_offset), Some(o.minus(vbase_offset)))
+                }
+                None => (0, None),
             };
-            self.components.push(VTableComponent::VCallOffset(offset));
+            self.push(VTableComponent::VCallOffset(offset), diff);
         }
         let primary = info.primary.map(|p| p.0);
         for &(b, v) in &info.bases {
@@ -154,7 +180,7 @@ impl OffsetsBuilder<'_> {
         &mut self,
         cx: &mut Classes<'_>,
         rd: DeclId,
-        off_in_layout: i64,
+        off_in_layout: Off,
     ) -> Result<(), VTableError> {
         cx.tick()?;
         let info = cx.get(rd);
@@ -163,15 +189,23 @@ impl OffsetsBuilder<'_> {
         }
         for &(b, v) in &info.bases {
             if v && self.visited_vbases.insert(b) {
-                let offset = cx.get(self.layout_class).vbase_offset(b) - off_in_layout;
+                let l = self.syms.vbase(cx, b);
                 let oo = self.current_offset_offset();
                 self.vbase_oo.push((b, oo));
-                self.components.push(VTableComponent::VBaseOffset(offset));
+                let diff = Some(l.minus(off_in_layout));
+                self.push(VTableComponent::VBaseOffset(l.val_minus(off_in_layout)), diff);
             }
             self.add_vbase_offsets(cx, b, off_in_layout)?;
         }
         self.explored.insert(rd);
         Ok(())
+    }
+
+    fn push(&mut self, c: VTableComponent, diff: Option<Diff>) {
+        self.components.push(c);
+        if self.syms.is_symbolic() {
+            self.diffs.push(diff);
+        }
     }
 }
 
@@ -195,13 +229,13 @@ impl BaseOffset {
 #[derive(Clone, Copy, Debug)]
 struct MethodInfo {
     base_offset: i64,
-    layout_off: i64,
+    layout_off: Off,
     index: u32,
 }
 
 /// A built vtable group, in clang's own terms (base subobjects as
 /// `(class, offset in the layout class)`).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Built {
     pub most_derived: DeclId,
     pub md_offset: i64,
@@ -231,11 +265,12 @@ struct VTableBuilder<'c, 'a> {
     md: DeclId,
     md_offset: i64,
     layout_class: DeclId,
+    syms: Syms,
     ov: FinalOverriders,
     components: Vec<VTableComponent>,
     vtable_starts: Vec<u32>,
-    address_points: Vec<((DeclId, i64), u32)>,
-    ap_seen: FxHashSet<(DeclId, i64)>,
+    address_points: Vec<((DeclId, Off), u32)>,
+    ap_seen: FxHashMap<(DeclId, i64), Off>,
     vbase_offset_offsets: Vec<(DeclId, i64)>,
     vcall_offsets_for_vbases: FxHashMap<DeclId, VCallOffsetMap>,
     method_info: FxHashMap<DeclId, MethodInfo>,
@@ -256,17 +291,33 @@ pub(crate) fn build(
     md_virtual: bool,
     layout_class: DeclId,
 ) -> Result<Built, VTableError> {
-    let ov = FinalOverriders::new(cx, most_derived, md_offset, layout_class)?;
+    let construction = most_derived != layout_class;
+    let syms = if construction {
+        let syms = Syms::symbolic(cx, most_derived, md_offset, layout_class);
+        if let Some(t) = cx.templates.get(&most_derived)
+            && let Some(b) = t.instantiate(&syms, md_virtual, md_offset)
+        {
+            cx.template_counts.0 = cx.template_counts.0.saturating_add(1);
+            return Ok(b);
+        }
+        cx.template_counts.1 = cx.template_counts.1.saturating_add(1);
+        syms
+    } else {
+        Syms::concrete(layout_class)
+    };
+    let md_off = syms.md(md_offset);
+    let ov = FinalOverriders::new(cx, most_derived, md_off, &syms)?;
     let mut b = VTableBuilder {
         cx,
         md: most_derived,
         md_offset,
         layout_class,
+        syms,
         ov,
         components: Vec::new(),
         vtable_starts: Vec::new(),
         address_points: Vec::new(),
-        ap_seen: FxHashSet::default(),
+        ap_seen: FxHashMap::default(),
         vbase_offset_offsets: Vec::new(),
         vcall_offsets_for_vbases: FxHashMap::default(),
         method_info: FxHashMap::default(),
@@ -276,26 +327,30 @@ pub(crate) fn build(
         primary_virtual_bases: FxHashSet::default(),
         original: FxHashMap::default(),
     };
-    b.layout_primary_and_secondary((most_derived, 0), false, md_virtual, md_offset)?;
+    b.layout_primary_and_secondary((most_derived, 0), false, md_virtual, md_off)?;
     let mut vbases = FxHashSet::default();
-    let mut memo = FxHashSet::default();
-    b.determine_primary_virtual_bases(most_derived, md_offset, &mut vbases, &mut memo)?;
+    let mut memo = FxHashMap::default();
+    b.determine_primary_virtual_bases(most_derived, md_off, &mut vbases, &mut memo)?;
     vbases.clear();
     let mut explored = FxHashSet::default();
     b.layout_vtables_for_virtual_bases(most_derived, &mut vbases, &mut explored)?;
     b.method_indices.sort_unstable_by_key(|&(m, i)| (i, m));
-    Ok(Built {
+    let built = Built {
         most_derived,
         md_offset,
         layout_class,
         components: b.components,
         vtable_starts: b.vtable_starts,
-        address_points: b.address_points,
+        address_points: b.address_points.iter().map(|&((c, o), ap)| ((c, o.val), ap)).collect(),
         slot_thunks: b.slot_thunks,
         thunks: b.thunks,
         vbase_offset_offsets: b.vbase_offset_offsets,
         method_indices: b.method_indices,
-    })
+    };
+    if let Some(t) = b.syms.into_template(&built, md_virtual, b.address_points) {
+        b.cx.templates.insert(most_derived, t);
+    }
+    Ok(built)
 }
 
 fn index(n: usize) -> Result<u32, VTableError> {
@@ -311,8 +366,8 @@ impl VTableBuilder<'_, '_> {
         self.cx.get(self.md).vbase_offset(v)
     }
 
-    fn layout_vbase_offset(&mut self, v: DeclId) -> i64 {
-        self.cx.get(self.layout_class).vbase_offset(v)
+    fn layout_vbase_offset(&mut self, v: DeclId) -> Off {
+        self.syms.vbase(self.cx, v)
     }
 
     fn add_thunk(&mut self, m: DeclId, t: Thunk) {
@@ -364,8 +419,8 @@ impl VTableBuilder<'_, '_> {
     /// clang `ComputeThisAdjustmentBaseOffset`.
     fn this_adjustment_base_offset(
         &mut self,
-        base: (DeclId, i64),
-        derived: (DeclId, i64),
+        base: (DeclId, Off),
+        derived: (DeclId, Off),
     ) -> Result<BaseOffset, VTableError> {
         if base.0 == derived.0 {
             return Err(VTableError::Incomplete);
@@ -374,12 +429,12 @@ impl VTableBuilder<'_, '_> {
         let mut found = false;
         for e in &paths {
             found = true;
-            let off = e.nv
-                + match e.vbase {
-                    Some(v) => self.layout_vbase_offset(v),
-                    None => derived.1,
-                };
-            if off == base.1 {
+            let off = match e.vbase {
+                Some(v) => self.layout_vbase_offset(v),
+                None => derived.1,
+            }
+            .add(e.nv);
+            if self.syms.eq(off, base.1) {
                 return Ok(BaseOffset { derived: Some(derived.0), vbase: e.vbase, nv: -e.nv });
             }
         }
@@ -390,7 +445,7 @@ impl VTableBuilder<'_, '_> {
     fn this_adjustment(
         &mut self,
         md: DeclId,
-        layout_off: i64,
+        layout_off: Off,
         overrider: OverriderInfo,
     ) -> Result<(i64, i64), VTableError> {
         let ast = self.cx.ast();
@@ -408,7 +463,7 @@ impl VTableBuilder<'_, '_> {
         if let Some(v) = off.vbase {
             let empty = self.vcall_offsets_for_vbases.get(&v).is_none_or(VCallOffsetMap::is_empty);
             if empty {
-                let r = build_offsets(self.cx, self.md, self.md, None, (v, 0), true, 0)?;
+                let r = own_offsets(self.cx, self.md, v, true)?;
                 self.vcall_offsets_for_vbases.insert(v, r.vcall);
             }
             let map = self.vcall_offsets_for_vbases.get(&v).ok_or(VTableError::Incomplete)?;
@@ -464,12 +519,12 @@ impl VTableBuilder<'_, '_> {
     fn is_overrider_used(
         &mut self,
         overrider: DeclId,
-        layout_off: i64,
+        layout_off: Off,
         first_base: DeclId,
-        first_off: i64,
+        first_off: Off,
     ) -> Result<bool, VTableError> {
         let ast = self.cx.ast();
-        if layout_off == first_off || parent(ast, overrider) == first_base {
+        if self.syms.eq(layout_off, first_off) || parent(ast, overrider) == first_base {
             return Ok(true);
         }
         let mut chain: FxHashSet<DeclId> = FxHashSet::default();
@@ -479,8 +534,11 @@ impl VTableBuilder<'_, '_> {
             self.cx.tick()?;
             let info = self.cx.get(rd);
             let Some((p, pv)) = info.primary else { break };
-            if pv && self.layout_vbase_offset(p) != first_off {
-                break;
+            if pv {
+                let l = self.layout_vbase_offset(p);
+                if !self.syms.eq(l, first_off) {
+                    break;
+                }
             }
             if !chain.insert(p) {
                 return Err(VTableError::Incomplete);
@@ -497,9 +555,9 @@ impl VTableBuilder<'_, '_> {
     fn add_methods(
         &mut self,
         base: (DeclId, i64),
-        layout_off: i64,
+        layout_off: Off,
         first_base: DeclId,
-        first_off: i64,
+        first_off: Off,
         primary_bases: &mut PrimaryBases,
     ) -> Result<(), VTableError> {
         self.cx.tick()?;
@@ -590,7 +648,7 @@ impl VTableBuilder<'_, '_> {
                 continue;
             }
             let overrider = self.ov.get(m, mi.base_offset)?;
-            if mi.layout_off == overrider.offset
+            if self.syms.eq(mi.layout_off, overrider.offset)
                 && self.slot_thunks.get(&mi.index).is_none_or(|t| t.ret == (0, 0))
             {
                 continue;
@@ -635,7 +693,7 @@ impl VTableBuilder<'_, '_> {
         base: (DeclId, i64),
         morally_virtual: bool,
         virtual_in_layout: bool,
-        layout_off: i64,
+        layout_off: Off,
     ) -> Result<(), VTableError> {
         self.cx.tick()?;
         let ast = self.cx.ast();
@@ -644,12 +702,17 @@ impl VTableBuilder<'_, '_> {
         let r = build_offsets(
             self.cx,
             self.md,
-            self.layout_class,
+            &self.syms,
             Some(&self.ov),
             base,
             virtual_in_layout,
             layout_off,
         )?;
+        for (k, d) in r.diffs.iter().enumerate() {
+            if let Some(d) = d {
+                self.syms.record(start + k, *d);
+            }
+        }
         self.components.extend(r.components);
         if virtual_in_layout && !r.vcall.is_empty() {
             let e = self.vcall_offsets_for_vbases.entry(base.0).or_default();
@@ -660,7 +723,9 @@ impl VTableBuilder<'_, '_> {
         if base.0 == self.md {
             self.vbase_offset_offsets = r.vbase_offset_offsets;
         }
-        self.components.push(VTableComponent::OffsetToTop(self.md_offset - layout_off));
+        let md_off = self.syms.md(self.md_offset);
+        self.syms.record(self.components.len(), md_off.minus(layout_off));
+        self.components.push(VTableComponent::OffsetToTop(md_off.val_minus(layout_off)));
         self.components.push(VTableComponent::Rtti(self.md));
         let ap = index(self.components.len())?;
         let mut primary_bases = PrimaryBases::default();
@@ -674,13 +739,16 @@ impl VTableBuilder<'_, '_> {
         self.compute_this_adjustments()?;
         let mut rd = base.0;
         loop {
-            if self.ap_seen.insert((rd, layout_off)) {
+            if self.syms.insert(&mut self.ap_seen, rd, layout_off) {
                 self.address_points.push(((rd, layout_off), ap));
             }
             let info = self.cx.get(rd);
             let Some((p, pv)) = info.primary else { break };
-            if pv && self.layout_vbase_offset(p) != layout_off {
-                break;
+            if pv {
+                let l = self.layout_vbase_offset(p);
+                if !self.syms.eq(l, layout_off) {
+                    break;
+                }
             }
             rd = p;
             self.cx.tick()?;
@@ -693,7 +761,7 @@ impl VTableBuilder<'_, '_> {
         &mut self,
         base: (DeclId, i64),
         morally_virtual: bool,
-        layout_off: i64,
+        layout_off: Off,
     ) -> Result<(), VTableError> {
         self.cx.tick()?;
         let info = self.cx.get(base.0);
@@ -710,7 +778,7 @@ impl VTableBuilder<'_, '_> {
                 continue;
             }
             let rel = info.base_offset(b);
-            let (bo, blo) = (base.1 + rel, layout_off + rel);
+            let (bo, blo) = (base.1 + rel, layout_off.add(rel));
             if Some(b) == primary {
                 self.layout_secondary((b, bo), morally_virtual, blo)?;
             } else {
@@ -724,19 +792,23 @@ impl VTableBuilder<'_, '_> {
     fn determine_primary_virtual_bases(
         &mut self,
         rd: DeclId,
-        layout_off: i64,
+        layout_off: Off,
         vbases: &mut FxHashSet<DeclId>,
-        memo: &mut FxHashSet<(DeclId, i64)>,
+        memo: &mut FxHashMap<(DeclId, i64), Off>,
     ) -> Result<(), VTableError> {
         self.cx.tick()?;
         let info = self.cx.get(rd);
-        if !info.has_vbases() || !memo.insert((rd, layout_off)) {
+        if !info.has_vbases() || !self.syms.insert(memo, rd, layout_off) {
             return Ok(());
         }
-        if let Some((p, true)) = info.primary
-            && (!self.construction() || self.layout_vbase_offset(p) == layout_off)
-        {
-            self.primary_virtual_bases.insert(p);
+        if let Some((p, true)) = info.primary {
+            let primary = !self.construction() || {
+                let l = self.layout_vbase_offset(p);
+                self.syms.eq(l, layout_off)
+            };
+            if primary {
+                self.primary_virtual_bases.insert(p);
+            }
         }
         for &(b, v) in &info.bases {
             let bo = if v {
@@ -745,7 +817,7 @@ impl VTableBuilder<'_, '_> {
                 }
                 self.layout_vbase_offset(b)
             } else {
-                layout_off + info.base_offset(b)
+                layout_off.add(info.base_offset(b))
             };
             self.determine_primary_virtual_bases(b, bo, vbases, memo)?;
         }
@@ -830,7 +902,7 @@ pub(crate) fn vbase_offset_offset(
     let table = if let Some(t) = cx.vbase_offset_offsets.get(&rd) {
         Rc::clone(t)
     } else {
-        let r = build_offsets(cx, rd, rd, None, (rd, 0), false, 0)?;
+        let r = own_offsets(cx, rd, rd, false)?;
         let t = Rc::new(r.vbase_offset_offsets);
         cx.vbase_offset_offsets.insert(rd, Rc::clone(&t));
         t

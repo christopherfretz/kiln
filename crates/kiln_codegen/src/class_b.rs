@@ -18,7 +18,7 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::IrType;
 use kiln_ast::DeclId;
 use kiln_ast::attr::{AttrKind as K, AttrNode};
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, ParamData};
 use kiln_ast::ids::RawId;
 use kiln_ast::sanitize::{SanitizerSet as San, no_sanitize_set};
 use kiln_llvm::{Attr, AttrKind, AttrSetId, GlobalSanitizer, TypeId as LTy};
@@ -684,6 +684,31 @@ impl Cg<'_> {
             if let Some(n) = av {
                 self.add_param_attr(params, at, Attr::Align(u64::from(n.a)));
             }
+            self.static_array_param(p, at, params);
+        }
+    }
+
+    /// C17 6.7.6.3p7: a parameter declared `T a[static N]` points to at
+    /// least `N` elements (clang `EmitFunctionProlog`, spec/codegen.md
+    /// "Parameter attributes"): `align` of `T`, and `dereferenceable(N *
+    /// sizeof(T))` when `N` is a nonzero constant and `T` has a constant
+    /// size, else `nonnull` (unless null pointers are valid).
+    fn static_array_param(&mut self, p: DeclId, at: usize, params: &mut [AttrSetId]) {
+        let ast = self.ast;
+        let Some(pd) = ast.decls.param(p) else { return };
+        if pd.flags & ParamData::STATIC_ARRAY == 0 {
+            return;
+        }
+        let Some(orig) = pd.original_ty else { return };
+        let Some(elem) = ast.types.element(orig) else { return };
+        let align = self.natural_align(elem);
+        self.add_param_attr(params, at, Attr::Align(align));
+        let n = ast.types.array_size(orig).filter(|&n| n != 0 && !self.is_vla(elem));
+        if let Some(n) = n {
+            let size = self.size_align(elem).0;
+            self.add_param_attr(params, at, Attr::Dereferenceable(size.saturating_mul(n)));
+        } else if !self.opts.null_pointer_is_valid {
+            self.add_param_attr(params, at, Attr::Flag(AttrKind::NonNull));
         }
     }
 

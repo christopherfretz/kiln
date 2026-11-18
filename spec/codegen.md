@@ -2927,10 +2927,27 @@ the variable-bound rule of kind 5: `variable_bounds_have_no_row`.
   a non-defining declaration does not count, and a nested restrict
   (`int *restrict *`) does not either. One check per parameter. A
   `__restrict` reference parameter is `noalias` for clang too, but
-  kiln's types drop qualifiers on a reference (WP-1663 remainder). Tests:
+  kiln's types drop qualifiers on a reference (`TypeTable::qualify`):
+  for clang 22 and GCC 16.1 `int &__restrict` is a type of its own
+  (a template argument of it mangles `rRi`, where kiln writes `Ri`), so
+  keeping it is a type-identity and mangling change, not a codegen one
+  (WP-1668 follow-up; xfail
+  `tests/conformance/ext.gnu.restrict/restrict-reference-is-a-distinct-type.cpp`). Tests:
   `tests/codegen/restrict_noalias_params.cpp`,
   `tests/c/dcl/restrict-noalias-params-ir.c`, the -O2 run tests in
   `tests/conformance/ext.gnu.restrict/`.
+- A C definition's parameter declared with `static` in its outermost
+  array derivation (`int d[static 2]`, C17 6.7.6.3p7: the argument
+  points to at least that many elements; with or without `restrict`
+  or other qualifiers in the brackets) is `align` of the element type
+  and `dereferenceable(N * sizeof element)` when the bound `N` is a
+  nonzero constant and the element has a constant size; a variable
+  bound, a variably modified element or a zero bound give `nonnull`
+  instead (none when null pointers are valid). Only the definition's own
+  parameter counts, not a declaration it redeclares (clang
+  `EmitFunctionProlog` reads the `ParmVarDecl`'s original type;
+  `Cg::static_array_param`, one flag test per parameter; WP-1668).
+  Tests: `tests/c/dcl/static-array-params{,-gnu}-ir.c`.
 - A template parameter object is emitted `linkonce_odr` with a comdat
   and `dso_local`, or `internal` when its type or value names an
   internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an

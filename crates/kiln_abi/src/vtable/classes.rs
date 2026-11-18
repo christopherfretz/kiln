@@ -11,7 +11,8 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{Ast, DeclId, ListId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
-use super::VTableError;
+use super::template::Template;
+use super::{SubobjectId, SubobjectTable, VTableError};
 use crate::layout::{Layouter, MAX_SUBOBJECTS, props};
 
 /// The deepest chain of dynamic classes the builders accept (they
@@ -96,6 +97,15 @@ pub(crate) struct Classes<'a> {
     overridden: FxHashMap<DeclId, Rc<[DeclId]>>,
     /// Per class, its [`Self::paths`] indices by base class.
     path_index: FxHashMap<DeclId, Rc<FxHashMap<DeclId, Vec<u32>>>>,
+    /// Per class, the last construction group built for it as most-derived
+    /// class (`template.rs`; at most one per class).
+    pub templates: FxHashMap<DeclId, Template>,
+    /// Construction groups served from [`Self::templates`], and built.
+    pub template_counts: (u32, u32),
+    /// Classes [`Self::check_depth`] accepted.
+    depth_ok: FxHashSet<DeclId>,
+    /// Per class, its base-subobject table.
+    tables: FxHashMap<DeclId, Rc<SubobjectTable>>,
     /// Remaining builder steps before [`VTableError::TooComplex`].
     fuel: u64,
 }
@@ -109,6 +119,10 @@ impl<'a> Classes<'a> {
             vbase_offset_offsets: FxHashMap::default(),
             overridden: FxHashMap::default(),
             path_index: FxHashMap::default(),
+            templates: FxHashMap::default(),
+            template_counts: (0, 0),
+            depth_ok: FxHashSet::default(),
+            tables: FxHashMap::default(),
             fuel: FUEL,
         }
     }
@@ -189,6 +203,9 @@ impl<'a> Classes<'a> {
     pub fn check_depth(&mut self, root: DeclId) -> Result<(), VTableError> {
         let ast = self.ast();
         let root = ast.first(root);
+        if self.depth_ok.contains(&root) {
+            return Ok(());
+        }
         self.lay.record(root);
         let mut depth: FxHashMap<DeclId, usize> = FxHashMap::default();
         let mut on_stack: FxHashSet<DeclId> = FxHashSet::default();
@@ -216,7 +233,26 @@ impl<'a> Classes<'a> {
                 }
             }
         }
+        self.depth_ok.insert(root);
         Ok(())
+    }
+
+    /// The base-subobject table of `record` (any declaration), cached.
+    pub fn subobject_table(&mut self, record: DeclId) -> Rc<SubobjectTable> {
+        let ast = self.ast();
+        let first = ast.first(record);
+        if let Some(t) = self.tables.get(&first) {
+            return Rc::clone(t);
+        }
+        let list = self.lay.subobjects(first);
+        let mut ids = FxHashMap::default();
+        for (i, (s, off)) in list.iter().enumerate() {
+            let Ok(id) = u16::try_from(i) else { break };
+            ids.entry((ast.first(s.class), *off)).or_insert(SubobjectId(id));
+        }
+        let t = Rc::new(SubobjectTable { list, ids });
+        self.tables.insert(first, Rc::clone(&t));
+        t
     }
 
     /// Every base-class subobject of `derived` in clang's

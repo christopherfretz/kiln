@@ -8,16 +8,15 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::VTableError;
 use super::classes::{Classes, parent};
+use super::template::{Off, Syms};
 
 /// The final overrider of one virtual function in one subobject.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct OverriderInfo {
     /// The overriding method (first declaration).
     pub method: DeclId,
-    /// The virtual base whose subobject holds the overrider.
-    pub vbase: Option<DeclId>,
     /// The overrider's class subobject offset in the layout class.
-    pub offset: i64,
+    pub offset: Off,
 }
 
 /// clang `UniqueVirtualMethod`.
@@ -148,17 +147,17 @@ pub(crate) struct FinalOverriders {
 
 impl FinalOverriders {
     /// The final overriders of `most_derived` laid out at
-    /// `md_offset` within `layout_class` (equal to `most_derived` and 0
-    /// outside construction vtables).
+    /// `md_offset` within the layout class of `syms` (equal to
+    /// `most_derived` and 0 outside construction vtables).
     pub fn new(
         cx: &mut Classes<'_>,
         most_derived: DeclId,
-        md_offset: i64,
-        layout_class: DeclId,
+        md_offset: Off,
+        syms: &Syms,
     ) -> Result<Self, VTableError> {
         let mut offs = Offsets {
             md: most_derived,
-            layout_class,
+            syms,
             sub: FxHashMap::default(),
             layout: FxHashMap::default(),
             counts: FxHashMap::default(),
@@ -206,10 +205,7 @@ impl FinalOverriders {
                 else {
                     return Err(VTableError::Incomplete);
                 };
-                map.insert(
-                    (md, base_offset),
-                    OverriderInfo { method: uvm.method, vbase: uvm.in_virtual, offset },
-                );
+                map.insert((md, base_offset), OverriderInfo { method: uvm.method, offset });
             }
         }
         Ok(FinalOverriders { map })
@@ -223,24 +219,24 @@ impl FinalOverriders {
 }
 
 /// clang `FinalOverriders::ComputeBaseOffsets`.
-struct Offsets {
+struct Offsets<'s> {
     md: DeclId,
-    layout_class: DeclId,
+    syms: &'s Syms,
     /// (class, subobject number) → offset in the most-derived class.
     sub: FxHashMap<(DeclId, u32), i64>,
     /// (class, subobject number) → offset in the layout class.
-    layout: FxHashMap<(DeclId, u32), i64>,
+    layout: FxHashMap<(DeclId, u32), Off>,
     counts: FxHashMap<DeclId, u32>,
 }
 
-impl Offsets {
+impl Offsets<'_> {
     fn compute(
         &mut self,
         cx: &mut Classes<'_>,
         rd: DeclId,
         is_virtual: bool,
         off: i64,
-        layout_off: i64,
+        layout_off: Off,
     ) {
         let num = if is_virtual {
             0
@@ -261,10 +257,10 @@ impl Offsets {
                 if self.sub.contains_key(&(b, 0)) {
                     continue;
                 }
-                (cx.get(self.md).vbase_offset(b), cx.get(self.layout_class).vbase_offset(b))
+                (cx.get(self.md).vbase_offset(b), self.syms.vbase(cx, b))
             } else {
                 let o = info.base_offset(b);
-                (off + o, layout_off + o)
+                (off + o, layout_off.add(o))
             };
             self.compute(cx, b, v, bo, blo);
         }
