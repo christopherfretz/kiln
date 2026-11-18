@@ -176,6 +176,7 @@ sema_template_arg_must_be_type = Error (0) "template argument for template type 
 sema_template_arg_must_be_type_suggest = Error (0) "template argument for template type parameter must be a type; did you forget 'typename'?";
 sema_template_arg_not_address_of = Error (1) "non-type template argument for template parameter of pointer type {0} must have its address taken";
 sema_template_arg_not_decl_ref = Error (0) "non-type template argument does not refer to any declaration";
+sema_template_arg_not_pointer_to_member_form = Error (0) "non-type template argument is not a pointer to member constant";
 sema_template_arg_not_valid_template = Error (1) "template argument does not refer to a {0:class or alias template|variable template|concept}, or template template parameter";
 sema_template_arg_template_params_mismatch = Error (0) "template template argument has different template parameters than its corresponding template template parameter";
 sema_template_constraints_not_satisfied = Error (3) "constraints not satisfied for {0:class template|function template|variable template|alias template|template template parameter|template} '{1}' {2}";

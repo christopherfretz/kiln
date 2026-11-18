@@ -6,7 +6,7 @@
 // not reachable from there: is_complete_type is false in every call of
 // f. GCC 16.1 agrees (it evaluates the initializer once, at f's
 // definition).
-//@ xfail(kiln): WP-1660: a nested evaluation's point of evaluation is not compared with the locus of a class's definition
+//@ xfail(kiln): WP-1660 remainder: a nested evaluation's point of evaluation is not compared with the locus of a class's definition
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc

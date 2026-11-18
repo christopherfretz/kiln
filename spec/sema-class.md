@@ -178,7 +178,14 @@ destructor's specification is implicit when not written, on either side
 on one side only is `-Wimplicit-exception-spec-mismatch` (WP-1656,
 `class.friend/friend-redecl-exception-spec.cpp`, also ordinary members
 and member templates through the function redeclaration check). GCC
-does not check friends. After a missing specification, as in clang, the
+does not check friends. A friend redeclaration is not what lookup in
+the member's class finds ([class.friend]/7): a later friend or
+out-of-line declaration of the member is compared to the latest
+non-friend declaration (`skip_friend_redecls` in `member_redecl_prev`),
+whose location "previous declaration is here" names and whose
+specification "is missing exception specification" spells; a friend's
+specification matches the member's, so the verdict is the same (WP-1665,
+`class.friend/friend-member-redecl-previous-is-member.cpp`). After a missing specification, as in clang, the
 `constexpr` agreement is not checked; after a mismatch it is. Its
 `constexpr` or `consteval` specifier must be the member's, an implicitly
 constexpr one counting as declared so: clang's "non-constexpr declaration

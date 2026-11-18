@@ -1387,6 +1387,28 @@ Planned as 1.3.0.
   inline static data member with a dynamic initializer is initialized
   before an importer's own variables, once per program (WP-1663,
   WP-1653).
+- Before C++17, an address template argument must be `&id`, or an array
+  or function name, and a member-pointer argument must be `&C::m`. This
+  is now also checked in template definitions and for substituted
+  parameters. At C++98 a null pointer argument is rejected, and
+  parentheses around an address argument give clang 22's
+  `-Wc++11-extensions` warning. Before C++17 a lambda's call operator is
+  not constexpr, so calling a lambda in a constant expression is
+  rejected, as in clang 22 and GCC 16.1. Inside a template, a friend
+  declaration of a non-dependent function template specialization that
+  matches no template is now rejected at the definition. A friend
+  declaring a member of an explicit specialization must not have a
+  non-empty template header. Once a member has been redeclared by a
+  friend, the "previous declaration" for later friends is still the
+  member (WP-1657, WP-1666, WP-1665, WP-1662).
+- `^^decltype(l)::operator()` reflects a closure type's call operator.
+  The other names that can follow a computed scope (`decltype(e)::`,
+  `T...[i]::`) also work: a conversion function, a destructor and a
+  `template` template-id. An annotation written before a
+  lambda-declarator (`[] [[=1]] () {}`) now appertains to the call
+  operator, as the text says, instead of being rejected. `decltype` of a
+  splice that designates a template parameter object is `const T`
+  (WP-1660).
 
 ## [1.2.1] - 2026-11-14
 

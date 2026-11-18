@@ -230,6 +230,12 @@ impl Sema<'_, '_> {
             }
             Reflectee::Object(p) => {
                 if let Some(x) = self.splice_object_expr(p, open) {
+                    if !matches!(
+                        self.ast.exprs.get(x).kind(),
+                        ExprKind::DeclRefExpr | ExprKind::MemberExpr
+                    ) {
+                        self.splice_objects.insert(x);
+                    }
                     return x;
                 }
                 let what = self.object_splice_unsupported(p);

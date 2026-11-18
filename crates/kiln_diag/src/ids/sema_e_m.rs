@@ -88,6 +88,8 @@ sema_ext_nonclass_type_friend = ExtWarn [Cxx11Extensions] (1) "non-class friend 
 sema_ext_placeholder_var = ExtWarn [Cxx26Extensions] (0) "placeholder variables are a C++2c extension";
 // WP-1645: clang ext_templ_default_in_function_templ ([temp.param]/14, C++11).
 sema_ext_templ_default_in_function_templ = ExtWarn [Cxx11Extensions] (0) "default template arguments for a function template are a C++11 extension";
+// WP-1657: clang ext_template_arg_extra_parens ([temp.arg.nontype]/1, C++11).
+sema_ext_template_arg_extra_parens = ExtWarn [Cxx11Extensions] (0) "parentheses around address non-type template argument are a C++11 extension";
 // WP-1645: clang ext_template_arg_local_type ([temp.arg.type], C++11 N2657).
 sema_ext_template_arg_local_type = ExtWarn [LocalTypeTemplateArgs] (1) "template argument uses local type {0}";
 // WP-1645: clang ext_template_arg_unnamed_type ([temp.arg.type], C++11 N2657).
@@ -333,6 +335,7 @@ sema_lambda_capture_anonymous_var = Error (0) "unnamed variable cannot be implic
 sema_lambda_capture_default_arg = Error (0) "lambda expression in default argument cannot capture any entity";
 sema_lambda_capture_default_non_local = Error (0) "non-local lambda expression cannot have a capture-default";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
+sema_lambda_in_constant_expression = Error (0) "a lambda expression may not appear inside of a constant expression";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
 sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";
 // -fclang-compat=22; clang 19 prints the operand (`_expr`, not a `_19`

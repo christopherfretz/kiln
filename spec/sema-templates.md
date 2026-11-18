@@ -189,7 +189,15 @@ template-template-param := template-head ('class'|'typename'|'auto') '...'? iden
   specializations included (WP-161): a member partial specialization of
   `Outer<int>` written with `template<class T> template<class U>` gets
   the second error, and its declaration is then dropped
-  (`take_template_head` reports `head_mismatch`).
+  (`take_template_head` reports `head_mismatch`). A friend declaration
+  is matched the same way where written (`take_template_head_of` with
+  `friend`; not as instantiated, and not after `template<>`), so
+  `template<class U> friend void A<int>::g(U);` (a member, member
+  template, constructor or member of a class nested in the implicitly
+  instantiated `A<int>`) gets the second error and declares nothing
+  ([temp.expl.spec]/15 with [temp.friend]/1: a friend has no
+  `template<>`; WP-1665,
+  `temp.friend/member-of-specialization-head-not-empty.cpp`).
 - **Header count of a member specialization** ([temp.expl.spec]/17,
   WP-1630). When the qualifier's implicit specializations take every
   leading `template<>`, the declaration has no header of its own: it
@@ -6262,11 +6270,30 @@ The `SpecKind` transitions are those of §4.5.
   id-expression of another type "non-type template argument for template
   parameter of pointer type 'int *' must have its address taken" (clang
   `CheckTemplateArgumentAddressOfObjectOrFunction`), with clang 22's
-  parameter note. Checked where written, not on substitution (WP-1646,
-  `temp.arg.nontype/address-form-before-cxx17.cpp`,
-  `subobject-address-cxx17.cpp`). Not done: clang's C++98 extension
-  warnings (parentheses, internal linkage), the form of a value-dependent
-  argument in a template definition (`R<*p>`), pointer-to-member forms.
+  parameter note (WP-1646, `temp.arg.nontype/address-form-before-cxx17.cpp`,
+  `subobject-address-cxx17.cpp`). Implicit conversions, then
+  parentheses, then substituted parameters are looked through, and again
+  substituted parameters after the `&`: a substituted parameter stands
+  for its argument's own form (`&x`, an array, a function, a variable for
+  a reference), so a value-dependent argument is checked once
+  substituted, at each instantiation (`RR<*q>`, `R<q + 0>`, `R<&*q>`:
+  "does not refer to any declaration"; WP-1657,
+  `address-form-dependent-before-cxx17.cpp`). Before C++11 a null pointer
+  value is not an argument either ("does not refer to any declaration").
+  A pointer to member before C++17 (`pre_cxx17_member_pointer_arg`,
+  clang `CheckTemplateArgumentPointerToMember`) must be `&C::m` with a
+  qualifier, the name of a non-type template parameter, a substituted
+  parameter, or from C++11 a null member pointer value: else
+  "non-type template argument is not a pointer to member constant" at
+  the argument, with no note (`member-pointer-form-before-cxx17.cpp`).
+  Before C++11, parentheses around a pointer, reference or pointer to
+  member argument are clang's ExtWarn "parentheses around address
+  non-type template argument are a C++11 extension" [-Wc++11-extensions]
+  at the outermost parenthesis, also for a value-dependent argument in
+  the definition and again (`per_instantiation`) for each instantiation
+  (`address-form-parens-null-cxx98.cpp`; C++17 accepts every form,
+  `address-forms-accepted-cxx17.cpp`). Not done: the internal-linkage
+  C++98 extension warning.
 - **Oven.** `var_info` treats the object as a usable constant whose value
   is its `ConstValueId`; `lv()` addresses it as a global.
 - **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
@@ -10015,7 +10042,13 @@ requires-clause scope.**
   `act_on_friend_spec_without_template`, `function_templates_in`,
   `match_function_spec_in`). A dependent friend specialization is a
   `FriendSpec` in `Sema.friend_specs`, matched when its class is
-  instantiated (`instantiate_friend_spec`); `friend_template_of` finds
+  instantiated (`instantiate_friend_spec`); one in a template whose
+  qualifier, type and arguments depend on nothing is also matched where
+  written ([temp.res.general]/6; `friend_spec_dependent`), so a friend
+  matching no template is "no function template matches function
+  template specialization" at the definition and declares nothing
+  (WP-1662, `temp.friend/friend-spec-no-match-in-template.cpp`,
+  `friend-spec-in-template-run.cpp`); `friend_template_of` finds
   the befriended template for access checks. Diagnostics:
   `sema_dependent_friend_spec_no_candidate` with
   `note_dependent_spec_not_template`. A qualified friend without

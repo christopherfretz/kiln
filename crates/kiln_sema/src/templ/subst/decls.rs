@@ -1781,8 +1781,11 @@ impl Substituter<'_, '_, '_> {
                 continue;
             }
             let init = self.sema.ast.decls.enumerator(en).and_then(|x| x.init);
+            // Manifestly constant-evaluated, as where it was written
+            // (clang `InstantiateEnumDefinition`'s `ConstantEvaluated`
+            // context).
             let init = match init {
-                Some(i) => match self.expr(i) {
+                Some(i) => match self.constant_operand(i) {
                     Ok(x) => Some(x),
                     Err(f) => {
                         self.sema.act_on_finish_enum_definition(e);

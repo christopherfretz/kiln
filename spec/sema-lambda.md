@@ -122,8 +122,29 @@ marks it so).
 A public inline `CXXMethodDecl` `operator()` ([expr.prim.lambda.closure]/4-5):
 `const` unless `mutable` or `static`; `static` makes it a static member
 function; `constexpr` (implicitly, [expr.prim.lambda.closure]/5) unless
-`consteval` was written; the return type is `auto` (deduced from the body)
-unless a trailing return type was written. Its parameters may have
+`consteval` was written, from C++17 only (P0170R1): before, it is constexpr
+only when `constexpr` was written (clang's `-Wc++17-extensions` warning
+"'constexpr' on lambda expressions is a C++17 extension", at the keyword);
+the return type is `auto` (deduced from the body) unless a trailing return
+type was written.
+
+**Before C++17** (WP-1666; C++11 [expr.const]/2, C++14 [expr.const]/2.6:
+a lambda-expression is not a core constant expression). A lambda-expression
+written directly in a constant-evaluated context (a `static_assert`, an
+enumerator, a `case`, a template argument or a template parameter's
+default, an array bound, a bit-field width, `alignas`, a
+*noexcept-specifier*), outside a dependent context (so at instantiation in
+a template), is an error at its `[` (`sema_lambda_in_constant_expression`,
+clang `PopExpressionEvaluationContext`); the initializer of a constexpr
+variable is not such a context. The Oven never evaluates a
+lambda-expression (`non-literal type '(lambda at F:L:C)' cannot be used in
+a constant expression`, clang `CheckLiteralType`), even discarded
+(`([]{}, 0)`: clang 22 accepts it, docs/status/deviations.md), except the
+whole initializer of the variable being initialized (through an elidable
+copy) at namespace scope from C++14, and at C++11 one without captures:
+those stay static initializations as clang emits them. The call operator
+and the conversion being non-constexpr, no call of them is constant. Run
+time is unchanged. Tests `expr.prim.lambda.closure/p5-*`. Its parameters may have
 default arguments; the [dcl.fct.default]/4 check is the ordinary one.
 
 **Explicit object parameter** (P0847, WP-356). When the first parameter
@@ -165,9 +186,10 @@ there is no static invoker.
 
 A lambda without a capture-default has ([expr.prim.lambda.closure]/8):
 
-- a public, implicit, constexpr, `noexcept` conversion function to
-  pointer to function with the call operator's parameters and return
-  type (and its *noexcept-specifier*);
+- a public, implicit, `noexcept` conversion function to pointer to
+  function with the call operator's parameters and return type (and its
+  *noexcept-specifier*), constexpr from C++17 (never before, even with a
+  written `constexpr`: clang `addFunctionPointerConversion`);
 - unless the lambda is `static`, an implicit static member function
   `__invoke` with the call operator's signature (clang's static invoker),
   constexpr only if `constexpr` was written.

@@ -299,7 +299,13 @@ impl Sema<'_, '_> {
             return Some(fd);
         }
         let own_head = self.friend_head_is_own(d);
-        let head = self.take_template_head(if own_head { None } else { d.qualifier });
+        let head = self.take_template_head_of(if own_head { None } else { d.qualifier }, true);
+        // [temp.expl.spec]/15 (clang `err_template_param_list_matches_nontemplate`,
+        // diagnosed by the call): a head matching an implicitly
+        // instantiated class of the qualifier; nothing is declared.
+        if self.templ.head_mismatch {
+            return None;
+        }
         if self.check_template_in_local_class(true, ds.lead_cxx11.unwrap_or(ds.loc)) {
             return None;
         }
@@ -1070,6 +1076,15 @@ impl Sema<'_, '_> {
                 );
                 return None;
             }
+            // A specialization that depends on nothing of the template is
+            // matched where written ([temp.res.general]/6.4; clang
+            // `CheckFunctionTemplateSpecialization` at the definition):
+            // when no template matches it is an error now, and the
+            // friend is dropped (`friend void A::f<0>(int);`).
+            if !self.friend_spec_dependent(d, ty, &sid.args) {
+                let explicit = Some(self.ast.types.arg_list(&sid.args));
+                self.match_function_spec_in(&templates, explicit, name, ty, false, loc)?;
+            }
             let target = FriendTarget::Type { ty, owned_tag: None };
             let fd = self.builder().friend(record, loc, target);
             let args = sid.args.clone();
@@ -1093,6 +1108,24 @@ impl Sema<'_, '_> {
             self.check_friend_access_noted(m.spec, loc, Some(loc));
         }
         Some(self.befriend_spec(record, m.spec, loc))
+    }
+
+    /// Whether the friend function template specialization `d` (of type
+    /// `ty`, explicit arguments `args`) depends on a template parameter:
+    /// its qualifier, type or explicit arguments.
+    fn friend_spec_dependent(&self, d: &Declarator, ty: QualType, args: &[TemplateArg]) -> bool {
+        use kiln_ast::types::{ArgView, TypeFlags};
+        let t = &self.ast.types;
+        let dep = TypeFlags::DEPENDENT | TypeFlags::UNEXPANDED_PACK;
+        d.qualifier_nns.is_some_and(|n| t.nns_flags(n).intersects(dep))
+            || t.qflags(ty).intersects(dep)
+            || args.iter().any(|&a| match a.view() {
+                ArgView::Expr { expr, .. } => {
+                    let n = self.ast.exprs.get(expr);
+                    n.is_value_dependent() || n.is_type_dependent()
+                }
+                _ => t.arg_flags(a).intersects(dep),
+            })
     }
 
     /// The [`FriendSpec`] of a class template's pattern for the
