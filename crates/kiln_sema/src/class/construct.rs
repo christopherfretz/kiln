@@ -365,8 +365,7 @@ impl Sema<'_, '_> {
             DeletedAs::Call
         };
         let x = self.construct_converted(e, to, ctx, at, deleted_as)?;
-        self.check_temp_copy(x, to, ctx, at, copy_as);
-        Some(x)
+        Some(self.check_temp_copy(x, to, ctx, at, copy_as).unwrap_or(x))
     }
 
     /// Before C++17, the copy that initializes the object of a
@@ -376,7 +375,11 @@ impl Sema<'_, '_> {
     /// copy whose argument takes no user-defined conversion, so the
     /// temporary does not bind a copy constructor's non-const reference
     /// nor reach a constructor through a second conversion (the old
-    /// `auto_ptr` idiom, [over.best.ics]/4).
+    /// `auto_ptr` idiom, [over.best.ics]/4). The copy is built over `x`
+    /// as clang's elidable `CXXConstructExpr`, so codegen and the Oven
+    /// elide it (`Ast::elidable_copy_source`) unless
+    /// `-fno-elide-constructors`; `None` when nothing is built (C++17,
+    /// another context, or the copy is not usable: diagnosed).
     pub(crate) fn check_temp_copy(
         &mut self,
         x: ExprId,
@@ -384,12 +387,12 @@ impl Sema<'_, '_> {
         ctx: ConvCtx,
         at: Loc,
         deleted_as: DeletedAs,
-    ) {
+    ) -> Option<ExprId> {
         if self.std >= kiln_lex::Std::Cxx17
             || self.is_err_expr(x)
             || !matches!(ctx, ConvCtx::Return | ConvCtx::Argument | ConvCtx::Initialization)
         {
-            return;
+            return None;
         }
         // The temporary a converting constructor makes is of the
         // cv-unqualified destination type ([dcl.init]/17.6.3 in C++14: "a
@@ -406,11 +409,9 @@ impl Sema<'_, '_> {
         } else {
             conv::raw_cast(self, CastKind::NoOp, x, unq, ValueCategory::PRValue, None)
         };
-        // Checked only: the copy of this second step is not built (the
-        // elidable copy node `check_elided_ctor` returns is dropped).
         self.temp_copy_second_step = true;
         let to = conv::strip_cv(self, to);
-        let _ = self.check_elided_ctor(arg, to, ctx, at, deleted_as);
+        let copy = self.check_elided_ctor(arg, to, ctx, at, deleted_as);
         self.temp_copy_second_step = false;
         // The copy's constructor stays recorded on `x` (`noexcept`).
         if arg != x
@@ -418,6 +419,7 @@ impl Sema<'_, '_> {
         {
             let _ = self.elided_ctors.insert(x, c);
         }
+        copy.filter(|&c| !self.is_err_expr(c))
     }
 
     /// [`Sema::convert_to_class`] for any source `e` (a class source of

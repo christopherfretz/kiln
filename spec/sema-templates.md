@@ -6124,7 +6124,13 @@ The `SpecKind` transitions are those of §4.5.
   argument, `eval_const` with `EvalContext::converted`, then
   `AstBuilder::template_param_object(const T, v)`; the argument is
   `TemplateArg::value(canonical T, v)`. Aggregate values are interned, so
-  the `ConstValueId` is the (type, value) key.
+  the `ConstValueId` is the (type, value) key. Deviation
+  ([temp.arg.nontype]/4 copies the object from `constexpr T v = A;` and
+  requires the copy to be template-argument-equivalent to `v`): one
+  initialization from the argument, its value kept, nothing compared, as
+  clang 22 and GCC 16.1 do (WP-1643,
+  `temp.arg.nontype/class-copy-not-equivalent-accepted.cpp`,
+  docs/status/deviations.md; `reflect_constant` compares, WP-1614).
 - **`_Complex` arguments** (WP-810): a GNU complex type is structural (a
   scalar, as clang). The argument is `TemplateArg::value(T, v)` with `v`
   the frozen `T[2]` image; substituted, it is a `ConstantExpr` holding `v`
@@ -6230,6 +6236,28 @@ The `SpecKind` transitions are those of §4.5.
   `temporary-bitfield-class-subobjects{,-19}.cpp`, the valid neighbours
   `string-copy-class-argument-run.cpp` and
   `tests/mangle/class_nttp_string_copy.cpp`).
+- **Before C++20** (`args.rs` `pre_cxx20_address_arg`, after the
+  disallowed bases, for pointer and reference arguments whose value
+  designates a variable or function; nothing from C++20 on). C++17
+  ([temp.arg.nontype]/2 of that standard): a subobject (a non-zero
+  offset, one past the end, a designated type other than the
+  variable's, except a pointer to the first element an array decays
+  to) is "non-type template argument refers to subobject '&a[2]'"
+  (clang `err_non_type_template_arg_subobject`, the value printed as a
+  template argument), at the argument. C++98 to C++14 ([temp.arg.nontype]/1
+  of those): the argument as written, parentheses around it allowed,
+  must be `&` applied directly to an id-expression, or for a pointer an
+  id-expression of array or function type (an overload set included),
+  or for a reference an id-expression: else "non-type template argument
+  does not refer to any declaration" (at the operand of `&`), or for an
+  id-expression of another type "non-type template argument for template
+  parameter of pointer type 'int *' must have its address taken" (clang
+  `CheckTemplateArgumentAddressOfObjectOrFunction`), with clang 22's
+  parameter note. Checked where written, not on substitution (WP-1646,
+  `temp.arg.nontype/address-form-before-cxx17.cpp`,
+  `subobject-address-cxx17.cpp`). Not done: clang's C++98 extension
+  warnings (parentheses, internal linkage), the form of a value-dependent
+  argument in a template definition (`R<*p>`), pointer-to-member forms.
 - **Oven.** `var_info` treats the object as a usable constant whose value
   is its `ConstValueId`; `lv()` addresses it as a global.
 - **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`

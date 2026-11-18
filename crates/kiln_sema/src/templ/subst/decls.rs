@@ -1985,7 +1985,7 @@ impl Substituter<'_, '_, '_> {
                 self.sema.befriend_special_template(record, class, sf.kind, ty, h, loc),
             ));
         }
-        Ok(self.sema.befriend_special_member(record, class, sf.kind, ty, loc))
+        Ok(self.sema.befriend_special_member(record, class, (sf.kind, None), ty, loc))
     }
 
     /// A friend declaration of the pattern ([temp.friend]).

@@ -30,6 +30,12 @@ pub struct Config {
 
 impl Config {
     /// The flags both compilers get, before the source file.
+    /// How the reports name the reference compiler: the file name of the
+    /// one `--clang` named (`clang++-19` by default), as it was run.
+    pub fn reference_label(&self) -> String {
+        reference_label(self.clang.as_deref())
+    }
+
     pub fn common_flags(&self) -> Vec<String> {
         let mut v = vec![
             format!("-std={}", self.std),
@@ -136,11 +142,12 @@ impl HeaderResult {
         err(&self.kiln).or_else(|| self.clang.as_ref().and_then(err))
     }
 
-    pub fn console_line(&self) -> String {
+    /// The console line, the reference compiler named `reference`.
+    pub fn console_line(&self, reference: &str) -> String {
         let clang = match &self.clang {
             None => String::new(),
             Some(c) if c.status.is_ok() => String::new(),
-            Some(c) => format!(" [clang++-19 rejects it too: {}]", c.status.tag()),
+            Some(c) => format!(" [{reference} rejects it too: {}]", c.status.tag()),
         };
         format!("<{}>: {}{clang}", self.header, self.kiln.status)
     }
@@ -280,6 +287,13 @@ pub fn libstdcxx_version(cfg: &Config) -> String {
         (Some(r), Some(d)) => format!("`_GLIBCXX_RELEASE` {r}, `__GLIBCXX__` {d}"),
         _ => "unknown".to_owned(),
     }
+}
+
+/// [`Config::reference_label`] of the reference compiler `clang`.
+pub fn reference_label(clang: Option<&Path>) -> String {
+    clang
+        .and_then(Path::file_name)
+        .map_or_else(|| "clang++-19".to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ cargo xtask libstdcxx [options]
 | `--gcc-toolchain <dir>` | Passed to both compilers as `--gcc-toolchain=<dir>` (spec/driver.md "Toolchain"), so they take libstdc++ from that GCC installation; the default `--headers` becomes the newest `<dir>/include/c++/<version>`. For GCC 16.1: `--gcc-toolchain $KILN_GCC16_ROOT/usr/local` (docs/VALIDATION.md "GCC 16.1 header sweep"; WP-525). |
 | `--profile <p>` | The cargo profile the implicit build uses: `debug`, `harness` (default) or `release` (`spec/libcxx.md` "Build profiles"). |
 | `--compiler <path>` | kiln binary. Default: `cargo build --profile <p> -p kiln_driver`, then `kiln++`. The report's command names `--profile <p>`, or `--compiler <kiln++>` when this is given. |
-| `--clang <path>` | The reference compiler. Default `clang++-19`. If it cannot report a version, a warning is printed and the run continues without a reference column. |
+| `--clang <path>` | The reference compiler. Default `clang++-19`. If it cannot report a version, a warning is printed and the run continues without a reference column. The console, the summary line and the page name it by its file name (`clang++-22` for `--clang /usr/bin/clang++-22`), and the page's command line repeats a non-default `--clang` (WP-1522). |
 | `--no-clang` | Skip the reference compiler. |
 | `--filter <glob>` | Keep only headers whose name matches the glob in full (`*` any run, `?` one character, everything else literally). |
 | `--list` | Print the selected headers and exit. Nothing is compiled. |

@@ -451,8 +451,18 @@ impl Substituter<'_, '_, '_> {
                 // `&C::m` stays the qualified name, not `this->C::m`
                 // (`Sema::act_on_id_expression_in`).
                 let addr = op == kiln_ast::expr::UnaryOp::AddrOf
-                    && self.sema.ast.exprs.get(o).kind() == ExprKind::DeclRefExpr
-                    && ex(self).decl_ref_extra(o).is_some_and(|x| x.qualifier.is_some());
+                    && match self.sema.ast.exprs.get(o).kind() {
+                        ExprKind::DeclRefExpr => {
+                            ex(self).decl_ref_extra(o).is_some_and(|x| x.qualifier.is_some())
+                        }
+                        // `&C<T>::template f<U>`, `&B::f<T>`: a pointer to
+                        // member once resolved ([class.protected]).
+                        ExprKind::DependentScopeDeclRefExpr => true,
+                        ExprKind::UnresolvedLookupExpr => {
+                            self.sema.ast.templates.expr_nns.get(o).is_some()
+                        }
+                        _ => false,
+                    };
                 let saved = std::mem::replace(&mut self.sema.address_operand, addr);
                 let o = self.expr(o);
                 self.sema.address_operand = saved;
@@ -1886,14 +1896,10 @@ impl Substituter<'_, '_, '_> {
                 None => None,
             };
             if self.sema.kind_of(d) == DeclKind::FunctionTemplate || targs.is_some() {
-                return Ok(self.sema.builder().unresolved_lookup(
-                    name,
-                    &[d],
-                    false,
-                    nns,
-                    targs,
-                    n.loc(),
-                ));
+                let r =
+                    self.sema.builder().unresolved_lookup(name, &[d], false, nns, targs, n.loc());
+                self.keep_ule_found(c, r);
+                return Ok(r);
             }
             return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
         }
@@ -1906,7 +1912,32 @@ impl Substituter<'_, '_, '_> {
             Some(q) => Some(self.nns(q, n.loc())?),
             None => None,
         };
-        Ok(self.sema.builder().unresolved_lookup(name, &ds, false, nns, targs, n.loc()))
+        let r = self.sema.builder().unresolved_lookup(name, &ds, false, nns, targs, n.loc());
+        self.keep_ule_found(c, r);
+        Ok(r)
+    }
+
+    /// The qualified name `r` rebuilt from `c` keeps what `c`'s lookup
+    /// found and its naming class when it names the same declarations (a
+    /// member of a non-dependent class, `B::f<T>`), so the call or
+    /// address resolving it checks the access of the function it selects
+    /// ([class.access]/4, [class.protected]) as the parser's would.
+    /// Its naming class is instantiated too (`&D::f<T>` in `D<T>` names
+    /// `D<int>`'s member).
+    fn keep_ule_found(&mut self, c: ExprId, r: ExprId) {
+        let Some(mut f) = self.sema.ovl.ule_found.get(&c).cloned() else { return };
+        if self.sema.ast.unresolved_decls(r) != self.sema.ast.unresolved_decls(c) {
+            return;
+        }
+        if let Some(n) = f.naming {
+            let loc = self.sema.ast.exprs.get(c).loc();
+            let Ok(n) = self.find_instantiated_decl(n, loc) else { return };
+            if self.sema.in_dependent_class(n) {
+                return;
+            }
+            f.naming = Some(n);
+        }
+        self.sema.ovl.ule_found.insert(r, f);
     }
 
     /// A name `e` found as a block-scope dependent using-declarator

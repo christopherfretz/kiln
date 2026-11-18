@@ -1583,10 +1583,17 @@ impl Compiler<'_> {
         // syntax, copies the object (clang's `handleTrivialCopy`): a
         // union's with its active member (sema defines it with an empty
         // body), a class's from a fully initialized source (aux 2; noted
-        // at the argument, the call's frame note at the call).
-        if spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
-            && self.ast().decls.get(md).name().as_operator()
-                == Some(kiln_ast::names::OverloadedOperator::Equal)
+        // at the argument, the call's frame note at the call). Before
+        // C++14 an implicit assignment operator is not constexpr
+        // ([class.copy]/26 C++11, N3652), so it is called and noted as a
+        // non-constexpr function, as clang does; from C++14 on the year
+        // alone decides.
+        if spec.is_some_and(|s| {
+            s.is_trivial()
+                && (self.b.cxx_year() >= 2014
+                    || s.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
+        }) && self.ast().decls.get(md).name().as_operator()
+            == Some(kiln_ast::names::OverloadedOperator::Equal)
             && let (Some(cls), [src]) = (cls, args)
             && let TyKind::Record { union, .. } = self.kind(cls)
         {

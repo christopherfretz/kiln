@@ -142,7 +142,7 @@ declaration (never inside one). Sema tracks the current unit's phase:
 | [cpp.module]/2 (P3034) | `module name component 'X' cannot be an object-like macro` (clang 19 and 22 expand the macro instead) |
 | import at top level only | `import of module 'M' appears within namespace` |
 | missing module | `module 'M' not found` (fatal) |
-| [basic.link]/11 | `declaration of 'x' in module M follows declaration in the global module`, `... in the global module follows declaration in module M`, `... in module N follows declaration in module M` |
+| [basic.link]/11 | `declaration of 'x' in module M follows declaration in the global module`, `... in the global module follows declaration in module M`, `... in module N follows declaration in module M`; also an out-of-line definition of a member (function, destructor, static data member, nested class, member template), attached where it is written ([module.unit]/7: `void X::f() {}` in M's purview for an `extern "C++"` class; compared with the class's attachment; not checked for an exported one, which already has `cannot export`, or an explicit instantiation; WP-1634, `basic.link/module-attachment-out-of-line-member.cpp`) |
 
 Locations follow clang 22: preamble errors (`module declaration must
 occur ...`, `multiple module declarations` and its note) are at the
