@@ -45,6 +45,26 @@ fn is_identifier(s: &str) -> bool {
 const MAX_INLINE: usize = 64;
 
 impl Sema<'_, '_> {
+    /// Whether `t` (a class type, or an array of one) is a class the
+    /// running evaluation completed with `define_aggregate` that the
+    /// running nested evaluation does not see (spec/reflection.md §6.2,
+    /// CWG3162): incomplete there, whatever the AST says. One length
+    /// check when no class was completed so.
+    pub(super) fn meta_hidden_completion(&self, t: kiln_ast::QualType, oven: &mut Oven) -> bool {
+        if !oven.has_injected_completions() {
+            return false;
+        }
+        let mut t = t;
+        while let Some(e) = self.ast.types.element(t) {
+            t = e;
+        }
+        self.ast
+            .types
+            .as_record(t)
+            .and_then(|r| oven.injected_completion_hidden(self.ast.first(r)))
+            .unwrap_or(false)
+    }
+
     /// Runs intrinsic `op` on `args` (the call's argument values, as the
     /// op's signature lays them out) into `out` (spec/reflection.md §3).
     ///

@@ -7,15 +7,17 @@
 // (the golden's one row is the deduction of can_substitute's own range
 // parameter at its five calls: no alias, signature-substitution or class
 // row for the substituted templates, and none for Ok<int>, the one
-// successful substitution, whose definition is never instantiated) and the
-// same peak_bytes as one trial.
+// successful substitution, whose definition is never instantiated) and
+// nothing on top of one trial: the first evaluation holds only the
+// interned reflection of Ok<int> (refl_bytes; a fold no longer
+// substitutes ahead of it, spec/reflection.md §4.3), the second nothing.
 //@ expect: compile-ok
 //@ args: -freflection
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 //@ inst-report: substitute-trial-rollback.inst.json
-//@ oven: 53 peak_bytes<=0 allocs<=0
-//@ oven: 54 peak_bytes<=0 allocs<=0 steps<=70000
+//@ oven: 55 peak_bytes<=32 refl_bytes<=32 allocs<=0
+//@ oven: 56 peak_bytes<=0 allocs<=0 steps<=70000
 // Declared here rather than by kiln_meta.h so that the golden holds only
 // this file's templates; the arguments are arrays.
 namespace std::meta {

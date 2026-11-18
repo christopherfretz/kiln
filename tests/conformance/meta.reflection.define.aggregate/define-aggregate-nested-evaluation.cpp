@@ -3,7 +3,6 @@
 // evaluation, so is_complete_type there sees the class incomplete before
 // the enclosing call defines it, in every recursive call. Found running
 // GCC's C++ testsuite.
-//@ xfail(kiln): WP-1642: a nested evaluation (CWG3162) still sees the classes the enclosing evaluation completed with define_aggregate
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc

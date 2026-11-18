@@ -180,6 +180,8 @@ ops! {
     // bit); aux = 4: saves the plain bit to [dst] and clears it; aux = 8:
     // restores it from [dst] (around a constexpr local's initializer);
     // aux = 16: the context alone, never diagnosed (`if consteval`).
+    // aux = 32: marks the run impure after `^^x` of an automatic
+    // variable ([dst] is untouched).
     IsConstEval = 1,
     // [src]; aux = 1 if the function returns a scalar
     Ret = 1,

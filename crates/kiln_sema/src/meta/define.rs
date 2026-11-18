@@ -477,6 +477,7 @@ impl Sema<'_, '_> {
             self.inject_field(r, d, &annots, loc, block);
         }
         self.lend_oven(oven, |s| s.act_on_finish_record_definition(r, false));
+        oven.note_injected_completion(self.ast.first(r));
         self.ctx = saved;
         self.pack = pack;
         oven.put_dms_buf(specs);

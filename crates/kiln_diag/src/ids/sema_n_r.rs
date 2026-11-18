@@ -275,6 +275,8 @@ sema_reflect_intervening_lambda = Error (0) "cannot take the reflection of a loc
 sema_reflect_nttp = Error (1) "'^^' cannot be applied to a non-type template parameter '{0}'";
 sema_reflect_operand = Error (0) "'^^' cannot be applied to this operand";
 sema_reflect_overload_set = Error (0) "cannot take the reflection of an overload set";
+// [expr.reflect]/7: a local parameter of a requires-expression (WP-1524)
+sema_reflect_requires_param = Error (1) "'^^' cannot be applied to a local parameter of a requires-expression '{0}'";
 // [expr.reflect]/5: lookup found a declaration that replaced a
 // using-declarator (WP-1505)
 sema_reflect_using_declarator = Error (1) "cannot take the reflection of '{0}', which names a declaration introduced by a using-declaration";

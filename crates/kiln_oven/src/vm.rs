@@ -154,6 +154,23 @@ pub(crate) struct RunState {
     /// function), 0 if none. Saved and restored with `plain` by
     /// `Op::IsConstEval`.
     pub nested_frame: u32,
+    /// The classes `define_aggregate` completed during the outermost
+    /// evaluation, each with its position in that order (the completion
+    /// log of spec/reflection.md §6.2; first declarations). Empty in an
+    /// evaluation that injects nothing, so every check is one length
+    /// test there.
+    pub injected: kiln_source::fx::FxHashMap<DeclId, u32>,
+    /// The completions the running evaluation does not see: positions
+    /// `inj_lo..inj_hi` of `injected` ([expr.const.reflect], CWG3162: a
+    /// constexpr local's initializer has its own evaluation context).
+    /// Saved and restored with `nested_frame` by `Op::IsConstEval`.
+    pub inj_lo: u32,
+    pub inj_hi: u32,
+    /// `injected.len()` when the innermost evaluation context began: an
+    /// instantiation a nested context runs sees what its enclosing
+    /// evaluation sees ([module.context]), so a constexpr local evaluated
+    /// in it hides only the completions from here on.
+    pub inj_anchor: u32,
     /// The evaluation checks for undefined behaviour
     /// ([`crate::Oven::fold_for_overflow`]): a signed `+`, `-`, `*` or
     /// negation that overflows yields its wrapped value and is recorded
@@ -2016,17 +2033,36 @@ impl Oven {
                 } else if aux & 4 != 0 {
                     // A constexpr local's initializer: its own
                     // evaluation, never plainly (spec/consteval-blocks.md §3).
-                    let saved = u128::from(std::mem::take(&mut self.run.plain))
-                        | u128::from(self.run.nested_frame) << 1;
+                    let run = &mut self.run;
+                    let saved = u128::from(std::mem::take(&mut run.plain))
+                        | u128::from(run.nested_frame) << 1
+                        | u128::from(run.inj_lo) << 64
+                        | u128::from(run.inj_hi) << 96;
                     reg!(0) = saved;
-                    self.run.nested_frame = self.stack.len() as u32;
+                    run.nested_frame = self.stack.len() as u32;
+                    // It does not see the classes the enclosing evaluation
+                    // completed with `define_aggregate` (CWG3162;
+                    // spec/reflection.md §6.2): none when none was.
+                    if !run.injected.is_empty() {
+                        if run.inj_lo >= run.inj_hi {
+                            run.inj_lo = run.inj_anchor;
+                        }
+                        run.inj_hi = run.injected.len() as u32;
+                    }
                 } else if aux & 8 != 0 {
                     let saved = reg!(0);
                     self.run.plain = saved & 1 != 0;
                     self.run.nested_frame = (saved >> 1) as u32;
+                    self.run.inj_lo = (saved >> 64) as u32;
+                    self.run.inj_hi = (saved >> 96) as u32;
                 } else if aux & 16 != 0 {
                     // `if consteval` ([stmt.if]/4).
                     reg!(0) = u128::from(self.run.const_context);
+                } else if aux & 32 != 0 {
+                    // A reflection of an automatic variable was taken
+                    // (compiled after the constant it leaves in [dst]):
+                    // no call that reaches it is memoized.
+                    self.run.impure += 1;
                 } else {
                     let cc = self.run.const_context;
                     reg!(0) = u128::from(cc);

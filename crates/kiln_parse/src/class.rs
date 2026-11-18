@@ -1816,6 +1816,9 @@ impl Parser<'_, '_> {
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
             self.record_declarator_end(target, &d);
             self.check_friend_without_contracts(is_fn, &ds, &parts, target, &d);
+            if is_fn && ds.friend.is_some() {
+                self.s.reject_friend_param_annotations(target);
+            }
             if let Some(x) = decl {
                 self.s.act_on_group_declarator(&mut group, x);
             }

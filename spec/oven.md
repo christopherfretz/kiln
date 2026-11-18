@@ -1896,6 +1896,16 @@ take `_Float32x`/`_Float64x` operands directly. Test:
 - A call that ran a reflection intrinsic whose purity class is not
   `Stable` is not cached (spec/reflection.md §3.3: the intrinsic bumps
   `run.impure`).
+- What a memoized call may return: a value that does not depend on the
+  frames the call ran. A reflection of an automatic variable does (an
+  `extract` or `constant_of` of it asks whether the variable's lifetime
+  began within the running evaluation, [meta.reflection.extract],
+  [meta.reflection.queries] `constant_of`'s example), so the
+  reflect-expression `^^x` of one is compiled with `IsConstEval` aux 32
+  after its constant, which bumps `run.impure`: neither that call nor any
+  call whose span contains it is cached (WP-1524 item 7). Only code that
+  reflects a local pays the one instruction; every other call is cached
+  as before (`meta.reflection.extract/local-escape-memo-neg.cpp`).
 
 ### Performance — normative targets, recorded baselines
 No heap allocation per evaluation once warm (no boxing of values, no hash
@@ -4687,11 +4697,14 @@ a frame of the running evaluation, lasts ([meta.reflection.extract]):
   variable belongs to an enclosing function or an earlier evaluation,
   and a variable usable in constant expressions gives its constant
   initializer (sema; never memory). The record is the dead slot itself,
-  so it is lost when the slot is reused after the frame quarantine, or
-  when the call that made it was a memo hit; both make an escaped
-  reflection of a constant local read that constant (as GCC 16.1 does
-  on a cached call), never a stale object. Only `extract`/`constant_of`
-  of a local not found live scans the slots: nothing on the hot path.
+  so it is lost when the slot is reused after the frame quarantine: an
+  escaped reflection of a constant local then reads that constant, never
+  a stale object. A memo hit cannot lose it: no call that took the
+  reflection of an automatic variable is memoized ("Memoization";
+  WP-1524), so the frame that makes the escape visible always runs in
+  the evaluation that uses the reflection (GCC 16.1 caches such a call
+  and accepts the escape). Only `extract`/`constant_of` of a local not
+  found live scans the slots: nothing on the hot path.
 
 Nothing is added for a function that reflects no reference local: its
 scan leaves `refl_refs` empty, so its frames, registers and instructions

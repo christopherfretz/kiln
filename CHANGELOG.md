@@ -279,6 +279,20 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Reflection (WP-1642, WP-1644, WP-1524): a nested constant evaluation
+  (a constexpr local's initializer) no longer sees the classes its
+  enclosing evaluation completed with `define_aggregate`, while the
+  instantiations an evaluation triggers do (CWG3162);
+  `can_substitute` may inject declarations as `substitute` does; `^^` of a
+  requires-expression parameter, a splice of another function's local and
+  a splice of an unnamed bit-field are diagnosed; `^^Ts...[0]::member`
+  parses; annotations on parameters of block-scope or non-defining friend
+  declarations and of a type that is not copy constructible are rejected;
+  a call that reflects a local is never memoized, so an escaped
+  reflection of a dead local is caught on every evaluation
+  ([spec/reflection.md](spec/reflection.md), [spec/oven.md](spec/oven.md)).
+  `g++.dg/reflect`: 476 to 481 of 565.
+
 - `.mason.meta`: three false ODR differences reported by mortar's
   maintainers. A definition without listed attributes no longer hashes
   differently in a unit that has such an attribute anywhere (an

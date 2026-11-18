@@ -447,7 +447,7 @@ impl Sema<'_, '_> {
             let loc = ctx.loc;
             return Ok(self.lend_oven(oven, |s| s.require_complete_silent(t, loc)));
         }
-        Ok(self.is_complete(t))
+        Ok(self.is_complete(t) && !self.meta_hidden_completion(t, oven))
     }
 }
 

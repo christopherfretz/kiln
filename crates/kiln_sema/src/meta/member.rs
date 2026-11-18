@@ -160,6 +160,9 @@ impl Sema<'_, '_> {
             }
             self.lend_oven(oven, |s| s.require_complete(t, loc));
         }
+        if self.meta_hidden_completion(t, oven) {
+            return Ok(None);
+        }
         Ok(self.ast.definition(d).filter(|_| self.is_complete(t)))
     }
 
@@ -827,6 +830,9 @@ impl Sema<'_, '_> {
         };
         if self.undefined_spec(t).is_some() && self.meta_may_instantiate(ctx) {
             self.lend_oven(oven, |s| s.require_complete(t, loc));
+        }
+        if self.meta_hidden_completion(t, oven) {
+            return fail(loc, format!("reflection with incomplete type in {what}"));
         }
         let _ = is_type;
         Ok((t, width))

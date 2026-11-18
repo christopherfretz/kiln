@@ -399,6 +399,22 @@ impl Sema<'_, '_> {
                 self.recover(info, &[], loc)
             }
             DeclKind::CXXConstructor => self.reflect_overload_set(name_loc, loc),
+            // [expr.reflect]/7: an id-expression naming a local parameter
+            // of a requires-expression is ill-formed.
+            DeclKind::ParmVar
+                if self
+                    .ast
+                    .decls
+                    .get(d)
+                    .ctx()
+                    .is_some_and(|c| self.kind_of(c) == DeclKind::RequiresExprBody) =>
+            {
+                let text = self.decl_name(d);
+                let e = self.diag(DiagId::sema_reflect_requires_param, name_loc).arg(text);
+                self.emit(e);
+                let info = self.meta_info_type();
+                self.recover(info, &[], loc)
+            }
             _ => match self.reflectee_of_decl(d) {
                 Some(r) => {
                     self.mark_reflected(d);

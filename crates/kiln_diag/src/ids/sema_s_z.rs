@@ -62,6 +62,8 @@ sema_splice_dependent_namespace = Error (1) "the splice-specifier of a {0} canno
 sema_splice_global_namespace = Error (1) "the splice-specifier of a {0} cannot designate the global namespace";
 // [expr.prim.splice]/2.1.4 (WP-781)
 sema_splice_intervening_lambda = Error (1) "cannot splice local entity '{0}' for which there is an intervening lambda expression";
+// [basic.def.odr]/10: a splice designating another function's local (WP-1524)
+sema_splice_local_other_function = Error (2) "use of local variable '{0}' with automatic storage from {1}";
 // [expr.prim.splice]/2.7, [temp.names]/3: a splice designating a
 // template needs `template` (WP-1505); GCC 16.1 pedwarns too
 sema_splice_missing_template_kw = ExtWarn [MissingTemplateKeyword] (0) "missing 'template' keyword before a splice-specifier that designates a template";
@@ -82,6 +84,8 @@ sema_splice_not_template = Error (0) "splice before a template argument list doe
 sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_special_member = Error (1) "a splice-expression cannot designate a {0:constructor|destructor}";
+// [expr.prim.splice]/2.1 (WP-1524)
+sema_splice_unnamed_bit_field = Error (0) "a splice-expression cannot designate an unnamed bit-field";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
 sema_standalone_specifier = ExtWarn [MissingDeclarations] (1) "'{0}' is not permitted on a declaration of a type";
 sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";

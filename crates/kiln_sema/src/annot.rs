@@ -196,6 +196,10 @@ impl Sema<'_, '_> {
             DeclKind::Function | DeclKind::Var if local_extern() => {
                 "a block-scope declaration whose target scope is a namespace"
             }
+            // /1: for a parameter, X is the function declaration.
+            DeclKind::ParmVar if self.param_of_local_extern(d) => {
+                "a parameter of a block-scope declaration whose target scope is a namespace"
+            }
             DeclKind::ParmVar
                 if self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_void(t)) =>
             {
@@ -236,6 +240,47 @@ impl Sema<'_, '_> {
             DeclKind::TranslationUnit | DeclKind::Empty => "an attribute-declaration",
             _ => "this declaration",
         })
+    }
+
+    /// Whether parameter `p` belongs to a block-scope function
+    /// declaration (its host scope, the block, is not its target scope).
+    fn param_of_local_extern(&self, p: DeclId) -> bool {
+        let Some(f) = self.ast.decls.get(p).ctx() else { return false };
+        self.ast.decls.get(f).kind() == DeclKind::Function
+            && self
+                .ast
+                .decls
+                .lexical_ctx(f)
+                .is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+    }
+
+    /// [dcl.attr.annotation]/1.2: the parameters of a non-defining friend
+    /// declaration of function `f` carry no annotation. Called by the
+    /// parser once the friend declaration is known not to be a
+    /// definition; the annotations already attached are diagnosed and
+    /// dropped.
+    pub fn reject_friend_param_annotations(&mut self, f: Option<DeclId>) {
+        let Some(f) = f else { return };
+        if self.ast.annots.is_empty() {
+            return;
+        }
+        let Some(fd) = self.ast.decls.function(f) else { return };
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
+        for p in params {
+            let l = self.ast.annots.of_decl(p);
+            let anns: Vec<AnnId> = self.ast.lists.iter::<AnnId>(l).collect();
+            if anns.is_empty() {
+                continue;
+            }
+            for a in anns {
+                let loc = self.ast.annots.get(a).loc;
+                let d = self
+                    .diag(DiagId::sema_annotation_not_allowed, loc)
+                    .arg("a parameter of a non-defining friend declaration".to_owned());
+                self.emit(d);
+            }
+            self.ast.annots.clear(p);
+        }
     }
 
     /// One annotation of `d` with operand `e` at `loc`, appended to the
@@ -281,6 +326,9 @@ impl Sema<'_, '_> {
         let canon = self.ast.types.canonical(ty);
         let canon = crate::conv::strip_cv(self, canon);
         let cty = self.ast.types.qualify(canon, Quals::CONST);
+        if !self.check_annotation_copyable(canon, cty, loc) {
+            return None;
+        }
         let c = self.perform_init(cty, Initializer::Expr(e), loc, false);
         if self.is_err_expr(c) || self.has_errors_in(c) {
             return None;
@@ -361,6 +409,44 @@ impl Sema<'_, '_> {
         for n in self.not_structural_notes(ty) {
             d = d.with_note(n);
         }
+        self.emit(d);
+        false
+    }
+
+    /// [meta.reflection.result] `reflect_constant` mandates
+    /// `is_copy_constructible_v<T>`, also when the operand is a prvalue
+    /// that would need no copy (`[[=U{}]]`): a class type `canon` (`cty`
+    /// is `const canon`) must be constructible from `const canon&`.
+    fn check_annotation_copyable(&mut self, canon: QualType, cty: QualType, loc: Loc) -> bool {
+        if self.ast.types.as_record(canon).is_none() {
+            return true;
+        }
+        let ok = if let Some(&ok) = self.annot_copyable.get(&canon) {
+            ok
+        } else {
+            let Some(arg) = self.apply_unary_transform(
+                kiln_ast::types::UnaryTransformKind::AddLvalueReference,
+                cty,
+                loc,
+            ) else {
+                return true;
+            };
+            let ok = self.eval_type_trait(
+                kiln_ast::expr::TypeTrait::IsConstructible,
+                &[(canon, loc), (arg, loc)],
+                loc,
+                loc,
+            ) != Some(false);
+            if self.is_complete(canon) {
+                self.annot_copyable.insert(canon, ok);
+            }
+            ok
+        };
+        if ok {
+            return true;
+        }
+        let d =
+            self.diag(DiagId::sema_annotation_not_copy_constructible, loc).arg(self.ty_arg(canon));
         self.emit(d);
         false
     }
