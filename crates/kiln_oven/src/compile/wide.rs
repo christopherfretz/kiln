@@ -69,6 +69,10 @@ impl Compiler<'_> {
                 self.trap(e, "kiln: internal: the address of a register value was taken");
                 self.reg()
             }
+            Place::Cond { .. } => {
+                self.unsupported(e);
+                self.reg()
+            }
         }
     }
 
@@ -286,7 +290,7 @@ impl Compiler<'_> {
         match place {
             Place::Mem(dst) => self.wide(wide::MOV, ak::ASSIGN, [dst, src, 0], ty, 0, e),
             Place::Bits { .. } => self.wide_write_bits(place, src, ty, ak::ASSIGN, false, e),
-            Place::Reg(_) | Place::Lane { .. } => self.unsupported(e),
+            Place::Reg(_) | Place::Lane { .. } | Place::Cond { .. } => self.unsupported(e),
         }
         place
     }

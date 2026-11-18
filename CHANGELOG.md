@@ -1503,6 +1503,16 @@ Planned as 1.3.0.
   location only, and xfail repros record a bit-field glvalue conditional
   stored as a whole storage unit and a C++98 explicit instantiation
   outside an enclosing namespace that is accepted (WP-1691).
+- Wrong code: assigning through a conditional whose operands are
+  bit-fields (`(c ? s.p : s.q) = v`, compound assignment, `++`) stored a
+  whole storage unit and overwrote the neighbouring bit-fields; it now
+  stores the selected bit-field only, at run time and in constant
+  evaluation. Binding an rvalue reference to a bit-field lvalue is
+  rejected (WP-1692). At C++98 an explicit instantiation outside a
+  namespace enclosing the template is rejected as GCC does, and one at
+  class scope is rejected in every mode (WP-1693). Before C++20 a `new`
+  or `delete` in a constant evaluation is rejected with clang's note
+  (WP-1689).
 
 ## [1.2.1] - 2026-11-14
 

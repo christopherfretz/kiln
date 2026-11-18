@@ -2,14 +2,14 @@
 // same type and value category, the result is a glvalue that is a
 // bit-field if either operand is one, so an assignment, a compound
 // assignment or an increment through `c ? s.p : s.q` stores into the
-// selected bit-field only. kiln lowers the result as a plain pointer to
-// the storage unit and stores the whole `int` there, which overwrites the
-// neighbouring bit-fields (reads are right). clang 22 refuses to generate
-// code for such a conditional ("cannot compile this conditional operator
+// selected bit-field only, not the whole storage unit (kiln did that
+// before WP-1692; reads were right). clang 22 refuses to generate code
+// for such a conditional ("cannot compile this conditional operator
 // yet"); compared with GCC 16.1. Found running GCC's C++ testsuite.
+// Siblings: p5-bit-field-glvalue-forms-run.cpp (the other forms),
+// p5-bit-field-glvalue-constexpr.cpp (constant evaluation).
 //@ expect: run
 //@ oracle: gcc
-//@ xfail(kiln): WP-1691 remainder: a glvalue conditional whose operands are bit-fields is stored as a whole storage unit
 //@ skip(clang): clang 19 and 22 do not generate code for a glvalue conditional of bit-fields
 //@ stdout: -2 1000
 //@ stdout: 5 300 5 7

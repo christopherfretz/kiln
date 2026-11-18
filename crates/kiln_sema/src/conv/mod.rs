@@ -1121,6 +1121,15 @@ fn bind_reference(
             }
             return Err(err);
         }
+        // /5.4.4: an rvalue reference binds no lvalue, a bit-field
+        // lvalue neither (a bit-field xvalue binds the temporary).
+        if rvalue_ref && vk == ValueCategory::LValue {
+            let (to_str, from_str) = strs(s);
+            return Err(ConvError::new(
+                DiagId::sema_rvalue_ref_bind_to_lvalue,
+                vec![to_str, from_str],
+            ));
+        }
         let target = s.ast.types.qualify(r_un, rq);
         let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
             .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;

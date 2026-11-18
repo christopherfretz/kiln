@@ -302,6 +302,7 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             };
             let v = self.load_lv(src);
@@ -330,6 +331,7 @@ impl Cg<'_> {
             q,
             bf: None,
             vidx: None,
+            sel: None,
             tb: Tb::Type,
         };
         self.f.opaque.insert(opaque, Opaque::Lv(lv));

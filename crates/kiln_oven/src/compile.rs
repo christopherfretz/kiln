@@ -11,7 +11,9 @@
 
 use kiln_ast::consts::{FloatKind, PtrBase, Scalar};
 use kiln_ast::decl::{ConstexprKind, DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, StorageDuration, TraitKind, UnaryOp};
+use kiln_ast::expr::{
+    BinaryOp, CastKind, ExprKind, ObjectKind, StorageDuration, TraitKind, UnaryOp,
+};
 use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::{TypeKind, TypeView};
@@ -186,6 +188,14 @@ enum Place {
         p: u32,
         idx: u32,
         vty: OTy,
+    },
+    /// A glvalue conditional that is a bit-field ([expr.cond]/5: one of
+    /// its operands is): operand place `cond_places[i][0]` if register
+    /// `c` (the condition's value) is true, else `cond_places[i][1]`;
+    /// each access branches on `c` to the operand's place.
+    Cond {
+        c: u32,
+        i: u32,
     },
 }
 
@@ -1182,6 +1192,8 @@ pub(crate) struct Compiler<'a> {
     /// conditionals, keyed by the expression (an `OpaqueValueExpr` names
     /// its source).
     opaque: FxHashMap<ExprId, Opaque>,
+    /// The operand places of the [`Place::Cond`]s.
+    cond_places: Vec<[Place; 2]>,
     /// The exception object a handler's parameter is being initialized
     /// from (`compile/except.rs`).
     catch_obj: Option<u32>,
@@ -1292,6 +1304,7 @@ impl<'a> Compiler<'a> {
             pending: Vec::new(),
             rmw_loc: None,
             opaque: FxHashMap::default(),
+            cond_places: Vec::new(),
             catch_obj: None,
             breakables: Vec::new(),
             stmt_exprs: Vec::new(),
@@ -4409,7 +4422,7 @@ impl Compiler<'_> {
         if let Some(out) = out {
             let postfix = matches!(op, UnaryOp::PostInc | UnaryOp::PostDec);
             let src = if postfix { old } else { new };
-            if let Place::Bits { .. } | Place::Lane { .. } = place
+            if let Place::Bits { .. } | Place::Lane { .. } | Place::Cond { .. } = place
                 && !postfix
             {
                 // The value of the bit-field after the store.
@@ -5344,6 +5357,15 @@ impl Compiler<'_> {
             Place::Lane { p, idx, vty } => {
                 self.emit_at(Op::LoadLane, akind, &[dst, p, idx, vty.0], e);
             }
+            Place::Cond { c, i } => {
+                let [pt, pf] = self.cond_places[i as usize];
+                let j = self.jmp_if(c, false);
+                self.load(pt, ty, akind, e, dst);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.load(pf, ty, akind, e, dst);
+                self.patch_here(end);
+            }
         }
     }
 
@@ -5363,7 +5385,34 @@ impl Compiler<'_> {
             Place::Lane { p, idx, vty } => {
                 self.emit_at(Op::StoreLane, 0, &[p, src, idx, vty.0], e);
             }
+            Place::Cond { c, i } => {
+                let [pt, pf] = self.cond_places[i as usize];
+                let j = self.jmp_if(c, false);
+                self.store(pt, src, ty, akind, e);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.store(pf, src, ty, akind, e);
+                self.patch_here(end);
+            }
         }
+    }
+
+    /// The place of the glvalue conditional `e` (condition `c`, operands
+    /// `t` and `f`) that is a bit-field ([expr.cond]/5): a
+    /// [`Place::Cond`] on a copy of the condition, so that each access
+    /// reaches the operand the evaluation selected.
+    fn cond_bits_place(&mut self, c: u32, t: ExprId, f: ExprId, acc: Access) -> Place {
+        let k = self.reg();
+        self.emit(Op::Mov, 0, &[k, c]);
+        let j = self.jmp_if(k, false);
+        let pt = self.lv(t, acc);
+        let end = self.jmp();
+        self.patch_here(j);
+        let pf = self.lv(f, acc);
+        self.patch_here(end);
+        self.cond_places.push([pt, pf]);
+        let i = u32::try_from(self.cond_places.len() - 1).expect("conditional places");
+        Place::Cond { c: k, i }
     }
 
     /// A glvalue that must have an address.
@@ -5434,7 +5483,7 @@ impl Compiler<'_> {
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
-            Place::Reg(_) | Place::Bits { .. } | Place::Lane { .. } => {
+            Place::Reg(_) | Place::Bits { .. } | Place::Lane { .. } | Place::Cond { .. } => {
                 self.trap(e, "kiln: internal: the address of a register value was taken");
                 self.reg()
             }
@@ -5735,6 +5784,11 @@ impl Compiler<'_> {
             ExprKind::BinaryConditionalOperator => {
                 let [common, cond, t, f] = self.bind_common(e, acc);
                 let c = self.rv(cond);
+                if n.object_kind() == ObjectKind::BitField && acc != Access::Addr {
+                    let place = self.cond_bits_place(c, t, f, acc);
+                    self.opaque.remove(&common);
+                    return place;
+                }
                 let r = self.reg();
                 let j = self.jmp_if(c, false);
                 let pt = self.lv_mem(t, acc);
@@ -5751,6 +5805,11 @@ impl Compiler<'_> {
                 let fold = self.bcp_fold_enter(ExprId::new(n.a()));
                 let c = self.rv(ExprId::new(n.a()));
                 let [t, f] = self.ast().exprs.cond_arms(e);
+                if n.object_kind() == ObjectKind::BitField && acc != Access::Addr {
+                    let place = self.cond_bits_place(c, t, f, acc);
+                    self.bcp_fold_exit(fold);
+                    return place;
+                }
                 let r = self.reg();
                 let j = self.jmp_if(c, false);
                 let pt = self.lv_mem(t, acc);

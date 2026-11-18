@@ -899,7 +899,7 @@ impl Cg<'_> {
             return Ok(lv);
         }
         let addr = self.cx_part_addr(lv.addr, lv.q, u32::from(imag));
-        Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
+        Ok(LV { addr, q, bf: None, vidx: None, sel: None, tb: Tb::Type })
     }
 
     /// clang `EmitCompare` on complex operands (`==` and `!=` only).

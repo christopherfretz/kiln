@@ -1415,7 +1415,7 @@ impl Cg<'_> {
         if !self.ub_range_wanted(lv.q) || lv.vidx.is_some() {
             return Ok(self.load_lv(lv));
         }
-        if lv.bf.is_some() {
+        if lv.bf.is_some() || lv.sel.is_some() {
             let v = self.load_lv(lv);
             self.ub_range_check(v, lv.q, loc)?;
             return Ok(v);
@@ -2512,7 +2512,11 @@ impl Cg<'_> {
         }
         let ast = self.ast;
         let n = *ast.exprs.get(e);
-        if n.kind() == ExprKind::DeclRefExpr || lv.bf.is_some() || lv.vidx.is_some() {
+        if n.kind() == ExprKind::DeclRefExpr
+            || lv.bf.is_some()
+            || lv.sel.is_some()
+            || lv.vidx.is_some()
+        {
             return Ok(());
         }
         let skip = if n.kind() == ExprKind::MemberExpr {

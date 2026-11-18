@@ -237,6 +237,9 @@ pub(crate) struct Fx {
     /// The bound common expressions of the enclosing GNU binary
     /// conditionals (clang `OpaqueValueMapping`).
     pub opaque: FxHashMap<kiln_ast::ExprId, crate::expr::Opaque>,
+    /// The accesses of the glvalue conditionals of bit-fields
+    /// ([`crate::expr::LV::sel`]).
+    pub bf_sels: Vec<crate::expr::BfSel>,
     /// The indices of the enclosing `ArrayInitLoopExpr`s, innermost last
     /// (clang `ArrayInitIndex`).
     pub array_index: Vec<V>,
@@ -346,6 +349,7 @@ impl Fx {
             musttail_armed: false,
             conds: Vec::new(),
             opaque: FxHashMap::default(),
+            bf_sels: Vec::new(),
             array_index: Vec::new(),
             inh_args: None,
             vla_sizes: FxHashMap::default(),

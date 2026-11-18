@@ -3633,6 +3633,20 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   language year otherwise); the instruction runs only where the
   construction does
   (`tests/conformance/dcl.constexpr/trivial-default-ctor-cxx17.cpp`).
+- Dynamic allocation before C++20 (WP-1689). Before C++20 a new-expression
+  or delete-expression is not a core constant expression (C++17
+  [expr.const]/2.18-2.19; P0784R7). `new_expr` and `delete_expr` emit,
+  first (before the nothrow and placement checks, so a placement new
+  reports this note first as clang does), an `Op::Cce` noting "dynamic
+  memory allocation is not permitted in constant expressions until C++20"
+  at the expression: an evaluation that reaches it fails, a fold goes on,
+  as clang's `CCEDiag` `note_constexpr_new`. Every form is covered (scalar,
+  array, `delete` of a null pointer, default member initializers,
+  placement new inside `std::construct_at`); an allocation on a branch not
+  taken is fine. `std::allocator<T>::allocate` (`global_alloc_call`) is
+  not checked, as in clang. From C++20 on: one comparison of the language
+  year at compile time
+  (`tests/conformance/expr.const/new-delete-pre-cxx20-*.cpp`).
 
 ### Dynamic types — Landed (WP-077)
 
@@ -5107,7 +5121,12 @@ Implemented (M2): integers of every width incl. `__int128`, `bool`,
 character types, binary32/64, x87 `long double`, binary128, enums;
 pointers to objects, arrays and functions; **references** (lowered as
 pointers: local, parameter, member, global and return references, bound
-to glvalues); arrays, structs, unions, bit-fields; all C control flow (if,
+to glvalues); arrays, structs, unions, bit-fields (a glvalue conditional
+that is a bit-field, [expr.cond]/5, compiles to `Place::Cond`: the
+condition copied to a register and each operand's place, every read and
+write branching on it to the selected operand's access, WP-1692;
+`tests/conformance/expr.cond/p5-bit-field-glvalue-constexpr.cpp`; a wide
+`_BitInt` one is unsupported); all C control flow (if,
 loops, switch incl. fallthrough, break/continue, return); labels and
 `goto` (diagnosed as clang does); calls and recursion; constexpr variables
 and functions; `static_assert`; compound assignment, comma, conditional,

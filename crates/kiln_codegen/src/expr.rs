@@ -55,6 +55,31 @@ pub(crate) struct LV {
     pub vidx: Option<VecLane>,
     /// Its TBAA access path (clang `LValue::getTBAAInfo`).
     pub tb: Tb,
+    /// A glvalue conditional whose operands differ in their bit-field
+    /// access ([expr.cond]/5: the result is a bit-field if either operand
+    /// is one): its [`BfSel`] in `FnState::bf_sels`. `addr` is the
+    /// selected operand's address, `bf` is `None`, and every read and
+    /// write goes through the selected operand's access.
+    pub sel: Option<u32>,
+}
+
+/// How one operand of a glvalue conditional of bit-fields is accessed
+/// ([`LV::sel`]): its bit-field, storage type, alignment and TBAA path.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SelArm {
+    bf: Option<BitFieldInfo>,
+    ty: LTy,
+    align: u64,
+    tb: Tb,
+}
+
+/// The access of a glvalue conditional whose operands differ in their
+/// bit-field access: `idx` (an `i32`) numbers the selected operand in
+/// `arms`; a nested conditional's operands are flattened in.
+#[derive(Clone, Debug)]
+pub(crate) struct BfSel {
+    idx: V,
+    arms: Vec<SelArm>,
 }
 
 /// The part of a vector an [`LV`] designates.
@@ -549,7 +574,14 @@ impl Cg<'_> {
                     [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
                     _ => VecLane::Swizzle(e),
                 };
-                self.load_lv(LV { addr: tmp, q, bf: None, vidx: Some(vidx), tb: Tb::Type })
+                self.load_lv(LV {
+                    addr: tmp,
+                    q,
+                    bf: None,
+                    vidx: Some(vidx),
+                    sel: None,
+                    tb: Tb::Type,
+                })
             }
             // clang `ScalarExprEmitter::VisitDeclRefExpr` ->
             // `tryEmitAsConstant`: a variable named without being odr-used
@@ -592,6 +624,9 @@ impl Cg<'_> {
                 return self.swizzle_value(vec, &lanes);
             }
             None => {}
+        }
+        if let Some(i) = lv.sel {
+            return self.sel_access(lv, i, None);
         }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
@@ -650,6 +685,9 @@ impl Cg<'_> {
             self.store(raw, lv.addr.v, lv.addr.align, vol);
             return v;
         }
+        if let Some(i) = lv.sel {
+            return self.sel_access(lv, i, Some((v, want)));
+        }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
                 self.atomic_store_lv(v, lv, vq);
@@ -698,6 +736,63 @@ impl Cg<'_> {
         let rt = self.lsty(lv.q);
         let r = self.int_cast(r, rt, bf.is_signed);
         self.emit_from_memory(r, lv.q)
+    }
+
+    /// A read (`store` `None`) or a write of `v` (with `want`, as
+    /// [`Cg::store_lv`]) through the glvalue conditional `lv` whose
+    /// operands differ in their bit-field access (its [`BfSel`] `i`): a
+    /// `switch` on the selected operand, each case accessing the address
+    /// with that operand's bit-field; the value read (or stored) joins.
+    fn sel_access(&mut self, lv: LV, i: u32, store: Option<(V, bool)>) -> V {
+        let BfSel { idx, arms } = self.f.bf_sels[i as usize].clone();
+        let blocks: Vec<_> = arms.iter().map(|_| self.f.fir.create_block()).collect();
+        let cont = self.f.fir.create_block();
+        let (&last, rest) = blocks.split_last().expect("a conditional has two operands");
+        let mut cases = Vec::with_capacity(rest.len());
+        for (k, &b) in rest.iter().enumerate() {
+            cases.push((self.icn(LTy::I32, k as i128), b));
+        }
+        self.f.fir.push(Op::Switch { c: idx, default: last, cases }, LTy::VOID);
+        let mut inc = Vec::with_capacity(arms.len());
+        for (arm, &b) in arms.iter().zip(&blocks) {
+            self.emit_block(b, false);
+            let one = LV {
+                addr: Addr { v: lv.addr.v, ty: arm.ty, align: arm.align },
+                q: lv.q,
+                bf: arm.bf,
+                vidx: None,
+                tb: arm.tb,
+                sel: None,
+            };
+            let r = match store {
+                Some((v, want)) => self.store_lv(v, one, want),
+                None => self.load_lv(one),
+            };
+            inc.push((r, self.f.fir.cur().expect(crate::fir::OPEN_BLOCK)));
+            self.br(cont);
+        }
+        self.emit_block(cont, false);
+        let first = inc[0].0;
+        if inc.iter().all(|&(r, _)| r == first) {
+            return first;
+        }
+        let ty = self.f.fir.ty(&self.m, first);
+        self.f.fir.push(Op::Phi { ty, inc }, ty)
+    }
+
+    /// The operand number and operand accesses of `lv` as an operand of
+    /// a glvalue conditional of bit-fields ([`LV::sel`]).
+    fn sel_parts(&mut self, lv: &LV) -> (V, Vec<SelArm>) {
+        match lv.sel {
+            Some(i) => {
+                let s = &self.f.bf_sels[i as usize];
+                (s.idx, s.arms.clone())
+            }
+            None => (
+                self.icn(LTy::I32, 0),
+                vec![SelArm { bf: lv.bf, ty: lv.addr.ty, align: lv.addr.align, tb: lv.tb }],
+            ),
+        }
     }
 
     /// clang `EmitScalarConversion`.
@@ -1344,7 +1439,7 @@ impl Cg<'_> {
                 (r, r, self.ast.exprs.get(e).ty())
             }
         };
-        let stored = self.store_lv(new, lv, lv.bf.is_some());
+        let stored = self.store_lv(new, lv, lv.bf.is_some() || lv.sel.is_some());
         if let Some(bf) = lv.bf {
             let to = self.ast.exprs.get(e).ty();
             self.ub_bf_conv(src, sq, stored, to, bf.size, self.ub_expr_loc(e))?;
@@ -2306,6 +2401,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    sel: None,
                     tb: Tb::Type,
                 })
             }
@@ -2373,7 +2469,7 @@ impl Cg<'_> {
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
-                    return Ok(LV { addr: a, q, bf: None, vidx: None, tb: Tb::Type });
+                    return Ok(LV { addr: a, q, bf: None, vidx: None, sel: None, tb: Tb::Type });
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
@@ -2394,7 +2490,14 @@ impl Cg<'_> {
                         self.tls_var_addr(d, g)?.0
                     };
                 }
-                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
+                Ok(LV {
+                    addr: Addr { v, ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    sel: None,
+                    tb: Tb::Type,
+                })
             }
             // A postcondition's result name ([dcl.contract.res]): the
             // return slot, bound by `emit_postconditions`.
@@ -2414,7 +2517,7 @@ impl Cg<'_> {
                     let p = self.load_reference(slot.v, slot.align, dq);
                     return Ok(self.ref_lvalue(p, q));
                 }
-                Ok(LV { addr: slot, q, bf: None, vidx: None, tb: Tb::Type })
+                Ok(LV { addr: slot, q, bf: None, vidx: None, sel: None, tb: Tb::Type })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
@@ -2426,6 +2529,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    sel: None,
                     tb: Tb::Type,
                 })
             }
@@ -2517,7 +2621,7 @@ impl Cg<'_> {
         let align = self.var_align(d);
         let g = self.unnamed_global_from(d, k, align);
         let addr = Addr { v: V::C(gval(g)), ty: self.mty(dq), align };
-        Ok(Some(LV { addr, q, bf: None, vidx: None, tb: Tb::Type }))
+        Ok(Some(LV { addr, q, bf: None, vidx: None, sel: None, tb: Tb::Type }))
     }
 
     /// The global holding a namespace-scope or static reference variable.
@@ -2581,7 +2685,7 @@ impl Cg<'_> {
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
         let (_, align) = self.pointee_layout(q);
-        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, tb: Tb::Type }
+        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, sel: None, tb: Tb::Type }
     }
 
     /// clang `EmitLValue`.
@@ -2660,6 +2764,7 @@ impl Cg<'_> {
                     q,
                     bf: None,
                     vidx: None,
+                    sel: None,
                     tb: Tb::Type,
                 })
             }
@@ -2711,7 +2816,7 @@ impl Cg<'_> {
                 let g = self.get_gvar(d)?;
                 let (ty, align) = (self.mty(q), self.var_align(d));
                 let addr = Addr { v: V::C(gval(g)), ty, align };
-                Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
+                Ok(LV { addr, q, bf: None, vidx: None, sel: None, tb: Tb::Type })
             }
             // A C literal of any type is an lvalue (C17 6.5.2.5p4).
             ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) || self.opts.c.is_some() => {
@@ -2749,7 +2854,14 @@ impl Cg<'_> {
         };
         let ty = self.m.global(g).value_type();
         let align = self.m.global(g).align.unwrap_or(1);
-        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
+        Ok(LV {
+            addr: Addr { v: V::C(gval(g)), ty, align },
+            q,
+            bf: None,
+            vidx: None,
+            sel: None,
+            tb: Tb::Type,
+        })
     }
 
     /// clang `EmitUnaryOpLValue`: `*p`, `++x`/`--x`, `__real`/`__imag`
@@ -2767,7 +2879,14 @@ impl Cg<'_> {
                     (self.emit_scalar(s)?, self.natural_align(q))
                 };
                 let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
-                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
+                Ok(LV {
+                    addr: Addr { v: p, ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    sel: None,
+                    tb: Tb::Type,
+                })
             }
             op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                 let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -2821,7 +2940,7 @@ impl Cg<'_> {
                     self.emit_agg(r, t, false)?;
                     self.f.slot_volatile = false;
                     self.atomic_agg_store(t, lv);
-                    return Ok(LV { addr: t, q, bf: None, vidx: None, tb: Tb::Type });
+                    return Ok(LV { addr: t, q, bf: None, vidx: None, sel: None, tb: Tb::Type });
                 }
                 if self.is_complex(q) {
                     return Ok(self.cx_assign(e)?.0);
@@ -2861,7 +2980,7 @@ impl Cg<'_> {
         let (tmp, needs_init) =
             if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
         if !needs_init {
-            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, tb: Tb::Type });
+            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, sel: None, tb: Tb::Type });
         }
         // A C compound literal's object lives until its block ends (C17
         // 6.5.2.5p5), not the full-expression: no lifetime markers, as
@@ -2906,7 +3025,7 @@ impl Cg<'_> {
         } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
             self.push_temporary_cleanup(e, tmp);
         }
-        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, tb: Tb::Type })
+        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, sel: None, tb: Tb::Type })
     }
 
     /// clang `EmitCompoundLiteralLValue` for a literal in a function: its
@@ -2929,7 +3048,7 @@ impl Cg<'_> {
             let v = self.emit_scalar(init)?;
             self.store_scalar(v, tmp, q);
         }
-        Ok(LV { addr: tmp, q, bf: None, vidx: None, tb: Tb::Type })
+        Ok(LV { addr: tmp, q, bf: None, vidx: None, sel: None, tb: Tb::Type })
     }
 
     /// clang `EmitCastLValue`.
@@ -2960,7 +3079,14 @@ impl Cg<'_> {
                 let loc = self.ub_expr_loc(e);
                 let (v, align) = self.base_address(lv.addr, derived, vb, off, false, Some(loc))?;
                 let ty = self.mty(q);
-                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: lv.tb.sub() })
+                Ok(LV {
+                    addr: Addr { v, ty, align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                    sel: None,
+                    tb: lv.tb.sub(),
+                })
             }
             // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
             CastKind::BaseToDerived => {
@@ -3003,6 +3129,7 @@ impl Cg<'_> {
                     q: dq,
                     bf: None,
                     vidx: None,
+                    sel: None,
                     tb: Tb::Type,
                 });
             }
@@ -3022,6 +3149,22 @@ impl Cg<'_> {
         }
         self.emit_block(rb, false);
         let y = self.cond_eval(start, |cg| cg.lvalue_or_throw(b))?;
+        // [expr.cond]/5: the result is a bit-field if either operand is
+        // one. Operands with the same access (no bit-field, or the same
+        // bit-field description) share it; otherwise the result selects
+        // its operand's access with its address ([`LV::sel`]): the
+        // operands are numbered, the second's after the first's.
+        let sel = match (&x, &y) {
+            (Some(x), Some(y)) if Self::differ_in_access(x, y) => {
+                let (ix, mut arms) = self.sel_parts(x);
+                let (iy, more) = self.sel_parts(y);
+                let n = self.icn(LTy::I32, arms.len() as i128);
+                let iy = if y.sel.is_some() { self.bin(BinOp::Add, Flags::NONE, iy, n) } else { n };
+                arms.extend(more);
+                Some((ix, iy, arms))
+            }
+            _ => None,
+        };
         let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(cont, false);
         let (x, y) = match (x, y) {
@@ -3038,13 +3181,31 @@ impl Cg<'_> {
         let align = x.addr.align.min(y.addr.align);
         // clang `mergeTBAAInfoForConditionalOperator`.
         let tb = if x.tb == y.tb { x.tb } else { Tb::MayAlias };
+        let sel = sel.map(|(ix, iy, arms)| {
+            let inc = vec![(ix, lb), (iy, rb)];
+            let idx = self.f.fir.push(Op::Phi { ty: LTy::I32, inc }, LTy::I32);
+            self.f.bf_sels.push(BfSel { idx, arms });
+            u32::try_from(self.f.bf_sels.len() - 1).expect("bit-field conditionals in a function")
+        });
         Ok(LV {
             addr: Addr { v: p, ty: x.addr.ty, align },
             q: ast.exprs.get(e).ty(),
-            bf: None,
+            bf: if sel.is_none() && x.bf == y.bf { x.bf } else { None },
             vidx: None,
+            sel,
             tb,
         })
+    }
+
+    /// The operands `x` and `y` of a glvalue conditional are accessed
+    /// differently: one is a bit-field (or such a conditional) and the
+    /// other is not, or they are bit-fields of different description. A
+    /// vector-element operand is not (its lane is not selected yet).
+    fn differ_in_access(x: &LV, y: &LV) -> bool {
+        if x.sel.is_none() && y.sel.is_none() && x.bf == y.bf {
+            return x.bf.is_some() && x.addr.ty != y.addr.ty;
+        }
+        x.vidx.is_none() && y.vidx.is_none()
     }
 
     /// `e` through parentheses, if it is a throw-expression.
@@ -3164,6 +3325,7 @@ impl Cg<'_> {
                 q,
                 bf: Some(bf),
                 vidx: None,
+                sel: None,
                 tb: Tb::None,
             });
         }
@@ -3183,6 +3345,7 @@ impl Cg<'_> {
                 q: referee,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             });
         }
@@ -3245,6 +3408,7 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             });
         }
@@ -3254,11 +3418,18 @@ impl Cg<'_> {
             let off = self.field_byte_offset(field)?;
             let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
             let align = min_align(base.align, off);
-            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type });
+            return Ok(LV {
+                addr: Addr { v, ty, align },
+                q,
+                bf: None,
+                vidx: None,
+                sel: None,
+                tb: Tb::Type,
+            });
         };
         let v = self.field_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
-        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, tb: Tb::Type })
+        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None, sel: None, tb: Tb::Type })
     }
 
     /// The array operand of a simple array-to-pointer decay.
@@ -3380,7 +3551,7 @@ impl Cg<'_> {
             [l] => VecLane::Index(self.icn(LTy::I64, i128::from(*l))),
             _ => VecLane::Swizzle(e),
         };
-        Ok(LV { addr, q, bf: None, vidx: Some(vidx), tb: Tb::Type })
+        Ok(LV { addr, q, bf: None, vidx: Some(vidx), sel: None, tb: Tb::Type })
     }
 
     /// The `ExtVectorElementExpr` lvalue (through parentheses) that the
@@ -3494,6 +3665,7 @@ impl Cg<'_> {
                 q,
                 bf: None,
                 vidx: Some(VecLane::Index(i)),
+                sel: None,
                 tb: Tb::Type,
             });
         }
@@ -3563,7 +3735,7 @@ impl Cg<'_> {
         };
         let is = self.is_signed(iq);
         let v = self.gep_checked(addr.ty, addr.v, indices, !is, is, false, self.ub_expr_loc(e))?;
-        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, tb })
+        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None, sel: None, tb })
     }
 
     // ---- statement expressions -----------------------------------------
@@ -5376,6 +5548,7 @@ impl Cg<'_> {
             q: eq,
             bf: None,
             vidx: None,
+            sel: None,
             tb: Tb::Type,
         };
         let r = if inner {
@@ -5552,6 +5725,7 @@ impl Cg<'_> {
                 q: eq,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             };
             self.init_to_lvalue(init, lv, zeroed)?;
@@ -5580,6 +5754,7 @@ impl Cg<'_> {
                 q: eq,
                 bf: None,
                 vidx: None,
+                sel: None,
                 tb: Tb::Type,
             };
             // [class.temporary]/5: the temporaries of each element's
@@ -5916,7 +6091,8 @@ impl Cg<'_> {
         if ast.types.as_atomic(q).is_some() {
             // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
             self.auto_init_prefill(d, q, addr, init);
-            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None, tb: Tb::Type });
+            return self
+                .atomic_init(init, LV { addr, q, bf: None, vidx: None, sel: None, tb: Tb::Type });
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {
