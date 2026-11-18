@@ -1167,6 +1167,40 @@ fn debug_sweep_mode_selection() {
     assert!(skip("//@ expect: pp\n").is_some());
 }
 
+/// WP-1563: the sweep's plain `-c` that crashes is a FAIL, an ordinary
+/// failure stays a SKIP; an IR test keeps its own arguments minus the
+/// IR-only ones; `-flto` bitcode is recognised.
+#[test]
+fn debug_sweep_crash_and_args() {
+    use runner::sweep_crash;
+    // Fake outcomes: (exit code, timed out, stderr) -> crashed?
+    assert_eq!(sweep_crash(Some(1), false, "a.cpp:3:1: error: expected ';'\n"), None);
+    assert_eq!(sweep_crash(None, false, ""), Some("crashed"), "a signal");
+    assert_eq!(sweep_crash(None, true, ""), Some("hung"));
+    assert_eq!(sweep_crash(Some(70), false, ""), Some("crashed"), "ICE, no reproducer");
+    for stderr in [
+        "thread 'main' panicked at crates/kiln_sema/src/x.rs:1:1:\n",
+        "kiln++: error: internal compiler error: checked mode\n",
+        "LLVM ERROR: Cannot select\nPLEASE submit a bug report to ...\n",
+        "kiln++: note: diagnostic msg: /tmp/a-123.cpp\n",
+    ] {
+        assert_eq!(sweep_crash(Some(1), false, stderr), Some("crashed"), "{stderr}");
+    }
+    assert!(runner::kiln_crash(Some(1), "x.rs: panicked at"));
+    assert!(runner::kiln_crash(Some(70), ""));
+    assert!(!runner::kiln_crash(Some(1), "LLVM ERROR: Cannot select\nPLEASE submit a bug report"));
+    let spec = |src: &str| directives::parse(src, directives::Lang::Cxx).unwrap();
+    let s = runner::sweep_spec(&spec(
+        "//@ expect: ir\n//@ args: -fprofile-instr-generate -Xclang -disable-llvm-passes -O1\n",
+    ));
+    assert_eq!(s.args, strings(&["-fprofile-instr-generate", "-O1"]));
+    let s = runner::sweep_spec(&spec("//@ args: -Xclang -fno-x -S -emit-llvm\n"));
+    assert_eq!(s.args, strings(&["-Xclang", "-fno-x"]));
+    assert!(runner::is_bitcode(b"BC\xC0\xDE\x35\x14"));
+    assert!(runner::is_bitcode(&[0xDE, 0xC0, 0x17, 0x0B, 0]));
+    assert!(!runner::is_bitcode(b"\x7fELF"));
+}
+
 #[test]
 fn meta_header_directive_errors() {
     for bad in ["//@ meta-header: skip\n", "//@ meta-header: off\n", "//@ meta-header: skipx y\n"] {

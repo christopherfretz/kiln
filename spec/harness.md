@@ -591,15 +591,33 @@ never breaks a program kiln compiles. For each test it:
   `vtables` or `debugger` (reason ``not swept (`expect: <kind>`,
   `--debug-sweep`)``), after the usual `requires`/`skip` gates;
 - compiles the test with its `args` and `-c` to an object, without
-  `-g`. A test that does not compile to an object (an `xfail(kiln)`, a
-  `-fsyntax-only` in its `args`) is a **SKIP**, ``does not compile to an
-  object without -g (<end>)``;
+  `-g`. The arguments that stop a compile before the backend lowers
+  LLVM's own intrinsics or that write something other than an object
+  (`-Xclang -disable-llvm-passes`, `-emit-llvm`, `-S`: an `expect: ir`
+  test's) are dropped and the rest kept, so an IR test is compiled to an
+  object and checked like any other (WP-1563). A test that does not
+  compile to an object (an `xfail(kiln)`, a `-fsyntax-only` in its
+  `args`) is a **SKIP**, ``does not compile to an object without -g
+  (<end>)``, unless that compile **crashed**: killed by a signal, timed
+  out, exit status 70 (an internal compiler error under
+  `-fno-crash-diagnostics`), or a crash report on stderr (`panicked at`,
+  `internal compiler error: `, `PLEASE submit a bug report`, a
+  reproducer's `note: diagnostic msg: ` lines). A crash is a **FAIL**
+  with the compiler's stderr: a checked-mode panic is never a skip. The
+  one exception is a crash in LLVM's backend (no panic, no internal
+  compiler error, not status 70) that the control (the toolchain's clang,
+  the same source and arguments, `-c`) crashes on too: a **SKIP** naming
+  it, as `__builtin_coro_size` outside a coroutine is in both;
 - compiles it again with `-c -g`, which must succeed and write the
   object, else **FAIL** with the compiler's stderr;
 - runs `llvm-dwarfdump --verify` on the `-g` object (the toolchain's
   `bin/llvm-dwarfdump`, else `llvm-dwarfdump-N` on `PATH` for the
   toolchain's major version, else none, and the sweep only compiles); a
-  verifier error is a **FAIL** with its output.
+  verifier error is a **FAIL** with its output, unless the control (the
+  toolchain's clang, the same source, arguments and `-c -g`) writes an
+  object the verifier rejects too: that defect is LLVM's, and the test
+  is a **SKIP** naming it. An object that is LLVM bitcode (`-flto`) has
+  no DWARF sections to verify; the `-g` compile succeeding is the check.
 
 `xfail` does not apply (a test is swept only when it compiles), and
 neither do diagnostics, oracles, run output or `oven:` budgets. Both
@@ -1605,6 +1623,112 @@ Bench budgets are the bench's own: `mem<=N` caps a measured compile's
 address space as above, and `budget-time: <ms>` (spec/bench.md
 "Directives") fails a bench entry whose fastest kiln run takes longer,
 `--record` included, so a re-record cannot absorb a regression past it.
+
+## Release gate
+
+`cargo xtask release-gate` (WP-1219, `xtask/src/release_gate/`) runs the
+gate every kiln tag needs (docs/RELEASING.md) as one resumable command
+and writes its record. Its step manifest (`manifest.rs`) is the single
+source of what a gate is; nothing else lists the steps.
+
+**Steps.** Each step has an id, a host (`local`: the aarch64 development
+host, run by `run`; `hosted`: GitHub's x86-64 runners, `sweep.yml`, read
+back by `import-x86`), the existing command it calls, how its counts are
+read, a pass rule, a **minimum unit count**, rough minutes and scratch
+GB, and its dependencies:
+
+| step | host | pass rule | minimum units |
+|---|---|---|---:|
+| `archive` | local | `dist --check` and `sha256sum -c` exit 0; the unpacked `kiln++ --version` names the version | 2 archives |
+| `merge-gate` | local | `cargo xtask ci`: exit 0, every `corpus (...)` line `ok.` with 0 failed | 6000 (`corpus (kiln)` passed) |
+| `oracle19` | local | `KILN_ORACLE=19 cargo xtask ci --oracle-only --step kiln`: the same | 6000 |
+| `pch-sweep` | local | `scripts/pch-release-gate.sh <kiln++> <dir> all` prints `pch-release-gate: pass` | 4000 (libc++ pair tests) |
+| `libcxx-aarch64`, `libcxx-x86_64` | local, hosted | PASS count not below the stored baseline | 9000 tests |
+| `torture-gnu23`, `torture-gnu17` | local | `cargo xtask gcc-torture`: kiln's pass count not below the stored baseline | 7000 cases |
+| `gxx-dg-aarch64`, `gxx-dg-x86_64` | local, hosted | by case against `docs/status/gxx-dg-baseline.txt` (below) | 50000 cases |
+| `oss-<project>` | local | one per row of `scripts/oss/projects.toml`, the LLVM rows included: `report.json`'s TUs ok and tests passed not below the row's `docs/status/oss.md` section (kiln column) | 1 TU |
+| `oss-x86_64` | hosted | every `sweep = true` row reported, each at its oss.md baseline | the sweep rows |
+| `external-<id>` | local | `--external <id>=<command>`: exit 0; the command's last line is the step's result and holds `units=<n>` | 1 |
+
+A step that ran fewer units than its minimum FAILS whatever its exit
+status (a failed clone once gave an OSS row 0 of 0 translation units and
+exit 0). A release gate requires the external `downstream` (the
+record's "Downstream build" section); a gate without it is incomplete.
+The stored count baselines are `docs/status/release-gate-baseline.tsv`
+(`step`, `count`, value, source); the explained g++.dg cases are
+`docs/status/gxx-dg-explained.txt` (`<test> [<opt>] <reason>`).
+
+**g++.dg by case.** The baseline holds kiln's class per case (test id,
+option set) for each host, nothing else (`scripts/gxx-dg-compare.py
+baseline`; any subcommand reads it as `FILE@HOST`). The step passes when
+`gxx-dg-compare.py compare --gate --explained` finds no case that went
+from pass to a failing class unless the explained list names it; the
+pass percentage is reported, not gated. A full run's TSV is reused for
+the verdict while its stamp (commit and `kiln++` hash) matches.
+
+**Subcommands.** `plan` prints every step with its status (done with
+its verdict, stale with the reason, missing), its rule, minimum, time
+and scratch; no side effects. `run [--step <id>,..] [--from <id>]
+[--redo] [--dry-run]` runs the missing and stale local steps in manifest
+order (the archive first; then two tracks side by side, as the
+hand-driven 1.2.1 gate ran them, all builds on the shared jobserver),
+each with its output in `<state>/logs/<id>.log`, and prints the push
+command for the hosted steps (it never pushes). It refuses a step whose
+scratch need plus 50 GB exceeds the free space of the state directory's
+file system, and a release gate on a tree with uncommitted changes.
+`import-x86 <dir>` reads the artifacts of a `sweep/rc-*` run downloaded
+into `<dir>` (one directory per artifact): every artifact it reads
+carries a `commit` file, which must be this commit, or nothing is
+recorded. `control <step> <unit> --previous <kiln++> [--times n]` runs
+one unit (an OSS project, a libc++ test, a torture or g++.dg glob) n
+times with the gate's and the previous release's `kiln++` and prints the
+table; it decides nothing. `record [--out f] [--refresh-baselines]`
+writes `docs/status/release-<version>.md`; `check <file>` verifies one.
+Options: `--state <dir>` (default `<target>/release-gate`),
+`--external <id>=<command>` (kept in `<state>/externals.tsv`),
+`--smoke` and, with it only, `--kiln <kiln++>`. Every step gets a
+driver named `kiln++` (kiln picks C or C++ by the name it is invoked
+as): the path is made absolute without resolving symlinks, a `kiln`
+stands for the `kiln++` beside it, and any other name is refused; the
+same holds for `control --previous`. The command never
+pushes, tags, publishes or deletes a branch, and deletes only inside its
+state directory (an OSS row's build tree once its report is copied).
+
+**State records.** `<state>/<id>.rec`, `key: value` lines: `step`,
+`commit` (full), `version`, `mode` (`release` or `smoke`), `kiln` (the
+FNV-1a 64 hash of the `kiln++` it ran, `-` for none), `start` and `end`
+(Unix seconds), `load` (1-minute load at start and end), `arch`,
+`counts` (`name=value` words), `units`, `verdict` (`pass` or `FAIL`),
+`detail`, `log` and `log_hash`. A record is written when its step ends
+(a killed step has none). A record is **stale**, and the step re-runs,
+when it was made at another commit, in the other mode, for another
+version, without counts, with another `kiln++` (steps that run the
+archive's), or when its log is missing or changed. There is no option
+that accepts a stale record: this is the no-carried-over-rows rule
+(WP-1475). A failed record is complete; `--redo --step <id>` re-runs it.
+
+**The record.** `record` fails, listing each, when a manifest step has no
+completed record for this commit. Otherwise it writes one generated
+region per section between `<!-- release-gate:begin <section>
+commit=<short> version=<v> mode=<m> fnv64=<hash> -->` and `<!--
+release-gate:end <section> -->` (sections `summary`, `archive`,
+`merge-gate`, `pch`, `torture`, `libcxx`, `gxx-dg` (with the explained
+list), `oss`, `external`), each a table with one row per step (step,
+host, commit, units, counts, verdict, detail); text outside the markers
+is kept. Only load, architecture and times reach it, no host path.
+`--refresh-baselines`, after a passed release gate, rewrites the stored
+baselines, the g++.dg baseline (from the two runs' TSVs) and empties the
+explained list. `check` fails when a manifest step has no row, a row is
+at another commit, a row's verdict is not `pass`, the sections disagree
+on commit or version, a section is in `smoke` mode, or a region's hash
+does not match its marker (an edit by hand).
+
+**Smoke gates.** `--smoke` restricts the suite steps to one small
+selection (gcc-torture `execute/20000*` at `-O0`, g++.dg
+`g++.dg/cpp26/*`, libc++ `std/utilities/any`), applies the
+smoke minimums and no stored baseline, and marks every record and the
+record file (`mode=smoke`, a banner); such a record never passes
+`check`.
 
 ## Jobserver
 

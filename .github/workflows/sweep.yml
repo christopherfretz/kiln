@@ -23,8 +23,11 @@ name: sweep
 # workflow_dispatch (from main). A newer push of the same ref cancels the
 # older run. The g++.dg jobs are opt-in: the `gxx` input of a dispatch, or a
 # push of a `sweep/gxx-<name>` branch, which runs the build and the g++.dg
-# jobs only (no libc++, no OSS); any other `sweep/` push runs libc++ and OSS
-# as before and no g++.dg job.
+# jobs only (no libc++, no OSS); a push of a `sweep/rc-<version>` branch
+# runs all three, the x86-64 half of the release gate (docs/RELEASING.md,
+# `cargo xtask release-gate import-x86`); any other `sweep/` push runs
+# libc++ and OSS as before and no g++.dg job. Every result artifact holds a
+# `commit` file, the commit it was built from, which import-x86 checks.
 on:
   workflow_dispatch:
     inputs:
@@ -128,6 +131,8 @@ jobs:
       # A workspace-relative path: in a container job `runner.temp` is
       # the host's path, and the upload kept the `__w/_temp` prefix.
       - if: ${{ !cancelled() }}
+        run: mkdir -p libcxx-out && echo "$GITHUB_SHA" > libcxx-out/commit
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: libcxx-${{ matrix.shard }}
@@ -149,8 +154,13 @@ jobs:
           ls results
           python3 scripts/libcxx-results.py --label "libc++ 22.1.8 suite, x86_64" \
             $(find results -name 'libcxx-*.tsv' | sort) | tee libcxx-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "$GITHUB_SHA" > commit
       - uses: actions/upload-artifact@v4
-        with: { name: libcxx-summary, path: libcxx-summary.md }
+        with:
+          name: libcxx-summary
+          path: |
+            libcxx-summary.md
+            commit
 
   # The oss matrix's two lists, the one place they are spelled (WP-1265):
   # the projects are scripts/oss/projects.toml's `sweep = true` rows, the
@@ -234,6 +244,7 @@ jobs:
           rc=0
           scripts/oss/oss-build.sh ${{ matrix.project }} --compiler ${{ matrix.compiler }} --jobs 4 || rc=$?
           b="$KILN_OSS_ROOT/build/${{ matrix.project }}/${{ matrix.compiler }}"
+          mkdir -p "$b" && echo "$GITHUB_SHA" > "$b/commit"
           tail -n 60 "$b/test.log" 2>/dev/null || tail -n 60 "$b/build.log" 2>/dev/null || true
           cat "$b/report.json" || true
           df -h /mnt
@@ -255,6 +266,7 @@ jobs:
             /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/compile.jsonl
             /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/configure.log
             /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/test.log
+            /mnt/oss/build/${{ matrix.project }}/${{ matrix.compiler }}/commit
           if-no-files-found: warn
 
   oss-summary:
@@ -288,8 +300,13 @@ jobs:
           done
           # shellcheck disable=SC2086 # OSS_PROJECTS is a word list
           python3 scripts/oss/oss-report.py --root oss --expect "$OSS_COMPILERS" $OSS_PROJECTS | tee oss-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "$GITHUB_SHA" > commit
       - uses: actions/upload-artifact@v4
-        with: { name: oss-summary, path: oss-summary.md }
+        with:
+          name: oss-summary
+          path: |
+            oss-summary.md
+            commit
 
   # GCC 16.1's C++ testsuite (g++.dg with its torture directory,
   # c-c++-common, g++.old-deja; spec/harness.md "The g++.dg runner",
@@ -304,7 +321,7 @@ jobs:
   gxx-dg:
     name: gxx-dg ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [build]
-    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.gxx }}
+    if: ${{ (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/sweep/gxx-') || startsWith(github.ref, 'refs/heads/sweep/rc-'))) || inputs.gxx }}
     runs-on: ubuntu-24.04
     container: gcc:16.1.0-trixie
     timeout-minutes: 150
@@ -335,6 +352,8 @@ jobs:
             --summary "gxx-out/gxx-dg-${{ matrix.shard }}.md" 2>&1 | tee "gxx-out/gxx-dg-${{ matrix.shard }}.log"
       # A workspace-relative path (see the libcxx job).
       - if: ${{ !cancelled() }}
+        run: mkdir -p gxx-out && echo "$GITHUB_SHA" > gxx-out/commit
+      - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: gxx-dg-${{ matrix.shard }}
@@ -360,9 +379,11 @@ jobs:
             $(find results -name 'gxx-dg-*.tsv' ! -name '*.partial.tsv' | sort)
           python3 -I scripts/gxx-dg-compare.py summary gxx-dg-x86_64.tsv \
             --label "GCC 16.1 C++ testsuite, x86_64" | tee gxx-dg-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "$GITHUB_SHA" > commit
       - uses: actions/upload-artifact@v4
         with:
           name: gxx-dg-summary
           path: |
             gxx-dg-x86_64.tsv
             gxx-dg-summary.md
+            commit

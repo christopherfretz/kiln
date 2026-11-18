@@ -116,6 +116,9 @@ pub struct DebugSweep {
     /// `llvm-dwarfdump`, which checks each `-g` object (`--verify`);
     /// `None` when there is none, and the sweep only compiles.
     pub dwarfdump: Option<PathBuf>,
+    /// clang, compiled with the same arguments when the verifier rejects
+    /// kiln's object: a rejection of both is LLVM's (WP-1563).
+    pub control: Option<PathBuf>,
 }
 
 /// Outcome of one test.
@@ -1492,8 +1495,9 @@ impl Test<'_> {
     /// builds an object without `-g`, and, when it can, again with `-g`,
     /// which must succeed with an object that `dwarfdump --verify` accepts.
     /// A test that does not compile to an object without `-g` (an xfail, a
-    /// `-fsyntax-only` in its `args:`) is a SKIP; `xfail` does not apply,
-    /// nor do the diags, the oracles or the budgets.
+    /// `-fsyntax-only` in its `args:`) is a SKIP unless the compile
+    /// crashed ([`sweep_crash`], WP-1563), which is a FAIL; `xfail` does
+    /// not apply, nor do the diags, the oracles or the budgets.
     fn debug_sweep(
         &mut self,
         spec: &TestSpec,
@@ -1517,9 +1521,30 @@ impl Test<'_> {
         dwarfdump: Option<&Path>,
     ) -> Result<Option<String>, Problem> {
         let dir = self.scratch()?.to_path_buf();
+        let swept = sweep_spec(spec);
+        let spec = &swept;
         let plain = dir.join("plain.o");
-        let o = self.compile(spec, &["-c"], Some(&plain))?;
+        // Not `compile`, which fails every crash: this one may be LLVM's.
+        let compiler = self.cfg.compiler.clone();
+        let c = self.command(&compiler, spec, &["-c"], Some(&plain));
+        let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
         if !o.success() || !plain.is_file() {
+            let stderr = o.stderr_str();
+            if let Some(what) = sweep_crash(o.code(), o.timed_out(), &stderr) {
+                // A crash in LLVM's backend (no kiln panic, no ICE) that the
+                // control's compile of the same source and arguments
+                // reproduces is LLVM's: a SKIP that names it.
+                if !kiln_crash(o.code(), &stderr)
+                    && let Some(why) = self.control_crashes(spec, &dir)?
+                {
+                    return Ok(Some(why));
+                }
+                return Err(Problem::Fail(format!(
+                    "the compiler {what} without -g ({})\n{}",
+                    o.describe_end(),
+                    indent(&o.stderr_str())
+                )));
+            }
             let why = format!("does not compile to an object without -g ({})", o.describe_end());
             return Ok(Some(why));
         }
@@ -1533,18 +1558,57 @@ impl Test<'_> {
             )));
         }
         let Some(dwarfdump) = dwarfdump else { return Ok(None) };
+        // `-flto` writes LLVM bitcode, which has no DWARF sections to
+        // verify: the `-g` compile succeeding is the check.
+        if fs::read(&with_g).is_ok_and(|b| is_bitcode(&b)) {
+            return Ok(None);
+        }
+        let o = self.dwarf_verify(dwarfdump, &with_g)?;
+        if o.success() {
+            return Ok(None);
+        }
+        // The control: clang's own `-g` object of the same source and
+        // arguments. When the verifier rejects that one too, the defect is
+        // LLVM's (the backend writes the line table), not kiln's: a SKIP
+        // that names it, never a silent pass.
+        if let Some(control) = self.cfg.debug_sweep.as_ref().and_then(|s| s.control.clone()) {
+            let theirs = dir.join("control-g.o");
+            let c = self.command(&control, spec, &["-c", "-g"], Some(&theirs));
+            let built = self.exec("the control", &c, self.cfg.compile_timeout)?;
+            if built.success() && !self.dwarf_verify(dwarfdump, &theirs)?.success() {
+                return Ok(Some(format!(
+                    "`llvm-dwarfdump --verify` rejects {}'s -g object of this test too",
+                    control.display()
+                )));
+            }
+        }
         let mut c = Command::new(dwarfdump);
         c.arg("--verify").arg(&with_g);
-        let shown = Shown(&c).to_string();
-        let o = self.exec("llvm-dwarfdump", &c, self.cfg.compile_timeout)?;
-        if !o.success() {
-            return Err(Problem::Fail(format!(
-                "the -g object fails `{shown}` ({})\n{}",
-                o.describe_end(),
-                indent(&String::from_utf8_lossy(&o.stdout))
-            )));
-        }
-        Ok(None)
+        Err(Problem::Fail(format!(
+            "the -g object fails `{}` ({})\n{}",
+            Shown(&c),
+            o.describe_end(),
+            indent(&String::from_utf8_lossy(&o.stdout))
+        )))
+    }
+
+    /// The debug-info sweep's control compile (`-c`, no `-g`) of `spec`:
+    /// `Some(reason)` when it crashes too.
+    fn control_crashes(&mut self, spec: &TestSpec, dir: &Path) -> Result<Option<String>, Problem> {
+        let Some(control) = self.cfg.debug_sweep.as_ref().and_then(|s| s.control.clone()) else {
+            return Ok(None);
+        };
+        let c = self.command(&control, spec, &["-c"], Some(&dir.join("control.o")));
+        let o = self.exec("the control", &c, self.cfg.compile_timeout)?;
+        let crashed =
+            !o.success() && sweep_crash(o.code(), o.timed_out(), &o.stderr_str()).is_some();
+        Ok(crashed.then(|| format!("LLVM crashes on this test under {} too", control.display())))
+    }
+
+    fn dwarf_verify(&mut self, dwarfdump: &Path, obj: &Path) -> Result<Output, Problem> {
+        let mut c = Command::new(dwarfdump);
+        c.arg("--verify").arg(obj);
+        self.exec("llvm-dwarfdump", &c, self.cfg.compile_timeout)
     }
 
     fn scratch(&self) -> Result<&Path, Problem> {
@@ -2700,6 +2764,75 @@ pub(super) fn debug_sweep_skip(spec: &TestSpec) -> Option<String> {
             | Expect::Debugger
     );
     (!swept).then(|| format!("not swept (`expect: {}`, `--debug-sweep`)", spec.expect.as_str()))
+}
+
+/// The flags that make a compile stop before the backend lowers LLVM's
+/// own intrinsics (an IR test's `-Xclang -disable-llvm-passes`) or write
+/// something other than an object: the debug-info sweep drops them from a
+/// test's `args:` and keeps the rest, so that an `expect: ir` test is
+/// compiled to an object and checked rather than failed in `llc` on an
+/// unlowered `llvm.instrprof.*` or `llvm.coro.*` call, as clang's driver
+/// would be (WP-1563; spec/harness.md "Debug-info sweep").
+const SWEEP_DROPPED: &[&[&str]] = &[&["-Xclang", "-disable-llvm-passes"], &["-emit-llvm"], &["-S"]];
+
+/// The test as the debug-info sweep compiles it: [`SWEEP_DROPPED`] removed.
+pub(super) fn sweep_spec(spec: &TestSpec) -> TestSpec {
+    let mut out = spec.clone();
+    let mut args = Vec::with_capacity(spec.args.len());
+    let mut i = 0;
+    'next: while i < spec.args.len() {
+        for drop in SWEEP_DROPPED {
+            if spec.args[i..].starts_with(&drop.iter().map(|d| (*d).to_owned()).collect::<Vec<_>>())
+            {
+                i += drop.len();
+                continue 'next;
+            }
+        }
+        args.push(spec.args[i].clone());
+        i += 1;
+    }
+    out.args = args;
+    out
+}
+
+/// Whether a compile that did not succeed CRASHED (WP-1563): killed by a
+/// signal, timed out, the exit status of an internal compiler error under
+/// `-fno-crash-diagnostics` (70, `crash::EXIT_CRASH_NO_DIAGNOSTICS` of
+/// `kiln_driver`), or a crash report on stderr (a panic, an ICE line, LLVM's
+/// "PLEASE submit a bug report", a reproducer's `diagnostic msg:` lines).
+/// `None` for an ordinary failure with diagnostics.
+pub(super) fn sweep_crash(
+    code: Option<i32>,
+    timed_out: bool,
+    stderr: &str,
+) -> Option<&'static str> {
+    const MARKERS: &[&str] = &[
+        "panicked at",
+        "internal compiler error: ",
+        "PLEASE submit a bug report",
+        "note: diagnostic msg: ",
+        "preprocessed source and associated run script",
+    ];
+    if timed_out {
+        Some("hung")
+    } else if code.is_none() || code == Some(70) || MARKERS.iter().any(|m| stderr.contains(m)) {
+        Some("crashed")
+    } else {
+        None
+    }
+}
+
+/// Whether a crash is kiln's own (a panic, an internal compiler error),
+/// which no control excuses, rather than LLVM's backend.
+pub(super) fn kiln_crash(code: Option<i32>, stderr: &str) -> bool {
+    code == Some(70)
+        || stderr.contains("panicked at")
+        || stderr.contains("internal compiler error: ")
+}
+
+/// LLVM bitcode (raw or in its wrapper): what `-flto -c` writes.
+pub(super) fn is_bitcode(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"BC\xC0\xDE") || bytes.starts_with(&[0xDE, 0xC0, 0x17, 0x0B])
 }
 
 /// Why the header-differential mode (`--meta-header`) leaves a test out,

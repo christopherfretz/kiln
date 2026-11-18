@@ -23,6 +23,7 @@ mod libcxx;
 mod libstdcxx;
 mod oracle;
 mod pgo;
+mod release_gate;
 mod test;
 mod util;
 
@@ -125,6 +126,7 @@ fn command() -> ExitCode {
         Some("build") => pgo::build_main(args),
         Some("pgo-profile") => pgo::profile_main(args),
         Some("pgo-train") => pgo::train_main(args),
+        Some("release-gate") => release_gate::main(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
         _ => {
@@ -903,11 +905,13 @@ mod ci_tests {
         // The g++.dg jobs are opt-in (WP-1473): the `gxx` dispatch input
         // (default false) or a `sweep/gxx-*` push, which in turn starts no
         // libc++ or OSS job; every other `sweep/` push runs those as before.
+        // A release candidate's `sweep/rc-*` push runs all three (WP-1219).
         assert!(
             on.contains("      gxx:\n") && on.contains("        default: false\n"),
             "sweep.yml has no `gxx` dispatch input defaulting to false"
         );
         let gxx_push = "startsWith(github.ref, 'refs/heads/sweep/gxx-')";
+        let rc_push = "startsWith(github.ref, 'refs/heads/sweep/rc-')";
         for (name, input) in [("libcxx", "libcxx"), ("oss-matrix", "oss"), ("oss", "oss")] {
             has(
                 &job(name),
@@ -921,7 +925,9 @@ mod ci_tests {
         has(
             &gxx,
             "gxx-dg",
-            &format!("if: ${{{{ (github.event_name == 'push' && {gxx_push}) || inputs.gxx }}}}"),
+            &format!(
+                "if: ${{{{ (github.event_name == 'push' && ({gxx_push} || {rc_push})) || inputs.gxx }}}}"
+            ),
         );
         assert!(gxx.contains("cargo xtask gxx-dg") && gxx.contains("--shard ${{ matrix.shard }}/"));
         let gxx_summary = job("gxx-dg-summary");
