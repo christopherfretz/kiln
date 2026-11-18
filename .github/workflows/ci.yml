@@ -72,4 +72,8 @@ jobs:
       - uses: ./.github/actions/kiln-ci
         with: { cache-key: kiln-hod-arm, save-cache: "true" }
       - run: cargo xtask kiln-hod test
-      - run: cargo xtask kiln-hod sweep tests/codegen
+      # The bridge (seam K3a): IR equality with hod's text reader, then the
+      # object sweep with the bridged object also compared in process with
+      # the text path's (`--dual`).
+      - run: cargo xtask kiln-hod bridge-eq tests/codegen
+      - run: cargo xtask kiln-hod sweep --dual tests/codegen

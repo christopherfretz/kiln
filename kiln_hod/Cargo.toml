@@ -29,6 +29,10 @@ kiln_hod    = { path = "crates/kiln_hod" }
 # `kiln_hod::HOD_REV` and the `EMBED_API` assertion (kiln_hod/README.md).
 # Default features (`readers`): this first form compiles the printed text.
 hod = { git = "https://github.com/christopherfretz/hod", rev = "d789a92ab0513dc330124645bd28d8f62532c23c" }
+# hod's IR and text reader, at the same revision: the bridge (seam K3a)
+# builds `hod_ir` directly and is proved equal to `hod_ll` (README.md).
+hod_ir = { git = "https://github.com/christopherfretz/hod", rev = "d789a92ab0513dc330124645bd28d8f62532c23c" }
+hod_ll = { git = "https://github.com/christopherfretz/hod", rev = "d789a92ab0513dc330124645bd28d8f62532c23c" }
 
 # The root workspace's lint levels, unchanged (kiln's `Cargo.toml`).
 [workspace.lints.rust]

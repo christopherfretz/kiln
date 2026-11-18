@@ -16,7 +16,17 @@
 //!   Where the external route took or declined the job, the wrapper must
 //!   give the same answer (same reason) and the same object bytes, except
 //!   for the jobs the in-process route does not take by rule (`opt`
-//!   triggers: counted apart). Exit status 1 on any difference.
+//!   triggers: counted apart). Exit status 1 on any difference. The
+//!   wrapper's route per job (bridge, or text and why) is counted.
+//!   `--dual`: the wrapper also runs with `KILN_HOD_DUAL=1` (the bridged
+//!   object compared with the text path's in process).
+//! - `bridge-eq [options] <dir|file>...`: the bridge's IR-equality test.
+//!   The wrapper compiles every test file (as `sweep`, without `-g`) with
+//!   `KILN_HOD_BRIDGE_EQ=1`: each module the bridge takes is compared with
+//!   what hod's text reader builds from the module's text, both printed by
+//!   `hod_ir`. Counts modules compared, equal, refused equally (by
+//!   reason), not bridged (by reason) and different; exit status 1 on a
+//!   difference not listed in `kiln_hod/bridge-eq-expected.txt`.
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -32,8 +42,10 @@ use crate::util::{self, process};
 const USAGE: &str = "\
 usage: cargo xtask kiln-hod build [--profile <dev|release|harness>]
        cargo xtask kiln-hod test
-       cargo xtask kiln-hod sweep [-j N] [--llvm-dir <dir>]... [--no-g] [--report <file>]
-                                  <dir|file>...
+       cargo xtask kiln-hod sweep [-j N] [--llvm-dir <dir>]... [--no-g] [--dual]
+                                  [--report <file>] <dir|file>...
+       cargo xtask kiln-hod bridge-eq [-j N] [--llvm-dir <dir>]... [--report <file>]
+                                      <dir|file>...
 
 The kiln_hod workspace (kiln_hod/, its own Cargo.lock, hod by git revision):
 a kiln++ with hod in process (spec/driver.md \"In-process back end\").
@@ -43,8 +55,16 @@ test    the stock kiln++ (root, debug) and hod's executable, then the workspace'
 sweep   object equality of the in-process route against the stock kiln++ driving
         the external hod built from the same revision, over the test files given;
         dialects: each --llvm-dir (default /usr/lib/llvm-19 and /usr/lib/llvm-22,
-        those that exist), each with and without -g (--no-g: without only)
+        those that exist), each with and without -g (--no-g: without only);
+        --dual: the wrapper also compares the bridged object with the text path's
+bridge-eq
+        IR equality of the bridge (kiln_llvm::Module into hod_ir) with hod's text
+        reader on every module of the test files given, printed by hod_ir; without -g
 ";
+
+/// The expected differences of `bridge-eq`: one test file per line (from
+/// the repository root), a tab, and why. Empty while there is none.
+const EXPECTED: &str = "kiln_hod/bridge-eq-expected.txt";
 
 /// The text of a failure to fetch hod: the network or the revision.
 const FETCH_HINT: &str = "cannot fetch hod at the revision kiln_hod/Cargo.toml pins \
@@ -64,7 +84,8 @@ pub fn main(mut args: impl Iterator<Item = String>) -> ExitCode {
                 .and_then(|p| build(&p).map(|exe| eprintln!("xtask kiln-hod: {}", exe.display())))
         }
         Some("test") => test(),
-        Some("sweep") => Sweep::parse(args).and_then(|s| s.run()),
+        Some("sweep") => Sweep::parse(args, Mode::Objects).and_then(|s| s.run()),
+        Some("bridge-eq") => Sweep::parse(args, Mode::BridgeEq).and_then(|s| s.run()),
         Some("-h" | "--help") => {
             print!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -174,9 +195,21 @@ fn build_hod_cli(profile: &str) -> Result<PathBuf, String> {
     Ok(target.join(if profile == "dev" { "debug" } else { profile }).join("hod"))
 }
 
+/// What a sweep compares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// The objects of the external route and the wrapper.
+    Objects,
+    /// The same, the wrapper with `KILN_HOD_DUAL=1`.
+    Dual,
+    /// The bridge's IR with the text reader's (`bridge-eq`).
+    BridgeEq,
+}
+
 /// `sweep`'s options.
 #[derive(Debug)]
 struct Sweep {
+    mode: Mode,
     jobs: usize,
     llvm_dirs: Vec<PathBuf>,
     with_g: bool,
@@ -185,8 +218,9 @@ struct Sweep {
 }
 
 impl Sweep {
-    fn parse(args: impl Iterator<Item = String>) -> Result<Sweep, String> {
+    fn parse(args: impl Iterator<Item = String>, mode: Mode) -> Result<Sweep, String> {
         let mut s = Sweep {
+            mode,
             jobs: std::thread::available_parallelism().map_or(4, std::num::NonZero::get),
             llvm_dirs: Vec::new(),
             with_g: true,
@@ -200,6 +234,7 @@ impl Sweep {
                 "-j" => s.jobs = value("-j")?.parse().map_err(|_| "-j needs a number")?,
                 "--llvm-dir" => s.llvm_dirs.push(PathBuf::from(value("--llvm-dir")?)),
                 "--no-g" => s.with_g = false,
+                "--dual" if s.mode == Mode::Objects => s.mode = Mode::Dual,
                 "--report" => s.report = Some(PathBuf::from(value("--report")?)),
                 o if o.starts_with('-') => return Err(format!("unknown option {o}\n{USAGE}")),
                 p => s.inputs.push(PathBuf::from(p)),
@@ -219,14 +254,20 @@ impl Sweep {
             return Err("no LLVM directory (--llvm-dir)".into());
         }
         s.jobs = s.jobs.max(1);
+        if s.mode == Mode::BridgeEq {
+            s.with_g = false;
+        }
         Ok(s)
     }
 
     fn run(&self) -> Result<(), String> {
         let root = util::repo_root();
-        let stock = util::build_kiln(&root, &root_target()?, "kiln-hod", false)?;
+        let (stock, hod) = if self.mode == Mode::BridgeEq {
+            (PathBuf::new(), PathBuf::new())
+        } else {
+            (util::build_kiln(&root, &root_target()?, "kiln-hod", false)?, build_hod_cli("dev")?)
+        };
         let wrapper = build("dev")?;
-        let hod = build_hod_cli("dev")?;
         let files = self.files(&root)?;
         let mut jobs = Vec::new();
         for f in &files {
@@ -248,7 +289,13 @@ impl Sweep {
         let scratch = hod_target()?.join("sweep");
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
-        let tools = Tools { stock: &stock, wrapper: &wrapper, hod: &hod, scratch: &scratch };
+        let tools = Tools {
+            mode: self.mode,
+            stock: &stock,
+            wrapper: &wrapper,
+            hod: &hod,
+            scratch: &scratch,
+        };
         let next = AtomicUsize::new(0);
         let results: Mutex<Vec<(usize, Verdict)>> = Mutex::new(Vec::new());
         std::thread::scope(|s| {
@@ -270,6 +317,9 @@ impl Sweep {
         let mut results = results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
         results.sort_by_key(|(i, _)| *i);
         let _ = std::fs::remove_dir_all(&scratch);
+        if self.mode == Mode::BridgeEq {
+            return self.summarize_eq(&root, &jobs, &results);
+        }
         self.summarize(&jobs, &results)
     }
 
@@ -337,6 +387,7 @@ impl Sweep {
     fn summarize(&self, jobs: &[Job<'_>], results: &[(usize, Verdict)]) -> Result<(), String> {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+        let mut routes: BTreeMap<String, usize> = BTreeMap::new();
         let mut bad = Vec::new();
         let mut tsv = String::from("file\tllvm\tg\texternal\tin_process\tresult\n");
         for (i, v) in results {
@@ -344,6 +395,9 @@ impl Sweep {
             *counts.entry(v.kind.to_owned()).or_default() += 1;
             if let Some(r) = &v.reason {
                 *reasons.entry(r.clone()).or_default() += 1;
+            }
+            if let Some(r) = &v.route {
+                *routes.entry(r.clone()).or_default() += 1;
             }
             let line = format!(
                 "{} {}\t{}\t{}\t{}\t{}\t{}",
@@ -373,6 +427,10 @@ impl Sweep {
         }
         eprintln!("  declines by reason (both routes):");
         for (r, n) in &reasons {
+            eprintln!("    {r}: {n}");
+        }
+        eprintln!("  the wrapper's route (modules):");
+        for (r, n) in &routes {
             eprintln!("    {r}: {n}");
         }
         for b in &bad {
@@ -473,6 +531,7 @@ struct Job<'a> {
 }
 
 struct Tools<'a> {
+    mode: Mode,
     stock: &'a Path,
     wrapper: &'a Path,
     hod: &'a Path,
@@ -521,6 +580,9 @@ struct Ran {
 #[derive(Debug)]
 struct Verdict {
     kind: &'static str,
+    /// The wrapper's route (`bridge`, `text(<why>)`); for `bridge-eq`,
+    /// the equality check's result.
+    route: Option<String>,
     reason: Option<String>,
     external: String,
     in_process: String,
@@ -544,7 +606,22 @@ impl Job<'_> {
             .env("KILN_HOD", t.hod)
             .env_remove("KILN_BACKEND")
             .env_remove("KILN_HOD_STRICT")
-            .env_remove("HOD_COVERAGE_LOG");
+            .env_remove("HOD_COVERAGE_LOG")
+            .env_remove("KILN_HOD_BRIDGE")
+            .env_remove("KILN_HOD_DUAL")
+            .env_remove("KILN_HOD_BRIDGE_EQ");
+        if exe == t.wrapper {
+            cmd.env("KILN_HOD_BRIDGE_LOG", dir.join("bridge.jsonl"));
+            match t.mode {
+                Mode::Dual => {
+                    cmd.env("KILN_HOD_DUAL", "1");
+                }
+                Mode::BridgeEq => {
+                    cmd.env("KILN_HOD_BRIDGE_EQ", "1");
+                }
+                Mode::Objects => {}
+            }
+        }
         util::isolate_caches(&mut cmd);
         let ok = process::run(&mut cmd, Duration::from_secs(600)).is_ok_and(|o| o.success());
         let object = std::fs::read(dir.join("out.o")).ok();
@@ -555,7 +632,11 @@ impl Job<'_> {
     fn run(&self, t: &Tools<'_>, n: usize) -> Verdict {
         let dir = t.scratch.join(n.to_string());
         let _ = std::fs::create_dir_all(&dir);
-        let v = self.compare(t, &dir);
+        let mut v =
+            if t.mode == Mode::BridgeEq { self.equality(t, &dir) } else { self.compare(t, &dir) };
+        if v.route.is_none() {
+            v.route = route(&dir.join("bridge.jsonl"), "route");
+        }
         let _ = std::fs::remove_dir_all(&dir);
         v
     }
@@ -563,6 +644,7 @@ impl Job<'_> {
     fn compare(&self, t: &Tools<'_>, dir: &Path) -> Verdict {
         let verdict = |kind, reason: Option<&String>, a: &Ran, b: Option<&Ran>, bad| Verdict {
             kind,
+            route: None,
             reason: reason.cloned(),
             external: a.stats.as_ref().map_or_else(|| "-".to_owned(), Stats::describe),
             in_process: b
@@ -603,5 +685,120 @@ impl Job<'_> {
         };
         let reason = (sa.backend != "hod").then_some(sa.reason.as_ref()).flatten();
         verdict(kind, reason, &a, Some(&b), !same)
+    }
+
+    /// `bridge-eq`: the wrapper alone, with the equality check.
+    fn equality(&self, t: &Tools<'_>, dir: &Path) -> Verdict {
+        let b = self.compile(t, dir, t.wrapper, "in-process");
+        let eq = route(&dir.join("bridge.jsonl"), "eq");
+        let (kind, bad) = match eq.as_deref() {
+            None if !b.ok => ("not in process, compile failed", false),
+            None => ("not in process", false),
+            Some("equal") => ("equal", false),
+            Some(e) if e.starts_with("refused:") => ("refused equally", false),
+            Some(e) if e.starts_with("fallback:") || e == "debug" => ("not bridged", false),
+            Some(_) => ("DIFF", true),
+        };
+        Verdict {
+            kind,
+            route: eq,
+            reason: None,
+            external: String::new(),
+            in_process: b.stats.as_ref().map_or_else(|| "-".to_owned(), Stats::describe),
+            bad,
+        }
+    }
+}
+
+/// The value of `key` in the bridge log's lines (one per module), joined
+/// by `;` when a job compiled several modules.
+fn route(log: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(log).ok()?;
+    let values: Vec<String> = text
+        .lines()
+        .filter_map(|l| Json::parse(l).ok())
+        .filter_map(|j| {
+            let value = j.get(key).and_then(Json::as_str)?.to_owned();
+            if key != "route" {
+                return Some(value);
+            }
+            Some(match j.get("reason").and_then(Json::as_str) {
+                Some(why) => format!("{value}({why})"),
+                None => value,
+            })
+        })
+        .collect();
+    (!values.is_empty()).then(|| values.join(";"))
+}
+
+impl Sweep {
+    fn summarize_eq(
+        &self,
+        root: &Path,
+        jobs: &[Job<'_>],
+        results: &[(usize, Verdict)],
+    ) -> Result<(), String> {
+        let expected_text = std::fs::read_to_string(root.join(EXPECTED)).unwrap_or_default();
+        let expected: Vec<&str> = expected_text
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.split('\t').next())
+            .collect();
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut refused: BTreeMap<String, usize> = BTreeMap::new();
+        let mut not_bridged: BTreeMap<String, usize> = BTreeMap::new();
+        let mut bad = Vec::new();
+        let mut tsv = String::from("file\tllvm\tresult\teq\n");
+        for (i, v) in results {
+            let job = &jobs[*i];
+            let eq = v.route.clone().unwrap_or_default();
+            let file = job.file.path.strip_prefix(root).unwrap_or(&job.file.path);
+            let listed = expected.iter().any(|e| Path::new(e) == file);
+            let kind = if v.bad && listed { "expected difference" } else { v.kind };
+            *counts.entry(kind.to_owned()).or_default() += 1;
+            for one in eq.split(';') {
+                if let Some(r) = one.strip_prefix("refused:") {
+                    *refused.entry(r.to_owned()).or_default() += 1;
+                } else if let Some(r) = one.strip_prefix("fallback:") {
+                    *not_bridged.entry(r.to_owned()).or_default() += 1;
+                } else if one == "debug" {
+                    *not_bridged.entry("debug".to_owned()).or_default() += 1;
+                }
+            }
+            let target = job.file.args.iter().find(|a| a.starts_with("--target="));
+            let line = format!(
+                "{} {}\t{}\t{kind}\t{eq}",
+                file.display(),
+                target.map_or("", String::as_str),
+                job.llvm.display(),
+            );
+            let _ = writeln!(tsv, "{line}");
+            if v.bad && !listed {
+                bad.push(line);
+            }
+        }
+        if let Some(r) = &self.report {
+            std::fs::write(r, &tsv).map_err(|e| format!("{}: {e}", r.display()))?;
+        }
+        let compared: usize = ["equal", "refused equally", "DIFF", "expected difference"]
+            .iter()
+            .map(|k| counts.get(*k).copied().unwrap_or(0))
+            .sum();
+        eprintln!("xtask kiln-hod bridge-eq: {} jobs, {compared} modules compared", results.len());
+        for (k, n) in &counts {
+            eprintln!("  {k}: {n}");
+        }
+        eprintln!("  refused equally, by reason:");
+        for (r, n) in &refused {
+            eprintln!("    {r}: {n}");
+        }
+        eprintln!("  not bridged (text path), by reason:");
+        for (r, n) in &not_bridged {
+            eprintln!("    {r}: {n}");
+        }
+        for b in &bad {
+            eprintln!("DIFF {b}");
+        }
+        if bad.is_empty() { Ok(()) } else { Err(format!("{} differences", bad.len())) }
     }
 }
