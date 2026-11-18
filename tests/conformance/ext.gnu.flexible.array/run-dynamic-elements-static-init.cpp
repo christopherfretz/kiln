@@ -46,7 +46,11 @@ int main() {
   std::printf("%d %d %d %d %d %d | ", int(t.q), t.c, t.t[0], t.t[1], t.t[2],
               int(reinterpret_cast<char *>(&t.t[3]) - reinterpret_cast<char *>(&t)));
   std::printf("%d %d | ", x[0] + 7, x[1] + 8);
-  std::printf("%d %d | ", once(5), once(6));
+  // Two statements: the order in which a call's arguments are evaluated
+  // is unspecified, and only the first call initializes `s`.
+  int first = once(5);
+  int second = once(6);
+  std::printf("%d %d | ", first, second);
   int j = 8;
   static A e = {j, {j + 1}};
   std::printf("%d %d\n", e.a, e.b[0]);
