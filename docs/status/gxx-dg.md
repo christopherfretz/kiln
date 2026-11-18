@@ -521,6 +521,8 @@ elements (`cwg3149`, now G only).
 
 After WP-1613 and WP-1614: 468 of 565 g++.dg/reflect cases pass (8 compile-reject cases now pass: `member15`, `member17`, `enumerators_of1`, `is_enumerable_type1`, `p2996-7`, `reflect_function2`, `variable_of2`, `visibility1`; none regressed in g++.dg/reflect, g++.dg/template or g++.dg/ext/is_*). Of the K row, `define_aggregate10` (CWG3162 injected declarations) is left; `type_trait6`, `reflect_constant9` and `parse2` now fail only on their G lines, and `json-parser` only on `#embed` pedantic.
 
+After WP-1670 and WP-1671 (partial ordering of implicit object against explicit object member function templates; lambdas in unevaluated operands before C++20 and in template arguments at C++17): over `g++.dg/cpp23`, `cpp2a/lambda*`, `cpp2a/concepts*`, `cpp0x/lambda`, `cpp1y/lambda*`, `cpp1z/lambda*`, `cpp1z/constexpr-lambda*`, `template`, `overload` and `g++.old-deja/g++.pt`, 9442 to 9445 of 10576 decided cases pass (`lambda-uneval` at C++11 and C++17 and `lambda-conv15` at C++17, all accept-invalid before), none regressed; `cpp23/explicit-obj-constraints` reports 16 ambiguities, clang 22's static-member ones, instead of 48.
+
 ### x86-64
 
 The first x86-64 run: the opt-in `gxx-dg` jobs of `.github/workflows/sweep.yml`

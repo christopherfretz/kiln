@@ -9,7 +9,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId};
-use kiln_ast::types::{ArgView, ExcSpec, TemplateArg, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, RefQual, TemplateArg, TemplateName, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -18,6 +18,7 @@ use crate::Sema;
 use crate::overload::{ArgInfo, CandidateKind, IcsOptions, OverloadCandidateSet, Rewrite};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
+use crate::templ::order::ObjectParam;
 use crate::templ::stack::{FrameKind, SfinaeState};
 use crate::templ::subst::Substituter;
 
@@ -2702,11 +2703,26 @@ impl Sema<'_, '_> {
     ) -> bool {
         let (x, y) = (set.cand(c1), set.cand(c2));
         let (Some(t1), Some(t2)) = (x.template, y.template) else { return false };
+        // An explicit object parameter takes the object argument
+        // ([over.match.funcs.general]/4), so it is compared like any
+        // parameter; the other template's object parameter follows
+        // [`Self::object_params`].
+        let explicit =
+            |s: &Self, t: DeclId| s.templated_function(t).is_some_and(|f| s.has_explicit_object(f));
+        let (e1, e2) = (explicit(self, t1), explicit(self, t2));
         // Conversion function templates order by their return types
         // ([temp.deduct.partial]/3.2); one never orders against a
         // constructor template.
         if x.kind == CandidateKind::ConvFn || y.kind == CandidateKind::ConvFn {
-            return x.kind == y.kind && self.more_specialized_conversion(t1, t2);
+            if x.kind != y.kind {
+                return false;
+            }
+            if e1 != e2
+                && let Some((o1, o2)) = self.object_params(t1, e1, t2, e2)
+            {
+                return self.more_specialized_conversion_objects(t1, o1, t2, o2);
+            }
+            return self.more_specialized_conversion(t1, t2);
         }
         // So do they in an explicit call `x.operator const char *()`
         // (clang `TPOC_Conversion` for a `CXXConversionDecl` candidate).
@@ -2714,28 +2730,96 @@ impl Sema<'_, '_> {
             s.templated_function(t).is_some_and(|f| s.kind_of(f) == DeclKind::CXXConversion)
         };
         if conv(self, t1) && conv(self, t2) {
+            if e1 != e2
+                && let Some((o1, o2)) = self.object_params(t1, e1, t2, e2)
+            {
+                return self.more_specialized_conversion_objects(t1, o1, t2, o2);
+            }
             return self.more_specialized_conversion(t1, t2);
         }
-        // An explicit object parameter takes the object argument
-        // ([over.match.funcs.general]/4), so it is compared like any
-        // parameter, and an implicit object member compared with such a
-        // template gets its object parameter inserted ([temp.func.order]/3:
-        // only a member with an implicit object parameter does).
-        let explicit =
-            |s: &Self, t: DeclId| s.templated_function(t).is_some_and(|f| s.has_explicit_object(f));
-        let (e1, e2) = (explicit(self, t1), explicit(self, t2));
         if !set.oper {
             if set.object.is_none() || !(e1 || e2) {
                 return self.more_specialized(t1, t2, nargs);
             }
-            let n = |e: bool| nargs + usize::from(e);
-            return self.more_specialized_operator(t1, n(e1), t2, n(e2), false);
+            let n = |o: ObjectParam, e: bool| nargs + usize::from(e && o == ObjectParam::None);
+            let (o1, o2) = self
+                .object_params(t1, e1, t2, e2)
+                .unwrap_or((ObjectParam::None, ObjectParam::None));
+            return self.more_specialized_objects(t1, o1, n(o1, e1), t2, o2, n(o2, e2), false);
+        }
+        // An operator: a non-member candidate takes the object operand as
+        // its first parameter.
+        let reversed = x.rewrite.is_reversed() != y.rewrite.is_reversed();
+        if set.object.is_some()
+            && let Some((o1, o2)) = self.object_params(t1, e1, t2, e2)
+        {
+            let n = |k: CandidateKind, o: ObjectParam, e: bool| {
+                nargs + usize::from((k == CandidateKind::Function || e) && o == ObjectParam::None)
+            };
+            let (n1, n2) = (n(x.kind, o1, e1), n(y.kind, o2, e2));
+            return self.more_specialized_objects(t1, o1, n1, t2, o2, n2, reversed);
         }
         let n = |k: CandidateKind, e: bool| {
             nargs + usize::from((k == CandidateKind::Function || e) && set.object.is_some())
         };
-        let reversed = x.rewrite.is_reversed() != y.rewrite.is_reversed();
         self.more_specialized_operator(t1, n(x.kind, e1), t2, n(y.kind, e2), reversed)
+    }
+
+    /// The object parameters partial ordering gives function templates
+    /// `t1` and `t2` (`e1`, `e2`: which has an explicit object
+    /// parameter) in a member call or an operator ([temp.func.order]/3
+    /// as CWG2834 reads it; spec/sema-templates.md §6.7), for the pairs
+    /// it decides: an implicit object member against an explicit object
+    /// member or a non-member gets X(M), a reference to its class, an
+    /// rvalue one for a `&&` member or for one without a ref-qualifier
+    /// against an rvalue reference first parameter, and the other
+    /// template's parameters are compared as declared; a static member
+    /// against an explicit object member gets none and the explicit
+    /// object parameter is not compared by deduction. `None` for any
+    /// other pair (two implicit object members, two explicit object
+    /// members, a static member against an implicit object one or a
+    /// non-member): their rules are unchanged. Decided from what the
+    /// declarations carry: no type is built here.
+    fn object_params(
+        &self,
+        t1: DeclId,
+        e1: bool,
+        t2: DeclId,
+        e2: bool,
+    ) -> Option<(ObjectParam, ObjectParam)> {
+        if e1 && e2 {
+            return None;
+        }
+        let (f1, f2) = (self.templated_function(t1)?, self.templated_function(t2)?);
+        let iobj = |s: &Self, f: DeclId| s.is_implicit_object_member(f);
+        let nonmember = |s: &Self, f: DeclId| s.kind_of(f) == DeclKind::Function;
+        // `m` against `other`: the pair of object parameters, `m`'s first.
+        let pair = |s: &Self, m: DeclId, mx: bool, other: DeclId, ox: bool| {
+            if iobj(s, m) && (ox || nonmember(s, other)) {
+                let rvalue = match s.method_object_quals(m).1 {
+                    RefQual::RValue => true,
+                    RefQual::None => s.first_param_is_rvalue_ref(other),
+                    RefQual::LValue => false,
+                };
+                return Some((ObjectParam::Ref(rvalue), ObjectParam::None));
+            }
+            (ox && !mx && s.is_static_method(m))
+                .then_some((ObjectParam::StaticClass, ObjectParam::Skip))
+        };
+        pair(self, f1, e1, f2, e2).or_else(|| pair(self, f2, e2, f1, e1).map(|(a, b)| (b, a)))
+    }
+
+    /// Whether the first declared parameter of function `f` is an rvalue
+    /// reference ([temp.func.order]/3.1, X(M) of the other template).
+    fn first_param_is_rvalue_ref(&self, f: DeclId) -> bool {
+        let Some(p) = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return false;
+        };
+        self.ast
+            .types
+            .params(p)
+            .first()
+            .is_some_and(|&q| matches!(self.ast.types.canonical_view(q), TypeView::RValueRef(_)))
     }
 
     /// A rewritten or reversed operator function template candidate

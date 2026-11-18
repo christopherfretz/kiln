@@ -337,6 +337,11 @@ sema_lambda_capture_default_arg = Error (0) "lambda expression in default argume
 sema_lambda_capture_default_non_local = Error (0) "non-local lambda expression cannot have a capture-default";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_lambda_in_constant_expression = Error (0) "a lambda expression may not appear inside of a constant expression";
+// C++17 [expr.prim.lambda]/2 (clang `err_lambda_in_invalid_context`): a
+// lambda-expression in a template-argument, before C++20.
+sema_lambda_in_invalid_context = Error (0) "a lambda expression cannot appear in this context";
+// C++11-17 [expr.prim.lambda]/2 (clang `err_lambda_unevaluated_operand`).
+sema_lambda_unevaluated_operand = Error (0) "lambda expression in an unevaluated operand";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
 sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";
 // -fclang-compat=22; clang 19 prints the operand (`_expr`, not a `_19`

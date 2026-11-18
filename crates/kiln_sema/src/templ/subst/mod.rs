@@ -418,8 +418,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 // ^^f<N>)[0]>()`: the vector is not a result of it).
                 // Evaluated even inside an unevaluated operand
                 // (`sizeof(f<(T(), 0)>())`, [expr.context]/1; clang's
-                // `ConstantEvaluated` context).
+                // `ConstantEvaluated` context). A template-argument for
+                // the lambda rules (WP-1671).
+                let saved = self.sema.enter_template_argument();
                 let e = self.constant_operand(expr);
+                self.sema.exit_template_argument(saved);
                 Ok(self.sema.ast.builder().template_arg_expr(e?))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
@@ -536,9 +539,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 // (§7.2).
                 // Each element is a constant-expression, as in
                 // `template_arg`.
+                let saved = self.sema.enter_template_argument();
                 let unevaluated = self.sema.enter_constant_expression();
                 let r = self.expand_pattern_rewrap(None, |s| s.element_expr(p));
                 self.sema.exit_constant_expression(None, unevaluated);
+                self.sema.exit_template_argument(saved);
                 match r? {
                     Expansion::Elements(v) => {
                         let rw = self.take_rewrap();

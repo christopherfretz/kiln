@@ -1416,6 +1416,15 @@ Planned as 1.3.0.
   as clang 22, so libstdc++ keeps its library path. `__builtin_has_attribute`
   answers attributes written in a type-id operand and tells
   `visibility("internal")` from `hidden` (WP-1667).
+- Partial ordering of a member function template with an implicit object
+  parameter against one with an explicit object parameter (or against a
+  non-member operator) now gives the implicit one a reference object
+  parameter, as clang 22 does, so constraints and the reference
+  tie-breaker can decide calls that kiln reported as ambiguous. A static
+  member against an explicit object member no longer deduces from the
+  object parameter. Before C++20 a lambda in an unevaluated operand is
+  rejected, and at C++17 a lambda in a template argument is rejected, with
+  clang 22's diagnostics (WP-1670, WP-1671).
 
 ## [1.2.1] - 2026-11-14
 

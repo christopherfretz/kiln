@@ -1872,8 +1872,9 @@ Where the code differs from (or details) the design above:
   `more_specialized_candidate`; an explicit object parameter takes the
   object argument, so its template counts it among the compared
   parameters, in a member call too, and an implicit object member
-  compared with it gets its object parameter inserted (WP-1519,
-  `temp.func.order/p3-explicit-object-parameter.cpp`); P2468 `functions_correspond` maps
+  compared with it, or with a non-member operator, gets X(M) inserted, a
+  reference to its class (WP-1519, WP-1670; spec/sema-templates.md §6.7
+  "Object parameters", `temp.func.order/p3-explicit-object-parameter.cpp`); P2468 `functions_correspond` maps
   specializations to their patterns. Operators no longer set
   `skipped_templates` for reversed or rewritten templates.
 - `&f` against a target type with no matching template prints clang's
