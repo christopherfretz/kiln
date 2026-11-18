@@ -1495,6 +1495,14 @@ Planned as 1.3.0.
   TU-local constant (`return &K;`) and the lambda a variable of closure
   type is initialized with are checked for exposures, as GCC does
   (WP-1685, WP-1684).
+- docs/status/gxx-dg.md: the third full run of GCC's C++ testsuite at
+  kiln `01c4bb2f5` passes 88.8% of the decided cases on aarch64 (50256 of
+  56568; second run 87.2%) and on x86-64 (50475 of 56870; 87.1%). The
+  triage splits the cases that still fail into kiln bugs with a row,
+  kiln bugs without one, GCC-specific expectations and wording or
+  location only, and xfail repros record a bit-field glvalue conditional
+  stored as a whole storage unit and a C++98 explicit instantiation
+  outside an enclosing namespace that is accepted (WP-1691).
 
 ## [1.2.1] - 2026-11-14
 
