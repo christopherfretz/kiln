@@ -336,6 +336,12 @@ gate results will be in `docs/status/release-1.3.0.md`.
   (a non-static member template's trailing return type naming a data
   member): Boost.LexicalCast, and with it Boost.ProgramOptions and
   Boost.DateTime, build again.
+- Templates (WP-1724, a regression since 1.2.1): a member function named
+  only by a default template argument (`template <auto C =
+  &X<T>::f>`) is instantiated where the specialization substitutes it,
+  so the program links again (EnTT's `reactive_mixin`); a default of a
+  namespace-scope template naming a member of a class template
+  specialization links too.
 - Access (WP-1726, a regression since 1.2.1): explicit template
   arguments given to a template declared in a local scope (a generic
   lambda's `operator()<I>`) no longer leave that template as the access
