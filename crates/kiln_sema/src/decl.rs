@@ -9289,6 +9289,7 @@ impl Sema<'_, '_> {
             func: self.func.take(),
             pushed,
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            this_watch: std::mem::take(&mut self.this_watch),
             contract_ctx: std::mem::take(&mut self.contract_ctx),
         });
         let mut fs = Scope::new(ScopeKind::Function, None);
@@ -9454,6 +9455,7 @@ impl Sema<'_, '_> {
             }
             self.func = saved.func;
             self.nsdmi_this = saved.nsdmi_this;
+            self.this_watch = saved.this_watch;
             self.contract_ctx = saved.contract_ctx;
         }
         self.ctx = self

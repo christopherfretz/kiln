@@ -4570,6 +4570,16 @@ specification as written (`TypeNames` prints ` noexcept`,
   requires-clause (clang `checkThisInStaticMemberFunctionType`). In a
   class template the substitution of the declaration's signature
   (`subst::function_sig`) watches again and reports per instantiation.
+  The watch judges that declarator only (WP-1723): an instantiation
+  context (`in_inst_context`: a class's members, a function's body), a
+  nested function definition (`SavedFn`), another signature substituted
+  by `function_sig` (a non-static member's is not watched) and a
+  signature substituted for deduction (`function_spec_signature`) set it
+  aside and restore it, so a class template instantiated from a static
+  member function's trailing return type, whose non-static members name
+  data members implicitly, is no error there, while the static
+  declarator's own later implicit `this` still is
+  (`expr.prim.this/static-member-declarator-nested-instantiation*.cpp`).
   When a static member function template's signature is substituted for
   deduction, no `this` is formed, so a dependent call naming a
   non-static member without an object is a deduction failure (`call to non-static member function
