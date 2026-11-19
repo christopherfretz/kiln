@@ -23,6 +23,14 @@ use crate::module::Cg;
 
 const PTR: &str = "DW_TAG_pointer_type";
 
+/// The longest debug name of a template specialization spelled with its
+/// template arguments (spec/codegen.md "Bounded template names", WP-1710).
+/// A longer name is the template's simple name, the identifier alone (as
+/// clang's `-gsimple-template-names` emits it), and the node keeps its
+/// `templateParams`. Only names exponential in their argument nesting
+/// reach it: the longest names of a libc++-heavy unit are a few KiB.
+pub(crate) const DI_NAME_LIMIT: usize = 64 * 1024;
+
 impl<'a> Cg<'a> {
     fn di_cu(&self) -> MetadataId {
         self.di.as_deref().map_or_else(|| super::unreachable_md(), |d| d.cu)
@@ -339,7 +347,11 @@ impl<'a> Cg<'a> {
             return base;
         }
         let mut n = self.di_ident(td);
-        write_arg_list_debug_written(&ast.types, &self.di_names(), args, &mut n);
+        let simple = n.len();
+        if !write_arg_list_debug_written(&ast.types, &self.di_names(), args, DI_NAME_LIMIT, &mut n)
+        {
+            n.truncate(simple);
+        }
         let loc = ast.decls.get(alias).loc();
         let (file, line) = (self.di_file(loc), self.di_line(loc));
         let scope = self.di_scope_nocu(td);
@@ -694,14 +706,19 @@ impl<'a> Cg<'a> {
     /// the debug-information printing policy ([`AstNames::for_debug_info`]:
     /// split closers, canonical types, inline namespaces kept, enumeration
     /// values as casts).
+    ///
+    /// A name longer than [`DI_NAME_LIMIT`] is the identifier alone.
     fn di_class_name(&self, rd: DeclId) -> String {
         let ast = self.ast;
         let mut s = self.di_ident(rd);
         if ast.spec_print_args(rd).is_some()
             && let Some((_, si)) = ast.spec_info(rd)
         {
+            let simple = s.len();
             let l = ast.types.canonical_args(si.args);
-            write_arg_list_debug(&ast.types, &self.di_names(), l, &mut s);
+            if !write_arg_list_debug(&ast.types, &self.di_names(), l, DI_NAME_LIMIT, &mut s) {
+                s.truncate(simple);
+            }
         }
         s
     }
@@ -1191,6 +1208,9 @@ impl<'a> Cg<'a> {
 
     /// clang `getFunctionName`: the name with the template arguments of
     /// a function template specialization.
+    ///
+    /// A name longer than [`DI_NAME_LIMIT`] is the name without its
+    /// arguments (spec/codegen.md "Bounded template names").
     pub(crate) fn di_fn_name(&self, f: DeclId) -> String {
         let ast = self.ast;
         let names = self.di_names();
@@ -1199,7 +1219,10 @@ impl<'a> Cg<'a> {
         if let Some((_, si)) = ast.spec_info(f)
             && ast.decls.get(f).kind() != DeclKind::CXXRecord
         {
-            write_arg_list_debug(&ast.types, &names, si.args, &mut s);
+            let simple = s.len();
+            if !write_arg_list_debug(&ast.types, &names, si.args, DI_NAME_LIMIT, &mut s) {
+                s.truncate(simple);
+            }
         }
         s
     }

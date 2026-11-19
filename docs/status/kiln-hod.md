@@ -38,11 +38,14 @@ tests/stress), the pre-`opt` modules newly in process. `debug:invalid`
 (4 jobs in tests/codegen) is gone: it was the asm-labelled destructor of
 WP-1709. Not bridged: `const:splat` (12) and a scalable `alloca` (2).
 Not compiled: tests that do not compile to an object (1320 in
-tests/conformance, 156 in tests/codegen, 40 in tests/stress) and 4 jobs
-that hit the memory cap on both routes: `tests/stress/linkage-pack-dag-36x17.cpp`
-and `tests/stress/linkage-type-dag-10x10.cpp` with `-g` (a runaway `-g`
-compile in the front end, the same on the stock route; clang 22 runs
-away too).
+tests/conformance, 156 in tests/codegen, 40 in tests/stress) and, at
+WP-1562, 4 jobs that hit the memory cap on both routes:
+`tests/stress/linkage-pack-dag-36x17.cpp` and
+`tests/stress/linkage-type-dag-10x10.cpp` with `-g` (a runaway `-g`
+compile in the front end, the same on the stock route). Since WP-1710
+(spec/codegen.md "Bounded template names") both compile with `-g` and
+compare equal: tests/stress at WP-1710 is 120 jobs, 80 modules compared,
+80 equal, none at the memory cap.
 
 `sweep --dual` (with and without `-g`): tests/codegen 5036 jobs (4174
 taken in process with the same bytes, 232 declined alike), tests/conformance

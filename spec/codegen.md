@@ -1674,6 +1674,29 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   `templateParams` and substituted types from the canonical arguments,
   and one artificial variable per member of a block-scope anonymous
   union (WP-1400, spec/landed/codegen/WP-1400.md);
+- **Bounded template names** (WP-1710): such a name (a class's
+  `DICompositeType`, a function template specialization's
+  `DISubprogram`, an alias template's `DW_TAG_typedef`) is spelled with
+  its template arguments only while it is at most 65536 bytes
+  (`DI_NAME_LIMIT`, `debuginfo/types.rs`). A longer name is the template's
+  name alone, the identifier as clang's `-gsimple-template-names` spells
+  it (`Foo`, `ignore`), and the node is otherwise unchanged: its
+  `templateParams` (shared nodes, one per distinct argument type),
+  `identifier:` and `linkageName:` (Itanium-mangled, so linear in the
+  number of distinct types) still describe the arguments. Only a name
+  exponential in its argument nesting reaches the limit: a class template
+  whose arguments repeat a specialization of it (`Foo<A, A, ...>` with
+  `A = Foo<B, B, ...>`) doubles in length per level for two arguments,
+  and `tests/stress/linkage-pack-dag-36x17-g.cpp` would spell about 1.8e27
+  bytes. The longest names of libc++-heavy units are under 2 KiB
+  (1580 bytes in libc++'s `range.split/general.pass.cpp`), so no real
+  program changes, byte for byte. The printer stops once its output passes
+  the limit (`write_arg_list_debug`, checked per template argument), so a
+  name costs O(limit) whatever its full length. A debugger shows the
+  simple name: lldb rebuilds `Foo<Foo, Foo, ...>` from the template
+  parameters one level deep, gdb's `whatis` prints the variable's typedef
+  (`Q`); gdb 16's `ptype` of such a type crashes, on clang's
+  `-gsimple-template-names` output for it too;
 - a template value argument in a name is spelled as clang's
   `TemplateArgument::print` / `APValue::printPretty` spell it, the same
   in diagnostics and `__PRETTY_FUNCTION__` (spec/ast.md §9.3): only the

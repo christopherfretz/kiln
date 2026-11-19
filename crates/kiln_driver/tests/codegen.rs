@@ -3020,3 +3020,62 @@ fn gcc_only_builtins_codegen() {
         assert!(s.contains(&format!("\t{perm}\t")), "{t}: {perm}\n{s}");
     }
 }
+
+/// WP-1710 (spec/codegen.md "Bounded template names"): a specialization's
+/// debug name spelled with its template arguments is kept up to 65536
+/// bytes; one byte more and the class (`DICompositeType`) and function
+/// template specialization (`DISubprogram`) are named by the template's
+/// name alone, their `templateParams` intact. The names here are exactly
+/// 65536 and 65537 bytes: `V<7, ..., 7>` with 21845 arguments is
+/// 3 * 21845 + 1 bytes; a last argument `77` adds one.
+#[test]
+fn debug_template_name_bound() {
+    const N: usize = 21845;
+    let d = scratch("dbgname");
+    let ir = |last: &str| {
+        let args = format!("{}{last}", "7, ".repeat(N - 1));
+        let src = format!(
+            "template <int... N> struct V {{}};\nV<{args}> v;\n\
+             template <int... N> int g() {{ return 0; }}\nint main() {{ return g<{args}>(); }}\n"
+        );
+        std::fs::write(d.join("n.cpp"), src).unwrap();
+        let o = kiln_in(&d, &["-std=c++26", "-g", "-S", "-emit-llvm", "-o", "-", "n.cpp"]);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{last}");
+        text(&o.stdout)
+    };
+    // The node named `name` of kind `kind`, and its pack's element count.
+    let find = |ir: &str, kind: &str, name: &str| -> usize {
+        let line = ir
+            .lines()
+            .find(|l| l.contains(kind) && l.contains(&format!("name: \"{name}\"")))
+            .unwrap_or_else(|| panic!("no {kind} named {name:.20}..."));
+        let def = |id: &str| {
+            let p = format!("{id} = ");
+            ir.lines().find_map(|l| l.strip_prefix(&p)).unwrap_or_else(|| panic!("no {id}"))
+        };
+        let field = |l: &str, f: &str| {
+            let at = l.find(&format!("{f}: !")).unwrap_or_else(|| panic!("no {f}: in {l:.80}"));
+            l[at + f.len() + 2..].split([',', ')']).next().unwrap().to_owned()
+        };
+        // templateParams: !{pack}; the pack's value: !{N elements}.
+        let tp = def(&field(line, "templateParams"));
+        let pack = def(tp.trim_start_matches("!{").trim_end_matches('}'));
+        assert!(pack.contains("DW_TAG_GNU_template_parameter_pack"), "{pack}");
+        def(&field(pack, "value")).matches('!').count() - 1
+    };
+    for (last, over) in [("7", false), ("77", true)] {
+        let ir = ir(last);
+        let args = format!("{}{last}", "7, ".repeat(N - 1));
+        let (v, g) = if over {
+            ("V".to_owned(), "g".to_owned())
+        } else {
+            (format!("V<{args}>"), format!("g<{args}>"))
+        };
+        assert_eq!(3 + args.len(), 65536 + usize::from(over));
+        assert_eq!(find(&ir, "DICompositeType", &v), N, "V, over={over}");
+        assert_eq!(find(&ir, "DISubprogram", &g), N, "g, over={over}");
+        // The other spelling is absent.
+        assert_eq!(ir.contains("name: \"V\""), over);
+        assert_eq!(ir.contains("name: \"g\""), over);
+    }
+}
