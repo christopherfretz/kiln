@@ -342,6 +342,13 @@ gate results will be in `docs/status/release-1.3.0.md`.
   so the program links again (EnTT's `reactive_mixin`); a default of a
   namespace-scope template naming a member of a class template
   specialization links too.
+- Access (WP-1726, a regression since 1.2.1): explicit template
+  arguments given to a template declared in a local scope (a generic
+  lambda's `operator()<I>`) no longer leave that template as the access
+  context for the rest of the translation unit, which rejected a class's
+  own members' bodies naming its private members and accepted private
+  accesses that only the lambda had: glaze's JSON and YAML tests build
+  again.
 - Concepts (WP-1716, a regression since 1.2.1): a nested requirement
   naming a local parameter of its requires-expression whose substitution
   fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type
