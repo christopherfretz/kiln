@@ -750,6 +750,17 @@ impl Sema<'_, '_> {
                     NonOdrUse::None,
                     ExprFlags::NONE,
                 );
+                // The member function is odr-used as the expression names
+                // it ([basic.def.odr]/4; clang builds it with
+                // `BuildDeclarationNameExpr`, which marks it referenced),
+                // so a member of a class template specialization is
+                // instantiated ([temp.inst]/5). Its argument may come from
+                // a default template argument formed in a template head,
+                // where nothing is odr-used (`template<auto C =
+                // &X<T>::f>`, WP-1724).
+                if self.kind_of(member).is_function() {
+                    self.mark_function_referenced(member, loc);
+                }
                 let mp = self.ast.types.member_pointer(declared, class_ty);
                 let a =
                     self.builder().unary(UnaryOp::AddrOf, r, mp, loc, ExprFlags::CANNOT_OVERFLOW);

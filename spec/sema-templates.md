@@ -6234,6 +6234,15 @@ The `SpecKind` transitions are those of §4.5.
   names match clang's (`XadL_ZN1S1vEE`, `mcM1BiadL_ZN1D1dEE`;
   `tests/codegen/nttp_member_pointer.cpp`,
   `tests/conformance/temp.arg.nontype/member-pointer-argument-value.cpp`).
+  A member function so named is odr-used (`mark_function_referenced`, as
+  the pointer case's `build_decl_ref` and clang's
+  `BuildDeclarationNameExpr` do), so a member of a class template
+  specialization is instantiated ([temp.inst]/5): the argument may come
+  from a default template argument formed in a template head, where
+  nothing is odr-used (`template <auto C = &X<T>::f>` of a member
+  template, whose redeclared default is in a dependent context since
+  WP-1497, or of a namespace-scope template; WP-1724,
+  `tests/conformance/temp.inst/member-pointer-default-template-arg-run.cpp`).
   `&C::m` of exactly the parameter's type while `C` is still being
   defined (boost.intrusive's `member_hook<C, H, &C::hook>` in `C`'s own
   body) is converted without the Oven, which has no layout for `C` yet:
