@@ -122,7 +122,7 @@ macro_rules! sema_fields {
     ($mac:ident) => {
         $mac! {
             state: [layout_cache, pragma_packs, sections, no_sanitize_not_global,
-                attr_spellings, traits, exc_disabled_seen, exc_disabled_pattern,
+                attr_spellings, traits, reverted_traits, exc_disabled_seen, exc_disabled_pattern,
                 consteval_only_pattern, consteval_only_inits, immediate_vars, early_odr_uses,
                 default_leaves, call_recovery, nns_start, no_builtin_pending, redecl_index,
                 explicit_memo, glibc_float128_alias, cfg_out, inferred_noreturn,

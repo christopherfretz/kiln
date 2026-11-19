@@ -2136,6 +2136,10 @@ patterns (S4, below); other templates still fall back.
   partition) that imports nothing;
 - it has no global module fragment (no declaration from a real file
   before `module`) and no private module fragment;
+- it reverted no trait keyword to an identifier (`struct __is_void`,
+  spec/parse.md §1 "Trait keywords"): the image does not carry the
+  revert, which an importer must see as in clang 22, so such a unit is
+  replayed ("a trait keyword reverted to an identifier"; WP-1721);
 - every purview declaration that is not a local or a parameter is one
   of the following:
   - a named, non-inline namespace;

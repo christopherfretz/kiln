@@ -342,6 +342,12 @@ gate results will be in `docs/status/release-1.3.0.md`.
   argument does, instead of "non-type template argument is not a constant
   expression".
 
+- Precompiled headers (WP-1721, a regression since 1.2.1): a trait
+  keyword the header turned into an identifier (`struct __is_arithmetic`
+  in libstdc++) stays one in the file that includes the PCH, so
+  `<cmath>` after a PCH of `<iostream>` compiles again instead of
+  "expected expression".
+
 - Debug information (WP-1710): `-g` stays bounded on class templates
   whose arguments repeat a specialization of the same template, whose
   names grow exponentially with the nesting (36^17 argument paths

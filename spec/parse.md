@@ -168,8 +168,20 @@ trait name followed by `(` is always the trait. Otherwise
 - `__builtin_is_structural`, `__is_invocable`, `__is_nothrow_invocable`
   and `__is_nullptr` (`keywords::NON_KEYWORD_TRAITS`), and the type transforms
   (`__remove_cv`, ...), stay identifiers unless followed by `(`.
-`Parser::ident_of` is the one check (`Keywords::is_ident`). Test:
-`lex.key/trait-keywords.cpp`.
+`Parser::ident_of` is the one check (`Keywords::is_ident`). A revert is
+also recorded in `Sema::reverted_traits`, which a snapshot writes, so a
+translation unit continued from a PCH snapshot keeps the prefix's reverts
+(`Parser::new` re-applies them), as clang keeps
+`hasRevertedTokenIDToIdentifier` per identifier in its AST file (WP-1721).
+clang 22's module files keep them too: after `import m;` of an interface
+with `export struct __is_void {};`, `__is_void v;` declares a variable
+(except as the very first token after the import, which clang lexes
+before it loads the module). kiln parses an imported unit with the
+importer's parser (spec/modules.md §1, §11.2), so a replayed unit's
+reverts reach the importer; a unit that reverted one writes no
+declaration image (spec/modules.md §11.11 "Part 2a"), so it is always
+replayed. Tests:
+`lex.key/trait-keywords.cpp`, `lex.key/trait-keywords-pch.cpp`.
 
 Tests: `tests/c/lex/`, `tests/c/parse/`, `tests/c/expr/builtin-types-compatible*.c`.
 
@@ -196,7 +208,10 @@ end-of-translation-unit work.
   parser over `pp` (its main file entered) continues `sema` to the end,
   end-of-TU work included, and finishes as `parse_preprocessed` does.
 - No field of `Parser` is state (the table at `Parser::snapshot_ready`):
-  the consumer builds a new parser over its own token source.
+  the consumer builds a new parser over its own token source. The one
+  piece of parser configuration a prefix changes, the trait keywords it
+  reverted, has its written copy in `Sema::reverted_traits` ("Trait
+  keywords" above; WP-1721).
 - Nothing in the driver calls either entry point yet (WP-1383).
 
 Tests: `crates/kiln_parse/tests/snap.rs`.

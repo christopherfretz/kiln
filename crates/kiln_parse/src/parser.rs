@@ -367,6 +367,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 kw.remove(s.ast.symbols(), k);
             }
         }
+        // A restored snapshot's reverted trait keywords stay identifiers
+        // (WP-1721).
+        for &t in &s.reverted_traits {
+            kw.revert_trait(t);
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
@@ -461,7 +466,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `s` | owned root | [`Sema`], written by its own root |
     /// | `sm` | reference | the consumer's source manager |
     /// | `src` | rebuilt | the consumer's token source over its preprocessor |
-    /// | `kw`, `lex_opts`, `lit_opts`, `std` | configuration | from the options and the interner ([`Parser::new`]) |
+    /// | `kw` | configuration | from the options and the interner ([`Parser::new`]), less the trait keywords reverted so far, whose written copy is [`Sema::reverted_traits`] |
+    /// | `lex_opts`, `lit_opts`, `std` | configuration | from the options and the interner ([`Parser::new`]) |
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
@@ -896,6 +902,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             .arg(self.spelling_of(&self.tok()));
         self.emit(d);
         self.kw.revert_trait(s);
+        self.s.reverted_traits.push(s);
     }
 
     /// The identifier (not a keyword) `t` is.

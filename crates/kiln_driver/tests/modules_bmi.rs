@@ -629,6 +629,32 @@ fn kind2_declaration_image() {
     assert_eq!(o.code, 1, "replaying a blank source fails: {}", o.stderr);
 }
 
+/// A unit that reverts a trait keyword (`struct __is_void`, spec/parse.md
+/// §1 "Trait keywords") writes no declaration image, so its importers
+/// replay it and see the name as an identifier, as clang 22's do
+/// (WP-1721).
+#[test]
+fn kind2_declaration_image_reverted_trait() {
+    let d = scratch("image-reverted-trait");
+    std::fs::write(d.join("rt.cppm"), "export module rt;\nexport struct __is_void { int x; };\n")
+        .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import rt;\nint first;\n__is_void v{1};\nstatic_assert(__is_void(void));\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "rt.cppm", "-o", "rt.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("(no declaration image: a trait keyword reverted to an identifier)"),
+        "{}",
+        o.stderr
+    );
+    // Replayed: no image, so no note.
+    let notes = image_notes(&d, &["-fsyntax-only", "-fmodule-file=rt=rt.pcm", "u.cpp"]);
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
 /// Stage S2 (§11.11 "Part 2a", WP-1064): inline, constexpr and consteval
 /// bodies and variable initializers come from the image alone. With the
 /// unit's source blanked in the capsule, an importer still evaluates
