@@ -8,9 +8,30 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
-Planned as 1.3.0.
+## [1.3.0] - 2026-11-18
+
+A feature release with the fixes made since 1.2.1. New: an experimental
+`kiln++` with the hod back end linked in (`kiln_hod/`, in-process
+`-fkiln-backend=hod`); ODR metadata for linkers, `-fmason-metadata`
+(section `.mason.meta`, definition hash scheme `kiln-odr-1`); GCC's C++
+testsuite through `cargo xtask gxx-dg`, passing 88.8% of the decided cases
+on both hosts; and the release gate as one resumable command,
+`cargo xtask release-gate`, that writes a checked record. Some fixes
+change behaviour on purpose, following the standard's text and, where
+the text leaves room, GCC or clang 22: exposures of TU-local entities
+are errors (WP-1677), a non-dependent `^^typename S::T` reflects the type
+(WP-1673), iobj/xobj partial ordering accepts the calls both compilers
+accept (WP-1670), and a constexpr local whose value points into itself
+stays accepted at C++26 (WP-1680; docs/status/deviations.md). Nothing
+in it changes what [docs/STABILITY.md](docs/STABILITY.md) promises. The
+gate results will be in `docs/status/release-1.3.0.md`.
 
 ### Added
+
+- `cargo xtask release-gate plan|run|control|import-x86|record|check`
+  (WP-1219; docs/RELEASING.md, spec/harness.md "Release gate"): the
+  release gate as one resumable command whose record page is written and
+  checked by the command, not by hand.
 
 - Experimental: a `kiln++` with the hod back end linked in (WP-1703;
   `kiln_hod/`, a separate workspace, so the stock build and its lock are
