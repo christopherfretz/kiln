@@ -46,7 +46,8 @@ struct SavedState {
     deferred_call_refs: Vec<(kiln_ast::ExprId, DeclId)>,
     cleanup: crate::class::CleanupState,
     extend_collector: Option<Vec<kiln_ast::ExprId>>,
-    nsdmi_this: Vec<(DeclId, QualType)>,
+    /// `nsdmi_this` and `this_watch` ([`Sema::take_this_state`]).
+    this_state: (Vec<(DeclId, QualType)>, crate::class::ThisWatch),
     contract_ctx: Vec<crate::contracts::ContractCtx>,
     initializing: Option<DeclId>,
     heads: Vec<super::HeadBuild>,
@@ -105,7 +106,7 @@ impl Sema<'_, '_> {
             deferred_call_refs: std::mem::take(&mut self.deferred_call_refs),
             cleanup: std::mem::take(&mut self.cleanup),
             extend_collector: self.extend_collector.take(),
-            nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            this_state: self.take_this_state(),
             contract_ctx: std::mem::take(&mut self.contract_ctx),
             initializing: self.initializing.take(),
             heads: std::mem::take(&mut self.templ.heads),
@@ -172,7 +173,7 @@ impl Sema<'_, '_> {
         self.cleanup = saved.cleanup;
         self.extend_collector = saved.extend_collector;
         self.range_for_outer_depth = outer_depth;
-        self.nsdmi_this = saved.nsdmi_this;
+        (self.nsdmi_this, self.this_watch) = saved.this_state;
         self.contract_ctx = saved.contract_ctx;
         self.initializing = saved.initializing;
         self.templ.heads = saved.heads;

@@ -983,6 +983,7 @@ impl Sema<'_, '_> {
             func: self.func.take(),
             pushed: 0,
             nsdmi_this: Vec::new(),
+            this_watch: crate::class::ThisWatch::Off,
             contract_ctx: Vec::new(),
         });
         let mut fs = Scope::new(ScopeKind::Function, None);

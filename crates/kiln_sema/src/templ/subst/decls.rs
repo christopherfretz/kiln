@@ -694,9 +694,16 @@ impl Substituter<'_, '_, '_> {
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         // A static member function's substituted declaration may not use
         // `this` either ([expr.prim.this]/3): reported per instantiation,
-        // as clang's `checkThisInStaticMemberFunctionType` (WP-1572).
-        let watch =
-            (this && self.sema.is_static_method(d)).then(|| self.sema.act_on_start_this_watch());
+        // as clang's `checkThisInStaticMemberFunctionType` (WP-1572). The
+        // watch is this declaration's own: a non-static member's signature
+        // substituted while an enclosing static one's is (a class
+        // template instantiated from its trailing return type) is not
+        // watched (WP-1723).
+        let watch = if this && self.sema.is_static_method(d) {
+            self.sema.act_on_start_this_watch()
+        } else {
+            std::mem::take(&mut self.sema.this_watch)
+        };
         let sig = params.and_then(|params| {
             let ret = match early_ret {
                 Some(r) => r?,
@@ -718,8 +725,7 @@ impl Substituter<'_, '_, '_> {
             };
             Ok((params, ret, exc))
         });
-        if let Some(w) = watch
-            && let Some((at, implicit)) = self.sema.act_on_end_this_watch(w)
+        if let Some((at, implicit)) = self.sema.act_on_end_this_watch(watch)
             && sig.is_ok()
         {
             self.sema.report_this_in_static_declarator(at, implicit);
@@ -1069,6 +1075,10 @@ impl Substituter<'_, '_, '_> {
         let method =
             self.sema.kind_of(pat) == DeclKind::CXXMethod && !self.sema.is_static_method(pat);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
+        // Deduction for a call in a static member function's declarator
+        // substitutes another function's signature: its `this` is not the
+        // watched declarator's (WP-1723).
+        let watch = std::mem::take(&mut self.sema.this_watch);
         let sig = params.and_then(|params| {
             let ret = match leading_ret {
                 Some(r) => r,
@@ -1102,6 +1112,7 @@ impl Substituter<'_, '_, '_> {
             Ok((params, ret, exc))
         });
         self.sema.act_on_end_this_scope(this);
+        self.sema.this_watch = watch;
         // A pattern whose specification waits (a member template's
         // redeclared pattern, or one awaiting its complete-class context):
         // so does the specialization's ([`Sema::defer_spec_exception_spec`]).

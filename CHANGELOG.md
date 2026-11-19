@@ -329,6 +329,13 @@ gate results will be in `docs/status/release-1.3.0.md`.
   decltype(f(0));`) may look into that class from its trailing return
   type again, also a static one (`decltype(declval<U const&>().m())` with
   `U` the class): Boost.Beast's `is_fields` check passes again.
+- Templates (WP-1723, a regression since 1.2.1): a class template
+  instantiated from a static member function's trailing return type no
+  longer gets "'this' cannot be implicitly used in a static member
+  function declaration" for its own non-static members' implicit `this`
+  (a non-static member template's trailing return type naming a data
+  member): Boost.LexicalCast, and with it Boost.ProgramOptions and
+  Boost.DateTime, build again.
 - Concepts (WP-1716, a regression since 1.2.1): a nested requirement
   naming a local parameter of its requires-expression whose substitution
   fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type

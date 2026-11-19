@@ -124,12 +124,14 @@ pub struct ClassBuild {
 /// A function definition also sets aside the default member initializers
 /// and contract predicates it is nested in (a local class's member
 /// function in a lambda there): its `this` is its own, not theirs
-/// ([expr.prim.this]/2-3); a lambda keeps them.
+/// ([expr.prim.this]/2-3), and so is a watch for `this` in a static member
+/// function's declarator (WP-1723); a lambda keeps them.
 #[derive(Debug)]
 pub(crate) struct SavedFn {
     pub(crate) func: Option<crate::stmt::FnState>,
     pub(crate) pushed: usize,
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
+    pub(crate) this_watch: ThisWatch,
     pub(crate) contract_ctx: Vec<crate::contracts::ContractCtx>,
 }
 
@@ -459,6 +461,15 @@ impl Sema<'_, '_> {
             ThisWatch::On(used) => used,
             ThisWatch::Off => None,
         }
+    }
+
+    /// Takes the `this` scopes of default member initializers and
+    /// declarators and the watch for `this` for an instantiation context:
+    /// a static member function's declarator watched for `this`
+    /// ([expr.prim.this]/3) does not see the uses in what it instantiates,
+    /// a class's members or a function's body (WP-1723).
+    pub(crate) fn take_this_state(&mut self) -> (Vec<(DeclId, QualType)>, ThisWatch) {
+        (std::mem::take(&mut self.nsdmi_this), std::mem::take(&mut self.this_watch))
     }
 
     /// Records a use of `this` at `loc` for an active watch.
