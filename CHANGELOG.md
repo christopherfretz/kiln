@@ -31,7 +31,8 @@ gate results will be in `docs/status/release-1.3.0.md`.
 - `cargo xtask release-gate plan|run|control|import-x86|record|check`
   (WP-1219; docs/RELEASING.md, spec/harness.md "Release gate"): the
   release gate as one resumable command whose record page is written and
-  checked by the command, not by hand.
+  checked by the command, not by hand. The hosted OSS rows are compared
+  with the oss.md counts capped at the same run's clang control (WP-1718).
 
 - Experimental: a `kiln++` with the hod back end linked in (WP-1703;
   `kiln_hod/`, a separate workspace, so the stock build and its lock are
