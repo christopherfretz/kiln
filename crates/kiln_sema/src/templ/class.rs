@@ -83,6 +83,7 @@ impl Sema<'_, '_> {
     /// or a class), with the parse state of the point of instantiation
     /// set aside ([temp.point]: names are looked up from the template's
     /// definition, not from where the instantiation was required).
+    #[allow(clippy::too_many_lines, reason = "one save and one restore per piece of parse state")]
     pub(crate) fn in_inst_context<R>(&mut self, ctx: DeclId, f: impl FnOnce(&mut Self) -> R) -> R {
         let tu_dirs = self.scopes.first().map(|s| s.using_dirs.clone()).unwrap_or_default();
         let outer_depth = self.range_for_outer_depth;
