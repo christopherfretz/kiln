@@ -58,6 +58,9 @@ struct SavedState {
     dependent_depth: u32,
     friend_tag: Option<DeclId>,
     member_refs: kiln_source::fx::FxHashMap<kiln_ast::ExprId, crate::class::MemberRef>,
+    /// The operand of a unary `&` being analysed ([`Sema::address_operand`]):
+    /// a name in the instantiated declaration is not that operand (WP-1727).
+    address_operand: bool,
 }
 
 impl Sema<'_, '_> {
@@ -117,6 +120,7 @@ impl Sema<'_, '_> {
             dependent_depth: std::mem::take(&mut self.ast.templates.dependent_depth),
             friend_tag: self.friend_tag.take(),
             member_refs: std::mem::take(&mut self.member_refs),
+            address_operand: std::mem::take(&mut self.address_operand),
         };
         let mut tu = Scope::new(ScopeKind::TranslationUnit, Some(self.ast.tu));
         tu.using_dirs = tu_dirs;
@@ -183,6 +187,7 @@ impl Sema<'_, '_> {
         self.templ.req_ctx = saved.req_ctx;
         self.ast.templates.dependent_depth = saved.dependent_depth;
         self.friend_tag = saved.friend_tag;
+        self.address_operand = saved.address_operand;
         // The outer full-expression's pending names ([`Sema::flush_member_refs`])
         // are not the instantiation's to flush; any it left pending stay so.
         let inner = std::mem::replace(&mut self.member_refs, saved.member_refs);
