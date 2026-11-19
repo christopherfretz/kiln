@@ -1647,7 +1647,7 @@ GB, and its dependencies:
 | `torture-gnu23`, `torture-gnu17` | local | `cargo xtask gcc-torture`: kiln's pass count not below the stored baseline | 7000 cases |
 | `gxx-dg-aarch64`, `gxx-dg-x86_64` | local, hosted | by case against `docs/status/gxx-dg-baseline.txt` (below) | 50000 cases |
 | `oss-<project>` | local | one per row of `scripts/oss/projects.toml`, the LLVM rows included: `report.json`'s TUs ok and tests passed not below the row's `docs/status/oss.md` section (kiln column) | 1 TU |
-| `oss-x86_64` | hosted | every `sweep = true` row reported, each at its oss.md baseline | the sweep rows |
+| `oss-x86_64` | hosted | every `sweep = true` row reported, each at its oss.md baseline, each count capped at what the same run's clang control reached on that host (a project can build fewer translation units on x86-64 than on the development host; WP-1718) | the sweep rows |
 | `external-<id>` | local | `--external <id>=<command>`: exit 0; the command's last line is the step's result and holds `units=<n>` | 1 |
 
 A step that ran fewer units than its minimum FAILS whatever its exit

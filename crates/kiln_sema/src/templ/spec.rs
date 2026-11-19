@@ -447,10 +447,14 @@ impl Sema<'_, '_> {
     /// `CheckExplicitInstantiationScope` recovers. A class or block
     /// scope is rejected by the parser. In C++98 the same rule applies
     /// (WP-1692): C++03 [temp.explicit]/5 asked for the template's own
-    /// namespace, and DR 275 relaxed it to the C++11 rule; GCC 16.1
-    /// rejects exactly these cases in C++98, where clang 22 gives its
+    /// namespace, and DR 275 relaxed it to the C++11 rule. GCC 16.1
+    /// rejects the cases outside an enclosing namespace in C++98 too, but
+    /// accepts an unqualified name found in an enclosing namespace through
+    /// a using-declaration or using-directive (a pedantic error only from
+    /// C++11, g++.dg/cpp0x/explicit-inst1.C); clang 22 gives its
     /// off-by-default `-Wc++11-compat` warnings
-    /// (`warn_explicit_instantiation_*_0x`) instead.
+    /// (`warn_explicit_instantiation_*_0x`) for all of them. kiln follows
+    /// the text in both cases (docs/status/deviations.md).
     pub(crate) fn check_explicit_inst_scope(
         &mut self,
         pattern: DeclId,

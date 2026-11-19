@@ -264,7 +264,8 @@ fn defs() -> Vec<Def> {
             "oss",
             "every `sweep = true` row's kiln report.json",
             "every sweep row reported, each at its \
-           docs/status/oss.md baseline (TUs ok and tests passed not below)",
+           docs/status/oss.md baseline (TUs ok and tests passed not below), each \
+           count capped at the same run's clang control",
             1,
             1,
             240,
@@ -502,6 +503,25 @@ pub fn oss_baseline(oss_md: &str, project: &str) -> Option<(Option<u64>, Option<
         }
     }
     Some((tus, tests))
+}
+
+/// A hosted (x86-64) row's baseline: the oss.md kiln column, each count
+/// capped at what the same sweep's clang control reached on that host.
+/// The oss.md numbers are the development host's (aarch64), and a project
+/// can build fewer translation units on another architecture (opencv's
+/// CPU-dispatch sources: 635 on aarch64, 537 on x86-64 under both
+/// compilers); a count above clang's on the same host is no regression.
+pub fn oss_baseline_capped(
+    base: Option<(Option<u64>, Option<u64>)>,
+    control: Option<&Measured>,
+) -> Option<(Option<u64>, Option<u64>)> {
+    let (tus, tests) = base?;
+    let Some(c) = control else { return Some((tus, tests)) };
+    let cap = |want: Option<u64>, key: &str| match (want, c.count(key)) {
+        (Some(w), Some(got)) => Some(w.min(got)),
+        (w, _) => w,
+    };
+    Some((cap(tus, "tus_ok"), cap(tests, "tests_passed")))
 }
 
 /// The OSS pass rule against a baseline.

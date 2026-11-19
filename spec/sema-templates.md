@@ -7166,6 +7166,14 @@ whose head the notes name. It evaluates:
     atom ([expr.prim.req.nested]/1, `Sema::sat_nested_requirement`;
     clang 22 and GCC 16.1 agree). WP-1531,
     `temp.constr.normal/concept-id-default-argument-substitution-failure{,-reject}.cpp`.
+    Those atoms are substituted with the requires-expression's local
+    parameters mapped to their substituted copies, as the whole
+    requirement was (`ConceptState::nested_locals`, seeded by
+    `constraint_subst` for the requires-expression's body): `requires
+    !C<decltype(t.begin())>;` in `requires(T& t)` for a `T` without
+    `begin` is then a failed substitution (unsatisfied), not an atom left
+    naming the pattern's dependent `t` (WP-1716, a regression since 1.2.1;
+    `expr.prim.req.nested/p1-local-parameter-{substitution-failure,default-argument}.cpp`).
     The first failure is the
     "substituted constraint expression is ill-formed" note. Tests:
     `temp.constr.normal/concept-id-unused-argument-substitution-failure.cpp`,

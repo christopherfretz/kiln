@@ -260,7 +260,14 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.has_errors_in(c) {
             return Err(());
         }
+        // An odr-use of a by-copy capture here reads the captured
+        // variable, as in a scalar argument (`templ/args.rs`, WP-1622):
+        // `I<v[K]>` with `operator[]` returning a reference into a
+        // `constexpr` local of class type, in a generic lambda's body
+        // (WP-1717; clang 22 and GCC 16.1 accept).
+        let outer = std::mem::replace(&mut self.capture_reads_variable, true);
         let c = self.act_on_constant_full_expr(c);
+        self.capture_reads_variable = outer;
         match self.eval_const(c, EvalContext::converted(at)) {
             // [temp.arg.nontype]/6 for each pointer and reference
             // subobject of the value.

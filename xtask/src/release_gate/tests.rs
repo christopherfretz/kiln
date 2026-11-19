@@ -260,6 +260,30 @@ fn readers_and_rules() {
     .unwrap();
     manifest::oss_verdict(&mut r, manifest::oss_baseline(md, "glaze"));
     assert!(!r.pass && r.detail.contains("tests_passed 99 < baseline 100"));
+    // WP-1718: a hosted row's baseline is capped at the same run's clang
+    // control (opencv builds fewer TUs on x86-64 than on aarch64).
+    let clang = manifest::read_oss_report(
+        r#"{"tus": {"ok": 80, "total": 80}, "tests": {"passed": 100, "total": 102}}"#,
+    )
+    .unwrap();
+    let capped = manifest::oss_baseline_capped(manifest::oss_baseline(md, "glaze"), Some(&clang));
+    assert_eq!(capped, Some((Some(80), Some(100))));
+    let mut x86 = manifest::read_oss_report(
+        r#"{"tus": {"ok": 80, "total": 80}, "tests": {"passed": 100, "total": 102}}"#,
+    )
+    .unwrap();
+    manifest::oss_verdict(&mut x86, capped);
+    assert!(x86.pass, "{}", x86.detail);
+    let mut low = manifest::read_oss_report(
+        r#"{"tus": {"ok": 6, "total": 80}, "tests": {"passed": 11, "total": 102}}"#,
+    )
+    .unwrap();
+    manifest::oss_verdict(&mut low, capped);
+    assert!(!low.pass && low.detail.contains("tus_ok 6 < baseline 80"), "{}", low.detail);
+    assert_eq!(
+        manifest::oss_baseline_capped(manifest::oss_baseline(md, "glaze"), None),
+        Some((Some(87), Some(100)))
+    );
     assert_eq!(record::utc(0), "1970-01-01 00:00 UTC");
     assert_eq!(record::utc(1_763_424_000), "2025-11-18 00:00 UTC");
     let rec = done("x", C1, true);

@@ -853,7 +853,12 @@ fn import_x86(g: &Gate, dir: &str) -> Result<bool, String> {
         {
             Some(Ok(mut r)) => {
                 got += 1;
-                manifest::oss_verdict(&mut r, manifest::oss_baseline(&md, p));
+                let control = fs::read_to_string(dir.join(format!("oss-{p}-clang/report.json")))
+                    .ok()
+                    .and_then(|t| manifest::read_oss_report(&t).ok());
+                let base =
+                    manifest::oss_baseline_capped(manifest::oss_baseline(&md, p), control.as_ref());
+                manifest::oss_verdict(&mut r, base);
                 if !r.pass {
                     bad.push(format!("{p}: {}", r.detail));
                 }

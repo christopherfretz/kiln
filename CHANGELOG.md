@@ -31,7 +31,8 @@ gate results will be in `docs/status/release-1.3.0.md`.
 - `cargo xtask release-gate plan|run|control|import-x86|record|check`
   (WP-1219; docs/RELEASING.md, spec/harness.md "Release gate"): the
   release gate as one resumable command whose record page is written and
-  checked by the command, not by hand.
+  checked by the command, not by hand. The hosted OSS rows are compared
+  with the oss.md counts capped at the same run's clang control (WP-1718).
 
 - Experimental: a `kiln++` with the hod back end linked in (WP-1703;
   `kiln_hod/`, a separate workspace, so the stock build and its lock are
@@ -322,6 +323,19 @@ gate results will be in `docs/status/release-1.3.0.md`.
   longer holds the merge queue for six hours (WP-1600).
 
 ### Fixed
+
+- Concepts (WP-1716, a regression since 1.2.1): a nested requirement
+  naming a local parameter of its requires-expression whose substitution
+  fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type
+  without `begin`) is unsatisfied again instead of the error "an atomic
+  constraint that stays value-dependent after substitution".
+
+- Lambdas (WP-1717, a regression since 1.2.1): a by-copy capture named in
+  a template argument for a non-type parameter of class type inside a
+  generic lambda (`I<v[K]>`, `operator[]` returning a reference into a
+  `constexpr` local) reads the captured variable again, as a scalar
+  argument does, instead of "non-type template argument is not a constant
+  expression".
 
 - Debug information (WP-1710): `-g` stays bounded on class templates
   whose arguments repeat a specialization of the same template, whose
@@ -1571,8 +1585,10 @@ gate results will be in `docs/status/release-1.3.0.md`.
   stores the selected bit-field only, at run time and in constant
   evaluation. Binding an rvalue reference to a bit-field lvalue is
   rejected (WP-1692). At C++98 an explicit instantiation outside a
-  namespace enclosing the template is rejected as GCC does, and one at
-  class scope is rejected in every mode (WP-1693). Before C++20 a `new`
+  namespace enclosing the template is rejected as GCC does, so is one
+  whose unqualified name is found outside the template's namespace
+  (which GCC accepts in C++98), and one at class scope is rejected in
+  every mode (WP-1693). Before C++20 a `new`
   or `delete` in a constant evaluation is rejected with clang's note
   (WP-1689).
 - Wrong code found running GCC's C++ testsuite (WP-1694, WP-1700): a
