@@ -324,6 +324,11 @@ gate results will be in `docs/status/release-1.3.0.md`.
 
 ### Fixed
 
+- Templates (WP-1722, a regression since 1.2.1): a member function
+  template deduced inside its class's definition (`using t =
+  decltype(f(0));`) may look into that class from its trailing return
+  type again, also a static one (`decltype(declval<U const&>().m())` with
+  `U` the class): Boost.Beast's `is_fields` check passes again.
 - Concepts (WP-1716, a regression since 1.2.1): a nested requirement
   naming a local parameter of its requires-expression whose substitution
   fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type
@@ -336,6 +341,12 @@ gate results will be in `docs/status/release-1.3.0.md`.
   `constexpr` local) reads the captured variable again, as a scalar
   argument does, instead of "non-type template argument is not a constant
   expression".
+
+- Precompiled headers (WP-1721, a regression since 1.2.1): a trait
+  keyword the header turned into an identifier (`struct __is_arithmetic`
+  in libstdc++) stays one in the file that includes the PCH, so
+  `<cmath>` after a PCH of `<iostream>` compiles again instead of
+  "expected expression".
 
 - Debug information (WP-1710): `-g` stays bounded on class templates
   whose arguments repeat a specialization of the same template, whose

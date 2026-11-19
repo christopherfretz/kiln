@@ -1719,6 +1719,17 @@ Redeclaration and linkage rules:
   ([expr.ref]/4 applies to the access as written there) and is accepted
   (WP-1571,
   `expr.ref/member-access-in-deduction-from-class-being-instantiated{,-reject}.cpp`).
+  The signature of a member function template substituted for a call
+  (the innermost frame `DeducedArgSubstitution` or
+  `ExplicitArgSubstitution` of a template whose context is a class) is
+  such a place as well, also for a static member template, which kiln
+  substitutes without `this` (WP-1572): clang's `SubstFunctionType` sets
+  the `this` type for every method. The class may be one whose
+  definition is open or set aside (`suspended_defining`): `using t =
+  decltype(f(0));` in `C` deducing `f`'s trailing
+  `decltype(declval<U const&>().m())` with `U = C` is valid; a
+  namespace-scope function template doing the same is not (WP-1722,
+  `expr.ref/member-template-in-class-being-defined{,-reject}.cpp`).
   A member of incomplete type (`field has incomplete type`, the class
   itself or another incomplete class) makes the class invalid
   (`Sema::invalid_defining`, clang's `CheckFieldDecl` marking the record

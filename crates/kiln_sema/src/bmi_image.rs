@@ -4922,6 +4922,14 @@ impl Writer<'_, '_, '_> {
             _ => return Err("a unit that is not a module interface or partition"),
         };
         let module = unit.module.clone().ok_or("no module declaration")?;
+        // A trait keyword the unit reverted (`struct __is_void`) is an
+        // identifier in its importers too, as in clang 22, where the
+        // module file keeps the revert per identifier; the image does not
+        // carry it, so the importer replays the unit (spec/parse.md §1,
+        // "Trait keywords"; WP-1721).
+        if !s.reverted_traits.is_empty() {
+            return Err("a trait keyword reverted to an identifier");
+        }
         // S6: a unit with imports, or a partition, is entered by replaying
         // its preamble; the records follow it (spec/modules.md §11.11
         // "Imports, partitions and using-declarations").

@@ -508,6 +508,13 @@ pub struct Sema<'a, 'sm> {
     /// `__float128` convert by a function pointer conversion
     /// (`conv::qual::is_function_conversion`; WP-1058).
     pub glibc_float128_alias: bool,
+    /// The revertible trait keywords (`__is_arithmetic`, ...) this unit
+    /// turned into identifiers, in revert order (spec/parse.md §1, "Trait
+    /// keywords"). The parser keeps the keyword table; this is its
+    /// written copy, so a parser built over a restored snapshot reverts
+    /// them again (clang serializes `hasRevertedTokenIDToIdentifier` per
+    /// identifier in a PCH; WP-1721).
+    pub reverted_traits: Vec<kiln_source::symbol::Symbol>,
     /// The dumps of `-fkiln-dump-cfg` and lines of `-fkiln-cfg-stats`.
     pub cfg_out: String,
     /// `-fkiln-cfg-max-elems`: a body whose graph would hold more
@@ -1554,6 +1561,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             explicit_memo: templ::explicit_memo::ExplicitMemo::default(),
             permissive: false,
             glibc_float128_alias: false,
+            reverted_traits: Vec::new(),
             cfg_out: String::new(),
             cfg_max_elems: cfg::DEFAULT_MAX_ELEMS,
             cfg_body: cfg::BodyCfg::default(),
