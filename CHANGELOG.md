@@ -24,8 +24,7 @@ are errors (WP-1677), a non-dependent `^^typename S::T` reflects the type
 accept (WP-1670), and a constexpr local whose value points into itself
 stays accepted at C++26 (WP-1680; docs/status/deviations.md). Nothing
 in it changes what [docs/STABILITY.md](docs/STABILITY.md) promises. The
-gate results are in
-[docs/status/release-1.3.0.md](docs/status/release-1.3.0.md).
+gate results will be in `docs/status/release-1.3.0.md`.
 
 ### Added
 
