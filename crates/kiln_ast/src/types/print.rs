@@ -375,6 +375,7 @@ pub fn write_declarator(
         written_tags: opts.written_tags,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.print(q, placeholder);
     *out = p.out;
@@ -401,6 +402,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.nns(n);
     *out = p.out;
@@ -457,6 +459,7 @@ pub fn write_nns_resolved(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     let view = ctx.nns_view(n);
     let resolved = match view {
@@ -489,31 +492,40 @@ pub fn write_arg_list_canonical(
     l: ArgListId,
     out: &mut String,
 ) {
-    arg_list_canonical(ctx, names, l, false, out);
+    arg_list_canonical(ctx, names, l, false, usize::MAX, out);
 }
 
 /// [`write_arg_list_canonical`] with nested closers split (`> >`), as
 /// clang's debug-information printing policy names class templates.
+///
+/// Bounded: once `out` is longer than `limit` bytes no further argument
+/// is printed, and the result is `false` (`out` then holds a truncated
+/// list the caller discards). A name no longer than `limit` is printed in
+/// full, byte for byte as without a limit, and the result is `true`. The
+/// work is O(`limit`) however deep the arguments nest (WP-1710).
 pub fn write_arg_list_debug(
     ctx: &TypeContext,
     names: &dyn TypeNames,
     l: ArgListId,
+    limit: usize,
     out: &mut String,
-) {
-    arg_list_canonical(ctx, names, l, true, out);
+) -> bool {
+    arg_list_canonical(ctx, names, l, true, limit, out);
+    out.len() <= limit
 }
 
 /// The arguments `l` of an alias template specialization as written,
 /// nested closers split (`> >`): the name clang's debug information gives
 /// its `DW_TAG_typedef` (`CGDebugInfo::CreateType(const
 /// TemplateSpecializationType *)`, which turns `PrintCanonicalTypes`
-/// off).
+/// off). Bounded by `limit` as [`write_arg_list_debug`].
 pub fn write_arg_list_debug_written(
     ctx: &TypeContext,
     names: &dyn TypeNames,
     l: ArgListId,
+    limit: usize,
     out: &mut String,
-) {
+) -> bool {
     let mut p = Printer {
         ctx,
         names,
@@ -532,9 +544,11 @@ pub fn write_arg_list_debug_written(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit,
     };
     p.arg_list(l, false);
     *out = p.out;
+    out.len() <= limit
 }
 
 fn arg_list_canonical(
@@ -542,6 +556,7 @@ fn arg_list_canonical(
     names: &dyn TypeNames,
     l: ArgListId,
     split_closers: bool,
+    limit: usize,
     out: &mut String,
 ) {
     let mut p = Printer {
@@ -562,6 +577,7 @@ fn arg_list_canonical(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit,
     };
     p.arg_list(l, false);
     *out = p.out;
@@ -623,6 +639,7 @@ fn arg_list_with_scope(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.arg_list_prefix(l, false, usize::MAX, template, false);
     *out = p.out;
@@ -671,6 +688,7 @@ pub fn write_arg_list_c(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.arg_list_prefix(l, false, usize::MAX, Some(template), false);
     *out = p.out;
@@ -726,6 +744,7 @@ fn arg_list_prefix_with_scope(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.arg_list_prefix(l, false, len, None, false);
     *out = p.out;
@@ -757,6 +776,7 @@ pub fn write_template_arg(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.arg(a.view());
     *out = p.out;
@@ -789,6 +809,7 @@ pub fn write_template_name(
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.template_name(n, Qual::AsWritten);
     *out = p.out;
@@ -857,6 +878,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         written_tags: false,
         c22: names.clang_compat() >= 22,
         depth: 0,
+        limit: usize::MAX,
     };
     p.print(q, "");
     p.out
@@ -1220,6 +1242,11 @@ struct Printer<'a> {
     /// [`TypeNames::clang_compat`] is 22 or later.
     c22: bool,
     depth: u32,
+    /// Stop printing further template arguments once the output is longer
+    /// than this (`usize::MAX`: no limit). A bounded debug name
+    /// ([`write_arg_list_debug`]) gives up as soon as it passes the limit,
+    /// so a name exponential in its argument nesting costs O(limit).
+    limit: usize,
 }
 
 impl Printer<'_> {
@@ -2443,6 +2470,9 @@ impl Printer<'_> {
         }
         let mut first = true;
         for (i, a) in ctx.args(l).iter().take(len).enumerate() {
+            if self.out.len() > self.limit {
+                break;
+            }
             let start;
             let typed = if is_pack {
                 pack_typed

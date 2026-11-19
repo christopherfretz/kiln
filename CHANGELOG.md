@@ -302,6 +302,17 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Debug information (WP-1710): `-g` stays bounded on class templates
+  whose arguments repeat a specialization of the same template, whose
+  names grow exponentially with the nesting (36^17 argument paths
+  through 18 types in `tests/stress/linkage-pack-dag-36x17.cpp`): the
+  compile grew past 4 GB and failed an 8 GiB allocation, and now takes
+  0.1 s and 63 MB, as without `-g`. A specialization's debug name over
+  64 KiB is the template's name alone (as clang's
+  `-gsimple-template-names` spells it), its `templateParams` kept; no
+  real name comes near the limit (spec/codegen.md "Bounded template
+  names").
+
 - Debug information (WP-1709): with `-g`, a virtual destructor (or any
   constructor or destructor) with a GNU asm label, whose variants are
   built into one function, gave the later variant's body a second
