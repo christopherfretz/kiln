@@ -1128,7 +1128,10 @@ impl Sema<'_, '_> {
     /// `SubstituteExplicitTemplateArguments` enter the template's
     /// context), as for its signature and body. A template in a local
     /// scope keeps the use's scopes: they are the only ones that hold its
-    /// function's names.
+    /// function's names. Either way the access context `f` sets
+    /// ([`Sema::access_ctx`]) ends with it: the use's is restored, as
+    /// [`Sema::in_inst_context`] does (WP-1726: the local template's
+    /// signature context leaked into the rest of the translation unit).
     pub(crate) fn in_template_context<R>(
         &mut self,
         tmpl: DeclId,
@@ -1137,7 +1140,10 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("in_template_context");
         if self.decl_in_local_scope(tmpl) {
-            return f(self);
+            let access_ctx = self.access_ctx;
+            let r = f(self);
+            self.access_ctx = access_ctx;
+            return r;
         }
         let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(ctx, f)
