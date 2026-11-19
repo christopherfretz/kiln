@@ -329,6 +329,13 @@ gate results will be in `docs/status/release-1.3.0.md`.
   without `begin`) is unsatisfied again instead of the error "an atomic
   constraint that stays value-dependent after substitution".
 
+- Lambdas (WP-1717, a regression since 1.2.1): a by-copy capture named in
+  a template argument for a non-type parameter of class type inside a
+  generic lambda (`I<v[K]>`, `operator[]` returning a reference into a
+  `constexpr` local) reads the captured variable again, as a scalar
+  argument does, instead of "non-type template argument is not a constant
+  expression".
+
 - Debug information (WP-1710): `-g` stays bounded on class templates
   whose arguments repeat a specialization of the same template, whose
   names grow exponentially with the nesting (36^17 argument paths

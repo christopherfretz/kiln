@@ -797,7 +797,11 @@ A closure object is an ordinary class object in the Oven's memory; the
   argument's full-expression ends (`Sema::capture_reads_variable`), an
   odr-use still captures but is not marked `NAMES_CLOSURE_COPY`, as clang
   22 and GCC 16.1 read the variable (docs/status/deviations.md;
-  `temp.arg.nontype/closure-copy-odr-use-*.cpp`). The keyword `alignas`
+  `temp.arg.nontype/closure-copy-odr-use-*.cpp`). This holds for a
+  parameter of class type too (`convert_class_nttp_arg`: `I<v[K]>` with
+  `operator[]` returning a reference into a `constexpr` local, in a
+  generic lambda, where WP-1655's call-operand rule does not apply;
+  WP-1717, a regression since 1.2.1). The keyword `alignas`
   argument shares the rule (`check_alignment_expr`, WP-1640) where both
   accept: in a lambda whose enclosing entities are not templated other
   than generic lambdas' call operators
