@@ -1585,8 +1585,10 @@ gate results will be in `docs/status/release-1.3.0.md`.
   stores the selected bit-field only, at run time and in constant
   evaluation. Binding an rvalue reference to a bit-field lvalue is
   rejected (WP-1692). At C++98 an explicit instantiation outside a
-  namespace enclosing the template is rejected as GCC does, and one at
-  class scope is rejected in every mode (WP-1693). Before C++20 a `new`
+  namespace enclosing the template is rejected as GCC does, so is one
+  whose unqualified name is found outside the template's namespace
+  (which GCC accepts in C++98), and one at class scope is rejected in
+  every mode (WP-1693). Before C++20 a `new`
   or `delete` in a constant evaluation is rejected with clang's note
   (WP-1689).
 - Wrong code found running GCC's C++ testsuite (WP-1694, WP-1700): a

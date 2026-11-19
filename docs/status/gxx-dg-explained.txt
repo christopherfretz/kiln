@@ -4,3 +4,4 @@
 # A case that went from pass in docs/status/gxx-dg-baseline.txt to a
 # failing class fails the gate unless it is listed here; the record prints
 # this list. Emptied when the baseline is refreshed at a release.
+g++.dg/cpp0x/explicit-inst1.C [-std=c++98] WP-1693: kiln follows C++03 14.7.2/5 and DR 275 (an unqualified explicit instantiation outside the template's namespace is ill-formed), GCC and clang accept in C++98; docs/status/deviations.md
