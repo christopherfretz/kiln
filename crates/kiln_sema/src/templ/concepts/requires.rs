@@ -458,8 +458,10 @@ impl Substituter<'_, '_, '_> {
                     // constraint makes it unsatisfied, unless its atoms
                     // checked one by one are satisfied (an argument no
                     // atom's parameter mapping names failed).
+                    // The atoms name the substituted local parameters.
+                    let locals = || self.locals.iter().map(|(&k, &v)| (k, v)).collect();
                     if !self.sema.levels_dependent(self.args)
-                        && self.sema.sat_nested_requirement(body, e, self.args)
+                        && self.sema.sat_nested_requirement(body, e, self.args, locals())
                     {
                         let t = self.sema.builder().bool_literal(QualType::BOOL, true, loc);
                         return Some(Requirement::Nested(t));

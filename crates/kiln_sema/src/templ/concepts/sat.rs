@@ -682,15 +682,24 @@ impl Sema<'_, '_> {
     /// ([temp.constr.constr]), atom by atom, so a concept-id whose failed
     /// argument no atom names is satisfied (`requires C<T>;` with an
     /// invalid default argument of `C` its atoms do not use; clang 22
-    /// and GCC 16.1 agree). `body` is the requires-expression's body.
+    /// and GCC 16.1 agree). `body` is the requires-expression's body;
+    /// `locals` is what its substitution made of the pattern's locals, so
+    /// an atom naming a local parameter (`requires !C<decltype(t.f())>;`
+    /// in `requires(T& t)`) names the substituted one
+    /// ([expr.prim.req.general]/5) and its failure makes the atom
+    /// unsatisfied instead of leaving it dependent.
     pub(crate) fn sat_nested_requirement(
         &mut self,
         body: DeclId,
         e: ExprId,
         levels: &MultiLevelArgs,
+        locals: Vec<(DeclId, crate::templ::subst::DeclOrPack)>,
     ) -> bool {
         let mut recs = Vec::new();
-        self.sat_expr(body, e, levels, &mut recs, 0)
+        self.inst.concepts.nested_locals.push((body, locals));
+        let r = self.sat_expr(body, e, levels, &mut recs, 0);
+        self.inst.concepts.nested_locals.pop();
+        r
     }
 
     /// Whether atom `e` is a concept-id of a concept (not of a concept
@@ -970,6 +979,16 @@ impl Sema<'_, '_> {
             .collect();
         let pushed = lambdas.len();
         self.inst.concepts.lambda_constraint.extend(lambdas);
+        // A nested requirement's atoms checked one by one name the
+        // requires-expression's substituted parameters.
+        let nested: Vec<(DeclId, crate::templ::subst::DeclOrPack)> = self
+            .inst
+            .concepts
+            .nested_locals
+            .last()
+            .filter(|&&(b, _)| b == entity)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_default();
         let run = |s: &mut Self| {
             let saved = s.access_ctx;
             s.access_ctx = access.or(saved);
@@ -980,6 +999,7 @@ impl Sema<'_, '_> {
                     sub.seed_function_params(f).ok()?;
                 }
                 sub.seed_init_captures(entity);
+                sub.locals.extend(nested.iter().copied());
                 f(&mut sub)
             });
             s.access_ctx = saved;

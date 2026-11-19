@@ -323,6 +323,12 @@ gate results will be in `docs/status/release-1.3.0.md`.
 
 ### Fixed
 
+- Concepts (WP-1716, a regression since 1.2.1): a nested requirement
+  naming a local parameter of its requires-expression whose substitution
+  fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type
+  without `begin`) is unsatisfied again instead of the error "an atomic
+  constraint that stays value-dependent after substitution".
+
 - Debug information (WP-1710): `-g` stays bounded on class templates
   whose arguments repeat a specialization of the same template, whose
   names grow exponentially with the nesting (36^17 argument paths

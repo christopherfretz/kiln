@@ -158,6 +158,15 @@ pub struct ConceptState {
     /// snapshot point.
     #[snap(skip)]
     pub(crate) lambda_constraint: Vec<kiln_ast::ids::LambdaId>,
+    /// While the atoms of a nested requirement are checked one by one
+    /// after its constraint-expression failed to substitute as a whole
+    /// ([`Sema::sat_nested_requirement`]): the requires-expression's body
+    /// and what the substitution made of its locals (its parameters).
+    /// An atom naming `t` of `requires(T& t)` is substituted with the
+    /// substituted parameter, not left naming the pattern's (dependent)
+    /// one. Transient, empty at a snapshot point.
+    #[snap(skip)]
+    pub(crate) nested_locals: Vec<(DeclId, Vec<(DeclId, crate::templ::subst::DeclOrPack)>)>,
     /// Counters.
     pub counters: SatCounters,
 }
