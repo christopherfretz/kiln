@@ -58,6 +58,9 @@ struct SavedState {
     dependent_depth: u32,
     friend_tag: Option<DeclId>,
     member_refs: kiln_source::fx::FxHashMap<kiln_ast::ExprId, crate::class::MemberRef>,
+    /// The operand of a unary `&` being analysed ([`Sema::address_operand`]):
+    /// a name in the instantiated declaration is not that operand (WP-1727).
+    address_operand: bool,
 }
 
 impl Sema<'_, '_> {
@@ -80,6 +83,7 @@ impl Sema<'_, '_> {
     /// or a class), with the parse state of the point of instantiation
     /// set aside ([temp.point]: names are looked up from the template's
     /// definition, not from where the instantiation was required).
+    #[allow(clippy::too_many_lines, reason = "one save and one restore per piece of parse state")]
     pub(crate) fn in_inst_context<R>(&mut self, ctx: DeclId, f: impl FnOnce(&mut Self) -> R) -> R {
         let tu_dirs = self.scopes.first().map(|s| s.using_dirs.clone()).unwrap_or_default();
         let outer_depth = self.range_for_outer_depth;
@@ -117,6 +121,7 @@ impl Sema<'_, '_> {
             dependent_depth: std::mem::take(&mut self.ast.templates.dependent_depth),
             friend_tag: self.friend_tag.take(),
             member_refs: std::mem::take(&mut self.member_refs),
+            address_operand: std::mem::take(&mut self.address_operand),
         };
         let mut tu = Scope::new(ScopeKind::TranslationUnit, Some(self.ast.tu));
         tu.using_dirs = tu_dirs;
@@ -183,6 +188,7 @@ impl Sema<'_, '_> {
         self.templ.req_ctx = saved.req_ctx;
         self.ast.templates.dependent_depth = saved.dependent_depth;
         self.friend_tag = saved.friend_tag;
+        self.address_operand = saved.address_operand;
         // The outer full-expression's pending names ([`Sema::flush_member_refs`])
         // are not the instantiation's to flush; any it left pending stay so.
         let inner = std::mem::replace(&mut self.member_refs, saved.member_refs);

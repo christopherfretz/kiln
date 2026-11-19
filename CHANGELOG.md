@@ -349,6 +349,13 @@ gate results will be in `docs/status/release-1.3.0.md`.
   own members' bodies naming its private members and accepted private
   accesses that only the lambda had: glaze's JSON and YAML tests build
   again.
+- Access (WP-1727, a regression since 1.2.1): a class or function body
+  instantiated while the operand of a unary `&` naming a member of a
+  dependent class (`&holder<T>::f`, `&M::constraints` in a template
+  argument) is substituted no longer checks its own qualified member names
+  as if they formed a pointer to member, which rejected a derived class's
+  member template naming a protected member through a base class
+  (`base_t::m`): eight Boost.Geometry tests build again.
 - Concepts (WP-1716, a regression since 1.2.1): a nested requirement
   naming a local parameter of its requires-expression whose substitution
   fails (`requires !std::same_as<void, decltype(t.begin())>;` for a type
