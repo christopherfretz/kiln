@@ -492,6 +492,13 @@ impl AttrKind {
     /// parameter, kept only for `__builtin_has_attribute` (WP-1675): kiln
     /// never emits common symbols, so it has no effect.
     pub const NOCOMMON: AttrKind = AttrKind(283);
+    /// The implicit section of an active `#pragma clang section` (clang's
+    /// `PragmaClang{BSS,Data,Rodata,Relro,Text}SectionAttr`, WP-1744): `a`
+    /// is the section name (a `StringLitId`), `b` the kind, an index into
+    /// [`CLANG_SECTION_KINDS`]. On a variable definition with static or
+    /// thread storage duration (one node per active data kind) or a
+    /// function definition (`text`).
+    pub const PRAGMA_CLANG_SECTION: AttrKind = AttrKind(284);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -522,6 +529,12 @@ impl AttrKind {
             || self == AttrKind::NO_SANITIZE
     }
 }
+
+/// The section kinds of `#pragma clang section`, by the `b` word of an
+/// [`AttrKind::PRAGMA_CLANG_SECTION`] node (clang `PragmaClangSectionKind`
+/// without `PCSK_Invalid`); each is also the LLVM global attribute
+/// `"<kind>-section"` of a variable, except `text`, a function's section.
+pub const CLANG_SECTION_KINDS: [&str; 5] = ["bss", "data", "rodata", "text", "relro"];
 
 /// The arguments of `zero_call_used_regs` (clang `ZeroCallUsedRegsKind`),
 /// in the order of [`AttrKind::ZERO_CALL_USED_REGS`]'s `a`.

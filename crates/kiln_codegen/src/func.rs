@@ -489,6 +489,9 @@ impl Cg<'_> {
             debug_assert!(self.dup_reported, "body for a forwarding function (WP-1663)");
             return Ok(());
         }
+        if thunk.is_none() {
+            self.pragma_text_section(d, f);
+        }
         // clang `FunctionDecl::isMain`: never under `-ffreestanding`.
         let is_main = !ast.freestanding
             && mangle::decl_name(ast, first) == "main"

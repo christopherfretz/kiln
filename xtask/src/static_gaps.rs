@@ -42,7 +42,6 @@ pub const GAP_DIAG_IDS: &[&str] = &[
     "cg_cannot_mangle_expression",
     "drv_not_implemented",
     "parse_unsupported",
-    "pp_expr_unsupported",
     "pp_header_unit_unsupported",
     "pp_scan_header_unit",
     "sema_attribute_unsupported_by_kiln",

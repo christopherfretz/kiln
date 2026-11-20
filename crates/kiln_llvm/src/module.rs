@@ -155,6 +155,10 @@ pub struct GlobalVar {
     /// The sanitizer metadata (`no_sanitize_address`, ...).
     pub sanitizer: GlobalSanitizer,
     pub(crate) md: Vec<(MdKindId, MetadataId)>,
+    /// The global's attributes (`llvm::GlobalVariable::getAttributes`:
+    /// clang's `"bss-section"`, ... of `#pragma clang section`), printed
+    /// as ` #N` after the metadata attachments.
+    pub attrs: AttrSetId,
 }
 
 /// A global's `SanitizerMetadata`, printed after its section as
@@ -996,6 +1000,7 @@ impl Module {
             comdat: None,
             align: None,
             md: Vec::new(),
+            attrs: AttrSetId::EMPTY,
         });
         self.global_order.push(id);
         id

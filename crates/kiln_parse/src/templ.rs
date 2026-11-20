@@ -260,6 +260,34 @@ impl Parser<'_, '_> {
         self.s.act_on_finish_template_decl();
     }
 
+    /// `export` at the start of a declaration before C++20, or after a
+    /// template head (clang `ParseTemplateDeclarationOrSpecialization`):
+    /// C++98's exported templates ([temp]/6 in ISO/IEC 14882:1998,
+    /// removed by C++11, [diff.cpp03.temp]), whose `export` the
+    /// keyword `template` must follow. An exported template is parsed
+    /// as a template, with clang's warning "exported templates are
+    /// unsupported" (kiln, as clang, does not separate a template's
+    /// definition from its instantiations); otherwise "expected
+    /// template" at the next token, which starts the next declaration
+    /// (a template head before `export` is dropped).
+    pub(crate) fn parse_export_template(&mut self, ctx: DeclaratorContext) {
+        let export = self.bump().span.lo;
+        if !self.at_kw(Kw::Template) {
+            self.error_here(DiagId::parse_expected_template);
+            return;
+        }
+        if !self.peek_is(1, Punct::Less) {
+            // clang `ParseTemplateParameters`: skipped to the `;`.
+            self.bump();
+            let d = self.s.diag(DiagId::parse_expected_less_after, self.loc()).arg("template");
+            self.s.emit(d);
+            self.skip_unsupported_declaration();
+            return;
+        }
+        self.s.error(DiagId::parse_template_export_unsupported, export);
+        self.parse_template_declaration(ctx);
+    }
+
     /// `class-key identifier` then `{`, `:`, `;` or `final`: a class
     /// declaration whose name is not a template-id.
     fn at_plain_tag_decl(&self) -> bool {
@@ -447,6 +475,9 @@ impl Parser<'_, '_> {
     ) {
         match self.kw() {
             Some(Kw::Template) => return self.parse_template_declaration(ctx),
+            // `template<...> export ...`: an exported template head
+            // after this one; anything else drops this head.
+            Some(Kw::Export) => return self.parse_export_template(ctx),
             Some(Kw::Concept) => return self.parse_concept_definition(head),
             Some(Kw::Using) => {
                 self.parse_using();

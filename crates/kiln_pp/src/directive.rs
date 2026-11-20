@@ -10,7 +10,7 @@ use kiln_source::{FileId, SourceManager, Span};
 
 use crate::builtin::OPERATOR_NAMES;
 use crate::callbacks::FileChange;
-use crate::cond::{IfContext, IfEvaluator, StubIfEvaluator, stub_value};
+use crate::cond::{IfContext, IfEvaluator};
 use crate::include::{EmbedRequest, IncludeKind, IncludeRequest, ResolvedInclude};
 use crate::macros::MacroDef;
 use crate::preprocessor::{Cond, Frame, Marker, Preprocessor};
@@ -880,11 +880,15 @@ impl Preprocessor<'_, '_> {
         let old_pi = std::mem::replace(&mut self.parsing_if, true);
         let old_q = std::mem::replace(&mut self.quiet_lex, false);
         let mut ev = self.evaluator.take();
+        let mut nested = self.nested_eval;
         let v = {
             let mut cx = IfCx::new(self, false);
             let v = match ev.as_mut() {
                 Some(e) => e.eval(&mut cx),
-                None => StubIfEvaluator.eval(&mut cx),
+                // Only while the installed evaluator runs (it is taken):
+                // an `#if` inside one cannot start, so this is a nested
+                // expression's evaluator (see `embed_int`).
+                None => nested.eval(&mut cx),
             };
             let ndef = cx.ifndef_macro();
             cx.pp.if_ndef = ndef;
@@ -1617,11 +1621,15 @@ impl Preprocessor<'_, '_> {
         }
         let old_pi = std::mem::replace(&mut self.parsing_if, true);
         let mut ev = self.evaluator.take();
+        let mut nested = self.nested_eval;
         let (v, used_defined, end) = {
             let mut cx = IfCx::new(self, true);
             let v = match ev.as_mut() {
                 Some(e) => e.eval_value(&mut cx),
-                None => stub_value(&mut cx),
+                // `__has_embed(... limit(e))` inside `#if`: the installed
+                // evaluator is running the `#if` ([cpp.cond]/5), and `e`
+                // is evaluated by the same rules (clang's `PPExpressions`).
+                None => nested.eval_value(&mut cx),
             };
             (v, cx.used_defined, cx.end)
         };

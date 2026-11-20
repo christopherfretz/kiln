@@ -1308,6 +1308,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   (WP-1536; `temp.pre/decl-specifier-before-template*.cpp`). Any other
   decl-specifier there (`constexpr`, `virtual`) is `expected
   unqualified-id`, `friend` also `'friend' used outside of class`.
+- **`export` before C++20** (`parse_export_template`, WP-1744): C++03
+  [temp]/1 allowed `export` before a template head; C++11 removed exported
+  templates and kept the keyword ([diff.cpp03.temp]). As clang's
+  `ParseTemplateDeclarationOrSpecialization`: `export template <...>` (at
+  namespace scope, also after an enclosing template head, on an explicit
+  specialization) is `exported templates are unsupported`
+  (`parse_template_export_unsupported`, a warning in no group) at `export`
+  and is parsed as if `export` were absent; `export` not followed by
+  `template` is `expected template` (`parse_expected_template`) at the next
+  token, which then starts the declaration; `export template` without `<`
+  is `expected '<' after 'template'` and the declaration is skipped
+  (`temp.export/export-*.cpp`). From C++20 on `export` starts an
+  export-declaration ([module.interface]).
 - **Tags** (`parse_tag_specifier`):
   - `act_on_tag(kind, name, TagUse, …)`. `TagUse` is reference,
     declaration, definition or friend, decided by the next token, as in

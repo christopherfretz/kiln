@@ -6593,6 +6593,18 @@ local and an instantiated template included, so the ELF linker's
 `__start_name`/`__stop_name` bound the section. Section type conflicts
 (clang `err_section_conflict`) are not diagnosed.
 `tests/codegen/section_attr.cpp`, `tests/conformance/ext.gnu.section/`.
+The sections of `#pragma clang section` (WP-1744, `pragma_section.rs`;
+sema in spec/sema.md §4.5): a variable definition's implicit
+`bss`/`data`/`rodata`/`relro` sections become its global's attributes
+`"bss-section"="name"`, ... (clang `setNonAliasAttributes`; the object
+file writer places the variable in the one that fits it), on namespace
+scope and static data member definitions, static locals and template
+instantiations; a function definition's `text` section is its LLVM
+function's section unless a `section` attribute names one, for every
+constructor and destructor variant but not a thunk. kiln_llvm prints a
+global's attribute set as ` #N` after its metadata attachments and
+numbers the globals' sets before the functions' (LLVM's
+`SlotTracker`). `tests/conformance/cpp.pragma/clang-section-ir.cpp`.
 
 ## 9. Aliases and ifuncs (WP-763; `alias.rs`)
 

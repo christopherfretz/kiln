@@ -1167,6 +1167,9 @@ impl Parser<'_, '_> {
     /// the first declarator of a function ([dcl.fct.def.general]), at `=`;
     /// `f` is the function (`None` when sema made none).
     pub(crate) fn parse_defaulted_or_deleted(&mut self, f: Option<DeclId>) {
+        if let Some(f) = f {
+            self.s.act_on_function_definition_declarator(f);
+        }
         self.bump();
         let kw = self.bump();
         let is_delete = self.kw_of(kw) == Some(Kw::Delete);
@@ -1992,6 +1995,11 @@ impl Parser<'_, '_> {
             self.record_fn_end(target, end);
             self.parse_defaulted_or_deleted(target);
             return;
+        }
+        // Before the body's tokens are read: a pragma after the body
+        // must not apply to it.
+        if let Some(f) = target {
+            self.s.act_on_function_definition_declarator(f);
         }
         let ctor = matches!(d.special, Some((SpecialName::Constructor(_), _)));
         let is_try = self.at_kw(Kw::Try);

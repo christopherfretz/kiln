@@ -108,6 +108,7 @@ pub mod overload;
 mod packed;
 pub mod pragma_attr;
 mod pragma_names;
+pub mod pragma_pack;
 mod predefined;
 mod qualified_decl;
 mod range_for;
@@ -116,7 +117,7 @@ mod reflect_limit;
 mod reflect_operand;
 mod rtti;
 pub mod scope;
-mod section;
+pub mod section;
 mod selectany;
 mod self_ref;
 mod shadow;
@@ -251,12 +252,12 @@ pub struct Sema<'a, 'sm> {
     /// defined is laid out over it but not kept, WP-428), and a complete
     /// class's layout never changes within the TU.
     pub(crate) layout_cache: kiln_abi::LayoutCache,
-    /// The `#pragma pack` directives seen, in order (location and the
-    /// spelling of the argument list).
-    pub pragma_packs: Vec<(Loc, String)>,
     /// The named sections seen, each with the first declaration placed in
     /// it and its flags (clang `ASTContext::SectionInfos`; [`section`]).
-    pub(crate) sections: kiln_source::fx::FxHashMap<Box<[u8]>, (DeclId, u8)>,
+    pub(crate) sections: kiln_source::fx::FxHashMap<Box<[u8]>, section::SectionInfo>,
+    /// The current section of each `#pragma clang section` kind
+    /// ([`section`]).
+    pub(crate) clang_sections: section::ClangSections,
     /// The known `no_sanitize("...")` arguments clang does not allow on a
     /// global variable, by attribute: warned about once the subject is
     /// known to be one (WP-675; `class_b_attrs`).
@@ -537,11 +538,10 @@ pub struct Sema<'a, 'sm> {
     /// for a pattern naming a dependent type (clang
     /// `TemplateDeclInstantiator::InstantiateTypedefNameDecl`).
     pub(crate) in_typedef_instantiation: bool,
-    /// The `#pragma pack` state (clang's `AlignPackStack`): the current
-    /// maximum field alignment in bytes (0: none) and the pushed
-    /// `(label, value)` entries. Applied to each class definition as it
-    /// begins (`record_pack`).
-    pub(crate) pack: (u16, Vec<(Option<String>, u16)>),
+    /// The `#pragma pack` / `#pragma options align` state (clang's
+    /// `AlignPackStack`, [`pragma_pack`]). Applied to each class
+    /// definition as it begins (`record_pack`).
+    pub(crate) pack: pragma_pack::PackStack,
     /// `#pragma ms_struct on` is in effect (clang `MSStructPragmaOn`):
     /// each class definition that begins gets an implicit `ms_struct`.
     pub(crate) ms_struct_pragma: bool,
@@ -1502,8 +1502,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             target,
             abi,
             layout_cache: kiln_abi::LayoutCache::default(),
-            pragma_packs: Vec::new(),
             sections: kiln_source::fx::FxHashMap::default(),
+            clang_sections: section::ClangSections::default(),
             no_sanitize_not_global: kiln_source::fx::FxHashMap::default(),
             attr_spellings: kiln_source::fx::FxHashMap::default(),
             traits: templ::builtins::TraitState::default(),
@@ -1569,7 +1569,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inferred_noreturn: kiln_source::fx::FxHashSet::default(),
             gsl_inferred_pointers: kiln_source::fx::FxHashSet::default(),
             in_typedef_instantiation: false,
-            pack: (0, Vec::new()),
+            pack: pragma_pack::PackStack::default(),
             ms_struct_pragma: false,
             fp_pragma: (kiln_ast::fp::FpOverride::NONE, Vec::new()),
             scopes: vec![scope::Scope {

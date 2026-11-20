@@ -159,6 +159,7 @@ PointerSign = "pointer-sign" [];
 PointerTypeMismatch = "pointer-type-mismatch" [];
 PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
 PragmaClangAttribute = "pragma-clang-attribute" [];
+PragmaPack = "pragma-pack" [];
 PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 // ----- WP-191 (vexing parse, null dereference, empty body)
 RedeclaredClassMember = "redeclared-class-member" [];

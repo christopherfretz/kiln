@@ -92,6 +92,13 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NONNULL => "NonNull",
         AttrKind::NONSTRING => "NonString",
         AttrKind::NOCOMMON => "NoCommon",
+        AttrKind::PRAGMA_CLANG_SECTION => match a.b {
+            0 => "PragmaClangBSSSection",
+            1 => "PragmaClangDataSection",
+            2 => "PragmaClangRodataSection",
+            3 => "PragmaClangTextSection",
+            _ => "PragmaClangRelroSection",
+        },
         AttrKind::RETURNS_NONNULL => "ReturnsNonNull",
         AttrKind::LOOP_HINT => "LoopHint",
         _ => return None,

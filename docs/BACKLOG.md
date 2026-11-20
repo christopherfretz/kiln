@@ -783,7 +783,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1776 | harness: an `xfail` never masks an internal compiler error; a crash (kiln's "internal compiler error" exit) under `xfail` is a FAIL (WP-1742's xfail repro hid an ICE that only the `read_view` unit test caught) | WP-1742 | open |
 | WP-1777 | `__builtin_vectorelements` (clang 18+) is missing | WP-1742 | open |
 | WP-1743 | reflection: GAP-130..GAP-134 (5 sites, 0 cases) | WP-1719 | open |
-| WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | open |
+| WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | in progress |
+| WP-1778 | the `std::initializer_list` layout check rejects a class whose first field is `T *` (non-const); clang 22 accepts it (found running GCC's C++ testsuite: `g++.dg/cpp/embed-25.C`, `embed-26.C` regressed with WP-1741's check, "'std::initializer_list<B>' layout not recognized"): follow clang's rule | WP-1744 | open |
+| WP-1779 | `-Wpragma-pack` at include boundaries is not implemented: a non-default `#pragma pack` value in effect at an `#include`, or changed inside a header and not restored (clang's two warnings and their notes) | WP-1744 | open |
+| WP-1780 | a stray `{ ... }` at file scope loses the next declaration: clang stops skipping after the closing brace, kiln skips to the next `;` | WP-1744 | open |
+| WP-1781 | the out-of-line member declaration `Y::~Y();` is accepted; clang rejects it ("out-of-line declaration of a member must be a definition", [class.mfct]/[dcl.meaning]) | WP-1744 | open |
 | WP-1745 | misc: GAP-144..GAP-167 (30 sites, 0 cases) | WP-1719 | in progress |
 | WP-1761 | `int e; extern int e; int e = 1;` is accepted; clang reports a redefinition (crates/kiln_sema decl.rs, the redeclaration merge near line 7740) | WP-1745 | open |
 | WP-1762 | an enum-qualified declaration `int E::v;` is accepted; clang rejects it (`diagnose_qualified_declaration` in qualified_decl.rs) | WP-1745 | open |

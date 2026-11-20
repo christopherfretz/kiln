@@ -37,14 +37,14 @@ fn cpp_pragma_pack_applied() {
 }
 
 /// [cpp.pragma]: the `#pragma pack` forms clang diagnoses (`show`, an
-/// invalid alignment, `pop` on an empty stack) are reported as
-/// unsupported.
+/// invalid alignment, `pop` on an empty stack) get clang's warnings.
 #[test]
-fn cpp_pragma_pack_unsupported() {
+fn cpp_pragma_pack_diagnosed() {
     let p = parse("#pragma pack(show)\n#pragma pack(3)\n#pragma pack(pop)\nint x;\n");
-    p.assert_diag("1:9 error: '#pragma pack' is not supported yet");
-    p.assert_diag("2:9 error: '#pragma pack' is not supported yet");
-    p.assert_diag("3:9 error: '#pragma pack' is not supported yet");
+    p.assert_diag("1:9 warning: value of #pragma pack(show) == 8");
+    p.assert_diag("2:9 warning: expected #pragma pack parameter to be '1', '2', '4', '8', or '16'");
+    p.assert_diag("3:9 warning: #pragma pack(pop, ...) failed: stack empty");
+    assert_eq!(p.problems().len(), 3, "{:?}", p.diags);
 }
 
 /// [cpp.pragma]: `#pragma pack` without `(` is ignored with a warning.

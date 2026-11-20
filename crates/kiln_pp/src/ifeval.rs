@@ -72,6 +72,10 @@ impl IfEvaluator for IfEval {
         ev.expression().is_ok_and(|v| v.v != 0)
     }
 
+    fn nested(&self) -> IfEval {
+        *self
+    }
+
     fn eval_value(&mut self, cx: &mut dyn IfContext) -> Option<i64> {
         let mut ev = Ev::new(cx, self.params);
         let v = ev.value(true).ok()?;

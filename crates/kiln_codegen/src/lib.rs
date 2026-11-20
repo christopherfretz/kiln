@@ -57,6 +57,7 @@ mod neon;
 mod new_delete;
 mod null_init;
 mod outline;
+mod pragma_section;
 mod psabi;
 mod recursion;
 mod sme;
