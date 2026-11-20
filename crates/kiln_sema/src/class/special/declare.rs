@@ -167,10 +167,13 @@ impl Sema<'_, '_> {
             match sp {
                 SpecialName::Conversion(_) => self.error(DiagId::sema_conv_not_member, sloc),
                 SpecialName::Destructor(_) => self.error(DiagId::sema_dtor_not_member, sloc),
+                // kiln-gap: GAP-147
                 SpecialName::Constructor(_) => self.unsupported("constructors", sloc),
+                // kiln-gap: GAP-147
                 SpecialName::Operator(_) => self.unsupported("overloaded operators", sloc),
-                SpecialName::LiteralOperator(_) => self.unsupported("literal operators", sloc),
-                SpecialName::DeductionGuide(_) => self.unsupported("deduction guides here", sloc),
+                SpecialName::LiteralOperator(_) | SpecialName::DeductionGuide(_) => {
+                    unreachable!("handles_special_declarator admits neither")
+                }
             }
             return None;
         };

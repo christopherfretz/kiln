@@ -443,6 +443,7 @@ impl Sema<'_, '_> {
                 None => return self.recover_err(&kids, loc),
             }
         } else if self.contains_auto(elem) {
+            // kiln-gap: GAP-033
             self.unsupported("this form of 'auto' in a new-expression", tid.loc);
             return self.recover_err(&kids, loc);
         }

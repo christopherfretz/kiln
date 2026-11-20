@@ -8,6 +8,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
+### Added
+
+- Every known-incomplete language corner is listed in
+  docs/status/static-gaps.md and a lint keeps the list exact (WP-1719).
+
 ## [1.3.0] - 2026-11-20
 
 A feature release with the fixes made since 1.2.1. New: an experimental

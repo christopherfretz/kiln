@@ -157,6 +157,7 @@ impl Cg<'_> {
         // length array in C++ ("variable-sized object may not be
         // initialized", as clang 22 at every `-std=`).
         if init.is_some_and(|i| ast.exprs.get(i).kind() != ExprKind::CXXConstructExpr) {
+            // kiln-gap: GAP-091
             return err(loc, "this initializer of a variable length array is not supported yet");
         }
         if !self.f.did_stack_save {

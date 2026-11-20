@@ -425,6 +425,7 @@ impl Parser<'_, '_> {
                 // [cpp.module], [cpp.import]: clang parses these; kiln
                 // does not implement modules yet.
                 let what = if import { "a module import" } else { "a module declaration" };
+                // kiln-gap: GAP-139
                 self.unsupported(what, span.lo);
             }
             Event::PragmaPack { loc, args } => self.s.act_on_pragma_pack(loc, args),

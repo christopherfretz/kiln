@@ -97,10 +97,12 @@ impl Compiler<'_> {
         match types.kind(t) {
             _ if bit_int => {
                 let n = self.o.tname(self.ast(), t);
+                // kiln-gap: GAP-169
                 Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
             }
             TyKind::Opaque => {
                 let n = self.o.tname(self.ast(), t);
+                // kiln-gap: GAP-169
                 Some(format!("constexpr bit cast involving type '{n}' is not yet supported"))
             }
             TyKind::Array { elem, .. } => self.bit_cast_unsupported(elem),
@@ -176,6 +178,7 @@ impl Compiler<'_> {
             return;
         }
         if mem.is_none() && self.o.types.is_aggregate(td) {
+            // kiln-gap: GAP-123
             self.unsupported(e);
             return;
         }

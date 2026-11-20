@@ -545,6 +545,7 @@ impl<'a> Cg<'a> {
             if seen.insert(e) {
                 let kind = format!("{:?}", self.ast.exprs.get(e).kind());
                 let at = Span::empty(self.ast.begin_loc(e));
+                // kiln-gap: GAP-041
                 self.diags.push(Diag::new(DiagId::cg_cannot_mangle_expression, at).arg(&kind));
             }
         }
@@ -2399,6 +2400,7 @@ impl<'a> Cg<'a> {
                 return err(
                     loc,
                     format!(
+                        // kiln-gap: GAP-061
                         "passing or returning '{t}' by value is not supported yet: it is an \
                          SVE tuple type, which clang 20 and later pass as a struct of vectors"
                     ),
@@ -2409,6 +2411,7 @@ impl<'a> Cg<'a> {
                 return err(
                     loc,
                     format!(
+                        // kiln-gap: GAP-061
                         "passing or returning '{t}' by value is not supported yet: it is an \
                          AAPCS64 pure scalable type (an aggregate of fixed-length SVE types)"
                     ),

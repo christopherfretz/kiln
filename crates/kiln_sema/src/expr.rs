@@ -2647,6 +2647,7 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[], loc);
             }
             _ => {
+                // kiln-gap: GAP-167
                 self.unsupported("this kind of name", loc);
                 return self.recover_err(&[], loc);
             }
@@ -3555,6 +3556,7 @@ impl Sema<'_, '_> {
                 self.inc_dec(op, e, loc)
             }
             _ => {
+                // kiln-gap: GAP-055
                 self.unsupported(&format!("unary operator '{}'", op.spelling()), loc);
                 self.recover_err(&[e], loc)
             }
@@ -4172,6 +4174,7 @@ impl Sema<'_, '_> {
             BinaryOp::Cmp => self.builtin_three_way(l, r, loc),
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
             _ => {
+                // kiln-gap: GAP-056
                 self.unsupported(&format!("operator '{}'", op.spelling()), loc);
                 self.recover_err(&[l, r], loc)
             }
@@ -5865,6 +5868,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         };
         let Some(proto) = self.sugared_proto(fn_ty) else {
+            // kiln-gap: GAP-146
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
@@ -7547,6 +7551,7 @@ impl Sema<'_, '_> {
             return self.cast_user_conversion(style, e, ty, loc, rparen);
         }
         if self.ast.types.as_record(ty).is_some() {
+            // kiln-gap: GAP-032
             self.unsupported("conversions of class types", loc);
             return self.recover(ty, &[e], loc);
         }
@@ -7692,6 +7697,7 @@ impl Sema<'_, '_> {
                         self.recover(ty, &[e], loc)
                     }
                     None => {
+                        // kiln-gap: GAP-031
                         self.unsupported("this user-defined conversion", loc);
                         self.recover(ty, &[e], loc)
                     }

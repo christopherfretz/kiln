@@ -260,6 +260,7 @@ impl Mangler<'_, '_> {
             // As in a template argument: a hard error, never a shared
             // placeholder name (WP-593).
             let at = self.failed.unwrap_or(e);
+            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }
@@ -286,6 +287,7 @@ impl Mangler<'_, '_> {
                 return;
             }
             let at = self.failed.unwrap_or(e);
+            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }
@@ -361,6 +363,7 @@ impl Mangler<'_, '_> {
                 return;
             }
             let at = self.failed.unwrap_or(e);
+            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }

@@ -122,6 +122,7 @@ impl Compiler<'_> {
                 self.wide_store(pf, src, ty, k, init, e);
                 self.patch_here(end);
             }
+            // kiln-gap: GAP-126
             Place::Reg(_) | Place::Lane { .. } => self.unsupported(e),
         }
     }
@@ -341,6 +342,7 @@ impl Compiler<'_> {
         let lty = self.ety(lhs);
         let ct = self.ty(x.result_ty);
         let Some(sub) = wide_sub(op) else {
+            // kiln-gap: GAP-126
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
@@ -368,6 +370,7 @@ impl Compiler<'_> {
                 self.wide(wide::FROM | wide::INIT, 0, [t, r, 0], ct, rx, e);
                 (t, 0)
             } else {
+                // kiln-gap: GAP-126
                 self.unsupported(e);
                 return Place::Mem(self.reg());
             }
@@ -405,6 +408,7 @@ impl Compiler<'_> {
                 self.wide(wide::TO, 0, [new, t, 0], ct, lx, e);
                 self.store(place, new, lty, k, e);
             }
+            // kiln-gap: GAP-126
             _ => self.unsupported(e),
         }
         if let (Some(bf), Place::Mem(t)) = (bf, place) {
@@ -435,6 +439,7 @@ impl Compiler<'_> {
     ) -> Place {
         let op = self.ast().exprs.binary_op(e);
         let Some(iop) = int_op(op) else {
+            // kiln-gap: GAP-126
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
@@ -467,6 +472,7 @@ impl Compiler<'_> {
                 self.convert(old, lty, ct, a, e);
             }
             _ => {
+                // kiln-gap: GAP-126
                 self.unsupported(e);
                 return place;
             }
@@ -529,6 +535,7 @@ impl Compiler<'_> {
         let [l, r] = self.ast().exprs.operands(e);
         let lt = self.ety(l);
         let (Some(c), true) = (cmp_of(op), self.ety(r) == lt) else {
+            // kiln-gap: GAP-126
             return self.unsupported(e);
         };
         let a = self.wide_place(l);
@@ -555,7 +562,53 @@ impl Compiler<'_> {
                 let x = self.float_x(ty);
                 self.wide(wide::TO_FLOAT, 0, [dst, a, 0], ot, x, e);
             }
-            _ => self.unsupported(e),
+            CastKind::Dependent
+            | CastKind::NoOp
+            | CastKind::LValueToRValue
+            | CastKind::LValueToRValueBitCast
+            | CastKind::LValueBitCast
+            | CastKind::BitCast
+            | CastKind::ArrayToPointerDecay
+            | CastKind::FunctionToPointerDecay
+            | CastKind::BuiltinFnToFnPtr
+            | CastKind::NullToPointer
+            | CastKind::NullToMemberPointer
+            | CastKind::IntegralToPointer
+            | CastKind::PointerToIntegral
+            | CastKind::PointerToBoolean
+            | CastKind::IntegralCast
+            | CastKind::BooleanToSignedIntegral
+            | CastKind::FloatingToIntegral
+            | CastKind::FloatingToBoolean
+            | CastKind::FloatingCast
+            | CastKind::DerivedToBase
+            | CastKind::UncheckedDerivedToBase
+            | CastKind::BaseToDerived
+            | CastKind::Dynamic
+            | CastKind::DerivedToBaseMemberPointer
+            | CastKind::BaseToDerivedMemberPointer
+            | CastKind::MemberPointerToBoolean
+            | CastKind::ReinterpretMemberPointer
+            | CastKind::UserDefinedConversion
+            | CastKind::ConstructorConversion
+            | CastKind::ToVoid
+            | CastKind::ToUnion
+            | CastKind::VectorSplat
+            | CastKind::NonAtomicToAtomic
+            | CastKind::AtomicToNonAtomic
+            | CastKind::IntegralRealToComplex
+            | CastKind::FloatingRealToComplex
+            | CastKind::IntegralComplexCast
+            | CastKind::FloatingComplexCast
+            | CastKind::IntegralComplexToReal
+            | CastKind::FloatingComplexToReal
+            | CastKind::IntegralComplexToBoolean
+            | CastKind::FloatingComplexToBoolean
+            | CastKind::IntegralComplexToFloatingComplex
+            | CastKind::FloatingComplexToIntegralComplex => {
+                // kiln-gap: GAP-126
+                self.unsupported(e);
+            }
         }
     }
 }

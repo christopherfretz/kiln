@@ -287,9 +287,6 @@ pub(crate) struct OverloadCandidateSet {
     pub found: Vec<DeclId>,
     /// Parameter types of the candidate being added.
     pub params: Vec<QualType>,
-    /// Function templates were found but not added (deduction is
-    /// WP-071).
-    pub skipped_templates: bool,
     /// A candidate has a *requires-clause*, which is not checked yet
     /// (WP-073): the outcome is uncertain.
     pub uncertain: bool,
@@ -342,7 +339,6 @@ impl Default for OverloadCandidateSet {
             target: QualType::ERROR,
             found: Vec::new(),
             params: Vec::new(),
-            skipped_templates: false,
             uncertain: false,
             oper: false,
             note_extra_args: 0,
@@ -368,7 +364,6 @@ impl OverloadCandidateSet {
         self.target = QualType::ERROR;
         self.found.clear();
         self.params.clear();
-        self.skipped_templates = false;
         self.uncertain = false;
         self.oper = false;
         self.note_extra_args = 0;

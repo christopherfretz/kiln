@@ -294,6 +294,7 @@ impl Sema<'_, '_> {
             let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
             if let Some(at) = self.fmv_hidden_version(&attrs) {
                 let msg =
+                    // kiln-gap: GAP-144
                     self.diag(DiagId::sema_multiversion_not_supported, at).arg("target_version");
                 self.emit(msg);
             }

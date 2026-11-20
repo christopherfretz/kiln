@@ -1505,6 +1505,7 @@ impl Compiler<'_> {
                 let Some((w, s)) = int_of(self.kind(xt)) else {
                     let q = self.ast().exprs.get(x).ty();
                     let Some(et) = self.ast().types.pointee(q) else {
+                        // kiln-gap: GAP-115
                         self.unsupported(e);
                         return Some(self.finish_builtin(dst));
                     };
@@ -1561,7 +1562,17 @@ impl Compiler<'_> {
                         op(self, bi::FP_OP, float_code(fk) | bi::FABS << 4, [a, a, dst], [0, 0], begin);
                     }
                     TyKind::Float(_) => self.trap(e, ""),
-                    _ => self.unsupported(e),
+                    TyKind::Void
+                    | TyKind::Ptr(_)
+                    | TyKind::NullPtr
+                    | TyKind::Array { .. }
+                    | TyKind::BoolVec { .. }
+                    | TyKind::Record { .. }
+                    | TyKind::Func
+                    | TyKind::MemPtr { .. }
+                    | TyKind::Reflection
+                    | TyKind::WideInt { .. }
+                    | TyKind::Opaque => self.unsupported(e), // kiln-gap: GAP-115
                 }
             }
             // clang 19 does not constant-evaluate the vector reductions;

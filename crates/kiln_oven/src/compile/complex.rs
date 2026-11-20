@@ -112,6 +112,7 @@ impl Compiler<'_> {
     /// Initializes the complex object of type `ty` at `p` from operation
     /// `e` (`cx_op`).
     pub(super) fn cx_init(&mut self, e: ExprId, p: u32, ty: OTy) {
+        // kiln-gap: GAP-127
         let Some(elem) = self.cx_elem(ty) else { return self.unsupported(e) };
         let [re, im] = self.cx_regs(e);
         let es = self.o.types.size(elem);
@@ -162,6 +163,7 @@ impl Compiler<'_> {
         let e = skip_parens(self.ast(), e);
         let ty = self.ety(e);
         let Some(elem) = self.cx_elem(ty) else {
+            // kiln-gap: GAP-127
             self.unsupported(e);
             return [self.reg(), self.reg()];
         };
@@ -206,6 +208,7 @@ impl Compiler<'_> {
             ExprKind::BinaryOperator => self.cx_binary(e, elem),
             ExprKind::CallExpr => {
                 let Some([a, b]) = self.builtin_complex_args(e) else {
+                    // kiln-gap: GAP-127
                     self.unsupported(e);
                     return [self.reg(), self.reg()];
                 };
@@ -251,6 +254,7 @@ impl Compiler<'_> {
             }
             _ => {
                 let Some(xe) = self.cx_elem(xt) else {
+                    // kiln-gap: GAP-127
                     self.unsupported(e);
                     return [self.reg(), self.reg()];
                 };
@@ -299,6 +303,7 @@ impl Compiler<'_> {
         e: ExprId,
     ) -> [u32; 2] {
         let Place::Mem(p) = place else {
+            // kiln-gap: GAP-127
             self.unsupported(e);
             return [self.reg(), self.reg()];
         };
@@ -439,6 +444,7 @@ impl Compiler<'_> {
             self.cx_elem(t).unwrap_or(t)
         };
         let Some(c) = cmp_of(op).filter(|_| matches!(op, BinaryOp::EQ | BinaryOp::NE)) else {
+            // kiln-gap: GAP-127
             return self.unsupported(e);
         };
         let ([ra, ia], _) = self.cx_operand(a);
@@ -564,6 +570,7 @@ impl Compiler<'_> {
         let old = match (lelem, place) {
             (Some(le), Place::Mem(p)) => (self.cx_load(p, le, ak::COMPOUND, e), false),
             (Some(_), _) => {
+                // kiln-gap: GAP-127
                 self.unsupported(e);
                 return place;
             }

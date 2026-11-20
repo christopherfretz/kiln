@@ -330,6 +330,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     }
 
     pub(crate) fn unimplemented<T>(&mut self, feature: &str, loc: Loc) -> SubstResult<T> {
+        // kiln-gap: forward
         self.sema.templ_unimplemented(feature, loc);
         Err(SubstFail)
     }
@@ -438,6 +439,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
+                // kiln-gap: GAP-003
                 self.unimplemented("pack expansion", loc)
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),
@@ -710,6 +712,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                         let TemplateName::TemplateTemplateParm { decl, .. } =
                             self.sema.ast.types.template_name_view(n)
                         else {
+                            // kiln-gap: GAP-014
                             return self.unimplemented("member templates", loc);
                         };
                         let np = self.find_instantiated_decl(decl, loc)?;
@@ -824,6 +827,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Nns::Type { prefix, ty, template_kw }
             }
             Nns::Identifier { prefix, name } => {
+                // kiln-gap: GAP-045
                 let Some(orig) = prefix else { return self.unimplemented("dependent name", loc) };
                 let p = self.nns(orig, loc)?;
                 if self.nns_still_dependent(p) {
@@ -893,6 +897,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             Nns::Namespace { ns, .. } | Nns::NamespaceAlias { ns, .. } => Ok(ns),
             Nns::Type { ty, .. } => {
                 if self.sema.is_dependent_type(ty) {
+                    // kiln-gap: GAP-042
                     return self.unimplemented("dependent nested name specifier", loc);
                 }
                 let t = &self.sema.ast.types;
@@ -909,6 +914,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 }
                 Ok(self.sema.ast.definition(r).unwrap_or(r))
             }
+            // kiln-gap: GAP-046
             _ => self.unimplemented("this nested name specifier", loc),
         }
     }
@@ -1308,11 +1314,13 @@ impl Substituter<'_, '_, '_> {
 
     fn pattern_specialization(&mut self, parent: DeclId, loc: Loc) -> SubstResult<DeclId> {
         if !self.is_class_pattern(parent) {
+            // kiln-gap: GAP-043
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         let injected = self.sema.this_class_type(parent);
         let t = self.ty(injected, loc)?;
         if self.sema.ast.types.is_dependent(t) {
+            // kiln-gap: GAP-043
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         match self.sema.ast.types.as_record(t) {

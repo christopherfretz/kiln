@@ -345,6 +345,7 @@ impl Sema<'_, '_> {
             return e;
         }
         if let Some(what) = self.temporary_unsupported(ty) {
+            // kiln-gap: GAP-020
             self.unsupported(&format!("value-initialization of {what}"), loc);
             return self.recover(ty, &[], loc);
         }
@@ -459,6 +460,7 @@ impl Sema<'_, '_> {
             .temporary_unsupported(ty)
             .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
         {
+            // kiln-gap: GAP-022
             self.unsupported(&format!("list-initialization of {what}"), l.lbrace);
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, loc);
@@ -573,6 +575,7 @@ impl Sema<'_, '_> {
             return self.recover_dropping_braced(ty, args, loc);
         }
         if let Some(what) = self.temporary_unsupported(ty) {
+            // kiln-gap: GAP-025
             self.unsupported(&format!("direct-initialization of {what}"), loc);
             return self.recover_dropping_braced(ty, args, loc);
         }
@@ -608,6 +611,7 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(cn.ty()).is_some()
             || self.ast.types.as_record(rn.ty()).is_some()
         {
+            // kiln-gap: GAP-052
             self.unsupported("the GNU '?:' operator on class types", loc);
             return self.recover_err(&[common, rhs], loc);
         }

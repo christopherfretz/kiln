@@ -2161,6 +2161,7 @@ impl Preprocessor<'_, '_> {
             return true;
         }
         if import && !matches!(next.kind, TokKind::Identifier(_) | TokKind::Punct(Punct::Colon)) {
+            // kiln-gap: GAP-136
             self.emit(Diag::new(DiagId::pp_header_unit_unsupported, next.span));
         }
         if let TokKind::Identifier(n) = next.kind

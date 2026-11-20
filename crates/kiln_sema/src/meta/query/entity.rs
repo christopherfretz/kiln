@@ -549,6 +549,7 @@ impl Sema<'_, '_> {
             None => fail(
                 loc,
                 format!(
+                    // kiln-gap: GAP-132
                     "kiln: constant_of an object of type '{}' is not implemented yet",
                     self.ty_str(obj)
                 ),

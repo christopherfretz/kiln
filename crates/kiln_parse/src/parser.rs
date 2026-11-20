@@ -996,6 +996,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// Reports `{what} is not supported yet` at `loc`.
     pub(crate) fn unsupported(&self, what: &str, loc: Loc) {
+        // kiln-gap: forward
         self.s.unsupported(what, loc);
     }
 

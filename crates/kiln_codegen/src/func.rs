@@ -1613,6 +1613,7 @@ impl Cg<'_> {
                     let a = self.f.fir.alloca(mt, align);
                     Ok(ParamVal::Indirect(Addr { v: a, ty: mt, align }, false))
                 } else {
+                    // kiln-gap: GAP-088
                     err(loc, "an ignored scalar parameter is not supported yet")
                 }
             }
@@ -1723,6 +1724,7 @@ impl Cg<'_> {
                             if got.is_none_or(|g| g < *align) {
                                 return err(
                                     loc,
+                                    // kiln-gap: GAP-089
                                     "copying an under-aligned byval argument is not supported yet",
                                 );
                             }

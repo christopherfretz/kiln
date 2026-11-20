@@ -376,6 +376,7 @@ impl Parser<'_, '_> {
     }
 
     fn fenv_unsupported(&mut self, what: &str, loc: Loc) {
+        // kiln-gap: GAP-142
         self.s.unsupported(&format!("{what} (the floating-point environment)"), loc);
     }
 }

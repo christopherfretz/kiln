@@ -234,6 +234,7 @@ impl Cg<'_> {
             _ => {
                 return err(
                     self.loc_of(e),
+                    // kiln-gap: GAP-060
                     format!("code generation for {name} is not supported yet"),
                 );
             }

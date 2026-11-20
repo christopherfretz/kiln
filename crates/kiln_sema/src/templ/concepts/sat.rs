@@ -616,6 +616,7 @@ impl Sema<'_, '_> {
                 // invalid program or pick the wrong overload.
                 if let Some(d) = first
                     .as_ref()
+                    // kiln-gap: check
                     .filter(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
                 {
                     self.emit(d.clone());
@@ -650,6 +651,7 @@ impl Sema<'_, '_> {
             // Concrete arguments but a dependent result: a substitution
             // the substituter does not complete.
             let d = self
+                // kiln-gap: GAP-093
                 .diag(DiagId::sema_unimplemented_template_feature, loc)
                 .arg("an atomic constraint that stays value-dependent after substitution");
             self.emit(d);

@@ -199,6 +199,7 @@ impl Sema<'_, '_> {
                     let loc = self.ast.decls.get(f).loc();
                     let what =
                         format!("deciding whether the {} needs overload resolution", k.spelling());
+                    // kiln-gap: GAP-039
                     self.unsupported(&what, loc);
                 }
                 false
@@ -866,6 +867,7 @@ impl Sema<'_, '_> {
             if first {
                 mismatch = true;
             } else {
+                // kiln-gap: GAP-040
                 self.unsupported("a variadic explicitly-defaulted special member", floc);
                 had_error = true;
             }

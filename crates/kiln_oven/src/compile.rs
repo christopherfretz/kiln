@@ -1548,6 +1548,7 @@ impl<'a> Compiler<'a> {
         if wide {
             self.trap(
                 e,
+                // kiln-gap: GAP-129
                 "kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet",
             );
         }
@@ -1663,6 +1664,7 @@ impl<'a> Compiler<'a> {
             // `ICK_Boolean_Conversion` between vectors): the generic note.
             return self.throw_invalid(e);
         }
+        // kiln-gap: forward
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 
@@ -2748,6 +2750,7 @@ impl Compiler<'_> {
             StmtKind::CaseStmt | StmtKind::DefaultStmt => {
                 self.trap_loc(
                     n.loc(),
+                    // kiln-gap: GAP-121
                     "kiln: a 'case' label outside its switch body is not supported yet".into(),
                 );
             }
@@ -2817,9 +2820,10 @@ impl Compiler<'_> {
                     self.contract_check(s);
                 }
             }
-            k => {
+            k @ (StmtKind::CXXExpansionStmt | StmtKind::CXXCatchStmt) => {
                 self.trap_loc(
                     n.loc(),
+                    // kiln-gap: GAP-120
                     format!("kiln: constant evaluation of {k:?} is not supported yet"),
                 );
             }
@@ -3345,6 +3349,7 @@ impl Compiler<'_> {
                 let loc = self.b.ast().stmts.get(l.stmt).loc();
                 self.trap_loc(
                     loc,
+                    // kiln-gap: GAP-122
                     "kiln: a 'case' label in this statement is not supported yet".into(),
                 );
             }
@@ -3946,6 +3951,7 @@ impl Compiler<'_> {
                         self.emit(Op::IsConstEval, 32, &[dst]);
                     }
                 }
+                // kiln-gap: GAP-110
                 None => self.unsupported(e),
             },
             ExprKind::ArrayTypeTraitExpr => {
@@ -4009,6 +4015,7 @@ impl Compiler<'_> {
                     self.rv_inner(d, dst);
                     self.srcloc = saved;
                 }
+                // kiln-gap: GAP-110
                 None => self.unsupported(e),
             },
             ExprKind::SourceLocExpr => self.source_loc(e, dst),
@@ -4051,6 +4058,7 @@ impl Compiler<'_> {
                     let f = self.o.func_index(self.b.ast(), d);
                     self.konst(dst, u128::from(fn_ptr(f)));
                 } else {
+                    // kiln-gap: GAP-110
                     self.unsupported(e);
                 }
             }
@@ -4125,6 +4133,7 @@ impl Compiler<'_> {
                         }
                     }
                     Some(Opaque::Lv(p)) => self.load(p, ty, ak::READ, e, dst),
+                    // kiln-gap: GAP-110
                     None => self.unsupported(e),
                 }
             }
@@ -4165,12 +4174,14 @@ impl Compiler<'_> {
                     self.rv_inner(x, dst);
                     self.srcloc = saved;
                 }
+                // kiln-gap: GAP-110
                 None => self.unsupported(e),
             },
             ExprKind::ArrayInitIndexExpr => match self.array_index {
                 Some(k) => {
                     self.emit(Op::Mov, 0, &[dst, k]);
                 }
+                // kiln-gap: GAP-110
                 None => self.unsupported(e),
             },
             ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
@@ -4179,14 +4190,69 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, r]);
                 }
             }
-            k if k.is_cast() => self.cast(e, dst, ty),
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr => self.cast(e, dst, ty),
             _ if n.value_category().is_glvalue() => {
                 // A glvalue used as a value (an lvalue-to-rvalue conversion
                 // sema left implicit).
                 let p = self.lv(e, Access::Read);
                 self.load(p, ty, ak::READ, e, dst);
             }
-            _ => self.unsupported(e),
+            ExprKind::StringLiteral
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::MemberExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::CoyieldExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::VAArgExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr => self.unsupported(e), // kiln-gap: GAP-117
         }
     }
 
@@ -4243,6 +4309,7 @@ impl Compiler<'_> {
                 u64::from(self.typedef_align(q).unwrap_or_else(|| self.o.types.info(t).align))
             }
             TraitKind::VecStep => {
+                // kiln-gap: GAP-110
                 self.unsupported(e);
                 return;
             }
@@ -4337,6 +4404,7 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, Some(dst), e);
             }
+            // kiln-gap: GAP-110
             UnaryOp::Coawait => self.unsupported(e),
         }
     }
@@ -4656,13 +4724,16 @@ impl Compiler<'_> {
     /// `partial_ordering`, `==` then `<` then `>` else unordered).
     fn three_way(&mut self, e: ExprId, p: u32, ty: OTy) {
         let TyKind::Record { decl, .. } = self.kind(ty) else {
+            // kiln-gap: GAP-110
             return self.unsupported(e);
         };
         let Some(info) = self.ast().cmp_categories.for_record(decl).copied() else {
+            // kiln-gap: GAP-110
             return self.unsupported(e);
         };
         let Some(fi) = self.o.types.fields(ty).iter().copied().find(|f| f.decl == info.field)
         else {
+            // kiln-gap: GAP-110
             return self.unsupported(e);
         };
         let [a, b] = self.ast().exprs.operands(e);
@@ -4767,6 +4838,7 @@ impl Compiler<'_> {
             }
         }
         let Some(iop) = int_op(op) else {
+            // kiln-gap: GAP-110
             self.unsupported(e);
             return;
         };
@@ -4831,6 +4903,7 @@ impl Compiler<'_> {
                 Some(fop) => {
                     self.emit_at(fop, float_code(k), &[dst, ra, rb], e);
                 }
+                // kiln-gap: GAP-110
                 None => self.unsupported(e),
             },
             k => {
@@ -4886,6 +4959,7 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, src]);
                 }
             }
+            // kiln-gap: GAP-110
             _ => self.unsupported(e),
         }
     }
@@ -5115,7 +5189,21 @@ impl Compiler<'_> {
                 };
                 self.cce(e, aux, dst, r, REINTERPRET_CONV);
             }
-            _ => self.unsupported(e),
+            CastKind::Dependent
+            | CastKind::LValueBitCast
+            | CastKind::BuiltinFnToFnPtr
+            | CastKind::BooleanToSignedIntegral
+            | CastKind::ToUnion
+            | CastKind::VectorSplat
+            | CastKind::IntegralRealToComplex
+            | CastKind::FloatingRealToComplex
+            | CastKind::IntegralComplexCast
+            | CastKind::FloatingComplexCast
+            | CastKind::IntegralComplexToFloatingComplex
+            | CastKind::FloatingComplexToIntegralComplex => {
+                // kiln-gap: GAP-118
+                self.unsupported(e);
+            }
         }
     }
 
@@ -5546,6 +5634,7 @@ impl Compiler<'_> {
                 if ast.decls.get(d).kind() == DeclKind::Binding {
                     // A binding names its expression ([dcl.struct.bind]).
                     let Some(b) = ast.decls.binding_expr(d) else {
+                        // kiln-gap: GAP-111
                         self.unsupported(e);
                         return Place::Mem(self.reg());
                     };
@@ -5570,6 +5659,7 @@ impl Compiler<'_> {
                     ast.decls.get(d).kind(),
                     DeclKind::Var | DeclKind::ParmVar | DeclKind::TemplateParamObject
                 ) {
+                    // kiln-gap: GAP-111
                     self.unsupported(e);
                     return Place::Mem(self.reg());
                 }
@@ -5751,6 +5841,7 @@ impl Compiler<'_> {
                         place
                     }
                     _ => {
+                        // kiln-gap: GAP-111
                         self.unsupported(e);
                         Place::Mem(self.reg())
                     }
@@ -5768,6 +5859,7 @@ impl Compiler<'_> {
                     _ if op.is_compound_assignment() => self.compound_assign(e),
                     _ if op.is_ptr_mem() => self.mp_access(e, acc),
                     _ => {
+                        // kiln-gap: GAP-111
                         self.unsupported(e);
                         Place::Mem(self.reg())
                     }
@@ -5777,6 +5869,7 @@ impl Compiler<'_> {
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(p)) => p,
                 _ => {
+                    // kiln-gap: GAP-111
                     self.unsupported(e);
                     Place::Mem(self.reg())
                 }
@@ -5925,6 +6018,7 @@ impl Compiler<'_> {
                 Place::Mem(self.materialize(e, ty))
             }
             _ => {
+                // kiln-gap: GAP-111
                 self.unsupported(e);
                 Place::Mem(self.reg())
             }
@@ -6001,6 +6095,7 @@ impl Compiler<'_> {
             _ => (false, None),
         };
         let Some(idx) = idx else {
+            // kiln-gap: GAP-111
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
@@ -6207,6 +6302,7 @@ impl Compiler<'_> {
             let lt = self.ty(x.lhs_ty);
             let ct = self.ty(x.result_ty);
             let Some(iop) = int_op(op) else {
+                // kiln-gap: GAP-111
                 self.unsupported(e);
                 return place;
             };
@@ -6528,7 +6624,101 @@ impl Compiler<'_> {
                 let src = self.lv_mem(e, Access::Read);
                 self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
             }
-            _ => self.unsupported(e),
+            ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::DeclRefExpr
+            | ExprKind::MemberExpr
+            | ExprKind::CXXThisExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::BinaryConditionalOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::ParenExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::CXXRewrittenBinaryOperator
+            | ExprKind::ParenListExpr
+            | ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr
+            | ExprKind::ImplicitValueInitExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXDefaultArgExpr
+            | ExprKind::CXXDefaultInitExpr
+            | ExprKind::CXXScalarValueInitExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::CoyieldExpr
+            | ExprKind::ConstantExpr
+            | ExprKind::AddrLabelExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::VAArgExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::CXXReflectExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::PseudoObjectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr => self.unsupported(e), // kiln-gap: GAP-119
         }
     }
 
@@ -6607,6 +6797,7 @@ impl Compiler<'_> {
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
                 if inits.len() as u64 > n {
+                    // kiln-gap: GAP-112
                     self.unsupported(e);
                     return;
                 }
@@ -6669,6 +6860,7 @@ impl Compiler<'_> {
                 // One bit per lane (`ty.rs`); the lanes not listed are
                 // false.
                 if inits.len() as u64 > n || inits.iter().any(|&x| self.is_vector_expr(x)) {
+                    // kiln-gap: GAP-112
                     return self.unsupported(e);
                 }
                 if (inits.len() as u64) < n {
@@ -6791,7 +6983,17 @@ impl Compiler<'_> {
                     }
                 }
             }
-            _ => self.unsupported(e),
+            TyKind::Void
+            | TyKind::Bool
+            | TyKind::Int { .. }
+            | TyKind::Float(_)
+            | TyKind::Ptr(_)
+            | TyKind::NullPtr
+            | TyKind::Func
+            | TyKind::MemPtr { .. }
+            | TyKind::Reflection
+            | TyKind::WideInt { .. }
+            | TyKind::Opaque => self.unsupported(e), // kiln-gap: GAP-112
         }
     }
 
@@ -6823,9 +7025,12 @@ impl Compiler<'_> {
     fn std_initializer_list(&mut self, e: ExprId, p: u32, ty: OTy) {
         let arr = self.ast().exprs.operand(e);
         let aty = self.ety(arr);
+        // kiln-gap: GAP-112
         let TyKind::Array { elem, n } = self.kind(aty) else { return self.unsupported(e) };
+        // kiln-gap: GAP-112
         let &[f0, f1] = self.o.types.fields(ty) else { return self.unsupported(e) };
         if !matches!(self.kind(f0.ty), TyKind::Ptr(_)) || f0.width.is_some() {
+            // kiln-gap: GAP-112
             return self.unsupported(e);
         }
         let a = self.lv_mem(arr, Access::Addr);
@@ -6839,7 +7044,19 @@ impl Compiler<'_> {
                 self.konst(k, u128::from(n));
                 self.emit_ptr_add(int_aux(64, false), &[r, a, k, elem.0], e);
             }
-            _ => return self.unsupported(e),
+            TyKind::Void
+            | TyKind::Bool
+            | TyKind::Int { .. }
+            | TyKind::Float(_)
+            | TyKind::NullPtr
+            | TyKind::Array { .. }
+            | TyKind::BoolVec { .. }
+            | TyKind::Record { .. }
+            | TyKind::Func
+            | TyKind::MemPtr { .. }
+            | TyKind::Reflection
+            | TyKind::WideInt { .. }
+            | TyKind::Opaque => return self.unsupported(e), // kiln-gap: GAP-112
         }
         let q1 = self.elem_ptr(p, f1.offset, e);
         self.emit_at(Op::InitStore, 0, &[q1, r, f1.ty.0], e);
@@ -7048,6 +7265,7 @@ impl Compiler<'_> {
             // `void()` (an empty comma fold, [temp.variadic]/10) or a
             // discarded `T()`: no effect.
             ExprKind::CXXScalarValueInitExpr => {}
+            // kiln-gap: GAP-110
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
                 let _ = self.materialize(e, ty);
@@ -7493,6 +7711,7 @@ impl Compiler<'_> {
     ) -> u32 {
         use crate::meta::materialize::{ExcSite, MetaSite, Shape, recipe};
         if args.len() > crate::MAX_META_ARGS {
+            // kiln-gap: GAP-124
             self.unsupported(e);
             return self.reg();
         }
@@ -7730,6 +7949,7 @@ impl Compiler<'_> {
         let kind = ast.exprs.source_loc_kind(e);
         let key = self.srcloc.unwrap_or(e);
         let Some(v) = ast.exprs.source_loc_values(key).copied() else {
+            // kiln-gap: GAP-116
             return self.unsupported(e);
         };
         let cv = match kind {
@@ -7740,6 +7960,7 @@ impl Compiler<'_> {
             K::Function => v.function,
             K::SourceLocStruct => match v.location {
                 Some(c) => c,
+                // kiln-gap: GAP-116
                 None => return self.unsupported(e),
             },
         };

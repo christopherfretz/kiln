@@ -784,6 +784,7 @@ impl Parser<'_, '_> {
     fn parse_sizeof_pack(&mut self, loc: Loc) -> PExpr {
         let dots = self.bump().span.lo;
         if !self.at(Punct::LParen) {
+            // kiln-gap: GAP-013
             self.unsupported("'sizeof...' without parentheses", dots);
             return None;
         }
@@ -2221,6 +2222,7 @@ impl Parser<'_, '_> {
                     self.parse_template_splice_expr()
                 }
                 Kw::Template => {
+                    // kiln-gap: GAP-155
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }

@@ -503,14 +503,8 @@ impl Sema<'_, '_> {
     /// [`Selected`], keeping a failed set for its notes.
     pub(crate) fn selected_of(&mut self, set: OverloadCandidateSet, out: OvlOutcome) -> Selected {
         let unsure = set.uncertain;
-        let skipped = set.skipped_templates;
         let r = match out {
             _ if unsure => Selected::Unsupported,
-            OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
-                if skipped && !self.template_cannot_win(&set, b) =>
-            {
-                Selected::Unsupported
-            }
             OvlOutcome::Success(b) => {
                 // The inheriting constructor of a usable base constructor
                 // can itself be deleted ([class.inhctor.init]/1; clang
@@ -519,7 +513,6 @@ impl Sema<'_, '_> {
                 if self.is_deleted_fn(m) { Selected::Deleted(m) } else { Selected::Found(m) }
             }
             OvlOutcome::Deleted(b) => Selected::Deleted(self.selected_ctor(&set, b)),
-            OvlOutcome::NoViable | OvlOutcome::Ambiguous if skipped => Selected::Unsupported,
             OvlOutcome::NoViable => Selected::Missing,
             OvlOutcome::Ambiguous => Selected::Ambiguous,
         };

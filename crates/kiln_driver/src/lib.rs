@@ -440,6 +440,7 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
     .or((action != Action::SyntaxOnly && args.verify.is_some())
         .then_some("-verify without -fsyntax-only"));
     if let Some(what) = not_impl {
+        // kiln-gap: GAP-148
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }
     // WP-813: clang's `XRayArgs` checks.

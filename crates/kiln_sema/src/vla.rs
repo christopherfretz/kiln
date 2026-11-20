@@ -65,6 +65,7 @@ impl Sema<'_, '_> {
     /// again. `None` (after an error) for any other array type.
     pub(crate) fn vla_range_count(&mut self, q: QualType, loc: Loc) -> Option<ExprId> {
         let TypeView::VariableArray { elem, .. } = self.ast.types.canonical_view(q) else {
+            // kiln-gap: GAP-151
             self.unsupported("range-based for over this array type", loc);
             return None;
         };

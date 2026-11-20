@@ -2395,6 +2395,7 @@ impl Substituter<'_, '_, '_> {
                 let elems = match elems {
                     Ok(crate::templ::pack::Expansion::Elements(v)) => v,
                     Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
+                        // kiln-gap: GAP-009
                         let _ = self.unimplemented::<()>("base pack expansion", b.loc);
                         continue;
                     }
@@ -2736,6 +2737,7 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
         let Some(name) = n.name().as_ident().filter(|_| !n.name().is_empty()) else {
+            // kiln-gap: GAP-017
             return self.unimplemented("anonymous member classes of class templates", loc);
         };
         let kw = match self.sema.ast.decls.record(m).map(|r| r.tag) {
@@ -2775,6 +2777,7 @@ impl Substituter<'_, '_, '_> {
             match self.expand_pattern(|s| s.nns(pnns, qloc))? {
                 crate::templ::pack::Expansion::Elements(v) => v,
                 crate::templ::pack::Expansion::Unexpanded(_) => {
+                    // kiln-gap: GAP-010
                     return self.unimplemented("this using-declaration pack expansion", loc);
                 }
             }
@@ -2864,6 +2867,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Replays member `m` of the pattern class (§4.6).
+    #[allow(clippy::too_many_lines, reason = "one arm per member kind, listed exhaustively")]
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
@@ -2953,7 +2957,42 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::FunctionTemplate
             | DeclKind::VarTemplate
             | DeclKind::TypeAliasTemplate => self.member_template(m)?,
-            k => return self.unimplemented(&format!("{k:?} members of class templates"), loc),
+            k @ (DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::NamespaceAlias
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingDirective
+            | DeclKind::UsingEnum
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::EnumConstant
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::IndirectField
+            | DeclKind::FriendTemplate
+            | DeclKind::Function
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::ParmVar
+            | DeclKind::ImplicitParam
+            | DeclKind::Binding
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::TemplateParamObject
+            | DeclKind::Label
+            | DeclKind::ContractResultName) => {
+                // kiln-gap: GAP-015
+                return self.unimplemented(&format!("{k:?} members of class templates"), loc);
+            }
         }))
     }
 }

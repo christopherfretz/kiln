@@ -669,6 +669,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, &flat, lparen);
         }
         if !class && let Some(what) = self.temporary_unsupported(ty) {
+            // kiln-gap: GAP-024
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
         }
@@ -753,6 +754,7 @@ impl Sema<'_, '_> {
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_)
         ) {
             let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
+            // kiln-gap: GAP-024
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, flat, lparen);
         }

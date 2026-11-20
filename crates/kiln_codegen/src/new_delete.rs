@@ -1826,6 +1826,7 @@ impl Cg<'_> {
             i += 1;
         }
         if i != params.len() {
+            // kiln-gap: GAP-090
             return err(loc, "this deallocation function is not supported yet");
         }
         self.emit_new_delete_call(od, &vals, &arg_tys, loc)?;

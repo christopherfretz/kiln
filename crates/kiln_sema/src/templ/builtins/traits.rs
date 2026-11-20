@@ -176,6 +176,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             let what = format!("type trait '{}'", t.spelling());
+            // kiln-gap: GAP-109
             let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(what);
             self.emit(d);
             return None;

@@ -381,6 +381,7 @@ impl MetaError {
             notes: vec![Note::new(
                 loc,
                 format!(
+                    // kiln-gap: forward
                     "kiln: reflection function '{}' is not implemented yet (WP-{wp})",
                     op.display()
                 ),

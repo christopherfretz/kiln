@@ -2075,14 +2075,30 @@ manual / M4-gate check.
 [--unit-group <group>]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
 
-0. two in-process lints, each listing every problem it finds:
+0. three in-process lints, each listing every problem it finds:
    `cargo xtask diag-split --check` (kiln_diag's id and group tables are
    in their area files with empty tails, spec/diag.md §2.4; the failure
    says to run `cargo xtask diag-split`), and the per-WP Landed files
    (spec/README.md "Landed sections", `xtask/src/landed.rs`): each file
    under `spec/landed/` is `<spec>/WP-NNN.md` for an existing
    `spec/<spec>.md`, starts `# WP-NNN — <title>` with its own id, and has
-   a `| WP-NNN |` row in `docs/BACKLOG.md`. Both run before `ci` fails;
+   a `| WP-NNN |` row in `docs/BACKLOG.md`; and the static-gap inventory
+   (`cargo xtask static-gaps`, `xtask/src/static_gaps.rs`, WP-1719). A
+   *gap site* is a line of a crate's `src/` outside test modules that
+   uses a gap diagnostic (`static_gaps::GAP_DIAG_IDS`), calls a function
+   that forwards its text to one (`static_gaps::WRAPPERS`, by crate), has
+   a string literal with a gap phrase (`static_gaps::PHRASES`: "not
+   supported yet", "not yet implemented", ...), or uses `todo!` /
+   `unimplemented!`. Each site carries `// kiln-gap: GAP-NNN` on its line
+   or in the comment block directly above it (`forward` inside a wrapper
+   function, `check` on a line that only compares an id with a gap id),
+   and a `GAP-NNN` marker no detected site uses marks the next code line
+   as a site. The lint fails when a site has no marker or names an id
+   `docs/status/static-gaps.md` lacks, when an entry there has no site
+   left, when an entry's sites cell (each `` `file::fn` ``, sorted, ` ×N`
+   for N sites) differs from its markers, or when its row is not an
+   `open` / `in progress` row of `docs/BACKLOG.md` or `excluded:
+   <reason>`; line numbers play no part. All three run before `ci` fails;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun

@@ -491,6 +491,7 @@ impl Cg<'_> {
             // [stmt.contract.assert] (spec/contracts.md §6.3).
             StmtKind::ContractAssertStmt => self.emit_contract_check(s),
             k @ StmtKind::CXXCatchStmt => {
+                // kiln-gap: GAP-073
                 err(Some(n.loc()), format!("statement {k:?} is not supported yet"))
             }
         }

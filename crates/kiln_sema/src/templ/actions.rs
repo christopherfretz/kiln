@@ -1957,6 +1957,7 @@ impl Sema<'_, '_> {
         } else {
             "explicit instantiation"
         };
+        // kiln-gap: GAP-105
         self.templ_unimplemented(what, loc);
         None
     }
@@ -1970,6 +1971,7 @@ impl Sema<'_, '_> {
         } else {
             "explicit specialization"
         };
+        // kiln-gap: GAP-106
         self.templ_unimplemented(what, loc);
         None
     }
@@ -1977,6 +1979,7 @@ impl Sema<'_, '_> {
     /// A deduction guide ([temp.deduct.guide]): CTAD is WP-074.
     pub fn act_deduction_guide(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let _ = sym_str(self, name);
+        // kiln-gap: GAP-107
         self.templ_unimplemented("deduction guide", loc);
         None
     }

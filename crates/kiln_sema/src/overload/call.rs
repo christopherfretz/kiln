@@ -699,16 +699,9 @@ impl Sema<'_, '_> {
         member: bool,
     ) -> Option<u32> {
         let text = self.decl_name_str(name);
-        let undecided = set.uncertain
-            || (set.skipped_templates
-                && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
-                    if self.template_cannot_win(set, b)));
-        if undecided {
-            if set.skipped_templates {
-                self.templ_unimplemented("calls to function templates", loc);
-            } else {
-                self.unsupported("overload resolution with constraints", loc);
-            }
+        if set.uncertain {
+            // kiln-gap: GAP-053
+            self.unsupported("overload resolution with constraints", loc);
             return None;
         }
         if !matches!(out, OvlOutcome::Success(_)) {

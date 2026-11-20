@@ -82,6 +82,13 @@ C mode:
   clusters (crash, wrong-code, rejects-valid where clang accepts,
   accepts-invalid where clang rejects).
 
+Known gaps:
+
+- `static-gaps.md`: every source site that reports a language corner kiln
+  knows it does not handle yet, one `GAP-NNN` entry per gap with its g++.dg
+  reach and the BACKLOG row that fixes it (WP-1719); `cargo xtask
+  static-gaps` keeps it exact in `ci`.
+
 Performance:
 
 - `perf.md`: `cargo xtask bench` against clang 19 (generated; do not edit

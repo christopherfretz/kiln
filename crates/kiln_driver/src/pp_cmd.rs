@@ -610,6 +610,7 @@ impl Job<'_> {
         } else if let MainInput::Capsule(_) = &main {
             let what =
                 if staged { "a module file before C++20" } else { "preprocessing a module file" };
+            // kiln-gap: GAP-140
             Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(engine);
             return None;
         }

@@ -220,6 +220,7 @@ impl Cg<'_> {
             return err(
                 self.loc_of(e),
                 format!(
+                    // kiln-gap: GAP-062
                     "code generation for SVE builtin '{name}' (called as '{called}') is not \
                      supported yet"
                 ),

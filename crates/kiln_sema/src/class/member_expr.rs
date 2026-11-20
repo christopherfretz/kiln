@@ -601,6 +601,7 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[base], loc);
             }
             if !self.is_member_overload_set(&found.decls) {
+                // kiln-gap: GAP-057
                 self.unsupported("this kind of overloaded member access", loc);
                 return self.recover_err(&[base], loc);
             }
@@ -1316,6 +1317,7 @@ impl Sema<'_, '_> {
         for (n, at, ty) in [(name, loc, named), (fname, floc, t1)] {
             match ty {
                 None if dependent => {
+                    // kiln-gap: GAP-044
                     self.templ_unimplemented("a dependent destructor name", at);
                     return self.recover_err(&[obj.base], loc);
                 }
@@ -1458,6 +1460,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(obj.ty));
                 self.emit(msg);
             } else if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
+                // kiln-gap: GAP-044
                 self.templ_unimplemented("a dependent destructor name", loc);
             } else {
                 let text = self.ast.symbols().as_str(name).to_owned();
@@ -2115,6 +2118,7 @@ impl Sema<'_, '_> {
         match kind {
             DeclKind::Field | DeclKind::IndirectField => {
                 let Some(target) = self.declaring_class(m) else {
+                    // kiln-gap: GAP-145
                     self.unsupported("this kind of member access", loc);
                     return self.recover_err(&[b], loc);
                 };
@@ -2206,6 +2210,7 @@ impl Sema<'_, '_> {
                 self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
             _ => {
+                // kiln-gap: GAP-145
                 self.unsupported("this kind of member access", loc);
                 self.recover_err(&[b], loc)
             }
@@ -2490,6 +2495,7 @@ impl Sema<'_, '_> {
             _ => return None,
         };
         let Some(proto) = self.sugared_proto(fn_ty) else {
+            // kiln-gap: GAP-146
             self.unsupported("calls through this function type", loc);
             return Some(self.recover_err(&kids, loc));
         };
@@ -2923,6 +2929,7 @@ impl Sema<'_, '_> {
         }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(declared) {
+            // kiln-gap: GAP-161
             self.unsupported("pointer to member of reference type", loc);
             return Some(self.recover_err(&[e], loc));
         }

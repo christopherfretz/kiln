@@ -2116,7 +2116,45 @@ impl Cg<'_> {
             | TypeView::Builtin(BuiltinType::MetaInfo) => {
                 "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
-            _ => return err(None, format!("RTTI for type `{name}` is not supported yet")),
+            TypeView::Invalid
+            | TypeView::Builtin(..)
+            | TypeView::BitInt { .. }
+            | TypeView::DependentBitInt { .. }
+            | TypeView::LValueRef(..)
+            | TypeView::RValueRef(..)
+            | TypeView::VariableArray { .. }
+            | TypeView::DependentSizedArray { .. }
+            | TypeView::Record(..)
+            | TypeView::UnresolvedUsing(..)
+            | TypeView::Paren(..)
+            | TypeView::Atomic(..)
+            | TypeView::DependentVector { .. }
+            | TypeView::ExtQual { .. }
+            | TypeView::Typedef { .. }
+            | TypeView::Using { .. }
+            | TypeView::Elaborated { .. }
+            | TypeView::QualifiedArray { .. }
+            | TypeView::TemplateTypeParm(..)
+            | TypeView::CanonTemplateTypeParm { .. }
+            | TypeView::SubstTemplateTypeParm { .. }
+            | TypeView::SubstTemplateTypeParmPack { .. }
+            | TypeView::TemplateSpecialization { .. }
+            | TypeView::InjectedClassName { .. }
+            | TypeView::DependentName { .. }
+            | TypeView::DependentTemplateSpecialization { .. }
+            | TypeView::PackExpansion { .. }
+            | TypeView::PackIndexing { .. }
+            | TypeView::Decltype { .. }
+            | TypeView::DependentDecltype(..)
+            | TypeView::TypeOf { .. }
+            | TypeView::UnaryTransform { .. }
+            | TypeView::Auto { .. }
+            | TypeView::DeducedTemplateSpecialization { .. }
+            | TypeView::Attributed { .. }
+            | TypeView::Splice { .. } => {
+                // kiln-gap: GAP-092
+                return err(None, format!("RTTI for type `{name}` is not supported yet"));
+            }
         };
         let pre = self.reserve_rtti(&name);
         let linkage = self.type_rtti_linkage(q);

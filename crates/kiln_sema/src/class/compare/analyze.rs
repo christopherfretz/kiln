@@ -288,7 +288,7 @@ impl Sema<'_, '_> {
         );
         let secondary = !cx.k.is_primary();
         let mut r = CmpAnalysis::OK;
-        if set.uncertain || set.skipped_templates {
+        if set.uncertain {
             // todo(WP-071/073): undecided candidates; assumed usable.
             self.end_set(set);
             return r;

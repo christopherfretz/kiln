@@ -1058,6 +1058,7 @@ impl Sema<'_, '_> {
             };
         }
         if braced {
+            // kiln-gap: GAP-158
             self.unsupported("a braced argument to a builtin function", loc);
             return self.recover_err(&kids, loc);
         }
@@ -1168,6 +1169,7 @@ impl Sema<'_, '_> {
                 self.builtin_arm_exclusive(callee, load, args, rparen)
             }
             _ => {
+                // kiln-gap: GAP-160
                 self.unsupported("this builtin function", loc);
                 None
             }
@@ -3192,6 +3194,7 @@ impl Sema<'_, '_> {
             }
         }
         if braced {
+            // kiln-gap: GAP-159
             self.unsupported("a braced argument to __builtin_addressof", loc);
             return None;
         }

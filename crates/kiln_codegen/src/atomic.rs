@@ -912,6 +912,7 @@ impl Cg<'_> {
         let ty = self.f.fir.ty(&self.m, exp);
         let at = self.atomic_access_ty(ty, size, true);
         if at != ty && self.m.types.float_width(ty).is_none_or(|w| w == 80) {
+            // kiln-gap: GAP-079
             return err(None, format!("atomic compare-exchange of {vq:?} is not supported yet"));
         }
         let (exp, des) = if at == ty {
@@ -1234,6 +1235,7 @@ impl Cg<'_> {
             }
             _ => {
                 let name = kiln_ast::decl::builtin::info(b).map_or("?", |i| i.name);
+                // kiln-gap: GAP-060
                 err(self.loc_of(e), format!("code generation for {name} is not supported yet"))
             }
         }

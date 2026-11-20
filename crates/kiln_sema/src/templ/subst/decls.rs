@@ -761,6 +761,7 @@ impl Substituter<'_, '_, '_> {
             TypeView::Function(p) => (p, Some(self.function_sig(d, &p, friend, loc)?)),
             _ => match self.sema.sugared_proto(t) {
                 Some(p) => (p, None),
+                // kiln-gap: GAP-100
                 None => return self.unimplemented("function declared with this type", loc),
             },
         };
@@ -1054,6 +1055,7 @@ impl Substituter<'_, '_, '_> {
         let loc = self.sema.ast.decls.get(pat).loc();
         let t = self.decl_ty(pat);
         let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else {
+            // kiln-gap: GAP-101
             return self.unimplemented("function declared with a typedef of function type", loc);
         };
         let info = p.info();
@@ -1957,6 +1959,7 @@ impl Substituter<'_, '_, '_> {
                 matches!(self.sema.kind_of(c), DeclKind::Namespace | DeclKind::TranslationUnit)
             })
         {
+            // kiln-gap: GAP-018
             return self.unimplemented("friend class declared in a class template", loc);
         }
         // `friend Ts...;` ([class.friend]/3, P2893): one friend
@@ -2094,6 +2097,7 @@ impl Substituter<'_, '_, '_> {
             }
             FriendTarget::Decl(f) => {
                 if !matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) {
+                    // kiln-gap: GAP-019
                     return self.unimplemented("this kind of friend declaration", loc);
                 }
                 let ctx = DeclaratorContext::Member;

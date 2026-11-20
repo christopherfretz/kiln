@@ -146,6 +146,7 @@ impl Stub<'_> {
         }
         if self.punct() != Some(Punct::Colon) {
             let span = self.tok.span;
+            // kiln-gap: GAP-135
             self.fail(DiagId::pp_expr_unsupported, span);
             return 0;
         }
@@ -273,6 +274,7 @@ impl Stub<'_> {
                 if let Some(v) = parse_int(&text) {
                     v
                 } else {
+                    // kiln-gap: GAP-135
                     self.fail(DiagId::pp_expr_unsupported, span);
                     0
                 }
@@ -290,6 +292,7 @@ impl Stub<'_> {
             }
             _ => {
                 let span = self.tok.span;
+                // kiln-gap: GAP-135
                 self.fail(DiagId::pp_expr_unsupported, span);
                 0
             }
