@@ -1,11 +1,12 @@
 //! Dependent specializations of the builtin templates
-//! `__make_integer_seq` and `__type_pack_element` (spec/modules.md
-//! §11.11, "Forms carried by WP-1344").
+//! `__make_integer_seq`, `__type_pack_element` and (WP-1740)
+//! `__builtin_common_type` (spec/modules.md §11.11, "Forms carried by
+//! WP-1344").
 //!
-//! Every unit declares both when its `Sema` is created
+//! Every unit declares them when its `Sema` is created
 //! (`declare_builtin_templates`), so the image names the importer's: an
-//! `Implicit` record of kind [`MAKE_INTEGER_SEQ_KIND`] or
-//! [`TYPE_PACK_ELEMENT_KIND`] (unnamed, at global scope, like a builtin
+//! `Implicit` record of kind [`MAKE_INTEGER_SEQ_KIND`],
+//! [`TYPE_PACK_ELEMENT_KIND`] or [`COMMON_TYPE_KIND`] (unnamed, at global scope, like a builtin
 //! function's stub), which a `Tst` type with no underlying type names
 //! with its arguments as written. A non-dependent one (its computed
 //! type under the sugar) stays refused.
@@ -21,12 +22,15 @@ use crate::Sema;
 pub(super) const MAKE_INTEGER_SEQ_KIND: u8 = 8;
 /// The `Implicit` record kind of `__type_pack_element`.
 pub(super) const TYPE_PACK_ELEMENT_KIND: u8 = 9;
+/// The `Implicit` record kind of `__builtin_common_type`.
+pub(super) const COMMON_TYPE_KIND: u8 = 12;
 
 /// The builtin template of an `Implicit` record kind, by name.
 fn name_of(kind: u8) -> Option<&'static str> {
     match kind {
         MAKE_INTEGER_SEQ_KIND => Some("__make_integer_seq"),
         TYPE_PACK_ELEMENT_KIND => Some("__type_pack_element"),
+        COMMON_TYPE_KIND => Some("__builtin_common_type"),
         _ => None,
     }
 }
@@ -51,6 +55,7 @@ impl Writer<'_, '_, '_> {
         let kind = match n.data() {
             crate::templ::builtins::MAKE_INTEGER_SEQ => MAKE_INTEGER_SEQ_KIND,
             crate::templ::builtins::TYPE_PACK_ELEMENT => TYPE_PACK_ELEMENT_KIND,
+            crate::templ::builtins::COMMON_TYPE => COMMON_TYPE_KIND,
             _ => return Err("a builtin template the image does not carry"),
         };
         let rec = self.img.decls.len() as u32;

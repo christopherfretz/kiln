@@ -6,6 +6,10 @@
 //! SFINAE context, as `__is_constructible`'s initialization is.
 //! `__has_builtin` answers 0 for both (as clang 22, which lacks them), so
 //! libstdc++ keeps its library `std::is_invocable` at every `-std`.
+//!
+//! Also clang's `__builtin_invoke(f, args...)` (WP-1740), the same
+//! `INVOKE` on the written arguments, which libc++ 22's `std::__invoke`
+//! uses.
 
 use kiln_ast::expr::{BinaryOp, TypeTrait, UnaryOp, ValueCategory};
 use kiln_ast::types::{ArgView, TypeView};
@@ -126,6 +130,78 @@ impl Sema<'_, '_> {
         }
         let obj = self.declval_operand(q, at);
         self.act_on_unary(UnaryOp::Deref, obj, at)
+    }
+
+    /// `__builtin_invoke(f, t1, ..., tN)` with callee `callee` (clang 21
+    /// `BuiltinInvoke`): the expression `INVOKE(f, t1, ..., tN)`
+    /// ([func.require]/1) denotes, which replaces the call: for a
+    /// pointer to member function `f` of class `T`, `(t1.*f)(t2, ...,
+    /// tN)` when `t1`'s class is `T` or derived from it, `(t1.get().*f)(t2,
+    /// ..., tN)` for a `std::reference_wrapper`, else `((*t1).*f)(t2, ...,
+    /// tN)`; for a pointer to data member the same object with `.*f`
+    /// (exactly two arguments); otherwise `f(t1, ..., tN)`. The argument
+    /// count errors are clang's at the call. `None` after a diagnostic.
+    pub(crate) fn builtin_invoke(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        let loc = self.begin_loc(callee);
+        let too_few = |s: &mut Self, n: usize| {
+            let msg = s.diag(DiagId::sema_call_too_few_args_at_least, loc).arg(n).arg(args.len());
+            s.emit(msg);
+        };
+        let Some((&f, rest)) = args.split_first() else {
+            too_few(self, 1);
+            return None;
+        };
+        let fty = self.ety(f);
+        let TypeView::MemberPointer { pointee, class } = self.ast.types.canonical_view(fty) else {
+            return Some(self.act_on_call(f, rest, loc, rparen));
+        };
+        let Some((&obj, rest)) = rest.split_first() else {
+            too_few(self, 2);
+            return None;
+        };
+        let is_fn = self.ast.types.is_function(pointee);
+        if !is_fn && !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let obj = self.invoke_object_expr(obj, QualType::unqual(class), loc);
+        if self.is_err_expr(obj) {
+            return None;
+        }
+        let m = self.act_on_binary(BinaryOp::PtrMemD, obj, f, loc);
+        if !is_fn || self.is_err_expr(m) {
+            return Some(m);
+        }
+        let m = self.act_on_paren(m, loc, loc);
+        Some(self.act_on_call(m, rest, loc, rparen))
+    }
+
+    /// The object operand of [`Sema::builtin_invoke`]: `t1` itself,
+    /// `t1.get()` or `*t1`, as [`Sema::invoke_object`] chooses for a type.
+    fn invoke_object_expr(&mut self, t1: ExprId, class: QualType, loc: Loc) -> ExprId {
+        let bare = crate::conv::strip_cv(self, self.ety(t1));
+        let at = self.begin_loc(t1);
+        if let (Some(c), Some(r)) =
+            (self.ast.types.as_record(class), self.ast.types.as_record(bare))
+        {
+            let same = self.ast.first(c) == self.ast.first(r);
+            if same || (self.require_complete_silent(bare, at) && is_derived_from(self, r, c)) {
+                return t1;
+            }
+            if self.reference_wrapper_arg(r).is_some() {
+                let get = self.intern("get");
+                let m = self.act_on_member(t1, get, loc, loc, false);
+                if self.is_err_expr(m) {
+                    return m;
+                }
+                return self.act_on_call(m, &[], loc, loc);
+            }
+        }
+        self.act_on_unary(UnaryOp::Deref, t1, loc)
     }
 
     /// `T` when class `r` is `std::reference_wrapper<T>`.

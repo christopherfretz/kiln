@@ -935,6 +935,20 @@ u8_enum!(
         IsInvocable = "__is_invocable",
         /// GCC's `__is_nothrow_invocable(F, Args...)` (WP-1667).
         IsNothrowInvocable = "__is_nothrow_invocable",
+        /// `__builtin_structured_binding_size(T)` (clang 21+): the number
+        /// of structured bindings `T` decomposes into, a `size_t`
+        /// ([dcl.struct.bind]; WP-1740).
+        StructuredBindingSize = "__builtin_structured_binding_size",
+        /// `__builtin_lt_synthesizes_from_spaceship(T, U)` (clang 22):
+        /// whether `declval<T>() < declval<U>()` is a rewritten
+        /// `operator<=>` candidate ([over.match.oper]/3.4; WP-1740).
+        LtSynthesizesFromSpaceship = "__builtin_lt_synthesizes_from_spaceship",
+        /// `__builtin_le_synthesizes_from_spaceship(T, U)` (clang 22).
+        LeSynthesizesFromSpaceship = "__builtin_le_synthesizes_from_spaceship",
+        /// `__builtin_gt_synthesizes_from_spaceship(T, U)` (clang 22).
+        GtSynthesizesFromSpaceship = "__builtin_gt_synthesizes_from_spaceship",
+        /// `__builtin_ge_synthesizes_from_spaceship(T, U)` (clang 22).
+        GeSynthesizesFromSpaceship = "__builtin_ge_synthesizes_from_spaceship",
     }
 );
 
@@ -2752,9 +2766,16 @@ impl ExprArena {
     /// The value of a `TypeTraitExpr` or `ExpressionTraitExpr` (`false`
     /// while value-dependent).
     pub fn type_trait_value(&self, e: ExprId) -> bool {
+        self.type_trait_int(e) != 0
+    }
+
+    /// The value of a `TypeTraitExpr` or `ExpressionTraitExpr` as an
+    /// integer: 0 or 1 for a `bool` trait, the count for
+    /// `__builtin_structured_binding_size` (0 while value-dependent).
+    pub fn type_trait_int(&self, e: ExprId) -> u32 {
         let n = self.get(e);
         debug_assert!(matches!(n.kind, ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr));
-        n.b != 0
+        n.b
     }
 
     /// The operand of a `CXXReflectExpr` as written (spec/reflection-repr.md

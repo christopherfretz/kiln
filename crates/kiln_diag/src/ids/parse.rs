@@ -78,6 +78,9 @@ parse_expected_init_in_condition = Error (0) "variable declaration in condition 
 parse_expected_init_in_condition_lparen = Error (0) "variable declaration in condition cannot have a parenthesized initializer";
 parse_expected_lambda_body = Error (0) "expected body of lambda expression";
 parse_expected_lbrace_after_base = Error (0) "expected '{{' after base class list";
+// WP-1740: clang `err_expected_less_after` (`template<> template void
+// f();`: a template head with no parameter list).
+parse_expected_less_after = Error (1) "expected '<' after '{0}'";
 parse_expected_lparen_after_type = Error (0) "expected '(' for function-style cast or type construction";
 parse_expected_member_name = Error (0) "expected member name or ';' after declaration specifiers";
 parse_expected_member_or_base_name = Error (0) "expected class member or base class name";

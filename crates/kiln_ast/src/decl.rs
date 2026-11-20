@@ -5779,6 +5779,8 @@ pub mod builtin {
         row(VERBOSE_TRAP, "__builtin_verbose_trap", "vcC*cC*", N | R),
         row(COPYSIGNF16, "__builtin_copysignf16", "hhh", N | C | F),
         row(IS_WITHIN_LIFETIME, "__builtin_is_within_lifetime", "bv*", N | T | I),
+        // WP-1740.
+        row(INVOKE, "__builtin_invoke", "v.", T),
         // WP-416.
         row(ALIGN_UP, "__builtin_align_up", "v*.", N | C | T),
         row(ALIGN_DOWN, "__builtin_align_down", "v*.", N | C | T),
@@ -6391,14 +6393,16 @@ pub mod builtin {
         match id {
             // 2039..=2047 (WP-410): `sincos`, `fmaximum_num`, `fminimum_num`;
             // 2060..=2065 (WP-419): the `f128` forms and `sincospi`;
-            // IS_WITHIN_LIFETIME (WP-418): clang 20.
+            // IS_WITHIN_LIFETIME (WP-418): clang 20; INVOKE (WP-1740):
+            // clang 21.
             2035
             | 2036
             | FMAXIMUM_NUMF16
             | FMINIMUM_NUMF16
             | 2039..=2047
             | 2060..=2065
-            | IS_WITHIN_LIFETIME => 22,
+            | IS_WITHIN_LIFETIME
+            | INVOKE => 22,
             _ => 0,
         }
     }
@@ -6483,6 +6487,10 @@ pub mod builtin {
     /// clang 20, `Consteval` and `CustomTypeChecking`): whether `p` points
     /// to an object within its lifetime. Kiln-private id.
     pub const IS_WITHIN_LIFETIME: u32 = 2090;
+    /// `__builtin_invoke(f, args...)` (clang 21, `CustomTypeChecking`,
+    /// `Constexpr`): `INVOKE(f, args...)` ([func.require]/1); sema
+    /// replaces the call by the expression it denotes. Kiln-private id.
+    pub const INVOKE: u32 = 2475;
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {

@@ -9955,13 +9955,19 @@ impl Sema<'_, '_> {
     /// The template head a tag declaration consumes: a class's own head,
     /// or none for an enumeration, whose heads (`template<class T> enum
     /// class A<T>::E { ... }`) belong to the qualifier's class templates
-    /// ([temp.mem.enum]).
+    /// ([temp.mem.enum]). A head left over after the qualifier's
+    /// (`template<class T> enum class N::E : int {}`, `N` a namespace)
+    /// would make the enumeration a template: "enumeration cannot be a
+    /// template" at `kw` ([temp.pre]/2; clang `ActOnTag`'s
+    /// `err_enum_template`). An enumeration never keeps
+    /// [`TemplState::cur`] set.
     fn tag_template_head(
         &mut self,
         is_enum: bool,
         qualifier: Option<DeclId>,
         use_: TagUse,
         nested: bool,
+        kw: Loc,
     ) -> Option<kiln_ast::ids::TemplateParamListId> {
         if nested {
             return None;
@@ -9971,8 +9977,13 @@ impl Sema<'_, '_> {
             let _ = self.check_template_in_local_class(false, Loc::INVALID);
             return head;
         }
-        if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
-            let _ = self.take_template_head(qualifier);
+        if is_enum
+            && qualifier.is_some()
+            && matches!(use_, TagUse::Definition | TagUse::Declaration)
+        {
+            if self.take_template_head(qualifier).is_some() {
+                self.error(DiagId::sema_enum_template, kw);
+            }
             self.templ.cur = None;
         }
         None
@@ -10103,6 +10114,29 @@ impl Sema<'_, '_> {
         fixed: Option<QualType>,
         loc: Loc,
     ) -> DeclId {
+        if use_ == TagUse::Declaration
+            && let Some((_, nloc)) = name
+            && let Some((_, template_loc)) = self.templ.explicit_inst
+            && self.at_explicit_head()
+        {
+            // `[extern] template struct N::S;` names a class by an
+            // elaborated-type-specifier ([temp.explicit]/3); it must be a
+            // member class of a class template specialization (clang's
+            // `ActOnExplicitInstantiation` for a tag, through `ActOnTag` as
+            // a reference).
+            let p =
+                self.act_on_tag(keyword, name, qualifier, TagUse::Reference, scoped, fixed, loc);
+            if !self.act_on_explicit_member_class_inst(p, nloc)
+                && self.templ.explicit_inst.take().is_some()
+                && !self.is_invalid_decl(p)
+            {
+                let t = self.qualified_decl_name(p);
+                let n = self.diag(DiagId::note_nontemplate_decl_here, self.ast.decls.get(p).loc());
+                let d = self.diag(DiagId::sema_explicit_inst_nontemplate_type, template_loc).arg(t);
+                self.emit(d.with_note(n));
+            }
+            return p;
+        }
         let extraneous_head = self.extraneous_tag_head.take().map(|d| self.emit(d)).is_some();
         let nested = std::mem::take(&mut self.nested_tag);
         if use_ == TagUse::Friend {
@@ -10112,7 +10146,7 @@ impl Sema<'_, '_> {
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         let fixed = self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
-        let head = self.tag_template_head(is_enum, qualifier, use_, nested);
+        let head = self.tag_template_head(is_enum, qualifier, use_, nested, loc);
         // [temp.pre]/5, [dcl.pre]/5: a class template is declared with no
         // declarator, so its class-specifier must introduce its name
         // (clang `CheckClassTemplate`'s `err_template_unnamed_class` at the

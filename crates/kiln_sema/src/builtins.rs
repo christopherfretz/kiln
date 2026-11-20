@@ -1057,6 +1057,12 @@ impl Sema<'_, '_> {
                 None => self.recover_err(&kids, loc),
             };
         }
+        if id == builtin::INVOKE {
+            return match self.builtin_invoke(callee, args, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
+        }
         if braced {
             // kiln-gap: GAP-158
             self.unsupported("a braced argument to a builtin function", loc);

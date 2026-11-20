@@ -1796,12 +1796,12 @@ impl Sema<'_, '_> {
             k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
                 DeclKind::FunctionTemplate
             }
-            _ => {
-                let loc = self.ast.decls.get(pattern).loc();
-                // kiln-gap: GAP-108
-                self.templ_unimplemented("this kind of template declaration", loc);
-                return None;
-            }
+            // Every caller passes a variable, function, class, enumeration
+            // or alias; `act_on_declarator_impl` drops the head of a
+            // typedef or non-static data member after its error, and
+            // `tag_template_head` that of an enumeration, so no other kind
+            // reaches here with `cur` set.
+            k => unreachable!("a {k:?} declaration consumed a template head"),
         };
         let prev = self.ast.prev(pattern).and_then(|p| self.ast.described_template(p));
         // [temp.over.link]/6: a class or variable template is redeclared

@@ -144,7 +144,7 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         if extern_loc.is_some() || !self.at(Punct::Less) {
             // explicit-instantiation ([temp.explicit]/1).
-            if self.at_partial_specialization() || !self.at_spec_tag_or_template() {
+            if !matches!(self.kw(), Some(Kw::Enum | Kw::Template)) {
                 self.s.act_explicit_inst_start(extern_loc, loc);
                 self.template_decl_kind = Some(TemplateDeclKind::ExplicitInstantiation);
                 self.parse_spec_declaration(ctx);
@@ -161,7 +161,10 @@ impl Parser<'_, '_> {
                 // `err_explicit_instantiation_enum`).
                 self.error_here(DiagId::sema_enum_explicit_instantiation);
             } else {
-                let _ = self.s.act_explicit_instantiation(extern_loc, loc);
+                // `template template<...> ...`: the declaration has no
+                // template head ([temp.explicit]/1); `template` starts no
+                // decl-specifier (clang's ParseDeclarationAfterTemplate).
+                self.error_here(DiagId::parse_expected_unqualified_id);
             }
             self.skip_unsupported_declaration();
             return;
@@ -197,25 +200,28 @@ impl Parser<'_, '_> {
             }
             // `template<> enum class A<int>::E : int { ... };` explicitly
             // specializes a member enumeration ([temp.expl.spec]/1).
-            if self.at_partial_specialization()
-                || self.at_spec_member_tag_decl()
-                || self.at_var_template_spec()
-                || self.at_kw(Kw::Enum)
-                || !self.at_spec_tag_or_template()
+            if self.at_kw(Kw::Template) {
+                // `template<> template void f();`: a template head needs
+                // its parameter list (clang's `err_expected_less_after`).
+                self.bump();
+                let d = self.s.diag(DiagId::parse_expected_less_after, self.loc()).arg("template");
+                self.s.emit(d);
+                self.skip_unsupported_declaration();
+                return;
+            }
+            if !self.at_partial_specialization()
+                && !self.at_spec_member_tag_decl()
+                && !self.at_var_template_spec()
+                && self.explicit_spec_of_non_template(loc, ctx)
             {
-                self.s.act_explicit_spec_start(loc);
-                self.s.act_explicit_spec_headers(&empty_heads);
-                self.template_decl_kind = Some(TemplateDeclKind::ExplicitSpecialization);
-                self.parse_spec_declaration(ctx);
-                self.template_decl_kind = None;
-                self.s.act_explicit_spec_end();
                 return;
             }
-            if self.explicit_spec_of_non_template(loc, ctx) {
-                return;
-            }
-            let _ = self.s.act_explicit_specialization(false, loc);
-            self.skip_unsupported_declaration();
+            self.s.act_explicit_spec_start(loc);
+            self.s.act_explicit_spec_headers(&empty_heads);
+            self.template_decl_kind = Some(TemplateDeclKind::ExplicitSpecialization);
+            self.parse_spec_declaration(ctx);
+            self.template_decl_kind = None;
+            self.s.act_explicit_spec_end();
             return;
         }
         // [class.access]/7: the names in a namespace-scope template head
@@ -509,13 +515,6 @@ impl Parser<'_, '_> {
             self.s.restore_template_decl_state(saved);
         }
         true
-    }
-
-    /// A class-key, `enum` or `template` after `template<>` or an
-    /// explicit-instantiation `template`: a declaration other than a
-    /// function or variable one (member classes, member templates).
-    fn at_spec_tag_or_template(&self) -> bool {
-        matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union | Kw::Enum | Kw::Template))
     }
 
     /// A simple-declaration whose declarator-id is a template-id naming

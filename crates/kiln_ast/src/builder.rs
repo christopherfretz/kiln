@@ -2588,7 +2588,8 @@ impl<'a> AstBuilder<'a> {
     }
 
     /// `__trait(T...)` ([meta.unary], spec/sema-templates.md §9.1): a
-    /// `bool` prvalue whose `value` sema computed from the unevaluated
+    /// `bool` (0 or 1; or `size_t`, `__builtin_structured_binding_size`)
+    /// prvalue whose `value` sema computed from the unevaluated
     /// type operands `args`. Value-dependent if any operand is dependent
     /// ([temp.dep.constexpr]/3); `rparen` is the closing `)`.
     #[allow(clippy::too_many_arguments, reason = "one per field of the node")]
@@ -2597,7 +2598,7 @@ impl<'a> AstBuilder<'a> {
         trait_: TypeTrait,
         args: &[QualType],
         rhs_loc: Option<Loc>,
-        value: bool,
+        value: u32,
         ty: QualType,
         loc: Loc,
         rparen: Loc,
@@ -2619,7 +2620,7 @@ impl<'a> AstBuilder<'a> {
             ty,
             loc,
             list.raw(),
-            u32::from(value),
+            value,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect(FRESH_EXPR);
         if let Some(l) = rhs_loc {

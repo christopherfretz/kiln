@@ -73,6 +73,10 @@ sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be c
 sema_anon_union_not_static = Error (0) "anonymous unions at namespace or global scope must be declared 'static'";
 // WP-1645: clang err_anonymous_union_with_storage_spec ([class.union.anon]/2).
 sema_anon_union_with_storage_spec = Error (0) "anonymous union at class scope must not have a storage specifier";
+// WP-1740: clang 22 err_arg_is_not_destructurable
+// (`__builtin_structured_binding_size` of a type with no decomposition;
+// clang 22 wording, as the builtin is clang 21+).
+sema_arg_is_not_destructurable = Error (1) "type {0} cannot be bound";
 sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
 sema_argument_outside_range = WarningError [ArgumentOutsideRange] (3) "argument value {0} is outside the valid range [{1}, {2}]";
 sema_arith_anon_enum_enum_deprecated = Warning [DeprecatedAnonEnumEnumConversion] (3) "{0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2}) is deprecated";

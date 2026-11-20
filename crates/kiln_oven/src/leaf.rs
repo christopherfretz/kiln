@@ -262,7 +262,7 @@ impl Oven {
             ExprKind::CXXBoolLiteralExpr => u128::from(b.ast().exprs.bool_value(e)),
             ExprKind::CXXNoexceptExpr => u128::from(b.ast().exprs.noexcept_value(e)),
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
-                u128::from(b.ast().exprs.type_trait_value(e))
+                u128::from(b.ast().exprs.type_trait_int(e))
             }
             ExprKind::ParenExpr => {
                 let x = b.ast().exprs.operand(e);

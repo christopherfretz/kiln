@@ -3212,9 +3212,10 @@ split by form (`<reason>: <form>`), so what remains says what it is.
   record must be the template, its pattern `i`), and the reader gives
   the class its bases right after it builds the template, before any
   member.
-- *Builtin templates* (`__make_integer_seq`, `__type_pack_element`).
-  Every unit declares both, so a dependent specialization names the
-  importer's: an `Implicit` record of kind 8 or 9 (unnamed, at global
+- *Builtin templates* (`__make_integer_seq`, `__type_pack_element`,
+  and since WP-1740 `__builtin_common_type`). Every unit declares them,
+  so a dependent specialization names the importer's: an `Implicit`
+  record of kind 8, 9 or 12 (unnamed, at global
   scope, no flags or owner), named by a `TyRec::Tst` with no
   underlying type and its arguments as written. A non-dependent one
   stays refused ("a builtin template's specialization that is not
@@ -4824,7 +4825,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 41` since WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 43` since WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

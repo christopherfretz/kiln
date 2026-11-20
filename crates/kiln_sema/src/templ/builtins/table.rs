@@ -115,6 +115,10 @@ pub fn arity(t: TypeTrait) -> Arity {
         | T::ReferenceConstructsFromTemporary
         | T::ReferenceConvertsFromTemporary
         | T::TypesCompatible
+        | T::LtSynthesizesFromSpaceship
+        | T::LeSynthesizesFromSpaceship
+        | T::GtSynthesizesFromSpaceship
+        | T::GeSynthesizesFromSpaceship
         | T::ArrayExtent => Arity::Exact(2),
         T::IsConstructible
         | T::IsNothrowConstructible
@@ -179,8 +183,10 @@ pub fn deprecated_replacement(t: TypeTrait) -> Option<&'static str> {
 
 /// The status of trait `t`.
 pub fn trait_status(_t: TypeTrait) -> Status {
-    // Every trait clang 19 knows is implemented (WP-166 finished the
-    // `__has_nothrow_*`, layout and register-passing queries).
+    // Every trait is implemented (WP-166 finished clang 19's; WP-1740
+    // the clang 21-22 `__builtin_structured_binding_size` and
+    // `__builtin_*_synthesizes_from_spaceship`): a trait keyword lands
+    // with its evaluator, so `build_type_trait` has no unimplemented path.
     Status::Done
 }
 
@@ -203,8 +209,6 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
-/// The clang 22 builtins WP-263 left for a follow-up.
-const LATER: Status = Status::Owner("WP-263 follow-up");
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
@@ -453,41 +457,13 @@ pub static TABLE: &[Row] = &[
     f("__builtin_return_address", DONE, Oven::No),
     f("__builtin_elementwise_add_sat", DONE, Oven::Yes),
     f("__builtin_elementwise_sub_sat", DONE, Oven::Yes),
-    // Added by clang 20-22 and probed by the C++26 headers; staged off
-    // until implemented (spec/sema.md "clang 22 builtins"), so
-    // `__has_builtin` answers 0 at every `-fclang-compat` level.
-    Row { name: "__builtin_common_type", kind: Kind::Template, status: LATER, oven: Oven::No },
-    Row {
-        name: "__builtin_structured_binding_size",
-        kind: Kind::TypePredicate,
-        status: LATER,
-        oven: Oven::No,
-    },
-    Row {
-        name: "__builtin_lt_synthesizes_from_spaceship",
-        kind: Kind::TypePredicate,
-        status: LATER,
-        oven: Oven::No,
-    },
-    Row {
-        name: "__builtin_le_synthesizes_from_spaceship",
-        kind: Kind::TypePredicate,
-        status: LATER,
-        oven: Oven::No,
-    },
-    Row {
-        name: "__builtin_gt_synthesizes_from_spaceship",
-        kind: Kind::TypePredicate,
-        status: LATER,
-        oven: Oven::No,
-    },
-    Row {
-        name: "__builtin_ge_synthesizes_from_spaceship",
-        kind: Kind::TypePredicate,
-        status: LATER,
-        oven: Oven::No,
-    },
-    f("__builtin_invoke", LATER, Oven::No),
+    // Added by clang 20-22 and probed by the C++26 headers (WP-1740;
+    // the clang 21-22 trait keywords are `TypeTrait` rows above):
+    // `__builtin_common_type` (builtin_templates.rs), `__builtin_invoke`
+    // (sema `builtin_invoke`, rewritten to the call it denotes, so the
+    // Oven evaluates that call).
+    Row { name: "__builtin_common_type", kind: Kind::Template, status: DONE, oven: Oven::No },
+    f("__builtin_invoke", DONE, Oven::Yes),
     // WP-418: sema `builtin_is_within_lifetime`, the Oven `bi::LIFETIME`.
     f("__builtin_is_within_lifetime", DONE, Oven::Yes),
     // WP-473: kiln extension, the Oven's `Op::IsConstEval` (aux 2).
@@ -671,17 +647,15 @@ mod tests {
             "__builtin_is_implicit_lifetime",
             "__builtin_is_cpp_trivially_relocatable",
             "__builtin_is_within_lifetime",
-        ] {
-            assert_eq!(has_builtin_staged(n), Some(true), "{n}");
-        }
-        for n in [
             "__builtin_common_type",
             "__builtin_structured_binding_size",
             "__builtin_lt_synthesizes_from_spaceship",
+            "__builtin_ge_synthesizes_from_spaceship",
             "__builtin_invoke",
         ] {
-            assert_eq!(has_builtin_staged(n), Some(false), "{n}");
+            assert_eq!(has_builtin_staged(n), Some(true), "{n}");
         }
+        assert_eq!(has_constexpr_builtin_staged("__builtin_invoke"), Some(true));
     }
 
     #[test]
