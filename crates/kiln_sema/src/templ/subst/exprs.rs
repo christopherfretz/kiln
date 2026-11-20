@@ -406,6 +406,17 @@ impl Substituter<'_, '_, '_> {
                     let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                     return Ok(self.sema.act_dependent_scope_ref(nns, name, None, begin, loc));
                 }
+                // An unqualified member of a class template pattern this
+                // substitution leaves dependent (`B(A1<X>, V)` in the guide
+                // of alias `U<T> = B<T, 1>`): `B<T, 1>::X`, a member of an
+                // unknown specialization ([temp.dep.type]/6, /7), looked up
+                // again when the guide is substituted.
+                if ex(self).decl_ref_extra(e).and_then(|x| x.qualifier).is_none()
+                    && let Some((nns, name)) = self.dependent_member_ref(d, loc)?
+                {
+                    let name = DeclName::ident(name);
+                    return Ok(self.sema.act_dependent_scope_ref(nns, name, None, loc, loc));
+                }
                 // The qualifier as written survives ([temp.inst]; clang's
                 // `TransformDeclRefExpr` transforms the qualifier loc).
                 let nns = match ex(self).decl_ref_extra(e).and_then(|x| x.qualifier) {
@@ -773,6 +784,31 @@ impl Substituter<'_, '_, '_> {
                 // is looked up now, in the object's class (clang
                 // `TransformCXXPseudoDestructorExpr` → `getDestructorName`).
                 if let Some(&name) = self.sema.ast.templates.pseudo_dtor_name.get(e) {
+                    // `p->NS::X<T>::~Q()`, `p.T::~Q()`: the qualifier and
+                    // the first type-name substituted (a member-rooted one
+                    // looked up in the object's class), then `Q` looked up
+                    // as [basic.lookup.qual.general]/4 says (WP-1737).
+                    let nns = self.sema.ast.templates.expr_nns.get(e).copied();
+                    let first = self.sema.ast.templates.pseudo_dtor_first.get(e).copied();
+                    if nns.is_some() || first.is_some() {
+                        let begin = self.sema.ast.templates.expr_begin.get(e).copied();
+                        let qual = match nns {
+                            Some(q) => {
+                                Some(self.member_qualifier(q, base, arrow, begin.unwrap_or(loc))?)
+                            }
+                            None => None,
+                        };
+                        let first = match first {
+                            Some((f, fl)) => Some((
+                                self.member_rooted_type(f, base, arrow, (begin.unwrap_or(fl), fl))?,
+                                fl,
+                            )),
+                            None => None,
+                        };
+                        return Ok(self.sema.act_on_dependent_destructor_name_late(
+                            base, qual, first, name, loc, op, arrow,
+                        ));
+                    }
                     // `p->~C<args>()` (WP-1173).
                     if let Some(&l) = self.sema.ast.templates.expr_targs.get(e) {
                         let l = self.args(l, loc)?;
@@ -899,9 +935,14 @@ impl Substituter<'_, '_, '_> {
                             self.sema.set_template_id_qualifier(x, nns);
                             Ok(if callee { x } else { self.sema.resolve_single_template_id(x) })
                         }
+                        // `T::template X<A>()` with `X` a class or alias
+                        // template once instantiated: a template-id after
+                        // `template` in an expression names a function or
+                        // variable template ([temp.names]/6,
+                        // [temp.res.general]/4), as clang's
+                        // `BuildQualifiedTemplateIdExpr` diagnoses it.
                         Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
-                            // kiln-gap: GAP-050
-                            self.unimplemented("a type template-id as an expression", loc)
+                            Ok(self.type_template_id_expr(t, nns, name, l, (begin, loc), callee))
                         }
                         Err(()) => Err(SubstFail),
                     };
@@ -1650,16 +1691,25 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.check_reflect_dependent_kind(r, ctx, name, template_kw, name_loc, loc))
     }
 
-    fn member_name(&mut self, name: DeclName, loc: Loc) -> SubstResult<DeclName> {
+    pub(super) fn member_name(&mut self, name: DeclName, loc: Loc) -> SubstResult<DeclName> {
         match self.sema.ast.names.view(name) {
             DeclNameView::Conversion(t) => {
                 let t = self.ty(t, loc)?;
                 let t = self.sema.ast.types.canonical(t);
                 Ok(self.sema.ast.names.conversion(t))
             }
-            DeclNameView::Destructor(_) | DeclNameView::Constructor(_) => {
-                // kiln-gap: GAP-051
-                self.unimplemented("member access to a special member", loc)
+            // A special member's name names the substituted class
+            // ([class.ctor.general]/1, [class.dtor]/1; clang's
+            // `TransformDeclarationNameInfo`).
+            DeclNameView::Destructor(t) => {
+                let t = self.ty(QualType::unqual(t), loc)?;
+                let canon = self.sema.ast.types.canonical(t).ty();
+                Ok(self.sema.ast.names.destructor(canon))
+            }
+            DeclNameView::Constructor(t) => {
+                let t = self.ty(QualType::unqual(t), loc)?;
+                let canon = self.sema.ast.types.canonical(t).ty();
+                Ok(self.sema.ast.names.constructor(canon))
             }
             _ => Ok(name),
         }
@@ -1687,6 +1737,17 @@ impl Substituter<'_, '_, '_> {
         arrow: bool,
         loc: Loc,
     ) -> SubstResult<(DeclId, NnsId)> {
+        // `u.Base::get()` whose object is still dependent (a generic
+        // lambda of the template being instantiated): `Base` is looked
+        // up in the object's class at the instantiation that makes it one
+        // ([basic.lookup.qual.general]/2, [temp.dep.type]/6).
+        if self.rooted_in_member(n) {
+            let bt = self.sema.ety(base);
+            let obj = if arrow { self.sema.ast.types.pointee(bt) } else { Some(bt) };
+            if self.sema.ast.types.is_dependent(obj.unwrap_or(bt)) {
+                return Ok((self.sema.decltype_scope_marker(), n));
+            }
+        }
         match self.sema.ast.types.nns_view(n) {
             Nns::Identifier { prefix: None, name } => {
                 let bt = self.sema.ety(base);
@@ -1717,6 +1778,14 @@ impl Substituter<'_, '_, '_> {
             }
             _ => {
                 let q = self.nns(n, loc)?;
+                // Still dependent (`u.B<decltype(u)>::get()` in a generic
+                // lambda of the template being instantiated): the access
+                // stays a member of an unknown specialization
+                // ([temp.dep.type]/6, [temp.dep.expr]/5), named through
+                // the dependent-scope context.
+                if self.nns_still_dependent(q) {
+                    return Ok((self.sema.decltype_scope_marker(), q));
+                }
                 let c = self.nns_context(q, loc)?;
                 // The injected-class-name of the class template being
                 // instantiated (`this->S::f()` in `S<A>`) names the
@@ -1806,21 +1875,82 @@ impl Substituter<'_, '_, '_> {
     /// becomes an implicit member access or a static member reference
     /// (clang's `TransformUnresolvedLookupExpr` over the
     /// `UnresolvedUsingValueDecl`, then `BuildPossibleImplicitMemberExpr`).
+    /// `nns::template name<l>` in an expression naming the class or alias
+    /// template `t` once substituted: clang's "is expected to be a non-type
+    /// template, but instantiated to a class template" at the name; a
+    /// called one is then "called object type `nns::template name<l>` is
+    /// not a function or function pointer" at its start, as clang's
+    /// recovery types the expression with the template-id.
+    fn type_template_id_expr(
+        &mut self,
+        t: DeclId,
+        nns: NnsId,
+        name: DeclName,
+        l: ArgListId,
+        (begin, loc): (Loc, Loc),
+        callee: bool,
+    ) -> ExprId {
+        let alias = u8::from(self.sema.kind_of(t) == DeclKind::TypeAliasTemplate);
+        let shown = format!("{}template {}", self.sema.nns_str(nns), self.sema.decl_name_str(name));
+        let note = self
+            .sema
+            .diag(kiln_diag::DiagId::note_referenced_type_template, self.sema.typo_note_loc(t))
+            .arg(alias);
+        let msg = self
+            .sema
+            .diag(kiln_diag::DiagId::sema_template_kw_refers_to_type_template, loc)
+            .arg(shown)
+            .arg(alias)
+            .with_note(note);
+        self.sema.emit(msg);
+        if callee && let Some(id) = name.as_ident() {
+            let ty = self.sema.ast.types.dependent_template_specialization(
+                kiln_ast::types::TagKeyword::None,
+                nns,
+                id,
+                l,
+            );
+            let msg = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_call_not_function, begin)
+                .arg(self.sema.ty_arg(ty));
+            self.sema.emit(msg);
+        }
+        self.sema.recover_err(&[], loc)
+    }
+
     fn implicit_dependent_member(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
         let name = self.sema.ast.dependent_member_name(e);
         let name = self.member_name(name, loc)?;
-        if self.sema.ast.templates.expr_targs.get(e).is_some() {
-            // kiln-gap: GAP-047
-            return self.unimplemented("implicit dependent member template-id", loc);
-        }
+        // Formed only by `Sema::act_on_id_expression_dn` (a dependent
+        // conversion-function-id or a name a dependent using-declarator
+        // introduces), never with template arguments: `D::template f<A>`
+        // is a dependent-scope reference (`Sema::dep_member_nns`).
         let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
             Some(q) => {
-                let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
-                let nns = self.nns(q, at)?;
+                let at = self.sema.ast.templates.expr_begin.get(e).copied();
+                let nns = self.nns(q, at.unwrap_or(loc))?;
                 if self.nns_still_dependent(nns) {
-                    // kiln-gap: GAP-048
-                    return self.unimplemented("implicit dependent member access", loc);
+                    // `L::m` in a local class of a generic lambda (`struct L
+                    // : B<decltype(x)> { using B<decltype(x)>::m; ... }`)
+                    // instantiated with the lambda's own level retained:
+                    // still a member of the current instantiation named by
+                    // a dependent using-declarator ([temp.dep.type]/6.3).
+                    let r = self.sema.builder().dependent_member(
+                        None,
+                        true,
+                        name,
+                        false,
+                        Some(nns),
+                        None,
+                        loc,
+                    );
+                    if let Some(at) = at {
+                        let _ = self.sema.ast.templates.expr_begin.insert(r, at);
+                    }
+                    return Ok(r);
                 }
+                let at = at.unwrap_or(loc);
                 let ctx = self.nns_context(nns, at)?;
                 Some(crate::using::Qualifier { ctx, nns, loc: at })
             }
@@ -1915,6 +2045,20 @@ impl Substituter<'_, '_, '_> {
             let nns = self.nns(q, n.loc())?;
             let begin = self.sema.ast.templates.expr_begin.get(c).copied().unwrap_or(n.loc());
             return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, begin, n.loc()));
+        }
+        // Unqualified (`sf()`, `vt<char>` in a constructor's signature,
+        // named by an alias template's deduction guide): `B<T, 1>::vt<char>`,
+        // as for a variable ([temp.dep.type]/6).
+        if let Some(&d) = decls.first()
+            && self.sema.ast.templates.expr_nns.get(c).is_none()
+            && let Some((nns, _)) = self.dependent_member_ref(d, n.loc())?
+        {
+            let targs = match (targs, self.sema.ast.templates.expr_targs.get(c).copied()) {
+                (Some(l), _) => Some(l),
+                (None, Some(l)) => Some(self.args(l, n.loc())?),
+                (None, None) => None,
+            };
+            return Ok(self.sema.act_dependent_scope_ref(nns, name, targs, n.loc(), n.loc()));
         }
         if let [d] = decls {
             let d = self.find_instantiated_decl(*d, n.loc())?;

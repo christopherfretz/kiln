@@ -160,29 +160,17 @@ impl Sema<'_, '_> {
             return self.class_using_declarator(class, q, name, name_loc, using_loc, false);
         }
         let dependent = self.dependent_qualifier(q);
-        if name.as_ident().is_none() && self.in_local_scope() && dependent {
-            // A block-scope `using T::operator+;` is an
-            // `UnresolvedUsingValue` in clang, diagnosed when instantiated
-            // (the qualifier is a class, whose only nameable members here
-            // are enumerators, [namespace.udecl]/8); the local scope
-            // records non-identifier names only as resolved shadows
-            // (`Scope.local_names`).
-            // kiln-gap: GAP-049
-            self.unsupported(
-                "an operator name with a dependent qualifier in a block-scope using-declarator",
-                name_loc,
-            );
-            return None;
-        }
-        if let Some(n) = name.as_ident()
-            && self.in_local_scope()
-            && dependent
-        {
+        if self.in_local_scope() && dependent {
             // A dependent qualifier in a function template (`using
             // E<T>::A;`, an enumerator, [namespace.udecl]/8): clang's
             // `UnresolvedUsingValueDecl`, a local name whose uses are
             // dependent; the instantiation redoes the declarator
-            // (`subst/stmts.rs` `local_using_decl`).
+            // (`subst/stmts.rs` `local_using_decl`). An operator or
+            // conversion name (`using T::operator+;`) never names an
+            // enumerator, so it is diagnosed there ("using declaration
+            // cannot refer to class member"); the local scope records
+            // only identifiers (`Scope.local_names`), so it names nothing
+            // meanwhile.
             let h = DeclHead::new(self.ctx, name, name_loc);
             let d = self.builder().unresolved_using_value(h, q.nns, false);
             if using_loc != name_loc {
@@ -194,7 +182,9 @@ impl Sema<'_, '_> {
                 // instantiated, where more than one element is an error.
                 let _ = self.ast.decls.cold.declarator_end.insert(d, l);
             }
-            self.push_local(n, d);
+            if let Some(n) = name.as_ident() {
+                self.push_local(n, d);
+            }
             return Some(d);
         }
         self.unrepeated_enum_using(q.ctx, name, name_loc)?;

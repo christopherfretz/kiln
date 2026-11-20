@@ -754,7 +754,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1750 | standard check: a reference direct-initialized from several parenthesized expressions (`const A& r(1, 2)`): kiln and clang reject ("reference cannot be initialized with multiple values"), GCC 16 accepts (P1975R0 / [dcl.init.general]/16?); read every applicable rule, then keep or change (g++.dg paren-init1.C, paren-init4.C) | WP-1735 | open |
 | WP-1736 | mangling: GAP-041..GAP-041 (5 sites, 9 cases) | WP-1719 | done: every expression kind mangles as clang 22 (sZ, sP, decltype sr, rewritten ops, di/dx/dX, SUBSTPACK, co_await); clang-unmangleable kinds give clang's error (GAP-041 excluded); 9 g++.dg cases pass |
 | WP-1751 | perf check: tests/stress/redecl-chain-65536.cpp takes over 600 s in a debug build on main (its comment says WP-1076 made it fast): measure it in release against kiln 1.2.1 and clang 22; if the quadratic redeclaration-chain behaviour is back, find the change and fix it | WP-1736 | open |
-| WP-1737 | dependent names: GAP-042..GAP-051 (12 sites, 8 cases) | WP-1719 | open |
+| WP-1737 | dependent names: GAP-042..GAP-051 (12 sites, 8 cases) | WP-1719 | done: GAP-042..046, 048..051 implemented per the standard with clang diagnostics, GAP-047 dead; 13 conformance tests, g++.dg +8 0 regressions; explicit(bool) implicit-guide follow-up xfail |
+| WP-1752 | implicit deduction guides: carry a constructor's `explicit(bool)` with a dependent condition into the guide and evaluate it per [over.match.class.deduct] (ctad.rs ~688/858/2029); closes the xfail `tests/conformance/over.match.class.deduct/implicit-guide-dependent-explicit-bool-copy-list-run.cpp` | WP-1737 | open |
+| WP-1753 | `(void)T::~T;` in a template is rejected at definition; clang 22 accepts the definition and diagnoses only at instantiation ([temp.res.general]/6) | WP-1737 | open |
+| WP-1754 | `p->template ~T()` is accepted; clang 22 rejects the `template` keyword before a destructor name ([temp.names]/5) | WP-1737 | open |
+| WP-1755 | `p->decltype(*p)::~Zq()` is accepted when the object type is dependent; clang 22 rejects the mismatched destructor name at instantiation ([expr.prim.id.dtor]/2) | WP-1737 | open |
 | WP-1738 | operators: GAP-052..GAP-058 (11 sites, 7 cases) | WP-1719 | open |
 | WP-1739 | codegen fallbacks: GAP-059..GAP-092 (39 sites, 7 cases) | WP-1719 | open |
 | WP-1740 | NTTP/substitution kinds: GAP-093..GAP-109 (17 sites, 3 cases) | WP-1719 | open |

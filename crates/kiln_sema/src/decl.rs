@@ -3319,7 +3319,8 @@ impl Sema<'_, '_> {
     /// functions are then matched with the substituted signature
     /// ([temp.friend]/1, [class.friend]/10, [temp.res.general]/3). A name
     /// that finds nothing, or something other than functions, is still
-    /// diagnosed now (clang).
+    /// diagnosed now (clang). A local class of a function template (or of
+    /// a generic lambda) is templated as well ([temp.pre]/8).
     fn defers_method_friend(
         &mut self,
         method_friend: bool,
@@ -3328,7 +3329,11 @@ impl Sema<'_, '_> {
         (ctx, lexical): (DeclId, DeclId),
         new_fn: NewFn,
     ) -> bool {
-        if !method_friend || d.qualifier.is_none() || !self.in_templated_class(Some(lexical)) {
+        if !method_friend
+            || d.qualifier.is_none()
+            || !(self.in_templated_class(Some(lexical))
+                || self.ast.decls.get(lexical).flags().contains(DeclFlags::DEPENDENT_CTX))
+        {
             return false;
         }
         let dep_nns = d

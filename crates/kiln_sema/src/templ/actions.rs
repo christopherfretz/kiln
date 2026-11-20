@@ -141,15 +141,32 @@ impl Sema<'_, '_> {
             // found there is bound now: it cannot change.
             Some(q.nns)
         } else if template_id
-            && matches!(
+            && (matches!(
                 self.classify_name(name, Some(q.ctx)),
                 crate::decl::NameClass::Undeclared | crate::decl::NameClass::Dependent
-            )
+            ) || self.names_dependent_using(q.ctx, name))
         {
             self.unknown_specialization_nns(q)
         } else {
             None
         }
+    }
+
+    /// True if `name` in the class `ctx` (the current instantiation) is
+    /// introduced by a using-declarator with a dependent qualifier
+    /// (`using B<T>::f;`): `ctx::template f<args>` names whatever `f` is
+    /// in the instantiated base, a member of an unknown specialization
+    /// ([namespace.udecl]/1, [temp.dep.type]/6.3; clang's
+    /// `UnresolvedUsingValueDecl` found by `isTemplateName`).
+    fn names_dependent_using(&self, ctx: DeclId, name: Symbol) -> bool {
+        if self.kind_of(ctx) != DeclKind::CXXRecord {
+            return false;
+        }
+        let found = self.lookup_qualified(ctx, name, LookupKind::Ordinary);
+        found
+            .decls
+            .iter()
+            .any(|&d| self.kind_of(self.ast.strip_shadow(d)) == DeclKind::UnresolvedUsingValue)
     }
 
     /// The specifier under which `q::name` names a member of an unknown
@@ -370,10 +387,11 @@ impl Sema<'_, '_> {
         Some((self.ast.definition(r).unwrap_or(r), n))
     }
 
-    /// The qualifier context of a dependent `decltype(e)::`: one implicit
-    /// alias of `<dependent type>` linked into no context, so that
-    /// [`Sema::is_dependent_ctx`] holds for it (the specifier itself
-    /// carries the `decltype`).
+    /// The qualifier context of a dependent `decltype(e)::`, and of a
+    /// member access's qualifier that a substitution leaves dependent:
+    /// one implicit alias of `<dependent type>` linked into no context,
+    /// so that [`Sema::is_dependent_ctx`] holds for it (the specifier
+    /// itself carries the type).
     pub(crate) fn decltype_scope_marker(&mut self) -> DeclId {
         if let Some(d) = self.templ.decltype_scope {
             return d;

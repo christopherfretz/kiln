@@ -38,6 +38,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   a conditional operator over two xvalues of differently cv-qualified
   types, and a defaulted assignment operator whose subobject assignment
   needs overload resolution.
+- Dependent names that reported "not yet implemented" (WP-1737): member
+  friends named by an operator (`friend void *A<T>::operator new(...)`),
+  qualifiers that stay dependent inside generic lambdas and their local
+  classes, deduction guides of alias templates and inherited
+  constructors whose parameter types name members of the class template,
+  qualified destructor names looked up at instantiation
+  (`p->NS::S::~Q()`, `p.T::~Q()`), and `D::template f<A>` through a
+  dependent using-declarator ([temp.dep.type], [over.match.class.deduct],
+  [basic.lookup.qual.general]/4).
 
 ### Fixed
 
@@ -48,6 +57,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   reported "cannot yet mangle expression type"; a `decltype` naming only
   non-dependent template parameters is its type (`i`), not `DT...E`; the
   kinds clang cannot mangle either give clang's errors.
+- A member friend with a dependent qualifier in a local class of a
+  function template is matched when the local class is instantiated
+  instead of failing at its definition; `s->T::~S()` on a class object
+  with a dependent `T` no longer reports "no member named '~S'";
+  `T::template X<A>` naming a class template once instantiated and a
+  block-scope `using T::operator+;` get clang's diagnostics instead of
+  "not yet implemented"/"not supported yet" (WP-1737).
 - `sizeof... T`, an attribute pack expansion `[[a...]]` and a
   mem-initializer pack expansion that initializes a member or names no
   pack are reported with clang's diagnostics instead of "not supported
