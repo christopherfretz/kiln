@@ -260,6 +260,32 @@ impl Substituter<'_, '_, '_> {
         self.braced_args(v)
     }
 
+    /// The written initializers of the parenthesized aggregate
+    /// initialization `p` (clang `getUserSpecifiedInitExprs`), braced ones
+    /// braced arguments again, as [`Self::call_arg_list`]. The trailing
+    /// subobjects the initialization filled are implicit
+    /// ([dcl.init.general]/16.6.2.2): a `CXXDefaultInitExpr` (the default
+    /// member initializer) or an `ImplicitValueInitExpr`, never a written
+    /// argument, which the rebuilt initialization fills again in its own
+    /// context (the source-location builtins of a default member
+    /// initializer name the instantiation's function).
+    fn paren_list_args(&mut self, p: ExprId) -> SubstResult<Vec<ExprId>> {
+        let l = self.sema.ast.exprs.paren_list_inits(p);
+        let mut v: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        while v.last().is_some_and(|&x| {
+            matches!(
+                self.sema.ast.exprs.get(x).kind(),
+                ExprKind::CXXDefaultInitExpr | ExprKind::ImplicitValueInitExpr
+            )
+        }) {
+            v.pop();
+        }
+        if !v.iter().any(|&x| self.braced_source(x).is_some() || self.braced_pattern(x).is_some()) {
+            return self.expand_exprs(&v);
+        }
+        self.braced_args(v)
+    }
+
     /// The rebuild of [`Self::call_arg_list`] for an argument list holding a
     /// braced argument (or a braced pack expansion), up to the first
     /// `CXXDefaultArgExpr`.
@@ -348,7 +374,7 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
         end: Loc,
     ) -> SubstResult<ExprId> {
-        let args = self.call_arg_list(self.sema.ast.exprs.paren_list_inits(p))?;
+        let args = self.paren_list_args(p)?;
         Ok(match args.as_slice() {
             [a] if !self.sema.is_braced_arg(*a) => {
                 self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end)
@@ -1421,34 +1447,112 @@ impl Substituter<'_, '_, '_> {
                 let l = self.init_list(e)?;
                 Ok(self.sema.act_on_braced_template_arg(&l))
             }
+            // A semantic braced-init-list reached outside an initializer
+            // the substitution rebuilds itself: an element of a
+            // `RecoveryExpr` over an initialization that failed when the
+            // pattern was parsed (`E e{N}` of an enumeration `E`).
+            // As clang's `TransformInitListExpr`, the instantiation is the
+            // written list again, kept unanalyzed: the error was diagnosed
+            // in the definition, and the enclosing `RecoveryExpr` is never
+            // analyzed again.
+            ExprKind::InitListExpr => {
+                let l = self.init_list(e)?;
+                Ok(self.sema.dependent_init_list(&l))
+            }
+            // The default member initializer of a field an initialization
+            // used (clang `TransformCXXDefaultInitExpr`), reached as an
+            // element of a `RecoveryExpr` over a failed initialization:
+            // the instantiated field's default member initializer, used
+            // again in the instantiation's context ([class.mem.general]/11,
+            // [dcl.init.aggr]/5.1).
+            ExprKind::CXXDefaultInitExpr => {
+                let f = self.sema.ast.exprs.default_init_field(e);
+                let f = self.find_instantiated_decl(f, loc)?;
+                Ok(self.sema.field_filler(f, loc))
+            }
+            // `T()` of a non-class type `T` (clang
+            // `TransformCXXScalarValueInitExpr`): the value-initialization
+            // ([expr.type.conv]/2, [dcl.init.general]/9) of the substituted
+            // type, formed again. The pattern's node is rebuilt only when
+            // its type is instantiation-dependent without being dependent:
+            // a variable length array bound naming a local entity of the
+            // template (`using P = int (*)[n]; P()`), whose bound each
+            // specialization evaluates for its own `n`.
+            ExprKind::CXXScalarValueInitExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                Ok(self.sema.act_on_value_init_cast(ty, loc, end))
+            }
+            // The value-initialization filling an implicit subobject (clang
+            // `TransformImplicitValueInitExpr`): the same initialization
+            // of the substituted type. Only the semantic member
+            // initializers of an aggregate initialization that failed in
+            // the pattern hold one outside a braced list (the elements of
+            // its `RecoveryExpr`, `init.rs`), whose type is rebuilt only
+            // when it is instantiation-dependent.
+            ExprKind::ImplicitValueInitExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                Ok(self.sema.builder().implicit_value_init(ty))
+            }
+            // The remaining kinds never need a rebuild ([`Self::expr`]
+            // shares a node whose dependence has none of
+            // `TYPE | VALUE | INSTANTIATION | UNEXPANDED_PACK`), or are
+            // consumed by the node that holds them; each arm names the
+            // invariant (WP-1740).
             ExprKind::IntegerLiteral
             | ExprKind::FloatingLiteral
             | ExprKind::CharacterLiteral
             | ExprKind::StringLiteral
             | ExprKind::CXXBoolLiteralExpr
             | ExprKind::CXXNullPtrLiteralExpr
-            | ExprKind::UserDefinedLiteral
             | ExprKind::ImaginaryLiteral
-            | ExprKind::EmbedExpr
-            | ExprKind::GNUNullExpr
-            | ExprKind::UnresolvedMemberExpr
-            | ExprKind::ParenListExpr
-            | ExprKind::InitListExpr
-            | ExprKind::ImplicitValueInitExpr
-            | ExprKind::DesignatedInitExpr
-            | ExprKind::CXXInheritedCtorInitExpr
-            | ExprKind::CXXDefaultArgExpr
-            | ExprKind::CXXDefaultInitExpr
-            | ExprKind::CXXScalarValueInitExpr
-            | ExprKind::ArrayInitLoopExpr
-            | ExprKind::ArrayInitIndexExpr
-            | ExprKind::NoInitExpr
-            | ExprKind::DesignatedInitUpdateExpr
-            | ExprKind::OpaqueValueExpr
-            | ExprKind::PseudoObjectExpr => {
-                // kiln-gap: GAP-097
-                self.unimplemented(&format!("substitution into {k:?}"), loc)
+            | ExprKind::GNUNullExpr => unreachable!(
+                "{k:?} rebuilt: a literal has no children and the dependence of its \
+                 concrete type (kiln_ast builder `type_deps`; `__null` has none), so \
+                 `Substituter::expr` shares it"
+            ),
+            ExprKind::UserDefinedLiteral | ExprKind::EmbedExpr | ExprKind::UnresolvedMemberExpr => {
+                unreachable!(
+                    "{k:?} rebuilt: kiln_ast's builder has no constructor for it (a \
+                     user-defined literal is a `CallExpr`, `#embed` expands to integer literals, an \
+                     overloaded member access is a `MemberExpr` of overload type)"
+                )
             }
+            ExprKind::ParenListExpr => unreachable!(
+                "ParenListExpr rebuilt outside an initializer: Sema builds it only as the \
+                 dependent initializer of a variable, init-capture or new-expression, which \
+                 `Substituter::initializer` / `new_initializer` take apart"
+            ),
+            ExprKind::DesignatedInitExpr => unreachable!(
+                "DesignatedInitExpr rebuilt outside a braced list: it is only a clause of \
+                 a written list (`Sema::dependent_init_list`, a semantic list's syntactic \
+                 form), whose clauses `Substituter::init_items` takes apart"
+            ),
+            ExprKind::NoInitExpr | ExprKind::DesignatedInitUpdateExpr => unreachable!(
+                "{k:?} rebuilt: it is only in the semantic form of a designated list, \
+                 which `Substituter::init_list` rebuilds from its syntactic form (clang's \
+                 `TreeTransform` is unreachable for it too)"
+            ),
+            ExprKind::CXXDefaultArgExpr => unreachable!(
+                "CXXDefaultArgExpr rebuilt: it is only an argument of a call or \
+                 construction, whose argument lists the substitution cuts at the first \
+                 default argument (`expr_list`, `call_arg_list`, `braced_args`, \
+                 `construct_list`, `new_expr`), and no `RecoveryExpr` holds one"
+            ),
+            ExprKind::ArrayInitLoopExpr | ExprKind::ArrayInitIndexExpr => unreachable!(
+                "{k:?} rebuilt: only a structured binding's or array capture's initializer \
+                 (taken apart by `Substituter::initializer`) or an implicit special \
+                 member's body (never a pattern) holds one"
+            ),
+            ExprKind::OpaqueValueExpr => unreachable!(
+                "OpaqueValueExpr rebuilt: a bound one is reached only through its binder \
+                 (`?:`, co_await, array init loop, synthesized `<=>`), each rebuilt from \
+                 the source operand; an unbound one (`opaque_value_of`) has no dependence"
+            ),
+            ExprKind::PseudoObjectExpr | ExprKind::CXXInheritedCtorInitExpr => unreachable!(
+                "{k:?} rebuilt: it is only in the body of a defaulted comparison or an \
+                 inheriting constructor, defined for a complete non-dependent class, \
+                 never a template pattern"
+            ),
         }
     }
 
@@ -3051,7 +3155,7 @@ impl Substituter<'_, '_, '_> {
         }
         if pk == ExprKind::CXXParenListInitExpr && style != InitStyle::C {
             let pn = *self.sema.ast.exprs.get(peeled);
-            let args = self.expr_list(self.sema.ast.exprs.paren_list_inits(peeled))?;
+            let args = self.paren_list_args(peeled)?;
             let r = self.sema.ast.exprs.end_loc(peeled).unwrap_or(pn.loc());
             return Ok(Some(Initializer::Paren(args, pn.loc(), r)));
         }

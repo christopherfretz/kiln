@@ -4215,7 +4215,14 @@ here because the GCC cases reaching them are template tests:
     [dcl.init.general]/16.6.2.2), alone or under its no-op functional
     cast, becomes `act_on_cast` (one operand) or `act_on_paren_list_cast`
     of the substituted type from its explicit initializers
-    ([expr.type.conv]/2);
+    ([expr.type.conv]/2). The explicit initializers are the written
+    arguments (`Substituter::paren_list_args`, clang
+    `getUserSpecifiedInitExprs`): the trailing members the initialization
+    filled (a `CXXDefaultInitExpr` or `ImplicitValueInitExpr`) are left
+    out and filled again in the specialization's context, so a default
+    member initializer's `__builtin_FUNCTION()` names the specialization,
+    and a braced argument (`B b({N, 1}, {N, 2})`) stays braced (WP-1740;
+    `temp.inst/paren-aggregate-implicit-subobjects-run.cpp`);
   - a braced list behind implicit nodes (`Substituter::braced_source`:
     an `InitListExpr`, the backing array of a `CXXStdInitializerListExpr`
     or a list-initializing `CXXConstructExpr`) is that list again: a
@@ -4280,13 +4287,53 @@ here because the GCC cases reaching them are template tests:
     context is always value- and instantiation-dependent (below), its
     body is never shared with the pattern.
 
-  Every other expression or statement kind without an arm reaches the
-  generic catch-all, which gives the NYI diagnostic `substitution into
-  <kind>` and never panics. A census over the libc++ 19 10% sample
-  (790 tests, `-fsyntax-only`) found no kind reaching it; the kinds left
-  are unreachable today because their construct is rejected or
-  unimplemented before substitution: coroutine expressions and
-  statements, `template for` and computed `goto`. A `contract_assert`
+- (WP-1740) The initialization kinds reached outside the initializers
+  above:
+  - `T()` of a non-class `T` (`CXXScalarValueInitExpr`, clang
+    `TransformCXXScalarValueInitExpr`) is `act_on_value_init_cast` of the
+    substituted type. Its node is rebuilt only when the type is
+    instantiation-dependent without being dependent: a pointer to a
+    variable length array whose bound names a local of the template
+    (`using PA = int (*)[n]; PA()`;
+    `temp.inst/vla-scalar-value-init-run.cpp`).
+  - The elements of a `RecoveryExpr` over an initialization that failed
+    in the pattern are its semantic elements (`init.rs` aggregate
+    checking): a typed `InitListExpr` is rebuilt as the written list
+    (`init_list`, then `dependent_init_list`: clang
+    `TransformInitListExpr` rebuilds an untyped syntactic list), and a
+    `CXXDefaultInitExpr` is the instantiated field's default member
+    initializer again (`field_filler`; clang
+    `TransformCXXDefaultInitExpr`). Neither is analyzed again, so the
+    instantiation adds no diagnostic to the pattern's one
+    (`temp.inst/recovery-expr-initializer-elements.cpp`).
+  - An `ImplicitValueInitExpr` reached on its own is the value
+    initialization of its substituted type (clang
+    `TransformImplicitValueInitExpr`).
+
+  The other expression kinds `expr_node` cannot be given are explicit
+  `unreachable!` arms naming the invariant that keeps them out: a literal
+  (`IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`,
+  `StringLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`,
+  `ImaginaryLiteral`, `GNUNullExpr`) has the dependence of its concrete
+  type and no children, so `Substituter::expr` shares it;
+  `UserDefinedLiteral`, `EmbedExpr` and `UnresolvedMemberExpr` are never
+  built; `ParenListExpr` is only a dependent initializer, taken apart by
+  `initializer` / `new_initializer`; `DesignatedInitExpr` is only a clause
+  of a written list (`init_items`); `NoInitExpr` and
+  `DesignatedInitUpdateExpr` are only in the semantic form of a
+  designated list, rebuilt from its syntactic form (clang's
+  `TreeTransform` is unreachable for both too); `CXXDefaultArgExpr` is
+  only a call or construction argument, and every argument list is cut
+  at the first one; `ArrayInitLoopExpr` and `ArrayInitIndexExpr` are only
+  in a structured binding's or array capture's initializer (taken apart
+  by `initializer`) or an implicit special member's body;
+  `OpaqueValueExpr` is reached only through its binder, rebuilt from the
+  source operand (an unbound one has no dependence); and
+  `PseudoObjectExpr` and `CXXInheritedCtorInitExpr` are only in the body
+  of a defaulted comparison or inheriting constructor, never a template
+  pattern. Neither the expression match (`expr_node`) nor the statement
+  match (`stmt_node`, whose one `unreachable!` arm is `CXXCatchStmt`,
+  substituted by its try-block) has a catch-all. A `contract_assert`
   (`ContractAssertStmt`) has its own arm since WP-706, and a function's
   `pre`/`post` specifiers are substituted with the function
   (`templ/subst/contracts.rs`; spec/contracts.md §5, Templates).

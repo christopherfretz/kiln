@@ -329,12 +329,6 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Err(SubstFail)
     }
 
-    pub(crate) fn unimplemented<T>(&mut self, feature: &str, loc: Loc) -> SubstResult<T> {
-        // kiln-gap: forward
-        self.sema.templ_unimplemented(feature, loc);
-        Err(SubstFail)
-    }
-
     /// What template parameter `(depth, index)` becomes.
     pub(crate) fn lookup(&self, depth: u16, index: u16) -> ArgLookup {
         let types = &self.sema.ast.types;
