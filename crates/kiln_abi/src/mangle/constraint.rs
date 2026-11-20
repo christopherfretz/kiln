@@ -187,7 +187,6 @@ impl Mangler<'_, '_> {
             // subexpression (clang's "cannot yet mangle expression
             // type"), never a silently wrong name.
             let at = self.failed.unwrap_or(r);
-            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
         }
         self.failed = saved_failed;

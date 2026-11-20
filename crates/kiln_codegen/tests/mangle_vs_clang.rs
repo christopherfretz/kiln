@@ -200,3 +200,78 @@ fn mangling_matches_clang() {
         failures.join("\n")
     );
 }
+
+/// Each name of `names`, one per line, through demangler `tool`; `None`
+/// when the tool cannot be run.
+fn demangle_with(tool: &str, names: &BTreeSet<String>) -> Option<Vec<String>> {
+    use std::io::Write;
+    let mut child = Command::new(tool)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut input = String::new();
+    for n in names {
+        input.push_str(n);
+        input.push('\n');
+    }
+    child.stdin.take()?.write_all(input.as_bytes()).ok()?;
+    let out = child.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect())
+}
+
+/// The demangling round trip (spec/abi.md §8.15, WP-1736): every
+/// `// demangles: <text>` line of a `tests/mangle/*.cpp` file is what
+/// llvm-cxxfilt or GNU c++filt prints for one of kiln's names for that
+/// file. Skipped, with a note, when neither demangler is installed.
+#[test]
+fn kiln_names_demangle() {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(corpus_dir())
+        .expect("tests/mangle")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "cpp"))
+        .collect();
+    files.sort();
+    let llvm = ["llvm-cxxfilt-22", "llvm-cxxfilt-19", "llvm-cxxfilt"];
+    let mut failures = Vec::new();
+    let mut checked = 0usize;
+    for f in &files {
+        let src = std::fs::read_to_string(f).expect("read case");
+        let want: Vec<&str> =
+            src.lines().filter_map(|l| l.strip_prefix("// demangles: ")).map(str::trim).collect();
+        if want.is_empty() {
+            continue;
+        }
+        let stem = f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let ours = match kiln_names(&src, Arch::AArch64) {
+            Ok(n) => n,
+            Err(e) => {
+                failures.push(format!("{stem}: {e}"));
+                continue;
+            }
+        };
+        let mut got: BTreeSet<String> = BTreeSet::new();
+        let mut any = false;
+        // The first LLVM demangler found, then GNU's.
+        let first_llvm = llvm.iter().find_map(|t| demangle_with(t, &ours));
+        for lines in [first_llvm, demangle_with("c++filt", &ours)].into_iter().flatten() {
+            any = true;
+            got.extend(lines);
+        }
+        if !any {
+            eprintln!("no llvm-cxxfilt or c++filt found; skipping the demangling round trip");
+            return;
+        }
+        for w in want {
+            checked += 1;
+            if !got.contains(w) {
+                failures.push(format!("{stem}: no kiln name demangles to `{w}`"));
+            }
+        }
+    }
+    eprintln!("kiln_names_demangle: {checked} demangled names checked");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -539,14 +539,29 @@ impl<'a> Cg<'a> {
         let r = self.run_tu();
         // An expression in a symbol with no encoding: a requires-clause
         // (WP-818), a template argument, `decltype` operand or array
-        // bound (WP-593).
+        // bound (WP-593). Only the kinds clang cannot mangle either reach
+        // here (spec/abi.md §8.15), each with clang's error.
         let mut seen = FxHashSet::default();
         for e in self.anon.take_unmangleable() {
             if seen.insert(e) {
-                let kind = format!("{:?}", self.ast.exprs.get(e).kind());
                 let at = Span::empty(self.ast.begin_loc(e));
-                // kiln-gap: GAP-041
-                self.diags.push(Diag::new(DiagId::cg_cannot_mangle_expression, at).arg(&kind));
+                let kind = self.ast.exprs.get(e).kind();
+                let trait_kw = (kind == kiln_ast::expr::ExprKind::UnaryExprOrTypeTraitExpr)
+                    .then(|| match self.ast.exprs.trait_kind(e) {
+                        kiln_ast::expr::TraitKind::DataSizeOf => Some("__datasizeof"),
+                        kiln_ast::expr::TraitKind::VecStep => Some("vec_step"),
+                        _ => None,
+                    })
+                    .flatten();
+                let d = if kind == kiln_ast::expr::ExprKind::BinaryConditionalOperator {
+                    Diag::new(DiagId::cg_cannot_mangle_omitted_middle, at)
+                } else if let Some(kw) = trait_kw {
+                    Diag::new(DiagId::cg_cannot_mangle_trait, at).arg(kw)
+                } else {
+                    // kiln-gap: GAP-041
+                    Diag::new(DiagId::cg_cannot_mangle_expression, at).arg(format!("{kind:?}"))
+                };
+                self.diags.push(d);
             }
         }
         let stats = self.mason_stats.take();

@@ -179,6 +179,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "record_pack",
     "requires_clause",
     "size_of_pack_origin",
+    "size_of_pack_partial",
     "source_loc",
     "splice_args",
     "syntactic_list",

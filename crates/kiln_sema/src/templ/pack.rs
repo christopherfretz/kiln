@@ -947,7 +947,12 @@ impl Substituter<'_, '_, '_> {
                 Some(l) => self.sema.builtin_binary(kiln_ast::expr::BinaryOp::Add, l, t, loc),
             });
         }
-        acc.ok_or(SubstFail)
+        let acc = acc.ok_or(SubstFail)?;
+        // The partial arguments, for the mangling `sP <template-arg>* E`
+        // (clang's `isPartiallySubstituted`, spec/abi.md §8.15).
+        let partial = self.sema.ast.types.arg_list(elems);
+        let _ = self.sema.ast.templates.size_of_pack_partial.insert(acc, partial);
+        Ok(acc)
     }
 }
 

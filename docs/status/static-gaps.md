@@ -8,8 +8,8 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-127 gaps at 220 sites; 34 of 56,766 g++.dg cases hit one at the
-1.3.0 release candidate. 3 more entries (4 sites) use wording that
+126 gaps at 215 sites; 25 of 56,766 g++.dg cases hit one at the
+1.3.0 release candidate. 4 more entries (5 sites) use wording that
 matches clang's for a limit clang shares: they are listed as excluded and
 stay.
 
@@ -74,7 +74,6 @@ By family:
 | family | gaps | sites | reach |
 |---|---|---|---|
 | Oven trap | 20 | 90 | 0 |
-| cg_cannot_mangle_expression | 1 | 5 | 9 |
 | codegen fallback | 34 | 39 | 7 |
 | drv_not_implemented | 3 | 3 | 0 |
 | parse_unsupported | 32 | 37 | 7 |
@@ -91,7 +90,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| mangling | 1 (GAP-041..GAP-041) | 5 | 9 | WP-1736 |
 | dependent names | 10 (GAP-042..GAP-051) | 12 | 8 | WP-1737 |
 | operators | 7 (GAP-052..GAP-058) | 11 | 7 | WP-1738 |
 | codegen fallbacks | 34 (GAP-059..GAP-092) | 39 | 7 | WP-1739 |
@@ -106,7 +104,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-041 | cg_cannot_mangle_expression | mangling | `cannot yet mangle expression type {kind}` ({kind}: the kind of the innermost expression with no encoding in a requires-clause, template argument, `decltype` operand or array bound; at the RC `UnresolvedLookupExpr`, `SizeOfPackExpr`. Also marked: the four `kiln_abi` places that record the expression) | `crates/kiln_abi/src/mangle/constraint.rs::requires_clause`, `crates/kiln_abi/src/mangle/dep.rs::dependent_decltype`, `crates/kiln_abi/src/mangle/dep.rs::dependent_dimension`, `crates/kiln_abi/src/mangle/dep.rs::template_arg_expr`, `crates/kiln_codegen/src/module.rs::run_with_stats` | 9 | WP-1736 |
 | GAP-042 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: dependent nested name specifier` | `crates/kiln_sema/src/templ/subst/mod.rs::nns_context` | 6 | WP-1737 |
 | GAP-043 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: reference to a member of a dependent context` | `crates/kiln_sema/src/templ/subst/mod.rs::pattern_specialization` ×2 | 2 | WP-1737 |
 | GAP-044 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: a dependent destructor name` | `crates/kiln_sema/src/class/member_expr.rs::member_destructor_in`, `crates/kiln_sema/src/class/member_expr.rs::pseudo_destructor_named` | 0 | WP-1737 |
@@ -244,11 +241,35 @@ words, so these are not kiln gaps.
 | GAP-168 | codegen fallback | excluded | `cannot compile this tail call skipping over cleanups yet` | `crates/kiln_codegen/src/expr.rs::finish_musttail` | 0 | excluded: clang's own wording and limit (`[[clang::musttail]]` over cleanups) |
 | GAP-169 | Oven trap | excluded | `constexpr bit cast involving type '{n}' is not yet supported` | `crates/kiln_oven/src/compile/bitcast.rs::bit_cast_unsupported` ×2 | 0 | excluded: clang's note `note_constexpr_bit_cast_unsupported_type`, same cases |
 | GAP-170 | Oven trap | excluded | `non-trivial destruction of lifetime-extended temporary with type '{t}' used in the result of a constant expression is not yet supported` | `crates/kiln_oven/src/value.rs::check_let_destruction` | 0 | excluded: clang's note `note_constexpr_unsupported_temporary_nontrivial_dtor`, same cases |
+| GAP-041 | cg_cannot_mangle_expression | excluded | `cannot yet mangle expression type {kind}` ({kind}: the kinds clang has no encoding for either, under Enumerated kinds) | `crates/kiln_codegen/src/module.rs::run_with_stats` | 0 | excluded: clang's own error (`CXXNameMangler::mangleExpression`) for the same kinds; every kind clang mangles has its encoding (WP-1736, spec/abi.md §8.15) |
 
 ## Enumerated kinds
 
 The kinds an exhaustive match arm sends to the gap (WP-1719 replaced each
 `_ =>` arm with this list, so a new variant needs a decision).
+
+### GAP-041
+
+`Mangler::expression_node` (`crates/kiln_abi/src/mangle/dep.rs`), the
+kinds clang reports the same way (`mangleExpression`): `ChooseExpr`,
+`CompoundLiteralExpr`, `ExtVectorElementExpr`, `GenericSelectionExpr`,
+`OffsetOfExpr`, `PredefinedExpr`, `ShuffleVectorExpr`,
+`ConvertVectorExpr`, `StmtExpr`, `ArrayTypeTraitExpr`,
+`ExpressionTraitExpr`, `VAArgExpr`, `PseudoObjectExpr`, `AtomicExpr`,
+`SourceLocExpr`, `EmbedExpr`, `BuiltinBitCastExpr`; with clang's other
+errors, `BinaryConditionalOperator` (`?: operator with omitted middle
+operand cannot be mangled`) and `UnaryExprOrTypeTraitExpr` of
+`__datasizeof` / `vec_step` (`cannot yet mangle __datasizeof
+expression`). Never in a mangled operand (clang: unreachable): `ParenExpr`,
+`ImplicitCastExpr`, `ConstantExpr`, `MaterializeTemporaryExpr`,
+`CXXBindTemporaryExpr`, `ExprWithCleanups`, `SubstNonTypeTemplateParmExpr`,
+`CXXDefaultArgExpr`, `CXXDefaultInitExpr` (stepped over),
+`OpaqueValueExpr`, `ParenListExpr`, `ImplicitValueInitExpr`,
+`CXXInheritedCtorInitExpr`, `CXXParenListInitExpr`, `ArrayInitLoopExpr`,
+`ArrayInitIndexExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`,
+`RecoveryExpr`, `UserDefinedLiteral` and `UnresolvedMemberExpr` (kiln
+builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
+`AddrLabelExpr` (ExprKind).
 
 ### GAP-059
 

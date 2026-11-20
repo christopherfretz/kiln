@@ -1104,6 +1104,49 @@ fn unmangleable_dimension_is_an_error() {
 }
 
 #[test]
+fn unmangleable_kinds_are_clangs_errors() {
+    // spec/abi.md §8.15, WP-1736: the expression kinds clang has no
+    // encoding for either are its errors, each at its location: the GNU
+    // `?:` with clang's own wording, `__datasizeof` as "cannot yet mangle
+    // __datasizeof expression" (clang 19 gives that one no location;
+    // kiln follows clang 22), the others as "cannot yet mangle expression
+    // type {kind}".
+    let d = scratch("unmangleable_kinds");
+    let src = "struct T0 { int a; };\n\
+               template <class T> auto f(T t) -> decltype(t, (T)1 ?: t) { throw 0; }\n\
+               template <class T> auto g(T t) -> decltype(__datasizeof(T) + t) { throw 0; }\n\
+               template <class T> auto h(T t) -> decltype(t + __builtin_offsetof(T0, a)) \
+               { throw 0; }\n\
+               template <class T> auto m(T t) -> decltype(__builtin_choose_expr(1, t, 2.0)) \
+               { throw 0; }\n\
+               void use() { f(1); g(1); h(1); m(1); }\n";
+    let want = [
+        "t.cpp:2:47: error: ?: operator with omitted middle operand cannot be mangled",
+        "t.cpp:3:44: error: cannot yet mangle __datasizeof expression",
+        "t.cpp:4:48: error: cannot yet mangle expression type OffsetOfExpr",
+        "t.cpp:5:44: error: cannot yet mangle expression type ChooseExpr",
+    ];
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let _ = std::fs::remove_file(d.join("t.ll"));
+    let o = kiln_in(&d, &["-std=c++26", "-S", "-emit-llvm", "t.cpp"]);
+    let err = text(&o.stderr);
+    let errors: Vec<&str> = err.lines().filter(|l| l.contains(": error: ")).collect();
+    assert_eq!(errors, want, "{err}");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!d.join("t.ll").exists());
+    if have("clang++-22") {
+        let c = Command::new("clang++-22")
+            .args(["-std=c++26", "-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        let cerr = text(&c.stderr);
+        let cerrors: Vec<&str> = cerr.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(cerrors, want, "clang++-22");
+    }
+}
+
+#[test]
 fn asm_output_aggregate_not_register_sized() {
     // WP-1456 (found running GCC's C++ testsuite): an `=r`/`+r` output of an
     // aggregate whose size is not a register width reached the backend and
