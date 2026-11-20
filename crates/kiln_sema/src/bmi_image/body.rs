@@ -2158,6 +2158,7 @@ impl Writer<'_, '_, '_> {
                     || c.offsetof_pattern.contains(e)
                     || c.splice_args.contains(e)
                     || (t.size_of_pack_origin.contains(e) && k != ExprKind::IntegerLiteral)
+                    || t.size_of_pack_partial.contains(e)
                     || t.pseudo_dtor_name.contains(e)
                     || t.pseudo_dtor_first.contains(e)
                 {

@@ -41,6 +41,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Every expression kind in a dependent signature mangles as clang's (WP-1736):
+  `sizeof...` of a function parameter pack (`sZfp_`) and of a partially
+  substituted pack (`sP`), a `decltype` qualifier, rewritten comparisons,
+  designated initializers and expanded function parameter packs, which
+  reported "cannot yet mangle expression type"; a `decltype` naming only
+  non-dependent template parameters is its type (`i`), not `DT...E`; the
+  kinds clang cannot mangle either give clang's errors.
 - `sizeof... T`, an attribute pack expansion `[[a...]]` and a
   mem-initializer pack expansion that initializes a member or names no
   pack are reported with clang's diagnostics instead of "not supported

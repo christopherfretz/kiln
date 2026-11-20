@@ -311,6 +311,12 @@ pub struct TemplateTables {
     /// integer literal: clang keeps a non-dependent `SizeOfPackExpr`,
     /// which still mangles as `sZ <template-param>` (spec/abi.md §8.15).
     pub size_of_pack_origin: ColdMap<ExprId, DeclId>,
+    /// The partial arguments of a `sizeof...` whose pack was bound to
+    /// elements some of which are pack expansions (`{int, Ts...}`), on
+    /// the expression substitution formed for it: clang keeps a partially
+    /// substituted `SizeOfPackExpr`, which mangles as `sP
+    /// <template-arg>* E` (spec/abi.md §8.15).
+    pub size_of_pack_partial: ColdMap<ExprId, ArgListId>,
     /// The selected element a substituted `pack...[i]` became, mapped to
     /// that pack-index expression of the pattern: clang keeps a
     /// non-dependent `PackIndexingExpr`, which still mangles as nothing
@@ -471,6 +477,7 @@ impl Default for TemplateTables {
             expr_targs: ColdMap::new("expr_targs"),
             expr_begin: ColdMap::new("expr_begin"),
             size_of_pack_origin: ColdMap::new("size_of_pack_origin"),
+            size_of_pack_partial: ColdMap::new("size_of_pack_partial"),
             pack_index_origin: ColdMap::new("pack_index_origin"),
             member_op_loc: ColdMap::new("member_op_loc"),
             pseudo_dtor_name: ColdMap::new("pseudo_dtor_name"),
@@ -794,6 +801,7 @@ impl HeapSize for TemplateTables {
         r.push(self.expr_targs.mem_row());
         r.push(self.expr_begin.mem_row());
         r.push(self.size_of_pack_origin.mem_row());
+        r.push(self.size_of_pack_partial.mem_row());
         r.push(self.pack_index_origin.mem_row());
         r.push(self.member_op_loc.mem_row());
         r.push(self.pseudo_dtor_name.mem_row());

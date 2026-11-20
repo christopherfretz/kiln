@@ -191,20 +191,99 @@ impl Sema<'_, '_> {
         Some(self.ast.types.decltype_type(e, u, None))
     }
 
-    /// Whether the `decltype` operand `e` (with dependence `deps`) only
-    /// names a variable or parameter with automatic storage of a template
-    /// whose type is not dependent (`std::vector<int> V; decltype(V)`, or
-    /// `decltype((V))`). Its reference is instantiation-dependent only so
-    /// that instantiation rebinds it to the instantiated local
-    /// (`decl_deps`); clang's `computeDependence(DeclRefExpr *)` does not
-    /// make it so, and `decltype(V)::iterator` names a member of a known
-    /// class ([temp.dep.type]/7, LLVM's MappedIteratorTest.cpp).
+    /// Whether the `decltype` operand `e` (with dependence `deps`) is
+    /// instantiation-dependent only through references to variables or
+    /// parameters with automatic storage of a template whose types are
+    /// not dependent (`std::vector<int> V; decltype(V)`, `decltype((V))`,
+    /// `decltype(t + 1)` of an `int t` parameter of a function template).
+    /// Such a reference is instantiation-dependent only so that
+    /// instantiation rebinds it to the instantiated local (`decl_deps`);
+    /// clang's `computeDependence(DeclRefExpr *)` does not make it so, so
+    /// the `decltype` is not dependent: `decltype(V)::iterator` names a
+    /// member of a known class ([temp.dep.type]/7, LLVM's
+    /// MappedIteratorTest.cpp), and a signature's `decltype(t + 1)`
+    /// mangles as `i`, not `DTplfp_Li1EE` (spec/abi.md §8.15, WP-1736).
     fn names_template_local(&self, e: ExprId, deps: kiln_ast::expr::ExprDeps) -> bool {
         if deps != kiln_ast::expr::ExprDeps::INSTANTIATION {
             return false;
         }
-        let x = self.ignore_parens(e);
-        if self.ast.exprs.get(x).kind() != ExprKind::DeclRefExpr {
+        let mut stack = vec![e];
+        let mut kids = Vec::new();
+        while let Some(x) = stack.pop() {
+            let n = *self.ast.exprs.get(x);
+            let d = n.deps();
+            if !d.contains(kiln_ast::expr::ExprDeps::INSTANTIATION) {
+                continue;
+            }
+            if d != kiln_ast::expr::ExprDeps::INSTANTIATION
+                || self.ast.types.qflags(n.ty()).intersects(
+                    TypeFlags::DEPENDENT_INSTANTIATION
+                        | TypeFlags::UNEXPANDED_PACK
+                        | TypeFlags::UNDEDUCED,
+                )
+            {
+                return false;
+            }
+            match n.kind() {
+                ExprKind::DeclRefExpr => {
+                    if !self.is_template_local(x) {
+                        return false;
+                    }
+                }
+                // A member of a class local to the template is a source
+                // of its own.
+                ExprKind::MemberExpr
+                    if self.ast.decls.get(self.ast.exprs.decl(x)).has(DeclFlags::DEPENDENT_CTX) =>
+                {
+                    return false;
+                }
+                // The forms whose dependence is their operands' alone.
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::UnaryOperator
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::ArraySubscriptExpr
+                | ExprKind::CallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::MemberExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => {
+                    kids.clear();
+                    self.ast.exprs.children_into(x, &self.ast.lists, &mut kids);
+                    let before = stack.len();
+                    stack.extend(kids.iter().copied().filter(|&k| {
+                        self.ast
+                            .exprs
+                            .get(k)
+                            .deps()
+                            .contains(kiln_ast::expr::ExprDeps::INSTANTIATION)
+                    }));
+                    // No operand explains the dependence: the node has a
+                    // source of its own (a qualifier, template arguments).
+                    if stack.len() == before {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Whether the `DeclRefExpr` `x` names a variable or parameter with
+    /// automatic storage whose type is not dependent.
+    fn is_template_local(&self, x: ExprId) -> bool {
+        if self
+            .ast
+            .exprs
+            .decl_ref_extra(x)
+            .is_some_and(|r| r.qualifier.is_some() || r.template_args.is_some())
+        {
             return false;
         }
         let d = self.ast.exprs.decl(x);

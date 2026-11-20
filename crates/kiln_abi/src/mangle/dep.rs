@@ -260,7 +260,6 @@ impl Mangler<'_, '_> {
             // As in a template argument: a hard error, never a shared
             // placeholder name (WP-593).
             let at = self.failed.unwrap_or(e);
-            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }
@@ -287,7 +286,6 @@ impl Mangler<'_, '_> {
                 return;
             }
             let at = self.failed.unwrap_or(e);
-            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }
@@ -363,7 +361,6 @@ impl Mangler<'_, '_> {
                 return;
             }
             let at = self.failed.unwrap_or(e);
-            // kiln-gap: GAP-041
             self.anon.unmangleable.push(at);
             self.failed = saved_failed;
         }
@@ -639,10 +636,9 @@ impl Mangler<'_, '_> {
     /// names its pack).
     fn integer_literal(&mut self, e: ExprId) -> bool {
         let ast = self.ast;
-        let pack = ast.templates.size_of_pack_origin.get(e);
-        if let Some(p) = pack.and_then(|&d| ast.template_parm(d)) {
-            self.out.push_str("sZ");
-            self.template_param_at(u32::from(p.depth), u32::from(p.index));
+        if let Some(&d) = ast.templates.size_of_pack_origin.get(e)
+            && self.size_of_pack(d)
+        {
             return true;
         }
         let ty = ast.exprs.get(e).ty();
@@ -659,6 +655,24 @@ impl Mangler<'_, '_> {
         self.out.push_str(&v.to_string());
         self.out.push('E');
         true
+    }
+
+    /// `sZ` and the pack `d` names: a template parameter pack
+    /// (`<template-param>`) or a function parameter pack
+    /// (`<function-param>`); false, writing nothing, for anything else.
+    fn size_of_pack(&mut self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let len = self.out.len();
+        self.out.push_str("sZ");
+        if let Some(p) = ast.template_parm(d) {
+            self.template_param_at(u32::from(p.depth), u32::from(p.index));
+            return true;
+        }
+        if ast.decls.get(d).kind() == DeclKind::ParmVar && self.function_param_ref(d) {
+            return true;
+        }
+        self.out.truncate(len);
+        false
     }
 
     /// A GNU imaginary literal `2i` / `2.0i` (clang `mangleExpression`,
@@ -719,6 +733,11 @@ impl Mangler<'_, '_> {
         true
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::match_same_arms,
+        reason = "one arm per expression kind; clang's unmangleable kinds and the kinds that never reach a mangled operand stay separate lists"
+    )]
     fn expression_node(&mut self, e: ExprId, arity: usize) -> bool {
         let ast = self.ast;
         if self.substituted_value(e) {
@@ -729,6 +748,16 @@ impl Mangler<'_, '_> {
         // The element a substituted `pack...[i]` selected: clang keeps a
         // `PackIndexingExpr` and writes nothing for it (WP-1060).
         if ast.templates.pack_index_origin.contains(e) {
+            return true;
+        }
+        // A partially substituted `sizeof...`: `sP <template-arg>* E`
+        // (clang `SizeOfPackExprClass`, `isPartiallySubstituted`).
+        if let Some(&partial) = ast.templates.size_of_pack_partial.get(e) {
+            self.out.push_str("sP");
+            for a in ast.types.args(partial) {
+                self.template_arg(a.view());
+            }
+            self.out.push('E');
             return true;
         }
         let n = ast.exprs.get(e);
@@ -818,11 +847,12 @@ impl Mangler<'_, '_> {
             ExprKind::CXXDependentScopeMemberExpr | ExprKind::MemberExpr => {
                 return self.member_expression(e, arity);
             }
+            // `sZ <template-param>`, or `sZ <function-param>` for a
+            // function parameter pack (clang `SizeOfPackExprClass`,
+            // `mangleFunctionParam`).
             ExprKind::SizeOfPackExpr => {
                 let Some(d) = DeclId::try_new(n.a()) else { return false };
-                let Some(p) = ast.template_parm(d) else { return false };
-                self.out.push_str("sZ");
-                self.template_param_at(u32::from(p.depth), u32::from(p.index));
+                return self.size_of_pack(d);
             }
             // A vendor trait: `u <source-name> <type>* E`.
             ExprKind::TypeTraitExpr => {
@@ -835,7 +865,98 @@ impl Mangler<'_, '_> {
                 }
                 self.out.push('E');
             }
-            _ => return self.operator_expression(e, converted),
+            ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::CXXRewrittenBinaryOperator
+            | ExprKind::ConditionalOperator
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::InitListExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXScalarValueInitExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::IntegerPackExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::CoyieldExpr => return self.operator_expression(e, converted),
+            // clang has no encoding for these either and reports "cannot
+            // yet mangle expression type {kind}" (`mangleExpression`, the
+            // "invent manglings for all these" group), the GNU `?:` with
+            // its own "?: operator with omitted middle operand cannot be
+            // mangled": the same errors (spec/abi.md §8.15).
+            ExprKind::ChooseExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::StmtExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::VAArgExpr
+            | ExprKind::PseudoObjectExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::EmbedExpr
+            | ExprKind::BuiltinBitCastExpr
+            | ExprKind::BinaryConditionalOperator => return false,
+            // Never in a mangled operand: the transparent nodes
+            // `skip_transparent` steps over (a default argument without
+            // its expression is a malformed node); the forms of
+            // initialization and recovery only a function body or a
+            // variable's initializer holds (clang: `llvm_unreachable`,
+            // "unexpected statement kind"); `UserDefinedLiteral` and
+            // `UnresolvedMemberExpr`, which kiln builds as a `CallExpr`
+            // and a `MemberExpr` of overloaded type; a `template for`
+            // element selection, which only an expansion statement's
+            // body holds; a label address, a statement-level GNU form.
+            ExprKind::ParenExpr
+            | ExprKind::ImplicitCastExpr
+            | ExprKind::ConstantExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::SubstNonTypeTemplateParmExpr
+            | ExprKind::CXXDefaultArgExpr
+            | ExprKind::CXXDefaultInitExpr
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::ImplicitValueInitExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::AddrLabelExpr => return false,
         }
         true
     }
@@ -994,6 +1115,7 @@ impl Mangler<'_, '_> {
 
     /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
     /// `converted` is the type `expr` is implicitly converted to.
+    #[allow(clippy::too_many_lines, reason = "one arm per operator expression kind")]
     fn operator_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
         let ast = self.ast;
         let node = ast.exprs.get(expr);
@@ -1081,9 +1203,77 @@ impl Mangler<'_, '_> {
                 return self.expression(ast.exprs.operand(expr));
             }
             ExprKind::CXXDeleteExpr => return self.delete_expression(expr),
+            // clang `CXXRewrittenBinaryOperatorClass`: the original syntax,
+            // the written operator and operands (`a != b` is `ne`, not the
+            // `nt (a == b)` it means).
+            ExprKind::CXXRewrittenBinaryOperator => {
+                let (op, list) = ast.exprs.rewritten_written(expr);
+                let ops: Vec<ExprId> = ast.lists.iter::<ExprId>(list).collect();
+                let [lhs, rhs] = ops[..] else { return false };
+                self.out.push_str(binary_code(op));
+                return self.expression(lhs) && self.expression(rhs);
+            }
+            // clang `DesignatedInitExprClass`: `di <source-name>` per field
+            // designator, `dx <expression>` per index, `dX <expression>
+            // <expression>` per GNU range, then the initializer.
+            ExprKind::DesignatedInitExpr => return self.designated_init(expr),
+            // clang `CXXStdInitializerListExprClass`: its sub-expression.
+            ExprKind::CXXStdInitializerListExpr => {
+                return self.expression(ast.exprs.operand(expr));
+            }
+            // A function parameter pack of an enclosing template expanded
+            // in a pattern that still names an unexpanded pack: the
+            // vendor token clang writes, `v110_SUBSTPACK`, then the
+            // pattern's parameter (`mangleExpression`,
+            // `FunctionParmPackExprClass`: "not clear how to mangle
+            // this"; clang 19 and 22).
+            ExprKind::FunctionParmPackExpr => {
+                self.out.push_str("v110_SUBSTPACK");
+                return self.function_param_ref(ast.exprs.parm_pack_parameter(expr));
+            }
+            // clang's vendor expressions (`CoawaitExprClass`,
+            // `DependentCoawaitExprClass`, `CoyieldExprClass`):
+            // `v18co_await <expression>` / `v18co_yield <expression>`.
+            // [expr.await]/2 and [expr.yield]/1 keep both in a function
+            // body, so no signature names one.
+            ExprKind::CoawaitExpr | ExprKind::DependentCoawaitExpr | ExprKind::CoyieldExpr => {
+                self.out.push_str(if node.kind() == ExprKind::CoyieldExpr {
+                    "v18co_yield"
+                } else {
+                    "v18co_await"
+                });
+                return self.expression(ast.exprs.coawait_operand(expr, &ast.lists));
+            }
+            // `expression_node` sends no other kind here.
             _ => return false,
         }
         true
+    }
+
+    /// clang `DesignatedInitExprClass`.
+    fn designated_init(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        for d in ast.exprs.designators(expr) {
+            let ok = match *d {
+                kiln_ast::expr::Designator::Field { name, .. } => {
+                    self.out.push_str("di");
+                    self.symbol(name);
+                    true
+                }
+                kiln_ast::expr::Designator::Index { index, .. } => {
+                    self.out.push_str("dx");
+                    self.expression(index)
+                }
+                kiln_ast::expr::Designator::Range { first, last, .. } => {
+                    self.out.push_str("dX");
+                    self.expression(first) && self.expression(last)
+                }
+            };
+            if !ok {
+                return false;
+            }
+        }
+        self.expression(ast.exprs.designated_init(expr))
     }
 
     /// A built-in unary or binary operator, compound assignments
@@ -1104,7 +1294,8 @@ impl Mangler<'_, '_> {
                 // clang has no operator name for these and mangles the
                 // operand alone (WP-980).
                 UnaryOp::Real | UnaryOp::Imag | UnaryOp::Extension => "",
-                UnaryOp::Coawait => return false,
+                // clang `UO_Coawait`: the operator name `aw`.
+                UnaryOp::Coawait => "aw",
             };
             self.out.push_str(code);
             return self.expression(ast.exprs.operand(expr));
@@ -1598,6 +1789,7 @@ impl Mangler<'_, '_> {
         ast.template_parm(decl).and_then(|x| x.params)
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per unresolved-type form")]
     fn unresolved_type_or_simple_id(&mut self, ty: QualType, recursive: bool) -> Option<bool> {
         let ast = self.ast;
         // An alias template specialization keeps its name as written
@@ -1634,6 +1826,17 @@ impl Mangler<'_, '_> {
             TypeView::Using { .. } => {
                 return self
                     .unresolved_type_or_simple_id(ast.types.desugar_once(written), recursive);
+            }
+            // A `decltype` or GNU `typeof` qualifier is an unresolved type
+            // even when it is not dependent (clang's `unresolvedType`
+            // group): the type it denotes, no closing `E`
+            // (`decltype(ll)::operator()<T>` is `sr3$_0onclIT_E`).
+            TypeView::Decltype { .. } | TypeView::TypeOf { .. } => {
+                if recursive {
+                    self.out.push('N');
+                }
+                self.ty(q);
+                return Some(true);
             }
             _ => {}
         }

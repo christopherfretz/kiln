@@ -1306,12 +1306,14 @@ or the function's own when only its type is substituted for deduction
 against a target type): `Subst::nested_prototype_param` makes a fresh
 parameter keeping index and scope depth, as clang's
 `TransformFunctionTypeParams` does (`tests/mangle/function_param_depth.cpp`).
-An expression with no encoding yet is an error, `cannot yet mangle
-expression type <kind>` at its innermost unencodable subexpression, as in
-clang, in a template argument, a `decltype` operand, a dependent array
-bound (WP-593, `spec/landed/abi/WP-933.md`) and a requires-clause
-(§8.16); the placeholder kiln writes into the name meanwhile (`XLi0EE`,
-`u7unknown`) is never emitted. WP-818's rules (§8.29) cover the cases the
+An expression clang has no encoding for either is clang's error at its
+innermost unencodable subexpression, in a template argument, a `decltype`
+operand, a dependent array bound (WP-593, `spec/landed/abi/WP-933.md`) and
+a requires-clause (§8.16): `cannot yet mangle expression type <kind>`,
+`?: operator with omitted middle operand cannot be mangled`, `cannot yet
+mangle __datasizeof expression`; the placeholder kiln writes into the name
+meanwhile (`XLi0EE`, `u7unknown`) is never emitted. Every other kind has
+its encoding (WP-1736, "Every expression kind" below). WP-818's rules (§8.29) cover the cases the
 standard-library sweep found: non-dependent `sizeof`, substituted
 `sizeof...` and enumeration parameters, dependent CTAD, alias templates
 and template template parameters in qualifiers, the injected-class-name
@@ -1424,7 +1426,9 @@ E` for an expression (a non-primary one wrapped in `X ... E`), the form
 since clang 12 (libstdc++'s `aligned_storage<sizeof(T)>::type` is
 `N...15aligned_storageIXstT_EXu11__alignof__N...21__aligned_storage_msaIXstS1_EE6__typeEEEE4typeE`).
 A dependent `__datasizeof` or `vec_step` has no encoding (clang's
-"cannot yet mangle"; kiln's `cg_cannot_mangle_expression`). Tests:
+"cannot yet mangle __datasizeof expression"; kiln's
+`cg_cannot_mangle_trait`, at the operand as clang 22, where clang 19 gives
+no location). Tests:
 `tests/mangle/trait_operand.cpp`, `tests/codegen/mangle_alignof_operand.cpp`,
 `tests/conformance/temp.over.link/alignof-operand-two-units-run.cpp`.
 **Closures in function template signatures (WP-1077).** A lambda in
@@ -1455,6 +1459,63 @@ explicit template-id more than once in some conversions and deduces
 templates for an address that a non-template matches, which number more
 closures than kiln (spec/sema-lambda.md §3.5). Details:
 `spec/landed/abi/WP-1077.md`.
+
+**Every expression kind (WP-1736).** `Mangler::expression_node` decides
+each `ExprKind` (an exhaustive match; `docs/status/static-gaps.md`
+GAP-041 lists the kinds that are errors). clang 22 is the oracle, and
+clang 19 agrees on every form below:
+
+- `sizeof...` of a function parameter pack is `sZ <function-param>`
+  (`sZfp_`), of a template parameter pack `sZ <template-param>`, also
+  when substitution has replaced it by its length
+  (`Templates::size_of_pack_origin`). A pack bound to elements some of
+  which are pack expansions (`Al<int, U...>` with `template <class... T>
+  using Al = A<sizeof...(T)>`) is clang's partially substituted
+  `SizeOfPackExpr`, `sP <template-arg>* E` (`XsPiDpT_EE`): substitution
+  records the partial arguments on the expression it forms
+  (`Templates::size_of_pack_partial`).
+- A `decltype` or GNU `typeof` qualifier is an unresolved type even when
+  it is not dependent, the type it denotes and no closing `E`:
+  `&decltype(ll)::operator()<T>` is `adsrN2llMUlDpT_E_EonclIT_E`,
+  `decltype(s)::g(t)` is `clsr1S1gfp_E` (a class there is its plain
+  name, which LLVM's demangler does not read; GNU c++filt does).
+- A rewritten comparison (`CXXRewrittenBinaryOperator`) is its written
+  operator and operands, `X{} != X{}` is `netl1XEtlS0_E`, not the `!(a ==
+  b)` it means.
+- A designated initializer is `di <source-name>`, `dx <index>` or `dX
+  <first> <last>` per designator, then the initializer
+  (`ildi1afp_di1bLi2EE`).
+- A function parameter pack of an enclosing class template expanded in a
+  member template's pattern (`FunctionParmPackExpr`) is clang's vendor
+  form `v110_SUBSTPACK <function-param>`.
+- `co_await` / `co_yield` (never in a signature, [expr.await]/2) are
+  clang's vendor forms `v18co_await` / `v18co_yield`, the unary
+  `co_await` operator `aw`; `CXXStdInitializerListExpr` is its operand.
+- A `decltype` whose operand is instantiation-dependent only through
+  references to non-dependent locals or parameters of a template
+  (`decltype(t + 1)` of an `int t`) is not dependent, as in clang
+  (`computeDependence(DeclRefExpr *)`): its type, `i`, not `DTplfp_Li1EE`
+  (`Sema::names_template_local`).
+- Pack indexing writes nothing, as clang 22 (§ "Expression forms and
+  member qualifiers"); the `sy` production GCC 16 uses is not clang's.
+  An expression splice follows GCC 16.1, `DS <expression>
+  [<template-args>] E`, and a reflection `L <info-type> <reflection> E`
+  (clang 22 has no P2996 encoding).
+
+The kinds clang reports as "cannot yet mangle expression type" (the
+GNU and vendor builtins `__builtin_choose_expr`, `_Generic`,
+`__builtin_offsetof`, `__func__`, `__builtin_LINE()` and the other
+source locations, `__builtin_bit_cast`, `__array_rank`,
+`__is_lvalue_expr`, `__builtin_shufflevector`,
+`__builtin_convertvector`, vector element access, `__builtin_va_arg`,
+the atomic builtins, statement expressions, compound literals, `#embed`)
+are the same errors; the kinds that never reach a mangled operand
+(initialization forms of a function body, recovery, transparent nodes)
+are errors too, which clang asserts on. Tests:
+`tests/mangle/expression_kinds.cpp` (with the `// demangles:` round
+trip through llvm-cxxfilt / c++filt),
+`tests/conformance/temp.over.link/expression-kinds-two-units-run.cpp`,
+`crates/kiln_driver/tests/codegen.rs::unmangleable_kinds_are_clangs_errors`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by

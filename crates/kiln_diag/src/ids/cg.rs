@@ -31,6 +31,14 @@ cg_builtin_needs_feature = Error (2) "'{0}' needs target feature {1}";
 // (`CXXNameMangler::mangleExpression`): {0} the expression's class; a
 // requires-clause the mangler cannot encode (spec/abi.md §8.15; WP-818).
 cg_cannot_mangle_expression = Error (1) "cannot yet mangle expression type {0}";
+// clang's custom error for a GNU `a ?: b` in a mangled operand
+// (`CXXNameMangler::mangleExpression`, `BinaryConditionalOperatorClass`;
+// spec/abi.md §8.15, WP-1736).
+cg_cannot_mangle_omitted_middle = Error (0) "?: operator with omitted middle operand cannot be mangled";
+// clang's custom error for a `__datasizeof` or `vec_step` operand
+// (`mangleExpression`, `UnaryExprOrTypeTraitExprClass`): {0} the
+// keyword; spec/abi.md §8.15, WP-1736.
+cg_cannot_mangle_trait = Error (1) "cannot yet mangle {0} expression";
 // clang `err_cyclic_alias`: {0} is 0 for an alias, 1 for an ifunc;
 // WP-763.
 cg_cyclic_alias = Error (1) "{0:alias|ifunc} definition is part of a cycle";

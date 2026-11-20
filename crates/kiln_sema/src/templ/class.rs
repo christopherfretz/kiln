@@ -696,44 +696,48 @@ impl Sema<'_, '_> {
     /// canonical `InjectedClassNameType` prints as `X<T>`, where kiln's
     /// canonical form is the dependent specialization).
     fn alias_subst_args(&mut self, sugared: ArgListId) -> ArgListId {
-        let out: Vec<TemplateArg> =
-            self.ast
-                .types
-                .args(sugared)
-                .to_vec()
-                .into_iter()
-                .map(|a| match a.view() {
-                    ArgView::Type(q) if q.quals().is_empty() => {
-                        let mut t = q;
-                        loop {
-                            if matches!(
-                                self.ast.types.view(t.ty()),
-                                TypeView::InjectedClassName { .. }
-                            ) {
-                                break TemplateArg::ty(t);
-                            }
-                            let n = self.ast.types.desugar_once(t);
-                            if n == t {
-                                break self.ast.types.canonical_arg(a);
-                            }
-                            t = n;
+        let out: Vec<TemplateArg> = self
+            .ast
+            .types
+            .args(sugared)
+            .to_vec()
+            .into_iter()
+            .map(|a| match a.view() {
+                // A pack expansion keeps the pack it names: canonical,
+                // it would name no parameter, and `sizeof...` of the
+                // alias's pack could not count it (`A<sizeof...(T)>`
+                // with `T` := `{int, U...}` is `1 + sizeof...(U)`).
+                ArgView::Type(_) if self.is_pack_expansion_arg(a) => a,
+                ArgView::Type(q) if q.quals().is_empty() => {
+                    let mut t = q;
+                    loop {
+                        if matches!(self.ast.types.view(t.ty()), TypeView::InjectedClassName { .. })
+                        {
+                            break TemplateArg::ty(t);
                         }
+                        let n = self.ast.types.desugar_once(t);
+                        if n == t {
+                            break self.ast.types.canonical_arg(a);
+                        }
+                        t = n;
                     }
-                    // A dependent expression stays one: its canonical form
-                    // (a profile) cannot be substituted.
-                    ArgView::Expr { profile: Some(_), .. } => a,
-                    // A pack holding a pack expansion (`index_sequence<Is...>`)
-                    // keeps its elements substitutable the same way.
-                    ArgView::Pack(l)
-                        if self.ast.types.args(l).iter().any(|e| {
-                            matches!(e.view(), ArgView::Expr { profile: Some(_), .. })
-                        }) =>
-                    {
-                        TemplateArg::pack(self.alias_subst_args(l))
-                    }
-                    _ => self.ast.types.canonical_arg(a),
-                })
-                .collect();
+                }
+                // A dependent expression stays one: its canonical form
+                // (a profile) cannot be substituted.
+                ArgView::Expr { profile: Some(_), .. } => a,
+                // A pack holding a pack expansion (`index_sequence<Is...>`)
+                // keeps its elements substitutable the same way.
+                ArgView::Pack(l)
+                    if self.ast.types.args(l).iter().any(|&e| {
+                        matches!(e.view(), ArgView::Expr { profile: Some(_), .. })
+                            || self.is_pack_expansion_arg(e)
+                    }) =>
+                {
+                    TemplateArg::pack(self.alias_subst_args(l))
+                }
+                _ => self.ast.types.canonical_arg(a),
+            })
+            .collect();
         self.ast.types.arg_list(&out)
     }
 
