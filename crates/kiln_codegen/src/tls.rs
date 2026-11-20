@@ -75,7 +75,9 @@ impl Cg<'_> {
             if v.init.is_some() {
                 return true;
             }
-            if v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(r) {
+            if (v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(r))
+                && !ast.has_own_selectany(r)
+            {
                 return false;
             }
             let in_class = ast

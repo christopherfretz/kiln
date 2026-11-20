@@ -560,12 +560,15 @@ impl Parser<'_, '_> {
             } else if self.at_kw(Kw::Attribute) {
                 self.parse_gnu_attributes(out);
             } else if self.at_kw(Kw::Declspec) {
-                let loc = self.bump().span.lo;
-                // kiln-gap: GAP-152
-                self.unsupported("'__declspec'", loc);
-                if let Some(l) = self.eat(Punct::LParen) {
+                // Microsoft `__declspec(...)` is an extension clang enables
+                // only with `-fdeclspec` / `-fms-extensions`, which kiln
+                // does not offer (no Microsoft target): clang's
+                // `err_ms_attributes_not_enabled` at the keyword, and the
+                // parenthesized list is skipped.
+                self.error_here(DiagId::parse_ms_attributes_not_enabled);
+                self.bump();
+                if self.eat(Punct::LParen).is_some() {
                     self.skip_until(&[Punct::RParen], false, true);
-                    let _ = l;
                 }
             } else {
                 return;

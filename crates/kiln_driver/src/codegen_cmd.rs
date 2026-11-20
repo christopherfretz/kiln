@@ -235,15 +235,41 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
 #[derive(Debug)]
 pub struct CodegenJob<'j>(pub Job<'j>);
 
+/// What a [`CodegenJob`] made.
+#[derive(Default)]
+pub struct Lowered {
+    /// The module, or `None` after an error.
+    pub module: Option<Module>,
+    /// The error count (under `-verify`, the verifier's problems).
+    pub errors: u32,
+    /// The `-MD` / `-MMD` dependency list, complete whatever the errors.
+    pub deps: Option<SharedDeps>,
+    /// The `-fdump-record-layouts`, `-fdump-vtable-layouts`,
+    /// `-fkiln-dump-cfg` and `-fkiln-cfg-stats` text, for standard
+    /// output (spec/driver.md "Syntax checking", WP-1745).
+    pub dumps: String,
+    /// `-verify` passed on a unit with (expected) errors: no module, and
+    /// not a failure (clang writes no object and exits 0).
+    pub verified: bool,
+}
+
+impl std::fmt::Debug for Lowered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lowered")
+            .field("module", &self.module.is_some())
+            .field("errors", &self.errors)
+            .field("verified", &self.verified)
+            .finish_non_exhaustive()
+    }
+}
+
 impl CodegenJob<'_> {
     /// Runs the job: diagnostics (and the `N errors generated.` summary)
-    /// to standard error. Returns the module, or `None` after an error
-    /// (the error count is the second element), and the `-MD` / `-MMD`
-    /// dependency list, complete whatever the errors (the third). The
-    /// caller prints the module (`print_ir`): by then the AST, the
-    /// Oven, the preprocessor and the source manager are gone, so the
-    /// print's peak holds the module and its text only (WP-633, WP-1366).
-    pub fn run(self) -> (Option<Module>, u32, Option<SharedDeps>) {
+    /// to standard error. The caller prints the module (`print_ir`): by
+    /// then the AST, the Oven, the preprocessor and the source manager
+    /// are gone, so the print's peak holds the module and its text only
+    /// (WP-633, WP-1366).
+    pub fn run(self) -> Lowered {
         let job = &self.0;
         let sm = SourceManager::new();
         let interner = Arc::new(Interner::new());
@@ -258,7 +284,13 @@ impl CodegenJob<'_> {
                 e.emit(&engine);
             }
             engine.flush();
-            return (None, engine.error_count(), None);
+            return Lowered { errors: engine.error_count(), ..Lowered::default() };
+        }
+        if let Some(v) = &job.args.verify {
+            // The header is replayed: a restore does not show its
+            // diagnostics to the verifier.
+            drop(engine);
+            return self.run_verify(v.clone(), &diag_opts);
         }
         if let Some(s) = &job.args.pch.snapshot_use {
             match self.run_restored(s, &diag_opts) {
@@ -269,11 +301,10 @@ impl CodegenJob<'_> {
                 }
             }
         }
-        let mut module = None;
-        let mut deps = None;
+        let mut out = Lowered::default();
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                module = self.lower(&sm, &engine, &interner, inputs, &mut deps, None);
+                out.module = self.lower(&sm, &engine, &interner, inputs, &mut out, None, None);
             }
         });
         engine.flush();
@@ -283,10 +314,54 @@ impl CodegenJob<'_> {
             let mut err = job.stderr.clone();
             let _ = writeln!(err, "{s}");
         }
-        let errors = engine.error_count();
+        out.errors = engine.error_count();
         // After an error (a `-Werror` codegen warning, say) the module is
         // dropped unprinted: nothing is written for a failed compile.
-        (if errors == 0 { module } else { None }, errors, deps)
+        if out.errors > 0 {
+            out.module = None;
+        }
+        out
+    }
+
+    /// `-verify` (spec/driver.md "-verify", WP-1745): as
+    /// `-fsyntax-only -verify`, the diagnostics checked against the
+    /// `expected-*` comments and only the verifier's report printed;
+    /// the module is kept when the unit had no error, as clang writes
+    /// the object then.
+    fn run_verify(
+        &self,
+        opts: kiln_diag::verify::VerifyOptions,
+        diag_opts: &DiagOptions,
+    ) -> Lowered {
+        let job = &self.0;
+        let sm = SourceManager::new();
+        let interner = Arc::new(Interner::new());
+        let sink = kiln_diag::MemorySink::new();
+        let engine = DiagEngine::new(&sm, diag_opts, sink.clone());
+        let mut out = Lowered::default();
+        let mut verifier = None;
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                let v = crate::syntax_cmd::new_verifier(&sm, opts.clone(), &inputs);
+                out.module = self.lower(&sm, &engine, &interner, inputs, &mut out, Some(&v), None);
+                verifier = Some(v);
+            }
+        });
+        let had_errors = engine.error_count() > 0;
+        out.errors = crate::syntax_cmd::verify_report(
+            &sm,
+            &engine,
+            &sink,
+            verifier,
+            opts,
+            diag_opts,
+            &job.stderr,
+        );
+        if had_errors {
+            out.module = None;
+            out.verified = out.errors == 0;
+        }
+        out
     }
 
     /// WP-1383: [`Self::run`] with the `-include-pch`
@@ -298,20 +373,20 @@ impl CodegenJob<'_> {
         &self,
         snap: &crate::args::PchSnapshotUse,
         diag_opts: &DiagOptions,
-    ) -> Result<(Option<Module>, u32, Option<SharedDeps>), String> {
+    ) -> Result<Lowered, String> {
         let job = &self.0;
         let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
         let restored = sm.file_count();
         let mut engine = make_engine(&sm, diag_opts, job.stderr.clone(), None);
         engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
         restore.timer.mark("DiagEngine");
-        let mut module = None;
-        let mut deps = None;
+        let mut out = Lowered::default();
         let mut failed = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
                 let mut restore = Some(restore);
-                module = self.lower(&sm, &engine, &interner, inputs, &mut deps, restore.as_mut());
+                out.module =
+                    self.lower(&sm, &engine, &interner, inputs, &mut out, None, restore.as_mut());
                 failed = restore.and_then(|r| r.failed);
             }
         });
@@ -327,8 +402,11 @@ impl CodegenJob<'_> {
             let mut err = job.stderr.clone();
             let _ = writeln!(err, "{s}");
         }
-        let errors = engine.error_count();
-        Ok((if errors == 0 { module } else { None }, errors, deps))
+        out.errors = engine.error_count();
+        if out.errors > 0 {
+            out.module = None;
+        }
+        Ok(out)
     }
 
     /// The parser's options of the job.
@@ -362,6 +440,8 @@ impl CodegenJob<'_> {
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
             target_features: if x86 { Vec::new() } else { feats.extra.clone() },
             target_attr_features: crate::features::target_attr_feature_list,
+            cfg_dump: a.dump_cfg,
+            cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
             range_for_ext_temps: a.range_for_ext_temps,
@@ -380,7 +460,9 @@ impl CodegenJob<'_> {
 
     #[allow(
         clippy::too_many_lines,
-        reason = "target, parse and codegen options in one straight-line pipeline"
+        clippy::too_many_arguments,
+        reason = "target, parse and codegen options in one straight-line pipeline over the \
+                  job's session handles"
     )]
     fn lower<'sm>(
         &self,
@@ -388,7 +470,8 @@ impl CodegenJob<'_> {
         engine: &DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
-        deps_out: &mut Option<SharedDeps>,
+        out: &mut Lowered,
+        verify: Option<&std::rc::Rc<std::cell::RefCell<kiln_diag::verify::Verifier<'sm>>>>,
         restore: Option<&mut crate::pch_snapshot::Restore<'_>>,
     ) -> Option<Module> {
         let job = &self.0;
@@ -434,7 +517,11 @@ impl CodegenJob<'_> {
             restore.timer.report();
             (tu, pp, deps, main_id)
         } else {
-            let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+            let (mut pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+            if let Some(v) = verify {
+                let v = std::rc::Rc::clone(v);
+                pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
+            }
             let main_id = pp.main_file();
             let popts = self.parse_options();
             let limits = a.constexpr.limits();
@@ -452,9 +539,24 @@ impl CodegenJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
+        if verify.is_some() {
+            // As `-fsyntax-only -verify`: every comment after a fatal
+            // error still reaches the verifier.
+            while !pp.next().is_eof() {}
+        }
         // WP-1557: read from the macro table at the end of the TU.
         let mason_meta = crate::mason_meta::options(a, &job.std, &pp);
-        *deps_out = crate::pp_cmd::finish_deps(pp, deps);
+        out.deps = crate::pp_cmd::finish_deps(pp, deps);
+        // WP-1745: the dumps `-fsyntax-only` writes, in its order; clang
+        // prints the layouts as Sema completes each class, before the
+        // object.
+        out.dumps.push_str(&tu.cfg_dump);
+        if a.dump_record_layouts {
+            out.dumps.push_str(&kiln_abi::dump_all_record_layouts(&tu.ast, &target, Some(sm)));
+        }
+        if a.dump_vtable_layouts {
+            out.dumps.push_str(&kiln_abi::vtable::dump_all_vtable_layouts(&tu.ast, &target));
+        }
         let mut module = None;
         if engine.error_count() == 0 {
             let fp = a.fp_model();
@@ -2024,7 +2126,18 @@ fn execute(
                 // before, unless the in-process back end gets it first.
                 let (kept, mut text, facts) = {
                     let _frontend = kiln_source::trace::Phase::new("Frontend");
-                    let module = frontend(args, tc, input, stdin_text, diag_opts, io);
+                    let out = frontend(args, tc, input, stdin_text, diag_opts, io);
+                    if out.verified {
+                        // spec/driver.md "-verify": the expected errors
+                        // leave no object, and the job did not fail; a
+                        // link has nothing to link (clang's linker then
+                        // fails on the missing object).
+                        failed |= Phase::of(args) == Phase::Link;
+                        skip_piped = true;
+                        ir = None;
+                        continue;
+                    }
+                    let module = out.module;
                     let facts = module.as_ref().map(IrFacts::of_module);
                     match (module, facts) {
                         (Some(m), Some(f)) if in_process && hod_takes(args, tc, f) => {
@@ -2505,9 +2618,9 @@ fn preprocess_asm(
 }
 
 /// The frontend on one source input: its module (the caller prints it,
-/// [`print_checked`]); `None` after an error. Writes the input's `-MD` /
-/// `-MMD` dependency file, errors or not
-/// ([`crate::deps::write_side_file`]).
+/// [`print_checked`]); no module after an error. Writes the input's
+/// `-MD` / `-MMD` dependency file, errors or not
+/// ([`crate::deps::write_side_file`]), and its dumps to standard output.
 fn frontend(
     args: &Args,
     tc: &Toolchain,
@@ -2515,7 +2628,7 @@ fn frontend(
     stdin_text: Option<&str>,
     diag_opts: &DiagOptions,
     io: &mut Io,
-) -> Option<Module> {
+) -> Lowered {
     let lang = args.input_lang(input);
     let report = |d: Diag| {
         let sm = SourceManager::new();
@@ -2527,7 +2640,7 @@ fn frontend(
         Ok(s) => s,
         Err(d) => {
             report(*d);
-            return None;
+            return Lowered { errors: 1, ..Lowered::default() };
         }
     };
     let job = Job {
@@ -2557,17 +2670,23 @@ fn frontend(
         Some(replay) => Job { args: replay, ..job },
         None => job,
     };
-    let (mut module, _, deps) = CodegenJob(job).run();
+    let mut out = CodegenJob(job).run();
+    if !out.dumps.is_empty() {
+        let _ = io.stdout.write_all(out.dumps.as_bytes());
+        let _ = io.stdout.flush();
+    }
     if let Some(d) = snap_diff {
         crate::pch_snapshot::report_mismatch(args, diag_opts, &io.stderr, &d);
-        module = None;
+        out.module = None;
+        out.verified = false;
     }
-    if let Some(list) = deps
+    if let Some(list) = out.deps.take()
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
     {
-        return None;
+        out.module = None;
+        out.verified = false;
     }
-    module
+    out
 }
 
 #[cfg(test)]

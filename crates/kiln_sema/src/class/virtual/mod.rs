@@ -198,8 +198,11 @@ impl Sema<'_, '_> {
         // [class.abstract]/2: a pure-specifier on a virtual function.
         if let Some(_zero) = d.pure {
             if site.friend {
-                // kiln-gap: GAP-164
-                self.unsupported("pure virtual friend functions", d.name_loc());
+                // [class.mem.general]/1: a pure-specifier appears only in
+                // a member-declarator, and a friend declaration declares
+                // no member (clang `err_pure_friend`; the friend is
+                // still declared).
+                self.error(DiagId::sema_pure_friend, d.name_loc());
             } else if spec.is_virtual() || (site.method && self.in_dependent_class(site.class)) {
                 // clang `CheckPureMethod`: in a dependent class the
                 // function may override one of a dependent base, so it is

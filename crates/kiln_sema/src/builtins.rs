@@ -1035,8 +1035,12 @@ impl Sema<'_, '_> {
     /// A call of a builtin with custom type-checking (clang's
     /// `CustomTypeChecking` builtins, checked in `CheckBuiltinFunctionCall`):
     /// the arguments are not converted to parameter types; each builtin
-    /// converts and checks them and decides the call's type. Returns the
-    /// call, or a recovery expression after a diagnostic.
+    /// converts and checks them and decides the call's type. A
+    /// braced-init-list argument (its list in `braced`) is the `void`
+    /// initializer list of `act_on_braced_arg`, as in clang, so a checker
+    /// rejects it by its type (`__builtin_addressof({1})`: "cannot take the address of an
+    /// rvalue of type 'void'"). Returns the call, or a recovery
+    /// expression after a diagnostic.
     #[allow(clippy::too_many_arguments, reason = "one per part of the call")]
     #[allow(clippy::too_many_lines, reason = "one arm per custom-checked builtin")]
     pub(crate) fn builtin_custom_call(
@@ -1045,14 +1049,14 @@ impl Sema<'_, '_> {
         b: DeclId,
         id: u32,
         args: &[ExprId],
-        braced: bool,
+        braced: &[Option<crate::init::InitList>],
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
         let mut kids = vec![callee];
         kids.extend_from_slice(args);
         if id == builtin::ADDRESSOF {
-            return match self.builtin_addressof_call(callee, b, args, braced, loc, rparen) {
+            return match self.builtin_addressof_call(callee, b, args, loc, rparen) {
                 Some(e) => e,
                 None => self.recover_err(&kids, loc),
             };
@@ -1062,11 +1066,6 @@ impl Sema<'_, '_> {
                 Some(e) => e,
                 None => self.recover_err(&kids, loc),
             };
-        }
-        if braced {
-            // kiln-gap: GAP-158
-            self.unsupported("a braced argument to a builtin function", loc);
-            return self.recover_err(&kids, loc);
         }
         if id == builtin::SHUFFLEVECTOR {
             return self.act_on_shufflevector(args, self.begin_loc(callee), rparen);
@@ -1164,7 +1163,7 @@ impl Sema<'_, '_> {
                 self.builtin_elementwise_sat(args, rparen)
             }
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
-                return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
+                return self.builtin_operator_new_delete(callee, id, args, braced, loc, rparen);
             }
             // WP-630.
             builtin::NONTEMPORAL_STORE | builtin::NONTEMPORAL_LOAD => {
@@ -1174,11 +1173,11 @@ impl Sema<'_, '_> {
             _ if let Some(load) = builtin::arm::exclusive_load(id) => {
                 self.builtin_arm_exclusive(callee, load, args, rparen)
             }
-            _ => {
-                // kiln-gap: GAP-160
-                self.unsupported("this builtin function", loc);
-                None
-            }
+            _ => unreachable!(
+                "builtin {id:#x} is marked CUSTOM but has no arm in builtin_custom_call: every \
+                 `attr::CUSTOM` row of `builtin::ALL` and `builtin::arm` (the only tables that \
+                 set it) is handled above"
+            ),
         };
         let Some((args, ty)) = r else { return self.recover_err(&kids, loc) };
         let f = self.builtin_fn_to_ptr(callee, b);
@@ -2989,9 +2988,9 @@ impl Sema<'_, '_> {
     fn builtin_operator_new_delete(
         &mut self,
         callee: ExprId,
-        b: DeclId,
         id: u32,
         args: &[ExprId],
+        braced: &[Option<crate::init::InitList>],
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
@@ -3013,13 +3012,27 @@ impl Sema<'_, '_> {
                 continue;
             }
             let mut exact = 0;
-            let ok = args.iter().zip(&ps).all(|(&a, &p)| match self.placement_arg_match(a, p) {
-                Some(e) => {
-                    exact += usize::from(e);
-                    true
-                }
-                None => false,
-            });
+            let mut ok = true;
+            for (i, (&a, &p)) in args.iter().zip(&ps).enumerate() {
+                // A braced-init-list argument copy-list-initializes its
+                // parameter ([over.ics.list], [expr.call]/7).
+                let m = match braced.get(i).cloned().flatten() {
+                    Some(l) => {
+                        let to = if self.ast.types.is_reference(p) {
+                            p
+                        } else {
+                            conv::strip_cv(self, p)
+                        };
+                        (!self.list_arg_ics(to, &l).is_bad()).then_some(false)
+                    }
+                    None => self.placement_arg_match(a, p),
+                };
+                let Some(e) = m else {
+                    ok = false;
+                    break;
+                };
+                exact += usize::from(e);
+            }
             if ok && best.is_none_or(|(_, e)| exact > e) {
                 best = Some((f, exact));
             }
@@ -3043,8 +3056,16 @@ impl Sema<'_, '_> {
         }
         let Some((ps, _)) = self.fn_params(f) else { return self.recover_err(&kids, loc) };
         let mut out = Vec::with_capacity(args.len());
-        for (&a, &p) in args.iter().zip(&ps) {
+        for (i, (&a, &p)) in args.iter().zip(&ps).enumerate() {
             let p = conv::strip_cv(self, p);
+            if let Some(l) = braced.get(i).cloned().flatten() {
+                let x = self.init_list_entity(p, &l, l.lbrace, ConvCtx::Argument, None);
+                if self.is_err_expr(x) {
+                    return self.recover_err(&kids, loc);
+                }
+                out.push(x);
+                continue;
+            }
             match conv::implicit_convert(self, a, p, ConvCtx::Argument) {
                 Ok(x) => out.push(x),
                 Err(err) => {
@@ -3056,7 +3077,6 @@ impl Sema<'_, '_> {
         }
         self.mark_used(f);
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let _ = b;
         let cal = conv::raw_cast(
             self,
             CastKind::BuiltinFnToFnPtr,
@@ -3178,7 +3198,6 @@ impl Sema<'_, '_> {
         callee: ExprId,
         b: DeclId,
         args: &[ExprId],
-        braced: bool,
         loc: Loc,
         rparen: Loc,
     ) -> Option<ExprId> {
@@ -3198,11 +3217,6 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             }
-        }
-        if braced {
-            // kiln-gap: GAP-159
-            self.unsupported("a braced argument to __builtin_addressof", loc);
-            return None;
         }
         let ty = self.check_addressable(args[0], at)?;
         let f = self.builtin_fn_to_ptr(callee, b);

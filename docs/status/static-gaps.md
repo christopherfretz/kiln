@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-77 gaps at 156 sites; 10 of 56,766 g++.dg cases hit one at the
+55 gaps at 131 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -75,8 +75,8 @@ By family:
 |---|---|---|---|
 | Oven trap | 20 | 90 | 0 |
 | codegen fallback | 18 | 19 | 0 |
-| drv_not_implemented | 3 | 3 | 0 |
-| parse_unsupported | 26 | 29 | 0 |
+| drv_not_implemented | 2 | 2 | 0 |
+| parse_unsupported | 6 | 6 | 0 |
 | pp_expr_unsupported | 1 | 3 | 0 |
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
@@ -84,7 +84,6 @@ By family:
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
 | sema_unimplemented_template_feature | 1 | 1 | 0 |
-| sema_vla_unsupported | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
@@ -96,7 +95,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | Oven traps: types | 5 (GAP-125..GAP-129) | 35 | 0 | WP-1742 |
 | reflection | 5 (GAP-130..GAP-134) | 5 | 0 | WP-1743 |
 | preprocessor/modules | 9 (GAP-135..GAP-143) | 11 | 0 | WP-1744 |
-| misc | 24 (GAP-144..GAP-167) | 30 | 0 | WP-1745 |
+| misc | 2 (GAP-144, GAP-149) | 5 | 0 | WP-1745 |
 
 ## Gaps
 
@@ -156,29 +155,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-142 | parse_unsupported | preprocessor/modules | `{what} (the floating-point environment) is not supported yet` ({what}: `'#pragma clang fp exceptions(v)'`, `'#pragma clang fp eval_method(v)'`, `'#pragma STDC FENV_ACCESS ON'`, `'#pragma STDC FENV_ROUND m'`, `'#pragma float_control(except, on)'`) | `crates/kiln_parse/src/fp_pragma.rs::fenv_unsupported` | 0 | WP-1744 |
 | GAP-143 | parse_unsupported | preprocessor/modules | `'#pragma {what}' is not supported yet` ({what}: `align`, `options`, `clang section`, `pack` (the forms clang diagnoses)) | `crates/kiln_sema/src/decl.rs::act_on_unsupported_pragma` | 0 | WP-1744 |
 | GAP-144 | sema_multiversion_not_supported | misc | `function multiversioning with '{0}' is not supported yet` ({0}: `target_version`, `target`, or the attribute name `fmv_attached` computes) | `crates/kiln_sema/src/class/mod.rs::act_on_friend`, `crates/kiln_sema/src/decl.rs::act_on_declarator_impl`, `crates/kiln_sema/src/fmv.rs::check_fmv_attrs`, `crates/kiln_sema/src/fmv.rs::fmv_attached` | 0 | WP-1745 |
-| GAP-145 | parse_unsupported | misc | `this kind of member access is not supported yet` | `crates/kiln_sema/src/class/member_expr.rs::member_of_object` ×2 | 0 | WP-1745 |
-| GAP-146 | parse_unsupported | misc | `calls through this function type is not supported yet` | `crates/kiln_sema/src/class/member_expr.rs::try_member_call`, `crates/kiln_sema/src/expr.rs::act_on_call` | 0 | WP-1745 |
-| GAP-147 | parse_unsupported | misc | `constructors is not supported yet` / `overloaded operators is not supported yet` | `crates/kiln_sema/src/class/special/declare.rs::act_on_special_declarator` ×2 | 0 | WP-1745 |
-| GAP-148 | drv_not_implemented | misc | `{what} is not implemented yet` ({what}: `-### with -E or -fsyntax-only`, `-fdump-ast without -fsyntax-only`, `-fdump-record-layouts without -fsyntax-only`, `-fdump-vtable-layouts without -fsyntax-only`, `-fkiln-dump-cfg without -fsyntax-only`, `-fkiln-cfg-stats without -fsyntax-only`, `-verify without -fsyntax-only`) | `crates/kiln_driver/src/lib.rs::check_action` | 0 | WP-1745 |
-| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `cpu_dispatch`, `cpu_specific`, `interrupt`, `matrix_type`, `model`, the `opencl_*` address spaces, `riscv_rvv_vector_bits`, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`, `target_clones`, `target_version`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
-| GAP-150 | sema_vla_unsupported | misc | `variable length arrays are not supported yet` | `crates/kiln_sema/src/decl.rs::folded_array_bound` | 0 | WP-1745 |
-| GAP-151 | parse_unsupported | misc | `range-based for over this array type is not supported yet` | `crates/kiln_sema/src/vla.rs::vla_range_count` | 0 | WP-1745 |
-| GAP-152 | parse_unsupported | misc | `'__declspec' is not supported yet` | `crates/kiln_parse/src/attr.rs::parse_attributes` | 0 | WP-1745 |
-| GAP-153 | parse_unsupported | misc | `qualified member initializers is not supported yet` | `crates/kiln_parse/src/class.rs::parse_mem_initializer` | 0 | WP-1745 |
-| GAP-154 | parse_unsupported | misc | `a destructor name in a using-declarator is not supported yet` | `crates/kiln_parse/src/decl.rs::parse_using_declaration` | 0 | WP-1745 |
-| GAP-155 | parse_unsupported | misc | `'template' expressions is not supported yet` | `crates/kiln_parse/src/expr.rs::parse_primary_expr` | 0 | WP-1745 |
-| GAP-156 | parse_unsupported | misc | `lambda expressions is not supported yet` | `crates/kiln_parse/src/new_delete.rs::parse_delete_expr` | 0 | WP-1745 |
-| GAP-157 | parse_unsupported | misc | `'{kw}' here is not supported yet` ({kw}: `namespace`, `template`) | `crates/kiln_parse/src/stmt.rs::parse_statement_after_attrs_inner` | 0 | WP-1745 |
-| GAP-158 | parse_unsupported | misc | `a braced argument to a builtin function is not supported yet` | `crates/kiln_sema/src/builtins.rs::builtin_custom_call` | 0 | WP-1745 |
-| GAP-159 | parse_unsupported | misc | `a braced argument to __builtin_addressof is not supported yet` | `crates/kiln_sema/src/builtins.rs::builtin_addressof_call` | 0 | WP-1745 |
-| GAP-160 | parse_unsupported | misc | `this builtin function is not supported yet` | `crates/kiln_sema/src/builtins.rs::builtin_custom_call` | 0 | WP-1745 |
-| GAP-161 | parse_unsupported | misc | `pointer to member of reference type is not supported yet` | `crates/kiln_sema/src/class/member_expr.rs::member_pointer_of` | 0 | WP-1745 |
-| GAP-162 | parse_unsupported | misc | `{what} is not supported yet` ({what}: `constructors`, `destructors`, `conversion functions`, `overloaded operators`, `literal operators`, `deduction guides here`) | `crates/kiln_sema/src/decl.rs::unsupported_declarator` | 0 | WP-1745 |
-| GAP-163 | parse_unsupported | misc | `'explicit' is not supported yet` | `crates/kiln_sema/src/decl.rs::unsupported_declarator` | 0 | WP-1745 |
-| GAP-164 | parse_unsupported | misc | `pure virtual friend functions is not supported yet` | `crates/kiln_sema/src/class/virtual/mod.rs::virtual_decl` | 0 | WP-1745 |
-| GAP-165 | parse_unsupported | misc | `language linkage "{lang}" is not supported yet` ({lang}: any language other than `C` and `C++`) | `crates/kiln_sema/src/decl.rs::act_on_start_linkage_spec` | 0 | WP-1745 |
-| GAP-166 | parse_unsupported | misc | `'selectany' on an 'extern' declaration without an initializer is not supported yet` | `crates/kiln_sema/src/selectany.rs::check_selectany_extern` | 0 | WP-1745 |
-| GAP-167 | parse_unsupported | misc | `this kind of name is not supported yet` | `crates/kiln_sema/src/expr.rs::build_decl_ref_extra` | 0 | WP-1745 |
+| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `cpu_dispatch`, `cpu_specific`, `interrupt`, `model`, the `opencl_*` address spaces, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`, `target_clones`, `target_version`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
 ## Excluded (clang-matching wording)
 

@@ -1118,9 +1118,19 @@ impl Parser<'_, '_> {
                     // a type resolved at instantiation ([class.base.init]/2).
                     MemInitId::Type(ty)
                 } else {
-                    // kiln-gap: GAP-153
-                    self.unsupported("qualified member initializers", loc);
-                    return (None, true);
+                    // [class.base.init]/2: a qualified mem-initializer-id
+                    // is looked up as a type only (a member is named
+                    // unqualified); naming no type it names neither a
+                    // member nor a base (clang's
+                    // `err_mem_init_not_member_or_class`, at the name).
+                    // Counted as a failed initializer, so no implicit
+                    // base or member initializers are added.
+                    let d = self
+                        .s
+                        .diag(DiagId::sema_init_mem_not_member_or_base, loc)
+                        .arg(self.s.ast.symbols().as_str(name).to_owned());
+                    self.emit(d);
+                    MemInitId::Type(QualType::ERROR)
                 }
             }
         };
@@ -2170,19 +2180,15 @@ impl Parser<'_, '_> {
         if i == self.pos() && self.deduction_guide_at(i).is_some() {
             return true;
         }
-        let named = match last {
-            Some(q) => q == n,
-            None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
-        };
-        if !named {
-            return false;
-        }
         // The class the qualifier names, whose scope the parameter list
         // is in (`X::Y::Y(`: the context `Y` is named in).
         let qual = match last {
             Some(_) => self.scan_name_qual_at(self.pos()).and_then(|(_, _, _, _, q)| q),
             None => None,
         };
+        if !self.qualified_ctor_name(n, last, qual, ctx) {
+            return false;
+        }
         self.ctor_params_follow_in(i + 1, last.is_none(), qual, friend && last.is_none())
     }
 
@@ -2401,11 +2407,53 @@ impl Parser<'_, '_> {
         if Self::punct_of(self.peek(1)) != Some(Punct::LParen) {
             return false;
         }
-        let named = match last_qual {
-            Some(q) => q == n,
-            None => self.names_own_class(n, ctx),
+        self.qualified_ctor_name(n, last_qual, qual, ctx)
+            && self.ctor_params_follow_in(self.pos() + 1, last_qual.is_none(), qual, false)
+    }
+
+    /// Whether `n` after the qualifier whose last name is `last` and
+    /// whose resolved scope is `qual` (none when unqualified) is a
+    /// constructor name ([class.qual]/2, clang `isCurrentClassName`):
+    /// after a qualifier naming class `C`, `C`'s own name, also when a
+    /// typedef names the class (`T0::S0` for `typedef struct S0 T0`);
+    /// after one naming a namespace or an enumeration never (`void
+    /// N::N();` in namespace `N` declares a function `N`). A qualifier
+    /// the lookahead does not resolve to its class (past a dependent
+    /// component) is compared as written.
+    fn qualified_ctor_name(
+        &self,
+        n: Symbol,
+        last: Option<Symbol>,
+        qual: Option<DeclId>,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        let Some(last) = last else {
+            return self.names_own_class(n, ctx);
         };
-        named && self.ctor_params_follow_in(self.pos() + 1, last_qual.is_none(), qual, false)
+        let Some(q) = qual else {
+            return last == n;
+        };
+        let decl = self.s.ast.decls.get(q);
+        let ast = &self.s.ast;
+        match decl.kind() {
+            DeclKind::Namespace
+            | DeclKind::Enum
+            | DeclKind::TranslationUnit
+            | DeclKind::TemplateTypeParm => false,
+            DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization => {
+                last == n || decl.name().as_ident() == Some(n)
+            }
+            // A typedef names its class's constructor by the class's own
+            // name; one naming no class here (a dependent type: `T::T`
+            // through `using X = T`) has no constructor to name.
+            DeclKind::Typedef | DeclKind::TypeAlias => decl
+                .ty()
+                .and_then(|t| ast.types.as_record(t))
+                .is_some_and(|r| ast.decls.get(r).name().as_ident() == Some(n)),
+            _ => last == n,
+        }
     }
 
     /// CWG2237: the unqualified constructor name `n<args>` at `n` in its

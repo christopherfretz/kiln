@@ -110,8 +110,11 @@ compound literals) are WP-1276's.
   (spec/sema.md §7; `tests/c/stmt/jump-into-vla-scope.c`). `-Wvla` is
   off by default, `-Wvla-extension` warns before C99 under
   `-pedantic`. In C++ the same VLAs are the GNU extension
-  (`-Wvla-cxx-extension`), as in clang. A variably modified expression
-  never folds: the Oven traps it (spec/oven.md).
+  (`-Wvla-cxx-extension`), as in clang, except in a SFINAE context, where
+  a C++ bound that is no constant expression is `sema_vla_in_sfinae` and
+  the substitution fails (clang `err_vla_in_sfinae`, [temp.deduct.general]/8;
+  `tests/conformance/temp.deduct/vla-bound-sfinae.cpp`). A variably
+  modified expression never folds: the Oven traps it (spec/oven.md).
 - **Compound literals** (6.5.2.5p4-p5): in C every literal is an lvalue
   `CompoundLiteralExpr`, never a temporary (no `maybe_bind_temporary`,
   no `MaterializeTemporaryExpr`): inside a function it names an
@@ -1096,9 +1099,8 @@ family, and the `nonnull` attribute spellings.
    - references to references, pointers to references
    - array bounds: converted constant expressions of integral,
      unscoped enumeration or `_Atomic` integral type, which must be
-     positive. A bound that is not a constant expression is a VLA, which
-     kiln does not support (`sema_vla_unsupported`), except at namespace
-     or class scope, where a bound that `OvenBridge::fold_rvalue_int`
+     positive. A bound that is not a constant expression is a VLA (see
+     below), except in a namespace- or class-scope declaration, where a bound that `OvenBridge::fold_rvalue_int`
      folds (lax mode: e.g. a `const _Atomic(int)` or `const` variable
      with a non-constant-expression initializer that is still a constant)
      gives clang's `TryToFixInvalidVariablyModifiedType` result: a
@@ -1125,8 +1127,11 @@ family, and the `nonnull` attribute spellings.
      (`Sema::pending_alias_vla`, emitted first by `act_on_alias_decl`;
      WP-415,
      `tests/conformance/dcl.array/vla-namespace-scope-alias-and-outer-arrays.cpp`).
-     Not yet modelled: another namespace-scope type-id (`sizeof(int[n])`
-     in an initializer, a cast) still says `sema_vla_unsupported`
+     Any other namespace- or class-scope type-id (`sizeof(int[n])` in an
+     initializer, a cast) and every parameter, in a template's
+     declaration too, is a VLA as in a function (WP-1745): the bound is
+     evaluated where the type-id is, the dynamic initializer for a
+     namespace-scope one.
    - variable length arrays in a function (WP-183, clang `BuildArrayType`):
      a non-constant bound of a block-scope declarator (variable, typedef,
      alias, type-id) makes a `VariableArray` even when it would fold.
@@ -10358,6 +10363,66 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
   again rather than converted from the pattern's array construction.
   Test: `expr.const.imm/consteval-default-ctor-array-in-template-run.cpp`.
 
+### 5.34 Former static gaps, misc (WP-1745)
+
+Each was a "not supported yet" site; it is now clang's diagnostic or
+behaviour, or proven unreachable (`unreachable!` with the invariant):
+
+- **Names that are no value** (`build_decl_ref_extra`,
+  [expr.prim.id.unqual]/3, [temp.names]/1): a class template, alias
+  template or template template parameter without arguments is "use of
+  <kind> 'X' requires template arguments" with "template is declared
+  here" (an alias template's at its `using`, `missing_template_args`);
+  a namespace or namespace alias is "unexpected namespace name 'N':
+  expected expression" (the alias printed as its namespace); anything
+  else lookup can find is "'X' does not refer to a value" with "declared
+  here" (clang `CheckDeclInExpr`). Test
+  `expr.prim.id/non-value-names-errors.cpp`.
+- **Member access naming a member template** (`s.CT`, `p->AT`,
+  [expr.ref]/7): "cannot refer to member 'CT' in 'S' with '.'" with
+  "member 'CT' declared here" (clang
+  `err_typecheck_member_reference_unknown`). A data member without a
+  declaring class cannot reach `member_of_object`. Test
+  `expr.ref/member-template-reference-errors.cpp`.
+- **A friend deduction guide** ([temp.deduct.guide]/3): "cannot declare
+  a deduction guide as a friend" at the template name, nothing declared
+  (`unsupported_declarator`; the other special names and `explicit` on a
+  friend cannot reach it). Test
+  `temp.deduct.guide/friend-deduction-guide-errors.cpp`.
+- **A pointer to a member of reference type** (`&S::r`, [dcl.mptr]/3):
+  "cannot form a pointer-to-member to member 'r' of reference type 'int
+  &'" at the `&`. Test `dcl.mptr/reference-member-errors.cpp`.
+- **Braced-init-list arguments to custom-checked builtins**: the
+  argument is the `void` initializer list `act_on_braced_arg` builds, as
+  clang's `InitListExpr`, so each checker rejects it by its type
+  (`__builtin_addressof({i})`: "cannot take the address of an rvalue of
+  type 'void'"); `__builtin_operator_new` / `__builtin_operator_delete`
+  copy-list-initialize the parameter (`list_arg_ics` for viability,
+  `init_list_entity` to convert). Every `CUSTOM` builtin has an arm in
+  `builtin_custom_call`. Tests `ext.gnu.builtins/braced-argument-errors.cpp`,
+  `ext.gnu.builtins/operator-delete-braced-run.cpp`.
+- **A constructor declarator whose qualifier names no class** (left
+  only when the parser could not resolve the qualifier): clang's
+  "nested name specifier 'X' for declaration does not refer into a
+  class, class template or class template partial specialization".
+- **A variable length array range** (`vla_range_count`, [stmt.ranged]/1):
+  the range of a non-dependent range-based `for` is complete first, so
+  an array range without a constant size is a VLA.
+- **Variable length arrays outside a function** (`folded_array_bound`):
+  see §4.2. A type parameter's default is checked as a template argument:
+  a variably modified one is "variably modified type 'int[m]' cannot be
+  used as a template argument", the default dropped. Tests
+  `dcl.array/vla-type-name-namespace-scope-run.cpp`,
+  `temp.arg.type/vla-default-template-argument-errors.cpp`.
+- **Class-A attributes no kiln unit can enable**: `matrix_type` is
+  clang's "matrix types extension is disabled. Pass -fenable-matrix to
+  enable it" (kiln has no `-fenable-matrix`), `riscv_rvv_vector_bits`
+  clang's "'riscv_rvv_vector_bits' attribute is not supported on targets
+  missing 'zve32x'; ..." (no RISC-V target). The other class-A rows
+  (address spaces, the Swift ABI, x86 `interrupt`, x86 multiversioning)
+  are still "not supported by kiln yet". Test
+  `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - an invalid element (WP-408): an expression standing for clang's
@@ -11588,8 +11653,9 @@ non-compound body is parsed as any loop's sub-statement (its own block
 scope, [stmt.pre]/1; `break`/`continue` as in a braced body) and kept
 as written; its element block `{ decl = element; body }` spans the
 body's own location (no `}`). `template`
-followed by anything but `for` in a block keeps clang's `'template' here is
-not supported yet`.
+followed by anything but `for` (or `[:`) in a block is a block-scope
+template-declaration or explicit instantiation and gets clang's errors
+(spec/parse.md §4, WP-1745).
 
 - **Synthetic template level.** `act_on_expansion_head` opens a template
   level of its own (`push_expansion_level`, a parameterless head at the

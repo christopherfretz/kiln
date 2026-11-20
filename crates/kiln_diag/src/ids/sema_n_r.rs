@@ -236,8 +236,10 @@ sema_pseudo_dtor_not_type = Error (2) "'{0}' does not refer to a type name in ps
 sema_pseudo_dtor_type_mismatch = Error (2) "the type of object expression ({0}) does not match the type being destroyed ({1}) in pseudo-destructor expression";
 sema_ptrmem_call_drops_quals = Error (3) "call to pointer to member function of type {0} drops '{1}' qualifier{2:|s}";
 sema_ptrmem_lhs_incompatible = Error (3) "left hand operand to {0} must be a {1:|pointer to }class compatible with the right hand operand, but is {2}";
+sema_ptrmem_reference_member = Error (2) "cannot form a pointer-to-member to member '{0}' of reference type {1}";
 sema_ptrmem_rhs_not_member_pointer = Error (2) "right hand operand to {0} has non-pointer-to-member type {1}";
 sema_ptrmem_value_classify = Error (2) "pointer-to-member function type {0} can only be called on an {1:rvalue|lvalue}";
+sema_pure_friend = Error (0) "friend declaration cannot have a pure-specifier";
 sema_pure_not_virtual = Error (1) "'{0}' is not virtual and cannot be declared pure";
 sema_pure_virtual_call_in_cdtor = Warning [CallToPureVirtualFromCtorDtor] (3) "call to pure virtual member function {0} has undefined behavior; overrides of {0} in subclasses are not available in the {1:constructor|destructor} of {2}";
 sema_qualified_ctor_name_as_type = Error (1) "qualified reference to {0} is a constructor name rather than a type in this context";
@@ -317,5 +319,6 @@ sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
 sema_return_local_temp_ref = Warning [ReturnStackAddress] (0) "returning reference to local temporary object";
 sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
+sema_riscv_rvv_vector_bits_unsupported = Error (0) "'riscv_rvv_vector_bits' attribute is not supported on targets missing 'zve32x'; specify an appropriate -march= or -mcpu=";
 sema_rref_in_exception_spec = Error (1) "rvalue reference type {0} is not allowed in exception specification";
 sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";

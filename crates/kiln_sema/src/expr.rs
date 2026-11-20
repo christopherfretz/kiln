@@ -2631,24 +2631,54 @@ impl Sema<'_, '_> {
             _ if self.is_class_member_ref(d) => {
                 return self.implicit_member_ref(d, loc, shadow, extra.and_then(|x| x.qualifier));
             }
-            // [temp.names]/1: a variable template or concept is named with
-            // arguments (clang's `diagnoseMissingTemplateArguments`).
-            DeclKind::VarTemplate | DeclKind::Concept => {
-                let what =
-                    if n.kind() == DeclKind::Concept { "concept" } else { "variable template" };
+            // [temp.names]/1: a template is named with arguments in an
+            // expression (clang's `diagnoseMissingTemplateArguments`): a
+            // class or alias template or a template template parameter
+            // that the parser took as an id-expression (no `(` or `{`
+            // follows) as well.
+            DeclKind::VarTemplate
+            | DeclKind::Concept
+            | DeclKind::ClassTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::TemplateTemplateParm => {
+                let what = match n.kind() {
+                    DeclKind::Concept => "concept",
+                    DeclKind::VarTemplate => "variable template",
+                    DeclKind::ClassTemplate => "class template",
+                    DeclKind::TypeAliasTemplate => "alias template",
+                    _ => "template template parameter",
+                };
                 self.missing_template_args(d, what, extra.and_then(|x| x.qualifier), loc);
                 return self.recover_err(&[], loc);
             }
-            k if crate::lookup::is_type_kind(k) || k == DeclKind::Namespace => {
+            // [expr.prim.id.unqual]/1: a namespace (or a namespace alias,
+            // printed as the namespace it names) is no expression (clang's
+            // `err_unexpected_namespace`).
+            DeclKind::Namespace | DeclKind::NamespaceAlias => {
+                let ns = self.ast.resolve_alias(d);
+                let msg = self
+                    .diag(DiagId::sema_unexpected_namespace_name, loc)
+                    .arg(format!("'{}'", self.decl_name(ns)));
+                self.emit(msg);
+                return self.recover_err(&[], loc);
+            }
+            k if crate::lookup::is_type_kind(k) => {
                 let msg = self
                     .diag(DiagId::sema_ref_non_value, loc)
                     .arg(format!("'{}'", self.decl_name(d)));
                 self.emit(msg);
                 return self.recover_err(&[], loc);
             }
+            // [expr.prim.id.unqual]/3: an id-expression names a value;
+            // anything else lookup can find is not one (clang's
+            // `CheckDeclInExpr`: `err_ref_non_value` with the declaration).
             _ => {
-                // kiln-gap: GAP-167
-                self.unsupported("this kind of name", loc);
+                let note = self.diag(DiagId::note_declared_at, n.loc());
+                let msg = self
+                    .diag(DiagId::sema_ref_non_value, loc)
+                    .arg(format!("'{}'", self.decl_name(d)))
+                    .with_note(note);
+                self.emit(msg);
                 return self.recover_err(&[], loc);
             }
         }
@@ -5798,8 +5828,7 @@ impl Sema<'_, '_> {
             && let Some(id) = self.ast.decls.builtin_id(b)
             && kiln_ast::decl::builtin::is_custom(id)
         {
-            let has_braced = braced.iter().any(Option::is_some);
-            return self.builtin_custom_call(callee, b, id, args, has_braced, loc, rparen);
+            return self.builtin_custom_call(callee, b, id, args, &braced, loc, rparen);
         }
         // A member function named by a member access with no overload set
         // to resolve (`x.f()`): a placeholder return type is deduced first,
@@ -5879,9 +5908,10 @@ impl Sema<'_, '_> {
             return self.recover_err(&kids, loc);
         };
         let Some(proto) = self.sugared_proto(fn_ty) else {
-            // kiln-gap: GAP-146
-            self.unsupported("calls through this function type", loc);
-            return self.recover_err(&kids, loc);
+            unreachable!(
+                "`fn_ty` passed `is_function`, so its canonical type is a function \
+                 type and `sugared_proto` falls back to its prototype"
+            );
         };
         // clang `warn_call_wrong_number_of_arguments`: a call of a function
         // without a prototype whose definition has another parameter count.

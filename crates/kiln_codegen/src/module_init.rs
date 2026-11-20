@@ -151,7 +151,8 @@ impl Cg<'_> {
     fn var_is_module_initializer(&self, d: DeclId) -> bool {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return false };
-        let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
+        let ext = (v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d))
+            && !ast.has_own_selectany(d);
         if (ext && v.init.is_none())
             || matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
             || self.is_templated(d)

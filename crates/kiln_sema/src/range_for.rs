@@ -475,7 +475,7 @@ impl Sema<'_, '_> {
                     let pd = QualType::unqual(self.target.ptrdiff_t);
                     self.builder().int_literal(pd, bound, Radix::Decimal, range_loc)
                 }
-                None => self.vla_range_count(range_ty, colon)?,
+                None => self.vla_range_count(range_ty, colon),
             };
             let end = self.act_on_binary(BinaryOp::Add, end_range, count, colon);
             if self.is_err_expr(end) {

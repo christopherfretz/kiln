@@ -2038,8 +2038,8 @@ impl Sema<'_, '_> {
     /// function a bound that is not a constant expression makes a
     /// variable length array (clang `BuildArrayType`, after the same
     /// warning) even when it would fold; [`Self::check_vla_var`] rejects or
-    /// folds one with static storage duration. Anything else is a
-    /// variable length array kiln does not support.
+    /// folds one with static storage duration. So does a type-name or a
+    /// parameter anywhere.
     fn folded_array_bound(
         &mut self,
         c: ExprId,
@@ -2048,48 +2048,50 @@ impl Sema<'_, '_> {
         f: kiln_oven::EvalFailure,
     ) -> Option<Result<u64, ExprId>> {
         let at = d.name.map_or(d.loc, |(_, l)| l);
-        // In C a type-name is variably modified at file scope too (C17
-        // 6.7.6.2p2 restricts declarations, not types): `sizeof(int[m])`
-        // is no constant and a compound literal folds its bound
-        // (`Sema::act_on_compound_literal`; clang 22, WP-1512).
-        let local = matches!(
-            d.ctx,
-            DeclaratorContext::Block
-                | DeclaratorContext::ForInit
-                | DeclaratorContext::Condition
-                | DeclaratorContext::TypeName
-        ) && self.in_local_scope()
-            || self.is_c() && d.ctx == DeclaratorContext::TypeName
-            // C17 6.7.6.2p2: a parameter may be variably modified; clang
-            // accepts one in C++ too (after `-Wvla-cxx-extension`).
-            || d.ctx == DeclaratorContext::Prototype && !self.in_template();
+        // An alias-declaration's type-id is a typedef's declarator
+        // (diagnosed at the alias name, by `act_on_alias_decl`).
+        let alias = d.site == DeclSite::Alias;
+        let file_like =
+            alias || matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member);
+        // Everything else is variably modified, as clang's `BuildArrayType`
+        // makes it (WP-1745): a block-scope declarator, a type-name
+        // anywhere (C17 6.7.6.2p2 restricts declarations, not types:
+        // `sizeof(int[m])` at namespace scope is evaluated by the dynamic
+        // initializer, and a C compound literal folds its bound,
+        // `Sema::act_on_compound_literal`, WP-1512), and a parameter (C17
+        // 6.7.6.2p2; clang accepts one in C++ too, in a template's too,
+        // whose substitution then fails).
+        let local = !file_like
+            || matches!(
+                d.ctx,
+                DeclaratorContext::Block
+                    | DeclaratorContext::ForInit
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::TypeName
+            ) && self.in_local_scope();
         if local {
             if self.is_c() {
                 // C has no constant-expression notes for a bound.
                 self.emit(self.diag(self.vla_ext_id(), loc));
                 return Some(Err(c));
             }
+            // clang `BuildArrayType`: in C++ no variable length array is
+            // formed in a SFINAE context (`err_vla_in_sfinae`), so the
+            // substitution fails ([temp.deduct.general]/8): a requirement
+            // `static_cast<char(*)[n]>(nullptr)` tests that `n` is a
+            // constant expression.
+            if self.inst.stack.is_sfinae() {
+                self.error(DiagId::sema_vla_in_sfinae, loc);
+                return None;
+            }
             let w = self.vla_ext_warning(f, loc);
             self.emit(w);
             return Some(Err(c));
         }
-        // An alias-declaration's type-id is a typedef's declarator
-        // (diagnosed at the alias name, by `act_on_alias_decl`).
-        let alias = d.site == DeclSite::Alias;
-        let file_like =
-            alias || matches!(d.ctx, DeclaratorContext::File | DeclaratorContext::Member);
-        let folded = if file_like {
-            self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
-        } else {
-            None
-        };
+        let folded =
+            self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v));
         let Some(v) = folded else {
-            if file_like {
-                self.vla_at_file_scope(d, loc, at, f);
-            } else {
-                // kiln-gap: GAP-150
-                self.error(DiagId::sema_vla_unsupported, loc);
-            }
+            self.vla_at_file_scope(d, loc, at, f);
             return None;
         };
         let w = self.vla_ext_warning(f, loc);
@@ -3498,35 +3500,43 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The declarator forms the parser accepts but sema does not handle yet
-    /// (spec/parse.md §9): reports `{what} is not supported yet`, returning
-    /// true when the declaration is dropped. Constructors, destructors and
-    /// conversion functions are WP-067a, operator functions WP-068b; the
-    /// specifiers are reported and ignored.
+    /// The declarator checks shared by `act_on_declarator` and
+    /// `act_on_friend` for a declarator neither handled as a special
+    /// member: reports a friend deduction guide and the specifiers that
+    /// do not belong, returning true when the declaration is dropped.
     pub(crate) fn unsupported_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> bool {
         if let Some((sp, loc)) = d.special {
-            let what = match sp {
-                SpecialName::Constructor(_) => "constructors",
-                SpecialName::Destructor(_) => "destructors",
-                SpecialName::Conversion(_) => "conversion functions",
-                SpecialName::Operator(_) => "overloaded operators",
-                SpecialName::LiteralOperator(_) => "literal operators",
-                SpecialName::DeductionGuide(_) => "deduction guides here",
+            // Both callers handle the other special names first:
+            // constructors, destructors and conversion functions
+            // (`handles_special_declarator`; a friend one in
+            // `act_on_friend`, qualified or not), operators and literal
+            // operators (`operator_declarator` clears `special`), and a
+            // deduction guide that is no friend (`act_on_deduction_guide`;
+            // the parser drops `friend` outside a class).
+            let SpecialName::DeductionGuide(_) = sp else {
+                unreachable!(
+                    "special declarator {sp:?} reached unsupported_declarator: its callers \
+                     declare constructors, destructors, conversion functions and operators"
+                );
             };
-            // kiln-gap: GAP-162
-            self.unsupported(what, loc);
+            // [temp.deduct.guide]/3: a deduction guide is declared in the
+            // scope of its template, never as a friend (clang's wording,
+            // at the template name; nothing is declared).
+            self.error(DiagId::sema_deduction_guide_friend, loc);
             return true;
         }
         // `explicit` outside a constructor or conversion function is
-        // ill-formed ([dcl.fct.spec]/3); on a friend it is WP-068b.
-        if let Some(l) = ds.explicit {
-            if ds.friend.is_some() {
-                // kiln-gap: GAP-163
-                self.unsupported("'explicit'", l);
-            } else {
-                let function = d.is_function_declarator() && !ds.is_typedef();
-                self.check_explicit_spec(ds, d, function, false);
-            }
+        // ill-formed ([dcl.fct.spec]/3). A friend never carries it: the
+        // parser reports and drops it (`reject_friend_storage`), and an
+        // instantiated friend takes it from its pattern, which is a friend
+        // too.
+        if ds.explicit.is_some() {
+            assert!(
+                ds.friend.is_none(),
+                "a friend's `explicit` is dropped by the parser (reject_friend_storage)"
+            );
+            let function = d.is_function_declarator() && !ds.is_typedef();
+            self.check_explicit_spec(ds, d, function, false);
         }
         // [dcl.constexpr]/2: `consteval` declares an immediate function.
         // A non-static data member reports it in `act_on_field`.
@@ -7374,9 +7384,12 @@ impl Sema<'_, '_> {
         if self.ast.is_member_spec_declaration(v) {
             return false;
         }
-        // [dcl.link]/8: `extern "C" int x;` is treated as `extern`.
+        // [dcl.link]/8: `extern "C" int x;` is treated as `extern`. A
+        // declaration with its own `selectany` is a definition all the
+        // same (clang `VarDecl::isThisDeclarationADefinition`; WP-1745).
         let ext = |x: &kiln_ast::decl::VarData| {
-            x.spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v)
+            (x.spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v))
+                && !self.ast.has_own_selectany(v)
         };
         self.ast.decls.var(v).is_some_and(|x| !ext(x) || x.init.is_some())
     }
@@ -8920,8 +8933,6 @@ impl Sema<'_, '_> {
             self.check_static_tls(v, None);
             self.check_constinit(v);
             self.unify_var_section(v);
-        } else {
-            self.check_selectany_extern(v);
         }
         self.check_consteval_only_var(v);
     }
@@ -9097,8 +9108,9 @@ impl Sema<'_, '_> {
         }
         // [dcl.link]/8: the declaration directly contained in a braceless
         // linkage specification (`extern "C" int x[];`) is one, as `extern`.
-        let declaration_only =
-            spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
+        let declaration_only = (spec.storage() == VarStorage::Extern
+            || self.ast.decls.is_single_line_linkage(v))
+            && !self.ast.has_own_selectany(v);
         if self.ast.types.is_reference(ty) {
             if !declaration_only {
                 // Repeats the template definition's report (WP-318).
@@ -11752,25 +11764,30 @@ impl Sema<'_, '_> {
     }
 
     /// `extern "C"` / `extern "C++"` ([dcl.link]); `lang` is the string
-    /// literal's contents.
-    pub fn act_on_start_linkage_spec(&mut self, lang: &str, loc: Loc, lang_loc: Loc) -> DeclId {
+    /// literal's contents. Any other string is implementation-defined
+    /// ([dcl.link]/3) and kiln, like clang, knows only these two: clang's
+    /// `err_language_linkage_spec_unknown` at the string, and no linkage
+    /// specification (`None`: the declarations belong to the enclosing
+    /// context, as in clang's `ActOnStartLinkageSpecification`).
+    pub fn act_on_start_linkage_spec(
+        &mut self,
+        lang: &str,
+        loc: Loc,
+        lang_loc: Loc,
+    ) -> Option<DeclId> {
         let l = match lang {
             "C" => LinkageLang::C,
             "C++" => LinkageLang::Cxx,
             _ => {
-                let msg = self
-                    // kiln-gap: GAP-165
-                    .diag(DiagId::parse_unsupported, lang_loc)
-                    .arg(format!("language linkage \"{lang}\""));
-                self.emit(msg);
-                LinkageLang::Cxx
+                self.error(DiagId::sema_language_linkage_spec_unknown, lang_loc);
+                return None;
             }
         };
         let ctx = self.ctx;
         let ls = self.builder().linkage_spec(ctx, l, loc);
         self.scopes.push(Scope::new(ScopeKind::LinkageSpec, Some(ls)));
         self.ctx = ls;
-        ls
+        Some(ls)
     }
 
     /// The linkage specification `ls` has no braces: it directly
@@ -13859,6 +13876,17 @@ impl Sema<'_, '_> {
                 }
                 let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: 0 };
                 return Some(self.ast.attrs.push(node));
+            }
+            // clang's own errors where the attribute cannot apply to any
+            // unit kiln compiles (WP-1745): kiln has no `-fenable-matrix`,
+            // and neither target has the RISC-V vector extension.
+            crate::attr_triage::Support::Unsupported if n == "matrix_type" => {
+                self.error(DiagId::sema_matrix_types_disabled, loc);
+                return None;
+            }
+            crate::attr_triage::Support::Unsupported if n == "riscv_rvv_vector_bits" => {
+                self.error(DiagId::sema_riscv_rvv_vector_bits_unsupported, loc);
+                return None;
             }
             crate::attr_triage::Support::Unsupported => {
                 // kiln-gap: GAP-149

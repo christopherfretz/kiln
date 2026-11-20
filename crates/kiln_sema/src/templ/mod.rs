@@ -1097,6 +1097,16 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_template_param_pack_default_arg, eq);
             return;
         }
+        // A type default is checked as an argument (clang's
+        // `ActOnTypeParameter` calls `CheckTemplateArgument`): a variably
+        // modified type is none, and the default is dropped (WP-1745).
+        if let ArgView::Type(t) = arg.view()
+            && self.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED)
+        {
+            let d = self.diag(DiagId::sema_variably_modified_template_arg, loc).arg(self.ty_arg(t));
+            self.emit(d);
+            return;
+        }
         // [temp.variadic]/12: `class U = Ts` is reported at the
         // parameter's name, `int N = sizeof(Ts)` at the argument (clang's
         // `ActOn{Type,NonType}TemplateParameter`); the default is dropped.

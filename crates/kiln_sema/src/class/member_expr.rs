@@ -2290,9 +2290,11 @@ impl Sema<'_, '_> {
         match kind {
             DeclKind::Field | DeclKind::IndirectField => {
                 let Some(target) = self.declaring_class(m) else {
-                    // kiln-gap: GAP-145
-                    self.unsupported("this kind of member access", loc);
-                    return self.recover_err(&[b], loc);
+                    unreachable!(
+                        "a non-static data member reaching a member access is a member of a \
+                         class: found by lookup in `obj_class`, a splice whose \
+                         `declaring_class` names a base, or a structured binding's field"
+                    )
                 };
                 let (b, obj_class) =
                     self.object_to_qualifier(b, arrow, obj_class, quals, nns, target);
@@ -2381,12 +2383,37 @@ impl Sema<'_, '_> {
                 self.diagnose_deleted_use(m, loc);
                 self.build_member_expr(b, m, QualType::BOUND_MEMBER, arrow, loc, extra)
             }
-            _ => {
-                // kiln-gap: GAP-145
-                self.unsupported("this kind of member access", loc);
-                self.recover_err(&[b], loc)
-            }
+            // Any other member (a member class template or alias
+            // template; [expr.ref]/7 gives `E1.E2` a meaning only for the
+            // kinds above): clang's catch-all in `BuildMemberReferenceExpr`,
+            // `err_typecheck_member_reference_unknown` with the note at
+            // the member (WP-1745).
+            _ => self.member_reference_unknown(b, m, obj_ty, arrow, loc),
         }
+    }
+
+    /// `err_typecheck_member_reference_unknown` for member `m` of `b`,
+    /// with the note at the member.
+    fn member_reference_unknown(
+        &mut self,
+        b: ExprId,
+        m: DeclId,
+        obj_ty: QualType,
+        arrow: bool,
+        loc: Loc,
+    ) -> ExprId {
+        let text = self.decl_name_str(self.ast.decls.get(m).name());
+        // An alias template's note is at its `using` (`conflict_loc`).
+        let note =
+            self.diag(DiagId::note_member_declared_named, self.conflict_loc(m)).arg(text.clone());
+        let msg = self
+            .diag(DiagId::sema_member_reference_unknown, loc)
+            .arg(text)
+            .arg(self.ty_arg(obj_ty))
+            .arg(u8::from(arrow))
+            .with_note(note);
+        self.emit(msg);
+        self.recover_err(&[b], loc)
     }
 
     /// A prvalue class object `e` materialized to an xvalue
@@ -2666,10 +2693,17 @@ impl Sema<'_, '_> {
             }
             _ => return None,
         };
-        let Some(proto) = self.sugared_proto(fn_ty) else {
-            // kiln-gap: GAP-146
-            self.unsupported("calls through this function type", loc);
+        // A method whose declaration was invalid (diagnosed there) has the
+        // error type.
+        if fn_ty == QualType::ERROR {
             return Some(self.recover_err(&kids, loc));
+        }
+        let Some(proto) = self.sugared_proto(fn_ty) else {
+            unreachable!(
+                "a bound member function has function type: the method's type, or the \
+                 pointee of a pointer to member function (`BOUND_MEMBER` is given to no \
+                 other member access)"
+            );
         };
         let named = method.map(|d| CallCallee { decl: d, overloadable: false, enable_if: true });
         let Some(conv_args) =
@@ -3100,9 +3134,14 @@ impl Sema<'_, '_> {
             self.resolve_exc_for_type(d, at);
         }
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        // [dcl.mptr]/3: there is no pointer to member of reference type
+        // (clang `err_cannot_form_pointer_to_member_of_reference_type`).
         if self.ast.types.is_reference(declared) {
-            // kiln-gap: GAP-161
-            self.unsupported("pointer to member of reference type", loc);
+            let msg = self
+                .diag(DiagId::sema_ptrmem_reference_member, loc)
+                .arg(self.decl_name(d))
+                .arg(self.ty_arg(declared));
+            self.emit(msg);
             return Some(self.recover_err(&[e], loc));
         }
         let operand = if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {

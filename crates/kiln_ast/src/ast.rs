@@ -847,6 +847,16 @@ impl Ast {
         self.any_redecl_has(d, crate::attr::AttrKind::SELECTANY)
     }
 
+    /// Whether declaration `d` itself (not an earlier redeclaration)
+    /// carries `selectany`: clang's `VarDecl::isThisDeclarationADefinition`
+    /// then makes it a definition even with `extern` and no initializer
+    /// (a non-inherited `SelectAnyAttr`; WP-1745).
+    pub fn has_own_selectany(&self, d: DeclId) -> bool {
+        self.lists
+            .iter::<crate::ids::AttrId>(self.attrs.of_decl(d))
+            .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::SELECTANY)
+    }
+
     /// WP-809: class `d` uses the Microsoft bit-field layout: some
     /// declaration of it is `ms_struct` (written, or implied by `#pragma
     /// ms_struct on`) and none is clang 22 `gcc_struct`.

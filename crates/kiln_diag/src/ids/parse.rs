@@ -160,6 +160,7 @@ parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{
 // clang `ext_keyword_as_ident`: a revertible trait keyword reverted to an
 // identifier (spec/parse.md §1; WP-1505)
 parse_keyword_as_ident = Warning [KeywordCompat] (1) "keyword '{0}' will be made available as an identifier for the remainder of the translation unit";
+parse_lambda_after_delete = Error (0) "'[]' after delete interpreted as 'delete[]'; add parentheses to treat this as a lambda-expression";
 parse_lambda_decl_specifier_repeated = Error (1) "{0} cannot appear multiple times in a lambda declarator";
 parse_literal_operator_string_not_empty = Error (0) "string literal after 'operator' must be '\"\"'";
 parse_literal_operator_string_prefix = Error (0) "string literal after 'operator' cannot have an encoding prefix";
@@ -170,7 +171,9 @@ parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat
 parse_missing_template_arg_list_after_template_kw = WarningError [MissingTemplateArgListAfterTemplateKw] (0) "a template argument list is expected after a name prefixed by the template keyword";
 parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
 parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
+parse_ms_attributes_not_enabled = Error (0) "'__declspec' attributes are not enabled; use '-fdeclspec' or '-fms-extensions' to enable support for __declspec attributes";
 parse_multiple_template_declarators = Error (1) "{0:a template declaration|an explicit template specialization|an explicit template instantiation} can only {0:declare|declare|instantiate} a single entity";
+parse_namespace_nonnamespace_scope = Error (0) "namespaces can only be defined in global or namespace scope";
 parse_only_constructors_take_base_inits = Error (0) "only constructors take base initializers";
 parse_paren_sizeof_parameter_pack = Error (1) "missing parentheses around the size of parameter pack '{0}'";
 parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
@@ -237,6 +240,7 @@ parse_unspecified_size_with_static = Error (0) "'static' may not be used without
 parse_unspecified_vla_size_with_static = Error (0) "'static' may not be used with an unspecified variable length array size";
 parse_unsupported = Error (1) "{0} is not supported yet";
 parse_using_attribute_ns_conflict = Error (0) "attribute with scope specifier cannot follow default scope specifier";
+parse_using_decl_destructor = Error (0) "using declaration cannot refer to a destructor";
 parse_using_enum_requires_name = Error (0) "using enum requires an enum or typedef name";
 parse_vexing_parse = Warning [VexingParse] (0) "parentheses were disambiguated as a function declaration";
 parse_virt_specifier_outside_class = Error (1) "'{0}' specifier is not allowed outside a class definition";

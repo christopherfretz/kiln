@@ -118,7 +118,7 @@ fn vtable_layouts_match_clang() {
     assert!(failures.is_empty(), "{} runs differ", failures.len());
 }
 
-/// The flag needs `-fsyntax-only`; a non-dynamic class dumps nothing.
+/// A non-dynamic class dumps nothing; a codegen job dumps too (WP-1745).
 #[test]
 fn flag_action() {
     let dir = std::env::temp_dir().join(format!("kiln-vtable-flag-{}", std::process::id()));
@@ -139,10 +139,11 @@ fn flag_action() {
         .arg(&src)
         .output()
         .unwrap();
-    assert!(!o.status.success());
-    assert!(
-        String::from_utf8_lossy(&o.stderr).contains("-fdump-vtable-layouts without -fsyntax-only")
-    );
+    // WP-1745: a codegen job prints the dump before the IR, as clang.
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    let ir = out.find("; ModuleID").unwrap_or_else(|| panic!("{out}"));
+    assert!(out[..ir].contains("Vtable for 'P' (3 entries).\n"), "{out}");
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&dir);
 }

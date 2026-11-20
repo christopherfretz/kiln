@@ -466,11 +466,23 @@ fn syntax_only() {
         o.stderr,
         "error: invalid value 'bogus' in '-fdump-ast=bogus'\n1 error generated.\n"
     );
-    let o = kiln(&["-E", "-fdump-ast", "-"], "");
-    assert_eq!(
-        o.stderr,
-        "kiln++: error: -fdump-ast without -fsyntax-only is not implemented yet\n"
-    );
+    // WP-1745: `-fdump-ast` is the action, as clang's `-ast-dump`: `-E`,
+    // `-c` and `-S` dump the AST to standard output and write nothing else.
+    for mode in [&["-E"][..], &["-c", "-o", "x.o"], &["-S", "-emit-llvm"]] {
+        let mut a = mode.to_vec();
+        a.extend(["-fdump-ast", "-fdump-ast-filter=keep", "-"]);
+        let o = kiln(&a, "int keep_me;\n");
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{mode:?}");
+        assert!(o.stdout.contains("VarDecl") && o.stdout.contains("keep_me"), "{}", o.stdout);
+        assert!(!o.stdout.contains("ModuleID"), "{}", o.stdout);
+    }
+    // `-###` with `-E` and `-fsyntax-only` prints the in-process step.
+    let o = kiln(&["-###", "-fsyntax-only", "-x", "c++", "-"], "");
+    assert_eq!(o.code, 0);
+    assert!(o.stderr.ends_with(" (in-process) frontend \"-\" -fsyntax-only\n"), "{}", o.stderr);
+    let o = kiln(&["-###", "-E", "-o", "t.ii", "-x", "c++", "-"], "");
+    assert_eq!(o.code, 0);
+    assert!(o.stderr.ends_with(" (in-process) preprocessor \"-\" -> \"t.ii\"\n"), "{}", o.stderr);
     // C (WP-1275): `bool` is an identifier before C23.
     let o = kiln(&["-fsyntax-only", "-x", "c", "-"], "int bool, this;\n");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));

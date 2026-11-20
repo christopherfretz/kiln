@@ -62,19 +62,21 @@ impl Sema<'_, '_> {
     /// __bound`): `sizeof(q) / sizeof(element)` (clang
     /// `BuildCXXForRangeStmt`), so that the bound is the one evaluated
     /// when the array was declared, not the bound expression evaluated
-    /// again. `None` (after an error) for any other array type.
-    pub(crate) fn vla_range_count(&mut self, q: QualType, loc: Loc) -> Option<ExprId> {
+    /// again.
+    pub(crate) fn vla_range_count(&mut self, q: QualType, loc: Loc) -> ExprId {
         let TypeView::VariableArray { elem, .. } = self.ast.types.canonical_view(q) else {
-            // kiln-gap: GAP-151
-            self.unsupported("range-based for over this array type", loc);
-            return None;
+            unreachable!(
+                "the range of a non-dependent range-based for is complete (`build_for_range` \
+                 rejects an incomplete array first, a dependent range waits for instantiation), \
+                 so an array range without a constant size is a variable length array"
+            )
         };
         let st = self.size_type();
         let whole =
             self.builder().trait_of_type(kiln_ast::expr::TraitKind::SizeOf, q, st, loc, loc);
         let each =
             self.builder().trait_of_type(kiln_ast::expr::TraitKind::SizeOf, elem, st, loc, loc);
-        Some(self.act_on_binary(kiln_ast::expr::BinaryOp::Div, whole, each, loc))
+        self.act_on_binary(kiln_ast::expr::BinaryOp::Div, whole, each, loc)
     }
 
     /// `q` contains a `[*]` array derivation (C17 6.7.6.3p12; clang

@@ -391,7 +391,8 @@ impl Cg<'_> {
             let ext = ast
                 .decls
                 .var(d)
-                .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern);
+                .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern)
+                && !ast.has_own_selectany(d);
             if ext {
                 return explicit_only(self);
             }

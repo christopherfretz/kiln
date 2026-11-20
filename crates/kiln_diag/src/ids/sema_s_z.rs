@@ -313,6 +313,7 @@ sema_undefined_internal_type = Error (2) "{0:function|variable} '{1}' is used bu
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
 sema_underlying_type_of_incomplete_enum = Error (1) "cannot determine underlying type of incomplete enumeration type {0}";
 sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack{1}";
+sema_unexpected_namespace_name = Error (1) "unexpected namespace name {0}: expected expression";
 sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
 sema_unimplemented_template_feature = Error (1) "kiln: not yet implemented: {0}";
 sema_uninit_const_reference = WarningOff [UninitializedConstReference] (1) "variable {0} is uninitialized when passed as a const reference argument here";
@@ -437,9 +438,10 @@ sema_vla_extern_linkage = Error (0) "variable length array declaration cannot ha
 sema_vla_folded_to_constant = ExtWarn [GnuFoldingConstant] (0) "variable length array folded to constant array as an extension";
 // [dcl.fct.def.coroutine] (clang `err_vla_in_coroutine_unsupported`; WP-1374)
 sema_vla_in_coroutine_unsupported = Error (0) "variable length arrays in a coroutine are not supported";
+// [temp.deduct.general]/8 (clang `err_vla_in_sfinae`; WP-1745)
+sema_vla_in_sfinae = Error (0) "variable length array cannot be formed in a SFINAE context";
 sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
 sema_vla_static_storage = Error (0) "variable length array declaration cannot have 'static' storage duration";
-sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
 sema_vla_used = WarningOff [Vla] (0) "variable length array used";
 sema_vm_decl_in_file_scope = Error (0) "variably modified type declaration not allowed at file scope";
 sema_vm_func_decl = Error (0) "function declaration cannot have variably modified type";
