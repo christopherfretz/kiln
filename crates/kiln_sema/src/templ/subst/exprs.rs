@@ -1302,8 +1302,15 @@ impl Substituter<'_, '_, '_> {
                 let p = self.expr(pattern)?;
                 Ok(if p == pattern { e } else { self.sema.act_pack_expansion(p, loc) })
             }
-            // kiln-gap: GAP-003
-            ExprKind::PackExpansionExpr => self.unimplemented("pack expansion", loc),
+            // A pack expansion met outside a list being expanded (the
+            // lists expand theirs in place, `expand_exprs`): its pattern
+            // substituted with the substituted packs kept, the expansion
+            // rebuilt (clang's `TransformPackExpansionExpr`, §7.2).
+            ExprKind::PackExpansionExpr => {
+                let pattern = ExprId::from_raw(self.sema.ast.exprs.get(e).a()).ok_or(SubstFail)?;
+                let p = self.kept_pack_pattern(|s| s.expr(pattern))?;
+                Ok(self.sema.act_pack_expansion(p, loc))
+            }
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
             ExprKind::LambdaExpr => self.lambda_expr(e, loc),
@@ -2725,12 +2732,9 @@ impl Substituter<'_, '_, '_> {
         Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
     }
 
+    /// A single written initializer (an expansion in it, never expanded
+    /// by a list here, is rebuilt by `expr`).
     fn written_arg(&mut self, e: ExprId) -> SubstResult<ExprId> {
-        if self.sema.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
-            let loc = self.sema.ast.exprs.get(e).loc();
-            // kiln-gap: GAP-003
-            return self.unimplemented("pack expansion", loc);
-        }
         self.expr(e)
     }
 
@@ -2750,7 +2754,9 @@ impl Substituter<'_, '_, '_> {
     /// expressions are substituted; the id is resolved again in the
     /// instantiated class.
     /// A pack expansion `B(args)...` gives one mem-initializer per
-    /// element ([temp.variadic]/5).
+    /// element ([temp.variadic]/5); one whose packs belong to a level not
+    /// substituted yet (a constructor of a member class template) stays an
+    /// expansion of its substituted pattern.
     pub(crate) fn mem_initializer(
         &mut self,
         info: &crate::class::MemInitInfo,
@@ -2760,9 +2766,10 @@ impl Substituter<'_, '_, '_> {
         }
         match self.expand_pattern(|s| s.mem_initializer_one(info))? {
             crate::templ::pack::Expansion::Elements(v) => Ok(v),
-            crate::templ::pack::Expansion::Unexpanded(_) => self
-                // kiln-gap: GAP-007
-                .unimplemented("a mem-initializer pack expansion of an enclosing pack", info.loc),
+            crate::templ::pack::Expansion::Unexpanded(mut x) => {
+                x.pack_expansion = true;
+                Ok(vec![x])
+            }
         }
     }
 

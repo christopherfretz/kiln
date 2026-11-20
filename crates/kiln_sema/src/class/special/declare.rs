@@ -115,6 +115,19 @@ impl Sema<'_, '_> {
             })
     }
 
+    /// The operand of `explicit(e)` as parsed: one naming a pack outside
+    /// an expansion is diagnosed ([temp.variadic]/12, at its begin) and
+    /// dropped (`None`: the declaration is plainly `explicit`).
+    pub fn act_on_explicit_operand(&mut self, e: kiln_ast::ExprId) -> Option<kiln_ast::ExprId> {
+        let at = self.begin_loc(e);
+        let bad = self.diagnose_unexpanded_operand_written(
+            crate::templ::pack::PackOperand::Expr(e),
+            "expression",
+            at,
+        );
+        (!bad).then_some(e)
+    }
+
     /// The value of `explicit(expr)` ([dcl.fct.spec]/4), as
     /// [`Sema::resolve_explicit`]: `None` when it is value-dependent.
     /// After an error the declaration is not explicit (clang leaves the

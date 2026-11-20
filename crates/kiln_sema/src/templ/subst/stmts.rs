@@ -261,8 +261,17 @@ impl Substituter<'_, '_, '_> {
                 }
                 let mut out = Vec::with_capacity(ds.len());
                 for (i, &d) in ds.iter().enumerate() {
-                    match self.local_decl(d) {
-                        Ok(x) => out.push(x),
+                    let r = match self.sema.kind_of(d) {
+                        // A pack expansion may declare nothing.
+                        DeclKind::Using | DeclKind::UnresolvedUsingValue => {
+                            let at = self.sema.ast.decls.get(d).loc();
+                            self.local_using_decl(d, at)
+                        }
+                        _ => self.local_decl(d).map(Some),
+                    };
+                    match r {
+                        Ok(Some(x)) => out.push(x),
+                        Ok(None) => {}
                         Err(f) => {
                             // This declaration and the ones after it are
                             // invalid; a later use is no new error. As
@@ -292,6 +301,10 @@ impl Substituter<'_, '_, '_> {
                         .map(|(&d, &v)| (v, self.sema.group_placeholder(d)))
                         .collect();
                     self.sema.check_auto_group(&items);
+                }
+                if out.is_empty() {
+                    // `using E<Ts>::A...;` with an empty pack.
+                    return Ok(self.sema.act_on_null_stmt(loc));
                 }
                 Ok(self.sema.act_on_decl_stmt(&out, loc))
             }
@@ -794,15 +807,36 @@ impl Substituter<'_, '_, '_> {
     /// `TemplateDeclInstantiator::VisitUsingDecl`): the qualifier is
     /// substituted and the declarator is redone in the instantiation's
     /// block scope, introducing its shadows there.
-    fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+    fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<Option<DeclId>> {
         let dname = self.sema.ast.decls.get(d).name();
         let pnns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         // Qualifier errors and the qualifier's notes are located where
         // the nested-name-specifier begins, not at the name.
         let qloc = self.qualifier_begin(pnns, loc);
-        let nns = self.nns(pnns, qloc)?;
         // The `using` keyword, where the declaration's notes point.
         let using_loc = self.sema.ast.decls.cold.begin_loc.get(d).copied().unwrap_or(loc);
+        let nns = match self.sema.ast.decls.cold.declarator_end.get(d).copied() {
+            // A pack expansion (`using E<Ts>::A...;`, [temp.variadic]/5):
+            // at block scope it may produce at most one declarator, as a
+            // second would redeclare the name ([namespace.udecl]/8;
+            // clang's `instantiateUnresolvedUsingDecl`); none declares
+            // nothing.
+            Some(ellipsis) => {
+                match self.expand_pattern_at(Some(ellipsis), |s| s.nns(pnns, qloc))? {
+                    crate::templ::pack::Expansion::Elements(v) => match v.as_slice() {
+                        [] => return Ok(None),
+                        &[one] => one,
+                        _ => {
+                            self.sema
+                                .error(DiagId::sema_using_decl_redeclaration_expansion, ellipsis);
+                            return Err(SubstFail);
+                        }
+                    },
+                    crate::templ::pack::Expansion::Unexpanded(x) => x,
+                }
+            }
+            None => self.nns(pnns, qloc)?,
+        };
         if self.nns_still_dependent(nns) {
             // Still dependent (a generic lambda's body inside a function
             // template specialization): the local stays unresolved, its
@@ -814,8 +848,13 @@ impl Substituter<'_, '_, '_> {
             if using_loc != loc {
                 let _ = self.sema.ast.decls.cold.begin_loc.insert(x, using_loc);
             }
+            if let Some(&l) = self.sema.ast.decls.cold.declarator_end.get(d)
+                && self.sema.operand_has_packs(crate::templ::pack::PackOperand::Nns(nns))
+            {
+                let _ = self.sema.ast.decls.cold.declarator_end.insert(x, l);
+            }
             self.sema.push_local(name, x);
-            return Ok(x);
+            return Ok(Some(x));
         }
         let ctx = self.nns_context(nns, qloc)?;
         // A using-declaration whose lookup finds nothing survives in the
@@ -826,7 +865,7 @@ impl Substituter<'_, '_, '_> {
             && self.sema.lookup_qualified_dn(ctx, dname, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc: qloc };
         let r = self.sema.act_on_using_declarator(using_loc, Some(q), dname, loc, if_exists, None);
-        r.ok_or(SubstFail)
+        r.map(Some).ok_or(SubstFail)
     }
 
     /// A declaration of a declaration statement.
@@ -853,7 +892,9 @@ impl Substituter<'_, '_, '_> {
                 let (name, at) = self.label_name(d)?;
                 Ok(self.sema.act_on_local_label(name, at))
             }
-            DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
+            DeclKind::Using | DeclKind::UnresolvedUsingValue => {
+                self.local_using_decl(d, loc)?.ok_or(SubstFail)
+            }
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the
             // instantiation's block scope for its dependent lookups.

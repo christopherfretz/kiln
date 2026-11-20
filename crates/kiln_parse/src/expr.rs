@@ -779,14 +779,28 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_cast(CastStyle::CStyle, ty, e, open, rparen))
     }
 
-    /// `sizeof...(name)` ([expr.sizeof]/5): Sema looks the pack up; the
-    /// unparenthesized form is unsupported.
+    /// `sizeof...(name)` ([expr.sizeof]/5): Sema looks the pack up. The
+    /// grammar requires the parentheses: `sizeof... name` is reported
+    /// with fix-its inserting them and recovers as if they were written
+    /// (clang `ParseUnaryExprOrTypeTraitExpression`).
     fn parse_sizeof_pack(&mut self, loc: Loc) -> PExpr {
-        let dots = self.bump().span.lo;
+        self.bump();
         if !self.at(Punct::LParen) {
-            // kiln-gap: GAP-013
-            self.unsupported("'sizeof...' without parentheses", dots);
-            return None;
+            let Some(name) = self.ident() else {
+                self.error_here(DiagId::parse_sizeof_parameter_pack);
+                return None;
+            };
+            let lparen = self.prev_end();
+            let name_loc = self.bump().span.lo;
+            let rparen = self.prev_end();
+            let d = self
+                .s
+                .diag(DiagId::parse_paren_sizeof_parameter_pack, lparen)
+                .arg(self.s.ast.symbols().as_str(name))
+                .fixit(kiln_diag::FixIt::insert(lparen, "("))
+                .fixit(kiln_diag::FixIt::insert(rparen, ")"));
+            self.emit(d);
+            return Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen));
         }
         let open = self.bump().span.lo;
         let Some(name) = self.ident() else {

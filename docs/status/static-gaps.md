@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-167 gaps at 266 sites; 109 of 56,766 g++.dg cases hit one at the
+154 gaps at 249 sites; 82 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate. 3 more entries (4 sites) use wording that
 matches clang's for a limit clang shares: they are listed as excluded and
 stay.
@@ -77,7 +77,7 @@ By family:
 | cg_cannot_mangle_expression | 1 | 5 | 9 |
 | codegen fallback | 34 | 39 | 7 |
 | drv_not_implemented | 3 | 3 | 0 |
-| parse_unsupported | 55 | 61 | 37 |
+| parse_unsupported | 50 | 56 | 31 |
 | pp_expr_unsupported | 1 | 3 | 0 |
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
@@ -85,14 +85,13 @@ By family:
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_conv_unsupported | 3 | 3 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
-| sema_unimplemented_template_feature | 42 | 51 | 56 |
+| sema_unimplemented_template_feature | 34 | 39 | 35 |
 | sema_vla_unsupported | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| template packs | 13 (GAP-001..GAP-013) | 17 | 27 | WP-1733 |
 | member templates | 6 (GAP-014..GAP-019) | 7 | 24 | WP-1734 |
 | init + conversions | 21 (GAP-020..GAP-040) | 22 | 24 | WP-1735 |
 | mangling | 1 (GAP-041..GAP-041) | 5 | 9 | WP-1736 |
@@ -110,19 +109,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-001 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: pack expansion in this context` | `crates/kiln_sema/src/templ/pack.rs::pack_reached` | 15 | WP-1733 |
-| GAP-002 | parse_unsupported | template packs | `attribute pack expansions is not supported yet` | `crates/kiln_parse/src/attr.rs::parse_cxx11_attributes_in` | 6 | WP-1733 |
-| GAP-003 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: pack expansion` | `crates/kiln_sema/src/templ/subst/exprs.rs::ex`, `crates/kiln_sema/src/templ/subst/exprs.rs::written_arg`, `crates/kiln_sema/src/templ/subst/mod.rs::template_arg`, `crates/kiln_sema/src/templ/subst/types.rs::ty_node` | 3 | WP-1733 |
-| GAP-004 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: sizeof... of this pack` | `crates/kiln_sema/src/templ/pack.rs::size_of_pack` | 3 | WP-1733 |
-| GAP-005 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: template argument deduction for a pack` | `crates/kiln_sema/src/templ/deduce.rs::deduce_arg`, `crates/kiln_sema/src/templ/deduce.rs::deduce_structural` | 0 | WP-1733 |
-| GAP-006 | parse_unsupported | template packs | `a mem-initializer pack expansion is not supported yet` | `crates/kiln_sema/src/class/ctorinit.rs::act_on_mem_initializer` | 0 | WP-1733 |
-| GAP-007 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: a mem-initializer pack expansion of an enclosing pack` | `crates/kiln_sema/src/templ/subst/exprs.rs::mem_initializer` | 0 | WP-1733 |
-| GAP-008 | parse_unsupported | template packs | `pack expansions in a base-specifier list is not supported yet` | `crates/kiln_sema/src/class/members.rs::attach_bases_annotated` | 0 | WP-1733 |
-| GAP-009 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: base pack expansion` | `crates/kiln_sema/src/templ/class.rs::class_bases` | 0 | WP-1733 |
-| GAP-010 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: this using-declaration pack expansion` | `crates/kiln_sema/src/templ/class.rs::member_using` | 0 | WP-1733 |
-| GAP-011 | parse_unsupported | template packs | `a pack expansion in a non-member using-declaration is not supported yet` | `crates/kiln_sema/src/using.rs::act_on_using_declarator` | 0 | WP-1733 |
-| GAP-012 | sema_unimplemented_template_feature | template packs | `kiln: not yet implemented: capture packs in templates` | `crates/kiln_sema/src/templ/subst/lambda.rs::lambda_captures` | 0 | WP-1733 |
-| GAP-013 | parse_unsupported | template packs | `'sizeof...' without parentheses is not supported yet` | `crates/kiln_parse/src/expr.rs::parse_sizeof_pack` | 0 | WP-1733 |
 | GAP-014 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: member templates` | `crates/kiln_sema/src/templ/subst/exprs.rs::nttp_ref`, `crates/kiln_sema/src/templ/subst/mod.rs::template_name` | 15 | WP-1734 |
 | GAP-015 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: {k} members of class templates` ({k}: the 33 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/class.rs::member` | 9 | WP-1734 |
 | GAP-016 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: member templates of kind {k}` ({k}: the 53 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/member.rs::member_template_pattern` | 0 | WP-1734 |

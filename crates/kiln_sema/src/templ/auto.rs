@@ -553,8 +553,12 @@ impl Sema<'_, '_> {
             }
         } else {
             let list = self.ast.types.arg_list(&args);
-            // `C auto` names `C<T, args...>`, completed with C's defaults.
-            self.concept_default_args(c, list, loc)
+            // `C auto` names `C<T, args...>`, completed with C's defaults;
+            // the arguments of a trailing parameter pack grouped into one
+            // pack argument ([temp.arg.general]/4), as converted
+            // arguments are (`sizeof...(Ts)` in `C2<T> auto`).
+            let list = self.concept_default_args(c, list, loc);
+            self.concept_mapping_args(c, list)
         };
         let sat = self.check_concept(c, list, loc);
         if self.sat_ok(sat) {

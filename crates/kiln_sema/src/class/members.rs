@@ -687,12 +687,8 @@ impl Sema<'_, '_> {
                 });
                 continue;
             }
-            if s.pack_expansion {
-                // kiln-gap: GAP-008
-                self.unsupported("pack expansions in a base-specifier list", s.loc);
-                dropped = true;
-                continue;
-            }
+            // A pack expansion naming no pack was diagnosed, and made a
+            // plain base, as it was parsed (`check_base_specifier_packs`).
             let Some(b) = self.ast.types.as_record(s.ty) else {
                 self.error(DiagId::sema_base_not_class, s.loc);
                 self.invalidate_defining(r);

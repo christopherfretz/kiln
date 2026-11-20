@@ -49,6 +49,14 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return self.invalid_noexcept_spec(loc);
         }
+        // [temp.variadic]/12, at the operand.
+        if self.diagnose_unexpanded_operand_written(
+            crate::templ::pack::PackOperand::Expr(e),
+            "expression",
+            start,
+        ) {
+            return self.invalid_noexcept_spec(loc);
+        }
         if self.expr_is_value_dependent(e) {
             let p = self.dependent_profile(e);
             return ExcSpec::NoexceptExpr { expr: e, value: NoexceptValue::Dependent(p) };

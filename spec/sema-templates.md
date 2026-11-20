@@ -1217,18 +1217,39 @@ type parameter named `auto:N`, as in clang's dump.
 | template parameter pack that is a pack expansion | `template<T... v>` | §2.1 | yes |
 | initializer-list / call arguments | `f(a...)`, `{a...}`, `T(a...)` | expression-list | yes |
 | braced-init-list pattern ([temp.variadic]/5.4, WP-332) | `{{t, 1}...}`, `f({t, 1}...)`, `: m{{t, 1}...}`, `{.m = {t}...}` | `parse_init_list` / expression-list: `act_pack_expansion_list` keeps the list unanalyzed (an `InitListExpr` of type `void`) under a `PackExpansionExpr`; instantiation (`init_items`, `written_list`, `call_arg_list`) rebuilds one braced-init-list (or braced argument) per element | yes |
-| base-specifier-list | `struct D : B<T>... {}` | base clause (WP-065) | yes |
-| mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065) | yes |
+| base-specifier-list | `struct D : B<T>... {}` | base clause (WP-065); `Sema::check_base_specifier_packs` at parse; a pack of an enclosing level kept by `class_bases` (a local class of a generic lambda, WP-1733) | yes |
+| mem-initializer-list | `D() : B<T>(0)... {}` | ctor-initializer (WP-065); `Sema::check_mem_initializer_packs` at parse; a pack of a level not substituted yet (a constructor of a member class template) keeps the expansion (`Substituter::mem_initializer`, WP-1733) | yes |
 | template-argument-list | `X<T...>` | §2.2 | yes |
-| using-declarator-list | `using B<T>::f...;` | using-decl (WP-062) | yes |
+| using-declarator-list | `using B<T>::f...;` | using-decl (WP-062); a conversion-function name `using Ts::operator typename Ts::type...;`, and at block scope (`local_using_decl`: at most one element, else "using declaration pack expansion at block scope produces multiple values"; none declares nothing; WP-1733) | yes |
 | alignment-specifier | `alignas(T...)`, `alignas(N...)` | `parse_alignas`; one `ALIGNED` per element at instantiation (spec/sema.md §4.5, WP-302) | yes |
 | lambda capture | `[t...]`, `[...x = t]` | WP-075 | yes |
-| `sizeof...` | `sizeof...(T)` | primary expression | yes |
+| `sizeof...` | `sizeof...(T)` | primary expression; `sizeof... T` is "missing parentheses around the size of parameter pack 'T'" with fix-its, recovered as `sizeof...(T)` (WP-1733) | yes |
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
 | pack-index | `t...[0]`, `T...[0]` | postfix and type | yes |
-| attribute-list | `[[a...]]` | — | rejected, as clang |
+| attribute-list | `[[a...]]` | `parse_cxx11_attributes_in`: "attribute 'a' cannot be used as an attribute pack" at the token after the `...` ([dcl.attr.grammar]/4: no attribute allows one), the attribute kept; an argument naming a pack is unexpanded at definition (`Sema::check_attribute_arg_packs`; WP-1733) | rejected, as clang |
 | structured-binding pack | `auto [...xs] = e` | decomposition declarator (P1061, §7.1) | yes |
 | friend pack | `friend T...;` | friend-type-specifier-list (P2893, §7.1) | yes |
+
+**Declaration sites** (WP-1733, clang `DiagnoseUnexpandedParameterPack`
+and `ActOnMemInitializer`). A base-specifier, a mem-initializer and a
+using-declarator with a `...` whose pattern names no pack report
+`sema_pack_expansion_without_packs` at the `...` and go on as if it were
+absent. A mem-initializer `m(args)...` that lookup in the class finds a
+data member for is "pack expansion for initialization of member 'm'"
+(`sema_pack_expansion_member_init`), in a template too ([class.base.init]/1:
+only a base-initializer is a pack expansion), and goes on as plain. Without
+a `...`, a pack named outside an expansion is reported at definition
+([temp.variadic]/12) with clang's context word: "base type" (the
+base-specifier's begin), "enumerator value", "using declaration" (the
+nested-name-specifier, or the conversion type), "bit-field size", "fixed
+underlying type", "expression" (an explicit-specifier, a
+noexcept-specifier, an attribute argument), "initializer" (a
+mem-initializer's class or initializer, at its `(` or `{`) and "declaration
+type" (a placeholder's type-constraint `K<Ts> auto`); the declaration (or
+mem-initializer, counted as failed) is dropped as clang drops it.
+`Sema::diagnose_unexpanded_operand_written` does each check (nothing
+while instantiating; in a lambda only its own packs, the enclosing
+scope's being diagnosed at the full-expression).
 
 A pattern that names no unexpanded pack is "pack expansion does not
 contain any unexpanded parameter packs" at the `...`
@@ -6679,8 +6700,11 @@ The fold and expansion patterns detect a partial element through
 `element_expr` (the expression analogue of `element_ty`): an element
 that, after substitution with a pack index, still names an unexpanded
 pack is rebuilt in keep mode as one unexpanded expansion. A
-`PackExpansionExpr` pattern met in keep mode is still "not yet
-implemented". An expression pack expansion in a template argument list
+`PackExpansionExpr`, `PackExpansion` type or template-template
+expansion pattern met in keep mode is substituted with its substituted
+packs kept (`kept_pack_pattern`, clang's `TransformPackExpansion`
+rebuild) and stays one expansion of the rebuilt pattern (WP-1733:
+`T... x, decltype(x)... y`, `template<Ts... Vs>` of a member template). An expression pack expansion in a template argument list
 uses the same detection (`expand_arg` → `element_expr`, WP-669):
 `B<P<Ts, Us>::value...>` in a member template of `A<Ts...>`, met while
 the class is instantiated and only `Ts` is known, stays one partially

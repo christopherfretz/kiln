@@ -20,6 +20,7 @@ parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', 
 parse_asm_string_kind = Error (1) "cannot use {0:unicode|wide|an empty} string literal in 'asm'";
 parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
 parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an argument list";
+parse_attribute_forbids_ellipsis = Error (1) "attribute '{0}' cannot be used as an attribute pack";
 parse_attribute_ignored = Warning [IgnoredAttributes] (1) "'{0}' attribute ignored";
 parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
 parse_attribute_wrong_arg_count = Error (2) "'{0}' attribute takes {1:no arguments|one argument}";
@@ -168,6 +169,7 @@ parse_missing_type_specifier = Error (0) "a type specifier is required for all d
 parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
 parse_multiple_template_declarators = Error (1) "{0:a template declaration|an explicit template specialization|an explicit template instantiation} can only {0:declare|declare|instantiate} a single entity";
 parse_only_constructors_take_base_inits = Error (0) "only constructors take base initializers";
+parse_paren_sizeof_parameter_pack = Error (1) "missing parentheses around the size of parameter pack '{0}'";
 parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
 parse_pragma_attribute_duplicate_subject = Error (1) "duplicate attribute subject matcher '{0}'";
 parse_pragma_attribute_expected_attribute = Error (0) "expected an attribute after '('";
@@ -210,6 +212,7 @@ parse_requires_clause_needs_parens = Error (0) "parentheses are required around 
 parse_requires_expr_expected_type_constraint = Error (0) "expected concept name with optional arguments";
 // [temp.names]/1, [expr.prim.splice] (WP-830): a splice used as a whole
 // template-argument must be parenthesized or prefixed with `typename`/`template`.
+parse_sizeof_parameter_pack = Error (0) "expected parenthesized parameter pack name in 'sizeof...' expression";
 parse_splice_template_arg_unparenthesized = Error (0) "unparenthesized splice expression cannot be used as a template argument";
 parse_static_inline_explicit_inst_ignored = Warning [StaticInlineExplicitInstantiation] (1) "ignoring '{0:static|inline}' keyword on explicit template instantiation";
 parse_static_lambda_captures = Error (0) "a static lambda cannot have any captures";

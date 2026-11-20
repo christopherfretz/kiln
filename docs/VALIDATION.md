@@ -233,6 +233,12 @@ included). The defects found so far, each with the test that records it:
   of 'x' in the global module follows declaration in module m`); clang 22
   and kiln accept it. `module.interface/export-member-template-var-run.cpp`
   carries `requires: clang>=22` (WP-1159).
+- clang 22 crashes (`Sema::SubstBaseSpecifiers`) on a base-specifier pack
+  expansion naming a generic lambda's own pack (`struct L :
+  decltype(xs)...`) in a local class of the lambda inside a function
+  template; clang 19 and kiln accept it.
+  `temp.variadic/p5-base-pack-generic-lambda-local-class-run.cpp` carries
+  `requires: clang<22` (WP-1733).
 - clang 19 sometimes recurses without bound in `AutoType::Profile` (a
   segfault) on a placeholder type-constraint whose argument names an
   earlier *constrained* placeholder parameter (`template <any auto R,

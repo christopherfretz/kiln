@@ -208,7 +208,10 @@ impl Substituter<'_, '_, '_> {
                 // A simple-capture pack `ts...` / `&ts...`
                 // ([expr.prim.lambda.capture]/18): one capture per
                 // parameter the function parameter pack expanded to.
-                let params = match c.var.filter(|_| !c.init).and_then(|v| self.locals.get(&v)) {
+                // A capture pack names a variable (the parser rejected
+                // anything else, so it has none only after an error).
+                let Some(pv) = c.var.filter(|_| !c.init) else { return Err(SubstFail) };
+                let params = match self.locals.get(&pv) {
                     Some(&DeclOrPack::Pack(l)) => {
                         self.sema.ast.lists.iter::<kiln_ast::DeclId>(l).collect::<Vec<_>>()
                     }
@@ -216,20 +219,22 @@ impl Substituter<'_, '_, '_> {
                     // generic lambda's parameter pack while the enclosing
                     // template is instantiated) and stays a capture pack.
                     Some(&DeclOrPack::Decl(v)) if self.sema.is_pack_decl(v) => {
-                        let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
-                        intro.captures.push(LambdaCaptureSpec {
-                            kind: c.kind,
-                            name,
-                            loc: c.loc,
-                            end: Loc::INVALID,
-                            ellipsis: Some(c.ellipsis),
-                            init: None,
-                            var: Some(v),
-                        });
+                        intro.captures.push(self.capture_pack_kept(c, v));
                         continue;
                     }
-                    // kiln-gap: GAP-012
-                    _ => return self.unimplemented("capture packs in templates", c.loc),
+                    // Not a local of this substitution: the pack as
+                    // instantiated elsewhere (clang `FindInstantiatedDecl`),
+                    // or a failed local's (a structured binding pack whose
+                    // declaration failed, already diagnosed: the capture
+                    // fails too).
+                    _ => {
+                        let v = self.find_instantiated_decl(pv, c.loc)?;
+                        if self.sema.is_pack_decl(v) {
+                            intro.captures.push(self.capture_pack_kept(c, v));
+                            continue;
+                        }
+                        vec![v]
+                    }
                 };
                 for v in params {
                     let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
@@ -284,6 +289,21 @@ impl Substituter<'_, '_, '_> {
             });
         }
         Ok(init_vars)
+    }
+
+    /// Simple-capture pack `c` kept as a capture pack of `v` (a pack of
+    /// a level not substituted yet).
+    fn capture_pack_kept(&self, c: &LambdaCapture, v: kiln_ast::DeclId) -> LambdaCaptureSpec {
+        let name = self.sema.ast.decls.get(v).name().as_ident().map(|s| (s, c.loc));
+        LambdaCaptureSpec {
+            kind: c.kind,
+            name,
+            loc: c.loc,
+            end: Loc::INVALID,
+            ellipsis: Some(c.ellipsis),
+            init: None,
+            var: Some(v),
+        }
     }
 
     /// The initializer of pattern init-capture variable `v` with its

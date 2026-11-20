@@ -12,6 +12,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 - Every known-incomplete language corner is listed in
   docs/status/static-gaps.md and a lint keeps the list exact (WP-1719).
+- Pack expansions in the contexts that reported "not yet implemented"
+  (WP-1733): a mem-initializer pack expansion of a member class
+  template's own pack, a using-declarator pack expansion at block scope
+  and of a conversion function, a
+  base-specifier pack naming a generic lambda's pack in a local class, a
+  pack expansion nested in a partly substituted pattern
+  (`T... x, decltype(x)... y`), deduction against partly substituted pack
+  expansions, and a type-constraint of a concept whose last parameter is a
+  pack (`C<T> auto`).
+- A pack named outside an expansion in a template's declarations is
+  diagnosed when the template is defined, as clang does: a base type, an
+  enumerator value, a using-declaration, a bit-field width, a fixed
+  underlying type, an explicit- or noexcept-specifier, a mem-initializer
+  and an attribute argument (WP-1733).
+
+### Fixed
+
+- `sizeof... T`, an attribute pack expansion `[[a...]]` and a
+  mem-initializer pack expansion that initializes a member or names no
+  pack are reported with clang's diagnostics instead of "not supported
+  yet"; a capture pack naming a structured binding pack whose declaration
+  failed no longer reports "not yet implemented" (WP-1733).
 
 ## [1.3.0] - 2026-11-20
 

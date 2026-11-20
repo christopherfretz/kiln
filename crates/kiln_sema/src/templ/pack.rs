@@ -180,8 +180,20 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         let Some(i) = self.pack_index else {
-            // kiln-gap: GAP-001
-            return self.unimplemented("pack expansion in this context", loc);
+            // [temp.variadic]/12: a pack reached outside every expansion
+            // is named where no `...` expands it. Each such context is
+            // diagnosed when the template is parsed (a base-specifier, an
+            // enumerator value, a bit-field size, a fixed underlying
+            // type, a using-declarator, `explicit` and `noexcept`
+            // operands, a lambda's body); this reports one those checks
+            // do not see, as they would, rather than leaving the
+            // instantiation silently invalid.
+            let n = name(self).name;
+            let list =
+                if n.is_empty() { " '__integer_pack'".to_owned() } else { format!(" '{n}'") };
+            let d = self.sema.diag(DiagId::sema_unexpanded_pack, loc).arg("expression").arg(list);
+            self.sema.emit(d);
+            return Err(SubstFail);
         };
         if let Some((len, first)) = self.pack.expanding.clone()
             && len != n
@@ -855,7 +867,7 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         let len = if let Some(&DeclOrPack::Pack(l)) = self.locals.get(&d) {
-            Some(self.sema.ast.lists.len(l))
+            self.sema.ast.lists.len(l)
         } else if let Some(&DeclOrPack::Decl(x)) = self.locals.get(&d) {
             // A function parameter pack that stays one (a generic
             // lambda's, its own levels retained).
@@ -869,9 +881,15 @@ impl Substituter<'_, '_, '_> {
                         if elems.iter().any(|&x| self.sema.is_pack_expansion_arg(x)) {
                             return self.size_of_partial_pack(&elems, e, loc, end);
                         }
-                        Some(elems.len())
+                        elems.len()
                     }
-                    _ => None,
+                    // An argument not grouped into a pack stands for a
+                    // pack of itself, as `pack_element` substitutes it;
+                    // an expansion for the pack it expands.
+                    _ if self.sema.is_pack_expansion_arg(a) => {
+                        return self.size_of_partial_pack(&[a], e, loc, end);
+                    }
+                    _ => 1,
                 },
                 ArgLookup::Retain(_) => return Ok(e),
                 ArgLookup::Missing => return Err(SubstFail),
@@ -879,8 +897,6 @@ impl Substituter<'_, '_, '_> {
         } else {
             return Ok(e);
         };
-        // kiln-gap: GAP-004
-        let Some(len) = len else { return self.unimplemented("sizeof... of this pack", loc) };
         // Gap (spec §7.4): an `IntegerLiteral` of type `size_t` stands
         // for the substituted `SizeOfPackExpr` (its dump differs).
         let _ = end;
@@ -940,6 +956,8 @@ impl Substituter<'_, '_, '_> {
 pub(crate) enum PackOperand {
     Expr(ExprId),
     Type(QualType),
+    /// A nested-name-specifier (`Ts::` of a using-declarator).
+    Nns(kiln_ast::NnsId),
 }
 
 impl Sema<'_, '_> {
@@ -968,6 +986,9 @@ impl Sema<'_, '_> {
                 self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
             }
             PackOperand::Type(t) => self.has_unexpanded_pack(t),
+            PackOperand::Nns(n) => {
+                self.ast.types.nns_flags(n).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
+            }
         }
     }
 
@@ -980,6 +1001,7 @@ impl Sema<'_, '_> {
             match op {
                 PackOperand::Expr(e) => self.expr_packs(e, &mut packs, 0),
                 PackOperand::Type(t) => self.type_packs(t, &mut packs, 0),
+                PackOperand::Nns(n) => self.nns_packs(n, &mut packs, 0),
             }
         }
         packs
@@ -1153,18 +1175,48 @@ impl Sema<'_, '_> {
         what: &'static str,
         at: Loc,
     ) -> bool {
-        if !self.inst.stack.is_empty() || !self.has_unexpanded_pack(ty) {
+        self.diagnose_unexpanded_operand_written(PackOperand::Type(ty), what, at)
+    }
+
+    /// [temp.variadic]/12 for an operand written in a template: a type,
+    /// expression or nested-name-specifier of a declaration (a
+    /// base-specifier's "base type", an "enumerator value", a
+    /// using-declarator's "using declaration"; clang's
+    /// `DiagnoseUnexpandedParameterPack` with the matching
+    /// `UnexpandedParameterPackContext`). In a lambda body only the
+    /// lambda's own packs are diagnosed; an enclosing scope's make the
+    /// lambda-expression contain an unexpanded pack
+    /// ([`Sema::lambda_unexpanded`]), diagnosed at its full-expression
+    /// unless an expansion encloses it. A substituted operand is not
+    /// checked (§7.2). True after the diagnostic.
+    pub(crate) fn diagnose_unexpanded_operand_written(
+        &mut self,
+        op: PackOperand,
+        what: &'static str,
+        at: Loc,
+    ) -> bool {
+        if !self.inst.stack.is_empty() || !self.operand_has_packs(op) {
             return false;
         }
         if !self.lambdas.is_empty() {
-            let local = self.lambda_unexpanded(PackOperand::Type(ty));
+            let local = self.lambda_unexpanded(op);
             if local.is_empty() {
                 return false;
             }
             self.report_unexpanded_packs(&local, what, at);
             return true;
         }
-        self.diagnose_unexpanded_pack(PackOperand::Type(ty), what, at)
+        self.diagnose_unexpanded_pack(op, what, at)
+    }
+
+    /// An expression argument of an attribute, at its parse
+    /// ([temp.variadic]/12): no attribute but `annotate` takes a pack
+    /// expansion, so a pack it names is reported ("expression contains
+    /// unexpanded parameter pack 'T'"); returns false then, and the
+    /// attribute is dropped.
+    pub fn check_attribute_arg_packs(&mut self, e: ExprId) -> bool {
+        let at = self.begin_loc(e);
+        !self.diagnose_unexpanded_operand_written(PackOperand::Expr(e), "expression", at)
     }
 
     /// The packs expression `e` names outside expansions, in order.
@@ -1347,6 +1399,24 @@ impl Sema<'_, '_> {
                 self.type_packs(p.ret(), out, depth + 1);
                 for &x in t.params(&p) {
                     self.type_packs(x, out, depth + 1);
+                }
+                let noexcept = match t.exc_spec(&p) {
+                    kiln_ast::types::ExcSpec::NoexceptExpr { expr, .. } => Some(expr),
+                    kiln_ast::types::ExcSpec::DependentNoexcept(pr) => t.profile_expr(pr),
+                    _ => None,
+                };
+                if let Some(e) = noexcept {
+                    self.expr_packs(e, out, depth + 1);
+                }
+            }
+            // `C<Ts> auto`: the type-constraint's arguments.
+            TypeView::Auto { args: Some(args), .. } => {
+                for &a in t.args(args) {
+                    match a.view() {
+                        ArgView::Type(x) => self.type_packs(x, out, depth + 1),
+                        ArgView::Expr { expr, .. } => self.expr_packs(expr, out, depth + 1),
+                        _ => {}
+                    }
                 }
             }
             TypeView::DependentName { nns, .. } => self.nns_packs(nns, out, depth + 1),

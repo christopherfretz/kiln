@@ -6984,6 +6984,15 @@ impl Sema<'_, '_> {
         if self.is_err_expr(w) {
             return None;
         }
+        // [temp.variadic]/12 (clang's `UPPC_BitFieldWidth`, at the width).
+        let at = self.begin_loc(w);
+        if self.diagnose_unexpanded_operand_written(
+            crate::templ::pack::PackOperand::Expr(w),
+            "bit-field size",
+            at,
+        ) {
+            return None;
+        }
         let t = &self.ast.types;
         if !(self.is_dependent_type(ty)
             || t.is_integral(ty)
@@ -9807,6 +9816,15 @@ impl Sema<'_, '_> {
     /// instantiated dependent one is checked again in [`Self::act_on_tag`].
     pub fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) -> Option<QualType> {
         if let Some(f) = fixed {
+            // [temp.variadic]/12: clang's `ActOnTag` reports
+            // `UPPC_FixedUnderlyingType` and goes on with `int`.
+            if self.diagnose_unexpanded_operand_written(
+                crate::templ::pack::PackOperand::Type(f),
+                "fixed underlying type",
+                loc,
+            ) {
+                return Some(QualType::INT);
+            }
             let bit_int = matches!(self.ast.types.canonical_view(f), TypeView::BitInt { .. });
             let ok = (self.ast.types.is_integral(f) && !bit_int)
                 || self.is_error_type(f)
@@ -11182,6 +11200,16 @@ impl Sema<'_, '_> {
         let Some(build) = self.enums.last().cloned() else {
             return self.ast.tu;
         };
+        // [temp.variadic]/12: a value naming a pack is diagnosed and
+        // dropped (clang's `CheckEnumConstant`, `UPPC_EnumeratorValue`).
+        let init = init.filter(|&v| {
+            let at = self.begin_loc(v);
+            !self.diagnose_unexpanded_operand_written(
+                crate::templ::pack::PackOperand::Expr(v),
+                "enumerator value",
+                at,
+            )
+        });
         let e = build.decl;
         let scoped = self.is_scoped_enum(e);
         // Redeclaration ([basic.scope.scope]).
