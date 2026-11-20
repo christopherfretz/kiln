@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
         let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
         let won = match out {
-            OvlOutcome::Success(b) if !set.uncertain => Some(set.cand(b).func()),
+            OvlOutcome::Success(b) => Some(set.cand(b).func()),
             _ => None,
         };
         self.end_set(set);
@@ -309,7 +309,6 @@ impl Sema<'_, '_> {
         if self.kind_of(f) != DeclKind::CXXMethod
             || self.ast.decls.get(f).has(DeclFlags::INVALID)
             || self.has_explicit_object(f)
-            || self.ast.decls.cold.requires_clause.contains(f)
             || self.ast.templates.trailing_requires.get(f).is_some()
         {
             return false;

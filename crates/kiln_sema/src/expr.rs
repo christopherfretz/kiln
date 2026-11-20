@@ -3555,10 +3555,12 @@ impl Sema<'_, '_> {
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
                 self.inc_dec(op, e, loc)
             }
-            _ => {
-                // kiln-gap: GAP-055
-                self.unsupported(&format!("unary operator '{}'", op.spelling()), loc);
-                self.recover_err(&[e], loc)
+            // `__extension__` is built by `act_on_unary` before any
+            // conversion, and a `co_await` is a `CoawaitExpr` whose
+            // `operator co_await` is looked up by `operator_coawait`: sema
+            // never forms a built-in unary operator of either here.
+            UnaryOp::Extension | UnaryOp::Coawait => {
+                unreachable!("built-in unary operator '{}'", op.spelling())
             }
         }
     }
@@ -4117,7 +4119,16 @@ impl Sema<'_, '_> {
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
-            _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
+            BinaryOp::MulAssign
+            | BinaryOp::DivAssign
+            | BinaryOp::RemAssign
+            | BinaryOp::AddAssign
+            | BinaryOp::SubAssign
+            | BinaryOp::ShlAssign
+            | BinaryOp::ShrAssign
+            | BinaryOp::AndAssign
+            | BinaryOp::XorAssign
+            | BinaryOp::OrAssign => self.compound_assign(op, l, r, loc),
             BinaryOp::Comma => self.comma_binary(l, r, loc),
             BinaryOp::LAnd | BinaryOp::LOr => self.logical_binary(op, l, r, loc),
             BinaryOp::Add | BinaryOp::Sub => self.additive(op, l, r, loc),
@@ -4173,11 +4184,6 @@ impl Sema<'_, '_> {
             | BinaryOp::NE => self.comparison(op, l, r, loc),
             BinaryOp::Cmp => self.builtin_three_way(l, r, loc),
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
-            _ => {
-                // kiln-gap: GAP-056
-                self.unsupported(&format!("operator '{}'", op.spelling()), loc);
-                self.recover_err(&[l, r], loc)
-            }
         }
     }
 
@@ -5283,9 +5289,12 @@ impl Sema<'_, '_> {
                     continue;
                 }
                 match conv::implicit_convert(self, *a, ty, ConvCtx::Initialization) {
-                    // The elidable copy of a prvalue arm is bound as the
-                    // arm was (clang: a bound `InitializeTemporary`).
-                    Ok(x) if !self.is_err_expr(x) && !glvalue && x != *a => {
+                    // The copy is a temporary destroyed at the end of the
+                    // full-expression unless it initializes an object
+                    // ([class.temporary]/4; clang: a bound
+                    // `InitializeTemporary`), for a glvalue arm's copy as
+                    // for the elidable copy of a prvalue arm.
+                    Ok(x) if !self.is_err_expr(x) && x != *a => {
                         *a = self.maybe_bind_temporary(x);
                     }
                     Ok(x) if !self.is_err_expr(x) => *a = x,

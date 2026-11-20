@@ -6585,6 +6585,20 @@ impl Compiler<'_> {
                 self.patch_here(end);
                 self.bcp_fold_exit(fold);
             }
+            // GNU `x ?: y` of class type: `x` is evaluated (a class
+            // prvalue materialized) once, then converted to `bool`; the
+            // chosen arm initializes the object ([expr.cond]).
+            ExprKind::BinaryConditionalOperator => {
+                let [common, cond, t, f] = self.bind_common(e, Access::Read);
+                let c = self.rv(cond);
+                let j = self.jmp_if(c, false);
+                self.init(t, p, ty);
+                let end = self.jmp();
+                self.patch_here(j);
+                self.init(f, p, ty);
+                self.patch_here(end);
+                self.opaque.remove(&common);
+            }
             ExprKind::BinaryOperator if self.ast().exprs.binary_op(e) == BinaryOp::Comma => {
                 let [a, b] = self.ast().exprs.operands(e);
                 self.effect(a);
@@ -6648,7 +6662,6 @@ impl Compiler<'_> {
             | ExprKind::UnaryOperator
             | ExprKind::BinaryOperator
             | ExprKind::CompoundAssignOperator
-            | ExprKind::BinaryConditionalOperator
             | ExprKind::ArraySubscriptExpr
             | ExprKind::ParenExpr
             | ExprKind::CallExpr

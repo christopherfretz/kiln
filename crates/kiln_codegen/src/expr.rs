@@ -5317,29 +5317,15 @@ impl Cg<'_> {
             // arm initializes the destination in its own block.
             ExprKind::ConditionalOperator => {
                 let [a, b] = ast.exprs.cond_arms(e);
-                let c = self.sub(e);
-                if let Some(x) = self.fold_bool(c) {
-                    if x {
-                        self.prof_inc(Key::Expr(e));
-                    }
-                    return self.agg_visit(if x { a } else { b }, dest, zeroed);
-                }
-                let lb = self.f.fir.create_block();
-                let rb = self.f.fir.create_block();
-                let cont = self.f.fir.create_block();
-                let start = self.f.fir.cur();
-                self.branch_on_bool(c, lb, rb)?;
-                // Both arms see the same slot (`IsDestructed` included).
-                let destructed = self.f.dest_destructed;
-                self.emit_block(lb, false);
-                self.prof_inc(Key::Expr(e));
-                self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
-                self.br(cont);
-                self.emit_block(rb, false);
-                self.f.dest_destructed = destructed;
-                self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
-                self.emit_block(cont, false);
-                Ok(())
+                self.agg_conditional(e, self.sub(e), a, b, dest, zeroed)
+            }
+            // GNU `x ?: y` of class type: the common operand is evaluated
+            // (and a class prvalue materialized) once, then as above.
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.agg_conditional(e, c, a, b, dest, zeroed);
+                self.f.opaque.remove(&common);
+                r
             }
             ExprKind::StringLiteral => {
                 // A literal initializing a (possibly longer) char array:
@@ -5426,7 +5412,6 @@ impl Cg<'_> {
             | ExprKind::FunctionParmPackExpr
             | ExprKind::BinaryOperator
             | ExprKind::CompoundAssignOperator
-            | ExprKind::BinaryConditionalOperator
             | ExprKind::ParenListExpr
             | ExprKind::ImplicitCastExpr
             | ExprKind::CStyleCastExpr
@@ -5472,6 +5457,42 @@ impl Cg<'_> {
                 err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet"))
             }
         }
+    }
+
+    /// The class-typed conditional `e` (condition `c`, arms `a` and `b`)
+    /// into `dest`: each arm initializes the destination in its own
+    /// block (clang `AggExprEmitter::VisitAbstractConditionalOperator`).
+    fn agg_conditional(
+        &mut self,
+        e: ExprId,
+        c: ExprId,
+        a: ExprId,
+        b: ExprId,
+        dest: Addr,
+        zeroed: bool,
+    ) -> R<()> {
+        if let Some(x) = self.fold_bool(c) {
+            if x {
+                self.prof_inc(Key::Expr(e));
+            }
+            return self.agg_visit(if x { a } else { b }, dest, zeroed);
+        }
+        let lb = self.f.fir.create_block();
+        let rb = self.f.fir.create_block();
+        let cont = self.f.fir.create_block();
+        let start = self.f.fir.cur();
+        self.branch_on_bool(c, lb, rb)?;
+        // Both arms see the same slot (`IsDestructed` included).
+        let destructed = self.f.dest_destructed;
+        self.emit_block(lb, false);
+        self.prof_inc(Key::Expr(e));
+        self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
+        self.br(cont);
+        self.emit_block(rb, false);
+        self.f.dest_destructed = destructed;
+        self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
+        self.emit_block(cont, false);
+        Ok(())
     }
 
     /// The builtin three-way comparison `e` into the comparison-category

@@ -491,12 +491,6 @@ impl Sema<'_, '_> {
         }
         let (set, out, types, reversible) =
             self.oper_set(form, op, &ops, &brs, args.len(), loc, rewrites, true);
-        if set.uncertain {
-            // kiln-gap: GAP-053
-            self.unsupported("overload resolution with constraints", loc);
-            self.end_set(set);
-            return OperResult::Done(self.recover_err(args, loc));
-        }
         let spelling = match form {
             OperForm::Binary(b) => b.spelling(),
             OperForm::Unary(u) => u.spelling(),
@@ -752,9 +746,6 @@ impl Sema<'_, '_> {
         if self.ast.decls.function(d).is_none() {
             return;
         }
-        if self.ast.decls.cold.requires_clause.contains(d) {
-            set.uncertain = true;
-        }
         let (t1, t2) = (types[0], types.get(1).copied());
         if self.acceptable_nonmember(d, t1, t2) {
             self.add_candidate(set, d, found, CandidateKind::Function, IcsOptions::NONE);
@@ -852,9 +843,6 @@ impl Sema<'_, '_> {
             }
             if reversed && !self.should_add_reversed(d, ops[1]) {
                 continue;
-            }
-            if self.ast.decls.cold.requires_clause.contains(d) {
-                set.uncertain = true;
             }
             if reversed {
                 self.add_reversed(set, d, f, CandidateKind::Method, rewrite);

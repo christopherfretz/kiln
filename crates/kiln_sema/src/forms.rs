@@ -4,7 +4,7 @@
 //! `T()`, `T{...}`, `T(a, b)` ([expr.type.conv]).
 
 use kiln_ast::decl::TagKind;
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, ValueCategory};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
@@ -673,17 +673,26 @@ impl Sema<'_, '_> {
             return self.recover_err(&[common, rhs], loc);
         }
         let (cn, rn) = (*self.ast.exprs.get(common), *self.ast.exprs.get(rhs));
-        if self.ast.types.as_record(cn.ty()).is_some()
-            || self.ast.types.as_record(rn.ty()).is_some()
-        {
-            // kiln-gap: GAP-052
-            self.unsupported("the GNU '?:' operator on class types", loc);
-            return self.recover_err(&[common, rhs], loc);
-        }
         let keep = cn.value_category().is_glvalue()
             && cn.value_category() == rn.value_category()
             && self.ast.types.same_type(cn.ty(), rn.ty());
         let common = if keep { common } else { conv::usual_unary_conversions(self, common) };
+        // A class prvalue is materialized so that the condition and the
+        // second operand can both refer to the one object ([conv.rval];
+        // clang `ActOnConditionalOp`): `X() ?: y` constructs one `X`,
+        // converts it to `bool` ([expr.cond]/1, contextually) and, when
+        // true, yields that object as the second operand.
+        let common = {
+            let n = *self.ast.exprs.get(common);
+            if n.value_category() == ValueCategory::PRValue
+                && !n.deps().contains(ExprDeps::TYPE)
+                && (self.ast.types.as_record(n.ty()).is_some() || self.ast.types.is_array(n.ty()))
+            {
+                self.materialize_temporary(common, n.ty(), false)
+            } else {
+                common
+            }
+        };
         let ov = self.builder().opaque_value(common);
         let c = self.act_on_conditional(ov, ov, rhs, loc);
         if self.ast.exprs.get(c).kind() != ExprKind::ConditionalOperator {

@@ -744,7 +744,12 @@ than `ics2[k]` and the first applicable of:
    (clang `sameFunctionParameterTypeLists`; `best.rs::
    same_param_type_lists`), and `more_constrained(c1, c2)` (WP-073). A
    more constrained `operator<=>(const W&, const T&)` used reversed thus
-   beats `operator<(const T&, const W&)` before /2.8 (WP-1111);
+   beats `operator<(const T&, const W&)` before /2.8 (WP-1111). The
+   same comparison decides every candidate set: calls, member and
+   non-member operators, `operator->`, `operator()` and `operator[]`
+   (`tests/conformance/over.match.best/more-constrained-operators-*.cpp`,
+   WP-1738); a set with constrained candidates is never set aside as
+   undecided;
 7. /2.7 `c1` constructor of `D`, `c2` inherited from base `B` (or both
    inherited, `c1` from the more derived class), and for every argument
    the corresponding parameters have the same type

@@ -706,6 +706,16 @@ translation unit that fails costs about what it costs clang:
     name the first `x` with its errors reported, as in clang 19 and 22.
     `basic.lookup/invalid-redecl-recovery.cpp`,
     `basic.lookup.argdep/module-example.cpp`.
+    Class member access follows it too (WP-1738): a member function or
+    typedef-name redeclaring a member as a different kind of entity
+    ([basic.scope.scope]/4, "redefinition of 'm' as different kind of
+    symbol") is invalid (clang `MergeFunctionDecl`,
+    `MergeTypedefNameDecl`), and `s.m` drops invalid declarations while
+    a valid one is left, so it names the data member. Valid declarations
+    that are not all member functions or their templates (an unscoped
+    enumerator after member functions) are `reference to 'm' is
+    ambiguous` ([basic.lookup.general]/4).
+    `expr.ref/member-redefined-as-different-kind.cpp`.
     A function whose declaration is invalid (an unknown return or
     parameter type) is erroneous when named outside a call (clang's
     `BuildDeclarationNameExpr` makes such a name an error; a call
@@ -7321,7 +7331,16 @@ for them.
 - **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
   `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
-  type, `x` gets the usual unary conversions first.
+  type, `x` gets the usual unary conversions first (a class glvalue is
+  left as is). A class (or array) prvalue `x` is then materialized
+  ([conv.rval]), so the condition and the second operand refer to one
+  object: `x` is contextually converted to `bool` (an explicit
+  `operator bool` included) and the result follows [expr.cond]/4-7 with
+  `x` as the second operand, as clang's `ActOnConditionalOp` does. Codegen
+  and the Oven evaluate `x` once, also when the result initializes a
+  class object (WP-1738;
+  `tests/conformance/expr.cond/gnu-binary-conditional-class-*.cpp`,
+  `ast/expr.cond/gnu-binary-conditional-class.cpp`).
 - **Compound literals** `( T ) { ... }` (`act_on_compound_literal`;
   clang's `BuildCompoundLiteralExpr`): in C++ a prvalue (in C an
   lvalue, §1.0.1) `CompoundLiteralExpr` of the written type, holding the

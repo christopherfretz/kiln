@@ -287,9 +287,6 @@ pub(crate) struct OverloadCandidateSet {
     pub found: Vec<DeclId>,
     /// Parameter types of the candidate being added.
     pub params: Vec<QualType>,
-    /// A candidate has a *requires-clause*, which is not checked yet
-    /// (WP-073): the outcome is uncertain.
-    pub uncertain: bool,
     /// An operator set ([over.match.oper]): `object` is the first operand,
     /// which a non-member candidate takes as its first parameter.
     pub oper: bool,
@@ -339,7 +336,6 @@ impl Default for OverloadCandidateSet {
             target: QualType::ERROR,
             found: Vec::new(),
             params: Vec::new(),
-            uncertain: false,
             oper: false,
             note_extra_args: 0,
             builtin_op: None,
@@ -364,7 +360,6 @@ impl OverloadCandidateSet {
         self.target = QualType::ERROR;
         self.found.clear();
         self.params.clear();
-        self.uncertain = false;
         self.oper = false;
         self.note_extra_args = 0;
         self.builtin_op = None;

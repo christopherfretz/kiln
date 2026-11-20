@@ -626,48 +626,62 @@ impl Substituter<'_, '_, '_> {
                     // class object, [over.ref]/1): `operator->` selected
                     // again for the substituted object.
                     (OO::Arrow, &[a]) => self.sema.rebuild_operator_arrow(a, loc).ok_or(SubstFail),
+                    // The `operator co_await` call of an await-expression
+                    // ([expr.await]/3.3, [over.match.oper]/2): looked up
+                    // again for the substituted operand.
+                    (OO::Coawait, &[a]) => Ok(self.sema.operator_coawait(a, loc)),
+                    // [over.oper.unary], [over.inc]: a one-operand call
+                    // (a postfix `++`/`--` has the extra `0`) of a unary
+                    // operator function.
                     (_, &[a]) | (OO::PlusPlus | OO::MinusMinus, &[a, _]) => {
-                        match unary_of(op, args.len() == 2) {
-                            Some(u) => {
-                                self.sema.oper_override = self.sema.oper_rebuild_set(e);
-                                let r = self.sema.act_on_unary(u, a, loc);
-                                self.sema.oper_override = None;
-                                Ok(r)
-                            }
-                            // kiln-gap: GAP-054
-                            None => self.unimplemented("this overloaded operator", loc),
-                        }
+                        let Some(u) = unary_of(op, args.len() == 2) else {
+                            // Overload resolution forms a one-operand call
+                            // only of the operators above: `new`/`delete`
+                            // operator functions are never a
+                            // `CXXOperatorCallExpr` (a new- or
+                            // delete-expression, or a call `operator new(n)`
+                            // of a named function), and a binary-only
+                            // operator has two operands ([over.oper]/8).
+                            unreachable!("a one-operand call of operator {op:?}")
+                        };
+                        self.sema.oper_override = self.sema.oper_rebuild_set(e);
+                        let r = self.sema.act_on_unary(u, a, loc);
+                        self.sema.oper_override = None;
+                        Ok(r)
                     }
-                    // Every binary operator function, `->*` and `,`
-                    // included, names a built-in binary operator.
-                    (_, &[l, r]) => match binary_of(op) {
-                        Some(b) => {
-                            self.sema.oper_override = self.sema.oper_rebuild_set(e);
-                            let x = self.sema.act_on_binary(b, l, r, loc);
-                            self.sema.oper_override = None;
-                            Ok(x)
-                        }
-                        // kiln-gap: GAP-054
-                        None => self.unimplemented("this overloaded operator", loc),
-                    },
-                    // Not reached by a resolved call: `new`/`delete`
-                    // operator functions are never a `CXXOperatorCallExpr`
-                    // (a new/delete-expression, or a call `operator new(n)`
-                    // of a named function), and the `operator co_await` call
-                    // of a `CoawaitExpr` is formed again from the operand as
-                    // written ([expr.await]/3.3).
-                    // kiln-gap: GAP-054
-                    _ => self.unimplemented("this overloaded operator", loc),
+                    // [over.binary]: every two-operand call (the arms
+                    // above took `()`, `[]` and postfix `++`/`--`) is of a
+                    // binary operator function, `->*` and `,` included,
+                    // and names a built-in binary operator.
+                    (_, &[l, r]) => {
+                        let Some(b) = binary_of(op) else {
+                            unreachable!("a two-operand call of operator {op:?}")
+                        };
+                        self.sema.oper_override = self.sema.oper_rebuild_set(e);
+                        let x = self.sema.act_on_binary(b, l, r, loc);
+                        self.sema.oper_override = None;
+                        Ok(x)
+                    }
+                    // Only `()` and `[]` take other operand counts
+                    // ([over.call], [over.sub]), and the arms above took
+                    // them.
+                    (_, ops) => unreachable!("a {}-operand call of operator {op:?}", ops.len()),
                 }
             }
+            // [over.match.oper]/3.4, /8: a comparison rewritten to `==`
+            // or `<=>` (P2468's `==`/`!=` rules included) is formed again
+            // from the operator and the two operands as written, so the
+            // candidates, rewritten and synthesized, are looked up and
+            // ranked again for the substituted operands.
             ExprKind::CXXRewrittenBinaryOperator => {
-                let (op, l) = ex(self).rewritten_written(e);
-                let v = self.expr_list(l)?;
-                match v.as_slice() {
-                    &[l, r] => Ok(self.sema.act_on_binary(op, l, r, loc)),
-                    // kiln-gap: GAP-058
-                    _ => self.unimplemented("this rewritten comparison", loc),
-                }
+                let (op, list) = ex(self).rewritten_written(e);
+                let written: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(list).collect();
+                let &[l, r] = written.as_slice() else {
+                    unreachable!("a rewritten comparison keeps both written operands")
+                };
+                let l = self.expr(l)?;
+                let r = self.expr(r)?;
+                Ok(self.sema.act_on_binary(op, l, r, loc))
             }
             ExprKind::UnresolvedLookupExpr if self.sema.var_ttp_ref(e).is_some() => {
                 // `V<args>` with `V` a variable template template

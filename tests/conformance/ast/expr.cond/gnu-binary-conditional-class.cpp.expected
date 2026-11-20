@@ -1,0 +1,87 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl i 'int'
+| |-CXXConstructorDecl S 'void (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXConstructorDecl used S 'void (const S &)'
+| | `-ParmVarDecl 'const S &'
+| |-CXXDestructorDecl used ~S 'void () noexcept'
+| `-CXXConversionDecl used operator bool 'bool () const'
+|-FunctionDecl used make 'S (int)'
+| `-ParmVarDecl 'int'
+|-FunctionDecl lvalue 'S &(S &, S &)'
+| |-ParmVarDecl used a 'S &'
+| |-ParmVarDecl used z 'S &'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryConditionalOperator 'S' lvalue
+|       |-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+|       |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|       | `-CXXMemberCallExpr 'bool'
+|       |   `-MemberExpr '<bound member function type>' .operator bool
+|       |     `-ImplicitCastExpr 'const S' lvalue <NoOp>
+|       |       `-OpaqueValueExpr 'S' lvalue
+|       |         `-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+|       |-OpaqueValueExpr 'S' lvalue
+|       | `-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+|       `-DeclRefExpr 'S' lvalue ParmVar 'z' 'S &'
+|-FunctionDecl prvalue 'S ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'S'
+|       `-BinaryConditionalOperator 'S'
+|         |-MaterializeTemporaryExpr 'S' xvalue
+|         | `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+|         |   `-CallExpr 'S'
+|         |     |-ImplicitCastExpr 'S (*)(int)' <FunctionToPointerDecay>
+|         |     | `-DeclRefExpr 'S (int)' lvalue Function 'make' 'S (int)'
+|         |     `-IntegerLiteral 'int' 3
+|         |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|         | `-CXXMemberCallExpr 'bool'
+|         |   `-MemberExpr '<bound member function type>' .operator bool
+|         |     `-ImplicitCastExpr 'const S' xvalue <NoOp>
+|         |       `-OpaqueValueExpr 'S' xvalue
+|         |         `-MaterializeTemporaryExpr 'S' xvalue
+|         |           `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+|         |             `-CallExpr 'S'
+|         |               |-ImplicitCastExpr 'S (*)(int)' <FunctionToPointerDecay>
+|         |               | `-DeclRefExpr 'S (int)' lvalue Function 'make' 'S (int)'
+|         |               `-IntegerLiteral 'int' 3
+|         |-CXXBindTemporaryExpr 'S' (CXXTemporary)
+|         | `-CXXConstructExpr 'S' 'void (const S &)'
+|         |   `-ImplicitCastExpr 'const S' xvalue <NoOp>
+|         |     `-OpaqueValueExpr 'S' xvalue
+|         |       `-MaterializeTemporaryExpr 'S' xvalue
+|         |         `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+|         |           `-CallExpr 'S'
+|         |             |-ImplicitCastExpr 'S (*)(int)' <FunctionToPointerDecay>
+|         |             | `-DeclRefExpr 'S (int)' lvalue Function 'make' 'S (int)'
+|         |             `-IntegerLiteral 'int' 3
+|         `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+|           `-CallExpr 'S'
+|             |-ImplicitCastExpr 'S (*)(int)' <FunctionToPointerDecay>
+|             | `-DeclRefExpr 'S (int)' lvalue Function 'make' 'S (int)'
+|             `-IntegerLiteral 'int' 4
+`-FunctionDecl mixed 'S (S &)'
+  |-ParmVarDecl used a 'S &'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ExprWithCleanups 'S'
+        `-BinaryConditionalOperator 'S'
+          |-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+          |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+          | `-CXXMemberCallExpr 'bool'
+          |   `-MemberExpr '<bound member function type>' .operator bool
+          |     `-ImplicitCastExpr 'const S' lvalue <NoOp>
+          |       `-OpaqueValueExpr 'S' lvalue
+          |         `-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+          |-CXXBindTemporaryExpr 'S' (CXXTemporary)
+          | `-CXXConstructExpr 'S' 'void (const S &)'
+          |   `-ImplicitCastExpr 'const S' lvalue <NoOp>
+          |     `-OpaqueValueExpr 'S' lvalue
+          |       `-DeclRefExpr 'S' lvalue ParmVar 'a' 'S &'
+          `-CXXBindTemporaryExpr 'S' (CXXTemporary)
+            `-CallExpr 'S'
+              |-ImplicitCastExpr 'S (*)(int)' <FunctionToPointerDecay>
+              | `-DeclRefExpr 'S (int)' lvalue Function 'make' 'S (int)'
+              `-IntegerLiteral 'int' 9
