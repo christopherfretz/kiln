@@ -46,6 +46,11 @@ impl Cg<'_> {
         self.cx_elem(q).is_some()
     }
 
+    /// Whether `q` is `_Atomic(T)` with `T` complex.
+    pub(crate) fn is_atomic_complex(&self, q: QualType) -> bool {
+        self.ast.types.as_atomic(q).is_some_and(|v| self.is_complex(v))
+    }
+
     /// clang `emitAddrOfRealComponent` / `emitAddrOfImagComponent`: the
     /// address of part `i` of the complex object of type `q` at `a`.
     pub(crate) fn cx_part_addr(&mut self, a: Addr, q: QualType, i: u32) -> Addr {
@@ -59,7 +64,14 @@ impl Cg<'_> {
 
     /// clang `ComplexExprEmitter::EmitLoadOfLValue`: the wanted parts
     /// (both when volatile).
+    /// An `_Atomic` complex object is loaded whole, atomically (clang
+    /// `EmitLoadOfComplex` → `EmitAtomicLoad`, C17 6.2.6.1p9).
     pub(crate) fn cx_load(&mut self, a: Addr, q: QualType, ign: (bool, bool)) -> Cx {
+        if let Some(vq) = self.ast.types.as_atomic(q) {
+            let lv = LV { addr: a, q, bf: None, vidx: None, sel: None, tb: Tb::Type };
+            let (r, i) = self.atomic_cx_load(lv, vq);
+            return (Some(r), Some(i));
+        }
         let vol = self.is_volatile(q);
         let re = (!ign.0 || vol).then(|| {
             let p = self.cx_part_addr(a, q, 0);
@@ -73,7 +85,14 @@ impl Cg<'_> {
     }
 
     /// clang `EmitStoreOfComplex`.
+    /// An `_Atomic` complex object is stored whole, atomically (clang
+    /// `EmitStoreOfComplex` → `EmitAtomicStore`).
     pub(crate) fn cx_store(&mut self, (re, im): (V, V), a: Addr, q: QualType) {
+        if let Some(vq) = self.ast.types.as_atomic(q) {
+            let lv = LV { addr: a, q, bf: None, vidx: None, sel: None, tb: Tb::Type };
+            self.atomic_cx_store((re, im), lv, vq);
+            return;
+        }
         let vol = self.is_volatile(q);
         let rp = self.cx_part_addr(a, q, 0);
         let ip = self.cx_part_addr(a, q, 1);
@@ -132,10 +151,17 @@ impl Cg<'_> {
             {
                 self.emit_cx(ast.exprs.selected_operand(e).expect("match guard checked it"), ign)
             }
+            // clang `VisitExprWithCleanups`: the parts survive a shared
+            // cleanup block (`ForceCleanup({&Vals.first, &Vals.second})`;
+            // a `co_await` of an awaiter returning `_Complex`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_cx(self.sub(e), ign);
-                self.end_scope(sc);
+                let mut r = self.emit_cx(self.sub(e), ign);
+                match &mut r {
+                    Ok((Some(re), Some(im))) => self.end_scope_reload(sc, &mut [re, im]),
+                    Ok((Some(v), None) | (None, Some(v))) => self.end_scope_reload(sc, &mut [v]),
+                    _ => self.end_scope(sc),
+                }
                 r
             }
             // A glvalue's value is the address it designates (WP-640).
@@ -203,6 +229,26 @@ impl Cg<'_> {
                     None => err(self.loc_of(e), "a complex call without a complex result"),
                 }
             }
+            // clang `ComplexExprEmitter::VisitCoawaitExpr` /
+            // `VisitCoyieldExpr`: the `await_resume()` call's value
+            // ([expr.await]/5.4, an `await_resume` returning `_Complex`).
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                match self.emit_coawait(e, crate::coro::Want::Complex)? {
+                    crate::coro::Got::Cx(r, i) => Ok((Some(r), Some(i))),
+                    _ => unreachable!("emit_coawait(Want::Complex) yields Got::Cx"),
+                }
+            }
+            // clang `ComplexExprEmitter::VisitAtomicExpr`: the result
+            // temporary's parts (`__c11_atomic_load` of an `_Atomic
+            // _Complex`).
+            ExprKind::AtomicExpr => {
+                self.f.cx_ret = None;
+                self.emit_atomic_expr(e, None)?;
+                match self.f.cx_ret.take() {
+                    Some((r, i)) => Ok((Some(r), Some(i))),
+                    None => unreachable!("emit_atomic_expr leaves a complex result in cx_ret"),
+                }
+            }
             ExprKind::StmtExpr => {
                 self.f.cx_ret = None;
                 self.emit_stmt_expr(e)?;
@@ -236,11 +282,25 @@ impl Cg<'_> {
                 let (r, i) = self.cx_zero(q);
                 Ok((Some(r), Some(i)))
             }
+            // clang `ComplexExprEmitter::VisitOpaqueValueExpr`: the bound
+            // lvalue, loaded, or the bound pair (GNU `c ?: d`).
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(lv)) => Ok(self.cx_load(lv.addr, lv.q, ign)),
-                // kiln-gap: GAP-074
-                _ => err(self.loc_of(e), "a complex opaque value is not supported yet"),
+                Some(Opaque::Cx(r, i)) => Ok((Some(r), Some(i))),
+                Some(Opaque::Rv(_)) => {
+                    unreachable!("bind_opaque_source binds a complex prvalue as Opaque::Cx")
+                }
+                None => err(self.loc_of(e), "unbound OpaqueValueExpr"),
             },
+            // GNU `x ?: y` of complex type (clang
+            // `VisitAbstractConditionalOperator`): the common operand is
+            // evaluated once, then each arm in its own block.
+            ExprKind::BinaryConditionalOperator => {
+                let [common, c, a, b] = self.bind_common(e)?;
+                let r = self.emit_cx_conditional(e, c, a, b);
+                self.f.opaque.remove(&common);
+                r
+            }
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.emit_cx(ast.exprs.rewritten_semantic(e), ign)
             }
@@ -283,7 +343,6 @@ impl Cg<'_> {
             | ExprKind::CXXDependentScopeMemberExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr
-            | ExprKind::BinaryConditionalOperator
             | ExprKind::ArraySubscriptExpr
             | ExprKind::CallExpr
             | ExprKind::CXXMemberCallExpr
@@ -320,12 +379,9 @@ impl Cg<'_> {
             | ExprKind::CXXFoldExpr
             | ExprKind::PackIndexingExpr
             | ExprKind::CXXUnresolvedConstructExpr
-            | ExprKind::CoawaitExpr
             | ExprKind::DependentCoawaitExpr
-            | ExprKind::CoyieldExpr
             | ExprKind::AddrLabelExpr
             | ExprKind::ChooseExpr
-            | ExprKind::AtomicExpr
             | ExprKind::ShuffleVectorExpr
             | ExprKind::ConvertVectorExpr
             | ExprKind::ExtVectorElementExpr
@@ -335,8 +391,12 @@ impl Cg<'_> {
             | ExprKind::CXXExpansionSelectExpr
             | ExprKind::GenericSelectionExpr
             | ExprKind::IntegerPackExpr) => {
-                // kiln-gap: GAP-075
-                err(self.loc_of(e), format!("complex expression {k:?} is not supported yet"))
+                // Never a complex prvalue (WP-1739): every glvalue takes
+                // the arm above, a complex call/init list/literal/opaque
+                // value has its own arm, and the rest are of another type
+                // or dependent kinds and `RecoveryExpr` that never reach
+                // codegen.
+                unreachable!("complex {k:?} (WP-1739)")
             }
         }
     }
@@ -410,8 +470,11 @@ impl Cg<'_> {
             | CastKind::FloatingComplexToReal
             | CastKind::IntegralComplexToBoolean
             | CastKind::FloatingComplexToBoolean) => {
-                // kiln-gap: GAP-076
-                err(self.loc_of(e), format!("complex cast {k:?} is not supported yet"))
+                // Never a complex result (WP-1739): these casts yield a
+                // scalar, pointer, class, union, vector or `void`, so the
+                // scalar, aggregate or ignored emitters lower them;
+                // `Dependent` only in a template pattern.
+                unreachable!("complex cast {k:?}: not of complex type (WP-1739)")
             }
         }
     }
@@ -462,15 +525,16 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 Ok(self.cx_load(lv.addr, lv.q, ign))
             }
+            // Never a complex prvalue (WP-1739): `&` is a pointer, `!` an
+            // `int`/`bool`, `__real__`/`__imag__` the element type, `*`
+            // a glvalue (the arm above); sema never builds a built-in
+            // unary `co_await`.
             op @ (UnaryOp::AddrOf
             | UnaryOp::Deref
             | UnaryOp::LNot
             | UnaryOp::Real
             | UnaryOp::Imag
-            | UnaryOp::Coawait) => {
-                // kiln-gap: GAP-077
-                err(self.loc_of(e), format!("complex unary {op:?} is not supported yet"))
-            }
+            | UnaryOp::Coawait) => unreachable!("complex unary {op:?} (WP-1739)"),
         }
     }
 
@@ -554,8 +618,14 @@ impl Cg<'_> {
             | BinaryOp::AndAssign
             | BinaryOp::XorAssign
             | BinaryOp::OrAssign) => {
-                // kiln-gap: GAP-078
-                err(self.loc_of(e), format!("complex binary {op:?} is not supported yet"))
+                // Never a complex prvalue (WP-1739): `%`, shifts and the
+                // bitwise operators are rejected for complex operands as
+                // clang does ("invalid operands to binary expression",
+                // GNU C too), comparisons and `&&`/`||` are `int`/`bool`,
+                // `<=>` is rejected, `.*`/`->*` are glvalues (the arm
+                // above), and compound assignments are
+                // `CompoundAssignOperator`s.
+                unreachable!("complex binary {op:?} (WP-1739)")
             }
         }
     }
@@ -985,17 +1055,36 @@ impl Cg<'_> {
         self.branch_on_bool(c, lb, rb)?;
         self.emit_block(lb, false);
         self.prof_inc(Key::Expr(e));
-        let x = self.cond_eval(start, |cg| cg.emit_complex(a))?;
+        let x = self.cond_eval(start, |cg| cg.emit_cx_arm(a))?;
         let lb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_branch(cont);
         self.emit_block(rb, false);
-        let y = self.cond_eval(start, |cg| cg.emit_complex(b))?;
+        let y = self.cond_eval(start, |cg| cg.emit_cx_arm(b))?;
         let rb = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(cont, false);
+        let (x, y) = match (x, y) {
+            (Some(x), Some(y)) => (x, y),
+            // A `throw` arm ([expr.cond]/2.1) leaves no value: the result
+            // is the other arm's, as for a scalar conditional.
+            (Some(v), None) | (None, Some(v)) => return Ok((Some(v.0), Some(v.1))),
+            (None, None) => unreachable!("Sema: a complex conditional has a complex arm"),
+        };
         let t = self.f.fir.ty(&self.m, x.0);
         let r = self.f.fir.push(Op::Phi { ty: t, inc: vec![(x.0, lb), (y.0, rb)] }, t);
         let i = self.f.fir.push(Op::Phi { ty: t, inc: vec![(x.1, lb), (y.1, rb)] }, t);
         Ok((Some(r), Some(i)))
+    }
+
+    /// An arm of a complex conditional: its parts, or `None` for a
+    /// `void` arm (a throw-expression, [expr.cond]/2.1), which is
+    /// emitted for its effect. clang 22 rejects a throw arm here ("cannot
+    /// compile this complex expression yet"); GCC accepts it.
+    fn emit_cx_arm(&mut self, a: ExprId) -> R<Option<(V, V)>> {
+        if self.ast.types.is_void(self.ast.exprs.get(a).ty()) {
+            self.emit_ignored(a)?;
+            return Ok(None);
+        }
+        self.emit_complex(a).map(Some)
     }
 
     /// The complex result of a call returning `rq` directly as `r`

@@ -523,6 +523,10 @@ impl Cg<'_> {
                     out.push((Some(at), *offset == 0 && *coerce == IrType::Ptr));
                     at += 1;
                 }
+                ArgKind::CoerceAndExpand { parts, .. } => {
+                    out.push((Some(at), false));
+                    at += parts.len();
+                }
                 _ => {
                     out.push((Some(at), false));
                     at += 1;

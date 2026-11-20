@@ -432,6 +432,24 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   rules are spec/landed/codegen/WP-813.md
   (`tests/codegen/class_b_*.cpp`).
 - Calls:
+  - an AAPCS64 pure scalable type (`ArgKind::CoerceAndExpand`, spec/abi.md
+    §8.32; WP-1739) is lowered as clang's `CoerceAndExpand`: the
+    signature has one parameter per part and returns the one part or a
+    packed struct of them (`Cg::expand_ret_type`); each non-padding
+    element of the object viewed as the `coerce` struct is reached by a
+    struct GEP emitted right before its use (`Cg::expand_elems`,
+    `expand_gep`). The prolog stores each incoming part there, a
+    fixed-length vector first extracted from its scalable type
+    (`sve_to_fixed`); a call argument loads each element with
+    `coerced_load` (`llvm.vector.insert` into `poison`, a predicate as
+    `<vscale x 2N x i8>` bitcast to `<vscale x 16 x i1>`); the epilog
+    (`RetKind::Expand`) loads the parts the same way and gathers several
+    with `insertvalue`; a call result is stored part by part, still
+    scalable, at the elements of its destination (clang stores it
+    unconverted). An SVE tuple (a `Direct` struct of scalable vectors) is
+    gathered with `insertvalue` and stored whole in the prolog, and
+    loaded whole and split with `extractvalue` at a call (clang
+    `containsHomogeneousScalableVectorTypes` paths);
   - a call site gets `nounwind` only when the callee's prototype is
     nothrow, or the direct callee has a `NoThrow` attribute (a
     recognized C library function, spec/sema.md §5.4) or a `const` /
@@ -507,6 +525,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     temporary arguments and discarded conditionals are covered too (WP-774;
     `tests/codegen/discarded_member_call_chain.cpp`,
     `tests/conformance/expr.call/run-discarded-member-call-chain-order.cpp`);
+  - a C structure assignment, or a `.*`/`->*` naming a class member, as
+    an aggregate prvalue (an arm of `?:`, an initializer): the left side
+    is emitted as an lvalue and copied to the destination (clang
+    `AggExprEmitter::VisitBinAssign` and
+    `VisitPointerToDataMemberBinaryOperator`; WP-1739);
   - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
     ... and a member callee) evaluates its right operand before the
     object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
@@ -5101,7 +5124,29 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
   - `==`/`!=`, `?:` (phi of both parts), and conversion to `bool`;
   - list initialization, `__builtin_complex`;
   - folded constants (`extractvalue` of the constant pair);
-  - `ImaginaryLiteral` (a null real part).
+  - `ImaginaryLiteral` (a null real part);
+  - GNU `x ?: y`: `x` emitted once and bound to its `OpaqueValueExpr`
+    as the pair (`Opaque::Cx`, clang `OpaqueValueMappingData::bind`)
+    unless it is a glvalue; in C sema converts `x` to a value first;
+  - `?:` with a throw-expression arm: the throwing arm is emitted for
+    its effect and the result is the other arm's parts, without a `phi`
+    (GCC accepts it; clang 22 rejects it, WP-1739);
+  - `co_await`/`co_yield` results (`Want::Complex`), the `__c11_atomic_*`
+    builtins (the pair from the result temporary, `cx_ret`), and an
+    `ExprWithCleanups` whose cleanups are shared with another path (both
+    parts reloaded after them, clang `ForceCleanup`; WP-1739).
+- **`_Atomic _Complex`** (WP-1739; clang `EmitAtomicLoad`/
+  `EmitAtomicStore` of a complex): a load copies the whole object
+  atomically (sequentially consistent: an atomic integer load when the
+  size is lock-free, else `__atomic_load`) into a temporary of the
+  atomic type and reads the parts from it; a store writes the parts into
+  such a temporary (zeroed first when the atomic type is padded) and
+  copies it atomically. Initialization (`__c11_atomic_init`, a
+  declaration) stores the parts non-atomically.
+- **Unreachable kinds.** Every kind of the visitors' exhaustive matches
+  that is not lowered is an `unreachable!` naming the invariant (sema
+  never builds it, it is of another evaluation kind, or dependent), as
+  in the scalar, lvalue and aggregate visitors (WP-1739).
 - **Multiplication.** For floating types it uses the four products, then
   the NaN check on both results (`fcmp uno`, branch weights 1:1048575),
   then the library call `__mul{s,d,x,t}c3`. Integer multiplication is

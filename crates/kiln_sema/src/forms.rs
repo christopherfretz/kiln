@@ -661,7 +661,9 @@ impl Sema<'_, '_> {
     /// GNU `x ?: y`: `x ? x : y` with `x` evaluated once (clang's
     /// `BinaryConditionalOperator`). Unless both operands are glvalues
     /// of the same type, `x` undergoes the usual unary conversions
-    /// before it is shared. `loc` is the `?`.
+    /// before it is shared; in C it always does (clang
+    /// `ActOnConditionalOp`), so a volatile `x` is read once. `loc` is
+    /// the `?`.
     pub fn act_on_binary_conditional(
         &mut self,
         common: ExprId,
@@ -673,7 +675,8 @@ impl Sema<'_, '_> {
             return self.recover_err(&[common, rhs], loc);
         }
         let (cn, rn) = (*self.ast.exprs.get(common), *self.ast.exprs.get(rhs));
-        let keep = cn.value_category().is_glvalue()
+        let keep = !self.is_c()
+            && cn.value_category().is_glvalue()
             && cn.value_category() == rn.value_category()
             && self.ast.types.same_type(cn.ty(), rn.ty());
         let common = if keep { common } else { conv::usual_unary_conversions(self, common) };

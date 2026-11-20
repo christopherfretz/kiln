@@ -2305,57 +2305,61 @@ fn expansion_outlining_shape() {
     assert!(!o0.contains(".expand."), "{o0}");
 }
 
-/// spec/codegen.md "SVE fixed-length vectors" (WP-810): an AAPCS64 pure
-/// scalable type (an aggregate of `arm_sve_vector_bits` vectors and
-/// predicates) passed or returned by value is a codegen error from
-/// `-fclang-compat=22` (clang 20+ passes it in SVE registers, which kiln
-/// does not lower yet), at the definition and at the call; clang 19's
-/// lowering (`-fclang-compat=19`) and a struct that also holds a NEON
-/// vector compile. `-fsyntax-only` accepts all of them.
+/// spec/abi.md §8.32 (WP-1739): an AAPCS64 pure scalable type (an
+/// aggregate of `arm_sve_vector_bits` vectors and predicates) and an SVE
+/// tuple by value lower as clang 20+ does from `-fclang-compat=20`, one
+/// scalable argument per part, and as any other aggregate (the tuple as
+/// one wide vector) at `-fclang-compat=19`. With a pinned target and no
+/// headers, so an x86-64 host checks the `AArch64` lowering too.
 #[test]
 fn sve_pure_scalable_by_value() {
     let d = scratch("svepst");
-    let pre = "typedef __SVInt32_t svint32_t; typedef __SVBool_t svbool_t;\n\
+    let src = "typedef __SVInt32_t svint32_t; typedef __SVBool_t svbool_t;\n\
                typedef svint32_t fi32 __attribute__((arm_sve_vector_bits(128)));\n\
                typedef svbool_t fb __attribute__((arm_sve_vector_bits(128)));\n\
-               typedef __attribute__((neon_vector_type(4))) int n4;\n\
                struct A { fi32 v; };\n\
-               struct C { fi32 v; n4 n; };\n\
                struct D { fi32 v[2]; fb p; };\n\
-               void c(C x) { c(x); }\n";
-    let what = "by value is not supported yet: it is an AAPCS64 pure scalable type (an \
-                aggregate of fixed-length SVE types)";
-    let cases = [
-        ("void a(A) {}\n", format!("t.cpp:9:6: error: passing or returning 'A' {what}")),
-        (
-            "D d();\nint e() { d(); return 0; }\n",
-            format!("t.cpp:10:11: error: passing or returning 'D' {what}"),
-        ),
-    ];
-    let flags =
-        ["--target=aarch64-unknown-linux-gnu", "-march=armv8-a+sve", "-msve-vector-bits=128"];
-    for (body, want) in cases {
-        std::fs::write(d.join("t.cpp"), format!("{pre}{body}")).unwrap();
-        let mut args = vec!["-fclang-compat=22", "-S", "-emit-llvm", "-o", "k.ll"];
-        args.extend(flags);
-        args.push("t.cpp");
+               void a(A) {}\n\
+               D d();\n\
+               int e() { d(); return 0; }\n\
+               void t(__clang_svint8x2_t) {}\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let ir = |compat: &str| {
+        let args = [
+            compat,
+            "--target=aarch64-unknown-linux-gnu",
+            "-march=armv8-a+sve",
+            "-msve-vector-bits=128",
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+            "t.cpp",
+        ];
         let o = kiln_in(&d, &args);
-        assert!(text(&o.stderr).starts_with(&want), "{body}: {}", text(&o.stderr));
-        assert_eq!(o.status.code(), Some(1), "{body}");
-        args[0] = "-fclang-compat=19";
-        let o = kiln_in(&d, &args);
-        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
-        let mut args = vec!["-fclang-compat=22", "-fsyntax-only"];
-        args.extend(flags);
-        args.push("t.cpp");
-        let o = kiln_in(&d, &args);
-        assert!(o.status.success(), "{body}: {}", text(&o.stderr));
+        assert!(o.status.success(), "{compat}: {}", text(&o.stderr));
+        std::fs::read_to_string(d.join("k.ll")).unwrap()
+    };
+    let new = ir("-fclang-compat=22");
+    for want in [
+        "define dso_local void @_Z1a1A(<vscale x 4 x i32> %0)",
+        "declare <{ <vscale x 4 x i32>, <vscale x 4 x i32>, <vscale x 16 x i1> }> @_Z1dv()",
+        "define dso_local void @_Z1t10svint8x2_t(<vscale x 16 x i8> %0, <vscale x 16 x i8> %1)",
+    ] {
+        assert!(new.contains(want), "{want}\n{new}");
+    }
+    let old = ir("-fclang-compat=19");
+    for want in [
+        "define dso_local void @_Z1a1A([1 x <4 x i32>] alignstack(16) %0)",
+        "define dso_local void @_Z1t10svint8x2_t(<vscale x 32 x i8> %0)",
+    ] {
+        assert!(old.contains(want), "{want}\n{old}");
     }
 }
 
 /// WP-810: an `<arm_sve.h>` intrinsic kiln does not lower, a call without
-/// the `sve` feature, an SVE tuple by value at `-fclang-compat=22` and an
-/// alias whose declaration does not match its builtin are hard errors.
+/// the `sve` feature and an alias whose declaration does not match its
+/// builtin are hard errors.
 /// `-ffreestanding` keeps `<stdint.h>` off the host libc, so the test
 /// runs on an x86-64 host without `AArch64` headers.
 #[test]
@@ -2375,14 +2379,6 @@ fn sve_builtin_alias_errors() {
             "-fclang-compat=19",
             "-march=armv8-a",
             "t.cpp:2:23: error: 'svcntw' needs target feature sve|sme",
-        ),
-        (
-            format!("{sve}void a(svint8x2_t) {{}}\n"),
-            "-fclang-compat=22",
-            "-march=armv8-a+sve",
-            "t.cpp:2:6: error: passing or returning '__clang_svint8x2_t' by value is not \
-             supported yet: it is an SVE tuple type, which clang 20 and later pass as a \
-             struct of vectors",
         ),
         (
             "unsigned long f(int) \
@@ -2411,12 +2407,12 @@ fn sve_builtin_alias_errors() {
         assert!(text(&o.stderr).starts_with(want), "{src}: {}", text(&o.stderr));
         assert_eq!(o.status.code(), Some(1), "{src}");
     }
-    // The tuple is accepted by value where clang 19 passes it as one vector.
+    // A tuple by value is accepted (spec/abi.md §8.32, WP-1739).
     std::fs::write(d.join("t.cpp"), format!("{sve}void a(svint8x2_t) {{}}\n")).unwrap();
     let o = kiln_in(
         &d,
         &[
-            "-fclang-compat=19",
+            "-fclang-compat=22",
             "--target=aarch64-unknown-linux-gnu",
             "-ffreestanding",
             "-march=armv8-a+sve",

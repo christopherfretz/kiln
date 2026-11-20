@@ -216,8 +216,12 @@ impl Cg<'_> {
             | DeclKind::Label
             | DeclKind::ContractResultName
             | DeclKind::ConstevalBlock) => {
-                // kiln-gap: GAP-072
-                err(self.loc_of(e), format!("pointer to member {k:?} is not supported yet"))
+                // [expr.unary.op]/3.2: sema forms a pointer to member
+                // (`member_pointer_of`) only for `&C::m` naming a
+                // non-static data member or member function (its
+                // `member_refs`); a static member's `&C::s` is an
+                // ordinary pointer (WP-1739).
+                unreachable!("pointer to member of a {k:?} (WP-1739)")
             }
         }
     }

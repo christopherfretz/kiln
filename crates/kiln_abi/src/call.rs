@@ -94,6 +94,26 @@ pub enum ArgKind {
     },
     /// Not passed at all.
     Ignore,
+    /// clang 20+ `AArch64` `getCoerceAndExpand` for a pure scalable type
+    /// (AAPCS64 §5.4.2 C.7/B.3): passed as one IR value per SVE register,
+    /// `parts` (the scalable types; returned as `parts[0]` or a packed
+    /// literal struct of them), each read from or written to the object's
+    /// memory viewed as the literal struct `coerce` (the flattened memory
+    /// type, whose `[N x i8]` padding elements pair with no part).
+    CoerceAndExpand {
+        /// The flattened memory type's elements.
+        coerce: Vec<IrType>,
+        /// The scalable IR type of each part, in order.
+        parts: Vec<IrType>,
+    },
+}
+
+impl ArgKind {
+    /// clang `ABIArgInfo::isPaddingForCoerceAndExpand`: an `[N x i8]`
+    /// element of a `CoerceAndExpand` struct holds no part.
+    pub fn is_expand_padding(t: &IrType) -> bool {
+        matches!(t, IrType::Array(e, _) if **e == IrType::Int(8))
+    }
 }
 
 /// The lowering of one value plus its `noundef`-ness.
@@ -132,7 +152,10 @@ pub fn classify_call(
     variadic: bool,
 ) -> CallInfo {
     let mut info = match t.target().arch() {
-        Arch::AArch64 => aarch64(t, ret, args, cc == CallConv::Win64 && variadic),
+        Arch::AArch64 => {
+            let named = if variadic { n_required } else { args.len() };
+            aarch64(t, ret, args, named, cc == CallConv::Win64 && variadic)
+        }
         // clang `X86_64ABIInfo::computeInfo` delegates `ms_abi` to
         // `WinX86_64ABIInfo` (spec/abi.md §5.3).
         Arch::X86_64 if cc == CallConv::Win64 => win64(t, ret, args),
@@ -174,7 +197,11 @@ pub struct VaArgInfo {
 /// Classify `q` as an unnamed (variadic) argument read by `va_arg`.
 pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
     match t.target().arch() {
-        Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q, false), needed_int: 0, needed_sse: 0 },
+        Arch::AArch64 => {
+            // clang `EmitAAPCSVAArg`: `IsNamedArg` false, fresh counts.
+            let kind = aarch64_arg(t, q, false, false, &mut SveRegs::default());
+            VaArgInfo { kind, needed_int: 0, needed_sse: 0 }
+        }
         Arch::X86_64 => {
             // clang `X86_64ABIInfo::EmitVAArg`: `isNamedArg` false.
             let (kind, needed_int, needed_sse) = x86_arg(t, q, 0, false);
@@ -297,6 +324,8 @@ fn no_undef(t: &mut IrTypes<'_>, q: QualType, kind: &ArgKind, check_coerce: bool
     match kind {
         ArgKind::Indirect { .. } | ArgKind::Extend { .. } => return true,
         ArgKind::Ignore => return false,
+        // Always a class (`DetermineNoUndef` gives no class `noundef`).
+        ArgKind::CoerceAndExpand { .. } => return false,
         ArgKind::Direct { coerce, .. } => {
             if !size_equals_store_size(&mem) {
                 return false;
@@ -340,19 +369,59 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
 
 // ---------------------------------------------------------------- AAPCS64
 
-/// AAPCS64; `win_variadic` is clang's `IsWinVariadic` (an `ms_abi`
-/// variadic prototype), under which no argument is an HFA/HVA.
-fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], win_variadic: bool) -> CallInfo {
+/// AAPCS64; the first `named` arguments are named (clang `IsNamedArg`);
+/// `win_variadic` is clang's `IsWinVariadic` (an `ms_abi` variadic
+/// prototype), under which no argument is an HFA/HVA.
+fn aarch64(
+    t: &mut IrTypes<'_>,
+    ret: QualType,
+    args: &[QualType],
+    named: usize,
+    win_variadic: bool,
+) -> CallInfo {
     let r = aarch64_ret(t, ret);
-    let a = args.iter().map(|q| arg(aarch64_arg(t, *q, win_variadic))).collect();
+    let mut regs = SveRegs::default();
+    let a = args
+        .iter()
+        .enumerate()
+        .map(|(i, q)| arg(aarch64_arg(t, *q, win_variadic, i < named, &mut regs)))
+        .collect();
     CallInfo { ret: arg(r), args: a, max_vector_width: 0 }
+}
+
+/// clang 20+ `AArch64ABIInfo`'s `NSRN` / `NPRN`: the SIMD/FP and SVE
+/// predicate argument registers the arguments so far take (capped at 8
+/// and 4), which decide whether a pure scalable type still fits.
+#[derive(Default)]
+struct SveRegs {
+    nsrn: u64,
+    nprn: u64,
+}
+
+impl SveRegs {
+    fn vec(&mut self, n: u64) {
+        self.nsrn = (self.nsrn + n).min(8);
+    }
+    fn pred(&mut self, n: u64) {
+        self.nprn = (self.nprn + n).min(4);
+    }
+}
+
+/// clang 20+ `AArch64ABIInfo::passAsAggregateType`: an aggregate, or an
+/// SVE tuple type other than `svcount_t`.
+fn aarch64_pass_as_aggregate(t: &IrTypes<'_>, q: QualType) -> bool {
+    is_aggregate(t, q) || (t.clang_compat() >= 20 && is_sve_tuple(t, q))
+}
+
+fn is_sve_tuple(t: &IrTypes<'_>, q: QualType) -> bool {
+    matches!(view(t, q), TypeView::Builtin(b) if b.is_sve_tuple())
 }
 
 /// clang `AArch64ABIInfo::isIllegalVectorType` + `coerceIllegalVector`:
 /// a vector whose element count is not a power of two, or whose size is
 /// neither 64 bits nor 128 bits with several elements, goes as `i32`,
 /// `<2 x i32>`, `<4 x i32>` or indirectly.
-fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
+fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType, regs: &mut SveRegs) -> Option<ArgKind> {
     let TypeView::Vector { count, .. } = view(t, q) else {
         return None;
     };
@@ -361,6 +430,9 @@ fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
         return None;
     }
     let i32v = |n| IrType::Vector(Box::new(IrType::Int(32)), n);
+    if size == 64 || size == 128 {
+        regs.vec(1);
+    }
     Some(match size {
         0..=32 => direct(IrType::Int(32)),
         64 => direct(i32v(2)),
@@ -373,11 +445,26 @@ fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
 /// vector (`arm_sve_vector_bits`, WP-810): passed and returned in the
 /// scalable register type, `<vscale x 16 x i1>` for a predicate and
 /// `<vscale x 128/E x T>` for data of element `T` of `E` bits.
-fn aarch64_sve_fixed(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
+fn aarch64_sve_fixed(t: &mut IrTypes<'_>, q: QualType, regs: &mut SveRegs) -> Option<ArgKind> {
+    let TypeView::Vector { kind, .. } = view(t, q) else {
+        return None;
+    };
+    let sc = sve_fixed_scalable(t, q)?;
+    if kind == VectorKind::SveFixedPredicate {
+        regs.pred(1);
+    } else {
+        regs.vec(1);
+    }
+    Some(direct(sc))
+}
+
+/// clang `convertFixedToScalableVectorType`: the scalable register type
+/// of a fixed-length SVE vector, `None` for any other type.
+fn sve_fixed_scalable(t: &mut IrTypes<'_>, q: QualType) -> Option<IrType> {
     let TypeView::Vector { elem, kind, .. } = view(t, q) else {
         return None;
     };
-    let sv = |e: IrType, n| direct(IrType::ScalableVector(Box::new(e), n));
+    let sv = |e: IrType, n| IrType::ScalableVector(Box::new(e), n);
     match kind {
         VectorKind::SveFixedPredicate => Some(sv(IrType::Int(1), 16)),
         VectorKind::SveFixedData => {
@@ -410,20 +497,40 @@ pub fn transparent_union_first_field(ast: &Ast, q: QualType) -> Option<QualType>
         .and_then(|f| ast.decls.get(f).ty())
 }
 
-fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind {
+/// clang `AArch64ABIInfo::classifyArgumentType` for an argument that is
+/// `named` (not a variadic one), counting the SVE registers in `regs`.
+fn aarch64_arg(
+    t: &mut IrTypes<'_>,
+    q: QualType,
+    win_variadic: bool,
+    named: bool,
+    regs: &mut SveRegs,
+) -> ArgKind {
     let q = first_field_if_transparent(t.ast(), q);
-    if let Some(k) = aarch64_sve_fixed(t, q) {
+    if let Some(k) = aarch64_sve_fixed(t, q, regs) {
         return k;
     }
-    if let Some(k) = aarch64_illegal_vector(t, q) {
+    if let Some(k) = aarch64_illegal_vector(t, q, regs) {
         return k;
     }
-    if !is_aggregate(t, q) {
+    if !aarch64_pass_as_aggregate(t, q) {
         let q = strip_enum(t, q);
-        if let TypeView::BitInt { width, .. } = view(t, q)
-            && width > 128
-        {
-            return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+        match view(t, q) {
+            TypeView::BitInt { width, .. } if width > 128 => {
+                return ArgKind::Indirect {
+                    byval: false,
+                    align: t.layouter().type_layout(q).align,
+                };
+            }
+            TypeView::Vector { .. } => regs.vec(1),
+            TypeView::Builtin(b) if b.is_floating() => regs.vec(1),
+            TypeView::Builtin(b) if b.is_sizeless() => match b.sve_tuple_parts() {
+                Some((BuiltinType::SvBool, n)) => regs.pred(u64::from(n)),
+                Some((_, n)) => regs.vec(u64::from(n)),
+                None if matches!(b, BuiltinType::SvBool | BuiltinType::SvCount) => regs.pred(1),
+                None => regs.vec(1),
+            },
+            _ => {}
         }
         return direct(t.convert(q));
     }
@@ -432,7 +539,7 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind 
     }
     let size = type_bits(t, q);
     let empty = is_empty_record(t, q, true);
-    if empty || size == 0 {
+    if !is_sve_tuple(t, q) && (empty || size == 0) {
         // C++, non-Darwin.
         if empty && size == 0 {
             return ArgKind::Ignore;
@@ -452,6 +559,7 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind 
         // only for a naturally 16-byte-aligned type (clang
         // `getTypeUnadjustedAlignInChars`; an `alignas` on the class
         // itself does not count, one on a member does).
+        regs.vec(members);
         let align = unadjusted_align(t, q);
         let bt = t.convert(base);
         return ArgKind::Direct {
@@ -460,6 +568,9 @@ fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind 
             flatten: true,
             align: Some(if align >= 16 { 16 } else { 8 }),
         };
+    }
+    if let Some(k) = aarch64_pure_scalable(t, q, named, regs) {
+        return k;
     }
     if size <= 128 {
         // AAPCS64 C.10 classifies by the natural alignment (clang
@@ -522,14 +633,14 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
-    if let Some(k) = aarch64_sve_fixed(t, q) {
+    if let Some(k) = aarch64_sve_fixed(t, q, &mut SveRegs::default()) {
         return k;
     }
     // Large vector types are returned via memory.
     if matches!(view(t, q), TypeView::Vector { .. }) && type_bits(t, q) > 128 {
         return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
     }
-    if !is_aggregate(t, q) {
+    if !aarch64_pass_as_aggregate(t, q) {
         let q = strip_enum(t, q);
         if let TypeView::BitInt { width, .. } = view(t, q)
             && width > 128
@@ -539,11 +650,16 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
         return direct(t.convert(q));
     }
     let size = type_bits(t, q);
-    if size == 0 || is_empty_record(t, q, true) {
+    if !is_sve_tuple(t, q) && (size == 0 || is_empty_record(t, q, true)) {
         return ArgKind::Ignore;
     }
     if homogeneous(t, q).is_some() {
         return direct(t.convert(q));
+    }
+    // A pure scalable return value is one named argument with all the
+    // registers free.
+    if let Some(k) = aarch64_pure_scalable(t, q, true, &mut SveRegs::default()) {
+        return k;
     }
     if size <= 128 {
         if size <= 64 {
@@ -656,44 +772,171 @@ fn byte_vector(t: &mut IrTypes<'_>, q: QualType) -> IrType {
     IrType::Vector(Box::new(IrType::Double), type_bits(t, q) / 64)
 }
 
-/// clang 20+ `AArch64ABIInfo::passAsPureScalableType` with a nonzero
-/// register count (WP-810): `q` is a record (not a union, passable in
-/// registers) or a nonempty array whose non-empty members are, at every
-/// depth, fixed-length SVE vectors (`arm_sve_vector_bits`), at least one.
-/// AAPCS64 passes such an aggregate expanded in SVE registers, which kiln
-/// does not lower yet; clang 19 lowers it as any other aggregate.
-pub fn is_pure_scalable(t: &mut IrTypes<'_>, q: QualType) -> bool {
-    matches!(view(t, q), TypeView::Record(_) | TypeView::ConstantArray(_))
-        && pure_scalable_count(t, q).is_some_and(|n| n > 0)
+/// clang 20+ `AArch64ABIInfo::coerceAndExpandPureScalableAggregate`
+/// (AAPCS64 C.7/B.3): a pure scalable type `q` (an SVE tuple, or a class
+/// or array made only of `arm_sve_vector_bits` vectors and predicates) is
+/// passed in as many Z and P registers as it has parts when it is `named`
+/// and they are all free, else by reference (no `byval`). `None` when `q`
+/// is not one, and always before clang 20, which passes such a class as
+/// any other.
+fn aarch64_pure_scalable(
+    t: &mut IrTypes<'_>,
+    q: QualType,
+    named: bool,
+    regs: &mut SveRegs,
+) -> Option<ArgKind> {
+    if t.clang_compat() < 20 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let (mut nvec, mut npred) = (0, 0);
+    if !pure_scalable(t, q, &mut nvec, &mut npred, &mut parts) || nvec + npred == 0 {
+        return None;
+    }
+    let indirect = ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    if !named || regs.nsrn + nvec > 8 || regs.nprn + npred > 4 {
+        return Some(indirect);
+    }
+    let ct = t.convert(q);
+    let kind = if is_sve_tuple(t, q) {
+        // `getDirect()`: the struct of vectors, one IR argument each.
+        direct(ct)
+    } else {
+        let mut coerce = Vec::new();
+        flatten_ir(t, &ct, &mut coerce);
+        // clang pairs every non-padding element with one part. Empty
+        // members have no IR element (clang `isEmptyFieldForLayout`), so
+        // the counts agree; were they ever to differ, kiln passes the
+        // class by reference, as when the registers run out, rather than
+        // a signature whose arguments do not match its parts.
+        let n = coerce.iter().filter(|e| !ArgKind::is_expand_padding(e)).count();
+        if n != parts.len() {
+            return Some(indirect);
+        }
+        ArgKind::CoerceAndExpand { coerce, parts }
+    };
+    regs.nsrn += nvec;
+    regs.nprn += npred;
+    Some(kind)
 }
 
-fn pure_scalable_count(t: &mut IrTypes<'_>, q: QualType) -> Option<u64> {
+/// clang `AArch64ABIInfo::flattenType`: the leaf IR types of `ty`,
+/// arrays expanded, `[N x i8]` padding kept whole.
+fn flatten_ir(t: &mut IrTypes<'_>, ty: &IrType, out: &mut Vec<IrType>) {
+    match ty {
+        _ if ArgKind::is_expand_padding(ty) => out.push(ty.clone()),
+        IrType::Array(e, n) => {
+            let mut one = Vec::new();
+            flatten_ir(t, e, &mut one);
+            for _ in 0..*n {
+                out.extend(one.iter().cloned());
+            }
+        }
+        IrType::Struct(m, _) => {
+            for e in m {
+                flatten_ir(t, e, out);
+            }
+        }
+        IrType::Record(d) => {
+            let m = t.record(*d).members.clone();
+            for e in &m {
+                flatten_ir(t, e, out);
+            }
+        }
+        IrType::RecordBase(d) => {
+            let r = t.record(*d);
+            let m = r.base_members.clone().unwrap_or_else(|| r.members.clone());
+            for e in &m {
+                flatten_ir(t, e, out);
+            }
+        }
+        _ => out.push(ty.clone()),
+    }
+}
+
+/// clang 20+ `AArch64ABIInfo::passAsPureScalableType`: whether `q` is a
+/// pure scalable type of at most 12 parts, adding its Z (`nvec`) and P
+/// (`npred`) register counts and its parts' scalable IR types (`seq`).
+/// A class must be no union and passable in registers; empty bases and
+/// fields are skipped; an empty array is no pure scalable type.
+fn pure_scalable(
+    t: &mut IrTypes<'_>,
+    q: QualType,
+    nvec: &mut u64,
+    npred: &mut u64,
+    seq: &mut Vec<IrType>,
+) -> bool {
+    const MAX: usize = 12;
     let ast = t.ast();
     match view(t, q) {
         TypeView::ConstantArray(a) => {
-            let n = ast.types.array_size(q).filter(|&n| n > 0)?;
-            Some(pure_scalable_count(t, a.elem)? * n)
+            let n = ast.types.array_size(q).unwrap_or(0);
+            if n == 0 {
+                return false;
+            }
+            let (mut nv, mut np, mut one) = (0, 0, Vec::new());
+            if !pure_scalable(t, a.elem, &mut nv, &mut np, &mut one) {
+                return false;
+            }
+            let more = usize::try_from(n).ok().and_then(|n| n.checked_mul(one.len()));
+            if more.is_none_or(|m| seq.len() + m > MAX) {
+                return false;
+            }
+            for _ in 0..n {
+                seq.extend(one.iter().cloned());
+            }
+            *nvec += n * nv;
+            *npred += n * np;
+            true
         }
         TypeView::Record(d) => {
-            let def = ast.definition(d)?;
+            let Some(def) = ast.definition(d) else { return false };
             if props::class_desc(ast, def).is_union || !can_pass_in_registers(ast, def) {
-                return None;
+                return false;
             }
-            let mut n = 0;
-            for b in ast.decls.bases(def, &ast.lists) {
-                if !is_empty_record(t, b.ty, true) {
-                    n += pure_scalable_count(t, b.ty)?;
+            let bases: Vec<QualType> = ast.decls.bases(def, &ast.lists).map(|b| b.ty).collect();
+            for b in bases {
+                if !is_empty_record(t, b, true) && !pure_scalable(t, b, nvec, npred, seq) {
+                    return false;
                 }
             }
             for f in props::fields(ast, def) {
-                if !is_empty_field(t, &f, true) {
-                    n += pure_scalable_count(t, f.ty)?;
+                if !is_empty_field(t, &f, true) && !pure_scalable(t, f.ty, nvec, npred, seq) {
+                    return false;
                 }
             }
-            Some(n)
+            true
         }
-        TypeView::Vector { kind, .. } if kind.is_sve_fixed() => Some(1),
-        _ => None,
+        TypeView::Vector { kind, .. } if kind.is_sve_fixed() => {
+            if kind == VectorKind::SveFixedPredicate {
+                *npred += 1;
+            } else {
+                *nvec += 1;
+            }
+            if seq.len() + 1 > MAX {
+                return false;
+            }
+            let Some(sc) = sve_fixed_scalable(t, q) else { return false };
+            seq.push(sc);
+            true
+        }
+        // `svcount_t` is an opaque SVE type, no vector or predicate.
+        TypeView::Builtin(b) if b.is_sizeless() && b != BuiltinType::SvCount => {
+            let (v, n) = b.sve_tuple_parts().unwrap_or((b, 1));
+            if v == BuiltinType::SvBool {
+                *npred += u64::from(n);
+            } else {
+                *nvec += u64::from(n);
+            }
+            let n = n as usize;
+            if seq.len() + n > MAX {
+                return false;
+            }
+            let part = crate::irtype::sve_type(v);
+            seq.extend(std::iter::repeat_n(part, n));
+            true
+        }
+        _ => false,
     }
 }
 

@@ -308,8 +308,11 @@ impl Sema<'_, '_> {
             return None;
         }
         // 6.5.15p3, p5: arithmetic operands, the usual arithmetic
-        // conversions (`b ? s1 : s2` is `int`).
-        if self.is_arith_operand(tt0) && self.is_arith_operand(ft0) {
+        // conversions (`b ? s1 : s2` is `int`), after the lvalue
+        // conversion that drops `_Atomic` (6.3.2.1p2: `b ? ai : 1`).
+        let arith =
+            |s: &Self, q: QualType| s.is_arith_operand(s.ast.types.as_atomic(q).unwrap_or(q));
+        if arith(self, tt0) && arith(self, ft0) {
             return Some(
                 match conv::usual_arithmetic_conversions_kind(
                     self,

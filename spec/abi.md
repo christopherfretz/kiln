@@ -2070,6 +2070,46 @@ AArch64, without `noundef`; a class holding one is classified as a class
 holding a pointer. A run-time `info` always holds the null reflection
 (spec/codegen.md "Run-time reflections").
 
+### 8.32 Landed (WP-1739): AAPCS64 pure scalable types and SVE tuples
+From `-fclang-compat=20` (`call::aarch64_pure_scalable`, clang 20+
+`AArch64ABIInfo`):
+- **Register counts.** Arguments are classified in order, counting the
+  SIMD/FP registers (NSRN, at most 8) and SVE predicate registers (NPRN,
+  at most 4) they take: a floating-point scalar, a vector, a
+  fixed-length SVE data vector and a 64- or 128-bit illegal vector take
+  one Z; an HFA/HVA takes one per member; `svbool_t`, `svcount_t` and a
+  fixed-length predicate take one P; an SVE builtin takes its vector
+  count. Arguments past the prototype's named ones are unnamed (clang
+  `IsNamedArg`), as is every `va_arg` read.
+- **Pure scalable type** (`pure_scalable`, `passAsPureScalableType`): a
+  class (no union, passable in registers; empty bases and fields
+  skipped) or nonempty array whose members are, at every depth,
+  fixed-length SVE vectors and predicates, or an SVE tuple; at most 12
+  parts; at least one. It is checked after the HFA/HVA rule, and a
+  fixed-length SVE vector is no HFA/HVA base from clang 20.
+- **Passing.** A named pure scalable argument whose Z and P counts both
+  still fit goes as `ArgKind::CoerceAndExpand`: one IR argument per part,
+  of its scalable type (`<vscale x 128/E x T>` for data, `<vscale x 16 x
+  i1>` for a predicate); otherwise (unnamed, or out of registers) it is
+  `Indirect` without `byval`. A return value is classified the same way
+  with all registers free: one part is returned as itself, several as a
+  packed literal struct of them, more than 8 Z or 4 P in memory (`sret`).
+  An SVE tuple instead is `Direct` with its IR type, a struct of its
+  vectors (`IrTypes::convert`; clang 19 used one wide scalable vector),
+  flattened to one IR argument per vector.
+- **Memory view.** The `coerce` struct is the class's IR type flattened
+  (`flatten_ir`, clang `flattenType`: arrays expanded, `[N x i8]` padding
+  kept whole and paired with no part). Codegen (spec/codegen.md §6)
+  addresses each non-padding element with a struct GEP and converts with
+  `llvm.vector.extract`/`insert` (a predicate through `<vscale x 2N x
+  i8>`). Were the non-padding elements and the parts ever to differ in
+  number, the class goes by reference.
+- `-fclang-compat=19` keeps clang 19's lowering: such a class is an
+  ordinary aggregate (an HVA when its vectors are 128-bit).
+Tests: `tests/conformance/ext.arm.sve/ir-sve-pure-scalable-types.cpp`,
+`ir-sve-tuples-by-value.cpp` (IR only, no SVE hardware on the test hosts),
+`kiln_driver` `sve_pure_scalable_by_value`.
+
 ## Definition hash (`odr_def`)
 `kiln_abi::odr_def` (WP-1582, package K-3b) is the serializer of a
 function definition for the link-time ODR checks: record kind 2 of

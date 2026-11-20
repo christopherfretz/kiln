@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-39 gaps at 49 sites; 10 of 56,766 g++.dg cases hit one at the
+22 gaps at 31 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -74,7 +74,7 @@ By family:
 | family | gaps | sites | reach |
 |---|---|---|---|
 | Oven trap | 4 | 8 | 0 |
-| codegen fallback | 18 | 19 | 0 |
+| codegen fallback | 1 | 1 | 0 |
 | drv_not_implemented | 2 | 2 | 0 |
 | parse_unsupported | 6 | 6 | 0 |
 | pp_expr_unsupported | 1 | 3 | 0 |
@@ -89,7 +89,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| codegen fallbacks | 18 (GAP-061..GAP-078) | 19 | 0 | WP-1739 |
+| codegen fallbacks | 1 (GAP-062) | 1 | 0 | WP-1739 |
 | NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
 | Oven traps: expressions | 2 (GAP-114..GAP-115) | 3 | 0 | WP-1741 |
 | Oven traps: types | 2 (GAP-126, GAP-129) | 5 | 0 | WP-1742 |
@@ -101,24 +101,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-061 | codegen fallback | codegen fallbacks | `passing or returning '{t}' by value is not supported yet: it is an SVE tuple type, ...` / `...: it is an AAPCS64 pure scalable type ...` | `crates/kiln_codegen/src/module.rs::check_pure_scalable` ×2 | 0 | WP-1739 |
 | GAP-062 | codegen fallback | codegen fallbacks | `code generation for SVE builtin '{name}' (called as '{called}') is not supported yet` | `crates/kiln_codegen/src/sve.rs::emit_sve_alias` | 0 | WP-1739 |
-| GAP-063 | codegen fallback | codegen fallbacks | `cast {k} is not supported yet` ({k}: the 8 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::emit_cast` | 0 | WP-1739 |
-| GAP-064 | codegen fallback | codegen fallbacks | `unary {op} is not supported yet` ({op}: `Coawait`) | `crates/kiln_codegen/src/expr.rs::emit_unary` | 0 | WP-1739 |
-| GAP-065 | codegen fallback | codegen fallbacks | `binary {op} is not supported yet` ({op}: the 17 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::arith` | 0 | WP-1739 |
-| GAP-066 | codegen fallback | codegen fallbacks | `reference to {k} is not supported yet` ({k}: the 49 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::decl_lvalue` | 0 | WP-1739 |
-| GAP-067 | codegen fallback | codegen fallbacks | `lvalue {k} is not supported yet` ({k}: the 64 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::emit_lvalue_x` | 0 | WP-1739 |
-| GAP-068 | codegen fallback | codegen fallbacks | `lvalue unary {op} is not supported yet` ({op}: the 8 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::unary_lvalue` | 0 | WP-1739 |
-| GAP-069 | codegen fallback | codegen fallbacks | `lvalue binary {op} is not supported yet` ({op}: the 29 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::binary_lvalue` | 0 | WP-1739 |
-| GAP-070 | codegen fallback | codegen fallbacks | `lvalue cast {k} is not supported yet` ({k}: the 38 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::cast_lvalue` | 0 | WP-1739 |
-| GAP-071 | codegen fallback | codegen fallbacks | `aggregate expression {k} is not supported yet` ({k}: the 63 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::agg_visit_x` | 0 | WP-1739 |
-| GAP-072 | codegen fallback | codegen fallbacks | `pointer to member {k} is not supported yet` ({k}: the 53 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/memptr.rs::mp_addr_of` | 0 | WP-1739 |
-| GAP-073 | codegen fallback | codegen fallbacks | `statement {k} is not supported yet` ({k}: `CXXCatchStmt`) | `crates/kiln_codegen/src/stmt.rs::emit_stmt` | 0 | WP-1739 |
-| GAP-074 | codegen fallback | codegen fallbacks | `a complex opaque value is not supported yet` | `crates/kiln_codegen/src/complex.rs::emit_cx_x` | 0 | WP-1739 |
-| GAP-075 | codegen fallback | codegen fallbacks | `complex expression {k} is not supported yet` ({k}: the 72 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_x` | 0 | WP-1739 |
-| GAP-076 | codegen fallback | codegen fallbacks | `complex cast {k} is not supported yet` ({k}: the 32 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_cast` | 0 | WP-1739 |
-| GAP-077 | codegen fallback | codegen fallbacks | `complex unary {op} is not supported yet` ({op}: the 6 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_unary` | 0 | WP-1739 |
-| GAP-078 | codegen fallback | codegen fallbacks | `complex binary {op} is not supported yet` ({op}: the 27 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_binary` | 0 | WP-1739 |
 | GAP-097 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: the 25 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
 | GAP-114 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `CXXDeleteExpr` of a `void *` operand, which clang 22 destroys and frees by the allocation's dynamic type) | `crates/kiln_oven/src/compile/new_delete.rs::delete_expr` | 0 | WP-1741 |
 | GAP-115 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `__builtin_align_up`/`_down`/`__builtin_is_aligned` or an elementwise builtin on a `_BitInt` wider than 128 bits) | `crates/kiln_oven/src/compile/builtins.rs::builtin_call` ×2 | 0 | WP-1741 |
@@ -180,58 +163,6 @@ expression`). Never in a mangled operand (clang: unreachable): `ParenExpr`,
 `RecoveryExpr`, `UserDefinedLiteral` and `UnresolvedMemberExpr` (kiln
 builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
 `AddrLabelExpr` (ExprKind).
-
-### GAP-063
-
-`Dependent`, `ToUnion`, `IntegralRealToComplex`, `FloatingRealToComplex`, `IntegralComplexCast`, `FloatingComplexCast`, `IntegralComplexToFloatingComplex`, `FloatingComplexToIntegralComplex` (CastKind).
-
-### GAP-065
-
-`PtrMemD`, `PtrMemI`, `Cmp`, `LAnd`, `LOr`, `Assign`, `MulAssign`, `DivAssign`, `RemAssign`, `AddAssign`, `SubAssign`, `ShlAssign`, `ShrAssign`, `AndAssign`, `XorAssign`, `OrAssign`, `Comma` (BinaryOp).
-
-### GAP-066
-
-`TranslationUnit`, `Namespace`, `NamespaceAlias`, `LinkageSpec`, `Export`, `Empty`, `FileScopeAsm`, `UsingDirective`, `Using`, `UsingEnum`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingValue`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists`, `Typedef`, `TypeAlias`, `Enum`, `EnumConstant`, `CXXRecord`, `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`, `Field`, `IndirectField`, `AccessSpec`, `Friend`, `FriendTemplate`, `CXXConstructor`, `CXXDestructor`, `CXXDeductionGuide`, `ImplicitParam`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`, `ClassTemplate`, `FunctionTemplate`, `VarTemplate`, `TypeAliasTemplate`, `Concept`, `BuiltinTemplate`, `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`, `LifetimeExtendedTemporary`, `StaticAssert`, `Label`, `ConstevalBlock` (DeclKind).
-
-### GAP-067
-
-`IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `GNUNullExpr`, `CXXThisExpr`, `SourceLocExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `CXXMemberCallExpr`, `ParenListExpr`, `ImplicitValueInitExpr`, `DesignatedInitExpr`, `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXScalarValueInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `CompoundLiteralExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `CXXBindTemporaryExpr`, `CXXNewExpr`, `CXXDeleteExpr`, `CXXPseudoDestructorExpr`, `CXXThrowExpr`, `CXXNoexceptExpr`, `UnaryExprOrTypeTraitExpr`, `TypeTraitExpr`, `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr`, `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `DependentCoawaitExpr`, `StmtExpr`, `AddrLabelExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr`, `ShuffleVectorExpr`, `ConvertVectorExpr`, `CXXReflectExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).
-
-### GAP-068
-
-`PostInc`, `PostDec`, `AddrOf`, `Plus`, `Minus`, `Not`, `LNot`, `Coawait` (UnaryOp).
-
-### GAP-069
-
-`Mul`, `Div`, `Rem`, `Add`, `Sub`, `Shl`, `Shr`, `Cmp`, `LT`, `GT`, `LE`, `GE`, `EQ`, `NE`, `And`, `Xor`, `Or`, `LAnd`, `LOr`, `MulAssign`, `DivAssign`, `RemAssign`, `AddAssign`, `SubAssign`, `ShlAssign`, `ShrAssign`, `AndAssign`, `XorAssign`, `OrAssign` (BinaryOp).
-
-### GAP-070
-
-`Dependent`, `LValueToRValueBitCast`, `BitCast`, `ArrayToPointerDecay`, `FunctionToPointerDecay`, `BuiltinFnToFnPtr`, `NullToPointer`, `NullToMemberPointer`, `IntegralToPointer`, `PointerToIntegral`, `PointerToBoolean`, `IntegralCast`, `IntegralToBoolean`, `BooleanToSignedIntegral`, `IntegralToFloating`, `FloatingToIntegral`, `FloatingToBoolean`, `FloatingCast`, `DerivedToBaseMemberPointer`, `BaseToDerivedMemberPointer`, `MemberPointerToBoolean`, `ReinterpretMemberPointer`, `ConstructorConversion`, `ToVoid`, `ToUnion`, `VectorSplat`, `NonAtomicToAtomic`, `AtomicToNonAtomic`, `IntegralRealToComplex`, `FloatingRealToComplex`, `IntegralComplexCast`, `FloatingComplexCast`, `IntegralComplexToReal`, `FloatingComplexToReal`, `IntegralComplexToBoolean`, `FloatingComplexToBoolean`, `IntegralComplexToFloatingComplex`, `FloatingComplexToIntegralComplex` (CastKind).
-
-### GAP-071
-
-`IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `GNUNullExpr`, `CXXThisExpr`, `PredefinedExpr`, `SourceLocExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `BinaryOperator`, `CompoundAssignOperator`, `ParenListExpr`, `ImplicitCastExpr`, `CStyleCastExpr`, `CXXFunctionalCastExpr`, `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `BuiltinBitCastExpr`, `DesignatedInitExpr`, `ArrayInitIndexExpr`, `OpaqueValueExpr`, `CXXNewExpr`, `CXXDeleteExpr`, `CXXPseudoDestructorExpr`, `CXXNoexceptExpr`, `CXXTypeidExpr`, `UnaryExprOrTypeTraitExpr`, `TypeTraitExpr`, `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `DependentCoawaitExpr`, `AddrLabelExpr`, `ChooseExpr`, `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr`, `CXXReflectExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).
-
-### GAP-072
-
-`TranslationUnit`, `Namespace`, `NamespaceAlias`, `LinkageSpec`, `Export`, `Empty`, `FileScopeAsm`, `UsingDirective`, `Using`, `UsingEnum`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingValue`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists`, `Typedef`, `TypeAlias`, `Enum`, `EnumConstant`, `CXXRecord`, `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`, `AccessSpec`, `Friend`, `FriendTemplate`, `Function`, `CXXConstructor`, `CXXDestructor`, `CXXDeductionGuide`, `Var`, `ParmVar`, `ImplicitParam`, `Binding`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`, `ClassTemplate`, `FunctionTemplate`, `VarTemplate`, `TypeAliasTemplate`, `Concept`, `BuiltinTemplate`, `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`, `LifetimeExtendedTemporary`, `TemplateParamObject`, `StaticAssert`, `Label`, `ContractResultName`, `ConstevalBlock` (DeclKind).
-
-### GAP-075
-
-`IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `StringLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `EmbedExpr`, `GNUNullExpr`, `DeclRefExpr`, `MemberExpr`, `CXXThisExpr`, `PredefinedExpr`, `SourceLocExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `BinaryConditionalOperator`, `ArraySubscriptExpr`, `CallExpr`, `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `ParenListExpr`, `DesignatedInitExpr`, `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXParenListInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `CXXNewExpr`, `CXXDeleteExpr`, `CXXPseudoDestructorExpr`, `CXXThrowExpr`, `CXXNoexceptExpr`, `CXXTypeidExpr`, `UnaryExprOrTypeTraitExpr`, `TypeTraitExpr`, `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr`, `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr`, `AddrLabelExpr`, `ChooseExpr`, `AtomicExpr`, `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr`, `CXXReflectExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).
-
-### GAP-076
-
-`Dependent`, `BitCast`, `ArrayToPointerDecay`, `FunctionToPointerDecay`, `BuiltinFnToFnPtr`, `NullToPointer`, `NullToMemberPointer`, `IntegralToPointer`, `PointerToIntegral`, `PointerToBoolean`, `IntegralCast`, `IntegralToBoolean`, `BooleanToSignedIntegral`, `IntegralToFloating`, `FloatingToIntegral`, `FloatingToBoolean`, `FloatingCast`, `DerivedToBase`, `UncheckedDerivedToBase`, `BaseToDerived`, `Dynamic`, `DerivedToBaseMemberPointer`, `BaseToDerivedMemberPointer`, `MemberPointerToBoolean`, `ReinterpretMemberPointer`, `ToVoid`, `ToUnion`, `VectorSplat`, `IntegralComplexToReal`, `FloatingComplexToReal`, `IntegralComplexToBoolean`, `FloatingComplexToBoolean` (CastKind).
-
-### GAP-077
-
-`AddrOf`, `Deref`, `LNot`, `Real`, `Imag`, `Coawait` (UnaryOp).
-
-### GAP-078
-
-`PtrMemD`, `PtrMemI`, `Rem`, `Shl`, `Shr`, `Cmp`, `LT`, `GT`, `LE`, `GE`, `EQ`, `NE`, `And`, `Xor`, `Or`, `LAnd`, `LOr`, `MulAssign`, `DivAssign`, `RemAssign`, `AddAssign`, `SubAssign`, `ShlAssign`, `ShrAssign`, `AndAssign`, `XorAssign`, `OrAssign` (BinaryOp).
 
 ### GAP-097
 

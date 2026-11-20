@@ -2,8 +2,8 @@
 // lowering (AAPCS64 before pure scalable types): a homogeneous aggregate of
 // up to four 128-bit vectors, SVE or NEON, is `[N x <4 x i32>]`, a small
 // one is an integer, a larger one is indirect. Clang 20+ passes a pure
-// scalable type in SVE registers, which kiln rejects (crates/kiln_driver/tests/codegen.rs
-// `sve_pure_scalable_by_value`). spec/landed/codegen/WP-810.md (WP-810).
+// scalable type in SVE registers (ir-sve-pure-scalable-types.cpp, WP-1739).
+// spec/landed/codegen/WP-810.md (WP-810).
 // Host-restricted (no pinned `--target`): on an x86_64 host clang has no
 // AArch64 sysroot and leaves `+outline-atomics` out of the features.
 //@ requires: clang<22
