@@ -176,6 +176,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A constraint of a lambda nested in a generic lambda in a template, or
   of a member function of a local class there, is checked with every
   enclosing level's arguments instead of failing as dependent (WP-1740).
+- Template instantiation no longer reports "not yet implemented:
+  substitution into" an initialization kind (WP-1740): a parenthesized
+  aggregate initialization whose aggregate has a default member
+  initializer naming the function, or that has braced arguments
+  (`D d(N)`, `B b({N, 1}, {N, 2})`), `T()` of a pointer to a variable
+  length array, and an initialization that failed in the template's
+  definition (`E e{N}` of an enumeration) are substituted, the last with
+  no diagnostic beyond the definition's one.
 - A conditional operator whose class-typed arms are a glvalue and a
   prvalue destroys the copy of the glvalue at the end of the
   full-expression when the result is not used to initialize an object;

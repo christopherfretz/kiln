@@ -59,7 +59,6 @@ pub const WRAPPERS: &[(&str, &str)] = &[
     ("kiln_parse", "unsupported"),
     ("kiln_sema", "not_implemented"),
     ("kiln_sema", "templ_unimplemented"),
-    ("kiln_sema", "unimplemented"),
     ("kiln_sema", "unsupported"),
 ];
 
