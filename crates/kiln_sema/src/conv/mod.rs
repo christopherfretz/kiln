@@ -822,9 +822,36 @@ fn retarget_template_id(
     s.retarget_template_id(e, to)
 }
 
-fn unsupported(what: &str) -> ConvError {
-    // kiln-gap: forward
-    ConvError::new(DiagId::sema_conv_unsupported, vec![what.into()])
+/// The copy-initialization of the incomplete class `to` from the
+/// non-class `e` ([over.match.copy]/1: an incomplete class has no
+/// converting constructor): clang's `FK_UserConversionOverloadFailed`
+/// with no candidate, "no viable conversion from 'int' to incomplete
+/// type 'I'" and the class's declaration note. An undefined class
+/// template specialization was reported by its instantiation, and the
+/// conversion only recovers.
+fn incomplete_class_target(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    at: Loc,
+) -> Result<ExprId, ConvError> {
+    let reported = s.undefined_spec(to).is_some_and(|r| {
+        !s.ast
+            .spec_info(r)
+            .is_some_and(|(_, x)| x.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization)
+    });
+    let pending = s.inst.suppress_next_error.get();
+    let note = s.incomplete_note(s.diag(DiagId::sema_nonviable_conversion_incomplete, at), to);
+    // `incomplete_note` asks to drop the next error when the class's
+    // own error stands for it (an invalid class being defined).
+    let silenced = !pending && s.inst.suppress_next_error.replace(false);
+    if reported || silenced {
+        return Ok(s.recover_err(&[e], at));
+    }
+    let (fa, ta) = s.ty_diff(s.ety(e), to);
+    let mut err = ConvError::new(DiagId::sema_nonviable_conversion_incomplete, vec![fa, ta]);
+    err.notes = note.into_notes();
+    Err(err)
 }
 
 /// clang `FK_ReferenceInitFailed` for binding a reference to `referee`
@@ -860,8 +887,7 @@ fn bind_reference(
     let (rvalue_ref, referee) = match s.ast.types.canonical_view(to) {
         TypeView::LValueRef(p) => (false, p),
         TypeView::RValueRef(p) => (true, p),
-        // kiln-gap: GAP-028
-        _ => return Err(unsupported("this reference binding")),
+        _ => unreachable!("bind_reference: every caller binds a reference type"),
     };
     let n = *s.ast.exprs.get(e);
     let from = n.ty();
@@ -1349,10 +1375,8 @@ fn convert_overload_set(
 /// Converts `e` to type `to` in context `ctx` by an implicit conversion
 /// sequence ([over.best.ics]): a standard conversion sequence for
 /// non-class types ([over.ics.scs]), or a direct reference binding to a
-/// reference-compatible glvalue ([dcl.init.ref]). User-defined
-/// conversions are not implemented yet (M3): a class source without
-/// conversion functions gets clang's "no viable conversion", others
-/// `sema_conv_unsupported`.
+/// reference-compatible glvalue ([dcl.init.ref]), or a user-defined
+/// conversion ([over.match.copy], [over.match.conv]).
 ///
 /// # Errors
 /// If no conversion exists; the error is clang's diagnostic for `ctx`.
@@ -1450,8 +1474,7 @@ pub fn implicit_convert(
         if let Some(x) = s.convert_to_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
             return Ok(x);
         }
-        // kiln-gap: GAP-029
-        return Err(unsupported("initialization of a class object"));
+        return incomplete_class_target(s, e, to, at);
     }
     if fr.is_some() {
         // [over.match.conv]: a conversion function.

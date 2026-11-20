@@ -281,6 +281,11 @@ impl Diag {
         !self.notes.is_empty()
     }
 
+    /// The notes attached to the diagnostic, which is dropped.
+    pub fn into_notes(self) -> Vec<Diag> {
+        self.notes
+    }
+
     /// Adds a fix-it hint.
     pub fn fixit(mut self, f: FixIt) -> Diag {
         self.fixits.push(f);

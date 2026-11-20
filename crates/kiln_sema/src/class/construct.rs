@@ -2,11 +2,8 @@
 //! [class.copy.ctor]; spec/sema-class.md §5.2 and §5.6): copy and move
 //! construction from a glvalue or prvalue of the same or a derived class.
 //!
-//! The constructor is chosen by the Q7 approximation of overload
-//! resolution ([`Sema::select_special`]): the copy and move constructors
-//! (and any other constructor whose first parameter is a reference to, or
-//! is, the class) ranked by their reference bindings. A selection that
-//! needs full overload resolution (WP-068a) reports `sema_unsupported`.
+//! The constructor is chosen by overload resolution among the class's
+//! constructors ([`Sema::select_special`], clang `LookupSpecialMember`).
 
 use kiln_ast::expr::{
     CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, ValueCategory,

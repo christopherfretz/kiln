@@ -395,7 +395,7 @@ impl Sema<'_, '_> {
                 }
             }
             Selected::Deleted(m) => self.diagnose_deleted_use(m, loc),
-            Selected::Missing | Selected::Ambiguous | Selected::Unsupported => {}
+            Selected::Missing | Selected::Ambiguous => {}
         }
     }
 }

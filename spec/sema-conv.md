@@ -446,8 +446,12 @@ the target:
 4. The deprecated conversion from a string literal to `char*` is rejected,
    as C++11 and later require. clang accepts it with a warning under
    `-Wwritable-strings`.
-5. Binding a reference to a temporary, and to the result of a conversion
-   function, is `sema_conv_unsupported` (M3: MaterializeTemporaryExpr).
+5. An implicit conversion to an incomplete class type is "no viable
+   conversion from 'int' to incomplete type 'I'" with the forward
+   declaration as a note (`incomplete_class_target`; clang
+   `PerformImplicitConversion` after `RequireCompleteType`), or nothing
+   when the incompleteness was already reported (WP-1735,
+   spec/landed/sema/WP-1735.md).
 6. PowerPC double-double `long double` is approximated. Narrowing and
    literal rounding treat it as IEEE double, and the rank comparison
    (`float_order`) treats it as a 106-bit-mantissa format. No supported

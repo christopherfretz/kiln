@@ -317,6 +317,7 @@ sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} i
 sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
 // ----- WP-862 (flow-based -Wuninitialized; clang `AnalysisBasedWarnings.cpp` `DiagUninitUse`)
 sema_uninit_var = WarningOff [Uninitialized] (2) "variable {0} is uninitialized when {1:used here|captured by block}";
+sema_uninitialized_member_for_assign = Error (3) "cannot define the implicit copy assignment operator for {0}, because non-static {1:reference|const} member {2} cannot use copy assignment operator";
 sema_union_has_base = Error (0) "unions cannot have base classes";
 sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
 sema_union_virtual = Error (0) "unions cannot have virtual functions";
@@ -397,6 +398,7 @@ sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a 
 sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
 // clang `err_va_start_used_in_wrong_abi_function` on a non-Windows target (WP-808)
 sema_va_start_wrong_abi = Error (0) "'va_start' used in Win64 ABI function";
+sema_value_init_for_array_type = Error (0) "array types cannot be value-initialized";
 sema_var_instantiates_to_function = Error (2) "{0:variable|static data member} instantiated with function type {1}";
 sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";

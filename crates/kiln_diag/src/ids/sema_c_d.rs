@@ -400,6 +400,7 @@ sema_defaulted_deleted = Warning [DefaultedFunctionDeleted] (1) "explicitly defa
 sema_defaulted_special_member_copy_const_param = Error (1) "the parameter for this explicitly-defaulted copy {0:constructor|assignment operator} is const, but a member or base requires it to be non-const";
 sema_defaulted_special_member_move_const_param = Error (1) "the parameter for an explicitly-defaulted move {0:constructor|assignment operator} may not be const";
 sema_defaulted_special_member_quals = Error (2) "an explicitly-defaulted {0:copy|move} assignment operator may not have 'const'{1:|, 'constexpr'} or 'volatile' qualifiers";
+sema_defaulted_special_member_variadic = Error (1) "an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} cannot be variadic";
 sema_defaulted_special_member_volatile_param = Error (1) "the parameter for an explicitly-defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} may not be volatile";
 sema_define_explicitly_defaulted_member = Error (1) "definition of explicitly defaulted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";
 sema_define_implicit_member = Error (1) "definition of implicitly declared {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor|function}";

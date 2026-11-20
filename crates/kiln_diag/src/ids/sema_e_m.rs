@@ -317,6 +317,7 @@ sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of
 sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
 sema_invalid_declarator_scope = Error (3) "cannot define or redeclare '{0}' here because namespace '{1}' does not enclose namespace '{2}'";
 sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant";
+sema_invalid_incomplete_type_use = Error (1) "invalid use of incomplete type {0}";
 sema_invalid_member_in_static = Error (2) "invalid use of member '{0}' in {1:static|explicit object} member function";
 sema_invalid_nonstatic_member_use = Error (1) "invalid use of non-static data member '{0}'";
 sema_invalid_operands = Error (2) "invalid operands to binary expression ({0} and {1})";

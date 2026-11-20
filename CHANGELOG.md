@@ -31,6 +31,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `using enum` members ([enum.udecl]), and member and friend templates
   whose own non-type or template template parameters appear in their
   signatures or noexcept specifiers ([temp.mem], [temp.friend]).
+- Initialization and conversion corners that reported "not supported
+  yet" now follow the standard (WP-1735): `void{}` (CWG2351), braced
+  placement arguments of a new-expression (`new ({1, 2}) T`), an empty
+  braced list calling a constructor template as the default constructor,
+  a conditional operator over two xvalues of differently cv-qualified
+  types, and a defaulted assignment operator whose subobject assignment
+  needs overload resolution.
 
 ### Fixed
 
@@ -47,6 +54,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   specifier naming its own template parameters is diagnosed once its
   class template is instantiated ([except.spec], [temp.over.link];
   WP-1734).
+- Ill-formed initializations and conversions get clang's diagnostics
+  instead of "not supported yet" (WP-1735): `T()` / `T(a, b)` of an
+  array, reference or incomplete type, a reference initialized from
+  several expressions or from `()` in a mem-initializer, a variable,
+  default argument or conversion target of incomplete class type,
+  static and C-style casts to an incomplete class, a variable-length
+  array initialized by a braced list, an ambiguous initializer-list
+  constructor, a defaulted assignment operator of a class with a
+  reference or const member, and a variadic explicitly-defaulted special
+  member. A nested designator into a member that is not an aggregate is
+  an error (docs/status/deviations.md).
 
 ## [1.3.0] - 2026-11-20
 

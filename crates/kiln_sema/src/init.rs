@@ -333,7 +333,9 @@ impl Sema<'_, '_> {
         {
             return Some(e);
         }
-        if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end, ctor_at) {
+        if let Some(e) =
+            self.init_list_ctor_init(ty, l, style, at, temp_end, ctor_at, param_note.as_ref())
+        {
             return Some(e);
         }
         // clang 20+ (CWG2137, the single-element copy above gone): in phase
@@ -649,7 +651,9 @@ impl Sema<'_, '_> {
     /// constructor, a type-dependent element) or selects nothing (phase 2
     /// follows). The argument is built as list-initialization of the
     /// parameter (a `CXXStdInitializerListExpr`, bound to a temporary for
-    /// a reference parameter).
+    /// a reference parameter). `param_note` notes the parameter a list
+    /// argument initializes, for an ambiguous selection.
+    #[allow(clippy::too_many_arguments, reason = "the list initialization's sites")]
     fn init_list_ctor_init(
         &mut self,
         ty: QualType,
@@ -658,6 +662,7 @@ impl Sema<'_, '_> {
         at: Loc,
         temp_end: Option<Loc>,
         ctor_at: Loc,
+        param_note: Option<&Diag>,
     ) -> Option<ExprId> {
         use crate::class::{CtorCall, Selected, SpecialKind};
         use crate::overload::{ArgInfo, IcsOptions, SetKind};
@@ -702,8 +707,27 @@ impl Sema<'_, '_> {
         let sel = self.selected_of(set, out);
         self.ovl.lists.pop();
         let (Selected::Found(f) | Selected::Deleted(f)) = sel else {
-            // kiln-gap: GAP-023
-            self.unsupported("this initializer-list constructor selection", l.lbrace);
+            // [over.match.list]/1.1, [over.match.best.general]/3: viable
+            // initializer-list constructors without a best one make the
+            // initialization ill-formed (clang's `err_ovl_ambiguous_init`
+            // with the candidates as notes, at the initialized entity).
+            let (entity, _) = self.take_ctor_entity();
+            let mut site = ConstructSite::at(at);
+            site.sites.access = ctor_at;
+            if let Some(n) = param_note {
+                site.sites.deleted_as = DeletedAs::Param(n.clone());
+            }
+            let call = CtorCall { temp_end, ..CtorCall::new(&[]) };
+            let _ = self.use_ctor(
+                sel,
+                ty,
+                class,
+                SpecialKind::CopyCtor,
+                call,
+                ctor_at,
+                entity,
+                site.sites,
+            );
             let flat = Self::list_exprs(l);
             return Some(self.recover(ty, &flat, l.lbrace));
         };
@@ -848,6 +872,18 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// `T& r(a, b)`: [dcl.init.ref]/5 binds a reference to one
+    /// expression; P0960's parenthesized aggregate initialization
+    /// ([dcl.init.general]/16.6.2.2, /16.5) is of an object, not of a
+    /// reference's temporary (clang `FK_TooManyInitsForReference`, at the
+    /// entity, the expressions underlined). `v` has two or more elements.
+    fn reference_multiple_inits(&mut self, v: &[ExprId], loc: Loc) {
+        let (first, last) = (v[0], v[v.len() - 1]);
+        let span = Span::new(self.begin_loc(first), self.expr_range(last).hi);
+        let msg = self.diag(DiagId::sema_reference_has_multiple_inits, loc).range(span);
+        self.emit(msg);
+    }
+
     /// The initialization of an object of type `ty` by `init`
     /// ([dcl.init.general]/16); `direct_list` for `T x{...}`
     /// (direct-list-initialization, [dcl.init.list]/1).
@@ -902,12 +938,9 @@ impl Sema<'_, '_> {
                     // initialization ([dcl.init.general]/16.1 applies only
                     // to a non-parenthesized braced-init-list).
                     let _ = self.take_braced_arg(*a);
-                    let reference = u8::from(self.ast.types.is_reference(ty));
-                    let msg = self
-                        .diag(DiagId::sema_list_init_in_parens, loc)
-                        .arg(reference)
-                        .arg(self.ty_arg(ty));
-                    self.emit(msg);
+                    let msg = self.diag(DiagId::sema_list_init_in_parens, loc);
+                    let msg = msg.arg(u8::from(self.ast.types.is_reference(ty)));
+                    self.emit(msg.arg(self.ty_arg(ty)));
                     return self.recover(ty, &v, l);
                 }
                 if settled && self.ast.types.as_record(ty).is_some() {
@@ -942,9 +975,14 @@ impl Sema<'_, '_> {
                     let d = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
                     self.emit(d);
                     self.recover(ty, &v, l)
+                } else if self.ast.types.is_reference(ty) && settled {
+                    self.reference_multiple_inits(&v, loc);
+                    self.recover(ty, &v, l)
                 } else {
-                    // kiln-gap: GAP-021
-                    self.unsupported("parenthesized initialization with multiple expressions", l);
+                    // An aggregate or reference initialized from an
+                    // erroneous or type-dependent expression: nothing to
+                    // check now (a dependent one is checked when
+                    // instantiated, the erroneous one was diagnosed).
                     self.recover(ty, &v, l)
                 }
             }
@@ -2576,10 +2614,24 @@ impl Sema<'_, '_> {
         if let Some(k) = sub.entry
             && record.is_none_or(|_| !self.is_aggregate(ty))
         {
-            match record {
-                // kiln-gap: GAP-026
-                Some(_) => self.unsupported("a designator into a non-aggregate member", lbrace),
-                None => self.designator_mismatch(ty, &items[*pos].designator[k]),
+            match (record, items[*pos].designator[k]) {
+                // A nested field designator (`.n.x`, the C99 extension)
+                // into a member of non-aggregate class type: as `.n =
+                // {.x = ...}`, ill-formed by [dcl.init.list]/3.1, the
+                // designator underlined. clang accepts it and initializes
+                // the class's fields without a constructor
+                // (docs/status/deviations.md); GCC has no nested
+                // designators.
+                (Some(_), Designator::Field(_, l)) => {
+                    let at = self.period_before(l);
+                    let end = self.token_end(l).unwrap_or(l);
+                    let msg = self
+                        .diag(DiagId::sema_designated_init_non_aggregate, at)
+                        .arg(self.ty_arg(ty))
+                        .range(Span::new(at, end));
+                    self.emit(msg);
+                }
+                (_, d) => self.designator_mismatch(ty, &d),
             }
             *pos += 1;
             return self.recover(ty, &[], lbrace);

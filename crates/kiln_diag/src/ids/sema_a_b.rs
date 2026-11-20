@@ -267,6 +267,7 @@ sema_auto_var_requires_init = Error (2) "declaration of variable '{0}' with dedu
 sema_auto_var_template_in_own_initializer = Error (2) "variable template '{0}' declared with deduced type {1} cannot appear in its own initializer";
 sema_auto_var_template_spec_depends_on_itself = Error (2) "the type of variable template specialization '{0}' declared with deduced type {1} depends on itself";
 sema_await_suspend_invalid_return_type = Error (1) "return type of 'await_suspend' is required to be 'void' or 'bool' (have {0})";
+sema_bad_cast_incomplete = Error (1) "{0} is an incomplete type";
 sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
 sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
 sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";

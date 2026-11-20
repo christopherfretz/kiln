@@ -2723,7 +2723,13 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if unexpanded || !list_refs_ok || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
+        // [dcl.fct.default]/1, after the argument's checks (clang
+        // `ConvertParamDefaultArgument`): the argument initializes the
+        // parameter, whose class type must be complete.
+        if unexpanded
+            || !list_refs_ok
+            || !roots.into_iter().all(|e| self.check_default_arg_refs(e))
+            || !p.invalid && self.incomplete_class_rejected(p.ty, p.loc)
         {
             p.invalid = true;
             if let Some(d) = p.decl {
@@ -7983,6 +7989,49 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// clang `AddInitializerToDecl`'s `RequireCompleteType(VDecl->getLocation(),
+    /// ..., err_typecheck_decl_incomplete_type)`: an initialized variable
+    /// of class type has a complete type ([basic.def]/5,
+    /// [dcl.init.general]/7), whatever the form of its initializer
+    /// (`I i(1, 2);`, `I i = 1;`, `I i{1};`). An undefined class template
+    /// specialization is reported by its instantiation only ("implicit
+    /// instantiation of undefined template"); any other class as
+    /// "variable has incomplete type" at the name, with the declaration's
+    /// note. True (and `v` invalid) if rejected; the caller drops the
+    /// initializer.
+    fn reject_incomplete_class_init(&mut self, v: DeclId, ty: QualType, loc: Loc) -> bool {
+        if !self.incomplete_class_rejected(ty, loc) {
+            return false;
+        }
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        true
+    }
+
+    /// The check behind [`Sema::reject_incomplete_class_init`], shared
+    /// with a default argument ([dcl.fct.default]/1: it initializes the
+    /// parameter, clang `ActOnParamDefaultArgument`): true when the
+    /// non-dependent class `ty` is incomplete, reported at `loc` unless
+    /// its instantiation already was.
+    pub(crate) fn incomplete_class_rejected(&mut self, ty: QualType, loc: Loc) -> bool {
+        if self.ast.types.as_record(ty).is_none() || self.ast.types.is_dependent(ty) {
+            return false;
+        }
+        let reported = self.undefined_spec(ty).is_some_and(|r| {
+            !self.ast.spec_info(r).is_some_and(|(_, s)| {
+                s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+            })
+        });
+        if self.require_complete(ty, loc) {
+            return false;
+        }
+        if !reported {
+            let msg =
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
+            self.emit(self.incomplete_note(msg, ty));
+        }
+        true
+    }
+
     /// A dependent initializer, kept as written until instantiation.
     fn set_dependent_var_init(&mut self, v: DeclId, e: ExprId) {
         let e = self.act_on_full_expr(e);
@@ -8212,7 +8261,8 @@ impl Sema<'_, '_> {
         // clang `AddInitializerToDecl`'s `RequireCompleteType`: a class
         // template specialization failing to instantiate here leaves the
         // variable invalid, quietly.
-        if self.invalid_by_failed_spec(v, ty, loc) {
+        if self.invalid_by_failed_spec(v, ty, loc) || self.reject_incomplete_class_init(v, ty, loc)
+        {
             self.discard_initializer(&init);
             return;
         }

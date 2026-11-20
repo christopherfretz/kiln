@@ -1449,7 +1449,9 @@ impl Substituter<'_, '_, '_> {
                 None
             }
             // The allocation function's default arguments are added again.
-            Some(l) => Some(NewPlacement { args: self.expr_list(l)?, lparen: loc, rparen: loc }),
+            Some(l) => {
+                Some(NewPlacement { args: self.call_arg_list(l)?, lparen: loc, rparen: loc })
+            }
             None => None,
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;

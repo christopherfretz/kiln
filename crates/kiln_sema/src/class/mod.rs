@@ -401,6 +401,13 @@ impl Sema<'_, '_> {
         if eq.is_valid() && !self.has_errors_in(e) && self.reject_param_pack_default(pty, eq) {
             return;
         }
+        // [dcl.fct.default]/1, as `act_on_param_default_init`.
+        let ploc = self.ast.decls.get(p).loc();
+        if eq.is_valid() && self.incomplete_class_rejected(pty, ploc) {
+            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            let _ = self.ast.decls.set_default_arg(p, e);
+            return;
+        }
         self.attach_default_arg(p, e);
     }
 
