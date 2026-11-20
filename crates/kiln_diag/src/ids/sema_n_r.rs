@@ -172,6 +172,7 @@ sema_ovl_rewrite_equalequal_not_bool = Error (2) "return type {0} of selected 'o
 sema_ovl_rewrite_equalequal_not_bool_ext = ExtWarn [RewriteNotBool] (2) "ISO C++20 requires return type of selected 'operator==' function for rewritten '{1}' comparison to be 'bool', not {0}";
 sema_ovl_static_nonstatic_member = Error (0) "static and non-static member functions with the same parameter types cannot be overloaded";
 sema_ovl_unresolvable = Error (1) "reference to overloaded function could not be resolved; did you mean to call it{0:| with no arguments}?";
+sema_pack_expansion_member_init = Error (1) "pack expansion for initialization of member '{0}'";
 sema_pack_expansion_without_packs = Error (0) "pack expansion does not contain any unexpanded parameter packs";
 sema_pack_index_invalid = Error (3) "invalid index {0} for pack {1} of size {2}";
 sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed at an out of bounds index";

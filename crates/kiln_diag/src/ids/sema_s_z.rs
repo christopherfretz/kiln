@@ -372,6 +372,10 @@ sema_using_decl_friend = Error (0) "cannot befriend target of using declaration"
 sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
 sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
 sema_using_decl_redeclaration = Error (0) "redeclaration of using declaration";
+// [temp.variadic]/5, [namespace.udecl]/8 (WP-1733): a block-scope
+// using-declarator pack expansion of more than one element (clang
+// `err_using_decl_redeclaration_expansion`).
+sema_using_decl_redeclaration_expansion = Error (0) "using declaration pack expansion at block scope produces multiple values";
 sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
 sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
 sema_using_enum_is_dependent = Error (0) "using-enum cannot name a dependent type";

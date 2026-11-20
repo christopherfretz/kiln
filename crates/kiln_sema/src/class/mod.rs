@@ -245,6 +245,35 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [temp.variadic]/5, /12 for base-specifier `b` as parsed (clang's
+    /// `ActOnBaseSpecifier` / `CheckBaseSpecifier`): one that is no pack
+    /// expansion must name no pack, "base type contains unexpanded
+    /// parameter pack" at the specifier's begin (false: the specifier is
+    /// dropped); a pack expansion (`...` at `ellipsis`) must name one,
+    /// else "pack expansion does not contain any unexpanded parameter
+    /// packs" and the specifier stays as a plain base.
+    pub fn check_base_specifier_packs(
+        &mut self,
+        b: &mut BaseSpecInfo,
+        ellipsis: Option<Loc>,
+    ) -> bool {
+        use crate::templ::pack::PackOperand;
+        match ellipsis {
+            None => !self.diagnose_unexpanded_operand_written(
+                PackOperand::Type(b.ty),
+                "base type",
+                b.loc,
+            ),
+            Some(l) => {
+                if !self.has_unexpanded_pack(b.ty) {
+                    self.error(DiagId::sema_pack_expansion_without_packs, l);
+                    b.pack_expansion = false;
+                }
+                true
+            }
+        }
+    }
+
     /// The base-clause of class `r` (spec/sema-class.md §3.1; WP-066b,
     /// virtual bases WP-078a). Called once per class definition, after
     /// `act_on_start_record_definition` and before any member, with an

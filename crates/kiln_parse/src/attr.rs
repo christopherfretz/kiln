@@ -886,17 +886,22 @@ impl Parser<'_, '_> {
             {
                 // clang `ParseCXX11AttributeArgs`: a standard attribute
                 // without arguments takes no argument list, even `()`.
-                let d =
-                    self.s.diag(DiagId::parse_attribute_forbids_arguments, self.loc()).arg(text);
+                let d = self
+                    .s
+                    .diag(DiagId::parse_attribute_forbids_arguments, self.loc())
+                    .arg(text.as_str());
                 self.emit(d);
                 self.parse_attr_args(name);
                 None
             } else {
                 self.parse_attr_args(name)
             };
-            if let Some(l) = self.eat(Punct::Ellipsis) {
-                // kiln-gap: GAP-002
-                self.unsupported("attribute pack expansions", l);
+            // [dcl.attr.grammar]/4: an attribute pack expansion needs an
+            // attribute that allows one, and none does (clang reports it
+            // at the token after the `...` and keeps the attribute).
+            if self.eat(Punct::Ellipsis).is_some() {
+                let d = self.s.diag(DiagId::parse_attribute_forbids_ellipsis, self.loc()).arg(text);
+                self.emit(d);
             }
             if let Some(args) = args
                 && let Some(a) = self.s.act_on_attribute(AttrSyntax::Cxx11, scope, name, &args, loc)
@@ -1112,8 +1117,12 @@ impl Parser<'_, '_> {
                 e = self.s.act_pack_expansion(e, l);
             }
             // clang drops an attribute whose argument is invalid; kiln
-            // does so for the string-literal attributes above.
+            // does so for the string-literal attributes above, and for an
+            // argument naming an unexpanded pack.
             if string_literal_arg(&text, 0) && self.s.contains_errors(e) {
+                ok = false;
+            }
+            if !self.s.check_attribute_arg_packs(e) {
                 ok = false;
             }
             args.push(AttrArg::Expr(e));

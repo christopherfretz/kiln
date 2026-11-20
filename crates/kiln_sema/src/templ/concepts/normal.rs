@@ -768,7 +768,7 @@ impl Sema<'_, '_> {
     /// grouped into one pack argument ([temp.arg.general]/4), so the
     /// concept's own constraint substitutes `A...` element-wise and the
     /// mapping is the same whichever route named the concept.
-    fn concept_mapping_args(&mut self, c: DeclId, args: ArgListId) -> ArgListId {
+    pub(crate) fn concept_mapping_args(&mut self, c: DeclId, args: ArgListId) -> ArgListId {
         let params = self.template_params(c);
         let Some((&last, fixed)) = params.split_last() else { return args };
         if !self.ast.template_parm(last).is_some_and(|x| x.pack) {

@@ -761,11 +761,14 @@ impl Sema<'_, '_> {
                 self.deduce_expr_arg(e, p, a, d)
             }
             ArgView::Null => Tdk::Success,
+            // An argument pack, or a template pack expansion `TT...`, of
+            // `P` outside a list (each list flattens its packs and
+            // expands its expansions itself): deduced as the one-element
+            // list it is part of ([temp.deduct.type]/9), the pack's
+            // elements matched in turn, the expansion's pattern against
+            // every `A` element.
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } => {
-                let at = if loc.is_valid() { loc } else { d.loc };
-                // kiln-gap: GAP-005
-                self.templ_unimplemented("template argument deduction for a pack", at);
-                Tdk::MiscellaneousDeductionFailure
+                self.deduce_arg_list(&[p], &[a], true, d, level, loc)
             }
         }
     }
@@ -1564,10 +1567,21 @@ impl Sema<'_, '_> {
                     _ => Tdk::Success,
                 }
             }
+            // A pack expansion of `P` met outside a list (function
+            // parameter lists and template argument lists expand theirs):
+            // as the one-element list it is part of ([temp.deduct.type]/9;
+            // the pattern deduced against `A`, each deduced value one
+            // element of its pack).
             TypeView::PackExpansion { .. } => {
-                // kiln-gap: GAP-005
-                self.templ_unimplemented("template argument deduction for a pack", d.loc);
-                Tdk::MiscellaneousDeductionFailure
+                let loc = d.loc;
+                self.deduce_arg_list(
+                    &[TemplateArg::ty(p)],
+                    &[TemplateArg::ty(a)],
+                    true,
+                    d,
+                    next,
+                    loc,
+                )
             }
             // Non-deduced contexts ([temp.deduct.type]/5): the
             // qualifier of a qualified-id, `decltype`, pack indexing,

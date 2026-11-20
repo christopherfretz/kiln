@@ -122,10 +122,10 @@ impl Sema<'_, '_> {
             self.cleanup = super::CleanupState::default();
             return;
         }
+        // A pack expansion here was rejected by
+        // [`Sema::check_mem_initializer_packs`]: a non-dependent
+        // constructor names no pack.
         if info.pack_expansion {
-            // todo(WP-070): pack expansions of base initializers.
-            // kiln-gap: GAP-006
-            self.unsupported("a mem-initializer pack expansion", info.loc);
             self.cleanup = super::CleanupState::default();
             self.mem_inits.any_errors = true;
             return;
@@ -144,6 +144,90 @@ impl Sema<'_, '_> {
             Some(ci) => self.mem_inits.inits.push(ci),
             None => self.mem_inits.any_errors = true,
         }
+    }
+
+    /// The pack checks of a written mem-initializer of constructor `ctor`,
+    /// before [`Sema::act_on_mem_initializer`] (clang `BuildMemInitializer`,
+    /// `BuildBaseInitializer`); `ellipsis` is its `...`.
+    /// - A pack expansion is a base-initializer whose class names a pack
+    ///   ([temp.variadic]/5.4): one initializing a member is reported
+    ///   ("pack expansion for initialization of member 'm'"), one whose
+    ///   class names no pack too (clang's "pack expansion does not
+    ///   contain any unexpanded parameter packs"); both go on as plain
+    ///   mem-initializers.
+    /// - Without one, a pack named in the mem-initializer-id or the
+    ///   initializer is ill-formed ([temp.variadic]/12): reported and the
+    ///   mem-initializer counted as failed; returns false.
+    pub fn check_mem_initializer_packs(
+        &mut self,
+        ctor: DeclId,
+        info: &mut MemInitInfo,
+        ellipsis: Option<Loc>,
+    ) -> bool {
+        use crate::templ::pack::PackOperand;
+        if let Some(at) = ellipsis.filter(|_| info.pack_expansion) {
+            if let Some(name) = self.mem_init_names_member(ctor, info) {
+                let msg = self
+                    .diag(DiagId::sema_pack_expansion_member_init, at)
+                    .arg(crate::decl::sym_str(self, name));
+                self.emit(msg);
+                info.pack_expansion = false;
+            } else if let MemInitId::Type(t) = info.id
+                && !self.ast.types.is_error(t)
+                && !self.operand_has_packs(PackOperand::Type(t))
+            {
+                self.error(DiagId::sema_pack_expansion_without_packs, at);
+                info.pack_expansion = false;
+            }
+            return true;
+        }
+        let bad = match info.id {
+            MemInitId::Type(t) => self.diagnose_unexpanded_operand_written(
+                PackOperand::Type(t),
+                "initializer",
+                info.loc,
+            ),
+            MemInitId::Ident(_) => false,
+        } || {
+            // At the initializer's `(` or `{` (clang's `ParenListExpr` or
+            // `InitListExpr` begin).
+            let open = match &info.init {
+                Initializer::Paren(_, l, _) => Some(*l),
+                Initializer::List(l) => Some(l.lbrace),
+                Initializer::Expr(_) => None,
+            };
+            initializer_exprs(&info.init).into_iter().any(|e| {
+                let at = open.unwrap_or_else(|| self.begin_loc(e));
+                self.diagnose_unexpanded_operand_written(PackOperand::Expr(e), "initializer", at)
+            })
+        };
+        if !bad {
+            return true;
+        }
+        if self.mem_inits.ctor != Some(ctor) {
+            self.mem_inits = MemInitState { ctor: Some(ctor), ..MemInitState::default() };
+            self.mem_inits.skip = !self.check_mem_inits_of(ctor);
+        }
+        self.mem_inits.count += 1;
+        self.mem_inits.any_errors = true;
+        self.mem_inits.pattern_failed |= self.mem_inits.skip;
+        self.cleanup = super::CleanupState::default();
+        false
+    }
+
+    /// The name of a mem-initializer that lookup in the constructor's
+    /// class finds a non-static data member of ([class.base.init]/2;
+    /// clang `tryLookupCtorInitMemberDecl`).
+    fn mem_init_names_member(&mut self, ctor: DeclId, info: &MemInitInfo) -> Option<Symbol> {
+        let MemInitId::Ident(name) = info.id else { return None };
+        let class = self.ast.decls.get(ctor).ctx()?;
+        let def = self.class_def(class);
+        let found = self.lookup_in(def, name, LookupKind::Ordinary);
+        found
+            .decls
+            .iter()
+            .any(|&d| matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField))
+            .then_some(name)
     }
 
     /// clang's `CXXConstructExpr` of a mem-initializer ends at its `)` or

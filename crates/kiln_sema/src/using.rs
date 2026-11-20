@@ -91,6 +91,43 @@ impl Sema<'_, '_> {
 
     // -- using-declarations ------------------------------------------------------------
 
+    /// [temp.variadic]/5, /12: the qualifier or the name (a
+    /// conversion-function-id's type) of a using-declarator that is a
+    /// pack expansion names a pack; one that is not names none (clang's
+    /// `ActOnUsingDeclaration`: without packs the `...` is diagnosed and
+    /// dropped). The `...` kept, or `Err` after an unexpanded pack.
+    fn using_declarator_packs(
+        &mut self,
+        q: &Qualifier,
+        name: DeclName,
+        name_loc: Loc,
+        ellipsis: Option<Loc>,
+    ) -> Result<Option<Loc>, ()> {
+        use crate::templ::pack::PackOperand;
+        let name_ty = match self.ast.names.view(name) {
+            kiln_ast::names::DeclNameView::Conversion(t) => Some(t),
+            _ => None,
+        };
+        if let Some(l) = ellipsis {
+            if !self.operand_has_packs(PackOperand::Nns(q.nns))
+                && !name_ty.is_some_and(|t| self.has_unexpanded_pack(t))
+            {
+                self.error(DiagId::sema_pack_expansion_without_packs, l);
+                return Ok(None);
+            }
+            return Ok(ellipsis);
+        }
+        let what = "using declaration";
+        if self.diagnose_unexpanded_operand_written(PackOperand::Nns(q.nns), what, q.loc)
+            || name_ty.is_some_and(|t| {
+                self.diagnose_unexpanded_operand_written(PackOperand::Type(t), what, name_loc)
+            })
+        {
+            return Err(());
+        }
+        Ok(None)
+    }
+
     /// One using-declarator `using qual name;` ([namespace.udecl]).
     /// `using_loc` is the `using` keyword; `if_exists` is set by the
     /// `using_if_exists` attribute; `ellipsis` is the `...` of a pack
@@ -112,18 +149,7 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_using_requires_qualname, name_loc);
             return None;
         };
-        if let Some(l) = ellipsis {
-            let flags = self.ast.types.nns_flags(q.nns);
-            if !flags.contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK) {
-                self.error(DiagId::sema_pack_expansion_without_packs, l);
-                return None;
-            }
-            if self.member_spec_class().is_none() {
-                // kiln-gap: GAP-011
-                self.unsupported("a pack expansion in a non-member using-declaration", l);
-                return None;
-            }
-        }
+        let ellipsis = self.using_declarator_packs(&q, name, name_loc, ellipsis).ok()?;
         let qk = self.kind_of(q.ctx);
         if self.literal_operator_qualifier_error(q, name, name_loc) {
             return None;
@@ -162,6 +188,11 @@ impl Sema<'_, '_> {
             if using_loc != name_loc {
                 // The instantiation's notes point at the `using`.
                 let _ = self.ast.decls.cold.begin_loc.insert(d, using_loc);
+            }
+            if let Some(l) = ellipsis {
+                // A pack expansion (`using E<Ts>::A...;`): expanded when
+                // instantiated, where more than one element is an error.
+                let _ = self.ast.decls.cold.declarator_end.insert(d, l);
             }
             self.push_local(n, d);
             return Some(d);

@@ -432,15 +432,21 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             // elements, expansions expanded (§7.2).
             ArgView::Pack(l) => Ok(TemplateArg::pack(self.args(l, loc)?)),
             // A canonical value-dependent argument: its first expression
-            // stands for it (an implicit deduction guide's, WP-134).
-            ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
+            // stands for it (an implicit deduction guide's, WP-134); one
+            // naming a pack is rebuilt as `expr` rebuilds an expansion.
+            ArgView::Profile(p) => {
                 let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
                 let e = self.constant_operand(e)?;
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
-            ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
-                // kiln-gap: GAP-003
-                self.unimplemented("pack expansion", loc)
+            // `TT...` met outside an argument list being expanded
+            // (`args` expands it in place): the pattern is substituted
+            // with its substituted packs kept and the expansion rebuilt,
+            // to be expanded by the list it ends up in (clang's
+            // `TransformTemplateArgument` of a `TemplateExpansion`).
+            ArgView::TemplateExpansion { name, num_expansions } => {
+                let n = self.kept_pack_pattern(|s| s.template_name(name, loc))?;
+                Ok(TemplateArg::template_expansion(n, num_expansions))
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),
         }
@@ -940,13 +946,57 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// `TransformFunctionTypeParams` instantiating the `ParmVarDecl`s).
     /// It keeps its index and function-scope depth for the mangling of
     /// a still-dependent reference.
+    /// A function parameter pack (`void (*)(T... a, decltype(a)... b)`,
+    /// [temp.variadic]/5) becomes one parameter per element of its
+    /// type's expansion, the element named under the current pack index
+    /// ([`Self::find_instantiated_decl`]); one whose expansion keeps a
+    /// level not substituted stays a pack.
     pub(crate) fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let node = *self.sema.ast.decls.get(d);
         let Some(pd) = self.sema.ast.decls.param(d).copied() else { return Ok(d) };
         let t = pd.original_ty.unwrap_or_else(|| self.decl_ty(d));
-        let ty = self.ty(t, loc)?;
         let ctx = self.sema.ctx;
         let flags = pd.flags & !kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING;
+        let pack = pd.flags & kiln_ast::decl::ParamData::PACK != 0;
+        if pack && let Some(pat) = crate::templ::pack::type_pattern(self.sema, t) {
+            let tys = match self.expand_pattern(|s| s.element_ty(pat, loc))? {
+                crate::templ::pack::Expansion::Elements(v) => v,
+                crate::templ::pack::Expansion::Unexpanded(x) => {
+                    let ty = self.sema.ast.types.pack_expansion(x, None);
+                    let np = self.sema.builder().prototype_param(
+                        ctx,
+                        node.name(),
+                        node.loc(),
+                        ty,
+                        pd.index,
+                        flags,
+                    );
+                    self.sema.unowned_params.insert(np);
+                    self.locals.insert(d, DeclOrPack::Decl(np));
+                    return Ok(np);
+                }
+            };
+            let flags = flags & !kiln_ast::decl::ParamData::PACK;
+            let ps: Vec<DeclId> = tys
+                .into_iter()
+                .map(|ty| {
+                    let np = self.sema.builder().prototype_param(
+                        ctx,
+                        node.name(),
+                        node.loc(),
+                        ty,
+                        pd.index,
+                        flags,
+                    );
+                    self.sema.unowned_params.insert(np);
+                    np
+                })
+                .collect();
+            let l = self.sema.ast.lists.push(&ps);
+            self.locals.insert(d, DeclOrPack::Pack(l));
+            return self.find_instantiated_decl(d, loc);
+        }
+        let ty = self.ty(t, loc)?;
         let np =
             self.sema.builder().prototype_param(ctx, node.name(), node.loc(), ty, pd.index, flags);
         self.sema.unowned_params.insert(np);

@@ -942,12 +942,16 @@ impl Parser<'_, '_> {
                 // non-constructor (reported once, below).
                 let valid = ok && ctor;
                 // Each mem-initializer is a full-expression, built as soon
-                // as it is parsed ([class.base.init]/7).
-                if let Some(info) = info
+                // as it is parsed ([class.base.init]/7). Its `...` is the
+                // last token it took.
+                if let Some(mut info) = info
                     && ctor
                 {
                     count += 1;
-                    self.s.act_on_mem_initializer(f, &info);
+                    let ellipsis = info.pack_expansion.then(|| self.prev_lo());
+                    if self.s.check_mem_initializer_packs(f, &mut info, ellipsis) {
+                        self.s.act_on_mem_initializer(f, &info);
+                    }
                 }
                 if self.eat(Punct::Comma).is_some() {
                     continue;
@@ -2744,8 +2748,12 @@ impl Parser<'_, '_> {
         loop {
             match self.parse_base_specifier() {
                 Some(mut b) => {
-                    self.s.check_base_annotation_packs(&mut b.attrs, b.pack_expansion);
-                    bases.push(b);
+                    // The `...` of a pack expansion is the last token.
+                    let ellipsis = b.pack_expansion.then(|| self.prev_lo());
+                    if self.s.check_base_specifier_packs(&mut b, ellipsis) {
+                        self.s.check_base_annotation_packs(&mut b.attrs, b.pack_expansion);
+                        bases.push(b);
+                    }
                 }
                 None => {
                     self.skip_until(&[Punct::Comma, Punct::LBrace], true, false);

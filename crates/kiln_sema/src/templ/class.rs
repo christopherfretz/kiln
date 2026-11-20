@@ -11,7 +11,7 @@ use kiln_ast::ids::{ArgListId, TemplateNameId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName, TypeFlags, TypeView};
-use kiln_ast::{AnnId, DeclId, QualType};
+use kiln_ast::{AnnId, DeclId, NnsId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -2392,13 +2392,13 @@ impl Substituter<'_, '_, '_> {
                     let es = exprs.iter().map(|&e| s.expr(e)).collect::<SubstResult<Vec<_>>>()?;
                     Ok((ty, es))
                 });
-                let elems = match elems {
-                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
-                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
-                        // kiln-gap: GAP-009
-                        let _ = self.unimplemented::<()>("base pack expansion", b.loc);
-                        continue;
-                    }
+                // Its packs belong to a level not substituted yet (a
+                // local class of a generic lambda, `struct L :
+                // decltype(xs)... {}`): the class keeps one dependent
+                // pack-expansion base, expanded when that level is.
+                let (elems, kept) = match elems {
+                    Ok(crate::templ::pack::Expansion::Elements(v)) => (v, false),
+                    Ok(crate::templ::pack::Expansion::Unexpanded(x)) => (vec![x], true),
                     Err(_) => {
                         failed = true;
                         continue;
@@ -2410,7 +2410,7 @@ impl Substituter<'_, '_, '_> {
                         loc: b.loc,
                         is_virtual: b.is_virtual,
                         access: b.access,
-                        pack_expansion: false,
+                        pack_expansion: kept,
                         attrs: Vec::new(),
                     });
                     let copies = if k == 0 { mine.clone() } else { self.sema.copy_annots(&mine) };
@@ -2754,38 +2754,60 @@ impl Substituter<'_, '_, '_> {
     fn member_using(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
         let pnns = self.sema.ast.using_qualifier(m).ok_or(SubstFail)?;
         let dn = self.sema.ast.decls.get(m).name();
-        // An operator- or conversion-function-id (`using B<T>::operator=;`)
-        // is kept, a conversion's target type substituted; a constructor
-        // name (or the base's own name) inherits constructors.
-        let (name, inheriting) = match self.sema.ast.names.view(dn) {
-            DeclNameView::Identifier(n) => (dn, self.sema.nns_last_name(pnns) == Some(n)),
-            DeclNameView::Operator(_) | DeclNameView::LiteralOperator(_) => (dn, false),
-            DeclNameView::Conversion(t) => {
-                let t = self.ty(t, loc)?;
-                let t = self.sema.ast.types.canonical(t);
-                (self.sema.ast.names.conversion(t), false)
-            }
-            _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
+        // A constructor name (or the base's own name) inherits
+        // constructors; it is named by the qualifier's last component.
+        let (inheriting, ctor_name) = match self.sema.ast.names.view(dn) {
+            DeclNameView::Identifier(n) => (self.sema.nns_last_name(pnns) == Some(n), false),
+            DeclNameView::Operator(_)
+            | DeclNameView::LiteralOperator(_)
+            | DeclNameView::Conversion(_) => (false, false),
+            _ => (true, true),
         };
         // Qualifier errors and the qualifier's notes are located where
         // the nested-name-specifier begins, not at the name.
         let qloc = self.qualifier_begin(pnns, loc);
-        let packed = self.sema.ast.types.nns_flags(pnns).contains(TypeFlags::UNEXPANDED_PACK);
-        let nnss = if packed {
-            // `using Bases::operator()...;` ([temp.variadic]/5): one
-            // using-declarator per element.
-            match self.expand_pattern(|s| s.nns(pnns, qloc))? {
-                crate::templ::pack::Expansion::Elements(v) => v,
-                crate::templ::pack::Expansion::Unexpanded(_) => {
-                    // kiln-gap: GAP-010
-                    return self.unimplemented("this using-declaration pack expansion", loc);
+        let conv = match self.sema.ast.names.view(dn) {
+            DeclNameView::Conversion(t) => Some(t),
+            _ => None,
+        };
+        let packed = self.sema.ast.types.nns_flags(pnns).contains(TypeFlags::UNEXPANDED_PACK)
+            || conv.is_some_and(|t| self.sema.has_unexpanded_pack(t));
+        // One using-declarator: the qualifier substituted, and an
+        // operator- or conversion-function-id (`using B<T>::operator=;`)
+        // kept, a conversion's target type substituted; a constructor
+        // name (or the base's own name) inherits constructors.
+        let one = |s: &mut Self| -> Result<(NnsId, DeclName), SubstFail> {
+            let nns = s.nns(pnns, qloc)?;
+            let name = match conv {
+                Some(t) => {
+                    let t = s.ty(t, loc)?;
+                    let t = s.sema.ast.types.canonical(t);
+                    s.sema.ast.names.conversion(t)
                 }
+                None if ctor_name => DeclName::ident(s.sema.nns_last_name(pnns).ok_or(SubstFail)?),
+                None => dn,
+            };
+            Ok((nns, name))
+        };
+        let declarators = if packed {
+            // `using Bases::operator()...;`, `using As<T>::operator T...;`
+            // ([temp.variadic]/5, [namespace.udecl]/1): one
+            // using-declarator per element; the qualifier and the name
+            // are substituted together, so a pack named only by the
+            // conversion's type, or by both under different names, is
+            // expanded once.
+            match self.expand_pattern(one)? {
+                crate::templ::pack::Expansion::Elements(v) => v,
+                // Its packs belong to a level not substituted yet: the
+                // declarator stays dependent, its qualifier or name still
+                // naming them, and is expanded when they are.
+                crate::templ::pack::Expansion::Unexpanded(x) => vec![x],
             }
         } else {
-            vec![self.nns(pnns, qloc)?]
+            vec![one(self)?]
         };
         let mut last = None;
-        for nns in nnss {
+        for (nns, name) in declarators {
             if self.nns_still_dependent(nns) {
                 last = self.sema.still_dependent_class_using(nns, name, loc, inheriting).or(last);
                 continue;

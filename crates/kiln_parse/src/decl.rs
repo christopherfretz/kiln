@@ -1498,7 +1498,7 @@ impl Parser<'_, '_> {
         }
         let open = self.bump().span.lo;
         if let Some(e) = self.with_greater_op(true, Self::parse_constant_expr) {
-            ds.explicit_expr = Some(e);
+            ds.explicit_expr = self.s.act_on_explicit_operand(e);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         } else {
             ds.invalid = true;

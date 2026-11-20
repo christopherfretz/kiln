@@ -1720,7 +1720,9 @@ pub struct ColdDeclData {
     /// `FunctionDecl::getEndLoc` before a body is attached), where
     /// "must be declared with 'noexcept'" points; and a block-scope
     /// variable whose declarator ends after its name → the start of that
-    /// last token (clang `VarDecl::getEndLoc` without an initializer).
+    /// last token (clang `VarDecl::getEndLoc` without an initializer);
+    /// and a block-scope dependent using-declaration that is a pack
+    /// expansion (`using E<Ts>::A...;`) → its `...`.
     pub declarator_end: ColdMap<DeclId, Loc>,
     /// Builtin function ids of implicit builtin `Function` decls (§5.3).
     pub builtin_id: ColdMap<DeclId, u32>,

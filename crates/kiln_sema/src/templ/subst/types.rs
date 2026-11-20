@@ -955,8 +955,15 @@ impl Substituter<'_, '_, '_> {
                 self.pack_indexing_type(pattern, index, loc)
             }
             TypeView::PackIndexing { selected: Some(s), .. } => self.ty(s, loc),
-            // kiln-gap: GAP-003
-            TypeView::PackExpansion { .. } => self.unimplemented("pack expansion", loc),
+            // A pack expansion met outside a list being expanded (the
+            // lists expand theirs in place, `expand_types`): its pattern
+            // substituted with the substituted packs kept, the expansion
+            // rebuilt for the list it ends up in to expand (clang's
+            // `TransformPackExpansionType`, §7.2).
+            TypeView::PackExpansion { pattern, num_expansions } => {
+                let p = self.kept_pack_pattern(|s| s.ty(pattern, loc))?;
+                Ok(self.sema.ast.types.pack_expansion(p, num_expansions))
+            }
             // `const A` with `using A = T[3]`: [dcl.array]/6 pushes the
             // cv-qualifiers into the substituted element type (clang
             // `TransformQualifiedType` re-applying the qualifiers).
