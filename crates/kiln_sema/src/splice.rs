@@ -220,16 +220,32 @@ impl Sema<'_, '_> {
                 _ => self.splice_misfit_expr(e, at, open),
             },
             // A value: a prvalue of it; an object: an lvalue naming it
-            // ([expr.prim.splice]/2; `splice_object.rs`).
+            // ([expr.prim.splice]/2; `splice_object.rs`). Every value a
+            // value reflection holds is a valid constant template argument
+            // (`check_tparg` at `reflect_constant`, or a template argument
+            // itself), so `nttp_arg_expr` spells it; every object an object
+            // reflection designates is a variable, a template parameter
+            // object, an object no declaration names or a subobject of one
+            // (`check_tparg` rejects temporaries, string literals and
+            // `typeid` results), which `object_lvalue` /
+            // `const_object_lvalue` reach. A failure with no error of its
+            // own is an internal error, never a silent drop (WP-1743).
             Reflectee::Value(v) => {
+                let errors = self.diags.error_count();
                 if let Some(x) = self.splice_value_expr(v, open) {
                     return x;
                 }
-                // kiln-gap: GAP-133
-                self.unsupported("splice of this value reflection", open);
+                if self.diags.error_count() == errors {
+                    let ty = self.ast.consts.ty(v);
+                    let d = self
+                        .diag(DiagId::sema_splice_value_no_expression, open)
+                        .arg(self.ty_arg(ty));
+                    self.emit(d);
+                }
                 self.recover_err(&[e], open)
             }
             Reflectee::Object(p) => {
+                let errors = self.diags.error_count();
                 if let Some(x) = self.splice_object_expr(p, open) {
                     if !matches!(
                         self.ast.exprs.get(x).kind(),
@@ -239,9 +255,13 @@ impl Sema<'_, '_> {
                     }
                     return x;
                 }
-                let what = self.object_splice_unsupported(p);
-                // kiln-gap: GAP-134
-                self.unsupported(what, open);
+                if self.diags.error_count() == errors {
+                    let ty = self.splice_object_type(p);
+                    let d = self
+                        .diag(DiagId::sema_splice_object_no_expression, open)
+                        .arg(self.ty_arg(ty));
+                    self.emit(d);
+                }
                 self.recover_err(&[e], open)
             }
             // `template [: r :]` / `[: r :]` designating a function

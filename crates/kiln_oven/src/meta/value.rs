@@ -220,10 +220,13 @@ impl Oven {
         loc: Loc,
     ) -> Result<ConstValueId, MetaError> {
         let ty = self.types.intern(b, q);
-        let r = if self.types.is_aggregate(ty) {
+        // A wide `_BitInt` (an aggregate to the Oven's memory, a scalar in
+        // the store) arrives as the address of its object, read at the
+        // argument's own type (WP-1743).
+        let r = if self.types.wide(ty).is_some() {
+            self.freeze_wide(b, v as u64, ty, loc)
+        } else if self.types.is_aggregate(ty) {
             self.freeze_aggregate(b, ty, v as u64, loc)
-        } else if self.types.wide(ty).is_some() {
-            self.freeze_object(b, v as u64, loc)
         } else {
             self.freeze_scalar(b, ty, v, loc)
         };
@@ -234,8 +237,8 @@ impl Oven {
     /// [`Oven::meta_freeze`] freezes it: `constant_of` of an object
     /// reflection, a subobject of a variable usable in constant
     /// expressions or of a static constant ([meta.reflection.queries];
-    /// WP-503). `None`: no object of a type the Oven reads (a wide
-    /// integer subobject, a null pointer).
+    /// WP-503; a wide `_BitInt` subobject since WP-1743). `None`: not a
+    /// pointer to an object (a null pointer).
     ///
     /// # Errors
     /// The notes of a value that is no constant; the evaluator's fault
@@ -252,10 +255,14 @@ impl Oven {
         let pt = self.types.intern(b, ty);
         let TyKind::Ptr(o) = self.types.kind(pt) else { return Ok(None) };
         let addr = self.thaw_ptr(b, p, pt, ctx.top) as u64;
-        if addr == 0 || self.types.wide(o).is_some() {
+        if addr == 0 {
             return Ok(None);
         }
-        let r = if self.types.is_aggregate(o) {
+        // A wide `_BitInt` is a scalar in the store (before the aggregate
+        // test: the Oven lays it out as bytes in memory).
+        let r = if self.types.wide(o).is_some() {
+            self.freeze_wide(b, addr, o, ctx.loc)
+        } else if self.types.is_aggregate(o) {
             self.freeze_aggregate(b, o, addr, ctx.loc)
         } else {
             let v = self.load(addr, o, ak::READ).map_err(fault)?;

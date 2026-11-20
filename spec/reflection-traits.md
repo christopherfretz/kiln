@@ -27,8 +27,13 @@ only one place is added to the engine first and both consumers use it.
   `TraitFailure`:
   - `Incomplete(T)`: a completeness requirement (§2.2) failed;
   - `BadOperand(T)`: an operand outside a transformation's domain
-    (`make_signed(bool)`, `underlying_type(int)`);
-  - `Unimplemented`: the engine row has no implementation yet.
+    (`make_signed(bool)`, `underlying_type(int)`).
+- Every `std::meta` trait of [meta.reflection.traits] (the list GCC 16.1's
+  `<meta>` declares, which `gcc16_meta_names.txt` pins) has an engine
+  answer: `shape` maps each `TraitOp` to an implemented trait, transform or
+  library delegation, so no trait failure means "not implemented"
+  (WP-1743; the former `Unimplemented` failure was never produced, since
+  every builtin trait is implemented: `table::trait_status`).
 - Completeness checks in quiet mode use `require_complete_silent`: they
   may instantiate a class template specialization (as the builtin does)
   but emit nothing.
@@ -63,9 +68,9 @@ TU's own `std::` class template for the represented types
 
 - The IS forms taking a `reflection_range` (`is_constructible_type(T, R&&)`,
   the invocable family, `invoke_result`, `common_type`, `common_reference`)
-  are not yet intrinsics: their `"ix"` / `"iix"` / `"x"` rows fail with
-  "the reflection_range form of 'F' is not implemented yet" (spec/reflection.md
-  §3.5 range reading is WP-475's).
+  are intrinsics: the site's `Shape::Range` recipe reads the range
+  argument as `data | n << 64` and the `"ix"` / `"iix"` / `"x"` row runs
+  the `(const info*, size_t)` row below on it (`meta_trait`).
 - Each has a `(const info* data, size_t n)` row (`…TypeN`, signature `"ixx"`
   / `"iixx"` / `"xx"`): the leading `info` operands, then `n` elements read
   from `data` with `Oven::meta_info_at` (the element type must be `info`).
@@ -103,7 +108,6 @@ parity is out of scope.
 | Library template not defined for the operands | `'std::NAME' is not defined for these operands` |
 | Library template has no result member | `'std::NAME' has no member 'value'` (or `'type'`) `for these operands` |
 | A range too long | `'F': the range is too long` |
-| A `reflection_range` row (§1.3) | `kiln: the reflection_range form of 'F' is not implemented yet; use the (const info*, size_t) overload (kiln_meta_traits.h)` |
 
 - `std::meta::exception` (P3560) replaces the note when WP-475 lands.
 

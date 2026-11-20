@@ -544,16 +544,15 @@ impl Sema<'_, '_> {
             PtrBase::Const(c) if whole(self, self.ast.consts.ty(c)) => return Ok(r),
             _ => {}
         }
+        // Every object type is read (WP-1743): a class with members, a
+        // union, an array, a pointer to member, a reflection, a closure
+        // and a wide `_BitInt` (the one family that used to be refused).
+        // `None` is only a value that is no pointer to an object, which an
+        // object reflection never is (`reflect_object` takes an lvalue):
+        // the evaluator's invalid-program fault, as above.
         match self.bridge(|b| oven.meta_freeze_at(b, p, ctx))? {
             Some(cv) => self.constant_of_value(cv, loc),
-            None => fail(
-                loc,
-                format!(
-                    // kiln-gap: GAP-132
-                    "kiln: constant_of an object of type '{}' is not implemented yet",
-                    self.ty_str(obj)
-                ),
-            ),
+            None => Err(MetaError::invalid()),
         }
     }
 

@@ -8000,6 +8000,13 @@ impl Compiler<'_> {
                     };
                     self.emit(Op::Mov, 0, &[slot, r]);
                 }
+                // A wide `_BitInt` (`reflect_constant(x)` of one) is given
+                // the address of its value, as `Oven::meta_freeze` reads
+                // it (WP-1743).
+                _ if self.o.types.wide(xt).is_some() => {
+                    let r = self.wide_place(x);
+                    self.emit(Op::Mov, 0, &[slot, r]);
+                }
                 // A value op's `const T&` parameter bound to a scalar
                 // glvalue (`reflect_constant(x)`) is given its value.
                 _ if value_op && self.ast().exprs.get(x).value_category().is_glvalue() => {

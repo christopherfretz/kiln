@@ -128,6 +128,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   operand (`1 << s`, `x <<= s`) and the operand of an integral to pointer
   conversion, and of `.hi`/`.odd` of an odd-sized ext vector prvalue,
   whose lane past the end holds no value (WP-1742).
+- Reflection corners that reported "not implemented" or "not supported
+  yet" (WP-1743): `constant_of` of a `_BitInt` member or element wider
+  than 128 bits, `reflect_constant` of such a value, splices of their
+  value reflections, and splices of an object reflection of the real or
+  imaginary part of a complex object (`reflect_object(__real__ z)`; also
+  a reference template argument designating one, which used to stop with
+  an internal error). Every value and object reflection now splices; the
+  `std::meta` traits and the query family have no unimplemented row.
 
 ### Fixed
 

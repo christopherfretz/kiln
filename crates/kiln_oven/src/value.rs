@@ -577,18 +577,8 @@ impl Oven {
         let Some(a) = self.alloc_any(Ptr::decode(p)).copied() else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
-        if let Some((width, signed)) = self.types.wide(a.ty) {
-            // A wide `_BitInt` is a scalar in the store (`IntBits`).
-            let Ok(mut w) = self.wide_load(p, a.ty, crate::kbc::ak::READ) else {
-                return Err(self.uninit(b, None, a.ty, loc));
-            };
-            crate::bigint::canon(&mut w, width, false);
-            w.truncate(IntBits::words_for(width));
-            let Some(bits) = IntBits::from_words(width, &w) else {
-                return Err(Freeze::Fault(FailKind::NotConstant));
-            };
-            let s = Scalar::Int { ty: self.types.info(a.ty).q, signed, bits };
-            return b.consts().push_scalar(s).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
+        if self.types.wide(a.ty).is_some() {
+            return self.freeze_wide(b, p, a.ty, loc);
         }
         if self.types.is_aggregate(a.ty) {
             return self.freeze_aggregate(b, a.ty, p, loc);
@@ -597,6 +587,30 @@ impl Oven {
             return Err(self.uninit(b, None, a.ty, loc));
         };
         self.freeze_scalar(b, a.ty, v, loc)
+    }
+
+    /// The value of the wide `_BitInt` object of type `ty` (wider than
+    /// 128 bits) at `p`: a scalar in the store (`IntBits`).
+    pub(crate) fn freeze_wide(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        p: u64,
+        ty: OTy,
+        loc: Loc,
+    ) -> Result<ConstValueId, Freeze> {
+        let Some((width, signed)) = self.types.wide(ty) else {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        };
+        let Ok(mut w) = self.wide_load(p, ty, crate::kbc::ak::READ) else {
+            return Err(self.uninit(b, None, ty, loc));
+        };
+        crate::bigint::canon(&mut w, width, false);
+        w.truncate(IntBits::words_for(width));
+        let Some(bits) = IntBits::from_words(width, &w) else {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        };
+        let s = Scalar::Int { ty: self.types.info(ty).q, signed, bits };
+        b.consts().push_scalar(s).map_err(|_| Freeze::Fault(FailKind::MemoryLimit))
     }
 
     /// clang's `note_constexpr_memory_leak` for the allocations of the

@@ -1148,7 +1148,9 @@ position's operand).
   [temp.param]/8, which `nttp_value_expr` makes when the value has none
   yet) splices to an lvalue of the object's type: a `DeclRefExpr` to the
   variable or template parameter object, then the derived-to-base
-  conversions, member accesses and subscripts reaching the subobject at
+  conversions, member accesses, subscripts and complex parts
+  (`__real__` / `__imag__`, which clang also takes as reference template
+  arguments; WP-1743) reaching the subobject at
   the reflection's byte offset (`Sema::object_lvalue`, recovered from the
   record layout: direct non-virtual bases first, then the virtual bases
   of an object that is not itself a base subobject, then fields, skipping
@@ -1170,7 +1172,18 @@ position's operand).
   subobject of one) splices to `*p` of the constant pointer `p` to it
   (`Sema::const_object_lvalue`; a `const` template parameter object,
   [temp.param]/8), which the Oven and codegen read as any constant pointer
-  (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830). An object
+  (`expr.prim.splice/object-no-declaration-run.cpp`; WP-830).
+  Every value and object reflection splices (WP-1743): a value reflection
+  holds a valid constant template argument (`check_tparg` at
+  `reflect_constant`, or a template argument), which `nttp_arg_expr`
+  spells, a `_BitInt` wider than 128 bits included (a scalar in the
+  constant store, also read by `constant_of` of a subobject); an object
+  reflection designates a variable, a template parameter object, an object
+  no declaration names, or a subobject of one, which the walk above
+  reaches. A splice that still yields no expression, with no error of its
+  own, is the internal error `sema_splice_value_no_expression` /
+  `sema_splice_object_no_expression`, never a silent drop
+  (`expr.prim.splice/value-object-all-run.cpp`). An object
   template argument of `substitute`/`reflection_template_arg` at a
   non-zero offset of its complete object is the same subobject lvalue
   (`meta.reflection.substitute/object-subobject-args-run.cpp`). A string
