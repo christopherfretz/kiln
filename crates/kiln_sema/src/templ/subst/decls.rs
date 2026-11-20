@@ -1943,24 +1943,24 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<Option<DeclId>> {
         // `friend struct Z;` that first declared `Z` in the enclosing
-        // namespace: the instantiation befriends the same class (not
-        // dependent). One that a local class of a templated function
-        // declared in the block scope ([class.friend]/11) is declared
-        // again in the instantiated block, where the instantiated
-        // definition redeclares it.
+        // namespace ([namespace.memdef]/3; `act_on_friend_tag` declares
+        // it there, also from a nested or linkage-specification scope):
+        // the instantiation befriends the same class (not dependent), by
+        // the type path below. One that a local class of a templated
+        // function declared in the block scope ([class.friend]/11; the
+        // only other place a friend class is declared) is declared again
+        // in the instantiated block, where the instantiated definition
+        // redeclares it.
         if let Some(t) = owned_tag
-            && self.sema.is_hidden_local_friend(t)
             && self.sema.enclosing_function(t).is_some()
         {
-            return self.local_friend_tag(t, loc).map(Some);
-        }
-        if let Some(t) = owned_tag
-            && !self.sema.ast.decls.get(t).ctx().is_some_and(|c| {
-                matches!(self.sema.kind_of(c), DeclKind::Namespace | DeclKind::TranslationUnit)
-            })
-        {
-            // kiln-gap: GAP-018
-            return self.unimplemented("friend class declared in a class template", loc);
+            if self.sema.is_hidden_local_friend(t) {
+                return self.local_friend_tag(t, loc).map(Some);
+            }
+            // An invalid one was diagnosed in the pattern: like clang's
+            // `InstantiateClass`, which skips invalid members, the
+            // instantiation befriends nothing and reports nothing again.
+            return Ok(None);
         }
         // `friend Ts...;` ([class.friend]/3, P2893): one friend
         // per element of the expansion.
@@ -2095,11 +2095,9 @@ impl Substituter<'_, '_, '_> {
                 self.sema.push_friend(first);
                 Ok(Some(fd))
             }
-            FriendTarget::Decl(f) => {
-                if !matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) {
-                    // kiln-gap: GAP-019
-                    return self.unimplemented("this kind of friend declaration", loc);
-                }
+            FriendTarget::Decl(f)
+                if matches!(self.sema.kind_of(f), DeclKind::Function | DeclKind::CXXMethod) =>
+            {
                 let ctx = DeclaratorContext::Member;
                 // [temp.friend]/9: a non-template friend with a
                 // requires-clause (only a templated class has one) declares
@@ -2124,6 +2122,17 @@ impl Substituter<'_, '_, '_> {
                 self.check_member_friend_access(f, r, loc);
                 Ok(Some(r))
             }
+            // [class.friend]/2, /3: a friend is a class or a function. A
+            // class is a `FriendTarget::Type` or a class template, a
+            // function one of the kinds above (a function template, a
+            // constructor, destructor or conversion function, a function
+            // or member function); a variable, typedef or alias is
+            // rejected where it is declared ("friends can only be classes
+            // or functions"), and so is a deduction guide
+            // ([temp.deduct.guide]/3: it inhabits the class template's
+            // scope). No friend of another kind exists to instantiate; a
+            // stray one is reported by `guarded_member`, not dropped.
+            FriendTarget::Decl(_) => Err(SubstFail),
         }
     }
 

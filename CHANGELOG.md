@@ -26,6 +26,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   enumerator value, a using-declaration, a bit-field width, a fixed
   underlying type, an explicit- or noexcept-specifier, a mem-initializer
   and an attribute argument (WP-1733).
+- Class templates instantiate members that used to stop with "not yet
+  implemented" (WP-1734): member deduction guides ([temp.deduct.guide]),
+  `using enum` members ([enum.udecl]), and member and friend templates
+  whose own non-type or template template parameters appear in their
+  signatures or noexcept specifiers ([temp.mem], [temp.friend]).
 
 ### Fixed
 
@@ -34,6 +39,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   pack are reported with clang's diagnostics instead of "not supported
   yet"; a capture pack naming a structured binding pack whose declaration
   failed no longer reports "not yet implemented" (WP-1733).
+- An unnamed class template (`template<class U> struct { U u; };`) is
+  reported as clang does, "cannot declare a class template with no name",
+  and a class template containing one still instantiates; a concept
+  declared in a class uses clang's wording (WP-1734).
+- A friend function template redeclared with a different noexcept
+  specifier naming its own template parameters is diagnosed once its
+  class template is instantiated ([except.spec], [temp.over.link];
+  WP-1734).
 
 ## [1.3.0] - 2026-11-20
 

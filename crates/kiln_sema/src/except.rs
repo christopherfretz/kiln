@@ -626,6 +626,35 @@ impl Sema<'_, '_> {
             let dependent_friend = unknown(ne)
                 && !matches!(ne, ExcSpec::Deferred(_))
                 && self.is_dependent_friend_fn(n);
+            // A friend template of a class template specialization
+            // redeclaring a function template ([temp.friend]/1): both
+            // value-dependent `noexcept(expr)` stay so, and are equivalent
+            // when their operands are ([temp.over.link]/5, [except.spec]/5;
+            // clang `CheckEquivalentExceptionSpecImpl` compares their
+            // profiles).
+
+            let dependent_expr = |e: ExcSpec| {
+                matches!(
+                    e,
+                    ExcSpec::DependentNoexcept(_)
+                        | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
+                )
+            };
+            if !dependent_friend
+                && dependent_expr(ne)
+                && dependent_expr(pe)
+                && self.ast.described_template(n).is_some()
+            {
+                if kiln_ast::types::TypeContext::exc_identity(ne)
+                    != kiln_ast::types::TypeContext::exc_identity(pe)
+                {
+                    let loc = self.ast.decls.get(n).loc();
+                    let msg = self.diag(DiagId::sema_exception_spec_mismatch, loc);
+                    let msg = self.note_prev(msg, p, false);
+                    self.emit(msg);
+                }
+                continue;
+            }
             if !dependent_friend && (unknown(ne) || unknown(pe)) {
                 // The other one is still to come: check again then.
                 self.delayed_exc_equiv.push((n, p));
@@ -893,6 +922,7 @@ impl Sema<'_, '_> {
             }
             (spec, args, pairs, None)
         };
+        let spec_is_f = spec == f;
         if !self.push_inst_frame(FrameKind::ExceptionSpec, f, pattern, poi) {
             return None;
         }
@@ -939,6 +969,23 @@ impl Sema<'_, '_> {
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
+            // A friend or member function template of the specialization
+            // (not one of its specializations): its own parameters are
+            // those of the redeclared template, one level shallower
+            // ([temp.friend]/1, [temp.mem]/1; clang's
+            // `InstantiateExceptionSpec` finds them in the instantiated
+            // template's scope).
+            if !spec_is_f {
+                let head = |s: &Self, d: DeclId| {
+                    s.ast
+                        .described_template(d)
+                        .and_then(|t| s.ast.template_info(t))
+                        .map(|i| i.params)
+                };
+                if let (Some(from), Some(to)) = (head(sub.sema, pattern), head(sub.sema, f)) {
+                    sub.map_template_params(from, to);
+                }
+            }
             let r = match what {
                 ExcSource::Noexcept(expr, _) => {
                     let e = sub.expr(expr);

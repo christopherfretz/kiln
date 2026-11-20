@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-154 gaps at 249 sites; 82 of 56,766 g++.dg cases hit one at the
+148 gaps at 242 sites; 58 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate. 3 more entries (4 sites) use wording that
 matches clang's for a limit clang shares: they are listed as excluded and
 stay.
@@ -85,14 +85,13 @@ By family:
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_conv_unsupported | 3 | 3 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
-| sema_unimplemented_template_feature | 34 | 39 | 35 |
+| sema_unimplemented_template_feature | 28 | 32 | 11 |
 | sema_vla_unsupported | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| member templates | 6 (GAP-014..GAP-019) | 7 | 24 | WP-1734 |
 | init + conversions | 21 (GAP-020..GAP-040) | 22 | 24 | WP-1735 |
 | mangling | 1 (GAP-041..GAP-041) | 5 | 9 | WP-1736 |
 | dependent names | 10 (GAP-042..GAP-051) | 12 | 8 | WP-1737 |
@@ -109,12 +108,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-014 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: member templates` | `crates/kiln_sema/src/templ/subst/exprs.rs::nttp_ref`, `crates/kiln_sema/src/templ/subst/mod.rs::template_name` | 15 | WP-1734 |
-| GAP-015 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: {k} members of class templates` ({k}: the 33 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/class.rs::member` | 9 | WP-1734 |
-| GAP-016 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: member templates of kind {k}` ({k}: the 53 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/member.rs::member_template_pattern` | 0 | WP-1734 |
-| GAP-017 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: anonymous member classes of class templates` | `crates/kiln_sema/src/templ/class.rs::member_class_decl` | 0 | WP-1734 |
-| GAP-018 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: friend class declared in a class template` | `crates/kiln_sema/src/templ/subst/decls.rs::friend_type` | 0 | WP-1734 |
-| GAP-019 | sema_unimplemented_template_feature | member templates | `kiln: not yet implemented: this kind of friend declaration` | `crates/kiln_sema/src/templ/subst/decls.rs::friend_decl` | 0 | WP-1734 |
 | GAP-020 | parse_unsupported | init + conversions | `value-initialization of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type) | `crates/kiln_sema/src/forms.rs::act_on_value_init_cast` | 12 | WP-1735 |
 | GAP-021 | parse_unsupported | init + conversions | `parenthesized initialization with multiple expressions is not supported yet` | `crates/kiln_sema/src/init.rs::perform_init` | 6 | WP-1735 |
 | GAP-022 | parse_unsupported | init + conversions | `list-initialization of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type, a void temporary) | `crates/kiln_sema/src/forms.rs::build_list_cast` | 3 | WP-1735 |
@@ -279,14 +272,6 @@ words, so these are not kiln gaps.
 
 The kinds an exhaustive match arm sends to the gap (WP-1719 replaced each
 `_ =>` arm with this list, so a new variant needs a decision).
-
-### GAP-015
-
-`TranslationUnit`, `Namespace`, `NamespaceAlias`, `LinkageSpec`, `Export`, `FileScopeAsm`, `UsingDirective`, `UsingEnum`, `UsingPack`, `UnresolvedUsingIfExists`, `EnumConstant`, `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`, `IndirectField`, `FriendTemplate`, `Function`, `CXXDeductionGuide`, `ParmVar`, `ImplicitParam`, `Binding`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`, `Concept`, `BuiltinTemplate`, `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`, `LifetimeExtendedTemporary`, `TemplateParamObject`, `Label`, `ContractResultName` (DeclKind).
-
-### GAP-016
-
-`TranslationUnit`, `Namespace`, `NamespaceAlias`, `LinkageSpec`, `Export`, `Empty`, `FileScopeAsm`, `UsingDirective`, `Using`, `UsingEnum`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingValue`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists`, `Enum`, `EnumConstant`, `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`, `Field`, `IndirectField`, `AccessSpec`, `Friend`, `FriendTemplate`, `Function`, `CXXMethod`, `CXXConstructor`, `CXXDestructor`, `CXXConversion`, `CXXDeductionGuide`, `ParmVar`, `ImplicitParam`, `Binding`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`, `ClassTemplate`, `FunctionTemplate`, `VarTemplate`, `TypeAliasTemplate`, `Concept`, `BuiltinTemplate`, `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`, `LifetimeExtendedTemporary`, `TemplateParamObject`, `StaticAssert`, `Label`, `ContractResultName`, `ConstevalBlock` (DeclKind).
 
 ### GAP-059
 
