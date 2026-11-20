@@ -1,9 +1,7 @@
 //! Constructor selection for a call with arbitrary arguments
 //! ([over.match.ctor], [over.match.list]; spec/sema-overload.md §10.3):
 //! a candidate set of the class's constructors resolved by the overload
-//! engine. Function templates (WP-071) are skipped; a selection that a
-//! skipped template or an unchecked *requires-clause* (WP-073) could
-//! change answers [`Selected::Unsupported`].
+//! engine, constructor templates and constraints included.
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclName;
@@ -502,9 +500,7 @@ impl Sema<'_, '_> {
     /// Maps the outcome of a constructor or special-member set to
     /// [`Selected`], keeping a failed set for its notes.
     pub(crate) fn selected_of(&mut self, set: OverloadCandidateSet, out: OvlOutcome) -> Selected {
-        let unsure = set.uncertain;
         let r = match out {
-            _ if unsure => Selected::Unsupported,
             OvlOutcome::Success(b) => {
                 // The inheriting constructor of a usable base constructor
                 // can itself be deleted ([class.inhctor.init]/1; clang

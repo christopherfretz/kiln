@@ -1283,15 +1283,33 @@ impl Sema<'_, '_> {
         });
     }
 
-    /// Whether `c` has a default constructor (a cheap check for the
-    /// `{}` rule of [dcl.init.list]/3.5).
+    /// Whether `c` has a default constructor, for the `{}` rule of
+    /// [dcl.init.list]/3.5 and [over.match.list]/1: a constructor
+    /// callable with no argument ([class.default.ctor]/1). A constructor
+    /// taking no argument answers at once; otherwise a constructor
+    /// template that one could be specialized from (`template<class...
+    /// T> A(T...)`) is found by resolving the call with no argument
+    /// (clang's `LookupDefaultConstructor`: a best or deleted candidate,
+    /// not an ambiguous set).
     pub(crate) fn has_default_ctor_cheap(&mut self, c: DeclId) -> bool {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         let ctors: Vec<DeclId> = self.usable_ctors(c);
-        ctors
-            .into_iter()
-            .any(|f| self.kind_of(f) == DeclKind::CXXConstructor && self.fn_min_args(f) == 0)
+        if ctors
+            .iter()
+            .any(|&f| self.kind_of(f) == DeclKind::CXXConstructor && self.fn_min_args(f) == 0)
+        {
+            return true;
+        }
+        if !ctors.iter().any(|&f| self.kind_of(f) == DeclKind::FunctionTemplate) {
+            return false;
+        }
+        let failed = self.ovl.failed.take();
+        let sel = self.resolve_ctor(c, &[], crate::class::InitStyle::Direct);
+        if let Some(set) = std::mem::replace(&mut self.ovl.failed, failed) {
+            self.end_set(set);
+        }
+        matches!(sel, crate::class::Selected::Found(_) | crate::class::Selected::Deleted(_))
     }
 
     /// Adds the constructors of class `c` to `set` (the set's arguments

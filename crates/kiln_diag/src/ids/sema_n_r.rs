@@ -70,6 +70,7 @@ sema_nonstatic_member_out_of_line = Error (0) "non-static data member defined ou
 sema_nontemporal_bad_pointee = Error (1) "address argument to nontemporal builtin must be a pointer to integer, float, pointer, or a vector of such types ({0} invalid)";
 sema_nontemporal_not_pointer = Error (1) "address argument to nontemporal builtin must be a pointer ({0} invalid)";
 sema_nonviable_condition_no_candidates = Error (2) "cannot convert {0} to {1} without a conversion operator";
+sema_nonviable_conversion_incomplete = Error (2) "no viable conversion from {0} to incomplete type {1}";
 sema_noreturn_lambda_has_return_expr = Error (0) "lambda declared 'noreturn' should not return";
 sema_noreturn_non_function = Error (0) "'_Noreturn' can only appear on functions";
 sema_not_a_template = Error (1) "{0} is not a template";
@@ -265,11 +266,13 @@ sema_reference_bind_incompatible_quals = Error (2) "binding reference of type {0
 sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
 sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
 sema_reference_bind_to_vector_element = Error (1) "{0:non-const|volatile} reference cannot bind to vector element";
+sema_reference_has_multiple_inits = Error (0) "reference cannot be initialized with multiple values";
 sema_reference_to_local_in_enclosing = Error (2) "reference to local variable '{0}' declared in enclosing {1}";
 sema_reference_to_reference = Error (1) "'{0}' declared as a reference to a reference";
 sema_reference_to_unsatisfied_function = Error (1) "invalid reference to function {0}: constraints not satisfied";
 sema_reference_to_void = Error (0) "cannot form a reference to 'void'";
 sema_reference_var_requires_init = Error (1) "declaration of reference variable '{0}' requires an initializer";
+sema_reference_without_init = Error (1) "reference to type {0} requires an initializer";
 // [expr.reflect]/7.1.1 (WP-781)
 sema_reflect_init_capture = Error (0) "cannot take the reflection of a local entity declared by init-capture";
 // [expr.reflect]/7.1.4 (WP-781)

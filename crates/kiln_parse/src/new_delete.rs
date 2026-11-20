@@ -197,13 +197,15 @@ impl Parser<'_, '_> {
     fn parse_new_expr_list(&mut self) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
         loop {
-            if self.at(Punct::LBrace) {
-                // kiln-gap: GAP-034
-                self.unsupported("braced-init-list arguments", self.loc());
-                self.skip_until(&[Punct::RParen], false, true);
-                return None;
-            }
-            let Some(a) = self.parse_assignment_expr() else {
+            // [expr.new]/1: new-placement is `( expression-list )`, whose
+            // initializer-clauses may be braced-init-lists ([dcl.init]),
+            // arguments of the allocation function's call.
+            let a = if self.at(Punct::LBrace) {
+                self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
+            } else {
+                self.parse_assignment_expr()
+            };
+            let Some(a) = a else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };

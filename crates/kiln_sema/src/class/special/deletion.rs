@@ -1,8 +1,8 @@
 //! Deleted special members: `should_delete` ([class.default.ctor]/2,
 //! [class.copy.ctor]/10, [class.copy.assign]/7, [class.dtor]/7,
 //! [class.union.general]/3) with clang's notes, the selection of a
-//! subobject's special member (spec/sema-class.md §4.2, the Q7
-//! unique-candidate approximation until WP-068a), and the checks of an
+//! subobject's special member by overload resolution (spec/sema-class.md
+//! §4.2), and the checks of an
 //! explicitly defaulted special member ([dcl.fct.def.default]/2–5; clang
 //! `ShouldDeleteSpecialMember`, `CheckExplicitlyDefaultedSpecialMember`).
 
@@ -34,10 +34,6 @@ pub(crate) enum Selected {
     Deleted(DeclId),
     /// No best viable member.
     Ambiguous,
-    /// Selecting needs overload resolution kiln does not do yet
-    /// (todo(WP-068a): templates, constraints, inherited members,
-    /// derived-to-base ranking).
-    Unsupported,
 }
 
 /// The answer of [`Sema::should_delete`]'s walk.
@@ -47,8 +43,6 @@ pub(crate) enum DeleteReason {
     No,
     /// Deleted (the notes, if asked for, say why).
     Yes,
-    /// Undecidable without overload resolution (Q7).
-    Unsupported,
 }
 
 /// A potentially constructed subobject.
@@ -104,7 +98,6 @@ impl Sema<'_, '_> {
     ) -> Selected {
         use SpecialKind as K;
         let c = self.class_def(class);
-        let bits = self.defn_bits(c);
         match k {
             K::DefaultCtor => self.ensure_implicit(c, K::DefaultCtor),
             K::CopyCtor | K::MoveCtor => {
@@ -123,9 +116,6 @@ impl Sema<'_, '_> {
                 Some(d) if self.fn_spec(d).is_deleted() => Selected::Deleted(d),
                 Some(d) => Selected::Found(d),
             };
-        }
-        if k.is_assign() && bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN) {
-            return Selected::Unsupported;
         }
         // clang `LookupSpecialMember`: an argument of the class type (an
         // lvalue for copy, an xvalue for move) without user-defined
@@ -187,30 +177,15 @@ impl Sema<'_, '_> {
     }
 
     /// Whether the special member `f` (of kind `k`) is deleted when
-    /// defaulted (clang `ShouldDeleteSpecialMember`). A selection that
-    /// needs overload resolution reports `sema_unsupported` (Q7) and
-    /// answers no.
-    pub(crate) fn should_delete(&mut self, f: DeclId, k: SpecialKind, diagnose: bool) -> bool {
-        match self.deletion(f, k, false, 0).0 {
-            DeleteReason::Yes => true,
-            DeleteReason::No => false,
-            DeleteReason::Unsupported => {
-                if !diagnose {
-                    let loc = self.ast.decls.get(f).loc();
-                    let what =
-                        format!("deciding whether the {} needs overload resolution", k.spelling());
-                    // kiln-gap: GAP-039
-                    self.unsupported(&what, loc);
-                }
-                false
-            }
-        }
+    /// defaulted (clang `ShouldDeleteSpecialMember`).
+    pub(crate) fn should_delete(&mut self, f: DeclId, k: SpecialKind) -> bool {
+        self.deletion(f, k, false, 0).0 == DeleteReason::Yes
     }
 
     /// Whether inheriting constructor `dc` is deleted beyond its base
     /// constructor being deleted ([class.inhctor.init]/1 with
     /// [class.default.ctor]/2; clang `findInheritingConstructor`'s
-    /// `ShouldDeleteSpecialMember`). Undecidable selections answer no.
+    /// `ShouldDeleteSpecialMember`).
     pub(crate) fn inheriting_ctor_should_delete(&mut self, dc: DeclId) -> bool {
         self.deletion(dc, SpecialKind::DefaultCtor, false, 0).0 == DeleteReason::Yes
     }
@@ -425,9 +400,10 @@ impl Sema<'_, '_> {
                 }
                 return DeleteReason::Yes;
             }
-            match self.delete_for_class_subobject(w, bc, Subobject::Base(b), Quals::NONE) {
-                DeleteReason::No => {}
-                r => return r,
+            if self.delete_for_class_subobject(w, bc, Subobject::Base(b), Quals::NONE)
+                == DeleteReason::Yes
+            {
+                return DeleteReason::Yes;
             }
         }
         let fields = self.special_fields(w.class);
@@ -435,9 +411,8 @@ impl Sema<'_, '_> {
             if self.ast.decls.get(f).has(DeclFlags::INVALID) {
                 continue;
             }
-            match self.delete_for_field(w, f) {
-                DeleteReason::No => {}
-                r => return r,
+            if self.delete_for_field(w, f) == DeleteReason::Yes {
+                return DeleteReason::Yes;
             }
         }
         // [class.default.ctor]/2 before C++26: a union whose members are
@@ -578,11 +553,10 @@ impl Sema<'_, '_> {
                 }
                 if !self.ast.types.is_reference(ut)
                     && let Some(urec) = self.element_class(ut)
+                    && self.delete_for_class_subobject(w, urec, Subobject::Field(*uf), uq)
+                        == DeleteReason::Yes
                 {
-                    match self.delete_for_class_subobject(w, urec, Subobject::Field(*uf), uq) {
-                        DeleteReason::No => {}
-                        r => return r,
-                    }
+                    return DeleteReason::Yes;
                 }
             }
             if w.kind == K::DefaultCtor
@@ -635,9 +609,8 @@ impl Sema<'_, '_> {
                 quals
             };
             let sel = self.select_special(rec, w.kind, rhs & Quals::CV, lhs & Quals::CV);
-            match self.delete_for_call(w, sub, sel, false) {
-                DeleteReason::No => {}
-                r => return r,
+            if self.delete_for_call(w, sub, sel, false) == DeleteReason::Yes {
+                return DeleteReason::Yes;
             }
         }
         if w.kind.is_ctor() {
@@ -675,7 +648,6 @@ impl Sema<'_, '_> {
             };
         }
         let non_trivial = match dtor {
-            Selected::Unsupported => return DeleteReason::Unsupported,
             Selected::Found(m) => {
                 let is_ok = self.special_accessible_from(m, w.member_class(), false);
                 if is_ok && self.fn_spec(m).is_trivial() {
@@ -743,7 +715,6 @@ impl Sema<'_, '_> {
         dtor_in_ctor: bool,
     ) -> DeleteReason {
         let (kind, decl) = match sel {
-            Selected::Unsupported => return DeleteReason::Unsupported,
             Selected::Missing => (0u8, None),
             Selected::Deleted(m) => (1, Some(m)),
             Selected::Ambiguous => (2, None),
@@ -864,11 +835,16 @@ impl Sema<'_, '_> {
             self.emit(d);
             had_error = true;
         } else if info.variadic() {
-            if first {
+            // [dcl.fct.def.default]/2.6: an ellipsis is a type mismatch,
+            // which deletes a member defaulted on its first declaration
+            // (C++20) and is otherwise ill-formed (clang
+            // `err_defaulted_special_member_variadic`).
+            if delete_on_mismatch {
                 mismatch = true;
             } else {
-                // kiln-gap: GAP-040
-                self.unsupported("a variadic explicitly-defaulted special member", floc);
+                let d =
+                    self.diag(DiagId::sema_defaulted_special_member_variadic, floc).arg(k.index());
+                self.emit(d);
                 had_error = true;
             }
         }
@@ -1000,7 +976,7 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_ty(f, t);
             }
         }
-        let deleted = mismatch || self.should_delete(f, k, false);
+        let deleted = mismatch || self.should_delete(f, k);
         if !deleted {
             return !had_error;
         }

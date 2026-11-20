@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-148 gaps at 242 sites; 58 of 56,766 g++.dg cases hit one at the
+127 gaps at 220 sites; 34 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate. 3 more entries (4 sites) use wording that
 matches clang's for a limit clang shares: they are listed as excluded and
 stay.
@@ -37,7 +37,7 @@ reports a gap:
 Each site carries a marker comment on its line or in the comment block
 directly above it: `// kiln-gap: GAP-NNN` names its entry; `// kiln-gap:
 forward` marks the body of a forwarding function (its callers are the
-sites; 7 today); `// kiln-gap: check` marks a line that only compares a
+sites; 6 today); `// kiln-gap: check` marks a line that only compares a
 diagnostic's id with a gap id (2 today). A `GAP-NNN` marker that no
 detected site uses marks the next line of code as a site of its own (the
 four places in `kiln_abi` that record an expression with no mangling).
@@ -77,13 +77,12 @@ By family:
 | cg_cannot_mangle_expression | 1 | 5 | 9 |
 | codegen fallback | 34 | 39 | 7 |
 | drv_not_implemented | 3 | 3 | 0 |
-| parse_unsupported | 50 | 56 | 31 |
+| parse_unsupported | 32 | 37 | 7 |
 | pp_expr_unsupported | 1 | 3 | 0 |
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
 | reflection error | 3 | 3 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
-| sema_conv_unsupported | 3 | 3 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
 | sema_unimplemented_template_feature | 28 | 32 | 11 |
 | sema_vla_unsupported | 1 | 1 | 0 |
@@ -92,7 +91,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| init + conversions | 21 (GAP-020..GAP-040) | 22 | 24 | WP-1735 |
 | mangling | 1 (GAP-041..GAP-041) | 5 | 9 | WP-1736 |
 | dependent names | 10 (GAP-042..GAP-051) | 12 | 8 | WP-1737 |
 | operators | 7 (GAP-052..GAP-058) | 11 | 7 | WP-1738 |
@@ -108,27 +106,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-020 | parse_unsupported | init + conversions | `value-initialization of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type) | `crates/kiln_sema/src/forms.rs::act_on_value_init_cast` | 12 | WP-1735 |
-| GAP-021 | parse_unsupported | init + conversions | `parenthesized initialization with multiple expressions is not supported yet` | `crates/kiln_sema/src/init.rs::perform_init` | 6 | WP-1735 |
-| GAP-022 | parse_unsupported | init + conversions | `list-initialization of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type, a void temporary) | `crates/kiln_sema/src/forms.rs::build_list_cast` | 3 | WP-1735 |
-| GAP-023 | parse_unsupported | init + conversions | `this initializer-list constructor selection is not supported yet` | `crates/kiln_sema/src/init.rs::init_list_ctor_init` | 3 | WP-1735 |
-| GAP-024 | parse_unsupported | init + conversions | `compound literals of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type, a temporary) | `crates/kiln_sema/src/gnu.rs::act_on_compound_literal`, `crates/kiln_sema/src/gnu.rs::array_compound_literal` | 0 | WP-1735 |
-| GAP-025 | parse_unsupported | init + conversions | `direct-initialization of {what} is not supported yet` ({what}: a class temporary, an array temporary, a reference type, a function type) | `crates/kiln_sema/src/forms.rs::act_on_paren_list_cast` | 0 | WP-1735 |
-| GAP-026 | parse_unsupported | init + conversions | `a designator into a non-aggregate member is not supported yet` | `crates/kiln_sema/src/init.rs::check_aggregate_in` | 0 | WP-1735 |
-| GAP-027 | parse_unsupported | init + conversions | `value-initialization of a reference member is not supported yet` | `crates/kiln_sema/src/class/ctorinit.rs::mem_init_value` | 0 | WP-1735 |
-| GAP-028 | sema_conv_unsupported | init + conversions | `this reference binding is not supported yet` | `crates/kiln_sema/src/conv/mod.rs::bind_reference` | 0 | WP-1735 |
-| GAP-029 | sema_conv_unsupported | init + conversions | `initialization of a class object is not supported yet` | `crates/kiln_sema/src/conv/mod.rs::implicit_convert` | 0 | WP-1735 |
-| GAP-030 | sema_conv_unsupported | init + conversions | `this user-defined conversion is not supported yet` | `crates/kiln_sema/src/overload/udc.rs::unsupported_udc` | 0 | WP-1735 |
-| GAP-031 | parse_unsupported | init + conversions | `this user-defined conversion is not supported yet` | `crates/kiln_sema/src/expr.rs::cast_user_conversion` | 0 | WP-1735 |
-| GAP-032 | parse_unsupported | init + conversions | `conversions of class types is not supported yet` | `crates/kiln_sema/src/expr.rs::build_explicit_cast` | 0 | WP-1735 |
-| GAP-033 | parse_unsupported | init + conversions | `this form of 'auto' in a new-expression is not supported yet` | `crates/kiln_sema/src/new_delete.rs::act_on_cxx_new` | 0 | WP-1735 |
-| GAP-034 | parse_unsupported | init + conversions | `braced-init-list arguments is not supported yet` | `crates/kiln_parse/src/new_delete.rs::parse_new_expr_list` | 0 | WP-1735 |
-| GAP-035 | parse_unsupported | init + conversions | `selecting the constructor is not supported yet` | `crates/kiln_sema/src/class/special/define.rs::use_ctor` | 0 | WP-1735 |
-| GAP-036 | parse_unsupported | init + conversions | `selecting the assignment operator is not supported yet` | `crates/kiln_sema/src/class/special/define.rs::assign_subobject_at` | 0 | WP-1735 |
-| GAP-037 | parse_unsupported | init + conversions | `assigning a reference or const member is not supported yet` | `crates/kiln_sema/src/class/special/define.rs::define_assign` | 0 | WP-1735 |
-| GAP-038 | parse_unsupported | init + conversions | `implicit assignment of an array of this type is not supported yet` | `crates/kiln_sema/src/class/special/define.rs::assign_array_loop` | 0 | WP-1735 |
-| GAP-039 | parse_unsupported | init + conversions | `deciding whether the {member} needs overload resolution is not supported yet` ({member}: the special member's spelling (default constructor, copy constructor, ...)) | `crates/kiln_sema/src/class/special/deletion.rs::should_delete` | 0 | WP-1735 |
-| GAP-040 | parse_unsupported | init + conversions | `a variadic explicitly-defaulted special member is not supported yet` | `crates/kiln_sema/src/class/special/deletion.rs::check_defaulted_impl` | 0 | WP-1735 |
 | GAP-041 | cg_cannot_mangle_expression | mangling | `cannot yet mangle expression type {kind}` ({kind}: the kind of the innermost expression with no encoding in a requires-clause, template argument, `decltype` operand or array bound; at the RC `UnresolvedLookupExpr`, `SizeOfPackExpr`. Also marked: the four `kiln_abi` places that record the expression) | `crates/kiln_abi/src/mangle/constraint.rs::requires_clause`, `crates/kiln_abi/src/mangle/dep.rs::dependent_decltype`, `crates/kiln_abi/src/mangle/dep.rs::dependent_dimension`, `crates/kiln_abi/src/mangle/dep.rs::template_arg_expr`, `crates/kiln_codegen/src/module.rs::run_with_stats` | 9 | WP-1736 |
 | GAP-042 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: dependent nested name specifier` | `crates/kiln_sema/src/templ/subst/mod.rs::nns_context` | 6 | WP-1737 |
 | GAP-043 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: reference to a member of a dependent context` | `crates/kiln_sema/src/templ/subst/mod.rs::pattern_specialization` ×2 | 2 | WP-1737 |

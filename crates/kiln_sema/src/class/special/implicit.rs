@@ -537,7 +537,7 @@ impl Sema<'_, '_> {
                 };
                 self.fn_spec(f).constexpr_kind() != ConstexprKind::None
             }
-            Selected::Missing | Selected::Ambiguous | Selected::Unsupported => true,
+            Selected::Missing | Selected::Ambiguous => true,
         }
     }
 
@@ -1400,7 +1400,6 @@ impl Sema<'_, '_> {
             Selected::Found(m) | Selected::Deleted(m) => {
                 self.ast.decls.function(m).is_some_and(|x| x.spec.is_trivial())
             }
-            Selected::Unsupported => self.has_trivial(c, k),
             _ => true,
         })
     }
@@ -1577,7 +1576,7 @@ impl Sema<'_, '_> {
         }
         let t = self.with_exc_spec(fty, ExcSpec::Deferred(f));
         self.ast.decls.set_ty(f, t);
-        if self.should_delete(f, k, false) {
+        if self.should_delete(f, k) {
             self.ast.decls.mark_function(f, FnSpec::new().with_deleted(true));
             // An assignment operator has no `DEFAULTED_*_DELETED` bit: it
             // is recorded as deleted while the class is finishing too

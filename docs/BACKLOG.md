@@ -749,7 +749,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1746 | a qualified template-id functional cast in a block (`Hog<1>(Hog<1>::OINK);`) is parsed as an expression and accepted; clang takes it as a declaration and rejects it (statement/declaration disambiguation in kiln_parse; xfail repro tests/conformance/stmt.ambig/template-id-qualified-declarator-in-block.cpp) | WP-1734 | open |
 | WP-1747 | a second `using enum E;` in one class scope is not diagnosed ([enum.udecl], [namespace.udecl]/10; xfail repro tests/conformance/enum.udecl/using-enum-redeclared-in-class.cpp) | WP-1734 | open |
 | WP-1748 | a local class's `friend struct Z;` naming a block-scope typedef `Z` is accepted: the scope search looks only for tags (crates/kiln_sema/src/local_friend.rs::act_on_local_friend_tag; xfail repro tests/conformance/class.friend/local-class-friend-class-names-typedef.cpp) | WP-1734 | open |
-| WP-1735 | init + conversions: GAP-020..GAP-040 (22 sites, 24 cases) | WP-1719 | open |
+| WP-1735 | init + conversions: GAP-020..GAP-040 (22 sites, 24 cases) | WP-1719 | done: all 21 gaps fixed (standard or clang's diagnostic; 4 dead sites removed); g++.dg 9/24 pass, the other 15 reject with clang's diagnostic |
+| WP-1749 | dead code after WP-1735: the overload `uncertain` / `requires_clause` paths that nothing reaches, and the now unused diagnostic id `sema_conv_unsupported` (crates/kiln_diag/src/ids/sema_c_d.rs, xtask/src/static_gaps.rs gap-id list) | WP-1735 | open |
+| WP-1750 | standard check: a reference direct-initialized from several parenthesized expressions (`const A& r(1, 2)`): kiln and clang reject ("reference cannot be initialized with multiple values"), GCC 16 accepts (P1975R0 / [dcl.init.general]/16?); read every applicable rule, then keep or change (g++.dg paren-init1.C, paren-init4.C) | WP-1735 | open |
 | WP-1736 | mangling: GAP-041..GAP-041 (5 sites, 9 cases) | WP-1719 | open |
 | WP-1737 | dependent names: GAP-042..GAP-051 (12 sites, 8 cases) | WP-1719 | open |
 | WP-1738 | operators: GAP-052..GAP-058 (11 sites, 7 cases) | WP-1719 | open |

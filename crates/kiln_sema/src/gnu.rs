@@ -668,11 +668,6 @@ impl Sema<'_, '_> {
         if class && self.require_non_abstract_alloc(lparen, ty) {
             return self.recover(ty, &flat, lparen);
         }
-        if !class && let Some(what) = self.temporary_unsupported(ty) {
-            // kiln-gap: GAP-024
-            self.unsupported(&format!("compound literals of {what}"), lparen);
-            return self.recover(ty, &flat, lparen);
-        }
         // A vector or `_Complex` literal takes a list of its elements (clang
         // `InitListChecker::CheckVectorType` / `CheckComplexType`). In C a
         // scalar literal's excess elements are only a warning
@@ -753,9 +748,10 @@ impl Sema<'_, '_> {
             self.ast.types.canonical_view(ty),
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_)
         ) {
-            let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
-            // kiln-gap: GAP-024
-            self.unsupported(&format!("compound literals of {what}"), lparen);
+            // A variable length array in C++ (C folds or rejects its bound
+            // first): it cannot be initialized, as a VLA variable cannot
+            // (clang `FK_VariableLengthArrayHasInitializer` at the `(`).
+            self.error(DiagId::sema_vla_no_init, lparen);
             return self.recover(ty, flat, lparen);
         }
         // clang's `isFileScope` literal: outside a function (at namespace

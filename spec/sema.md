@@ -10815,9 +10815,8 @@ Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.
     substitution makes it a placeholder again. A lone parenthesized list
     for a non-class `T` is `sema_list_init_in_parens` (clang's
     FK_ParenthesizedListInitForScalar).
-  - Class, array and reference `T` need temporaries and are
-    unsupported (`temporary_unsupported`) until classes have
-    constructors (WP-065).
+  - Class, array and reference `T`: see spec/landed/sema/WP-1735.md
+    (`paren_cast_rejected`, `require_complete_construct`).
   - A function type `T` in `T()`, `T{...}` or `T(a, b)` is `cannot
     create object of function type 'T'` at the type, ranging over the
     whole expression (clang `BuildCXXTypeConstructExpr`

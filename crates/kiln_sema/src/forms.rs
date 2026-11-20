@@ -120,7 +120,7 @@ impl Sema<'_, '_> {
 
     /// The conversion sequence of braced argument `l` to parameter type
     /// `ty` ([over.ics.list]).
-    fn list_arg_ics(&mut self, ty: QualType, l: &InitList) -> crate::overload::Ics {
+    pub(crate) fn list_arg_ics(&mut self, ty: QualType, l: &InitList) -> crate::overload::Ics {
         let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
         self.ovl.lists.push(l.clone());
         let a = crate::overload::ArgInfo {
@@ -334,7 +334,9 @@ impl Sema<'_, '_> {
         // instantiation, here, fails (a failed `static_assert` in it,
         // [temp.inst]/2) is not initialized, quietly
         // (`construction_instantiation_fails`).
-        if self.construction_instantiation_fails(ty, loc) {
+        if self.construction_instantiation_fails(ty, loc)
+            || self.paren_cast_rejected(ty, &[], loc, rparen)
+        {
             return self.recover(QualType::ERROR, &[], loc);
         }
         // [class.abstract]/3 (clang `BuildCXXTypeConstructExpr`).
@@ -344,12 +346,74 @@ impl Sema<'_, '_> {
         if let Some(e) = self.value_init_class_temporary(ty, loc, rparen) {
             return e;
         }
-        if let Some(what) = self.temporary_unsupported(ty) {
-            // kiln-gap: GAP-020
-            self.unsupported(&format!("value-initialization of {what}"), loc);
-            return self.recover(ty, &[], loc);
-        }
         self.builder().scalar_value_init(ty, loc, rparen)
+    }
+
+    /// The checks of `T(...)` ([expr.type.conv]/2) with `args` (none for
+    /// `T()`, else two or more) that clang's `BuildCXXTypeConstructExpr`
+    /// makes before the initialization, in its order; true after a
+    /// diagnostic. With a parenthesized expression-list `T` shall not be
+    /// an array type ("array types cannot be value-initialized"); a
+    /// reference cannot be value-initialized ([dcl.init.general]/11) nor
+    /// initialized from several expressions ([dcl.init.ref]/5 takes one);
+    /// a class must be complete ([`Sema::require_complete_construct`]).
+    fn paren_cast_rejected(&mut self, ty: QualType, args: &[ExprId], loc: Loc, end: Loc) -> bool {
+        let range = Span::new(loc, self.token_end(end).unwrap_or(end));
+        if self.ast.types.is_array(ty) {
+            let msg = self.diag(DiagId::sema_value_init_for_array_type, loc).range(range);
+            self.emit(msg);
+            return true;
+        }
+        if self.ast.types.is_reference(ty) {
+            let msg = match args {
+                [] => self
+                    .diag(DiagId::sema_reference_without_init, loc)
+                    .arg(self.ty_arg(self.non_reference(ty)))
+                    .range(range),
+                [first, .., last] => {
+                    let span = Span::new(self.begin_loc(*first), self.expr_range(*last).hi);
+                    self.diag(DiagId::sema_reference_has_multiple_inits, loc).range(span)
+                }
+                [_] => return false,
+            };
+            self.emit(msg);
+            return true;
+        }
+        !self.require_complete_construct(ty, loc, end)
+    }
+
+    /// clang's `RequireCompleteType(TyBeginLoc, ElemTy,
+    /// err_invalid_incomplete_type_use, FullRange)` in
+    /// `BuildCXXTypeConstructExpr`: the class `ty` names (the element
+    /// class of an array) must be complete for `T(...)` or `T{...}`
+    /// ([expr.type.conv]/2 creates an object of it, [basic.def]/5). False
+    /// after a diagnostic: an undefined class template specialization is
+    /// reported by its instantiation ("implicit instantiation of undefined
+    /// template"), any other class as "invalid use of incomplete type" at
+    /// the type with the whole expression underlined, with the
+    /// declaration's note.
+    pub(crate) fn require_complete_construct(&mut self, ty: QualType, loc: Loc, end: Loc) -> bool {
+        let elem = self.base_element(ty);
+        if self.ast.types.as_record(elem).is_none() {
+            return true;
+        }
+        let reported = self.undefined_spec(elem).is_some_and(|r| {
+            !self.ast.spec_info(r).is_some_and(|(_, s)| {
+                s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+            })
+        });
+        if self.require_complete(elem, loc) {
+            return true;
+        }
+        if !reported {
+            let range = Span::new(loc, self.token_end(end).unwrap_or(end));
+            let msg = self
+                .diag(DiagId::sema_invalid_incomplete_type_use, loc)
+                .arg(self.ty_arg(elem))
+                .range(range);
+            self.emit(self.incomplete_note(msg, elem));
+        }
+        false
     }
 
     /// `T{ ... }` ([expr.type.conv]/2): direct-list-initialization of a
@@ -408,10 +472,14 @@ impl Sema<'_, '_> {
         // As `T()` (`act_on_value_init_cast`).
         if self.function_type_construct(ty, loc, l.rbrace)
             || self.construction_instantiation_fails(ty, loc)
+            || !self.ast.types.is_void(ty) && !self.require_complete_construct(ty, loc, l.rbrace)
             || self.require_non_abstract_alloc(loc, ty)
         {
             let flat = Self::list_exprs(l);
             return self.recover(QualType::ERROR, &flat, loc);
+        }
+        if self.ast.types.is_void(ty) {
+            return self.void_list_cast(ty, l, loc);
         }
         // [expr.type.conv]/2, [expr.prop]/[basic.lval]/7: a class prvalue
         // keeps the cv-qualifiers (and the sugar) of the written type, so
@@ -456,14 +524,15 @@ impl Sema<'_, '_> {
         if self.ast.types.is_reference(ty) {
             return self.reference_list_cast(ty, l, loc);
         }
-        if let Some(what) = self
-            .temporary_unsupported(ty)
-            .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
+        if let kiln_ast::types::TypeView::VariableArray { size, .. } =
+            self.ast.types.canonical_view(ty)
         {
-            // kiln-gap: GAP-022
-            self.unsupported(&format!("list-initialization of {what}"), l.lbrace);
+            // clang `FK_VariableLengthArrayHasInitializer`, at the bound
+            // (as for a variable, `reject_vla_init`).
+            let at = self.begin_loc(size);
+            self.error(DiagId::sema_vla_no_init, at);
             let flat = Self::list_exprs(l);
-            return self.recover(ty, &flat, loc);
+            return self.recover(QualType::ERROR, &flat, loc);
         }
         let to = conv::strip_cv(self, ty);
         // `E{v}` for a fixed-underlying-type enumeration is
@@ -530,6 +599,7 @@ impl Sema<'_, '_> {
         // As `T()` (`act_on_value_init_cast`).
         if self.function_type_construct(ty, loc, rparen)
             || self.construction_instantiation_fails(ty, loc)
+            || self.paren_cast_rejected(ty, args, loc, rparen)
             || self.require_non_abstract_alloc(loc, ty)
         {
             return self.recover_dropping_braced(QualType::ERROR, args, loc);
@@ -572,11 +642,6 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(DiagId::sema_list_init_in_parens, loc).arg(0u8).arg(self.ty_arg(ty));
             self.emit(msg);
-            return self.recover_dropping_braced(ty, args, loc);
-        }
-        if let Some(what) = self.temporary_unsupported(ty) {
-            // kiln-gap: GAP-025
-            self.unsupported(&format!("direct-initialization of {what}"), loc);
             return self.recover_dropping_braced(ty, args, loc);
         }
         let msg = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
@@ -669,6 +734,33 @@ impl Sema<'_, '_> {
         )
     }
 
+    /// `void{}` ([expr.type.conv]/2, CWG2351): a prvalue of type `void`
+    /// that performs no initialization (clang 20+: a `ToVoid` functional
+    /// cast of an empty `InitListExpr` of type `void`). A non-empty list,
+    /// or any list before clang 20, is "illegal initializer type 'void'"
+    /// at the `{` (clang `FK_InitListBadDestinationType`).
+    fn void_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
+        if !l.items.is_empty() || self.clang_compat < 20 {
+            let t = self.ty_arg(ty);
+            let msg = self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(t);
+            self.emit(msg);
+            let flat = Self::list_exprs(l);
+            return self.recover(QualType::ERROR, &flat, loc);
+        }
+        let il = self.builder().init_list(QualType::VOID, &[], None, None, l.lbrace, l.rbrace);
+        let to = conv::strip_cv(self, ty);
+        self.builder().functional_cast(
+            CastKind::ToVoid,
+            il,
+            to,
+            ValueCategory::PRValue,
+            None,
+            loc,
+            l.rbrace,
+            ExprFlags::NONE,
+        )
+    }
+
     /// `A{ ... }` for an array type `A` ([expr.type.conv]/2): the
     /// aggregate-initialized array temporary (an array of unknown bound
     /// takes the bound of the list, [dcl.init.aggr]/4), bound to its
@@ -691,23 +783,6 @@ impl Sema<'_, '_> {
             l.rbrace,
             ExprFlags::NONE,
         )
-    }
-
-    /// Why a temporary of type `ty` cannot be created yet (class types
-    /// need constructors, WP-065; arrays and references are rare in
-    /// functional casts), or `None`.
-    pub(crate) fn temporary_unsupported(&self, ty: QualType) -> Option<&'static str> {
-        if self.ast.types.as_record(ty).is_some() {
-            Some("a class temporary")
-        } else if self.ast.types.is_array(ty) {
-            Some("an array temporary")
-        } else if self.ast.types.is_reference(ty) {
-            Some("a reference type")
-        } else if self.ast.types.is_function(ty) {
-            Some("a function type")
-        } else {
-            None
-        }
     }
 
     /// `auto(x)` / `auto{x}` ([expr.type.conv]/1, P0849): the type of a

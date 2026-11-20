@@ -68,7 +68,10 @@ impl Sema<'_, '_> {
         }
         let a = self.arg_info(e);
         match self.try_implicit_conversion(&a, to, opts) {
-            Ics::UserDefined(u) => {
+            // An aggregate's [over.ics.list]/8 conversion is a list
+            // argument's: `arg_info` of an expression carries no list, so
+            // the sequence names a constructor or a conversion function.
+            Ics::UserDefined(u) if u.via != UdcVia::Aggregate => {
                 self.ovl.udc_depth += 1;
                 let r = self.apply_udc(e, &u, to, ctx, at);
                 self.ovl.udc_depth -= 1;
@@ -88,11 +91,13 @@ impl Sema<'_, '_> {
         ctx: ConvCtx,
         at: Loc,
     ) -> Result<ExprId, ConvError> {
+        // A constructor or conversion function sequence names its function
+        // (only the aggregate one, filtered out by the caller, has none).
         let (Some(f), Some(found)) = (u.func, u.found) else {
-            return Err(unsupported_udc());
+            return Err(no_conversion(self, e, to));
         };
         let x = match u.via {
-            UdcVia::Aggregate => return Err(unsupported_udc()),
+            UdcVia::Aggregate => return Err(no_conversion(self, e, to)),
             UdcVia::ConvFn => {
                 let target = self.non_reference(to);
                 self.conversion_function_call(e, f, found, target, at)?
@@ -437,11 +442,6 @@ impl Sema<'_, '_> {
         self.order_template_candidates(&mut set);
         Some(set)
     }
-}
-
-fn unsupported_udc() -> ConvError {
-    // kiln-gap: GAP-030
-    ConvError::new(DiagId::sema_conv_unsupported, vec!["this user-defined conversion".into()])
 }
 
 fn no_conversion(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ConvError {

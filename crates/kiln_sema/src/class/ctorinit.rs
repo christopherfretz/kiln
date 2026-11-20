@@ -651,10 +651,13 @@ impl Sema<'_, '_> {
                     return self.recover(QualType::ERROR, &[], *l);
                 }
                 if self.ast.types.is_reference(ty) {
-                    // todo(WP-067b follow-up): clang's "reference to type
-                    // requires an initializer".
-                    // kiln-gap: GAP-027
-                    self.unsupported("value-initialization of a reference member", info.loc);
+                    // [dcl.init.general]/11: value-initializing a reference
+                    // is ill-formed (clang `FK_DefaultInitOfReference`
+                    // at the member's name).
+                    let msg = self
+                        .diag(DiagId::sema_reference_without_init, info.loc)
+                        .arg(self.ty_arg(self.non_reference(ty)));
+                    self.emit(msg);
                     return self.recover(ty, &[], info.loc);
                 }
                 if self.ast.types.is_array(ty) {

@@ -433,6 +433,10 @@ impl Sema<'_, '_> {
         }
         // [dcl.type.auto.deduct]: `new auto(e)`, and a placeholder under
         // pointer and member-pointer declarators (`new auto Q::*(&Q::m)`).
+        // `contains_undeduced_auto` walks every declarator the allocated
+        // type can have (a function type's return included); an array of
+        // `auto` and a vector of it were rejected by the declarator, and a
+        // placeholder deduced as a dependent type took the dependent path.
         if self.is_undeduced_auto(elem) || self.contains_undeduced_auto(elem) {
             if let Some(&(_, at)) = arrays.first() {
                 self.error(DiagId::sema_new_array_of_auto, at);
@@ -442,10 +446,6 @@ impl Sema<'_, '_> {
                 Some(t) => elem = t,
                 None => return self.recover_err(&kids, loc),
             }
-        } else if self.contains_auto(elem) {
-            // kiln-gap: GAP-033
-            self.unsupported("this form of 'auto' in a new-expression", tid.loc);
-            return self.recover_err(&kids, loc);
         }
         // The later bounds, outermost last.
         for (k, &(n, at)) in later.iter().enumerate().rev() {
@@ -668,7 +668,20 @@ impl Sema<'_, '_> {
                 Some(&pt) => {
                     let to =
                         if self.ast.types.is_reference(pt) { pt } else { conv::strip_cv(self, pt) };
-                    self.convert_for_init(a, to, ConvCtx::Argument)
+                    // [expr.new]/20, [dcl.init.general]/16.1: a braced
+                    // placement argument copy-list-initializes its
+                    // parameter, as a call's does.
+                    match self.take_braced_arg(a) {
+                        Some(l) => self.init_list_entity(to, &l, l.lbrace, ConvCtx::Argument, None),
+                        None => self.convert_for_init(a, to, ConvCtx::Argument),
+                    }
+                }
+                None if variadic && self.is_braced_arg(a) => {
+                    // [expr.call]/12: no braced-init-list for the ellipsis.
+                    if let Some(l) = self.take_braced_arg(a) {
+                        self.braced_variadic_argument(&l, 0);
+                    }
+                    return self.recover_err(&kids, loc);
                 }
                 None if variadic => {
                     let c = conv::decay(self, a);
@@ -837,7 +850,11 @@ impl Sema<'_, '_> {
         if first.is_some() {
             flags = flags.with(ExprFlags::ARRAY_FORM);
         }
-        let placement_list = placement.map(|p| self.ast.lists.push(&p.args));
+        // Braced placement arguments keep their nested lists.
+        let placement_list = placement.map(|p| {
+            let args = self.dependent_args(&p.args);
+            self.ast.lists.push(&args)
+        });
         // `new auto(e)` with a dependent `e`: the type is deduced later.
         let ty = if self.contains_auto(elem) {
             QualType::DEPENDENT
@@ -1294,7 +1311,11 @@ impl Sema<'_, '_> {
         pass_align: bool,
         loc: Loc,
     ) -> Result<Option<(DeclId, bool)>, Vec<kiln_diag::Diag>> {
-        match self.find_operator_new_exact(cands, place, pass_align) {
+        // A braced-init-list argument has no type to match exactly.
+        let braced = place.iter().any(|&a| self.is_braced_arg(a));
+        let exact =
+            if braced { None } else { self.find_operator_new_exact(cands, place, pass_align) };
+        match exact {
             Some(found) => Ok(Some(found)),
             None if place.is_empty() || cands.is_empty() => Ok(None),
             None => {
@@ -1398,9 +1419,12 @@ impl Sema<'_, '_> {
             if with_align && let Some(al) = al {
                 set.args.push(ArgInfo::of_type(al, ValueCategory::PRValue));
             }
-            for &a in place {
-                set.args.push(self.arg_info(a));
-            }
+            // A braced-init-list argument ([over.ics.list]) as a call's.
+            let braced: Vec<Option<InitList>> = place
+                .iter()
+                .map(|&a| self.braced_args.iter().find(|(x, _)| *x == a).map(|(_, l)| l.clone()))
+                .collect();
+            let mark = self.push_call_args(&mut set, place, &braced);
             // Class members go through the member adder; a namespace-scope
             // function or function template is added directly, each
             // function once over its redeclarations.
@@ -1445,10 +1469,12 @@ impl Sema<'_, '_> {
                     // alignment only when nothing is viable.
                     let amb = self.ovl_notes(&set, true);
                     self.end_set(set);
+                    self.ovl.lists.truncate(mark);
                     return Err(amb);
                 }
             };
             self.end_set(set);
+            self.ovl.lists.truncate(mark);
             if let Some(f) = f {
                 return Ok(Some((f, with_align)));
             }
@@ -1468,7 +1494,10 @@ impl Sema<'_, '_> {
     ) -> kiln_diag::Diag {
         let have = 1 + place.len();
         let size_t = self.size_type();
-        let mut bad: Vec<(bool, Loc, String)> = Vec::new();
+        // (implicit, the location of a candidate rejected for a braced
+        // argument, its location, the detail): clang sorts those by
+        // position (`CompareOverloadCandidatesForDisplay`).
+        let mut bad: Vec<(bool, Option<Loc>, Loc, String)> = Vec::new();
         let mut arity: Vec<(usize, bool, Loc, String)> = Vec::new();
         for &f in cands {
             let Some((ps, variadic)) = self.fn_params(f) else { continue };
@@ -1485,6 +1514,20 @@ impl Sema<'_, '_> {
                 .chain(place.iter().map(|&a| (self.ast.exprs.get(a).ty(), Some(a))))
                 .collect();
             for (i, (&(aty, a), &p)) in args.iter().zip(&ps).enumerate() {
+                let list = a.and_then(|a| {
+                    self.braced_args.iter().find(|(x, _)| *x == a).map(|(_, l)| l.clone())
+                });
+                if let Some(l) = list {
+                    let to =
+                        if self.ast.types.is_reference(p) { p } else { conv::strip_cv(self, p) };
+                    let ics = self.list_arg_ics(to, &l);
+                    if ics.is_bad() {
+                        let detail = self.bad_conversion_detail(&ics, Some(i), None);
+                        bad.push((implicit, Some(fl), fl, detail));
+                        break;
+                    }
+                    continue;
+                }
                 let ok = match a {
                     Some(a) => self.placement_arg_match(a, p).is_some(),
                     None => self.ast.types.same_type(aty, p),
@@ -1510,15 +1553,27 @@ impl Sema<'_, '_> {
                 {
                     detail.push_str("; take the address of the argument with &");
                 }
-                bad.push((implicit, fl, detail));
+                bad.push((implicit, None, fl, detail));
                 break;
             }
         }
-        bad.sort_by_key(|b| b.0);
+        let sm = self.diags.sm();
+        bad.sort_by(|a, b| match (a.1, b.1) {
+            (Some(x), Some(y)) if a.0 == b.0 => {
+                if crate::implicit_fallthrough::before_in_tu(sm, x, y) {
+                    std::cmp::Ordering::Less
+                } else if crate::implicit_fallthrough::before_in_tu(sm, y, x) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            }
+            _ => (a.0, a.1.is_some()).cmp(&(b.0, b.1.is_some())),
+        });
         arity.sort_by_key(|a| (a.0, !a.1));
         let notes: Vec<(Loc, String)> = bad
             .into_iter()
-            .map(|(_, l, d)| (l, d))
+            .map(|(_, _, l, d)| (l, d))
             .chain(arity.into_iter().map(|(_, _, l, d)| (l, d)))
             .collect();
         for (l, d) in notes {

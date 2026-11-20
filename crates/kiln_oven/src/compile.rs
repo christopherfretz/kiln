@@ -7151,6 +7151,9 @@ impl Compiler<'_> {
             // side effects ended with that evaluation (it is a full
             // constant expression, [expr.const]/16).
             ExprKind::ConstantExpr if self.kind(ty) == TyKind::Void => {}
+            // The empty list of `void{}` ([expr.type.conv]/2, CWG2351)
+            // performs no initialization.
+            ExprKind::InitListExpr if self.kind(ty) == TyKind::Void => {}
             ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr
                 if self.ast().exprs.selected_operand(e).is_some() =>
             {

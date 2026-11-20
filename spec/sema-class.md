@@ -3027,8 +3027,8 @@ Constructors, destructors, conversion functions, `= default` and
   follows the C++23+ rules (§4.6).
 - §4.2 deletion (`deletion.rs`): `should_delete` is the Q7 rule over
   bases, fields and variant members, with `select_special` as the
-  approximate overload resolution (Found / Missing / Deleted / Ambiguous
-  / Unsupported); `deletion_notes` / `deleted_function_notes` give clang's
+  approximate overload resolution (Found / Missing / Deleted / Ambiguous;
+  WP-1735 removed the never-produced Unsupported); `deletion_notes` / `deleted_function_notes` give clang's
   `note_deleted_*` explanation. `check_defaulted` / `check_out_of_line_defaulted`
   (§4.4; pending ones run at `}` via `check_pending_defaulted`) check the
   signature (return type, parameter kind, default arguments, declared vs

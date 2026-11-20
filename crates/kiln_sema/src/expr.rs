@@ -5144,8 +5144,10 @@ impl Sema<'_, '_> {
     }
 
     /// [expr.cond]/4 and /5: glvalues of the same type and value category
-    /// give that glvalue; an lvalue of a less cv-qualified type binds to a
-    /// reference to the other operand's type (/4.1).
+    /// give that glvalue; an lvalue (an xvalue) of a less cv-qualified
+    /// type binds directly to an lvalue (rvalue) reference to the other
+    /// operand's type (/4.1, /4.2), so `b ? f() : g()` of an `int&&` and
+    /// a `const int&&` call is a `const int` xvalue.
     ///
     /// Only for ordinary and bit-field objects (clang
     /// `isOrdinaryOrBitFieldObject`): a conditional of GNU vector
@@ -5172,15 +5174,15 @@ impl Sema<'_, '_> {
             }
             return Some(res);
         }
-        if tn.value_category() != ValueCategory::LValue
-            || fnn.value_category() != ValueCategory::LValue
+        let lv = tn.value_category();
+        if !lv.is_glvalue()
+            || fnn.value_category() != lv
             || self.ast.types.as_record(tt).is_some()
             || !self.ast.types.same_unqualified(tt, ft)
         {
             return None;
         }
         let (tq, fq) = (self.ast.types.effective_quals(tt), self.ast.types.effective_quals(ft));
-        let lv = ValueCategory::LValue;
         let (t2, f2, ty) = if tq.contains(fq) {
             (t, conv::raw_cast(self, CastKind::NoOp, f, tt, lv, None), tt)
         } else if fq.contains(tq) {
@@ -7550,11 +7552,26 @@ impl Sema<'_, '_> {
         {
             return self.cast_user_conversion(style, e, ty, loc, rparen);
         }
-        if self.ast.types.as_record(ty).is_some() {
-            // kiln-gap: GAP-032
-            self.unsupported("conversions of class types", loc);
+        if style.allows_static() && self.ast.types.as_record(ty).is_some() {
+            // The constructors were not considered: the class is
+            // incomplete ([expr.static.cast]/4 initializes an object of it;
+            // clang `TryStaticImplicitCast`'s `RequireCompleteType` with
+            // `err_bad_cast_incomplete` at the cast). An undefined class
+            // template specialization was reported by its instantiation.
+            let reported = self.undefined_spec(ty).is_some_and(|r| {
+                !self.ast.spec_info(r).is_some_and(|(_, s)| {
+                    s.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+                })
+            });
+            if !reported && !self.require_complete(ty, loc) {
+                let msg = self.diag(DiagId::sema_bad_cast_incomplete, loc).arg(self.ty_arg(ty));
+                self.emit(self.incomplete_note(msg, ty));
+            }
             return self.recover(ty, &[e], loc);
         }
+        // A `const_cast` or `reinterpret_cast` to a class type is none of
+        // their conversions ([expr.const.cast], [expr.reinterpret.cast]):
+        // rejected below as for any other type they cannot reach.
         let to = conv::strip_cv(self, ty);
         // const_cast part (and the qualification-only C-style cast).
         if style.allows_const() {
@@ -7696,11 +7713,9 @@ impl Sema<'_, '_> {
                         self.emit_conv_error(err, loc);
                         self.recover(ty, &[e], loc)
                     }
-                    None => {
-                        // kiln-gap: GAP-031
-                        self.unsupported("this user-defined conversion", loc);
-                        self.recover(ty, &[e], loc)
-                    }
+                    // The sequence is no longer user-defined (the
+                    // conversion nests past `MAX_UDC_DEPTH`): no conversion.
+                    None => self.bad_cast(style, e, ty, loc),
                 };
             }
             Ics::UserDefined(_) => DiagId::sema_ovl_deleted_conversion_in_cast,

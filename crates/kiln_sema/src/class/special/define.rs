@@ -1394,11 +1394,6 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 None
             }
-            Selected::Unsupported => {
-                // kiln-gap: GAP-035
-                self.unsupported("selecting the constructor", loc);
-                None
-            }
         }
     }
 
@@ -1513,6 +1508,32 @@ impl Sema<'_, '_> {
 
     // -- assignment operators ----------------------------------------------
 
+    /// [class.copy.assign]/7: a reference member, or a const member of
+    /// non-class type, makes the class's assignment operator deleted, so
+    /// one is defined with such a member only where that was not checked
+    /// (an instantiated out-of-line `= default`); clang
+    /// `DefineImplicitCopyAssignment` rejects it at the class (its text
+    /// says "copy" for a move too). Reports it and answers true.
+    fn unassignable_member(&mut self, class: DeclId, m: DeclId, fty: QualType) -> bool {
+        let elem = self.base_element(fty);
+        let reference = self.ast.types.is_reference(fty);
+        if !reference
+            && (self.ast.types.as_record(elem).is_some()
+                || !self.ast.types.effective_quals(elem).is_const())
+        {
+            return false;
+        }
+        let class_loc = self.ast.decls.get(class).loc();
+        let msg = self
+            .diag(DiagId::sema_uninitialized_member_for_assign, class_loc)
+            .arg(self.ty_arg(self.class_type(class)))
+            .arg(u8::from(!reference))
+            .arg(self.decl_arg(m));
+        let note = self.diag(DiagId::note_declared_at, self.ast.decls.get(m).loc());
+        self.emit(msg.with_note(note));
+        true
+    }
+
     /// clang `DefineImplicitCopyAssignment` / `DefineImplicitMoveAssignment`
     /// ([class.copy.assign]/12): each direct base, then each non-static
     /// data member, is assigned from the corresponding subobject of the
@@ -1585,15 +1606,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             let fty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-            let elem = self.base_element(fty);
-            if self.ast.types.is_reference(fty)
-                || self.ast.types.as_record(elem).is_none()
-                    && self.ast.types.effective_quals(elem).is_const()
-            {
-                // An implicit assignment operator of such a class is
-                // deleted ([class.copy.assign]/7), so never defined.
-                // kiln-gap: GAP-037
-                self.unsupported("assigning a reference or const member", loc);
+            if self.unassignable_member(class, m, fty) {
                 invalid = true;
                 continue;
             }
@@ -1714,9 +1727,17 @@ impl Sema<'_, '_> {
                     self.diagnose_deleted_use(op, loc);
                     return None;
                 }
-                _ => {
-                    // kiln-gap: GAP-036
-                    self.unsupported("selecting the assignment operator", loc);
+                // No usable or no best operator (an instantiated
+                // out-of-line `= default` again): [class.copy.assign]/12
+                // assigns the subobject as by `to.operator=(from)`, whose
+                // call reports the failure as a member call does (clang
+                // `buildSingleCopyAssignRecursively`: "call to member
+                // function 'operator=' is ambiguous", or the sole
+                // candidate's argument conversion).
+                Selected::Missing | Selected::Ambiguous => {
+                    let name = DeclName::operator(kiln_ast::names::OverloadedOperator::Equal);
+                    let callee = self.act_on_member_dn(to, name, loc, loc, false);
+                    let _ = self.act_on_call(callee, &[from], loc, loc);
                     return None;
                 }
             };
@@ -1753,10 +1774,12 @@ impl Sema<'_, '_> {
         depth: u32,
         loc: Loc,
     ) -> Option<StmtId> {
+        // Only a bounded array reaches here: a flexible array member is
+        // skipped by `define_assign`, and a field of variably modified
+        // type is rejected ("fields must have a constant size") and
+        // invalid.
         let Some(n) = self.ast.types.array_size(ty) else {
-            // kiln-gap: GAP-038
-            self.unsupported("implicit assignment of an array of this type", loc);
-            return None;
+            unreachable!("assign_array_loop: an array subobject has a constant bound")
         };
         let elem = self.ast.types.element(ty)?;
         let moving = self.ast.exprs.get(from).value_category() == ValueCategory::XValue;
