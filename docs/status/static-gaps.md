@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-19 gaps at 26 sites; 10 of 56,766 g++.dg cases hit one at the
+14 gaps at 21 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -76,10 +76,9 @@ By family:
 | Oven trap | 4 | 8 | 0 |
 | codegen fallback | 1 | 1 | 0 |
 | drv_not_implemented | 2 | 2 | 0 |
-| parse_unsupported | 4 | 4 | 0 |
+| parse_unsupported | 2 | 2 | 0 |
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
-| reflection error | 3 | 3 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
 | sema_unimplemented_template_feature | 1 | 1 | 0 |
@@ -92,7 +91,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
 | Oven traps: expressions | 2 (GAP-114..GAP-115) | 3 | 0 | WP-1741 |
 | Oven traps: types | 2 (GAP-126, GAP-129) | 5 | 0 | WP-1742 |
-| reflection | 5 (GAP-130..GAP-134) | 5 | 0 | WP-1743 |
 | preprocessor/modules | 6 (GAP-136, GAP-137, GAP-139..GAP-142) | 6 | 0 | WP-1744 |
 | misc | 2 (GAP-144, GAP-149) | 5 | 0 | WP-1745 |
 
@@ -106,11 +104,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-115 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `__builtin_align_up`/`_down`/`__builtin_is_aligned` or an elementwise builtin on a `_BitInt` wider than 128 bits) | `crates/kiln_oven/src/compile/builtins.rs::builtin_call` ×2 | 0 | WP-1741 |
 | GAP-126 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a write to, or a splat into, a lane of a vector of wide `_BitInt` lanes) | `crates/kiln_oven/src/compile/wide.rs::wide_compound_assign`, `crates/kiln_oven/src/compile/wide.rs::wide_float_compound`, `crates/kiln_oven/src/compile/wide.rs::wide_store`, `crates/kiln_oven/src/compile/wide.rs::wide_to_scalar` | 0 | WP-1742 |
 | GAP-129 | Oven trap | Oven traps: types | `kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet` (a wide operand of a builtin call or of `new T[n]`, a lane of a vector of wide lanes) | `crates/kiln_oven/src/compile.rs::wide_bit_int` | 0 | WP-1742 |
-| GAP-130 | reflection error | reflection | `kiln: reflection function '{name}' is not implemented yet (WP-{wp})` ({name}: the queries `meta_query` has no arm for (`symbol_of`, `u8symbol_of`)) | `crates/kiln_sema/src/meta/query/mod.rs::meta_query` | 0 | WP-1743 |
-| GAP-131 | reflection error | reflection | `kiln: '{name}' is not implemented yet` ({name}: a `std::meta` trait whose builtin is not implemented (the type traits of the `type trait` entry)) | `crates/kiln_sema/src/meta/traits.rs::trait_result` | 0 | WP-1743 |
-| GAP-132 | reflection error | reflection | `kiln: constant_of an object of type '{t}' is not implemented yet` | `crates/kiln_sema/src/meta/query/entity.rs::object_constant` | 0 | WP-1743 |
-| GAP-133 | parse_unsupported | reflection | `splice of this value reflection is not supported yet` | `crates/kiln_sema/src/splice.rs::act_on_splice_expr` | 0 | WP-1743 |
-| GAP-134 | parse_unsupported | reflection | `{what} is not supported yet` ({what}: `splice of a reflection of this subobject`, `splice of a reflection of this object`) | `crates/kiln_sema/src/splice.rs::act_on_splice_expr` | 0 | WP-1743 |
 | GAP-136 | pp_header_unit_unsupported | preprocessor/modules | `importing a header unit is not supported yet` | `crates/kiln_pp/src/directive.rs::maybe_module_directive` | 0 | WP-1744 |
 | GAP-137 | pp_scan_header_unit | preprocessor/modules | `header unit {0} cannot be imported: kiln-scan-deps does not support header units yet` | `crates/kiln_pp/src/modules.rs::module_directive` | 0 | WP-1744 |
 | GAP-139 | parse_unsupported | preprocessor/modules | `{what} is not supported yet` ({what}: `a module import`, `a module declaration` (inside a pragma region)) | `crates/kiln_parse/src/pragma.rs::on_event` | 0 | WP-1744 |

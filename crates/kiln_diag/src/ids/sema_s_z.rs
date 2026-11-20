@@ -82,10 +82,18 @@ sema_splice_not_scope = Error (0) "splice in a scope position does not designate
 // [temp.names]/1 with a splice-specialization-specifier (WP-482)
 sema_splice_not_template = Error (0) "splice before a template argument list does not designate a template";
 sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
+// [expr.prim.splice]/2: an object reflection no lvalue designates, with
+// no earlier error: an invariant of `object_lvalue`, never a silent drop
+// (WP-1743; spec/reflection.md §5)
+sema_splice_object_no_expression = Error (1) "kiln: internal error: no expression designates the object of type {0} the splice's reflection represents";
 // [expr.prim.splice]/2 (WP-474)
 sema_splice_special_member = Error (1) "a splice-expression cannot designate a {0:constructor|destructor}";
 // [expr.prim.splice]/2.1 (WP-1524)
 sema_splice_unnamed_bit_field = Error (0) "a splice-expression cannot designate an unnamed bit-field";
+// [expr.prim.splice]/2: a value reflection no prvalue spells, with no
+// earlier error: an invariant of `nttp_arg_expr`, never a silent drop
+// (WP-1743; spec/reflection.md §5)
+sema_splice_value_no_expression = Error (1) "kiln: internal error: no expression stands for the value of type {0} the splice's reflection represents";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
 sema_standalone_specifier = ExtWarn [MissingDeclarations] (1) "'{0}' is not permitted on a declaration of a type";
 sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";

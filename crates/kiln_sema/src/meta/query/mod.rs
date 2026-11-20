@@ -27,6 +27,7 @@ use super::fail;
 use crate::Sema;
 
 impl Sema<'_, '_> {
+    #[allow(clippy::too_many_lines, reason = "one arm per query op, exhaustive")]
     pub(in crate::meta) fn meta_query(
         &mut self,
         q: QueryOp,
@@ -35,6 +36,7 @@ impl Sema<'_, '_> {
         ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<(), MetaError> {
+        use QueryOp as Q;
         let loc = ctx.loc;
         if let QueryOp::SymbolOf | QueryOp::U8SymbolOf = q {
             let op = *args.first().ok_or_else(MetaError::invalid)?;
@@ -69,10 +71,8 @@ impl Sema<'_, '_> {
         {
             oven.mark_impure();
         }
-        if let Some(b) = self.query_pred(q, r, ctx, oven)? {
-            *out = MetaOut::Scalar(u128::from(b));
-            return Ok(());
-        }
+        // Every query has its arm (WP-1743): a new `QueryOp` needs a
+        // decision here.
         *out = match q {
             QueryOp::TypeOf => {
                 // A static data member of a class template specialization
@@ -108,8 +108,103 @@ impl Sema<'_, '_> {
                 MetaOut::Info(self.reflect_variable_of(r, ctx.nested_point, loc)?)
             }
             QueryOp::ReturnTypeOf => MetaOut::Info(self.reflect_return_type_of(r, loc)?),
-            // kiln-gap: GAP-130
-            _ => return Err(MetaError::not_implemented(MetaOp::Query(q), loc)),
+            // The predicates ([meta.reflection.queries]): `query_pred`
+            // (and its `entity_pred`) answer each of these.
+            Q::HasTemplateArguments
+            | Q::IsFunctionParameter
+            | Q::IsExplicitObjectParameter
+            | Q::HasDefaultArgument
+            | Q::IsVarargFunction
+            | Q::IsPublic
+            | Q::IsProtected
+            | Q::IsPrivate
+            | Q::IsVirtual
+            | Q::IsPureVirtual
+            | Q::IsOverride
+            | Q::IsFinal
+            | Q::IsDeleted
+            | Q::IsDefaulted
+            | Q::IsUserProvided
+            | Q::IsUserDeclared
+            | Q::IsExplicit
+            | Q::IsNoexcept
+            | Q::IsBitField
+            | Q::IsEnumerator
+            | Q::IsConst
+            | Q::IsVolatile
+            | Q::IsMutableMember
+            | Q::IsLvalueReferenceQualified
+            | Q::IsRvalueReferenceQualified
+            | Q::HasStaticStorageDuration
+            | Q::HasThreadStorageDuration
+            | Q::HasAutomaticStorageDuration
+            | Q::HasInternalLinkage
+            | Q::HasModuleLinkage
+            | Q::HasExternalLinkage
+            | Q::HasCLanguageLinkage
+            | Q::HasLinkage
+            | Q::IsCompleteType
+            | Q::IsEnumerableType
+            | Q::IsVariable
+            | Q::IsType
+            | Q::IsNamespace
+            | Q::IsTypeAlias
+            | Q::IsNamespaceAlias
+            | Q::IsFunction
+            | Q::IsConversionFunction
+            | Q::IsOperatorFunction
+            | Q::IsLiteralOperator
+            | Q::IsSpecialMemberFunction
+            | Q::IsConstructor
+            | Q::IsDefaultConstructor
+            | Q::IsCopyConstructor
+            | Q::IsMoveConstructor
+            | Q::IsAssignment
+            | Q::IsCopyAssignment
+            | Q::IsMoveAssignment
+            | Q::IsDestructor
+            | Q::IsTemplate
+            | Q::IsFunctionTemplate
+            | Q::IsVariableTemplate
+            | Q::IsClassTemplate
+            | Q::IsAliasTemplate
+            | Q::IsConversionFunctionTemplate
+            | Q::IsOperatorFunctionTemplate
+            | Q::IsLiteralOperatorTemplate
+            | Q::IsConstructorTemplate
+            | Q::IsConcept
+            | Q::IsStructuredBinding
+            | Q::IsValue
+            | Q::IsObject
+            | Q::IsClassMember
+            | Q::IsNamespaceMember
+            | Q::IsNonstaticDataMember
+            | Q::IsStaticMember
+            | Q::IsBase
+            | Q::HasDefaultMemberInitializer
+            | Q::HasParent => {
+                let b = self.query_pred(q, r, ctx, oven)?;
+                MetaOut::Scalar(u128::from(b.unwrap_or_else(|| {
+                    unreachable!("query_pred answers every predicate query, {q:?} included")
+                })))
+            }
+            // Answered before the operand is read as a reflection
+            // ([meta.reflection.names]: the operand is a `std::meta::operators`).
+            Q::SymbolOf | Q::U8SymbolOf => {
+                unreachable!("symbol_of and u8symbol_of return before this match")
+            }
+            // `Sema::meta` sends these to `meta_names` (`names::is_names_op`).
+            Q::HasIdentifier
+            | Q::IdentifierOf
+            | Q::U8IdentifierOf
+            | Q::DisplayStringOf
+            | Q::U8DisplayStringOf
+            | Q::SourceLocationOf
+            | Q::KilnReflectionRange
+            | Q::KilnMemberOffset
+            | Q::KilnAccessContext => {
+                unreachable!("Sema::meta sends the names query {q:?} to meta_names")
+            }
         };
         Ok(())
     }

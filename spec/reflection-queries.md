@@ -202,10 +202,12 @@ parity is out of scope. The negative tests are `entity-neg.cpp`,
 | `return_type_of` | `r` is not a function or function type, or is a function whose type contains an undeduced placeholder (§1) | `reflection does not represent a function or function type with a return type` |
 | `variable_of` | `r` is not a parameter of the function being evaluated | `reflection does not represent parameter of current function` |
 
-**Not implemented yet.** These fail with a `kiln:` note:
-- `constant_of` of a subobject the Oven cannot read: a `_BitInt` wider
-  than 128 bits (`constant_of an object of type 'T' is not implemented
-  yet`).
+`constant_of` of an object reads a value of every object type: a class
+with members, a union, an array, a pointer to member, a reflection, a
+closure, and a `_BitInt` wider than 128 bits (WP-1743;
+`meta.reflection.queries/constant-of-objects.cpp`).
+
+**Not implemented yet.** This fails with a `kiln:` note:
 - `constant_of` of an explicit-object member function: the
   "not a valid argument to a splice-expression" note, because only
   static member functions are handled yet.

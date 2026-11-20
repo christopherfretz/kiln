@@ -9,8 +9,9 @@
 //! argument: its template parameter object) splices to an lvalue naming
 //! the object: a reference to the variable or template parameter object
 //! holding it, followed by the member accesses, derived-to-base
-//! conversions and subscripts that reach the subobject its byte offset
-//! designates ([`Sema::object_lvalue`]). Substituting a pointer or
+//! conversions, subscripts and complex parts (`__real__`/`__imag__`)
+//! that reach the subobject its byte offset designates
+//! ([`Sema::object_lvalue`]). Substituting a pointer or
 //! reference template argument into a subobject uses the same walk.
 
 use kiln_ast::consts::{PtrBase, Scalar};
@@ -35,12 +36,16 @@ enum Step {
     Base { derived: DeclId, base: DeclId },
     /// The array element.
     Index(u64),
+    /// The real (`false`) or imaginary (`true`) part of a complex object
+    /// (GNU `__real__` / `__imag__`, an lvalue of the element type).
+    Part(bool),
 }
 
 impl Sema<'_, '_> {
     /// `[: r :]` of value reflection `v` ([expr.prim.splice]/2): a prvalue
-    /// of the value's type computing it. `None` for a value kiln cannot
-    /// spell (the caller diagnoses).
+    /// of the value's type computing it. `None` only for a value that is
+    /// no valid constant template argument (an internal error the caller
+    /// reports).
     pub(crate) fn splice_value_expr(&mut self, v: ConstValueId, loc: Loc) -> Option<ExprId> {
         let ty = self.ast.consts.ty(v);
         self.nttp_arg_expr(ty, v, loc)
@@ -48,8 +53,9 @@ impl Sema<'_, '_> {
 
     /// `[: r :]` of object reflection `p` (its interned pointer to the
     /// object; [expr.prim.splice]/2): an lvalue designating the object,
-    /// of the object's type. `None` for an object kiln cannot name (a
-    /// string literal or `std::type_info` object; the caller diagnoses).
+    /// of the object's type. `None` only when an expression built on the
+    /// way fails (an internal error the caller reports unless that
+    /// expression diagnosed itself).
     ///
     /// The object is not a variable, so a contract predicate does not
     /// make the splice `const` (P3598R0, [expr.prim.splice]/2.3: "the
@@ -110,15 +116,14 @@ impl Sema<'_, '_> {
         (!self.is_err_expr(r)).then_some(r)
     }
 
-    /// What a splice of object reflection `p` that
-    /// [`Self::splice_object_expr`] could not name is, for the
-    /// not-supported diagnostic.
-    pub(crate) fn object_splice_unsupported(&self, p: ConstValueId) -> &'static str {
+    /// The type of the object object reflection `p` designates (its
+    /// interned pointer's pointee), for the internal-error diagnostic.
+    pub(crate) fn splice_object_type(&self, p: ConstValueId) -> QualType {
         match self.ast.consts.scalar(p) {
-            Some(Scalar::Pointer { base: PtrBase::Decl(_), .. }) => {
-                "splice of a reflection of this subobject"
+            Some(Scalar::Pointer { ty, .. }) => {
+                self.ast.types.pointee(ty).unwrap_or(QualType::ERROR)
             }
-            _ => "splice of a reflection of this object",
+            _ => QualType::ERROR,
         }
     }
 
@@ -162,6 +167,10 @@ impl Sema<'_, '_> {
                     let st = self.size_type();
                     let idx = self.nttp_int_literal(st, i128::from(i), loc);
                     self.act_on_subscript(cur, idx, loc)
+                }
+                Step::Part(imag) => {
+                    let op = if imag { UnaryOp::Imag } else { UnaryOp::Real };
+                    self.real_imag(op, cur, loc)
                 }
             };
             if self.is_err_expr(cur) {
@@ -276,6 +285,26 @@ impl Sema<'_, '_> {
             }
             path.push(Step::Index(i));
             if self.subobject_path(elem, offset - i * stride, target, true, path, depth + 1) {
+                return true;
+            }
+            path.pop();
+            return false;
+        }
+        if let Some(elem) = self.ast.types.as_complex(ty) {
+            // A complex object is its real part followed by its imaginary
+            // part (C23 6.2.5p13), each an lvalue `__real__` / `__imag__`
+            // designates; clang takes either as a reference template
+            // argument (WP-1743).
+            let Some((size, _)) = crate::target::size_align(&self.ast, elem, &self.abi) else {
+                return false;
+            };
+            let imag = match offset {
+                0 => false,
+                o if o == size && size != 0 => true,
+                _ => return false,
+            };
+            path.push(Step::Part(imag));
+            if self.subobject_path(elem, 0, target, true, path, depth + 1) {
                 return true;
             }
             path.pop();

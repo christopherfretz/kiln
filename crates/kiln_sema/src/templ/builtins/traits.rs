@@ -39,8 +39,6 @@ pub(crate) enum TraitFailure {
     /// A transformation's operand is outside its domain
     /// (`make_signed<bool>`, `underlying_type<int>`): the type named.
     BadOperand(QualType),
-    /// The trait is not implemented ([`table::trait_status`]).
-    Unimplemented,
 }
 
 /// The engine's per-TU state: whether trait diagnostics are being
