@@ -4032,6 +4032,7 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
+        self.pragma_var_sections(d, g);
         self.add_global_annotations(d, gval(g))?;
         self.note_used_attrs(d, gval(g));
         if needs_init || needs_dtor {
@@ -4128,6 +4129,7 @@ impl<'a> Cg<'a> {
         }
         self.mark_tls(first, g, true);
         self.static_locals.insert(first, g);
+        self.pragma_var_sections(d, g);
         // clang `AddInitializerToStaticVarDecl`.
         // A dynamic initializer runs, guarded, at the declaration
         // statement ([stmt.dcl]/3; `static_local_init`).

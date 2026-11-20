@@ -2578,37 +2578,61 @@ flags, `alignas`/`packed` attributes, and the `#pragma pack` value current at
 the class definition, which sema records in cold map `record_pack: DeclId →
 u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
 
-**`#pragma pack` state (WP-066c; clang `Sema::ActOnPragmaPack`).**
-- **State.** Sema keeps the current value N (bytes, 0 = none) and a
-  stack of `(label, value)` entries.
-- **Applying it.** `act_on_start_record_definition` stores a nonzero N
-  in `record_pack` for the class being defined. A class template's
-  pattern gets it too. Its instantiations copy the pattern's value,
-  whatever is in effect where they are instantiated (clang's
+**`#pragma pack` state (WP-066c, WP-1744; clang `Sema::ActOnPragmaPack`,
+`Sema::ActOnPragmaOptionsAlign`, `AlignPackStack`; kiln_sema
+`pragma_pack`).** `#pragma pack`, `#pragma options align=k` and
+`#pragma align=k` share one stack.
+- **State.** Sema keeps the current value, a mode (`native`, `natural`
+  or `packed`), a pack value N (bytes, 0 = none) and whether `#pragma
+  pack` set it, with the pragma that set it, and a stack of `(label,
+  value, pushing pragma)` entries.
+- **Applying it.** `act_on_start_record_definition` stores the value's
+  maximum member alignment in `record_pack` for the class being defined
+  when it is nonzero: N when `#pragma pack` set the value, else 1 in
+  `packed` mode (clang `AddAlignmentAttributesForRecord`). A class
+  template's pattern gets it too. Its instantiations copy the pattern's
+  value, whatever is in effect where they are instantiated (clang's
   `InstantiateClass` copying `MaxFieldAlignmentAttr`;
   `start_instantiated_definition`, WP-782). Test:
   `tests/conformance/cpp.pragma/pack-template-instantiation-run.cpp`.
-- **Forms** (the argument text of `#pragma pack(...)` and
-  `_Pragma("pack(...)")`):
-  - `()` resets N to 0;
+- **`#pragma pack` forms** (the parser's port of clang's
+  `PragmaPackHandler`; `_Pragma("pack(...)")` too):
+  - `()` resets to the default;
   - `(N)` sets N;
   - `(push)`, `(push, id)`, `(push, N)` and `(push, id, N)` push the
     current value (with `id`), then set N if given;
   - `(pop)` restores the top entry;
   - `(pop, id)` pops through the nearest entry labelled `id`, or does
     nothing if there is none;
-  - `(pop, N)` pops, then sets N.
-  - N must be one of 0, 1, 2, 4, 8 or 16.
-- **Rejected forms.** These are reported through the
-  unsupported-pragma diagnostic (`#pragma pack ... is not supported
-  yet`; an error), where clang 19 warns and ignores them:
-  - `show`;
-  - any other N;
-  - `pop` on an empty stack;
-  - `pop` with both a label and N;
-  - an unknown action.
-- **Not implemented.** clang's end-of-file `-Wpragma-pack` "unterminated
-  push" warning and the include-boundary warnings are missing.
+  - `(pop, N)` pops, then sets N;
+  - `(show)` warns "value of #pragma pack(show) == N" (8, the target's
+    default, when none is set).
+  - N must be 0 (as `()` for the value), 1, 2, 4, 8 or 16; any other
+    value, or a numeric literal that is not an integer, is ignored with
+    clang's `-Wignored-pragmas` warning.
+  - `pop` on an empty stack warns ("#pragma pack(pop, ...) failed: stack
+    empty") and then acts; `pop` with both a label and N warns
+    ("specifying both a name and alignment to 'pop' is undefined").
+  - A missing `(` or `)`, an unknown action, a malformed argument list
+    or tokens after `)` ignore the pragma with clang's warning.
+- **`#pragma options align=k` / `#pragma align=k`** (clang
+  `ParseAlignPragma`): `native` and `power` (AIX's; `native` on kiln's
+  targets) push the value and set `native` mode, `natural` and `packed`
+  their modes; `reset` pops, or with an empty stack resets a non-default
+  value, or else warns "#pragma options align=reset failed: stack
+  empty". `mac68k` is clang's error "mac68k alignment pragma is not
+  supported on this target" (Darwin only). The malformed forms are
+  ignored with clang's warnings.
+- **End of file.** Every push not popped warns "unterminated '#pragma
+  pack (push, ...)' at end of file" (`-Wpragma-pack`), the innermost
+  first; when the value in effect is the default, the innermost notes
+  the pragma that reset it ("did you intend to use '#pragma pack (pop)'
+  instead of '#pragma pack()'?").
+- **Not implemented.** clang's include-boundary `-Wpragma-pack` warnings
+  (a non-default value at an `#include` that a class in the header
+  uses, a value the header changes); diagnostics only.
+- Tests: `tests/conformance/cpp.pragma/pack-*.cpp`,
+  `tests/conformance/cpp.pragma/options-align-*.cpp`.
 
 ### 6.2 Algorithm (Itanium §2.4, clang `ItaniumRecordLayoutBuilder`)
 Status: steps 3–5 and 7 are implemented for non-virtual bases (WP-066c,

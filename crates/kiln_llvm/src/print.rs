@@ -579,6 +579,11 @@ impl<'a> Printer<'a> {
 
     fn number_attrs(&mut self) {
         let m = self.m;
+        // `SlotTracker::processModule`: the global variables' attribute
+        // sets first, then the functions'.
+        for g in m.ordered_globals() {
+            self.add_attr_slot(g.attrs);
+        }
         for f in m.ordered_funcs() {
             self.add_attr_slot(f.attrs.func);
         }
@@ -1286,7 +1291,8 @@ impl<'a> Printer<'a> {
             w.write_str(", align ")?;
             write_u64(w, a)?;
         }
-        self.attachments(w, g.md.iter().copied(), ", ")
+        self.attachments(w, g.md.iter().copied(), ", ")?;
+        self.attr_group_ref(w, g.attrs)
     }
 
     fn alias(&self, w: Out<'_>, i: usize) -> fmt::Result {

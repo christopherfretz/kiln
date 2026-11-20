@@ -226,6 +226,13 @@ sema_pragma_attribute_unused = Warning [PragmaClangAttribute] (1) "unused attrib
 sema_pragma_loop_compatibility = Error (3) "{0:incompatible|duplicate} directives '{1}' and '{2}'";
 sema_pragma_loop_invalid_argument_type = Error (1) "invalid argument of type {0}; expected an integer type";
 sema_pragma_loop_precedes_nonloop = Error (1) "expected a for, while, or do-while loop to follow '{0}'";
+sema_pragma_options_align_mac68k_unsupported = Error (0) "mac68k alignment pragma is not supported on this target";
+sema_pragma_options_align_reset_failed = Warning [IgnoredPragmas] (1) "#pragma options align=reset failed: {0}";
+sema_pragma_pack_invalid_alignment = Warning [IgnoredPragmas] (0) "expected #pragma pack parameter to be '1', '2', '4', '8', or '16'";
+sema_pragma_pack_no_pop_eof = Warning [PragmaPack] (0) "unterminated '#pragma pack (push, ...)' at end of file";
+sema_pragma_pack_pop_identifier_and_alignment = Warning (0) "specifying both a name and alignment to 'pop' is undefined";
+sema_pragma_pack_show = Warning (1) "value of #pragma pack(show) == {0}";
+sema_pragma_pop_failed = Warning [IgnoredPragmas] (2) "#pragma {0}(pop, ...) failed: {1}";
 sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
 sema_probability_not_constant_float = Error (0) "probability argument to __builtin_expect_with_probability must be constant floating-point expression";
 sema_probability_out_of_range = Error (0) "probability argument to __builtin_expect_with_probability is outside the range [0.0, 1.0]";

@@ -584,6 +584,9 @@ impl<'a> Printer<'a> {
 
     fn number_attrs(&mut self) {
         let m = self.m;
+        for g in m.global_ids() {
+            self.add_attr_slot(m.global(g).attrs);
+        }
         for f in m.functions().map(|(_, f)| f) {
             self.add_attr_slot(f.attrs.func);
         }
@@ -1292,7 +1295,8 @@ impl<'a> Printer<'a> {
             w.write_str(", align ")?;
             write_u64(w, a)?;
         }
-        self.attachments(w, g.metadata().iter().copied(), ", ")
+        self.attachments(w, g.metadata().iter().copied(), ", ")?;
+        self.attr_group_ref(w, g.attrs)
     }
 
     fn alias(&self, w: Out<'_>, id: AliasId) -> fmt::Result {

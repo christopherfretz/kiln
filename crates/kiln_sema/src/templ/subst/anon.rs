@@ -234,10 +234,17 @@ impl Substituter<'_, '_, '_> {
             .map(|a| (a, *ast.attrs.get(a)))
             // A local variable's `cleanup` names a function, not a dependent
             // entity (WP-807); clang's `annotate` is lowered on every
-            // instantiated variable (WP-1113).
+            // instantiated variable (WP-1113); a `#pragma clang section`
+            // one is cloned (WP-1744).
             .filter(|(_, n)| {
                 !only_aligned
-                    || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP | AttrKind::ANNOTATE)
+                    || matches!(
+                        n.kind,
+                        AttrKind::ALIGNED
+                            | AttrKind::CLEANUP
+                            | AttrKind::ANNOTATE
+                            | AttrKind::PRAGMA_CLANG_SECTION
+                    )
             })
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol

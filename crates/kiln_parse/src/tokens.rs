@@ -32,12 +32,23 @@ use crate::pragma::{PragmaCx, classify};
 /// after it (clang's pragma annotation tokens).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// `#pragma pack(...)`.
+    /// `#pragma pack(...)` (clang's `PragmaPackHandler`).
     PragmaPack {
         /// The `pack` token.
         loc: Loc,
-        /// The spelling of the tokens between the parentheses.
-        args: String,
+        /// What it does.
+        action: kiln_sema::pragma_pack::PackAction,
+        /// The label of `push` / `pop`.
+        label: Option<String>,
+        /// The alignment, if one is given.
+        align: Option<kiln_sema::pragma_pack::PackAlignArg>,
+    },
+    /// `#pragma options align=k` / `#pragma align=k`.
+    PragmaOptionsAlign {
+        /// The `options` / `align` token.
+        loc: Loc,
+        /// `k`.
+        kind: kiln_sema::pragma_pack::OptionsAlign,
     },
     /// `#pragma ms_struct on` (`on`) or `off` / `reset`.
     PragmaMsStruct {
@@ -69,14 +80,10 @@ pub enum Event {
     },
     /// `#pragma clang attribute ...` (clang's `annot_pragma_attribute`).
     PragmaAttribute(AttrPragma),
-    /// A pragma clang implements and kiln does not yet (`clang section`,
-    /// ...).
-    UnsupportedPragma {
-        /// The pragma's name (`"align"`, `"clang section"`).
-        what: String,
-        /// Its first token.
-        loc: Loc,
-    },
+    /// `#pragma clang section kind="name" ...`: each kind with its kind
+    /// token and name (empty: `""`, which clears it), up to the first
+    /// error.
+    PragmaClangSection(Vec<(kiln_sema::section::ClangSectionKind, Loc, Box<[u8]>)>),
     /// A `module` / `import` directive ([cpp.module], [cpp.import]),
     /// already removed from the token stream.
     Module {

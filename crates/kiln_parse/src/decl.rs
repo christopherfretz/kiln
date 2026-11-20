@@ -333,11 +333,7 @@ impl Parser<'_, '_> {
             (_, Some(Kw::Export)) if self.std >= Std::Cxx20 => {
                 self.parse_export_declaration();
             }
-            (_, Some(Kw::Export)) => {
-                // kiln-gap: GAP-138
-                self.unsupported("modules", loc);
-                self.skip_unsupported_declaration();
-            }
+            (_, Some(Kw::Export)) => self.parse_export_template(DeclaratorContext::File),
             (_, Some(Kw::Asm)) => self.parse_file_scope_asm(),
             _ if self.at_attributed_using() => {
                 self.parse_attributed_using();
@@ -5450,6 +5446,7 @@ impl Parser<'_, '_> {
                     kiln_source::trace::Scope::with_detail("ParseFunctionDefinition", || {
                         self.decl_name(f)
                     });
+                self.s.act_on_function_definition_declarator(f);
                 self.parse_function_definition(f, ctor);
             }
             None => self.skip_function_body(),

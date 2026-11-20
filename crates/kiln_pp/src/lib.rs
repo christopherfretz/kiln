@@ -52,7 +52,7 @@ pub use callbacks::{
     FileChange, ModuleFileRead, NoCallbacks, PpCallbacks, PragmaInfo, PragmaIntroducer,
     PragmaMessageKind,
 };
-pub use cond::{IfContext, IfEvaluator, StubIfEvaluator};
+pub use cond::{IfContext, IfEvaluator};
 pub use diag_map::literal_diags;
 pub use features::{
     ClangFeatures, FeatureFlag, FeatureTable, TargetBuiltins, is_library_builtin, table_keys,

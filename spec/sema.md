@@ -3525,6 +3525,31 @@ instantiation unless stated.
     do not. `#pragma section` and `__declspec(allocate)` (clang
     `PSF_Implicit`) are not modelled. Test:
     `tests/conformance/ext.gnu.section/section-conflict.cpp`.
+    `#pragma clang section kind="name" ...` (WP-1744; clang
+    `PragmaClangSectionHandler`, `ActOnPragmaClangSection`; kind `bss`,
+    `data`, `rodata`, `relro` or `text`, the name one or more adjacent
+    ordinary string literals; the entries before a syntax error take
+    effect) places the section at the kind token with the kind's flags
+    (bss read|write|zero-init, data read|write, rodata and relro read,
+    text read|execute) and makes it the kind's current section; `""`
+    clears the kind. A pragma whose flags differ from the section's is
+    an error `this causes a section type conflict with ...` and leaves
+    the kind unchanged; a declaration that conflicts with a section a
+    pragma placed is `'b' causes a section type conflict with a prior
+    #pragma section`, with a `#pragma entered here` note. While a kind
+    is current, each definition of a variable with static or thread
+    storage duration that has no `section` attribute takes the current
+    bss/data/rodata/relro sections as implicit
+    `AttrKind::PRAGMA_CLANG_SECTION` attributes (clang
+    `FinalizeDeclaration`), and each function definition (the
+    declarator followed by a body, `= default` or `= delete`; clang
+    `ActOnFunctionDeclarator`) the text section; never inside a template
+    instantiation, whose declarations take the template's (codegen:
+    spec/codegen.md §8 "Sections"). Syntax errors are clang's: `expected
+    one of [bss|data|rodata|text|relro] section kind in '#pragma clang
+    section'`, `expected '=' following '#pragma clang section bss'`,
+    `expected string literal in pragma clang section`. Tests:
+    `tests/conformance/cpp.pragma/clang-section-*.cpp`.
     (`visibility`: see "Visibility attributes")
   - GNU `format(archetype, F, A)` (WP-186, clang `handleFormatAttr`, in
     its order): exactly three arguments (`'format' attribute requires

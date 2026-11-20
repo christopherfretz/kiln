@@ -296,6 +296,9 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) frames: Vec<Frame<'a>>,
     pub(crate) resolver: Box<dyn IncludeResolver + 'd>,
     pub(crate) evaluator: Option<Box<dyn IfEvaluator + 'd>>,
+    /// The evaluator of an expression nested in one `evaluator` is
+    /// running ([`IfEvaluator::nested`]).
+    pub(crate) nested_eval: IfEval,
     pub(crate) features: Box<dyn FeatureQueries + 'd>,
     pub(crate) callbacks: Box<dyn PpCallbacks + 'd>,
     pub(crate) markers: VecDeque<Marker>,
@@ -425,6 +428,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             frames: Vec::new(),
             resolver: Box::new(NoIncludes),
             evaluator: Some(Box::new(IfEval::default())),
+            nested_eval: IfEval::default(),
             features: Box::new(NoFeatures),
             callbacks: Box::new(NoCallbacks),
             markers: VecDeque::new(),
@@ -493,6 +497,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// Installs the `#if` evaluator (default: [`IfEval::default`], the
     /// x86-64 Linux character types).
     pub fn set_if_evaluator(&mut self, e: Box<dyn IfEvaluator + 'd>) {
+        self.nested_eval = e.nested();
         self.evaluator = Some(e);
     }
 

@@ -1251,8 +1251,10 @@ impl Sema<'_, '_> {
         // (a default member initializer, a default argument).
         let pending = std::mem::take(&mut self.volatile_assigns);
         self.warn_volatile_assigns(pending);
-        // clang `DiagnoseUnterminatedPragmaAttribute`, then the `#pragma
-        // weak` identifiers never declared.
+        // clang `DiagnoseUnterminatedPragmaAlignPack` and
+        // `DiagnoseUnterminatedPragmaAttribute`, then the `#pragma weak`
+        // identifiers never declared.
+        self.diagnose_unterminated_pragma_pack();
         self.diagnose_unterminated_pragma_attr();
         // A prefix (a precompiled header) leaves these warnings to the
         // unit that includes it, as clang's `TU_Prefix` return does.

@@ -99,6 +99,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   no variable length array is formed in a SFINAE context ("variable
   length array cannot be formed in a SFINAE context"): a non-constant
   bound in a requirement or a deduced signature is a substitution failure.
+- `#pragma clang section bss|data|rodata|relro|text="name"` (WP-1744):
+  variable definitions with static or thread storage duration get the
+  current data sections as LLVM global attributes, function definitions
+  the text section; section type conflicts with a pragma are diagnosed.
+- `#pragma options align=k` and `#pragma align=k` (`native`, `natural`,
+  `packed`, `power`, `reset`) share `#pragma pack`'s stack (WP-1744).
+  `#pragma pack(show)` prints the value, and the `#pragma pack` forms
+  clang ignores (an invalid alignment, `pop` on an empty stack, an
+  unknown action) get clang's warnings instead of an error. A push
+  never popped is reported at the end of the file (`-Wpragma-pack`).
+- Before C++20, `export template <...>` is accepted with clang's
+  "exported templates are unsupported" warning ([diff.cpp03.temp]), and
+  any other `export` is clang's "expected template" error, instead of the
+  "modules is not supported yet" error (WP-1744).
 - Constant evaluation of the expressions that reported "not supported
   yet" (WP-1741): a `case` label nested in a statement of its switch
   body (Duff's device), the taken branch of an `if constexpr` whose
@@ -246,6 +260,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A constructor defined through a typedef of its class (`T::S() {}`) and
   braced arguments to `__builtin_operator_new` / `__builtin_operator_delete`
   are accepted, as clang does (WP-1745).
+- The `limit` and `clang::offset` parameters of a `__has_embed` inside
+  `#if` are evaluated with the full `#if` rules (character literals,
+  `uintmax_t` conversions, clang's diagnostics) instead of a reduced
+  grammar that reported other forms as needing "the full evaluator"
+  (WP-1744).
 
 ## [1.3.0] - 2026-11-20
 

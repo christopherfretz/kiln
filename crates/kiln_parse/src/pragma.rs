@@ -23,16 +23,9 @@ use crate::tokens::{Event, LoopHintInfo};
 /// translation unit (codegen hints and `#pragma comment`).
 const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
-/// Pragmas clang knows that change the meaning of the translation unit
-/// and that kiln does not implement yet.
-const UNSUPPORTED: &[&str] = &["align", "options"];
-
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
     &["diagnostic", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
-
-/// `#pragma clang ...` pragmas kiln does not implement yet.
-const CLANG_UNSUPPORTED: &[&str] = &["section"];
 
 /// The `#pragma STDC` pragmas ([cpp.pragma]/2; C23 7.12.2, 7.6.1,
 /// 7.3.4, 7.6.2).
@@ -110,9 +103,7 @@ pub(crate) fn classify(
                 // the warning state per location in the diagnostic engine.
                 ("GCC", "diagnostic") => None,
                 ("clang", s) if CLANG_IGNORED.contains(&s) => None,
-                ("clang", s) if CLANG_UNSUPPORTED.contains(&s) => {
-                    Some(Event::UnsupportedPragma { what: format!("clang {s}"), loc })
-                }
+                ("clang", "section") => clang_section(cx, &rest[1..], end),
                 _ => {
                     cx.report(DiagId::pp_unknown_pragma, loc);
                     None
@@ -138,7 +129,8 @@ pub(crate) fn classify(
         "unroll_and_jam" => unroll_hint(cx, "unroll_and_jam", start, loc, rest, end),
         "nounroll_and_jam" => unroll_hint(cx, "nounroll_and_jam", start, loc, rest, end),
         s if IGNORED.contains(&s) => None,
-        s if UNSUPPORTED.contains(&s) => Some(Event::UnsupportedPragma { what: s.to_owned(), loc }),
+        "options" => options_align(cx, loc, rest, end, true),
+        "align" => options_align(cx, loc, rest, end, false),
         _ => {
             cx.report(DiagId::pp_unknown_pragma, loc);
             None
@@ -147,21 +139,199 @@ pub(crate) fn classify(
 }
 
 /// `#pragma pack ( ... )` (clang's `PragmaPackHandler`); `loc` is the
-/// `pack` token.
+/// `pack` token. The forms: `()`, `(N)`, `(show)`, `(push|pop [, id]
+/// [, N])`; a malformed one is ignored with clang's warning.
 fn pack(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Event> {
-    if rest.first().is_none_or(|t| t.kind != TokKind::Punct(Punct::LParen)) {
-        let at = rest.first().map_or(end, |t| t.span.lo);
-        cx.report_what(DiagId::parse_pragma_expected_lparen, "pack", at);
+    use kiln_sema::pragma_pack::{PackAction, PackAlignArg};
+    const WHAT: &str = "pack";
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let kind = |i: usize| rest.get(i).map(|t| t.kind);
+    let num = |i: usize| -> Option<PackAlignArg> {
+        let t = rest.get(i).filter(|t| t.kind == TokKind::PpNumber)?;
+        let text = kiln_lex::spelling(cx.sm, t, cx.lex_opts);
+        let n = kiln_lex::literal::classify_number(&text, cx.lex_opts.std);
+        Some(match n.class {
+            kiln_lex::literal::NumberClass::Integer(i) if i.ud_suffix.is_none() => {
+                PackAlignArg::Int(i.value().and_then(|v| u64::try_from(v).ok()))
+            }
+            _ => PackAlignArg::NotInteger,
+        })
+    };
+    if kind(0) != Some(TokKind::Punct(Punct::LParen)) {
+        cx.report_what(DiagId::parse_pragma_expected_lparen, WHAT, at(0));
         return None;
     }
-    let mut args = String::new();
-    for t in &rest[1..] {
-        if t.kind == TokKind::Punct(Punct::RParen) {
+    let mut action = PackAction::default();
+    let mut label = None;
+    let mut align = None;
+    let mut i = 1;
+    if let Some(a) = num(i) {
+        align = Some(a);
+        action.set = true;
+        i += 1;
+    } else if let Some(word) = cx.word(rest.get(i)) {
+        if word == "show" {
+            action.show = true;
+            i += 1;
+        } else {
+            match word {
+                "push" => action.push = true,
+                "pop" => action.pop = true,
+                _ => {
+                    cx.report_what(DiagId::parse_pragma_invalid_action, WHAT, at(i));
+                    return None;
+                }
+            }
+            i += 1;
+            if kind(i) == Some(TokKind::Punct(Punct::Comma)) {
+                i += 1;
+                if let Some(a) = num(i) {
+                    align = Some(a);
+                    action.set = true;
+                    i += 1;
+                } else if let Some(l) = cx.word(rest.get(i)) {
+                    label = Some(l.to_owned());
+                    i += 1;
+                    if kind(i) == Some(TokKind::Punct(Punct::Comma)) {
+                        i += 1;
+                        let Some(a) = num(i) else {
+                            cx.report(DiagId::parse_pragma_pack_malformed, at(i));
+                            return None;
+                        };
+                        align = Some(a);
+                        action.set = true;
+                        i += 1;
+                    }
+                } else {
+                    cx.report(DiagId::parse_pragma_pack_malformed, at(i));
+                    return None;
+                }
+            }
+        }
+    }
+    if kind(i) != Some(TokKind::Punct(Punct::RParen)) {
+        cx.report_what(DiagId::parse_pragma_expected_rparen, WHAT, at(i));
+        return None;
+    }
+    if rest.len() > i + 1 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, WHAT, at(i + 1));
+        return None;
+    }
+    Some(Event::PragmaPack { loc, action, label, align })
+}
+
+/// `#pragma options align=k` (`options`) and `#pragma align=k` (clang's
+/// `ParseAlignPragma`); `loc` is the `options` / `align` token.
+fn options_align(
+    cx: &PragmaCx<'_, '_>,
+    loc: Loc,
+    rest: &[Token],
+    end: Loc,
+    options: bool,
+) -> Option<Event> {
+    use kiln_sema::pragma_pack::OptionsAlign;
+    let name = if options { "options" } else { "align" };
+    let shown = if options { "options align" } else { "align" };
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let mut i = 0;
+    if options {
+        if cx.word(rest.first()) != Some("align") {
+            cx.report(DiagId::parse_pragma_options_expected_align, at(0));
+            return None;
+        }
+        i = 1;
+    }
+    if rest.get(i).is_none_or(|t| t.kind != TokKind::Punct(Punct::Equal)) {
+        cx.report_what(DiagId::parse_pragma_align_expected_equal, shown, at(i));
+        return None;
+    }
+    i += 1;
+    let Some(word) = cx.word(rest.get(i)) else {
+        cx.report_what(DiagId::parse_pragma_expected_identifier, name, at(i));
+        return None;
+    };
+    let kind = match word {
+        "native" => OptionsAlign::Native,
+        "natural" => OptionsAlign::Natural,
+        "packed" => OptionsAlign::Packed,
+        "power" => OptionsAlign::Power,
+        "mac68k" => OptionsAlign::Mac68k,
+        "reset" => OptionsAlign::Reset,
+        _ => {
+            cx.report_what(DiagId::parse_pragma_align_invalid_option, shown, at(i));
+            return None;
+        }
+    };
+    if rest.len() > i + 1 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, name, at(i + 1));
+        return None;
+    }
+    Some(Event::PragmaOptionsAlign { loc, kind })
+}
+
+/// `#pragma clang section kind="name" ...` (clang
+/// `PragmaClangSectionHandler`): any number of `kind = string-literal`
+/// with `kind` one of `bss`, `data`, `rodata`, `text`, `relro`; the
+/// string is ordinary, adjacent ones concatenated. The entries before an
+/// error take effect; the error ends the pragma.
+fn clang_section(cx: &PragmaCx<'_, '_>, rest: &[Token], end: Loc) -> Option<Event> {
+    use kiln_sema::section::ClangSectionKind;
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let mut entries = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let Some(kind) = cx.word(rest.get(i)).and_then(ClangSectionKind::from_name) else {
+            cx.report_what(
+                DiagId::parse_pragma_clang_section_expected_kind,
+                "clang section",
+                at(i),
+            );
+            break;
+        };
+        let kind_loc = at(i);
+        i += 1;
+        if rest.get(i).is_none_or(|t| t.kind != TokKind::Punct(Punct::Equal)) {
+            cx.report_what(DiagId::parse_pragma_clang_section_expected_equal, kind.name(), at(i));
             break;
         }
-        args.push_str(&kiln_lex::spelling(cx.sm, t, cx.lex_opts));
+        i += 1;
+        // clang `Preprocessor::LexStringLiteral`: ordinary string
+        // literals only.
+        let ordinary = |t: Option<&Token>| {
+            matches!(t.map(|t| t.kind), Some(TokKind::StringLit(kiln_lex::Encoding::Ordinary)))
+        };
+        if !ordinary(rest.get(i)) {
+            cx.report_what(DiagId::parse_expected_string_literal_in, "pragma clang section", at(i));
+            break;
+        }
+        let opts = kiln_lex::literal::LiteralOptions::new(
+            cx.lex_opts.std,
+            kiln_lex::literal::EncodingParams::default(),
+        );
+        let mut name = Vec::new();
+        let mut bad = false;
+        while ordinary(rest.get(i)) {
+            let t = &rest[i];
+            let sp = kiln_lex::spelling(cx.sm, t, cx.lex_opts);
+            let lit = kiln_lex::literal::decode_string(&sp, opts);
+            for d in kiln_pp::literal_diags(cx.sm, t, &sp, &lit.diags, None, cx.lex_opts) {
+                d.emit(cx.diags);
+            }
+            if lit.ud_suffix.is_some() {
+                cx.report(DiagId::pp_string_udl, t.span.lo);
+            }
+            bad |= lit.had_error;
+            if let kiln_lex::literal::CodeUnits::U8(u) = &lit.units {
+                name.extend_from_slice(u);
+            }
+            i += 1;
+        }
+        if bad {
+            break;
+        }
+        entries.push((kind, kind_loc, name.into_boxed_slice()));
     }
-    Some(Event::PragmaPack { loc, args })
+    (!entries.is_empty()).then_some(Event::PragmaClangSection(entries))
 }
 
 /// `#pragma weak name` and `#pragma weak name = target` (clang's
@@ -428,7 +598,12 @@ impl Parser<'_, '_> {
                 // kiln-gap: GAP-139
                 self.unsupported(what, span.lo);
             }
-            Event::PragmaPack { loc, args } => self.s.act_on_pragma_pack(loc, args),
+            Event::PragmaPack { loc, action, label, align } => {
+                self.s.act_on_pragma_pack(loc, action, label.as_deref(), align);
+            }
+            Event::PragmaOptionsAlign { loc, kind } => {
+                self.s.act_on_pragma_options_align(kind, loc);
+            }
             Event::PragmaMsStruct { on } => self.s.act_on_pragma_ms_struct(on),
             Event::LoopHints { before, hints } => {
                 // Applied when the statement at `before` is parsed.
@@ -439,7 +614,11 @@ impl Parser<'_, '_> {
                 }
             }
             Event::FpPragma { before, pragma } => self.queue_fp_pragma(before, pragma),
-            Event::UnsupportedPragma { what, loc } => self.s.act_on_unsupported_pragma(&what, loc),
+            Event::PragmaClangSection(entries) => {
+                for (kind, loc, name) in entries {
+                    self.s.act_on_pragma_clang_section(kind, loc, &name);
+                }
+            }
             // clang's `ActOnPragmaVisibility`; sema applies the pushed
             // visibility to the declarations that follow.
             Event::Visibility { loc, push: Some(v) } => {

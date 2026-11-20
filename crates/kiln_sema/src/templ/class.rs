@@ -1992,6 +1992,9 @@ impl Sema<'_, '_> {
         let d = self.builder().var(h, ty, spec_bits, Some(v));
         self.ast.templates.dependent_depth = depth;
         self.ast.templates.set_instantiated_from(d, pdef);
+        // clang `InstantiateAttrs`: a `#pragma clang section` of the
+        // pattern's definition (WP-1744).
+        self.clone_clang_sections(d, pdef);
         // A redeclaration of a member keeps its access ([class.access]/1,
         // as an out-of-line definition does, `set_member_access`): as the
         // member's latest declaration it is what a later qualified lookup
@@ -2269,6 +2272,8 @@ impl Substituter<'_, '_, '_> {
     /// constructor's ctor-initializer is substituted, then the body.
     pub(crate) fn function_def(&mut self, f: DeclId, pdef: DeclId, body: kiln_ast::StmtId) {
         let sub = self;
+        // clang `InstantiateAttrs` from the definition (WP-1744).
+        sub.sema.clone_clang_sections(f, pdef);
         let pp: Vec<DeclId> = sub
             .sema
             .ast
@@ -2517,12 +2522,15 @@ impl Substituter<'_, '_, '_> {
         // pattern was defined applies, not the one where it is
         // instantiated (WP-782).
         let pat = self.sema.ast.decls.cold.record_pack.get(def).copied().unwrap_or(0);
-        let saved = std::mem::replace(&mut self.sema.pack.0, pat);
+        let saved = std::mem::replace(
+            &mut self.sema.pack.current,
+            crate::pragma_pack::PackValue::with_max_field_align(pat),
+        );
         // Nor does `#pragma ms_struct` (the pattern's `ms_struct`, implied
         // or written, is copied with its attributes).
         let saved_ms = std::mem::replace(&mut self.sema.ms_struct_pragma, false);
         self.sema.act_on_start_record_definition(spec);
-        self.sema.pack.0 = saved;
+        self.sema.pack.current = saved;
         self.sema.ms_struct_pragma = saved_ms;
     }
 

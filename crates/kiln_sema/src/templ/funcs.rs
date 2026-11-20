@@ -357,6 +357,8 @@ impl Sema<'_, '_> {
                 }
             });
         }
+        // clang `InstantiateAttrs` from the definition (WP-1744).
+        self.clone_clang_sections(f, pdef);
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
         self.in_inst_context(ctx, |s| {
