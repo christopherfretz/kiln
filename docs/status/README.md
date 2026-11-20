@@ -44,6 +44,9 @@ Releases:
   snapshot-against-replay sweeps.
 - `release-1.2.1.md`: the 1.2.1 release gate (the x86-64 AVX calling
   convention fix): the same commands against the 1.2.0 results.
+- `release-1.3.0.md`: the 1.3.0 release gate, the first run by
+  `cargo xtask release-gate` and written by its `record`, against the
+  1.2.1 results.
 
 Standard libraries:
 
