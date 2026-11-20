@@ -1832,7 +1832,11 @@ namespace of one of its arguments", or nothing (`std` and names with
 `__` are never suggested). A call then resolves against that function
 (clang's recovery); an operator does not (`two_phase_call`,
 `two_phase_operator`; `temp.dep.candidate/operator-definition-lookup-errors.cpp`,
-WP-1509).
+WP-1509). For an operator the found functions must yield a viable best
+function for the operands (clang's `BestViableFunction` check): a
+non-member `operator co_await` that cannot take the operand is not
+diagnosed, and the member or built-in form stands
+(`expr.await/operator-coawait-nonviable-in-template-run.cpp`, WP-1738).
 
 *Operators (WP-1496).* A dependent unary, binary or compound-assignment
 operator expression built in a template (`act_on_unary`, `act_on_binary`)
@@ -1848,7 +1852,15 @@ callee of a `CXXOperatorCallExpr`). An operator expression that was
 already resolved at the definition (a `CXXOperatorCallExpr` whose
 operands became dependent only through an enclosing level) reuses its
 callee: a member function needs no other set, a non-member keeps the
-function (or its template) found then. A non-dependent operator
+function (or its template) found then. Every operator rebuilds
+(WP-1738): `()`, `[]` and `->` as calls, subscripts and member access;
+`co_await` through the coroutine's `operator co_await` lookup; one
+operand (or a postfix `++`/`--` with its dummy `int`) as the unary form;
+two as the binary form ([over.match.oper]/3, /8). A
+`CXXRewrittenBinaryOperator` rebuilds its written `x op y` from scratch,
+so the rewritten and reversed candidates are considered again for the
+instantiated operands ([over.match.oper]/3.4, P2468;
+`over.match.oper/template-operator-calls-rebuilt-run.cpp`). A non-dependent operator
 expression records nothing and does no extra lookup. An operator
 declared after the definition in a namespace that is not associated
 with the operands is therefore not a candidate
@@ -10430,7 +10442,10 @@ declarator scopes.**
   copy-initializes the prvalue result (clang `PerformCopyInitialization`
   of an `InitializeTemporary` entity), so `b ? std::move(x) : X(3)` runs
   `X(X&&)` and moves from `x`
-  (tests/conformance/expr.cond/class-glvalue-arm-copy.cpp).
+  (tests/conformance/expr.cond/class-glvalue-arm-copy.cpp). The copy is
+  bound (`maybe_bind_temporary`), so a discarded result is destroyed at
+  the end of the full-expression ([class.temporary]/4; WP-1738,
+  tests/conformance/expr.cond/p7-glvalue-arm-copy-destroyed-run.cpp).
 - *Calls returning `F&&`*: a call whose result type is an rvalue
   reference to function is an lvalue ([expr.call]/14), so
   `declval<Fn>()()` is callable and `decltype` of it is `F&`.

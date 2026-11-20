@@ -1701,8 +1701,6 @@ pub struct ColdDeclData {
     pub dtor_delete_this: ColdMap<DeclId, ExprId>,
     /// Class → the `#pragma pack` value in effect at its definition.
     pub record_pack: ColdMap<DeclId, u16>,
-    /// Trailing requires-clauses.
-    pub requires_clause: ColdMap<DeclId, ExprId>,
     /// Contract assertions (P2900): `ListId` of contract-spec indices.
     pub contracts: ColdMap<DeclId, ListId>,
     /// `asm("label")`.
@@ -1790,7 +1788,6 @@ impl Default for ColdDeclData {
             dtor_delete: ColdMap::new("dtor_delete"),
             dtor_delete_this: ColdMap::new("dtor_delete_this"),
             record_pack: ColdMap::new("record_pack"),
-            requires_clause: ColdMap::new("requires_clause"),
             contracts: ColdMap::new("contracts"),
             asm_label: ColdMap::new("asm_label"),
             alignment: ColdMap::new("alignment"),
@@ -1817,7 +1814,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 33] {
+    fn rows(&self) -> [MemRow; 32] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1830,7 +1827,6 @@ impl ColdDeclData {
             self.dtor_delete.mem_row(),
             self.dtor_delete_this.mem_row(),
             self.record_pack.mem_row(),
-            self.requires_clause.mem_row(),
             self.contracts.mem_row(),
             self.asm_label.mem_row(),
             self.alignment.mem_row(),

@@ -4764,7 +4764,11 @@ impl Sema<'_, '_> {
                     None => invalid = true,
                 }
             } else {
+                // clang `MergeTypedefNameDecl` makes the typedef-name
+                // invalid, so a member lookup that also finds the earlier
+                // entity denotes that entity (`LookupResult::resolveKind`).
                 self.diag_typedef_different_kind(p, name, alias_using, d.name_loc());
+                invalid = true;
             }
         } else if let Some(tag) = prev_tag {
             if alias_using.is_some() {
@@ -5933,6 +5937,10 @@ impl Sema<'_, '_> {
                     .arg(fname.clone());
                 let msg = self.note_prev(msg, p, true);
                 self.emit(msg);
+                // clang `MergeFunctionDecl`: the function is invalid, so
+                // a lookup that also finds the earlier entity denotes that
+                // entity (`LookupResult::resolveKind`).
+                invalid_redecl = true;
             }
         }
         let params: Vec<ParamInfo> = match d.function_params() {

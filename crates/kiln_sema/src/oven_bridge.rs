@@ -92,9 +92,11 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         }
         if self.sema.is_defaulted_cmp(f) {
             // A defaulted comparison used only in a context the use did
-            // not define it in (WP-082; spec/sema-class.md §8.3).
+            // not define it in (WP-082; spec/sema-class.md §8.3). Building
+            // its body folds constants (the narrowing check of a
+            // three-way comparison), so the Oven is lent back (WP-1738).
             let loc = self.sema.ast.decls.get(f).loc();
-            self.sema.define_defaulted_comparison(f, loc);
+            self.sema.lend_oven(oven, |s| s.define_defaulted_comparison(f, loc));
             return self.sema.defined_body(f);
         }
         // A metafunction called indirectly (WP-1462), or given a range

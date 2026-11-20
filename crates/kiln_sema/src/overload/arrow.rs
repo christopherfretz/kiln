@@ -200,12 +200,6 @@ impl Sema<'_, '_> {
         self.add_member_opers(&mut set, OO::Arrow, &[base], Rewrite::None, loc);
         let out = self.resolve_set(&mut set);
         self.ovl.lists.truncate(mark);
-        if set.uncertain {
-            // kiln-gap: GAP-053
-            self.unsupported("overload resolution with constraints", loc);
-            self.end_set(set);
-            return Step::Err;
-        }
         let t = self.ety(base);
         let msg = match out {
             OvlOutcome::Success(b) => {

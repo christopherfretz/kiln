@@ -509,6 +509,23 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// clang `LookupResult::resolveKind` ignores an invalid declaration
+    /// unless it is the only one left: a member function diagnosed as
+    /// redefining a data member of its name ([basic.scope.scope]/4)
+    /// leaves the name denoting the data member.
+    fn drop_invalid_members(&self, found: &mut crate::lookup::Found) {
+        let keep: Vec<bool> = found.decls.iter().map(|&d| !self.is_invalid_decl(d)).collect();
+        if found.decls.len() < 2 || keep.iter().all(|&k| k) || !keep.iter().any(|&k| k) {
+            return;
+        }
+        let mut k = keep.iter();
+        found.decls.retain(|_| k.next().copied().unwrap_or(true));
+        if found.found.len() == keep.len() {
+            let mut k = keep.iter();
+            found.found.retain(|_| k.next().copied().unwrap_or(true));
+        }
+    }
+
     /// `base.name` / `base->name` once the object type is known
     /// ([expr.ref]/2-7): class member lookup in `def` (the object's
     /// complete class), ambiguity and access checks, then the access.
@@ -530,7 +547,8 @@ impl Sema<'_, '_> {
         // or one of its bases.
         let look = qual.map_or(def, |q| q.ctx);
         self.declare_implicit_named(look, name);
-        let found = self.member_lookup(qual, def, look, name, loc);
+        let mut found = self.member_lookup(qual, def, look, name, loc);
+        self.drop_invalid_members(&mut found);
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[base], loc);
         }
@@ -591,18 +609,13 @@ impl Sema<'_, '_> {
                 self.diagnose_placeholder_ambiguity(text, &found.decls, true, loc);
                 return self.recover_err(&[base], loc);
             }
-            if !self.is_member_overload_set(&found.decls)
-                && found.decls.iter().any(|&d| self.kind_of(d) == DeclKind::EnumConstant)
-            {
-                // An unscoped enumerator declared after member functions
-                // of its name ([basic.lookup.general]/4; clang's
-                // `AmbiguousReference`, WP-929).
-                self.diagnose_ambiguous_reference(name, &found.decls, false, loc);
-                return self.recover_err(&[base], loc);
-            }
             if !self.is_member_overload_set(&found.decls) {
-                // kiln-gap: GAP-057
-                self.unsupported("this kind of overloaded member access", loc);
+                // Valid declarations of one name that are not all member
+                // functions (or their templates), such as an unscoped
+                // enumerator declared after member functions of its name:
+                // [basic.lookup.general]/4, clang's `AmbiguousReference`
+                // (WP-929, WP-1738).
+                self.diagnose_ambiguous_reference(name, &found.decls, false, loc);
                 return self.recover_err(&[base], loc);
             }
             // spec/sema-overload.md §2.3: resolved by the call.

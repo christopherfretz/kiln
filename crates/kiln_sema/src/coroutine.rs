@@ -531,7 +531,7 @@ impl Sema<'_, '_> {
 
     /// `operator co_await(e)` if one applies, else `e` ([expr.await]/3.3;
     /// clang `buildOperatorCoawaitCall`).
-    fn operator_coawait(&mut self, e: ExprId, loc: Loc) -> ExprId {
+    pub(crate) fn operator_coawait(&mut self, e: ExprId, loc: Loc) -> ExprId {
         match self.try_overloaded_operator(
             OperForm::Unary(UnaryOp::Coawait),
             &[e],

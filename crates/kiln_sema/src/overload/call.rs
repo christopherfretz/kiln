@@ -132,12 +132,37 @@ impl Sema<'_, '_> {
         if decls.is_empty() {
             return false;
         }
-        let retry = self.builder().unresolved_lookup(name, &decls, false, None, None, loc);
-        let (r, stash) = self.capturing(|s| s.resolve_unresolved_call(retry, args, &[]));
-        let Some(f) = r.filter(|_| !self.stash_has_error(&stash)).and_then(|e| {
-            let k = self.ast.exprs.get(e).kind();
-            (k == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(e))
-        }) else {
+        // Only a viable best function is diagnosed (clang's
+        // `BestViableFunction` succeeding): a non-member `operator
+        // co_await(F)` declared after the template does not make an
+        // awaiter of another type ill-formed ([expr.await]/3.3 falls back
+        // to the operand, WP-1738). The one-candidate path of
+        // `resolve_unresolved_call` would not check the conversions.
+        let mut set = self.begin_set(SetKind::Normal, loc);
+        let mark = self.push_call_args(&mut set, args, &[]);
+        for &d in &decls {
+            if self.kind_of(d) == DeclKind::FunctionTemplate {
+                self.add_template_candidate(
+                    &mut set,
+                    d,
+                    d,
+                    None,
+                    CandidateKind::Function,
+                    IcsOptions::NONE,
+                    loc,
+                );
+            } else {
+                self.add_candidate(&mut set, d, d, CandidateKind::Function, IcsOptions::NONE);
+            }
+        }
+        let (out, stash) = self.capturing(|s| s.resolve_set(&mut set));
+        self.ovl.lists.truncate(mark);
+        let f = match out {
+            OvlOutcome::Success(b) if !self.stash_has_error(&stash) => Some(set.cand(b).func()),
+            _ => None,
+        };
+        self.end_set(set);
+        let Some(f) = f else {
             return false;
         };
         let msg = self
@@ -325,9 +350,6 @@ impl Sema<'_, '_> {
         let base = self.push_call_args(&mut set, args, braced);
         for (i, &(d, f)) in cands.iter().enumerate() {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
-                if self.ast.decls.cold.requires_clause.contains(d) {
-                    set.uncertain = true;
-                }
                 if set.two_phase && explicit.is_none() {
                     set.deferred.push(super::defer::Deferred::Template {
                         ft: d,
@@ -356,9 +378,6 @@ impl Sema<'_, '_> {
                 );
                 self.templ.deduce_poi = None;
             } else {
-                if self.ast.decls.cold.requires_clause.contains(d) {
-                    set.uncertain = true;
-                }
                 self.add_candidate(&mut set, d, f, CandidateKind::Function, IcsOptions::NONE);
             }
             if i >= decls.len()
@@ -699,11 +718,6 @@ impl Sema<'_, '_> {
         member: bool,
     ) -> Option<u32> {
         let text = self.decl_name_str(name);
-        if set.uncertain {
-            // kiln-gap: GAP-053
-            self.unsupported("overload resolution with constraints", loc);
-            return None;
-        }
         if !matches!(out, OvlOutcome::Success(_)) {
             let ty = self.recovery_type(set, out);
             self.note_call_recovery(ty);

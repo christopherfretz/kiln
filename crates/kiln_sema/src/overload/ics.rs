@@ -1358,8 +1358,7 @@ impl Sema<'_, '_> {
 
     /// Adds the functions in `found` (constructors or member functions
     /// of one class, of kind `kind`) to `set`, once per entity; function
-    /// templates are skipped (WP-071) and a *requires-clause* makes the
-    /// set uncertain (WP-073). With `list_only`, only
+    /// templates are added by deduction. With `list_only`, only
     /// initializer-list constructors.
     pub(crate) fn add_found_candidates(
         &mut self,
@@ -1407,9 +1406,6 @@ impl Sema<'_, '_> {
             seen.push(first);
             if list_only && !self.is_init_list_ctor(f) {
                 continue;
-            }
-            if self.ast.decls.cold.requires_clause.contains(f) {
-                set.uncertain = true;
             }
             self.add_candidate(set, f, fd, kind, first_opts);
             if fd != f {
@@ -1540,9 +1536,6 @@ impl Sema<'_, '_> {
         seen.push(first);
         if list_only && !self.is_init_list_ctor(pattern) {
             return;
-        }
-        if self.ast.decls.cold.requires_clause.contains(ft) {
-            set.uncertain = true;
         }
         if set.two_phase {
             // clang 21+: a constructor template whose explicit-specifier

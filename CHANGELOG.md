@@ -47,8 +47,43 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   (`p->NS::S::~Q()`, `p.T::~Q()`), and `D::template f<A>` through a
   dependent using-declarator ([temp.dep.type], [over.match.class.deduct],
   [basic.lookup.qual.general]/4).
+- The GNU `x ?: y` operator on class types (WP-1738): `x` is evaluated
+  once (a class prvalue materialized), converted to `bool` by its
+  conversion function, and the result is the conditional of [expr.cond]
+  with `x` as its second operand, in code generation and in constant
+  evaluation.
 
 ### Fixed
+
+- A conditional operator whose class-typed arms are a glvalue and a
+  prvalue destroys the copy of the glvalue at the end of the
+  full-expression when the result is not used to initialize an object;
+  kiln never destroyed it (WP-1738).
+- The "overload resolution with constraints is not supported yet" path
+  is removed with the never-populated state behind it: constrained
+  candidates of calls and operators were already resolved by
+  [over.match.best.general]/2.6 (WP-1738; the PCH format is now 74).
+- The "not yet implemented: this overloaded operator" and "this
+  rewritten comparison" paths of template instantiation are removed:
+  every operator call overload resolution forms is rebuilt, and a
+  rewritten comparison always keeps its two written operands (WP-1738).
+- A non-member `operator co_await` that cannot take the operand no longer
+  turns a template coroutine's `co_await` into the "neither visible in
+  the template definition nor found by argument-dependent lookup" error:
+  only a viable best function is diagnosed, as in clang (WP-1738).
+- A defaulted comparison first required inside a template's definition
+  evaluates its body's immediate invocations (an undefined reference to
+  the comparison category's consteval constructor before), and one first
+  defined during a constant evaluation no longer stops kiln with an
+  internal error (WP-1738).
+- A member access naming a member function or typedef-name that
+  redeclared a data member (or member function) as a different kind of
+  entity names the valid member, as in clang, instead of reporting "this
+  kind of overloaded member access is not supported yet"; other mixed
+  sets are ambiguous references (WP-1738).
+- The unreachable "unary operator ... is not supported yet" and
+  "operator ... is not supported yet" paths of the built-in operators are
+  removed (WP-1738).
 
 - Every expression kind in a dependent signature mangles as clang's (WP-1736):
   `sizeof...` of a function parameter pack (`sZfp_`) and of a partially

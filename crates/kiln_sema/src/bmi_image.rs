@@ -4306,7 +4306,6 @@ impl Writer<'_, '_, '_> {
             // `explicit(expr)` travels with the constraints (WP-1345).
             || (c.explicit_expr.contains(d) && self.s.ast.decls.function(d).is_none())
             || c.record_pack.contains(d)
-            || c.requires_clause.contains(d)
             || c.contracts.contains(d)
             || (c.asm_label.contains(d) && !self.own_asm_label(d))
             || c.alignment.contains(d)

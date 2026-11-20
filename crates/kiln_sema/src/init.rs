@@ -698,7 +698,7 @@ impl Sema<'_, '_> {
             ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
         });
         self.add_ctor_candidates(&mut set, class, IcsOptions::NONE, true);
-        if set.viable().next().is_none() && !set.uncertain {
+        if set.viable().next().is_none() {
             self.end_set(set);
             self.ovl.lists.pop();
             return None;

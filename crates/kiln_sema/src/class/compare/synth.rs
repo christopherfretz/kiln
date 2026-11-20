@@ -435,9 +435,8 @@ impl Sema<'_, '_> {
             true,
             overloadable,
         );
-        let uncertain = set.uncertain;
         self.end_set(set);
-        !uncertain && matches!(out, OvlOutcome::NoViable)
+        matches!(out, OvlOutcome::NoViable)
     }
 
     /// clang `visitExpandedSubobject`: `x @ y` for the operator of the

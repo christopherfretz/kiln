@@ -759,7 +759,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1753 | `(void)T::~T;` in a template is rejected at definition; clang 22 accepts the definition and diagnoses only at instantiation ([temp.res.general]/6) | WP-1737 | open |
 | WP-1754 | `p->template ~T()` is accepted; clang 22 rejects the `template` keyword before a destructor name ([temp.names]/5) | WP-1737 | open |
 | WP-1755 | `p->decltype(*p)::~Zq()` is accepted when the object type is dependent; clang 22 rejects the mismatched destructor name at instantiation ([expr.prim.id.dtor]/2) | WP-1737 | open |
-| WP-1738 | operators: GAP-052..GAP-058 (11 sites, 7 cases) | WP-1719 | open |
+| WP-1738 | operators: GAP-052..GAP-058 (11 sites, 7 cases) | WP-1719 | done: GNU ?: on class types and member access through a mixed lookup result implemented; GAP-053..056/058 dead and deleted; 3 bugs fixed on the way (two-phase operator viability, defaulted comparisons in templates); PCH 75 |
+| WP-1756 | redeclaration lookup: a member function declared after a member variable template of the same name (and the reverse) is "redefinition as different kind" as in clang; `pick_prev_function` skips templates when the new function is not one; closes the xfail `tests/conformance/basic.scope.scope/member-function-after-variable-template.cpp` | WP-1738 | open |
+| WP-1757 | wording: C-mode diagnostic for a struct condition of `?:` (C++ wording today); -Wpointer-bool-conversion for `arr ?: b` | WP-1738 | open |
 | WP-1739 | codegen fallbacks: GAP-059..GAP-092 (39 sites, 7 cases) | WP-1719 | open |
 | WP-1740 | NTTP/substitution kinds: GAP-093..GAP-109 (17 sites, 3 cases) | WP-1719 | open |
 | WP-1741 | Oven traps: expressions: GAP-110..GAP-124 (55 sites, 0 cases) | WP-1719 | open |

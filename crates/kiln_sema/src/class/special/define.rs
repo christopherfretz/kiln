@@ -230,6 +230,11 @@ pub(crate) struct Saved {
     /// An alias template's use context does not reach into the member
     /// being defined: its own subobject accesses are checked from it.
     access_ctx: Option<DeclId>,
+    /// The definition is of a member of a complete, non-dependent class:
+    /// one first required inside a template's definition (a non-dependent
+    /// `a < b` there) is not part of the template, so its immediate
+    /// invocations are evaluated ([expr.const]/25).
+    dependent_depth: u32,
 }
 
 impl Sema<'_, '_> {
@@ -311,6 +316,7 @@ impl Sema<'_, '_> {
             contract_ctx: std::mem::take(&mut self.contract_ctx),
             deferring: std::mem::take(&mut self.deferring_call_ref),
             access_ctx: self.access_ctx.take(),
+            dependent_depth: std::mem::take(&mut self.ast.templates.dependent_depth),
         };
         self.ctx = member;
         let fty = self.ast.decls.get(member).ty().unwrap_or(QualType::ERROR);
@@ -337,6 +343,7 @@ impl Sema<'_, '_> {
         self.contract_ctx = saved.contract_ctx;
         self.deferring_call_ref = saved.deferring;
         self.access_ctx = saved.access_ctx;
+        self.ast.templates.dependent_depth = saved.dependent_depth;
     }
 
     // -- implicit definitions ------------------------------------------------

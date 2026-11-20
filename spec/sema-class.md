@@ -1943,7 +1943,12 @@ a port of the clang 19 function it names.
   from its own body) before its exception specification is resolved, so
   errors in the body get the note `in defaulted ... comparison operator
   for 'X' first required here` at the use. The Oven bridge defines one it
-  meets undefined (`oven_bridge.rs`). The bodies match clang's AST
+  meets undefined (`oven_bridge.rs`), with the running Oven lent back to
+  sema (`lend_oven`), since building the body folds constants. Every
+  synthesized definition (`push_synth`) is built outside any enclosing
+  template definition (the dependent depth is saved and zeroed), so the
+  immediate invocations of a body first needed there are evaluated
+  (`class.compare.default/first-required-in-template-run.cpp`, WP-1738). The bodies match clang's AST
   (goldens under `tests/conformance/ast/class.{eq,spaceship,
   compare.secondary,compare.default}/`). The implicit exception
   specification comes from the body.

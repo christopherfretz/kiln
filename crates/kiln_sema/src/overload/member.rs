@@ -417,9 +417,6 @@ impl Sema<'_, '_> {
             if self.ast.decls.get(d).has(DeclFlags::INVALID) {
                 continue;
             }
-            if self.ast.decls.cold.requires_clause.contains(d) {
-                set.uncertain = true;
-            }
             if self.kind_of(d) == DeclKind::FunctionTemplate {
                 // A member function template: its specialization deduced
                 // from the call's arguments ([temp.deduct.call]).

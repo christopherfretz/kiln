@@ -177,7 +177,6 @@ const COLD_MAP_NAMES: &[&str] = &[
     "pseudo_dtor_first",
     "pseudo_dtor_name",
     "record_pack",
-    "requires_clause",
     "size_of_pack_origin",
     "size_of_pack_partial",
     "source_loc",
