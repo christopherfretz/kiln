@@ -124,6 +124,7 @@ sema_static_overrides_virtual = Error (1) "'static' member function '{0}' overri
 sema_static_self_reference_in_init = Warning [StaticSelfInit] (1) "static variable {0} is suspiciously used within its own initialization";
 sema_std_compare_member_form = Error (3) "standard library implementation of {0} is not supported; member '{1}' {2:does not have expected form|is missing}";
 sema_std_compare_type_form = Error (2) "standard library implementation of {0} is not supported; the type {1:is not trivially copyable|does not have the expected form}";
+sema_std_initializer_list_malformed = Error (1) "{0} layout not recognized. Must be a non-polymorphic class type with no bases and two fields: a 'const E *' and either another 'const E *' or a 'std::size_t'";
 sema_std_source_location_impl_malformed = Error (0) "'std::source_location::__impl' must be standard-layout and have only two 'const char *' fields '_M_file_name' and '_M_function_name', and two integral fields '_M_line' and '_M_column'";
 sema_std_source_location_impl_not_found = Error (0) "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called";
 sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";

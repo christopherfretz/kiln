@@ -315,9 +315,11 @@ on every probe, including `display_string_of`, which both spell
      qualify, and `std::other` does not;
   3. `(name, signature)` matches a row of the op tables (§3.3), where the
      signature is the parameter list with each parameter classified as
-     `info` (its canonical unqualified type is `MetaInfo`) or not. An
-     overload with another signature, such as `type_of(int)`, is an
-     ordinary undefined function.
+     `info` (its canonical unqualified type is `MetaInfo`) or not, and
+     the declaration is not variadic (no metafunction of [meta.syn] is;
+     WP-1741). An overload with another signature, such as
+     `type_of(int)` or `type_of(info, ...)`, is an ordinary undefined
+     function.
 - Matching is a linear scan of the tables, run once per call site when the
   call is compiled, never per evaluation.
 - **The name table** (WP-484). `kiln_oven/src/meta/gcc16_meta_names.txt`
@@ -332,8 +334,10 @@ on every probe, including `display_string_of`, which both spell
   helpers the header's own definitions call (`reflect_constant_string`
   and `reflect_constant_array`'s, `_S_exception_cvt_*_utf8`) are
   intrinsics too.
-- A recognized call with more than `MAX_META_ARGS` (8) arguments is not
-  compiled (unsupported). No table row has more than three.
+- No table row has more than three parameters, and a recognized
+  declaration is not variadic, so a recognized call has at most
+  `MAX_META_ARGS` (8) arguments (asserted when the call is compiled,
+  WP-1741).
 - **Indirect calls** (WP-1462). A metafunction is a function: its address
   may be taken (`views::filter(is_template)`, a `size_t (*)(info)`
   parameter). Asked for the body of a recognized intrinsic that is a

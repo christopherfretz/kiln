@@ -84,9 +84,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   no variable length array is formed in a SFINAE context ("variable
   length array cannot be formed in a SFINAE context"): a non-constant
   bound in a requirement or a deduced signature is a substitution failure.
+- Constant evaluation of the expressions that reported "not supported
+  yet" (WP-1741): a `case` label nested in a statement of its switch
+  body (Duff's device), the taken branch of an `if constexpr` whose
+  discarded branch names an uncaptured entity, a discarded built-in
+  `<=>`, an array new-expression initialized by a string literal,
+  `std::initializer_list` with two pointer members, and in C an
+  assignment's value used as a structure's initializer. A `(T&)x` cast
+  that performs a reinterpret_cast is reported as clang does, and an
+  `std::initializer_list` of another layout is an error ("layout not
+  recognized"; the PCH format is now 78).
 
 ### Fixed
 
+- Value-dependent conditions in a template definition are no longer
+  constant-evaluated (WP-1741).
 - Explicit instantiations and specializations that reported "not yet
   implemented" (WP-1740): `template struct S;` naming a class that is no
   member class of a class template specialization is "explicit

@@ -223,10 +223,14 @@ impl Compiler<'_> {
             // derived object's ([class.mi]/4), found at run time
             // (`Oven::sub_addr`). A downcast is ill-formed
             // ([expr.static.cast]/2, /11; sema rejects it).
-            let Some(k) = self.path_sub(cur, &rest).filter(|_| !down) else {
-                // kiln-gap: GAP-113
-                self.unsupported(e);
-                return;
+            assert!(
+                !down,
+                "sema rejects a cast to a derived class through a virtual base ([expr.static.cast]/2, /11)"
+            );
+            let Some(k) = self.path_sub(cur, &rest) else {
+                unreachable!(
+                    "the subobject graph of a complete class (`Oven::poly_info`) holds every base on a base path sema built for it; sema caches the graph of a class with virtual bases at its closing brace (`check_unique_final_overriders`)"
+                )
             };
             let q = if off == 0 {
                 p
@@ -896,6 +900,8 @@ impl Compiler<'_> {
     }
 
     fn ctor_init(&mut self, ci: &CtorInit, this: u32, cls: OTy, union: bool) {
+        /// Why a mem-initializer's field is in its class's layout.
+        const MEM_INIT_FIELD: &str = "a mem-initializer names a non-static data member of the constructor's class, or one of an anonymous union or struct member of it ([class.base.init]/2), and the layout (`Types::intern`) gives every field of a class definition a FieldInfo";
         match ci.kind {
             CtorInitKind::Base => {
                 let bty = self.ty(QualType::unqual(TypeId::new(ci.target)));
@@ -913,9 +919,7 @@ impl Compiler<'_> {
                 let fd = DeclId::new(ci.target);
                 let fields = self.o.types.fields(cls);
                 let Some(idx) = fields.iter().position(|f| !f.base && f.decl == fd) else {
-                    // kiln-gap: GAP-113
-                    self.unsupported(ci.init);
-                    return;
+                    unreachable!("{MEM_INIT_FIELD}")
                 };
                 let fi = fields[idx];
                 if union {
@@ -935,9 +939,7 @@ impl Compiler<'_> {
                 for (k, fd) in chain.iter().enumerate() {
                     let fields = self.o.types.fields(oty);
                     let Some(idx) = fields.iter().position(|f| !f.base && f.decl == *fd) else {
-                        // kiln-gap: GAP-113
-                        self.unsupported(ci.init);
-                        return;
+                        unreachable!("{MEM_INIT_FIELD}")
                     };
                     let fi = fields[idx];
                     if matches!(self.kind(oty), TyKind::Record { union: true, .. }) {
@@ -1262,8 +1264,9 @@ impl Compiler<'_> {
                         self.init_inner(a, p, ty);
                     }
                 }
-                // kiln-gap: GAP-113
-                _ => self.unsupported(e),
+                _ => unreachable!(
+                    "a trivial constructor is a default constructor (no argument) or a copy or move constructor (one), and an explicitly-defaulted one has no default argument ([class.default.ctor]/3, [class.copy.ctor]/11, [dcl.fct.def.default]/2.3)"
+                ),
             }
             return;
         }
@@ -1324,8 +1327,9 @@ impl Compiler<'_> {
                 Some(Local::Mem(a)) => {
                     self.emit_at(Op::Load, crate::kbc::ak::READ, &[slot, a, pty.0], e);
                 }
-                // kiln-gap: GAP-113
-                None => self.unsupported(e),
+                None => unreachable!(
+                    "an inherited constructor call is in its inheriting constructor's body, whose every parameter `compile_func` bound"
+                ),
             }
         }
         let f = if self.has_base_variant(ctor) {
@@ -1526,9 +1530,9 @@ impl Compiler<'_> {
             if let Some(bin) = self.is_mp_callee(callee) {
                 return self.mp_call(e, bin, sret);
             }
-            // kiln-gap: GAP-113
-            self.unsupported(e);
-            return self.reg();
+            unreachable!(
+                "sema builds a member function call's callee as a class member access or a pointer-to-member operator (`try_member_call`, `assign_subobject_at`), and `member_call_callee` looks through parentheses, `__extension__` and selections"
+            );
         }
         let obj = ast.exprs.member_call_object(e);
         let md = ast.exprs.decl(callee);
@@ -1689,9 +1693,9 @@ impl Compiler<'_> {
         let [common, elem_init] = ast.exprs.array_init_loop(e);
         let src = ast.exprs.opaque_source(common).unwrap_or(common);
         let TyKind::Array { elem, n } = self.kind(ty) else {
-            // kiln-gap: GAP-113
-            self.unsupported(e);
-            return;
+            unreachable!(
+                "an ArrayInitLoopExpr initializes an array ([dcl.init.general]/16.6, [expr.prim.lambda.capture]/15, [class.copy.ctor]/14): sema builds one only for a constant array type"
+            )
         };
         let m = self.next;
         let v = if self.node(src).value_category().is_glvalue() {

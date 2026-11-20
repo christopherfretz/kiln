@@ -767,7 +767,10 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1760 | a non-consteval function with a `std::meta::info` parameter is emitted; a consteval-only type ([basic.types.general]) must not reach code generation: check what the standard requires and what GCC 16.1 does, then diagnose or skip its emission | WP-1739 | open |
 | WP-1740 | NTTP/substitution kinds: GAP-093..GAP-109 (17 sites, 3 cases) | WP-1719 | in progress |
 | WP-1758 | mangling of a past-the-end pointer NTTP into a class member: `&t.a + 1` and `&t.b[0]` mangle as one value (clang: distinct), because Oven pointer values are a flat (base, offset) with no designated subobject (crates/kiln_abi/src/mangle.rs `lvalue_path`) | WP-1740 | open |
-| WP-1741 | Oven traps: expressions: GAP-110..GAP-124 (55 sites, 0 cases) | WP-1719 | open |
+| WP-1741 | Oven traps: expressions: GAP-110..GAP-124 (55 sites, 0 cases) | WP-1719 | in progress |
+| WP-1765 | the constant evaluator silently traps on the floating-point elementwise builtins other than `abs` (crates/kiln_oven/src/compile/builtins.rs, the `TyKind::Float(_) => self.trap` arm; no static-gaps marker): implement them as clang 22 evaluates them, or record the site as a gap | WP-1741 | open |
+| WP-1766 | a constexpr constructor of a class with a virtual base is accepted; clang 22 rejects it: check [dcl.constexpr] and [class.virtual] at the target draft and what GCC 16.1 does, then diagnose as the standard requires | WP-1741 | open |
+| WP-1767 | C: `_Static_assert(((union U)3).i == 3, "")` is accepted; clang rejects it (a GNU cast to union is not an integer constant expression in C) | WP-1741 | open |
 | WP-1742 | Oven traps: types: GAP-125..GAP-129 (35 sites, 0 cases) | WP-1719 | open |
 | WP-1743 | reflection: GAP-130..GAP-134 (5 sites, 0 cases) | WP-1719 | open |
 | WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | open |

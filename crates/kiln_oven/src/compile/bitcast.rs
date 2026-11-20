@@ -177,11 +177,10 @@ impl Compiler<'_> {
             self.trap_loc(loc, m);
             return;
         }
-        if mem.is_none() && self.o.types.is_aggregate(td) {
-            // kiln-gap: GAP-123
-            self.unsupported(e);
-            return;
-        }
+        assert!(
+            mem.is_some() || !self.o.types.is_aggregate(td),
+            "a bit cast to a class, array or wide `_BitInt` initializes its result object in memory (`init_inner` passes it); `rv` evaluates scalar results only"
+        );
         let (b, sub) = mem.map_or((src, 0), |p| (p, bi::TO_MEM));
         self.emit_site(
             Op::Builtin,

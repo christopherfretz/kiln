@@ -3,6 +3,7 @@
 //! after its complete-class contexts (the delayed exception-specification
 //! check and the key function).
 
+use kiln_ast::class::ClassVirtuals;
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind, TemplLinkKind,
 };
@@ -167,6 +168,16 @@ impl Sema<'_, '_> {
         }
         if bad {
             self.ast.decls.set_flags(r, DeclFlags::INVALID);
+        }
+        // Cache the graph for every later reader, including bridges that
+        // only read `Ast::virtuals` (codegen's folds): a conversion through
+        // a virtual base needs it although the class may never be
+        // constructed in this translation unit (`extern` objects).
+        let first = self.ast.first(r);
+        if self.ast.virtuals.get(first).is_none() {
+            let mut overriders = all;
+            overriders.dedup_by_key(|e| (e.0, e.1));
+            self.ast.virtuals.insert(first, ClassVirtuals { subobjects: subs, overriders });
         }
     }
 

@@ -262,6 +262,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let proto = self.ast.types.proto(n.ty()?)?;
+        // A variadic declaration is no metafunction's ([meta.syn]): an
+        // ordinary function without a definition.
+        if proto.variadic() {
+            return None;
+        }
         let info = BuiltinType::MetaInfo.qual_type();
         let mut params = [false; kiln_oven::MAX_META_ARGS];
         let ps = self.ast.types.params(proto);
