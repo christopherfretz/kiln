@@ -2834,7 +2834,9 @@ instantiation unless stated.
   declare; every builtin kiln declares lowers or folds (the list of
   unlowered ones is gone since WP-1739, which lowered its last entries,
   and `kiln_driver/tests/builtin_lowering.rs` checks it per target and
-  clang version); a header that tests for a feature
+  clang version); under `-fclang-compat=22` a target builtin clang 19
+  has and clang 22 dropped (the MMX builtins, `__builtin_ia32_maskmovq`)
+  answers 0, as in clang 22; a header that tests for a feature
   takes the path kiln implements. `-E` keeps clang's answers. A reported
   builtin is declared on the target (WP-1057): `__builtin_readcyclecounter`
   (`ULLi`, every target; not constant, lowered to `llvm.readcyclecounter`)

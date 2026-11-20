@@ -530,6 +530,16 @@ impl FeatureQueries for ClangFeatures {
 
     fn has_builtin(&self, name: &str) -> u32 {
         if let Some(v) = self.target_builtins.as_ref().and_then(|t| t.answer(name)) {
+            // A target builtin clang 19 has and clang 22 dropped (the MMX
+            // builtins clang 20 removed, `__builtin_ia32_maskmovq`) is
+            // absent under `-fclang-compat=22`, as in clang 22.
+            if v != 0
+                && self.compat == ClangCompat::Clang22
+                && self.lookup_at(Kind::Builtin, table::BUILTIN, name, false) != 0
+                && self.lookup(Kind::Builtin, table::BUILTIN, name) == 0
+            {
+                return 0;
+            }
             return v;
         }
         if ACLE_HEADER_BUILTINS.contains(&name) {
