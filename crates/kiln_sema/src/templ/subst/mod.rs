@@ -671,6 +671,37 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
     }
 
+    /// A template template parameter of a member template ([temp.mem])
+    /// whose level is retained at depth `nd`: that of the redeclared head,
+    /// one level shallower, redeclared now when this substitution keeps
+    /// its head by depth only (a member friend's, [temp.friend]/5; see
+    /// `nttp_ref`). The canonical form has no declaration: it moves to the
+    /// new depth.
+    fn retained_ttp_name(
+        &mut self,
+        n: kiln_ast::ids::TemplateNameId,
+        nd: u16,
+        loc: Loc,
+    ) -> SubstResult<kiln_ast::ids::TemplateNameId> {
+        match self.sema.ast.types.template_name_view(n) {
+            TemplateName::TemplateTemplateParm { decl, .. } => {
+                let mut np = self.find_instantiated_decl(decl, loc)?;
+                if np == decl {
+                    np = self.subst_template_parm(decl, nd, false)?;
+                }
+                Ok(self.sema.template_name_for(np))
+            }
+            TemplateName::CanonTemplateTemplateParm { index, pack, .. } => {
+                Ok(self.sema.ast.types.template_name(TemplateName::CanonTemplateTemplateParm {
+                    depth: u32::from(nd),
+                    index,
+                    pack,
+                }))
+            }
+            _ => Err(SubstFail),
+        }
+    }
+
     /// Substitutes into a template name (a template template parameter
     /// becomes its argument's template).
     pub fn template_name(
@@ -714,16 +745,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                         _ => Err(SubstFail),
                     },
                     ArgLookup::Retain(nd) if nd == d => Ok(n),
-                    ArgLookup::Retain(_) => {
-                        let TemplateName::TemplateTemplateParm { decl, .. } =
-                            self.sema.ast.types.template_name_view(n)
-                        else {
-                            // kiln-gap: GAP-014
-                            return self.unimplemented("member templates", loc);
-                        };
-                        let np = self.find_instantiated_decl(decl, loc)?;
-                        Ok(self.sema.template_name_for(np))
-                    }
+                    ArgLookup::Retain(nd) => self.retained_ttp_name(n, nd, loc),
                     ArgLookup::Missing => Err(SubstFail),
                 }
             }

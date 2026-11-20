@@ -143,6 +143,8 @@ sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer ty
 sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
 sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
 sema_compound_qualified_function_type = Error (4) "{0:pointer|reference} to function type {1:|{2} }cannot have '{3}' qualifier";
+// ----- WP-1734 (clang `err_concept_decls_may_only_appear_in_global_namespace_scope`; [temp.concept])
+sema_concept_decls_namespace_scope_only = Error (0) "concept declarations may only appear in global or namespace scope";
 sema_concept_template_param_constraints = Error (0) "concept template parameter cannot have associated constraints";
 sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
 sema_conditional_ambiguous_ovl = Error (2) "conditional expression is ambiguous; {0} and {1} can be converted to several common types";

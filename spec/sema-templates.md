@@ -2645,6 +2645,9 @@ errors.
 | member template | declaration: a new template decl, with outer levels substituted and its own parameters retained (§5.1); `TemplateInfo.member_of` points to the pattern member | its own specializations need it |
 | friend | declaration; a hidden friend's definition is in `instantiated_from` | odr-use (§4.9) |
 | anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
+| deduction guide ([temp.deduct.guide]/3) | declaration, as a member function (`function_decl`) | — |
+| `using enum` ([enum.udecl]) | fully: the instantiated enumeration's enumerators are redeclared (`using_enum_of`) | — |
+| unnamed class template | nothing: `template<class U> struct { };` is clang's "cannot declare a class template with no name" in the pattern ([temp.pre]/5, [dcl.pre]/5; `act_on_tag`), the class and template are invalid and the class body skips the member without invalidating the specialization (WP-1734, `temp.pre/unnamed-class-template.cpp`) | — |
 | unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
 
 A member function whose definition is instantiated from an out-of-line
@@ -2748,6 +2751,20 @@ program would otherwise compile with a member missing, and a release build
 must not do that either. A substitution failure in a member *declaration*
 is never SFINAE here: SFINAE applies only to deduction, and a class
 instantiated inside a SFINAE context is a hard error there (§5.7).
+
+**Exhaustive member kinds (WP-1734).** `member` (class.rs), the pattern
+of a member template (`member_template_pattern`, member.rs), a member
+class's declaration (`member_class_decl`) and a friend's target
+(`friend_decl`) match every `DeclKind` and give no "not yet implemented"
+fallback: each kind is instantiated, or is listed in an arm that returns
+`Err(SubstFail)` with a comment saying why the kind cannot reach it (it
+is no member-declaration, [class.mem.general]; a template declares only
+a class, function, variable or alias, [temp.pre]/2, and a concept
+inhabits a namespace scope, [temp.concept]; a friend is a class or a
+function, [class.friend]/2-3; an unnamed member class is instantiated by
+`unnamed_member_class`). Such an arm, if ever reached, is reported by the
+guard above (`member_dropped`) rather than dropped, and a new `DeclKind`
+needs a decision in each match.
 
 The same guard covers function bodies and local classes (WP-905), with
 `kiln: internal error: {part} in {context} was not instantiated and no
@@ -3348,6 +3365,35 @@ reports a dropped statement, part or declaration lookup.
     A use of `x.n` outside the requires-expression, even in its
     discarded `if constexpr` branch, is still replayed as an error in
     such a specialization, as clang does for a befriended specialization.
+- **Own parameters of a member or friend template (WP-1734).** A
+  member template's and a friend template's own head is redeclared one
+  level shallower ([temp.mem]/1, [temp.friend]/1), and so is the head of
+  a [temp.friend]/5 friend (`template<int N> friend void A<N>::f();`).
+  A use of one of its parameters that substitution reaches before the
+  head was redeclared (`MultiLevelArgs` says `Retain(depth)`: a non-type
+  parameter in an expression, `nttp_ref`, or a template template
+  parameter in a template name, `template_name`) declares the parameter
+  at the retained depth there (`subst_template_parm`, without its
+  default), so the instantiated declaration names its own parameter and
+  never the pattern's. A friend function template's deferred
+  *noexcept-specifier* that names its own parameters is substituted with
+  the template's head mapped to the friend's (`map_template_params` in
+  `substitute_exception_spec`), and a redeclaration of the befriended
+  template is compared with it once both are known
+  (`check_delayed_exc_equiv`; two dependent specifiers are equivalent
+  when their profiles are, [temp.over.link]/5, [except.spec]/5): "exception
+  specification in declaration does not match previous declaration"
+  either way round (`temp.friend/friend-template-noexcept-own-param*.cpp`,
+  `member-friend-non-type-head-*.cpp`).
+- **Friend classes declared by the friend (WP-1734).** `friend struct Z;`
+  declares `Z`, when no prior declaration is found, in the innermost
+  enclosing namespace ([namespace.memdef]/3) or, in a local class, in its
+  block scope ([class.friend]/11): `friend_type` befriends the same
+  namespace class in every specialization, and declares the block's class
+  again in each instantiated block (`local_friend_tag`), where the class
+  defined later in the block redeclares it; a local friend class that
+  was invalid in the pattern befriends nothing
+  (`class.friend/local-class-friend-class-in-templated-member-*.cpp`).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 

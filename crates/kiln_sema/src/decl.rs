@@ -5644,8 +5644,15 @@ impl Sema<'_, '_> {
                 let mut pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 // [except.spec]/13: a previous declaration's specification
                 // still uninstantiated is needed now (clang resolves the
-                // old one in `CheckEquivalentExceptionSpec`).
-                if !self.in_template()
+                // old one in `CheckEquivalentExceptionSpec`). So is that of
+                // a friend template of a class template specialization
+                // redeclared by a function template ([temp.friend]/1): its
+                // operand names the template's own parameters, compared
+                // as written ([temp.over.link]/5).
+                let friend_template = self.ast.described_template(p).is_some()
+                    && pn.misc().friend() != FriendKind::None
+                    && !self.is_dependent_friend_fn(p);
+                if (!self.in_template() || friend_template)
                     && matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
                     && self.uninstantiated_exc.contains_key(&self.ast.first(p))
                     && !self.exc_unparsed(p)
@@ -10043,6 +10050,15 @@ impl Sema<'_, '_> {
         let fixed = self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = self.tag_template_head(is_enum, qualifier, use_, nested);
+        // [temp.pre]/5, [dcl.pre]/5: a class template is declared with no
+        // declarator, so its class-specifier must introduce its name
+        // (clang `CheckClassTemplate`'s `err_template_unnamed_class` at the
+        // class-key). The class and its template are declared invalid:
+        // no anonymous struct or union, no member of the enclosing class.
+        let unnamed_template = head.is_some() && name.is_none();
+        if unnamed_template {
+            self.error(DiagId::sema_template_unnamed_class, loc);
+        }
         let mut prev = None;
         let mut redefined = false;
         // A name of another kind (`kind_conflict`): the tag is declared
@@ -10245,7 +10261,7 @@ impl Sema<'_, '_> {
         }
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
-        if redefined {
+        if redefined || unnamed_template {
             h = h.flags(DeclFlags::INVALID);
         }
         h.lexical = Some(if qualifier.is_some() || self.is_c() { self.ctx } else { ctx });
@@ -10287,6 +10303,9 @@ impl Sema<'_, '_> {
         self.set_tag_member_access(d);
         let t = self.finish_template_pattern(d);
         if let Some(t) = t {
+            if unnamed_template {
+                self.ast.decls.set_flags(t, DeclFlags::INVALID);
+            }
             if qualifier.is_none() {
                 self.set_tag_member_access(t);
             } else if self.templ.member_spec.is_some() {

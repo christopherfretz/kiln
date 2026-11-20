@@ -414,7 +414,6 @@ impl Substituter<'_, '_, '_> {
 
     /// Declares the pattern of a member template (the head is open).
     fn member_template_pattern(&mut self, p: DeclId) -> SubstResult<DeclId> {
-        let loc = self.sema.ast.decls.get(p).loc();
         match self.sema.kind_of(p) {
             DeclKind::CXXRecord => self.member_class_decl(p),
             DeclKind::TypeAlias | DeclKind::Typedef => self.typedef_decl(p),
@@ -422,7 +421,16 @@ impl Substituter<'_, '_, '_> {
             k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
                 self.function_decl(p, DeclaratorContext::Member, None)
             }
-            k @ (DeclKind::TranslationUnit
+            // [temp.pre]/2: a template declares a class, a function, a
+            // variable or an alias (a concept inhabits a namespace scope,
+            // [temp.concept], and is no member). The templates
+            // `finish_template_pattern` builds have exactly the patterns
+            // above, a class template's partial specializations are
+            // redeclared on their own (`member_partial_spec`), and a
+            // function payload kind listed below was taken by the guard
+            // arm. So no member template has a pattern of these kinds; a
+            // stray one is reported by `guarded_member`, not dropped.
+            DeclKind::TranslationUnit
             | DeclKind::Namespace
             | DeclKind::NamespaceAlias
             | DeclKind::LinkageSpec
@@ -474,10 +482,7 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::StaticAssert
             | DeclKind::Label
             | DeclKind::ContractResultName
-            | DeclKind::ConstevalBlock) => {
-                // kiln-gap: GAP-016
-                self.unimplemented(&format!("member templates of kind {k:?}"), loc)
-            }
+            | DeclKind::ConstevalBlock => Err(SubstFail),
         }
     }
 
@@ -537,6 +542,29 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Maps the parameters of `from`, the head of a member or friend
+    /// template of the pattern class, to those of `to`, its head as the
+    /// template was redeclared in the specialization ([temp.mem]/1,
+    /// [temp.friend]/1): a later substitution with only the enclosing
+    /// levels (a deferred *noexcept-specifier*) names the redeclared
+    /// template's own parameters, one level shallower, as
+    /// [`Self::param_list`] mapped them when the head was substituted.
+    pub(crate) fn map_template_params(
+        &mut self,
+        from: TemplateParamListId,
+        to: TemplateParamListId,
+    ) {
+        let lists = &self.sema.ast.lists;
+        let old = lists.iter::<DeclId>(self.sema.ast.templates.param_list(from).params);
+        let new = lists.iter::<DeclId>(self.sema.ast.templates.param_list(to).params);
+        let pairs: Vec<(DeclId, DeclId)> = old.zip(new).collect();
+        for (p, np) in pairs {
+            if p != np {
+                self.locals.insert(p, DeclOrPack::Decl(np));
+            }
+        }
+    }
+
     /// Substitutes template parameter list `list` of a member template:
     /// new parameters at their retained depth, mapped from the old ones
     /// in [`Substituter::locals`]; defaults substituted now.
@@ -549,75 +577,7 @@ impl Substituter<'_, '_, '_> {
         let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();
         let mut new = Vec::with_capacity(old.len());
         for p in old {
-            let n = *self.sema.ast.decls.get(p);
-            let Some(pi) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
-            let mut h = kiln_ast::DeclHead::new(self.sema.ctx, n.name(), n.loc());
-            // An invented parameter ([dcl.fct]/22, a generic lambda's
-            // `auto`) stays implicit, so it still prints as `auto`.
-            if n.flags().contains(kiln_ast::decl::DeclFlags::IMPLICIT) {
-                h = h.flags(kiln_ast::decl::DeclFlags::IMPLICIT);
-            }
-            let np = match n.kind() {
-                DeclKind::TemplateTypeParm => self.sema.builder().template_type_parm(
-                    h,
-                    depth,
-                    pi.index,
-                    pi.pack,
-                    pi.typename_kw,
-                ),
-                DeclKind::NonTypeTemplateParm => {
-                    let t = self.decl_ty(p);
-                    let (ty, expanded) = self.nttp_param_ty(t, pi.pack, n.loc())?;
-                    let np =
-                        self.sema.builder().non_type_template_parm(h, ty, depth, pi.index, pi.pack);
-                    if let Some(l) = expanded {
-                        self.sema.templ.expanded_packs.insert(np, l);
-                    }
-                    np
-                }
-                DeclKind::TemplateTemplateParm => {
-                    let Some(inner) = pi.params else { return Err(SubstFail) };
-                    let inner = self.param_list(inner)?;
-                    let np = self.sema.builder().template_template_parm(
-                        h,
-                        inner,
-                        depth,
-                        pi.index,
-                        pi.pack,
-                        pi.typename_kw,
-                    );
-                    self.sema.builder().set_ttp_kind(np, pi.ttp_kind);
-                    np
-                }
-                _ => return Err(SubstFail),
-            };
-            // The constraints stay unsubstituted, as in clang: they are
-            // checked with the specialization's levels through
-            // `member_constraints`, and keep redeclarations that differ
-            // only in them apart ([temp.over.link]/6).
-            if let Some(c) = pi.constraint {
-                self.sema.builder().set_parm_constraint(np, c);
-            }
-            self.locals.insert(p, DeclOrPack::Decl(np));
-            if let Some(a) = self.sema.template_default(p) {
-                // Substituted now (clang's `SubstDefaultArgument` when
-                // the member template is redeclared).
-                let saved = self.sema.act_on_start_template_param_default();
-                // In the member template's head: its parameters are open,
-                // so a closure type created here is dependent.
-                let head = std::mem::replace(&mut self.sema.templ.member_head_default, true);
-                self.sema.ast.templates.dependent_depth += 1;
-                let a = self.template_arg(a, n.loc());
-                self.sema.ast.templates.dependent_depth -= 1;
-                self.sema.templ.member_head_default = head;
-                self.sema.act_on_end_template_param_default(saved);
-                let a = a?;
-                let _ = self.sema.builder().set_template_default(np, a);
-                if let Some(&dl) = self.sema.templ.default_locs.get(&p) {
-                    self.sema.templ.default_locs.insert(np, dl);
-                }
-            }
-            new.push(np);
+            new.push(self.subst_template_parm(p, depth, true)?);
         }
         Ok(self.sema.builder().template_param_list(
             l.template_loc,
@@ -627,5 +587,82 @@ impl Substituter<'_, '_, '_> {
             &new,
             l.requires,
         ))
+    }
+
+    /// Template parameter `p` of a member or friend template's head,
+    /// redeclared at `depth` (its retained depth) with its type
+    /// substituted, and mapped from `p` in [`Substituter::locals`]; its
+    /// default argument substituted too when `defaults`.
+    pub(crate) fn subst_template_parm(
+        &mut self,
+        p: DeclId,
+        depth: u16,
+        defaults: bool,
+    ) -> SubstResult<DeclId> {
+        let n = *self.sema.ast.decls.get(p);
+        let Some(pi) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
+        let mut h = kiln_ast::DeclHead::new(self.sema.ctx, n.name(), n.loc());
+        // An invented parameter ([dcl.fct]/22, a generic lambda's
+        // `auto`) stays implicit, so it still prints as `auto`.
+        if n.flags().contains(kiln_ast::decl::DeclFlags::IMPLICIT) {
+            h = h.flags(kiln_ast::decl::DeclFlags::IMPLICIT);
+        }
+        let np = match n.kind() {
+            DeclKind::TemplateTypeParm => {
+                self.sema.builder().template_type_parm(h, depth, pi.index, pi.pack, pi.typename_kw)
+            }
+            DeclKind::NonTypeTemplateParm => {
+                let t = self.decl_ty(p);
+                let (ty, expanded) = self.nttp_param_ty(t, pi.pack, n.loc())?;
+                let np =
+                    self.sema.builder().non_type_template_parm(h, ty, depth, pi.index, pi.pack);
+                if let Some(l) = expanded {
+                    self.sema.templ.expanded_packs.insert(np, l);
+                }
+                np
+            }
+            DeclKind::TemplateTemplateParm => {
+                let Some(inner) = pi.params else { return Err(SubstFail) };
+                let inner = self.param_list(inner)?;
+                let np = self.sema.builder().template_template_parm(
+                    h,
+                    inner,
+                    depth,
+                    pi.index,
+                    pi.pack,
+                    pi.typename_kw,
+                );
+                self.sema.builder().set_ttp_kind(np, pi.ttp_kind);
+                np
+            }
+            _ => return Err(SubstFail),
+        };
+        // The constraints stay unsubstituted, as in clang: they are
+        // checked with the specialization's levels through
+        // `member_constraints`, and keep redeclarations that differ
+        // only in them apart ([temp.over.link]/6).
+        if let Some(c) = pi.constraint {
+            self.sema.builder().set_parm_constraint(np, c);
+        }
+        self.locals.insert(p, DeclOrPack::Decl(np));
+        if defaults && let Some(a) = self.sema.template_default(p) {
+            // Substituted now (clang's `SubstDefaultArgument` when
+            // the member template is redeclared).
+            let saved = self.sema.act_on_start_template_param_default();
+            // In the member template's head: its parameters are open,
+            // so a closure type created here is dependent.
+            let head = std::mem::replace(&mut self.sema.templ.member_head_default, true);
+            self.sema.ast.templates.dependent_depth += 1;
+            let a = self.template_arg(a, n.loc());
+            self.sema.ast.templates.dependent_depth -= 1;
+            self.sema.templ.member_head_default = head;
+            self.sema.act_on_end_template_param_default(saved);
+            let a = a?;
+            let _ = self.sema.builder().set_template_default(np, a);
+            if let Some(&dl) = self.sema.templ.default_locs.get(&p) {
+                self.sema.templ.default_locs.insert(np, dl);
+            }
+        }
+        Ok(np)
     }
 }

@@ -215,6 +215,8 @@ sema_template_spec_needs_header = Error (0) "template specialization requires 't
 sema_template_tag_noparams = Error (2) "extraneous 'template<>' in declaration of {0} '{1}'";
 sema_template_template_param_no_params = Error (0) "template template parameter must have its own template parameters";
 sema_template_template_param_not_at_least_as_constrained = Error (2) "template template argument {0} is more constrained than template template parameter {1}";
+// ----- WP-1734 (clang `err_template_unnamed_class`; [temp.pre]/5, [dcl.pre]/5)
+sema_template_unnamed_class = Error (0) "cannot declare a class template with no name";
 sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
 // clang `err_tentative_def_incomplete_type` (C, end of the TU; WP-1286).
 sema_tentative_def_incomplete_type = Error (1) "tentative definition has type {0} that is never completed";

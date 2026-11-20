@@ -2340,12 +2340,15 @@ impl Substituter<'_, '_, '_> {
             ArgLookup::Arg(a) => self.element(a, Some(p), loc)?,
             ArgLookup::Retain(d) if d == info.depth => return Ok(e),
             // A parameter of a member template redeclared one level
-            // shallower ([temp.mem]; §4.6).
-            ArgLookup::Retain(_) => {
-                let np = self.find_instantiated_decl(p, loc)?;
+            // shallower ([temp.mem]; §4.6). One whose head this
+            // substitution keeps by depth only, without redeclaring it (a
+            // member friend `template<int N> friend void A<N>::f();`,
+            // [temp.friend]/1 and /5), is redeclared at its new depth
+            // now, as its head's substitution would.
+            ArgLookup::Retain(d) => {
+                let mut np = self.find_instantiated_decl(p, loc)?;
                 if np == p {
-                    // kiln-gap: GAP-014
-                    return self.unimplemented("member templates", loc);
+                    np = self.subst_template_parm(p, d, false)?;
                 }
                 return Ok(self.sema.build_decl_ref(np, loc));
             }

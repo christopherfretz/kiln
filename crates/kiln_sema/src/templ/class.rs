@@ -2560,6 +2560,13 @@ impl Substituter<'_, '_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) || sub.sema.is_implicit_friend(m) {
                 continue;
             }
+            // An unnamed class template (`template<class U> struct { };`,
+            // diagnosed by `act_on_tag`, [temp.pre]/5) is no member at
+            // all: clang's `CheckClassTemplate` declares nothing, so the
+            // specialization stays valid.
+            if n.kind() == DeclKind::ClassTemplate && n.name().is_empty() {
+                continue;
+            }
             if n.has(DeclFlags::INVALID)
                 || n.kind() == DeclKind::FunctionTemplate
                     && sub.sema.pattern_of(m).is_some_and(|p| sub.sema.is_invalid_decl(p))
@@ -2737,8 +2744,13 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
         let Some(name) = n.name().as_ident().filter(|_| !n.name().is_empty()) else {
-            // kiln-gap: GAP-017
-            return self.unimplemented("anonymous member classes of class templates", loc);
+            // An unnamed member class is instantiated with its object
+            // (`unnamed_member_class`, [class.union.anon], [class.pre]/1),
+            // and an unnamed member class template is ill-formed
+            // ([temp.pre]/5: `act_on_tag` diagnoses it and the class body
+            // skips it), so neither reaches here; a stray one is reported
+            // by `guarded_member` rather than dropped.
+            return Err(SubstFail);
         };
         let kw = match self.sema.ast.decls.record(m).map(|r| r.tag) {
             Some(TagKind::Class) => TagKeyword::Class,
@@ -2923,10 +2935,15 @@ impl Substituter<'_, '_, '_> {
                 }
                 v
             }
+            // A deduction guide of a member class template
+            // ([temp.deduct.guide]/3: declared in the scope of its
+            // template) is redeclared with its types substituted (clang
+            // `VisitCXXDeductionGuideDecl`).
             DeclKind::CXXMethod
             | DeclKind::CXXConstructor
             | DeclKind::CXXDestructor
-            | DeclKind::CXXConversion => {
+            | DeclKind::CXXConversion
+            | DeclKind::CXXDeductionGuide => {
                 // An out-of-line redeclaration is not a member of the
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
@@ -2942,6 +2959,17 @@ impl Substituter<'_, '_, '_> {
                 return Ok(None);
             }
             DeclKind::Enum => self.enum_decl(m)?,
+            // A member using-enum-declaration ([enum.udecl]/1, clang
+            // `VisitUsingEnumDecl`): the enumeration it names is not
+            // dependent, but may be a member of the pattern (instantiated
+            // with the class); its enumerators are redeclared in the
+            // specialization ([enum.udecl]/3).
+            DeclKind::UsingEnum => {
+                let e = self.sema.ast.using_target(m).ok_or(SubstFail)?;
+                let e = self.find_instantiated_decl(e, loc)?;
+                let written = self.sema.decl_name(e);
+                self.sema.using_enum_of(e, &written, loc)
+            }
             DeclKind::AccessSpec => {
                 let a = n.misc().access();
                 let _ = self.sema.act_on_access_spec(a, loc);
@@ -2979,14 +3007,30 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::FunctionTemplate
             | DeclKind::VarTemplate
             | DeclKind::TypeAliasTemplate => self.member_template(m)?,
-            k @ (DeclKind::TranslationUnit
+            // No other kind is in a class's member list
+            // ([class.mem.general]/1): namespace-scope declarations
+            // (`TranslationUnit`, `Namespace`, `NamespaceAlias`,
+            // `LinkageSpec`, `Export`, `FileScopeAsm`, `UsingDirective`,
+            // `Concept`) are not member-declarations; a `UsingPack` or an
+            // `UnresolvedUsingIfExists` exists only in an instantiation (the
+            // pattern has the dependent using-declaration), an
+            // `EnumConstant` is a member of its enumeration, an
+            // `IndirectField` is injected by its anonymous member (skipped
+            // by the caller), a non-member `Function` here is a friend
+            // (skipped above), and kiln declares member class and variable
+            // template specializations as `CXXRecord` and `Var` (the
+            // `*Specialization` kinds and `FriendTemplate` are never
+            // built). The rest are parameters, statement-level or
+            // expression-level entities. A pattern member of one of these
+            // kinds is a kiln bug: the failure is reported as an internal
+            // error by `guarded_member` (§4.6 "No silent drop").
+            DeclKind::TranslationUnit
             | DeclKind::Namespace
             | DeclKind::NamespaceAlias
             | DeclKind::LinkageSpec
             | DeclKind::Export
             | DeclKind::FileScopeAsm
             | DeclKind::UsingDirective
-            | DeclKind::UsingEnum
             | DeclKind::UsingPack
             | DeclKind::UnresolvedUsingIfExists
             | DeclKind::EnumConstant
@@ -2995,7 +3039,6 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::IndirectField
             | DeclKind::FriendTemplate
             | DeclKind::Function
-            | DeclKind::CXXDeductionGuide
             | DeclKind::ParmVar
             | DeclKind::ImplicitParam
             | DeclKind::Binding
@@ -3011,10 +3054,7 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::LifetimeExtendedTemporary
             | DeclKind::TemplateParamObject
             | DeclKind::Label
-            | DeclKind::ContractResultName) => {
-                // kiln-gap: GAP-015
-                return self.unimplemented(&format!("{k:?} members of class templates"), loc);
-            }
+            | DeclKind::ContractResultName => return Err(SubstFail),
         }))
     }
 }

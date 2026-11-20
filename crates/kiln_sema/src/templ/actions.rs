@@ -1594,8 +1594,10 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let _ = self.take_template_head(None);
         self.templ.cur = None;
+        // [temp.concept]: a concept-definition inhabits a namespace scope
+        // (clang `ActOnConceptDefinition`, at the name).
         if self.in_local_scope() || self.kind_of(self.ctx) == DeclKind::CXXRecord {
-            self.error(DiagId::sema_template_outside_namespace_or_class, loc);
+            self.error(DiagId::sema_concept_decls_namespace_scope_only, loc);
         }
         // [temp.param]/14: a template parameter pack is the last
         // parameter of a concept's head.
