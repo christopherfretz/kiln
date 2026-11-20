@@ -96,6 +96,10 @@ impl Cg<'_> {
         let t = self.temp(q);
         if self.is_aggregate(q) {
             self.emit_agg(e, t, false)?;
+        } else if self.is_complex(q) {
+            // `EmitAnyExprToMem` of a complex value: its parts.
+            let v = self.emit_complex(e)?;
+            self.cx_store(v, t, q);
         } else {
             let v = self.emit_scalar(e)?;
             self.store_scalar(v, t, q);
@@ -342,6 +346,15 @@ impl Cg<'_> {
             return Ok(None);
         }
         let ty = self.mty(rq);
+        if self.is_complex(rq) {
+            // clang `convertTempToRValue` of a complex result: its parts,
+            // loaded from the result temporary, are left in `cx_ret`.
+            let (Some(r), Some(i)) = self.cx_load(Addr { ty, ..d }, rq, (false, false)) else {
+                unreachable!("cx_load loads both parts unless told to ignore one")
+            };
+            self.f.cx_ret = Some((r, i));
+            return Ok(None);
+        }
         Ok(Some(self.load_scalar(Addr { ty, ..d }, rq)))
     }
 
@@ -689,6 +702,54 @@ impl Cg<'_> {
         if self.has_bool_rep(vq) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
 
+    /// clang `EmitAtomicLoad` of the complex `_Atomic` lvalue `lv`
+    /// (`seq_cst`): the object is loaded whole into an `atomic-temp` of
+    /// the atomic type, whose parts are then read
+    /// (`convertAtomicTempToRValue`).
+    pub(crate) fn atomic_cx_load(&mut self, lv: LV, vq: QualType) -> (V, V) {
+        let t = self.temp(lv.q);
+        if self.atomic_lv_libcall(lv.q) {
+            self.atomic_lv_libcall_op(false, lv, t.v);
+        } else {
+            let vol = self.is_volatile(lv.q);
+            let size = self.size_align(lv.q).0;
+            let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
+            let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
+            let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
+            self.tbaa_mark(v, lv.q, lv.tb);
+            self.store(v, t.v, t.align, false);
+        }
+        let ty = self.mty(vq);
+        let (Some(r), Some(i)) = self.cx_load(Addr { ty, ..t }, vq, (false, false)) else {
+            unreachable!("cx_load loads both parts unless told to ignore one")
+        };
+        (r, i)
+    }
+
+    /// clang `EmitAtomicStore` of the complex value `v` to the `_Atomic`
+    /// lvalue `lv` (`seq_cst`): the parts go into an `atomic-temp` of the
+    /// atomic type (zeroed first when the value does not fill it), which
+    /// is stored whole.
+    pub(crate) fn atomic_cx_store(&mut self, v: (V, V), lv: LV, vq: QualType) {
+        let t = self.temp(lv.q);
+        let asize = self.size_align(lv.q).0;
+        if self.size_align(vq).0 != asize {
+            self.memset(t, 0, asize, false);
+        }
+        let ty = self.mty(vq);
+        self.cx_store(v, Addr { ty, ..t }, vq);
+        if self.atomic_lv_libcall(lv.q) {
+            self.atomic_lv_libcall_op(true, lv, t.v);
+            return;
+        }
+        let vol = self.is_volatile(lv.q);
+        let at = self.m.types.int(u32::try_from(asize * 8).unwrap_or(8));
+        let x = self.load(at, t.v, t.align, false);
+        let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let st = self.f.fir.push(Op::Store { val: x, ptr: lv.addr.v, mem }, LTy::VOID);
+        self.tbaa_mark(st, lv.q, lv.tb);
+    }
+
     /// Whether `q` is `_Atomic(T)` with `T` an aggregate (clang
     /// `getEvaluationKind` is `TEK_Aggregate`).
     pub(crate) fn is_atomic_aggregate(&self, q: QualType) -> bool {
@@ -807,6 +868,17 @@ impl Cg<'_> {
             }
             let dest = project(self);
             return self.emit_agg(init, dest, padded);
+        }
+        if self.is_complex(vq) {
+            // clang `EmitAtomicInit`, `TEK_Complex`: the parts stored into
+            // the value's place (after zeroing a padded atomic).
+            let v = self.emit_complex(init)?;
+            if padded {
+                self.memset(whole, 0, asize, false);
+            }
+            let dest = project(self);
+            self.cx_store(v, dest, vq);
+            return Ok(());
         }
         let v = match self.folds.get(init) {
             Some(c) => V::C(self.const_scalar_value(c, vq)?),

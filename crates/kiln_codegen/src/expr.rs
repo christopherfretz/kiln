@@ -31,6 +31,9 @@ use kiln_ast::sanitize::SanitizerSet as San;
 pub(crate) enum Opaque {
     Rv(Option<V>),
     Lv(LV),
+    /// A complex prvalue's parts (clang binds `EmitAnyExpr`'s
+    /// `RValue::getComplex`).
+    Cx(V, V),
 }
 
 /// The callee of [`Cg::call_vals_to`] (clang `CGCallee`).
@@ -432,6 +435,9 @@ impl Cg<'_> {
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Rv(v)) => return Ok(v),
                 Some(Opaque::Lv(lv)) => self.load_lv(lv),
+                Some(Opaque::Cx(..)) => {
+                    unreachable!("a complex opaque value is read by emit_cx, never as a scalar")
+                }
                 None => return err(self.loc_of(e), "unbound OpaqueValueExpr"),
             },
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => return self.emit_call(e, None),
@@ -1196,6 +1202,12 @@ impl Cg<'_> {
             | CastKind::IntegralComplexToBoolean => {
                 self.emit_complex_to_scalar_cast(e, ck, q, sq, s)?
             }
+            // Never a scalar cast (WP-1739): `Dependent` only in a
+            // template pattern; `ToUnion` is never built (sema's
+            // `c_union_cast` makes `(union U)x` a `NoOp` of the union's
+            // initializer list); the rest have a complex type, emitted by
+            // `emit_cx` (every caller dispatches on the evaluation kind,
+            // clang `getEvaluationKind`).
             k @ (CastKind::Dependent
             | CastKind::ToUnion
             | CastKind::IntegralRealToComplex
@@ -1204,8 +1216,7 @@ impl Cg<'_> {
             | CastKind::FloatingComplexCast
             | CastKind::IntegralComplexToFloatingComplex
             | CastKind::FloatingComplexToIntegralComplex) => {
-                // kiln-gap: GAP-063
-                return err(self.loc_of(e), format!("cast {k:?} is not supported yet"));
+                unreachable!("scalar cast {k:?}: dependent, never built or complex (WP-1739)")
             }
         }))
     }
@@ -1490,10 +1501,9 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 Ok(V::C(self.m.const_zero(t)))
             }
-            op @ UnaryOp::Coawait => {
-                // kiln-gap: GAP-064
-                err(self.loc_of(e), format!("unary {op:?} is not supported yet"))
-            }
+            // A `co_await` is a `CoawaitExpr`: sema never builds a
+            // built-in unary `co_await` (`build_unary`'s `unreachable!`).
+            UnaryOp::Coawait => unreachable!("built-in unary co_await (WP-1739)"),
         }
     }
 
@@ -1880,8 +1890,12 @@ impl Cg<'_> {
             | BinaryOp::XorAssign
             | BinaryOp::OrAssign
             | BinaryOp::Comma) => {
-                // kiln-gap: GAP-065
-                return err(self.loc_of(e), format!("binary {op:?} is not supported yet"));
+                // Not an arithmetic operator (WP-1739): `emit_binary`
+                // lowers assignment, comma, `&&`/`||` and `.*`/`->*`
+                // itself, a compound assignment passes its operator's
+                // arithmetic one, and `<=>` has a comparison category
+                // class type (`agg_three_way`).
+                unreachable!("arith of binary {op:?} (WP-1739)")
             }
         })
     }
@@ -2191,16 +2205,26 @@ impl Cg<'_> {
     /// clang `OpaqueValueMapping` for a `BinaryConditionalOperator`:
     /// evaluates the common expression once and binds it; returns the
     /// operands `[common, cond, then, else]`.
-    fn bind_common(&mut self, e: ExprId) -> R<[ExprId; 4]> {
+    pub(crate) fn bind_common(&mut self, e: ExprId) -> R<[ExprId; 4]> {
         let ast = self.ast;
         let ops = ast.exprs.binary_conditional_operands(e, &ast.lists);
-        let v = if self.is_glvalue(ops[0]) {
-            Opaque::Lv(self.emit_lvalue(ops[0])?)
-        } else {
-            Opaque::Rv(self.emit_scalar_opt(ops[0])?)
-        };
+        let v = self.bind_opaque_source(ops[0])?;
         self.f.opaque.insert(ops[0], v);
         Ok(ops)
+    }
+
+    /// clang `OpaqueValueMappingData::bind`: a glvalue source binds its
+    /// lvalue, a complex prvalue its parts, any other prvalue its scalar
+    /// value.
+    fn bind_opaque_source(&mut self, src: ExprId) -> R<Opaque> {
+        Ok(if self.is_glvalue(src) {
+            Opaque::Lv(self.emit_lvalue(src)?)
+        } else if self.is_complex(self.ast.exprs.get(src).ty()) {
+            let (r, i) = self.emit_complex(src)?;
+            Opaque::Cx(r, i)
+        } else {
+            Opaque::Rv(self.emit_scalar_opt(src)?)
+        })
     }
 
     /// clang `emitPseudoObjectExpr`: evaluates the semantic expressions
@@ -2217,11 +2241,7 @@ impl Cg<'_> {
             }
             match ast.exprs.opaque_source(s) {
                 Some(src) if ast.exprs.get(s).kind() == ExprKind::OpaqueValueExpr => {
-                    let v = if self.is_glvalue(src) {
-                        Opaque::Lv(self.emit_lvalue(src)?)
-                    } else {
-                        Opaque::Rv(self.emit_scalar_opt(src)?)
-                    };
+                    let v = self.bind_opaque_source(src)?;
                     self.f.opaque.insert(src, v);
                 }
                 _ => self.emit_ignored(s)?,
@@ -2681,8 +2701,14 @@ impl Cg<'_> {
             | DeclKind::StaticAssert
             | DeclKind::Label
             | DeclKind::ConstevalBlock) => {
-                // kiln-gap: GAP-066
-                err(self.loc_of(e), format!("reference to {k:?} is not supported yet"))
+                // A `DeclRefExpr` names a value (WP-1739): a variable
+                // (a variable template specialization is a `Var` with a
+                // template link), parameter, function, binding, template
+                // parameter object or contract result. An enumerator's
+                // is a prvalue (`emit_scalar`); a non-static member's
+                // forms a member pointer (`mp_addr_of`) or is unevaluated;
+                // the other kinds are not values, or never built.
+                unreachable!("lvalue of a reference to a {k:?} (WP-1739)")
             }
         }
     }
@@ -3049,8 +3075,14 @@ impl Cg<'_> {
             | ExprKind::CXXExpansionSelectExpr
             | ExprKind::GenericSelectionExpr
             | ExprKind::IntegerPackExpr) => {
-                // kiln-gap: GAP-067
-                err(self.loc_of(e), format!("lvalue {k:?} is not supported yet"))
+                // Never a glvalue, nor a prvalue the emitters ask an
+                // address of (WP-1739): a class or array prvalue operand
+                // is a `MaterializeTemporaryExpr` (C++) or reaches
+                // `temporary_lvalue`/the aggregate emitter (C member access
+                // of a call, `?:`, `,`, `va_arg`, atomic or statement
+                // expression result); dependent kinds and `RecoveryExpr`
+                // never reach codegen.
+                unreachable!("lvalue of a {k:?} (WP-1739)")
             }
         }
     }
@@ -3130,8 +3162,10 @@ impl Cg<'_> {
             | UnaryOp::Not
             | UnaryOp::LNot
             | UnaryOp::Coawait) => {
-                // kiln-gap: GAP-068
-                err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet"))
+                // Prvalues ([expr.unary.op], [expr.post.incr]): never
+                // asked for an address; sema never builds a built-in
+                // unary `co_await` (WP-1739).
+                unreachable!("lvalue of unary {op:?} (WP-1739)")
             }
         }
     }
@@ -3175,7 +3209,10 @@ impl Cg<'_> {
                     self.atomic_agg_store(t, lv);
                     return Ok(LV { addr: t, q, bf: None, vidx: None, sel: None, tb: Tb::Type });
                 }
-                if self.is_complex(q) {
+                // An `_Atomic` complex left side is stored whole by
+                // `cx_store` (clang `getEvaluationKind` sees through
+                // `_Atomic`).
+                if self.is_complex(q) || self.is_atomic_complex(q) {
                     return Ok(self.cx_assign(e)?.0);
                 }
                 let (v, prev) = self.ub_bf_rhs(l, r)?;
@@ -3221,8 +3258,9 @@ impl Cg<'_> {
             | BinaryOp::AndAssign
             | BinaryOp::XorAssign
             | BinaryOp::OrAssign) => {
-                // kiln-gap: GAP-069
-                err(self.loc_of(e), format!("lvalue binary {op:?} is not supported yet"))
+                // Prvalues ([expr.mul] .. [expr.log.or]); a compound
+                // assignment is a `CompoundAssignOperator` (WP-1739).
+                unreachable!("lvalue of binary {op:?} (WP-1739)")
             }
         }
     }
@@ -3408,8 +3446,12 @@ impl Cg<'_> {
             | CastKind::FloatingComplexToBoolean
             | CastKind::IntegralComplexToFloatingComplex
             | CastKind::FloatingComplexToIntegralComplex) => {
-                // kiln-gap: GAP-070
-                err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet"))
+                // Prvalue casts (WP-1739): a class or array result is
+                // materialized or emitted by `agg_visit` (the atomic
+                // casts by `agg_atomic_cast`), never asked for an address
+                // here; `ToUnion` is never built, `Dependent` only in a
+                // template pattern.
+                unreachable!("lvalue of cast {k:?} (WP-1739)")
             }
         }
     }
@@ -4729,7 +4771,6 @@ impl Cg<'_> {
         // The direct callee whose class B call-site attributes apply
         // (set by `alloc_call_attrs`, WP-813).
         let callee_decl = self.f.call_decl.take();
-        self.check_pure_scalable(sig, self.f.call_loc)?;
         let rq = sig.ret;
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
@@ -4780,6 +4821,10 @@ impl Cg<'_> {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();
                 self.ir(&c)
+            }
+            ArgKind::CoerceAndExpand { parts, .. } => {
+                let t = Cg::expand_ret_type(parts);
+                self.ir(&t)
             }
             _ => LTy::VOID,
         };
@@ -4867,6 +4912,21 @@ impl Cg<'_> {
                 None => (self.temp(rq), size),
             };
             let kind = sig.info.ret.kind.clone();
+            if let ArgKind::CoerceAndExpand { coerce, parts } = &kind {
+                // clang `EmitCall`, `CoerceAndExpand`: each part of the
+                // result stored as is (still scalable) at its element.
+                for (i, e) in self.expand_elems(d, coerce).iter().enumerate() {
+                    let e = self.expand_gep(e);
+                    let v = if parts.len() > 1 {
+                        let pt = self.ir(&parts[i]);
+                        self.f.fir.push(Op::ExtractValue { agg: r, idx: i as u32 }, pt)
+                    } else {
+                        r
+                    };
+                    self.store(v, e.v, e.align, false);
+                }
+                return Ok(None);
+            }
             let (coerce, offset) = match &kind {
                 ArgKind::Direct { coerce, offset, .. } => (coerce.clone(), *offset),
                 ArgKind::Extend { coerce, .. } => (coerce.clone(), 0),
@@ -5324,6 +5384,24 @@ impl Cg<'_> {
                 self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
+            // clang `AggExprEmitter::VisitBinAssign` and
+            // `VisitPointerToDataMemberBinaryOperator`: the left side's
+            // lvalue (after the assignment), copied into the destination
+            // (`EmitFinalDestCopy`), as for a C struct assignment used as
+            // a conditional operand, `c ? (s = t) : u` (C 6.5.16/3: its
+            // value is the left operand's after the assignment).
+            ExprKind::BinaryOperator
+                if matches!(
+                    ast.exprs.binary_op(e),
+                    BinaryOp::Assign | BinaryOp::PtrMemD | BinaryOp::PtrMemI
+                ) =>
+            {
+                let lv = self.emit_lvalue(e)?;
+                let size = self.size_align(q).0;
+                let vol = self.is_volatile(lv.q);
+                self.agg_copy(q, dest, lv.addr, size, vol);
+                Ok(())
+            }
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Comma => {
                 let [l, r] = ast.exprs.operands(e);
                 self.emit_ignored(l)?;
@@ -5470,8 +5548,14 @@ impl Cg<'_> {
             | ExprKind::CXXExpansionSelectExpr
             | ExprKind::GenericSelectionExpr
             | ExprKind::IntegerPackExpr) => {
-                // kiln-gap: GAP-071
-                err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet"))
+                // Never of class, array or atomic aggregate type here
+                // (WP-1739): scalar, pointer or `void` kinds, casts and
+                // binary operators other than the arms above (assignment,
+                // `.*`/`->*`, `,`, `<=>`), an `OpaqueValueExpr` (a
+                // glvalue, bound by `bind_common`/`bind_pseudo`), and
+                // dependent kinds or `RecoveryExpr`, which never reach
+                // codegen.
+                unreachable!("aggregate {k:?} (WP-1739)")
             }
         }
     }
@@ -5912,11 +5996,7 @@ impl Cg<'_> {
         let [ove, sub] = ast.exprs.array_init_loop(e);
         let src = ast.exprs.opaque_source(ove);
         if let Some(src) = src {
-            let v = if self.is_glvalue(src) {
-                Opaque::Lv(self.emit_lvalue(src)?)
-            } else {
-                Opaque::Rv(self.emit_scalar_opt(src)?)
-            };
+            let v = self.bind_opaque_source(src)?;
             self.f.opaque.insert(src, v);
         }
         let n = ast.types.array_size(q).unwrap_or(0);

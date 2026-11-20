@@ -451,11 +451,13 @@ impl Sema<'_, '_> {
             }
         }
         if !self.is_dependent_type(ty) {
-            // [expr.prim.id.qual]/1: the class must be complete.
+            // [expr.prim.id.qual]/1: the class must be complete; an
+            // alias template specialization may name an enumeration.
             if !self.require_complete_nns(ty, loc) {
                 return None;
             }
-            let r = self.ast.types.as_record(ty)?;
+            let t = &self.ast.types;
+            let r = t.as_record(ty).or_else(|| t.as_enum(ty))?;
             return Some((self.ast.definition(r).unwrap_or(r), n));
         }
         // `template<class T> void P<T*>::f()`: a declarator qualifier

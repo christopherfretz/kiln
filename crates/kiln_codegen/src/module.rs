@@ -2398,46 +2398,6 @@ impl<'a> Cg<'a> {
 
     // ---- signatures ----------------------------------------------------
 
-    /// WP-810: clang 20+ passes and returns an AAPCS64 pure scalable type
-    /// (an aggregate of `arm_sve_vector_bits` vectors and predicates)
-    /// expanded in SVE registers; kiln does not lower that convention yet,
-    /// so a by-value one in `sig` is a hard error rather than a silently
-    /// different ABI. clang 19 lowers it as any other aggregate. The same
-    /// holds for an SVE tuple type, which clang 19 passes as one wide
-    /// scalable vector.
-    pub(crate) fn check_pure_scalable(&mut self, sig: &Sig, loc: Option<Loc>) -> R<()> {
-        if self.target.triple.arch != Arch::AArch64 || self.opts.clang_compat < 20 {
-            return Ok(());
-        }
-        for q in std::iter::once(sig.ret).chain(sig.params.iter().copied()) {
-            // clang 20+ also lowers an SVE tuple (`svint8x2_t`) as a struct
-            // of vectors, where clang 19 used one wide scalable vector.
-            if self.ast.types.builtin(q).is_some_and(BuiltinType::is_sve_tuple) {
-                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
-                return err(
-                    loc,
-                    format!(
-                        // kiln-gap: GAP-061
-                        "passing or returning '{t}' by value is not supported yet: it is an \
-                         SVE tuple type, which clang 20 and later pass as a struct of vectors"
-                    ),
-                );
-            }
-            if kiln_abi::call::is_pure_scalable(&mut self.tys, q) {
-                let t = print_type(&self.ast.types, self.ast, q, PrintOptions::SUGARED);
-                return err(
-                    loc,
-                    format!(
-                        // kiln-gap: GAP-061
-                        "passing or returning '{t}' by value is not supported yet: it is an \
-                         AAPCS64 pure scalable type (an aggregate of fixed-length SVE types)"
-                    ),
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// The lowered signature of function type `fty`.
     pub fn sig(&mut self, fty: QualType, extern_c: bool) -> Sig {
         self.sig_this(fty, extern_c, None)
@@ -2633,6 +2593,10 @@ impl<'a> Cg<'a> {
                 LTy::VOID
             }
             ArgKind::Ignore => LTy::VOID,
+            ArgKind::CoerceAndExpand { parts, .. } => {
+                let t = Self::expand_ret_type(parts);
+                self.ir(&t)
+            }
         };
         if this {
             ps.push(LTy::PTR);
@@ -2651,9 +2615,24 @@ impl<'a> Cg<'a> {
                 }
                 ArgKind::Indirect { .. } => ps.push(LTy::PTR),
                 ArgKind::Ignore => {}
+                ArgKind::CoerceAndExpand { parts, .. } => {
+                    for p in parts {
+                        let t = self.ir(p);
+                        ps.push(t);
+                    }
+                }
             }
         }
         self.m.types.function(rt, &ps, variadic)
+    }
+
+    /// clang `getUnpaddedCoerceAndExpandType`: a pure scalable type is
+    /// returned as its one part or a packed literal struct of its parts.
+    pub(crate) fn expand_ret_type(parts: &[IrType]) -> IrType {
+        match parts {
+            [p] => p.clone(),
+            _ => IrType::Struct(parts.to_vec(), true),
+        }
     }
 
     /// The return and parameter attributes of `sig` (`ConstructAttributeList`).
@@ -2690,7 +2669,7 @@ impl<'a> Cg<'a> {
                 self.ref_attrs(sig.ret, &mut ret);
                 ret.extend(self.no_fp_class(sig.ret, coerce, false));
             }
-            ArgKind::Ignore => {}
+            ArgKind::Ignore | ArgKind::CoerceAndExpand { .. } => {}
         }
         if let Some(t) = sig.this {
             // ConstructAttributeList: `nonnull dereferenceable(N) align A`
@@ -2746,6 +2725,11 @@ impl<'a> Cg<'a> {
                 k @ ArgKind::Direct { flatten: true, .. } if self.flat_fields(k).is_some() => {
                     let n = self.flat_fields(k).map_or(1, |f| f.0.len());
                     for _ in 1..n {
+                        params.push(self.m.attr_set(&s));
+                    }
+                }
+                ArgKind::CoerceAndExpand { parts, .. } => {
+                    for _ in 1..parts.len() {
                         params.push(self.m.attr_set(&s));
                     }
                 }

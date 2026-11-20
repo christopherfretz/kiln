@@ -83,6 +83,9 @@ pub(crate) enum RetKind {
     /// Coerced from the `retval` memory to the given type.
     Coerced,
     Sret,
+    /// An AAPCS64 pure scalable type: each part loaded from the `retval`
+    /// memory (`ArgKind::CoerceAndExpand`).
+    Expand,
 }
 
 /// Per-function state.
@@ -576,7 +579,6 @@ impl Cg<'_> {
         if thunk.is_none() {
             self.ub_ret_nonnull_start(d);
         }
-        self.check_pure_scalable(&sig, Some(ast.decls.get(d).loc()))?;
         let mut arg_no = 0u32;
         match &sig.info.ret.kind {
             ArgKind::Ignore => {
@@ -615,6 +617,13 @@ impl Cg<'_> {
                     self.f.ret_kind = RetKind::Coerced;
                     self.f.ret_coerce = Some(coerce.clone());
                 }
+            }
+            ArgKind::CoerceAndExpand { .. } => {
+                let vt = self.lty(sig.ret);
+                let (_, align) = self.size_align(sig.ret);
+                let slot = self.f.fir.alloca(vt, align);
+                self.f.ret_slot = Some(Addr { v: slot, ty: vt, align });
+                self.f.ret_kind = RetKind::Expand;
             }
         }
         if is_main && let Some(slot) = self.f.ret_slot {
@@ -1244,6 +1253,31 @@ impl Cg<'_> {
                 };
                 Some(self.coerced_load(slot, &ct))
             }
+            RetKind::Expand => {
+                // clang `EmitFunctionEpilog`, `CoerceAndExpand`: each part
+                // loaded, one returned as is, several as a packed struct.
+                let slot = self.f.ret_slot.expect("retval");
+                let Some(ArgKind::CoerceAndExpand { coerce, parts }) =
+                    self.f.sig.as_ref().map(|g| g.info.ret.kind.clone())
+                else {
+                    unreachable!("RetKind::Expand without its ABI kind (WP-1739)")
+                };
+                let mut vals = Vec::with_capacity(parts.len());
+                for (e, p) in self.expand_elems(slot, &coerce).iter().zip(&parts) {
+                    let a = self.expand_gep(e);
+                    vals.push(self.coerced_load(a, p));
+                }
+                if let [v] = vals[..] {
+                    Some(v)
+                } else {
+                    let rt = self.ir(&Cg::expand_ret_type(&parts));
+                    let mut r = V::C(self.m.const_poison(rt));
+                    for (i, v) in vals.into_iter().enumerate() {
+                        r = self.f.fir.push(Op::InsertValue { agg: r, val: v, idx: i as u32 }, rt);
+                    }
+                    Some(r)
+                }
+            }
         };
         if let Some(v) = rv {
             self.ub_ret_nonnull_check(v)?;
@@ -1612,6 +1646,21 @@ impl Cg<'_> {
                     unreachable!("an ignored parameter of scalar type {pq:?} (WP-1739)")
                 }
             }
+            ArgKind::CoerceAndExpand { coerce, .. } => {
+                // clang `EmitFunctionProlog`, `CoerceAndExpand`: each part
+                // stored into the class's memory, a fixed-length vector
+                // extracted from its scalable register type.
+                let align = self.global_align(pq);
+                let alloca = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
+                for e in self.expand_elems(alloca, coerce) {
+                    let e = self.expand_gep(&e);
+                    let v = V::Arg(*arg_no);
+                    *arg_no += 1;
+                    let v = self.sve_to_fixed(v, e.ty).unwrap_or(v);
+                    self.store(v, e.v, e.align, false);
+                }
+                Ok(ParamVal::Indirect(alloca, false))
+            }
             ArgKind::Indirect { byval, align } => {
                 let addr = Addr { v: V::Arg(*arg_no), ty: mt, align: *align };
                 *arg_no += 1;
@@ -1657,6 +1706,20 @@ impl Cg<'_> {
                 }
                 let flat = self.flat_fields(kind);
                 match flat {
+                    // clang `EmitFunctionProlog`: an SVE tuple's vectors
+                    // are gathered into the struct and stored whole.
+                    Some((fs, _)) if fs.len() > 1 && is_scalable_struct(coerce) => {
+                        let mut v = V::C(self.m.const_poison(ct));
+                        for j in 0..fs.len() {
+                            let a = V::Arg(*arg_no);
+                            *arg_no += 1;
+                            v = self
+                                .f
+                                .fir
+                                .push(Op::InsertValue { agg: v, val: a, idx: j as u32 }, ct);
+                        }
+                        self.store(v, alloca.v, alloca.align, false);
+                    }
                     // clang `EmitFunctionProlog`: flattened stores only
                     // for a struct of more than one element; one element
                     // is a coerced store of that element.
@@ -1751,6 +1814,29 @@ impl Cg<'_> {
                 }
                 Ok(())
             }
+            ArgKind::CoerceAndExpand { coerce, parts } => {
+                // clang `EmitCall`, `CoerceAndExpand`: each part loaded
+                // from the class's memory into its scalable type.
+                let src = match arg {
+                    CallArg::Agg(a) => a,
+                    CallArg::Scalar(v) => {
+                        let t = self.temp(q);
+                        self.store_scalar(v, t, q);
+                        t
+                    }
+                    CallArg::Complex(re, im) => {
+                        let t = self.temp(q);
+                        self.cx_store((re, im), t, q);
+                        t
+                    }
+                };
+                for (e, p) in self.expand_elems(src, coerce).iter().zip(parts) {
+                    let e = self.expand_gep(e);
+                    let v = self.coerced_load(e, p);
+                    out.push(v);
+                }
+                Ok(())
+            }
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let offset = if let ArgKind::Direct { offset, .. } = kind { *offset } else { 0 };
                 let ct = self.ir(coerce);
@@ -1778,7 +1864,17 @@ impl Cg<'_> {
                     out.push(v);
                     return Ok(());
                 }
-                if let Some((fs, packed)) = self.flat_fields(kind) {
+                if let Some((fs, _)) = self.flat_fields(kind)
+                    && is_scalable_struct(coerce)
+                {
+                    // clang `EmitCall`: an SVE tuple is loaded whole and
+                    // split into its vectors.
+                    let v = self.load(ct, src.v, src.align, false);
+                    for (j, f) in fs.iter().enumerate() {
+                        let ft = self.ir(f);
+                        out.push(self.f.fir.push(Op::ExtractValue { agg: v, idx: j as u32 }, ft));
+                    }
+                } else if let Some((fs, packed)) = self.flat_fields(kind) {
                     let src_size = self.alloc_size(src.ty);
                     let dst_size = self.alloc_size(ct);
                     let from = if src_size < dst_size {
@@ -1807,6 +1903,35 @@ impl Cg<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// The elements of `a` viewed as the `CoerceAndExpand` struct `coerce`
+    /// that are no padding, each to be addressed with [`Cg::expand_gep`]
+    /// right before its use (clang `CreateStructGEP`).
+    pub(crate) fn expand_elems(&mut self, a: Addr, coerce: &[IrType]) -> Vec<ExpandElem> {
+        let st = self.ir(&IrType::Struct(coerce.to_vec(), false));
+        let offs = self.struct_field_offsets(st);
+        let mut out = Vec::with_capacity(coerce.len());
+        for (i, e) in coerce.iter().enumerate() {
+            if ArgKind::is_expand_padding(e) {
+                continue;
+            }
+            let ty = self.ir(e);
+            out.push(ExpandElem {
+                st,
+                base: a.v,
+                idx: i as u32,
+                ty,
+                align: min_align(a.align, offs[i]),
+            });
+        }
+        out
+    }
+
+    /// The address of one `CoerceAndExpand` element.
+    pub(crate) fn expand_gep(&mut self, e: &ExpandElem) -> Addr {
+        let v = self.struct_gep(e.st, e.base, e.idx);
+        Addr { v, ty: e.ty, align: e.align }
     }
 
     /// clang `emitAddressAtOffset`: where a `Direct` value at a nonzero
@@ -3102,4 +3227,19 @@ fn float_kind(ty: LTy) -> Option<FloatKind> {
         LTy::X86_FP80 => FloatKind::X87Extended,
         _ => return None,
     })
+}
+
+/// One `CoerceAndExpand` element: index `idx` of struct `st` at `base`.
+pub(crate) struct ExpandElem {
+    st: LTy,
+    base: V,
+    idx: u32,
+    ty: LTy,
+    align: u64,
+}
+
+/// A literal struct of scalable vectors (an SVE tuple's IR type, clang
+/// `containsHomogeneousScalableVectorTypes`).
+fn is_scalable_struct(t: &IrType) -> bool {
+    matches!(t, IrType::Struct(fs, _) if fs.iter().all(|f| matches!(f, IrType::ScalableVector(..))))
 }

@@ -5240,7 +5240,10 @@ impl Sema<'_, '_> {
     fn arith_conditional(&mut self, o: CondOps) -> Option<ExprId> {
         let CondOps { c2, t, f, loc, .. } = o;
         let (tt, ft) = (self.ety(t), self.ety(f));
+        // An `_Atomic` arm is read as its value type (clang
+        // `UsualUnaryConversions`: `b ? ai : 1`).
         let arith = |s: &Self, q: QualType| {
+            let q = s.ast.types.as_atomic(q).unwrap_or(q);
             s.ast.types.is_arithmetic(q)
                 || s.ast.types.as_enum(q).is_some()
                 || s.ast.types.as_complex(q).is_some()

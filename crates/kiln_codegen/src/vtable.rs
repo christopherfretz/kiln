@@ -1711,6 +1711,10 @@ impl Cg<'_> {
                 let c = coerce.clone();
                 self.ir(&c)
             }
+            ArgKind::CoerceAndExpand { parts, .. } => {
+                let t = Cg::expand_ret_type(parts);
+                self.ir(&t)
+            }
             _ => LTy::VOID,
         };
         let (ret, pattrs) = self.sig_attrs(&sig, params.len(), false);

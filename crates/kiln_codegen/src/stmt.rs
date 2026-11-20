@@ -490,10 +490,9 @@ impl Cg<'_> {
             StmtKind::CoroutineBodyStmt => self.emit_coroutine_body(s),
             // [stmt.contract.assert] (spec/contracts.md §6.3).
             StmtKind::ContractAssertStmt => self.emit_contract_check(s),
-            k @ StmtKind::CXXCatchStmt => {
-                // kiln-gap: GAP-073
-                err(Some(n.loc()), format!("statement {k:?} is not supported yet"))
-            }
+            // A handler is only a `CXXTryStmt`'s, emitted by
+            // `exit_try_stmt` (its compound statement), never alone.
+            StmtKind::CXXCatchStmt => unreachable!("a handler outside its try-block (WP-1739)"),
         }
     }
 

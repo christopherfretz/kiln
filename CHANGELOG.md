@@ -72,6 +72,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `_BitInt` and `_Atomic` types; the caller-side postcondition check of
   a function returning an `_Atomic` class type; an under-aligned `byval`
   argument (copied to an aligned temporary).
+- More code generation paths that reported "not supported yet"
+  (WP-1739): the GNU `x ?: y` operator on `_Complex` operands, `_Atomic
+  _Complex` objects (loaded and stored whole and atomically, also through
+  the `__c11_atomic_*` builtins), a `co_await` or `co_yield` whose result
+  is `_Complex`, a `_Complex` conditional with a throw-expression arm (as
+  GCC accepts it), and a C structure assignment used as an arm of `?:`.
+  The remaining exhaustive arms of the code generation visitors name the
+  invariant that keeps them unreachable.
+- AAPCS64 pure scalable types (classes and arrays of
+  `arm_sve_vector_bits` vectors and predicates) and SVE tuple types
+  (`svint8x2_t`) can be passed and returned by value at
+  `-fclang-compat=20` and later, in SVE registers as clang 20+ does (by
+  reference once the registers run out or for a variadic argument);
+  kiln reported "passing or returning 'T' by value is not supported yet"
+  (WP-1739).
 - `-verify`, the record-layout, vtable-layout and CFG dumps work with
   every action (WP-1745): a codegen job checks its diagnostics and
   writes its output only without errors, and prints the dumps before its
@@ -94,11 +109,6 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   that performs a reinterpret_cast is reported as clang does, and an
   `std::initializer_list` of another layout is an error ("layout not
   recognized"; the PCH format is now 78).
-
-### Fixed
-
-- Value-dependent conditions in a template definition are no longer
-  constant-evaluated (WP-1741).
 - Constant evaluation of a `_BitInt` wider than 128 bits as a subscript,
   a pointer offset (`p + s`, `p += s`), the shift count of a narrow left
   operand (`1 << s`, `x <<= s`) and the operand of an integral to pointer
@@ -107,6 +117,8 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Value-dependent conditions in a template definition are no longer
+  constant-evaluated (WP-1741).
 - A pointer to a bit-field member (`&C::b`) is an error, "address of
   bit-field requested", as clang (WP-1742).
 - In a constant expression, `p += s` and `p -= s` with a pointer `p` and a
@@ -118,6 +130,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   reduction or an operator on a vector of `_BitInt` lanes wider than 128
   bits no longer crashes the compiler: it fails with the note that such
   a `_BitInt` is not supported yet (WP-1742).
+- A conditional operator with an `_Atomic` arithmetic operand (`b ? ai :
+  1`) is accepted in C and C++; kiln reported "incompatible operand types
+  ('int' and 'int')" (WP-1739).
+- In C, the first operand of GNU `x ?: y` is converted to a value before
+  it is shared, as clang does, so a volatile operand is read once
+  (WP-1739).
+- An alias template specialization naming an enumeration may qualify a
+  name (`EA<int>::e`, [expr.prim.id.qual]/1); kiln left the expression
+  erroneous without a diagnostic (WP-1739).
 - Explicit instantiations and specializations that reported "not yet
   implemented" (WP-1740): `template struct S;` naming a class that is no
   member class of a class template specialization is "explicit

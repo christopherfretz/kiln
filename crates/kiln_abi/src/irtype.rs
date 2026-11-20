@@ -354,6 +354,13 @@ impl<'a> IrTypes<'a> {
             // reflection, a null pointer (spec/codegen.md "Run-time
             // reflections"; P4101R1).
             BuiltinType::NullPtr | BuiltinType::MetaInfo => IrType::Ptr,
+            // clang 20+ makes an SVE tuple a struct of its vectors (an
+            // AAPCS64 pure scalable type, passed in consecutive registers;
+            // WP-1739); clang 19 one wide vector.
+            b if b.is_sizeless() && self.clang_compat() >= 20 => match b.sve_tuple_parts() {
+                Some((v, nf)) => IrType::Struct(vec![sve_type(v); nf as usize], false),
+                None => sve_type(b),
+            },
             b if b.is_sizeless() => sve_type(b),
             // A placeholder with no size (an error or dependent type, which
             // only an undiagnosed instantiation failure lets reach codegen)
@@ -1291,7 +1298,7 @@ pub fn record_kind_prefix(ast: &Ast, d: DeclId) -> &'static str {
 
 /// The LLVM type of the SVE builtin `b` (clang
 /// `CodeGenTypes::ConvertType` with `AArch64SVEACLETypes.def`).
-fn sve_type(b: BuiltinType) -> IrType {
+pub(crate) fn sve_type(b: BuiltinType) -> IrType {
     use BuiltinType as B;
     // A tuple is clang 19's wide vector of its parts (`svint8x2_t` is
     // `<vscale x 32 x i8>`; clang 20 makes it a struct, WP-810).

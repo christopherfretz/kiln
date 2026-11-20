@@ -68,6 +68,8 @@ pub(crate) enum Want {
     Scalar,
     Lvalue,
     Agg(Addr, bool),
+    /// A complex prvalue (clang `ComplexExprEmitter::VisitCoawaitExpr`).
+    Complex,
 }
 
 /// The value of a `co_await`/`co_yield` (clang `LValueOrRValue`).
@@ -75,6 +77,7 @@ pub(crate) enum Got {
     None,
     Scalar(Option<V>),
     Lv(LV),
+    Cx(V, V),
 }
 
 /// The parameter allocas of a coroutine kept out of its frame
@@ -581,6 +584,10 @@ impl Cg<'_> {
             Want::Agg(dest, zeroed) => {
                 self.emit_agg(p.resume, dest, zeroed)?;
                 Got::None
+            }
+            Want::Complex => {
+                let (r, i) = self.emit_complex(p.resume)?;
+                Got::Cx(r, i)
             }
         })
     }
