@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-55 gaps at 131 sites; 10 of 56,766 g++.dg cases hit one at the
+42 gaps at 79 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -73,7 +73,7 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| Oven trap | 20 | 90 | 0 |
+| Oven trap | 7 | 38 | 0 |
 | codegen fallback | 18 | 19 | 0 |
 | drv_not_implemented | 2 | 2 | 0 |
 | parse_unsupported | 6 | 6 | 0 |
@@ -91,7 +91,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 |---|---|---|---|---|
 | codegen fallbacks | 18 (GAP-061..GAP-078) | 19 | 0 | WP-1739 |
 | NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
-| Oven traps: expressions | 15 (GAP-110..GAP-124) | 55 | 0 | WP-1741 |
+| Oven traps: expressions | 2 (GAP-114..GAP-115) | 3 | 0 | WP-1741 |
 | Oven traps: types | 5 (GAP-125..GAP-129) | 35 | 0 | WP-1742 |
 | reflection | 5 (GAP-130..GAP-134) | 5 | 0 | WP-1743 |
 | preprocessor/modules | 9 (GAP-135..GAP-143) | 11 | 0 | WP-1744 |
@@ -120,21 +120,8 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-077 | codegen fallback | codegen fallbacks | `complex unary {op} is not supported yet` ({op}: the 6 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_unary` | 0 | WP-1739 |
 | GAP-078 | codegen fallback | codegen fallbacks | `complex binary {op} is not supported yet` ({op}: the 27 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_binary` | 0 | WP-1739 |
 | GAP-097 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: the 25 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
-| GAP-110 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the expression's kind, where an operand form, operator or type of an rvalue is not handled) | `crates/kiln_oven/src/compile.rs::arith`, `crates/kiln_oven/src/compile.rs::binary_node`, `crates/kiln_oven/src/compile.rs::convert`, `crates/kiln_oven/src/compile.rs::effect`, `crates/kiln_oven/src/compile.rs::rv_inner` ×6, `crates/kiln_oven/src/compile.rs::three_way` ×3, `crates/kiln_oven/src/compile.rs::trait_expr`, `crates/kiln_oven/src/compile.rs::unary` | 0 | WP-1741 |
-| GAP-111 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the kind of an lvalue (or assignment target) form not handled) | `crates/kiln_oven/src/compile.rs::compound_assign`, `crates/kiln_oven/src/compile.rs::lv` ×6, `crates/kiln_oven/src/compile.rs::member` | 0 | WP-1741 |
-| GAP-112 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the initializer's kind, for an aggregate or `std::initializer_list` form not handled (the type kinds of the arms in `init_aggr` and `std_initializer_list`)) | `crates/kiln_oven/src/compile.rs::init_aggr` ×3, `crates/kiln_oven/src/compile.rs::std_initializer_list` ×4 | 0 | WP-1741 |
-| GAP-113 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the kind of a class operation not handled (derived-to-base cast, member initializer, construction, inherited constructor, member call, array init loop)) | `crates/kiln_oven/src/compile/class.rs::array_init_loop`, `crates/kiln_oven/src/compile/class.rs::class_cast`, `crates/kiln_oven/src/compile/class.rs::construct_obj`, `crates/kiln_oven/src/compile/class.rs::ctor_init` ×2, `crates/kiln_oven/src/compile/class.rs::inherited_ctor`, `crates/kiln_oven/src/compile/class.rs::member_call` | 0 | WP-1741 |
-| GAP-114 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: a `new`/`delete` form not handled) | `crates/kiln_oven/src/compile/new_delete.rs::delete_expr` ×3, `crates/kiln_oven/src/compile/new_delete.rs::new_expr` ×3 | 0 | WP-1741 |
-| GAP-115 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: a builtin call form not handled) | `crates/kiln_oven/src/compile/builtins.rs::builtin_call` ×2 | 0 | WP-1741 |
-| GAP-116 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `SourceLocExpr` of a form not handled) | `crates/kiln_oven/src/compile.rs::source_loc` ×2 | 0 | WP-1741 |
-| GAP-117 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the 49 kinds of the arm, under Enumerated kinds) | `crates/kiln_oven/src/compile.rs::rv_inner` | 0 | WP-1741 |
-| GAP-118 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the 12 kinds of the arm, under Enumerated kinds) | `crates/kiln_oven/src/compile.rs::cast` | 0 | WP-1741 |
-| GAP-119 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the 95 kinds of the arm, under Enumerated kinds) | `crates/kiln_oven/src/compile.rs::init_inner` | 0 | WP-1741 |
-| GAP-120 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `CXXExpansionStmt`, `CXXCatchStmt` (as statements)) | `crates/kiln_oven/src/compile.rs::stmt` | 0 | WP-1741 |
-| GAP-121 | Oven trap | Oven traps: expressions | `kiln: a 'case' label outside its switch body is not supported yet` | `crates/kiln_oven/src/compile.rs::stmt` | 0 | WP-1741 |
-| GAP-122 | Oven trap | Oven traps: expressions | `kiln: a 'case' label in this statement is not supported yet` | `crates/kiln_oven/src/compile.rs::switch_stmt` | 0 | WP-1741 |
-| GAP-123 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `__builtin_bit_cast` of a form not handled) | `crates/kiln_oven/src/compile/bitcast.rs::bit_cast` | 0 | WP-1741 |
-| GAP-124 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: a `std::meta` call with more arguments than `MAX_META_ARGS`) | `crates/kiln_oven/src/compile.rs::meta_call` | 0 | WP-1741 |
+| GAP-114 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `CXXDeleteExpr` of a `void *` operand, which clang 22 destroys and frees by the allocation's dynamic type) | `crates/kiln_oven/src/compile/new_delete.rs::delete_expr` | 0 | WP-1741 |
+| GAP-115 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `__builtin_align_up`/`_down`/`__builtin_is_aligned` or an elementwise builtin on a `_BitInt` wider than 128 bits) | `crates/kiln_oven/src/compile/builtins.rs::builtin_call` ×2 | 0 | WP-1741 |
 | GAP-125 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a vector operation not handled) | `crates/kiln_oven/src/compile/vector.rs::ext_elt_regs` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_binary`, `crates/kiln_oven/src/compile/vector.rs::vec_compound_assign` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_elementwise`, `crates/kiln_oven/src/compile/vector.rs::vec_gcc_shuffle` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_init`, `crates/kiln_oven/src/compile/vector.rs::vec_reduce`, `crates/kiln_oven/src/compile/vector.rs::vec_regs` ×2, `crates/kiln_oven/src/compile/vector.rs::vec_shuffle` ×2 | 0 | WP-1742 |
 | GAP-126 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: an operation on a `_BitInt` wider than 128 bits not handled (`wide_to_scalar`: arm)) | `crates/kiln_oven/src/compile/wide.rs::wide_compare`, `crates/kiln_oven/src/compile/wide.rs::wide_compound_assign` ×3, `crates/kiln_oven/src/compile/wide.rs::wide_float_compound` ×2, `crates/kiln_oven/src/compile/wide.rs::wide_store`, `crates/kiln_oven/src/compile/wide.rs::wide_to_scalar` | 0 | WP-1742 |
 | GAP-127 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a complex operation not handled) | `crates/kiln_oven/src/compile/complex.rs::cx_cast`, `crates/kiln_oven/src/compile/complex.rs::cx_compare`, `crates/kiln_oven/src/compile/complex.rs::cx_compound_assign`, `crates/kiln_oven/src/compile/complex.rs::cx_inc_dec`, `crates/kiln_oven/src/compile/complex.rs::cx_init`, `crates/kiln_oven/src/compile/complex.rs::cx_regs` ×2 | 0 | WP-1742 |
@@ -252,15 +239,3 @@ builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
 ### GAP-097
 
 `IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `StringLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `GNUNullExpr`, `UnresolvedMemberExpr`, `ParenListExpr`, `InitListExpr`, `ImplicitValueInitExpr`, `DesignatedInitExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr`, `CXXDefaultInitExpr`, `CXXScalarValueInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `OpaqueValueExpr`, `PseudoObjectExpr` (ExprKind).
-
-### GAP-117
-
-`StringLiteral`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `MemberExpr`, `PredefinedExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `ArraySubscriptExpr`, `CallExpr`, `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `ParenListExpr`, `DesignatedInitExpr`, `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXParenListInitExpr`, `ArrayInitLoopExpr`, `CXXStdInitializerListExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `MaterializeTemporaryExpr`, `OpaqueValueExpr`, `CXXPseudoDestructorExpr`, `CXXTypeidExpr`, `SizeOfPackExpr`, `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr`, `ShuffleVectorExpr`, `ConvertVectorExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).
-
-### GAP-118
-
-`Dependent`, `LValueBitCast`, `BuiltinFnToFnPtr`, `BooleanToSignedIntegral`, `ToUnion`, `VectorSplat`, `IntegralRealToComplex`, `FloatingRealToComplex`, `IntegralComplexCast`, `FloatingComplexCast`, `IntegralComplexToFloatingComplex`, `FloatingComplexToIntegralComplex` (CastKind).
-
-### GAP-119
-
-`IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `GNUNullExpr`, `DeclRefExpr`, `MemberExpr`, `CXXThisExpr`, `PredefinedExpr`, `SourceLocExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `UnaryOperator`, `BinaryOperator`, `CompoundAssignOperator`, `ArraySubscriptExpr`, `ParenExpr`, `CallExpr`, `CXXMemberCallExpr`, `CXXOperatorCallExpr`, `CXXRewrittenBinaryOperator`, `ParenListExpr`, `ImplicitCastExpr`, `CStyleCastExpr`, `CXXFunctionalCastExpr`, `CXXStaticCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr`, `CXXDynamicCastExpr`, `BuiltinBitCastExpr`, `ImplicitValueInitExpr`, `DesignatedInitExpr`, `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr`, `CXXDefaultInitExpr`, `CXXScalarValueInitExpr`, `CXXParenListInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `CXXStdInitializerListExpr`, `CompoundLiteralExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `ExprWithCleanups`, `OpaqueValueExpr`, `CXXNewExpr`, `CXXDeleteExpr`, `CXXPseudoDestructorExpr`, `CXXThrowExpr`, `CXXNoexceptExpr`, `CXXTypeidExpr`, `UnaryExprOrTypeTraitExpr`, `TypeTraitExpr`, `ArrayTypeTraitExpr`, `ExpressionTraitExpr`, `OffsetOfExpr`, `SizeOfPackExpr`, `RequiresExpr`, `ConceptSpecializationExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr`, `ConstantExpr`, `AddrLabelExpr`, `ChooseExpr`, `VAArgExpr`, `AtomicExpr`, `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr`, `CXXReflectExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `PseudoObjectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).

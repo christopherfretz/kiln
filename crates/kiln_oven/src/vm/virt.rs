@@ -248,24 +248,44 @@ impl Oven {
     /// The index of class `cls`'s [`PolyInfo`] (computed on first use).
     pub(crate) fn poly_info(&mut self, b: &mut dyn SemaBridge, cls: OTy) -> u32 {
         let cls = self.types.class_of(cls);
-        if let Some(&i) = self.virt.map.get(&cls) {
-            return i;
-        }
-        let TyKind::Record { decl, .. } = self.types.kind(cls) else {
-            let i = self.virt.infos.len() as u32;
-            self.virt.infos.push(PolyInfo {
+        let stale = match self.virt.map.get(&cls).copied() {
+            Some(i) if self.virt.infos[i as usize].decl.is_some() => return i,
+            Some(i) if !matches!(self.types.kind(cls), TyKind::Record { .. }) => return i,
+            // A class met before it was complete got an empty entry: its
+            // slot has since been upgraded (`Types::intern`), or its
+            // definition completed: the entry is built now, in place.
+            Some(i) => Some(i),
+            None => None,
+        };
+        let empty = |o: &mut Self| {
+            let info = PolyInfo {
                 decl: None,
                 subs: Vec::new(),
                 vptrs: Vec::new(),
                 vvptrs: Vec::new(),
                 vbase_at: FxHashMap::default(),
                 at: FxHashSet::default(),
-            });
-            self.virt.map.insert(cls, i);
-            return i;
+            };
+            if let Some(i) = stale {
+                o.virt.infos[i as usize] = info;
+                return i;
+            }
+            let i = o.virt.infos.len() as u32;
+            o.virt.infos.push(info);
+            o.virt.map.insert(cls, i);
+            i
+        };
+        let TyKind::Record { decl, .. } = self.types.kind(cls) else {
+            return empty(self);
         };
         let first = b.ast().first(decl);
         let graph: Vec<kiln_ast::class::Subobject> = b.subobjects(first).to_vec();
+        if graph.is_empty() {
+            // A class evaluated within its own definition (sema computes
+            // the subobject graph once it is complete, `ensure_virtuals`):
+            // no subobject is reachable through a base path yet.
+            return empty(self);
+        }
         let mut subs: Vec<Sub> = Vec::with_capacity(graph.len());
         for (i, s) in graph.iter().enumerate() {
             let ast = b.ast();
@@ -333,9 +353,14 @@ impl Oven {
             }
         }
         let vbase_at = subs.iter().filter(|s| s.vbase).map(|s| (s.decl, s.off)).collect();
-        let i = self.virt.infos.len() as u32;
         let at = subs.iter().map(|s| (s.off, s.cls)).collect();
-        self.virt.infos.push(PolyInfo { decl: Some(first), subs, vptrs, vvptrs, vbase_at, at });
+        let info = PolyInfo { decl: Some(first), subs, vptrs, vvptrs, vbase_at, at };
+        if let Some(i) = stale {
+            self.virt.infos[i as usize] = info;
+            return i;
+        }
+        let i = self.virt.infos.len() as u32;
+        self.virt.infos.push(info);
         self.virt.map.insert(cls, i);
         i
     }

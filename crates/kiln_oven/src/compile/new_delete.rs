@@ -9,7 +9,7 @@
 //! the VM.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
+use kiln_ast::expr::{CastKind, ExprDeps, ExprFlags, ExprKind};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::ArgView;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
@@ -148,8 +148,14 @@ impl Compiler<'_> {
         let ast = self.ast();
         let x = *ast.exprs.new_extra(e);
         let Some(op_new) = x.operator_new else {
-            // kiln-gap: GAP-114
-            self.unsupported(e);
+            // Only a dependent new-expression has no allocation function
+            // (sema's `dependent_new`; [temp.res]): it is evaluated once
+            // instantiated.
+            assert!(
+                self.node(e).deps().intersects(ExprDeps::TYPE_VALUE_INST),
+                "sema looks up the allocation function of every non-dependent new-expression"
+            );
+            self.trap(e, "");
             return;
         };
         // clang 22's `VisitCXXNewExpr` order: `new (std::nothrow)`, the
@@ -247,6 +253,8 @@ impl Compiler<'_> {
             List { list: ExprId, k: u64, filler: Option<ExprId>, zero_rest: bool },
             /// Each element by a constructor call.
             Each(ExprId),
+            /// A string literal (of `k` elements) and zeros.
+            Str { s: ExprId, k: u64 },
         }
         let ai = match init.map(|i| (i, self.node(i).kind())) {
             None => ArrInit::None,
@@ -255,9 +263,9 @@ impl Compiler<'_> {
                 let ast = self.ast();
                 let lty = ast.exprs.get(i).ty();
                 let Some(k) = ast.types.array_size(lty) else {
-                    // kiln-gap: GAP-114
-                    self.unsupported(i);
-                    return;
+                    unreachable!(
+                        "sema types an array new-expression's list as an array of its element count ([expr.new]/22, [dcl.init.aggr]/4)"
+                    )
                 };
                 // `new T[n](a, b)` (P0960) carries its filler like a list.
                 let filler = if kind == ExprKind::InitListExpr {
@@ -269,14 +277,25 @@ impl Compiler<'_> {
                 ArrInit::List { list: i, k, filler, zero_rest }
             }
             Some((i, ExprKind::CXXConstructExpr)) => ArrInit::Each(i),
-            Some((i, _)) => {
-                // kiln-gap: GAP-114
-                self.unsupported(i);
-                return;
+            // `new char[n]{"ab"}` ([expr.new]/22, [dcl.init.string]/3):
+            // the string's elements, then zeros; a bound too small for
+            // it fails as for a list (clang `VisitCXXNewExpr`).
+            Some((i, _))
+                if self.node(skip_parens(self.ast(), i)).kind() == ExprKind::StringLiteral =>
+            {
+                let s = skip_parens(self.ast(), i);
+                let ast = self.ast();
+                let Some(k) = ast.types.array_size(ast.exprs.get(s).ty()) else {
+                    unreachable!("a string literal has a complete array type ([lex.string]/1)")
+                };
+                ArrInit::Str { s, k }
             }
+            Some((_, k)) => unreachable!(
+                "sema initializes the elements of an array new-expression by value-initialization, a braced or parenthesized list, a constructor call or a string literal (`new_initializer`), not a {k:?}"
+            ),
         };
         let k = match ai {
-            ArrInit::List { k, .. } => k,
+            ArrInit::List { k, .. } | ArrInit::Str { k, .. } => k,
             _ => 0,
         };
         // Default-initialized `std::meta::info` elements are the null
@@ -289,7 +308,12 @@ impl Compiler<'_> {
             }
             matches!(self.kind(base), TyKind::Reflection)
         };
-        if info_elems || matches!(ai, ArrInit::Zero | ArrInit::List { zero_rest: true, .. }) {
+        if info_elems
+            || matches!(
+                ai,
+                ArrInit::Zero | ArrInit::List { zero_rest: true, .. } | ArrInit::Str { .. }
+            )
+        {
             aux |= new_aux::ZERO;
         }
         let cnt = self.rv_copy(stripped);
@@ -339,6 +363,21 @@ impl Compiler<'_> {
                 self.jmp_if(c, false)
             });
             self.fill_loop(dst, 0, cnt, i, elem, e);
+            if let Some(j) = skip {
+                self.patch_here(j);
+            }
+            return;
+        }
+        if let ArrInit::Str { s, k } = ai {
+            // A null result (`std::nothrow`) has no elements.
+            let skip = (aux & new_aux::NOTHROW != 0).then(|| {
+                let c = self.reg();
+                self.emit(Op::PtrToBool, 0, &[c, dst]);
+                self.jmp_if(c, false)
+            });
+            let sty = self.ety(s);
+            debug_assert_eq!(self.o.types.size(sty), k * self.o.types.size(elem));
+            self.init(s, dst, sty);
             if let Some(j) = skip {
                 self.patch_here(j);
             }
@@ -437,8 +476,17 @@ impl Compiler<'_> {
         self.pre_cxx20_alloc_check(e);
         let ast = self.ast();
         let Some(op_del) = ast.exprs.operator_delete(e) else {
-            // kiln-gap: GAP-114
-            self.unsupported(e);
+            // Only a delete-expression whose operand is invalid or
+            // type-dependent has no deallocation function (sema's
+            // `act_on_cxx_delete`): never a constant, or evaluated once
+            // instantiated.
+            assert!(
+                self.node(ast.exprs.delete_operand(e))
+                    .deps()
+                    .intersects(ExprDeps::ERROR.with(ExprDeps::TYPE)),
+                "sema looks up the deallocation function of every delete-expression with a valid, non-dependent operand ([expr.delete]/10)"
+            );
+            self.trap(e, "");
             return;
         };
         if !is_replaceable_global_alloc(ast, op_del) && !is_type_aware_global_alloc(ast, op_del) {
@@ -449,9 +497,9 @@ impl Compiler<'_> {
         let array = self.node(e).has(ExprFlags::ARRAY_FORM);
         let arg = ast.exprs.delete_operand(e);
         let Some(pq) = ast.types.pointee(ast.exprs.get(arg).ty()) else {
-            // kiln-gap: GAP-114
-            self.unsupported(e);
-            return;
+            unreachable!(
+                "sema converts a delete-expression's operand to a pointer to object type ([expr.delete]/2) or recovers"
+            )
         };
         if ast.types.is_void(pq) {
             // kiln-gap: GAP-114

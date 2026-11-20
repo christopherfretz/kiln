@@ -2112,6 +2112,20 @@ Redeclaration and linkage rules:
     `EvaluateStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
+- **The layout of `std::initializer_list<E>`** (WP-1741): each
+  initialization of one from a braced list (clang
+  `InitializationSequence::Perform`, `SK_StdInitializerList`) checks
+  that the class is a non-union class without bases or virtual functions
+  whose only two non-static data members are a `const E *` and either
+  another `const E *` or a `std::size_t` that is not a bit-field. If not,
+  `'std::initializer_list<E>' layout not recognized. Must be a
+  non-polymorphic class type with no bases and two fields: a 'const E *'
+  and either another 'const E *' or a 'std::size_t'`
+  (`sema_std_initializer_list_malformed`) is reported at the class, once
+  per initialization, and the initialization fails, so the Oven only
+  ever builds a list of the two layouts it binds.
+  Corpus: `dcl.init.list/initializer-list-layout-malformed.cpp`,
+  `dcl.init.list/initializer-list-two-pointers-constexpr.cpp`.
 
 **Landed (WP-119).** `decltype(e)::` as a nested-name-specifier
 ([expr.prim.id.qual]/1). `act_on_nested_name_decltype(ty, loc) ->

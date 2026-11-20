@@ -2968,7 +2968,11 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   are dropped ([class.virtual]/2). Pure-final-overrider ⇒ abstract.
 - `SemaBridge::final_overrider` / `subobjects` (§8.4) compute on demand
   via `ensure_virtuals`; `kiln_codegen/src/fold.rs` still only reads
-  `Ast.virtuals` (no sema dependency; WP-079/080).
+  `Ast.virtuals` (no sema dependency; WP-079/080), so sema caches the
+  graph of every non-dependent class with virtual bases at its `}`
+  (`check_unique_final_overriders`, which computes it anyway; WP-1741):
+  a fold may convert through a virtual base of a class never constructed
+  in the translation unit (an `extern` object).
 - §3.1/§3.2: virtual bases are accepted; `lookup_in_class` follows clang
   `lookupInBases` dominance: a result reached through virtual base `V` is
   dropped when another result's class has `V` as a virtual base, and

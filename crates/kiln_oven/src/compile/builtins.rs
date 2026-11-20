@@ -1505,6 +1505,14 @@ impl Compiler<'_> {
                 let Some((w, s)) = int_of(self.kind(xt)) else {
                     let q = self.ast().exprs.get(x).ty();
                     let Some(et) = self.ast().types.pointee(q) else {
+                        // Sema takes an integer or a pointer operand (clang
+                        // `checkBuiltinAlignment`): the only one left is a
+                        // `_BitInt` wider than 128 bits (x86-64), whose
+                        // result lives in memory (`wide.rs`).
+                        assert!(
+                            matches!(self.kind(xt), TyKind::WideInt { .. }),
+                            "an alignment builtin's operand is an integer or a pointer"
+                        );
                         // kiln-gap: GAP-115
                         self.unsupported(e);
                         return Some(self.finish_builtin(dst));
@@ -1562,6 +1570,9 @@ impl Compiler<'_> {
                         op(self, bi::FP_OP, float_code(fk) | bi::FABS << 4, [a, a, dst], [0, 0], begin);
                     }
                     TyKind::Float(_) => self.trap(e, ""),
+                    // A `_BitInt` wider than 128 bits (x86-64): its result
+                    // lives in memory (`wide.rs`).
+                    TyKind::WideInt { .. } => self.unsupported(e), // kiln-gap: GAP-115
                     TyKind::Void
                     | TyKind::Ptr(_)
                     | TyKind::NullPtr
@@ -1571,8 +1582,9 @@ impl Compiler<'_> {
                     | TyKind::Func
                     | TyKind::MemPtr { .. }
                     | TyKind::Reflection
-                    | TyKind::WideInt { .. }
-                    | TyKind::Opaque => self.unsupported(e), // kiln-gap: GAP-115
+                    | TyKind::Opaque => unreachable!(
+                        "sema takes an integer or floating operand of an element-wise builtin, or a vector of them (clang `checkMathBuiltinElementType`), and a vector's call is a vector operation (`vector.rs`): {t:?}"
+                    ),
                 }
             }
             // clang 19 does not constant-evaluate the vector reductions;

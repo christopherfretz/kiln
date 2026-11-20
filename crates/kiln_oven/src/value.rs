@@ -6,7 +6,7 @@ use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
 use kiln_ast::decl::{DeclKind, VarEvalState};
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{ExprDeps, ExprKind};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
@@ -294,6 +294,18 @@ impl Oven {
         let void_ok = std::mem::take(&mut self.void_next);
         let addr = std::mem::take(&mut self.addr_next);
         let unchecked = std::mem::take(&mut self.unchecked_next);
+        let deps = b.ast().exprs.get(e).deps();
+        if deps.intersects(ExprDeps::TYPE.with(ExprDeps::VALUE)) && !deps.contains(ExprDeps::ERROR)
+        {
+            // A value-dependent expression ([temp.dep.constexpr]) has no
+            // value until its template is instantiated: sema folds some in
+            // a template definition, and the evaluation fails without a
+            // note (clang never evaluates one: its evaluator asserts that a
+            // valid expression is not value-dependent). The Oven compiles
+            // no template pattern from here on (spec/oven.md "Evaluation
+            // entry points"); an erroneous expression still fails as one.
+            return Err(EvalFailure::silent(FailKind::NotConstant));
+        }
         let f = self.compile_thunk(b, e, object, addr);
         self.let_pending.clear();
         let run = self.exec(b, f, fb);

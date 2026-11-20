@@ -455,6 +455,15 @@ pays nothing for it.
     `basic.life/own-init-assignment-dynamic{,-O2}-run.cpp`). The same
     write to a local variable from its own initializer in a constexpr
     function is not diagnosed yet (WP-1503 remainder).
+  - **A value-dependent root** (WP-1741): `eval_at` (every entry point
+    that compiles a thunk) refuses a root that is type- or
+    value-dependent ([temp.dep.constexpr]) and not erroneous, before any
+    compile, with a silent `NotConstant` failure: it has no value until
+    its template is instantiated. Sema folds some such roots in a
+    template definition (a condition, a `-W` check); clang never
+    evaluates one. The Oven therefore never compiles a template pattern,
+    and its compiler treats a dependent node kind as unreachable.
+    Corpus: `temp.dep.constexpr/value-dependent-conditions-not-folded.cpp`.
 - `Oven::try_fold(bridge, e) -> Option<ConstValueId>`: silent, not
   recorded.
   - **Trial-fold fast path** (WP-656, `leaf.rs`): an outermost

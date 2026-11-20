@@ -812,7 +812,64 @@ impl Sema<'_, '_> {
         let arr = self.ast.types.constant_array(celem, n, None);
         let init = self.init_from_list_at(arr, l, Some(at));
         let mte = self.materialize_temporary(init, arr, false);
+        if !self.std_initializer_list_layout_ok(ty, elem) {
+            // clang `InitializationSequence::Perform` (SK_StdInitializerList):
+            // the error at the class, and the initialization fails.
+            let loc = match self.ast.types.as_record(ty) {
+                Some(r) => {
+                    let def = self.class_def(r);
+                    self.ast.decls.get(def).loc()
+                }
+                None => at,
+            };
+            let t = self.ty_arg(ty.without_quals());
+            // Once per initialization, all at the class (clang).
+            self.emit(
+                self.diag(DiagId::sema_std_initializer_list_malformed, loc)
+                    .arg(t)
+                    .allow_duplicate(),
+            );
+            return Some(self.recover(ty, &[mte], at));
+        }
         Some(self.builder().std_initializer_list(mte, ty))
+    }
+
+    /// Whether `std::initializer_list<E>` `ty` (a complete class) has the
+    /// layout the backing array is bound through ([dcl.init.list]/5,
+    /// [support.initlist]/1; clang checks it at each such initialization):
+    /// a non-union class without bases or virtual functions whose only
+    /// two non-static data members are a `const E *` and either another
+    /// `const E *` or a `std::size_t` that is not a bit-field.
+    fn std_initializer_list_layout_ok(&mut self, ty: QualType, elem: QualType) -> bool {
+        let Some(r) = self.ast.types.as_record(ty) else { return false };
+        let def = self.class_def(r);
+        if self.is_union(def)
+            || self.ast.decls.bases(def, &self.ast.lists).next().is_some()
+            || self.defn_bits(def).contains(DefinitionBits::POLYMORPHIC)
+        {
+            return false;
+        }
+        let fields: Vec<DeclId> =
+            self.ast.decls.members(def).filter(|&f| self.kind_of(f) == DeclKind::Field).collect();
+        let &[first, second] = fields.as_slice() else { return false };
+        let celem = self.ast.types.qualify(elem, kiln_ast::types::Quals::CONST);
+        let ptr = |s: &Self, f: DeclId| {
+            let q = s.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+            match s.ast.types.canonical_view(q) {
+                kiln_ast::types::TypeView::Pointer(p) => Some(s.ast.types.same_type(p, celem)),
+                _ => None,
+            }
+        };
+        if ptr(self, first) != Some(true) {
+            return false;
+        }
+        if let Some(ok) = ptr(self, second) {
+            return ok;
+        }
+        let q = self.ast.decls.get(second).ty().unwrap_or(QualType::ERROR);
+        let bit_field = self.ast.decls.field(second).is_some_and(|x| x.bit_width.is_some());
+        let st = self.size_type();
+        !bit_field && self.ast.types.same_type(q, st)
     }
 
     /// Whether braced list `l` holds, at any depth, an element clang's

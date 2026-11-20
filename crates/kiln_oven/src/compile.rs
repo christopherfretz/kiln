@@ -987,6 +987,7 @@ impl Oven {
         };
         let ast = b.ast();
         let def = ast.definition(d).unwrap_or(d);
+        let ast = b.ast();
         if ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
             self.funcs[idx as usize].state = FState::Invalid;
             return;
@@ -2211,6 +2212,9 @@ struct CaseTarget {
     /// The index of a label nested in a sub-statement of the body
     /// ([`NestedLabels`]).
     nested: Option<usize>,
+    /// A label of this switch in a statement the hunt does not enter:
+    /// selecting it fails the evaluation.
+    unhunted: bool,
 }
 
 impl Compiler<'_> {
@@ -2612,6 +2616,25 @@ impl Compiler<'_> {
                         }
                     }
                     _ => {
+                        // [stmt.if]/2: the discarded substatement of an
+                        // `if constexpr` is never executed (outside a
+                        // template it may name what a lambda did not
+                        // capture, [basic.def.odr]/5): only the taken one
+                        // is compiled. The condition is still tested, as
+                        // clang's `EvaluateStmt` does, for the step count.
+                        let taken = match d.cond {
+                            Some(c) if kind == IfKind::Constexpr => self
+                                .stored_value(c)
+                                .and_then(|v| self.ast().consts.scalar(v))
+                                .and_then(|x| scalar_bits(&x))
+                                .map(|b| b != 0),
+                            _ => None,
+                        };
+                        let (then, els) = match taken {
+                            Some(true) => (d.then, d.els.and(None)),
+                            Some(false) => (d.then.and(None), d.els),
+                            None => (d.then, d.els),
+                        };
                         let j = match d.cond {
                             Some(c) => {
                                 let r = self.rv(c);
@@ -2620,10 +2643,10 @@ impl Compiler<'_> {
                             }
                             None => None,
                         };
-                        if let Some(t) = d.then {
+                        if let Some(t) = then {
                             self.stmt(t);
                         }
-                        if let Some(e) = d.els {
+                        if let Some(e) = els {
                             let end = self.jmp();
                             if let Some(j) = j {
                                 self.patch_here(j);
@@ -2737,8 +2760,18 @@ impl Compiler<'_> {
                 }
                 self.next = m;
             }
-            StmtKind::CaseStmt | StmtKind::DefaultStmt if self.is_nested_label(s) => {
-                self.nested_label(s);
+            // [stmt.label]/1, [stmt.switch]/5: a label reached in order
+            // evaluates its statement (clang `EvaluateStmt`, one step for
+            // the label). A label nested in a sub-statement of the body is
+            // also the target of a jump from its switch
+            // ([`Compiler::nested_label`]); one in a statement the hunt
+            // does not enter (a try-block, a range-based `for`, a
+            // statement expression: ill-formed, [stmt.dcl]/3, [except.pre]/2)
+            // fails as a target (`switch_stmt`) but not when flowed into.
+            StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+                if self.is_nested_label(s) {
+                    self.nested_label(s);
+                }
                 let ast = self.b.ast();
                 let sub = if n.kind() == StmtKind::CaseStmt {
                     ast.stmts.case_data(s).sub
@@ -2746,13 +2779,6 @@ impl Compiler<'_> {
                     ast.stmts.default_sub(s)
                 };
                 self.stmt(sub);
-            }
-            StmtKind::CaseStmt | StmtKind::DefaultStmt => {
-                self.trap_loc(
-                    n.loc(),
-                    // kiln-gap: GAP-121
-                    "kiln: a 'case' label outside its switch body is not supported yet".into(),
-                );
             }
             // [expr.const]/5: evaluating a goto statement is not a core
             // constant expression (clang: the generic note at the `goto`).
@@ -2820,13 +2846,15 @@ impl Compiler<'_> {
                     self.contract_check(s);
                 }
             }
-            k @ (StmtKind::CXXExpansionStmt | StmtKind::CXXCatchStmt) => {
-                self.trap_loc(
-                    n.loc(),
-                    // kiln-gap: GAP-120
-                    format!("kiln: constant evaluation of {k:?} is not supported yet"),
-                );
-            }
+            StmtKind::CXXExpansionStmt => unreachable!(
+                "an expansion statement is left unexpanded only in a template pattern \
+                 (`act_on_finish_expansion`); its instantiation is expanded \
+                 (`expand_expansion`), and the Oven compiles no pattern"
+            ),
+            StmtKind::CXXCatchStmt => unreachable!(
+                "a handler is only ever a child of its try-block (`act_on_catch`'s results \
+                 go to `act_on_try` alone), compiled by `try_stmt`"
+            ),
         }
     }
 
@@ -3163,6 +3191,7 @@ impl Compiler<'_> {
                     pre: chain.clone(),
                     stub_jmp: 0,
                     nested: None,
+                    unhunted: false,
                 });
                 chain.push(ast.stmts.get(cur).loc());
                 cur = sub;
@@ -3175,9 +3204,35 @@ impl Compiler<'_> {
                 let mut at = chain.clone();
                 hunt_to(ast, cur, l, &mut at);
                 let range = case_range(ast, l);
-                targets.push(CaseTarget { stmt: l, range, pre: at, stub_jmp: 0, nested: Some(i) });
+                targets.push(CaseTarget {
+                    stmt: l,
+                    range,
+                    pre: at,
+                    stub_jmp: 0,
+                    nested: Some(i),
+                    unhunted: false,
+                });
             }
             hunt_cost(ast, c, &mut pre);
+        }
+        // The labels of this switch the hunt does not reach: those in a
+        // try-block, a handler, a range-based `for`, a statement
+        // expression (all ill-formed jumps, [stmt.dcl]/3, [except.pre]/2,
+        // diagnosed by sema). Selecting one fails at the label, as clang's
+        // `EvaluateSwitch` on `ESR_CaseNotFound`.
+        for &l in ast.lists.get(d.cases) {
+            let l = StmtId::new(l);
+            if targets.iter().all(|t| t.stmt != l) {
+                let range = case_range(ast, l);
+                targets.push(CaseTarget {
+                    stmt: l,
+                    range,
+                    pre: Vec::new(),
+                    stub_jmp: 0,
+                    nested: None,
+                    unhunted: true,
+                });
+            }
         }
         let ctx_decls = self.stmt_decls(d.init, d.cond_var);
         self.open_scope(&ctx_decls, false);
@@ -3266,6 +3321,11 @@ impl Compiler<'_> {
             .collect();
         for &(i, j) in &stubs {
             self.patch_here(j);
+            if targets[i].unhunted {
+                let loc = self.b.ast().stmts.get(targets[i].stmt).loc();
+                self.trap_loc(loc, STMT_EXPR_UNSUPPORTED.into());
+                continue;
+            }
             let pre = targets[i].pre.clone();
             self.pending.extend(pre);
             match (targets[i].nested, sel) {
@@ -3334,9 +3394,10 @@ impl Compiler<'_> {
         for j in b.into_iter().chain(end_jumps) {
             self.patch(j, end);
         }
-        // A nested label the body did not compile (one in a statement
-        // the descent does not enter, which sema rejects): selecting it
-        // fails the evaluation.
+        // A nested label the body did not compile (`nested_labels`
+        // descends only statements `stmt` compiles, so none today): the
+        // hunt did not find it, and selecting it fails at the label, as
+        // clang's `EvaluateSwitch` on `ESR_CaseNotFound`.
         if let Some(ns) = ns
             && ns.labels.iter().any(|l| !l.reached)
         {
@@ -3347,11 +3408,7 @@ impl Compiler<'_> {
                     self.patch(j, at);
                 }
                 let loc = self.b.ast().stmts.get(l.stmt).loc();
-                self.trap_loc(
-                    loc,
-                    // kiln-gap: GAP-122
-                    "kiln: a 'case' label in this statement is not supported yet".into(),
-                );
+                self.trap_loc(loc, STMT_EXPR_UNSUPPORTED.into());
             }
             self.patch_here(over);
         }
@@ -3951,8 +4008,9 @@ impl Compiler<'_> {
                         self.emit(Op::IsConstEval, 32, &[dst]);
                     }
                 }
-                // kiln-gap: GAP-110
-                None => self.unsupported(e),
+                None => unreachable!(
+                    "a reflect-expression holds its interned id: sema's `build_reflect_expr` replaces one whose interning failed by a recovery expression, and a value-dependent one is never evaluated (`value::eval_at`)"
+                ),
             },
             ExprKind::ArrayTypeTraitExpr => {
                 let v = self.ast().exprs.array_trait(e).value;
@@ -4015,8 +4073,9 @@ impl Compiler<'_> {
                     self.rv_inner(d, dst);
                     self.srcloc = saved;
                 }
-                // kiln-gap: GAP-110
-                None => self.unsupported(e),
+                None => unreachable!(
+                    "sema builds a CXXDefaultArgExpr only from its parameter's default argument (`AstBuilder::default_arg` callers read `ParamData::default_arg` first)"
+                ),
             },
             ExprKind::SourceLocExpr => self.source_loc(e, dst),
             ExprKind::ConstantExpr => {
@@ -4058,8 +4117,9 @@ impl Compiler<'_> {
                     let f = self.o.func_index(self.b.ast(), d);
                     self.konst(dst, u128::from(fn_ptr(f)));
                 } else {
-                    // kiln-gap: GAP-110
-                    self.unsupported(e);
+                    unreachable!(
+                        "a prvalue DeclRefExpr names an enumerator with its value or a function: a variable is an lvalue, a non-type template parameter is replaced by its argument, and a value-dependent enumerator is never evaluated (`value::eval_at`)"
+                    );
                 }
             }
             // An enumerator named by a class member access (`r.E`,
@@ -4133,8 +4193,14 @@ impl Compiler<'_> {
                         }
                     }
                     Some(Opaque::Lv(p)) => self.load(p, ty, ak::READ, e, dst),
-                    // kiln-gap: GAP-110
-                    None => self.unsupported(e),
+                    // An opaque value outside the expression that binds it
+                    // (sema folds a subexpression of a `?:`): its source
+                    // gives the value, and one without a source is not a
+                    // constant expression (clang `VisitOpaqueValueExpr`).
+                    None => match self.ast().exprs.opaque_source(e) {
+                        Some(src) => self.rv_inner(src, dst),
+                        None => self.throw_invalid(e),
+                    },
                 }
             }
             ExprKind::CXXScalarValueInitExpr => self.konst(dst, 0),
@@ -4174,15 +4240,18 @@ impl Compiler<'_> {
                     self.rv_inner(x, dst);
                     self.srcloc = saved;
                 }
-                // kiln-gap: GAP-110
-                None => self.unsupported(e),
+                None => unreachable!(
+                    "sema builds a CXXDefaultInitExpr only for a field with its default member initializer (`default_member_init` checks it first)"
+                ),
             },
             ExprKind::ArrayInitIndexExpr => match self.array_index {
                 Some(k) => {
                     self.emit(Op::Mov, 0, &[dst, k]);
                 }
-                // kiln-gap: GAP-110
-                None => self.unsupported(e),
+                // Outside its array initialization loop (sema folds a
+                // subexpression): not a constant expression (clang
+                // `VisitArrayInitIndexExpr`).
+                None => self.throw_invalid(e),
             },
             ExprKind::CXXMemberCallExpr if !n.value_category().is_glvalue() => {
                 let r = self.member_call(e, None);
@@ -4204,55 +4273,39 @@ impl Compiler<'_> {
                 let p = self.lv(e, Access::Read);
                 self.load(p, ty, ak::READ, e, dst);
             }
-            ExprKind::StringLiteral
-            | ExprKind::UserDefinedLiteral
-            | ExprKind::ImaginaryLiteral
-            | ExprKind::EmbedExpr
-            | ExprKind::MemberExpr
-            | ExprKind::PredefinedExpr
+            // A bound member function (`s.f`, `p->*pmf`, `p->~T`: a callee
+            // only), an unresolved overload set, or a form clang's
+            // evaluator has no visitor for (`VAArgExpr`, `AtomicExpr`, a
+            // `ParenListExpr` kept for a dependent type's initializer, a
+            // designated initializer update) has no value: clang's
+            // `Evaluate` gives the generic note. So does a `co_await` or
+            // `co_yield` ([expr.const]/5.23, WP-351).
+            ExprKind::MemberExpr
+            | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::UnresolvedLookupExpr
             | ExprKind::UnresolvedMemberExpr
-            | ExprKind::DependentScopeDeclRefExpr
-            | ExprKind::CXXDependentScopeMemberExpr
-            | ExprKind::SubstNonTypeTemplateParmPackExpr
-            | ExprKind::FunctionParmPackExpr
-            | ExprKind::ArraySubscriptExpr
-            | ExprKind::CallExpr
-            | ExprKind::CXXMemberCallExpr
-            | ExprKind::CXXOperatorCallExpr
             | ExprKind::ParenListExpr
-            | ExprKind::DesignatedInitExpr
-            | ExprKind::CXXConstructExpr
-            | ExprKind::CXXTemporaryObjectExpr
-            | ExprKind::CXXInheritedCtorInitExpr
-            | ExprKind::CXXParenListInitExpr
-            | ExprKind::ArrayInitLoopExpr
-            | ExprKind::CXXStdInitializerListExpr
-            | ExprKind::NoInitExpr
-            | ExprKind::DesignatedInitUpdateExpr
-            | ExprKind::MaterializeTemporaryExpr
-            | ExprKind::OpaqueValueExpr
-            | ExprKind::CXXPseudoDestructorExpr
-            | ExprKind::CXXTypeidExpr
-            | ExprKind::SizeOfPackExpr
-            | ExprKind::LambdaExpr
-            | ExprKind::PackExpansionExpr
-            | ExprKind::CXXFoldExpr
-            | ExprKind::PackIndexingExpr
-            | ExprKind::CXXUnresolvedConstructExpr
-            | ExprKind::CoawaitExpr
-            | ExprKind::DependentCoawaitExpr
-            | ExprKind::CoyieldExpr
-            | ExprKind::ChooseExpr
             | ExprKind::VAArgExpr
             | ExprKind::AtomicExpr
-            | ExprKind::ShuffleVectorExpr
-            | ExprKind::ConvertVectorExpr
-            | ExprKind::CXXSpliceExpr
-            | ExprKind::RecoveryExpr
-            | ExprKind::CXXExpansionSelectExpr
-            | ExprKind::GenericSelectionExpr
-            | ExprKind::IntegerPackExpr => self.unsupported(e), // kiln-gap: GAP-117
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr => self.throw_invalid(e),
+            // An erroneous expression was diagnosed when it was built: the
+            // evaluation fails without a note (clang fails silently on an
+            // expression that `containsErrors()`).
+            ExprKind::RecoveryExpr => self.trap(e, ""),
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                match self.ast().exprs.selected_operand(e) {
+                    Some(x) => self.rv_inner(x, dst),
+                    None => unreachable!(
+                        "only a dependent `__builtin_choose_expr` or `_Generic` has no selected operand, and a value-dependent expression is never evaluated (`value::eval_at`)"
+                    ),
+                }
+            }
+            k => unreachable!(
+                "`rv_inner` evaluates a scalar prvalue, not a {k:?}: a glvalue takes the arm above, a call and an opaque value their own arms, a class, array or vector prvalue is initialized in memory (`init_inner`), no expression of kind UserDefinedLiteral or EmbedExpr is built (a call; the literals), and the pack, splice and other dependent forms are built value-dependent only (`AstBuilder::size_of_pack`, `fold_expr`, `splice_expr`, ...), never evaluated (`value::eval_at`)"
+            ),
         }
     }
 
@@ -4309,9 +4362,7 @@ impl Compiler<'_> {
                 u64::from(self.typedef_align(q).unwrap_or_else(|| self.o.types.info(t).align))
             }
             TraitKind::VecStep => {
-                // kiln-gap: GAP-110
-                self.unsupported(e);
-                return;
+                unreachable!("`vec_step` is OpenCL's: the parser builds no VecStep trait")
             }
         };
         let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
@@ -4404,8 +4455,9 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, Some(dst), e);
             }
-            // kiln-gap: GAP-110
-            UnaryOp::Coawait => self.unsupported(e),
+            UnaryOp::Coawait => unreachable!(
+                "sema builds a `co_await` as a CoawaitExpr, never a built-in unary operator (`Sema::build_unary`)"
+            ),
         }
     }
 
@@ -4723,18 +4775,17 @@ impl Compiler<'_> {
     /// the integer of the selected value (clang's `VisitBinCmp`: for
     /// `partial_ordering`, `==` then `<` then `>` else unordered).
     fn three_way(&mut self, e: ExprId, p: u32, ty: OTy) {
-        let TyKind::Record { decl, .. } = self.kind(ty) else {
-            // kiln-gap: GAP-110
-            return self.unsupported(e);
-        };
+        // Sema types a built-in `<=>` only with a category class it
+        // validated and recorded (`cmp_category_type`: one integral data
+        // member); an invalid category makes the comparison an error.
+        const CATEGORY: &str = "a built-in three-way comparison has a validated comparison category type (`Sema::cmp_category_type`)";
+        let TyKind::Record { decl, .. } = self.kind(ty) else { unreachable!("{CATEGORY}") };
         let Some(info) = self.ast().cmp_categories.for_record(decl).copied() else {
-            // kiln-gap: GAP-110
-            return self.unsupported(e);
+            unreachable!("{CATEGORY}")
         };
         let Some(fi) = self.o.types.fields(ty).iter().copied().find(|f| f.decl == info.field)
         else {
-            // kiln-gap: GAP-110
-            return self.unsupported(e);
+            unreachable!("{CATEGORY}")
         };
         let [a, b] = self.ast().exprs.operands(e);
         let (at, bt) = (self.ety(a), self.ety(b));
@@ -4838,8 +4889,14 @@ impl Compiler<'_> {
             }
         }
         let Some(iop) = int_op(op) else {
-            // kiln-gap: GAP-110
-            self.unsupported(e);
+            // `x.*pmf` / `p->*pmf`: a bound member function, only a callee;
+            // evaluated alone (a fold of the callee) it has no value, and
+            // clang's `Evaluate` gives the generic note.
+            assert!(
+                op.is_ptr_mem(),
+                "a builtin binary operator other than `.*`/`->*` reaching `binary_node` is arithmetic, a comparison or a shift ({op:?}: `binary` takes the others)"
+            );
+            self.throw_invalid(e);
             return;
         };
         let shift = matches!(iop, Op::IShl | Op::IShr);
@@ -4903,8 +4960,9 @@ impl Compiler<'_> {
                 Some(fop) => {
                     self.emit_at(fop, float_code(k), &[dst, ra, rb], e);
                 }
-                // kiln-gap: GAP-110
-                None => self.unsupported(e),
+                None => unreachable!(
+                    "sema accepts only `+ - * /` on a floating operand ([expr.mul]/2, [expr.shift]/1, [expr.bit.and]/1): {iop:?}"
+                ),
             },
             k => {
                 let (w, s) = int_of(k).unwrap_or((32, true));
@@ -4959,8 +5017,9 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, src]);
                 }
             }
-            // kiln-gap: GAP-110
-            _ => self.unsupported(e),
+            (fk, tk) => unreachable!(
+                "`convert` converts between arithmetic types, or a pointer to `bool` or to a pointer (its callers: the scalar cast kinds, and the complex, vector element and compound assignment conversions), not {fk:?} to {tk:?}"
+            ),
         }
     }
 
@@ -5189,21 +5248,33 @@ impl Compiler<'_> {
                 };
                 self.cce(e, aux, dst, r, REINTERPRET_CONV);
             }
+            // `(T&)x`: the read through the glvalue (`lv` notes the
+            // conversion).
+            CastKind::LValueBitCast => {
+                let p = self.lv(e, Access::Read);
+                self.load(p, ty, ak::READ, e, dst);
+            }
+            // A builtin's callee evaluated apart from its call (a call
+            // strips the cast to reach the builtin, `call_inner`): clang's
+            // `PointerExprEvaluator` has no case for the cast, so the
+            // generic note at the callee (WP-996).
+            CastKind::BuiltinFnToFnPtr => self.throw_invalid(e),
+            // A scalar's splat to a sizeless (SVE) vector: an expression of
+            // a sizeless type has no constant value (clang's `Evaluate`
+            // gives the generic note); a fixed-length vector's splat is a
+            // vector operation (`vec_op`), not a scalar's.
+            CastKind::VectorSplat => self.throw_invalid(e),
             CastKind::Dependent
-            | CastKind::LValueBitCast
-            | CastKind::BuiltinFnToFnPtr
             | CastKind::BooleanToSignedIntegral
             | CastKind::ToUnion
-            | CastKind::VectorSplat
             | CastKind::IntegralRealToComplex
             | CastKind::FloatingRealToComplex
             | CastKind::IntegralComplexCast
             | CastKind::FloatingComplexCast
             | CastKind::IntegralComplexToFloatingComplex
-            | CastKind::FloatingComplexToIntegralComplex => {
-                // kiln-gap: GAP-118
-                self.unsupported(e);
-            }
+            | CastKind::FloatingComplexToIntegralComplex => unreachable!(
+                "`cast` evaluates a scalar result: a dependent cast is value-dependent, never evaluated (`value::eval_at`); a union cast's result is a class and a complex or vector mask conversion's a complex value or a vector, initialized in memory (`init_inner`, `cx_op`, `vec_op`): {ck:?}"
+            ),
         }
     }
 
@@ -5634,8 +5705,9 @@ impl Compiler<'_> {
                 if ast.decls.get(d).kind() == DeclKind::Binding {
                     // A binding names its expression ([dcl.struct.bind]).
                     let Some(b) = ast.decls.binding_expr(d) else {
-                        // kiln-gap: GAP-111
-                        self.unsupported(e);
+                        // Sema leaves a binding without its expression only
+                        // when the decomposition failed, with its error.
+                        self.trap(e, "");
                         return Place::Mem(self.reg());
                     };
                     return self.lv(b, acc);
@@ -5655,13 +5727,21 @@ impl Compiler<'_> {
                 // the result check ("pointer to 'q' is not a constant
                 // expression"), and only a read faults ("function parameter
                 // 'q' with unknown value ...", `notes.rs`).
-                if !matches!(
-                    ast.decls.get(d).kind(),
-                    DeclKind::Var | DeclKind::ParmVar | DeclKind::TemplateParamObject
-                ) {
-                    // kiln-gap: GAP-111
-                    self.unsupported(e);
-                    return Place::Mem(self.reg());
+                match ast.decls.get(d).kind() {
+                    DeclKind::Var | DeclKind::ParmVar | DeclKind::TemplateParamObject => {}
+                    // A non-static data member named without an object (an
+                    // invalid use, diagnosed by sema's `flush_member_refs`),
+                    // or a postcondition's result name outside the check
+                    // that binds it (`check_posts`; sema's speculative
+                    // overflow fold of the condition): the evaluation fails
+                    // without a note of its own.
+                    DeclKind::Field | DeclKind::IndirectField | DeclKind::ContractResultName => {
+                        self.trap(e, "");
+                        return Place::Mem(self.reg());
+                    }
+                    k => unreachable!(
+                        "a glvalue DeclRefExpr names a variable, a parameter, a template parameter object, a binding, a function, a member or a result name, not a {k:?}: a non-type template parameter is replaced by its argument, and a value-dependent expression is never evaluated (`value::eval_at`)"
+                    ),
                 }
                 let g = self.o.global_index(self.b.ast(), d);
                 let r = self.reg();
@@ -5764,6 +5844,20 @@ impl Compiler<'_> {
                 self.trap_loc(loc, "subexpression not valid in a constant expression".into());
                 Place::Mem(self.reg())
             }
+            ExprKind::ArraySubscriptExpr
+                if {
+                    let ast = self.ast();
+                    let [a, b] = ast.exprs.operands(e);
+                    [a, b].iter().any(|&x| ast.types.is_sizeless(ast.exprs.get(x).ty()))
+                } =>
+            {
+                // clang `VisitArraySubscriptExpr` does not evaluate a lane
+                // of a sizeless (SVE, RVV) vector: the generic note at the
+                // subscript.
+                let loc = self.begin(e);
+                self.trap_loc(loc, "subexpression not valid in a constant expression".into());
+                Place::Mem(self.reg())
+            }
             ExprKind::ExtVectorElementExpr => {
                 // Nor an ext vector element access of a glvalue vector,
                 // silently (a prvalue one is `ext_elt_regs`).
@@ -5840,11 +5934,7 @@ impl Compiler<'_> {
                         self.inc_dec(place, xty, op, None, e);
                         place
                     }
-                    _ => {
-                        // kiln-gap: GAP-111
-                        self.unsupported(e);
-                        Place::Mem(self.reg())
-                    }
+                    _ => self.lv_other(e),
                 }
             }
             ExprKind::BinaryOperator => {
@@ -5858,21 +5948,25 @@ impl Compiler<'_> {
                     }
                     _ if op.is_compound_assignment() => self.compound_assign(e),
                     _ if op.is_ptr_mem() => self.mp_access(e, acc),
-                    _ => {
-                        // kiln-gap: GAP-111
-                        self.unsupported(e);
-                        Place::Mem(self.reg())
-                    }
+                    _ => self.lv_other(e),
                 }
             }
             ExprKind::CompoundAssignOperator => self.compound_assign(e),
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(p)) => p,
-                _ => {
-                    // kiln-gap: GAP-111
-                    self.unsupported(e);
-                    Place::Mem(self.reg())
-                }
+                Some(Opaque::Rv(_)) => unreachable!(
+                    "an opaque value has its source's value category, and `bind_common`/`bind_pseudo` bind a glvalue source as a place"
+                ),
+                // Unbound (sema folds a subexpression of a `?:`): the source
+                // designates the object, and one without a source is not a
+                // constant expression (clang `VisitOpaqueValueExpr`).
+                None => match self.ast().exprs.opaque_source(e) {
+                    Some(src) => self.lv(src, acc),
+                    None => {
+                        self.throw_invalid(e);
+                        Place::Mem(self.reg())
+                    }
+                },
             },
             ExprKind::BinaryConditionalOperator => {
                 let [common, cond, t, f] = self.bind_common(e, acc);
@@ -5933,11 +6027,18 @@ impl Compiler<'_> {
             // [expr.reinterpret.cast]/11: the glvalue `reinterpret_cast`
             // designates the operand's object; not a constant expression
             // ([expr.const]/5.15) outside a fold (`Op::Cce`).
-            ExprKind::CXXReinterpretCastExpr
-                if n.value_category().is_glvalue()
-                    && self.ast().exprs.cast_kind(e) == CastKind::LValueBitCast =>
+            // A C-style or functional `(T&)x` performs the same conversion
+            // (clang's `note_constexpr_invalid_cast`, worded for the cast).
+            k if k.is_cast()
+                && n.value_category().is_glvalue()
+                && self.ast().exprs.cast_kind(e) == CastKind::LValueBitCast =>
             {
-                self.cce_check(e, "reinterpret_cast is not allowed in a constant expression");
+                let msg = if k == ExprKind::CXXReinterpretCastExpr {
+                    "reinterpret_cast is not allowed in a constant expression"
+                } else {
+                    REINTERPRET_CONV
+                };
+                self.cce_check(e, msg);
                 let op = self.ast().exprs.operand(e);
                 let sub = match acc {
                     Access::Write => Access::Write,
@@ -6007,21 +6108,7 @@ impl Compiler<'_> {
                 self.throw_expr(e);
                 Place::Mem(self.reg())
             }
-            // A class prvalue used as a glvalue: materialize it, destroyed
-            // at the end of the full-expression.
-            _ if !n.value_category().is_glvalue() && {
-                let ty = self.ety(e);
-                self.o.types.is_aggregate(ty)
-            } =>
-            {
-                let ty = self.ety(e);
-                Place::Mem(self.materialize(e, ty))
-            }
-            _ => {
-                // kiln-gap: GAP-111
-                self.unsupported(e);
-                Place::Mem(self.reg())
-            }
+            _ => self.lv_other(e),
         }
     }
 
@@ -6055,6 +6142,38 @@ impl Compiler<'_> {
                 .function(c)
                 .is_some_and(|f| f.spec.is_deleted() && ast.lists.len(f.params) == 0)
         })
+    }
+
+    /// The place of `e`, a form `lv` has no arm of its own for.
+    fn lv_other(&mut self, e: ExprId) -> Place {
+        let n = self.node(e);
+        let ty = self.ety(e);
+        match n.kind() {
+            // A class prvalue used as a glvalue: materialize it, destroyed
+            // at the end of the full-expression.
+            _ if !n.value_category().is_glvalue() && self.o.types.is_aggregate(ty) => {
+                Place::Mem(self.materialize(e, ty))
+            }
+            // A `co_await` / `co_yield` ([expr.const]/5.23) or an
+            // unresolved overload set (no value): the generic note.
+            ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr => {
+                self.throw_invalid(e);
+                Place::Mem(self.reg())
+            }
+            // An erroneous expression was diagnosed when it was built: the
+            // evaluation fails without a note.
+            ExprKind::RecoveryExpr => {
+                self.trap(e, "");
+                Place::Mem(self.reg())
+            }
+            k => unreachable!(
+                "`lv` takes a glvalue or a class prvalue, not a {k:?} ({:?}): the glvalue forms have their arms, no built-in unary or binary operator but those `lv` handles yields a glvalue or a class, and the dependent forms are never evaluated (`value::eval_at`)",
+                n.value_category()
+            ),
+        }
     }
 
     fn member(&mut self, e: ExprId, acc: Access) -> Place {
@@ -6095,9 +6214,9 @@ impl Compiler<'_> {
             _ => (false, None),
         };
         let Some(idx) = idx else {
-            // kiln-gap: GAP-111
-            self.unsupported(e);
-            return Place::Mem(self.reg());
+            unreachable!(
+                "a class member access names a static member (above), a function or an enumerator (their own arms), or a field of the class of its object expression (sema converts the object to the member's class, and reaches an anonymous member's field through the anonymous member)"
+            )
         };
         let fi = self.o.types.fields(rt)[idx];
         let p = if arrow {
@@ -6302,9 +6421,7 @@ impl Compiler<'_> {
             let lt = self.ty(x.lhs_ty);
             let ct = self.ty(x.result_ty);
             let Some(iop) = int_op(op) else {
-                // kiln-gap: GAP-111
-                self.unsupported(e);
-                return place;
+                unreachable!("every compound assignment operator has its opcode (`int_op`): {op:?}")
             };
             let shift = matches!(iop, Op::IShl | Op::IShr);
             let a = self.reg();
@@ -6638,100 +6755,46 @@ impl Compiler<'_> {
                 let src = self.lv_mem(e, Access::Read);
                 self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
             }
-            ExprKind::IntegerLiteral
-            | ExprKind::FloatingLiteral
-            | ExprKind::CharacterLiteral
-            | ExprKind::CXXBoolLiteralExpr
-            | ExprKind::CXXNullPtrLiteralExpr
-            | ExprKind::UserDefinedLiteral
-            | ExprKind::ImaginaryLiteral
-            | ExprKind::EmbedExpr
-            | ExprKind::GNUNullExpr
-            | ExprKind::DeclRefExpr
-            | ExprKind::MemberExpr
-            | ExprKind::CXXThisExpr
-            | ExprKind::PredefinedExpr
-            | ExprKind::SourceLocExpr
-            | ExprKind::UnresolvedLookupExpr
-            | ExprKind::UnresolvedMemberExpr
-            | ExprKind::DependentScopeDeclRefExpr
-            | ExprKind::CXXDependentScopeMemberExpr
-            | ExprKind::SubstNonTypeTemplateParmExpr
-            | ExprKind::SubstNonTypeTemplateParmPackExpr
-            | ExprKind::FunctionParmPackExpr
-            | ExprKind::UnaryOperator
-            | ExprKind::BinaryOperator
-            | ExprKind::CompoundAssignOperator
-            | ExprKind::ArraySubscriptExpr
-            | ExprKind::ParenExpr
-            | ExprKind::CallExpr
-            | ExprKind::CXXMemberCallExpr
-            | ExprKind::CXXOperatorCallExpr
-            | ExprKind::CXXRewrittenBinaryOperator
-            | ExprKind::ParenListExpr
-            | ExprKind::ImplicitCastExpr
-            | ExprKind::CStyleCastExpr
-            | ExprKind::CXXFunctionalCastExpr
-            | ExprKind::CXXStaticCastExpr
-            | ExprKind::CXXConstCastExpr
-            | ExprKind::CXXReinterpretCastExpr
-            | ExprKind::CXXDynamicCastExpr
-            | ExprKind::BuiltinBitCastExpr
-            | ExprKind::ImplicitValueInitExpr
-            | ExprKind::DesignatedInitExpr
-            | ExprKind::CXXConstructExpr
-            | ExprKind::CXXTemporaryObjectExpr
-            | ExprKind::CXXInheritedCtorInitExpr
-            | ExprKind::CXXDefaultArgExpr
-            | ExprKind::CXXDefaultInitExpr
-            | ExprKind::CXXScalarValueInitExpr
-            | ExprKind::CXXParenListInitExpr
-            | ExprKind::ArrayInitLoopExpr
-            | ExprKind::ArrayInitIndexExpr
-            | ExprKind::CXXStdInitializerListExpr
-            | ExprKind::CompoundLiteralExpr
-            | ExprKind::NoInitExpr
-            | ExprKind::DesignatedInitUpdateExpr
-            | ExprKind::MaterializeTemporaryExpr
-            | ExprKind::CXXBindTemporaryExpr
-            | ExprKind::ExprWithCleanups
-            | ExprKind::OpaqueValueExpr
-            | ExprKind::CXXNewExpr
-            | ExprKind::CXXDeleteExpr
-            | ExprKind::CXXPseudoDestructorExpr
-            | ExprKind::CXXThrowExpr
-            | ExprKind::CXXNoexceptExpr
-            | ExprKind::CXXTypeidExpr
-            | ExprKind::UnaryExprOrTypeTraitExpr
-            | ExprKind::TypeTraitExpr
-            | ExprKind::ArrayTypeTraitExpr
-            | ExprKind::ExpressionTraitExpr
-            | ExprKind::OffsetOfExpr
-            | ExprKind::SizeOfPackExpr
-            | ExprKind::RequiresExpr
-            | ExprKind::ConceptSpecializationExpr
-            | ExprKind::PackExpansionExpr
-            | ExprKind::CXXFoldExpr
-            | ExprKind::PackIndexingExpr
-            | ExprKind::CXXUnresolvedConstructExpr
-            | ExprKind::CoawaitExpr
-            | ExprKind::DependentCoawaitExpr
-            | ExprKind::CoyieldExpr
-            | ExprKind::ConstantExpr
-            | ExprKind::AddrLabelExpr
-            | ExprKind::ChooseExpr
-            | ExprKind::VAArgExpr
+            // clang 22's `VectorExprEvaluator` has no case for an integer
+            // vector's conversion to a `bool` vector (sema's clang 20+
+            // `ICK_Boolean_Conversion` between vectors): the generic note.
+            k if k.is_cast() && matches!(self.kind(ty), TyKind::BoolVec { .. }) => {
+                self.throw_invalid(e);
+            }
+            // Forms clang's evaluator has no visitor for (`VAArgExpr`,
+            // `AtomicExpr`, a designated initializer update, a
+            // `ParenListExpr` kept for a dependent type's initializer), and
+            // `co_await` / `co_yield` ([expr.const]/5.23): the generic note.
+            ExprKind::VAArgExpr
             | ExprKind::AtomicExpr
-            | ExprKind::ShuffleVectorExpr
-            | ExprKind::ConvertVectorExpr
-            | ExprKind::ExtVectorElementExpr
-            | ExprKind::CXXReflectExpr
-            | ExprKind::CXXSpliceExpr
-            | ExprKind::RecoveryExpr
-            | ExprKind::CXXExpansionSelectExpr
-            | ExprKind::PseudoObjectExpr
-            | ExprKind::GenericSelectionExpr
-            | ExprKind::IntegerPackExpr => self.unsupported(e), // kiln-gap: GAP-119
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr => self.throw_invalid(e),
+            // An erroneous expression was diagnosed when it was built: the
+            // evaluation fails without a note (clang fails silently on an
+            // expression that `containsErrors()`).
+            ExprKind::RecoveryExpr => self.trap(e, ""),
+            // C: an assignment's result is the left operand's new value, not
+            // an lvalue (C23 6.5.17.1p3): the assignment, then a copy.
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator
+                if self.ast().exprs.binary_op(e).is_assignment() =>
+            {
+                let src = self.lv_mem(e, Access::Read);
+                self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
+            }
+            ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                match self.ast().exprs.selected_operand(e) {
+                    Some(x) => self.init_inner(x, p, ty),
+                    None => unreachable!(
+                        "only a dependent `__builtin_choose_expr` or `_Generic` has no selected operand, and a value-dependent expression is never evaluated (`value::eval_at`)"
+                    ),
+                }
+            }
+            k => unreachable!(
+                "`init_inner` reaches its kind match with a class, array, bool vector or wide `_BitInt` prvalue, not a {k:?}: a glvalue is copied (the arm above), a scalar or a vector or complex operation is evaluated before the match, a literal, a reference to a declaration or an arithmetic operator has no aggregate type, and the pack, splice and other dependent forms are built value-dependent only, never evaluated (`value::eval_at`)"
+            ),
         }
     }
 
@@ -6809,11 +6872,15 @@ impl Compiler<'_> {
         let tr = self.elem_track.take_if(|t| t.list == e);
         match self.kind(ty) {
             TyKind::Array { elem, n } => {
-                if inits.len() as u64 > n {
-                    // kiln-gap: GAP-112
-                    self.unsupported(e);
-                    return;
-                }
+                // An excess clause is left out of the initialization in C
+                // (`Sema::excess_c`) and fails it in C++ (a `RecoveryExpr`
+                // replaces the initializer, [dcl.init.aggr]/12); a GNU
+                // flexible array member's elements are skipped by the
+                // caller (`is_flexible_elements_init`).
+                assert!(
+                    inits.len() as u64 <= n,
+                    "sema leaves no excess clause in an array's initializer list"
+                );
                 // A list of one string literal initializing a char array.
                 if inits.len() == 1
                     && self.node(skip_parens(self.ast(), inits[0])).kind()
@@ -6872,10 +6939,19 @@ impl Compiler<'_> {
             TyKind::BoolVec { elem, n } => {
                 // One bit per lane (`ty.rs`); the lanes not listed are
                 // false.
-                if inits.len() as u64 > n || inits.iter().any(|&x| self.is_vector_expr(x)) {
-                    // kiln-gap: GAP-112
-                    return self.unsupported(e);
-                }
+                // Excess clauses are left out (C) or fail the
+                // initialization (C++), as for an array; a vector clause
+                // would concatenate its lanes, which only OpenCL allows
+                // (sema rejects one: "cannot initialize ... with an lvalue
+                // of type" a vector).
+                assert!(
+                    inits.len() as u64 <= n
+                        && inits.iter().all(|&x| {
+                            !self.is_vector_expr(x)
+                                || self.node(x).deps().contains(kiln_ast::expr::ExprDeps::ERROR)
+                        }),
+                    "sema leaves no excess or vector clause in a vector's initializer list"
+                );
                 if (inits.len() as u64) < n {
                     self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 }
@@ -7006,7 +7082,12 @@ impl Compiler<'_> {
             | TyKind::MemPtr { .. }
             | TyKind::Reflection
             | TyKind::WideInt { .. }
-            | TyKind::Opaque => self.unsupported(e), // kiln-gap: GAP-112
+            | TyKind::Opaque => unreachable!(
+                "aggregate initialization reaches only an array, a class or a bool vector: \
+                 `init_inner` takes a list of another type through `rv` (scalars) or \
+                 `wide_init` (wide `_BitInt`), sema builds a parenthesized list only for an \
+                 aggregate ([dcl.init.general]/16.6.2.2), and a closure is a class"
+            ),
         }
     }
 
@@ -7031,27 +7112,28 @@ impl Compiler<'_> {
         !s.is_empty()
     }
 
-    /// `p + off` (bytes).
     /// A `std::initializer_list<E>` over its backing array
     /// ([dcl.init.list]/5): the first field points at the array, the
     /// second holds its length (libstdc++, libc++) or points past its end.
+    /// Sema builds the expression only for a class of that layout
+    /// (`Sema::std_initializer_list_layout_ok`, clang's
+    /// `err_std_initializer_list_malformed` otherwise) over a `const E[N]`
+    /// temporary.
     fn std_initializer_list(&mut self, e: ExprId, p: u32, ty: OTy) {
+        const LAYOUT: &str = "sema builds a `CXXStdInitializerListExpr` only over a `const E[N]` \
+                              temporary, for a class whose two fields are a `const E *` and a \
+                              `const E *` or non-bit-field `std::size_t` \
+                              (`Sema::std_initializer_list_layout_ok`)";
         let arr = self.ast().exprs.operand(e);
         let aty = self.ety(arr);
-        // kiln-gap: GAP-112
-        let TyKind::Array { elem, n } = self.kind(aty) else { return self.unsupported(e) };
-        // kiln-gap: GAP-112
-        let &[f0, f1] = self.o.types.fields(ty) else { return self.unsupported(e) };
-        if !matches!(self.kind(f0.ty), TyKind::Ptr(_)) || f0.width.is_some() {
-            // kiln-gap: GAP-112
-            return self.unsupported(e);
-        }
+        let TyKind::Array { elem, n } = self.kind(aty) else { unreachable!("{LAYOUT}") };
+        let &[f0, f1] = self.o.types.fields(ty) else { unreachable!("{LAYOUT}") };
         let a = self.lv_mem(arr, Access::Addr);
         let q0 = self.elem_ptr(p, f0.offset, e);
         self.emit_at(Op::InitStore, 0, &[q0, a, f0.ty.0], e);
         let r = self.reg();
         match self.kind(f1.ty) {
-            TyKind::Int { .. } if f1.width.is_none() => self.konst(r, u128::from(n)),
+            TyKind::Int { .. } => self.konst(r, u128::from(n)),
             TyKind::Ptr(_) => {
                 let k = self.reg();
                 self.konst(k, u128::from(n));
@@ -7059,7 +7141,6 @@ impl Compiler<'_> {
             }
             TyKind::Void
             | TyKind::Bool
-            | TyKind::Int { .. }
             | TyKind::Float(_)
             | TyKind::NullPtr
             | TyKind::Array { .. }
@@ -7069,12 +7150,13 @@ impl Compiler<'_> {
             | TyKind::MemPtr { .. }
             | TyKind::Reflection
             | TyKind::WideInt { .. }
-            | TyKind::Opaque => return self.unsupported(e), // kiln-gap: GAP-112
+            | TyKind::Opaque => unreachable!("{LAYOUT}"),
         }
         let q1 = self.elem_ptr(p, f1.offset, e);
         self.emit_at(Op::InitStore, 0, &[q1, r, f1.ty.0], e);
     }
 
+    /// `p + off` (bytes).
     fn elem_ptr(&mut self, p: u32, off: u64, e: ExprId) -> u32 {
         if off == 0 {
             return p;
@@ -7220,7 +7302,10 @@ impl Compiler<'_> {
                     _ if op.is_compound_assignment() => {
                         self.compound_assign(e);
                     }
-                    _ if self.o.types.wide(ty).is_some() => {
+                    // A wide integer, or the comparison-category object
+                    // of a discarded builtin `<=>` ([expr.spaceship]/4,
+                    // [expr.context]/2): a temporary.
+                    _ if self.o.types.wide(ty).is_some() || self.o.types.is_aggregate(ty) => {
                         let _ = self.materialize(e, ty);
                     }
                     _ => {
@@ -7281,8 +7366,19 @@ impl Compiler<'_> {
             // `void()` (an empty comma fold, [temp.variadic]/10) or a
             // discarded `T()`: no effect.
             ExprKind::CXXScalarValueInitExpr => {}
-            // kiln-gap: GAP-110
-            _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
+            _ if self.kind(ty) == TyKind::Void => match self.node(e).kind() {
+                // A `co_await` / `co_yield` ([expr.const]/5.23), or an
+                // atomic builtin clang's evaluator has no visitor for: the
+                // generic note.
+                ExprKind::CoawaitExpr
+                | ExprKind::CoyieldExpr
+                | ExprKind::AtomicExpr
+                | ExprKind::VAArgExpr => self.throw_invalid(e),
+                ExprKind::RecoveryExpr => self.trap(e, ""),
+                k => unreachable!(
+                    "a discarded void expression is a call, a cast to void, a conditional, comma, throw, delete or statement expression (their arms above), a coroutine or atomic operation, or erroneous, not a {k:?}"
+                ),
+            },
             _ if self.o.types.is_aggregate(ty) => {
                 let _ = self.materialize(e, ty);
             }
@@ -7726,11 +7822,10 @@ impl Compiler<'_> {
         sret: Option<u32>,
     ) -> u32 {
         use crate::meta::materialize::{ExcSite, MetaSite, Shape, recipe};
-        if args.len() > crate::MAX_META_ARGS {
-            // kiln-gap: GAP-124
-            self.unsupported(e);
-            return self.reg();
-        }
+        assert!(
+            args.len() <= crate::MAX_META_ARGS,
+            "an intrinsic's declaration is not variadic and has at most MAX_META_ARGS parameters (sema's `meta_intrinsic_of`), and a call has one argument per parameter"
+        );
         let mut site = MetaSite {
             e,
             callee,
@@ -7965,8 +8060,9 @@ impl Compiler<'_> {
         let kind = ast.exprs.source_loc_kind(e);
         let key = self.srcloc.unwrap_or(e);
         let Some(v) = ast.exprs.source_loc_values(key).copied() else {
-            // kiln-gap: GAP-116
-            return self.unsupported(e);
+            unreachable!(
+                "sema records the values of a source-location builtin where it builds one (`act_on_source_loc_expr`, `image_source_loc_use`), and `enter_default_arg` keys a default argument use only when sema recorded values for it"
+            )
         };
         let cv = match kind {
             K::Line => return self.konst(dst, u128::from(v.line)),
@@ -7976,8 +8072,9 @@ impl Compiler<'_> {
             K::Function => v.function,
             K::SourceLocStruct => match v.location {
                 Some(c) => c,
-                // kiln-gap: GAP-116
-                None => return self.unsupported(e),
+                None => unreachable!(
+                    "sema builds `__builtin_source_location()` only once it found a valid `std::source_location::__impl` (`std_source_location_impl`), and records its object with the values (`record_source_loc`)"
+                ),
             },
         };
         let ty = self.ety(e);
