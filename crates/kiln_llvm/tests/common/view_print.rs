@@ -2315,6 +2315,7 @@ fn write_type<W: fmt::Write + ?Sized>(t: &TypeTable, w: &mut W, ty: TypeId) -> f
         TypeData::Double => w.write_str("double"),
         TypeData::Fp128 => w.write_str("fp128"),
         TypeData::X86Fp80 => w.write_str("x86_fp80"),
+        TypeData::X86Amx => w.write_str("x86_amx"),
         TypeData::Int(n) => write!(w, "i{n}"),
         TypeData::Ptr(0) => w.write_str("ptr"),
         TypeData::Ptr(a) => write!(w, "ptr addrspace({a})"),

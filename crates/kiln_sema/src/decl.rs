@@ -2272,12 +2272,23 @@ impl Sema<'_, '_> {
     /// from C++20, at the bound like a braced one; before, it is no
     /// single initializer and goes on to the array checks ("array
     /// initializer must be an initializer list"). True (and `v`
-    /// invalid) if rejected.
+    /// invalid) if rejected; true also for C's empty initializer, which
+    /// it attaches.
     fn reject_vla_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
         let TypeView::VariableArray { size, .. } = self.ast.types.canonical_view(ty) else {
             return false;
         };
         let at = match init {
+            // C23 6.7.11/4: the empty initializer `{}` may initialize a
+            // variable length array (to zero); clang accepts it in every
+            // C mode, before C23 as an extension. The variable keeps its
+            // type, initialized by an empty list of it (codegen: a
+            // `memset` of the run-time size; WP-1739).
+            Initializer::List(l) if l.items.is_empty() && self.is_c() => {
+                let e = self.builder().init_list(ty, &[], None, None, l.lbrace, l.rbrace);
+                let _ = self.builder().set_var_init(v, e);
+                return true;
+            }
             Initializer::List(_) => self.begin_loc(size),
             Initializer::Paren(es, ..) if es.len() != 1 => {
                 if self.std < kiln_lex::Std::Cxx20 {

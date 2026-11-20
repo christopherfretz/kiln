@@ -1520,7 +1520,7 @@ impl Compiler<'_> {
     /// (`sret`: the result object of a class result).
     pub(super) fn member_call(&mut self, e: ExprId, sret: Option<u32>) -> u32 {
         let ast = self.ast();
-        let callee = skip_parens(ast, ast.exprs.callee(e));
+        let callee = ast.exprs.member_call_callee(e);
         let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
         if ast.exprs.get(callee).kind() != ExprKind::MemberExpr {
             if let Some(bin) = self.is_mp_callee(callee) {

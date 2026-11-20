@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprKind, TypeidOperand};
-use kiln_ast::types::{Nns, Quals, TagKeyword, TypeKind};
+use kiln_ast::types::{Nns, Quals, TagKeyword, TypeFlags, TypeKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -85,6 +85,14 @@ impl Sema<'_, '_> {
         {
             let msg = self.diag(DiagId::sema_typeid_incomplete, loc).arg(self.ty_arg(unqual));
             self.emit(self.incomplete_note(msg, unqual));
+            return self.recover_err(&kids, loc);
+        }
+        // A VLA has no `type_info` (clang `BuildCXXTypeId`,
+        // `err_variably_modified_typeid`, of the type or the operand's).
+        if self.ast.types.qflags(unqual).contains(TypeFlags::VARIABLY_MODIFIED) {
+            let msg =
+                self.diag(DiagId::sema_typeid_variably_modified, loc).arg(self.ty_arg(unqual));
+            self.emit(msg);
             return self.recover_err(&kids, loc);
         }
         // [expr.typeid]/3: a glvalue of polymorphic class type is

@@ -605,7 +605,9 @@ impl Cg<'_> {
                     return self.union_const(img, off, t, (*d, rec.size), e);
                 }
                 let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
-                self.record_elems(img, off, 0, *d, None, e, &mut elems)?;
+                let mut groups = Vec::new();
+                self.record_elems(img, off, 0, *d, None, e, &mut elems, &mut groups)?;
+                let elems = resolve_overlaps(elems, &groups);
                 self.build_struct_const(t, rec.size, &elems)
             }
             IrType::Struct(ms, packed) => {
@@ -616,9 +618,11 @@ impl Cg<'_> {
                 }
                 self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
             }
+            // A base subobject's type is a member of its class's struct
+            // only: `record_elems` flattens bases and potentially-
+            // overlapping members in itself.
             IrType::RecordBase(_) => {
-                // kiln-gap: GAP-083
-                err(None, "base-class subobjects in constants are not supported yet (M3)")
+                unreachable!("a base-subobject type outside a class constant (WP-1739)")
             }
             // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
             // lane, lane `i` at byte `i * sizeof(elem)` of the image; an
@@ -641,9 +645,15 @@ impl Cg<'_> {
                 }
                 self.m.const_vector(&elems).map_err(|e| ir_err(&e))
             }
+            // No object has type `void`; a sizeless type (SVE vectors and
+            // predicates, `__SVCount_t`) is no member or element type
+            // (Sema: "field has sizeless type", "array has sizeless
+            // element type"), and the Oven makes no constant of one
+            // ("value of this type cannot be represented as a constant",
+            // `kiln_oven` value.rs; zero-initialization is `zeroinitializer`
+            // in expression codegen).
             IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
-                // kiln-gap: GAP-084
-                err(None, "scalable-vector and target-type constants are not supported yet (M3)")
+                unreachable!("a constant of type {it:?} (WP-1739)")
             }
         }
     }
@@ -668,16 +678,18 @@ impl Cg<'_> {
         complete: Option<DeclId>,
         e: Option<ExprId>,
         out: &mut Vec<(u64, Value)>,
+        groups: &mut Vec<Overlap>,
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
         let rec = self.tys.record(first).clone();
         let as_base = complete.is_some();
         let vt_class = complete.unwrap_or(first);
-        if rec.is_union && as_base {
-            // kiln-gap: GAP-085
-            return err(None, "union base-class constants are not supported yet (M3)");
-        }
+        // [class.union.general]/4: a union has no base classes and is no
+        // base class, and a member stored as a base-subobject type is a
+        // class with tail padding, never a union (`base_members` is not
+        // set for one).
+        assert!(!(rec.is_union && as_base), "a union laid out as a base subobject (WP-1739)");
         let (members, packed) = match (&rec.base_members, as_base) {
             (Some(b), true) => {
                 let lt = self.ir(&IrType::RecordBase(first));
@@ -772,6 +784,13 @@ impl Cg<'_> {
                     out.push((at, self.const_value(c, xt, Some(x), false)?));
                     continue;
                 }
+                // A potentially-overlapping member (`[[no_unique_address]]`)
+                // of a class with tail padding is stored as its base-
+                // subobject type (`IrType::RecordBase`).
+                if let IrType::RecordBase(c) = m {
+                    self.overlapping_member(img, off, at, *c, sub, out, groups)?;
+                    continue;
+                }
                 let fm = ast.decls.get(f).ty().map(|q| self.const_ir_type(q));
                 let m = fm
                     .as_ref()
@@ -780,9 +799,9 @@ impl Cg<'_> {
                 out.push((at, self.image_const(img, off + at, m, sub)?));
             } else if let Some(b) = by_base[i] {
                 let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());
-                self.record_elems(img, off, at, b, Some(vt_class), sub, out)?;
+                self.record_elems(img, off, at, b, Some(vt_class), sub, out, groups)?;
             } else if let Some(b) = virt_slot[i] {
-                self.record_elems(img, off, at, b, Some(vt_class), None, out)?;
+                self.record_elems(img, off, at, b, Some(vt_class), None, out, groups)?;
             } else if i == 0
                 && (matches!(m, IrType::Ptr) || primary_vbase)
                 && self.is_dynamic(first)
@@ -794,11 +813,77 @@ impl Cg<'_> {
                 // complete object, or here as its indirect primary base
                 // with the same address point.
                 out.push((at, self.vtable_address_point(vt_class, first, rel)?));
-            } else if !matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                // kiln-gap: GAP-086
-                return err(None, "class constants with this member are not supported yet");
+            } else {
+                // kiln_abi `lower_struct` stores fields (and bit-field
+                // units), bases, virtual bases, the vptr (slot 0) and
+                // `insertPadding`'s byte arrays, nothing else.
+                assert!(
+                    matches!(m, IrType::Array(..) | IrType::Int(8)),
+                    "class constant slot {i} of type {m:?} is no member, base or padding (WP-1739)"
+                );
             }
         }
+        Ok(())
+    }
+
+    /// A potentially-overlapping member of class `c` at byte `at` of the
+    /// object at `off`, initialized by `sub`: its complete-object constant
+    /// (clang `tryEmitPrivateForMemory` of the field's value), recorded
+    /// in `groups` with the elements it splits into should a later
+    /// element reuse its tail padding (clang `ConstantAggregateBuilder::
+    /// split`, which `AppendField`'s overwrite of the padding forces;
+    /// [`resolve_overlaps`]). The member is a complete object: its vptr
+    /// points into its own class's vtable, and its virtual bases (P3533)
+    /// are its own. A union splits into its active member's constant.
+    #[allow(clippy::too_many_arguments)]
+    fn overlapping_member(
+        &mut self,
+        img: &Img,
+        off: u64,
+        at: u64,
+        c: DeclId,
+        sub: Option<ExprId>,
+        out: &mut Vec<(u64, Value)>,
+        groups: &mut Vec<Overlap>,
+    ) -> R<()> {
+        let whole = self.image_const(img, off + at, &IrType::Record(c), sub)?;
+        let size = self.tys.record(c).size;
+        let first = out.len();
+        let mut inner = Vec::new();
+        if self.tys.record(c).is_union {
+            match self.union_active(img, off + at, c, sub) {
+                Some((f, fsub)) => {
+                    let fq = self.ast.decls.get(f).ty().expect("Sema: a field has a type");
+                    match self.ast.types.as_record(fq).map(|r| self.ast.first(r)) {
+                        Some(fc) if !self.tys.record(fc).is_union => {
+                            self.overlapping_member(
+                                img,
+                                off + at,
+                                0,
+                                fc,
+                                fsub,
+                                &mut inner,
+                                groups,
+                            )?;
+                        }
+                        _ => inner.push((0, whole)),
+                    }
+                }
+                None => inner.push((0, whole)),
+            }
+        } else {
+            let mut nested = Vec::new();
+            self.record_elems(img, off + at, 0, c, None, sub, &mut inner, &mut nested)?;
+            // The nested groups' indices are into `inner`, shifted below.
+            groups.extend(nested.into_iter().map(|g| Overlap {
+                first: g.first + first,
+                end: g.end + first,
+                at: g.at + at,
+                ..g
+            }));
+        }
+        out.extend(inner.into_iter().map(|(o, v)| (o + at, v)));
+        groups.push(Overlap { first, end: out.len(), at, size, whole });
         Ok(())
     }
 
@@ -955,6 +1040,35 @@ impl Cg<'_> {
     /// The active member of the union `rd` at `off` of `img`, as the Oven
     /// recorded it (nested unions can share an offset: the member whose
     /// context is `rd`'s definition).
+    /// `e` (initializers stripped) if it is a list initialization.
+    fn list_init(&self, e: Option<ExprId>) -> Option<ExprId> {
+        e.map(|x| self.strip_init(x)).filter(|&x| {
+            matches!(
+                self.ast.exprs.get(x).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        })
+    }
+
+    /// The active member of the union `rd` at `off` initialized by `e`,
+    /// with its initializer: the member the initializer list names, else
+    /// the one the evaluation left active (a constructor body's
+    /// assignment, or a union copied by its trivial `operator=`), as
+    /// clang's `APValue`.
+    fn union_active(
+        &self,
+        img: &Img,
+        off: u64,
+        rd: DeclId,
+        e: Option<ExprId>,
+    ) -> Option<(DeclId, Option<ExprId>)> {
+        let ile = self.list_init(e);
+        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
+        let f = active.or_else(|| self.image_union_member(img, off, rd))?;
+        let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
+        Some((f, sub))
+    }
+
     fn image_union_member(&self, img: &Img, off: u64, rd: DeclId) -> Option<DeclId> {
         let def = self.ast.definition(rd).unwrap_or(rd);
         img.unions_at(off).find(|&f| {
@@ -990,25 +1104,13 @@ impl Cg<'_> {
         (rd, size): (DeclId, u64),
         e: Option<ExprId>,
     ) -> R<Value> {
-        let e = e.map(|x| self.strip_init(x));
-        let ile = e.filter(|&x| {
-            matches!(
-                self.ast.exprs.get(x).kind(),
-                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
-            )
-        });
-        // The member the initializer list names, else the one the
-        // evaluation left active (a constructor body's assignment, or a
-        // union copied by its trivial `operator=`), as clang's `APValue`.
-        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
-        let active = active.or_else(|| self.image_union_member(img, off, rd));
-        let Some(f) = active else {
+        let ile = self.list_init(e);
+        let Some((f, sub)) = self.union_active(img, off, rd, e) else {
             if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
                 return Ok(self.m.const_zero(t));
             }
             return err(None, "union constant without an active member");
         };
-        let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
         let fq = self.ast.decls.get(f).ty().expect("field type");
         // GNU: an initialized flexible array member (folded on its own,
         // `fold::flexible_elements_init`) is its elements, past the
@@ -1172,4 +1274,54 @@ fn has_bool_vec(it: &IrType) -> bool {
 
 pub(crate) fn ir_err(e: &kiln_llvm::IrError) -> crate::CodegenError {
     crate::CodegenError { loc: None, msg: format!("constant emission failed: {e:?}") }
+}
+
+/// A potentially-overlapping member's constant (`whole`, `size` bytes at
+/// `at`) and the elements `first..end` it splits into
+/// (`Cg::overlapping_member`).
+#[derive(Clone, Copy)]
+struct Overlap {
+    first: usize,
+    end: usize,
+    at: u64,
+    size: u64,
+    whole: Value,
+}
+
+/// clang `ConstantAggregateBuilder`: a potentially-overlapping member is
+/// one constant unless an element outside it lies in its bytes (a later
+/// field or a derived class's member in its tail padding), which splits
+/// it into its elements, each of those again only as far as needed.
+fn resolve_overlaps(elems: Vec<(u64, Value)>, groups: &[Overlap]) -> Vec<(u64, Value)> {
+    if groups.is_empty() {
+        return elems;
+    }
+    let whole = |g: &Overlap| {
+        !elems
+            .iter()
+            .enumerate()
+            .any(|(k, &(o, _))| (k < g.first || k >= g.end) && o >= g.at && o < g.at + g.size)
+    };
+    // The outermost unsplit groups, by first element.
+    let mut keep: Vec<&Overlap> = groups.iter().filter(|g| whole(g)).collect();
+    keep.sort_by_key(|g| (g.first, std::cmp::Reverse(g.end)));
+    let mut out = Vec::with_capacity(elems.len());
+    let (mut k, mut gi) = (0, 0);
+    loop {
+        match keep.get(gi) {
+            // Inside a group already emitted whole.
+            Some(g) if g.first < k => gi += 1,
+            Some(g) if g.first == k => {
+                out.push((g.at, g.whole));
+                k = g.end;
+                gi += 1;
+            }
+            _ if k < elems.len() => {
+                out.push(elems[k]);
+                k += 1;
+            }
+            _ => break,
+        }
+    }
+    out
 }

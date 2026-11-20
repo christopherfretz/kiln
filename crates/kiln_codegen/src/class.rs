@@ -1810,8 +1810,10 @@ impl Cg<'_> {
         if self.is_glvalue(e) {
             return Ok(self.emit_lvalue(e)?.addr.v);
         }
-        // kiln-gap: GAP-080
-        err(self.loc_of(e), "binding a reference to a prvalue is not supported yet")
+        // Sema materializes every prvalue a reference binds to
+        // ([dcl.init.ref]/5.4: a `MaterializeTemporaryExpr`,
+        // `Sema::materialize_temporary`), so the initializer is a glvalue.
+        unreachable!("a reference binds to a prvalue: sema materializes it (WP-1739)")
     }
 
     /// clang `pushTemporaryCleanup` after materializing the temporary
@@ -1972,12 +1974,15 @@ impl Cg<'_> {
                     n = n.saturating_mul(a.size);
                     q = a.elem;
                 }
+                // A variable length array's elements are constructed by
+                // `emit_vla_var` (`construct_array_n` over the run-time
+                // count), a `new[]`'s by `new_delete.rs`; Sema rejects
+                // every other initialization of one ("variable-sized
+                // object may not be initialized": copy captures, bindings)
+                // and builds no constructor call for an incomplete array
+                // (a flexible array member is left uninitialized).
                 TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => {
-                    return err(
-                        self.loc_of(e),
-                        // kiln-gap: GAP-081
-                        "construction of variable-length arrays is not supported yet",
-                    );
+                    unreachable!("constructing an array of unknown or run-time bound (WP-1739)")
                 }
                 _ => break,
             }
@@ -2194,19 +2199,19 @@ impl Cg<'_> {
     /// clang `EmitCXXMemberCallExpr` (non-virtual).
     pub(crate) fn emit_member_call(&mut self, e: ExprId, dest: Option<Addr>) -> R<Option<V>> {
         let ast = self.ast;
-        let mut callee_e = ast.exprs.callee(e);
-        while ast.exprs.get(callee_e).kind() == ExprKind::ParenExpr {
-            callee_e = ast.exprs.operand(callee_e);
-        }
+        // A member access or `.*` / `->*` under parentheses, `__extension__`
+        // or a chosen `__builtin_choose_expr` / `_Generic` operand.
+        let callee_e = ast.exprs.member_call_callee(e);
         if ast.exprs.get(callee_e).kind() == ExprKind::BinaryOperator
             && ast.exprs.binary_op(callee_e).is_ptr_mem()
         {
             return self.mp_call(e, callee_e, dest);
         }
-        if ast.exprs.get(callee_e).kind() != ExprKind::MemberExpr {
-            // kiln-gap: GAP-082
-            return err(self.loc_of(e), "calls through member pointers are not supported yet");
-        }
+        assert_eq!(
+            ast.exprs.get(callee_e).kind(),
+            ExprKind::MemberExpr,
+            "Sema: a member call's callee is a member access or `.*`/`->*` (WP-1739)"
+        );
         let md = ast.exprs.decl(callee_e);
         let base = ast.exprs.operand(callee_e);
         let arrow = ast.exprs.get(callee_e).has(ExprFlags::ARROW);
@@ -2244,12 +2249,7 @@ impl Cg<'_> {
             let mut dest = dest;
             let client = match self.client_checked(md) {
                 Some(d) => {
-                    if dest.is_none()
-                        && self.is_aggregate(sig.ret)
-                        && self.client_post_names_result(d)
-                    {
-                        dest = Some(self.temp(sig.ret));
-                    }
+                    dest = self.client_result_slot(d, sig.ret, dest);
                     Some(self.emit_client_pre(d, None, &vals)?)
                 }
                 None => None,
@@ -2392,10 +2392,7 @@ impl Cg<'_> {
         let mut dest = dest;
         let client = match self.client_checked(md) {
             Some(d) => {
-                if dest.is_none() && self.is_aggregate(sig.ret) && self.client_post_names_result(d)
-                {
-                    dest = Some(self.temp(sig.ret));
-                }
+                dest = self.client_result_slot(d, sig.ret, dest);
                 Some(self.emit_client_pre(d, Some((this.v, crd)), &vals)?)
             }
             None => None,

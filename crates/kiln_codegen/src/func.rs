@@ -668,7 +668,6 @@ impl Cg<'_> {
             let pq = ast.decls.get(p).ty().expect("param type");
             let info = sig.info.args[si].clone();
             si += 1;
-            let loc = Some(ast.decls.get(p).loc());
             // C17 6.9.1p10: a K&R parameter arrives as its promoted type
             // and is narrowed to its declared one (clang
             // `emitArgumentDemotion`).
@@ -683,7 +682,7 @@ impl Cg<'_> {
                     != ast.types.canonical(pq).without_quals()
                 && !transparent(sq)
                 && !transparent(pq);
-            let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no, loc)?;
+            let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no)?;
             vals.push(match pv {
                 ParamVal::Direct(v) if demote => {
                     let op =
@@ -696,9 +695,7 @@ impl Cg<'_> {
             if let Some(&(_, t, _)) = object_sizes.iter().find(|o| o.0 == i) {
                 let info = sig.info.args[si].clone();
                 si += 1;
-                if let ParamVal::Direct(v) =
-                    self.prolog_arg(&info.kind, size_q, &mut arg_no, loc)?
-                {
+                if let ParamVal::Direct(v) = self.prolog_arg(&info.kind, size_q, &mut arg_no)? {
                     hidden.push((p, t, v));
                 }
             }
@@ -1593,13 +1590,7 @@ impl Cg<'_> {
 
     /// One argument of clang `EmitFunctionProlog`: the parameter's value
     /// (scalars) or address (aggregates and coerced scalars' memory).
-    fn prolog_arg(
-        &mut self,
-        kind: &ArgKind,
-        pq: QualType,
-        arg_no: &mut u32,
-        loc: Option<Loc>,
-    ) -> R<ParamVal> {
+    fn prolog_arg(&mut self, kind: &ArgKind, pq: QualType, arg_no: &mut u32) -> R<ParamVal> {
         let mt = self.mty(pq);
         // A `_Complex` parameter lives in memory like an aggregate (clang
         // `EmitFunctionProlog`: not of scalar evaluation kind).
@@ -1613,8 +1604,12 @@ impl Cg<'_> {
                     let a = self.f.fir.alloca(mt, align);
                     Ok(ParamVal::Indirect(Addr { v: a, ty: mt, align }, false))
                 } else {
-                    // kiln-gap: GAP-088
-                    err(loc, "an ignored scalar parameter is not supported yet")
+                    // kiln_abi ignores only `void`, zero-sized types and
+                    // empty records: every scalar has an x86-64 class
+                    // (`classify`; an `__fp16` parameter off ARM is
+                    // rejected by Sema, "parameters cannot have __fp16
+                    // type", as clang) and a nonzero AArch64 size.
+                    unreachable!("an ignored parameter of scalar type {pq:?} (WP-1739)")
                 }
             }
             ArgKind::Indirect { byval, align } => {
@@ -1712,21 +1707,31 @@ impl Cg<'_> {
         q: QualType,
         arg: CallArg,
         out: &mut Vec<V>,
-        loc: Option<Loc>,
     ) -> R<()> {
         match kind {
             ArgKind::Ignore => Ok(()),
             ArgKind::Indirect { byval, align } => {
                 match arg {
                     CallArg::Agg(a) => {
+                        // clang `EmitCall`: a `byval` argument less aligned
+                        // than the ABI wants is realigned in place
+                        // (`getOrEnforceKnownAlignment`, an alloca), else
+                        // copied into an aligned `byval-temp`. kiln's
+                        // arguments are temporaries; a forwarded parameter
+                        // (`delegate_call_arg`) is the incoming one.
                         if *byval && a.align < *align {
                             let got = self.f.fir.enforce_alloca_align(a.v, *align);
                             if got.is_none_or(|g| g < *align) {
-                                return err(
-                                    loc,
-                                    // kiln-gap: GAP-089
-                                    "copying an under-aligned byval argument is not supported yet",
-                                );
+                                let mt = self.mty(q);
+                                let t = Addr {
+                                    v: self.f.fir.alloca(mt, *align),
+                                    ty: mt,
+                                    align: *align,
+                                };
+                                let (size, _) = self.size_align(q);
+                                self.agg_copy(q, t, a, size, false);
+                                out.push(t.v);
+                                return Ok(());
                             }
                         }
                         out.push(a.v);

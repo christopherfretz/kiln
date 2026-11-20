@@ -61,6 +61,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A function template declared through a typedef, alias or `decltype`
   of a function type (`template<class T> F f;`, [dcl.fct]/13) can be
   specialized and called (WP-1740).
+- Code generation paths that reported "not supported yet" (WP-1739):
+  the builtins the frontend accepted but could not lower (the AMX
+  `*_internal` and Key Locker builtins, MMX `maskmovq`, AArch32
+  `__a32_vcvt_bf16_f32`, `__atomic_always_lock_free` with a size known
+  only at run time); compound assignment, `++` and `--` of `_Atomic long
+  double` on x86-64; C23 `= {}` of a variable length array; constants of
+  classes with a `[[no_unique_address]]` member that overlaps its
+  neighbours (laid out as clang does); `typeid`, throw and handlers of
+  `_BitInt` and `_Atomic` types; the caller-side postcondition check of
+  a function returning an `_Atomic` class type; an under-aligned `byval`
+  argument (copied to an aligned temporary).
 
 ### Fixed
 
@@ -147,6 +158,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   reference or const member, and a variadic explicitly-defaulted special
   member. A nested designator into a member that is not an aggregate is
   an error (docs/status/deviations.md).
+
+- `typeid`, a handler, or a throw of a pointer to a variable length
+  array is an error, as in clang ("'typeid' of variably modified type",
+  "cannot catch variably modified type"), instead of failing in code
+  generation. The `type_info` of `__bf16` and the SVE types is emitted
+  where it is used, as clang does, because the C++ runtime does not define
+  it. A member call whose callee is wrapped in `__extension__`,
+  `__builtin_choose_expr` or `_Generic`, and a lambda in an abbreviated
+  function template's requires-clause or default argument, compile
+  instead of failing in code generation or crashing constant evaluation.
+  A template template parameter named without template arguments where
+  no deduced class type may appear (`typeid(T)`, `sizeof(T)`, `T *p`) is
+  an error in the template definition, as in clang (WP-1739).
 
 ## [1.3.0] - 2026-11-20
 

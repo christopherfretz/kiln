@@ -83,6 +83,10 @@ pub enum TypeData {
     Fp128,
     /// `x86_fp80`.
     X86Fp80,
+    /// `x86_amx`: an AMX tile register, only an operand or result of the
+    /// `llvm.x86.*.internal` intrinsics and the
+    /// `llvm.x86.cast.{vector.to.tile,tile.to.vector}` casts.
+    X86Amx,
     /// `iN`, `1 <= N <= MAX_INT_BITS`.
     Int(u32),
     /// Opaque pointer in an address space.
@@ -328,6 +332,11 @@ impl TypeTable {
     pub fn vector(&mut self, elem: TypeId, len: u32) -> TypeId {
         debug_assert!(self.is_valid_vector_elem(elem), "invalid vector element type");
         self.intern(TypeData::Vector { len, elem, scalable: false })
+    }
+
+    /// `x86_amx`.
+    pub fn x86_amx(&mut self) -> TypeId {
+        self.intern(TypeData::X86Amx)
     }
 
     /// `target("name")`.
@@ -666,6 +675,7 @@ impl TypeTable {
             TypeData::Double => w.write_str("double"),
             TypeData::Fp128 => w.write_str("fp128"),
             TypeData::X86Fp80 => w.write_str("x86_fp80"),
+            TypeData::X86Amx => w.write_str("x86_amx"),
             TypeData::Int(n) => write!(w, "i{n}"),
             TypeData::Ptr(0) => w.write_str("ptr"),
             TypeData::Ptr(a) => write!(w, "ptr addrspace({a})"),
@@ -776,6 +786,7 @@ impl TypeTable {
             TypeData::Double => s.push_str("f64"),
             TypeData::Fp128 => s.push_str("f128"),
             TypeData::X86Fp80 => s.push_str("f80"),
+            TypeData::X86Amx => s.push_str("x86amx"),
             TypeData::Int(n) => {
                 let _ = write!(s, "i{n}");
             }

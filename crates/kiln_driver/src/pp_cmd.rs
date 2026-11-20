@@ -1074,8 +1074,8 @@ pub const UNPARSED_KEYWORD_BUILTINS: &[&str] = &[
 /// than reaching "use of undeclared identifier".
 ///
 /// WP-805 (spec/sema.md §4.5): the answers are truthful. `__has_builtin`
-/// answers 0 for a builtin function kiln does not declare, and for one
-/// it declares but cannot lower ([`kiln_codegen::UNLOWERED_BUILTINS`]).
+/// answers 0 for a builtin function kiln does not declare (every builtin
+/// kiln declares lowers or folds, WP-1739).
 /// `__has_attribute`, `__has_cpp_attribute` and
 /// `__has_declspec_attribute` answer 0 for a class-A attribute kiln
 /// rejects ([`kiln_sema::attr_triage`]). `-E` keeps clang's raw answers.
@@ -1106,7 +1106,7 @@ impl StagedFeatures {
         let declared = kiln_ast::decl::builtin::by_name_at(name, compat).is_some()
             || kiln_ast::decl::builtin::lib_by_name(name).is_some();
         if declared {
-            return kiln_codegen::is_unlowered_builtin(name);
+            return false;
         }
         name.starts_with("__")
             && RESERVED_LIBRARY_BUILTINS.binary_search(&name).is_err()

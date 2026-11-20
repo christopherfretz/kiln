@@ -153,12 +153,17 @@ impl Cg<'_> {
             elem = e;
         }
         // A class element type: `init` is the default construction of the
-        // elements; Sema rejects every other initializer of a variable
-        // length array in C++ ("variable-sized object may not be
+        // elements; C's empty initializer `= {}` is an empty list of the
+        // array type (C23 6.7.11/4); Sema rejects every other initializer
+        // of a variable length array ("variable-sized object may not be
         // initialized", as clang 22 at every `-std=`).
-        if init.is_some_and(|i| ast.exprs.get(i).kind() != ExprKind::CXXConstructExpr) {
-            // kiln-gap: GAP-091
-            return err(loc, "this initializer of a variable length array is not supported yet");
+        let zeroed = init.is_some_and(|i| ast.exprs.get(i).kind() == ExprKind::InitListExpr);
+        if let Some(i) = init {
+            let k = ast.exprs.get(i).kind();
+            assert!(
+                matches!(k, ExprKind::CXXConstructExpr | ExprKind::InitListExpr),
+                "variable length array initializer {k:?}: Sema rejects it (WP-1739)"
+            );
         }
         if !self.f.did_stack_save {
             // The stack is saved once per cleanup scope and restored when
@@ -208,6 +213,20 @@ impl Cg<'_> {
         }
         // [basic.indet]/1: the erroneous value (spec/codegen.md §7y).
         self.auto_var_init_vla(d, q, addr)?;
+        if zeroed {
+            // clang `EmitNullInitialization`: a `memset` of the element
+            // count (recomputed, `getVLASize`) times the element size.
+            let (n, et) = self.vla_size(q)?;
+            let esz = self.size_align(et).0;
+            let size = if esz == 1 {
+                n
+            } else {
+                let k = self.i64c(i128::from(esz));
+                self.bin(BinOp::Mul, Flags::NUW, n, k)
+            };
+            self.memset_v(addr, 0, size, false);
+            return Ok(());
+        }
         // clang `EmitCXXAggrConstructorCall` with the run-time element
         // count, then the `emitDestroy` of the whole array (from the end,
         // an empty array checked first) as the variable's cleanup. An

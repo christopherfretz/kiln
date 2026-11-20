@@ -469,31 +469,6 @@ pub(crate) fn is_complete(ast: &Ast, q: QualType) -> bool {
     })
 }
 
-/// The builtins kiln declares but whose calls are still the error
-/// "code generation for X is not supported yet", sorted and separated by
-/// spaces: the x86 AMX `*_internal` and Key Locker builtins, whose
-/// results are tile registers or `{ i8, <2 x i64>, ... }` aggregates
-/// stored through pointers (WP-1242; the `__builtin_neon_*` forms all
-/// lower since WP-1421). The
-/// driver's `__has_builtin` answers 0 for them (WP-805), and
-/// `kiln_driver/tests/builtin_lowering.rs` checks the list is exact.
-pub static UNLOWERED_BUILTINS: &str = "__builtin_ia32_aesdec128kl_u8 __builtin_ia32_aesdec256kl_u8 \
-    __builtin_ia32_aesdecwide128kl_u8 __builtin_ia32_aesdecwide256kl_u8 \
-    __builtin_ia32_aesenc128kl_u8 __builtin_ia32_aesenc256kl_u8 __builtin_ia32_aesencwide128kl_u8 \
-    __builtin_ia32_aesencwide256kl_u8 __builtin_ia32_encodekey128_u32 \
-    __builtin_ia32_encodekey256_u32 __builtin_ia32_maskmovq __builtin_ia32_tcmmimfp16ps_internal \
-    __builtin_ia32_tcmmrlfp16ps_internal __builtin_ia32_tdpbf16ps_internal \
-    __builtin_ia32_tdpbssd_internal __builtin_ia32_tdpbsud_internal \
-    __builtin_ia32_tdpbusd_internal __builtin_ia32_tdpbuud_internal \
-    __builtin_ia32_tdpfp16ps_internal __builtin_ia32_tileloadd64_internal \
-    __builtin_ia32_tileloaddt164_internal __builtin_ia32_tilestored64_internal \
-    __builtin_ia32_tilezero_internal";
-
-/// Whether builtin `name` is in [`UNLOWERED_BUILTINS`].
-pub fn is_unlowered_builtin(name: &str) -> bool {
-    UNLOWERED_BUILTINS.split_ascii_whitespace().any(|n| n == name)
-}
-
 /// A pointer and what [`Cg::pointer_with_alignment`] knows of it.
 #[derive(Clone, Copy)]
 pub(crate) struct PtrAlign {
@@ -1586,6 +1561,7 @@ impl Cg<'_> {
                 return Ok(BuiltinCall::Emitted(None));
             }
             id::atomic::CLEAR
+            | id::atomic::ALWAYS_LOCK_FREE
             | id::atomic::IS_LOCK_FREE
             | id::atomic::SIGNAL_FENCE
             | id::atomic::TEST_AND_SET
@@ -1593,7 +1569,7 @@ impl Cg<'_> {
             | id::atomic::C11_IS_LOCK_FREE
             | id::atomic::C11_SIGNAL_FENCE
             | id::atomic::C11_THREAD_FENCE => {
-                return self.emit_atomic_builtin(b, e, &args).map(BuiltinCall::Emitted);
+                return self.emit_atomic_builtin(b, &args).map(BuiltinCall::Emitted);
             }
             _ if id::sync::op(b).is_some()
                 || matches!(
@@ -1615,14 +1591,11 @@ impl Cg<'_> {
             | id::ALLOCA_UNINITIALIZED
             | id::ALLOCA_WITH_ALIGN_UNINITIALIZED => self.emit_alloca(b, e, &args)?,
             _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
-            _ => {
-                let name = id::info(b).map_or("?", |i| i.name);
-                return err(
-                    self.loc_of(e),
-                    // kiln-gap: GAP-060
-                    format!("code generation for {name} is not supported yet"),
-                );
-            }
+            _ => unreachable!(
+                "builtin {}: every generic builtin sema declares is routed above \
+                 (kiln_driver/tests/builtin_lowering.rs, WP-1739)",
+                id::info(b).map_or("?", |i| i.name)
+            ),
         };
         Ok(BuiltinCall::Emitted(Some(v)))
     }

@@ -114,6 +114,8 @@ sema_catch_incomplete = Error (1) "cannot catch incomplete type {0}";
 sema_catch_incomplete_ptr = Error (1) "cannot catch pointer to incomplete type {0}";
 sema_catch_incomplete_ref = Error (1) "cannot catch reference to incomplete type {0}";
 sema_catch_rvalue_ref = Error (0) "cannot catch exceptions by rvalue reference";
+// clang `err_catch_variably_modified` (WP-1739).
+sema_catch_variably_modified = Error (1) "cannot catch variably modified type {0}";
 sema_caught_by_earlier_handler = Warning [Exceptions] (1) "exception of type {0} will be caught by earlier handler";
 sema_cce_conversion_not_allowed = Error (2) "conversion from {0} to {1} is not allowed in a converted constant expression";
 sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";

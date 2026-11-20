@@ -1163,7 +1163,12 @@ family, and the `nonnull` attribute spellings.
      an initializer whose bounds all fold is given the folded constant
      array type with the same ExtWarn at the name (clang
      `TryToFixInvalidVariablyModifiedType` for an initialized variable,
-     also in C; WP-1469); otherwise any initializer is the error
+     also in C; WP-1469); in C the empty initializer `= {}` (C23
+     6.7.11/4; before C23 clang's extension, the parser's "use of an
+     empty initializer is a C23 extension" under -pedantic) attaches an
+     empty `InitListExpr` of the VLA type, keeping the type (WP-1739,
+     `tests/c/c23/vla-empty-initializer-run.c`); otherwise any
+     initializer is the error
      "variable-sized object may not be initialized": a braced-init-list
      and, from C++20, a parenthesized list of several expressions
      (aggregate initialization) at the bound; a single expression (`=
@@ -2825,8 +2830,11 @@ instantiation unless stated.
   the `unknown attribute` warning. spec/landed/sema/WP-805.md.
 - **Truthful feature tests** (WP-805): in compile modes
   `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
-  name, and `__has_builtin` answers 0 for a builtin codegen cannot lower
-  (`kiln_codegen::UNLOWERED_BUILTINS`); a header that tests for a feature
+  name, and `__has_builtin` answers 0 for a builtin kiln does not
+  declare; every builtin kiln declares lowers or folds (the list of
+  unlowered ones is gone since WP-1739, which lowered its last entries,
+  and `kiln_driver/tests/builtin_lowering.rs` checks it per target and
+  clang version); a header that tests for a feature
   takes the path kiln implements. `-E` keeps clang's answers. A reported
   builtin is declared on the target (WP-1057): `__builtin_readcyclecounter`
   (`ULLi`, every target; not constant, lowered to `llvm.readcyclecounter`)
@@ -6853,7 +6861,10 @@ under its own name, the same signature, gating and codegen
 - The exception object's type is the operand's, with arrays and
   functions decayed and top-level cv removed; it must not be (a
   pointer to) an incomplete type other than cv `void` (clang's
-  `CheckCXXThrowOperand`).
+  `CheckCXXThrowOperand`). A VLA in the decayed type becomes `[*]`
+  (clang `getExceptionObjectType`), so throwing a 2-D VLA (a pointer to
+  a VLA) fails its initialization ("cannot initialize an exception
+  object of type 'int (*)[*]' ..."), as clang (WP-1739).
 - (WP-804) A class-type exception object (not a pointer) must not be
   abstract ("cannot throw an object of abstract type 'T'", with the
   pure virtual notes; [class.abstract]/3), and its destructor is
@@ -6956,6 +6967,10 @@ an lvalue of type `const std::type_info`.
   injected-class-name, a template-id and an expression operand wait for
   instantiation. GCC 16.1 diagnoses only at instantiation; kiln follows
   clang (WP-882, `expr.typeid/incomplete-in-template.cpp`).
+- A variably modified type or operand type is `'typeid' of variably
+  modified type T` at the `typeid` keyword (clang `BuildCXXTypeId`; a
+  VLA has no `type_info`; WP-1739,
+  `except.handle/variably-modified-type-info.cpp`).
 - A glvalue of polymorphic class type is potentially evaluated
   (`typeid_expr`, sema-class.md §5.1); other operands are unevaluated.
 - `-Wpotentially-evaluated-expression` (WP-219, `side_effects.rs`
@@ -11194,7 +11209,8 @@ Tests: `tests/conformance/stmt.break/stmt-expr-loop-header-{run,cfg}.cpp`,
   reference to) an incomplete type other than cv `void` is
   `cannot catch [pointer|reference] to incomplete type T`; an abstract
   class is the usual abstract-variable error; array and function types
-  decay. A class type by value is copy-initialized from an
+  decay; a variably modified (decayed) type is `cannot catch variably
+  modified type T` (clang `CheckExceptionDeclaration`; WP-1739). A class type by value is copy-initialized from an
   `OpaqueValueExpr` (clang's `ExceptionDecl` init) and its destructor is
   checked (access, deleted).
 - With `-fno-exceptions`, `try` is `cannot use 'try' with exceptions

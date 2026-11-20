@@ -613,16 +613,50 @@ impl Cg<'_> {
             ExprKind::AddrLabelExpr => {
                 V::C(self.addr_of_label(ast.exprs.addr_label(e), self.loc_of(e))?)
             }
+            // Never built: kiln's sema makes a user-defined literal a
+            // `CallExpr`, expands `#embed` to literals, and resolves a
+            // member call on an overload set to a `CXXMemberCallExpr`
+            // (no constructor of these kinds exists; WP-1739).
             k @ (ExprKind::UserDefinedLiteral
-            | ExprKind::ImaginaryLiteral
             | ExprKind::EmbedExpr
-            | ExprKind::UnresolvedLookupExpr
-            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::UnresolvedMemberExpr) => {
+                unreachable!("{k:?}: sema never builds it (WP-1739)")
+            }
+            // Dependent only: built for a template pattern, replaced by
+            // substitution (`sizeof...` and `__integer_pack` by literals,
+            // a pack index and an expansion select by the element, a
+            // splice by its entity, `__builtin_choose_expr` / `_Generic`
+            // given their selected operand above); codegen emits only
+            // instantiated, non-dependent bodies. `RecoveryExpr` only
+            // follows an error, and codegen does not run after one.
+            k @ (ExprKind::UnresolvedLookupExpr
             | ExprKind::DependentScopeDeclRefExpr
             | ExprKind::CXXDependentScopeMemberExpr
             | ExprKind::SubstNonTypeTemplateParmPackExpr
             | ExprKind::FunctionParmPackExpr
             | ExprKind::ParenListExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::IntegerPackExpr
+            | ExprKind::RecoveryExpr) => {
+                unreachable!("{k:?}: dependent or erroneous, never in an emitted body (WP-1739)")
+            }
+            // Not a scalar prvalue: complex (`emit_cx`), class or array
+            // (`emit_agg`; a scalar or vector `InitListExpr` is handled
+            // above), a glvalue (`typeid`), a callee only (a
+            // pseudo-destructor, `emit_call`), or of consteval-only type
+            // (a reflection, always inside a `ConstantExpr` at run time,
+            // [expr.const]); the callers dispatch on the evaluation kind
+            // (`emit_ignored`, the call arguments, initializers).
+            k @ (ExprKind::ImaginaryLiteral
             | ExprKind::InitListExpr
             | ExprKind::DesignatedInitExpr
             | ExprKind::CXXConstructExpr
@@ -636,22 +670,9 @@ impl Cg<'_> {
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::CXXTypeidExpr
-            | ExprKind::SizeOfPackExpr
             | ExprKind::LambdaExpr
-            | ExprKind::PackExpansionExpr
-            | ExprKind::CXXFoldExpr
-            | ExprKind::PackIndexingExpr
-            | ExprKind::CXXUnresolvedConstructExpr
-            | ExprKind::DependentCoawaitExpr
-            | ExprKind::ChooseExpr
-            | ExprKind::CXXReflectExpr
-            | ExprKind::CXXSpliceExpr
-            | ExprKind::RecoveryExpr
-            | ExprKind::CXXExpansionSelectExpr
-            | ExprKind::GenericSelectionExpr
-            | ExprKind::IntegerPackExpr) => {
-                // kiln-gap: GAP-059
-                return err(self.loc_of(e), format!("expression {k:?} is not supported yet"));
+            | ExprKind::CXXReflectExpr) => {
+                unreachable!("{k:?}: not a scalar prvalue, never emitted as one (WP-1739)")
             }
         }))
     }
@@ -4390,10 +4411,7 @@ impl Cg<'_> {
         let mut dest = dest;
         let client = match direct.and_then(|d| self.client_checked(d)) {
             Some(d) => {
-                if dest.is_none() && self.is_aggregate(sig.ret) && self.client_post_names_result(d)
-                {
-                    dest = Some(self.temp(sig.ret));
-                }
+                dest = self.client_result_slot(d, sig.ret, dest);
                 Some(self.emit_client_pre(d, None, &vals)?)
             }
             None => None,
@@ -4743,9 +4761,8 @@ impl Cg<'_> {
                 );
             };
             let kind = info.kind.clone();
-            let loc = args.get(i).and_then(|&a| self.loc_of(a));
             let at = ir_args.len();
-            self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
+            self.call_arg(&kind, sig.params[i], v, &mut ir_args)?;
             // clang `EmitCall`: a `maybe_undef` argument is frozen.
             if callee_decl.is_some_and(|d| self.maybe_undef_param(d, i)) {
                 for a in &mut ir_args[at..] {

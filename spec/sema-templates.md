@@ -1211,6 +1211,15 @@ type parameter named `auto:N`, as in clang's dump.
   `sized_sentinel_for` with range.iter.ops `distance_apriori_sentinel`;
   `temp.constr.atomic/abbreviated-friend-template.cpp`).
 - Generic lambdas use the same routine (WP-075).
+- A lambda-expression inside the declarator (its trailing
+  requires-clause, a default argument) saves the declarator's count of
+  invented parameters at its introducer and restores it when it ends
+  (`LambdaScope::saved_invented`): the lambda's own head does not end
+  the enclosing invented head, so `void f(auto p) requires requires {
+  [](int) {}(p); }` is still a template (WP-1739; before, the call
+  `f(1)` stayed an unresolved lookup and reached code generation;
+  `dcl.fct/p22-auto-lambda-in-requires-clause-run.cpp`,
+  `dcl.fct/p22-auto-generic-lambda-in-requires-clause-gcc.cpp`).
 - Placement (WP-305, clang's `FunctionDeclarationScope` and
   `err_auto_not_allowed`; `Parser::parse_param_clause`). Only the clause
   of a function declaration invents: a declarator in a `File`, `Member`,
@@ -5983,7 +5992,12 @@ A template template parameter named alone (`C(args)`, `C{args}`,
 (`is_ctad_template`, `names_class_type`): a dependent
 `DeducedTemplateSpecialization` whose template name substitution replaces
 with the argument's template, after which the placeholder is deduced as
-above (libc++ `ranges::to`; WP-198).
+above (libc++ `ranges::to`; WP-198). Where no placeholder may appear
+(`typeid(C)`, `sizeof(C)`, `C *p`, ...) the site rules of a class
+template's placeholder apply in the template definition, with clang's
+"use of template template parameter 'C' requires template arguments"
+(`ctad_site.rs` `template_param_placeholder`; WP-1739,
+`dcl.type.class.deduct/template-template-param-placeholder.cpp`).
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred.

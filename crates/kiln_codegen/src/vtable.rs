@@ -2106,19 +2106,35 @@ impl Cg<'_> {
             TypeView::ConstantArray(_) | TypeView::IncompleteArray(_) => {
                 "_ZTVN10__cxxabiv117__array_type_infoE"
             }
-            // clang `BuildTypeInfo`: vector and complex types are not
-            // in the C++ runtime, so their `__fundamental_type_info` is
-            // emitted where used, like a class's.
+            // clang `BuildTypeInfo`: vector, complex, `_BitInt`, `_Atomic`
+            // types and the builtins `TypeInfoIsInStandardLibrary`
+            // leaves out (`__bf16`, the SVE types) are not in the C++
+            // runtime, so their `__fundamental_type_info` is emitted
+            // where used, like a class's.
             // GCC 16.1 likewise emits `std::meta::info`'s (`_ZTIDm`)
             // where used: libstdc++ does not define it (WP-879).
             TypeView::Vector { .. }
             | TypeView::Complex(_)
-            | TypeView::Builtin(BuiltinType::MetaInfo) => {
+            | TypeView::BitInt { .. }
+            | TypeView::Atomic(_) => "_ZTVN10__cxxabiv123__fundamental_type_infoE",
+            TypeView::Builtin(b)
+                if b.is_sizeless()
+                    || matches!(b, BuiltinType::MetaInfo | BuiltinType::BFloat16) =>
+            {
                 "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
+            // A VLA (or a type built from one) has no `type_info`: Sema
+            // rejects `typeid`, `throw` and handlers of a variably
+            // modified type ([expr.typeid], [except.throw],
+            // [except.handle]; clang's errors). The other builtins are
+            // in the runtime (`is_std_lib_rtti`) or placeholders that
+            // never reach codegen; references are stripped by the
+            // callers ([expr.typeid]/4, [except.throw]/3); classes are
+            // handled above; dependent types are never emitted; the
+            // remaining kinds are sugar, never canonical (`ExtQual`
+            // has no constructor).
             TypeView::Invalid
             | TypeView::Builtin(..)
-            | TypeView::BitInt { .. }
             | TypeView::DependentBitInt { .. }
             | TypeView::LValueRef(..)
             | TypeView::RValueRef(..)
@@ -2127,7 +2143,6 @@ impl Cg<'_> {
             | TypeView::Record(..)
             | TypeView::UnresolvedUsing(..)
             | TypeView::Paren(..)
-            | TypeView::Atomic(..)
             | TypeView::DependentVector { .. }
             | TypeView::ExtQual { .. }
             | TypeView::Typedef { .. }
@@ -2152,8 +2167,7 @@ impl Cg<'_> {
             | TypeView::DeducedTemplateSpecialization { .. }
             | TypeView::Attributed { .. }
             | TypeView::Splice { .. } => {
-                // kiln-gap: GAP-092
-                return err(None, format!("RTTI for type `{name}` is not supported yet"));
+                unreachable!("RTTI for type `{name}` (WP-1739)")
             }
         };
         let pre = self.reserve_rtti(&name);
@@ -2505,9 +2519,14 @@ impl Cg<'_> {
     /// runtime has no `_ZTIDm` (nor `_ZTIu6__info`), so its descriptor is
     /// a weak definition where used, as g++-16 emits it (WP-879).
     fn is_std_lib_rtti(&self, q: QualType) -> bool {
+        use BuiltinType as B;
         let ast = self.ast;
         let fund = |q: QualType| match ast.types.canonical_view(q) {
-            TypeView::Builtin(b) => !matches!(b, BuiltinType::Dependent | BuiltinType::MetaInfo),
+            // clang `TypeInfoIsInStandardLibrary`: not `__bf16` nor the
+            // SVE types (nor kiln's `std::meta::info`).
+            TypeView::Builtin(b) => {
+                !b.is_placeholder() && !b.is_sizeless() && !matches!(b, B::MetaInfo | B::BFloat16)
+            }
             _ => false,
         };
         if fund(q) {

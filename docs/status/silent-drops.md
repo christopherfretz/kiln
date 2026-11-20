@@ -338,7 +338,7 @@ Owner: open (the fast-math item is fixed in WP-806, #364).
 - ARM ACLE builtins declared but not lowerable (arm.rs:129 hard error): ldrex/strex/ldaex/stlex/
   clrex, rsr/wsr(64/p), arm prefetch/trap, rndr/rndrrs, jcvt, rint*, ld64b/st64b*, gcs*, chkfeat.
   Pass `__has_builtin` and sema, fail at codegen. Loud. **Owner: fixed in WP-805** (`__has_builtin`
-  is 0 for every name in `kiln_codegen::UNLOWERED_BUILTINS`; implementation unowned).
+  was 0 for every name in the former `kiln_codegen::UNLOWERED_BUILTINS`; all lowered by WP-1739).
 - No `-Wassume` for side-effecting `__builtin_assume` (diagnostic half of B-A1). **Owner: fixed in WP-805.**
 ## 3. Pragmas
 

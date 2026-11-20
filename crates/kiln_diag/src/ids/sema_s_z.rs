@@ -283,6 +283,9 @@ sema_typedef_template = Error (0) "a typedef cannot be a template";
 sema_typedef_without_a_name = ExtWarn [MissingDeclarations] (0) "typedef requires a name";
 sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
 sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
+// [expr.typeid]: a VLA has no `type_info` (clang
+// `err_variably_modified_typeid`; WP-1739).
+sema_typeid_variably_modified = Error (1) "'typeid' of variably modified type {0}";
 // [dcl.type.class.deduct]/1: a typename-specifier naming a template
 // outside a variable's declared type (clang `err_deduced_tst`, WP-958).
 sema_typename_deduced_tst = Error (2) "typename specifier refers to {0:class template|function template|variable template|alias template|template template parameter|template} member in {1}; argument deduction not allowed here";

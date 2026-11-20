@@ -13,6 +13,7 @@
 
 use kiln_ast::decl::builtin::atomic::{self as at, Form, Rmw};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
+use kiln_ast::types::TypeView;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
@@ -911,12 +912,18 @@ impl Cg<'_> {
         let size = self.size_align(lv.q).0;
         let ty = self.f.fir.ty(&self.m, exp);
         let at = self.atomic_access_ty(ty, size, true);
-        if at != ty && self.m.types.float_width(ty).is_none_or(|w| w == 80) {
-            // kiln-gap: GAP-079
-            return err(None, format!("atomic compare-exchange of {vq:?} is not supported yet"));
-        }
+        // A value with no same-width integer bitcast (`x86_fp80` in its
+        // 16-byte slot) goes through memory, as clang's
+        // `convertRValueToInt` (`materializeRValue`, padding zeroed).
+        let through_memory = at != ty && self.m.types.float_width(ty).is_none_or(|w| w == 80);
         let (exp, des) = if at == ty {
             (exp, des)
+        } else if through_memory {
+            let (_, align) = self.size_align(lv.q);
+            let et = self.materialize_atomic(exp, lv, vq);
+            let exp = self.load(at, et, align, false);
+            let dt = self.materialize_atomic(des, lv, vq);
+            (exp, self.load(at, dt, align, false))
         } else {
             (self.cast(CastOp::BitCast, exp, at), self.cast(CastOp::BitCast, des, at))
         };
@@ -929,7 +936,16 @@ impl Cg<'_> {
             scope: SyncScope::SYSTEM,
         };
         let (old, ok) = self.cmpxchg_pair(lv.addr.v, exp, des, at, opts);
-        let old = if at == ty { old } else { self.cast(CastOp::BitCast, old, ty) };
+        let old = if at == ty {
+            old
+        } else if through_memory {
+            // clang `convertAtomicTempToRValue`.
+            let t = self.temp(lv.q);
+            self.store(old, t.v, t.align, false);
+            self.load(ty, t.v, t.align, false)
+        } else {
+            self.cast(CastOp::BitCast, old, ty)
+        };
         // A `bool` comes back as its value and goes to memory again
         // (`ConvertIntToValueOrAtomic`, then `EmitToMemory`).
         let old = if self.has_bool_rep(vq) {
@@ -1065,12 +1081,7 @@ impl Cg<'_> {
 
     /// The `__atomic_*` / `__c11_atomic_*` builtins `CGBuiltin` lowers
     /// itself (the folded lock-free queries never get here).
-    pub(crate) fn emit_atomic_builtin(
-        &mut self,
-        b: u32,
-        e: ExprId,
-        args: &[ExprId],
-    ) -> R<Option<V>> {
+    pub(crate) fn emit_atomic_builtin(&mut self, b: u32, args: &[ExprId]) -> R<Option<V>> {
         let arg = |i: usize| args.get(i).copied().map_or_else(|| err(None, "missing argument"), Ok);
         match b {
             at::TEST_AND_SET | at::CLEAR => {
@@ -1233,12 +1244,97 @@ impl Cg<'_> {
                 self.f.calls.push((Fir::last_inst(r), Some(f), false));
                 Ok(Some(r))
             }
+            at::ALWAYS_LOCK_FREE => self.emit_always_lock_free(arg(0)?, arg(1)?).map(Some),
             _ => {
-                let name = kiln_ast::decl::builtin::info(b).map_or("?", |i| i.name);
-                // kiln-gap: GAP-060
-                err(self.loc_of(e), format!("code generation for {name} is not supported yet"))
+                unreachable!("emit_builtin routes only the nine lock-free, fence and flag ids here")
             }
         }
+    }
+
+    /// `bool __atomic_always_lock_free(size_t n, const volatile void *p)`
+    /// whose size does not fold (a constant one is folded by the Oven,
+    /// clang 19's `IntExprEvaluator` rule, and never gets here; clang
+    /// then stops at "cannot compile this builtin function yet", GCC
+    /// folds it after inlining or rejects it). kiln evaluates both
+    /// operands and computes the same predicate at run time: `n` is a
+    /// power of two no wider than the target's inline atomic width, and
+    /// the object is a null pointer constant, one byte, aligned to `n` by
+    /// its pointee type (an aligned typedef counts), or, when `p` is an
+    /// integer cast to a pointer, an integer that is a multiple of `n`.
+    fn emit_always_lock_free(&mut self, size: ExprId, obj: ExprId) -> R<V> {
+        let (any, align, int) = self.lock_free_object(obj);
+        let n = self.emit_scalar(size)?;
+        let n = self.int_cast(n, LTy::I64, false);
+        let p = self.emit_scalar(obj)?;
+        let max = u64::from(self.target.types.max_atomic_inline_bytes);
+        let (zero, one) = (self.icn(LTy::I64, 0), self.icn(LTy::I64, 1));
+        let nm1 = self.bin(BinOp::Sub, Flags::NONE, n, one);
+        let low = self.bin(BinOp::And, Flags::NONE, n, nm1);
+        let nz = self.icmp(IntPredicate::Ne, n, zero);
+        let single = self.icmp(IntPredicate::Eq, low, zero);
+        let pow2 = self.bin(BinOp::And, Flags::NONE, nz, single);
+        let maxv = self.icn(LTy::I64, i128::from(max));
+        let fits = self.icmp(IntPredicate::Ule, n, maxv);
+        let mut r = self.bin(BinOp::And, Flags::NONE, pow2, fits);
+        if !any {
+            let a = self.icn(LTy::I64, i128::from(align));
+            let byte = self.icmp(IntPredicate::Eq, n, one);
+            let aligned = self.icmp(IntPredicate::Ule, n, a);
+            let mut ok = self.bin(BinOp::Or, Flags::NONE, byte, aligned);
+            if int && align < max {
+                let pi = self.cast(CastOp::PtrToInt, p, LTy::I64);
+                let m = self.bin(BinOp::And, Flags::NONE, pi, nm1);
+                let at_n = self.icmp(IntPredicate::Eq, m, zero);
+                ok = self.bin(BinOp::Or, Flags::NONE, ok, at_n);
+            }
+            r = self.bin(BinOp::And, Flags::NONE, r, ok);
+        }
+        Ok(r)
+    }
+
+    /// The object operand `p` of `__atomic_always_lock_free` as clang 19's
+    /// `IntExprEvaluator` sees it (the Oven's `lock_free_object`): a null
+    /// pointer constant (any object), else the alignment of the pointee
+    /// as written (0: `void` or an incomplete type), and whether `p` is
+    /// an integer converted to a pointer (through `NoOp` and `BitCast`).
+    fn lock_free_object(&mut self, p: ExprId) -> (bool, u64, bool) {
+        let ast = self.ast;
+        let mut x = self.skip_parens(p);
+        while ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+            if ast.exprs.cast_kind(x) == CastKind::NullToPointer {
+                return (true, 0, false);
+            }
+            x = self.skip_parens(ast.exprs.operand(x));
+        }
+        let mut int = false;
+        let mut y = self.skip_parens(p);
+        for _ in 0..16 {
+            if !ast.exprs.get(y).kind().is_cast() {
+                break;
+            }
+            match ast.exprs.cast_kind(y) {
+                CastKind::IntegralToPointer => {
+                    int = true;
+                    break;
+                }
+                CastKind::BitCast | CastKind::NoOp => y = self.skip_parens(ast.exprs.operand(y)),
+                _ => break,
+            }
+        }
+        let pq = ast.exprs.get(x).ty();
+        let align = match ast.types.pointee(pq) {
+            Some(t)
+                if !ast.types.is_void(t)
+                    && !ast.types.is_function(t)
+                    && ast.types.as_record(t).is_none_or(|rd| ast.definition(rd).is_some())
+                    && !matches!(ast.types.canonical_view(t), TypeView::IncompleteArray(_))
+                    && self.size_align(t).0 != 0 =>
+            {
+                self.natural_pointee_align(pq)
+            }
+            _ => 0,
+        };
+        (false, align, int)
     }
 
     /// The GCC `__sync` builtins (clang `EmitBuiltinExpr` with

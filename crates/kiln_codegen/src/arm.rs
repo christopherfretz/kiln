@@ -231,13 +231,10 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![x]);
                 return Ok(BuiltinCall::Emitted(None));
             }
-            _ => {
-                return err(
-                    self.loc_of(e),
-                    // kiln-gap: GAP-060
-                    format!("code generation for {name} is not supported yet"),
-                );
-            }
+            _ => unreachable!(
+                "{name}: every __builtin_arm_* builtin is lowered above \
+                 (kiln_driver/tests/builtin_lowering.rs, WP-1739)"
+            ),
         };
         Ok(BuiltinCall::Emitted(Some(v)))
     }

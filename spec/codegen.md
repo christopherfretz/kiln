@@ -446,7 +446,9 @@ them, the aggregate path included (a reversed `<=>` with a class result).
     every call site: direct, member (`emit_method_call` /
     `call_extra`), and virtual (the named method's attributes) (clang
     `ConstructAttributeList`). When the return or some argument is
-    passed by address (`sret`, `byval`, or a pointer to a temporary for
+    passed by address (`sret`, `byval` (an argument less aligned than
+    the `byval` alignment is realigned in place or copied to an aligned
+    temporary, clang `EmitCall`'s byval-temp; WP-1739), or a pointer to a temporary for
     a class that is not trivially copyable: `Sig::passes_indirect`),
     the access widens to `argmem: readwrite` (clang
     `AddPotentialArgAccess`: `memory(argmem: readwrite)` /
@@ -729,7 +731,21 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `builtin_memcpy_inline.cpp`); `__builtin_ia32_pause()` is `call void
       @llvm.x86.sse2.pause()`, declared `nounwind`
       (`target.x86/ia32-pause-ir{,-19}.cpp`); the x86 builtins in
-      general are spec/landed/codegen/WP-630.md.
+      general are spec/landed/codegen/WP-630.md. Every builtin kiln
+      declares lowers (an unrouted one is `unreachable!`; WP-1739). The
+      AMX `*_internal` builtins (`x86_kl.rs`) declare
+      `llvm.x86.<name>.internal` first, then convert each `<256 x i32>`
+      tile operand with `llvm.x86.cast.vector.to.tile.v256i32` right after
+      emitting it, and a tile result back with
+      `llvm.x86.cast.tile.to.vector.v256i32` (LLVM type `x86_amx`); the
+      Key Locker builtins store `encodekey*`'s handle parts through the
+      pointer (`getelementptr i8`, `align 1`) and `aes*kl_u8`'s blocks
+      through the out pointer on success, zeroes otherwise (clang 19 also
+      extracts each block in the wide forms' error block); MMX
+      `maskmovq` is clang 20+'s `_mm_maskmove_si64` (`maskmovdqu` on the
+      widened operands, backed up 8 bytes near a page end)
+      (`target.x86/{amx-internal,keylocker}-ir.cpp`,
+      `maskmovq-compile.cpp`).
       `__builtin_elementwise_add_sat` / `_sub_sat` are `llvm.sadd.sat` /
       `uadd.sat` / `ssub.sat` / `usub.sat` by element signedness (a
       `bool` operand as unsigned), folded at 22 when the Oven folds them
@@ -1287,8 +1303,8 @@ loads.
 
 The `AArch64` ACLE builtins (`__builtin_arm_*`, `kiln_ast::decl::
 builtin::arm`, declared per spec/landed/sema/WP-724.md) lower as clang 19
-`EmitAArch64BuiltinExpr`; every one listed here is lowered (none stays in
-`UNLOWERED_BUILTINS`). Intrinsic attribute shapes are `kiln_llvm::
+`EmitAArch64BuiltinExpr`; every one is lowered (an unknown id is
+`unreachable!`, WP-1739). Intrinsic attribute shapes are `kiln_llvm::
 intrinsics` (`target_nomem`, `target_intrinsic` with a `TargetMem`,
 `aarch64_prefetch`, `aarch64_break`).
 - **Hints, barriers, CRC32, bit counts** (WP-724): `llvm.aarch64.hint`
@@ -3282,6 +3298,17 @@ changes nothing:
   the tail and a union's bytes past its member are `zeroinitializer`
   instead of `undef`, so a padded structure constant is a literal
   struct (WP-1449; `tests/c/decl/constant-padding-ir.c`).
+- **Overlapping members** (WP-1739): a `[[no_unique_address]]` member
+  whose class has tail padding is stored as that class's base-subobject
+  type (`IrType::RecordBase`), so a later member may live in its tail.
+  Its fields are laid out inline, as one group (`consts.rs`
+  `overlapping_member`, recursively for nested such members; a union
+  member contributes its active member's, the complete layout is used so
+  a virtual base is present); a group no later element overlaps is
+  emitted as one constant of the member's complete type, otherwise its
+  elements stay inline (`resolve_overlaps`), as clang's
+  `ConstantAggregateBuilder` splits only on overlap
+  (`dcl.attr.nouniqueaddr/overlapping-member-constant-{ir,run}.cpp`).
 - **C specifics** (WP-1449):
   - a non-constant list initialization of a C aggregate at compat 20+
     zeroes the padding as clang's `AggExprEmitter::DoZeroInitPadding`:
@@ -3728,7 +3755,13 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   that defines them (below). Vector types (GNU and
   NEON) and `_Complex` types are not in the runtime: their
   `__fundamental_type_info` `{vt, name}` is emitted `linkonce_odr` where
-  used (WP-709). RTTI of a type that
+  used (WP-709); so are `_BitInt` and `_Atomic` types, `__bf16` and the
+  SVE ACLE types (clang `TypeInfoIsInStandardLibrary`; WP-1739,
+  `expr.typeid/ir-bitint-atomic-bf16-type-info-x86-64.cpp`,
+  `ir-bf16-sve-type-info-aarch64.cpp`), and pointers to them get a local
+  `__pointer_type_info`. No other type kind reaches `Cg::rtti`: Sema
+  rejects variably modified types in `typeid`, throws and handlers
+  (spec/sema.md §5.6). RTTI of a type that
   involves an incomplete class has `internal` linkage, as has RTTI of a
   type without linkage or built from one (arrays and function types
   included, clang `getTypeInfoLinkage`). Linkage of class
@@ -4264,7 +4297,14 @@ clang 19 `CGAtomic` at -O0, mirrored:
   (`fence`), `__atomic_signal_fence`/`__c11_atomic_signal_fence`
   (`fence syncscope("singlethread")`), each with the order switch when
   not constant; the lock-free queries are folded by the Oven, and a
-  non-constant `__atomic_is_lock_free` calls the libatomic function.
+  non-constant `__atomic_is_lock_free` calls the libatomic function. A
+  non-constant `__atomic_always_lock_free` (clang: "cannot compile this
+  builtin function yet"; GCC accepts it once optimization folds the
+  size) computes the Oven's rule at run time (`emit_always_lock_free`):
+  a power-of-two size at most the target's inline atomic width, and a
+  null or void object, a size of 1, an object type aligned to the size,
+  or an integer address that is a multiple of it (WP-1739,
+  `ext.c11.atomic/always-lock-free-runtime-run.cpp`).
 - **`_Atomic` lvalues** (`atomic_load_lv`/`atomic_store_lv`): reads are
   `load atomic seq_cst`, assignment is `store atomic seq_cst`;
   initialization is a plain store. `++`/`--` are `atomicrmw add/sub
@@ -4782,9 +4822,13 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   (WP-1499), is constructed and destroyed the same way: the constant
   inner dimensions are multiplied into the run-time count and the loop
   runs over the base class type (clang `emitArrayLength` flattening).
-  Sema rejects every other VLA initializer in C++ as clang 22 does
-  ("variable-sized object may not be initialized", at every `-std=`), so
-  the "not supported yet" error in codegen is unreachable from C++.
+  C's empty initializer `= {}` (C23 6.7.11/4, every C mode as clang;
+  WP-1739) is an empty `InitListExpr` of the VLA type: a `memset` to 0
+  of the element count times the element size (no multiply for a
+  one-byte element; clang `EmitNullInitialization`). Sema rejects every
+  other VLA initializer ("variable-sized object may not be initialized",
+  in C++ at every `-std=` as clang 22), so `emit_vla_var` asserts the
+  initializer is one of these two.
 - **Lambdas** (WP-1469, clang `captureVariablyModifiedType`): the
   `CaptureKind::VlaBound` closure members are initialized with
   `vla_bound_value` (the cached bound of the enclosing function), and the
@@ -5349,7 +5393,11 @@ across the checks (`emit_client_pre`, `emit_client_post`;
 `crates/kiln_codegen/tests/contracts.rs` on both targets,
 `basic.contract.eval/run-client-check-complex.cpp`,
 `run-client-check-new-delete.cpp` and
-`run-client-check-declared-template*.cpp`).
+`run-client-check-declared-template*.cpp`). A checked call whose result
+is an aggregate (an `_Atomic` class type) and has no destination (a
+discarded call, an operand) gets a temporary result slot, so a
+postcondition naming the result reads it (`Cg::client_result_slot`,
+WP-1739, `run-client-check-atomic-aggregate-result.cpp`).
 
 ### Freestanding `main` (WP-1456)
 Under `-ffreestanding` `main` is an ordinary function (clang's
@@ -6029,8 +6077,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   acquire load / release store of the lane at the pointer's alignment;
   tests `target.neon/ir-{ld-st-multi,compare,cvt,sisd,vector-misc,crypto-sha3-fml,image-codec-forms}-19.cpp`,
   `sisd-compare-cvt-run.cpp`, `image-codec-forms-run.cpp`; coverage:
-  docs/status/neon-builtins.md; no `__builtin_neon_*` builtin stays in
-  `UNLOWERED_BUILTINS`, and a compare against zero whose type code's quad
+  docs/status/neon-builtins.md; every `__builtin_neon_*` builtin lowers
+  (the unit test `neon_rows_lower`; the AArch32-only
+  `__a32_vcvt_bf16_f32`, which clang 22's AArch64 codegen rejects, is
+  `bfcvtn` and the low half, WP-1739), and a compare against zero whose type code's quad
   bit disagrees with its name, which clang's sema rejects, is "invalid
   type code"). The
   AArch64 ACLE builtins (`__builtin_arm_*`,

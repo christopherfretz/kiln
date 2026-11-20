@@ -2213,16 +2213,38 @@ impl ExprArena {
         )
     }
 
+    /// The callee of `CXXMemberCallExpr` `e` under what clang's
+    /// `IgnoreParens` looks through (and Sema's `ignore_parens` when it
+    /// built the call): parentheses, GNU `__extension__`, a
+    /// `__builtin_choose_expr` or `_Generic`'s chosen operand. A
+    /// `MemberExpr` or a `.*`/`->*` `BinaryOperator`.
+    pub fn member_call_callee(&self, e: ExprId) -> ExprId {
+        let mut c = ExprId::new(self.expect_kind(e, ExprKind::CXXMemberCallExpr).a);
+        loop {
+            let n = self.get(c);
+            c = match n.kind {
+                ExprKind::ParenExpr => ExprId::new(n.a),
+                ExprKind::UnaryOperator if self.unary_op(c) == UnaryOp::Extension => {
+                    ExprId::new(n.a)
+                }
+                ExprKind::ChooseExpr | ExprKind::GenericSelectionExpr => {
+                    match self.selected_operand(c) {
+                        Some(x) => x,
+                        None => return c,
+                    }
+                }
+                _ => return c,
+            };
+        }
+    }
+
     /// The implied object argument of a `CXXMemberCallExpr`: the base of
     /// its `MemberExpr` callee, or the left operand of a `.*`/`->*`
-    /// callee (sema-class.md §5.1; for `->` a pointer). Parentheses
-    /// around the callee, as in `(o.f)()` or `(o.*pm)()`, are looked
-    /// through (clang's `getImplicitObjectArgument`).
+    /// callee (sema-class.md §5.1; for `->` a pointer), under
+    /// [`Self::member_call_callee`]'s wrappers, as in `(o.f)()` or
+    /// `(o.*pm)()` (clang's `getImplicitObjectArgument`).
     pub fn member_call_object(&self, e: ExprId) -> ExprId {
-        let mut callee = self.get(ExprId::new(self.expect_kind(e, ExprKind::CXXMemberCallExpr).a));
-        while callee.kind == ExprKind::ParenExpr {
-            callee = self.get(ExprId::new(callee.a));
-        }
+        let callee = self.get(self.member_call_callee(e));
         assert!(
             matches!(callee.kind, ExprKind::MemberExpr | ExprKind::BinaryOperator),
             "CXXMemberCallExpr callee is {:?}",
