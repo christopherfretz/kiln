@@ -21,6 +21,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | GCC C++ testsuite | GCC 16.1's `g++.dg` (with `g++.dg/torture`), `c-c++-common` and `g++.old-deja` (same sparse checkout, `scripts/fetch-gcc-tests.sh`, never vendored), driven by `cargo xtask gxx-dg` (spec/harness.md "The g++.dg runner"); informational, not part of `ci`; status in `docs/status/gxx-dg.md` | kiln++ meets each test's `dg-error` expectations (and the errors its `dg-message` and `dg-regexp` regexps name) by line and severity (never by message) at the standards GCC's `g++-dg.exp` picks, compiles valid tests and runs `dg-do run` ones; each case is pass, rejects-valid, accept-invalid, wrong-line, wrong, crash or timeout (or expect-unknown, counted apart, where the file does not decide), with GCC 16.1 and clang on the cases kiln fails |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
+| Static gaps | `docs/status/static-gaps.md`, every source site that reports a known-incomplete language corner ("not supported yet", "not yet implemented", mangling, codegen fallbacks, Oven traps, reflection), checked by `cargo xtask static-gaps` in `ci --step lints` (spec/harness.md "CI", step 0). Each site carries a `// kiln-gap: GAP-NNN` marker naming its entry, so the check ignores line shifts; it fails on an unmarked site, an entry with no site left, an entry whose sites cell is stale, and an entry whose BACKLOG row is not open | No language gap exists that the inventory and a BACKLOG row do not name; a fixed gap leaves the list |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 | Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
 | External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: crash reproducers and large downstream code compile or fail cleanly |
@@ -384,7 +385,8 @@ spec/harness.md "CI"). `ci.yml` calls the reusable workflow
 `.github/workflows/ci-lane.yml` once per architecture (callers `arm` and
 `x86_64`, so the jobs show as `arm / kiln-22 2/6`), and each lane runs:
 
-- `lints`: `ci --step lints` (`cargo xtask lint`, fmt, clippy);
+- `lints`: `ci --step lints` (the in-process lints: diag-split, Landed
+  files and the static-gap inventory; then fmt, clippy);
 - `unit <group>`, one per unit group (`xtask`, `codegen`, `rest`): `ci
   --step unit --unit-group <group>`, the `cargo test --workspace` split by
   package so no job runs more than about two minutes of tests (the

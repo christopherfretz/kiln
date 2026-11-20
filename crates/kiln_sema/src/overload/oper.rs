@@ -491,16 +491,9 @@ impl Sema<'_, '_> {
         }
         let (set, out, types, reversible) =
             self.oper_set(form, op, &ops, &brs, args.len(), loc, rewrites, true);
-        let undecided = set.uncertain
-            || (set.skipped_templates
-                && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)
-                    if self.template_cannot_win(&set, b)));
-        if undecided {
-            if set.skipped_templates {
-                self.templ_unimplemented("calls to function templates", loc);
-            } else {
-                self.unsupported("overload resolution with constraints", loc);
-            }
+        if set.uncertain {
+            // kiln-gap: GAP-053
+            self.unsupported("overload resolution with constraints", loc);
             self.end_set(set);
             return OperResult::Done(self.recover_err(args, loc));
         }

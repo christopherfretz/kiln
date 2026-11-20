@@ -461,6 +461,7 @@ impl Parser<'_, '_> {
                     return self.block_scope_template(loc);
                 }
                 Kw::Namespace | Kw::Template => {
+                    // kiln-gap: GAP-157
                     self.unsupported(&format!("'{}' here", k.spelling()), loc);
                     self.skip_statement();
                     return None;

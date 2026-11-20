@@ -1395,6 +1395,7 @@ impl Sema<'_, '_> {
                 None
             }
             Selected::Unsupported => {
+                // kiln-gap: GAP-035
                 self.unsupported("selecting the constructor", loc);
                 None
             }
@@ -1591,6 +1592,7 @@ impl Sema<'_, '_> {
             {
                 // An implicit assignment operator of such a class is
                 // deleted ([class.copy.assign]/7), so never defined.
+                // kiln-gap: GAP-037
                 self.unsupported("assigning a reference or const member", loc);
                 invalid = true;
                 continue;
@@ -1713,6 +1715,7 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 _ => {
+                    // kiln-gap: GAP-036
                     self.unsupported("selecting the assignment operator", loc);
                     return None;
                 }
@@ -1751,6 +1754,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<StmtId> {
         let Some(n) = self.ast.types.array_size(ty) else {
+            // kiln-gap: GAP-038
             self.unsupported("implicit assignment of an array of this type", loc);
             return None;
         };

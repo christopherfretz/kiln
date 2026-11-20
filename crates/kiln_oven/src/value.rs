@@ -528,7 +528,7 @@ impl Oven {
             loc,
             format!(
                 "non-trivial destruction of lifetime-extended temporary with type '{}' used in \
-                 the result of a constant expression is not yet supported",
+                 the result of a constant expression is not yet supported", // kiln-gap: GAP-170
                 Self::type_name(ast, ty)
             ),
         )]))

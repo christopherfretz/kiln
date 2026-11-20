@@ -124,6 +124,7 @@ impl Sema<'_, '_> {
         }
         if info.pack_expansion {
             // todo(WP-070): pack expansions of base initializers.
+            // kiln-gap: GAP-006
             self.unsupported("a mem-initializer pack expansion", info.loc);
             self.cleanup = super::CleanupState::default();
             self.mem_inits.any_errors = true;
@@ -568,6 +569,7 @@ impl Sema<'_, '_> {
                 if self.ast.types.is_reference(ty) {
                     // todo(WP-067b follow-up): clang's "reference to type
                     // requires an initializer".
+                    // kiln-gap: GAP-027
                     self.unsupported("value-initialization of a reference member", info.loc);
                     return self.recover(ty, &[], info.loc);
                 }

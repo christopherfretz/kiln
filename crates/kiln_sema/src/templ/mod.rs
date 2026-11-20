@@ -586,6 +586,7 @@ impl Sema<'_, '_> {
     /// Reports a template feature that is designed but not implemented
     /// yet ("kiln: not yet implemented: {feature}"); never panics.
     pub fn templ_unimplemented(&self, feature: &str, loc: Loc) {
+        // kiln-gap: forward
         let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(feature);
         self.emit(d);
     }
@@ -1797,6 +1798,7 @@ impl Sema<'_, '_> {
             }
             _ => {
                 let loc = self.ast.decls.get(pattern).loc();
+                // kiln-gap: GAP-108
                 self.templ_unimplemented("this kind of template declaration", loc);
                 return None;
             }

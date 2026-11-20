@@ -228,6 +228,7 @@ impl Substituter<'_, '_, '_> {
                         });
                         continue;
                     }
+                    // kiln-gap: GAP-012
                     _ => return self.unimplemented("capture packs in templates", c.loc),
                 };
                 for v in params {
@@ -255,6 +256,7 @@ impl Substituter<'_, '_, '_> {
                     match self.initializer(i, style)? {
                         Some(x) => Some((style, x)),
                         None => {
+                            // kiln-gap: GAP-104
                             return self.unimplemented("this init-capture in a template", c.loc);
                         }
                     }

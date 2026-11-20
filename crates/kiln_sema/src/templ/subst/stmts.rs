@@ -496,6 +496,7 @@ impl Substituter<'_, '_, '_> {
             }
             StmtKind::ContractAssertStmt => self.contract_stmt(s, None),
             k @ StmtKind::CXXCatchStmt => {
+                // kiln-gap: GAP-098
                 self.unimplemented(&format!("substitution into {k:?}"), loc)
             }
         }
@@ -829,6 +830,7 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// A declaration of a declaration statement.
+    #[allow(clippy::too_many_lines, reason = "one arm per declaration kind, listed exhaustively")]
     fn local_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         match self.sema.kind_of(d) {
@@ -921,7 +923,52 @@ impl Substituter<'_, '_, '_> {
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }
-            k => self.unimplemented(&format!("local {k:?} declarations in templates"), loc),
+            k @ (DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingTypename
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::EnumConstant
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Field
+            | DeclKind::IndirectField
+            | DeclKind::AccessSpec
+            | DeclKind::Friend
+            | DeclKind::FriendTemplate
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::ParmVar
+            | DeclKind::ImplicitParam
+            | DeclKind::Binding
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::TemplateParamObject
+            | DeclKind::ContractResultName) => {
+                // kiln-gap: GAP-103
+                self.unimplemented(&format!("local {k:?} declarations in templates"), loc)
+            }
         }
     }
 }

@@ -693,7 +693,7 @@ impl Sema<'_, '_> {
             ..ArgInfo::of_type(QualType::VOID, ValueCategory::PRValue)
         });
         self.add_ctor_candidates(&mut set, class, IcsOptions::NONE, true);
-        if set.viable().next().is_none() && !set.skipped_templates && !set.uncertain {
+        if set.viable().next().is_none() && !set.uncertain {
             self.end_set(set);
             self.ovl.lists.pop();
             return None;
@@ -702,6 +702,7 @@ impl Sema<'_, '_> {
         let sel = self.selected_of(set, out);
         self.ovl.lists.pop();
         let (Selected::Found(f) | Selected::Deleted(f)) = sel else {
+            // kiln-gap: GAP-023
             self.unsupported("this initializer-list constructor selection", l.lbrace);
             let flat = Self::list_exprs(l);
             return Some(self.recover(ty, &flat, l.lbrace));
@@ -942,6 +943,7 @@ impl Sema<'_, '_> {
                     self.emit(d);
                     self.recover(ty, &v, l)
                 } else {
+                    // kiln-gap: GAP-021
                     self.unsupported("parenthesized initialization with multiple expressions", l);
                     self.recover(ty, &v, l)
                 }
@@ -2575,6 +2577,7 @@ impl Sema<'_, '_> {
             && record.is_none_or(|_| !self.is_aggregate(ty))
         {
             match record {
+                // kiln-gap: GAP-026
                 Some(_) => self.unsupported("a designator into a non-aggregate member", lbrace),
                 None => self.designator_mismatch(ty, &items[*pos].designator[k]),
             }

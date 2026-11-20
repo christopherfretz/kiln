@@ -119,6 +119,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             if self.member_spec_class().is_none() {
+                // kiln-gap: GAP-011
                 self.unsupported("a pack expansion in a non-member using-declaration", l);
                 return None;
             }
@@ -140,6 +141,7 @@ impl Sema<'_, '_> {
             // are enumerators, [namespace.udecl]/8); the local scope
             // records non-identifier names only as resolved shadows
             // (`Scope.local_names`).
+            // kiln-gap: GAP-049
             self.unsupported(
                 "an operator name with a dependent qualifier in a block-scope using-declarator",
                 name_loc,

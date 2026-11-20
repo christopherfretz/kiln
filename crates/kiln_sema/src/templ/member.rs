@@ -422,7 +422,62 @@ impl Substituter<'_, '_, '_> {
             k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
                 self.function_decl(p, DeclaratorContext::Member, None)
             }
-            k => self.unimplemented(&format!("member templates of kind {k:?}"), loc),
+            k @ (DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::NamespaceAlias
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingDirective
+            | DeclKind::Using
+            | DeclKind::UsingEnum
+            | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingValue
+            | DeclKind::UnresolvedUsingTypename
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::Enum
+            | DeclKind::EnumConstant
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Field
+            | DeclKind::IndirectField
+            | DeclKind::AccessSpec
+            | DeclKind::Friend
+            | DeclKind::FriendTemplate
+            | DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::ParmVar
+            | DeclKind::ImplicitParam
+            | DeclKind::Binding
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::TemplateParamObject
+            | DeclKind::StaticAssert
+            | DeclKind::Label
+            | DeclKind::ContractResultName
+            | DeclKind::ConstevalBlock) => {
+                // kiln-gap: GAP-016
+                self.unimplemented(&format!("member templates of kind {k:?}"), loc)
+            }
         }
     }
 

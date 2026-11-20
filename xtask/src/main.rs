@@ -25,6 +25,7 @@ mod libstdcxx;
 mod oracle;
 mod pgo;
 mod release_gate;
+mod static_gaps;
 mod test;
 mod util;
 
@@ -83,7 +84,10 @@ commands:
               corpus (`cargo xtask pgo-train --help`; --list prints the corpus)
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
-  ci          the merge gate: diag-split --check, the spec/landed lint, fmt --check, clippy
+  static-gaps check docs/status/static-gaps.md against the gap sites in crates/ (part of
+              ci); --sites prints every site (spec/harness.md \"CI\", step 0)
+  ci          the merge gate: diag-split --check, the spec/landed lint, the static-gap
+              lint, fmt --check, clippy
               -D warnings, cargo test, then the corpus twice: xtask test --compiler
               clang++-N (the corpus self-check; skipped when clang++-N is not on PATH) and
               xtask test with kiln; fails on any FAIL, XPASS, ERROR or KILLED in either
@@ -129,6 +133,7 @@ fn command() -> ExitCode {
         Some("pgo-train") => pgo::train_main(args),
         Some("release-gate") => release_gate::main(args),
         Some("jobserver") => jobs::main(args),
+        Some("static-gaps") => static_gaps::main(args),
         Some("ci") => ci(args),
         Some("kiln-hod") => kiln_hod::main(args),
         _ => {
@@ -563,6 +568,16 @@ fn ci_lints(root: &std::path::Path) -> bool {
             eprintln!("xtask ci: spec/landed: {p}");
         }
         eprintln!("xtask ci: FAILED: fix the files above (spec/README.md \"Landed sections\")");
+        ok = false;
+    }
+    if let Err(problems) = static_gaps::check(root) {
+        for p in &problems {
+            eprintln!("xtask ci: static-gaps: {p}");
+        }
+        eprintln!(
+            "xtask ci: FAILED: fix the sites or {} (spec/harness.md \"CI\", step 0)",
+            static_gaps::INVENTORY
+        );
         ok = false;
     }
     ok

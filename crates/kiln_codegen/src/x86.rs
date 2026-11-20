@@ -166,6 +166,7 @@ impl Cg<'_> {
         if let Some(v) = self.x86_generic(b, short, e, &args, rty)? {
             return Ok(BuiltinCall::Emitted(v));
         }
+        // kiln-gap: GAP-060
         err(self.loc_of(e), format!("code generation for {name} is not supported yet"))
     }
 

@@ -108,6 +108,7 @@ impl Sema<'_, '_> {
                 MetaOut::Info(self.reflect_variable_of(r, ctx.nested_point, loc)?)
             }
             QueryOp::ReturnTypeOf => MetaOut::Info(self.reflect_return_type_of(r, loc)?),
+            // kiln-gap: GAP-130
             _ => return Err(MetaError::not_implemented(MetaOp::Query(q), loc)),
         };
         Ok(())

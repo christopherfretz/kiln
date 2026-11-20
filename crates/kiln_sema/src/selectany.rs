@@ -78,6 +78,7 @@ impl Sema<'_, '_> {
             .find(|&a| self.ast.attrs.get(a).kind == AttrKind::SELECTANY);
         if let Some(a) = own {
             let msg = self
+                // kiln-gap: GAP-166
                 .diag(DiagId::parse_unsupported, self.ast.attrs.get(a).loc)
                 .arg("'selectany' on an 'extern' declaration without an initializer");
             self.emit(msg);

@@ -225,6 +225,7 @@ impl Sema<'_, '_> {
                 if let Some(x) = self.splice_value_expr(v, open) {
                     return x;
                 }
+                // kiln-gap: GAP-133
                 self.unsupported("splice of this value reflection", open);
                 self.recover_err(&[e], open)
             }
@@ -239,6 +240,7 @@ impl Sema<'_, '_> {
                     return x;
                 }
                 let what = self.object_splice_unsupported(p);
+                // kiln-gap: GAP-134
                 self.unsupported(what, open);
                 self.recover_err(&[e], open)
             }

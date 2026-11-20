@@ -366,6 +366,7 @@ impl Sema<'_, '_> {
                 _ => {
                     if emit {
                         let msg =
+                            // kiln-gap: GAP-144
                             self.diag(DiagId::sema_multiversion_not_supported, node.loc).arg(name);
                         self.emit(msg);
                     }
@@ -447,6 +448,7 @@ impl Sema<'_, '_> {
                 .any(|n| n.kind == AttrKind::TARGET && self.fmv_string(&n) != s)
         });
         if s == "default" || differs {
+            // kiln-gap: GAP-144
             let msg = self.diag(DiagId::sema_multiversion_not_supported, t.loc).arg("target");
             self.emit(msg);
             attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::TARGET);

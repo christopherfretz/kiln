@@ -536,6 +536,7 @@ impl Substituter<'_, '_, '_> {
                 let first = st.err().flatten();
                 if let Some(d) = first
                     .as_ref()
+                    // kiln-gap: check
                     .filter(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
                 {
                     // Not substitutable yet: a hard error, never assumed

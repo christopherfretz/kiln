@@ -482,6 +482,7 @@ impl SyntaxJob<'_> {
         let a = self.0.args;
         Ok(match (&a.dump_ast, main) {
             (Some(_), None) => {
+                // kiln-gap: GAP-141
                 Diag::new(DiagId::drv_not_implemented, Span::INVALID)
                     .arg("-fdump-ast of a module file")
                     .emit(engine);

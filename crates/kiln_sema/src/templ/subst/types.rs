@@ -955,6 +955,7 @@ impl Substituter<'_, '_, '_> {
                 self.pack_indexing_type(pattern, index, loc)
             }
             TypeView::PackIndexing { selected: Some(s), .. } => self.ty(s, loc),
+            // kiln-gap: GAP-003
             TypeView::PackExpansion { .. } => self.unimplemented("pack expansion", loc),
             // `const A` with `using A = T[3]`: [dcl.array]/6 pushes the
             // cv-qualifiers into the substituted element type (clang
@@ -977,6 +978,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(t)
             }
             // Remaining kinds cannot be dependent today.
+            // kiln-gap: GAP-099
             _ => self.unimplemented("substitution into this type", loc),
         }
     }

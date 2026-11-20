@@ -180,6 +180,7 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         let Some(i) = self.pack_index else {
+            // kiln-gap: GAP-001
             return self.unimplemented("pack expansion in this context", loc);
         };
         if let Some((len, first)) = self.pack.expanding.clone()
@@ -878,6 +879,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             return Ok(e);
         };
+        // kiln-gap: GAP-004
         let Some(len) = len else { return self.unimplemented("sizeof... of this pack", loc) };
         // Gap (spec §7.4): an `IntegerLiteral` of type `size_t` stands
         // for the substituted `SizeOfPackExpr` (its dump differs).

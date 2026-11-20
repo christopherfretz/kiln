@@ -763,6 +763,7 @@ impl Sema<'_, '_> {
             ArgView::Null => Tdk::Success,
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } => {
                 let at = if loc.is_valid() { loc } else { d.loc };
+                // kiln-gap: GAP-005
                 self.templ_unimplemented("template argument deduction for a pack", at);
                 Tdk::MiscellaneousDeductionFailure
             }
@@ -1564,6 +1565,7 @@ impl Sema<'_, '_> {
                 }
             }
             TypeView::PackExpansion { .. } => {
+                // kiln-gap: GAP-005
                 self.templ_unimplemented("template argument deduction for a pack", d.loc);
                 Tdk::MiscellaneousDeductionFailure
             }

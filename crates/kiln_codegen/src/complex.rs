@@ -171,7 +171,14 @@ impl Cg<'_> {
                 r
             }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_cx(ExprId::new(n.b()), ign),
-            k if k.is_cast() => self.emit_cx_cast(e, ign),
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr => self.emit_cx_cast(e, ign),
             ExprKind::UnaryOperator => self.emit_cx_unary(e, ign),
             ExprKind::BinaryOperator => self.emit_cx_binary(e, ign),
             ExprKind::CompoundAssignOperator => {
@@ -231,6 +238,7 @@ impl Cg<'_> {
             }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(lv)) => Ok(self.cx_load(lv.addr, lv.q, ign)),
+                // kiln-gap: GAP-074
                 _ => err(self.loc_of(e), "a complex opaque value is not supported yet"),
             },
             ExprKind::CXXRewrittenBinaryOperator => {
@@ -255,7 +263,81 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 Ok(self.cx_load(lv.addr, lv.q, ign))
             }
-            k => err(self.loc_of(e), format!("complex expression {k:?} is not supported yet")),
+            k @ (ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::StringLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::DeclRefExpr
+            | ExprKind::MemberExpr
+            | ExprKind::CXXThisExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::BinaryConditionalOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXOperatorCallExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::CoyieldExpr
+            | ExprKind::AddrLabelExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::CXXReflectExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr) => {
+                // kiln-gap: GAP-075
+                err(self.loc_of(e), format!("complex expression {k:?} is not supported yet"))
+            }
         }
     }
 
@@ -296,7 +378,41 @@ impl Cg<'_> {
                 let c = self.emit_cx(s, ign)?;
                 self.cx_convert(c, sq, q, self.ub_expr_loc(e))
             }
-            k => err(self.loc_of(e), format!("complex cast {k:?} is not supported yet")),
+            k @ (CastKind::Dependent
+            | CastKind::BitCast
+            | CastKind::ArrayToPointerDecay
+            | CastKind::FunctionToPointerDecay
+            | CastKind::BuiltinFnToFnPtr
+            | CastKind::NullToPointer
+            | CastKind::NullToMemberPointer
+            | CastKind::IntegralToPointer
+            | CastKind::PointerToIntegral
+            | CastKind::PointerToBoolean
+            | CastKind::IntegralCast
+            | CastKind::IntegralToBoolean
+            | CastKind::BooleanToSignedIntegral
+            | CastKind::IntegralToFloating
+            | CastKind::FloatingToIntegral
+            | CastKind::FloatingToBoolean
+            | CastKind::FloatingCast
+            | CastKind::DerivedToBase
+            | CastKind::UncheckedDerivedToBase
+            | CastKind::BaseToDerived
+            | CastKind::Dynamic
+            | CastKind::DerivedToBaseMemberPointer
+            | CastKind::BaseToDerivedMemberPointer
+            | CastKind::MemberPointerToBoolean
+            | CastKind::ReinterpretMemberPointer
+            | CastKind::ToVoid
+            | CastKind::ToUnion
+            | CastKind::VectorSplat
+            | CastKind::IntegralComplexToReal
+            | CastKind::FloatingComplexToReal
+            | CastKind::IntegralComplexToBoolean
+            | CastKind::FloatingComplexToBoolean) => {
+                // kiln-gap: GAP-076
+                err(self.loc_of(e), format!("complex cast {k:?} is not supported yet"))
+            }
         }
     }
 
@@ -346,7 +462,15 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 Ok(self.cx_load(lv.addr, lv.q, ign))
             }
-            op => err(self.loc_of(e), format!("complex unary {op:?} is not supported yet")),
+            op @ (UnaryOp::AddrOf
+            | UnaryOp::Deref
+            | UnaryOp::LNot
+            | UnaryOp::Real
+            | UnaryOp::Imag
+            | UnaryOp::Coawait) => {
+                // kiln-gap: GAP-077
+                err(self.loc_of(e), format!("complex unary {op:?} is not supported yet"))
+            }
         }
     }
 
@@ -403,7 +527,36 @@ impl Cg<'_> {
                 let lv = self.emit_lvalue(e)?;
                 Ok(self.cx_load(lv.addr, lv.q, ign))
             }
-            op => err(self.loc_of(e), format!("complex binary {op:?} is not supported yet")),
+            op @ (BinaryOp::PtrMemD
+            | BinaryOp::PtrMemI
+            | BinaryOp::Rem
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::Cmp
+            | BinaryOp::LT
+            | BinaryOp::GT
+            | BinaryOp::LE
+            | BinaryOp::GE
+            | BinaryOp::EQ
+            | BinaryOp::NE
+            | BinaryOp::And
+            | BinaryOp::Xor
+            | BinaryOp::Or
+            | BinaryOp::LAnd
+            | BinaryOp::LOr
+            | BinaryOp::MulAssign
+            | BinaryOp::DivAssign
+            | BinaryOp::RemAssign
+            | BinaryOp::AddAssign
+            | BinaryOp::SubAssign
+            | BinaryOp::ShlAssign
+            | BinaryOp::ShrAssign
+            | BinaryOp::AndAssign
+            | BinaryOp::XorAssign
+            | BinaryOp::OrAssign) => {
+                // kiln-gap: GAP-078
+                err(self.loc_of(e), format!("complex binary {op:?} is not supported yet"))
+            }
         }
     }
 

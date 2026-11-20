@@ -561,6 +561,7 @@ impl Parser<'_, '_> {
                 self.parse_gnu_attributes(out);
             } else if self.at_kw(Kw::Declspec) {
                 let loc = self.bump().span.lo;
+                // kiln-gap: GAP-152
                 self.unsupported("'__declspec'", loc);
                 if let Some(l) = self.eat(Punct::LParen) {
                     self.skip_until(&[Punct::RParen], false, true);
@@ -894,6 +895,7 @@ impl Parser<'_, '_> {
                 self.parse_attr_args(name)
             };
             if let Some(l) = self.eat(Punct::Ellipsis) {
+                // kiln-gap: GAP-002
                 self.unsupported("attribute pack expansions", l);
             }
             if let Some(args) = args

@@ -2087,6 +2087,7 @@ impl Sema<'_, '_> {
             if file_like {
                 self.vla_at_file_scope(d, loc, at, f);
             } else {
+                // kiln-gap: GAP-150
                 self.error(DiagId::sema_vla_unsupported, loc);
             }
             return None;
@@ -3490,6 +3491,7 @@ impl Sema<'_, '_> {
                 SpecialName::LiteralOperator(_) => "literal operators",
                 SpecialName::DeductionGuide(_) => "deduction guides here",
             };
+            // kiln-gap: GAP-162
             self.unsupported(what, loc);
             return true;
         }
@@ -3497,6 +3499,7 @@ impl Sema<'_, '_> {
         // ill-formed ([dcl.fct.spec]/3); on a friend it is WP-068b.
         if let Some(l) = ds.explicit {
             if ds.friend.is_some() {
+                // kiln-gap: GAP-163
                 self.unsupported("'explicit'", l);
             } else {
                 let function = d.is_function_declarator() && !ds.is_typedef();
@@ -3826,6 +3829,7 @@ impl Sema<'_, '_> {
                 if d.ctx == DeclaratorContext::Member {
                     // clang crashes on this (a friend: `act_on_friend`).
                     let msg = self
+                        // kiln-gap: GAP-144
                         .diag(DiagId::sema_multiversion_not_supported, at)
                         .arg("target_version");
                     self.emit(msg);
@@ -4314,6 +4318,7 @@ impl Sema<'_, '_> {
 
     /// Reports an unsupported construct (`{what} is not supported yet`).
     pub fn unsupported(&self, what: &str, loc: Loc) {
+        // kiln-gap: forward
         let d = self.diag(DiagId::parse_unsupported, loc).arg(what);
         self.emit(d);
     }
@@ -11599,6 +11604,7 @@ impl Sema<'_, '_> {
             "C++" => LinkageLang::Cxx,
             _ => {
                 let msg = self
+                    // kiln-gap: GAP-165
                     .diag(DiagId::parse_unsupported, lang_loc)
                     .arg(format!("language linkage \"{lang}\""));
                 self.emit(msg);
@@ -13700,6 +13706,7 @@ impl Sema<'_, '_> {
                 return Some(self.ast.attrs.push(node));
             }
             crate::attr_triage::Support::Unsupported => {
+                // kiln-gap: GAP-149
                 let msg = self.diag(DiagId::sema_attribute_unsupported_by_kiln, loc).arg(shown);
                 self.emit(msg);
                 return None;
@@ -14710,6 +14717,7 @@ impl Sema<'_, '_> {
 
     /// `#pragma pack` and other unsupported pragmas.
     pub fn act_on_unsupported_pragma(&self, what: &str, loc: Loc) {
+        // kiln-gap: GAP-143
         self.unsupported(&format!("'#pragma {what}'"), loc);
     }
 

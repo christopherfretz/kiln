@@ -1810,6 +1810,7 @@ impl Cg<'_> {
         if self.is_glvalue(e) {
             return Ok(self.emit_lvalue(e)?.addr.v);
         }
+        // kiln-gap: GAP-080
         err(self.loc_of(e), "binding a reference to a prvalue is not supported yet")
     }
 
@@ -1974,6 +1975,7 @@ impl Cg<'_> {
                 TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => {
                     return err(
                         self.loc_of(e),
+                        // kiln-gap: GAP-081
                         "construction of variable-length arrays is not supported yet",
                     );
                 }
@@ -2202,6 +2204,7 @@ impl Cg<'_> {
             return self.mp_call(e, callee_e, dest);
         }
         if ast.exprs.get(callee_e).kind() != ExprKind::MemberExpr {
+            // kiln-gap: GAP-082
             return err(self.loc_of(e), "calls through member pointers are not supported yet");
         }
         let md = ast.exprs.decl(callee_e);

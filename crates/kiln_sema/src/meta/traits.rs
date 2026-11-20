@@ -778,6 +778,7 @@ impl Sema<'_, '_> {
                 )
             }
             (Some(TraitFailure::Unimplemented), _) => {
+                // kiln-gap: GAP-131
                 fail(loc, format!("kiln: '{}' is not implemented yet", op.name()))
             }
             (None, Ok(Answer::Out(v))) => {

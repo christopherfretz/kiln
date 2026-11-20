@@ -467,7 +467,7 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
         let loc = ctx.loc;
-        let unsupported = |s: &Self| {
+        let no_empty_array = |s: &Self| {
             fail(
                 loc,
                 format!(
@@ -478,7 +478,7 @@ impl Sema<'_, '_> {
             )
         };
         let Some((_, tmpl)) = self.std_class_template("array") else {
-            return unsupported(self);
+            return no_empty_array(self);
         };
         // Instantiating `array<T, 0>` may evaluate: with the Oven lent back.
         let t = self.lend_oven(oven, |s| {
@@ -494,11 +494,11 @@ impl Sema<'_, '_> {
             }
         });
         let Some(t) = t else {
-            return unsupported(self);
+            return no_empty_array(self);
         };
         let t = self.unqual(t);
         let Some(cv) = self.bridge(|b| oven.meta_freeze_blank(b, t))? else {
-            return unsupported(self);
+            return no_empty_array(self);
         };
         let p = self.object_ptr(t, PtrBase::Const(cv), 0)?;
         self.intern_reflection(Reflectee::Object(p), loc).map_err(MetaError::from)

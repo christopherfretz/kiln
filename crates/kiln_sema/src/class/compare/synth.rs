@@ -435,7 +435,7 @@ impl Sema<'_, '_> {
             true,
             overloadable,
         );
-        let uncertain = set.uncertain || set.skipped_templates;
+        let uncertain = set.uncertain;
         self.end_set(set);
         !uncertain && matches!(out, OvlOutcome::NoViable)
     }

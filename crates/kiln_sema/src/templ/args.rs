@@ -1582,6 +1582,7 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         if t.is_array(ety) && !t.is_pointer(pty) {
+            // kiln-gap: GAP-094
             self.templ_unimplemented("non-type template parameter of class or reference type", at);
             return Err(());
         }

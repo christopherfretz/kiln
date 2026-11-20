@@ -567,6 +567,7 @@ impl Substituter<'_, '_, '_> {
                 let subs: Vec<ExprId> =
                     self.sema.ast.lists.iter::<ExprId>(ex(self).atomic_subs(e)).collect();
                 let Some(form) = kiln_ast::decl::builtin::atomic::form(op) else {
+                    // kiln-gap: GAP-102
                     return self.unimplemented("this atomic operation", loc);
                 };
                 let mut args = Vec::with_capacity(subs.len());
@@ -622,6 +623,7 @@ impl Substituter<'_, '_, '_> {
                                 self.sema.oper_override = None;
                                 Ok(r)
                             }
+                            // kiln-gap: GAP-054
                             None => self.unimplemented("this overloaded operator", loc),
                         }
                     }
@@ -634,6 +636,7 @@ impl Substituter<'_, '_, '_> {
                             self.sema.oper_override = None;
                             Ok(x)
                         }
+                        // kiln-gap: GAP-054
                         None => self.unimplemented("this overloaded operator", loc),
                     },
                     // Not reached by a resolved call: `new`/`delete`
@@ -642,6 +645,7 @@ impl Substituter<'_, '_, '_> {
                     // of a named function), and the `operator co_await` call
                     // of a `CoawaitExpr` is formed again from the operand as
                     // written ([expr.await]/3.3).
+                    // kiln-gap: GAP-054
                     _ => self.unimplemented("this overloaded operator", loc),
                 }
             }
@@ -650,6 +654,7 @@ impl Substituter<'_, '_, '_> {
                 let v = self.expr_list(l)?;
                 match v.as_slice() {
                     &[l, r] => Ok(self.sema.act_on_binary(op, l, r, loc)),
+                    // kiln-gap: GAP-058
                     _ => self.unimplemented("this rewritten comparison", loc),
                 }
             }
@@ -895,6 +900,7 @@ impl Substituter<'_, '_, '_> {
                             Ok(if callee { x } else { self.sema.resolve_single_template_id(x) })
                         }
                         Ok(crate::templ::actions::TemplateIdRef::Type(_)) => {
+                            // kiln-gap: GAP-050
                             self.unimplemented("a type template-id as an expression", loc)
                         }
                         Err(()) => Err(SubstFail),
@@ -1296,6 +1302,7 @@ impl Substituter<'_, '_, '_> {
                 let p = self.expr(pattern)?;
                 Ok(if p == pattern { e } else { self.sema.act_pack_expansion(p, loc) })
             }
+            // kiln-gap: GAP-003
             ExprKind::PackExpansionExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
@@ -1350,7 +1357,34 @@ impl Substituter<'_, '_, '_> {
                 let l = self.init_list(e)?;
                 Ok(self.sema.act_on_braced_template_arg(&l))
             }
-            _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
+            ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::StringLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::InitListExpr
+            | ExprKind::ImplicitValueInitExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXDefaultArgExpr
+            | ExprKind::CXXDefaultInitExpr
+            | ExprKind::CXXScalarValueInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::PseudoObjectExpr => {
+                // kiln-gap: GAP-097
+                self.unimplemented(&format!("substitution into {k:?}"), loc)
+            }
         }
     }
 
@@ -1615,6 +1649,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.sema.ast.names.conversion(t))
             }
             DeclNameView::Destructor(_) | DeclNameView::Constructor(_) => {
+                // kiln-gap: GAP-051
                 self.unimplemented("member access to a special member", loc)
             }
             _ => Ok(name),
@@ -1766,6 +1801,7 @@ impl Substituter<'_, '_, '_> {
         let name = self.sema.ast.dependent_member_name(e);
         let name = self.member_name(name, loc)?;
         if self.sema.ast.templates.expr_targs.get(e).is_some() {
+            // kiln-gap: GAP-047
             return self.unimplemented("implicit dependent member template-id", loc);
         }
         let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
@@ -1773,6 +1809,7 @@ impl Substituter<'_, '_, '_> {
                 let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(q, at)?;
                 if self.nns_still_dependent(nns) {
+                    // kiln-gap: GAP-048
                     return self.unimplemented("implicit dependent member access", loc);
                 }
                 let ctx = self.nns_context(nns, at)?;
@@ -2300,6 +2337,7 @@ impl Substituter<'_, '_, '_> {
             ArgLookup::Retain(_) => {
                 let np = self.find_instantiated_decl(p, loc)?;
                 if np == p {
+                    // kiln-gap: GAP-014
                     return self.unimplemented("member templates", loc);
                 }
                 return Ok(self.sema.build_decl_ref(np, loc));
@@ -2332,6 +2370,7 @@ impl Substituter<'_, '_, '_> {
             // argument converted for a partial substitution): its first
             // expression stands for it, as in `template_arg` (§5.1).
             ArgView::Profile(p) => self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?,
+            // kiln-gap: GAP-095
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
         // A parameter of reference type (also `decltype(auto)` deduced as
@@ -2444,6 +2483,7 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<ExprId> {
         match self.sema.nttp_arg_expr(ty, value, loc) {
             Some(e) => Ok(e),
+            // kiln-gap: GAP-096
             None => self.unimplemented("non-type template argument of this type", loc),
         }
     }
@@ -2688,6 +2728,7 @@ impl Substituter<'_, '_, '_> {
     fn written_arg(&mut self, e: ExprId) -> SubstResult<ExprId> {
         if self.sema.ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
             let loc = self.sema.ast.exprs.get(e).loc();
+            // kiln-gap: GAP-003
             return self.unimplemented("pack expansion", loc);
         }
         self.expr(e)
@@ -2720,6 +2761,7 @@ impl Substituter<'_, '_, '_> {
         match self.expand_pattern(|s| s.mem_initializer_one(info))? {
             crate::templ::pack::Expansion::Elements(v) => Ok(v),
             crate::templ::pack::Expansion::Unexpanded(_) => self
+                // kiln-gap: GAP-007
                 .unimplemented("a mem-initializer pack expansion of an enclosing pack", info.loc),
         }
     }

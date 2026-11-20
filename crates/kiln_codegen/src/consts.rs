@@ -617,6 +617,7 @@ impl Cg<'_> {
                 self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
             }
             IrType::RecordBase(_) => {
+                // kiln-gap: GAP-083
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
             // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
@@ -641,6 +642,7 @@ impl Cg<'_> {
                 self.m.const_vector(&elems).map_err(|e| ir_err(&e))
             }
             IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
+                // kiln-gap: GAP-084
                 err(None, "scalable-vector and target-type constants are not supported yet (M3)")
             }
         }
@@ -673,6 +675,7 @@ impl Cg<'_> {
         let as_base = complete.is_some();
         let vt_class = complete.unwrap_or(first);
         if rec.is_union && as_base {
+            // kiln-gap: GAP-085
             return err(None, "union base-class constants are not supported yet (M3)");
         }
         let (members, packed) = match (&rec.base_members, as_base) {
@@ -792,6 +795,7 @@ impl Cg<'_> {
                 // with the same address point.
                 out.push((at, self.vtable_address_point(vt_class, first, rel)?));
             } else if !matches!(m, IrType::Array(..) | IrType::Int(8)) {
+                // kiln-gap: GAP-086
                 return err(None, "class constants with this member are not supported yet");
             }
         }

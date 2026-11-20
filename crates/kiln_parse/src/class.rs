@@ -1114,6 +1114,7 @@ impl Parser<'_, '_> {
                     // a type resolved at instantiation ([class.base.init]/2).
                     MemInitId::Type(ty)
                 } else {
+                    // kiln-gap: GAP-153
                     self.unsupported("qualified member initializers", loc);
                     return (None, true);
                 }

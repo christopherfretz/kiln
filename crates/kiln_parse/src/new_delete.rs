@@ -198,6 +198,7 @@ impl Parser<'_, '_> {
         let mut args = Vec::new();
         loop {
             if self.at(Punct::LBrace) {
+                // kiln-gap: GAP-034
                 self.unsupported("braced-init-list arguments", self.loc());
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
@@ -349,6 +350,7 @@ impl Parser<'_, '_> {
                 _ => false,
             };
             if lambda {
+                // kiln-gap: GAP-156
                 self.unsupported("lambda expressions", self.loc());
                 return None;
             }

@@ -334,6 +334,7 @@ impl Parser<'_, '_> {
                 self.parse_export_declaration();
             }
             (_, Some(Kw::Export)) => {
+                // kiln-gap: GAP-138
                 self.unsupported("modules", loc);
                 self.skip_unsupported_declaration();
             }
@@ -731,6 +732,7 @@ impl Parser<'_, '_> {
                 DeclName::ident(name)
             } else {
                 if self.at(Punct::Tilde) {
+                    // kiln-gap: GAP-154
                     self.unsupported("a destructor name in a using-declarator", nl);
                 } else {
                     self.error_here(DiagId::parse_expected_unqualified_id);

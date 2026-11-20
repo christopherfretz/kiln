@@ -399,7 +399,14 @@ impl Cg<'_> {
                 self.emit_ignored(ast.exprs.operand(e))?;
                 V::C(v)
             }
-            k if k.is_cast() => return self.emit_cast(e),
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr => return self.emit_cast(e),
             ExprKind::UnaryOperator => return self.emit_unary(e).map(Some),
             ExprKind::BinaryOperator => return self.emit_binary(e),
             ExprKind::CompoundAssignOperator => {
@@ -606,7 +613,46 @@ impl Cg<'_> {
             ExprKind::AddrLabelExpr => {
                 V::C(self.addr_of_label(ast.exprs.addr_label(e), self.loc_of(e))?)
             }
-            k => return err(self.loc_of(e), format!("expression {k:?} is not supported yet")),
+            k @ (ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::InitListExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXParenListInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::CXXReflectExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr) => {
+                // kiln-gap: GAP-059
+                return err(self.loc_of(e), format!("expression {k:?} is not supported yet"));
+            }
         }))
     }
 
@@ -1129,7 +1175,17 @@ impl Cg<'_> {
             | CastKind::IntegralComplexToBoolean => {
                 self.emit_complex_to_scalar_cast(e, ck, q, sq, s)?
             }
-            k => return err(self.loc_of(e), format!("cast {k:?} is not supported yet")),
+            k @ (CastKind::Dependent
+            | CastKind::ToUnion
+            | CastKind::IntegralRealToComplex
+            | CastKind::FloatingRealToComplex
+            | CastKind::IntegralComplexCast
+            | CastKind::FloatingComplexCast
+            | CastKind::IntegralComplexToFloatingComplex
+            | CastKind::FloatingComplexToIntegralComplex) => {
+                // kiln-gap: GAP-063
+                return err(self.loc_of(e), format!("cast {k:?} is not supported yet"));
+            }
         }))
     }
 
@@ -1413,7 +1469,10 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 Ok(V::C(self.m.const_zero(t)))
             }
-            op => err(self.loc_of(e), format!("unary {op:?} is not supported yet")),
+            op @ UnaryOp::Coawait => {
+                // kiln-gap: GAP-064
+                err(self.loc_of(e), format!("unary {op:?} is not supported yet"))
+            }
         }
     }
 
@@ -1783,7 +1842,26 @@ impl Cg<'_> {
                     self.vec_cmp_result(c, q)
                 }
             }
-            op => return err(self.loc_of(e), format!("binary {op:?} is not supported yet")),
+            op @ (BinaryOp::PtrMemD
+            | BinaryOp::PtrMemI
+            | BinaryOp::Cmp
+            | BinaryOp::LAnd
+            | BinaryOp::LOr
+            | BinaryOp::Assign
+            | BinaryOp::MulAssign
+            | BinaryOp::DivAssign
+            | BinaryOp::RemAssign
+            | BinaryOp::AddAssign
+            | BinaryOp::SubAssign
+            | BinaryOp::ShlAssign
+            | BinaryOp::ShrAssign
+            | BinaryOp::AndAssign
+            | BinaryOp::XorAssign
+            | BinaryOp::OrAssign
+            | BinaryOp::Comma) => {
+                // kiln-gap: GAP-065
+                return err(self.loc_of(e), format!("binary {op:?} is not supported yet"));
+            }
         })
     }
 
@@ -2533,7 +2611,58 @@ impl Cg<'_> {
                     tb: Tb::Type,
                 })
             }
-            k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
+            k @ (DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::NamespaceAlias
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingDirective
+            | DeclKind::Using
+            | DeclKind::UsingEnum
+            | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingValue
+            | DeclKind::UnresolvedUsingTypename
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::Typedef
+            | DeclKind::TypeAlias
+            | DeclKind::Enum
+            | DeclKind::EnumConstant
+            | DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::Field
+            | DeclKind::IndirectField
+            | DeclKind::AccessSpec
+            | DeclKind::Friend
+            | DeclKind::FriendTemplate
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::ImplicitParam
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::StaticAssert
+            | DeclKind::Label
+            | DeclKind::ConstevalBlock) => {
+                // kiln-gap: GAP-066
+                err(self.loc_of(e), format!("reference to {k:?} is not supported yet"))
+            }
         }
     }
 
@@ -2827,8 +2956,81 @@ impl Cg<'_> {
             | ExprKind::CXXOperatorCallExpr
             | ExprKind::InitListExpr
             | ExprKind::CXXParenListInitExpr => self.temporary_lvalue(e),
-            k if k.is_cast() => self.cast_lvalue(e, q),
-            k => err(self.loc_of(e), format!("lvalue {k:?} is not supported yet")),
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr => self.cast_lvalue(e, q),
+            k @ (ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::CXXThisExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::ParenListExpr
+            | ExprKind::ImplicitValueInitExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::CXXConstructExpr
+            | ExprKind::CXXTemporaryObjectExpr
+            | ExprKind::CXXInheritedCtorInitExpr
+            | ExprKind::CXXScalarValueInitExpr
+            | ExprKind::ArrayInitLoopExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::NoInitExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::StmtExpr
+            | ExprKind::AddrLabelExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::VAArgExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::CXXReflectExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr) => {
+                // kiln-gap: GAP-067
+                err(self.loc_of(e), format!("lvalue {k:?} is not supported yet"))
+            }
         }
     }
 
@@ -2899,7 +3101,17 @@ impl Cg<'_> {
             }
             op @ (UnaryOp::Real | UnaryOp::Imag) => self.real_imag_lvalue(e, op == UnaryOp::Imag),
             UnaryOp::Extension => self.emit_lvalue(ast.exprs.operand(e)),
-            op => err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet")),
+            op @ (UnaryOp::PostInc
+            | UnaryOp::PostDec
+            | UnaryOp::AddrOf
+            | UnaryOp::Plus
+            | UnaryOp::Minus
+            | UnaryOp::Not
+            | UnaryOp::LNot
+            | UnaryOp::Coawait) => {
+                // kiln-gap: GAP-068
+                err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet"))
+            }
         }
     }
 
@@ -2959,7 +3171,38 @@ impl Cg<'_> {
                 self.ensure_insert_point();
                 self.emit_lvalue(r)
             }
-            op => err(self.loc_of(e), format!("lvalue binary {op:?} is not supported yet")),
+            op @ (BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Rem
+            | BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Shl
+            | BinaryOp::Shr
+            | BinaryOp::Cmp
+            | BinaryOp::LT
+            | BinaryOp::GT
+            | BinaryOp::LE
+            | BinaryOp::GE
+            | BinaryOp::EQ
+            | BinaryOp::NE
+            | BinaryOp::And
+            | BinaryOp::Xor
+            | BinaryOp::Or
+            | BinaryOp::LAnd
+            | BinaryOp::LOr
+            | BinaryOp::MulAssign
+            | BinaryOp::DivAssign
+            | BinaryOp::RemAssign
+            | BinaryOp::AddAssign
+            | BinaryOp::SubAssign
+            | BinaryOp::ShlAssign
+            | BinaryOp::ShrAssign
+            | BinaryOp::AndAssign
+            | BinaryOp::XorAssign
+            | BinaryOp::OrAssign) => {
+                // kiln-gap: GAP-069
+                err(self.loc_of(e), format!("lvalue binary {op:?} is not supported yet"))
+            }
         }
     }
 
@@ -3106,7 +3349,47 @@ impl Cg<'_> {
                 let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
                 Ok(self.ref_lvalue(p, q))
             }
-            k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
+            k @ (CastKind::Dependent
+            | CastKind::LValueToRValueBitCast
+            | CastKind::BitCast
+            | CastKind::ArrayToPointerDecay
+            | CastKind::FunctionToPointerDecay
+            | CastKind::BuiltinFnToFnPtr
+            | CastKind::NullToPointer
+            | CastKind::NullToMemberPointer
+            | CastKind::IntegralToPointer
+            | CastKind::PointerToIntegral
+            | CastKind::PointerToBoolean
+            | CastKind::IntegralCast
+            | CastKind::IntegralToBoolean
+            | CastKind::BooleanToSignedIntegral
+            | CastKind::IntegralToFloating
+            | CastKind::FloatingToIntegral
+            | CastKind::FloatingToBoolean
+            | CastKind::FloatingCast
+            | CastKind::DerivedToBaseMemberPointer
+            | CastKind::BaseToDerivedMemberPointer
+            | CastKind::MemberPointerToBoolean
+            | CastKind::ReinterpretMemberPointer
+            | CastKind::ConstructorConversion
+            | CastKind::ToVoid
+            | CastKind::ToUnion
+            | CastKind::VectorSplat
+            | CastKind::NonAtomicToAtomic
+            | CastKind::AtomicToNonAtomic
+            | CastKind::IntegralRealToComplex
+            | CastKind::FloatingRealToComplex
+            | CastKind::IntegralComplexCast
+            | CastKind::FloatingComplexCast
+            | CastKind::IntegralComplexToReal
+            | CastKind::FloatingComplexToReal
+            | CastKind::IntegralComplexToBoolean
+            | CastKind::FloatingComplexToBoolean
+            | CastKind::IntegralComplexToFloatingComplex
+            | CastKind::FloatingComplexToIntegralComplex) => {
+                // kiln-gap: GAP-070
+                err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet"))
+            }
         }
     }
 
@@ -4228,6 +4511,7 @@ impl Cg<'_> {
     ) -> R<Option<V>> {
         let i = Fir::last_inst(r);
         if !matches!(self.f.fir.op(i), Op::Call { .. }) {
+            // kiln-gap: GAP-168
             return err(loc, "cannot compile this tail call skipping over cleanups yet");
         }
         self.f.fir.set_musttail(i);
@@ -4654,7 +4938,14 @@ impl Cg<'_> {
             let n = ast.exprs.get(e);
             match n.kind() {
                 ExprKind::ParenExpr => e = ast.exprs.operand(e),
-                k if k.is_cast() => match ast.exprs.cast_kind(e) {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                | ExprKind::CXXDynamicCastExpr
+                | ExprKind::BuiltinBitCastExpr => match ast.exprs.cast_kind(e) {
                     CastKind::NoOp
                     | CastKind::BitCast
                     | CastKind::ToVoid
@@ -5114,7 +5405,72 @@ impl Cg<'_> {
                 self.agg_three_way(e, dest)
             }
             ExprKind::StmtExpr => self.agg_stmt_expr(e, dest, zeroed),
-            k => err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet")),
+            k @ (ExprKind::IntegerLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::UserDefinedLiteral
+            | ExprKind::ImaginaryLiteral
+            | ExprKind::EmbedExpr
+            | ExprKind::GNUNullExpr
+            | ExprKind::CXXThisExpr
+            | ExprKind::PredefinedExpr
+            | ExprKind::SourceLocExpr
+            | ExprKind::UnresolvedLookupExpr
+            | ExprKind::UnresolvedMemberExpr
+            | ExprKind::DependentScopeDeclRefExpr
+            | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::SubstNonTypeTemplateParmExpr
+            | ExprKind::SubstNonTypeTemplateParmPackExpr
+            | ExprKind::FunctionParmPackExpr
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::BinaryConditionalOperator
+            | ExprKind::ParenListExpr
+            | ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr
+            | ExprKind::BuiltinBitCastExpr
+            | ExprKind::DesignatedInitExpr
+            | ExprKind::ArrayInitIndexExpr
+            | ExprKind::OpaqueValueExpr
+            | ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::CXXTypeidExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::TypeTraitExpr
+            | ExprKind::ArrayTypeTraitExpr
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::OffsetOfExpr
+            | ExprKind::SizeOfPackExpr
+            | ExprKind::RequiresExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::PackExpansionExpr
+            | ExprKind::CXXFoldExpr
+            | ExprKind::PackIndexingExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::DependentCoawaitExpr
+            | ExprKind::AddrLabelExpr
+            | ExprKind::ChooseExpr
+            | ExprKind::ShuffleVectorExpr
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::CXXReflectExpr
+            | ExprKind::CXXSpliceExpr
+            | ExprKind::RecoveryExpr
+            | ExprKind::CXXExpansionSelectExpr
+            | ExprKind::GenericSelectionExpr
+            | ExprKind::IntegerPackExpr) => {
+                // kiln-gap: GAP-071
+                err(self.loc_of(e), format!("aggregate expression {k:?} is not supported yet"))
+            }
         }
     }
 

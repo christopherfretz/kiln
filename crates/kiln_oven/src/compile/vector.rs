@@ -196,6 +196,7 @@ impl Compiler<'_> {
                 .collect();
         }
         let Some((w, s)) = int_of(k) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -218,6 +219,7 @@ impl Compiler<'_> {
     /// `e` (`vec_op`).
     pub(super) fn vec_init(&mut self, e: ExprId, p: u32, ty: OTy) {
         if self.lanes(ty).is_none() {
+            // kiln-gap: GAP-125
             return self.unsupported(e);
         }
         let n = self.node(e);
@@ -340,6 +342,7 @@ impl Compiler<'_> {
         let e = skip_parens(self.ast(), e);
         let ty = self.ety(e);
         let Some((elem, n)) = self.lanes(ty) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -368,6 +371,7 @@ impl Compiler<'_> {
                 let x = self.ast().exprs.operand(e);
                 let xt = self.ety(x);
                 let Some((xe, _)) = self.lanes(xt) else {
+                    // kiln-gap: GAP-125
                     self.unsupported(e);
                     return Vec::new();
                 };
@@ -436,6 +440,7 @@ impl Compiler<'_> {
         let base = ast.exprs.operand(e);
         if ast.exprs.get(e).has(ExprFlags::ARROW) {
             // `p->x` is a glvalue: not folded (clang 19).
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         }
@@ -446,6 +451,7 @@ impl Compiler<'_> {
         let kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } =
             kiln_ast::expr::ext_vector_access(acc, count)
         else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -455,6 +461,7 @@ impl Compiler<'_> {
         }
         let Some(lanes) = lanes.iter().map(|&l| src.get(l as usize).copied()).collect() else {
             // An odd vector's `.hi`/`.odd` past its end.
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -470,10 +477,12 @@ impl Compiler<'_> {
         let ast = self.ast();
         let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
         let Some(mask) = ast.exprs.shuffle_mask(e, &ast.lists).map(<[u32]>::to_vec) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
         let (Some(&x), Some(&y)) = (subs.first(), subs.get(1)) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -514,16 +523,19 @@ impl Compiler<'_> {
         let args: Vec<ExprId> =
             ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
         let (Some(&a), Some(&m)) = (args.first(), args.last()) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
         let b = (args.len() == 3).then(|| args[1]);
         let (vt, mty) = (self.ety(a), self.ety(m));
         let (Some((elem, n)), Some((me, _))) = (self.lanes(vt), self.lanes(mty)) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
         let Some((w, _)) = int_of(self.kind(me)) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Vec::new();
         };
@@ -691,6 +703,7 @@ impl Compiler<'_> {
                 self.arith(iop, elem, be, d, ra, rb, e);
                 out.push(d);
             } else {
+                // kiln-gap: GAP-125
                 self.unsupported(e);
                 return out;
             }
@@ -705,6 +718,7 @@ impl Compiler<'_> {
     pub(super) fn vec_reduce(&mut self, e: ExprId, bid: u32, x: ExprId, dst: u32) {
         use kiln_ast::decl::builtin as id;
         let xt = self.ety(x);
+        // kiln-gap: GAP-125
         let Some((elem, _)) = self.lanes(xt) else { return self.unsupported(e) };
         if !matches!(self.kind(elem), TyKind::Int { .. } | TyKind::Bool) {
             return self.trap(e, "");
@@ -822,16 +836,19 @@ impl Compiler<'_> {
         let op = ast.exprs.binary_op(e);
         let lhs = ExprId::new(self.node(e).a());
         let Some((elem, n)) = self.lanes(ty) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
         let Some(iop) = int_op(op) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Place::Mem(self.reg());
         };
         // [expr.assign]/1: the right operand is sequenced first.
         let (rb, be) = self.vec_or_scalar(x.rhs, n);
         let Place::Mem(p) = self.lv_rmw(lhs, e) else {
+            // kiln-gap: GAP-125
             self.unsupported(e);
             return Place::Mem(self.reg());
         };

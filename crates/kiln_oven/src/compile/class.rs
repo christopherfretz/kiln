@@ -224,6 +224,7 @@ impl Compiler<'_> {
             // (`Oven::sub_addr`). A downcast is ill-formed
             // ([expr.static.cast]/2, /11; sema rejects it).
             let Some(k) = self.path_sub(cur, &rest).filter(|_| !down) else {
+                // kiln-gap: GAP-113
                 self.unsupported(e);
                 return;
             };
@@ -912,6 +913,7 @@ impl Compiler<'_> {
                 let fd = DeclId::new(ci.target);
                 let fields = self.o.types.fields(cls);
                 let Some(idx) = fields.iter().position(|f| !f.base && f.decl == fd) else {
+                    // kiln-gap: GAP-113
                     self.unsupported(ci.init);
                     return;
                 };
@@ -933,6 +935,7 @@ impl Compiler<'_> {
                 for (k, fd) in chain.iter().enumerate() {
                     let fields = self.o.types.fields(oty);
                     let Some(idx) = fields.iter().position(|f| !f.base && f.decl == *fd) else {
+                        // kiln-gap: GAP-113
                         self.unsupported(ci.init);
                         return;
                     };
@@ -1259,6 +1262,7 @@ impl Compiler<'_> {
                         self.init_inner(a, p, ty);
                     }
                 }
+                // kiln-gap: GAP-113
                 _ => self.unsupported(e),
             }
             return;
@@ -1320,6 +1324,7 @@ impl Compiler<'_> {
                 Some(Local::Mem(a)) => {
                     self.emit_at(Op::Load, crate::kbc::ak::READ, &[slot, a, pty.0], e);
                 }
+                // kiln-gap: GAP-113
                 None => self.unsupported(e),
             }
         }
@@ -1521,6 +1526,7 @@ impl Compiler<'_> {
             if let Some(bin) = self.is_mp_callee(callee) {
                 return self.mp_call(e, bin, sret);
             }
+            // kiln-gap: GAP-113
             self.unsupported(e);
             return self.reg();
         }
@@ -1683,6 +1689,7 @@ impl Compiler<'_> {
         let [common, elem_init] = ast.exprs.array_init_loop(e);
         let src = ast.exprs.opaque_source(common).unwrap_or(common);
         let TyKind::Array { elem, n } = self.kind(ty) else {
+            // kiln-gap: GAP-113
             self.unsupported(e);
             return;
         };

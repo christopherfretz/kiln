@@ -198,6 +198,7 @@ impl Sema<'_, '_> {
         // [class.abstract]/2: a pure-specifier on a virtual function.
         if let Some(_zero) = d.pure {
             if site.friend {
+                // kiln-gap: GAP-164
                 self.unsupported("pure virtual friend functions", d.name_loc());
             } else if spec.is_virtual() || (site.method && self.in_dependent_class(site.class)) {
                 // clang `CheckPureMethod`: in a dependent class the

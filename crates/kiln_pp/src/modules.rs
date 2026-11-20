@@ -462,6 +462,7 @@ impl Preprocessor<'_, '_> {
                 m.scanned.push(key);
             }
             if let Some((_, shown, span)) = header {
+                // kiln-gap: GAP-137
                 self.emit(Diag::new(DiagId::pp_scan_header_unit, span).arg(shown));
             }
             return;

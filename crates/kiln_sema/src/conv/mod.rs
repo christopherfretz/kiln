@@ -823,6 +823,7 @@ fn retarget_template_id(
 }
 
 fn unsupported(what: &str) -> ConvError {
+    // kiln-gap: forward
     ConvError::new(DiagId::sema_conv_unsupported, vec![what.into()])
 }
 
@@ -859,6 +860,7 @@ fn bind_reference(
     let (rvalue_ref, referee) = match s.ast.types.canonical_view(to) {
         TypeView::LValueRef(p) => (false, p),
         TypeView::RValueRef(p) => (true, p),
+        // kiln-gap: GAP-028
         _ => return Err(unsupported("this reference binding")),
     };
     let n = *s.ast.exprs.get(e);
@@ -1448,6 +1450,7 @@ pub fn implicit_convert(
         if let Some(x) = s.convert_to_class(e, to, ctx, at, crate::class::DeletedAs::Call) {
             return Ok(x);
         }
+        // kiln-gap: GAP-029
         return Err(unsupported("initialization of a class object"));
     }
     if fr.is_some() {

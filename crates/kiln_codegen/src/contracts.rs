@@ -253,6 +253,7 @@ impl Cg<'_> {
                             _ => {
                                 return err(
                                     Some(ast.stmts.get(s).loc()),
+                                    // kiln-gap: GAP-087
                                     "cannot compile a caller-side postcondition of this result yet",
                                 );
                             }

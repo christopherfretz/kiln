@@ -148,6 +148,7 @@ impl Compiler<'_> {
         let ast = self.ast();
         let x = *ast.exprs.new_extra(e);
         let Some(op_new) = x.operator_new else {
+            // kiln-gap: GAP-114
             self.unsupported(e);
             return;
         };
@@ -254,6 +255,7 @@ impl Compiler<'_> {
                 let ast = self.ast();
                 let lty = ast.exprs.get(i).ty();
                 let Some(k) = ast.types.array_size(lty) else {
+                    // kiln-gap: GAP-114
                     self.unsupported(i);
                     return;
                 };
@@ -268,6 +270,7 @@ impl Compiler<'_> {
             }
             Some((i, ExprKind::CXXConstructExpr)) => ArrInit::Each(i),
             Some((i, _)) => {
+                // kiln-gap: GAP-114
                 self.unsupported(i);
                 return;
             }
@@ -434,6 +437,7 @@ impl Compiler<'_> {
         self.pre_cxx20_alloc_check(e);
         let ast = self.ast();
         let Some(op_del) = ast.exprs.operator_delete(e) else {
+            // kiln-gap: GAP-114
             self.unsupported(e);
             return;
         };
@@ -445,10 +449,12 @@ impl Compiler<'_> {
         let array = self.node(e).has(ExprFlags::ARRAY_FORM);
         let arg = ast.exprs.delete_operand(e);
         let Some(pq) = ast.types.pointee(ast.exprs.get(arg).ty()) else {
+            // kiln-gap: GAP-114
             self.unsupported(e);
             return;
         };
         if ast.types.is_void(pq) {
+            // kiln-gap: GAP-114
             self.unsupported(e);
             return;
         }

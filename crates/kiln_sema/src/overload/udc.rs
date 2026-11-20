@@ -440,6 +440,7 @@ impl Sema<'_, '_> {
 }
 
 fn unsupported_udc() -> ConvError {
+    // kiln-gap: GAP-030
     ConvError::new(DiagId::sema_conv_unsupported, vec!["this user-defined conversion".into()])
 }
 

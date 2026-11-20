@@ -688,6 +688,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             if s.pack_expansion {
+                // kiln-gap: GAP-008
                 self.unsupported("pack expansions in a base-specifier list", s.loc);
                 dropped = true;
                 continue;

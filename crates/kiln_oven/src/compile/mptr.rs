@@ -20,6 +20,7 @@ impl Compiler<'_> {
         let d = self.ast().exprs.decl(x);
         match self.o.mp_intern(&mut *self.b, d, false, &[]) {
             Some(v) => self.konst(dst, v),
+            // kiln-gap: GAP-128
             None => self.unsupported(e),
         }
     }
@@ -66,6 +67,7 @@ impl Compiler<'_> {
         let to_base = u32::from(ck == CastKind::DerivedToBaseMemberPointer);
         for s in steps {
             let Some(c) = s else {
+                // kiln-gap: GAP-128
                 self.unsupported(e);
                 return;
             };

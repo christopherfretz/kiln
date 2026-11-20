@@ -163,7 +163,62 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 Ok(V::C(self.mfp_const(d, 0, t)?))
             }
-            k => err(self.loc_of(e), format!("pointer to member {k:?} is not supported yet")),
+            k @ (DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::NamespaceAlias
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingDirective
+            | DeclKind::Using
+            | DeclKind::UsingEnum
+            | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingValue
+            | DeclKind::UnresolvedUsingTypename
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::Typedef
+            | DeclKind::TypeAlias
+            | DeclKind::Enum
+            | DeclKind::EnumConstant
+            | DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::AccessSpec
+            | DeclKind::Friend
+            | DeclKind::FriendTemplate
+            | DeclKind::Function
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::Var
+            | DeclKind::ParmVar
+            | DeclKind::ImplicitParam
+            | DeclKind::Binding
+            | DeclKind::VarTemplateSpecialization
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::TemplateParamObject
+            | DeclKind::StaticAssert
+            | DeclKind::Label
+            | DeclKind::ContractResultName
+            | DeclKind::ConstevalBlock) => {
+                // kiln-gap: GAP-072
+                err(self.loc_of(e), format!("pointer to member {k:?} is not supported yet"))
+            }
         }
     }
 
