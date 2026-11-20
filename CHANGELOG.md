@@ -8,7 +8,7 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-11-18
+## [1.3.0] - 2026-11-20
 
 A feature release with the fixes made since 1.2.1. New: an experimental
 `kiln++` with the hod back end linked in (`kiln_hod/`, in-process
@@ -24,7 +24,8 @@ are errors (WP-1677), a non-dependent `^^typename S::T` reflects the type
 accept (WP-1670), and a constexpr local whose value points into itself
 stays accepted at C++26 (WP-1680; docs/status/deviations.md). Nothing
 in it changes what [docs/STABILITY.md](docs/STABILITY.md) promises. The
-gate results will be in `docs/status/release-1.3.0.md`.
+gate results are in
+[docs/status/release-1.3.0.md](docs/status/release-1.3.0.md).
 
 ### Added
 

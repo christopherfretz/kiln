@@ -2,7 +2,7 @@
 # "Release gate"): step, count, the value the step must not fall below,
 # where the value comes from. `cargo xtask release-gate record
 # --refresh-baselines` rewrites it from a passed gate.
-torture-gnu23	pass	6912	release-1.2.1.md
-torture-gnu17	pass	7072	release-1.2.1.md
-libcxx-aarch64	pass	8746	release-1.2.1.md
-libcxx-x86_64	pass	8749	release-1.2.1.md
+libcxx-aarch64	pass	8748	release-1.3.0.md
+torture-gnu23	pass	6938	release-1.3.0.md
+torture-gnu17	pass	7098	release-1.3.0.md
+libcxx-x86_64	pass	8749	release-1.3.0.md

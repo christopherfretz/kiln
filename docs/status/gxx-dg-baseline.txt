@@ -2,7 +2,7 @@
 # The kiln class of every case of a full `cargo xtask gxx-dg` run per host,
 # reduced for the release gate (scripts/gxx-dg-compare.py baseline; read it
 # with FILE@HOST). Test ids and result classes only.
-#commit 01c4bb2f5
+#commit ade1f5ae6
 #hosts aarch64 x86_64
 #opts a=* b=- c=-O0 d=-O2 e=-std=c++11 f=-std=c++14 g=-std=c++17 h=-std=c++20 i=-std=c++23 j=-std=c++26 k=-std=c++98 l=-std=gnu++11 m=-std=gnu++14 n=-std=gnu++17 o=-std=gnu++20 p=-std=gnu++23 q=-std=gnu++26 r=-std=gnu++98
 #classes p=pass r=compile-reject i=accept-invalid l=wrong-line w=wrong c=crash t=timeout n=not-run u=expect-unknown s=skip .=absent
@@ -1252,7 +1252,7 @@ builtin-arith-overflow-p-9.c	cpp dpp
 builtin-clear-padding-1.c	cpp dpp
 builtin-clear-padding-2.c	cpp dpp
 builtin-clear-padding-3.c	cpp dpp
-builtin-clear-padding-4.c	cww dww
+builtin-clear-padding-4.c	cpp dpp
 builtin-clear-padding-5.c	cpp dpp
 builtin-clear-padding-6.c	cpp dpp
 builtin-convertvector-1.c	cpp dpp
@@ -3562,7 +3562,7 @@ error6.C	epp hpp jpp
 error7.C	epp hpp jpp
 error8.C	epp hpp jpp
 error9.C	epp hpp jpp
-explicit-inst1.C	epp hpp kpp
+explicit-inst1.C	epp hpp krr
 explicit1.C	epp hpp jpp
 explicit10.C	epp hpp jpp
 explicit11.C	epp hpp jpp
@@ -9650,9 +9650,9 @@ flexary35.C	lpp opp qpp
 flexary36.C	oll qll rll
 flexary37.C	lll oll qll
 flexary38.C	opp qpp rpp
-flexary39.C	oww qww rww
+flexary39.C	opp qpp rpp
 flexary4.C	oll qll rll
-flexary40.C	oww qww rww
+flexary40.C	opp qpp rww
 flexary41.C	opp qpp rpp
 flexary42.C	oll qll rll
 flexary5.C	oll qll rll
@@ -12108,7 +12108,7 @@ packed1.C	hpp jpp kpp
 pr100580.C	opp qpp rpp
 pr104989.C	ouu quu ruu
 pr113617.C	lpp opp qpp
-pr117516.C	hpt jtt kpt
+pr117516.C	hpt jpt kpt
 pr123331.C	hpp jpp kpp
 pr20366.C	ass
 pr22003.C	ass
@@ -14513,7 +14513,7 @@ explicit4.C	hpp jpp kpp
 explicit5.C	hpp jpp kpp
 explicit6.C	hpp jpp kpp
 explicit7.C	hpp jpp kpp
-explicit8.C	hpp jpp kii
+explicit8.C	hpp jpp kpp
 explicit9.C	hpp jpp kpp
 expr1.C	opp qpp rpp
 extern-c.C	hii jii kii
@@ -15554,7 +15554,7 @@ accessor-fixits-9-xobj.C	cpp dpp
 accessor-fixits-9.C	cpp dpp
 alias-1.C	cpp dpp
 builtin-clear-padding-1.C	cpp dpp
-builtin-clear-padding-2.C	cww dww
+builtin-clear-padding-2.C	cpp dpp
 builtin-clear-padding-3.C	cpp dpp
 builtin-clear-padding-4.C	crr drr
 builtin-clear-padding-5.C	crr drr
@@ -15707,7 +15707,7 @@ pr36445.C	cpp dpp
 pr36745.C	cpp dpp
 pr36826.C	cpp dpp
 pr36960.C	cpp dpp
-pr37146-1.C	cww dww
+pr37146-1.C	cpp dpp
 pr37146-2.C	cpp dpp
 pr37343.C	cpp dpp
 pr37345.C	cpp dpp
