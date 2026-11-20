@@ -13,7 +13,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
-use kiln_ast::names::{DeclName, DeclNameKind};
+use kiln_ast::names::{DeclName, DeclNameKind, OverloadedOperator};
 use kiln_ast::types::{Nns, TemplateArg, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -241,10 +241,21 @@ impl Sema<'_, '_> {
         record: DeclId,
     ) -> Option<DeclId> {
         let nns = d.qualifier_nns?;
-        // A definition (ill-formed, [class.friend]/6) and the operator
-        // names take the ordinary path. A constructor, destructor or
-        // conversion function (`template<class U> friend X<U>::X(U);`)
-        // is matched by its kind of name and its type (WP-1513).
+        // An operator-function-id or literal-operator-id (`template<class
+        // T> friend void* A<T>::operator new(std::size_t);`) is matched by
+        // its name as any other member function is ([temp.friend]/5):
+        // the declarator in its `op_name` form.
+        if matches!(
+            d.special,
+            Some((SpecialName::Operator(_) | SpecialName::LiteralOperator(_), _))
+        ) {
+            let op = self.operator_declarator(d)?;
+            return self.declare_member_friend_fn(ds, base, &op, record);
+        }
+        // A definition (ill-formed, [class.friend]/6) takes the ordinary
+        // path. A constructor, destructor or conversion function
+        // (`template<class U> friend X<U>::X(U);`) is matched by its kind
+        // of name and its type (WP-1513).
         let special = match d.special {
             None => None,
             Some((
@@ -610,11 +621,16 @@ impl Sema<'_, '_> {
                 }
             }
             let Ok(t) = Substituter::new(s, &levels).ty(fty, loc) else { return Grant::No };
-            // A special member's exception specification may be implicit
-            // ([except.spec]/8).
+            // A special member's or a deallocation function's exception
+            // specification may be implicit ([except.spec]/8, /9).
+            let implicit_exc = special
+                || matches!(
+                    mf.name.as_operator(),
+                    Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
+                );
             if e_ty.is_none_or(|et| {
                 s.ast.types.canonical(et) != s.ast.types.canonical(t)
-                    && !(special && s.same_ignoring_exc_spec(et, t))
+                    && !(implicit_exc && s.same_ignoring_exc_spec(et, t))
             }) {
                 return Grant::No;
             }

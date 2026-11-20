@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-126 gaps at 215 sites; 25 of 56,766 g++.dg cases hit one at the
+116 gaps at 203 sites; 17 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate. 4 more entries (5 sites) use wording that
 matches clang's for a limit clang shares: they are listed as excluded and
 stay.
@@ -76,21 +76,20 @@ By family:
 | Oven trap | 20 | 90 | 0 |
 | codegen fallback | 34 | 39 | 7 |
 | drv_not_implemented | 3 | 3 | 0 |
-| parse_unsupported | 32 | 37 | 7 |
+| parse_unsupported | 31 | 36 | 7 |
 | pp_expr_unsupported | 1 | 3 | 0 |
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
 | reflection error | 3 | 3 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
-| sema_unimplemented_template_feature | 28 | 32 | 11 |
+| sema_unimplemented_template_feature | 19 | 21 | 3 |
 | sema_vla_unsupported | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| dependent names | 10 (GAP-042..GAP-051) | 12 | 8 | WP-1737 |
 | operators | 7 (GAP-052..GAP-058) | 11 | 7 | WP-1738 |
 | codegen fallbacks | 34 (GAP-059..GAP-092) | 39 | 7 | WP-1739 |
 | NTTP/substitution kinds | 17 (GAP-093..GAP-109) | 17 | 3 | WP-1740 |
@@ -104,16 +103,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-042 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: dependent nested name specifier` | `crates/kiln_sema/src/templ/subst/mod.rs::nns_context` | 6 | WP-1737 |
-| GAP-043 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: reference to a member of a dependent context` | `crates/kiln_sema/src/templ/subst/mod.rs::pattern_specialization` ×2 | 2 | WP-1737 |
-| GAP-044 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: a dependent destructor name` | `crates/kiln_sema/src/class/member_expr.rs::member_destructor_in`, `crates/kiln_sema/src/class/member_expr.rs::pseudo_destructor_named` | 0 | WP-1737 |
-| GAP-045 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: dependent name` | `crates/kiln_sema/src/templ/subst/mod.rs::nns` | 0 | WP-1737 |
-| GAP-046 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: this nested name specifier` | `crates/kiln_sema/src/templ/subst/mod.rs::nns_context` | 0 | WP-1737 |
-| GAP-047 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: implicit dependent member template-id` | `crates/kiln_sema/src/templ/subst/exprs.rs::implicit_dependent_member` | 0 | WP-1737 |
-| GAP-048 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: implicit dependent member access` | `crates/kiln_sema/src/templ/subst/exprs.rs::implicit_dependent_member` | 0 | WP-1737 |
-| GAP-049 | parse_unsupported | dependent names | `an operator name with a dependent qualifier in a block-scope using-declarator is not supported yet` | `crates/kiln_sema/src/using.rs::act_on_using_declarator` | 0 | WP-1737 |
-| GAP-050 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: a type template-id as an expression` | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1737 |
-| GAP-051 | sema_unimplemented_template_feature | dependent names | `kiln: not yet implemented: member access to a special member` | `crates/kiln_sema/src/templ/subst/exprs.rs::member_name` | 0 | WP-1737 |
 | GAP-052 | parse_unsupported | operators | `the GNU '?:' operator on class types is not supported yet` | `crates/kiln_sema/src/forms.rs::act_on_binary_conditional` | 7 | WP-1738 |
 | GAP-053 | parse_unsupported | operators | `overload resolution with constraints is not supported yet` | `crates/kiln_sema/src/overload/arrow.rs::overloaded_arrow`, `crates/kiln_sema/src/overload/call.rs::call_winner`, `crates/kiln_sema/src/overload/oper.rs::overloaded_operator` | 0 | WP-1738 |
 | GAP-054 | sema_unimplemented_template_feature | operators | `kiln: not yet implemented: this overloaded operator` | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` ×3 | 0 | WP-1738 |

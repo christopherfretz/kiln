@@ -837,12 +837,14 @@ impl Substituter<'_, '_, '_> {
             }
             None => self.nns(pnns, qloc)?,
         };
+        // `using T::operator U;`: the conversion's type substituted.
+        let dname = self.member_name(dname, loc)?;
         if self.nns_still_dependent(nns) {
             // Still dependent (a generic lambda's body inside a function
             // template specialization): the local stays unresolved, its
-            // uses dependent, until the lambda's own instantiation. (An
-            // operator name never has a dependent block-scope declarator.)
-            let name = dname.as_ident().ok_or(SubstFail)?;
+            // uses dependent, until the lambda's own instantiation. An
+            // operator name is entered in no scope (see
+            // `Sema::act_on_using_declarator`).
             let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
             let x = self.sema.builder().unresolved_using_value(h, nns, false);
             if using_loc != loc {
@@ -853,7 +855,9 @@ impl Substituter<'_, '_, '_> {
             {
                 let _ = self.sema.ast.decls.cold.declarator_end.insert(x, l);
             }
-            self.sema.push_local(name, x);
+            if let Some(name) = dname.as_ident() {
+                self.sema.push_local(name, x);
+            }
             return Ok(Some(x));
         }
         let ctx = self.nns_context(nns, qloc)?;

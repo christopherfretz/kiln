@@ -1733,6 +1733,55 @@ qualifier's type, checked against the object at instantiation, and
 (parse.md). Tests:
 `tests/conformance/expr.prim.id.dtor/dependent-member-destructor-name*.cpp`.
 
+A qualified destructor name `~Q` the definition cannot look up
+([basic.lookup.qual.general]/4; WP-1737) — `p->NS::S2::~Q()` and
+`p.T::~Q()` on a dependent object, `p->NS::X<T>::~Q()` or
+`p->C<T>::In::~Q()` with a dependent qualifier — is kept the same way
+with the written qualifier (`expr_nns`, at `expr_begin`) and the first
+type-name (`pseudo_dtor_first`)
+(`Sema::dependent_qualified_destructor_name`); substitution substitutes
+both (a member-rooted qualifier looked up in the object's class) and
+redoes the lookup (`act_on_dependent_destructor_name_late`): `Q` in the
+prefix `S` (4.2), in the class `F` names, and in the object's class
+(4.3), then `F` is checked against the object as for a dependent prefix;
+nothing found is `undeclared identifier 'Q' in destructor name`. On a
+class object without a prefix (`p->H<T>::~Q()`, `p->T::~Q()`), `Q` is
+looked up as in `p->~Q()` at the definition (4.3), so not found there it
+is that error at once, as clang. A dependent qualifier on a class object
+whose `~Q` was found (`s->T::~S()`) is checked as a first type-name at
+instantiation instead of as a member of the dependent qualifier.
+Tests: `expr.prim.id.dtor/*dependent-destructor-name-*.cpp`.
+
+Members of an unknown specialization ([temp.dep.type]/6-7; WP-1737):
+- a name a using-declarator with a dependent qualifier introduces into
+  the current instantiation (`using B<T>::f;`) followed by `template`
+  and a template argument list (`D::template f<A>`) is a dependent-scope
+  reference (`Sema::dep_member_nns`, `names_dependent_using`);
+- a qualifier substituted with a level still retained (a generic lambda,
+  or a local class of one, in the template being instantiated) stays a
+  dependent scope: `nns_context` is never asked for one
+  (`nns_still_dependent` first), an implicit member access through a
+  dependent using-declarator (`L::m`) is rebuilt as it was, and a member
+  access's member-rooted qualifier (`u.Base::get()`) waits for the
+  object;
+- in an alias template's or an inherited constructor's deduction guide
+  ([over.match.class.deduct]/3), a constructor parameter type that names
+  a member of the class template (an enumerator, a nested class, a
+  static member function, a variable template, a member class template
+  of another specialization) is rebuilt as a member of the substituted
+  specialization (`dependent_member_ref`, `find_instantiated_decl`
+  through `pattern_specialization`): clang 22 forms no such guide, GCC
+  16.1 does, and kiln follows the standard as GCC.
+Tests: `temp.dep.type/{generic-lambda-member-qualified-names,dependent-using-member-names}-run.cpp`,
+`over.match.class.deduct/alias-guide-dependent-member-*-run.cpp`.
+
+`T::template X<A>` in an expression whose `X` is a class or alias
+template once instantiated ([temp.names]/6) is clang's "'A::template X'
+is expected to be a non-type template, but instantiated to a class
+template" with "class template declared here", and a call of it "called
+object type 'A::template X<int>' is not a function or function pointer"
+(`temp.names/template-kw-instantiated-to-type-template.cpp`).
+
 A member access the pattern resolved into the current instantiation
 (`l.base()` with `l` a `const C&`, in a friend's trailing `decltype`
 inside `C`'s definition) is rebuilt at instantiation without a
@@ -3346,6 +3395,16 @@ reports a dropped statement, part or declaration lookup.
     note: kept for diagnostic parity). A friend without its own head
     (`friend class C<U>::Member;`, `friend class A<int>::Member;`) is an
     ordinary dependent friend type (above) and is not warned about.
+  - An operator-function-id or literal-operator-id (`template <class T>
+    friend void *A<T>::operator new(std::size_t);`) is matched by name
+    like any other member function (WP-1737), and a deallocation
+    function's implicit `noexcept` ([except.spec]/9) is ignored as a
+    special member's is. A local class of a function template or of a
+    generic lambda is templated ([temp.pre]/8): its member friends with
+    a dependent qualifier wait for the local class's instantiation, and
+    one whose qualifier is still dependent there (a generic lambda's) is
+    deferred again (`temp.friend/member-friend-operator-name-*.cpp`,
+    `local-class-member-friend-dependent-qualifier-run.cpp`).
   - Tests: `temp.friend/dependent-member-class-friend-run.cpp`,
     `dependent-member-friend-{variants,class-template}-run.cpp`,
     `dependent-member-friend-warning{,-clang19}.cpp`,

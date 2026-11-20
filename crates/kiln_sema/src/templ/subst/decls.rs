@@ -804,7 +804,16 @@ impl Substituter<'_, '_, '_> {
                 // A method friend matched at instantiation (WP-1110): the
                 // class its substituted specifier names.
                 let n = self.nns(n, qloc)?;
-                Some(self.nns_context(n, qloc)?)
+                if self.nns_still_dependent(n) {
+                    // Still dependent (a local class of a generic lambda
+                    // in the template being instantiated): deferred again,
+                    // to the instantiation that makes it a class
+                    // ([temp.dep.type]/6, [temp.friend]/1).
+                    dr.qualifier_nns = Some(n);
+                    Some(self.sema.decltype_scope_marker())
+                } else {
+                    Some(self.nns_context(n, qloc)?)
+                }
             } else {
                 match self.sema.friend_qualifiers.get(&d) {
                     Some(&q) => Some(q),
@@ -1991,9 +2000,21 @@ impl Substituter<'_, '_, '_> {
         // `friend Z<T>::Z(typename T::t);`: matched in the class the
         // substituted specifier names ([class.friend]/4, [temp.friend]/1).
         let ty = self.ty(sf.ty, loc)?;
+        let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
         let class = match sf.nns {
             Some(n) => {
                 let n = self.nns(n, loc)?;
+                if self.nns_still_dependent(n) {
+                    // Still dependent (a local class of a generic lambda in
+                    // the template being instantiated): matched at the
+                    // instantiation that makes it a class, as in the
+                    // pattern ([temp.dep.type]/6, [temp.friend]/1).
+                    let target = FriendTarget::Type { ty, owned_tag: None };
+                    let fd = self.sema.builder().friend(record, loc, target);
+                    let sf = crate::class::friend::SpecialFriend { ty, nns: Some(n), ..sf };
+                    self.sema.special_friends.insert(fd, sf);
+                    return Ok(Some(fd));
+                }
                 self.nns_context(n, loc)?
             }
             None if self.sema.in_dependent_class(sf.class) => {
@@ -2001,7 +2022,6 @@ impl Substituter<'_, '_, '_> {
             }
             None => sf.class,
         };
-        let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
         if let Some(h) = sf.head {
             // Its head keeps the pattern's parameters: equivalence does
             // not look at their depth.

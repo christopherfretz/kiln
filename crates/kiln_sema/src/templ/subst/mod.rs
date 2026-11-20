@@ -769,9 +769,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             TemplateName::DependentIdentifier { nns, name } => {
                 let q = self.nns(nns, loc)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(q)
-                    && self.sema.is_dependent_type(ty)
-                {
+                // Still dependent (`decltype(u)::In::template Y` in a
+                // generic lambda of the template being instantiated, any
+                // dependent component, [temp.dep.type]/6): kept.
+                if self.nns_still_dependent(q) {
                     return Ok(self
                         .sema
                         .ast
@@ -855,8 +856,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Nns::Type { prefix, ty, template_kw }
             }
             Nns::Identifier { prefix, name } => {
-                // kiln-gap: GAP-045
-                let Some(orig) = prefix else { return self.unimplemented("dependent name", loc) };
+                // A member access's leading `name::` (no prefix: found in
+                // the object's class, [basic.lookup.qual.general]/2) is
+                // resolved by the access against its substituted object
+                // (`member_nns`, `member_rooted_type`), which keeps it
+                // while the object is dependent: unchanged here.
+                let Some(orig) = prefix else { return Ok(n) };
                 let p = self.nns(orig, loc)?;
                 if self.nns_still_dependent(p) {
                     // Substituted with dependent arguments: `X::name::`
@@ -919,15 +924,25 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 
     /// The context a substituted nested-name-specifier names (a class
     /// type is instantiated, [temp.inst]/2: a class member access).
+    ///
+    /// A specifier the substitution leaves dependent (an argument of a
+    /// level it keeps: a generic lambda, a member template, a friend
+    /// template's own parameter) names no context yet ([temp.dep.type]/6):
+    /// every caller tests [`Self::nns_still_dependent`] first and keeps the
+    /// dependent form (a dependent type, a dependent member access or
+    /// qualified-id, a dependent using-declarator or friend), as the
+    /// parser does. Such a specifier names the dependent-scope context here,
+    /// in which nothing is found.
     pub(crate) fn nns_context(&mut self, n: NnsId, loc: Loc) -> SubstResult<DeclId> {
+        let dependent = self.nns_still_dependent(n);
+        debug_assert!(!dependent, "nns_context: callers keep a still-dependent specifier");
+        if dependent {
+            return Ok(self.sema.decltype_scope_marker());
+        }
         match self.sema.ast.types.nns_view(n) {
             Nns::Global => Ok(self.sema.ast.tu),
             Nns::Namespace { ns, .. } | Nns::NamespaceAlias { ns, .. } => Ok(ns),
             Nns::Type { ty, .. } => {
-                if self.sema.is_dependent_type(ty) {
-                    // kiln-gap: GAP-042
-                    return self.unimplemented("dependent nested name specifier", loc);
-                }
                 let t = &self.sema.ast.types;
                 let Some(r) = t.as_record(ty).or_else(|| t.as_enum(ty)) else {
                     let d = self
@@ -942,8 +957,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 }
                 Ok(self.sema.ast.definition(r).unwrap_or(r))
             }
-            // kiln-gap: GAP-046
-            _ => self.unimplemented("this nested name specifier", loc),
+            // Always dependent (`kiln_ast` flags them so), handled above.
+            Nns::Identifier { .. } | Nns::Splice(_) => Ok(self.sema.decltype_scope_marker()),
         }
     }
 
@@ -1026,6 +1041,23 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(np)
     }
 
+    /// The element of the expanded local pack `l` (from pattern `d`) for
+    /// the pack expansion element being substituted.
+    fn local_pack_element(&mut self, d: DeclId, l: ListId, loc: Loc) -> SubstResult<DeclId> {
+        let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
+        let i = self.pack_reached(
+            n,
+            |s| crate::templ::pack::PackName {
+                name: s.sema.decl_name(d),
+                depth: None,
+                outer: false,
+                partial: false,
+            },
+            loc,
+        )?;
+        self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
+    }
+
     /// The declaration of the instantiation that pattern declaration `d`
     /// became (clang's `FindInstantiatedDecl`, §5.6): a local of the
     /// pattern, a member of an instantiated class, or `d` itself when it
@@ -1039,20 +1071,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     }
                     Ok(x)
                 }
-                DeclOrPack::Pack(l) => {
-                    let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
-                    let i = self.pack_reached(
-                        n,
-                        |s| crate::templ::pack::PackName {
-                            name: s.sema.decl_name(d),
-                            depth: None,
-                            outer: false,
-                            partial: false,
-                        },
-                        loc,
-                    )?;
-                    self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
-                }
+                DeclOrPack::Pack(l) => self.local_pack_element(d, l, loc),
             };
         }
         // A local whose declaration statement failed: an invalid use,
@@ -1125,7 +1144,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             // an alias guide built from one, /3): the specialization the
             // substituted `X<P...>` names (clang's `FindInstantiatedDecl`
             // `ParentDC` lookup of the instantiated context).
-            inst_parent = self.pattern_specialization(parent, loc)?;
+            inst_parent = self.pattern_specialization(d, parent, loc)?;
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
             let ty = self.sema.tag_type(inst_parent);
@@ -1138,6 +1157,16 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
         if let Some(m) = self.find_member_of(inst_parent, d) {
             return Ok(m);
+        }
+        // The pattern of a member class template (named in a deduction
+        // guide of the template, `O<int>::I<V, 7>` through an alias,
+        // [over.match.class.deduct]/3): the pattern of the member template
+        // the instantiated class declares ([temp.mem]/1, [temp.inst]/3).
+        if let Some(t) = self.sema.ast.described_template(d)
+            && let Some(m) = self.find_member_of(inst_parent, t)
+            && let Some(p) = self.sema.pattern_of(m)
+        {
+            return Ok(p);
         }
         // The members of an instantiated member class are recorded on the
         // redeclaration that was defined: a pattern class declared before
@@ -1363,11 +1392,6 @@ impl Substituter<'_, '_, '_> {
         Ok(x)
     }
 
-    /// The instantiation of the pattern of a class template or class
-    /// template partial specialization `parent` that this substitution's
-    /// arguments name: `X<P...>` substituted, made complete. Fails (a
-    /// substitution failure) when the substituted type is still dependent
-    /// or names no class.
     /// Whether the innermost instantiation frame substitutes into a
     /// deduction guide (its deduced arguments or its constraints,
     /// [over.match.class.deduct]/1): a member of the class template's
@@ -1384,16 +1408,37 @@ impl Substituter<'_, '_, '_> {
         })
     }
 
-    fn pattern_specialization(&mut self, parent: DeclId, loc: Loc) -> SubstResult<DeclId> {
+    /// The instantiation of the pattern of a class template or class
+    /// template partial specialization `parent` that this substitution's
+    /// arguments name, for its member `d`: `X<P...>` substituted, made
+    /// complete. Fails (a substitution failure) when the substituted type
+    /// names no class.
+    ///
+    /// - Still dependent (`B<T, 1>` in the guide of alias template `U<T> =
+    ///   B<T, 1>`, [over.match.class.deduct]/3): `d` is a member of an
+    ///   unknown specialization ([temp.dep.type]/6, /7), which the names
+    ///   that can stay dependent rebuild as such before asking
+    ///   ([`Self::dependent_member_ref`]: a type, a template name, an
+    ///   id-expression). Any other use fails the substitution, so that
+    ///   guide is not formed (clang 22 drops it too).
+    /// - A member of a context other than a class pattern (a local of a
+    ///   function template) is instantiated with its context and found
+    ///   before this point: reaching here is a kiln bug, reported as an
+    ///   internal error unless an error explains it (§4.6, WP-600).
+    fn pattern_specialization(
+        &mut self,
+        d: DeclId,
+        parent: DeclId,
+        loc: Loc,
+    ) -> SubstResult<DeclId> {
         if !self.is_class_pattern(parent) {
-            // kiln-gap: GAP-043
-            return self.unimplemented("reference to a member of a dependent context", loc);
+            self.lookup_dropped(self.sema.ast.decls.get(d).name(), parent, loc);
+            return Err(SubstFail);
         }
         let injected = self.sema.this_class_type(parent);
         let t = self.ty(injected, loc)?;
         if self.sema.ast.types.is_dependent(t) {
-            // kiln-gap: GAP-043
-            return self.unimplemented("reference to a member of a dependent context", loc);
+            return Err(SubstFail);
         }
         match self.sema.ast.types.as_record(t) {
             Some(r) if r != parent => Ok(r),
@@ -1432,8 +1477,14 @@ impl Substituter<'_, '_, '_> {
         let (Some(parent), Some(name)) = (node.ctx(), node.name().as_ident()) else {
             return Ok(None);
         };
-        if !self.is_class_pattern(parent)
-            || self.find_instantiated_decl(parent, loc)? != parent
+        // The parent is not instantiated by this substitution: it maps to
+        // itself, or (a member class template of an instantiated class,
+        // `O<int>::I`) to the pattern of the instantiated member template.
+        if !self.is_class_pattern(parent) {
+            return Ok(None);
+        }
+        let ip = self.find_instantiated_decl(parent, loc)?;
+        if (ip != parent && !self.is_class_pattern(ip))
             || self.levels_retained(self.sema.ctx_template_levels(parent))
         {
             return Ok(None);
@@ -1447,6 +1498,49 @@ impl Substituter<'_, '_, '_> {
         Ok(Some((nns, name)))
     }
 
+    /// [`Self::dependent_member_nns`] for any member of such a class
+    /// template pattern: of a member class or a scoped enumeration of it
+    /// (`B<T, 1>::In::x`), or an enumerator of an unscoped enumeration
+    /// of it (`B<T, 1>::X`, a member of the class, [class.mem.general]/3).
+    pub(crate) fn dependent_member_ref(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+    ) -> SubstResult<Option<(NnsId, Symbol)>> {
+        if let Some(r) = self.dependent_member_nns(d, loc)? {
+            return Ok(Some(r));
+        }
+        let node = *self.sema.ast.decls.get(d);
+        let (Some(parent), Some(name)) = (node.ctx(), node.name().as_ident()) else {
+            return Ok(None);
+        };
+        if !node.flags().contains(DeclFlags::DEPENDENT_CTX) || self.locals.contains_key(&d) {
+            return Ok(None);
+        }
+        let unscoped = self
+            .sema
+            .ast
+            .decls
+            .enumeration(parent)
+            .is_some_and(|x| x.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT) == 0);
+        let class_member = match self.sema.kind_of(parent) {
+            DeclKind::CXXRecord => !self.is_class_pattern(parent),
+            DeclKind::Enum => true,
+            _ => false,
+        };
+        if !class_member {
+            return Ok(None);
+        }
+        let Some((pnns, pname)) = self.dependent_member_ref(parent, loc)? else {
+            return Ok(None);
+        };
+        if unscoped {
+            return Ok(Some((pnns, name)));
+        }
+        let nns = self.sema.ast.types.nns(Nns::Identifier { prefix: Some(pnns), name: pname });
+        Ok(Some((nns, name)))
+    }
+
     /// Whether `d` is (nested in) a member of a class template pattern
     /// whose substitution is still dependent ([`Self::dependent_member_nns`]
     /// applies to it or to an enclosing class).
@@ -1454,7 +1548,8 @@ impl Substituter<'_, '_, '_> {
         let mut x = d;
         for _ in 0..64 {
             let Some(parent) = self.sema.ast.decls.get(x).ctx() else { return Ok(false) };
-            if self.sema.kind_of(parent) != DeclKind::CXXRecord {
+            // An enumerator's enumeration (`S::Y`, `B::X`) is a member too.
+            if !matches!(self.sema.kind_of(parent), DeclKind::CXXRecord | DeclKind::Enum) {
                 return Ok(false);
             }
             if self.is_class_pattern(parent) {

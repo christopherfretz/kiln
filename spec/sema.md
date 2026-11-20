@@ -4957,12 +4957,13 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     the block's declarators of one name form one overload set (ADL still
     adds its candidates). In a template a non-dependent declarator is
     redone by the instantiation (`subst/stmts.rs` `local_using_decl`).
-    A dependent qualifier with an operator name (`using T::operator+;`,
-    clang's `UnresolvedUsingValue`, diagnosed at instantiation since
-    only enumerators may be named) reports `an operator name with a
-    dependent qualifier in a block-scope using-declarator is not
-    supported yet`
-    (tests/conformance/namespace.udecl/block-scope-using-*.cpp).
+    A dependent qualifier with an operator or conversion name (`using
+    T::operator+;`) is clang's `UnresolvedUsingValue`, entered in no
+    scope (the block records identifiers only), and diagnosed when
+    instantiated, its conversion type substituted: only enumerators may
+    be named, so "using declaration cannot refer to class member"
+    (WP-1737; tests/conformance/namespace.udecl/block-scope-using-*.cpp,
+    `block-scope-dependent-operator-using-declarator.cpp`).
   - `using typename q::x;` ([namespace.udecl]/1, /12;
     `act_on_using_typename_declarator`, WP-169): with a dependent
     qualifier in a class member specification, the declarator is an

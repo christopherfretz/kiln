@@ -835,6 +835,98 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// `p->S::F::~Q()` / `p->N::~Q()` on a dependent object (or with a
+    /// dependent qualifier) whose `Q` is found nowhere at the definition:
+    /// [`Sema::dependent_destructor_name`] keeping the written qualifier
+    /// (`expr_nns`, at `expr_begin`) and the first type-name `F`
+    /// (`pseudo_dtor_first`), so that the lookup of
+    /// [basic.lookup.qual.general]/4 is made again at instantiation
+    /// ([`Sema::act_on_dependent_destructor_name_late`]; clang's
+    /// `TransformCXXPseudoDestructorExpr` → `getDestructorName` with the
+    /// substituted scope).
+    fn dependent_qualified_destructor_name(
+        &mut self,
+        obj: DtorObject,
+        qual: Option<crate::using::Qualifier>,
+        first: Option<(QualType, Loc)>,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+    ) -> ExprId {
+        let e = self.dependent_destructor_name(obj, name, loc, op_loc);
+        if let Some(q) = qual {
+            let _ = self.ast.templates.expr_nns.insert(e, q.nns);
+            let _ = self.ast.templates.expr_begin.insert(e, q.loc);
+        }
+        if let Some(f) = first {
+            let _ = self.ast.templates.pseudo_dtor_first.insert(e, f);
+        }
+        e
+    }
+
+    /// The instantiation of [`Sema::dependent_qualified_destructor_name`]
+    /// with the substituted qualifier `qual` and first type-name `first`.
+    /// Without `F` the qualified destructor member is formed again
+    /// ([`Sema::act_on_member_destructor_q`]). With `F`, `Q` is looked up
+    /// in `S` (4.2), in the class `F` names (as at the definition), and in
+    /// the object's class (4.3), then checked with `F` against the object
+    /// as clang's `RebuildCXXPseudoDestructorExpr`.
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    pub(crate) fn act_on_dependent_destructor_name_late(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        first: Option<(QualType, Loc)>,
+        name: kiln_source::symbol::Symbol,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let Some((f, floc)) = first else {
+            let Some(q) = qual else {
+                return self.act_on_member_destructor_late(base, name, loc, op_loc, arrow);
+            };
+            return self.member_destructor_in(base, q, name, loc, loc, op_loc, arrow);
+        };
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        if self.ast.types.is_dependent(obj.ty)
+            || self.is_dependent_type(f)
+            || qual.is_some_and(|q| self.is_dependent_ctx(q.ctx))
+        {
+            return self.dependent_qualified_destructor_name(
+                obj,
+                qual,
+                Some((f, floc)),
+                name,
+                loc,
+                op_loc,
+            );
+        }
+        let in_class = |s: &Self, d: Option<DeclId>| {
+            let found = s.lookup_in_class(d?, name, LookupKind::Ordinary);
+            s.type_named_by(&found)
+        };
+        let f_def = self.ast.types.as_record(f).and_then(|d| self.ast.definition(d));
+        let named = qual
+            .and_then(|q| {
+                let found = self.lookup_qualified(q.ctx, name, LookupKind::Ordinary);
+                self.type_named_by(&found)
+            })
+            .or_else(|| in_class(self, f_def))
+            .or_else(|| in_class(self, obj.def));
+        let Some((destroyed, td)) = self.injected_named(named) else {
+            let text = self.ast.symbols().as_str(name).to_owned();
+            let msg = self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text);
+            self.emit(msg);
+            return self.recover_err(&[obj.base], loc);
+        };
+        self.mark_type_referenced(td);
+        self.pseudo_destructor_first_in(obj, (f, floc), destroyed, loc, op_loc)
+    }
+
     /// The instantiation of [`Sema::dependent_destructor_name`]: `~name`
     /// looked up in the class of the substituted object `base` only
     /// (clang `getDestructorName` without a scope), as
@@ -1316,10 +1408,15 @@ impl Sema<'_, '_> {
         let mut bad = false;
         for (n, at, ty) in [(name, loc, named), (fname, floc, t1)] {
             match ty {
+                // `p->NS::S2::~Q()` / `p.T::~Q()` on a dependent object:
+                // `Q` is looked up in `S` (4.2) or, after a
+                // member-qualified `F`, as in `p.~Q()` (4.3), in the
+                // object's class at instantiation ([basic.lookup.qual.general]/2).
+                // `F` named a type here (diagnosed above otherwise).
                 None if dependent => {
-                    // kiln-gap: GAP-044
-                    self.templ_unimplemented("a dependent destructor name", at);
-                    return self.recover_err(&[obj.base], loc);
+                    let first = t1.map(|(t, _)| (t, floc));
+                    return self
+                        .dependent_qualified_destructor_name(obj, qual, first, n, at, op_loc);
                 }
                 None => {
                     let text = self.ast.symbols().as_str(n).to_owned();
@@ -1459,9 +1556,22 @@ impl Sema<'_, '_> {
                     .arg(text)
                     .arg(self.ty_arg(obj.ty));
                 self.emit(msg);
-            } else if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
-                // kiln-gap: GAP-044
-                self.templ_unimplemented("a dependent destructor name", loc);
+            } else if self.ast.types.is_dependent(obj.ty)
+                || (self.is_dependent_ctx(q.ctx) && self.ast.types.nns_prefix(q.nns).is_some())
+            {
+                // `p->NS::X<T>::~Q()`, `p->C<T>::In::~Q()`: `Q` is looked
+                // up in the prefix `S` (4.2) or, on a dependent object, as
+                // a member-qualified name in its class (4.3; /2), at
+                // instantiation. Without a prefix on a class object the
+                // lookups `p->~Q()` makes are those above (4.3).
+                return self.dependent_qualified_destructor_name(
+                    obj,
+                    Some(q),
+                    None,
+                    name,
+                    loc,
+                    op_loc,
+                );
             } else {
                 let text = self.ast.symbols().as_str(name).to_owned();
                 let msg = self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text);
@@ -1780,6 +1890,18 @@ impl Sema<'_, '_> {
             Ok(o) => o,
             Err(e) => return e,
         };
+        self.pseudo_destructor_first_in(obj, (first, floc), destroyed, loc, op_loc)
+    }
+
+    /// [`Sema::rebuild_pseudo_destructor_first`] on the converted object.
+    fn pseudo_destructor_first_in(
+        &mut self,
+        obj: DtorObject,
+        (first, floc): (QualType, Loc),
+        destroyed: QualType,
+        loc: Loc,
+        op_loc: Loc,
+    ) -> ExprId {
         // A specialization named only here (`p->Self::template
         // TJ<int>::~TJ<int>()`) is instantiated for the member lookup in
         // it (WP-1192).
@@ -1921,6 +2043,48 @@ impl Sema<'_, '_> {
         Ok(DtorObject { base, b, ty, def, arrow })
     }
 
+    /// The destructor member access `finish_member_destructor` leaves for
+    /// instantiation: a dependent object or destroyed type, or a class
+    /// object whose dependent written qualifier is checked then.
+    fn deferred_member_destructor(
+        &mut self,
+        (b, arrow, has_def, obj_ty, destroyed): (ExprId, bool, bool, QualType, QualType),
+        qual: DtorQual,
+        loc: Loc,
+        name_loc: Loc,
+        op_loc: Loc,
+    ) -> Option<ExprId> {
+        // `p->T::~Q()` on a class object, `Q` found there: the dependent
+        // qualifier `T` must name that class (or a base, [expr.ref]/4),
+        // checked as a first type-name at instantiation
+        // (`rebuild_pseudo_destructor_first`; WP-1737).
+        if let DtorQual::Written(q) = qual
+            && has_def
+            && !self.ast.types.is_dependent(destroyed)
+            && self.is_dependent_ctx(q.ctx)
+            && let kiln_ast::types::Nns::Type { ty: first, .. } = self.ast.types.nns_view(q.nns)
+        {
+            // Diagnosed at the `~` as the destructor member is.
+            let e = self.builder().pseudo_destructor_q(b, arrow, true, destroyed, name_loc);
+            if op_loc != name_loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
+            let _ = self.ast.templates.pseudo_dtor_first.insert(e, (first, q.loc));
+            let _ = self.ast.templates.expr_begin.insert(e, q.loc);
+            return Some(e);
+        }
+        if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
+            let qualified = !matches!(qual, DtorQual::None);
+            let e = self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);
+            // The `.`/`->`, where an instantiation diagnoses the access.
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
+            return Some(e);
+        }
+        None
+    }
+
     /// The destructor member access of `obj` naming `destroyed` (found as
     /// `td` by destructor name lookup, `None` when substituted). `name_loc`
     /// is where the destructor name begins (the `~`; the destroyed type
@@ -1949,13 +2113,8 @@ impl Sema<'_, '_> {
             }
             _ => destroyed,
         };
-        if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
-            let qualified = !matches!(qual, DtorQual::None);
-            let e = self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);
-            // The `.`/`->`, where an instantiation diagnoses the access.
-            if op_loc != loc {
-                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
-            }
+        let parts = (b, arrow, def.is_some(), obj_ty, destroyed);
+        if let Some(e) = self.deferred_member_destructor(parts, qual, loc, name_loc, op_loc) {
             return e;
         }
         let same = self.same_unqual(obj_ty, destroyed);
