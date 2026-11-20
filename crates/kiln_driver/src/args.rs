@@ -609,27 +609,28 @@ pub struct Args {
     pub mode: DriverMode,
     /// Input files, in order.
     pub inputs: Vec<Input>,
-    /// `-fdump-ast[=<opts>]` (`-fsyntax-only`): the options, `""` for none.
+    /// `-fdump-ast[=<opts>]`: the options, `""` for none. It makes the
+    /// job `-fsyntax-only` (WP-1745).
     pub dump_ast: Option<String>,
     /// `-fdump-ast-filter=<substr>`.
     pub dump_ast_filter: Option<String>,
     /// `-fdump-record-layouts` or `-fdump-record-layouts-complete`
-    /// (`-fsyntax-only`; clang's `-Xclang` options of those names): the
-    /// layout of every complete class, spec/driver.md.
+    /// (`-fsyntax-only` and codegen jobs; clang's `-Xclang` options of
+    /// those names): the layout of every complete class, spec/driver.md.
     pub dump_record_layouts: bool,
-    /// `-verify[=<prefixes>]` (clang's `-Xclang` option; `-fsyntax-only`):
+    /// `-verify[=<prefixes>]` (clang's `-Xclang` option; every job):
     /// check the diagnostics against `expected-*` comments, spec/driver.md
     /// "-verify". `None` without `-verify`, or with an invalid prefix.
     pub verify: Option<kiln_diag::verify::VerifyOptions>,
-    /// `-fdump-vtable-layouts` (`-fsyntax-only`; clang's `-Xclang` option
+    /// `-fdump-vtable-layouts` (`-fsyntax-only` and codegen; clang's `-Xclang` option
     /// of that name): the vtable group of every complete dynamic class,
     /// spec/driver.md.
     pub dump_vtable_layouts: bool,
-    /// `-fkiln-dump-cfg` (`-fsyntax-only`): the control-flow graph of
+    /// `-fkiln-dump-cfg` (`-fsyntax-only` and codegen): the control-flow graph of
     /// every analysed function body, in clang's `debug.DumpCFG` layout
     /// (spec/sema.md §7.5.1).
     pub dump_cfg: bool,
-    /// `-fkiln-cfg-stats` (`-fsyntax-only`): one line per analysed
+    /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
     pub cfg_stats: bool,
@@ -1435,6 +1436,17 @@ impl Args {
             a.claim_no_unused(m, &argv[m.0..]);
         }
         a.verify = verify.finish(&mut a.errors);
+        // WP-1745: `-fdump-ast` is the job's action, as clang's `-cc1
+        // -ast-dump` replaces `-E`, `-M`, `-c`, `-S` and a link's compile
+        // (nothing else is written; clang's link then finds no object);
+        // the dump goes to standard output whatever the `-o`, as clang's.
+        if a.dump_ast.is_some()
+            && matches!(a.action, Action::Link | Action::Compile | Action::Preprocess)
+        {
+            a.action = Action::SyntaxOnly;
+            a.deps.only = None;
+            a.output = None;
+        }
         // WP-1151: the shadow call stack's register.
         a.sanitize.x18_reserved = a.fixed_x18
             || a.target.as_deref().is_some_and(crate::sanitize::x18_reserved_by_default);

@@ -62,26 +62,4 @@ impl Sema<'_, '_> {
             true
         });
     }
-
-    /// Variable `v`, declared without an initializer, is not a
-    /// definition: its own `selectany` would make it one in clang.
-    pub(crate) fn check_selectany_extern(&mut self, v: DeclId) {
-        if !matches!(self.kind_of(v), DeclKind::Var | DeclKind::VarTemplateSpecialization)
-            || self.is_in_class_static(v)
-        {
-            return;
-        }
-        let own = self
-            .ast
-            .lists
-            .iter::<AttrId>(self.ast.attrs.of_decl(v))
-            .find(|&a| self.ast.attrs.get(a).kind == AttrKind::SELECTANY);
-        if let Some(a) = own {
-            let msg = self
-                // kiln-gap: GAP-166
-                .diag(DiagId::parse_unsupported, self.ast.attrs.get(a).loc)
-                .arg("'selectany' on an 'extern' declaration without an initializer");
-            self.emit(msg);
-        }
-    }
 }

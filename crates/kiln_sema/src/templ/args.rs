@@ -915,7 +915,8 @@ impl Sema<'_, '_> {
         qual: Option<kiln_ast::ids::NnsId>,
         at: Loc,
     ) {
-        let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(d).loc());
+        // An alias template's note is at its `using` (`conflict_loc`).
+        let note = self.diag(DiagId::note_template_decl_here, self.conflict_loc(d));
         let q = qual.map(|n| self.nns_str(n)).unwrap_or_default();
         let msg = self
             .diag(DiagId::sema_template_requires_args, at)

@@ -270,6 +270,61 @@ impl Parser<'_, '_> {
         None
     }
 
+    /// A namespace-definition at block scope ([namespace.def.general]/2:
+    /// it may appear only in namespace scope), parsed as clang's
+    /// `ParseNamespace` does: the name (nested names included) and the
+    /// attributes, then `{`; a missing `{` is reported at the token in its
+    /// place and the rest of the statement is parsed as usual; the body
+    /// is skipped after `err_namespace_nonnamespace_scope` at its `{`.
+    fn block_scope_namespace(&mut self) {
+        self.bump();
+        let mut attrs = Vec::new();
+        self.parse_attributes(&mut attrs);
+        let mut named = false;
+        if self.ident().is_some() {
+            self.bump();
+            named = true;
+            while self.at(Punct::ColonColon) {
+                self.bump();
+                let _ = self.eat_kw(Kw::Inline);
+                if self.ident().is_none() {
+                    self.error_here(DiagId::parse_expected_namespace_name);
+                    self.skip_statement();
+                    return;
+                }
+                self.bump();
+            }
+            self.parse_attributes(&mut attrs);
+        }
+        if !self.at(Punct::LBrace) {
+            let what = if named { "'{'" } else { "identifier or '{'" };
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg(what);
+            self.s.emit(d);
+            return;
+        }
+        self.error_here(DiagId::parse_namespace_nonnamespace_scope);
+        let open = self.pos();
+        let end = self.skip_balanced(open).unwrap_or(open + 1);
+        while self.pos() < end && !self.at_eof() {
+            self.bump();
+        }
+    }
+
+    /// `template` with no `<` at block scope: an explicit instantiation,
+    /// which [temp.explicit]/3 allows only in namespace scope. clang 22
+    /// (`ParseDeclarationStartingWithTemplate` at block scope) wants the
+    /// template head's `<`; clang 19 reads an expression.
+    fn block_scope_explicit_instantiation(&mut self, loc: Loc) {
+        if self.s.clang_compat >= 22 {
+            self.bump();
+            let d = self.s.diag(DiagId::parse_expected_less_after, self.loc());
+            self.s.emit(d.arg("template"));
+        } else {
+            self.s.error(DiagId::parse_expected_expression, loc);
+        }
+        self.skip_statement();
+    }
+
     /// At a block-scope `template <`: the index of the `{` opening the
     /// function body if the template-declaration is a function definition
     /// (a declarator with a parenthesized group followed by `{`, no `=`,
@@ -453,17 +508,17 @@ impl Parser<'_, '_> {
                 // `template [: r :] ...`: a splice template-id
                 // ([expr.prim.splice], [expr.prim.id.qual]).
                 Kw::Template if self.peek_is(1, Punct::SpliceOpen) => {}
-                // Explicit instantiations and specializations keep the
-                // error below.
-                Kw::Template
-                    if self.peek_is(1, Punct::Less) && !self.peek_is(2, Punct::Greater) =>
-                {
+                // A template-declaration or an explicit specialization
+                // ([temp.pre]/2: only in namespace or class scope).
+                Kw::Template if self.peek_is(1, Punct::Less) => {
                     return self.block_scope_template(loc);
                 }
-                Kw::Namespace | Kw::Template => {
-                    // kiln-gap: GAP-157
-                    self.unsupported(&format!("'{}' here", k.spelling()), loc);
-                    self.skip_statement();
+                Kw::Template => {
+                    self.block_scope_explicit_instantiation(loc);
+                    return None;
+                }
+                Kw::Namespace => {
+                    self.block_scope_namespace();
                     return None;
                 }
                 _ => {}

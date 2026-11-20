@@ -771,7 +771,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1742 | Oven traps: types: GAP-125..GAP-129 (35 sites, 0 cases) | WP-1719 | open |
 | WP-1743 | reflection: GAP-130..GAP-134 (5 sites, 0 cases) | WP-1719 | open |
 | WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | open |
-| WP-1745 | misc: GAP-144..GAP-167 (30 sites, 0 cases) | WP-1719 | open |
+| WP-1745 | misc: GAP-144..GAP-167 (30 sites, 0 cases) | WP-1719 | in progress |
+| WP-1761 | `int e; extern int e; int e = 1;` is accepted; clang reports a redefinition (crates/kiln_sema decl.rs, the redeclaration merge near line 7740) | WP-1745 | open |
+| WP-1762 | an enum-qualified declaration `int E::v;` is accepted; clang rejects it (`diagnose_qualified_declaration` in qualified_decl.rs) | WP-1745 | open |
+| WP-1763 | VLAs in template substitution: a function template parameter `T a[n]` substitutes (clang: substitution failure, "array size is not a constant expression") and a VLA deduced through `T&` is accepted (clang: "variably modified template arg") | WP-1745 | open |
+| WP-1764 | `for (; int q[n] = {};)` is accepted; clang reports "an array type is not allowed here" for an array-typed condition declaration | WP-1745 | open |
 | WP-1456 | g++.dg crash/hang clusters: array size overflow, inline-asm operand checks, _Float128/__int128 conversions, recursive concept satisfaction depth limit, Oven abort on this in an NSDMI of a constexpr temporary, non-int main | WP-1443 | done: all six clusters fixed (17/20 crash cases pass; the 3 freestanding `main` cases need the runner to keep `-ffreestanding`) |
 | WP-1462 | g++.dg/reflect: a default-initialized `std::meta::info` is the null reflection and a constant; then the next clusters of that directory | WP-1443 | in progress |
 | WP-1288 | C mode wave 2d: GNU `?:` codegen ICE over short-circuit conditions, GNU builtins and implicit library declarations, `__label__`, driver gaps for C projects (`-rpath`, `-Wa,`, CMake ASM probes) | WP-1277 | done (#611) |

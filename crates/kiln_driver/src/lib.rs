@@ -417,32 +417,12 @@ pub(crate) fn write_output(
     }
 }
 
-/// Reports the actions and options kiln does not implement yet.
+/// Reports the command line's action errors. Every action takes every
+/// dump and `-verify` (WP-1745): `-fdump-ast` is an action of its own
+/// (`Args::parse`), the layout and CFG dumps print beside a codegen
+/// job's output and are unused by `-E`, and `-verify` checks the
+/// diagnostics of any job (spec/driver.md "-verify").
 fn check_action(args: &Args, drv: &DiagEngine<'_>) {
-    let mut action = args.action;
-    if action == Action::Link && args.deps.only.is_some() {
-        action = Action::Preprocess;
-    }
-    let not_impl = (args.print_commands
-        && matches!(action, Action::Preprocess | Action::SyntaxOnly))
-    .then_some("-### with -E or -fsyntax-only")
-    .or((action != Action::SyntaxOnly
-        && (args.dump_ast.is_some() || args.dump_ast_filter.is_some()))
-    .then_some("-fdump-ast without -fsyntax-only"))
-    .or((action != Action::SyntaxOnly && args.dump_record_layouts)
-        .then_some("-fdump-record-layouts without -fsyntax-only"))
-    .or((action != Action::SyntaxOnly && args.dump_vtable_layouts)
-        .then_some("-fdump-vtable-layouts without -fsyntax-only"))
-    .or((action != Action::SyntaxOnly && args.dump_cfg)
-        .then_some("-fkiln-dump-cfg without -fsyntax-only"))
-    .or((action != Action::SyntaxOnly && args.cfg_stats)
-        .then_some("-fkiln-cfg-stats without -fsyntax-only"))
-    .or((action != Action::SyntaxOnly && args.verify.is_some())
-        .then_some("-verify without -fsyntax-only"));
-    if let Some(what) = not_impl {
-        // kiln-gap: GAP-148
-        Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
-    }
     // WP-813: clang's `XRayArgs` checks.
     for d in args.codegen.xray_errors() {
         d.emit(drv);
@@ -927,8 +907,28 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             return i32::from(errors > 0);
         }
     }
+    let codegen = matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none();
+    if args.print_commands && !codegen && args.action != Action::Precompile {
+        // WP-1745: `-###` with `-E`, `-M` or `-fsyntax-only`: the version
+        // block, then the in-process step of each input (spec/driver.md
+        // "`-###`"); nothing runs.
+        print_version(&mut io.stderr, &tc, false);
+        let mut err = io.stderr.clone();
+        for input in inputs.iter().filter(|i| i.asm != Some(args::AsmKind::Plain)) {
+            let line = if args.action == Action::SyntaxOnly && input.asm.is_none() {
+                format!(" (in-process) frontend \"{}\" -fsyntax-only\n", input.path)
+            } else {
+                let to = args.deps.file.as_deref().filter(|_| args.deps.only.is_some());
+                let to = to.or(args.output.as_deref()).unwrap_or("-");
+                format!(" (in-process) preprocessor \"{}\" -> \"{to}\"\n", input.path)
+            };
+            let _ = err.write_all(line.as_bytes());
+        }
+        let _ = err.flush();
+        return 0;
+    }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
-    if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
+    if codegen {
         return codegen_cmd::compile(
             args,
             &tc,

@@ -118,7 +118,7 @@ fn record_layouts_match_clang() {
     assert!(failures.is_empty(), "{} of {} runs failed", failures.len(), jobs.len());
 }
 
-/// Both spellings are accepted; the flag needs `-fsyntax-only`.
+/// Both spellings are accepted; a codegen job dumps too (WP-1745).
 #[test]
 fn flag_spellings_and_action() {
     let dir = std::env::temp_dir().join(format!("kiln-layout-flag-{}", std::process::id()));
@@ -144,10 +144,11 @@ fn flag_spellings_and_action() {
         .arg(&src)
         .output()
         .unwrap();
-    assert!(!o.status.success());
-    assert!(
-        String::from_utf8_lossy(&o.stderr).contains("-fdump-record-layouts without -fsyntax-only")
-    );
+    // WP-1745: a codegen job prints the dump before the IR, as clang.
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.starts_with("\n*** Dumping AST Record Layout\n"), "{out}");
+    assert!(out.contains("; ModuleID"), "{out}");
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&dir);
 }

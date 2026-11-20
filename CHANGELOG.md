@@ -72,6 +72,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `_BitInt` and `_Atomic` types; the caller-side postcondition check of
   a function returning an `_Atomic` class type; an under-aligned `byval`
   argument (copied to an aligned temporary).
+- `-verify`, the record-layout, vtable-layout and CFG dumps work with
+  every action (WP-1745): a codegen job checks its diagnostics and
+  writes its output only without errors, and prints the dumps before its
+  IR; `-E` verifies the preprocessor's diagnostics. `-fdump-ast` is an
+  action, as clang's `-ast-dump`, and `-###` prints the step of `-E`,
+  `-M` and `-fsyntax-only` jobs.
+- GNU variable length array types outside a function (WP-1745):
+  `sizeof(int[n])` at namespace or class scope is evaluated at run time,
+  and a function template's parameter may be variably modified. In C++
+  no variable length array is formed in a SFINAE context ("variable
+  length array cannot be formed in a SFINAE context"): a non-constant
+  bound in a requirement or a deduced signature is a substitution failure.
 
 ### Fixed
 
@@ -171,6 +183,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   A template template parameter named without template arguments where
   no deduced class type may appear (`typeid(T)`, `sizeof(T)`, `T *p`) is
   an error in the template definition, as in clang (WP-1739).
+- Constructs that reported "not supported yet" get clang's diagnostics
+  (WP-1745): a member template named through member access, a namespace
+  or template used as a value, a friend deduction guide, `__declspec`
+  without `-fms-extensions`, a qualified mem-initializer naming no type,
+  a using-declaration naming a destructor, `template` as an expression,
+  a lambda after `delete`, a pointer to a reference member, a variably
+  modified type parameter default, and the `matrix_type` and
+  `riscv_rvv_vector_bits` attributes.
+- A constructor defined through a typedef of its class (`T::S() {}`) and
+  braced arguments to `__builtin_operator_new` / `__builtin_operator_delete`
+  are accepted, as clang does (WP-1745).
 
 ## [1.3.0] - 2026-11-20
 

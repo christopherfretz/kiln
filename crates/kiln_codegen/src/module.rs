@@ -1350,8 +1350,10 @@ impl<'a> Cg<'a> {
         if self.no_runtime_object(d) {
             return Ok(());
         }
-        // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
-        let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
+        // [dcl.link]/8: `extern "C" int x;` declares, like `extern`; one
+        // with its own `selectany` defines (clang, WP-1745).
+        let ext = (v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d))
+            && !ast.has_own_selectany(d);
         // [temp.expl.spec]/14: `template<> int C<char>::n;` declares: uses
         // name the external symbol (a later one with an initializer, or
         // another unit, defines it).

@@ -13,14 +13,14 @@ use std::sync::Arc;
 
 use kiln_ast::dump::{DumpOptions, Filter, dump};
 use kiln_diag::verify::{FileLookup, Verifier, VerifyOptions};
-use kiln_diag::{Diag, DiagEngine, DiagId, MemorySink};
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
 use kiln_sema::target::Target;
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
-use crate::make_engine;
 use crate::pp_cmd::{Job, JobResult, PpInputs};
+use crate::{SharedWriter, make_engine};
 
 /// One input to parse: the same inputs as a preprocessing [`Job`].
 #[derive(Debug)]
@@ -434,9 +434,7 @@ impl SyntaxJob<'_> {
         let mut failed = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
-                let v = Verifier::new(&sm, opts.clone(), inputs.main.file(), quoted_lookup(dirs));
-                let v = Rc::new(RefCell::new(v));
+                let v = new_verifier(&sm, opts.clone(), &inputs);
                 self.parse(
                     &sm,
                     &engine,
@@ -453,22 +451,8 @@ impl SyntaxJob<'_> {
         if let Some(why) = failed {
             return Err(why);
         }
-        let verifier = verifier.unwrap_or_else(|| {
-            Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None))))
-        });
-        verifier.borrow_mut().finish(&engine);
-        engine.flush();
-        let report = verifier.borrow().check(&sink.take());
-        let out = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
-        report.emit(&out);
-        out.flush();
-        if let Some(s) = report.summary()
-            && job.diag_opts.format == kiln_diag::Format::Text
-        {
-            let mut err = job.stderr.clone();
-            let _ = writeln!(err, "{s}");
-        }
-        result.errors = report.problems;
+        result.errors =
+            verify_report(&sm, &engine, &sink, verifier, opts, job.diag_opts, &job.stderr);
         Ok(result)
     }
 
@@ -627,6 +611,51 @@ impl SyntaxJob<'_> {
             }
         }
     }
+}
+
+/// `-verify`'s verifier for a job on `inputs` (spec/driver.md
+/// "-verify"): its `@<file>:<line>` names are looked up as
+/// [`quoted_lookup`] does. The job hands it the comments its
+/// preprocessor lexes (`set_comment_handler`).
+pub(crate) fn new_verifier<'sm>(
+    sm: &'sm SourceManager,
+    opts: VerifyOptions,
+    inputs: &PpInputs,
+) -> Rc<RefCell<Verifier<'sm>>> {
+    let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
+    Rc::new(RefCell::new(Verifier::new(sm, opts, inputs.main.file(), quoted_lookup(dirs))))
+}
+
+/// The end of a `-verify` job whose diagnostics went to `sink`: the
+/// verifier's report (and its summary) on standard error in place of
+/// the diagnostics; returns the number of problems, the job's error
+/// count. `verifier` is `None` when the job stopped before its inputs
+/// were read.
+pub(crate) fn verify_report<'sm>(
+    sm: &'sm SourceManager,
+    engine: &DiagEngine<'sm>,
+    sink: &MemorySink,
+    verifier: Option<Rc<RefCell<Verifier<'sm>>>>,
+    opts: VerifyOptions,
+    diag_opts: &DiagOptions,
+    stderr: &SharedWriter,
+) -> u32 {
+    let verifier = verifier.unwrap_or_else(|| {
+        Rc::new(RefCell::new(Verifier::new(sm, opts, None, Box::new(|_, _, _| None))))
+    });
+    verifier.borrow_mut().finish(engine);
+    engine.flush();
+    let report = verifier.borrow().check(&sink.take());
+    let out = make_engine(sm, diag_opts, stderr.clone(), None);
+    report.emit(&out);
+    out.flush();
+    if let Some(s) = report.summary()
+        && diag_opts.format == kiln_diag::Format::Text
+    {
+        let mut err = stderr.clone();
+        let _ = writeln!(err, "{s}");
+    }
+    report.problems
 }
 
 /// clang `Preprocessor::LookupFile` for a quoted name, as `-verify`'s

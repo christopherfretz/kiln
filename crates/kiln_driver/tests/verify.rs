@@ -149,13 +149,31 @@ error: 'expected-error' diagnostics expected but not seen: \n  File fat.cpp Line
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// spec/driver.md "-verify": verify needs `-fsyntax-only` for now.
+/// spec/driver.md "-verify" (WP-1745): every job verifies, as clang's
+/// `-cc1 -verify` does. A codegen job writes its output only when the
+/// unit had no error; expected errors are still a success. `-E` checks
+/// the preprocessor's diagnostics only.
 #[test]
-fn verify_requires_syntax_only() {
+fn verify_in_every_job() {
     let dir = setup("action");
-    let (code, err) = run(env!("CARGO_BIN_EXE_kiln"), &dir, &["-verify", "m.cpp"]);
+    std::fs::write(
+        dir.join("w.cpp"),
+        "int f() { return 1.5; } // expected-warning {{implicit conversion}}\n",
+    )
+    .unwrap();
+    let exe = env!("CARGO_BIN_EXE_kiln");
+    let ok = (0, String::new());
+    assert_eq!(run(exe, &dir, &["-S", "-emit-llvm", "-verify", "w.cpp", "-o", "w.ll"]), ok);
+    assert!(dir.join("w.ll").is_file());
+    assert_eq!(run(exe, &dir, &["-S", "-emit-llvm", "-verify", "m.cpp", "-o", "m.ll"]), ok);
+    assert!(!dir.join("m.ll").exists());
+    let (code, err) = run(exe, &dir, &["-S", "-emit-llvm", "-verify", "fat.cpp", "-o", "f.ll"]);
     assert_eq!(code, 1);
-    assert!(err.contains("-verify without -fsyntax-only"), "{err}");
+    assert!(err.contains("File fat.cpp Line 2: undeclared"), "{err}");
+    let (code, err) = run(exe, &dir, &["-E", "-verify", "w.cpp", "-o", "w.ii"]);
+    let want = "error: 'expected-warning' diagnostics expected but not seen: \n  File w.cpp Line 1: \
+                implicit conversion\n1 error generated.\n";
+    assert_eq!((code, err.as_str()), (1, want));
     std::fs::remove_dir_all(&dir).ok();
 }
 

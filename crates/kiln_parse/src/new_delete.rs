@@ -352,9 +352,16 @@ impl Parser<'_, '_> {
                 _ => false,
             };
             if lambda {
-                // kiln-gap: GAP-156
-                self.unsupported("lambda expressions", self.loc());
-                return None;
+                // [expr.delete]/1: `delete [` followed by `]` is always
+                // array delete, so a lambda here is ill-formed. clang
+                // (`err_lambda_after_delete`) reports it at `delete`,
+                // parses the lambda with its postfix suffix and recovers
+                // by deleting it as a single object.
+                self.s.error(DiagId::parse_lambda_after_delete, start);
+                let lambda = self.parse_lambda_expr()?;
+                let operand = self.parse_postfix_suffix(lambda)?;
+                let cxx26 = self.std >= Std::Cxx26;
+                return Some(self.s.act_on_cxx_delete(global, false, start, operand, cxx26));
             }
             let open = self.bump().span.lo;
             self.expect_closing(Punct::RSquare, Punct::LSquare, open);

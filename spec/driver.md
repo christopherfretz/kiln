@@ -115,20 +115,20 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-F <dir>` | accepted; warns `ignoring framework directory '<dir>' (kiln does not search frameworks)` (`drv_framework_dir_ignored`, no `-W` group: `-w` silences it, `-Qunused-arguments` does not) |
 | `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | write a Chrome trace per compiled input where clang writes it (see "Time trace"; WP-1115). Without a compiler job that writes one (`-fsyntax-only`), each spelling is `argument unused during compilation` (`-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), as clang; granularity and verbose are unused without `-ftime-trace`. A granularity that is not an unsigned integer is `invalid integral value '<v>' in '<flag>'` (`drv_invalid_int_value`) |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
-| `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
+| `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | check the diagnostics of any job against `expected-*` comments (see "-verify") |
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
-| `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
-| `-fkiln-cfg-stats` | with `-fsyntax-only` (otherwise not implemented): one line per function body sema analyzes, `cfg-stats: '<function>' status=<Ok\|TooLarge\|...> blocks=N elems=N edges=N bytes=N build_ns=N`, to the output (spec/sema.md §7.5.1); a measurement aid, not a stable format |
+| `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | the AST dump (`spec/ast-dump.md`) to the output. `-fdump-ast` is an action, as clang's `-cc1 -ast-dump`: with `-E`, `-M`, `-c`, `-S` or a link the job is `-fsyntax-only`, its dump goes to standard output whatever the `-o`, and nothing else is written or linked (WP-1745). `-fdump-ast-filter=` alone dumps nothing |
+| `-fkiln-cfg-stats` | with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR; WP-1745); `-E` has no CFG: one line per function body sema analyzes, `cfg-stats: '<function>' status=<Ok\|TooLarge\|...> blocks=N elems=N edges=N bytes=N build_ns=N`, to the output (spec/sema.md §7.5.1); a measurement aid, not a stable format |
 | `-fkiln-memory-report` | with `-fsyntax-only` or codegen: after the diagnostics (and after `-fkiln-instantiation-report`'s rows), one line per memory row to stderr, `memory: <name> count=N live=N reserved=N`, then `memory: total live=N reserved=N` (the sum over the rows, leaving out the derived `instantiation.*` rows and the `.capacity` rows, which are shown for information: `oven.mem.capacity`, whose bytes the exact `oven.heap-peak` and `oven.static-peak` rows stand for, spec/oven.md "Memory report: the Oven's peaks"). `-E` prints no report (a follow-up). The rows are their producers' (`Ast::memory` with the type context's `types.*`, `Sema::memory`, `Oven::memory`), in that order; the driver lists none itself. Taken when parsing ends, before codegen. A measurement aid, not a stable format (WP-663) |
 | `-fpermissive` | GCC's; its effects: `C::C` used as a type names the class with no diagnostic (GCC's permerror, clang's error by default; [class.qual]/2, WP-1539), and in C++26 the arithmetic between different enumeration types, or an enumeration and a floating type (P2864, an error), is diagnosed with the C++20/23 deprecation warning and its group (`-Wdeprecated-enum-enum-conversion`, ...) instead. GCC 16.1 makes it a pedwarn (a warning even without the flag); kiln keeps clang's error by default |
 | `-frange-for-ext-temps`, `-fno-range-for-ext-temps` | GCC's (the last wins): the temporaries of a range-based `for`'s for-range-initializer persist until the end of the loop (P2718R0, [class.temporary]/7) in every standard, or, with `-fno-`, only the one bound to `__range` even from C++23. Default: from C++23. `__cpp_range_based_for` follows the flag from C++17 on, as GCC 16.1's does: `202211L` with the extension, `201603L` without; C++11/14 keep `200907L` |
-| `-fkiln-dump-cfg` | with `-fsyntax-only` (otherwise not implemented): the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
+| `-fkiln-dump-cfg` | with `-fsyntax-only` (to the output) or codegen (to standard output, before the IR; WP-1745); `-E` has no CFG: the control-flow graph of every function body sema analyzes (spec/sema.md §7.5.1), in clang's `DumpCFG` layout, to the output (after the diagnostics, before an AST dump) |
 | `-fkiln-cfg-max-elems=N` | kiln: the element budget of one body's graph (default 33554432); a body over it builds no graph and its CFG-based warnings are skipped (spec/sema.md §7.5.1). A value that is not an integer is `invalid integral value` |
 | `-fkiln-outline-expansions=N` | kiln: the size threshold, in AST nodes summed over the elements, above which an expansion statement's elements are emitted as separate internal helpers at `-O1` and above (default 2048; `0` disables; spec/landed/codegen/WP-793.md). A value that is not an integer is `invalid integral value` |
-| `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
-| `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
+| `-fdump-record-layouts`, `-fdump-record-layouts-complete` | the record layouts (`spec/abi.md` §6, §8.4): to the output with `-fsyntax-only`, to standard output before the IR or object with codegen, as clang (WP-1745); unused by `-E` (clang's preprocessor job has no Sema) |
+| `-fdump-vtable-layouts` | the vtable groups (`spec/abi.md` §8.5): to the output with `-fsyntax-only`, to standard output before the IR or object with codegen (WP-1745); unused by `-E` |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
-| `-###` | with a codegen action: print the steps instead of running them |
+| `-###` | print the steps instead of running them (with `-E`, `-M` and `-fsyntax-only` too, WP-1745) |
 | `-moutline-atomics`, `-mno-outline-atomics` | AArch64: `+outline-atomics` or `-outline-atomics` in every function's `target-features` (spec/codegen.md); the last wins. Without either, `+outline-atomics` only when the GCC installation ("Toolchain") is 9.3.1 or later, else neither feature (clang 19/22 `Linux::IsAArch64OutlineAtomicsDefault`, the libgcc runtime, `GCCVersion::isOlderThan`), so a cross compile with no AArch64 GCC has inline atomics as clang's (WP-808). Ignored on x86-64 with clang's warning `'x86_64' does not support '<last spelling>'; flag ignored [-Woption-ignored]`, once per source input (clang warns once per compile job) and in every mode; `-Werror` makes it an error and no job runs (WP-228) |
 | `-fomit-frame-pointer`, `-fno-omit-frame-pointer`, `-momit-leaf-frame-pointer`, `-mno-omit-leaf-frame-pointer` | the frame-pointer kind of every function and the `frame-pointer` module flag (spec/codegen.md "Frame pointer"); the last of each pair wins (WP-405) |
 | `-fstrict-aliasing`, `-fno-strict-aliasing` | whether loads and stores carry `!tbaa` above `-O0` (`CodegenOptions::strict_aliasing`, spec/codegen.md "TBAA"); the last wins, strict by default (WP-412) |
@@ -1473,9 +1473,9 @@ output and status follow the `-E` rules:
 An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
-C inputs (`-x c`, `.c`) and
-`-fdump-ast`, `-fdump-record-layouts`, `-fdump-vtable-layouts` or
-`-verify` without `-fsyntax-only` are "not implemented yet".
+A codegen job (`-c`, `-S`, `-emit-llvm`, a link) writes the
+record-layout, vtable-layout and CFG dumps to standard output after the
+parse, in the order above, before its IR or object (WP-1745).
 
 ## `-verify`
 
@@ -1511,6 +1511,15 @@ directive grammar, the matching rules and the report are spec/diag.md
     buffer.
   - Its report goes to stderr in the selected diagnostic format. In the
     text format it is followed by `N error[s] generated.`.
+- **Jobs** (WP-1745). Every job verifies, as clang's `-cc1 -verify`.
+  `-E` and `-M` check the preprocessor's diagnostics (Sema's never
+  arise); the output is written when the report is clean. A codegen job
+  (`-c`, `-S`, `-emit-llvm`, a link) checks the frontend's
+  diagnostics, codegen's included, and writes its IR or object only when
+  the unit had no error: expected errors leave no output and are still a
+  success (exit 0), and a link then fails, as clang's linker finds no
+  object. A codegen job replays an `-include-pch` header rather than
+  restore its snapshot.
 - **Exit status.** 1 if the report has any problem, else 0, whatever
   the matched diagnostics were. The error limit (`-ferror-limit`)
   still applies to the buffered diagnostics, as it does in clang;
@@ -1639,7 +1648,11 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `-o <out>` (default `a.out`). The temporary objects are removed
   afterwards (by their directory's explicit path).
 - **`-###`** prints, to standard error, the `--version` block, then one
-  line per step (at `-O1` and above the `opt` runs follow the frontend
+  line per step. With `-E` or `-M` each input's step is
+  ` (in-process) preprocessor "<input>" -> "<out>"` (`<out>`: the `-MF`
+  file for `-M`, else `-o`, else `-`); with `-fsyntax-only` it is
+  ` (in-process) frontend "<input>" -fsyntax-only` (WP-1745). For a codegen
+  action, one line per step (at `-O1` and above the `opt` runs follow the frontend
   step, "IR optimization"). An external step is clang's format: a leading space, then
   every argument quoted (`"`, `\` and `$` escaped). The frontend step is
   ` (in-process) frontend "<input>" -> "<out>"`, where `<out>` is `|` when
@@ -1669,8 +1682,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
   start, fails or is killed is a driver error (below); the exit status is
   then 1.
 
-Not implemented: `-###` with `-E` or `-fsyntax-only` ("not implemented
-yet"). Debug information (`-g` and its levels, `-gdwarf-N`) is
+Debug information (`-g` and its levels, `-gdwarf-N`) is
 implemented; see "Debug information flags" (WP-814).
 
 ## Modules
@@ -3181,8 +3193,7 @@ Each deviation is covered by a test or a test note.
     only when code generation emits it (so never under `-fsyntax-only`),
     in emission order, sometimes repeating a construction vtable, and
     prints its `Original map` debugging sections, which kiln omits.
-17. **`-verify` needs `-fsyntax-only`.** clang also verifies a full
-    compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
+17. **`-Xclang` is the driver's parser.** `-Xclang` forwards to the driver parser, not to a `cc1`,
     so only options the driver knows are accepted after it.
 18. **Target features** ("Target features" above): the CPU names other
     than `generic` and `native`, `-march=armv8-r`, and the extensions kiln does
@@ -3312,14 +3323,14 @@ Each deviation is covered by a test or a test note.
   `kiln++ -fdump-record-layouts` and by `clang -Xclang
   -fdump-record-layouts-complete` on both triples, and the dumps are
   compared byte for byte (clang's builtin records are dropped). The test
-  also covers both spellings and the "not implemented" error with
-  `-S -emit-llvm`.
+  also covers both spellings and the dump of an `-S -emit-llvm` job
+  (WP-1745).
 - `crates/kiln_driver/tests/vtable_layouts.rs`: small programs (every
   dynamic class with an out-of-line key function, no constructors) are
   dumped by `kiln++ -fsyntax-only -fdump-vtable-layouts` and by
   `clang -S -emit-llvm -Xclang -fdump-vtable-layouts` on both triples;
   the dumps are compared as sets of blocks without clang's `Original
-  map` sections. Also the "not implemented" error with `-S -emit-llvm`.
+  map` sections. Also the dump of an `-S -emit-llvm` job (WP-1745).
   The exhaustive differential is `kiln_abi`'s `vtable_vs_clang`
   (spec/abi.md §7).
 - `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through

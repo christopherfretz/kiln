@@ -180,12 +180,27 @@ impl Sema<'_, '_> {
             match sp {
                 SpecialName::Conversion(_) => self.error(DiagId::sema_conv_not_member, sloc),
                 SpecialName::Destructor(_) => self.error(DiagId::sema_dtor_not_member, sloc),
-                // kiln-gap: GAP-147
-                SpecialName::Constructor(_) => self.unsupported("constructors", sloc),
-                // kiln-gap: GAP-147
-                SpecialName::Operator(_) => self.unsupported("overloaded operators", sloc),
-                SpecialName::LiteralOperator(_) | SpecialName::DeductionGuide(_) => {
-                    unreachable!("handles_special_declarator admits neither")
+                // The parser takes `X::X` for a constructor only after a
+                // qualifier naming class `X` or one it cannot resolve
+                // (`qualified_ctor_name`); the latter names no class
+                // here (clang's `err_template_qualified_declarator_no_match`;
+                // clang 22 prints the specifier without its `::`).
+                SpecialName::Constructor(_) => {
+                    let mut q = d.qualifier_nns.map(|n| self.nns_str(n)).unwrap_or_default();
+                    if self.clang_compat >= 22 && q.ends_with("::") {
+                        q.truncate(q.len() - 2);
+                    }
+                    let m = self.diag(DiagId::sema_template_qualified_declarator_no_match, sloc);
+                    self.emit(m.arg(q));
+                }
+                SpecialName::Operator(_)
+                | SpecialName::LiteralOperator(_)
+                | SpecialName::DeductionGuide(_) => {
+                    unreachable!(
+                        "handles_special_declarator admits an operator only as a member \
+                         `operator=` (with a declarator class), and no literal operator or \
+                         deduction guide"
+                    )
                 }
             }
             return None;

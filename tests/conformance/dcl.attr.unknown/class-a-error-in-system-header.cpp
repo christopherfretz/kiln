@@ -10,7 +10,7 @@
 //@ strict-diags
 //@ diag: 13:30 error "'weak_import' attribute is not supported by kiln yet"
 //@ diag: 14:20 error "'address_space' attribute is not supported by kiln yet"
-//@ diag: 15:35 error "'matrix_type' attribute is not supported by kiln yet"
+//@ diag: 15:35 error "matrix types extension is disabled. Pass -fenable-matrix to enable it"
 # 13 "tests/conformance/dcl.attr.unknown/class-a-error-in-system-header.cpp" 3
 extern int wi __attribute__((weak_import));
 int __attribute__((address_space(1))) *as;

@@ -2235,11 +2235,10 @@ impl Parser<'_, '_> {
                 Kw::Template if self.peek_is(1, Punct::SpliceOpen) => {
                     self.parse_template_splice_expr()
                 }
-                Kw::Template => {
-                    // kiln-gap: GAP-155
-                    self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
-                    None
-                }
+                // Any other keyword, `template` included: a primary
+                // expression never starts with `template` but before a
+                // splice ([expr.prim]; clang's "expected expression" at
+                // the keyword).
                 _ => {
                     self.error_here(DiagId::parse_expected_expression);
                     None

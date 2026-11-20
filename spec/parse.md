@@ -1176,7 +1176,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     the `{` under clang 22 and its body is skipped; any other
     block-scope template-declaration is
     `sema_template_outside_namespace_or_class` at `template` (clang 19:
-    `expected expression` for both; WP-1091).
+    `expected expression` for both; WP-1091). This includes `template<>`
+    explicit specializations; `template` with no `<` (an explicit
+    instantiation, [temp.explicit]/3) is `expected '<' after 'template'`
+    after the keyword under clang 22 (clang 19: `expected expression` at
+    `template`), and the statement is skipped (WP-1745).
+  - A namespace-definition at block scope ([namespace.def.general]/2;
+    `block_scope_namespace`, clang's `ParseNamespace`): attributes and
+    the (nested) name are read; a missing `{` is `expected '{'` (or
+    `expected identifier or '{'` with no name) at the token in its place
+    and the statement goes on from there; otherwise `namespaces can only
+    be defined in global or namespace scope` at the `{` and the braced
+    body is skipped (WP-1745).
   - `= delete` / `= default` on a later declarator or a non-function:
     `'= delete' is a function definition and must occur in a
     standalone declaration`, `only functions can have deleted
@@ -1371,6 +1382,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `dcl.link/gnu-attributes-before-linkage-spec.cpp`,
     `dcl.link/attribute-list-before-linkage-spec-errors.cpp`,
     `tests/codegen/linkage_spec_gnu_attrs.cpp`).
+    The language is the concatenation of the adjacent string literals
+    ([lex.string]/7: `extern "C" ""` is C linkage). A language other
+    than `C` and `C++` ([dcl.link]/3, implementation-defined) is clang's
+    `unknown linkage language` at the first string and makes no linkage
+    specification: the declarations are parsed in the enclosing context
+    with C++ linkage (`Sema::act_on_start_linkage_spec` returns `None`;
+    WP-1745, `dcl.link/unknown-language-errors.cpp`,
+    `dcl.link/concatenated-language-string-run.cpp`).
   - `using namespace N;`
 - **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
   - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
@@ -2569,7 +2588,21 @@ expressions ([dcl.fct.def.general]/8) passed to `act_on_predefined_expr`.
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement
-  - `asm goto`, MS `__asm` blocks, modules, `__declspec`
+  - `asm goto`, MS `__asm` blocks, modules
+- **Diagnosed as clang does (WP-1745):** `__declspec(...)` (clang's
+  `'__declspec' attributes are not enabled` without `-fdeclspec`, the list
+  skipped); a destructor in a using-declarator (`using declaration cannot
+  refer to a destructor`, [namespace.udecl]/1); `template` starting an
+  expression other than a splice (`expected expression`); a lambda after
+  `delete []` (`'[]' after delete interpreted as 'delete[]'`, the lambda
+  parsed with its postfix suffix and deleted as an object,
+  [expr.delete]/1); a qualified mem-initializer-id that names no type
+  (`member initializer 'x' does not name a non-static data member or
+  base class`, a failed initializer, [class.base.init]/2). `X::X` after a
+  qualifier is a constructor name only when the qualifier names class `X`
+  (also through a typedef: `T0::S0`), not after a namespace, an
+  enumeration or a template type parameter ([class.qual]/2, clang
+  `isCurrentClassName`; `Parser::qualified_ctor_name`).
 
 ## 10. Tests
 - **Per-rule tests** in `crates/kiln_parse/tests/`, each tagged with

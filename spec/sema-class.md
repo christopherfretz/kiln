@@ -1719,7 +1719,8 @@ pattern keeps its type, so a member of the now-known base cannot hide it in
 the instantiation (`_Alloc_hider : allocator_type` whose allocator has a
 member function `allocator_type`; WP-803,
 `class.base.init/typedef-bound-at-definition-run.cpp`). A qualified id naming no type in a non-dependent
-qualifier is still `qualified member initializers` unsupported. A
+qualifier is clang's `member initializer 'x' does not name a non-static
+data member or base class`, counted as a failed initializer (WP-1745). A
 mem-initializer that fails in an instantiation (its substitution, or its
 initialization: `decltype(t)(t)` naming a reference type) makes the
 constructor specialization invalid, as clang's `InstantiateMemInitializers`
@@ -2908,8 +2909,9 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   &mut FnSpec) -> VirtualDecl` runs before the function is built and
   `finish_virtual_decl(f, VirtualDecl)` after (decl.rs `act_on_function`):
   `virtual` outside a class / on an out-of-line definition / on a friend
-  / with `static`, pure-specifier on a non-virtual, `override`/`final` on
-  a non-member, the overridden-method search over all bases
+  / with `static`, pure-specifier on a non-virtual, pure-specifier on a
+  friend (`friend declaration cannot have a pure-specifier`,
+  [class.mem.general]/1, WP-1745), `override`/`final` on a non-member, the overridden-method search over all bases
   (`overridden_methods`, same name + `is_method_overload` false: same
   parameter-type-list, cv- and ref-qualifiers; operator functions such
   as `operator()` included, WP-276; a member function template is not

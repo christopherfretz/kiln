@@ -8,7 +8,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use kiln_ast::attr::AttrSyntax;
-use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions};
+use kiln_diag::verify::Verifier;
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
 use kiln_lex::TokKind;
 use kiln_pp::{
@@ -397,17 +398,44 @@ impl Job<'_> {
             // `-M` / `-MM` imply `-w`.
             diag_opts.ignore_warnings = true;
         }
-        let engine = make_engine(&sm, &diag_opts, self.stderr.clone(), None);
+        // `-verify` (spec/driver.md "-verify", WP-1745): the
+        // preprocessor's diagnostics are checked against the comments it
+        // lexes, as clang's `-E -verify`.
+        let sink = MemorySink::new();
+        let engine = if self.args.verify.is_some() {
+            DiagEngine::new(&sm, &diag_opts, sink.clone())
+        } else {
+            make_engine(&sm, &diag_opts, self.stderr.clone(), None)
+        };
         // An `-include-pch` that cannot be read is this job's error; the
         // job goes on without it (clang `AddImplicitIncludePCH`, WP-1153).
         crate::pch::emit(&self.args.pch.unread, &engine);
         let mut result = JobResult::default();
+        let mut verifier = None;
         crate::crash::catching(self.path, self.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = self.pp_inputs(&sm, &engine) {
                 let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
-                self.preprocess(&sm, &engine, &interner, inputs, &mut result);
+                let v = self
+                    .args
+                    .verify
+                    .clone()
+                    .map(|o| crate::syntax_cmd::new_verifier(&sm, o, &inputs));
+                self.preprocess(&sm, &engine, &interner, inputs, v.as_ref(), &mut result);
+                verifier = v;
             }
         });
+        if let Some(opts) = self.args.verify.clone() {
+            result.errors = crate::syntax_cmd::verify_report(
+                &sm,
+                &engine,
+                &sink,
+                verifier,
+                opts,
+                &diag_opts,
+                &self.stderr,
+            );
+            return result;
+        }
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
@@ -943,6 +971,7 @@ impl Job<'_> {
         engine: &DiagEngine<'a>,
         interner: &'a Interner,
         inputs: PpInputs,
+        verify: Option<&Rc<RefCell<Verifier<'a>>>>,
         result: &mut JobResult,
     ) {
         let a = self.args;
@@ -950,6 +979,10 @@ impl Job<'_> {
         else {
             return;
         };
+        if let Some(v) = verify {
+            let v = Rc::clone(v);
+            pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
+        }
         if a.deps.only.is_some() {
             while pp.next().kind != TokKind::Eof {}
         } else if a.print.macros_only {
