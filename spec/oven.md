@@ -4018,7 +4018,22 @@ exception (see "Bool vectors" below). The operations are in
 - **Ext-vector element access** (`ext_elt_regs`, WP-312): on a prvalue
   vector (a compound literal, an operator result, a call) the selected
   lanes are taken from the operand's registers, for one lane (a scalar)
-  and for a swizzle (a vector), as clang 19 folds them.
+  and for a swizzle (a vector), as clang 19 folds them. `.hi` / `.odd`
+  of a vector with an odd lane count select a lane past its end (WP-1742;
+  the lane exists in the padded layout but holds no value):
+  `ext_elt_lanes` keeps it as `None`, a nested access composes with it
+  (`(v.hi).x` reads only lane 0), direct initialization (`vec_init`)
+  leaves that lane uninitialized in the object, and a discarded access
+  (`vec_effect`) reads nothing. Any operation that reads the lane's value
+  (arithmetic, a reduction, a shuffle, a `?:` arm, a one-lane access of
+  it) gets it from a temporary where it was never stored, so it fails
+  with "read of uninitialized object is not allowed in a constant
+  expression" ([expr.const]/10.9). The freeze does not look into a vector
+  (clang's `CheckEvaluationResult` does not either), so a vector constant
+  may hold such a lane; it is padding in the image. clang 22 folds a read
+  of the lane to an arbitrary value (and crashes negating it), so kiln
+  rejects where clang folds
+  (`ext.vector/ext-vector-odd-half-past-end{,-read}.cpp`).
 - **Rejected without a note** (clang 19 fails silently): a `?:` with a
   vector condition, and ext-vector element access on a vector object
   (`v.x` for a variable `v`, the error at the expression's begin).
@@ -4175,8 +4190,33 @@ Type rules: spec/types.md §21.
   `CMP`s giving the ordering. An `IntegerLiteral` wider than 128 bits
   (only a substituted non-type template argument: C++ has no `wb` suffix)
   is built from its 128-bit chunks, most significant first (`FROM`, `SHL`
-  by 128, `OR`). The generic wide-`_BitInt` trap in `compile.rs`
-  `rv_inner` remains as a safety net for any other expression form.
+  by 128, `OR`).
+- *Narrow results of wide operands* (WP-1742). A subscript index, a
+  pointer offset (`p + i`, `i + p`, `p - i`, `p += i`, `p -= i`) and a
+  shift count of a narrow left operand (`1 << s`, `x <<= s`) are read
+  through `TO` saturating to 128 bits, signed as the operand
+  (`compile/wide.rs` `index_rv`): a value out of them is out of range for every array
+  and every shift, so it faults as clang does, but the note prints the
+  saturated value (`170141183460469231731687303715884105727`) where
+  clang's prints the exact one. An integral to pointer conversion and a
+  vector lane subscript take the low 64 bits, as clang truncates them; a
+  pointer to integer conversion to a wide type zero-extends the address's
+  64 bits. Both conversions note as a narrow operand's do ("cast that
+  performs the conversions of a reinterpret_cast", or "reinterpret_cast is
+  not allowed" for a `reinterpret_cast`, `reinterpret_cast<S>(s)`
+  included). The wide-`_BitInt` trap in `compile.rs` `rv_inner` remains
+  for the forms that still ask for a wide value in a register: a builtin's
+  argument (`__builtin_add_overflow`, `__builtin_popcountg`, the
+  elementwise builtins), a `new T[n]` size and a vector of wide lanes
+  (`_BitInt(256) __attribute__((ext_vector_type(2)))`, which clang
+  evaluates). `ty.rs` lays such a vector out as an opaque type, so the
+  vector arms do not see it: its value (`rv_inner`), a lane subscript or
+  element access (`lv`), and a lane-wise operation, conversion or
+  reduction of it (`vec_regs`, `vec_reduce`) trap with the same note at
+  the vector (`wide_lane_count`). A write to such a lane is `unsupported` in
+  `wide_store`, `wide_compound_assign` and `wide_float_compound`, and a
+  splat into such a vector (a vector shifted by a wide count) in
+  `wide_to_scalar`.
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,

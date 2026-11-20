@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-42 gaps at 79 sites; 10 of 56,766 g++.dg cases hit one at the
+39 gaps at 49 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -73,7 +73,7 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| Oven trap | 7 | 38 | 0 |
+| Oven trap | 4 | 8 | 0 |
 | codegen fallback | 18 | 19 | 0 |
 | drv_not_implemented | 2 | 2 | 0 |
 | parse_unsupported | 6 | 6 | 0 |
@@ -92,7 +92,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | codegen fallbacks | 18 (GAP-061..GAP-078) | 19 | 0 | WP-1739 |
 | NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
 | Oven traps: expressions | 2 (GAP-114..GAP-115) | 3 | 0 | WP-1741 |
-| Oven traps: types | 5 (GAP-125..GAP-129) | 35 | 0 | WP-1742 |
+| Oven traps: types | 2 (GAP-126, GAP-129) | 5 | 0 | WP-1742 |
 | reflection | 5 (GAP-130..GAP-134) | 5 | 0 | WP-1743 |
 | preprocessor/modules | 9 (GAP-135..GAP-143) | 11 | 0 | WP-1744 |
 | misc | 2 (GAP-144, GAP-149) | 5 | 0 | WP-1745 |
@@ -122,11 +122,8 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-097 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: the 25 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
 | GAP-114 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `CXXDeleteExpr` of a `void *` operand, which clang 22 destroys and frees by the allocation's dynamic type) | `crates/kiln_oven/src/compile/new_delete.rs::delete_expr` | 0 | WP-1741 |
 | GAP-115 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: `__builtin_align_up`/`_down`/`__builtin_is_aligned` or an elementwise builtin on a `_BitInt` wider than 128 bits) | `crates/kiln_oven/src/compile/builtins.rs::builtin_call` ×2 | 0 | WP-1741 |
-| GAP-125 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a vector operation not handled) | `crates/kiln_oven/src/compile/vector.rs::ext_elt_regs` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_binary`, `crates/kiln_oven/src/compile/vector.rs::vec_compound_assign` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_elementwise`, `crates/kiln_oven/src/compile/vector.rs::vec_gcc_shuffle` ×3, `crates/kiln_oven/src/compile/vector.rs::vec_init`, `crates/kiln_oven/src/compile/vector.rs::vec_reduce`, `crates/kiln_oven/src/compile/vector.rs::vec_regs` ×2, `crates/kiln_oven/src/compile/vector.rs::vec_shuffle` ×2 | 0 | WP-1742 |
-| GAP-126 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: an operation on a `_BitInt` wider than 128 bits not handled (`wide_to_scalar`: arm)) | `crates/kiln_oven/src/compile/wide.rs::wide_compare`, `crates/kiln_oven/src/compile/wide.rs::wide_compound_assign` ×3, `crates/kiln_oven/src/compile/wide.rs::wide_float_compound` ×2, `crates/kiln_oven/src/compile/wide.rs::wide_store`, `crates/kiln_oven/src/compile/wide.rs::wide_to_scalar` | 0 | WP-1742 |
-| GAP-127 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a complex operation not handled) | `crates/kiln_oven/src/compile/complex.rs::cx_cast`, `crates/kiln_oven/src/compile/complex.rs::cx_compare`, `crates/kiln_oven/src/compile/complex.rs::cx_compound_assign`, `crates/kiln_oven/src/compile/complex.rs::cx_inc_dec`, `crates/kiln_oven/src/compile/complex.rs::cx_init`, `crates/kiln_oven/src/compile/complex.rs::cx_regs` ×2 | 0 | WP-1742 |
-| GAP-128 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a member-pointer constant or conversion not handled) | `crates/kiln_oven/src/compile/mptr.rs::mp_const`, `crates/kiln_oven/src/compile/mptr.rs::mp_conv` | 0 | WP-1742 |
-| GAP-129 | Oven trap | Oven traps: types | `kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet` | `crates/kiln_oven/src/compile.rs::wide_bit_int` | 0 | WP-1742 |
+| GAP-126 | Oven trap | Oven traps: types | `kiln: constant evaluation of {k} is not supported yet` ({k}: a write to, or a splat into, a lane of a vector of wide `_BitInt` lanes) | `crates/kiln_oven/src/compile/wide.rs::wide_compound_assign`, `crates/kiln_oven/src/compile/wide.rs::wide_float_compound`, `crates/kiln_oven/src/compile/wide.rs::wide_store`, `crates/kiln_oven/src/compile/wide.rs::wide_to_scalar` | 0 | WP-1742 |
+| GAP-129 | Oven trap | Oven traps: types | `kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet` (a wide operand of a builtin call or of `new T[n]`, a lane of a vector of wide lanes) | `crates/kiln_oven/src/compile.rs::wide_bit_int` | 0 | WP-1742 |
 | GAP-130 | reflection error | reflection | `kiln: reflection function '{name}' is not implemented yet (WP-{wp})` ({name}: the queries `meta_query` has no arm for (`symbol_of`, `u8symbol_of`)) | `crates/kiln_sema/src/meta/query/mod.rs::meta_query` | 0 | WP-1743 |
 | GAP-131 | reflection error | reflection | `kiln: '{name}' is not implemented yet` ({name}: a `std::meta` trait whose builtin is not implemented (the type traits of the `type trait` entry)) | `crates/kiln_sema/src/meta/traits.rs::trait_result` | 0 | WP-1743 |
 | GAP-132 | reflection error | reflection | `kiln: constant_of an object of type '{t}' is not implemented yet` | `crates/kiln_sema/src/meta/query/entity.rs::object_constant` | 0 | WP-1743 |
