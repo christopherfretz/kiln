@@ -6,7 +6,7 @@
 //! a stdlib that ships none.
 
 use kiln_ast::stmt::{ContractKind, ContractSemantic};
-use kiln_ast::{DeclId, StmtId};
+use kiln_ast::{DeclId, QualType, StmtId};
 use kiln_llvm::{
     Attr, AttrKind, CallOpts, GepFlags, IntPredicate, IrBuilder, Linkage, TypeId as LTy, Value,
 };
@@ -205,6 +205,26 @@ impl Cg<'_> {
         Ok(b)
     }
 
+    /// The result object of a call of `d` (result type `rq`) whose
+    /// caller-side postcondition names the result: `dest`, or for a
+    /// result in memory (an aggregate or atomic aggregate) whose call has
+    /// none (a discarded call), a temporary, so that the postcondition
+    /// can read it ([`Self::emit_client_post`]).
+    pub(crate) fn client_result_slot(
+        &mut self,
+        d: DeclId,
+        rq: QualType,
+        dest: Option<Addr>,
+    ) -> Option<Addr> {
+        if dest.is_none()
+            && (self.is_aggregate(rq) || self.is_atomic_aggregate(rq))
+            && self.client_post_names_result(d)
+        {
+            return Some(self.temp(rq));
+        }
+        dest
+    }
+
     /// The caller-side postconditions of the call [`Self::emit_client_pre`]
     /// bound `b` for (under `-fcontracts-client-check=all`), on its normal
     /// return: the result name denotes the scalar result `r` (in a
@@ -250,13 +270,13 @@ impl Cg<'_> {
                                 self.cx_store(cx.expect("checked"), a, rq);
                                 Some(a)
                             }
-                            _ => {
-                                return err(
-                                    Some(ast.stmts.get(s).loc()),
-                                    // kiln-gap: GAP-087
-                                    "cannot compile a caller-side postcondition of this result yet",
-                                );
-                            }
+                            // A scalar result is `r`, a complex one in
+                            // `cx_ret`, one in memory (an aggregate or an
+                            // atomic aggregate) has the result object
+                            // `dest` (`client_result_slot`).
+                            _ => unreachable!(
+                                "a caller-side postcondition's result has no value (WP-1739)"
+                            ),
                         };
                     }
                     if let Some(a) = slot {

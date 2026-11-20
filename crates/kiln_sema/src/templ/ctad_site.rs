@@ -55,11 +55,15 @@ impl Sema<'_, '_> {
     /// The placeholder for a deduced class type `ty` where none may
     /// appear, reported at `loc` with the template note; the error type.
     pub(crate) fn ctad_misplaced(&mut self, ty: QualType, loc: Loc, why: Misplaced) -> QualType {
-        let Some((_, tmpl)) = self.undeduced_ctad(ty) else { return ty };
-        let what = if self.kind_of(tmpl) == DeclKind::ClassTemplate {
-            "class template"
-        } else {
-            "alias template"
+        let Some(tmpl) =
+            self.undeduced_ctad(ty).map(|(_, t)| t).or_else(|| self.template_param_placeholder(ty))
+        else {
+            return ty;
+        };
+        let what = match self.kind_of(tmpl) {
+            DeclKind::ClassTemplate => "class template",
+            DeclKind::TemplateTemplateParm => "template template parameter",
+            _ => "alias template",
         };
         let name = self.ty_arg(ty.without_quals());
         let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
@@ -73,6 +77,25 @@ impl Sema<'_, '_> {
         };
         self.emit(msg.with_note(note));
         QualType::ERROR
+    }
+
+    /// The template template parameter a type-specifier names without
+    /// arguments (`T` in `sizeof(T)`): clang forms a deduced class type
+    /// for it too, so the placeholder's site rules apply, and deduction
+    /// waits for the instantiation (WP-1739: `typeid(T)` reached code
+    /// generation).
+    fn template_param_placeholder(&self, ty: QualType) -> Option<kiln_ast::DeclId> {
+        let Some(TypeView::DeducedTemplateSpecialization { name, deduced: None }) = self
+            .ast
+            .types
+            .view_if(ty.ty(), kiln_ast::types::TypeKind::DeducedTemplateSpecialization)
+        else {
+            return None;
+        };
+        match self.ast.types.template_name_view(name) {
+            kiln_ast::types::TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+            _ => None,
+        }
     }
 
     /// Whether a placeholder may be the decl-specifier type of `d`, from
@@ -137,7 +160,7 @@ impl Sema<'_, '_> {
         spec_loc: Loc,
         d: &Declarator,
     ) -> QualType {
-        if !self.is_ctad_placeholder(base)
+        if !(self.is_ctad_placeholder(base) || self.template_param_placeholder(base).is_some())
             || matches!(d.special, Some((SpecialName::DeductionGuide(_), _)))
         {
             return base;

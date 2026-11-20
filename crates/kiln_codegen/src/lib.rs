@@ -74,6 +74,7 @@ mod vtable;
 mod x86;
 mod x86_gen;
 mod x86_intrinsics;
+mod x86_kl;
 mod x86_mmx;
 
 /// The x86 builtins clang lowers to one `llvm.x86.*` call
@@ -85,7 +86,6 @@ pub mod x86_intrinsic_table {
     pub use kiln_llvm::intrinsics::TargetMem as Mem;
 }
 
-pub use builtins::{UNLOWERED_BUILTINS, is_unlowered_builtin};
 pub use coverage::CoverageOptions;
 pub use debuginfo::{DebugInfoKind, DebugOptions};
 use kiln_abi::Target;

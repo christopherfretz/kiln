@@ -8,10 +8,10 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-93 gaps at 176 sites; 10 of 56,766 g++.dg cases hit one at the
-1.3.0 release candidate (3 of them GAP-093, since fixed). 4 more entries
-(5 sites) use wording that matches clang's for a limit clang shares: they
-are listed as excluded and stay.
+77 gaps at 156 sites; 10 of 56,766 g++.dg cases hit one at the
+1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
+wording that matches clang's for a limit clang shares: they are listed
+as excluded and stay.
 
 ## Method
 
@@ -74,7 +74,7 @@ By family:
 | family | gaps | sites | reach |
 |---|---|---|---|
 | Oven trap | 20 | 90 | 0 |
-| codegen fallback | 34 | 39 | 7 |
+| codegen fallback | 18 | 19 | 0 |
 | drv_not_implemented | 3 | 3 | 0 |
 | parse_unsupported | 26 | 29 | 0 |
 | pp_expr_unsupported | 1 | 3 | 0 |
@@ -90,7 +90,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| codegen fallbacks | 34 (GAP-059..GAP-092) | 39 | 7 | WP-1739 |
+| codegen fallbacks | 18 (GAP-061..GAP-078) | 19 | 0 | WP-1739 |
 | NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
 | Oven traps: expressions | 15 (GAP-110..GAP-124) | 55 | 0 | WP-1741 |
 | Oven traps: types | 5 (GAP-125..GAP-129) | 35 | 0 | WP-1742 |
@@ -102,8 +102,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-059 | codegen fallback | codegen fallbacks | `expression {k} is not supported yet` ({k}: the 37 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::emit_scalar_x` | 4 | WP-1739 |
-| GAP-060 | codegen fallback | codegen fallbacks | `code generation for {name} is not supported yet` ({name}: a builtin sema accepts with no lowering in that target's table (at the RC `__atomic_always_lock_free`)) | `crates/kiln_codegen/src/arm.rs::emit_arm_builtin`, `crates/kiln_codegen/src/atomic.rs::emit_atomic_builtin`, `crates/kiln_codegen/src/builtins.rs::emit_builtin`, `crates/kiln_codegen/src/neon.rs::emit_neon_builtin`, `crates/kiln_codegen/src/x86.rs::emit_x86_builtin` | 3 | WP-1739 |
 | GAP-061 | codegen fallback | codegen fallbacks | `passing or returning '{t}' by value is not supported yet: it is an SVE tuple type, ...` / `...: it is an AAPCS64 pure scalable type ...` | `crates/kiln_codegen/src/module.rs::check_pure_scalable` ×2 | 0 | WP-1739 |
 | GAP-062 | codegen fallback | codegen fallbacks | `code generation for SVE builtin '{name}' (called as '{called}') is not supported yet` | `crates/kiln_codegen/src/sve.rs::emit_sve_alias` | 0 | WP-1739 |
 | GAP-063 | codegen fallback | codegen fallbacks | `cast {k} is not supported yet` ({k}: the 8 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/expr.rs::emit_cast` | 0 | WP-1739 |
@@ -122,20 +120,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-076 | codegen fallback | codegen fallbacks | `complex cast {k} is not supported yet` ({k}: the 32 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_cast` | 0 | WP-1739 |
 | GAP-077 | codegen fallback | codegen fallbacks | `complex unary {op} is not supported yet` ({op}: the 6 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_unary` | 0 | WP-1739 |
 | GAP-078 | codegen fallback | codegen fallbacks | `complex binary {op} is not supported yet` ({op}: the 27 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/complex.rs::emit_cx_binary` | 0 | WP-1739 |
-| GAP-079 | codegen fallback | codegen fallbacks | `atomic compare-exchange of {vq} is not supported yet` | `crates/kiln_codegen/src/atomic.rs::atomic_cmpxchg_lv` | 0 | WP-1739 |
-| GAP-080 | codegen fallback | codegen fallbacks | `binding a reference to a prvalue is not supported yet` | `crates/kiln_codegen/src/class.rs::emit_ref_binding_in` | 0 | WP-1739 |
-| GAP-081 | codegen fallback | codegen fallbacks | `construction of variable-length arrays is not supported yet` ({k}: the 2 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/class.rs::construct_array` | 0 | WP-1739 |
-| GAP-082 | codegen fallback | codegen fallbacks | `calls through member pointers is not supported yet` | `crates/kiln_codegen/src/class.rs::emit_member_call` | 0 | WP-1739 |
-| GAP-083 | codegen fallback | codegen fallbacks | `base-class subobjects in constants are not supported yet (M3)` | `crates/kiln_codegen/src/consts.rs::image_const` | 0 | WP-1739 |
-| GAP-084 | codegen fallback | codegen fallbacks | `scalable-vector and target-type constants are not supported yet (M3)` ({k}: the 3 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/consts.rs::image_const` | 0 | WP-1739 |
-| GAP-085 | codegen fallback | codegen fallbacks | `union base-class constants are not supported yet (M3)` | `crates/kiln_codegen/src/consts.rs::record_elems` | 0 | WP-1739 |
-| GAP-086 | codegen fallback | codegen fallbacks | `class constants with this member is not supported yet` | `crates/kiln_codegen/src/consts.rs::record_elems` | 0 | WP-1739 |
-| GAP-087 | codegen fallback | codegen fallbacks | `cannot compile a caller-side postcondition of this result yet` | `crates/kiln_codegen/src/contracts.rs::emit_client_post` | 0 | WP-1739 |
-| GAP-088 | codegen fallback | codegen fallbacks | `an ignored scalar parameter is not supported yet` | `crates/kiln_codegen/src/func.rs::prolog_arg` | 0 | WP-1739 |
-| GAP-089 | codegen fallback | codegen fallbacks | `copying an under-aligned byval argument is not supported yet` | `crates/kiln_codegen/src/func.rs::call_arg` | 0 | WP-1739 |
-| GAP-090 | codegen fallback | codegen fallbacks | `this deallocation function is not supported yet` | `crates/kiln_codegen/src/new_delete.rs::emit_delete_call_n` | 0 | WP-1739 |
-| GAP-091 | codegen fallback | codegen fallbacks | `this initializer of a variable length array is not supported yet` | `crates/kiln_codegen/src/vla.rs::emit_vla_var` | 0 | WP-1739 |
-| GAP-092 | codegen fallback | codegen fallbacks | `RTTI for type `{name}` is not supported yet` ({k}: the 36 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/vtable.rs::rtti` | 0 | WP-1739 |
 | GAP-097 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: the 25 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
 | GAP-110 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the expression's kind, where an operand form, operator or type of an rvalue is not handled) | `crates/kiln_oven/src/compile.rs::arith`, `crates/kiln_oven/src/compile.rs::binary_node`, `crates/kiln_oven/src/compile.rs::convert`, `crates/kiln_oven/src/compile.rs::effect`, `crates/kiln_oven/src/compile.rs::rv_inner` ×6, `crates/kiln_oven/src/compile.rs::three_way` ×3, `crates/kiln_oven/src/compile.rs::trait_expr`, `crates/kiln_oven/src/compile.rs::unary` | 0 | WP-1741 |
 | GAP-111 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the kind of an lvalue (or assignment target) form not handled) | `crates/kiln_oven/src/compile.rs::compound_assign`, `crates/kiln_oven/src/compile.rs::lv` ×6, `crates/kiln_oven/src/compile.rs::member` | 0 | WP-1741 |
@@ -236,10 +220,6 @@ expression`). Never in a mangled operand (clang: unreachable): `ParenExpr`,
 builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
 `AddrLabelExpr` (ExprKind).
 
-### GAP-059
-
-`UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `UnresolvedLookupExpr`, `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, `SubstNonTypeTemplateParmPackExpr`, `FunctionParmPackExpr`, `ParenListExpr`, `InitListExpr`, `DesignatedInitExpr`, `CXXConstructExpr`, `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`, `CXXParenListInitExpr`, `ArrayInitLoopExpr`, `CXXStdInitializerListExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `CXXBindTemporaryExpr`, `CXXPseudoDestructorExpr`, `CXXTypeidExpr`, `SizeOfPackExpr`, `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr`, `CXXUnresolvedConstructExpr`, `DependentCoawaitExpr`, `ChooseExpr`, `CXXReflectExpr`, `CXXSpliceExpr`, `RecoveryExpr`, `CXXExpansionSelectExpr`, `GenericSelectionExpr`, `IntegerPackExpr` (ExprKind).
-
 ### GAP-063
 
 `Dependent`, `ToUnion`, `IntegralRealToComplex`, `FloatingRealToComplex`, `IntegralComplexCast`, `FloatingComplexCast`, `IntegralComplexToFloatingComplex`, `FloatingComplexToIntegralComplex` (CastKind).
@@ -291,18 +271,6 @@ builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
 ### GAP-078
 
 `PtrMemD`, `PtrMemI`, `Rem`, `Shl`, `Shr`, `Cmp`, `LT`, `GT`, `LE`, `GE`, `EQ`, `NE`, `And`, `Xor`, `Or`, `LAnd`, `LOr`, `MulAssign`, `DivAssign`, `RemAssign`, `AddAssign`, `SubAssign`, `ShlAssign`, `ShrAssign`, `AndAssign`, `XorAssign`, `OrAssign` (BinaryOp).
-
-### GAP-081
-
-`IncompleteArray`, `VariableArray` (TypeView).
-
-### GAP-084
-
-`Void`, `ScalableVector`, `TargetExt` (IrType).
-
-### GAP-092
-
-`Invalid`, `Builtin`, `BitInt`, `DependentBitInt`, `LValueRef`, `RValueRef`, `VariableArray`, `DependentSizedArray`, `Record`, `UnresolvedUsing`, `Paren`, `Atomic`, `DependentVector`, `ExtQual`, `Typedef`, `Using`, `Elaborated`, `QualifiedArray`, `TemplateTypeParm`, `CanonTemplateTypeParm`, `SubstTemplateTypeParm`, `SubstTemplateTypeParmPack`, `TemplateSpecialization`, `InjectedClassName`, `DependentName`, `DependentTemplateSpecialization`, `PackExpansion`, `PackIndexing`, `Decltype`, `DependentDecltype`, `TypeOf`, `UnaryTransform`, `Auto`, `DeducedTemplateSpecialization`, `Attributed`, `Splice` (TypeView).
 
 ### GAP-097
 

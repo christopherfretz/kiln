@@ -369,7 +369,7 @@ impl Cg<'_> {
 
     /// clang's `__anyext128`: a 64-bit vector as the low half of a
     /// `<4 x i32>`, the upper half poison.
-    fn x86_anyext128(&mut self, v: V) -> V {
+    pub(crate) fn x86_anyext128(&mut self, v: V) -> V {
         let i2 = self.m.types.vector(LTy::I32, 2);
         let v = self.cast(CastOp::BitCast, v, i2);
         let zero = V::C(self.m.const_zero(i2));
@@ -377,7 +377,7 @@ impl Cg<'_> {
     }
 
     /// clang's `__zext128`: the upper half zero.
-    fn x86_zext128(&mut self, v: V) -> V {
+    pub(crate) fn x86_zext128(&mut self, v: V) -> V {
         let i2 = self.m.types.vector(LTy::I32, 2);
         let v = self.cast(CastOp::BitCast, v, i2);
         let zero = V::C(self.m.const_zero(i2));

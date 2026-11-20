@@ -1105,6 +1105,10 @@ impl Sema<'_, '_> {
         } else {
             conv::strip_cv(self, ety)
         };
+        // clang `getExceptionObjectType`: a VLA in the decayed type becomes
+        // `[*]`, so a pointer to a VLA (a thrown 2-D VLA) is not
+        // convertible to it: no `type_info` is ever needed for a VLA.
+        let obj = self.vla_star_decayed(obj);
         let (checked, pointer) = match self.ast.types.pointee(obj) {
             Some(p) if self.ast.types.is_pointer(obj) => (p, true),
             _ => (obj, false),

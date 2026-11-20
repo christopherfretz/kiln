@@ -1555,9 +1555,11 @@ impl Cg<'_> {
         if let Some(s) = shape(name) {
             return Ok(BuiltinCall::Emitted(self.emit_neon_shape(s, name, e)?));
         }
+        if name.strip_prefix(neon::PREFIX) == Some("__a32_vcvt_bf16_f32") {
+            return self.emit_a32_vcvt_bf16(e, rty).map(|v| BuiltinCall::Emitted(Some(v)));
+        }
         let Some((intr, ret, params)) = lowering(name) else {
-            // kiln-gap: GAP-060
-            return err(self.loc_of(e), format!("code generation for {name} is not supported yet"));
+            unreachable!("every AArch64 NEON builtin has a shape or a lowering (neon_rows_lower)")
         };
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
         if args.len() < params.len() {
@@ -1590,6 +1592,30 @@ impl Cg<'_> {
             return Ok(BuiltinCall::Emitted(Some(r)));
         }
         Ok(BuiltinCall::Emitted(Some(self.neon_bitcast(r, ret, rty, e)?)))
+    }
+
+    /// `__builtin_neon___a32_vcvt_bf16_f32(v, code)`: the `AArch32` form of
+    /// `vcvt_bf16_f32` (four `bfloat16` narrowed from four `float`), which
+    /// clang declares on `AArch64` too but cannot compile there ("cannot
+    /// compile this builtin function yet"; its `arm_neon.h` calls it
+    /// only for `AArch32`). kiln lowers it as `AArch64`'s `vcvt_bf16_f32`:
+    /// the low half of `llvm.aarch64.neon.bfcvtn`, as the declared
+    /// `<8 x i8>`.
+    fn emit_a32_vcvt_bf16(&mut self, e: ExprId, rty: LTy) -> R<V> {
+        let ast = self.ast;
+        let Some(a) = ast.lists.iter(ast.exprs.call_args(e)).next() else {
+            return err(self.loc_of(e), "too few arguments to __builtin_neon___a32_vcvt_bf16_f32");
+        };
+        let v = self.emit_scalar(a)?;
+        let aty = self.lty(ast.exprs.get(a).ty());
+        let f4 = self.neon_ty(T::V(E::F32, 4));
+        let v = self.neon_bitcast(v, aty, f4, a)?;
+        let b8 = self.neon_ty(T::V(E::Bf16, 8));
+        let f = intrinsics::target_nomem(&mut self.m, "llvm.aarch64.neon.bfcvtn", b8, &[f4]);
+        let r = self.intrinsic_call(f, vec![v]);
+        let low = self.shuffle(r, None, vec![0, 1, 2, 3]);
+        let b4 = self.neon_ty(T::V(E::Bf16, 4));
+        self.neon_bitcast(low, b4, rty, e)
     }
 
     /// The integer immediate operand `a` (clang
@@ -3026,6 +3052,22 @@ mod tests {
 
     fn s(n: &str) -> Option<Shape> {
         shape(&format!("__builtin_neon_{n}"))
+    }
+
+    /// Sema accepts exactly the builtins code generation lowers: every
+    /// row of the NEON table has a shape, a 1:1 lowering or (the `AArch32`
+    /// `__a32_vcvt_bf16_f32`) its own routine (WP-1739).
+    #[test]
+    fn neon_rows_lower() {
+        let missing: Vec<&str> = kiln_ast::decl::builtin::neon::rows()
+            .map(|r| r.info.name)
+            .filter(|n| {
+                shape(n).is_none()
+                    && super::lowering(n).is_none()
+                    && *n != "__builtin_neon___a32_vcvt_bf16_f32"
+            })
+            .collect();
+        assert!(missing.is_empty(), "NEON builtins with no lowering: {missing:?}");
     }
 
     /// Every type code the shipped `arm_neon.h` and `arm_fp16.h` pass to

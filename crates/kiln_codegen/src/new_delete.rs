@@ -346,7 +346,7 @@ impl Cg<'_> {
                 return err(loc, "allocation call argument without ABI information");
             };
             let kind = info.kind.clone();
-            self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
+            self.call_arg(&kind, sig.params[i], v, &mut ir_args)?;
         }
         // `alloc_align`: a constant power of two raises the return
         // alignment; anything else is an `llvm.assume` after the call.
@@ -1825,10 +1825,13 @@ impl Cg<'_> {
             arg_tys.push(q);
             i += 1;
         }
-        if i != params.len() {
-            // kiln-gap: GAP-090
-            return err(loc, "this deallocation function is not supported yet");
-        }
+        // Sema calls only a usual deallocation function here
+        // ([basic.stc.dynamic.deallocation]/3, `usual_dealloc_info` /
+        // `usual_delete`): the parameters consumed above, nothing else
+        // (a placement `operator delete` is a `new` cleanup's,
+        // `emit_new_delete_cleanup`; a coroutine frame's is
+        // `emit_coro_delete`).
+        assert_eq!(i, params.len(), "a deallocation function that is not usual (WP-1739)");
         self.emit_new_delete_call(od, &vals, &arg_tys, loc)?;
         // clang erases the tag's alloca when the ABI ignored the empty
         // argument (x86-64), keeping it where it was passed (AArch64).

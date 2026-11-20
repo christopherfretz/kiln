@@ -1,7 +1,7 @@
 //! WP-805 (spec/sema.md §4.5 "Truthful feature tests"): every builtin
-//! function kiln's `__has_builtin` reports lowers or folds, and
-//! `kiln_codegen::UNLOWERED_BUILTINS`, the builtins kiln declares but
-//! cannot lower (which `__has_builtin` reports as absent), is exact.
+//! function kiln's `__has_builtin` reports lowers or folds (since
+//! WP-1739 every builtin kiln declares does; there is no list of
+//! unlowered ones).
 //!
 //! `__has_builtin` = 1 also implies sema declares the name on that
 //! target (WP-1057): no reported name in the reserved `__` namespace is
@@ -144,13 +144,9 @@ impl Probe {
 
     /// The calls `return name(Any{}, ...)` sema accepts, with the fewest
     /// operands that work (then the x86 retries, see the module doc), as
-    /// (name, operand list); the names no operand list satisfies drop out.
-    fn callable(&self, names: &[String]) -> Vec<(String, String)> {
-        self.callable_and_undeclared(names).0
-    }
-
-    /// [`Probe::callable`], and the names sema does not declare at all:
-    /// their call is a "use of undeclared identifier" (WP-1057).
+    /// (name, operand list), the names no operand list satisfies dropping
+    /// out; and the names sema does not declare at all: their call is a
+    /// "use of undeclared identifier" (WP-1057).
     fn callable_and_undeclared(&self, names: &[String]) -> (Vec<(String, String)>, Vec<String>) {
         let mut left: Vec<&String> = names.iter().collect();
         let mut ok = Vec::new();
@@ -244,13 +240,8 @@ impl Probe {
     }
 }
 
-fn unlowered_list() -> Vec<&'static str> {
-    kiln_codegen::UNLOWERED_BUILTINS.split_ascii_whitespace().collect()
-}
-
-/// The reported builtins of `target` at `compat` all lower; at clang 22
-/// each list entry sema accepts on `target` is confirmed unlowered.
-fn check(target: &'static str, compat: u32) -> BTreeSet<&'static str> {
+/// The reported builtins of `target` at `compat` all lower.
+fn check(target: &'static str, compat: u32) {
     let p = Probe::new(target, compat);
     let names: Vec<String> =
         p.reported().into_iter().filter(|n| !n.starts_with("__builtin_coro_")).collect();
@@ -274,26 +265,9 @@ fn check(target: &'static str, compat: u32) -> BTreeSet<&'static str> {
     let bad = p.unlowered(&calls);
     assert!(
         bad.is_empty(),
-        "{target} @{compat}: builtins __has_builtin reports that do not lower \
-         (lower them, or list them in kiln_codegen::UNLOWERED_BUILTINS): {bad:#?}"
+        "{target} @{compat}: builtins __has_builtin reports that do not lower: {bad:#?}"
     );
-    let mut confirmed = BTreeSet::new();
-    if compat == 22 {
-        let listed: Vec<String> = unlowered_list().into_iter().map(String::from).collect();
-        let mut lowered = Vec::new();
-        for (n, k) in p.callable(&listed) {
-            if p.unlowered(&[(n.clone(), k)]).is_empty() {
-                lowered.push(n.clone());
-            }
-            confirmed.insert(*unlowered_list().iter().find(|&&m| m == n).unwrap());
-        }
-        assert!(
-            lowered.is_empty(),
-            "{target}: these lower now: drop them from kiln_codegen::UNLOWERED_BUILTINS: {lowered:?}"
-        );
-    }
     let _ = std::fs::remove_dir_all(&p.dir);
-    confirmed
 }
 
 #[test]
@@ -306,25 +280,10 @@ fn x86_64_19() {
     check("x86_64-unknown-linux-gnu", 19);
 }
 
-/// Both targets at clang 22, and every list entry is confirmed on one.
+/// Both targets at clang 22.
 #[test]
-fn clang22_and_list_exact() {
+fn clang22() {
     let a = std::thread::spawn(|| check("aarch64-unknown-linux-gnu", 22));
-    let mut confirmed = check("x86_64-unknown-linux-gnu", 22);
-    confirmed.extend(a.join().unwrap());
-    let stale: Vec<_> = unlowered_list().into_iter().filter(|n| !confirmed.contains(n)).collect();
-    assert!(stale.is_empty(), "UNLOWERED_BUILTINS entries no probe confirms: {stale:?}");
-}
-
-#[test]
-fn list_sorted_and_declared() {
-    let l = unlowered_list();
-    assert!(l.windows(2).all(|w| w[0] < w[1]), "UNLOWERED_BUILTINS must be sorted, no duplicates");
-    for n in l {
-        assert!(
-            kiln_ast::decl::builtin::by_name(n).is_some()
-                || kiln_ast::decl::builtin::lib_by_name(n).is_some(),
-            "{n} is not a builtin kiln declares"
-        );
-    }
+    check("x86_64-unknown-linux-gnu", 22);
+    a.join().unwrap();
 }

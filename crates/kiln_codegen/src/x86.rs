@@ -6,9 +6,8 @@
 //! lowers to generic IR (shuffles, compares, element access, plain
 //! arithmetic) are lowered here, as `CodeGenFunction::EmitX86BuiltinExpr`
 //! does, and the AVX to AVX-512 ones in [`crate::x86_gen`] (WP-1242).
-//! The few x86 builtins kiln does not lower are in
-//! [`crate::builtins::UNLOWERED_BUILTINS`], so `__has_builtin` is 0 for
-//! them.
+//! The AMX `*_internal`, Key Locker and MMX `maskmovq` builtins are in
+//! [`crate::x86_kl`] (WP-1739); every x86 builtin lowers.
 
 use kiln_ast::ExprId;
 use kiln_ast::decl::builtin as id;
@@ -166,8 +165,10 @@ impl Cg<'_> {
         if let Some(v) = self.x86_generic(b, short, e, &args, rty)? {
             return Ok(BuiltinCall::Emitted(v));
         }
-        // kiln-gap: GAP-060
-        err(self.loc_of(e), format!("code generation for {name} is not supported yet"))
+        unreachable!(
+            "{name}: every x86 builtin is custom, mapped or generic \
+             (kiln_driver/tests/builtin_lowering.rs, WP-1739)"
+        )
     }
 
     /// The return and parameter types of the 1:1 lowering `map` (`None`:
@@ -321,6 +322,9 @@ impl Cg<'_> {
     ) -> R<Option<Option<V>>> {
         let n = name.strip_prefix(x86::PREFIX).unwrap_or(name);
         if let Some(v) = self.x86_mmx(n, e, args, rty)? {
+            return Ok(Some(v));
+        }
+        if let Some(v) = self.x86_kl_amx(n, e, args)? {
             return Ok(Some(v));
         }
         let arg = |s: &mut Self, i: usize| -> R<V> {

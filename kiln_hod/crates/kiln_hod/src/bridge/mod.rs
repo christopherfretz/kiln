@@ -262,6 +262,8 @@ impl<'k> Bridge<'k> {
                 ir(self.module.types.struct_type(&fields, packed))?
             }
             k::TypeData::TargetExt(name) => ir(self.module.types.target_ext(name))?,
+            // hod has no `x86_amx` type (AMX tile builtins, WP-1739): the llc route.
+            k::TypeData::X86Amx => return Err(Fallback::new("x86-amx")),
             k::TypeData::Function { ret, params, varargs } => {
                 let (ret, varargs) = (*ret, *varargs);
                 let params = self.tys(params)?;

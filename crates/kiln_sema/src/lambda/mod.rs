@@ -237,6 +237,12 @@ pub(crate) struct LambdaScope {
     /// `templ.heads.len()` at the introducer: a deeper head after the
     /// parameters is a generic lambda's invented one.
     heads: usize,
+    /// `templ.invented` at the introducer: the invented parameters of an
+    /// enclosing abbreviated function template whose declarator holds
+    /// this lambda (a trailing *requires-clause* or a default argument,
+    /// `void f(auto p) requires requires { [](int) {}(p); }`), restored
+    /// when the lambda ends ([dcl.fct]/22).
+    saved_invented: u16,
     /// `scopes.len()` at the introducer: a template parameter scope above
     /// it is the lambda's *template-parameter-list*.
     scope_base: usize,
@@ -357,6 +363,7 @@ impl Sema<'_, '_> {
             packs: Vec::new(),
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
+            saved_invented: self.templ.invented,
             scope_base: self.scopes.len(),
             call_template: None,
             cap_tys: Vec::new(),
@@ -468,14 +475,15 @@ impl Sema<'_, '_> {
     }
 
     /// Pops the template heads (and the parameter scope of a written
-    /// *template-parameter-list*) a generic lambda pushed.
-    fn pop_lambda_heads(&mut self, heads: usize, scope_base: usize) {
+    /// *template-parameter-list*) a generic lambda pushed, and restores
+    /// the enclosing declarator's count of invented parameters.
+    fn pop_lambda_heads(&mut self, heads: usize, scope_base: usize, invented: u16) {
         while self.templ.heads.len() > heads {
             self.templ.heads.pop();
             self.ast.templates.dependent_depth =
                 self.ast.templates.dependent_depth.saturating_sub(1);
         }
-        self.templ.invented = 0;
+        self.templ.invented = invented;
         while self.scopes.len() > scope_base
             && self.scopes.last().is_some_and(|s| s.kind == ScopeKind::TemplateParams)
         {
@@ -1112,7 +1120,7 @@ impl Sema<'_, '_> {
         self.immediate = top.saved_immediate;
         self.extend_collector = top.saved_extend.take();
         self.ctor_entity = top.saved_ctor_entity.take();
-        self.pop_lambda_heads(top.heads, top.scope_base);
+        self.pop_lambda_heads(top.heads, top.scope_base, top.saved_invented);
         self.ast.exprs.lambdas.get_mut(id).body = Some(body);
         let closure = top.closure;
         self.diagnose_unused_lambda_captures(id, &top);
@@ -1266,7 +1274,7 @@ impl Sema<'_, '_> {
             self.extend_collector = top.saved_extend.take();
             self.ctor_entity = top.saved_ctor_entity.take();
         }
-        self.pop_lambda_heads(top.heads, top.scope_base);
+        self.pop_lambda_heads(top.heads, top.scope_base, top.saved_invented);
         self.ast.decls.set_flags(top.closure, DeclFlags::INVALID);
         self.finish_closure(top.closure);
         if let Some(depth) = top.saved_dependent_depth {

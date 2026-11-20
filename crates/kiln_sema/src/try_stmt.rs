@@ -7,7 +7,7 @@ use kiln_ast::decl::{Access, DeclFlags, DeclKind, InitStyle, VarSpec};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::types::{ExcSpec, TypeView};
+use kiln_ast::types::{ExcSpec, TypeFlags, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -102,6 +102,13 @@ impl Sema<'_, '_> {
                 self.emit(self.incomplete_note(msg, checked));
                 invalid = true;
             }
+        }
+        // A VLA has no `type_info` (clang `CheckExceptionDeclaration`,
+        // `err_catch_variably_modified`, of the decayed type).
+        if !invalid && self.ast.types.qflags(ty).contains(TypeFlags::VARIABLY_MODIFIED) {
+            let msg = self.diag(DiagId::sema_catch_variably_modified, loc).arg(self.ty_arg(ty));
+            self.emit(msg);
+            invalid = true;
         }
         let name = d.name.map(|n| n.0);
         // [basic.scope.block]/2: the exception variable of a handler of a
