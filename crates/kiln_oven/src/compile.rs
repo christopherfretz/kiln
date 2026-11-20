@@ -3930,7 +3930,7 @@ impl Compiler<'_> {
             }
             // spec/sema-templates.md §9.1, §9.4: Sema evaluated the trait.
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
-                let v = self.ast().exprs.type_trait_value(e);
+                let v = self.ast().exprs.type_trait_int(e);
                 self.konst(dst, u128::from(v));
             }
             // spec/reflection.md §2.1: the interned id's value.

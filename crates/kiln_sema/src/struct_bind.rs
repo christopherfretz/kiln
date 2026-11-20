@@ -1127,6 +1127,105 @@ impl Sema<'_, '_> {
         Some(with_fields)
     }
 
+    /// clang `CheckMemberDecompositionFields`: a named-by-nothing member
+    /// `f` of the decomposed class `cdef` (a lambda's capture, an
+    /// anonymous struct or union) cannot be bound; diagnosed at `loc`.
+    fn unnamed_decomp_field(&mut self, cdef: DeclId, f: DeclId, dty: QualType, loc: Loc) -> bool {
+        if !self.ast.decls.get(f).name().is_empty() {
+            return false;
+        }
+        if self.ast.closure_lambda(cdef).is_some() {
+            let msg = self.diag(DiagId::sema_decomp_decl_lambda, loc).arg(self.ty_arg(dty));
+            self.emit(msg);
+            return true;
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let union = self.ast.types.as_record(fty).is_some_and(|u| self.is_union(u));
+        let msg = self
+            .diag(DiagId::sema_decomp_decl_anon_union_member, loc)
+            .arg(self.ty_arg(dty))
+            .arg(u8::from(union))
+            .with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(f).loc()));
+        self.emit(msg);
+        true
+    }
+
+    /// `__builtin_structured_binding_size(T)` written at `loc`, `T` at
+    /// `at` (clang 22 `GetDecompositionElementCount`): the number of
+    /// structured bindings an object of type `T` (top-level cv ignored)
+    /// decomposes into ([dcl.struct.bind]/3-5): an array's bound, a
+    /// vector's or complex type's element count, a tuple-like type's
+    /// `tuple_size<T>::value`, or a class's non-static data members
+    /// (with the checks of a declaration: one class with members, none
+    /// anonymous, each accessible here; diagnosed at `at`). Otherwise
+    /// "type 'T' cannot be bound" at `loc` and `None`.
+    pub(crate) fn structured_binding_size(
+        &mut self,
+        q: QualType,
+        at: Loc,
+        loc: Loc,
+    ) -> Option<u32> {
+        let t = conv::strip_cv(self, q);
+        let n = self.decomposition_count(t, at);
+        if n.is_none() {
+            let msg = self.diag(DiagId::sema_arg_is_not_destructurable, loc).arg(self.ty_arg(t));
+            self.emit(msg);
+        }
+        n.and_then(|n| u32::try_from(n).ok())
+    }
+
+    fn decomposition_count(&mut self, t: QualType, at: Loc) -> Option<u64> {
+        if self.ast.types.is_array(t)
+            && let Some(n) = self.ast.types.array_size(t)
+        {
+            return Some(n);
+        }
+        if let Some(p) = self.vector_parts(t) {
+            return Some(u64::from(p.count));
+        }
+        if self.ast.types.as_complex(t).is_some() {
+            return Some(2);
+        }
+        match self.tuple_like(at, t) {
+            TupleLike::Error => return None,
+            TupleLike::Yes(n) => return Some(n),
+            TupleLike::No => {}
+        }
+        let r = self.ast.types.as_record(t).filter(|&r| !self.is_union(r))?;
+        if !self.require_complete(t, at) {
+            let msg = self.diag(DiagId::sema_incomplete_type_required, at).arg(self.ty_arg(t));
+            self.emit(self.incomplete_note(msg, t));
+            return None;
+        }
+        let rdef = self.ast.definition(r)?;
+        let c = self.decomposable_class(rdef, at)?;
+        let cdef = self.ast.definition(c)?;
+        let fields: Vec<DeclId> =
+            self.ast.members(cdef).filter(|&m| self.kind_of(m) == DeclKind::Field).collect();
+        let mut count = 0;
+        for f in fields {
+            if self.ast.decls.get(f).name().is_empty()
+                && self.ast.decls.field(f).is_some_and(|x| x.bit_width.is_some())
+            {
+                continue;
+            }
+            if self.unnamed_decomp_field(cdef, f, t, at) {
+                return None;
+            }
+            count += 1;
+            let fname = self.decl_name(f);
+            if let Some(msg) = self.special_member_access(f, rdef, |s, protected| {
+                s.diag(DiagId::sema_decomp_decl_inaccessible_field, at)
+                    .arg(u8::from(protected))
+                    .arg(&fname)
+                    .arg(s.ty_arg(t))
+            }) {
+                self.emit(msg);
+            }
+        }
+        Some(count)
+    }
+
     /// [dcl.struct.bind]/5: `e.mi` for the non-static data members.
     fn decompose_members(
         &mut self,
@@ -1162,20 +1261,7 @@ impl Sema<'_, '_> {
             if !named(self, f) {
                 continue;
             }
-            if self.ast.decls.get(f).name().is_empty() {
-                if self.ast.closure_lambda(cdef).is_some() {
-                    let msg = self.diag(DiagId::sema_decomp_decl_lambda, loc).arg(self.ty_arg(dty));
-                    self.emit(msg);
-                    return false;
-                }
-                let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                let union = self.ast.types.as_record(fty).is_some_and(|u| self.is_union(u));
-                let msg = self
-                    .diag(DiagId::sema_decomp_decl_anon_union_member, loc)
-                    .arg(self.ty_arg(dty))
-                    .arg(u8::from(union))
-                    .with_note(self.diag(DiagId::note_declared_at, self.ast.decls.get(f).loc()));
-                self.emit(msg);
+            if self.unnamed_decomp_field(cdef, f, dty, loc) {
                 return false;
             }
             let Some(&b) = bindings.get(i) else { return bad_count(self) };

@@ -759,11 +759,7 @@ impl Substituter<'_, '_, '_> {
         // so the declaration builds the parameters from it.
         let (p, sig) = match self.sema.ast.types.view(t.ty()) {
             TypeView::Function(p) => (p, Some(self.function_sig(d, &p, friend, loc)?)),
-            _ => match self.sema.sugared_proto(t) {
-                Some(p) => (p, None),
-                // kiln-gap: GAP-100
-                None => return self.unimplemented("function declared with this type", loc),
-            },
+            _ => (self.fn_proto(t), None),
         };
         let info = p.info();
         let via_typedef = sig.is_none();
@@ -985,7 +981,8 @@ impl Substituter<'_, '_, '_> {
             }
         }
         if requires.is_some() {
-            self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
+            let args = self.args.clone();
+            self.record_member_constraints(f, d, args, loc)?;
         }
         if friend.is_some() {
             // [dcl.contract.func]/7 on the redeclaration it now is: a
@@ -1055,6 +1052,19 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// The prototype of function type `t`, a function declaration's,
+    /// through its sugar (a typedef, alias or `decltype` naming the
+    /// function type, [dcl.fct]/13).
+    fn fn_proto(&self, t: QualType) -> kiln_ast::types::FuncProto {
+        match self.sema.sugared_proto(t) {
+            Some(p) => p,
+            None => unreachable!(
+                "a function declaration's canonical type is a prototype: every C++ function \
+                 type has one and the builder declares functions only with function types"
+            ),
+        }
+    }
+
     /// The signature of function template specialization `spec` of
     /// pattern `pat` (§6.1 step 4, clang's `SubstFunctionType` under
     /// `FinishTemplateArgumentDeduction`): parameters, return type and
@@ -1063,10 +1073,11 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn function_spec_signature(&mut self, pat: DeclId, spec: DeclId) -> SubstResult<()> {
         let loc = self.sema.ast.decls.get(pat).loc();
         let t = self.decl_ty(pat);
-        let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else {
-            // kiln-gap: GAP-101
-            return self.unimplemented("function declared with a typedef of function type", loc);
-        };
+        // `template<class T> F f;` with `typedef R F(P...)` or through
+        // `decltype` ([dcl.fct]/13): the prototype under the sugar, whose
+        // parameters are the pattern's unnamed ones
+        // (`Sema::typedef_fn_params`, clang `BuildParmVarDeclForTypedef`).
+        let p = self.fn_proto(t);
         let info = p.info();
         // [temp.deduct.general]/7: substitution proceeds in lexical order
         // and stops at the first failure, so a leading return type is

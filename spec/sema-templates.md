@@ -300,6 +300,14 @@ delayed meaning; in practice they are always parsed immediately.
   `const int *a`. This holds in a member template of a class template
   (gRPC's `ParseValue<F, G>::Parse<F f, G g>`; WP-811). Test:
   `temp.param/nttp-substituted-function-array-type-adjusted-run.cpp`.
+  The same adjustment applies to a type deduced for a placeholder
+  (`template<decltype(auto) D>` with an array lvalue argument deduces
+  `int[4]`, adjusted to `int *`; `args.rs` `convert_nttp_arg_inner`,
+  WP-1740, `temp.arg.nontype/p1-decltype-auto-array-adjusted.cpp`). An
+  array argument for a parameter of any other non-pointer type has no
+  conversion: "value of type 'int[4]' is not implicitly convertible to
+  'S'" (`sema_cce_not_implicitly_convertible`;
+  `temp.arg.nontype/p1-array-argument-no-conversion.cpp`).
 - A template template parameter's template-head is followed by `class` or
   `typename` ([temp.param]/1). Without one, clang 19 always reports
   "template template parameter requires 'class' or 'typename' after the
@@ -1058,6 +1066,26 @@ arguments"), and `template<class T> void f(), g();` declares a function
 template `g` (WP-379, WP-392;
 `tests/conformance/temp.pre/multiple-declarators.cpp`).
 
+**Explicit instantiation of an elaborated class name** ([temp.explicit]/3,
+WP-1740; clang's `ActOnExplicitInstantiation` for a tag). Every
+declaration after `[extern] template` but `enum` and `template` goes
+through the declaration parser. A class-key before a name that is no
+template-id (`template struct N::S;`) is looked up as a reference
+(`act_on_tag` with `TagUse::Reference`, so a template name is "template
+'A' cannot be referenced with the 'class' specifier" and an undeclared
+name declares the class): a member class of a class template
+specialization is explicitly instantiated
+(`act_on_explicit_member_class_inst`); any other class is "explicit
+instantiation of non-templated type 'N::S'" at `template` with the note
+"non-templated declaration is here". `template template ...` is
+"expected unqualified-id" at the second `template`, and after
+`template<>` it is "expected '<' after 'template'". Every other
+declaration after `template<>` goes through the explicit
+specialization path, so `template<> struct P q;` is the extraneous
+`template<>` of variable `q`
+(`temp.explicit/elaborated-class-not-member-of-specialization.cpp`,
+`temp.expl.spec/class-key-declarator-forms.cpp`).
+
 **Explicit instantiation with a definition** ([temp.explicit]/3, WP-392;
 clang `ParseDeclarationAfterDeclaratorAndAttributes`,
 `ParseFunctionDefinition`, `ParseClassSpecifier`). An explicit
@@ -1099,7 +1127,8 @@ actions, and only when the decl-specifier-seq has no type specifier
 (`Declarator::typed`; clang's `AllowDeductionGuide`): `auto mk(F) -> T&`
 declares a function named like a visible class template `mk` (WP-789,
 `temp.deduct.guide/typed-function-named-like-class-template-run.cpp`). It parses `[explicit-specifier] template-name (params) ->
-simple-template-id ;` and calls `act_deduction_guide`.
+simple-template-id ;` as a function declarator whose type is a plain
+`auto` placeholder, declared like any other function declarator.
 
 **Function template partial specialization** (`template<class T> void
 f<T*>(T*)`) is parsed and then rejected by sema: "function template
@@ -4016,6 +4045,8 @@ in-class one. `Substituter::ci_expr_operand_ty` rebuilds the operand of
 | `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a local class or enumeration of a function pattern named before its declaration statement (`struct L *p; struct L {...};`, the invalid forward reference `enum V *pv;`) is declared on demand, without diagnostics, and added to `locals`; its later definition statement defines it (`local_tag_used_early`, clang `FindInstantiatedDecl` `NeedInstantiate`; WP-1103); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed. A member whose instantiated parent was not instantiated from its parent (a nested `In::Deep` reached through `B<T>` that selected an explicit or partial specialization) is looked up by name in that parent (`relookup_member`; WP-1054, WP-1071): a class or enum as a nested-name-specifier component ([basic.lookup.qual]/1: a typedef, alias or using-declaration naming a class qualifies too, and an ambiguous or inaccessible one is diagnosed as for a written qualifier); a function by its substituted type among the overloads found (`friend R B<T>::f(W<T>&)` against an explicitly specialized `B<long>` with several `f`s); any other member as the one declaration of its kind found. None is `no member named 'In' in 'B<int>'` at the written qualifier, an ambiguity `member 'In' found in multiple base classes`, and the found member's access is checked; it is never a silent failure. In a deduction guide (the innermost instantiation frame's entity or template is a `CXXDeductionGuide`), a member of the primary template whose deduced specialization is explicit or partial is a substitution failure instead, `cannot reference member of primary template because deduced class template specialization 'X<int>' is an explicit specialization` ([over.match.class.deduct]/1; clang's `FindInstantiatedDecl`, `err_specialization_not_primary_template`; clang 19 accepts) |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
+| `ExtQual{base, word}` | substitute `base`, keep the extended qualifiers (clang `TransformQualifiedType`; WP-1740) |
+| `Builtin`, `BitInt` | kept: only the builtin dependent type is dependent, and it stays, as clang's `DependentTy` (`TransformBuiltinType`; WP-1740) |
 
 `DependentBitInt{signed, width}` substitutes the width expression and
 rebuilds the type through `Sema::build_bit_int_type`, which checks the
@@ -4266,7 +4297,17 @@ here because the GCC cases reaching them are template tests:
 ### 5.5 Statements
 
 - Statements are substituted recursively. A `DeclStmt` goes through
-  `decl()` and binds `locals`.
+  `decl()` and binds `locals`. It holds only what a block-scope
+  declaration declares ([stmt.dcl]): variables (structured bindings and
+  anonymous unions included), typedefs and aliases, local classes and
+  enumerations, function declarations, labels, `static_assert`, consteval
+  blocks, using-declarations, using-directives, using-enum-declarations
+  and namespace aliases, plus the variables sema synthesizes. A template,
+  namespace, linkage specification, member, friend or deduction guide at
+  block scope is diagnosed and either skipped or marked invalid (an
+  invalid declaration ends its compound statement before substitution,
+  above); any other kind in a
+  `DeclStmt` is an internal error (`local_decl`, WP-1740).
 - **`if constexpr`.** Substitute the condition, then evaluate it with
   `EvalKind::IfConstexpr`. Only the taken branch is instantiated; the
   discarded slot stays empty (ast.md §5, [stmt.if]/2).
@@ -4404,6 +4445,13 @@ here because the GCC cases reaching them are template tests:
   `temp.deduct/{substitution-stops-at-first-failure,return-type-failure-before-parameters,trailing-return-substituted-after-parameters}.cpp`).
   The exception spec and `explicit(bool)` come later, when needed
   ([temp.inst]/14).
+- **Declared through a typedef.** A function template declared with no
+  function declarator (`template<class T> F f;` with `F` a typedef,
+  alias, alias template specialization or `decltype` of a function type,
+  [dcl.fct]/13) takes the prototype under that sugar; its pattern's
+  parameters are the unnamed ones `Sema::typedef_fn_params` declared, and
+  they are substituted like written ones (`fn_proto`; WP-1740,
+  `dcl.fct/p13-function-template-declared-by-typedef-run.cpp`).
 - **Parameters.** `ParmVar`s are substituted. A function parameter pack
   becomes N `ParmVar`s (`DeclOrPack::Pack`). A specialization declared
   from an earlier declaration takes the definition's parameter names
@@ -6387,6 +6435,20 @@ The `SpecKind` transitions are those of §4.5.
   the value is the member itself, the same argument as after `C` is
   complete (`args.rs` `defining_class_member_ptr`; WP-726,
   `tests/conformance/temp.arg.nontype/member-pointer-of-class-being-defined.cpp`).
+  A pointer value that is not the address of an object or subobject (one
+  past the end: `A<arr + 4>`, `A<&x + 1>`, `A<s.a + 2>`) has no
+  expression naming it; as in clang (whose structural value is an
+  `OpaqueValueExpr` in a `ConstantExpr`) the replacement is an opaque
+  prvalue of the parameter type wrapped in a `ConstantExpr` carrying the
+  value, so the evaluator reads the value, not the operand (WP-1740,
+  `temp.arg.nontype/p3-pointer-past-end-run.cpp`). The mangling is
+  clang's `so <type> L<entity>E <offset> p E` form
+  (`tests/mangle/nttp_pointer_past_end.cpp`); a flat `(base, offset)`
+  value cannot tell `&t.a + 1` from `&t.b[0]`, so that pair mangles as
+  the latter. An argument of the wrong kind or a value with no
+  expression at substitution is an internal error
+  (`sema_nttp_arg_not_value`, `sema_nttp_value_no_expression`), emitted
+  only when no error was reported before.
 - **Reference arguments** (`convert_ref_nttp_arg`): the conversion must
   exist (`sema_cce_not_implicitly_convertible`), must not be a
   derived-to-base conversion (`sema_cce_conversion_not_allowed`, below),
@@ -7392,22 +7454,47 @@ whose head the notes name. It evaluates:
     while the levels themselves are dependent (a retained level or a
     dependent argument: a partial check during a template definition,
     checked again at instantiation). With concrete levels it is an
-    **internal error**, not "not satisfied": [temp.constr.atomic]/3
-    gives only substitution failure, `false` and a non-constant result
-    as outcomes, and substitution with concrete arguments always yields
-    a non-dependent expression, so a dependent one means kiln's
-    substituter left the atom incomplete. Treating it as unsatisfied
-    would silently pick another overload or reject a valid program; it
-    is reported as `sema_unimplemented_template_feature` ("an atomic
-    constraint that stays value-dependent after substitution",
-    `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
-    reachable case is in the substitution, not this guard. No known
-    program reaches it (libc++ M3 gate, WP-325). One did (WP-335,
-    libc++'s pstl `__cpp17_destructible` = `requires(_Tp __v) {
-    __v.~_Tp(); }`): an implicit member of a non-template class
-    declared while a template definition was being parsed (`S x;` in a
-    function template body declares `S::~S()`) took `DEPENDENT_CTX`
-    from the ambient `dependent_depth`, so `v.~S()` was
+    **internal error**, `sema_constraint_left_dependent` ("kiln: internal
+    error: atomic constraint 'E' is still value-dependent after
+    substitution with concrete arguments", unless an earlier error
+    explains it), not "not satisfied": [temp.constr.atomic]/3 gives only
+    substitution failure, `false` and a non-constant result as outcomes,
+    and substitution with concrete arguments always yields a
+    non-dependent expression (clang asserts on it in
+    `calculateConstraintSatisfaction`), so a dependent one means kiln's
+    substituter missed a level; guessing would silently pick another
+    overload or reject a valid program. No known program reaches
+    it: the levels reach every parameter the atom names. Two causes were
+    fixed (WP-1740, formerly the "not yet implemented: an atomic
+    constraint that stays value-dependent after substitution" gap,
+    GAP-093): a lambda (or a member of a local class) in a generic
+    lambda in a template is rebuilt twice, when the template is
+    instantiated (the generic lambda's level retained) and when the
+    generic call operator is; the second rebuild's pattern already has
+    `member_constraints` (original pattern, outer levels), and
+    `record_member_constraints` composes them with the new levels
+    (`compose_levels`: each retained level replaced by the next new one)
+    so the original's constraints are checked with every enclosing
+    level, the template's, the generic lambda's and the lambda's own
+    (`concepts-lambda16` in GCC's testsuite); and a member function in a
+    dependent context (a local class of the generic lambda's pattern,
+    rebuilt with the template) is not checked when named there, as
+    clang's `CheckFunctionConstraints` skips a dependent context
+    (`check_function_constraints`). A constraint naming a parameter of
+    an enclosing generic lambda in an unevaluated operand (`[](auto v) {
+    return []() requires C<decltype(v)> {}; }` inside another generic
+    lambda or a template) names the enclosing specialization's
+    parameter: `seed_enclosing_params` maps the parameters of the
+    functions around the pattern to those around the checked entity
+    (clang's `LambdaScopeForCallOperatorInstantiationRAII`); before,
+    `find_instantiated_decl` instantiated the enclosing closure as a
+    member class. Tests:
+    `temp.constr.atomic/p3-nested-generic-lambda-levels{,-neg}.cpp`.
+    An earlier cause (WP-335, libc++'s pstl `__cpp17_destructible` =
+    `requires(_Tp __v) { __v.~_Tp(); }`): an implicit member of a
+    non-template class declared while a template definition was being
+    parsed (`S x;` in a function template body declares `S::~S()`) took
+    `DEPENDENT_CTX` from the ambient `dependent_depth`, so `v.~S()` was
     instantiation-dependent after substitution. Implicit members now
     follow their class's dependence (`declare_implicit`, spec/sema-class.md §8).
 - **`And` and `Or`** short-circuit from left to right.
@@ -7809,16 +7896,34 @@ omits it) and `__has_builtin` answers 0 for it (WP-394).
   The simple implicit copy operation stands in for a move operation
   only when that move operation is not user-declared: a user-provided
   move assignment beside a defaulted move constructor is false.
-- **Staged off** (`Status::Owner("WP-263 follow-up")`, so `__has_builtin`
-  answers 0 at every level and the headers use their library
-  fallbacks): `__builtin_common_type` (a template builtin, like
-  `__type_pack_element`), `__builtin_structured_binding_size` (a `size_t`
-  value; `TypeTraitExpr` holds a `bool`), `__builtin_invoke`,
-  `__builtin_is_within_lifetime` and
-  `__builtin_{lt,le,gt,ge}_synthesizes_from_spaceship`. In compile
-  modes these are the only names of the probed set whose answer differs
-  from clang 22's at level 22; `-E` is unstaged and answers as clang. `__builtin_is_replaceable` and `__builtin_common_reference`
-  answer 0 in clang 22 as well.
+- `__builtin_structured_binding_size(T)` (clang 21; WP-1740): a
+  `size_t` prvalue (the `TypeTraitExpr`'s value is a `u32`, 0 or 1 for
+  the other traits), clang 22's `GetDecompositionElementCount` on `T`
+  without top-level cv: an array's bound, a vector's or complex type's
+  element count, a tuple-like type's `tuple_size<T>::value`, else a
+  non-union class's non-static data members without unnamed bit-fields,
+  with the checks of a structured binding declaration at the operand
+  (a complete type, one class of the hierarchy with members, no
+  anonymous struct or union, each member accessible; an inaccessible
+  member is an error but the count stands). Otherwise "type 'T' cannot
+  be bound" at the keyword (`struct_bind.rs`
+  `structured_binding_size`;
+  `templates/builtins/builtin.structured-binding-size{,-diag}.cpp`).
+- `__builtin_{lt,le,gt,ge}_synthesizes_from_spaceship(T, U)` (clang 22;
+  WP-1740; libc++ 22's `__default_three_way_comparator`): whether `t op
+  u`, on opaque operands of types `T` and `U` (an lvalue for an lvalue
+  reference, an xvalue for an rvalue reference, else a prvalue) built as
+  an unevaluated operand in a SFINAE context from the translation unit,
+  is a `CXXRewrittenBinaryOperator` ([over.match.oper]/3.4, /8): built-in
+  and direct `operator<` comparisons and ill-formed ones are false
+  (`traits/cxx26.rs`;
+  `templates/builtins/builtin.synthesizes-from-spaceship.cpp`).
+- Every trait is implemented (`table::trait_status` is `Done`), so
+  `build_type_trait` has no unimplemented path. `__builtin_is_replaceable`
+  and `__builtin_common_reference` answer 0 in clang 22 as well, and in
+  kiln. With WP-1740 the compile modes answer every probed name as
+  clang 22 at level 22 (`has-builtin-staged-clang22.cpp`); `-E` is
+  unstaged and answers as clang.
 
 **Reference-from-temporary traits** (WP-138; libc++ `tuple`'s
 `std::tie` constructor uses `__reference_binds_to_temporary`). These are
@@ -7887,8 +7992,23 @@ These are injected into the TU's global scope at startup, like clang's
 | `__make_integer_seq<Seq, T, N>` | `template<template<class U, U...> class Seq, class T, T N>` | `Seq<T, 0, 1, …, N-1>`, through `get_class_spec`. `N < 0` is "integer sequences must have non-negative sequence length". The result is `TemplateSpecialization` sugar (clang). This is O(N) argument construction, with no recursion |
 | `__type_pack_element<I, Ts...>` | `template<size_t I, class... Ts>` | `Ts...[I]`. It shares §7.4; an out-of-range `I` is "__type_pack_element index out of bounds" |
 
-`__builtin_common_type` does not exist in clang 19, and libc++ 19 does
-not use it, so it is not in M3.
+`__builtin_common_type<Base, HasType, NoType, Ts...>` (clang 20; WP-1740;
+libc++ 20+ derives `std::common_type` from it) follows clang's
+`builtinCommonTypeImpl`: `HasType<C>` when `Ts...` have a common type
+`C` by [meta.trans.other]/3 Note A, else `NoType`. No type has none; one
+type `T0` is the case `T0, T0`; two types are decayed to `D1`, `D2`, and
+unless both were already decayed the result is the lookup of `D1, D2`;
+otherwise it is `decay_t` of the type of `b ? x : y` on a `bool` and
+prvalues of `D1` and `D2`, and from C++20 on `const` lvalues of them
+(COND-RES of CREF), each built as an unevaluated operand from the
+translation unit that fails quietly; more types fold from the left. The
+lookup of two types instantiates `Base<T1, T2>` in a SFINAE context,
+which finds a user specialization of the library's `common_type`
+([meta.trans.other]/4), except for two builtin types, which cannot have
+one. The arguments are checked by kind only (two templates, then types).
+It is declared at every `-fclang-compat` level; `__has_builtin` follows
+the level (`builtin_templates.rs`;
+`templates/builtins/builtin.common-type.cpp`).
 
 ### 9.4 Other trait-like operators
 
@@ -7897,6 +8017,7 @@ not use it, so it is not in M3.
 | `__array_extent(T, I)` | `ArrayTypeTraitExpr`, of type `size_t`: the bound of dimension `I`, or 0 | `tc` |
 | `__builtin_is_constant_evaluated()` | the Oven returns `true` in a manifestly constant-evaluated context. Codegen emits `false`. Sema warns "'__builtin_is_constant_evaluated' will always evaluate to 'true' in a manifestly constant-evaluated expression" where clang does. Owned by WP-063 | Oven `EvalContext` |
 | `__builtin_constant_p(e)` | `int`. The Oven returns 1 if `e` (integral, enumeration, floating, pointer or `nullptr_t`, with no assignment, increment, `new`, `delete` or `throw` of its own) evaluates to a constant. A pointer counts only if it is null or the start of a string literal. Other types and arguments with side effects give 0. The argument is evaluated speculatively (`Op::Speculate`): a failure gives 0, but a resource limit still fails the evaluation. Codegen folds the call through the Oven and emits 0 if that fold fails, as clang does at -O0 (WP-130) | Oven, codegen |
+| `__builtin_invoke(f, t1, ..., tN)` | (clang 21; WP-1740; libc++ 22's `std::__invoke`) replaced by the expression `INVOKE(f, t1, ..., tN)` denotes ([func.require]/1; clang `BuiltinInvoke`): for a pointer to member of class `T`, the object is `t1` when its class is `T` or derived from it, `t1.get()` for a `std::reference_wrapper`, else `*t1`; then `(obj.*f)(t2, ..., tN)` for a member function, `obj.*f` for a data member (exactly two arguments); otherwise `f(t1, ..., tN)`. Too few arguments (1, or 2 for a pointer to member) is "too few arguments to function call, expected at least N, have M" at the call. Type, value category, `noexcept` and constant evaluation are the replacement's (`traits/invocable.rs` `builtin_invoke`; `templates/builtins/builtin.invoke-{run,diag}.cpp`) | sema |
 | `__builtin_classify_type(e)` | `int`, an integer constant expression whatever `e` is: GCC's type class of `e`'s type (`Ast::gcc_type_class`, clang `EvaluateBuiltinClassifyType`, the same in clang 19 and 22). `e` is checked as a call argument (a bound member function or a builtin name is an error) but not converted or evaluated, so side effects and non-constant calls are dropped. Classes: `void` 0; integer and character types 1; enumerations (scoped too) 3; `bool` 4; pointers, arrays, string literals and functions 5; pointers to data members 7; floating types 8; `_Complex` 9; classes, closures and pointers to member functions 12; unions 13; `_BitInt` 18; vectors 19; `std::nullptr_t`, the SVE types and `std::meta::info` -1. `_Atomic(T)` classifies as `T`. An overload set is accepted and gives -1 (clang reads an unspecified value). The Oven and codegen both fold the call to the constant (WP-419) | Oven, codegen |
 
 **Failed-trait explanation** (clang 22 `DiagnoseTypeTraitDetails`,
@@ -8673,12 +8794,11 @@ impl Sema<'_, '_> {
     pub fn act_template_head(&mut self, params: &[ParamSyntax], requires: Option<ExprId>, depth: u16) -> TemplateParamListId;
     pub fn act_template_id(&mut self, name: TemplateNameId, args: &[TemplateArg], l: Loc, r: Loc) -> Result<TemplateIdRef, ()>;
     pub fn act_dependent_name(&mut self, nns: NnsId, name: Symbol, targs: Option<ArgListId>, kw: Keyword) -> QualType;
-    pub fn act_explicit_instantiation(&mut self, extern_loc: Option<Loc>, d: DeclSyntax) -> Option<DeclId>;
+    pub fn act_explicit_inst_start(&mut self, extern_loc: Option<Loc>, loc: Loc); // + act_explicit_inst_end
     pub fn act_concept(&mut self, head: TemplateParamListId, name: Symbol, e: ExprId) -> DeclId;
     pub fn act_requires_expr(&mut self, params: &[DeclId], reqs: &[Requirement]) -> ExprId;
     pub fn act_fold(&mut self, lhs: Option<ExprId>, op: BinOp, rhs: Option<ExprId>, ellipsis: Loc) -> ExprId;
     pub fn act_pack_expansion(&mut self, pattern: ExprId, ellipsis: Loc) -> ExprId;
-    pub fn act_deduction_guide(&mut self, …) -> DeclId;
     // engine (070–074)
     pub fn check_template_args(&mut self, tmpl: DeclId, written: &[TemplateArg], loc: Loc) -> Result<ConvertedArgs, ()>;
     pub fn get_class_spec(&mut self, tmpl: DeclId, args: &ConvertedArgs, loc: Loc) -> DeclId;
@@ -8786,9 +8906,6 @@ pub fn act_pack_expansion_type(&mut self, pattern: QualType, ellipsis: Loc) -> Q
 pub fn act_pack_expansion_arg(&mut self, a: TemplateArg, ellipsis: Loc) -> TemplateArg;
 pub fn act_fold(&mut self, lhs: Option<ExprId>, op: BinaryOp, rhs: Option<ExprId>, lparen: Loc, ellipsis: Loc, rparen: Loc) -> ExprId;
 pub fn act_on_sizeof_pack_name(&mut self, name: Symbol, name_loc: Loc, loc: Loc, rparen: Loc) -> ExprId;
-pub fn act_explicit_instantiation(&mut self, extern_loc: Option<Loc>, loc: Loc) -> Option<DeclId>;  // stub
-pub fn act_explicit_specialization(&mut self, partial: bool, loc: Loc) -> Option<DeclId>;           // stub
-pub fn act_deduction_guide(&mut self, name: Symbol, loc: Loc) -> Option<DeclId>;                    // stub
 pub fn templ_unimplemented(&self, feature: &str, loc: Loc); // sema_unimplemented_template_feature
 ```
 
@@ -8967,10 +9084,9 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - A non-dependent `class template specialization` (needs
   `get_class_spec` and instantiation).
 - Explicit and partial specializations of class, variable and function
-  templates (`act_explicit_specialization`,
-  `act_on_specialization_declarator_id`).
-- Explicit instantiation (`act_explicit_instantiation`).
-- Deduction guides (`act_deduction_guide`).
+  templates (`act_on_specialization_declarator_id`).
+- Explicit instantiation and deduction guides (no stub is left: WP-1740
+  removed the three parser stubs).
 - Alias-template substitution.
 - Calls to function templates (deduction, WP-071).
 

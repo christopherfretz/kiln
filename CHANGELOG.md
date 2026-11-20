@@ -53,8 +53,32 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   with `x` as its second operand, in code generation and in constant
   evaluation.
 
+- clang 21-22 builtins (WP-1740): `__builtin_structured_binding_size`,
+  `__builtin_{lt,le,gt,ge}_synthesizes_from_spaceship`,
+  `__builtin_invoke` and `__builtin_common_type`; `__has_builtin`
+  answers 1 for them at clang compatibility 22, so libc++ 22 takes its
+  builtin paths.
+- A function template declared through a typedef, alias or `decltype`
+  of a function type (`template<class T> F f;`, [dcl.fct]/13) can be
+  specialized and called (WP-1740).
+
 ### Fixed
 
+- Explicit instantiations and specializations that reported "not yet
+  implemented" (WP-1740): `template struct S;` naming a class that is no
+  member class of a class template specialization is "explicit
+  instantiation of non-templated type", `template class A<int> *p;` and
+  `template<> struct P q;` are diagnosed as clang does, and `template<>
+  template void f();` is "expected '<' after 'template'".
+- `template<class T> enum class N::E : int {}` with `N` a namespace is
+  "enumeration cannot be a template" instead of being accepted
+  (WP-1740).
+- A `decltype(auto)` non-type template parameter deduced as an array or
+  function type is adjusted to a pointer, and one-past-the-end pointer
+  arguments (`A<arr + 4>`) are accepted and mangled (WP-1740).
+- A constraint of a lambda nested in a generic lambda in a template, or
+  of a member function of a local class there, is checked with every
+  enclosing level's arguments instead of failing as dependent (WP-1740).
 - A conditional operator whose class-typed arms are a glvalue and a
   prvalue destroys the copy of the glvalue at the end of the
   full-expression when the result is not used to initialize an object;

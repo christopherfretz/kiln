@@ -260,10 +260,14 @@ impl Substituter<'_, '_, '_> {
                     init_vars.push((v, None));
                     match self.initializer(i, style)? {
                         Some(x) => Some((style, x)),
-                        None => {
-                            // kiln-gap: GAP-104
-                            return self.unimplemented("this init-capture in a template", c.loc);
-                        }
+                        // `initializer` is `None` only for a
+                        // default-initialized variable (a construction with
+                        // neither parentheses nor arguments).
+                        None => unreachable!(
+                            "an init-capture's initializer is written: its type is deduced \
+                             from it ([expr.prim.lambda.capture]/6), and one without is invalid \
+                             and has no `init`"
+                        ),
                     }
                 }
                 None => None,
@@ -450,6 +454,83 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// Maps the parameters of the functions around the pattern of
+    /// constrained `entity` (a lambda's call operator or its template, a
+    /// member function of a local class) to those of the functions around
+    /// `entity`, outward while the two contexts correspond: a constraint
+    /// may name a parameter of an enclosing generic lambda in an
+    /// unevaluated operand (`[](auto v) { return []() requires
+    /// C<decltype(v)> {}; }`), which names the enclosing specialization's
+    /// parameter ([temp.constr.atomic]/3; clang's
+    /// `LambdaScopeForCallOperatorInstantiationRAII` adds the enclosing
+    /// lambdas' instantiated parameters to the scope).
+    pub(crate) fn seed_enclosing_params(&mut self, entity: kiln_ast::DeclId) {
+        let Some(&(pat, _)) = self.sema.inst.concepts.member_constraints.get(&entity) else {
+            return;
+        };
+        let function_of = |s: &Self, d: kiln_ast::DeclId| match s.sema.kind_of(d) {
+            DeclKind::FunctionTemplate => s.sema.templated_function(d),
+            k if k.is_function() => Some(d),
+            _ => None,
+        };
+        let (Some(mut p), Some(mut n)) = (function_of(self, pat), function_of(self, entity)) else {
+            return;
+        };
+        loop {
+            let (Some(pc), Some(nc)) =
+                (self.sema.ast.decls.get(p).ctx(), self.sema.ast.decls.get(n).ctx())
+            else {
+                return;
+            };
+            (p, n) = (pc, nc);
+            if p == n || self.sema.kind_of(p) != self.sema.kind_of(n) {
+                return;
+            }
+            if self.sema.kind_of(p).is_function() {
+                self.map_enclosing_params(p, n);
+            }
+        }
+    }
+
+    /// Maps pattern function `p`'s parameters to those of `n`, a
+    /// specialization of it: one to one, a trailing pack to the
+    /// parameters it expanded to. Parameters already mapped stay.
+    fn map_enclosing_params(&mut self, p: kiln_ast::DeclId, n: kiln_ast::DeclId) {
+        let params = |s: &Self, f: kiln_ast::DeclId| -> Vec<kiln_ast::DeclId> {
+            s.sema
+                .ast
+                .decls
+                .function(f)
+                .map(|x| s.sema.ast.lists.iter::<kiln_ast::DeclId>(x.params).collect())
+                .unwrap_or_default()
+        };
+        let (pp, np) = (params(self, p), params(self, n));
+        let is_pack = |s: &Self, d: kiln_ast::DeclId| {
+            s.sema
+                .ast
+                .decls
+                .param(d)
+                .is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0)
+        };
+        let lead = match pp.split_last() {
+            Some((&last, lead))
+                if is_pack(self, last) && !lead.iter().any(|&d| is_pack(self, d)) =>
+            {
+                if np.len() < lead.len() {
+                    return;
+                }
+                let elems = self.sema.ast.lists.push(&np[lead.len()..]);
+                self.locals.entry(last).or_insert(DeclOrPack::Pack(elems));
+                lead.len()
+            }
+            _ if pp.len() == np.len() && !pp.iter().any(|&d| is_pack(self, d)) => pp.len(),
+            _ => return,
+        };
+        for (&o, &x) in pp.iter().zip(&np).take(lead) {
+            self.locals.entry(o).or_insert(DeclOrPack::Decl(x));
+        }
+    }
+
     /// The call operator's constraints stay the pattern's, checked with
     /// this instantiation's levels outside the operator's own (as a class
     /// template member's, `ConceptState::member_constraints`,
@@ -472,8 +553,64 @@ impl Substituter<'_, '_, '_> {
             None => return Ok(()),
         };
         let args = self.lambda_constraint_levels(pat, loc)?;
+        self.record_member_constraints(new, pat, args, loc)
+    }
+
+    /// Records that `new`, rebuilt from `pat`, has `pat`'s constraints
+    /// checked with `args` outside its own level
+    /// (`ConceptState::member_constraints`). A pattern that is itself
+    /// rebuilt from an enclosing template's (a lambda or a local class in
+    /// a generic lambda in a template, `[]<class U>(U) { return []<class
+    /// V>(V) requires C<T, U, V> {}; }`: the inner lambda was rebuilt when
+    /// the template was instantiated, with `U` retained) keeps the
+    /// original's constraints, so they are checked with the levels that
+    /// pattern recorded, its retained levels this instantiation's
+    /// ([temp.constr.decl]/3, [temp.constr.atomic]/3): else the
+    /// parameters of the levels in between stay dependent.
+    pub(crate) fn record_member_constraints(
+        &mut self,
+        new: kiln_ast::DeclId,
+        pat: kiln_ast::DeclId,
+        args: MultiLevelArgs,
+        loc: Loc,
+    ) -> SubstResult<()> {
+        let (pat, args) = match self.sema.inst.concepts.member_constraints.get(&pat).cloned() {
+            Some((p0, a0)) if p0 != pat => (p0, self.compose_levels(a0, args, loc)?),
+            _ => (pat, args),
+        };
         self.sema.inst.concepts.member_constraints.insert(new, (pat, args));
         Ok(())
+    }
+
+    /// `outer`, levels recorded against an original pattern whose
+    /// retained levels (explicit, or implicit past its end) are the levels
+    /// of the rebuilt pattern being substituted with `inner`: `outer`'s
+    /// substituted levels (their arguments substituted with `inner` where
+    /// they still name its parameters), each retained one replaced by
+    /// `inner`'s next level, then `inner`'s remaining levels.
+    fn compose_levels(
+        &mut self,
+        outer: MultiLevelArgs,
+        inner: MultiLevelArgs,
+        loc: Loc,
+    ) -> SubstResult<MultiLevelArgs> {
+        let mut rest = inner.levels.into_iter();
+        let mut out = MultiLevelArgs::new();
+        for l in outer.levels {
+            match l.mode {
+                LevelMode::Substitute => {
+                    let args = if self.sema.levels_dependent(&MultiLevelArgs { levels: vec![l] }) {
+                        self.args(l.args, loc)?
+                    } else {
+                        l.args
+                    };
+                    out.push(args, l.assoc, LevelMode::Substitute);
+                }
+                LevelMode::Retain => out.levels.push(rest.next().unwrap_or(l)),
+            }
+        }
+        out.levels.extend(rest);
+        Ok(out)
     }
 
     /// The levels the constraints of pattern `pat` (the call operator or

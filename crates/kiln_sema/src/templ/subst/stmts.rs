@@ -508,10 +508,10 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.stmt(b))
             }
             StmtKind::ContractAssertStmt => self.contract_stmt(s, None),
-            k @ StmtKind::CXXCatchStmt => {
-                // kiln-gap: GAP-098
-                self.unimplemented(&format!("substitution into {k:?}"), loc)
-            }
+            StmtKind::CXXCatchStmt => unreachable!(
+                "a handler is only ever a child of its try-block (`act_on_catch`'s results \
+                 go to `act_on_try` alone), substituted by `try_stmt` through `handler`"
+            ),
         }
     }
 
@@ -1011,8 +1011,18 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::LifetimeExtendedTemporary
             | DeclKind::TemplateParamObject
             | DeclKind::ContractResultName) => {
-                // kiln-gap: GAP-103
-                self.unimplemented(&format!("local {k:?} declarations in templates"), loc)
+                // A `DeclStmt` holds what a block-scope declaration
+                // ([stmt.dcl], [dcl.pre]) declares: the parser's label,
+                // static_assert, consteval block, using, namespace alias
+                // and simple-declaration forms, and the single variables
+                // sema synthesizes (coroutines, expansion statements). A
+                // template, namespace, linkage specification, member,
+                // friend, deduction guide or qualified redeclaration at
+                // block scope is diagnosed and its declaration marked
+                // invalid, which the `DeclStmt` arm drops before this
+                // point; every other kind lives in a class, a namespace,
+                // a parameter list or an expression, never in a block.
+                unreachable!("a {k:?} declaration in a block-scope DeclStmt")
             }
         }
     }

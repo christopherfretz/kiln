@@ -685,7 +685,19 @@ impl Sema<'_, '_> {
             Scalar::Pointer { ty: pty, base, offset, .. }
                 if self.is_subobject_ptr(pty, base, offset) =>
             {
-                self.subobject_arg_expr(ty, pty, base, offset, loc)
+                self.subobject_arg_expr(ty, pty, base, offset, loc).or_else(|| {
+                    // A pointer past the end of an object or array (`arr
+                    // + 4`, `&x + 1`; [temp.arg.nontype]/3 does not
+                    // exclude it, [basic.compound]/3): no subobject lies
+                    // there, and no expression of the program names it
+                    // without arithmetic, so the constant itself stands
+                    // for it, as clang's structural-value argument
+                    // (`BuildExpressionFromNonTypeTemplateArgument`).
+                    (!self.ast.types.is_reference(ty)).then(|| {
+                        let o = self.builder().opaque_value_of(ty, ValueCategory::PRValue, loc);
+                        self.builder().constant_expr(o, Some(v))
+                    })
+                })
             }
             Scalar::Pointer { base, offset: 0, .. } => {
                 let (PtrBase::Decl(d) | PtrBase::Function(d)) = base else { return None };

@@ -782,7 +782,9 @@ impl Substituter<'_, '_, '_> {
             }
             // `typename [: r :]` with a dependent operand
             // (spec/reflection.md §5): the substituted operand's type.
-            TypeView::Splice { operand, designated: None } => {
+            // (A designated type is substituted through its operand too:
+            // clang `TransformSpliceType` transforms the operand.)
+            TypeView::Splice { operand, .. } => {
                 let e = match operand {
                     ExprOperand::Expr(e) => e,
                     ExprOperand::Profile(p) => {
@@ -892,7 +894,15 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(elem, loc)?;
                 Ok(self.sema.ast.types.vector(e, count, kind))
             }
-            TypeView::DependentVector { elem, size: ExprOperand::Expr(s), kind } => {
+            // A canonical one names its size by profile: its first
+            // expression stands for it (as for `decltype`, above).
+            TypeView::DependentVector { elem, size, kind } => {
+                let s = match size {
+                    ExprOperand::Expr(s) => s,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
                 let e = self.ty(elem, loc)?;
                 // Diagnosed at the attribute, as clang does.
                 let at = match self.sema.inst.vector_attr_locs.get(&s) {
@@ -984,9 +994,21 @@ impl Substituter<'_, '_, '_> {
                 }
                 Ok(t)
             }
-            // Remaining kinds cannot be dependent today.
-            // kiln-gap: GAP-099
-            _ => self.unimplemented("substitution into this type", loc),
+            // clang `TransformBuiltinType`, `TransformBitIntType`: nothing
+            // to substitute (of these, only the builtin dependent type is
+            // dependent, and it is kept, as clang keeps `DependentTy`).
+            TypeView::Builtin(_) | TypeView::BitInt { .. } => Ok(q),
+            // clang `TransformQualifiedType`: the base is substituted and
+            // the extended qualifiers kept.
+            TypeView::ExtQual { base, word } => {
+                let b = self.ty(base, loc)?;
+                Ok(self.sema.ast.types.ext_qual(b, word))
+            }
+            TypeView::Invalid => {
+                unreachable!(
+                    "an invalid type node carries no dependence flags (`ty` returns first)"
+                )
+            }
         }
     }
 

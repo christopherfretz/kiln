@@ -17,7 +17,6 @@ use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
-use crate::decl::sym_str;
 use crate::lookup::LookupKind;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::MemberScope;
@@ -1961,47 +1960,6 @@ impl Sema<'_, '_> {
             && self.ast.decls.get(d).ty().is_some_and(|t| {
                 matches!(self.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
             })
-    }
-
-    // -- specializations, instantiations, guides -------------------------------------
-
-    /// `[extern] template declaration` ([temp.explicit]): explicit
-    /// instantiation is WP-070a.
-    pub fn act_explicit_instantiation(
-        &mut self,
-        extern_loc: Option<Loc>,
-        loc: Loc,
-    ) -> Option<DeclId> {
-        let what = if extern_loc.is_some() {
-            "explicit instantiation declaration"
-        } else {
-            "explicit instantiation"
-        };
-        // kiln-gap: GAP-105
-        self.templ_unimplemented(what, loc);
-        None
-    }
-
-    /// `template<> declaration` ([temp.expl.spec]) or a partial
-    /// specialization `template<params> class X<args>`
-    /// ([temp.spec.partial]): WP-070a.
-    pub fn act_explicit_specialization(&mut self, partial: bool, loc: Loc) -> Option<DeclId> {
-        let what = if partial {
-            "class template partial specialization"
-        } else {
-            "explicit specialization"
-        };
-        // kiln-gap: GAP-106
-        self.templ_unimplemented(what, loc);
-        None
-    }
-
-    /// A deduction guide ([temp.deduct.guide]): CTAD is WP-074.
-    pub fn act_deduction_guide(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
-        let _ = sym_str(self, name);
-        // kiln-gap: GAP-107
-        self.templ_unimplemented("deduction guide", loc);
-        None
     }
 
     // -- dependent expression forms ([temp.dep.expr]) -----------------------------

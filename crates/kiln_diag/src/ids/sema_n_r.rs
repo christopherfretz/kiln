@@ -79,6 +79,11 @@ sema_not_contextually_convertible_to_bool = Error (1) "value of type {0} is not 
 sema_not_found_by_two_phase_lookup = Error (1) "call to function '{0}' that is neither visible in the template definition nor found by argument-dependent lookup";
 sema_not_tag_in_scope = Error (3) "no {0:struct|interface|union|class|enum} named '{1}' in {2}";
 sema_nothrow_conflicts_exc_spec = Warning [IgnoredAttributes] (0) "'nothrow' attribute conflicts with exception specification; attribute ignored";
+// A non-type template parameter whose substituted argument is a type or a
+// template, with no earlier error (WP-1740; spec/sema-templates.md §5.4):
+// the argument list was checked when it was formed, so this is a
+// substitution invariant, never a silent drop.
+sema_nttp_arg_not_value = Error (1) "kiln: internal error: the argument substituted for non-type template parameter '{0}' is not a value";
 sema_nttp_bad_type = Error (1) "a non-type template parameter cannot have type {0}";
 sema_nttp_bad_type_before_cxx20 = Error (1) "a non-type template parameter cannot have type {0} before C++20";
 sema_nttp_deduction_failed = Error (3) "non-type template parameter '{0}' with type {1} has incompatible initializer of type {2}";
@@ -86,6 +91,9 @@ sema_nttp_incomplete = Error (1) "non-type template parameter has incomplete typ
 sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
 sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
 sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+// A converted non-type template argument value no expression stands for,
+// with no earlier error (WP-1740; spec/sema-templates.md §5.4).
+sema_nttp_value_no_expression = Error (1) "kiln: internal error: no expression stands for the non-type template argument of type {0}";
 sema_null_arg = Warning [NonNull] (0) "null passed to a callee that requires a non-null argument";
 sema_null_conversion = Warning [NullConversion] (2) "implicit conversion of {0} constant to {1}";
 sema_null_in_arithmetic = Warning [NullArithmetic] (0) "use of NULL in arithmetic operation";

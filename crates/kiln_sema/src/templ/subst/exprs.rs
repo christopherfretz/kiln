@@ -578,8 +578,10 @@ impl Substituter<'_, '_, '_> {
                 let subs: Vec<ExprId> =
                     self.sema.ast.lists.iter::<ExprId>(ex(self).atomic_subs(e)).collect();
                 let Some(form) = kiln_ast::decl::builtin::atomic::form(op) else {
-                    // kiln-gap: GAP-102
-                    return self.unimplemented("this atomic operation", loc);
+                    unreachable!(
+                        "an AtomicExpr is built only by `builtin_atomic_op`, after `atomic::form` \
+                         gave its operation's form"
+                    );
                 };
                 let mut args = Vec::with_capacity(subs.len());
                 for &s in form.arg_to_sub() {
@@ -2540,8 +2542,26 @@ impl Substituter<'_, '_, '_> {
             // argument converted for a partial substitution): its first
             // expression stands for it, as in `template_arg` (§5.1).
             ArgView::Profile(p) => self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?,
-            // kiln-gap: GAP-095
-            _ => return self.unimplemented("non-type template argument of this kind", loc),
+            // A type, template or pack (an element is taken first,
+            // `element`) for a non-type parameter: the argument list was
+            // checked against the parameters when it was formed
+            // ([temp.arg.general]/2), so only a list already diagnosed, or a
+            // level kiln misread (WP-1235's depth confusion), reaches here;
+            // never silently dropped.
+            ArgView::Null
+            | ArgView::Type(_)
+            | ArgView::Template(_)
+            | ArgView::TemplateExpansion { .. }
+            | ArgView::Pack(_) => {
+                if self.sema.diags.error_count() == 0 {
+                    let d = self
+                        .sema
+                        .diag(kiln_diag::DiagId::sema_nttp_arg_not_value, loc)
+                        .arg(self.sema.decl_name(shown));
+                    self.sema.emit(d);
+                }
+                return Err(SubstFail);
+            }
         };
         // A parameter of reference type (also `decltype(auto)` deduced as
         // one) keeps its argument's type: `decltype` of it is the
@@ -2651,11 +2671,24 @@ impl Substituter<'_, '_, '_> {
         value: kiln_ast::ConstValueId,
         loc: Loc,
     ) -> SubstResult<ExprId> {
-        match self.sema.nttp_arg_expr(ty, value, loc) {
-            Some(e) => Ok(e),
-            // kiln-gap: GAP-096
-            None => self.unimplemented("non-type template argument of this type", loc),
+        if let Some(e) = self.sema.nttp_arg_expr(ty, value, loc) {
+            return Ok(e);
         }
+        // Every value a converted argument can hold has an expression
+        // ([temp.arg.nontype]/1-3: integral, enumeration, floating, null,
+        // pointer and reference to an object, its subobject or one past
+        // its end, function, member pointer, class, complex, reflection;
+        // `nttp_arg_expr`). The values it excludes (temporaries, string
+        // literals, `typeid`, `__func__`) were rejected at conversion: an
+        // internal error, not a silent drop.
+        if self.sema.diags.error_count() == 0 {
+            let d = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_nttp_value_no_expression, loc)
+                .arg(self.sema.ty_arg(ty));
+            self.sema.emit(d);
+        }
+        Err(SubstFail)
     }
 
     pub(crate) fn int_literal(&mut self, ty: QualType, v: i128, loc: Loc) -> ExprId {

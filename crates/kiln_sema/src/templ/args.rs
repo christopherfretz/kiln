@@ -1490,6 +1490,13 @@ impl Sema<'_, '_> {
                 return Err(());
             }
         }
+        // A deduced array or function type is adjusted to a pointer
+        // ([temp.param]/10: `template<decltype(auto) V>` with `D<arr>`
+        // has a `T*` parameter; clang's `CheckNonTypeTemplateParameterType`
+        // decays it).
+        if pty != placeholder {
+            pty = self.adjust_param_type(pty);
+        }
         // A deduced type is checked at the argument ([temp.param]/6.3),
         // naming the parameter (clang `CheckTemplateArgument`).
         if pty != placeholder
@@ -1582,8 +1589,18 @@ impl Sema<'_, '_> {
         }
         let t = &self.ast.types;
         if t.is_array(ety) && !t.is_pointer(pty) {
-            // kiln-gap: GAP-094
-            self.templ_unimplemented("non-type template parameter of class or reference type", at);
+            // An array converts only to a pointer, a class (above) or a
+            // reference (above) parameter; to `bool` the conversion is not
+            // allowed (above): no conversion remains ([temp.arg.nontype]/2,
+            // [expr.const]/12), as for an argument whose type is still
+            // dependent where the conversion was not tried.
+            let d = self
+                .diag(DiagId::sema_cce_not_implicitly_convertible, self.begin_loc(e))
+                .arg(self.ty_arg(ety))
+                .arg(self.ty_arg(pty))
+                .range(self.expr_range(e));
+            let d = self.note_nttp_param(d, Some(self.ast.decls.get(p).loc()));
+            self.emit(d);
             return Err(());
         }
         let pty = conv::strip_cv(self, pty);

@@ -3261,7 +3261,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                             off == m.offset_bits / 8 && pointee.is_some_and(|p| same(p, m.ty))
                         })
                         .or_else(|| members.iter().find(inside));
-                    let Some(m) = hit else { break };
+                    let Some(m) = hit else {
+                        // No member holds the byte: one past the end of the
+                        // last member or of a member array (`s.a + 2`),
+                        // which clang mangles as the past-the-end form
+                        // (`soiL_Z1sE8pE`).
+                        r.past_end = off != 0;
+                        break;
+                    };
                     r.nonempty = true;
                     if union {
                         // <union-selector> ::= _ [<number>]

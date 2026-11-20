@@ -217,6 +217,17 @@ impl Sema<'_, '_> {
         if self.levels_dependent(outer) {
             return None;
         }
+        // A function in a dependent context (a member of a local class in
+        // a generic lambda's pattern, rebuilt when the enclosing template
+        // was instantiated) is checked when that context is instantiated,
+        // as clang's `CheckFunctionConstraints` does.
+        let mut c = self.ast.decls.get(f).ctx();
+        while let Some(d) = c {
+            if self.is_dependent_decl_context(d) {
+                return None;
+            }
+            c = self.ast.decls.get(d).ctx();
+        }
         let outer = outer.clone();
         let shown = outer.levels.last().map_or(ArgListId::EMPTY, |l| l.args);
         Some(self.check_constraints(f, &[r], &outer, shown, loc))
@@ -648,13 +659,21 @@ impl Sema<'_, '_> {
             if self.levels_dependent(levels) {
                 return true;
             }
-            // Concrete arguments but a dependent result: a substitution
-            // the substituter does not complete.
-            let d = self
-                // kiln-gap: GAP-093
-                .diag(DiagId::sema_unimplemented_template_feature, loc)
-                .arg("an atomic constraint that stays value-dependent after substitution");
-            self.emit(d);
+            // Concrete arguments reach every level the atom names (a
+            // lambda in a generic lambda in a template:
+            // `Substituter::record_member_constraints`; a function in a
+            // dependent context is not checked,
+            // `check_function_constraints`), so a dependent result is a
+            // substitution that missed a level. clang asserts here
+            // (`EvaluateAsConstantExpr` of a value-dependent atom); kiln
+            // reports an internal error instead of guessing an answer,
+            // unless an earlier error explains it.
+            if self.diags.error_count() == 0 {
+                let d = self
+                    .diag(DiagId::sema_constraint_left_dependent, loc)
+                    .arg(self.expr_text_as_written(e));
+                self.emit(d);
+            }
             return false;
         }
         let ty = self.ety(x);
@@ -1001,6 +1020,7 @@ impl Sema<'_, '_> {
                     sub.seed_function_params(f).ok()?;
                 }
                 sub.seed_init_captures(entity);
+                sub.seed_enclosing_params(entity);
                 sub.locals.extend(nested.iter().copied());
                 f(&mut sub)
             });

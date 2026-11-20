@@ -319,7 +319,7 @@ impl Cg<'_> {
             // `int` in C (clang `getLogicalOperationType`).
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr if q != QualType::BOOL => {
                 let t = self.lty(q);
-                self.icn(t, i128::from(ast.exprs.type_trait_value(e)))
+                self.icn(t, i128::from(ast.exprs.type_trait_int(e)))
             }
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
                 V::C(self.m.const_bool(ast.exprs.type_trait_value(e)))

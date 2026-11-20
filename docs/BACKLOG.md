@@ -763,7 +763,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1756 | redeclaration lookup: a member function declared after a member variable template of the same name (and the reverse) is "redefinition as different kind" as in clang; `pick_prev_function` skips templates when the new function is not one; closes the xfail `tests/conformance/basic.scope.scope/member-function-after-variable-template.cpp` | WP-1738 | open |
 | WP-1757 | wording: C-mode diagnostic for a struct condition of `?:` (C++ wording today); -Wpointer-bool-conversion for `arr ?: b` | WP-1738 | open |
 | WP-1739 | codegen fallbacks: GAP-059..GAP-092 (39 sites, 7 cases) | WP-1719 | open |
-| WP-1740 | NTTP/substitution kinds: GAP-093..GAP-109 (17 sites, 3 cases) | WP-1719 | open |
+| WP-1740 | NTTP/substitution kinds: GAP-093..GAP-109 (17 sites, 3 cases) | WP-1719 | in progress |
+| WP-1758 | mangling of a past-the-end pointer NTTP into a class member: `&t.a + 1` and `&t.b[0]` mangle as one value (clang: distinct), because Oven pointer values are a flat (base, offset) with no designated subobject (crates/kiln_abi/src/mangle.rs `lvalue_path`) | WP-1740 | open |
 | WP-1741 | Oven traps: expressions: GAP-110..GAP-124 (55 sites, 0 cases) | WP-1719 | open |
 | WP-1742 | Oven traps: types: GAP-125..GAP-129 (35 sites, 0 cases) | WP-1719 | open |
 | WP-1743 | reflection: GAP-130..GAP-134 (5 sites, 0 cases) | WP-1719 | open |

@@ -8,10 +8,10 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-109 gaps at 192 sites; 10 of 56,766 g++.dg cases hit one at the
-1.3.0 release candidate. 4 more entries (5 sites) use wording that
-matches clang's for a limit clang shares: they are listed as excluded and
-stay.
+93 gaps at 176 sites; 10 of 56,766 g++.dg cases hit one at the
+1.3.0 release candidate (3 of them GAP-093, since fixed). 4 more entries
+(5 sites) use wording that matches clang's for a limit clang shares: they
+are listed as excluded and stay.
 
 ## Method
 
@@ -83,7 +83,7 @@ By family:
 | reflection error | 3 | 3 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 | sema_multiversion_not_supported | 1 | 4 | 0 |
-| sema_unimplemented_template_feature | 17 | 17 | 3 |
+| sema_unimplemented_template_feature | 1 | 1 | 0 |
 | sema_vla_unsupported | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
@@ -91,7 +91,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
 | codegen fallbacks | 34 (GAP-059..GAP-092) | 39 | 7 | WP-1739 |
-| NTTP/substitution kinds | 17 (GAP-093..GAP-109) | 17 | 3 | WP-1740 |
+| NTTP/substitution kinds | 1 (GAP-097) | 1 | 0 | WP-1740 |
 | Oven traps: expressions | 15 (GAP-110..GAP-124) | 55 | 0 | WP-1741 |
 | Oven traps: types | 5 (GAP-125..GAP-129) | 35 | 0 | WP-1742 |
 | reflection | 5 (GAP-130..GAP-134) | 5 | 0 | WP-1743 |
@@ -136,23 +136,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-090 | codegen fallback | codegen fallbacks | `this deallocation function is not supported yet` | `crates/kiln_codegen/src/new_delete.rs::emit_delete_call_n` | 0 | WP-1739 |
 | GAP-091 | codegen fallback | codegen fallbacks | `this initializer of a variable length array is not supported yet` | `crates/kiln_codegen/src/vla.rs::emit_vla_var` | 0 | WP-1739 |
 | GAP-092 | codegen fallback | codegen fallbacks | `RTTI for type `{name}` is not supported yet` ({k}: the 36 kinds of the arm, under Enumerated kinds) | `crates/kiln_codegen/src/vtable.rs::rtti` | 0 | WP-1739 |
-| GAP-093 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | `crates/kiln_sema/src/templ/concepts/sat.rs::sat_atom_uncached` | 3 | WP-1740 |
-| GAP-094 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: non-type template parameter of class or reference type` | `crates/kiln_sema/src/templ/args.rs::convert_nttp_arg_inner` | 0 | WP-1740 |
-| GAP-095 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: non-type template argument of this kind` | `crates/kiln_sema/src/templ/subst/exprs.rs::nttp_replacement` | 0 | WP-1740 |
-| GAP-096 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: non-type template argument of this type` | `crates/kiln_sema/src/templ/subst/exprs.rs::value_literal` | 0 | WP-1740 |
 | GAP-097 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: the 25 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
-| GAP-098 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into {k}` ({k}: `CXXCatchStmt`) | `crates/kiln_sema/src/templ/subst/stmts.rs::stmt_node` | 0 | WP-1740 |
-| GAP-099 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: substitution into this type` | `crates/kiln_sema/src/templ/subst/types.rs::ty_node` | 0 | WP-1740 |
-| GAP-100 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: function declared with this type` | `crates/kiln_sema/src/templ/subst/decls.rs::function_decl` | 0 | WP-1740 |
-| GAP-101 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: function declared with a typedef of function type` | `crates/kiln_sema/src/templ/subst/decls.rs::function_spec_signature` | 0 | WP-1740 |
-| GAP-102 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: this atomic operation` | `crates/kiln_sema/src/templ/subst/exprs.rs::ex` | 0 | WP-1740 |
-| GAP-103 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: local {k} declarations in templates` ({k}: the 43 kinds of the arm, under Enumerated kinds) | `crates/kiln_sema/src/templ/subst/stmts.rs::local_decl` | 0 | WP-1740 |
-| GAP-104 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: this init-capture in a template` | `crates/kiln_sema/src/templ/subst/lambda.rs::lambda_captures` | 0 | WP-1740 |
-| GAP-105 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: {what}` ({what}: `explicit instantiation declaration`, `explicit instantiation`) | `crates/kiln_sema/src/templ/actions.rs::act_explicit_instantiation` | 0 | WP-1740 |
-| GAP-106 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: {what}` ({what}: `class template partial specialization`, `explicit specialization`) | `crates/kiln_sema/src/templ/actions.rs::act_explicit_specialization` | 0 | WP-1740 |
-| GAP-107 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: deduction guide` | `crates/kiln_sema/src/templ/actions.rs::act_deduction_guide` | 0 | WP-1740 |
-| GAP-108 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: this kind of template declaration` | `crates/kiln_sema/src/templ/mod.rs::finish_template_pattern` | 0 | WP-1740 |
-| GAP-109 | sema_unimplemented_template_feature | NTTP/substitution kinds | `kiln: not yet implemented: type trait '{name}'` ({name}: the traits whose status is `Owner` (`__builtin_common_type`, `__builtin_structured_binding_size`, `__builtin_{lt,le,gt,ge}_synthesizes_from_spaceship`, `__builtin_invoke`)) | `crates/kiln_sema/src/templ/builtins/traits.rs::eval_type_trait` | 0 | WP-1740 |
 | GAP-110 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the expression's kind, where an operand form, operator or type of an rvalue is not handled) | `crates/kiln_oven/src/compile.rs::arith`, `crates/kiln_oven/src/compile.rs::binary_node`, `crates/kiln_oven/src/compile.rs::convert`, `crates/kiln_oven/src/compile.rs::effect`, `crates/kiln_oven/src/compile.rs::rv_inner` ×6, `crates/kiln_oven/src/compile.rs::three_way` ×3, `crates/kiln_oven/src/compile.rs::trait_expr`, `crates/kiln_oven/src/compile.rs::unary` | 0 | WP-1741 |
 | GAP-111 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the kind of an lvalue (or assignment target) form not handled) | `crates/kiln_oven/src/compile.rs::compound_assign`, `crates/kiln_oven/src/compile.rs::lv` ×6, `crates/kiln_oven/src/compile.rs::member` | 0 | WP-1741 |
 | GAP-112 | Oven trap | Oven traps: expressions | `kiln: constant evaluation of {k} is not supported yet` ({k}: the initializer's kind, for an aggregate or `std::initializer_list` form not handled (the type kinds of the arms in `init_aggr` and `std_initializer_list`)) | `crates/kiln_oven/src/compile.rs::init_aggr` ×3, `crates/kiln_oven/src/compile.rs::std_initializer_list` ×4 | 0 | WP-1741 |
@@ -323,10 +307,6 @@ builds a `CallExpr` and a `MemberExpr`), `CXXExpansionSelectExpr`,
 ### GAP-097
 
 `IntegerLiteral`, `FloatingLiteral`, `CharacterLiteral`, `StringLiteral`, `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr`, `UserDefinedLiteral`, `ImaginaryLiteral`, `EmbedExpr`, `GNUNullExpr`, `UnresolvedMemberExpr`, `ParenListExpr`, `InitListExpr`, `ImplicitValueInitExpr`, `DesignatedInitExpr`, `CXXInheritedCtorInitExpr`, `CXXDefaultArgExpr`, `CXXDefaultInitExpr`, `CXXScalarValueInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `NoInitExpr`, `DesignatedInitUpdateExpr`, `OpaqueValueExpr`, `PseudoObjectExpr` (ExprKind).
-
-### GAP-103
-
-`TranslationUnit`, `Namespace`, `LinkageSpec`, `Export`, `Empty`, `FileScopeAsm`, `UsingShadow`, `ConstructorUsingShadow`, `UsingPack`, `UnresolvedUsingTypename`, `UnresolvedUsingIfExists`, `EnumConstant`, `ClassTemplateSpecialization`, `ClassTemplatePartialSpecialization`, `Field`, `IndirectField`, `AccessSpec`, `Friend`, `FriendTemplate`, `CXXMethod`, `CXXConstructor`, `CXXDestructor`, `CXXConversion`, `CXXDeductionGuide`, `ParmVar`, `ImplicitParam`, `Binding`, `VarTemplateSpecialization`, `VarTemplatePartialSpecialization`, `ClassTemplate`, `FunctionTemplate`, `VarTemplate`, `TypeAliasTemplate`, `Concept`, `BuiltinTemplate`, `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`, `LifetimeExtendedTemporary`, `TemplateParamObject`, `ContractResultName` (DeclKind).
 
 ### GAP-117
 

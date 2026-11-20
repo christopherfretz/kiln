@@ -17,7 +17,7 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
-use super::table::{self, Arity, Complete, Status};
+use super::table::{self, Arity, Complete};
 use crate::Sema;
 use crate::class::{Selected, SpecialKind};
 use crate::conv::rank::builtin_signed;
@@ -107,9 +107,8 @@ impl Sema<'_, '_> {
 
     /// Builds `__trait(T, ...)` (clang's `BuildTypeTrait`; also the
     /// substituter's rebuild): checks the arity and the operands'
-    /// completeness, then evaluates. Not-yet-implemented traits report
-    /// `sema_unimplemented_template_feature` (their `__has_builtin` is
-    /// 0, spec §13.3).
+    /// completeness, then evaluates (every trait is implemented:
+    /// [`table::trait_status`]).
     pub fn build_type_trait(
         &mut self,
         t: TypeTrait,
@@ -118,15 +117,19 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         let t = alias_target(t);
+        // `__builtin_structured_binding_size` is a `size_t` (clang
+        // `GetReturnType`), every other trait a truth value.
+        let sbs = t == TypeTrait::StructuredBindingSize;
+        let ty = if sbs { self.size_type() } else { self.truth_ty() };
         let tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(TypeFlags::CONTAINS_ERROR))
             || tys.contains(&QualType::ERROR)
         {
-            return self.recover(self.truth_ty(), &[], loc);
+            return self.recover(ty, &[], loc);
         }
         let has_pack = tys.iter().any(|&q| self.is_pack_expansion_type(q));
         if !has_pack && !self.check_trait_arity(t, tys.len(), loc) {
-            return self.recover(self.truth_ty(), &[], loc);
+            return self.recover(ty, &[], loc);
         }
         let rhs_loc = (tys.len() == 2).then(|| args[1].1);
         // Only a dependent type defers the trait (clang `BuildTypeTrait`
@@ -138,13 +141,18 @@ impl Sema<'_, '_> {
         let dependent =
             has_pack || tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(dep));
         if dependent {
-            let ty = self.truth_ty();
-            return self.builder().type_trait_expr(t, &tys, rhs_loc, false, ty, loc, rparen);
+            return self.builder().type_trait_expr(t, &tys, rhs_loc, 0, ty, loc, rparen);
         }
-        let Some(value) = self.eval_type_trait(t, args, loc, rparen) else {
-            return self.recover(self.truth_ty(), &[], loc);
+        let value = if sbs {
+            let canon = self.trait_eval_args(args);
+            let (q, at) = canon.as_deref().unwrap_or(args)[0];
+            self.structured_binding_size(q, at, loc)
+        } else {
+            self.eval_type_trait(t, args, loc, rparen).map(u32::from)
         };
-        let ty = self.truth_ty();
+        let Some(value) = value else {
+            return self.recover(ty, &[], loc);
+        };
         self.builder().type_trait_expr(t, &tys, rhs_loc, value, ty, loc, rparen)
     }
 
@@ -171,16 +179,6 @@ impl Sema<'_, '_> {
         }
         let canon = self.trait_eval_args(args);
         let args = canon.as_deref().unwrap_or(args);
-        if let Status::Owner(_) = table::trait_status(t) {
-            if self.traits.record(TraitFailure::Unimplemented) {
-                return None;
-            }
-            let what = format!("type trait '{}'", t.spelling());
-            // kiln-gap: GAP-109
-            let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(what);
-            self.emit(d);
-            return None;
-        }
         let value = if matches!(
             t,
             TypeTrait::IsConstructible
@@ -216,6 +214,8 @@ impl Sema<'_, '_> {
                 _ => InitCheck::WellFormed,
             };
             self.eval_assignable(args[0], args[1], check, loc)?
+        } else if let Some(op) = cxx26::spaceship_trait_op(t) {
+            self.synthesizes_from_spaceship(op, args[0].0, args[1].0, loc)
         } else {
             self.eval_binary_trait(t, args[0].0, args[1].0, args[1].1)
         };
