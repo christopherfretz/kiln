@@ -20,8 +20,11 @@ impl Compiler<'_> {
         let d = self.ast().exprs.decl(x);
         match self.o.mp_intern(&mut *self.b, d, false, &[]) {
             Some(v) => self.konst(dst, v),
-            // kiln-gap: GAP-128
-            None => self.unsupported(e),
+            // `mp_intern` fails only for a bit-field, and sema rejects
+            // `&C::b` of one ([class.bit]/3, `member_pointer_of`): the
+            // operand of a member pointer `&` is a laid-out data member or
+            // a member function of a class.
+            None => unreachable!("`&C::m` of a member that cannot be designated: {e:?}"),
         }
     }
 
@@ -66,11 +69,9 @@ impl Compiler<'_> {
         };
         let to_base = u32::from(ck == CastKind::DerivedToBaseMemberPointer);
         for s in steps {
-            let Some(c) = s else {
-                // kiln-gap: GAP-128
-                self.unsupported(e);
-                return;
-            };
+            // A cast path names class bases, and a member pointer type's
+            // class is a class ([dcl.mptr]/1; sema builds both).
+            let Some(c) = s else { unreachable!("member pointer cast step to a non-class: {e:?}") };
             self.emit_at(Op::MpCast, to_base, &[dst, c.index()], e);
         }
     }

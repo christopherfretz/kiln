@@ -1535,17 +1535,38 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
-    /// Traps (and returns true) if `e` is a `_BitInt(N)` with `N > 128`:
-    /// the Oven's integers are register values of at most 128 bits; the
-    /// arbitrary-precision path is not implemented yet (spec/oven.md
-    /// "`_BitInt`").
-    fn wide_bit_int(&mut self, e: ExprId) -> bool {
-        let q = self.b.ast().exprs.get(e).ty();
+    /// Whether `q` is a `_BitInt(N)` with `N > 128`.
+    fn is_wide_bit_int(&self, q: QualType) -> bool {
         let types = &self.b.ast().types;
-        let wide = matches!(
+        matches!(
             types.view_if(types.canonical(q).ty(), TypeKind::BitInt),
             Some(TypeView::BitInt { width, .. }) if width > 128
-        );
+        )
+    }
+
+    /// The lane count of `q` if it is a vector of wide `_BitInt` lanes
+    /// (`_BitInt(256) __attribute__((ext_vector_type(2)))`): the Oven lays
+    /// one out as an opaque type (`ty.rs`: its lanes are registers, and a
+    /// wide integer is memory-class), so `lanes` and `is_vector_expr` do
+    /// not see a vector there.
+    pub(super) fn wide_lane_count(&self, q: QualType) -> Option<u32> {
+        match self.b.ast().types.canonical_view(q) {
+            TypeView::Vector { elem, count, .. } if self.is_wide_bit_int(elem) => Some(count),
+            _ => None,
+        }
+    }
+
+    /// Traps (and returns true) if `e` is a `_BitInt(N)` with `N > 128`,
+    /// or a vector of such lanes: the Oven's integers are register values
+    /// of at most 128 bits, and a wide one is memory-class
+    /// (`compile/wide.rs`). The operator, conversion, subscript and
+    /// pointer forms read it from memory; a builtin's argument, a
+    /// `new T[n]` size and a vector of wide lanes (any value of one, a
+    /// lane access or a lane-wise operation on one) still ask for it as a
+    /// register value (spec/oven.md "`_BitInt`").
+    pub(super) fn wide_bit_int(&mut self, e: ExprId) -> bool {
+        let q = self.b.ast().exprs.get(e).ty();
+        let wide = self.is_wide_bit_int(q) || self.wide_lane_count(q).is_some();
         if wide {
             self.trap(
                 e,
@@ -4665,7 +4686,7 @@ impl Compiler<'_> {
             return self.cx_compare(e, dst);
         }
         if self.wide_operands(e) {
-            return self.wide_compare(e, dst);
+            return self.wide_binary(e, dst);
         }
         let ast = self.ast();
         let [a, b] = ast.exprs.operands(e);
@@ -5028,11 +5049,14 @@ impl Compiler<'_> {
             return self.addr_int_op(e, dst, ty);
         }
         let op = self.ast().exprs.operand(e);
-        if self.is_wide_expr(op) && self.o.types.wide(ty).is_none() {
+        let ck = self.ast().exprs.cast_kind(e);
+        if self.is_wide_expr(op)
+            && self.o.types.wide(ty).is_none()
+            && ck != CastKind::IntegralToPointer
+        {
             return self.wide_to_scalar(e, dst, ty);
         }
         let ast = self.ast();
-        let ck = ast.exprs.cast_kind(e);
         let ek = ast.exprs.get(e).kind();
         let reinterpret = ek == ExprKind::CXXReinterpretCastExpr;
         if reinterpret {
@@ -5238,7 +5262,7 @@ impl Compiler<'_> {
                 if !reinterpret {
                     self.cce_check(e, REINTERPRET_CONV);
                 }
-                let r = self.rv(op);
+                let r = self.low64_rv(op);
                 let aux = if ck == CastKind::IntegralToPointer {
                     cce::INT_TO_PTR
                 } else if self.addr_int_at.take() == Some(e) {
@@ -5800,6 +5824,38 @@ impl Compiler<'_> {
                 Place::Mem(self.fn_lv(e))
             }
             ExprKind::MemberExpr => self.member(e, acc),
+            // A lane of a vector of wide `_BitInt` lanes (an opaque type
+            // to the Oven, which the vector arms below do not see): the
+            // wide-`_BitInt` trap at the vector, as for its value
+            // (`wide_bit_int`). An element access names a lane only of
+            // such a vector when it has a wide type.
+            ExprKind::ArraySubscriptExpr
+                if {
+                    let [a, b] = self.ast().exprs.operands(e);
+                    [a, b].iter().any(|&x| {
+                        let q = self.ast().exprs.get(x).ty();
+                        self.wide_lane_count(q).is_some()
+                    })
+                } =>
+            {
+                let [a, b] = self.ast().exprs.operands(e);
+                let v = if self.wide_lane_count(self.ast().exprs.get(a).ty()).is_some() {
+                    a
+                } else {
+                    b
+                };
+                self.wide_bit_int(v);
+                Place::Mem(self.reg())
+            }
+            ExprKind::ExtVectorElementExpr
+                if {
+                    let q = self.ast().exprs.get(e).ty();
+                    self.is_wide_bit_int(q) || self.wide_lane_count(q).is_some()
+                } =>
+            {
+                self.wide_bit_int(e);
+                Place::Mem(self.reg())
+            }
             ExprKind::ArraySubscriptExpr
                 if self.o.clang_compat >= 22 && {
                     let [a, _] = self.ast().exprs.operands(e);
@@ -5810,7 +5866,7 @@ impl Compiler<'_> {
                 // lane array (spec/oven.md "Vectors").
                 let [a, i] = self.ast().exprs.operands(e);
                 let p = self.vec_object(a, lane_base_access(acc));
-                let ri = self.rv(i);
+                let ri = self.low64_rv(i);
                 let ru = self.reg();
                 self.emit(Op::ICast, 64 << 9, &[ru, ri]);
                 self.lane_place(p, ru, a, e)
@@ -5878,25 +5934,24 @@ impl Compiler<'_> {
                 if decay && self.unsized_member_decay(self.ast().exprs.operand(pe0)) {
                     return Place::Mem(self.reg());
                 }
-                let (p, i) = if decay {
+                // A wide `_BitInt` index is clamped to 128 bits.
+                let (p, (i, (w, s))) = if decay {
                     let inner = self.ast().exprs.operand(pe0);
                     let sub = if acc == Access::Addr { Access::Addr } else { acc };
                     if pe == a {
                         let p = self.lv_mem(inner, sub);
-                        (p, self.rv(ie))
+                        (p, self.index_rv(ie, false))
                     } else {
-                        let i = self.rv(ie);
+                        let i = self.index_rv(ie, false);
                         (self.lv_mem(inner, sub), i)
                     }
                 } else if pe == a {
                     let p = self.rv(pe);
-                    (p, self.rv(ie))
+                    (p, self.index_rv(ie, false))
                 } else {
-                    let i = self.rv(ie);
+                    let i = self.index_rv(ie, false);
                     (self.rv(pe), i)
                 };
-                let it = self.ety(ie);
-                let (w, s) = int_of(self.kind(it)).unwrap_or((64, true));
                 let r = self.reg();
                 // clang diagnoses the element step at the base's begin
                 // (`this->b[n]` at `this`, `(*this).b[n]` at the paren).
@@ -7217,7 +7272,7 @@ impl Compiler<'_> {
         let n = self.node(e);
         let ty = self.ety(e);
         if self.vec_op(e) && self.lanes(ty).is_some() {
-            let _ = self.vec_regs(e);
+            self.vec_effect(e);
             self.next = m;
             return;
         }

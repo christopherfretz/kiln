@@ -112,8 +112,8 @@ impl Compiler<'_> {
     /// Initializes the complex object of type `ty` at `p` from operation
     /// `e` (`cx_op`).
     pub(super) fn cx_init(&mut self, e: ExprId, p: u32, ty: OTy) {
-        // kiln-gap: GAP-127
-        let Some(elem) = self.cx_elem(ty) else { return self.unsupported(e) };
+        // `init_inner` calls this for a complex `ty` only.
+        let Some(elem) = self.cx_elem(ty) else { unreachable!("cx_init of a non-complex type") };
         let [re, im] = self.cx_regs(e);
         let es = self.o.types.size(elem);
         self.emit_at(Op::InitStore, 0, &[p, re, elem.0], e);
@@ -162,11 +162,11 @@ impl Compiler<'_> {
     pub(super) fn cx_regs(&mut self, e: ExprId) -> [u32; 2] {
         let e = skip_parens(self.ast(), e);
         let ty = self.ety(e);
-        let Some(elem) = self.cx_elem(ty) else {
-            // kiln-gap: GAP-127
-            self.unsupported(e);
-            return [self.reg(), self.reg()];
-        };
+        // Every caller passes an expression of complex type: an operand
+        // `is_complex_expr` checked, the operand of a complex cast or a
+        // complex operator, or a complex assignment's right operand
+        // (sema converts it to the left operand's type, [expr.ass]/3).
+        let Some(elem) = self.cx_elem(ty) else { unreachable!("cx_regs of a non-complex {e:?}") };
         let node = self.node(e);
         if node.kind() == ExprKind::SubstNonTypeTemplateParmExpr {
             let r = self.ast().exprs.subst_replacement(e);
@@ -207,10 +207,9 @@ impl Compiler<'_> {
             ExprKind::UnaryOperator => self.cx_unary(e, elem),
             ExprKind::BinaryOperator => self.cx_binary(e, elem),
             ExprKind::CallExpr => {
+                // `cx_op` admits a call only when it is `__builtin_complex`.
                 let Some([a, b]) = self.builtin_complex_args(e) else {
-                    // kiln-gap: GAP-127
-                    self.unsupported(e);
-                    return [self.reg(), self.reg()];
+                    unreachable!("complex operation call other than __builtin_complex")
                 };
                 [self.rv_copy(a), self.rv_copy(b)]
             }
@@ -253,10 +252,10 @@ impl Compiler<'_> {
                 [re, im]
             }
             _ => {
+                // The complex-to-complex casts `cx_op` admits: sema
+                // builds them on a complex operand ([expr.static.cast]).
                 let Some(xe) = self.cx_elem(xt) else {
-                    // kiln-gap: GAP-127
-                    self.unsupported(e);
-                    return [self.reg(), self.reg()];
+                    unreachable!("complex-to-complex cast of a non-complex operand")
                 };
                 let src = self.cx_regs(x);
                 if self.kind(xe) == self.kind(elem) {
@@ -302,11 +301,9 @@ impl Compiler<'_> {
         op: UnaryOp,
         e: ExprId,
     ) -> [u32; 2] {
-        let Place::Mem(p) = place else {
-            // kiln-gap: GAP-127
-            self.unsupported(e);
-            return [self.reg(), self.reg()];
-        };
+        // A complex object is memory-class (`T[2]`, never a register
+        // local) and never a bit-field or a vector lane.
+        let Place::Mem(p) = place else { unreachable!("complex lvalue not in memory: {place:?}") };
         let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
         let akind = if inc { ak::INCREMENT } else { ak::DECREMENT };
         let old = self.cx_load(p, elem, akind, e);
@@ -443,9 +440,12 @@ impl Compiler<'_> {
             let t = if self.is_complex_expr(a) { self.ety(a) } else { self.ety(b) };
             self.cx_elem(t).unwrap_or(t)
         };
+        // [expr.rel]/2 and [expr.spaceship]/4 reject a complex operand in
+        // sema, `binary` evaluates a comma and the logical and assignment
+        // operators, and an arithmetic result is complex: only `==` and
+        // `!=` ([expr.eq]/4) with a complex operand give a scalar here.
         let Some(c) = cmp_of(op).filter(|_| matches!(op, BinaryOp::EQ | BinaryOp::NE)) else {
-            // kiln-gap: GAP-127
-            return self.unsupported(e);
+            unreachable!("complex operand of scalar binary operator {op:?}")
         };
         let ([ra, ia], _) = self.cx_operand(a);
         let ([rb, ib], _) = self.cx_operand(b);
@@ -569,11 +569,8 @@ impl Compiler<'_> {
         let lelem = self.cx_elem(lty);
         let old = match (lelem, place) {
             (Some(le), Place::Mem(p)) => (self.cx_load(p, le, ak::COMPOUND, e), false),
-            (Some(_), _) => {
-                // kiln-gap: GAP-127
-                self.unsupported(e);
-                return place;
-            }
+            // A complex object is memory-class (see `cx_inc_dec`).
+            (Some(_), _) => unreachable!("complex lvalue not in memory: {place:?}"),
             (None, _) => {
                 let re = self.reg();
                 self.load(place, lty, ak::COMPOUND, e, re);

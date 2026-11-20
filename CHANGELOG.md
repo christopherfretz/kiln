@@ -99,6 +99,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 - Value-dependent conditions in a template definition are no longer
   constant-evaluated (WP-1741).
+- Constant evaluation of a `_BitInt` wider than 128 bits as a subscript,
+  a pointer offset (`p + s`, `p += s`), the shift count of a narrow left
+  operand (`1 << s`, `x <<= s`) and the operand of an integral to pointer
+  conversion, and of `.hi`/`.odd` of an odd-sized ext vector prvalue,
+  whose lane past the end holds no value (WP-1742).
+
+### Fixed
+
+- A pointer to a bit-field member (`&C::b`) is an error, "address of
+  bit-field requested", as clang (WP-1742).
+- In a constant expression, `p += s` and `p -= s` with a pointer `p` and a
+  `_BitInt` `s` wider than 128 bits no longer compute a wrong pointer, and
+  `reinterpret_cast<S>(s)` of such a `_BitInt` is not a constant
+  expression (WP-1742).
+- In a constant expression, a lane subscript (`v[i]`), an element
+  access, `__builtin_convertvector`, `__builtin_shufflevector`, a
+  reduction or an operator on a vector of `_BitInt` lanes wider than 128
+  bits no longer crashes the compiler: it fails with the note that such
+  a `_BitInt` is not supported yet (WP-1742).
 - Explicit instantiations and specializations that reported "not yet
   implemented" (WP-1740): `template struct S;` naming a class that is no
   member class of a class template specialization is "explicit

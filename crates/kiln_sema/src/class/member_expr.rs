@@ -3144,6 +3144,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return Some(self.recover_err(&[e], loc));
         }
+        // [class.bit]/3: there are no pointers to bit-fields (clang's
+        // `err_typecheck_address_of` "bit-field" for `&C::b`, an
+        // anonymous member's too).
+        let field = match self.kind_of(d) {
+            DeclKind::IndirectField => {
+                self.ast.lists.iter::<DeclId>(self.ast.indirect_field_chain(d)).last()
+            }
+            _ => Some(d),
+        };
+        if field.and_then(|f| self.ast.decls.field(f)).is_some_and(|f| f.bit_width.is_some()) {
+            self.error(DiagId::sema_addrof_bitfield, loc);
+            return Some(self.recover_err(&[e], loc));
+        }
         let operand = if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
             e
         } else {

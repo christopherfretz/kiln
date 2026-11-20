@@ -771,7 +771,14 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1765 | the constant evaluator silently traps on the floating-point elementwise builtins other than `abs` (crates/kiln_oven/src/compile/builtins.rs, the `TyKind::Float(_) => self.trap` arm; no static-gaps marker): implement them as clang 22 evaluates them, or record the site as a gap | WP-1741 | open |
 | WP-1766 | a constexpr constructor of a class with a virtual base is accepted; clang 22 rejects it: check [dcl.constexpr] and [class.virtual] at the target draft and what GCC 16.1 does, then diagnose as the standard requires | WP-1741 | open |
 | WP-1767 | C: `_Static_assert(((union U)3).i == 3, "")` is accepted; clang rejects it (a GNU cast to union is not an integer constant expression in C) | WP-1741 | open |
-| WP-1742 | Oven traps: types: GAP-125..GAP-129 (35 sites, 0 cases) | WP-1719 | open |
+| WP-1742 | Oven traps: types: GAP-125..GAP-129 (35 sites, 0 cases) | WP-1719 | in progress |
+| WP-1768 | a constant-evaluation note prints a `_BitInt` index or shift count wider than 128 bits as the clamped value; clang prints the exact one (crates/kiln_oven/src/vm/wide.rs, the clamp near line 193) | WP-1742 | open |
+| WP-1769 | `_BitInt` sema against clang 22: a false `-Wliteral-conversion` "out of range" for `_BitInt(200) r = 1e40` (crates/kiln_sema/src/impcast.rs:470); no ">128 bits" error for `__builtin_mul_overflow` on a wider `_BitInt`; the builtin set differs (kiln has `__builtin_ffsg`/`__builtin_parityg`, clang 22 does not; kiln lacks `__builtin_elementwise_popcount`/`bitreverse`/`fshl` and `__builtin_bswapg`) | WP-1742 | open |
+| WP-1770 | vectors of `_BitInt`: kiln accepts a non-power-of-2 element width (clang rejects) and rejects `vector_size` of `_BitInt(256)` (clang accepts); `__builtin_bit_cast` from `_BitInt(256)` to a vector is rejected (clang 22 accepts) | WP-1742 | open |
+| WP-1771 | accepted where clang rejects: a multi-word functional cast `unsigned int{3}` ([expr.type.conv] needs a simple-type-specifier); `_Atomic(_Complex double) x = c1;` in C++ | WP-1742 | open |
+| WP-1772 | C: an assignment expression is built as an lvalue (C23 6.5.17.1: it is not); a C23 `constexpr` initializer accepts a statement expression containing an assignment | WP-1742 | open |
+| WP-1776 | harness: an `xfail` never masks an internal compiler error; a crash (kiln's "internal compiler error" exit) under `xfail` is a FAIL (WP-1742's xfail repro hid an ICE that only the `read_view` unit test caught) | WP-1742 | open |
+| WP-1777 | `__builtin_vectorelements` (clang 18+) is missing | WP-1742 | open |
 | WP-1743 | reflection: GAP-130..GAP-134 (5 sites, 0 cases) | WP-1719 | open |
 | WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | open |
 | WP-1745 | misc: GAP-144..GAP-167 (30 sites, 0 cases) | WP-1719 | in progress |

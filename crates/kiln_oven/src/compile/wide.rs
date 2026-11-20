@@ -13,8 +13,11 @@
 use kiln_ast::ExprId;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 
-use super::{Access, Compiler, Place, cmp_of, eval_int, float_code, int_of, int_op, skip_parens};
-use crate::kbc::{Op, ak, wide};
+use super::{
+    Access, Compiler, Place, REINTERPRET_CONV, cmp_of, eval_int, float_code, int_of, int_op,
+    skip_parens,
+};
+use crate::kbc::{Op, ak, cce, int_aux, wide};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
@@ -122,8 +125,12 @@ impl Compiler<'_> {
                 self.wide_store(pf, src, ty, k, init, e);
                 self.patch_here(end);
             }
+            // A wide value is memory-class: never a register.
+            Place::Reg(_) => unreachable!("wide value in a register: {e:?}"),
+            // A lane of a vector of wide lanes: the Oven's vector lanes
+            // are registers.
             // kiln-gap: GAP-126
-            Place::Reg(_) | Place::Lane { .. } => self.unsupported(e),
+            Place::Lane { .. } => self.unsupported(e),
         }
     }
 
@@ -181,16 +188,26 @@ impl Compiler<'_> {
     /// The register value of a shift count `c` (`x`: its width | signed
     /// << 8): a wide count is clamped to 128 bits.
     fn shift_count(&mut self, c: ExprId) -> (u32, u32) {
-        let ct = self.ety(c);
-        if let Some((_, s)) = self.o.types.wide(ct) {
-            let a = self.wide_place(c);
+        let (r, (w, s)) = self.index_rv(c, true);
+        (r, w | u32::from(s) << 8)
+    }
+
+    /// The register value of integer operand `i` of a subscript, a pointer
+    /// offset or a shift count (`copy`: an `rv_copy`), and its width and
+    /// signedness: a wide `_BitInt` clamped to 128 bits, as wide as a
+    /// register gets (a value out of them is out of range for every array
+    /// and every shift; spec/oven.md "`_BitInt`").
+    pub(super) fn index_rv(&mut self, i: ExprId, copy: bool) -> (u32, (u32, bool)) {
+        let it = self.ety(i);
+        if let Some((_, s)) = self.o.types.wide(it) {
+            let a = self.wide_place(i);
             let r = self.reg();
             let x = 128 | u32::from(s) << 8;
-            self.wide(wide::TO, 0, [r, a, 0], ct, x | 1 << 9, c);
-            return (r, x);
+            self.wide(wide::TO, 0, [r, a, 0], it, x | 1 << 9, i);
+            return (r, (128, s));
         }
-        let r = self.rv_copy(c);
-        (r, self.narrow_code(ct))
+        let r = if copy { self.rv_copy(i) } else { self.rv(i) };
+        (r, int_of(self.kind(it)).unwrap_or((64, true)))
     }
 
     /// Initializes the wide object of type `ty` at `p` from `e`, if `e` is
@@ -248,7 +265,25 @@ impl Compiler<'_> {
             k if k.is_cast() => {
                 let op = self.ast().exprs.operand(e);
                 let ot = self.ety(op);
-                match self.ast().exprs.cast_kind(e) {
+                let ck = self.ast().exprs.cast_kind(e);
+                if k == ExprKind::CXXReinterpretCastExpr {
+                    // [expr.const]/5.15, whatever conversion it performs
+                    // (`reinterpret_cast<S>(s)`, `reinterpret_cast<S>(p)`;
+                    // `cast`'s rule).
+                    self.cce_check(e, "reinterpret_cast is not allowed in a constant expression");
+                }
+                match ck {
+                    CastKind::PointerToIntegral => {
+                        // As `cast`'s, into a wide integer: the address's
+                        // 64 bits, zero-extended.
+                        if k != ExprKind::CXXReinterpretCastExpr {
+                            self.cce_check(e, REINTERPRET_CONV);
+                        }
+                        let r = self.rv(op);
+                        let v = self.reg();
+                        self.cce(e, cce::PTR_TO_INT, v, r, REINTERPRET_CONV);
+                        self.wide(wide::FROM | init, 0, [p, v, 0], ty, 64, e);
+                    }
                     CastKind::LValueToRValue => {
                         let a = self.wide_place(op);
                         self.wide(wide::MOV | init, 0, [p, a, 0], ty, 0, e);
@@ -342,11 +377,42 @@ impl Compiler<'_> {
         let lty = self.ety(lhs);
         let ct = self.ty(x.result_ty);
         let Some(sub) = wide_sub(op) else {
-            // kiln-gap: GAP-126
-            self.unsupported(e);
-            return Place::Mem(self.reg());
+            unreachable!("compound assignment without a wide operation: {e:?}");
         };
         let shift = matches!(sub, wide::SHL | wide::SHR);
+        if let TyKind::Ptr(pointee) = self.kind(lty) {
+            // `p += i`, `p -= i` with a wide offset ([expr.ass]/7, the
+            // right operand first, [expr.ass]/1).
+            let k = ak::COMPOUND;
+            let (ri, (w, s)) = self.index_rv(x.rhs, true);
+            let place = self.lv_rmw(lhs, e);
+            self.volatile_glvalue(lhs, k, e);
+            let (old, new) = (self.reg(), self.reg());
+            self.load(place, lty, k, e, old);
+            let aux = int_aux(w as u8, s) | u32::from(sub == wide::SUB) << 9;
+            self.emit_ptr_add(aux, &[new, old, ri, pointee.0], e);
+            self.store(place, new, lty, k, e);
+            return place;
+        }
+        if shift && self.o.types.wide(lty).is_none() {
+            // A narrow left operand shifted by a wide count: computed in
+            // its promoted type.
+            let k = ak::COMPOUND;
+            let (c, cx) = self.shift_count(x.rhs);
+            let place = self.lv_rmw(lhs, e);
+            self.volatile_glvalue(lhs, k, e);
+            let old = self.reg();
+            self.load(place, lty, k, e, old);
+            let (a, res, new) = (self.reg(), self.reg(), self.reg());
+            self.convert(old, lty, ct, a, e);
+            let (w, s) = int_of(self.kind(ct)).unwrap_or((32, true));
+            let iop = if sub == wide::SHL { Op::IShl } else { Op::IShr };
+            let aux = int_aux(w as u8, s) | (cx & 0xFF) << 9 | (cx >> 8 & 1) << 17;
+            self.emit_at(iop, aux, &[res, a, c], e);
+            self.convert(res, ct, lty, new, e);
+            self.store(place, new, lty, k, e);
+            return place;
+        }
         if self.o.types.wide(ct).is_none() && !shift {
             return self.wide_float_compound(e, lhs, lty, x.rhs, ct);
         }
@@ -370,9 +436,10 @@ impl Compiler<'_> {
                 self.wide(wide::FROM | wide::INIT, 0, [t, r, 0], ct, rx, e);
                 (t, 0)
             } else {
-                // kiln-gap: GAP-126
-                self.unsupported(e);
-                return Place::Mem(self.reg());
+                // A wide computation type has integral operands (a
+                // floating one makes it floating, a pointer `lhs` is
+                // above, a complex one is `cx_compound_assign`'s).
+                unreachable!("wide compound assignment of a non-integral operand: {e:?}");
             }
         };
         let place = self.lv_rmw(lhs, e);
@@ -408,6 +475,8 @@ impl Compiler<'_> {
                 self.wide(wide::TO, 0, [new, t, 0], ct, lx, e);
                 self.store(place, new, lty, k, e);
             }
+            // A lane of a vector of wide lanes (its bit-fields are in
+            // memory above): the Oven's vector lanes are registers.
             // kiln-gap: GAP-126
             _ => self.unsupported(e),
         }
@@ -439,9 +508,8 @@ impl Compiler<'_> {
     ) -> Place {
         let op = self.ast().exprs.binary_op(e);
         let Some(iop) = int_op(op) else {
-            // kiln-gap: GAP-126
-            self.unsupported(e);
-            return Place::Mem(self.reg());
+            // `wide_compound_assign` came here for an arithmetic operator.
+            unreachable!("wide floating compound assignment without an operation: {e:?}");
         };
         let k = ak::COMPOUND;
         let fx = self.float_x(ct);
@@ -472,6 +540,7 @@ impl Compiler<'_> {
                 self.convert(old, lty, ct, a, e);
             }
             _ => {
+                // A lane of a vector of wide lanes, as `wide_compound_assign`.
                 // kiln-gap: GAP-126
                 self.unsupported(e);
                 return place;
@@ -529,18 +598,68 @@ impl Compiler<'_> {
         self.wide(wide::CMP, 0, [dst, cond, b], ty, c, v);
     }
 
-    /// The comparison `e` of wide operands into register `dst`.
-    pub(super) fn wide_compare(&mut self, e: ExprId, dst: u32) {
+    /// The register value of integer operand `i` of an integral to pointer
+    /// conversion or of a vector lane subscript (which clang truncates to
+    /// 64 bits): a wide `_BitInt` truncated to its low 64 bits.
+    pub(super) fn low64_rv(&mut self, i: ExprId) -> u32 {
+        let it = self.ety(i);
+        let Some((_, s)) = self.o.types.wide(it) else { return self.rv(i) };
+        let a = self.wide_place(i);
+        let r = self.reg();
+        self.wide(wide::TO, 0, [r, a, 0], it, 64 | u32::from(s) << 8, i);
+        r
+    }
+
+    /// The builtin binary operator `e` of a narrow type with a wide
+    /// operand, into register `dst`: a comparison, a pointer offset, or a
+    /// shift of a narrow left operand by a wide count (an arithmetic or
+    /// bitwise operator's result, and a wide left operand's shift, are
+    /// wide: `wide_init`).
+    pub(super) fn wide_binary(&mut self, e: ExprId, dst: u32) {
         let op = self.ast().exprs.binary_op(e);
         let [l, r] = self.ast().exprs.operands(e);
-        let lt = self.ety(l);
-        let (Some(c), true) = (cmp_of(op), self.ety(r) == lt) else {
-            // kiln-gap: GAP-126
-            return self.unsupported(e);
+        let (lt, rt) = (self.ety(l), self.ety(r));
+        if let Some(c) = cmp_of(op) {
+            // The usual arithmetic conversions gave both operands one type
+            // ([expr.rel]/4, [expr.eq]/7): a narrow one is converted to
+            // the wide one.
+            if rt != lt {
+                unreachable!("wide comparison of operands of distinct types: {e:?}");
+            }
+            let a = self.wide_place(l);
+            let b = self.wide_place(r);
+            return self.wide(wide::CMP, 0, [dst, a, b], lt, c, e);
+        }
+        let ptr = match (self.kind(lt), self.kind(rt)) {
+            (TyKind::Ptr(p), _) | (_, TyKind::Ptr(p)) => Some(p),
+            _ => None,
         };
-        let a = self.wide_place(l);
-        let b = self.wide_place(r);
-        self.wide(wide::CMP, 0, [dst, a, b], lt, c, e);
+        match op {
+            // [expr.add]/4: `p + i`, `i + p`, `p - i`, left operand first.
+            BinaryOp::Add | BinaryOp::Sub if let Some(pointee) = ptr => {
+                let left_ptr = matches!(self.kind(lt), TyKind::Ptr(_));
+                let (rp, (ri, (w, s))) = if left_ptr {
+                    let rp = self.rv(l);
+                    (rp, self.index_rv(r, false))
+                } else {
+                    let i = self.index_rv(l, false);
+                    (self.rv(r), i)
+                };
+                let aux = int_aux(w as u8, s) | u32::from(op == BinaryOp::Sub) << 9;
+                self.emit_ptr_add(aux, &[dst, rp, ri, pointee.0], e);
+            }
+            // [expr.shift]/4: the left operand is sequenced first.
+            BinaryOp::Shl | BinaryOp::Shr => {
+                let a = self.rv_copy(l);
+                let (c, x) = self.shift_count(r);
+                let ty = self.ety(e);
+                let (w, s) = int_of(self.kind(ty)).unwrap_or((32, true));
+                let iop = if op == BinaryOp::Shl { Op::IShl } else { Op::IShr };
+                let aux = int_aux(w as u8, s) | (x & 0xFF) << 9 | (x >> 8 & 1) << 17;
+                self.emit_at(iop, aux, &[dst, a, c], e);
+            }
+            _ => unreachable!("narrow {op:?} with a wide operand: {e:?}"),
+        }
     }
 
     /// Cast `e` of a wide operand to scalar type `ty`, into `dst`.
@@ -562,53 +681,16 @@ impl Compiler<'_> {
                 let x = self.float_x(ty);
                 self.wide(wide::TO_FLOAT, 0, [dst, a, 0], ot, x, e);
             }
-            CastKind::Dependent
-            | CastKind::NoOp
-            | CastKind::LValueToRValue
-            | CastKind::LValueToRValueBitCast
-            | CastKind::LValueBitCast
-            | CastKind::BitCast
-            | CastKind::ArrayToPointerDecay
-            | CastKind::FunctionToPointerDecay
-            | CastKind::BuiltinFnToFnPtr
-            | CastKind::NullToPointer
-            | CastKind::NullToMemberPointer
-            | CastKind::IntegralToPointer
-            | CastKind::PointerToIntegral
-            | CastKind::PointerToBoolean
-            | CastKind::IntegralCast
-            | CastKind::BooleanToSignedIntegral
-            | CastKind::FloatingToIntegral
-            | CastKind::FloatingToBoolean
-            | CastKind::FloatingCast
-            | CastKind::DerivedToBase
-            | CastKind::UncheckedDerivedToBase
-            | CastKind::BaseToDerived
-            | CastKind::Dynamic
-            | CastKind::DerivedToBaseMemberPointer
-            | CastKind::BaseToDerivedMemberPointer
-            | CastKind::MemberPointerToBoolean
-            | CastKind::ReinterpretMemberPointer
-            | CastKind::UserDefinedConversion
-            | CastKind::ConstructorConversion
-            | CastKind::ToVoid
-            | CastKind::ToUnion
-            | CastKind::VectorSplat
-            | CastKind::NonAtomicToAtomic
-            | CastKind::AtomicToNonAtomic
-            | CastKind::IntegralRealToComplex
-            | CastKind::FloatingRealToComplex
-            | CastKind::IntegralComplexCast
-            | CastKind::FloatingComplexCast
-            | CastKind::IntegralComplexToReal
-            | CastKind::FloatingComplexToReal
-            | CastKind::IntegralComplexToBoolean
-            | CastKind::FloatingComplexToBoolean
-            | CastKind::IntegralComplexToFloatingComplex
-            | CastKind::FloatingComplexToIntegralComplex => {
-                // kiln-gap: GAP-126
-                self.unsupported(e);
-            }
+            // A splat to a vector of wide lanes (a vector shifted by a
+            // wide count: clang's operand conversion): the Oven's vector
+            // lanes are registers.
+            // kiln-gap: GAP-126
+            CastKind::VectorSplat => self.unsupported(e),
+            // Otherwise a wide operand with a narrow result is an integral
+            // one's conversion: an integral to pointer one is `cast`'s (as
+            // a narrow operand's), and every other kind has an operand or
+            // a result of another category, or a wide result (`wide_init`).
+            ck => unreachable!("{ck:?} of a wide operand to a narrow type: {e:?}"),
         }
     }
 }

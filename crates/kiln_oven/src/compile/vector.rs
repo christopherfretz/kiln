@@ -195,11 +195,9 @@ impl Compiler<'_> {
                 })
                 .collect();
         }
-        let Some((w, s)) = int_of(k) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
-        };
+        // A vector's lanes are integers, `bool` or floating
+        // ([dcl.attr] GNU `vector_size`, `ext_vector_type`: sema checks).
+        let Some((w, s)) = int_of(k) else { unreachable!("vector lane of kind {k:?}") };
         let xs = self.vec_regs(x);
         let ys = match args.get(1) {
             Some(&y) => self.vec_regs(y),
@@ -219,13 +217,19 @@ impl Compiler<'_> {
     /// `e` (`vec_op`).
     pub(super) fn vec_init(&mut self, e: ExprId, p: u32, ty: OTy) {
         if self.lanes(ty).is_none() {
-            // kiln-gap: GAP-125
-            return self.unsupported(e);
+            unreachable!("vec_init of a non-vector type: `init_inner` checks it")
         }
         let n = self.node(e);
         if n.kind().is_cast() && self.ast().exprs.cast_kind(e) == CastKind::BitCast {
             let r = self.reg();
             return self.vec_bitcast(e, r, Some(p));
+        }
+        if n.kind() == ExprKind::ExtVectorElementExpr {
+            // An indeterminate lane is not read: it stays uninitialized
+            // in the object, as clang's `APValue` keeps it (a later read
+            // of it is the uninitialized read).
+            let lanes = self.ext_elt_lanes(e);
+            return self.store_some_lanes(p, ty, &lanes, e);
         }
         let regs = self.vec_regs(e);
         self.store_lanes(p, ty, &regs, e);
@@ -340,11 +344,20 @@ impl Compiler<'_> {
     /// (a register may hold several lanes: callers only read them).
     pub(super) fn vec_regs(&mut self, e: ExprId) -> Vec<u32> {
         let e = skip_parens(self.ast(), e);
+        // A vector of wide `_BitInt` lanes (an opaque type to the Oven):
+        // the wide-`_BitInt` trap, with a register per lane for the caller.
+        if let Some(n) = self.wide_lane_count(self.ast().exprs.get(e).ty()) {
+            self.wide_bit_int(e);
+            return (0..n).map(|_| self.reg()).collect();
+        }
         let ty = self.ety(e);
+        // Every caller passes a vector-typed expression: an operand
+        // `lanes` checked, or one sema gives a vector type (the operand
+        // of a vector operator, conversion, shuffle, reduction or
+        // element-wise builtin, of `__builtin_convertvector`, an arm of a
+        // vector `?:`), or one of wide lanes (above).
         let Some((elem, n)) = self.lanes(ty) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("vec_regs of a non-vector {e:?}")
         };
         let node = self.node(e);
         if node.kind().is_cast() {
@@ -369,11 +382,14 @@ impl Compiler<'_> {
             ExprKind::BinaryOperator => self.vec_binary(e, elem, n),
             ExprKind::ConvertVectorExpr => {
                 let x = self.ast().exprs.operand(e);
+                if self.wide_lane_count(self.ast().exprs.get(x).ty()).is_some() {
+                    return self.vec_regs(x);
+                }
                 let xt = self.ety(x);
+                // sema requires a vector source (clang's
+                // `err_convertvector_non_vector`), one of wide lanes above.
                 let Some((xe, _)) = self.lanes(xt) else {
-                    // kiln-gap: GAP-125
-                    self.unsupported(e);
-                    return Vec::new();
+                    unreachable!("__builtin_convertvector of a non-vector")
                 };
                 let src = self.vec_regs(x);
                 // clang converts a floating lane to a `bool` lane as to a
@@ -434,38 +450,88 @@ impl Compiler<'_> {
 
     /// The lanes selected by prvalue ext-vector element access `e`
     /// (`.x`, `.wzyx`, `.s3`, `.hi`, ...; clang 19 folds these on a
-    /// prvalue vector, e.g. a compound literal, but not on an object).
+    /// prvalue vector, e.g. a compound literal, but not on an object), for
+    /// an operation that reads them: a lane past the end of an odd-sized
+    /// vector (`ext_elt_lanes`) is an indeterminate value, and reading it
+    /// fails as a read of an uninitialized object does ([expr.const]/10.9;
+    /// spec/oven.md "Vectors").
     pub(super) fn ext_elt_regs(&mut self, e: ExprId) -> Vec<u32> {
-        let ast = self.ast();
-        let base = ast.exprs.operand(e);
-        if ast.exprs.get(e).has(ExprFlags::ARROW) {
-            // `p->x` is a glvalue: not folded (clang 19).
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+        let lanes = self.ext_elt_lanes(e);
+        if let Some(regs) = lanes.iter().copied().collect::<Option<Vec<u32>>>() {
+            return regs;
         }
+        // Through a temporary with those lanes left uninitialized: the
+        // read of each faults at the first indeterminate one.
+        let ty = self.ety(e);
+        let t = self.reg();
+        self.alloc(t, ty, Origin::Temp(e), false, e);
+        if self.lanes(ty).is_some() {
+            self.store_some_lanes(t, ty, &lanes, e);
+            return self.load_lanes(t, ty, ak::READ, e);
+        }
+        // One lane (a scalar result), never stored.
+        let r = self.reg();
+        let loc = self.begin(e);
+        self.emit_site(Op::Load, ak::READ, &[r, t, ty.0], e, loc);
+        vec![r]
+    }
+
+    /// The lanes selected by prvalue ext-vector element access `e`, each
+    /// a register, or `None` for a lane of `.hi`/`.odd` past the end of
+    /// an odd-sized vector (clang lays a 3-lane vector out as 4 lanes: the
+    /// lane exists but no value was ever stored to it). A base that is
+    /// itself such an access composes with it, so `(v.hi).x` reads only
+    /// the lane it names.
+    fn ext_elt_lanes(&mut self, e: ExprId) -> Vec<Option<u32>> {
+        let ast = self.ast();
+        // sema makes `p->x` an lvalue, so a prvalue access is `.` on a
+        // prvalue vector.
+        debug_assert!(!ast.exprs.get(e).has(ExprFlags::ARROW), "prvalue `->` vector access");
+        let base = skip_parens(ast, ast.exprs.operand(e));
         let bt = self.ety(base);
         let count = self.lanes(bt).map_or(0, |(_, n)| u32::try_from(n).unwrap_or(0));
         let ast = self.ast();
         let acc = ast.symbols().as_str(ast.exprs.ext_vector_accessor(e));
+        // sema builds the node only for a valid accessor (`Illegal` and
+        // `Exceeds` are diagnosed and recovered from, `vector_ops.rs`).
         let kiln_ast::expr::ExtVectorAccess::Lanes { lanes, .. } =
             kiln_ast::expr::ext_vector_access(acc, count)
         else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("ext vector element access with an invalid accessor")
         };
-        let src = self.vec_regs(base);
-        if src.is_empty() {
-            return Vec::new();
+        let nested = self.node(base).kind() == ExprKind::ExtVectorElementExpr
+            && !self.node(base).value_category().is_glvalue();
+        let src: Vec<Option<u32>> = if nested {
+            self.ext_elt_lanes(base)
+        } else {
+            self.vec_regs(base).into_iter().map(Some).collect()
+        };
+        lanes.iter().map(|&l| src.get(l as usize).copied().flatten()).collect()
+    }
+
+    /// Initializes the lanes of the vector of type `vty` at `p` from
+    /// `regs`, leaving a `None` lane uninitialized.
+    fn store_some_lanes(&mut self, p: u32, vty: OTy, regs: &[Option<u32>], e: ExprId) {
+        let Some((elem, _)) = self.lanes(vty) else { return };
+        let es = self.o.types.size(elem);
+        for (i, r) in regs.iter().enumerate() {
+            if let Some(r) = *r {
+                let q = self.elem_ptr(p, i as u64 * es, e);
+                self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
+            }
         }
-        let Some(lanes) = lanes.iter().map(|&l| src.get(l as usize).copied()).collect() else {
-            // An odd vector's `.hi`/`.odd` past its end.
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
-        };
-        lanes
+    }
+
+    /// A discarded-value vector operation `e`: evaluated for its effects
+    /// (an ext vector element access does not read an indeterminate lane
+    /// it selects).
+    pub(super) fn vec_effect(&mut self, e: ExprId) {
+        let e = skip_parens(self.ast(), e);
+        if self.node(e).kind() == ExprKind::ExtVectorElementExpr {
+            let _ = self.ext_elt_lanes(e);
+        } else {
+            let _ = self.vec_regs(e);
+        }
     }
 
     /// `__builtin_shufflevector(a, b, i...)` with folded indices (clang
@@ -476,15 +542,16 @@ impl Compiler<'_> {
     fn vec_shuffle(&mut self, e: ExprId) -> Vec<u32> {
         let ast = self.ast();
         let subs: Vec<ExprId> = ast.lists.iter(ast.exprs.shuffle_subs(e)).collect();
+        // sema folds the mask (empty for the unary form) once nothing is
+        // dependent, and requires two operands (`act_on_shufflevector`). A
+        // value-dependent mask is in a template's pattern, which a fold
+        // (codegen's prepass) may try: it has no value, silently.
         let Some(mask) = ast.exprs.shuffle_mask(e, &ast.lists).map(<[u32]>::to_vec) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
+            self.trap(e, "");
             return Vec::new();
         };
         let (Some(&x), Some(&y)) = (subs.first(), subs.get(1)) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("__builtin_shufflevector with fewer than two operands")
         };
         if subs.len() == 2 {
             // The unary form with a vector mask: clang 19 crashes
@@ -522,22 +589,18 @@ impl Compiler<'_> {
         let ast = self.ast();
         let args: Vec<ExprId> =
             ast.lists.get(ast.exprs.call_args(e)).iter().map(|&x| ExprId::new(x)).collect();
+        // sema (`builtin_shuffle`) requires two or three arguments, vector
+        // operands and an integer vector mask.
         let (Some(&a), Some(&m)) = (args.first(), args.last()) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("__builtin_shuffle without arguments")
         };
         let b = (args.len() == 3).then(|| args[1]);
         let (vt, mty) = (self.ety(a), self.ety(m));
         let (Some((elem, n)), Some((me, _))) = (self.lanes(vt), self.lanes(mty)) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("__builtin_shuffle of a non-vector")
         };
         let Some((w, _)) = int_of(self.kind(me)) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Vec::new();
+            unreachable!("__builtin_shuffle with a non-integer mask")
         };
         let ia = int_aux(w as u8, false);
         let pa = self.vec_addr(a);
@@ -678,6 +741,19 @@ impl Compiler<'_> {
             self.effect(a);
             return self.vec_regs(b);
         }
+        if op == BinaryOp::Assign || op.is_compound_assignment() {
+            // A C assignment is a prvalue ([C23 6.5.17.1]/3; kiln's AST
+            // makes it an lvalue as in C++, so this is defensive): the
+            // stored value, read back.
+            let ty = self.ety(a);
+            let place = if op == BinaryOp::Assign {
+                self.vec_assign(e, ty)
+            } else {
+                self.vec_compound_assign(e, ty)
+            };
+            let Place::Mem(p) = place else { unreachable!("vector assignment place") };
+            return self.load_lanes(p, ty, ak::READ, e);
+        }
         let (la, ae) = self.vec_or_scalar(a, n);
         let (lb, be) = self.vec_or_scalar(b, n);
         let kinds = (self.kind(ae), self.kind(be));
@@ -699,13 +775,13 @@ impl Compiler<'_> {
                 let r = self.reg();
                 self.emit(Op::ICast, 8 | w << 9 | 1 << 17, &[r, d]);
                 out.push(r);
-            } else if let Some(iop) = int_op(op) {
+            } else {
+                // `vec_op` leaves out `<=>` ([expr.spaceship]: no vector
+                // operands), and `.*`/`->*` designate a glvalue (or a
+                // member function): the rest are arithmetic.
+                let Some(iop) = int_op(op) else { unreachable!("vector binary operator {op:?}") };
                 self.arith(iop, elem, be, d, ra, rb, e);
                 out.push(d);
-            } else {
-                // kiln-gap: GAP-125
-                self.unsupported(e);
-                return out;
             }
         }
         out
@@ -717,9 +793,17 @@ impl Compiler<'_> {
     /// vector is not folded, silently.
     pub(super) fn vec_reduce(&mut self, e: ExprId, bid: u32, x: ExprId, dst: u32) {
         use kiln_ast::decl::builtin as id;
+        // A vector of wide `_BitInt` lanes (an opaque type to the Oven).
+        if self.wide_lane_count(self.ast().exprs.get(x).ty()).is_some() {
+            self.wide_bit_int(x);
+            return;
+        }
         let xt = self.ety(x);
-        // kiln-gap: GAP-125
-        let Some((elem, _)) = self.lanes(xt) else { return self.unsupported(e) };
+        // sema requires a vector argument (`builtin_reduce`), one of wide
+        // lanes above.
+        let Some((elem, _)) = self.lanes(xt) else {
+            unreachable!("__builtin_reduce_* of a non-vector")
+        };
         if !matches!(self.kind(elem), TyKind::Int { .. } | TyKind::Bool) {
             return self.trap(e, "");
         }
@@ -835,23 +919,18 @@ impl Compiler<'_> {
         let x = *ast.exprs.compound_assign(e);
         let op = ast.exprs.binary_op(e);
         let lhs = ExprId::new(self.node(e).a());
+        // Both callers pass the vector type of the left operand.
         let Some((elem, n)) = self.lanes(ty) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Place::Mem(self.reg());
+            unreachable!("vector compound assignment type")
         };
-        let Some(iop) = int_op(op) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Place::Mem(self.reg());
-        };
+        // Every compound assignment operator has its arithmetic operator.
+        let Some(iop) = int_op(op) else { unreachable!("compound assignment {op:?}") };
         // [expr.assign]/1: the right operand is sequenced first.
         let (rb, be) = self.vec_or_scalar(x.rhs, n);
-        let Place::Mem(p) = self.lv_rmw(lhs, e) else {
-            // kiln-gap: GAP-125
-            self.unsupported(e);
-            return Place::Mem(self.reg());
-        };
+        // A vector object is memory-class (an array or a `bool` lane
+        // pack: never a register local, a bit-field or a lane).
+        let place = self.lv_rmw(lhs, e);
+        let Place::Mem(p) = place else { unreachable!("vector lvalue not in memory: {place:?}") };
         let old = self.load_lanes(p, ty, ak::COMPOUND, e);
         let new: Vec<u32> = old
             .iter()

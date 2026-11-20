@@ -1383,8 +1383,17 @@ impl Oven {
                         return Ok(());
                     }
                 }
+                // clang's `CheckEvaluationResult` does not look into a
+                // vector: a lane never stored (an odd-sized vector's `.hi`
+                // past its end, `compile/vector.rs`) stays out of the
+                // image, as padding.
+                let vector = self.types.is_vector(b.ast(), t);
                 for i in 0..n as usize {
-                    let r = Ptr::with_off(raw, u64::from(p.off) + (i * es) as u64, false);
+                    let off = u64::from(p.off) + (i * es) as u64;
+                    if vector && !self.mem.space(st).is_init(u64::from(a.base) + off, e.size) {
+                        continue;
+                    }
+                    let r = Ptr::with_off(raw, off, false);
                     self.walk(b, s, elem, r, at + i * es, field, loc)?;
                 }
             }
