@@ -20,7 +20,7 @@ use kiln_ast::DeclId;
 use kiln_ast::attr::{AttrKind as K, AttrNode};
 use kiln_ast::decl::{DeclKind, ParamData};
 use kiln_ast::ids::RawId;
-use kiln_ast::sanitize::{SanitizerSet as San, no_sanitize_set};
+use kiln_ast::sanitize::{SanitizerSet as San, no_sanitize_coverage, no_sanitize_set};
 use kiln_llvm::{Attr, AttrKind, AttrSetId, GlobalSanitizer, TypeId as LTy};
 use kiln_source::Loc;
 
@@ -94,6 +94,31 @@ impl Cg<'_> {
             }
         }
         m
+    }
+
+    /// LLVM `SanitizerCoverage`'s `-fsanitize-coverage-allowlist=` /
+    /// `-ignorelist=` checks, made attributes (WP-1863; the pass `opt`
+    /// runs reads no list): every definition gets `nosanitize_coverage`
+    /// when the lists leave out the module's source file (`src:`), else
+    /// each whose symbol they leave out (`fun:`). The pass then skips
+    /// the same functions; unlike clang's, the IR shows the attribute.
+    pub(crate) fn coverage_list_attrs(&mut self) {
+        let Some(l) = self.opts.coverage_lists.clone() else { return };
+        let all = l.excludes("src", &self.opts.source_filename);
+        let fids: Vec<_> = self
+            .m
+            .functions()
+            .filter(|(_, f)| !f.is_declaration() && (all || l.excludes("fun", f.name())))
+            .map(|(id, _)| id)
+            .collect();
+        let flag = Attr::Flag(AttrKind::NoSanitizeCoverage);
+        for id in fids {
+            let mut v = self.m.attrs_of(self.m.func(id).attrs.func).to_vec();
+            if !v.contains(&flag) {
+                v.push(flag.clone());
+                self.m.func_mut(id).attrs.func = self.m.attr_set(&v);
+            }
+        }
     }
 
     /// The pattern implicitly instantiated variable template
@@ -420,6 +445,15 @@ impl Cg<'_> {
         }
         if has(K::NO_PROFILE_INSTRUMENT_FUNCTION) {
             a.push(Attr::Flag(AttrKind::NoProfile));
+        }
+        // `StartFunction`: `no_sanitize("coverage")` with coverage on
+        // (WP-1863).
+        if self.opts.sanitize.coverage
+            && d.is_some_and(|d| {
+                self.fn_attrs_of(d, K::NO_SANITIZE).iter().any(|n| no_sanitize_coverage(n.b))
+            })
+        {
+            a.push(Attr::Flag(AttrKind::NoSanitizeCoverage));
         }
         // `StartFunction`: the sanitizer attributes of its `SanOpts`
         // (`CreateGlobalInitOrCleanUpFunction` adds the module's to an

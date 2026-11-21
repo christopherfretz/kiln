@@ -674,6 +674,22 @@ All `-fkiln-*` flags are experimental, except the PCH snapshot and validation fl
 - The full list of intentional differences is spec/driver.md,
   "Deviations from clang 19".
 
+### Floating-point flags
+
+`-ffp-model=precise|strict|fast|aggressive`, `-f[no-]fast-math`,
+`-Ofast`, `-ffp-contract=`, `-f[no-]honor-nans` and the other value
+flags behave as in clang 22 (at `-fclang-compat=19`, as in clang 19,
+which has no `aggressive`). The complex-arithmetic flags work too:
+`-fcomplex-arithmetic=full|improved|promoted|basic`,
+`-f[no-]cx-limited-range` and `-f[no-]cx-fortran-rules`, with clang's
+`-Woverriding-complex-range` warnings (clang 19's
+`-Woverriding-option` at `-fclang-compat=19`). `promoted`, which
+`-ffp-model=fast` selects, divides complex numbers in the next wider
+floating type (`_Float16` in `float`, `float` in `double`, `double` in
+`long double`). `long double` has no wider type, so its division uses
+Smith's algorithm, and kiln warns once per such type at the end of the
+file (`-Whigher-precision-for-complex-division`), as clang 22 does.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -732,6 +748,29 @@ runtime is the linking `clang++`'s. Other sanitizers (cfi, dataflow,
 safe-stack, kcfi, memtag, ...) are rejected. `-fsanitize-ignorelist=`,
 `-ftrapv` and `-fsanitize-merge=` work. A few `undefined` checks are not
 done yet; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md#sanitizers-and-coverage).
+
+Sanitizer coverage works as in clang: `-fsanitize-coverage=` with any of
+clang's features (`trace-pc-guard`, `trace-pc`, `inline-8bit-counters`,
+`inline-bool-flag`, `pc-table`, `trace-cmp`, `trace-div`, `trace-gep`,
+`trace-loads`, `trace-stores`, `stack-depth`, `control-flow`,
+`indirect-calls`, `no-prune`, and the `func`/`bb`/`edge` insertion
+points), `-fno-sanitize-coverage=` to take features back, and
+`-fsanitize-coverage-allowlist=`/`-fsanitize-coverage-ignorelist=` to
+limit it to, or keep it from, some files (`src:`) and functions
+(`fun:`). `-fsanitize=fuzzer` turns on libFuzzer's feature set, which
+these flags adjust. `__attribute__((no_sanitize("coverage")))` exempts a
+function. A callback-based feature (`trace-pc-guard`, `trace-cmp`, ...)
+needs no runtime when the program defines the callbacks itself:
+
+```sh
+kiln++ -fsanitize-coverage=trace-pc-guard app.cpp callbacks.cpp -o app
+```
+
+The deprecated forms (`-fsanitize-coverage=1`, `trace-bb`,
+`8bit-counters`, an insertion point alone) warn as in clang.
+`-fsanitize-coverage-stack-depth-callback-min=<n>` (clang 22) works
+when kiln uses LLVM 22; with LLVM 19, which lacks it, it has no effect.
+See spec/driver.md, "Sanitizers".
 
 ### Coverage
 

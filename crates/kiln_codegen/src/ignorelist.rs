@@ -41,6 +41,9 @@ pub enum IgnorelistError {
 struct Section {
     /// The sanitizers its glob names.
     mask: San,
+    /// Its glob matches `coverage`, the section LLVM's
+    /// `SanitizerCoverage` asks (WP-1863).
+    coverage: bool,
     /// The index of its file among the lists, in command-line order.
     file: u32,
     /// Its file's version is 3 or later: `src:` and `mainfile:` queries
@@ -157,7 +160,13 @@ impl SanitizerIgnorelist {
     fn parse_one(&mut self, text: &str, file: u32, version: u64) -> Result<(), String> {
         let globs = version > 1;
         let dot_slash = version > 2;
-        self.sections.push(Section { mask: San::ALL, file, dot_slash, entries: Vec::new() });
+        self.sections.push(Section {
+            mask: San::ALL,
+            coverage: true,
+            file,
+            dot_slash,
+            entries: Vec::new(),
+        });
         for (n, raw) in text.split('\n').enumerate() {
             let line = u32::try_from(n + 1).unwrap_or(u32::MAX);
             // `line_iterator` skips lines whose first byte is the comment
@@ -173,9 +182,15 @@ impl SanitizerIgnorelist {
                 let Some(name) = rest.strip_suffix(']') else {
                     return Err(format!("malformed section header on line {line}: {l}"));
                 };
-                let mask = section_mask(name, globs)
+                let (mask, coverage) = section_mask(name, globs)
                     .map_err(|e| format!("malformed section at line {line}: '{name}': {e}"))?;
-                self.sections.push(Section { mask, file, dot_slash, entries: Vec::new() });
+                self.sections.push(Section {
+                    mask,
+                    coverage,
+                    file,
+                    dot_slash,
+                    entries: Vec::new(),
+                });
                 continue;
             }
             let (prefix, postfix) = l.split_once(':').unwrap_or((l, ""));
@@ -210,9 +225,30 @@ impl SanitizerIgnorelist {
         query: &str,
         category: &str,
     ) -> Option<(u32, u32)> {
+        self.blame_in(|s| s.mask.has_any(mask), prefix, query, category)
+    }
+
+    /// LLVM `SpecialCaseList::inSection("coverage", prefix, query)`, as
+    /// `SanitizerCoverage` asks an allowlist or ignorelist of
+    /// `-fsanitize-coverage-allowlist=` / `-ignorelist=` (WP-1863):
+    /// whether an entry of a section whose glob matches `coverage` lists
+    /// `query` (the module's source file name under `src`, a function's
+    /// symbol under `fun`).
+    #[must_use]
+    pub fn in_coverage_section(&self, prefix: &str, query: &str) -> bool {
+        self.blame_in(|s| s.coverage, prefix, query, "").is_some()
+    }
+
+    fn blame_in(
+        &self,
+        section: impl Fn(&Section) -> bool,
+        prefix: &str,
+        query: &str,
+        category: &str,
+    ) -> Option<(u32, u32)> {
         let mut best = None;
         let path = prefix == "src" || prefix == "mainfile";
-        for s in self.sections.iter().filter(|s| s.mask.has_any(mask)) {
+        for s in self.sections.iter().filter(|s| section(s)) {
             let q = if path && s.dot_slash { remove_leading_dotslash(query) } else { query };
             for e in &s.entries {
                 if &*e.prefix == prefix
@@ -248,16 +284,39 @@ impl SanitizerIgnorelist {
     }
 }
 
+/// The `-fsanitize-coverage-allowlist=` and `-ignorelist=` lists of a
+/// compilation (WP-1863), as LLVM's `SanitizerCoverage` reads them.
+#[derive(Clone, Debug, Default)]
+pub struct CoverageLists {
+    /// The allowlists (`None`: none given).
+    pub allow: Option<SanitizerIgnorelist>,
+    /// The ignorelists (`None`: none given).
+    pub ignore: Option<SanitizerIgnorelist>,
+}
+
+impl CoverageLists {
+    /// Whether `SanitizerCoverage` leaves `query` out: an allowlist does
+    /// not list it, or an ignorelist does (`prefix` `src` for the
+    /// module's source file name, `fun` for a function's symbol).
+    #[must_use]
+    pub fn excludes(&self, prefix: &str, query: &str) -> bool {
+        self.allow.as_ref().is_some_and(|a| !a.in_coverage_section(prefix, query))
+            || self.ignore.as_ref().is_some_and(|i| i.in_coverage_section(prefix, query))
+    }
+}
+
 /// clang `SanitizerSpecialCaseList::createSanitizerSections`: the
 /// sanitizers a section's pattern (a glob, or a regular expression
-/// without `globs`) names, or the pattern's error.
-fn section_mask(name: &str, globs: bool) -> Result<San, String> {
+/// without `globs`) names, and whether it matches `coverage`; or the
+/// pattern's error.
+fn section_mask(name: &str, globs: bool) -> Result<(San, bool), String> {
     let g = Pattern::new(name, globs)?;
-    Ok(SANITIZERS
+    let mask = SANITIZERS
         .iter()
         .chain(GROUPS)
         .filter(|(n, _)| g.matches(n))
-        .fold(San::NONE, |m, (_, s)| m.union(*s)))
+        .fold(San::NONE, |m, (_, s)| m.union(*s));
+    Ok((mask, g.matches("coverage")))
 }
 
 /// LLVM `GlobPattern`: a literal prefix, then brace-expanded

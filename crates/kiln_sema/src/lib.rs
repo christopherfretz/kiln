@@ -481,6 +481,15 @@ pub struct Sema<'a, 'sm> {
     /// `FEM_UnsetOnCommandLine`): `#pragma clang fp reassociate(on)` and
     /// `reciprocal(on)` are errors (WP-1798).
     pub fp_eval_on_command_line: bool,
+    /// `-fcomplex-arithmetic=promoted` (clang 22's `-ffp-model=fast`
+    /// too): a complex divisor whose element has no wider type is
+    /// recorded for clang 22's end-of-TU
+    /// `-Whigher-precision-for-complex-division` (WP-1795).
+    pub complex_promoted: bool,
+    /// clang 22 `LocationOfExcessPrecisionNotSatisfied` and
+    /// `ExcessPrecisionNotSatisfied`: the first such division's operator,
+    /// and per wider type its count (starting at its index in the list).
+    pub(crate) complex_div_unmet: (Option<Loc>, Vec<(QualType, usize)>),
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -1598,6 +1607,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             no_builtin_pending: Vec::new(),
             fp: kiln_ast::fp::FpOptions::default(),
             fp_eval_on_command_line: false,
+            complex_promoted: false,
+            complex_div_unmet: (None, Vec::new()),
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,

@@ -469,6 +469,21 @@ pub fn is_library_builtin(name: &str, clang22: bool) -> bool {
     has(table::OVERLAYS) || (clang22 && has(table::COMPAT22_OVERLAYS))
 }
 
+/// Whether clang's `Builtin::Context::isBuiltinFunc` knows `name`: a
+/// [library builtin](is_library_builtin) of any dialect, the GNU-mode
+/// ones (`bcmp`, `strcasecmp`, ...) included. The `-fno-builtin-<name>`
+/// names clang keeps (WP-1863).
+pub fn is_builtin_func(name: &str, clang22: bool) -> bool {
+    let gnu = |overlays: &[Overlay]| {
+        overlays
+            .iter()
+            .any(|o| o.0 == FeatureFlag::GnuMode && o.1 == Kind::Builtin && o.2 == name && o.3 != 0)
+    };
+    is_library_builtin(name, clang22)
+        || gnu(table::OVERLAYS)
+        || (clang22 && gnu(table::COMPAT22_OVERLAYS))
+}
+
 /// A feature-query table, for [`table_keys`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureTable {

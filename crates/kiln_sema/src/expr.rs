@@ -4269,6 +4269,7 @@ impl Sema<'_, '_> {
                             return self.invalid_operands(l, r, loc);
                         }
                         if matches!(op, BinaryOp::Div | BinaryOp::Rem) {
+                            self.detect_complex_division_precision_loss(op, r2, loc);
                             self.diagnose_division_by_zero(op, r2, loc);
                         }
                         self.builder().binary(op, l2, r2, ty, loc)
@@ -4284,6 +4285,46 @@ impl Sema<'_, '_> {
             | BinaryOp::NE => self.comparison(op, l, r, loc),
             BinaryOp::Cmp => self.builtin_three_way(l, r, loc),
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.act_on_ptr_mem(op, l, r, loc),
+        }
+    }
+
+    /// clang 22 `DetectPrecisionLossInComplexDivision`: under
+    /// `-fcomplex-arithmetic=promoted`, a complex divisor `r` (after the
+    /// usual arithmetic conversions) whose floating element has no wider
+    /// type holding twice its exponent range (`long double`,
+    /// `__float128`) is recorded for the end-of-TU warning
+    /// ([`Sema::diagnose_complex_division_precision_loss`]); `op` is `/`,
+    /// `/=` or a remainder, which has no complex operand.
+    fn detect_complex_division_precision_loss(&mut self, op: BinaryOp, r: ExprId, loc: Loc) {
+        if !self.complex_promoted
+            || self.clang_compat < 22
+            || !matches!(op, BinaryOp::Div | BinaryOp::DivAssign)
+        {
+            return;
+        }
+        let Some(elem) = self.ast.types.as_complex(self.ety(r)) else { return };
+        let Some(Err(wider)) = self.ast.types.complex_division_promotion(elem) else { return };
+        let wider = self.ast.types.canonical(wider);
+        let (first, list) = &mut self.complex_div_unmet;
+        first.get_or_insert(loc);
+        if let Some((_, n)) = list.iter_mut().find(|(t, _)| *t == wider) {
+            *n += 1;
+        } else {
+            let n = list.len();
+            list.push((wider, n));
+        }
+    }
+
+    /// clang 22 `DiagnosePrecisionLossInComplexDivision` (the end of the
+    /// translation unit, a precompiled header's too): one warning per
+    /// wider type, all at the first such division, with the "additional
+    /// uses" clause when its count is not 0.
+    pub(crate) fn diagnose_complex_division_precision_loss(&mut self) {
+        let (first, list) = std::mem::take(&mut self.complex_div_unmet);
+        let Some(loc) = first else { return };
+        for (_, n) in list {
+            let d = self.diag(DiagId::sema_excess_precision_not_supported, loc);
+            self.emit(d.arg(u32::from(n != 0)));
         }
     }
 
@@ -4467,6 +4508,7 @@ impl Sema<'_, '_> {
                         // clang `CheckMultiplyDivideOperands` /
                         // `CheckRemainderOperands` with `IsCompAssign`.
                         if matches!(op, BinaryOp::DivAssign | BinaryOp::RemAssign) {
+                            self.detect_complex_division_precision_loss(op, r2, loc);
                             self.diagnose_division_by_zero(op, r2, loc);
                         }
                         (r2, ty, ty)

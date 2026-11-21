@@ -1412,7 +1412,7 @@ impl Cg<'_> {
         s: ExprId,
     ) -> R<V> {
         if matches!(ck, CastKind::FloatingComplexToReal | CastKind::IntegralComplexToReal) {
-            return match self.emit_cx(s, (false, true))?.0 {
+            return match self.cx_emitter(|cg| cg.emit_cx(s, (false, true)))?.0 {
                 Some(v) => Ok(v),
                 None => err(self.loc_of(e), "a complex value without a real part"),
             };
@@ -1703,30 +1703,40 @@ impl Cg<'_> {
     /// unary `-`/`+` of an excess-precision `_Float16` keep their operands
     /// in `float`; anything else is emitted and extended.
     pub(crate) fn emit_promoted(&mut self, e: ExprId) -> R<V> {
-        let ast = self.ast;
-        let e = self.skip_parens(e);
-        let n = *ast.exprs.get(e);
+        let n = *self.ast.exprs.get(self.skip_parens(e));
         if self.f16_excess(n.ty()) {
-            match n.kind() {
-                ExprKind::BinaryOperator if is_promotable_op(ast.exprs.binary_op(e)) => {
-                    let [l, r] = ast.exprs.operands(e);
-                    let lv = self.emit_promoted(l)?;
-                    let rv = self.emit_promoted(r)?;
-                    let f = QualType::FLOAT;
-                    return self.arith(e, ast.exprs.binary_op(e), lv, rv, f, f, f);
-                }
-                ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Minus => {
-                    let v = self.emit_promoted(ast.exprs.operand(e))?;
-                    return Ok(self.fneg(v));
-                }
-                ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Plus => {
-                    return self.emit_promoted(ast.exprs.operand(e));
-                }
-                _ => {}
-            }
+            return self.emit_promoted_as(e, QualType::FLOAT);
         }
         let v = self.emit_scalar(e)?;
         Ok(self.cast_unscoped(CastOp::FPExt, v, LTy::FLOAT))
+    }
+
+    /// clang `ScalarExprEmitter::EmitPromoted` to the floating type `pt`
+    /// (`EmitPromotedScalarExpr`): `+ - * /` and unary `-`/`+` recurse
+    /// with their arithmetic in `pt`; anything else is emitted and
+    /// extended (`EmitPromotedValue`).
+    pub(crate) fn emit_promoted_as(&mut self, e: ExprId, pt: QualType) -> R<V> {
+        let ast = self.ast;
+        let e = self.skip_parens(e);
+        match ast.exprs.get(e).kind() {
+            ExprKind::BinaryOperator if is_promotable_op(ast.exprs.binary_op(e)) => {
+                let [l, r] = ast.exprs.operands(e);
+                let lv = self.emit_promoted_as(l, pt)?;
+                let rv = self.emit_promoted_as(r, pt)?;
+                return self.arith(e, ast.exprs.binary_op(e), lv, rv, pt, pt, pt);
+            }
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Minus => {
+                let v = self.emit_promoted_as(ast.exprs.operand(e), pt)?;
+                return Ok(self.fneg(v));
+            }
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Plus => {
+                return self.emit_promoted_as(ast.exprs.operand(e), pt);
+            }
+            _ => {}
+        }
+        let v = self.emit_scalar(e)?;
+        let t = self.lty(pt);
+        Ok(self.cast_unscoped(CastOp::FPExt, v, t))
     }
 
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
@@ -2492,7 +2502,7 @@ impl Cg<'_> {
         if self.is_complex(ca.result_ty) {
             // clang `EmitScalarCompoundAssignWithComplex` (and
             // `EmitComplexCompoundAssignmentLValue` for an lvalue).
-            let (lv, (v, _)) = self.cx_compound_assign(e)?;
+            let (lv, (v, _)) = self.cx_emitter(|cg| cg.cx_compound_assign(e))?;
             let v = v.unwrap_or_else(|| V::C(self.m.const_zero(LTy::I1)));
             let v =
                 if !self.is_complex(lv.q) && self.is_volatile(lv.q) { self.load_lv(lv) } else { v };
@@ -3262,7 +3272,7 @@ impl Cg<'_> {
                 // `cx_store` (clang `getEvaluationKind` sees through
                 // `_Atomic`).
                 if self.is_complex(q) || self.is_atomic_complex(q) {
-                    return Ok(self.cx_assign(e)?.0);
+                    return Ok(self.cx_emitter(|cg| cg.cx_assign(e))?.0);
                 }
                 let (v, prev) = self.ub_bf_rhs(l, r)?;
                 let lv = self.emit_checked_lvalue(l, Tck::Store)?;
@@ -4335,7 +4345,7 @@ impl Cg<'_> {
                 return self.emit_agg(e, tmp, false);
             }
             if self.is_complex(q) {
-                self.emit_cx(e, (true, true))?;
+                self.cx_emitter(|cg| cg.emit_cx(e, (true, true)))?;
                 return Ok(());
             }
             self.emit_scalar_opt(e)?;

@@ -1261,6 +1261,8 @@ impl Sema<'_, '_> {
         // identifiers never declared.
         self.diagnose_unterminated_pragma_pack();
         self.diagnose_unterminated_pragma_attr();
+        // clang 22 `DiagnosePrecisionLossInComplexDivision` (WP-1795).
+        self.diagnose_complex_division_precision_loss();
         // A prefix (a precompiled header) leaves these warnings to the
         // unit that includes it, as clang's `TU_Prefix` return does.
         if !self.tu_prefix {

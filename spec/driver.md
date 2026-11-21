@@ -133,7 +133,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fomit-frame-pointer`, `-fno-omit-frame-pointer`, `-momit-leaf-frame-pointer`, `-mno-omit-leaf-frame-pointer` | the frame-pointer kind of every function and the `frame-pointer` module flag (spec/codegen.md "Frame pointer"); the last of each pair wins (WP-405) |
 | `-fstrict-aliasing`, `-fno-strict-aliasing` | whether loads and stores carry `!tbaa` above `-O0` (`CodegenOptions::strict_aliasing`, spec/codegen.md "TBAA"); the last wins, strict by default (WP-412) |
 | `-flax-vector-conversions[=none\|integer\|all]`, `-fno-lax-vector-conversions` | which same-size vector bitcasts are implicit conversions (`Sema::lax_vector_conversions`, spec/types.md `Vector`): `all` without a flag, `integer` for the bare flag, `none` for the negative; the last wins. An unknown value is `invalid value '<v>' in '-flax-vector-conversions=<v>'` (WP-445) |
-| `-fcx-limited-range`, `-fno-cx-limited-range`, `-fcx-fortran-rules`, `-fno-cx-fortran-rules`, `-fcomplex-arithmetic=full\|improved\|basic` | the `_Complex` multiply/divide algorithm (`CodegenOptions::complex_range`, spec/codegen.md §7n): basic, full, improved, full, or the named one; the last of these and the fast-math flags (basic; "Floating-point flags") wins, and without any it is full. At `-fclang-compat=19`, `-fno-fast-math` leaves it alone; at 22 it clears it, and `-ffp-model=precise\|strict` set full. `-fcomplex-arithmetic=promoted` and unknown values are `unsupported argument '<v>' to option '-fcomplex-arithmetic='`. clang's `-Woverriding-option` between these flags is not issued (WP-237) |
+| `-fcx-limited-range`, `-fno-cx-limited-range`, `-fcx-fortran-rules`, `-fno-cx-fortran-rules`, `-fcomplex-arithmetic=full\|improved\|promoted\|basic` | the `_Complex` multiply/divide algorithm (`CodegenOptions::complex_range`, spec/codegen.md §7n): basic, full, improved, full, or the named one; the last of these and the fast-math flags (basic; clang 22's `-ffp-model=fast` promoted; "Floating-point flags") wins, and without any it is full. At `-fclang-compat=19`, `-fno-fast-math` leaves it alone; at 22 it clears it, and `-ffp-model=precise\|strict` set full. An unknown value is `unsupported argument '<v>' to option '-fcomplex-arithmetic='`. clang 22's `-Woverriding-complex-range` warnings are issued ("Floating-point flags"), and at `-fclang-compat=19` clang 19's `-Woverriding-option` ones |
 | `-ftrivial-auto-var-init=uninitialized\|zero\|pattern`, `-ftrivial-auto-var-init-max-size=N` | the erroneous value of an uninitialized automatic variable (`CodegenOptions::auto_var_init` / `auto_var_init_max_size`, spec/codegen.md §7r, §7y, WP-448, WP-452): `zero` fills with zero bytes, `pattern` with clang's pattern (`0xAA` bytes, all-ones floating point), `uninitialized` does not; the last wins, and without either it is `zero` under C++26 and later, `uninitialized` before. `N` bytes is the largest variable filled (default 4096, 0 = no limit); a non-integer is `invalid integral value '<v>' in '<arg>'`. An unknown value is `unsupported argument '<v>' to option '-ftrivial-auto-var-init='` |
 | `-fpic`, `-fPIC`, `-fpie`, `-fPIE`, `-fno-pic` (and `-fno-PIC`/`-fno-pie`/`-fno-PIE`) | the relocation model, the last one winning (default `-fPIE`, as clang on Linux): the `__pic__`/`__pie__` predefines, `llc`'s `-relocation-model=`, the `PIC Level`/`PIE Level` module flags and which globals are `dso_local` (spec/codegen.md "Symbol visibility and `dso_local`", WP-544) |
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
@@ -315,8 +315,8 @@ found building open-source SIMD libraries). An empty `-mtune=` is `unsupported a
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
 `-ffat-lto-objects` (WP-873; bitcode plus object code in
 one `.o` is WP-899), the `-fsanitize*` and `-fno-sanitize*`
-options "Sanitizers" below does not list (`-fsanitize-coverage=`,
-`-fsanitize-cfi-*`, ...), and under
+options "Sanitizers" below does not list (`-fsanitize-cfi-*`,
+`-fsanitize-minimal-runtime`, ...), and under
 `-fxray-instrument` every `-fxray-*` option but the threshold and
 `-fxray-ignore-loops` (`-fxray-modes=`, `-fxray-always-instrument=`, ...;
 WP-813). The coverage and profile flags are in "Coverage flags" (WP-941).
@@ -465,12 +465,40 @@ implemented or an error; none is accepted and ignored.
   rounding and `contract` off.
 - **clang 22 (`-fclang-compat=22`).** `-ffp-model=fast` keeps NaNs and
   infinities (no `__FAST_MATH__`, no `__FINITE_MATH_ONLY__`) and selects
-  promoted complex division. `-ffp-model=aggressive` is clang 19's
-  `fast`; at compat 19 it is `unsupported argument 'aggressive' to option
-  '-ffp-model='`. Promoted division is not implemented. When it is the
-  final complex range, it is the error `'-ffp-model=fast (promoted
-  complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported
-  by kiln`. Any later complex-range flag avoids it.
+  promoted complex division (WP-1795, spec/codegen.md §7n).
+  `-ffp-model=aggressive` is clang 19's `fast`; at compat 19 it is
+  `unsupported argument 'aggressive' to option '-ffp-model='`. A model
+  no longer resets `-ffp-contract=` itself (each sets its own).
+- **Complex-range warnings (clang 22, WP-1795).** clang's
+  `tools::setComplexRange`: every flag that sets a range (the
+  complex-range flags, `-ffast-math`/`-Ofast` basic, `-ffp-model=fast`
+  promoted, `aggressive` basic, `precise`/`strict` full,
+  `-fno-fast-math` none) remembers itself. A change of a set range warns
+  `drv_overriding_complex_range` (`'<new>' sets complex range to "<r>"
+  overriding the setting of "<old>" that was implied by '<flag>'`,
+  `-Woverriding-complex-range`), except for the same flag, a
+  `-f[no-]cx-*` flag and its negation, `-ffast-math` then
+  `-fno-fast-math`, a `-ffp-model=` then `-ffast-math`, `-fno-fast-math`
+  or another model, and two `-fcomplex-arithmetic=`. `-fno-fast-math`
+  clears the range (silently when it was full) and the remembered flag.
+  At `-fclang-compat=19` clang 19's own complex-range warnings are
+  issued instead: `-Woverriding-option` (`overriding '<a>' option with
+  '<b>'`) with its spellings (`-complex-range=<r>` for a range set by
+  another flag, `-fcomplex-arithmetic=<r>`, the last `-f[no-]cx-*`
+  flag), by its rules (`State::set_range_19`; `-ffast-math` warns over
+  a full, improved or promoted range). clang 19 keeps the range at
+  `-fno-fast-math` and `-ffp-model=precise|strict`.
+- **`-ffp-model=` overrides (both levels, WP-1795).** With `-Ofast` as
+  the optimization level, a model other than clang 22's `aggressive`
+  (clang 19's `fast`) is ignored after its reset of the value flags, with
+  `drv_overriding_option` (`overriding '-ffp-model=<v>' option with
+  '-Ofast'`, `-Woverriding-option`); clang 19 also resets `contract` to
+  `on` there. A model that replaces a different earlier one warns
+  `overriding '-ffp-model=<old>' option with '-ffp-model=<new>'`. clang's
+  other `-Woverriding-option` FP warnings (`-ffp-contract=`,
+  `-ffp-exception-behavior=`, after `-ffp-model=strict`) are not issued.
+  The driver warnings are emitted once per compile job, as clang's
+  `RenderFloatingPointOptions` runs per job (not for a `.s` input).
 - **The floating-point environment (WP-1798).** These flags set the
   unit's FP state, which the FP pragmas then change per scope
   (spec/codegen.md §3.2). The resulting cc1 state matches clang 19's and
@@ -700,8 +728,63 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
 - `__has_feature(address_sanitizer)` and friends follow the enabled set;
   `__SANITIZE_ADDRESS__`, `__SANITIZE_THREAD__` and
   `__SANITIZE_HWADDRESS__` are predefined from `-fclang-compat=22`.
+- Sanitizer coverage (WP-1863; clang `SanitizerArgs`, the same in 19
+  and 22; `sanitize.rs` `coverage_features`): `-fsanitize-coverage=` and
+  `-fno-sanitize-coverage=` take comma lists of `func`, `bb`, `edge`,
+  `indirect-calls`, `trace-bb`, `trace-cmp`, `trace-div`, `trace-gep`,
+  `8bit-counters`, `trace-pc`, `trace-pc-guard`, `no-prune`,
+  `inline-8bit-counters`, `inline-bool-flag`, `pc-table`, `stack-depth`,
+  `trace-loads`, `trace-stores`, `control-flow` (empty items dropped).
+  The features start as `-fsanitize=fuzzer`'s or `fuzzer-no-link`'s when
+  one is enabled after `-fno-sanitize=` (`inline-8bit-counters`,
+  `indirect-calls`, `trace-cmp`, `pc-table`, `stack-depth`), then the
+  options apply in order. A `-fsanitize-coverage=` whose only item is an
+  integer (`StringRef::getAsInteger` with radix 0: `0x2`, `010`, ...) is
+  the legacy form: it clears the features, and a non-zero one warns
+  `argument '-fsanitize-coverage=<n>' is deprecated, use
+  '-fsanitize-coverage=trace-pc-guard' instead [-Wdeprecated]`
+  (`drv_deprecated_arg`). In clang's order: an unknown item is
+  `unsupported argument '<v>' to option '-f[no-]sanitize-coverage='`;
+  two insertion points are `invalid argument
+  '-fsanitize-coverage=func' not allowed with
+  '-fsanitize-coverage=bb'` (and `func`/`edge`, `bb`/`edge`); `trace-bb`
+  and `8bit-counters` warn deprecated (use `trace-pc-guard`); an
+  insertion point without `trace-pc`, `trace-pc-guard`,
+  `inline-8bit-counters`, `inline-bool-flag`, `trace-loads`,
+  `trace-stores` or `control-flow` warns `argument
+  '-fsanitize-coverage=[func|bb|edge]' is deprecated, use
+  '-fsanitize-coverage=[func|bb|edge],[trace-pc-guard|trace-pc],[control-flow]'
+  instead`. Without an insertion point, `trace-pc`, `trace-pc-guard`,
+  the inline counters and `control-flow` imply `edge`, and
+  `stack-depth` `func`.
+  `-fsanitize-coverage-stack-depth-callback-min=<n>` (clang 22; clang
+  19's `unknown argument` at `-fclang-compat=19`): the last one counts;
+  a value that is not an `int` by `getAsInteger(0)` or is negative is
+  `invalid value '<v>' in '<arg>'`, checked before the coverage options
+  whether or not coverage is on. `-fsanitize-coverage-allowlist=<f>` and
+  `-fsanitize-coverage-ignorelist=<f>` are read (as special case lists,
+  with the `-fclang-compat` level's version rules above) only when some
+  feature is on: a missing file is `no such file or directory: '<f>'`,
+  a malformed one `malformed sanitizer coverage allowlist: '<message>'`
+  (`ignorelist`; `drv_malformed_sanitizer_coverage_allowlist`/`_ignorelist`);
+  with no feature they are `argument unused during compilation`. The
+  old `-fsanitize-coverage-whitelist=`/`-blacklist=` spellings are
+  `unknown argument`, as in clang. The instrumentation and the lists'
+  effect are spec/codegen.md "Sanitizer coverage".
+  `__has_feature(coverage_sanitizer)` is 1 when an insertion point,
+  `indirect-calls`, `trace-cmp`, `trace-loads`, `trace-stores` or
+  `control-flow` is on (clang `hasSanitizeCoverage`).
+- `-fsanitize=fuzzer` and `fuzzer-no-link` add clang's
+  `-fno-builtin-{bcmp,memcmp,strncmp,strcmp,strncasecmp,strcasecmp,strstr,strcasestr,memmem}`
+  (unless `-fno-builtin`). As for every `-fno-builtin-<name>` (WP-1863,
+  `Args::no_builtin_fns`), only the names clang's
+  `Builtin::Context::isBuiltinFunc` knows are kept: library builtins of
+  any dialect (`bcmp`, `alloca`, ...), the `std::` ones only with their
+  `std-` prefix; `memmem`, `strcasestr` and unknown names are dropped.
 
 Tests: `sanitize.rs` and `kiln_codegen::ignorelist` unit tests;
+`crates/kiln_driver/tests/sanitize_coverage.rs` (coverage, against
+clang++-22/19);
 `crates/kiln_driver/tests/codegen.rs` `sanitizer_frontend_attributes`,
 `sanitizer_ignorelist_asan`, `sanitizer_ignorelist_errors`;
 `tests/conformance/driver.sanitize/` (the `*-run.cpp` tests that link

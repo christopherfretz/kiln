@@ -263,6 +263,12 @@ limits are:
   and `local-bounds` ([WP-936](BACKLOG.md)) are accepted but emit no
   check. Other small gaps: [WP-937](BACKLOG.md). The umbrella is
   [WP-852](BACKLOG.md).
+- **Sanitizer coverage.** `indirect-calls` together with the `func` or
+  `bb` insertion point (for example `-fsanitize=fuzzer
+  -fno-sanitize-coverage=inline-8bit-counters`) does not trace indirect
+  calls: LLVM's `opt` cannot ask for that combination. With `edge`, the
+  default, it works. `-fsanitize-coverage-stack-depth-callback-min=` has
+  no effect when kiln uses LLVM 19, whose `SanitizerCoverage` lacks it.
 - Smaller differences from clang's sanitizer IR (value names, ASan module
   name, constructor details) are [WP-858](BACKLOG.md),
   [WP-859](BACKLOG.md) and [WP-861](BACKLOG.md).

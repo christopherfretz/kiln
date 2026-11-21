@@ -1,0 +1,2 @@
+# Functions coverage leaves out (WP-1863).
+fun:listed

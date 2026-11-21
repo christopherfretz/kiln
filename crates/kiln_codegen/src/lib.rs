@@ -380,6 +380,10 @@ pub struct CodegenOptions {
     /// The `-fsanitize-ignorelist=` and default lists (WP-1032): what
     /// they name is not instrumented.
     pub ignorelist: Option<std::sync::Arc<ignorelist::SanitizerIgnorelist>>,
+    /// The `-fsanitize-coverage-allowlist=` and `-ignorelist=` lists
+    /// (WP-1863): a function or source file they leave out gets
+    /// `nosanitize_coverage`.
+    pub coverage_lists: Option<std::sync::Arc<ignorelist::CoverageLists>>,
     /// `-flto` / `-flto=thin`: the module is an LTO unit (its module flags
     /// and vtable `!type` metadata; spec/codegen.md §5.3 "LTO", WP-873).
     pub lto: Option<Lto>,
@@ -408,6 +412,7 @@ pub enum Lto {
 
 /// The resolved sanitizer options (WP-675, docs/design/sanitizers.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent clang options and language facts")]
 pub struct SanitizeOptions {
     /// The enabled sanitizers.
     pub kinds: kiln_ast::sanitize::SanitizerSet,
@@ -429,6 +434,10 @@ pub struct SanitizeOptions {
     /// The unit is C++20 or later (signed `<<` is defined: no
     /// `shift-base` check of signed shifts).
     pub cxx20: bool,
+    /// clang `CodeGenOptions::hasSanitizeCoverage` (`-fsanitize-coverage=`
+    /// or `-fsanitize=fuzzer[-no-link]`, WP-1863): `no_sanitize("coverage")`
+    /// becomes `nosanitize_coverage`.
+    pub coverage: bool,
 }
 
 impl SanitizeOptions {
@@ -714,18 +723,37 @@ pub enum ComplexRange {
     /// `basic` (`-fcx-limited-range`, `-ffast-math`): the algebraic
     /// product and quotient (`EmitAlgebraicDiv`).
     Basic,
+    /// `promoted` (`-fcomplex-arithmetic=promoted`, clang 22's
+    /// `-ffp-model=fast`): the algebraic product; a quotient by a complex
+    /// divisor runs in the next wider type (`float` to `double`, `double`
+    /// to `long double`) with the algebraic formula and is narrowed back;
+    /// with no wider type that can hold the intermediate values (`long
+    /// double`), Smith's algorithm (spec/codegen.md "Promoted complex
+    /// arithmetic").
+    Promoted,
 }
 
 impl ComplexRange {
-    /// The `-fcomplex-arithmetic=` value kiln supports (`promoted` is
-    /// not: it widens the operands, spec/abi.md §8.17).
+    /// The range a `-fcomplex-arithmetic=` value names.
     #[must_use]
     pub fn from_arg(v: &str) -> Option<ComplexRange> {
         match v {
             "full" => Some(ComplexRange::Full),
             "improved" => Some(ComplexRange::Improved),
             "basic" => Some(ComplexRange::Basic),
+            "promoted" => Some(ComplexRange::Promoted),
             _ => None,
+        }
+    }
+
+    /// The value's spelling (clang `complexRangeKindToStr`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            ComplexRange::Full => "full",
+            ComplexRange::Improved => "improved",
+            ComplexRange::Basic => "basic",
+            ComplexRange::Promoted => "promoted",
         }
     }
 }
@@ -845,6 +873,7 @@ impl Default for CodegenOptions {
             hardening: Hardening::default(),
             sanitize: SanitizeOptions::default(),
             ignorelist: None,
+            coverage_lists: None,
             lto: None,
             lto_module_flags: true,
             mason_meta: None,

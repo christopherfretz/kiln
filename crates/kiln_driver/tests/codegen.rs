@@ -1879,7 +1879,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = ["-ffat-lto-objects", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
+    let rejected = ["-ffat-lto-objects", "-fsanitize=cfi", "-fsanitize-minimal-runtime"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -2110,8 +2110,8 @@ fn coverage_mapping_end_to_end() {
 }
 
 /// spec/driver.md "Floating-point flags" (WP-806, WP-1798): the
-/// environment flags are accepted; promoted complex division and
-/// `-fexcess-precision=16` are driver errors, never ignored, and
+/// environment flags are accepted; `-fexcess-precision=16` is a driver
+/// error, never ignored (promoted complex division works since WP-1795), and
 /// `-ffp-eval-method=` with a value-changing option is clang's error.
 #[test]
 fn fp_environment_flags() {
@@ -2119,10 +2119,6 @@ fn fp_environment_flags() {
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
     for (flags, want) in [
         (&["-fexcess-precision=16"][..], "'-fexcess-precision=16' is not supported by kiln"),
-        (
-            &["-ffp-model=fast"],
-            "'-ffp-model=fast (promoted complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported by kiln",
-        ),
         (
             &["-fclang-compat=19", "-ffp-model=aggressive"],
             "unsupported argument 'aggressive' to option '-ffp-model='",
@@ -2147,12 +2143,13 @@ fn fp_environment_flags() {
         &["-ffp-exception-behavior=maytrap"],
         &["-ffp-exception-behavior=strict"],
         &["-ffp-model=strict"],
-        &["-ffp-model=strict", "-ffp-model=precise"],
+        // clang's (and since WP-1795 kiln's) overriding warning, silenced.
+        &["-ffp-model=strict", "-ffp-model=precise", "-Wno-overriding-option"],
         &["-ffp-eval-method=double"],
         &["-ffp-eval-method=extended"],
         &["-frounding-math", "-fno-rounding-math"],
         &["-ffp-model=strict", "-fno-rounding-math", "-ffp-exception-behavior=ignore"],
-        &["-ffp-model=fast", "-fcx-limited-range"],
+        &["-ffp-model=fast"],
         &["-fclang-compat=19", "-ffp-model=fast"],
         &["-ffp-model=aggressive"],
     ] {
@@ -2205,17 +2202,7 @@ fn fp_contract_fast_backend_flag() {
             );
             assert_eq!(text(&o.stdout).contains("vfmadd"), fused, "{llvm} {contract}");
         }
-        let o = kiln_in(
-            &d,
-            &[
-                "--target=x86_64-linux-gnu",
-                &l,
-                "-ffp-model=fast",
-                "-fcx-limited-range",
-                "-c",
-                "f.cpp",
-            ],
-        );
+        let o = kiln_in(&d, &["--target=x86_64-linux-gnu", &l, "-ffp-model=fast", "-c", "f.cpp"]);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{llvm}");
     }
 }

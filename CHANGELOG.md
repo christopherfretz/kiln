@@ -336,6 +336,31 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   "Not implemented" or "Unsupported" must be listed in
   docs/status/static-gaps.md, for gaps with no message of their own in
   the code (WP-1782).
+- Promoted complex arithmetic (WP-1795, GAP-172):
+  `-fcomplex-arithmetic=promoted`, and `-ffp-model=fast`, which selects
+  it, no longer stop with "not supported by kiln". A complex division is
+  done in the next wider floating type with the algebraic formula
+  (Smith's algorithm, and clang 22's end-of-file
+  `-Whigher-precision-for-complex-division` warning, when there is no
+  wider type), as clang 22 does on both targets. The complex-range flags'
+  interactions with `-ffp-model=`, `-f[no-]fast-math` and `-Ofast` now
+  follow clang 22, with its `-Woverriding-complex-range` warnings, and
+  clang 19 at `-fclang-compat=19`, with its `-Woverriding-option`
+  warnings.
+- Sanitizer coverage (WP-1863): `-fsanitize-coverage=` (every clang
+  feature: `trace-pc-guard`, `inline-8bit-counters`, `trace-cmp`,
+  `pc-table`, `stack-depth`, `control-flow`, ...),
+  `-fno-sanitize-coverage=`, `-fsanitize-coverage-allowlist=`,
+  `-fsanitize-coverage-ignorelist=` and clang 22's
+  `-fsanitize-coverage-stack-depth-callback-min=` no longer stop with
+  "not supported by kiln". They combine with `-fsanitize=fuzzer` as in clang, with its
+  deprecated spellings, warnings and errors, and the instrumentation
+  matches clang 22's (clang 19's at `-fclang-compat=19`).
+  `no_sanitize("coverage")` and `__has_feature(coverage_sanitizer)` work.
+  The fuzzer set now also traces indirect calls, as clang's does, and
+  `-fsanitize=fuzzer`'s `"no-builtin-<name>"` attributes are clang's.
+  `-fno-builtin-<name>` now drops a name clang does not know as a
+  builtin (`-fno-builtin-memmem` gives no attribute), as clang does.
 
 ### Fixed
 

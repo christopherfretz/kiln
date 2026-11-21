@@ -436,6 +436,7 @@ impl CodegenJob<'_> {
             char8: a.predef.char8_t,
             fp: a.fp_model().opts,
             fp_eval_on_command_line: a.fp_model().eval_on_command_line,
+            complex_promoted: a.complex_range() == kiln_codegen::ComplexRange::Promoted,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
@@ -667,6 +668,11 @@ impl CodegenJob<'_> {
             opts.ignorelist = a.sanitize.ignorelist(
                 opts.sanitize.kinds,
                 &job.toolchain.resource_dir,
+                opts.clang_compat >= 22,
+            );
+            // WP-1863: the coverage allowlists and ignorelists.
+            opts.coverage_lists = a.sanitize.coverage_lists(
+                &a.sanitize(!job.toolchain.target.is_aarch64(), "").0,
                 opts.clang_compat >= 22,
             );
             // Sema sets the level on each evaluation it runs; a unit that
@@ -1709,9 +1715,12 @@ fn lto_writer(args: &Args, tc: &Toolchain, out: String) -> Command {
 /// clang's `addSanitizers` (WP-675, docs/design/sanitizers.md §1.3): the
 /// `OptimizerLast` passes and their `cl::opt` flags.
 fn sanitizer_passes(args: &Args, tc: &Toolchain) -> Option<(String, Vec<String>)> {
-    args.sanitize(!tc.target.is_aarch64(), tc.target.triple)
-        .0
-        .optimizer_last(opt_level(args.opt_flag.as_deref()))
+    let mut s = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0;
+    if tc.llvm_major() < 22 {
+        // LLVM 19's `SanitizerCoverage` has no callback minimum (WP-1863).
+        s.stack_depth_callback_min = 0;
+    }
+    s.optimizer_last(opt_level(args.opt_flag.as_deref()))
 }
 
 /// clang's coverage passes (WP-941, spec/codegen.md "Instrumentation"):

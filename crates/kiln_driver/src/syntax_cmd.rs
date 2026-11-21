@@ -372,6 +372,7 @@ impl SyntaxJob<'_> {
             char8: a.predef.char8_t,
             fp: a.fp_model().opts,
             fp_eval_on_command_line: a.fp_model().eval_on_command_line,
+            complex_promoted: a.complex_range() == kiln_codegen::ComplexRange::Promoted,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,

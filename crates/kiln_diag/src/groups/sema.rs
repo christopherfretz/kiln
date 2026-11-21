@@ -99,6 +99,8 @@ GnuStaticFloatInit = "gnu-static-float-init" [];
 GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
 GnuUnionCast = "gnu-union-cast" [];
 GnuVariableSizedTypeNotAtEnd = "gnu-variable-sized-type-not-at-end" [];
+// WP-1795: clang 22 complex division without a wider type.
+HigherPrecisionForComplexDivision = "higher-precision-for-complex-division" [];
 IgnoredAttributes = "ignored-attributes" [];
 ImplicitConstIntFloatConversion = "implicit-const-int-float-conversion" [];
 ImplicitExceptionSpecMismatch = "implicit-exception-spec-mismatch" [];

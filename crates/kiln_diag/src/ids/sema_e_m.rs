@@ -30,6 +30,11 @@ sema_excess_initializers_c = ExtWarn [ExcessInitializers] (1) "excess elements i
 sema_excess_initializers_in_char_array = Error (0) "excess elements in char array initializer";
 // C (clang `ext_excess_initializers_in_char_array_initializer`).
 sema_excess_initializers_in_char_array_c = ExtWarn [ExcessInitializers] (0) "excess elements in char array initializer";
+// WP-1795: clang 22 `warn_excess_precision_not_supported`
+// (`DiagnosePrecisionLossInComplexDivision`, at the end of the
+// translation unit): {0} 1 when more uses of the same wider type, or an
+// earlier wider type, were found.
+sema_excess_precision_not_supported = Warning [HigherPrecisionForComplexDivision] (1) "excess precision is requested but the target does not support excess precision which may result in observable differences in complex division behavior{0:|, additional uses where the requested higher precision cannot be honored were found but not diagnosed}";
 sema_expansion_size_not_constant = Error (0) "expansion size is not a constant expression";
 sema_expect_int = Error (1) "used type {0} where integer is required";
 sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
