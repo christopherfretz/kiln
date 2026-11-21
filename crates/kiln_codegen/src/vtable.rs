@@ -510,7 +510,15 @@ impl Cg<'_> {
             .collect();
         // clang marks the vtable of every dynamic class defined in a named
         // module unit's purview used when the class is completed.
-        classes.extend(self.module_dynamic_classes().into_iter().map(|c| (c, c)));
+        let locals: Vec<DeclId> = if ast.modules.active {
+            let mut v: Vec<DeclId> =
+                self.module_local_classes().values().flatten().copied().collect();
+            v.sort_unstable();
+            v
+        } else {
+            Vec::new()
+        };
+        classes.extend(self.module_dynamic_classes(&locals).into_iter().map(|c| (c, c)));
         // One order for both kinds, Sema's `VTableUses`: a key
         // function's class where the key function is defined, an
         // explicitly instantiated class where its explicit instantiation
@@ -563,7 +571,12 @@ impl Cg<'_> {
     /// The dynamic, non-templated classes (nested ones included) that
     /// this interface or partition unit defines in its purview (their
     /// vtables are used at their definition: `mark_module_vtable_used`).
-    fn module_dynamic_classes(&self) -> Vec<DeclId> {
+    /// `locals` are the unit's local classes ([class.local],
+    /// [`Self::module_local_classes`]): one of an inline function is not
+    /// internal, so its importers declare its vtable too (clang 22 and 19
+    /// define it only where something here uses it, so an importer that
+    /// constructs one fails to link; spec/modules.md §7).
+    fn module_dynamic_classes(&self, mut locals: &[DeclId]) -> Vec<DeclId> {
         let ast = self.ast;
         let mut out = Vec::new();
         let interface = ast.modules.units.first().is_some_and(|u| {
@@ -577,6 +590,20 @@ impl Cg<'_> {
         if !ast.modules.active || !interface {
             return out;
         }
+        // A class definition: its own vtable, then its members.
+        let class = |d: DeclId, stack: &mut Vec<DeclId>, out: &mut Vec<DeclId>| {
+            if self.class_is_templated_or_instantiated(d) {
+                return;
+            }
+            stack.push(d);
+            if ast.modules.owner(d).unit == 0
+                && ast.module_attachment(d).is_some()
+                && self.is_dynamic(d)
+                && self.vtable_linkage(d) == VtLinkage::Strong
+            {
+                out.push(d);
+            }
+        };
         let mut stack = vec![ast.tu];
         while let Some(ctx) = stack.pop() {
             for d in ast.decls.members(ctx) {
@@ -587,20 +614,18 @@ impl Cg<'_> {
                 match n.kind() {
                     DeclKind::Namespace | DeclKind::Export => stack.push(d),
                     DeclKind::CXXRecord if ast.definition(d) == Some(d) => {
-                        if self.class_is_templated_or_instantiated(d) {
-                            continue;
-                        }
-                        stack.push(d);
-                        if ast.modules.owner(d).unit == 0
-                            && ast.module_attachment(d).is_some()
-                            && self.is_dynamic(d)
-                            && self.vtable_linkage(d) == VtLinkage::Strong
-                        {
-                            out.push(d);
-                        }
+                        class(d, &mut stack, &mut out);
                     }
                     _ => {}
                 }
+            }
+            if stack.is_empty() {
+                // The local classes after the namespace-scope ones (each
+                // is listed once, a definition outside templates).
+                for &d in locals {
+                    class(d, &mut stack, &mut out);
+                }
+                locals = &[];
             }
         }
         out
