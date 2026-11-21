@@ -920,7 +920,7 @@ pub fn emit_with_stats(
     opts: &CodegenOptions,
     sm: Option<&kiln_source::SourceManager>,
 ) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>, Option<MasonDefStats>) {
-    let folds = fold::prepass(ast, oven, target);
+    let folds = fold::prepass(ast, oven, target, opts.fp);
     // The mangler reads data member descriptions from the AST
     // (spec/reflection.md §8.3).
     if oven.dms_count() > 0 {

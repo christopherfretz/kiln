@@ -1145,6 +1145,14 @@ impl Preprocessor<'_, '_> {
             }
             Builtin::FltEvalMethod => {
                 let _ = write!(text, "{}", self.features.flt_eval_method());
+                // The value the pragma changed is the TU's, so a use in
+                // its scope is ill-formed (clang
+                // `err_illegal_use_of_flt_eval_macro`).
+                if let Some(l) = self.fp_eval_pragma {
+                    let n = Diag::new(DiagId::note_pragma_entered_here, Span::empty(l));
+                    let d = Diag::new(DiagId::pp_flt_eval_macro_in_pragma_scope, t.tok.span);
+                    self.emit(d.with_note(n));
+                }
             }
             Builtin::HasInclude | Builtin::HasIncludeNext => {
                 match self.eval_has_include(t, b == Builtin::HasIncludeNext) {

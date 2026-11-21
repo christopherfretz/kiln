@@ -369,6 +369,21 @@ impl Sema<'_, '_> {
     /// statement restoring its enclosing state).
     pub fn set_fp_pragma_state(&mut self, fp: kiln_ast::fp::FpOverride) {
         self.fp_pragma.0 = fp;
+        self.sync_round_scope();
+    }
+
+    /// The FP options in effect: the command line's with the pragma
+    /// state applied.
+    pub fn fp_in_effect(&self) -> kiln_ast::fp::FpOptions {
+        self.fp_pragma.0.apply(self.fp)
+    }
+
+    /// Makes the builder record the directed rounding mode now in effect
+    /// on the operations it builds (`ExprArena::round_scope`; clang keeps
+    /// `CurFPFeatures` on each node).
+    pub(crate) fn sync_round_scope(&mut self) {
+        let r = self.fp_in_effect().rounding();
+        self.ast.exprs.round_scope = r.is_directed().then_some(r);
     }
 
     /// `#pragma float_control(push)`: saves the state.
@@ -382,7 +397,7 @@ impl Sema<'_, '_> {
     pub fn fp_pragma_pop(&mut self) -> bool {
         match self.fp_pragma.1.pop() {
             Some(s) => {
-                self.fp_pragma.0 = s;
+                self.set_fp_pragma_state(s);
                 true
             }
             None => false,

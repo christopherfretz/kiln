@@ -210,6 +210,9 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::MalformedIgnorelist(m) => {
             Diag::new(DiagId::drv_malformed_sanitizer_ignorelist, Span::INVALID).arg(m)
         }
+        ArgError::IncompatibleFpEvalMethod(i) => {
+            Diag::new(DiagId::drv_incompatible_fp_eval_method_options, Span::INVALID).arg(*i)
+        }
         ArgError::MemtagStackRequiresMte => {
             Diag::new(DiagId::drv_stack_tagging_requires_hardware_feature, Span::INVALID)
         }

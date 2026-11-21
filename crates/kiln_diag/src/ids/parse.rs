@@ -197,6 +197,8 @@ parse_pragma_attribute_unknown_subject_sub_rule = Error (4) "{0:invalid use of|u
 parse_pragma_attribute_unsupported_attribute = Error (1) "attribute '{0}' is not supported by '#pragma clang attribute'";
 parse_pragma_clang_section_expected_equal = Error (1) "expected '=' following '#pragma clang section {0}'";
 parse_pragma_clang_section_expected_kind = Error (1) "expected one of [bss|data|rodata|text|relro] section kind in '#pragma {0}'";
+// WP-1744: clang `err_setting_eval_method_used_in_unsafe_context`.
+parse_pragma_eval_method_unsafe = Error (2) "{0:'#pragma clang fp eval_method'|option 'ffp-eval-method'} cannot be used with {1:option 'fapprox-func'|option 'mreassociate'|option 'freciprocal'|option 'ffp-eval-method'|'#pragma clang fp reassociate'|'#pragma clang fp reciprocal'}";
 parse_pragma_expected_identifier = Warning [IgnoredPragmas] (1) "expected identifier in '#pragma {0}' - ignored";
 parse_pragma_expected_lparen = Warning [IgnoredPragmas] (1) "missing '(' after '#pragma {0}' - ignoring";
 parse_pragma_expected_rparen = Warning [IgnoredPragmas] (1) "missing ')' after '#pragma {0}' - ignoring";

@@ -5,7 +5,7 @@
 //! `CGFPOptionsRAII`, `getTrivialDefaultFunctionAttributes`).
 
 use kiln_ast::StmtId;
-use kiln_ast::fp::{FpContract, FpExcept, FpOptions, FpOverride, FpRound};
+use kiln_ast::fp::{FpContract, FpExcept, FpOptions, FpOverride};
 use kiln_llvm::{Attr, AttrKind, FastMath, TypeId, Value};
 
 use crate::fir::{Fir, Op, V};
@@ -125,11 +125,8 @@ impl Cg<'_> {
             mds.push(self.m.md_string(p.as_bytes()));
         }
         if round {
-            let r: &[u8] = match self.f.fp.rounding() {
-                FpRound::Dynamic => b"round.dynamic",
-                FpRound::Nearest => b"round.tonearest",
-            };
-            mds.push(self.m.md_string(r));
+            let r = self.f.fp.rounding().llvm_name();
+            mds.push(self.m.md_string(r.as_bytes()));
         }
         let x: &[u8] = match self.f.fp.exceptions() {
             FpExcept::Ignore => b"fpexcept.ignore",
@@ -169,12 +166,19 @@ impl Cg<'_> {
     }
 
     /// clang `CodeGenFunction::StartFunction` of a `strictfp` function:
-    /// every call in it is `strictfp` too.
+    /// every call in it is `strictfp` too, but for an implicit member's
+    /// or an initialization function's `EmitCall` calls
+    /// ([`crate::func::Fx::strict_calls`]).
     pub(crate) fn strict_call_sites(&mut self) {
         if !self.f.strict {
             return;
         }
+        let mut skip = if self.f.strict_calls { Vec::new() } else { self.f.emit_calls.clone() };
+        skip.sort_unstable();
         for i in 0..self.f.fir.inst_count() as u32 {
+            if skip.binary_search(&i).is_ok() {
+                continue;
+            }
             let Some(o) = self.f.fir.call_opts_mut(i) else { continue };
             let mut a = self.m.attrs_of(o.attrs.func).to_vec();
             if !a.contains(&Attr::Flag(AttrKind::StrictFP)) {
@@ -212,7 +216,11 @@ impl Cg<'_> {
         if unsafe_fp_math(o) {
             out.push(Attr::string("unsafe-fp-math", "true"));
         }
-        out.push(Attr::string("no-trapping-math", "true"));
+        // clang: only when the command line's exceptions are ignored
+        // (WP-1798: `-ffp-exception-behavior=maytrap|strict` drop it).
+        if o.exceptions() == FpExcept::Ignore {
+            out.push(Attr::string("no-trapping-math", "true"));
+        }
         if o.nsz {
             out.push(Attr::string("no-signed-zeros-fp-math", "true"));
         }

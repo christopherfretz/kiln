@@ -203,6 +203,9 @@ pub struct ClangFeatures {
     no_builtin_fns: Vec<String>,
     /// The C configuration bit (`target * 10 + std * 2 + gnu`), 0 in C++.
     c_bit: u32,
+    /// `__FLT_EVAL_METHOD__` from `-ffp-eval-method=` (`None`: the
+    /// target's).
+    flt_eval_method: Option<i32>,
 }
 
 /// Target builtins whose `__has_builtin` answer depends on the enabled
@@ -257,6 +260,7 @@ impl ClangFeatures {
             target_builtins: None,
             no_builtin_fns: Vec::new(),
             c_bit: 0,
+            flt_eval_method: None,
         })
     }
 
@@ -265,6 +269,14 @@ impl ClangFeatures {
     pub fn with_target_builtins(mut self, mut t: TargetBuiltins) -> ClangFeatures {
         t.enabled.sort_unstable();
         self.target_builtins = Some(t);
+        self
+    }
+
+    /// These answers with `__FLT_EVAL_METHOD__` `v` (`-ffp-eval-method=`,
+    /// WP-1798).
+    #[must_use]
+    pub fn with_flt_eval_method(mut self, v: i32) -> ClangFeatures {
+        self.flt_eval_method = Some(v);
         self
     }
 
@@ -654,6 +666,6 @@ impl FeatureQueries for ClangFeatures {
     }
 
     fn flt_eval_method(&self) -> i32 {
-        table::FLT_EVAL_METHOD[usize::from(self.triple.target)]
+        self.flt_eval_method.unwrap_or(table::FLT_EVAL_METHOD[usize::from(self.triple.target)])
     }
 }

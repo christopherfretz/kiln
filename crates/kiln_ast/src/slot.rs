@@ -157,6 +157,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "expr_begin",
     "expr_nns",
     "expr_targs",
+    "fp_round",
     "friends",
     "gnu_lib_twin",
     "hidden_shadow",

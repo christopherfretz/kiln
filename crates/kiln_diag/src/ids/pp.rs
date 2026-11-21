@@ -51,6 +51,8 @@ pp_expr_bad_token_lparen = Error (1) "function-like macro '{0}' is not defined";
 pp_expr_overflow = Warning (0) "integer overflow in preprocessor expression";
 pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";
 pp_file_not_found = Fatal (1) "'{0}' file not found";
+// WP-1744: clang `err_illegal_use_of_flt_eval_macro`.
+pp_flt_eval_macro_in_pragma_scope = Error (0) "'__FLT_EVAL_METHOD__' cannot be expanded inside a scope containing '#pragma clang fp eval_method'";
 pp_has_include_outside_directive = Error (1) "'{0}' must be used within a preprocessing directive";
 pp_has_warning_invalid_option = ExtWarn [MalformedWarningCheck] (0) "__has_warning expected option name (e.g. \"-Wundef\")";
 pp_hash_not_followed_by_param = Error (0) "'#' is not followed by a macro parameter";

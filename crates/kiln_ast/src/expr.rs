@@ -198,6 +198,23 @@ pub struct GenericAssoc {
 }
 
 impl ExprKind {
+    /// Whether an expression of this kind can be a floating-point
+    /// operation that rounds (arithmetic, `++`/`--`, a conversion): the
+    /// builder records the directed rounding mode on it
+    /// ([`ColdExprData::fp_round`]).
+    pub fn may_round(self) -> bool {
+        matches!(
+            self,
+            ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::UnaryOperator
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+        )
+    }
+
     /// True for the cast kinds (`aux` is a [`CastKind`]).
     pub const fn is_cast(self) -> bool {
         matches!(
@@ -1467,6 +1484,12 @@ pub struct ColdExprData {
     /// `ExprWithCleanups` of its own: its temporaries belong to the
     /// use's full-expression ([intro.execution]/5).
     pub default_arg_rewritten: ColdMap<ExprId, ExprId>,
+    /// The directed rounding mode (`#pragma STDC FENV_ROUND`, C23 7.6.2)
+    /// in effect where an operator or a cast was built (clang keeps its
+    /// `FPOptionsOverride` on the node): the Oven rounds the operation
+    /// in it ([`crate::fp::FpRound::is_directed`]; absent: to nearest).
+    /// Recorded by the builder from [`ExprArena::round_scope`].
+    pub fp_round: ColdMap<ExprId, crate::fp::FpRound>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1600,6 +1623,7 @@ impl Default for ColdExprData {
             offsetof_layout: ColdMap::new("offsetof_layout"),
             splice_args: ColdMap::new("splice_args"),
             default_arg_rewritten: ColdMap::new("default_arg_rewritten"),
+            fp_round: ColdMap::new("fp_round"),
         }
     }
 }
@@ -1618,6 +1642,12 @@ pub struct ExprArena {
     pub lambdas: crate::lambda::LambdaArena,
     /// Cold per-expression data.
     pub cold: ColdExprData,
+    /// The directed rounding mode sema is building in (its FP pragma
+    /// state, or a template pattern's during substitution): the builder
+    /// records it on every operator and cast it creates
+    /// ([`ColdExprData::fp_round`]). Not part of the AST.
+    #[snap(skip)]
+    pub round_scope: Option<crate::fp::FpRound>,
 }
 
 impl Default for ExprArena {
@@ -1652,6 +1682,7 @@ impl Default for ExprArena {
             }],
             lambdas: crate::lambda::LambdaArena::default(),
             cold: ColdExprData::default(),
+            round_scope: None,
         }
     }
 }
@@ -2502,6 +2533,18 @@ impl ExprArena {
         if let Some(&x) = cold.trait_rhs_loc.get(e) {
             let _ = cold.trait_rhs_loc.insert(id, x);
         }
+        if let Some(&x) = cold.fp_round.get(e) {
+            let _ = cold.fp_round.insert(id, x);
+        }
+    }
+
+    /// The directed rounding mode of operation `e`
+    /// ([`ColdExprData::fp_round`]).
+    pub fn fp_round(&self, e: ExprId) -> Option<crate::fp::FpRound> {
+        if self.cold.fp_round.is_empty() {
+            return None;
+        }
+        self.cold.fp_round.get(e).copied()
     }
 
     /// A copy of the `OpaqueValueExpr` `e` bound to `source` instead: a
@@ -3372,6 +3415,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.offsetof_layout.mem_row().prefixed("cold"));
         r.push(self.cold.splice_args.mem_row().prefixed("cold"));
         r.push(self.cold.default_arg_rewritten.mem_row().prefixed("cold"));
+        r.push(self.cold.fp_round.mem_row().prefixed("cold"));
         r
     }
 }
@@ -3579,6 +3623,7 @@ impl ExprArena {
             news,
             lambdas: _,
             cold: _,
+            round_scope: _,
         } = self;
         let side = [
             cond_arms.len(),

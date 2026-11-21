@@ -1219,7 +1219,7 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   and lowers them to their intrinsics (`ldexp`, `exp10` excepted).
 - The floating-point environment (WP-1744): `#pragma STDC FENV_ACCESS`,
   `#pragma clang fp exceptions(...)`, `#pragma float_control(except,
-  ...)` and `FENV_ROUND FE_TONEAREST|FE_DYNAMIC` set the scope's
+  ...)` and `#pragma STDC FENV_ROUND` (every mode) set the scope's
   rounding mode and exception behavior (clang `FPOptions`: the declared
   mode is `FE_DYNAMIC` by default, which is dynamic under FENV_ACCESS ON
   and to-nearest otherwise; the exceptions are the pragma's, else strict
@@ -1232,9 +1232,12 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   fusion, `fcmp` (`fcmps` for `<` `>` `<=` `>=`), FP conversion and the
   `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`/`fma`/
   `fmax`/`fmin` builtins (the errno-lowered libm intrinsics too) is an
-  `llvm.experimental.constrained.*` call with the scope's `round.*` and
-  `fpexcept.*` metadata (to-nearest and ignored outside the pragma's
-  scope), constants are not folded, every call site is `strictfp`, and
+  `llvm.experimental.constrained.*` call with the scope's `round.*`
+  (`round.dynamic`, `round.tonearest`, or a directed mode's
+  `round.upward`, `round.downward`, `round.towardzero`,
+  `round.tonearestaway`; `FpRound::llvm_name`) and `fpexcept.*`
+  metadata (to-nearest and ignored outside the pragma's scope; no
+  `llvm.set.rounding` is emitted, as clang at -O0), constants are not folded, every call site is `strictfp`, and
   the intrinsic declarations carry `strictfp` and
   `memory(inaccessiblemem: readwrite)`. `fneg`, `fabs` and `copysign`
   stay plain, as in clang.
@@ -1247,11 +1250,44 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   clang's fails on an inexact result under the dynamic mode or any
   exception under strict exceptions. Deviation: kiln does not track the
   status, so an exact result clang would fold is computed at run time.
-- Still errors (GAP-142): a directed `FENV_ROUND` mode (constant
-  evaluation in that mode is not implemented) and `#pragma clang fp
-  eval_method(double|extended)`; the driver flags that need the
-  environment (`-frounding-math`, `-ffp-exception-behavior=`,
-  `-ffp-model=strict`, `-ffp-eval-method=`, spec/driver.md).
+- A directed `FENV_ROUND` mode alone is not environment-dependent
+  (`FpOptions::env_dependent`: the dynamic mode, observed exceptions or
+  FENV_ACCESS ON are): trial folds go ahead and the Oven evaluates every
+  rounding operation in the mode written at it (spec/oven.md "Rounding
+  modes"), so an initializer, a constant and a folded condition hold the
+  directed result, as clang's.
+- Excess precision (`_Float16` on x86-64, `__bf16`): the promotion to
+  `float` and the truncation back (clang `EmitPromotedValue`/
+  `EmitUnPromotedValue`, `FnCtx::cast_unscoped`) use the command line's
+  FP options, not the scope's (clang emits them outside the expression's
+  `CGFPOptionsRAII`): `round.tonearest` and `fpexcept.ignore` under a
+  pragma, still constrained in a `strictfp` function. `#pragma clang fp
+  eval_method(double|extended)` needs nothing here: Sema's promotion
+  (spec/sema.md §5.35) puts the `fpext`/`fptrunc` in the AST.
+- The command line's environment (WP-1798, spec/driver.md
+  "Floating-point flags"): `-frounding-math` (`FpOptions::rounding_math`:
+  `FE_DYNAMIC` is `round.dynamic` everywhere), `-ffp-exception-behavior=`
+  (`FpOptions::except`) and `-ffp-model=strict` (both) are the unit's
+  base FP state, so every scope is constrained. Every function is
+  `strictfp`: implicit members, thunks and the initialization functions
+  (`__cxx_global_var_init*`, `_GLOBAL__sub_I_*`, `__tls_init`) too (clang
+  `StartFunction`), except a function whose body's own state a pragma
+  makes unconstrained (`FENV_ROUND FE_TONEAREST` at file scope under
+  `-frounding-math`; clang `usesFPIntrin` is the state at the
+  definition). A parsed body's call sites are all `strictfp`, and so
+  are a thunk's to such a body (`Fx::strict_calls`, clang
+  `usesFPIntrin`). Elsewhere only the calls the constrained builder
+  creates itself are: constrained intrinsics, runtime calls
+  (`__cxa_guard_*`, `__cxa_atexit`), `llvm.threadlocal.address` and the
+  init calls. The calls `emit_call_op` makes (clang `EmitCall`, which
+  replaces the attributes) are not. An instantiation's expressions are
+  rebuilt without the command-line method (clang `FPOptions(LangOpts)`):
+  only a pragma's `eval_method` applies there. Coroutine and outlined
+  bodies are left to WP-1799. A pragma's `FE_TONEAREST` gives
+  `round.tonearest`, and an explicit `ignore` holds under `FENV_ACCESS
+  ON`. `"no-trapping-math"="true"` is given only when the command line's
+  exceptions are ignored. `-ffp-eval-method=double|extended` is Sema's
+  promotion alone (no `strictfp`).
 
 ### 3.3 Pointer alignment (WP-819, WP-829, WP-847, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,

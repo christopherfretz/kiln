@@ -620,6 +620,9 @@ pub enum ArgError {
     /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
     /// (WP-1138; clang's "requires hardware support (+memtag)").
     MemtagStackRequiresMte,
+    /// `-ffp-eval-method=` with a value-changing option: 0
+    /// `-fapprox-func`, 1 reassociation, 2 `-freciprocal-math` (WP-1798).
+    IncompatibleFpEvalMethod(u8),
 }
 
 /// The parsed command line.

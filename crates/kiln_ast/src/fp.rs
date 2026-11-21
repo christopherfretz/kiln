@@ -22,8 +22,10 @@ pub enum FpContract {
 }
 
 /// The rounding mode a scope declares (clang `ConstRoundingMode`;
-/// `#pragma STDC FENV_ROUND`, C23 7.6.2). The directed modes are rejected
-/// (spec/codegen.md "Floating-point semantics").
+/// `#pragma STDC FENV_ROUND`, C23 7.6.2; spec/codegen.md
+/// "Floating-point semantics"). A directed mode applies to the scope's
+/// operations at run time (`round.<mode>` constrained intrinsics) and in
+/// constant evaluation (spec/oven.md "Floating point").
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, kiln_snap::Snap)]
 pub enum FpRound {
     /// `FE_DYNAMIC`, the default: the dynamic mode under `FENV_ACCESS ON`,
@@ -32,6 +34,51 @@ pub enum FpRound {
     Dynamic,
     /// `FE_TONEAREST`.
     Nearest,
+    /// `FE_UPWARD`.
+    Upward,
+    /// `FE_DOWNWARD`.
+    Downward,
+    /// `FE_TOWARDZERO`.
+    TowardZero,
+    /// `FE_TONEARESTFROMZERO` (ties away from zero).
+    NearestAway,
+}
+
+impl FpRound {
+    /// Whether this is a directed mode (one constant evaluation rounds
+    /// in): neither `FE_DYNAMIC` nor `FE_TONEAREST`.
+    pub fn is_directed(self) -> bool {
+        !matches!(self, FpRound::Dynamic | FpRound::Nearest)
+    }
+
+    /// LLVM's metadata name (`round.<mode>`, the LLVM language
+    /// reference's "Constrained Floating-Point Intrinsics").
+    pub fn llvm_name(self) -> &'static str {
+        match self {
+            FpRound::Dynamic => "round.dynamic",
+            FpRound::Nearest => "round.tonearest",
+            FpRound::Upward => "round.upward",
+            FpRound::Downward => "round.downward",
+            FpRound::TowardZero => "round.towardzero",
+            FpRound::NearestAway => "round.tonearestaway",
+        }
+    }
+}
+
+/// How floating-point operations evaluate (clang `FPEvalMethodKind`;
+/// `#pragma clang fp eval_method`, `-ffp-eval-method=`, C23 5.2.4.2.2
+/// `FLT_EVAL_METHOD`): an operand of a type ranked below `double`
+/// (`Double`) or `long double` (`Extended`) is converted to it by the
+/// usual unary conversions (spec/sema.md "Excess precision").
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, kiln_snap::Snap)]
+pub enum FpEval {
+    /// `source` (`FLT_EVAL_METHOD` 0, the default on every kiln target).
+    #[default]
+    Source,
+    /// `double` (1).
+    Double,
+    /// `extended` (2).
+    Extended,
 }
 
 /// The floating-point exception behavior (clang `FPExceptionModeKind`;
@@ -77,13 +124,20 @@ pub struct FpOptions {
     /// `#pragma STDC FENV_ACCESS ON` (C23 7.6.1): the program may test
     /// the status flags and change the control modes.
     pub fenv_access: bool,
+    /// The evaluation method.
+    pub eval: FpEval,
+    /// `-frounding-math` (clang `LangOptions::RoundingMath`): `FE_DYNAMIC`
+    /// is the dynamic mode even outside `FENV_ACCESS ON`. A command-line
+    /// option only; no pragma changes it.
+    pub rounding_math: bool,
 }
 
 impl FpOptions {
     /// The effective rounding mode (clang `FPOptions::getRoundingMode`):
-    /// `Dynamic` is round to nearest outside `FENV_ACCESS ON`.
+    /// `Dynamic` is round to nearest outside `FENV_ACCESS ON` without
+    /// `-frounding-math`.
     pub fn rounding(&self) -> FpRound {
-        if self.round == FpRound::Dynamic && !self.fenv_access {
+        if self.round == FpRound::Dynamic && !self.fenv_access && !self.rounding_math {
             FpRound::Nearest
         } else {
             self.round
@@ -102,6 +156,18 @@ impl FpOptions {
     /// `llvm.experimental.constrained.*` (spec/codegen.md).
     pub fn constrained(&self) -> bool {
         self.rounding() != FpRound::Nearest
+            || self.exceptions() != FpExcept::Ignore
+            || self.fenv_access
+    }
+
+    /// Whether an FP operation's result depends on the dynamic
+    /// environment, so a fold outside a constant context is not attempted
+    /// (clang `checkFloatingPointResult`, which fails an inexact result
+    /// under the dynamic mode and any exception when exceptions or the
+    /// environment are observed). A directed declared mode alone folds,
+    /// in that mode.
+    pub fn env_dependent(&self) -> bool {
+        self.rounding() == FpRound::Dynamic
             || self.exceptions() != FpExcept::Ignore
             || self.fenv_access
     }
@@ -143,6 +209,8 @@ pub mod fp_bit {
     pub const EXCEPT: u16 = 512;
     /// `fenv_access`.
     pub const FENV: u16 = 1024;
+    /// `eval`.
+    pub const EVAL: u16 = 2048;
 }
 
 /// Some [`FpOptions`] fields set by pragmas (clang `FPOptionsOverride`):
@@ -180,6 +248,8 @@ impl FpOverride {
             round: FpRound::Dynamic,
             except: None,
             fenv_access: false,
+            eval: FpEval::Source,
+            rounding_math: false,
         },
         cx_limited: None,
         strict_fn: false,
@@ -206,7 +276,15 @@ impl FpOverride {
             round: if self.mask & fp_bit::ROUND != 0 { v.round } else { base.round },
             except: if self.mask & fp_bit::EXCEPT != 0 { v.except } else { base.except },
             fenv_access: pick(fp_bit::FENV, v.fenv_access, base.fenv_access),
+            eval: if self.mask & fp_bit::EVAL != 0 { v.eval } else { base.eval },
+            rounding_math: base.rounding_math,
         }
+    }
+
+    /// Sets the evaluation method (`#pragma clang fp eval_method`).
+    pub fn set_eval(&mut self, m: FpEval) {
+        self.mask |= fp_bit::EVAL;
+        self.vals.eval = m;
     }
 
     /// Sets the declared rounding mode (`#pragma STDC FENV_ROUND`).

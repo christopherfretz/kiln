@@ -1268,7 +1268,13 @@ impl<'a> AstBuilder<'a> {
         a: u32,
         b: u32,
     ) -> ExprId {
-        self.ast.exprs.push(ExprNode::new(kind, vk, ok, flags, deps, aux, ty, loc, a, b))
+        let e = self.ast.exprs.push(ExprNode::new(kind, vk, ok, flags, deps, aux, ty, loc, a, b));
+        if let Some(r) = self.ast.exprs.round_scope
+            && kind.may_round()
+        {
+            let _ = self.ast.exprs.cold.fp_round.insert(e, r);
+        }
+        e
     }
 
     #[allow(clippy::too_many_arguments, reason = "header fields minus object kind and flags")]

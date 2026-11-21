@@ -578,6 +578,17 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.finish().0
     }
 
+    /// Where the `#pragma clang fp eval_method` in effect was entered
+    /// (the preprocessor's `__FLT_EVAL_METHOD__` scope, WP-1744).
+    pub(crate) fn fp_eval_pragma(&self) -> Option<Loc> {
+        self.src.borrow_mut().preprocessor().fp_eval_pragma()
+    }
+
+    /// Sets [`Self::fp_eval_pragma`].
+    pub(crate) fn set_fp_eval_pragma(&self, at: Option<Loc>) {
+        self.src.borrow_mut().preprocessor().set_fp_eval_pragma(at);
+    }
+
     /// Handles the preprocessor events before token `pos`.
     fn handle_events(&mut self, pos: usize) {
         while let Some(e) = self.src.get_mut().take_event(pos) {

@@ -472,6 +472,10 @@ pub struct Sema<'a, 'sm> {
     /// implicitly `const` (spec/sema.md §5.4, WP-806); the FP pragmas
     /// check their value-changing flags (WP-1744).
     pub fp: kiln_ast::fp::FpOptions,
+    /// `-ffp-eval-method=` was given (clang's `FPEvalMethod` is not
+    /// `FEM_UnsetOnCommandLine`): `#pragma clang fp reassociate(on)` and
+    /// `reciprocal(on)` are errors (WP-1798).
+    pub fp_eval_on_command_line: bool,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -1558,6 +1562,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             nc_strict_only: false,
             no_builtin_pending: Vec::new(),
             fp: kiln_ast::fp::FpOptions::default(),
+            fp_eval_on_command_line: false,
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,

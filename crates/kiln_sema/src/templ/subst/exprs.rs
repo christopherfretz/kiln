@@ -66,7 +66,19 @@ impl Substituter<'_, '_, '_> {
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
         self.sema.subst_expr_depth += 1;
+        // An operation keeps its pattern's rounding mode (clang's
+        // `TreeTransform` sets `CurFPFeatures` from the pattern node).
+        let exprs = &mut self.sema.ast.exprs;
+        let round = exprs.round_scope;
+        let scoped =
+            (round.is_some() || !exprs.cold.fp_round.is_empty()) && exprs.get(e).kind().may_round();
+        if scoped {
+            exprs.round_scope = exprs.fp_round(e);
+        }
         let r = self.expr_node(e);
+        if scoped {
+            self.sema.ast.exprs.round_scope = round;
+        }
         self.sema.subst_expr_depth -= 1;
         let r = r?;
         self.sema.note_inst_consteval_only(e, r);

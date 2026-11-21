@@ -62,7 +62,7 @@
 //! | `short_enums` | configuration | `-f[no-]short-enums` |
 //! | `char8` | configuration | `-f[no-]char8_t` |
 //! | `lib_builtin_name`, `clang_constexpr_builtin` | configuration | the preprocessor's builtin tables (`fn`s) |
-//! | `fp` | configuration | `-ffp-model=`, `-ffast-math`, `-f[no-]math-errno`, ... |
+//! | `fp`, `fp_eval_on_command_line` | configuration | `-ffp-model=`, `-ffast-math`, `-f[no-]math-errno`, `-ffp-eval-method=`, ... |
 //! | `cfg_dump`, `cfg_stats`, `cfg_max_elems` | configuration | `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=` |
 //! | `full_deduction`, `full_redecl_scan` | configuration | test hooks of `ParseOptions` |
 //! | `tu_prefix` | configuration | `ParseOptions::prefix` (a header being precompiled) |
@@ -158,7 +158,7 @@ macro_rules! sema_fields {
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
                 target_features, target_attr_features,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, contracts, sized_deallocation,
-                aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, cfg_dump,
+                aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, fp_eval_on_command_line, cfg_dump,
                 cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],
             // `ctx` first: the most telling refusal (a prefix ending inside
             // a namespace or `extern "C" {`); then the construct stacks.

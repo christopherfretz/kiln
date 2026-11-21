@@ -313,6 +313,43 @@ pub(crate) fn float_bin_raw(op: Op, kind: FloatKind, a: u128, b: u128) -> Option
     Some(if is_nan(kind, r) { softfloat::make_nan(kind, 0, false) } else { r })
 }
 
+/// [`float_bin`] rounded in mode `rm` (`#pragma STDC FENV_ROUND`): a
+/// directed mode runs in the soft-float for every format, the host only
+/// rounds to nearest.
+pub(crate) fn float_bin_rm(
+    op: Op,
+    kind: FloatKind,
+    a: u128,
+    b: u128,
+    rm: softfloat::Rm,
+) -> Result<u128, FloatErr> {
+    if rm == softfloat::Rm::Nearest {
+        return float_bin(op, kind, a, b);
+    }
+    if op == Op::FDiv && is_zero(kind, b) {
+        return Err(FloatErr::DivZero);
+    }
+    let r = float_bin_raw_rm(op, kind, a, b, rm).ok_or(FloatErr::Unsupported)?;
+    if is_nan(kind, r) {
+        return Err(FloatErr::NaN);
+    }
+    Ok(r)
+}
+
+/// [`float_bin_raw`] rounded in mode `rm`.
+pub(crate) fn float_bin_raw_rm(
+    op: Op,
+    kind: FloatKind,
+    a: u128,
+    b: u128,
+    rm: softfloat::Rm,
+) -> Option<u128> {
+    if rm == softfloat::Rm::Nearest {
+        return float_bin_raw(op, kind, a, b);
+    }
+    softfloat::bin_rm(op, kind, a, b, rm)
+}
+
 /// [`float_bin_raw`] of non-NaN operands in the host's arithmetic.
 fn float_bin_native(op: Op, kind: FloatKind, a: u128, b: u128) -> u128 {
     match kind {
@@ -381,6 +418,22 @@ pub(crate) fn float_cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
         return softfloat::cast(from, to, a);
     }
     from_f64(to, to_f64(from, a))
+}
+
+/// [`float_cast`] rounded in mode `rm`.
+pub(crate) fn float_cast_rm(from: FloatKind, to: FloatKind, a: u128, rm: softfloat::Rm) -> u128 {
+    if rm == softfloat::Rm::Nearest || from == to {
+        return float_cast(from, to, a);
+    }
+    softfloat::cast_rm(from, to, a, rm)
+}
+
+/// [`int_to_float`] rounded in mode `rm`.
+pub(crate) fn int_to_float_rm(kind: FloatKind, v: u128, signed: bool, rm: softfloat::Rm) -> u128 {
+    if rm == softfloat::Rm::Nearest {
+        return int_to_float(kind, v, signed);
+    }
+    softfloat::from_int_rm(kind, v, signed, rm)
 }
 
 /// Converts a canonical integer to a float (round to nearest even).

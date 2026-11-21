@@ -11,7 +11,7 @@
 use kiln_abi::call::ArgKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
-use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
+use kiln_llvm::{BinOp, CastOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
 use kiln_source::Loc;
 
 use crate::ComplexRange;
@@ -566,8 +566,8 @@ impl Cg<'_> {
                 if let Some(fty) = self.cx_promotion(ty) {
                     let eq = self.cx_elem(ty).expect("Sema typed it _Complex");
                     let (r, i) = self.emit_cx_promoted(e, fty)?;
-                    let f = QualType::FLOAT;
-                    return Ok((Some(self.conv(r, f, eq)), Some(self.conv(i, f, eq))));
+                    let t = self.lty(eq);
+                    return Ok((Some(self.unpromote(r, t)), Some(self.unpromote(i, t))));
                 }
                 let lhs = self.cx_operand(l)?;
                 let rhs = self.cx_operand(r)?;
@@ -781,8 +781,10 @@ impl Cg<'_> {
             return Ok((Some(r), Some(i)));
         }
         let v = self.emit_cx(x, ALL)?;
-        let eq = self.cx_elem(q).expect("Sema typed it _Complex");
-        Ok(self.cx_ext(v, eq))
+        let (r, i) = v;
+        let ext =
+            |c: &mut Self, v: Option<V>| v.map(|v| c.cast_unscoped(CastOp::FPExt, v, LTy::FLOAT));
+        Ok((ext(self, r), ext(self, i)))
     }
 
     /// clang `EmitBinAdd`/`Sub`/`Mul`/`Div`.

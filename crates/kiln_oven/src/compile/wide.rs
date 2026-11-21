@@ -523,7 +523,7 @@ impl Compiler<'_> {
             unreachable!("wide floating compound assignment without an operation: {e:?}");
         };
         let k = ak::COMPOUND;
-        let fx = self.float_x(ct);
+        let fx = self.float_x(ct) | super::round_code(self.ast().exprs.fp_round(e)) << 4;
         let rt = self.ety(rhs);
         let b = self.reg();
         if self.o.types.wide(rt).is_some() {
@@ -684,7 +684,8 @@ impl Compiler<'_> {
             }
             CastKind::IntegralToFloating => {
                 let a = self.wide_place(op);
-                let x = self.float_x(ty);
+                // x >> 4: the `FENV_ROUND` mode (`round_code`).
+                let x = self.float_x(ty) | super::round_code(self.ast().exprs.fp_round(e)) << 4;
                 self.wide(wide::TO_FLOAT, 0, [dst, a, 0], ot, x, e);
             }
             // Otherwise a wide operand with a narrow result is an integral

@@ -164,6 +164,22 @@ impl Substituter<'_, '_, '_> {
         let items: Vec<StmtId> =
             self.sema.ast.lists.iter::<StmtId>(self.sema.ast.stmts.compound_body(s)).collect();
         let rb = self.sema.ast.stmts.rbrace(s);
+        let fp = self.sema.ast.stmts.compound_fp(s);
+        // The statements are built in the pattern's FP state (clang's
+        // `TransformCompoundStmt` resets `CurFPFeatures` to it): its
+        // rounding mode and evaluation method.
+        let outer = self.sema.fp_pragma_state();
+        let mut state = kiln_ast::fp::FpOverride { strict_fn: false, ..fp };
+        if state.mask & kiln_ast::fp::fp_bit::EVAL == 0
+            && self.sema.fp.eval != kiln_ast::fp::FpEval::Source
+        {
+            // clang rebuilds an instantiation's expressions from
+            // `FPOptions(LangOpts)`, which leaves out `-ffp-eval-method=`
+            // (the preprocessor holds it): only a pragma's method applies
+            // (WP-1798).
+            state.set_eval(kiln_ast::fp::FpEval::Source);
+        }
+        self.sema.set_fp_pragma_state(state);
         let mut out = Vec::with_capacity(items.len());
         for x in items {
             let decl = self.sema.ast.stmts.get(x).kind() == StmtKind::DeclStmt;
@@ -172,7 +188,7 @@ impl Substituter<'_, '_, '_> {
                 break;
             }
         }
-        let fp = self.sema.ast.stmts.compound_fp(s);
+        self.sema.set_fp_pragma_state(outer);
         self.sema.ast.builder().compound_fp(&out, n.loc(), rb, fp)
     }
 

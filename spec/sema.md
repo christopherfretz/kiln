@@ -10585,6 +10585,55 @@ behaviour, or proven unreachable (`unreachable!` with the invariant):
   since WP-1745, §4.5). Test
   `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
 
+### 5.35 Excess precision and the rounding scope (`conv/mod.rs`, WP-1744)
+
+**Excess precision** (`#pragma clang fp eval_method`, C23 5.2.4.2.2
+`FLT_EVAL_METHOD`): the evaluation method in effect is the pragma
+state's (`FpOverride` with `fp_bit::EVAL`) over the command line's
+(`Sema::fp.eval`, `-ffp-eval-method=`). Under `double` (1) or `extended`
+(2) the usual unary conversions (clang `UsualUnaryConversions`) first
+promote an operand of a floating type ranked below the method's type,
+`double` or `long double`, to that type: an `ImplicitCastExpr`
+`FloatingCast`, or `FloatingComplexCast` for a complex operand of a
+lower element type. The ranks are clang's `getFloatingTypeOrder`:
+`__bf16` < `_Float16` < `__fp16` < `float` < `double` < `long double` <
+`__float128` (`clang_float_rank`, on the type's ABI twin). So binary
+arithmetic, comparisons, unary `-`/`+` and a compound assignment's right
+side (its computation type follows) are promoted, while `++`/`--`, an
+assignment's operand and a conditional whose arms share a type are not;
+the result converts back where it is stored or returned. Code
+generation and the Oven follow the promoted AST with no rule of their
+own, so constant evaluation of `a * a / a` that overflows `float` does
+not under `double`. `source` (0) promotes nothing. The command line's
+method holds only where no pragma state is in effect: clang applies
+a pragma's override to `FPOptions(LangOpts)`, which leaves out
+`-ffp-eval-method=` (the preprocessor holds it). So a scope that opens
+with `#pragma clang fp contract(fast)`, a file-scope `FENV_ROUND` and
+what follows it evaluate in `source`, unless the pragma state sets a
+method. A pragma popped at the end of its block restores the method.
+Deviation: after `float_control(push)`/`pop` back to no pragma state,
+kiln restores the command line's method, where clang keeps `source`.
+An instantiation does not see the command line's method (clang rebuilds it from
+`FPOptions(LangOpts)`, and the preprocessor holds `-ffp-eval-method=`):
+each substituted compound statement whose pattern state sets no method
+gets `source` (`templ/subst/stmts.rs`, WP-1798). So `tadd<double>` under
+`-ffp-eval-method=extended` adds in `double`, and a generic lambda's
+deduced return type is not promoted, as in clang.
+
+**Rounding scope** (`#pragma STDC FENV_ROUND`, C23 7.6.2): a directed
+mode in effect is `ExprArena::round_scope`
+(`Sema::sync_round_scope`, run by `set_fp_pragma_state`), and the
+builder records it on each expression that may round
+(`ExprArena::fp_round`, a cold map, empty in a program without the
+pragma). Floating literals round in it. Instantiation keeps the
+pattern's mode: a function template body is substituted under its
+pattern compound's pragma state, and each substituted expression takes
+the mode recorded on its pattern node, so `third<double>()` defined in an
+upward region is upward wherever it is used (clang keeps the pattern's
+`FPOptions`). Known gap: a BMI module image carries neither the
+per-compound FP state nor `fp_round`, so an imported inline function is
+evaluated and emitted to nearest.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - an invalid element (WP-408): an expression standing for clang's

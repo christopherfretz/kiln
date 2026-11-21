@@ -22,6 +22,7 @@ use crate::mem::{
     Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, UNION_ENDED, flags, synth_idx,
 };
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
+use crate::softfloat::Rm;
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
 use crate::{Oven, SemaBridge};
 
@@ -1554,10 +1555,14 @@ impl Oven {
             }
             Op::FAdd | Op::FSub | Op::FMul | Op::FDiv => {
                 let kind = float_of(aux);
-                match arith::float_bin(op, kind, reg!(1), reg!(2)) {
+                // aux >> 4: the `FENV_ROUND` mode, 0 (to nearest) on the
+                // fast path.
+                let rm = Rm::from_code(aux >> 4);
+                match arith::float_bin_rm(op, kind, reg!(1), reg!(2), rm) {
                     Ok(v) => reg!(0) = v,
                     Err(FloatErr::NaN | FloatErr::DivZero) if self.fold_float_ub => {
-                        let Some(v) = arith::float_bin_raw(op, kind, reg!(1), reg!(2)) else {
+                        let Some(v) = arith::float_bin_raw_rm(op, kind, reg!(1), reg!(2), rm)
+                        else {
                             fail!(Fault::Float(FloatErr::Unsupported))
                         };
                         reg!(0) = v;
@@ -1581,11 +1586,13 @@ impl Oven {
                 pc += 4;
             }
             Op::FCast => {
-                reg!(0) = arith::float_cast(float_of(aux), float_of(aux >> 4), reg!(1));
+                let rm = Rm::from_code(aux >> 8);
+                reg!(0) = arith::float_cast_rm(float_of(aux), float_of(aux >> 4), reg!(1), rm);
                 pc += 3;
             }
             Op::IToF => {
-                reg!(0) = arith::int_to_float(float_of(aux >> 9), reg!(1), aux >> 8 & 1 != 0);
+                let (kind, rm) = (float_of(aux >> 9), Rm::from_code(aux >> 13));
+                reg!(0) = arith::int_to_float_rm(kind, reg!(1), aux >> 8 & 1 != 0, rm);
                 pc += 3;
             }
             Op::FToI => {
