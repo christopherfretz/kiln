@@ -191,6 +191,9 @@ impl Sema<'_, '_> {
         let ty = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &args);
             sub.map_contexts(&pairs);
+            // clang reports at the declared type's begin (`SubstType` of
+            // its `TypeSourceInfo`; WP-1839).
+            sub.type_begin = sub.sema.type_spec_locs.get(&pattern).copied();
             let ty = member_ty.map_or_else(|| sub.ty(pty, ploc), Ok);
             // [dcl.align]/1: the pattern's alignment-specifiers, with a
             // dependent operand substituted (clang `InstantiateAttrs`).

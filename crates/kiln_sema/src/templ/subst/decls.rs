@@ -500,13 +500,13 @@ impl Substituter<'_, '_, '_> {
             self.sema.error(kiln_diag::DiagId::sema_param_with_void_type, loc);
             return Err(SubstFail);
         }
-        let ty = self.sema.adjust_param_type(ty);
         // A dependent address space made concrete (WP-1811; clang
-        // `SubstParmVarDecl` → `CheckParameter`).
+        // `SubstParmVarDecl` → `CheckParameter`), on the type as declared:
+        // an array's elements (WP-1823).
         if self.sema.check_addr_space_param(ty, loc) {
             return Err(SubstFail);
         }
-        Ok(ty)
+        Ok(self.sema.adjust_param_type(ty))
     }
 
     /// The parameters of pattern function `f` with substituted types.
@@ -679,6 +679,29 @@ impl Substituter<'_, '_, '_> {
     /// The substituted parameters, return type and exception
     /// specification of pattern function `d` of type `p`. On failure the
     /// pattern's parameters are forgotten.
+    /// clang `BuildFunctionType` → `checkExtParameterInfos`: the Swift
+    /// parameter ABIs of a substituted declaration's expanded parameters
+    /// `params`, in order, with its convention, every one at `at`
+    /// (WP-1839; a nested function type's are checked in
+    /// `Substituter::ty`).
+    fn check_sig_param_abis(
+        &mut self,
+        info: kiln_ast::types::FuncInfo,
+        params: &[ParamInfo],
+        at: Loc,
+    ) -> SubstResult<()> {
+        if info.param_abis() == 0 {
+            return Ok(());
+        }
+        let abis = self.sema.declarator_param_abis(params);
+        let locs = vec![at; abis.len()];
+        if abis.is_empty() || self.sema.check_ext_param_infos(info.cc(), &abis, &locs) {
+            Ok(())
+        } else {
+            Err(SubstFail)
+        }
+    }
+
     fn function_sig(
         &mut self,
         d: DeclId,
@@ -739,6 +762,7 @@ impl Substituter<'_, '_, '_> {
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
             self.check_volatile_params(fn_ty, &ptys, ret_loc);
             self.check_param_types(&ptys, ret_loc)?;
+            self.check_sig_param_abis(info, &params, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
@@ -1134,6 +1158,7 @@ impl Substituter<'_, '_, '_> {
             let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
             self.check_volatile_params(t, &ptys, ret_loc);
             self.check_param_types(&ptys, loc)?;
+            self.check_sig_param_abis(info, &params, loc)?;
             // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
             // not part of deduction; it is substituted when needed (clang
             // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from

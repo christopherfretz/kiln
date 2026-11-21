@@ -7,7 +7,6 @@
 //! translation unit.
 
 use kiln_ast::QualType;
-use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
@@ -1048,6 +1047,24 @@ impl Sema<'_, '_> {
         if let Some(prev) = prev {
             self.check_spec_default_args(prev, d, info.template);
         }
+        // The template's calling convention was adopted for the match: a
+        // different written one is merged as a redeclaration's (clang
+        // `MergeFunctionDecl`; WP-1843).
+        let ty = match self.ast.decls.get(s).ty() {
+            Some(sty) => {
+                // Previously declared by this declaration, or by the first
+                // explicit specialization (`Ast::contract_first`), not by
+                // the template.
+                let at = match info.kind {
+                    SpecKind::ExplicitSpecialization => {
+                        self.ast.decls.get(self.ast.contract_first(s)).loc()
+                    }
+                    _ => name_loc,
+                };
+                self.merge_cc_noted(ty, sty, s, name_loc, Some(at))
+            }
+            None => ty,
+        };
         if !self.check_spec_exc_spec(s, ty, name_loc, crate::except::missing_exc_spec_fixit_loc(d))
         {
             return None;
@@ -1227,6 +1244,11 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(pty) = self.declared_fn_type(c) else { continue };
+            // The member's calling convention is adopted for the match; a
+            // different written one is merged as a redeclaration's
+            // (`Sema::act_on_explicit_member_spec`; clang
+            // `MergeFunctionDecl`; WP-1843).
+            let ty = self.with_cc_of(ty, pty);
             if self.ast.types.same_type(pty, ty) {
                 let c = self.most_constrained_member_match(c, &cands, ty, d.name_loc());
                 if !inst && close.is_none() && self.spec_unsatisfied(c, d.name_loc()) {
@@ -1490,9 +1512,9 @@ impl Sema<'_, '_> {
         // specialization with that declaration: a `[[deprecated]]` or
         // `[[nodiscard]]` primary still applies; WP-1221).
         let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
-        // The SME keywords are in the declared type (`Sema::apply_cc_attrs`
-        // before the template was matched).
-        attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::SME_TYPE);
+        // The function type attributes are in the declared type
+        // (`Sema::apply_cc_attrs` before the template was matched).
+        attrs.retain(|&a| !self.ast.attrs.get(a).kind.is_fn_type_attr());
         self.take_annotations(f, &mut attrs);
         self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {
@@ -1543,6 +1565,11 @@ impl Sema<'_, '_> {
             return None;
         }
         self.check_spec_default_args(m, d, m);
+        // A written calling convention other than the member's (WP-1843).
+        let ty = match self.declared_fn_type(m) {
+            Some(pty) => self.merge_cc(ty, pty, m, name_loc),
+            None => ty,
+        };
         let fspec = self.explicit_spec_fnspec(ds, ty, m);
         // [dcl.constexpr]/1: the member's declarations agree on
         // `constexpr`/`consteval` (clang merges the specialization with

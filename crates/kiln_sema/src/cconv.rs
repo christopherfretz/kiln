@@ -431,6 +431,18 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// Function type `ty` with the calling convention of function type
+    /// `of` (clang `adjustCCAndNoReturn`'s convention half); `ty` when
+    /// either is not a function type.
+    pub(crate) fn with_cc_of(&mut self, ty: QualType, of: QualType) -> QualType {
+        let Some(cc) = self.ast.types.proto(of).map(|p| p.info().cc()) else { return ty };
+        if self.ast.types.proto(ty).is_none_or(|p| p.info().cc() == cc) {
+            return ty;
+        }
+        let f = move |i: FuncInfo| i.with_cc(cc);
+        self.with_fn_info(ty, &f, false).unwrap_or(ty)
+    }
+
     /// The calling convention and `no_caller_saved_registers` of a
     /// redeclaration's type `ty` against its previous declaration's `pty`
     /// (clang `MergeFunctionDecl`): a redeclaration that names none
@@ -445,6 +457,25 @@ impl Sema<'_, '_> {
         prev: DeclId,
         at: Loc,
     ) -> QualType {
+        self.merge_cc_noted(ty, pty, prev, at, None)
+    }
+
+    /// [`Self::merge_cc`], its notes at `note_at` when given: a function
+    /// template's specialization first declared by `at`'s explicit
+    /// specialization is "previously declared" there (clang creates it at
+    /// the specialization's location; WP-1843).
+    pub(crate) fn merge_cc_noted(
+        &mut self,
+        ty: QualType,
+        pty: QualType,
+        prev: DeclId,
+        at: Loc,
+        note_at: Option<Loc>,
+    ) -> QualType {
+        let note = |s: &Self, msg: kiln_diag::Diag, prev: DeclId| match note_at {
+            Some(l) => msg.with_note(s.diag(DiagId::note_previous_declaration, l)),
+            None => s.note_prev(msg, prev, false),
+        };
         let (Some(new), Some(old)) = (
             self.ast.types.proto(ty).map(kiln_ast::types::FuncProto::info),
             self.ast.types.proto(pty).map(kiln_ast::types::FuncProto::info),
@@ -469,7 +500,7 @@ impl Sema<'_, '_> {
                     None => "without calling convention".to_owned(),
                 };
                 let msg = self.diag(DiagId::sema_cconv_change, at).arg(cc_name(cc)).arg(was);
-                let msg = self.note_prev(msg, first, false);
+                let msg = note(self, msg, first);
                 self.emit(msg);
             }
             cc = old.cc();
@@ -478,7 +509,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_function_attribute_mismatch, at)
                 .arg("no_caller_saved_registers");
-            let msg = self.note_prev(msg, prev, false);
+            let msg = note(self, msg, prev);
             self.emit(msg);
         }
         let no_csr = old.no_caller_saved_regs();
@@ -491,7 +522,7 @@ impl Sema<'_, '_> {
                 None => "without the regparm".to_owned(),
             };
             let msg = self.diag(DiagId::sema_regparm_mismatch, at).arg(n.to_string()).arg(was);
-            let msg = self.note_prev(msg, prev, false);
+            let msg = note(self, msg, prev);
             self.emit(msg);
         }
         let regparm = old.regparm();

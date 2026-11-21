@@ -633,6 +633,7 @@ impl Parser<'_, '_> {
             }
             let tl = self.loc();
             self.typename_pack_index = None;
+            self.type_id_spec_loc = Loc::INVALID;
             let own = attrs.len();
             self.next_tag_site = Some(if self.s.has_open_template_head() {
                 TagSite::AliasTemplate
@@ -642,6 +643,12 @@ impl Parser<'_, '_> {
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
+            };
+            // A type-id's substituted type reports at its first
+            // type-specifier, past its attributes (clang's `TypeLoc`).
+            let tl = match std::mem::replace(&mut self.type_id_spec_loc, Loc::INVALID) {
+                l if l.is_valid() => l,
+                _ => tl,
             };
             let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc);
             self.s.note_alias_decl_loc(d, loc);
@@ -4812,6 +4819,8 @@ impl Parser<'_, '_> {
             // says nothing more (WP-186, WP-946).
             return Some(QualType::ERROR);
         }
+        // Set after the declarator's own type-ids were parsed.
+        self.type_id_spec_loc = ds.type_loc.unwrap_or(Loc::INVALID);
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
         // A calling convention among the decl-specifiers applies to the
         // function type as one after the declarator does (clang

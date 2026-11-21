@@ -247,9 +247,35 @@ impl Sema<'_, '_> {
         self.ast.decls.set_flags(v, DeclFlags::INVALID);
     }
 
-    /// Whether `ty`, the adjusted type of a parameter declared at `loc`,
-    /// is in an address space: clang's "parameter may not be qualified
-    /// with an address space" (the parameter is invalid).
+    /// [temp.inst] A parameter `np` of a function type written inside
+    /// another declarator, its type in the function type substituted as
+    /// `ty` (clang `SubstParmVarDecl` → `CheckParameter`, then
+    /// `AddParameterABIAttr` for its Swift ABI `abi`): the declared type
+    /// (the element type of one declared as an array) must not be in an
+    /// address space, and the adjusted type must suit the ABI. False after
+    /// a diagnostic (WP-1823).
+    pub(crate) fn check_nested_param(
+        &mut self,
+        ty: QualType,
+        np: crate::templ::written::NestedParam,
+        abi: kiln_ast::types::ParamAbi,
+    ) -> bool {
+        if self.is_error_type(ty) || self.ast.types.is_dependent(ty) {
+            return true;
+        }
+        let declared = if np.array { self.ast.types.pointee(ty).unwrap_or(ty) } else { ty };
+        let mut ok = !self.check_addr_space_param(declared, np.loc);
+        if abi != kiln_ast::types::ParamAbi::Ordinary && np.abi_loc.is_valid() {
+            let adjusted = self.adjust_param_type(ty);
+            ok &= self.param_abi_type_ok(abi, adjusted, np.abi_loc);
+        }
+        ok
+    }
+
+    /// Whether `ty`, the declared type of a parameter at `loc` (an array
+    /// is in its elements' space), is in an address space: clang's
+    /// "parameter may not be qualified with an address space" (the
+    /// parameter is invalid).
     pub(crate) fn check_addr_space_param(&mut self, ty: QualType, loc: Loc) -> bool {
         if self.ast.types.addr_space(ty) == AddrSpace::DEFAULT || self.is_error_type(ty) {
             return false;

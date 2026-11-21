@@ -3764,7 +3764,11 @@ instantiation unless stated.
   the order are checked again for the expanded parameters (clang
   `BuildFunctionType`), at the alias's `using` or the declaration's
   type, a substitution failure in a SFINAE context; the parameter types
-  are not (WP-1810): `swift_indirect_result` parameters come first
+  are not, except a parameter written in a function type inside another
+  declarator, a typedef or a member alias (WP-1810; a function
+  template's own type and its trailing return type too, and those nested
+  parameters' types, spec/sema-templates.md §5.8.1, WP-1839):
+  `swift_indirect_result` parameters come first
   ("parameters must be first parameters of function"),
   `swift_error_result` right after a `swift_context` ("must follow
   'swift_context' parameter"), each at its parameter; all but

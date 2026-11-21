@@ -576,7 +576,17 @@ enum ExcSpec /* tag */ {
   with other bits is an error, checked before the calling convention. An
   explicit instantiation or specialization of a function template has
   the bits it writes in the type matched against the template's
-  (WP-1792).
+  (WP-1792), as every function type attribute it writes
+  (`AttrKind::is_fn_type_attr`; none is a declaration attribute there,
+  WP-1843). The match adopts the template's calling convention and GNU
+  `noreturn` only (clang `adjustCCAndNoReturn`): other
+  `no_caller_saved_registers`, `regparm` or SME bits match no template.
+  A specialization written with another convention is then merged as a
+  redeclaration (`Sema::merge_cc_noted`: "function declared 'X' here was
+  previously declared ...", noted at its own first declaration); so is an
+  explicit specialization of a member function of a class template,
+  matched with the member's convention; an explicit instantiation's
+  written convention is ignored.
   Two streaming modes, or two states for ZA or ZT0, conflict. The
   declaration attributes `__arm_locally_streaming` and `__arm_new("za",
   "zt0")` apply to functions only (`cannot be applied to types` after a
