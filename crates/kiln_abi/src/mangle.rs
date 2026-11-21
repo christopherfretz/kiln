@@ -3914,7 +3914,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if params.is_empty() && !p.variadic() {
             self.out.push('v');
         }
-        for x in params {
+        for (i, x) in params.into_iter().enumerate() {
+            // clang `mangleExtParameterInfo`: a parameter ABI is a vendor
+            // qualifier, not a substitution candidate, of a function
+            // type's parameter only (`U13swift_context`; WP-1745).
+            let abi = ast.types.param_abi(p.info(), i).spelling();
+            if !abi.is_empty() {
+                self.out.push('U');
+                self.out.push_str(&abi.len().to_string());
+                self.out.push_str(abi);
+            }
             self.ty(self.param_type(x));
         }
         self.fn_depth = saved;

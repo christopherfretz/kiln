@@ -214,7 +214,7 @@ impl Store {
                     }
                     _ => ExcKey::Simple(p.exc),
                 };
-                Key::Func { ret: p.ret, params, info: p.info, exc }
+                Key::Func { ret: p.ret, params, info: p.info(), exc }
             }
         }
     }
@@ -279,7 +279,14 @@ pub(crate) fn push_payload(store: &mut Store, key: &Key<'_>) -> Option<(u8, u16,
                 }
             };
             let i = u32::try_from(store.protos.len()).ok()?;
-            store.protos.push(FuncProto { ret, params: start, n_params, info, exc: exc_word });
+            store.protos.push(FuncProto {
+                ret,
+                params: start,
+                n_params,
+                info: info.bits(),
+                exc: exc_word,
+                abis: info.param_abis(),
+            });
             Some((TypeKind::Function as u8, 0, i))
         }
     }

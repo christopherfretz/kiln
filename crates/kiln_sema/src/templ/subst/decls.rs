@@ -520,6 +520,10 @@ impl Substituter<'_, '_, '_> {
             let depth = pd.map_or(0, |x| x.flags & ParamData::SCOPE_DEPTH_MASK);
             let t = pd.and_then(|x| x.original_ty).unwrap_or_else(|| self.decl_ty(p));
             let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, n.loc()));
+            // Its Swift parameter ABI, re-checked on the substituted type
+            // (clang `SubstParmVarDecl` → `AddParameterABIAttr`, in the
+            // immediate context).
+            let abi_attrs = self.sema.param_abi_attrs(p);
             if pd.is_some_and(|x| x.flags & ParamData::PACK != 0)
                 && let Some(pat) = crate::templ::pack::type_pattern(self.sema, t)
             {
@@ -559,9 +563,13 @@ impl Substituter<'_, '_, '_> {
                         self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, depth);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
+                    let mut attrs = abi_attrs.clone();
+                    if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
+                        return Err(SubstFail);
+                    }
                     // The elements share the pack's name (carried by
                     // `np`); it is not a redefinition ([temp.variadic]/5).
-                    out.push(subst_param_info(None, ty, loc, np, None));
+                    out.push(ParamInfo { attrs, ..subst_param_info(None, ty, loc, np, None) });
                 }
                 let l = self.sema.ast.lists.push(&decls);
                 self.locals.insert(p, DeclOrPack::Pack(l));
@@ -579,6 +587,10 @@ impl Substituter<'_, '_, '_> {
             self.declarator_name = outer_name;
             let declared = self.sema.apply_pattern_mode(p, ty?);
             let ty = self.param_type(declared, n.loc())?;
+            let mut attrs = abi_attrs;
+            if !self.sema.check_param_abi_attrs(ty, &mut attrs) {
+                return Err(SubstFail);
+            }
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -601,7 +613,11 @@ impl Substituter<'_, '_, '_> {
                 self.sema.ast.decls.set_param_original_ty(np, o);
             }
             let eo_loc = (eo != 0).then_some(n.loc());
-            out.push(ParamInfo { original_ty, ..subst_param_info(name, ty, n.loc(), np, eo_loc) });
+            out.push(ParamInfo {
+                original_ty,
+                attrs,
+                ..subst_param_info(name, ty, n.loc(), np, eo_loc)
+            });
         }
         Ok(out)
     }
@@ -1172,6 +1188,7 @@ impl Substituter<'_, '_, '_> {
                 ids.push(d);
             }
         }
+        let info = self.sema.info_with_param_abis(info, &params);
         let fty = self.sema.ast.types.function(ret, &ptys, info, exc);
         self.sema.ast.decls.set_ty(spec, fty);
         if self.sema.kind_of(spec) == DeclKind::CXXConversion {

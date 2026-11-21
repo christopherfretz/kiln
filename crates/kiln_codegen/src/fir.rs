@@ -564,6 +564,9 @@ pub(crate) struct Fir {
     /// (clang `SanitizerScope`, WP-675): appended to every instruction
     /// [`Fir::push`] adds.
     nosan: Option<(MdKindId, MetadataId)>,
+    /// The `alloca swifterror` instructions (a Swift error-result
+    /// argument's temporary, WP-1745).
+    swifterror: Vec<u32>,
 }
 
 impl Fir {
@@ -584,6 +587,7 @@ impl Fir {
             call_fmf: FastMath::NONE,
             dbg: None,
             nosan: None,
+            swifterror: Vec::new(),
         };
         let e = f.create_block();
         f.place_at_end(e);
@@ -1197,6 +1201,7 @@ impl Fir {
             call_fmf: self.call_fmf,
             dbg: None,
             nosan: None,
+            swifterror: self.swifterror.clone(),
         })
     }
 
@@ -1322,6 +1327,15 @@ impl Fir {
         V::I(n)
     }
 
+    /// [`Fir::alloca`] marked `swifterror`.
+    pub fn alloca_swifterror(&mut self, ty: TypeId, align: u64) -> V {
+        let v = self.alloca(ty, align);
+        if let V::I(n) = v {
+            self.swifterror.push(n);
+        }
+        v
+    }
+
     /// The index the next instruction will get (a mark for
     /// [`Fir::allocas_from`]).
     pub fn mark(&self) -> u32 {
@@ -1398,6 +1412,9 @@ impl Fir {
                     }
                 };
                 let r = match &inst.op {
+                    Op::Alloca { ty, align } if self.swifterror.contains(&i) => {
+                        b.alloca_swifterror(*ty, *align)?
+                    }
                     Op::Alloca { ty, align } => b.alloca(*ty, *align)?,
                     Op::DynAlloca { ty, count, align } => {
                         b.alloca_ex(*ty, Some(val(*count)), *align, false)?

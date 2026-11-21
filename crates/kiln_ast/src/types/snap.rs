@@ -24,6 +24,7 @@
 //! | `target`, `opts` | state | as data (configuration: the consumer checks them against its own) |
 //! | `exhausted` | state | as data |
 //! | `vla_star_bound` | state | as data |
+//! | `param_abis` | state | as data (every byte a `ParamAbi`, every prototype's list id in range) |
 //!
 //! [`KeyedTable`], [`ArgTable`], [`ProfileTable`]: the entry arenas are
 //! state, `intern` is rebuilt as above.
@@ -42,7 +43,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::args::{ArgTable, ListEntry, TemplateArg};
 use super::context::{FIRST_USER_TYPE, TypeContext, TypeOptions};
-use super::func::{ExcSpec, FuncProto};
+use super::func::{ExcSpec, FuncProto, ParamAbi};
 use super::intern::{InternTable, KeyedEntry, KeyedTable, fx_hash};
 use super::kinds::TypeKind;
 use super::layout::TargetTypes;
@@ -227,7 +228,7 @@ impl Store {
             return Err("type reference out of range");
         }
         for p in &self.protos {
-            let FuncProto { ret, params, n_params, info: _, exc: _ } = *p;
+            let FuncProto { ret, params, n_params, info: _, exc: _, abis: _ } = *p;
             let exc_ok = match p.exc_tag() {
                 ExcSpec::TAG_NOEXCEPT_EXPR => (p.exc_operand() as usize) < self.triples.len(),
                 ExcSpec::TAG_DYNAMIC => self
@@ -283,6 +284,7 @@ impl Snap for TypeContext {
             opts,
             exhausted,
             vla_star_bound,
+            param_abis,
         } = self;
         store.put(w);
         intern.absent(store.nodes.len()).put(w);
@@ -302,6 +304,7 @@ impl Snap for TypeContext {
         opts.put(w);
         exhausted.put(w);
         vla_star_bound.put(w);
+        param_abis.put(w);
     }
 
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
@@ -338,6 +341,13 @@ impl Snap for TypeContext {
         let opts = crate::ast::timed(r, "TypeContext.opts")?;
         let exhausted = crate::ast::timed(r, "TypeContext.exhausted")?;
         let vla_star_bound = crate::ast::timed(r, "TypeContext.vla_star_bound")?;
+        let param_abis: Vec<Vec<u8>> = crate::ast::timed(r, "TypeContext.param_abis")?;
+        if param_abis.len() > usize::from(u16::MAX)
+            || param_abis.iter().flatten().any(|&b| b > ParamAbi::SwiftIndirectResult as u8)
+            || store.protos.iter().any(|p| usize::from(p.abis) > param_abis.len())
+        {
+            return Err(r.invalid::<Self>("parameter ABI list out of range"));
+        }
         let intern = crate::ast::timed_part("TypeContext.intern rebuild", || {
             InternTable::rebuild(store.nodes.len(), &absent, |i| fx_hash(&store.key_of(i)))
         });
@@ -361,6 +371,7 @@ impl Snap for TypeContext {
             opts,
             exhausted,
             vla_star_bound,
+            param_abis,
         })
     }
 
@@ -385,6 +396,7 @@ impl Snap for TypeContext {
         .field::<TypeOptions>("opts")
         .field::<bool>("exhausted")
         .field::<Option<ExprId>>("vla_star_bound")
+        .field::<Vec<Vec<u8>>>("param_abis")
         .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
@@ -408,7 +420,8 @@ impl Snap for TypeContext {
             .field::<TargetTypes>("target")
             .field::<TypeOptions>("opts")
             .field::<bool>("exhausted")
-            .field::<Option<ExprId>>("vla_star_bound");
+            .field::<Option<ExprId>>("vla_star_bound")
+            .field::<Vec<Vec<u8>>>("param_abis");
         if s.register::<Self>(d) {
             Store::schema(s);
             Vec::<u32>::schema(s);
@@ -425,6 +438,7 @@ impl Snap for TypeContext {
             TargetTypes::schema(s);
             TypeOptions::schema(s);
             Option::<ExprId>::schema(s);
+            Vec::<Vec<u8>>::schema(s);
         }
     }
 }

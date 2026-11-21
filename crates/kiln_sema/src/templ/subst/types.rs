@@ -461,9 +461,41 @@ impl Substituter<'_, '_, '_> {
                 let outer = self.type_begin.take();
                 let name = self.declarator_name.take();
                 let chunk = self.chunk_loc.take();
-                let out = self.expand_types(&params, loc);
+                // With Swift parameter ABIs, each parameter is expanded on
+                // its own: a pack's elements carry its ABI (clang
+                // `TransformFunctionTypeParams`' `ExtParameterInfoBuilder`).
+                let mut info = p.info();
+                let (out, abis) = if info.param_abis() == 0 {
+                    (self.expand_types(&params, loc), Vec::new())
+                } else {
+                    let mut out = Vec::with_capacity(params.len());
+                    let mut abis = Vec::with_capacity(params.len());
+                    let mut res = Ok(());
+                    for (i, &t) in params.iter().enumerate() {
+                        let abi = self.sema.ast.types.param_abi(info, i);
+                        match self.expand_types(&[t], loc) {
+                            Ok(v) => {
+                                abis.extend(std::iter::repeat_n(abi, v.len()));
+                                out.extend(v);
+                            }
+                            Err(e) => {
+                                res = Err(e);
+                                break;
+                            }
+                        }
+                    }
+                    (res.map(|()| out), abis)
+                };
                 (self.type_begin, self.declarator_name, self.chunk_loc) = (outer, name, chunk);
                 let out = out?;
+                if !abis.is_empty() {
+                    for (&t, &abi) in out.iter().zip(&abis) {
+                        if !self.sema.param_abi_type_ok(abi, t, loc) {
+                            return Err(SubstFail);
+                        }
+                    }
+                    info = info.with_param_abis(self.sema.ast.types.intern_param_abis(&abis));
+                }
                 // [temp.deduct.general]/11.10: a `void` parameter (clang
                 // `BuildFunctionType`).
                 if out.iter().any(|&t| self.sema.ast.types.is_void(t)) {
@@ -524,7 +556,7 @@ impl Substituter<'_, '_, '_> {
                     }
                     other => other,
                 };
-                Ok(self.sema.ast.types.function(ret, &out, p.info(), exc))
+                Ok(self.sema.ast.types.function(ret, &out, info, exc))
             }
             TypeView::Typedef { decl, underlying } => {
                 // A member typedef of the pattern: the instantiated

@@ -2156,6 +2156,27 @@ target ABI (clang `arrangeLLVMFunctionInfo` → `swiftcall::computeABIInfo`;
   function type) emits that call `musttail` followed by `ret`.
 - **Mangling**: `U9swiftcall` / `U14swiftasynccall` (vendor qualifiers
   on the function type).
+- **Swift parameter ABIs** (spec/sema.md §4.5; clang
+  `ConstructAttributeList`'s `ParameterABI` switch, on a declaration and
+  a call site alike): `swift_context` adds `swiftself`,
+  `swift_async_context` `swiftasync`, `swift_error_result` `swifterror`;
+  `swift_indirect_result` adds `noalias`, `sret(<pointer type>)` on the
+  first one when the function returns `void` and has no `sret` of its
+  own, and `dereferenceable(sizeof)` / `align` of a complete,
+  constant-size pointee (replacing a reference's own). A
+  `swift_error_result` argument (clang `EmitCall`) is passed as an
+  `alloca swifterror ptr` temporary (`swifterror.temp`) that holds the
+  error value loaded from the argument, stored back to it right after
+  the call (not after a `musttail` call); the callee (clang
+  `EmitFunctionProlog`) copies the incoming error value to a
+  `swifterror.temp` of its own, which the parameter then points to, and
+  copies it back at the end of the function on the normal path
+  (`Cleanup::CopyBackSwiftError`, clang `CopyBackSwiftError`). clang 19
+  and 22 agree. Mangling (clang `mangleExtParameterInfo`): inside a
+  function type, a non-ordinary parameter is preceded by
+  `U13swift_context`, `U19swift_async_context`, `U18swift_error_result`
+  or `U21swift_indirect_result` (not a substitution candidate); a
+  function's own name does not mention them.
 - **x86 `interrupt`** (spec/sema.md §4.5): a definition gets
   `x86_intrcc`, its first parameter `byval(T)` of the pointee type (`i8`
   for `void`, an opaque `type {}` for an incomplete class) and

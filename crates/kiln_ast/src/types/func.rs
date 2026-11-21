@@ -50,7 +50,7 @@ pub mod sme {
 /// (spec/types.md §5.4). Built with the
 /// `with_*` methods.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
-pub struct FuncInfo(u32);
+pub struct FuncInfo(u32, u16);
 
 impl FuncInfo {
     const VARIADIC: u32 = 1;
@@ -66,7 +66,7 @@ impl FuncInfo {
     /// No bits set: a non-variadic, non-member function with the default
     /// calling convention.
     pub const fn new() -> FuncInfo {
-        FuncInfo(0)
+        FuncInfo(0, 0)
     }
 
     /// The raw bits.
@@ -75,10 +75,32 @@ impl FuncInfo {
         self.0
     }
 
-    /// The info with raw bits `bits` (the unused high bits cleared).
+    /// The info with raw bits `bits` (the unused high bits cleared) and
+    /// no parameter ABIs.
     #[inline]
     pub const fn from_bits(bits: u32) -> FuncInfo {
-        FuncInfo(bits & ((1 << (Self::SME_SHIFT + 9)) - 1))
+        FuncInfo(bits & ((1 << (Self::SME_SHIFT + 9)) - 1), 0)
+    }
+
+    /// `bits` with this info's parameter ABIs.
+    #[inline]
+    const fn raw(self, bits: u32) -> FuncInfo {
+        FuncInfo(bits, self.1)
+    }
+
+    /// The id of the parameter ABI list in the type context (clang
+    /// `FunctionProtoType::ExtParameterInfo`'s ABI; 0: every parameter
+    /// is ordinary; [`ParamAbi`], `TypeContext::param_abi`; WP-1745).
+    #[inline]
+    pub const fn param_abis(self) -> u16 {
+        self.1
+    }
+
+    /// With parameter ABI list `id` (made by
+    /// `TypeContext::intern_param_abis`).
+    #[must_use]
+    pub const fn with_param_abis(self, id: u16) -> FuncInfo {
+        FuncInfo(self.0, id)
     }
 
     /// The `AArch64` SME attributes ([`sme`]; 0: none).
@@ -90,7 +112,7 @@ impl FuncInfo {
     /// With SME attributes `bits` ([`sme`]).
     #[must_use]
     pub const fn with_sme(self, bits: u16) -> FuncInfo {
-        FuncInfo(
+        self.raw(
             (self.0 & !((sme::MASK as u32) << Self::SME_SHIFT))
                 | (((bits & sme::MASK) as u32) << Self::SME_SHIFT),
         )
@@ -118,9 +140,9 @@ impl FuncInfo {
     #[must_use]
     pub const fn with_no_proto(self, v: bool) -> FuncInfo {
         if v {
-            FuncInfo(self.0 | (3 << Self::REF_SHIFT) | Self::VARIADIC)
+            self.raw(self.0 | (3 << Self::REF_SHIFT) | Self::VARIADIC)
         } else if self.no_proto() {
-            FuncInfo(self.0 & !(3 << Self::REF_SHIFT))
+            self.raw(self.0 & !(3 << Self::REF_SHIFT))
         } else {
             self
         }
@@ -171,7 +193,7 @@ impl FuncInfo {
     /// With the `no_caller_saved_registers` bit set to `v`.
     #[must_use]
     pub const fn with_no_caller_saved_regs(self, v: bool) -> FuncInfo {
-        FuncInfo(if v { self.0 | Self::NO_CSR } else { self.0 & !Self::NO_CSR })
+        self.raw(if v { self.0 | Self::NO_CSR } else { self.0 & !Self::NO_CSR })
     }
 
     /// The GNU `regparm(N)` of an x86 function type (clang
@@ -193,43 +215,43 @@ impl FuncInfo {
             Some(n) if n < 7 => n as u32 + 1,
             _ => 0,
         };
-        FuncInfo((self.0 & !(7 << Self::REGPARM_SHIFT)) | (n << Self::REGPARM_SHIFT))
+        self.raw((self.0 & !(7 << Self::REGPARM_SHIFT)) | (n << Self::REGPARM_SHIFT))
     }
 
     /// With the variadic bit set to `v`.
     #[must_use]
     pub const fn with_variadic(self, v: bool) -> FuncInfo {
-        FuncInfo(if v { self.0 | Self::VARIADIC } else { self.0 & !Self::VARIADIC })
+        self.raw(if v { self.0 | Self::VARIADIC } else { self.0 & !Self::VARIADIC })
     }
 
     /// With ref-qualifier `r`.
     #[must_use]
     pub const fn with_ref_qual(self, r: RefQual) -> FuncInfo {
-        FuncInfo((self.0 & !(3 << Self::REF_SHIFT)) | ((r as u32) << Self::REF_SHIFT))
+        self.raw((self.0 & !(3 << Self::REF_SHIFT)) | ((r as u32) << Self::REF_SHIFT))
     }
 
     /// With method qualifiers `q`.
     #[must_use]
     pub const fn with_this_quals(self, q: Quals) -> FuncInfo {
-        FuncInfo((self.0 & !(7 << Self::QUALS_SHIFT)) | ((q.bits() as u32) << Self::QUALS_SHIFT))
+        self.raw((self.0 & !(7 << Self::QUALS_SHIFT)) | ((q.bits() as u32) << Self::QUALS_SHIFT))
     }
 
     /// With calling convention `cc`.
     #[must_use]
     pub const fn with_cc(self, cc: CallConv) -> FuncInfo {
-        FuncInfo((self.0 & !(15 << Self::CC_SHIFT)) | ((cc as u32) << Self::CC_SHIFT))
+        self.raw((self.0 & !(15 << Self::CC_SHIFT)) | ((cc as u32) << Self::CC_SHIFT))
     }
 
     /// With the `noreturn` bit set to `v`.
     #[must_use]
     pub const fn with_noreturn(self, v: bool) -> FuncInfo {
-        FuncInfo(if v { self.0 | Self::NORETURN } else { self.0 & !Self::NORETURN })
+        self.raw(if v { self.0 | Self::NORETURN } else { self.0 & !Self::NORETURN })
     }
 
     /// With the trailing-return bit set to `v`.
     #[must_use]
     pub const fn with_trailing_return(self, v: bool) -> FuncInfo {
-        FuncInfo(if v { self.0 | Self::TRAILING } else { self.0 & !Self::TRAILING })
+        self.raw(if v { self.0 | Self::TRAILING } else { self.0 & !Self::TRAILING })
     }
 }
 
@@ -245,6 +267,7 @@ impl fmt::Debug for FuncInfo {
             .field("no_caller_saved_regs", &self.no_caller_saved_regs())
             .field("regparm", &self.regparm())
             .field("sme", &self.sme())
+            .field("param_abis", &self.param_abis())
             .finish()
     }
 }
@@ -346,10 +369,58 @@ impl ExcSpec {
 pub struct FuncProto {
     pub(crate) ret: QualType,
     pub(crate) params: u32,
-    pub(crate) info: FuncInfo,
+    /// [`FuncInfo`]'s bits.
+    pub(crate) info: u32,
     /// 3-bit tag (low bits) + 29-bit operand.
     pub(crate) exc: u32,
     pub(crate) n_params: u16,
+    /// [`FuncInfo::param_abis`] (in the padding after `n_params`).
+    pub(crate) abis: u16,
+}
+
+/// A parameter's ABI (clang `ParameterABI`, the Swift parameter
+/// attributes; spec/types.md §5.4, WP-1745): part of the function type,
+/// as clang's `ExtParameterInfo`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[repr(u8)]
+pub enum ParamAbi {
+    /// An ordinary parameter.
+    #[default]
+    Ordinary = 0,
+    /// `swift_context` (`swiftself`).
+    SwiftContext = 1,
+    /// `swift_async_context` (`swiftasync`).
+    SwiftAsyncContext = 2,
+    /// `swift_error_result` (`swifterror`).
+    SwiftErrorResult = 3,
+    /// `swift_indirect_result` (`noalias`, `sret` when the result is
+    /// `void`).
+    SwiftIndirectResult = 4,
+}
+
+impl ParamAbi {
+    /// The ABI of raw value `v` (an unknown value is ordinary).
+    pub const fn from_u8(v: u8) -> ParamAbi {
+        match v {
+            1 => ParamAbi::SwiftContext,
+            2 => ParamAbi::SwiftAsyncContext,
+            3 => ParamAbi::SwiftErrorResult,
+            4 => ParamAbi::SwiftIndirectResult,
+            _ => ParamAbi::Ordinary,
+        }
+    }
+
+    /// The attribute's name (clang `getParameterABISpelling`; empty for
+    /// an ordinary parameter).
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            ParamAbi::Ordinary => "",
+            ParamAbi::SwiftContext => "swift_context",
+            ParamAbi::SwiftAsyncContext => "swift_async_context",
+            ParamAbi::SwiftErrorResult => "swift_error_result",
+            ParamAbi::SwiftIndirectResult => "swift_indirect_result",
+        }
+    }
 }
 
 impl FuncProto {
@@ -368,13 +439,13 @@ impl FuncProto {
     /// The packed function bits.
     #[inline]
     pub const fn info(&self) -> FuncInfo {
-        self.info
+        FuncInfo(self.info, self.abis)
     }
 
     /// True for `(..., ...)`.
     #[inline]
     pub const fn variadic(&self) -> bool {
-        self.info.variadic()
+        self.info().variadic()
     }
 
     #[inline]

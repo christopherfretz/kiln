@@ -158,6 +158,14 @@ sema_sve_gnu_ambiguous = Error (2) "cannot combine GNU and SVE vectors in expres
 sema_sve_invalid_type = Error (2) "{0} attribute applied to non-SVE type {1}";
 sema_sve_type_non_streaming = Error (1) "SVE vector type {0} cannot be used in a non-streaming function";
 sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
+// clang `err_swift_abi_parameter_wrong_type`,
+// `err_swift_error_result_not_after_swift_context`,
+// `err_swift_indirect_result_not_first`, `err_swift_param_attr_not_swiftcall`
+// (WP-1745).
+sema_swift_abi_parameter_wrong_type = Error (3) "'{0}' parameter must have pointer{1:| to unqualified pointer} type; type here is {2}";
+sema_swift_error_result_not_after_swift_context = Error (0) "'swift_error_result' parameter must follow 'swift_context' parameter";
+sema_swift_indirect_result_not_first = Error (0) "'swift_indirect_result' parameters must be first parameters of function";
+sema_swift_param_attr_not_swiftcall = Error (2) "'{0}' parameter can only be used with swiftcall{1: or swiftasynccall|} calling convention{1:|s}";
 sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
 sema_switch_def_missing_case = WarningOff [SwitchEnum] (5) "{0:enumeration value {1} not explicitly handled in switch|enumeration values {1} and {2} not explicitly handled in switch|enumeration values {1}, {2}, and {3} not explicitly handled in switch|{4} enumeration values not explicitly handled in switch: {1}, {2}, {3}...}";
 // [stmt.switch]/2, [conv.general]/5 (WP-364)

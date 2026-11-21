@@ -4743,7 +4743,18 @@ impl Parser<'_, '_> {
             return Some(QualType::ERROR);
         }
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
-        let ty = self.s.act_on_type_id_decl_attrs(ty, &d.attrs);
+        // A calling convention among the decl-specifiers applies to the
+        // function type as one after the declarator does (clang
+        // `distributeFunctionTypeAttrFromDeclSpec`; WP-1745).
+        let ast = &self.s.ast;
+        let mut attrs: Vec<AttrId> = ds
+            .attrs
+            .iter()
+            .copied()
+            .filter(|&a| ast.attrs.get(a).kind == AttrKind::CALLING_CONV)
+            .collect();
+        attrs.extend(d.attrs.iter().copied());
+        let ty = self.s.act_on_type_id_decl_attrs(ty, &attrs);
         Some(self.s.check_qualified_fn_type(ty, &ds, &d))
     }
 

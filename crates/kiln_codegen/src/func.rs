@@ -727,6 +727,14 @@ impl Cg<'_> {
                 && !transparent(sq)
                 && !transparent(pq);
             let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no)?;
+            let pv = match pv {
+                ParamVal::Direct(v)
+                    if sig.abis.get(i) == Some(&kiln_ast::types::ParamAbi::SwiftErrorResult) =>
+                {
+                    ParamVal::Direct(self.swift_error_prolog(v, pq))
+                }
+                pv => pv,
+            };
             vals.push(match pv {
                 ParamVal::Direct(v) if demote => {
                     let op =
@@ -1702,6 +1710,26 @@ impl Cg<'_> {
 
     /// One argument of clang `EmitFunctionProlog`: the parameter's value
     /// (scalars) or address (aggregates and coerced scalars' memory).
+    /// clang `EmitFunctionProlog` for a `swift_error_result` parameter
+    /// `v` of type `pq` (a pointer or reference to a pointer): the
+    /// incoming error value is copied to a `swifterror.temp` slot, which
+    /// the parameter points to instead, and copied back at the end of the
+    /// function ([`Cleanup::CopyBackSwiftError`]; WP-1745).
+    fn swift_error_prolog(&mut self, v: V, pq: QualType) -> V {
+        let (TypeView::Pointer(pointee)
+        | TypeView::LValueRef(pointee)
+        | TypeView::RValueRef(pointee)) = self.ast.types.canonical_view(pq)
+        else {
+            return v;
+        };
+        let (_, align) = self.size_align(pointee);
+        let temp = self.f.fir.alloca(LTy::PTR, 8);
+        let incoming = self.load(LTy::PTR, v, align, false);
+        self.store(incoming, temp, 8, false);
+        self.push_cleanup_kind(Cleanup::CopyBackSwiftError { temp, arg: v, align }, true, false);
+        temp
+    }
+
     fn prolog_arg(&mut self, kind: &ArgKind, pq: QualType, arg_no: &mut u32) -> R<ParamVal> {
         let mt = self.mty(pq);
         // A `_Complex` parameter lives in memory like an aggregate (clang

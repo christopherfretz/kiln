@@ -4751,6 +4751,22 @@ impl Cg<'_> {
         Ok(CallArg::Scalar(self.emit_scalar(a)?))
     }
 
+    /// The `swifterror.temp` of a `swift_error_result` argument `p` for
+    /// parameter type `param`: an `alloca swifterror` holding the error
+    /// value `p` points to, and that pointee's alignment.
+    fn swift_error_temp(&mut self, param: QualType, p: V) -> (V, u64) {
+        let align = match self.ast.types.canonical_view(param) {
+            kiln_ast::types::TypeView::Pointer(t)
+            | kiln_ast::types::TypeView::LValueRef(t)
+            | kiln_ast::types::TypeView::RValueRef(t) => self.size_align(t).1,
+            _ => 8,
+        };
+        let temp = self.f.fir.alloca_swifterror(LTy::PTR, 8);
+        let v = self.load(LTy::PTR, p, align, false);
+        self.store(v, temp, 8, false);
+        (temp, align)
+    }
+
     /// clang `EmitCall` with evaluated arguments `vals` (of the
     /// expressions `args`).
     #[allow(clippy::too_many_arguments)]
@@ -4836,6 +4852,10 @@ impl Cg<'_> {
             };
             ir_args.push(v);
         }
+        // clang `EmitCall`: a `swift_error_result` argument is passed as a
+        // `swifterror` temporary holding the error value, written back
+        // after the call (WP-1745).
+        let mut swift_error = None;
         for (i, &v) in vals.iter().enumerate() {
             let Some(info) = sig.info.args.get(i) else {
                 return err(
@@ -4844,6 +4864,16 @@ impl Cg<'_> {
                 );
             };
             let kind = info.kind.clone();
+            let v = match v {
+                CallArg::Scalar(p)
+                    if sig.abis.get(i) == Some(&kiln_ast::types::ParamAbi::SwiftErrorResult) =>
+                {
+                    let (temp, align) = self.swift_error_temp(sig.params[i], p);
+                    swift_error = Some((temp, p, align));
+                    CallArg::Scalar(temp)
+                }
+                v => v,
+            };
             let at = ir_args.len();
             self.call_arg(&kind, sig.params[i], v, &mut ir_args)?;
             // clang `EmitCall`: a `maybe_undef` argument is frozen.
@@ -4906,6 +4936,10 @@ impl Cg<'_> {
         if musttail {
             let loc = args.first().and_then(|&a| self.loc_of(a));
             return self.finish_musttail(r, rq, rty, loc);
+        }
+        if let Some((temp, arg, align)) = swift_error {
+            let v = self.load(LTy::PTR, temp, 8, false);
+            self.store(v, arg, align, false);
         }
         if let Some(a) = sret_addr {
             // clang `convertTempToRValue`: a scalar returned indirectly

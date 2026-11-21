@@ -100,6 +100,11 @@ fn takes_expr_args(name: &str) -> bool {
             | "no_caller_saved_registers"
             | "no_builtin"
             | "interrupt"
+            // clang `ParameterABIAttr` (WP-1745).
+            | "swift_context"
+            | "swift_async_context"
+            | "swift_error_result"
+            | "swift_indirect_result"
     ) || kiln_ast::attr::CC_ATTR_SPELLINGS.contains(&n)
         || class_b_takes_expr_args(n)
 }

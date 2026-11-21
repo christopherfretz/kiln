@@ -485,7 +485,7 @@ if `arm_sve.h` support is ever required).
 
 ### 5.4 Function types ([dcl.fct], [except.spec])
 ```rust
-struct FuncProto {      // 20 bytes (field order: ret, params, info, exc, n_params)
+struct FuncProto {      // 20 bytes (field order: ret, params, info, exc, n_params, abis)
     ret: QualType,
     params: u32,        // start in type_lists (adjusted parameter types, [dcl.fct]/5)
     n_params: u16,
@@ -499,6 +499,12 @@ struct FuncProto {      // 20 bytes (field order: ret, params, info, exc, n_para
                         //      | regparm(3: 0 = none, else N+1; x86-64 only)
                         //      | sme(9, bit 16: AArch64 SME attributes, WP-1426)
     exc: ExcSpec,       // u32: 3-bit tag + 29-bit operand
+    abis: u16,          // the Swift parameter ABIs (WP-1745; in the padding, FuncInfo's
+                        // second field): 0 = all ordinary, else 1 + an index into
+                        // TypeContext::param_abis, one interned ParamAbi byte per
+                        // parameter up to the last non-ordinary one (clang
+                        // ExtParameterInfo). Part of the type's identity, so two
+                        // types differing only in them are distinct, also canonically.
 }
 enum ExcSpec /* tag */ {
     None,                    // potentially throwing (no spec, noexcept(false), throw(T...) pre-17 canon)

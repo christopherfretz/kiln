@@ -11,7 +11,7 @@ use kiln_ast::decl::{
 };
 use kiln_ast::decl::{FriendKind, FriendTarget};
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{BuiltinType, CallConv, PrintOptions, TypeView, print_type};
+use kiln_ast::types::{BuiltinType, CallConv, ParamAbi, PrintOptions, TypeView, print_type};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
@@ -79,6 +79,9 @@ pub(crate) struct Sig {
     /// The `AArch64` SME bits of the function type (WP-1426;
     /// [`kiln_ast::types::sme`]).
     pub sme: u16,
+    /// The Swift parameter ABI of each of `params`, up to the last one
+    /// that is not ordinary (clang `ExtParameterInfo::getABI`; WP-1745).
+    pub abis: Vec<ParamAbi>,
 }
 
 impl Sig {
@@ -2453,10 +2456,11 @@ impl<'a> Cg<'a> {
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
         let sme = p.info().sme();
+        let abis = ast.types.param_abi_list(p.info());
         let info =
             self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr, sme }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr, sme, abis }
     }
 
     /// WP-803: `sig` (of function type `fty`, variadic extras included)
@@ -2477,10 +2481,17 @@ impl<'a> Cg<'a> {
         let p = *ast.types.proto(fty).expect("function prototype");
         let size_q = QualType::unqual(ast.types.target().size_t);
         let mut all = Vec::with_capacity(sig.params.len() + ps.len());
+        let mut abis = Vec::new();
         for (i, &q) in sig.params.iter().enumerate() {
             all.push(q);
+            if !sig.abis.is_empty() {
+                abis.push(sig.abis.get(i).copied().unwrap_or_default());
+            }
             if ps.iter().any(|o| o.0 == i) {
                 all.push(size_q);
+                if !sig.abis.is_empty() {
+                    abis.push(ParamAbi::Ordinary);
+                }
             }
         }
         let n = ast.types.params(&p).len() + ps.len();
@@ -2489,7 +2500,7 @@ impl<'a> Cg<'a> {
         let info = self.classify(sig.ret, &all, n, !extern_c, t, cc, va);
         let decl_info = self.classify(sig.ret, &all[..n], n, !extern_c, t, cc, va);
         let fn_ty = self.fn_type(&decl_info, t, p.variadic());
-        Sig { info, fn_ty, params: all, ..sig }
+        Sig { info, fn_ty, params: all, abis, ..sig }
     }
 
     /// The signature of a runtime library call `ret(params...)` that
@@ -2510,6 +2521,7 @@ impl<'a> Cg<'a> {
             cc: CallConv::Default,
             no_csr: false,
             sme: 0,
+            abis: Vec::new(),
         }
     }
 
@@ -2581,7 +2593,8 @@ impl<'a> Cg<'a> {
         let fn_ty = self.fn_type(&decl_info, t, va);
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let sme = p.info().sme();
-        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr, sme }
+        let abis = ast.types.param_abi_list(p.info());
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr, sme, abis }
     }
 
     /// `sig` without its parameters (only `this`, and the VTT if any,
@@ -2725,12 +2738,16 @@ impl<'a> Cg<'a> {
         if sig.vtt {
             params.push(self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]));
         }
+        let mut used_sret = sig.sret();
         for (i, a) in sig.info.args.iter().take(n_args).enumerate() {
             let mut s = Vec::new();
             if a.noundef {
                 s.push(Attr::Flag(AttrKind::NoUndef));
             }
             self.ref_attrs(sig.params[i], &mut s);
+            if let Some(&abi) = sig.abis.get(i) {
+                self.param_abi_attrs(sig, i, abi, &mut used_sret, &mut s);
+            }
             if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
                 s.extend(self.no_fp_class(sig.params[i], coerce, *flatten));
             }
@@ -2775,6 +2792,70 @@ impl<'a> Cg<'a> {
         }
         let ret = self.m.attr_set(&ret);
         (ret, params)
+    }
+
+    /// The attributes of parameter `i` of `sig` with Swift parameter ABI
+    /// `abi` (clang `ConstructAttributeList`'s `ParameterABI` switch):
+    /// `swiftself`, `swiftasync`, `swifterror`, or for an indirect result
+    /// `noalias`, `sret` when the function returns `void` and has no
+    /// other (`used_sret`), and the pointee's `dereferenceable` and
+    /// `align` when it is complete.
+    fn param_abi_attrs(
+        &mut self,
+        sig: &Sig,
+        i: usize,
+        abi: ParamAbi,
+        used_sret: &mut bool,
+        s: &mut Vec<Attr>,
+    ) {
+        match abi {
+            ParamAbi::Ordinary => {}
+            ParamAbi::SwiftContext => s.push(Attr::Flag(AttrKind::SwiftSelf)),
+            ParamAbi::SwiftAsyncContext => s.push(Attr::Flag(AttrKind::SwiftAsync)),
+            ParamAbi::SwiftErrorResult => s.push(Attr::Flag(AttrKind::SwiftError)),
+            ParamAbi::SwiftIndirectResult => {
+                let q = sig.params[i];
+                if !*used_sret && self.ast.types.is_void(sig.ret) {
+                    let t = self.mty(q);
+                    s.push(Attr::SRet(t));
+                    *used_sret = true;
+                }
+                s.push(Attr::Flag(AttrKind::NoAlias));
+                let pointee = match self.ast.types.canonical_view(q) {
+                    TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                        Some(p)
+                    }
+                    _ => None,
+                };
+                if let Some((size, align)) = pointee.and_then(|p| self.complete_layout(p)) {
+                    // Replacing a reference's own (clang's `AttrBuilder`).
+                    s.retain(|a| !matches!(a, Attr::Dereferenceable(_) | Attr::Align(_)));
+                    s.push(Attr::Dereferenceable(size));
+                    s.push(Attr::Align(align));
+                }
+            }
+        }
+    }
+
+    /// The size and alignment of `p` when it is a complete object type
+    /// of constant size (clang `!isIncompleteType() &&
+    /// isConstantSizeType()` then `getTypeInfoInChars`).
+    fn complete_layout(&mut self, p: QualType) -> Option<(u64, u64)> {
+        let ast = self.ast;
+        match ast.types.canonical_view(p) {
+            TypeView::Record(d) => {
+                let def = ast.definition(d)?;
+                if self.class_incomplete_now(def) {
+                    return None;
+                }
+            }
+            TypeView::IncompleteArray(_)
+            | TypeView::VariableArray { .. }
+            | TypeView::Function(_) => return None,
+            _ if ast.types.is_void(p) => return None,
+            _ => {}
+        }
+        Some(self.size_align(p))
     }
 
     /// `nofpclass(nan inf)` on an FP value passed as `coerce` (a

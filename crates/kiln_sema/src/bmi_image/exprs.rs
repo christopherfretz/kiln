@@ -395,6 +395,9 @@ impl Writer<'_, '_, '_> {
             NoexceptValue::Dependent(_) => NX_DEPENDENT,
         };
         let types = &self.s.ast.types;
+        if p.info().param_abis() != 0 {
+            return Err("a Swift parameter ABI the image does not carry");
+        }
         let ps: Vec<QualType> = types.params(p).to_vec();
         let info = p.info().bits();
         let ret = self.qref(p.ret())?;
@@ -414,6 +417,9 @@ impl Writer<'_, '_, '_> {
             NoexceptValue::True => NX_TRUE,
             NoexceptValue::Dependent(_) => NX_DEPENDENT,
         };
+        if p.info().param_abis() != 0 {
+            return Err("a Swift parameter ABI the image does not carry");
+        }
         let ps: Vec<QualType> = types.params(&p).to_vec();
         let info = p.info().bits();
         let ret = self.qref(p.ret())?;

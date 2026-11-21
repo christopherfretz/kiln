@@ -514,7 +514,25 @@ impl<'m> IrBuilder<'m> {
             }
         }
         let align = to_align(align)?;
-        self.insert(InstKind::Alloca { allocated: ty, count, align, inalloca }, TypeId::PTR)
+        let swifterror = false;
+        self.insert(
+            InstKind::Alloca { allocated: ty, count, align, inalloca, swifterror },
+            TypeId::PTR,
+        )
+    }
+
+    /// `alloca swifterror ty, align N` (a Swift error-result argument's
+    /// temporary).
+    pub fn alloca_swifterror(&mut self, ty: TypeId, align: u64) -> IrResult<Value> {
+        if !self.types().is_sized(ty) {
+            return err(IrErrorKind::InvalidType, "alloca of an unsized type");
+        }
+        let align = to_align(align)?;
+        let (count, inalloca, swifterror) = (Value::NONE, false, true);
+        self.insert(
+            InstKind::Alloca { allocated: ty, count, align, inalloca, swifterror },
+            TypeId::PTR,
+        )
     }
 
     /// `alloca ty, align N`.

@@ -2091,6 +2091,13 @@ impl Printer<'_> {
             if i > 0 {
                 self.push(", ");
             }
+            // clang `printFunctionProtoAfter`: a parameter ABI (WP-1745).
+            let abi = ctx.param_abi(proto.info(), i);
+            if abi != crate::types::ParamAbi::Ordinary {
+                self.push("__attribute__((");
+                self.push(abi.spelling());
+                self.push(")) ");
+            }
             self.print(p, "");
         }
         if proto.variadic() && !no_proto {

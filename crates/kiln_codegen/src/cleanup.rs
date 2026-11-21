@@ -109,6 +109,10 @@ pub(crate) enum Cleanup {
     /// Calls the GNU `cleanup` function `func` with the address `addr`
     /// of a local variable (clang `CallCleanupFunction`, WP-807).
     AttrFn { func: DeclId, addr: V },
+    /// Copies the `swifterror.temp` slot `temp` of a `swift_error_result`
+    /// parameter back to the caller's error slot `arg` (`align`) at the
+    /// end of the function (clang `CopyBackSwiftError`; WP-1745).
+    CopyBackSwiftError { temp: V, arg: V, align: u64 },
     /// The EH cleanup of a [`Guard`]: destroys the completed object
     /// `obj` describes; with `flag`, only when the flag is set, clearing
     /// it first.
@@ -1348,6 +1352,10 @@ impl Cg<'_> {
             }
             Cleanup::GuardAbort { guard } => self.emit_guard_abort(guard),
             Cleanup::StackRestore { slot } => self.emit_stack_restore(slot),
+            Cleanup::CopyBackSwiftError { temp, arg, align } => {
+                let v = self.load(LTy::PTR, temp, 8, false);
+                self.store(v, arg, align, false);
+            }
             Cleanup::DtorDelete { op_delete, ptr, ty } => {
                 let loc = Some(self.ast.decls.get(op_delete).loc());
                 if let Err(e) = self.emit_delete_call(op_delete, ptr, ty, loc) {
