@@ -1853,7 +1853,11 @@ impl Cg<'_> {
                         BinaryOp::EQ => FloatPredicate::Oeq,
                         _ => FloatPredicate::Une,
                     };
-                    let c = self.fcmp(p, l, r);
+                    let c = if matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+                        self.fcmp(p, l, r)
+                    } else {
+                        self.fcmp_s(p, l, r)
+                    };
                     self.vec_cmp_result(c, q)
                 } else {
                     let s = !lp && self.is_signed(self.scalar_of(lq));
@@ -1910,7 +1914,13 @@ impl Cg<'_> {
 
     fn is_fmul(&self, v: V) -> bool {
         let V::I(i) = v else { return false };
-        matches!(self.f.fir.op(i), Op::Bin { op: BinOp::FMul, .. })
+        match self.f.fir.op(i) {
+            Op::Bin { op: BinOp::FMul, .. } => true,
+            // A `strictfp` function's (`Cg::constrained`).
+            Op::Call { callee: V::C(c), .. } => matches!(c.get(), kiln_llvm::ValueRef::Func(g)
+                if self.m.func(g).name().starts_with("llvm.experimental.constrained.fmul.")),
+            _ => false,
+        }
     }
 
     /// clang `tryEmitFMulAdd` (`-ffp-contract=on`): fuse an unused `fmul`
@@ -1940,12 +1950,19 @@ impl Cg<'_> {
 
     fn build_fmuladd(&mut self, mul: V, addend: V, neg_mul: bool, neg_add: bool) -> V {
         let mi = Fir::last_inst(mul);
-        let Op::Bin { l: a, r: b, .. } = *self.f.fir.op(mi) else {
-            unreachable!("try_fmuladd checked: an fmul")
+        let (a, b) = match self.f.fir.op(mi) {
+            Op::Bin { l, r, .. } => (*l, *r),
+            Op::Call { args, .. } => (args[0], args[1]),
+            _ => unreachable!("try_fmuladd checked: an fmul"),
         };
         let a = if neg_mul { self.fneg(a) } else { a };
         let addend = if neg_add { self.fneg(addend) } else { addend };
         let ty = self.f.fir.ty(&self.m, addend);
+        if self.f.strict {
+            let c = self.constrained("fmuladd", ty, &[ty], vec![a, b, addend], None, true);
+            self.f.fir.erase(mi);
+            return c;
+        }
         let name = kiln_llvm::intrinsics::overloaded_name(&self.m, "llvm.fmuladd", &[ty]);
         let fn_ty = self.m.types.function(ty, &[ty, ty, ty], false);
         let f =

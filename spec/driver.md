@@ -481,7 +481,12 @@ implemented or an error; none is accepted and ignored.
   A later flag that undoes the effect avoids the error: `-frounding-math
   -fno-rounding-math` is accepted, and so is `-ffp-model=strict
   -fno-rounding-math -ffp-exception-behavior=ignore`. A later
-  `-ffp-model=precise` does not undo it, as in clang.
+  `-ffp-model=precise` does not undo it, as in clang. The FP pragmas
+  implement the environment per scope (WP-1744, spec/codegen.md §3.2);
+  these flags would set it for the whole unit and stay errors. The
+  command line's options reach sema (`ParseOptions::fp`) for the
+  pragmas' precise checks: under `-ffast-math`, `#pragma STDC
+  FENV_ACCESS ON` is an error, as in clang.
 - **Macros.**
   - `__FAST_MATH__`: every fast-math flag (finite, no `errno`, unsafe).
   - `__FINITE_MATH_ONLY__ 1`: no infinities and no NaNs.
@@ -1759,9 +1764,15 @@ its module file): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm
 main.cpp`, or in two steps `kiln++ -std=c++20 -c m.cppm -fmodule-output -o
 m.o && kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o`. An importer
 emits only declarations for the non-inline functions and variables of the
-units it imports. `-fmodule-header` is an unknown argument and
-header-unit module files are not supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
-accepted and ignored ("Codegen flags").
+units it imports. `-fmodule-header[=user|system]` and `-x
+c++-user-header`, `-x c++-system-header` and `-x c++-header-unit-header`
+write a header unit's module file (`-o`, else `<stem>.pcm`), which
+`-fmodule-file=<path>` imports (spec/modules.md §11.6); without one, an
+imported header unit is built from its source. `-E` and `-M` print a
+header-unit import as `import "<path as found>";` and list its files,
+and skip a module file input with `<file>: previously preprocessed input`
+(spec/modules.md §2). `-fmodules-reduced-bmi` is accepted and ignored
+("Codegen flags").
 
 ### Module cache (WP-984)
 

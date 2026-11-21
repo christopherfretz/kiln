@@ -434,7 +434,7 @@ impl CodegenJob<'_> {
             aligned_allocation: a.predef.aligned_allocation_for(&job.std),
             short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
-            math_errno: a.fp_model().opts.math_errno,
+            fp: a.fp_model().opts,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,

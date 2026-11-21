@@ -260,6 +260,9 @@ pub struct Parser<'a, 'sm> {
     /// The FP pragmas not yet taken, keyed by the token they precede
     /// (spec/parse.md §2.3).
     pub(crate) fp_pragmas: Vec<(Loc, crate::tokens::FpPragma)>,
+    /// A scope of the function body being parsed is FP-constrained: the
+    /// function is `strictfp` (`Parser::fn_body_fp`, WP-1744).
+    pub(crate) fp_intrin: bool,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -431,6 +434,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             stmt_attrs_loc: None,
             loop_hints: Vec::new(),
             fp_pragmas: Vec::new(),
+            fp_intrin: false,
         };
         if p.src.get_mut().module_lines() {
             p.module_activate();
@@ -471,7 +475,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
-    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc`, `fp_intrin` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
     /// | `trace` | transient | test-only parse trace |
     ///
     /// No field is state: the late-parse lists end with their class, and
@@ -537,6 +541,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             stmt_attrs_loc: _,
             loop_hints,
             fp_pragmas,
+            fp_intrin: _,
         } = self;
         let open = [
             ("replay", !replay.is_empty()),
@@ -992,12 +997,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// Reports a diagnostic.
     pub(crate) fn emit(&self, d: Diag) {
         self.s.emit(d);
-    }
-
-    /// Reports `{what} is not supported yet` at `loc`.
-    pub(crate) fn unsupported(&self, what: &str, loc: Loc) {
-        // kiln-gap: forward
-        self.s.unsupported(what, loc);
     }
 
     // -- recovery ---------------------------------------------------------------

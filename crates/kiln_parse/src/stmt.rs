@@ -59,6 +59,7 @@ impl Parser<'_, '_> {
         if new_scope {
             self.s.pop_scope();
         }
+        self.note_fp_state();
         let fp = self.s.fp_pragma_state();
         self.s.set_fp_pragma_state(fp_outer);
         let block = self.s.act_on_compound_fp(&stmts, lbrace, rbrace, fp);

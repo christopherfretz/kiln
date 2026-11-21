@@ -842,8 +842,13 @@ impl Cg<'_> {
                     vs.push(self.emit_scalar(a)?);
                 }
                 let ty = self.f.fir.ty(&self.m, vs[0]);
-                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, n);
-                self.intrinsic_call(f, vs)
+                let base = name.trim_start_matches("llvm.");
+                if let Some(c) = self.constrained_intrinsic(base, ty, &vs) {
+                    c
+                } else {
+                    let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, n);
+                    self.intrinsic_call(f, vs)
+                }
             }
             id::ABS | id::LABS | id::LLABS => {
                 // clang 19: `llvm.abs(x, true)` (signed overflow is UB).
@@ -2170,6 +2175,9 @@ impl Cg<'_> {
         let ty = self.f.fir.ty(&self.m, vs[0]);
         Ok(match l {
             id::ErrnoIntrinsic::Fp(base, n) => {
+                if let Some(c) = self.constrained_intrinsic(base, ty, &vs) {
+                    return Ok(c);
+                }
                 let f = kiln_llvm::intrinsics::fp_op(&mut self.m, &format!("llvm.{base}"), ty, n);
                 self.intrinsic_call(f, vs)
             }
@@ -2181,6 +2189,9 @@ impl Cg<'_> {
             }
             id::ErrnoIntrinsic::ToInt(base) => {
                 let rt = self.lty(self.ast.exprs.get(e).ty());
+                if let Some(c) = self.constrained_intrinsic(base, rt, &vs) {
+                    return Ok(c);
+                }
                 let f =
                     kiln_llvm::intrinsics::fp_to_int(&mut self.m, &format!("llvm.{base}"), rt, ty);
                 self.intrinsic_call_ty(f, vs, rt)

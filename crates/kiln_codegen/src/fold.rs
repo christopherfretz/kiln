@@ -12,6 +12,7 @@ use kiln_abi::Target;
 use kiln_ast::consts::ConstStore;
 use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
+use kiln_ast::fp::FpOptions;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeFlags, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
@@ -157,7 +158,7 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists, fams) = {
+    let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists, fams, no_trial) = {
         let mut c = Collect {
             ast,
             compat: oven.clang_compat(),
@@ -172,9 +173,21 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             arr_lists: Vec::new(),
             fams: Vec::new(),
             cover: None,
+            no_trial: FxHashSet::default(),
         };
         c.tu();
-        (c.out, c.inits, c.c_static, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists, c.fams)
+        (
+            c.out,
+            c.inits,
+            c.c_static,
+            c.imm,
+            c.statics,
+            c.dtors,
+            c.ps_args,
+            c.arr_lists,
+            c.fams,
+            c.no_trial,
+        )
     };
     let mut b =
         Bridge { ast, abi: target, cxx_year: oven.cxx_year(), aligns: FxHashMap::default() };
@@ -191,6 +204,16 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
     oven.set_fold_leaks(true);
     for e in cands {
         if !tried.insert(e) {
+            continue;
+        }
+        // In an FP-constrained scope a trial fold of FP arithmetic is not
+        // done (clang `checkFloatingPointResult` fails an inexact result
+        // under the dynamic rounding mode, any exception under strict
+        // exceptions; kiln does not track the status, spec/codegen.md
+        // "Floating-point semantics"); a constant initializer's
+        // evaluation is in a constant context, which is unaffected.
+        let trial_ok = !no_trial.contains(&e);
+        if !trial_ok && !inits.contains_key(&e) {
             continue;
         }
         // A constant initializer is manifestly constant-evaluated
@@ -220,7 +243,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // uses nor its destruction see the value. Scalars,
                 // vectors and initializer lists (spec/codegen.md "Static
                 // initialization").
-                None if is_scalar(b.ast, var) || is_init_list(b.ast, e) => {
+                None if trial_ok && (is_scalar(b.ast, var) || is_init_list(b.ast, e)) => {
                     // An address cast to an integer stays one
                     // (`static intptr_t i = (intptr_t)&g;`, C23 6.6p9).
                     oven.set_fold_addr_int(true);
@@ -492,6 +515,9 @@ struct Collect<'a> {
     /// being walked: an array list, or a variable initializer whose value
     /// is emitted as a constant when it folds.
     cover: Option<ExprId>,
+    /// The candidates of FP-constrained scopes that involve floating
+    /// values: never trial-folded ([`prepass`]).
+    no_trial: FxHashSet<ExprId>,
 }
 
 impl Collect<'_> {
@@ -626,8 +652,18 @@ impl Collect<'_> {
         let n = *ast.stmts.get(s);
         match n.kind() {
             StmtKind::CompoundStmt => {
+                let strict = ast.stmts.compound_fp(s).apply(FpOptions::default()).constrained();
+                let from = self.out.len();
                 for &c in ast.lists.get(ast.stmts.compound_body(s)) {
                     self.stmt(StmtId::new(c));
+                }
+                if strict {
+                    for i in from..self.out.len() {
+                        let e = self.out[i];
+                        if involves_float(ast, e) {
+                            self.no_trial.insert(e);
+                        }
+                    }
                 }
             }
             StmtKind::DeclStmt => {
@@ -1032,6 +1068,63 @@ impl Collect<'_> {
 /// const-emittable is `CEK_AsValueOrReference`, so `tryEmitAsConstant`
 /// folds its value when the referent is constant; `const int& a = {}` at
 /// namespace scope reads as `0`, WP-233).
+/// Whether expression `e` performs a floating-point operation that may
+/// raise an exception or round: arithmetic, a comparison, a conversion
+/// or a call yielding a floating value (reading a `const double` does
+/// not).
+fn involves_float(ast: &Ast, e: ExprId) -> bool {
+    let float = |x: ExprId| {
+        let q = ast.exprs.get(x).ty();
+        ast.types.is_floating(q)
+            || ast.types.as_complex(q).is_some_and(|c| ast.types.is_floating(c))
+    };
+    let mut work = vec![e];
+    let mut kids = Vec::new();
+    while let Some(x) = work.pop() {
+        kids.clear();
+        ast.exprs.children_into(x, &ast.lists, &mut kids);
+        let k = ast.exprs.get(x).kind();
+        let op = match k {
+            ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::UnaryOperator => kids.iter().any(|&o| float(o)),
+            _ if k.is_cast() => matches!(
+                ast.exprs.cast_kind(x),
+                CastKind::IntegralToFloating
+                    | CastKind::FloatingToIntegral
+                    | CastKind::FloatingToBoolean
+                    | CastKind::FloatingCast
+                    | CastKind::FloatingComplexCast
+                    | CastKind::IntegralComplexToFloatingComplex
+                    | CastKind::FloatingComplexToIntegralComplex
+            ),
+            ExprKind::CallExpr => float(x),
+            // An automatic `const` variable's initializer is evaluated
+            // again at the read (static and `constexpr` ones have their
+            // value from a constant context).
+            ExprKind::DeclRefExpr => {
+                let d = ast.exprs.decl(x);
+                if ast.decls.get(d).kind() == DeclKind::Var
+                    && is_local(ast, d)
+                    && !is_static_local(ast, d)
+                    && let Some(v) = ast.decls.var(d)
+                    && !v.spec.is_constexpr()
+                    && let Some(init) = v.init
+                {
+                    work.push(init);
+                }
+                false
+            }
+            _ => false,
+        };
+        if op {
+            return true;
+        }
+        work.extend_from_slice(&kids);
+    }
+    false
+}
+
 pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     // Through parentheses and no-op casts (the xvalue of an implicitly
     // movable `return x;`): clang's `VisitCastExpr` visits a `CK_NoOp`

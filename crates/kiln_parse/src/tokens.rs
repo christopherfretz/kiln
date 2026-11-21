@@ -84,14 +84,6 @@ pub enum Event {
     /// token and name (empty: `""`, which clears it), up to the first
     /// error.
     PragmaClangSection(Vec<(kiln_sema::section::ClangSectionKind, Loc, Box<[u8]>)>),
-    /// A `module` / `import` directive ([cpp.module], [cpp.import]),
-    /// already removed from the token stream.
-    Module {
-        /// The first token of the directive.
-        span: Span,
-        /// An `import` (else a `module`) directive.
-        import: bool,
-    },
     /// A module directive the preprocessor parsed (modules enabled,
     /// spec/modules.md §3); its tokens never reach the parser.
     ModuleDirective(kiln_pp::ModuleDirective),
@@ -450,21 +442,13 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
             Marker::UnitEnd { key, image } => {
                 self.events.push_back((next, Event::UnitEnd { key, image }));
             }
-            Marker::Module { span, import, directive: None, .. } => {
-                // The directive's tokens end with `;` ([cpp.module],
-                // [cpp.import]); the parser never sees them.
-                loop {
-                    let t = self.pp.next();
-                    // `Eof` repeats: the caller reads it next.
-                    if t.kind == TokKind::Punct(Punct::Semi) || t.kind == TokKind::Eof {
-                        break;
-                    }
-                }
-                self.events.push_back((next, Event::Module { span, import }));
-            }
             // Already reported by the preprocessor, or no effect on
-            // phase 7 (the `#embed` bytes are ordinary literals).
-            Marker::PragmaMessage { .. }
+            // phase 7 (the `#embed` bytes are ordinary literals). A module
+            // directive left as text: only a preprocessing-only run
+            // (`ModuleOptions::text`) queues one, and it has no parser;
+            // before C++20 none is recognised (spec/modules.md §2).
+            Marker::Module { directive: None, .. }
+            | Marker::PragmaMessage { .. }
             | Marker::Ident { .. }
             | Marker::FileChange(_)
             | Marker::Embed { .. }

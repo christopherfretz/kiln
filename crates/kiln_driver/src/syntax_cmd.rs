@@ -32,12 +32,12 @@ pub fn dump_options<'a>(
     opts: &str,
     filter: Option<String>,
     sm: &'a SourceManager,
-    main: FileId,
+    main: Option<FileId>,
 ) -> Result<DumpOptions<'a>, String> {
     let mut d = DumpOptions {
         filter: filter.map(|name| Filter { name: Some(name), kind: None }),
         sources: Some(sm),
-        main_file: Some(main),
+        main_file: main,
         ..DumpOptions::default()
     };
     for o in opts.split(',').filter(|o| !o.is_empty()) {
@@ -370,7 +370,7 @@ impl SyntaxJob<'_> {
             aligned_allocation: a.predef.aligned_allocation_for(&job.std),
             short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
-            math_errno: a.fp_model().opts.math_errno,
+            fp: a.fp_model().opts,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
@@ -464,15 +464,10 @@ impl SyntaxJob<'_> {
         main: Option<FileId>,
     ) -> Result<Option<DumpOptions<'sm>>, ()> {
         let a = self.0.args;
-        Ok(match (&a.dump_ast, main) {
-            (Some(_), None) => {
-                // kiln-gap: GAP-141
-                Diag::new(DiagId::drv_not_implemented, Span::INVALID)
-                    .arg("-fdump-ast of a module file")
-                    .emit(engine);
-                return Err(());
-            }
-            (Some(o), Some(main)) => match dump_options(o, a.dump_ast_filter.clone(), sm, main) {
+        // A module file's main file is known once its unit is entered
+        // (`after_parse` fills it in, spec/modules.md §11.6).
+        Ok(match &a.dump_ast {
+            Some(o) => match dump_options(o, a.dump_ast_filter.clone(), sm, main) {
                 Ok(d) => {
                     Some(DumpOptions { written_tags: a.predef.clang_compat.major() >= 22, ..d })
                 }
@@ -484,7 +479,7 @@ impl SyntaxJob<'_> {
                     return Err(());
                 }
             },
-            (None, _) => None,
+            None => None,
         })
     }
 
@@ -604,7 +599,8 @@ impl SyntaxJob<'_> {
         if a.dump_vtable_layouts {
             result.output.push_str(&kiln_abi::vtable::dump_all_vtable_layouts(&ast, target));
         }
-        if let Some(d) = dump_opts {
+        if let Some(mut d) = dump_opts {
+            d.main_file = d.main_file.or(main_id);
             let mut out: Vec<u8> = Vec::new();
             if dump(&ast, &d, &mut out).is_ok() {
                 result.output.push_str(&String::from_utf8_lossy(&out));

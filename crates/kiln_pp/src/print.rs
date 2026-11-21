@@ -77,6 +77,11 @@ struct Printer<'p, 'a, 'd, 'o> {
     prev: Prev,
     prev_prev: Prev,
     embed: Option<EmbedState>,
+    /// Header units being imported (spec/modules.md §2): their tokens and
+    /// file changes are not part of the output.
+    unit_depth: u32,
+    /// A unit ended; its file exit comes next.
+    unit_closing: bool,
 }
 
 /// Writes the preprocessed translation unit (`clang -E`, or `-E -P`
@@ -100,6 +105,8 @@ pub fn print_preprocessed(pp: &mut Preprocessor<'_, '_>, opts: PrintOptions, out
         prev: Prev::None,
         prev_prev: Prev::None,
         embed: None,
+        unit_depth: 0,
+        unit_closing: false,
     };
     {
         crate::profile::time!(t_total_ns);
@@ -269,6 +276,7 @@ impl Printer<'_, '_, '_, '_> {
         let mut item = self.pp.next_item();
         loop {
             match &item {
+                _ if self.in_unit(&item) => {}
                 PpItem::Marker(m) => {
                     let m = m.clone();
                     self.marker(m);
@@ -288,22 +296,37 @@ impl Printer<'_, '_, '_, '_> {
         let mut in_bytes = false;
         loop {
             match item {
+                _ if self.in_unit(&item) => {}
+                PpItem::Token(t) if t.kind == TokKind::Eof => break,
                 PpItem::Marker(m) => {
                     if matches!(m, Marker::Embed { .. }) {
                         in_bytes = false;
                     }
                     self.marker(m);
                 }
-                PpItem::Token(t) => {
-                    if t.kind == TokKind::Eof {
-                        break;
-                    }
-                    self.token(&t, &mut sol, &mut in_bytes);
-                }
+                PpItem::Token(t) => self.token(&t, &mut sol, &mut in_bytes),
             }
             item = self.pp.next_item();
         }
         self.out.push('\n');
+    }
+
+    /// True for an item of a header unit being imported (its markers,
+    /// tokens and the file exit after it), which `-E` does not print
+    /// (spec/modules.md §2).
+    fn in_unit(&mut self, item: &PpItem) -> bool {
+        match item {
+            PpItem::Marker(Marker::UnitBegin { .. }) => self.unit_depth += 1,
+            // The unit's file exit follows its end.
+            PpItem::Marker(Marker::UnitEnd { .. }) => self.unit_closing = true,
+            PpItem::Marker(Marker::FileChange(FileChange::Exit { .. })) if self.unit_closing => {
+                self.unit_closing = false;
+                self.unit_depth = self.unit_depth.saturating_sub(1);
+            }
+            PpItem::Token(t) if t.kind == TokKind::Eof => return false,
+            _ => return self.unit_depth > 0,
+        }
+        true
     }
 
     fn token(&mut self, t: &Token, sol: &mut bool, in_bytes: &mut bool) {
@@ -619,6 +642,27 @@ impl Printer<'_, '_, '_, '_> {
                 self.out.push_str("#ident ");
                 self.out.push_str(&text);
                 self.emitted_tokens = true;
+            }
+            // A header-unit import, consumed to perform it: printed with
+            // the header's path as found, quoted, as clang prints the
+            // unit's name (its attributes dropped).
+            Marker::Module {
+                span,
+                export,
+                directive:
+                    Some(crate::ModuleDirective {
+                        kind: crate::DirectiveKind::Import { header: true, key, .. },
+                        ..
+                    }),
+                ..
+            } => {
+                self.move_to_loc(span.lo, true);
+                self.out.push_str(if export { "export import \"" } else { "import \"" });
+                self.out.push_str(key.strip_prefix('"').unwrap_or(&key));
+                self.out.push_str("\";");
+                self.emitted_tokens = true;
+                self.prev = Prev::None;
+                self.prev_prev = Prev::None;
             }
             Marker::Module { .. } | Marker::UnitBegin { .. } | Marker::UnitEnd { .. } => {}
             Marker::Define { def } => {

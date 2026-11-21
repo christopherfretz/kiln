@@ -273,7 +273,7 @@ impl Sema<'_, '_> {
         }
         // WP-806: an errno-setting math function is `const` without
         // `errno` (clang adds it before the `NoThrowAttr`).
-        if !self.math_errno
+        if !self.fp.math_errno
             && info.attrs & builtin::attr::CONST == 0
             && builtin::const_without_errno(info.name)
         {

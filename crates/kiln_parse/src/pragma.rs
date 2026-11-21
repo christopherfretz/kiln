@@ -591,13 +591,6 @@ impl Parser<'_, '_> {
         }
         match e {
             Event::ModuleDirective(_) | Event::UnitBegin { .. } | Event::UnitEnd { .. } => {}
-            Event::Module { span, import } => {
-                // [cpp.module], [cpp.import]: clang parses these; kiln
-                // does not implement modules yet.
-                let what = if import { "a module import" } else { "a module declaration" };
-                // kiln-gap: GAP-139
-                self.unsupported(what, span.lo);
-            }
             Event::PragmaPack { loc, action, label, align } => {
                 self.s.act_on_pragma_pack(loc, action, label.as_deref(), align);
             }

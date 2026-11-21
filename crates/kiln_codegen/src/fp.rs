@@ -5,10 +5,25 @@
 //! `CGFPOptionsRAII`, `getTrivialDefaultFunctionAttributes`).
 
 use kiln_ast::StmtId;
-use kiln_ast::fp::{FpContract, FpOptions, FpOverride};
-use kiln_llvm::{Attr, FastMath};
+use kiln_ast::fp::{FpContract, FpExcept, FpOptions, FpOverride, FpRound};
+use kiln_llvm::{Attr, AttrKind, FastMath, TypeId, Value};
 
+use crate::fir::{Fir, Op, V};
 use crate::module::Cg;
+
+/// Whether the constrained form of FP intrinsic `base` (`llvm.<base>`,
+/// LLVM `ConstrainedOps.def`) takes a rounding mode; `None`: it has none
+/// kiln emits (the intrinsic stays as is, as clang's `fabs`, `copysign`,
+/// `canonicalize`, `maximumnum` do).
+pub(crate) fn constrained_rounds(base: &str) -> Option<bool> {
+    Some(match base {
+        "fma" | "fmuladd" | "nearbyint" | "rint" | "sqrt" | "pow" | "powi" | "sin" | "cos"
+        | "exp" | "exp2" | "log" | "log10" | "log2" | "lrint" | "llrint" | "ldexp" => true,
+        "ceil" | "floor" | "round" | "roundeven" | "trunc" | "maxnum" | "minnum" | "lround"
+        | "llround" => false,
+        _ => return None,
+    })
+}
 
 /// The fast-math flags of `o` (clang `SetFastMathFlags`): `contract` only
 /// for `fp_contract(fast)`, which `on` lowers as `llvm.fmuladd` instead.
@@ -59,6 +74,7 @@ impl Cg<'_> {
         self.f.fp = o;
         self.f.fp_ovr = FpOverride::NONE;
         self.f.fp_attrs_off = 0;
+        self.f.strict = false;
         self.f.fir.set_base_fmf(fmf_of(o));
     }
 
@@ -85,6 +101,87 @@ impl Cg<'_> {
             }
         }
         Some(saved)
+    }
+
+    /// clang `IRBuilder::CreateConstrainedFPCall` (in a `strictfp`
+    /// function, [`crate::func::Fx::strict`]): `llvm.experimental.
+    /// constrained.<op>` overloaded on `overload`, on `args`, then the
+    /// predicate `pred`, the scope's rounding mode when `round`, and its
+    /// exception behavior. Never folded.
+    pub(crate) fn constrained(
+        &mut self,
+        op: &str,
+        ret: TypeId,
+        overload: &[TypeId],
+        mut args: Vec<V>,
+        pred: Option<&str>,
+        round: bool,
+    ) -> V {
+        let base = format!("llvm.experimental.constrained.{op}");
+        let name = kiln_llvm::intrinsics::overloaded_name(&self.m, &base, overload);
+        let tys: Vec<TypeId> = args.iter().map(|&a| self.f.fir.ty(&self.m, a)).collect();
+        let mut mds = Vec::with_capacity(3);
+        if let Some(p) = pred {
+            mds.push(self.m.md_string(p.as_bytes()));
+        }
+        if round {
+            let r: &[u8] = match self.f.fp.rounding() {
+                FpRound::Dynamic => b"round.dynamic",
+                FpRound::Nearest => b"round.tonearest",
+            };
+            mds.push(self.m.md_string(r));
+        }
+        let x: &[u8] = match self.f.fp.exceptions() {
+            FpExcept::Ignore => b"fpexcept.ignore",
+            FpExcept::MayTrap => b"fpexcept.maytrap",
+            FpExcept::Strict => b"fpexcept.strict",
+        };
+        mds.push(self.m.md_string(x));
+        let f = kiln_llvm::intrinsics::constrained(&mut self.m, &name, ret, &tys, mds.len());
+        args.extend(mds.into_iter().map(|m| V::C(Value::metadata(m))));
+        let fn_ty = self.m.func(f).ty();
+        let c = self.f.fir.push(
+            Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::default() },
+            ret,
+        );
+        self.f.calls.push((Fir::last_inst(c), Some(f), true));
+        c
+    }
+
+    /// The constrained form of a call of FP intrinsic `base` on `args`
+    /// in a `strictfp` function (clang `emitUnaryMaybeConstrainedFPBuiltin`
+    /// and kin), if it has one.
+    pub(crate) fn constrained_intrinsic(
+        &mut self,
+        base: &str,
+        ret: TypeId,
+        args: &[V],
+    ) -> Option<V> {
+        let round = constrained_rounds(base).filter(|_| self.f.strict)?;
+        let arg = args.first().map_or(ret, |&a| self.f.fir.ty(&self.m, a));
+        let over: &[TypeId] = if matches!(base, "lrint" | "llrint" | "lround" | "llround") {
+            &[ret, arg]
+        } else {
+            &[ret]
+        };
+        let over = over.to_vec();
+        Some(self.constrained(base, ret, &over, args.to_vec(), None, round))
+    }
+
+    /// clang `CodeGenFunction::StartFunction` of a `strictfp` function:
+    /// every call in it is `strictfp` too.
+    pub(crate) fn strict_call_sites(&mut self) {
+        if !self.f.strict {
+            return;
+        }
+        for i in 0..self.f.fir.inst_count() as u32 {
+            let Some(o) = self.f.fir.call_opts_mut(i) else { continue };
+            let mut a = self.m.attrs_of(o.attrs.func).to_vec();
+            if !a.contains(&Attr::Flag(AttrKind::StrictFP)) {
+                a.push(Attr::Flag(AttrKind::StrictFP));
+                o.attrs.func = self.m.attr_set(&a);
+            }
+        }
     }
 
     /// Leaves the FP scope [`Self::enter_fp`] entered.
@@ -124,7 +221,10 @@ impl Cg<'_> {
     /// Rewrites the definition attributes `fa` of the function just
     /// emitted for the FP scopes it entered: an attribute a scope turned
     /// off is `"false"` (clang `mergeFnAttrValue`).
-    pub(crate) fn fp_def_attrs(&self, fa: &mut [Attr]) {
+    pub(crate) fn fp_def_attrs(&self, fa: &mut Vec<Attr>) {
+        if self.f.strict {
+            fa.push(Attr::Flag(AttrKind::StrictFP));
+        }
         let off = self.f.fp_attrs_off;
         if off == 0 {
             return;

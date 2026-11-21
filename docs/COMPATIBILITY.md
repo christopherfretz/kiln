@@ -227,10 +227,8 @@ image instead of replaying the interface source. It does not cover
 libc++'s `std` yet, so the numbers above are without it
 ([STABILITY.md](STABILITY.md#not-covered-may-change-in-any-release)).
 
-Not yet supported:
-
-- header units as module files (`-fmodule-header`), so the scanner
-  rejects `import "h";` with an error.
+Header units work as module files too (`-fmodule-header`,
+`-fmodule-file=h.pcm`), and the scanner handles `import "h";`.
 
 ## Precompiled headers
 

@@ -21,9 +21,34 @@ pub enum FpContract {
     Fast,
 }
 
+/// The rounding mode a scope declares (clang `ConstRoundingMode`;
+/// `#pragma STDC FENV_ROUND`, C23 7.6.2). The directed modes are rejected
+/// (spec/codegen.md "Floating-point semantics").
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, kiln_snap::Snap)]
+pub enum FpRound {
+    /// `FE_DYNAMIC`, the default: the dynamic mode under `FENV_ACCESS ON`,
+    /// else round to nearest (C23 7.6.2/3).
+    #[default]
+    Dynamic,
+    /// `FE_TONEAREST`.
+    Nearest,
+}
+
+/// The floating-point exception behavior (clang `FPExceptionModeKind`;
+/// `#pragma clang fp exceptions`, `#pragma float_control(except, ...)`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, kiln_snap::Snap)]
+pub enum FpExcept {
+    /// Exceptions are not observed (`fpexcept.ignore`).
+    Ignore,
+    /// Spurious exceptions may be raised, none is lost (`fpexcept.maytrap`).
+    MayTrap,
+    /// Exceptions are exactly the source's (`fpexcept.strict`).
+    Strict,
+}
+
 /// The FP semantics in effect (clang `FPOptions`, the fields kiln
-/// implements; the FENV ones are rejected, spec/codegen.md). The default
-/// is clang's for C++ on Linux: `fp_contract(on)` and `errno`.
+/// implements, spec/codegen.md). The default is clang's for C++ on
+/// Linux: `fp_contract(on)` and `errno`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "LLVM's fast-math flags")]
 pub struct FpOptions {
@@ -44,6 +69,48 @@ pub struct FpOptions {
     /// Library math functions may set `errno` (`-fmath-errno`, the Linux
     /// default): they are not lowered to LLVM intrinsics.
     pub math_errno: bool,
+    /// The declared rounding mode.
+    pub round: FpRound,
+    /// The exception behavior a pragma specified; `None`: strict under
+    /// `FENV_ACCESS ON`, else ignored.
+    pub except: Option<FpExcept>,
+    /// `#pragma STDC FENV_ACCESS ON` (C23 7.6.1): the program may test
+    /// the status flags and change the control modes.
+    pub fenv_access: bool,
+}
+
+impl FpOptions {
+    /// The effective rounding mode (clang `FPOptions::getRoundingMode`):
+    /// `Dynamic` is round to nearest outside `FENV_ACCESS ON`.
+    pub fn rounding(&self) -> FpRound {
+        if self.round == FpRound::Dynamic && !self.fenv_access {
+            FpRound::Nearest
+        } else {
+            self.round
+        }
+    }
+
+    /// The effective exception behavior (clang
+    /// `FPOptions::getExceptionMode`).
+    pub fn exceptions(&self) -> FpExcept {
+        self.except.unwrap_or(if self.fenv_access { FpExcept::Strict } else { FpExcept::Ignore })
+    }
+
+    /// Whether FP operations must respect the floating-point environment
+    /// (clang `isFPConstrained`): a function containing such a scope is
+    /// `strictfp` and emits its FP operations as
+    /// `llvm.experimental.constrained.*` (spec/codegen.md).
+    pub fn constrained(&self) -> bool {
+        self.rounding() != FpRound::Nearest
+            || self.exceptions() != FpExcept::Ignore
+            || self.fenv_access
+    }
+
+    /// Whether value-changing optimizations are off (clang
+    /// `Sema::isPreciseFPEnabled`).
+    pub fn precise(&self) -> bool {
+        !self.reassoc && !self.nsz && !self.arcp && !self.afn
+    }
 }
 
 impl Default for FpOptions {
@@ -70,6 +137,12 @@ pub mod fp_bit {
     pub const AFN: u16 = 64;
     /// `math_errno`.
     pub const ERRNO: u16 = 128;
+    /// `round`.
+    pub const ROUND: u16 = 256;
+    /// `except`.
+    pub const EXCEPT: u16 = 512;
+    /// `fenv_access`.
+    pub const FENV: u16 = 1024;
 }
 
 /// Some [`FpOptions`] fields set by pragmas (clang `FPOptionsOverride`):
@@ -85,6 +158,10 @@ pub struct FpOverride {
     /// multiplication and division are algebraic (`ON`) or Annex G's
     /// (`OFF`); `None` is the command line's `-fcomplex-arithmetic=`.
     pub cx_limited: Option<bool>,
+    /// On the body of a function (kept by its instantiations): a scope in
+    /// it is [`FpOptions::constrained`], so the function is `strictfp`
+    /// (clang `FunctionDecl::usesFPIntrin`).
+    pub strict_fn: bool,
 }
 
 impl FpOverride {
@@ -100,13 +177,17 @@ impl FpOverride {
             nsz: false,
             afn: false,
             math_errno: false,
+            round: FpRound::Dynamic,
+            except: None,
+            fenv_access: false,
         },
         cx_limited: None,
+        strict_fn: false,
     };
 
     /// Whether no field is set.
     pub fn is_empty(&self) -> bool {
-        self.mask == 0 && self.cx_limited.is_none()
+        self.mask == 0 && self.cx_limited.is_none() && !self.strict_fn
     }
 
     /// `base` with the set fields replaced.
@@ -122,7 +203,22 @@ impl FpOverride {
             nsz: pick(fp_bit::NSZ, v.nsz, base.nsz),
             afn: pick(fp_bit::AFN, v.afn, base.afn),
             math_errno: pick(fp_bit::ERRNO, v.math_errno, base.math_errno),
+            round: if self.mask & fp_bit::ROUND != 0 { v.round } else { base.round },
+            except: if self.mask & fp_bit::EXCEPT != 0 { v.except } else { base.except },
+            fenv_access: pick(fp_bit::FENV, v.fenv_access, base.fenv_access),
         }
+    }
+
+    /// Sets the declared rounding mode (`#pragma STDC FENV_ROUND`).
+    pub fn set_round(&mut self, r: FpRound) {
+        self.mask |= fp_bit::ROUND;
+        self.vals.round = r;
+    }
+
+    /// Sets the exception behavior.
+    pub fn set_except(&mut self, e: FpExcept) {
+        self.mask |= fp_bit::EXCEPT;
+        self.vals.except = Some(e);
     }
 
     /// Sets the contraction mode (`None`: back to the command line's,
@@ -149,6 +245,7 @@ impl FpOverride {
             fp_bit::NSZ => v.nsz = on,
             fp_bit::AFN => v.afn = on,
             fp_bit::ERRNO => v.math_errno = on,
+            fp_bit::FENV => v.fenv_access = on,
             _ => unreachable!("not a boolean FP field: {bit}"),
         }
     }

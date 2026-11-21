@@ -475,6 +475,38 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
     }
 }
 
+/// Builds each of `units` (header-unit `-x` inputs of a compile or a
+/// link) as a header unit, as `--precompile` would (spec/modules.md
+/// §11.6): its module file is `<stem>.pcm`. Returns the errors.
+fn build_header_units(
+    args: &Args,
+    tc: &Toolchain,
+    units: &[&args::Input],
+    diag_opts: &DiagOptions,
+    io: &Io,
+) -> u32 {
+    let mut a = args.clone();
+    a.action = Action::Precompile;
+    a.output = None;
+    let mut errors = 0;
+    for u in units {
+        a.header_unit_main = args.header_unit_of(u);
+        let std = match input_std(&a, Lang::Cxx) {
+            Ok(s) => s,
+            Err(d) => {
+                let sm = SourceManager::new();
+                let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+                (*d).emit(&e);
+                e.flush();
+                errors += 1;
+                continue;
+            }
+        };
+        errors += syntax_only(&a, tc, std, &u.path, None, diag_opts, io).errors;
+    }
+    errors
+}
+
 /// One `-fsyntax-only` input.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn syntax_only(
@@ -657,7 +689,13 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
     args.inputs
         .iter()
         .filter(|i| {
-            let ok = i.path == "-" || std::path::Path::new(&i.path).exists();
+            // A `-fmodule-header=user|system` input names a header the
+            // job looks up (spec/modules.md §11.6).
+            let looked_up = matches!(
+                args.header_unit_of(i),
+                Some(args::HeaderUnitLookup::User | args::HeaderUnitLookup::System)
+            );
+            let ok = i.path == "-" || looked_up || std::path::Path::new(&i.path).exists();
             if !ok {
                 Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(&i.path).emit(drv);
             }
@@ -896,6 +934,20 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         e.flush();
         return 1;
     }
+    // spec/modules.md §11.6: a header-unit `-x` input is built as a
+    // header unit (its module file `<stem>.pcm`); the other inputs go on.
+    let (units, inputs): (Vec<&args::Input>, Vec<&args::Input>) =
+        inputs.into_iter().partition(|i| {
+            matches!(args.action, Action::Compile | Action::Link)
+                && args.deps.only.is_none()
+                && args.header_unit_of(i).is_some()
+        });
+    if !units.is_empty() {
+        let errors = build_header_units(args, &tc, &units, &diag_opts, &io);
+        if errors > 0 || inputs.is_empty() {
+            return i32::from(errors > 0);
+        }
+    }
     // Headers (and every input with `-emit-pch`) are precompiled; the
     // other inputs go on (WP-1023).
     let all_inputs = inputs.len();
@@ -979,6 +1031,27 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             }
             continue;
         }
+        // spec/modules.md §11.6: a module file is already preprocessed;
+        // `-E` and `-M` leave it alone, with clang's warning.
+        if !matches!(args.action, Action::SyntaxOnly | Action::Precompile)
+            && input.path != "-"
+            && is_module_file_input(input)
+        {
+            if !args.quiet_unused_arguments && !args.no_unused.quiet(&input.path) {
+                let sm = SourceManager::new();
+                let e = make_engine(
+                    &sm,
+                    &codegen_cmd::driver_diag_options(&diag_opts),
+                    io.stderr.clone(),
+                    Some(&args.program),
+                );
+                Diag::new(DiagId::drv_preprocessed_input_unused, Span::INVALID)
+                    .arg(&input.path)
+                    .emit(&e);
+                e.flush();
+            }
+            continue;
+        }
         let lang = args.input_lang(input);
         let std = match input_std(args, lang) {
             Ok(s) => s,
@@ -1005,9 +1078,16 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             });
             // spec/driver.md "Compile statistics log": the job's record.
             let stats = stats_log.as_ref().map(|_| stats::Job::start(Some(&input.path)));
+            // A header unit's job knows its lookup (spec/modules.md §11.6).
+            let unit_args = args.header_unit_of(input).map(|k| {
+                let mut a = args.clone();
+                a.header_unit_main = Some(k);
+                a
+            });
             let r = {
                 let _frontend = kiln_source::trace::Phase::new("Frontend");
-                syntax_only(args, &tc, std, &input.path, stdin, &diag_opts, &io)
+                let a = unit_args.as_ref().unwrap_or(args);
+                syntax_only(a, &tc, std, &input.path, stdin, &diag_opts, &io)
             };
             if let (Some(mut j), Some(log)) = (stats, &stats_log) {
                 j.failed = r.errors > 0;
@@ -1068,6 +1148,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
 
     write_results(args, &diag_opts, &mut io, &output, errors, side_deps)
+}
+
+/// A module file input (spec/modules.md §11.6): a `.pcm` with no `-x`
+/// (clang's input type), or a file starting with kiln's module-file magic
+/// (what the job's `load_main` reads as one).
+fn is_module_file_input(input: &args::Input) -> bool {
+    let path = std::path::Path::new(&input.path);
+    (input.lang.is_none() && input.asm.is_none() && path.extension().is_some_and(|e| e == "pcm"))
+        || kiln_pp::bmi::sniff(path) == kiln_pp::bmi::Sniffed::Kiln
 }
 
 pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {

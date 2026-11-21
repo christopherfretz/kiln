@@ -55,6 +55,8 @@ drv_malformed_sanitizer_ignorelist = Error (1) "malformed sanitizer ignorelist: 
 drv_mg_requires_m_or_mm = Error (0) "option '-MG' requires '-M' or '-MM'";
 drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
 drv_module_file_nameless = Warning [EagerLoadCxxNamedModules] (0) "the form '-fmodule-file=<BMI-path>' is deprecated for standard C++ named modules;consider to use '-fmodule-file=<module-name>=<BMI-path>' instead";
+// WP-1744: clang `err_module_header_file_not_found` (`-fmodule-header=user|system`).
+drv_module_header_not_found = Fatal (1) "module header file '{0}' not found";
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";
 drv_not_implemented = Error (1) "{0} is not implemented yet";
@@ -111,6 +113,8 @@ drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
+// WP-1744: clang `warn_drv_preprocessed_input_file_unused` (a module file under `-E` / `-M`).
+drv_preprocessed_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: previously preprocessed input";
 // WP-1633: clang `err_drv_incompatible_unwindlib` (kiln links with libgcc).
 drv_rtlib_requires_unwindlib = Error (0) "--rtlib=libgcc requires --unwindlib=libgcc";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).

@@ -788,6 +788,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1782 | a static gap the inventory missed: `constant_of` of an explicit-object member function fails with the "not a valid argument to a splice-expression" note (spec/reflection-queries.md "Not implemented yet"; only static member functions are handled): implement it per [meta.reflection.queries] and check why `cargo xtask static-gaps` did not list the site | WP-1743 | open |
 | WP-1783 | `reflect_object` of a structured binding is accepted; GCC 16.1 rejects it: decide from the standard text ([meta.reflection.result], [dcl.struct.bind]), then fix it or add a docs/status/deviations.md row | WP-1743 | open |
 | WP-1744 | preprocessor/modules: GAP-135..GAP-143 (11 sites, 0 cases) | WP-1719 | in progress |
+| WP-1798 | driver FP flags still rejected as "not supported by kiln": `-frounding-math`, `-ffp-exception-behavior=`, `-ffp-model=strict`, `-ffp-eval-method=`; reuse the FENV state WP-1744 added (strictfp + constrained intrinsics), IR equal to clang 22 | WP-1744 | open |
+| WP-1799 | strictfp for coroutine and outlined bodies in FENV_ACCESS scopes (clang marks them; kiln does not), and constrained `tan`/`asin`/… under `-fno-math-errno` | WP-1744 | open |
+| WP-1800 | [module.import]/6: check non-inline external definitions in a header unit (clang's diagnostic) | WP-1744 | open |
+| WP-1801 | `-fmodule-header` with a source input: clang preprocesses it to stdout, kiln precompiles it; match clang | WP-1744 | open |
+| WP-1802 | conformance harness: pass header-unit module files (`-fmodule-file=` of a header unit) so header-unit tests can live in the corpus | WP-1744 | open |
 | WP-1778 | the `std::initializer_list` layout check rejects a class whose first field is `T *` (non-const); clang 22 accepts it (found running GCC's C++ testsuite: `g++.dg/cpp/embed-25.C`, `embed-26.C` regressed with WP-1741's check, "'std::initializer_list<B>' layout not recognized"): follow clang's rule | WP-1744 | open |
 | WP-1779 | `-Wpragma-pack` at include boundaries is not implemented: a non-default `#pragma pack` value in effect at an `#include`, or changed inside a header and not restored (clang's two warnings and their notes) | WP-1744 | open |
 | WP-1780 | a stray `{ ... }` at file scope loses the next declaration: clang stops skipping after the closing brace, kiln skips to the next `;` | WP-1744 | open |
@@ -1227,7 +1232,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | done (#453) |
 | WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
-| WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
+| WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | done: WP-1744 (GAP-136): `-fmodule-header[=user|system]`, the header-unit `-x` types, `-fmodule-file=<h.pcm>`, `import "h"` / `import <h>` of a built header unit |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
 | WP-1125 | docs: 1.0 truth-up of README, USER_GUIDE, KNOWN_ISSUES, COMPATIBILITY, STABILITY against main (std module cache section, stale limitations, link check) | WP-984 | done (#492) |
 | WP-1202 | docs: 1.0 release prep: truth-up of CHANGELOG, README, USER_GUIDE, COMPATIBILITY, KNOWN_ISSUES, STABILITY; measurement runbook docs/status/release-1.0.md; dist smoke; version bump to 1.0.0 | WP-1125 | done (#554); version bump held on wp/1202-bump (741694ced) for the freeze PR |

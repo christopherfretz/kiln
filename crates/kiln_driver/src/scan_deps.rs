@@ -375,7 +375,8 @@ fn scan_command(
                 args.output.clone().unwrap_or_else(|| deps::default_target(&input))
             };
             let provides = match &s.unit {
-                Some((n, Some(kind))) => {
+                // A header unit provides no named module.
+                Some((n, Some(kind))) if *kind != UnitKind::HeaderUnit => {
                     Some((n.clone(), *kind != UnitKind::ImplementationPartition, name.clone()))
                 }
                 _ => None,

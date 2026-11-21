@@ -13,9 +13,9 @@ use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
 use kiln_lex::TokKind;
 use kiln_pp::{
-    ClangFeatures, DirGroup, HeaderSearch, IfEval, PicModel, PpOptions, PredefConfig, Preprocessor,
-    PrintOptions, RealFs, SearchDirSpec, SearchList, bmi, build_predefines, print_macros,
-    print_preprocessed,
+    ClangFeatures, DirGroup, HeaderSearch, IfEval, IncludeKind, IncludeRequest, IncludeResolver,
+    PicModel, PpOptions, PredefConfig, Preprocessor, PrintOptions, RealFs, SearchDirSpec,
+    SearchList, bmi, build_predefines, print_macros, print_preprocessed,
 };
 use kiln_source::activity::{self, Phase};
 use kiln_source::{FileId, Loc, SourceManager, Span};
@@ -83,7 +83,7 @@ impl kiln_pp::PpCallbacks for SkipCallbacks<'_> {
 
     fn inclusion_directive(
         &mut self,
-        req: &kiln_pp::IncludeRequest,
+        req: &IncludeRequest,
         result: Option<&kiln_pp::ResolvedInclude>,
     ) {
         if let Some(d) = &mut self.deps {
@@ -303,7 +303,7 @@ impl Job<'_> {
         o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
         o.clang19_escapes = a.predef.clang_compat == kiln_pp::ClangCompat::Clang19;
-        o.main_is_header = a.pch.header_main;
+        o.main_is_header = a.pch.header_main || a.header_unit_main.is_some();
         o.meta_hint = self.meta_hint();
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
@@ -371,6 +371,14 @@ impl Job<'_> {
                 _ => {}
             }
         }
+        if let Some(angled) = match self.args.header_unit_main {
+            Some(crate::args::HeaderUnitLookup::User) => Some(false),
+            Some(crate::args::HeaderUnitLookup::System) => Some(true),
+            _ => None,
+        } && self.stdin_text.is_none()
+        {
+            return self.find_module_header(sm, engine, angled).map(MainInput::File);
+        }
         let r = match &self.stdin_text {
             Some(t) => sm.add_virtual("<stdin>", t.clone()).map_err(|e| e.to_string()),
             None => sm.load_file(Path::new(self.path)).map_err(|e| e.to_string()),
@@ -385,6 +393,34 @@ impl Job<'_> {
                 None
             }
         }
+    }
+
+    /// `-fmodule-header=user|system` (spec/modules.md §11.6): the header
+    /// named by the input, looked up as `#include "..."` (from the working
+    /// directory) or `#include <...>` would find it.
+    fn find_module_header(
+        &self,
+        sm: &SourceManager,
+        engine: &DiagEngine<'_>,
+        angled: bool,
+    ) -> Option<FileId> {
+        let mut search = HeaderSearch::new(RealFs, self.search_list());
+        let req = IncludeRequest {
+            kind: IncludeKind::Include,
+            name: self.path.to_owned(),
+            angled,
+            includer: None,
+            lookup_from: None,
+            name_span: Span::INVALID,
+            directive_span: Span::INVALID,
+        };
+        let found = search.resolve(sm, &req);
+        if found.is_none() {
+            Diag::new(DiagId::drv_module_header_not_found, Span::INVALID)
+                .arg(self.path)
+                .emit(engine);
+        }
+        found.map(|r| r.file)
     }
 
     /// Runs the job. Diagnostics (and the `N errors generated.` summary)
@@ -502,6 +538,7 @@ impl Job<'_> {
         for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
             module_files.push((nameless_module_name(path, engine)?, path.into()));
         }
+        let header_unit = a.header_unit_main.is_some();
         let fingerprint = self.fingerprint();
         let std_cache = cache_key.and_then(|(predefines, search)| {
             crate::module_cache::for_job(self, predefines, search, &fingerprint)
@@ -512,8 +549,10 @@ impl Job<'_> {
             std_dir: Some(self.toolchain.libcxx_module_dir()),
             std_cache,
             fingerprint,
-            record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
+            record: !a.scan_deps && (a.precompile || header_unit || a.module_output.is_some()),
             scan: a.scan_deps,
+            text: false,
+            header_unit: None,
             image: a.bmi_image,
             no_unit_record: false,
         })
@@ -632,14 +671,34 @@ impl Job<'_> {
             opts.suppress_include_not_found = a.deps.missing_generated && a.deps.only.is_some();
         }
         // Modules for the modes that run sema, from C++20 (spec/modules.md
-        // §2); `-E`/`-M` keep the directives as text.
-        if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {
-            opts.modules = Some(self.module_options(engine, cache_key.as_ref())?);
-        } else if let MainInput::Capsule(_) = &main {
-            let what =
-                if staged { "a module file before C++20" } else { "preprocessing a module file" };
-            // kiln-gap: GAP-140
-            Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(engine);
+        // §2); `-E`/`-M` keep the directives as text. A module file given
+        // as the input is read under any `-std=`: its fingerprint check
+        // reports a language mode other than the one it was built with
+        // (§11.4, §11.6). The driver never preprocesses one (`-E` and
+        // `-M` skip it with clang's "previously preprocessed input").
+        let capsule = matches!(main, MainInput::Capsule(_));
+        let cxx20 = self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20;
+        if staged && (capsule || cxx20) {
+            let mut mo = self.module_options(engine, cache_key.as_ref())?;
+            // A header-unit build's key (spec/modules.md §11.6).
+            if a.header_unit_main.is_some()
+                && let Some(f) = main.file()
+            {
+                mo.header_unit = Some(kiln_pp::header_unit_key(sm.file_name(f)));
+            }
+            opts.modules = Some(mo);
+        } else if cxx20 && !capsule {
+            // `-E`/`-M`: a header unit is imported for its macros, built
+            // from its source; nothing else is (spec/modules.md §2).
+            opts.modules = Some(kiln_pp::ModuleOptions {
+                fingerprint: self.fingerprint(),
+                text: true,
+                ..kiln_pp::ModuleOptions::default()
+            });
+        } else if capsule {
+            Diag::new(DiagId::drv_preprocessed_input_unused, Span::INVALID)
+                .arg(self.path)
+                .emit(engine);
             return None;
         }
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
@@ -1024,7 +1083,11 @@ fn nameless_module_name(path: &str, engine: &DiagEngine<'_>) -> Option<String> {
     };
     match bmi::peek(&bytes) {
         Ok(h) => {
-            Diag::new(DiagId::drv_module_file_nameless, Span::INVALID).emit(engine);
+            // clang's warning is for named modules; a header unit's
+            // module file is always given by its path.
+            if h.kind != bmi::UnitKind::HeaderUnit {
+                Diag::new(DiagId::drv_module_file_nameless, Span::INVALID).emit(engine);
+            }
             Some(h.module)
         }
         Err(e) => {

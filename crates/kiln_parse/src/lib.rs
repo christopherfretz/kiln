@@ -106,8 +106,8 @@ pub struct ParseOptions {
     pub short_enums: bool,
     /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
     pub char8: Option<bool>,
-    /// `-f[no-]math-errno` ([`kiln_sema::Sema::math_errno`]).
-    pub math_errno: bool,
+    /// The command line's FP semantics ([`kiln_sema::Sema::fp`]).
+    pub fp: kiln_ast::fp::FpOptions,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
@@ -193,7 +193,7 @@ impl Default for ParseOptions {
             aligned_allocation: true,
             short_enums: false,
             char8: None,
-            math_errno: true,
+            fp: kiln_ast::fp::FpOptions::default(),
             sve: false,
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
@@ -385,7 +385,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.clang_constexpr_builtin = clang_constexpr_builtin;
-    s.math_errno = opts.math_errno;
+    s.fp = opts.fp;
     s.sve = opts.sve;
     s.sve_vector_bits = opts.sve_vector_bits;
     s.aarch64_cpu_valid = opts.aarch64_cpu_valid;

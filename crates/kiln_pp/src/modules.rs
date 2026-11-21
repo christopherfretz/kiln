@@ -45,8 +45,19 @@ pub struct ModuleOptions {
     pub std_dir: Option<PathBuf>,
     /// Dependency scanning (`kiln-scan-deps`, spec/modules.md §11.9):
     /// module directives are recorded ([`Preprocessor::scanned_imports`])
-    /// and no import is performed; a header-unit import is an error.
+    /// and no named module is imported; a header unit is built from its
+    /// source, so its macros and files reach the scan (§11.9).
     pub scan: bool,
+    /// Preprocessing only (`-E`, `-M`, spec/modules.md §2): module and
+    /// named-module import directives stay text; a header-unit import is
+    /// performed for its macros, its tokens are not part of the output,
+    /// and the directive is printed as written.
+    pub text: bool,
+    /// The main unit is a header unit (`-fmodule-header`, spec/modules.md
+    /// §11.6): its key, `"` plus the header's canonical path. Its module
+    /// file is of kind [`UnitKind::HeaderUnit`], and a module declaration
+    /// in it is an error.
+    pub header_unit: Option<String>,
     /// The hidden `-fkiln-bmi-image`: build an imported unit from its
     /// module file's declaration image when it has one and the name gate
     /// passes (spec/modules.md §11.11 "Part 2a"); otherwise replay.
@@ -246,7 +257,8 @@ pub(crate) struct ModState {
 impl ModState {
     pub(crate) fn new(opts: ModuleOptions) -> ModState {
         let record = opts.record.then(Box::default);
-        ModState { opts, record, ..ModState::default() }
+        let main_unit = opts.header_unit.clone().map(|k| (k, Some(UnitKind::HeaderUnit)));
+        ModState { opts, record, main_unit, ..ModState::default() }
     }
 
     /// The first field that keeps a snapshot from being taken (spec/pp.md
@@ -412,6 +424,18 @@ impl Preprocessor<'_, '_> {
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
         let mut d =
             ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive, end: None };
+        // clang `err_module_decl_in_header_unit`: a header unit has no
+        // module declaration (its own, at include depth 0 or not).
+        if !import
+            && !matches!(d.kind, DirectiveKind::Invalid)
+            && self
+                .modules
+                .as_ref()
+                .is_some_and(|m| m.opts.header_unit.is_some() && m.building.is_empty())
+        {
+            self.emit(Diag::new(DiagId::pp_module_decl_in_header_unit, kw_span));
+            d.kind = DirectiveKind::Invalid;
+        }
         if matches!(d.kind, DirectiveKind::Invalid) {
             self.finish_directive();
         } else {
@@ -461,9 +485,10 @@ impl Preprocessor<'_, '_> {
             {
                 m.scanned.push(key);
             }
-            if let Some((_, shown, span)) = header {
-                // kiln-gap: GAP-137
-                self.emit(Diag::new(DiagId::pp_scan_header_unit, span).arg(shown));
+            // A header unit is built from its source: its macros decide
+            // what follows, and its files are dependencies (§11.9).
+            if let Some((key, _, span)) = header {
+                self.import_header(key, span);
             }
             return;
         }
@@ -872,7 +897,7 @@ impl Preprocessor<'_, '_> {
     /// Starts reading unit `key` from the module file `path`.
     fn begin_capsule_unit(&mut self, key: String, path: String, c: Capsule, span: Span) {
         if let Some(c) = self.try_image_unit(&key, &path, c, span) {
-            self.replay_capsule_unit(key, path, c, span);
+            self.replay_capsule_unit(key, false, path, c, span);
         }
     }
 
@@ -933,7 +958,7 @@ impl Preprocessor<'_, '_> {
                     gated,
                     span,
                 };
-                self.replay_capsule_unit(key.to_owned(), path.to_owned(), c, span);
+                self.replay_capsule_unit(key.to_owned(), false, path.to_owned(), c, span);
                 self.set_image_stop(stop);
                 return None;
             }
@@ -1140,7 +1165,14 @@ impl Preprocessor<'_, '_> {
 
     /// Starts replaying unit `key` from the capsule `c` of module file
     /// `path` (§11.2).
-    fn replay_capsule_unit(&mut self, key: String, path: String, mut c: Capsule, span: Span) {
+    fn replay_capsule_unit(
+        &mut self,
+        key: String,
+        header: bool,
+        path: String,
+        mut c: Capsule,
+        span: Span,
+    ) {
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
         let carried = take_carried(&path, &mut c);
         let Some(m) = &mut self.modules else { return };
@@ -1150,7 +1182,7 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(path));
             return;
         };
-        self.begin_unit(key, false, file, false, span, Some(i));
+        self.begin_unit(key, header, file, false, span, Some(i));
         if let Some(c) = carried {
             self.set_unit_carried(c);
         }
@@ -1401,7 +1433,58 @@ impl Preprocessor<'_, '_> {
         if self.already_built(&key, span) {
             return;
         }
+        if let Some((unit, path)) = self.header_unit_file(file) {
+            // A header-unit module file (spec/modules.md §11.6): its
+            // replay is the unit; a module file built from this unit
+            // records where it was found.
+            if self.unit_ctx() == Ctx::Main
+                && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
+                && !rec.imports.iter().any(|(k, _)| *k == unit)
+            {
+                rec.imports.push((unit.clone(), path.clone()));
+            }
+            self.callbacks.module_file_read(&ModuleFileRead {
+                path: &path,
+                module: &unit,
+                cache_inputs: None,
+            });
+            let read = bmi::read_file(Path::new(&path));
+            let Some(c) = self.load_capsule(&path, read, Some(&unit), span) else { return };
+            if c.kind != UnitKind::HeaderUnit {
+                let d = Diag::new(DiagId::pp_module_file_wrong_module, span)
+                    .arg(&path)
+                    .arg(&c.module)
+                    .arg(&unit);
+                self.emit(d);
+                return;
+            }
+            self.replay_capsule_unit(key, true, path, c, span);
+            return;
+        }
         self.begin_unit(key, true, file, system, span, None);
+    }
+
+    /// The header-unit module file of the header `file`, when one was
+    /// given (`-fmodule-file=<path>`, whose module is `"` plus the
+    /// header's canonical path) or recorded by a module file read so far:
+    /// that module and the module file's path. Never when scanning or
+    /// preprocessing only, which build the unit from its source.
+    fn header_unit_file(&self, file: FileId) -> Option<(String, String)> {
+        let m = self.modules.as_ref()?;
+        if m.opts.scan || m.opts.text {
+            return None;
+        }
+        let unit = header_unit_key(self.sm.file_name(file));
+        let given = m.opts.module_files.iter().rev().find(|(n, _)| *n == unit);
+        if let Some((_, p)) = given {
+            return Some((unit, p.display().to_string()));
+        }
+        let recorded = m
+            .replays
+            .iter()
+            .rev()
+            .find_map(|r| r.imports.iter().find(|(n, _)| *n == unit).map(|(_, p)| p.clone()));
+        recorded.map(|p| (unit, p))
     }
 
     /// True if `key` is built (nothing to do) or being built (a cycle,
@@ -1539,6 +1622,17 @@ impl Preprocessor<'_, '_> {
             self.macros.map.insert(d.name, d.clone());
         }
     }
+}
+
+/// The module of the header-unit module file built from the header at
+/// `path`: `"` plus its canonical path (absolute when it cannot be
+/// canonicalised), so every spelling that finds the same file finds it.
+pub fn header_unit_key(path: &str) -> String {
+    let p = Path::new(path);
+    let full = std::fs::canonicalize(p)
+        .or_else(|_| std::path::absolute(p))
+        .unwrap_or_else(|_| p.to_path_buf());
+    format!("\"{}", full.display())
 }
 
 fn embed_key(includer: u32, req: &EmbedRequest) -> EmbedKey {

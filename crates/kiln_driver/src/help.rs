@@ -29,7 +29,9 @@ ACTIONS:
   -S                      Compile to an assembly file, but do not assemble
   -x <language>           Treat the inputs that follow as <language>: c,
                           c-header, cpp-output, c++, c++-header,
-                          c++-cpp-output, c++-module, or none (by extension)
+                          c++-cpp-output, c++-module, c++-user-header,
+                          c++-system-header, c++-header-unit-header, or
+                          none (by extension)
 
 LANGUAGE:
   -std=<standard>         Language standard: c++98 ... c++26, gnu++98 ...
@@ -199,6 +201,10 @@ SANITIZERS AND COVERAGE:
 
 MODULES:
   --precompile            Compile a module interface unit to a BMI (.pcm)
+  -fmodule-header[=<lookup>]
+                          Build header inputs as header units (.pcm);
+                          <lookup> user or system finds them as a quoted
+                          or an angled #include does
   -fmodule-file=[<module>=]<file>
                           Use <file> for the module: a BMI, or with
                           <module>= also an interface source
@@ -414,6 +420,7 @@ mod tests {
             "new" => "/b",
             "checks" => "undefined",
             "module" => "m",
+            "lookup" => "user",
             "linker" => "lld",
             "args" => "--as-needed",
             "arg" => "-v",
@@ -504,6 +511,7 @@ mod tests {
             "-fprofile-instr-generate[=<file>]",
             "-flto[=<kind>]",
             "--precompile",
+            "-fmodule-header[=<lookup>]",
             "-fmodule-file=[<module>=]<file>",
             "-fprebuilt-module-path=<dir>",
             "-fmodules-cache-path=<dir>",

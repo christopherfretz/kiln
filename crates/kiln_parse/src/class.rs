@@ -990,23 +990,22 @@ impl Parser<'_, '_> {
             return;
         }
         if let Some(try_loc) = fn_try {
-            let body = self.parse_try_block_common(try_loc, true);
-            let (body, end) = match body {
+            let (body, end) = self.fn_body_fp(|p| match p.parse_try_block_common(try_loc, true) {
                 Some(t) => {
                     // The `}` of the last handler ends the definition.
-                    let st = &self.s.ast.stmts;
-                    let last = self.s.ast.lists.iter::<kiln_ast::StmtId>(st.try_handlers(t)).last();
+                    let st = &p.s.ast.stmts;
+                    let last = p.s.ast.lists.iter::<kiln_ast::StmtId>(st.try_handlers(t)).last();
                     let end = last.map_or(try_loc, |h| st.rbrace(st.catch_block(h)));
                     (t, end)
                 }
-                None => (self.s.act_on_compound(&[], try_loc, try_loc), try_loc),
-            };
+                None => (p.s.act_on_compound(&[], try_loc, try_loc), try_loc),
+            });
             self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
             self.sync_attr_macros();
             self.s.act_on_finish_function_def(f, body, end);
             return;
         }
-        let (body, rbrace) = self.parse_compound(false);
+        let (body, rbrace) = self.fn_body_fp(|p| p.parse_compound(false));
         self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
         self.sync_attr_macros();
         self.s.act_on_finish_function_def(f, body, rbrace);

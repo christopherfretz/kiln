@@ -631,6 +631,25 @@ impl StmtArena {
         self.nodes.push(n);
         id
     }
+    /// Marks function body `s` `strictfp` ([`crate::fp::FpOverride::strict_fn`]
+    /// on its `CompoundStmt`, or a function-try-block's; WP-1744).
+    pub fn mark_strict_fn(&mut self, s: StmtId) {
+        let s = if self.get(s).kind == StmtKind::CXXTryStmt { self.try_block(s) } else { s };
+        if self.get(s).kind != StmtKind::CompoundStmt {
+            return;
+        }
+        let mut fp = self.compound_fp(s);
+        fp.strict_fn = true;
+        let aux = self.intern_fp(fp);
+        self.nodes[s.index() as usize].aux = aux;
+    }
+
+    /// Whether function body `s` is `strictfp` ([`Self::mark_strict_fn`]).
+    pub fn is_strict_fn(&self, s: StmtId) -> bool {
+        let s = if self.get(s).kind == StmtKind::CXXTryStmt { self.try_block(s) } else { s };
+        self.get(s).kind == StmtKind::CompoundStmt && self.compound_fp(s).strict_fn
+    }
+
     pub(crate) fn clear_return_nrvo(&mut self, s: StmtId) {
         assert_eq!(self.get(s).kind, StmtKind::ReturnStmt, "not a ReturnStmt");
         self.nodes[s.index() as usize].b = 0;
@@ -670,7 +689,7 @@ impl StmtArena {
         if let Some(i) = self.fp_overrides.iter().position(|x| *x == o) {
             return i as u16;
         }
-        // 7 mask bits x 3 contraction modes bound the distinct overrides.
+        // A source has a handful of distinct pragma states.
         assert!(self.fp_overrides.len() < u16::MAX as usize, "FP override space exhausted");
         self.fp_overrides.push(o);
         (self.fp_overrides.len() - 1) as u16

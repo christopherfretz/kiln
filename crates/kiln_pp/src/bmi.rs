@@ -74,6 +74,9 @@ pub enum UnitKind {
     InterfacePartition,
     /// `module M:P;`.
     ImplementationPartition,
+    /// A header unit (`-fmodule-header`, spec/modules.md §11.6); its
+    /// module is `"` plus the header's canonical path.
+    HeaderUnit,
 }
 
 impl UnitKind {
@@ -82,6 +85,7 @@ impl UnitKind {
             UnitKind::Interface => 1,
             UnitKind::InterfacePartition => 2,
             UnitKind::ImplementationPartition => 3,
+            UnitKind::HeaderUnit => 4,
         }
     }
 
@@ -90,6 +94,7 @@ impl UnitKind {
             1 => UnitKind::Interface,
             2 => UnitKind::InterfacePartition,
             3 => UnitKind::ImplementationPartition,
+            4 => UnitKind::HeaderUnit,
             _ => return None,
         })
     }
