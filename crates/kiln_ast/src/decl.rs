@@ -6781,7 +6781,8 @@ pub mod builtin {
     /// string, sorted by name; a row's id is [`arm::BASE`] plus its index
     /// (kiln-private ids). `__builtin_arm_ldrex` / `ldaex` / `strex` /
     /// `stlex` are custom type-checked (clang
-    /// `CheckARMBuiltinExclusiveCall`).
+    /// `CheckARMBuiltinExclusiveCall`). WP-1794 added the SME state query
+    /// `__builtin_arm_get_sme_state` (`<arm_sme.h>`'s helpers).
     pub mod arm {
         use super::{Info, attr};
 
@@ -6817,6 +6818,7 @@ pub mod builtin {
             ("__builtin_arm_dsb", "vUi", NC, ""),
             ("__builtin_arm_gcspopm", "WUiWUi", N, "gcs"),
             ("__builtin_arm_gcsss", "vC*vC*", N, "gcs"),
+            ("__builtin_arm_get_sme_state", "vULi*ULi*", N, ""),
             ("__builtin_arm_isb", "vUi", NC, ""),
             ("__builtin_arm_jcvt", "Zid", NC, "v8.3a"),
             ("__builtin_arm_ld64b", "vvC*WUi*", N, "ls64"),

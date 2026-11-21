@@ -40,6 +40,9 @@ fn sample_rows_match_clang_19() {
     assert_eq!(row("__builtin_arm_gcsss").info.sig, "vC*vC*");
     assert_eq!(row("__builtin_arm_trap").info.attrs & attr::NORETURN, attr::NORETURN);
     assert_eq!(row("__builtin_arm_ldrex").info.attrs & attr::CUSTOM, attr::CUSTOM);
+    // WP-1794: the SME state query `<arm_sme.h>` calls, no feature.
+    let sme = row("__builtin_arm_get_sme_state");
+    assert_eq!((sme.info.sig, sme.info.attrs, sme.features), ("vULi*ULi*", attr::NOTHROW, ""));
 }
 
 #[test]

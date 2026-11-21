@@ -4,13 +4,16 @@
 //! leading-zero / sign-bit counts, the hint instructions, the barriers, the
 //! exclusive accesses, the system register accesses, the FRINT/FJCVTZS
 //! conversions, the random numbers, the 64-byte loads and stores, the GCS
-//! builtins, `chkfeat`, `prefetch` and `trap`.
+//! builtins, `chkfeat`, `prefetch`, `trap` and the SME state query
+//! `get_sme_state`.
 
 use kiln_ast::decl::builtin::arm;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::intrinsics::{self, TargetMem};
-use kiln_llvm::{Attr, AttrList, BinOp, CallOpts, CastOp, Flags, FuncId, TypeId as LTy, Value};
+use kiln_llvm::{
+    Attr, AttrList, BinOp, CallConv, CallOpts, CastOp, Flags, FuncId, TypeId as LTy, Value,
+};
 
 use crate::builtins::BuiltinCall;
 use crate::fir::{Fir, Op, V};
@@ -182,6 +185,10 @@ impl Cg<'_> {
                 self.store(v, p, align, false);
                 self.cast(CastOp::ZExt, ok, LTy::I32)
             }
+            "get_sme_state" => {
+                self.emit_arm_get_sme_state(&args)?;
+                return Ok(BuiltinCall::Emitted(None));
+            }
             "ld64b" | "st64b" | "st64bv" | "st64bv0" => match self.emit_arm_ls64(base, &args)? {
                 Some(v) => v,
                 None => return Ok(BuiltinCall::Emitted(None)),
@@ -237,6 +244,42 @@ impl Cg<'_> {
             ),
         };
         Ok(BuiltinCall::Emitted(Some(v)))
+    }
+
+    /// `__builtin_arm_get_sme_state(p0, p1)` (clang
+    /// `EmitAArch64BuiltinExpr`): a plain call (never an `invoke`, no
+    /// `nounwind`) of the SME ABI support routine `__arm_sme_state`, a
+    /// `{ i64, i64 }()` runtime function, with the calling convention
+    /// `aarch64_sme_preservemost_from_x2` and the call-site attribute
+    /// `"aarch64_pstate_sm_compatible"`; field 0 is stored through `p0`
+    /// and field 1 through `p1`, each pointer evaluated right before its
+    /// store.
+    fn emit_arm_get_sme_state(&mut self, args: &[ExprId]) -> R<()> {
+        let pair = self.m.types.struct_literal(&[LTy::I64, LTy::I64], false);
+        let f = self.rt_fn("__arm_sme_state", pair, &[], &[]);
+        let fn_ty = self.m.func(f).ty();
+        let fa = self.m.attr_set(&[Attr::Str("aarch64_pstate_sm_compatible".into(), "".into())]);
+        let opts = CallOpts {
+            attrs: AttrList { func: fa, ..AttrList::default() },
+            cc: CallConv::AARCH64_SME_PRESERVEMOST_FROM_X2,
+            ..CallOpts::default()
+        };
+        let r = self.f.fir.push(
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: Vec::new(),
+                opts: Box::new(opts),
+            },
+            pair,
+        );
+        self.f.calls.push((Fir::last_inst(r), Some(f), false));
+        for (idx, &a) in (0u32..).zip(&args[..2]) {
+            let v = self.f.fir.push(Op::ExtractValue { agg: r, idx }, LTy::I64);
+            let (p, align) = self.ptr_align(a)?;
+            self.store(v, p, align, false);
+        }
+        Ok(())
     }
 
     /// A call of intrinsic `f` whose operand `idx` carries
@@ -481,7 +524,10 @@ fn arity(base: &str) -> usize {
         0
     } else if crc32(base).is_some()
         || base.starts_with("wsr")
-        || matches!(base, "strex" | "stlex" | "ld64b" | "st64b" | "st64bv" | "st64bv0")
+        || matches!(
+            base,
+            "strex" | "stlex" | "ld64b" | "st64b" | "st64bv" | "st64bv0" | "get_sme_state"
+        )
     {
         2
     } else if base == "prefetch" {

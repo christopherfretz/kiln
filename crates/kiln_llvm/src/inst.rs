@@ -451,6 +451,13 @@ impl CallConv {
     pub const AARCH64_VECTOR_PCS: CallConv = CallConv(97);
     /// `aarch64_sve_vector_pcs`.
     pub const AARCH64_SVE_VECTOR_PCS: CallConv = CallConv(98);
+    /// `aarch64_sme_preservemost_from_x0` (an SME ABI support routine
+    /// that preserves `x0`-`x13` and the vector state).
+    pub const AARCH64_SME_PRESERVEMOST_FROM_X0: CallConv = CallConv(102);
+    /// `aarch64_sme_preservemost_from_x2` (`__arm_sme_state`).
+    pub const AARCH64_SME_PRESERVEMOST_FROM_X2: CallConv = CallConv(103);
+    /// `aarch64_sme_preservemost_from_x1`.
+    pub const AARCH64_SME_PRESERVEMOST_FROM_X1: CallConv = CallConv(111);
 
     /// The textual keyword: `None` for `ccc` (not printed), the empty
     /// string for a number without a keyword (printed `cc N`).
@@ -483,6 +490,9 @@ impl CallConv {
             92 => "x86_regcallcc",
             97 => "aarch64_vector_pcs",
             98 => "aarch64_sve_vector_pcs",
+            102 => "aarch64_sme_preservemost_from_x0",
+            103 => "aarch64_sme_preservemost_from_x2",
+            111 => "aarch64_sme_preservemost_from_x1",
             _ => "",
         })
     }
