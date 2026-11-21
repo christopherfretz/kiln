@@ -76,6 +76,12 @@ pub(crate) struct HeadBuild {
     /// Holds only invented parameters (`auto:N`, [dcl.fct]/22) and has no
     /// scope.
     invented: bool,
+    /// In a module interface's purview, the first TU-local entity the
+    /// head names while it is parsed (a type-constraint, a parameter's
+    /// type or default argument, the requires-clause) and where:
+    /// [`Sema::module_check_head_exposure`] checks the declaration that
+    /// takes it ([basic.link]/14; WP-1855).
+    uses: Option<(DeclId, Loc)>,
 }
 
 /// What a class of an out-of-line declaration's qualifier expects of
@@ -102,6 +108,39 @@ impl Sema<'_, '_> {
     /// generic lambda's own heads), in order.
     pub(crate) fn head_params_from(&self, base: usize) -> Vec<DeclId> {
         self.templ.heads.iter().skip(base).flat_map(|h| h.params.iter().copied()).collect()
+    }
+
+    /// Records a use of `d` at `loc` for the template head being parsed,
+    /// if any: the innermost head whose list is not built yet and that no
+    /// declaration took (a template template parameter's own head, taken
+    /// at once, passes it to the head around it), outside the heads of
+    /// the lambdas being parsed. Only the first use is
+    /// kept ([`Sema::module_check_head_exposure`]; WP-1855).
+    pub(crate) fn note_template_head_use(&mut self, d: DeclId, loc: Loc) {
+        // A lambda's own heads are its closure type's: a use in a lambda
+        // belongs to the head around the lambda-expression.
+        let floor = self
+            .lambdas
+            .get(self.lambda_base..)
+            .and_then(|l| l.first())
+            .map_or(self.templ.heads.len(), |l| l.heads.min(self.templ.heads.len()));
+        for h in self.templ.heads[..floor].iter_mut().rev() {
+            if h.list.is_some() {
+                return;
+            }
+            if !h.taken {
+                if h.uses.is_none() {
+                    h.uses = Some((d, loc));
+                }
+                return;
+            }
+        }
+    }
+
+    /// The first use [`Self::note_template_head_use`] recorded for the
+    /// head whose list is `list`, if it is still open.
+    pub(crate) fn template_head_use(&self, list: TemplateParamListId) -> Option<(DeclId, Loc)> {
+        self.templ.heads.iter().rev().find(|h| h.list == Some(list)).and_then(|h| h.uses)
     }
 }
 
@@ -171,6 +210,7 @@ impl HeadBuild {
             list: None,
             taken: false,
             invented: false,
+            uses: None,
         }
     }
 }
@@ -659,6 +699,7 @@ impl Sema<'_, '_> {
             list: None,
             taken: false,
             invented: false,
+            uses: None,
         });
         self.scopes.push(Scope::new(ScopeKind::TemplateParams, None));
         self.ast.templates.dependent_depth += 1;
@@ -681,6 +722,7 @@ impl Sema<'_, '_> {
             list: None,
             taken: true,
             invented: false,
+            uses: None,
         });
         let f = self.func.as_ref().map(|f| f.decl);
         self.templ.expansions_open.push((f, self.ast.templates.dependent_depth));
@@ -962,6 +1004,7 @@ impl Sema<'_, '_> {
             list: None,
             taken: true,
             invented: false,
+            uses: None,
         });
         self.scopes.push(Scope::new(ScopeKind::TemplateParams, None));
         self.ast.templates.dependent_depth += 1;
@@ -1849,6 +1892,8 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        // [basic.link]/14: what its head names (WP-1855).
+        self.module_check_head_exposure(pattern, list);
         // clang `ActOnFunctionDeclarator`: an invalid function makes its
         // template invalid, which lookup then ignores beside other
         // declarations (`LookupResult::resolveKind`, WP-308).
@@ -2008,6 +2053,7 @@ impl Sema<'_, '_> {
             list: Some(params_id),
             taken: true,
             invented: false,
+            uses: None,
         });
         let mut s = Scope::new(ScopeKind::TemplateParams, None);
         for p in params {
@@ -2081,6 +2127,7 @@ impl Sema<'_, '_> {
                 list: None,
                 taken: false,
                 invented: true,
+                uses: None,
             });
             self.ast.templates.dependent_depth += 1;
             self.templ.invented = 0;

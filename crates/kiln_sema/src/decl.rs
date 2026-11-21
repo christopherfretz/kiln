@@ -8156,7 +8156,13 @@ impl Sema<'_, '_> {
         {
             init = Initializer::Expr(self.complete_expr_array_bound(e));
         }
+        let deduces = self.ast.modules.active
+            && self.ast.decls.get(v).ty().is_some_and(|t| self.contains_undeduced_auto(t));
         self.act_on_init_inner(v, init);
+        if deduces {
+            // [basic.link]/15.2: not the variable's type (WP-1856).
+            self.module_check_deduced_exposure(v);
+        }
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
         self.check_c_static_init(v);
@@ -9785,6 +9791,10 @@ impl Sema<'_, '_> {
         self.check_constexpr_body_vars(f, body);
         self.module_flush_exposures(f);
         self.module_resolve_escapes(f);
+        if self.ast.modules.active && !self.in_template() && self.fn_spec(f).return_deduced() {
+            // [basic.link]/15.1: not the deduced return type (WP-1856).
+            self.module_check_deduced_exposure(f);
+        }
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

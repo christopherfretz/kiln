@@ -46,6 +46,16 @@
 //!   function body nor an initializer), also a lambda there: collected
 //!   while it is parsed ([`Sema::module_start_concept`]) and checked at
 //!   the concept ([`Sema::module_check_concept_exposure`], WP-1845);
+//! - the template-head of a template (its type-constraints,
+//!   requires-clauses, parameter types and default arguments): each use
+//!   is held for the innermost head no declaration has taken yet
+//!   ([`Sema::note_template_head_use`]) and checked when the template is
+//!   formed ([`Sema::module_check_head_exposure`], WP-1855);
+//! - a variable's deduced type and a function's deduced return type
+//!   (/15.1, 15.2 keep both): checked once deduced
+//!   ([`Sema::module_check_deduced_exposure`]); a local class of a
+//!   specialization it names is TU-local when the specialization is,
+//!   which is decided at the end of the unit (WP-1856).
 //!
 //! A TU-local entity is a function, variable, class, enumeration or
 //! template with internal linkage, or a class template specialization
@@ -167,6 +177,7 @@ impl Sema<'_, '_> {
         let Some((owner, at, lambda, escape)) = self.exposure_site() else {
             if !in_inst {
                 self.note_concept_use(d, loc);
+                self.note_head_use(d, loc, false);
                 self.note_pattern_use(d);
                 self.local_member_body_warning(d, loc);
                 self.note_declarator_use(d, loc);
@@ -213,9 +224,16 @@ impl Sema<'_, '_> {
     /// forms: `decltype(f) *fp;` is an exposure of `f`, an unevaluated
     /// operand of the declarator (the standard's example; WP-1821).
     fn note_declarator_use(&mut self, d: DeclId, loc: Loc) {
+        // A requires-expression in a trailing requires-clause (WP-1855).
+        let mut ctx = self.ctx;
+        while self.kind_of(ctx) == DeclKind::RequiresExprBody
+            && let Some(p) = self.ast.decls.get(ctx).ctx()
+        {
+            ctx = p;
+        }
         if self.depr_init.is_none()
-            && self.depr_points.last() == Some(&self.ctx)
-            && !self.kind_of(self.ctx).is_function()
+            && self.depr_points.last() == Some(&ctx)
+            && !self.kind_of(ctx).is_function()
             && self.module_exposure_purview()
             && self.is_tu_local_entity(d)
         {
@@ -243,6 +261,50 @@ impl Sema<'_, '_> {
         if let Some(v) = self.concept_uses.as_mut() {
             v.push((d, loc, lambda));
         }
+    }
+
+    /// A use of `d` at `loc` in the template head being parsed
+    /// ([`Sema::note_template_head_use`]), when `d` is TU-local (`odr`: an
+    /// odr-use of a TU-local constant, [`Sema::module_note_odr_use`]).
+    fn note_head_use(&mut self, d: DeclId, loc: Loc, odr: bool) {
+        if !self.templ.heads.is_empty()
+            && self.module_exposure_purview()
+            && (odr || self.is_tu_local_entity(d))
+        {
+            self.note_template_head_use(d, loc);
+        }
+    }
+
+    /// Template `pattern` (a function, variable, class or alias) took the
+    /// head whose list is `list` ([`Sema::finish_template_pattern`]): a
+    /// TU-local entity the head names (a type-constraint's concept-name,
+    /// an id-expression in its requires-clause or a parameter's default
+    /// argument, a parameter's type) makes the declaration an exposure
+    /// ([basic.link]/14 counts every concept-name, type-specifier and
+    /// expression the template-declaration contains; /15 ignores none of
+    /// them), reported at its name (WP-1855). GCC 16.1 rejects the same
+    /// declarations; clang 22 accepts them. A friend is ignored (/15.3).
+    pub(crate) fn module_check_head_exposure(
+        &mut self,
+        pattern: DeclId,
+        list: kiln_ast::ids::TemplateParamListId,
+    ) {
+        let Some((e, _)) = self.template_head_use(list) else { return };
+        if !self.inst.stack.frames.is_empty()
+            || !self.module_exposure_purview()
+            || self.ast.decls.get(pattern).misc().friend() != kiln_ast::decl::FriendKind::None
+        {
+            return;
+        }
+        let Some(ctx) = self.ast.decls.get(pattern).ctx() else { return };
+        let scope = match self.decl_context_scope(ctx) {
+            Some(BodyScope::Ignored) | None => return,
+            Some(s) => s,
+        };
+        if self.modules.exposed.contains(&pattern) || self.is_tu_local_entity(pattern) {
+            return;
+        }
+        self.report_in_scope(pattern, e, scope);
     }
 
     /// The closure type of the outermost lambda around the current point,
@@ -343,6 +405,7 @@ impl Sema<'_, '_> {
                 // ([`Sema::default_arg_tu_local`]).
                 None if self.inst.stack.frames.is_empty() => {
                     self.note_concept_use(d, loc);
+                    self.note_head_use(d, loc, false);
                     self.modules.set_uses.push((loc, d));
                     self.note_declarator_use(d, loc);
                 }
@@ -856,6 +919,7 @@ impl Sema<'_, '_> {
         let Some((owner, at, lambda, escape)) = self.exposure_site() else {
             if self.inst.stack.frames.is_empty() {
                 self.note_concept_use(d, loc);
+                self.note_head_use(d, loc, true);
             }
             return;
         };
@@ -1114,6 +1178,13 @@ impl Sema<'_, '_> {
                 break;
             }
         }
+        // A declared or deduced type naming a local class of a TU-local
+        // instantiation (WP-1856).
+        for (owner, at, class, f) in std::mem::take(&mut self.modules.deferred_local_types) {
+            if !self.modules.exposed.contains(&owner) && self.inst_is_tu_local(self.ast.first(f)) {
+                self.report_exposure(owner, at, class);
+            }
+        }
         for (p, _) in deferred {
             let s = self.ast.first(p.entity);
             if !self.is_inline_fn(s) && self.is_function_spec(s) && self.inst_names_tu_local(s)
@@ -1178,6 +1249,15 @@ impl Sema<'_, '_> {
     fn exposure_owner(&self) -> Option<Site> {
         let mut c = self.ctx;
         let mut lambda = None;
+        // The declarator of a lambda (its template head, parameters,
+        // trailing return type) declares its closure type's call operator:
+        // a use there is in the lambda (WP-1855).
+        let declarator = self
+            .lambdas
+            .get(self.lambda_base..)
+            .and_then(|l| l.first())
+            .filter(|l| !l.body_open)
+            .map(|l| l.closure);
         for _ in 0..MAX_WALK {
             let k = self.kind_of(c);
             if k.is_function() {
@@ -1187,6 +1267,7 @@ impl Sema<'_, '_> {
                     c = parent;
                     continue;
                 }
+                let lambda = lambda.or(declarator);
                 if self.is_tu_local_entity(c) {
                     return None;
                 }
@@ -1217,6 +1298,7 @@ impl Sema<'_, '_> {
             }
             c = self.ast.decls.get(c).ctx()?;
         }
+        let lambda = lambda.or(declarator);
         if let Some(&(field, _)) = self.nsdmi_this.last()
             && self.ast.decls.get(field).ctx() == Some(c)
         {
@@ -1397,31 +1479,127 @@ impl Sema<'_, '_> {
             self.modules.decl_uses.retain(|&(l, ..)| l != level);
             first
         };
-        if friend || !self.inst.stack.frames.is_empty() || !self.module_exposure_purview() {
+        if friend {
             return;
         }
-        let k = self.kind_of(d);
-        let Some(ctx) = self.ast.decls.get(d).ctx() else { return };
-        let owner = match k {
-            DeclKind::Field if self.kind_of(ctx) == DeclKind::CXXRecord => ctx,
-            DeclKind::Var => d,
-            k if k.is_function() => d,
-            _ => return,
-        };
-        let scope = match self.decl_context_scope(ctx) {
-            Some(BodyScope::Ignored) | None => return,
-            Some(s) => s,
-        };
-        if self.modules.exposed.contains(&owner) || self.is_tu_local_entity(owner) {
-            return;
-        }
+        let Some((owner, scope)) = self.decl_exposure_owner(d) else { return };
         let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let mut found = self.type_tu_local(ty, 0);
-        if found.is_none() && k.is_function() {
+        if found.is_none() && self.kind_of(d).is_function() {
             found = self.default_args_tu_local(d);
         }
         if let Some(e) = found.or(named) {
             self.report_in_scope(owner, e, scope);
+        } else {
+            self.defer_instantiated_local_type(owner, scope, ty);
+        }
+    }
+
+    /// The declaration a function, variable or non-static data member `d`
+    /// being declared in a module interface's purview makes an exposure
+    /// by its declared type (its class for a data member), and the scope
+    /// it is in; `None` where nothing is checked (an instantiation, an
+    /// ignored function body, a TU-local or already reported owner).
+    fn decl_exposure_owner(&self, d: DeclId) -> Option<(DeclId, BodyScope)> {
+        if !self.inst.stack.frames.is_empty() || !self.module_exposure_purview() {
+            return None;
+        }
+        let ctx = self.ast.decls.get(d).ctx()?;
+        let owner = match self.kind_of(d) {
+            DeclKind::Field if self.kind_of(ctx) == DeclKind::CXXRecord => ctx,
+            DeclKind::Var => d,
+            k if k.is_function() => d,
+            _ => return None,
+        };
+        let scope = match self.decl_context_scope(ctx) {
+            Some(BodyScope::Ignored) | None => return None,
+            Some(s) => s,
+        };
+        if self.modules.exposed.contains(&owner) || self.is_tu_local_entity(owner) {
+            return None;
+        }
+        Some((owner, scope))
+    }
+
+    /// The type of variable `v` was deduced from its initializer, or the
+    /// return type of function `v` from its body: /15 ignores the
+    /// initializer and a non-inline function's body but not "the
+    /// variable's type" and "the deduced return type" ([basic.link]/15.1,
+    /// 15.2), so a deduced type built from a TU-local type, or from a
+    /// local class or closure type of a TU-local function, makes the
+    /// declaration an exposure (WP-1856; GCC 16.1 rejects the same). A
+    /// local class of the function itself is WP-1820's
+    /// ([`Sema::module_resolve_escapes`]).
+    pub(crate) fn module_check_deduced_exposure(&mut self, v: DeclId) {
+        if !self.ast.modules.active {
+            return;
+        }
+        let Some((owner, scope)) = self.decl_exposure_owner(v) else { return };
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if self.is_dependent_type(ty) || self.contains_undeduced_auto(ty) {
+            return;
+        }
+        match self.type_tu_local(ty, 0) {
+            Some(e) => self.report_in_scope(owner, e, scope),
+            None => self.defer_instantiated_local_type(owner, scope, ty),
+        }
+    }
+
+    /// A local class or closure type `ty` is built from (as
+    /// [`Sema::type_tu_local`] walks it, and through template arguments)
+    /// that is declared in a TU-local function, which makes it TU-local
+    /// ([basic.link]/16.1: no name with linkage, declared in the definition
+    /// of a TU-local entity): reported now; one declared in an
+    /// instantiated function of a template of the purview, TU-local if
+    /// that function is (/16.5, WP-1846): decided at the end of the unit
+    /// ([`Sema::module_resolve_deferred_exposures`]; WP-1856).
+    fn defer_instantiated_local_type(&mut self, owner: DeclId, scope: BodyScope, ty: QualType) {
+        if scope != BodyScope::Considered || !self.exposure_main_unit() {
+            return;
+        }
+        let Some((class, f)) = self.type_local_class(ty, 0) else { return };
+        if self.is_tu_local_entity(f) {
+            self.report_exposure(owner, self.ast.decls.get(owner).loc(), class);
+        } else if self.is_purview_instantiation(f) {
+            let at = self.ast.decls.get(owner).loc();
+            self.modules.deferred_local_types.push((owner, at, class, f));
+        }
+    }
+
+    /// The first class `ty` is built from that is declared in the body of
+    /// a function (not a lambda's call operator), with that function.
+    fn type_local_class(&self, ty: QualType, depth: usize) -> Option<(DeclId, DeclId)> {
+        if depth > 64 || self.is_error_type(ty) {
+            return None;
+        }
+        let t = &self.ast.types;
+        match t.canonical_view(ty) {
+            TypeView::Pointer(p)
+            | TypeView::LValueRef(p)
+            | TypeView::RValueRef(p)
+            | TypeView::IncompleteArray(p)
+            | TypeView::Complex(p)
+            | TypeView::Atomic(p) => self.type_local_class(p, depth + 1),
+            TypeView::ConstantArray(a) => self.type_local_class(a.elem, depth + 1),
+            TypeView::MemberPointer { pointee, class } => self
+                .type_local_class(QualType::unqual(class), depth + 1)
+                .or_else(|| self.type_local_class(pointee, depth + 1)),
+            TypeView::Function(p) => std::iter::once(p.ret())
+                .chain(t.params(&p).iter().copied())
+                .find_map(|x| self.type_local_class(x, depth + 1)),
+            TypeView::Record(d) => {
+                if let Some(f) = self.innermost_function_of(d) {
+                    return Some((d, f));
+                }
+                let (_, i) = self.ast.spec_info(d)?;
+                let args = t.canonical_args(i.args);
+                t.args(args).to_vec().into_iter().find_map(|a| match a.view() {
+                    ArgView::Type(x) => self.type_local_class(x, depth + 1),
+                    _ => None,
+                })
+            }
+            TypeView::Enum(d) => self.innermost_function_of(d).map(|f| (d, f)),
+            _ => None,
         }
     }
 
@@ -1550,10 +1728,16 @@ impl Sema<'_, '_> {
     /// per declaration.
     fn report_exposure(&mut self, owner: DeclId, at: Loc, e: DeclId) {
         self.modules.exposed.insert(owner);
+        // A closure type by its type, `(lambda at file:line:col)`.
+        let entity = if self.ast.closure_lambda(e).is_some() {
+            self.ty_str(self.tag_type(e))
+        } else {
+            self.name_for_diagnostic(e)
+        };
         let msg = self
             .diag(DiagId::sema_module_exposure, at)
             .arg(self.name_for_diagnostic(owner))
-            .arg(self.name_for_diagnostic(e));
+            .arg(entity);
         self.emit(msg);
     }
 }

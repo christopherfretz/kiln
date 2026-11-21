@@ -233,6 +233,7 @@ impl Substituter<'_, '_, '_> {
             list: Some(list),
             taken: false,
             invented: false,
+            uses: None,
         });
         let mut s = Scope::new(ScopeKind::TemplateParams, None);
         for &p in &params {
@@ -268,6 +269,7 @@ impl Substituter<'_, '_, '_> {
             list: Some(list),
             taken: false,
             invented: false,
+            uses: None,
         });
         let mut s = Scope::new(ScopeKind::TemplateParams, None);
         for &p in &params {

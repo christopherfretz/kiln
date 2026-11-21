@@ -99,7 +99,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 46;
+pub(crate) const IMAGE_VERSION: u32 = 47;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -745,6 +745,8 @@ struct Image {
     reqs: requires::ReqBodies,
     /// WP-1284: where the carried dependent names were written.
     written: Vec<written::WrittenRec>,
+    /// WP-1859: the written parameters of nested function types.
+    nested: Vec<written::NestedRec>,
     /// WP-1293: block-scope declarations, in `local_externs` order.
     lexterns: localexterns::LocalExterns,
     /// WP-1307: explicit instantiations of class templates.
@@ -1548,6 +1550,7 @@ fn encode(img: &Image) -> Vec<u8> {
     constraints::encode_constraints(&mut w, &img.cons);
     requires::encode_requires(&mut w, &img.reqs);
     written::encode_written(&mut w, &img.written);
+    written::encode_nested(&mut w, &img.nested);
     localexterns::encode_local_externs(&mut w, &img.lexterns);
     explinst::encode_explicit_insts(&mut w, &img.explinsts);
     patinit::encode_pattern_inits(&mut w, &img.patinits);
@@ -2272,6 +2275,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.cons = constraints::decode_constraints(&mut r)?;
     img.reqs = requires::decode_requires(&mut r)?;
     img.written = written::decode_written(&mut r)?;
+    img.nested = written::decode_nested(&mut r)?;
     img.lexterns = localexterns::decode_local_externs(&mut r)?;
     img.explinsts = explinst::decode_explicit_insts(&mut r)?;
     img.patinits = patinit::decode_pattern_inits(&mut r)?;
@@ -3434,6 +3438,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     constraints::validate_constraints(img)?;
     requires::validate_requires(img, &|q| qref_ok(q, nt))?;
     written::validate_written(img, &|q| qref_ok(q, nt))?;
+    written::validate_nested(img, &|q| qref_ok(q, nt))?;
     exprs::validate_late_nx(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
@@ -7021,6 +7026,7 @@ mod tests {
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
+            nested: Vec::new(),
             lexterns: localexterns::LocalExterns::default(),
             texprs: Vec::new(),
             late_nx: Vec::new(),

@@ -5099,7 +5099,7 @@ formed it:
   keep their written keys. Types formed during instantiation therefore
   do not need recording.
 
-#### 5.8.1 Function types re-checked after substitution (WP-1823, WP-1839)
+#### 5.8.1 Function types re-checked after substitution (WP-1823, WP-1839, WP-1859)
 
 A substituted function type is checked again as if its declarator had
 been written with the arguments (clang `TransformFunctionProtoType`:
@@ -5128,9 +5128,11 @@ type is kept.
   `E<int AS(1)>` with `E = void (*)(T)` is accepted. Nor is a function
   template's own type in deduction (`Substituter::own_fn_type`): its
   parameters are checked when the specialization's declaration is
-  substituted. Recording happens only while parsing; a module image does
-  not carry the table (a gap: an imported template's nested parameters
-  are not re-checked).
+  substituted. Recording happens while parsing; a module image carries
+  the entries whose type it carries (its `nested` section, WP-1859,
+  spec/modules.md §11.11), so an imported template's nested parameters
+  are checked again as after a replay
+  (`module.import/nested-function-params-importer*.cpp`).
 - **Swift parameter ABIs.** The order and convention of the expanded
   parameters' ABIs are checked again for every substituted function type
   (a nested one in `Substituter::ty`, a declaration's own in

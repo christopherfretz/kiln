@@ -1610,11 +1610,16 @@ impl Sema<'_, '_> {
     /// constraint-expression, so a class defined there
     /// (`requires (struct S {} x)`) takes none ([temp.pre]/1).
     pub fn act_on_concept_head(&mut self) {
-        let _ = self.take_template_head(None);
+        let head = self.take_template_head(None);
         self.templ.cur = None;
         // [basic.link]/14: in a module interface, the TU-local entities
-        // the constraint-expression names (WP-1845).
+        // its head and the constraint-expression name (WP-1845, WP-1855).
         self.module_start_concept();
+        if let Some((e, loc)) = head.and_then(|l| self.template_head_use(l))
+            && let Some(v) = self.concept_uses.as_mut()
+        {
+            v.push((e, loc, None));
+        }
     }
 
     /// `template<params> concept name = e;` ([temp.concept]/1); the head

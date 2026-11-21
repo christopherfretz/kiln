@@ -236,7 +236,7 @@ pub(crate) struct LambdaScope {
     explicit_constexpr: bool,
     /// `templ.heads.len()` at the introducer: a deeper head after the
     /// parameters is a generic lambda's invented one.
-    heads: usize,
+    pub(crate) heads: usize,
     /// `templ.invented` at the introducer: the invented parameters of an
     /// enclosing abbreviated function template whose declarator holds
     /// this lambda (a trailing *requires-clause* or a default argument,

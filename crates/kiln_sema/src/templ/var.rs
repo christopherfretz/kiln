@@ -599,6 +599,8 @@ impl Sema<'_, '_> {
             h.lexical = Some(self.ctx);
         }
         let p = self.builder().var_partial_spec(h, tmpl, head, conv.sugared, ty, vspec);
+        // [basic.link]/14: what its head names (WP-1855).
+        self.module_check_head_exposure(p, head);
         if self.kind_of(self.ctx) == DeclKind::CXXRecord {
             self.set_member_access(p);
         }
