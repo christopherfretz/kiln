@@ -75,7 +75,17 @@ pub fn apply_standard_conversion(
         ThirdStep::Identity => {}
         ThirdStep::Qualification => {
             let u = s.ast.types.unqualified(to);
-            e = cast_to(s, CastKind::NoOp, e, u, None);
+            // clang `PerformImplicitConversion` `ICK_Qualification`: a
+            // change of the pointee's address space is its own cast.
+            let from = ty(s, e);
+            let t = &s.ast.types;
+            let ck = if t.is_pointer(from) && t.pointee_addr_space(from) != t.pointee_addr_space(u)
+            {
+                CastKind::AddressSpaceConversion
+            } else {
+                CastKind::NoOp
+            };
+            e = cast_to(s, ck, e, u, None);
         }
         ThirdStep::FunctionPointer => {
             let from = ty(s, e);

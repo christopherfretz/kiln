@@ -280,6 +280,12 @@ impl Sema<'_, '_> {
             if matches!(node.syntax, AttrSyntax::Gnu | AttrSyntax::Declspec) {
                 return true;
             }
+            // `[[clang::address_space(N)]]` and the `opencl_*` spaces: a
+            // type attribute anywhere (WP-1803); after a ptr-operator the
+            // parser applies it to that pointer.
+            if node.kind == AttrKind::ADDRESS_SPACE {
+                return true;
+            }
             // `[[clang::neon_vector_type(N)]]` and the like after the
             // type-specifiers: type attributes (WP-809), applied with the
             // GNU spellings by `Sema::apply_declspec_vector_attrs`.

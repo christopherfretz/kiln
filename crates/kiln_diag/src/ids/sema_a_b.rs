@@ -24,6 +24,15 @@ sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking addr
 sema_address_of_reference_bool_conversion = Warning [UndefinedBoolConversion] (0) "reference cannot be bound to dereferenced null pointer in well-defined C++ code; pointer may be assumed to always convert to true";
 // WP-411: clang `DiagnoseAlwaysNonNullPointer` (comparison forms).
 sema_address_of_reference_null_compare = Warning [TautologicalUndefinedCompare] (1) "reference cannot be bound to dereferenced null pointer in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";
+sema_address_space_automatic = Error (0) "automatic variable qualified with an address space";
+sema_address_space_field = Error (0) "field may not be qualified with an address space";
+sema_address_space_function_type = Error (0) "function type may not be qualified with an address space";
+sema_address_space_multiple = Error (0) "multiple address spaces specified for type";
+sema_address_space_multiple_identical = Warning [DuplicateDeclSpecifier] (0) "multiple identical address spaces specified for type";
+sema_address_space_negative = Error (0) "address space is negative";
+sema_address_space_parameter = Error (0) "parameter may not be qualified with an address space";
+sema_address_space_ref_bind = Error (2) "binding reference of type {0} to value of type {1} changes address space";
+sema_address_space_too_high = Error (1) "address space is larger than the maximum supported ({0})";
 sema_addrof_bitfield = Error (0) "address of bit-field requested";
 sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
 sema_addrof_vector_element = Error (0) "address of vector element requested";
@@ -242,7 +251,6 @@ sema_attribute_too_few_arguments_one = Error (1) "{0} attribute takes at least 1
 sema_attribute_too_many_arguments = Error (2) "{0} attribute takes no more than {1} arguments";
 sema_attribute_too_many_arguments_one = Error (1) "{0} attribute takes no more than 1 argument";
 sema_attribute_type_not_supported_global = Warning [IgnoredAttributes] (2) "{0} attribute argument '{1}' not supported on a global variable";
-sema_attribute_unsupported_by_kiln = Error (1) "'{0}' attribute is not supported by kiln yet";
 sema_attribute_unsupported_target = Error (2) "{0} attribute is not supported on targets missing {1}; specify an appropriate -march= or -mcpu=";
 sema_attribute_void_function = Warning [IgnoredAttributes] (1) "attribute {0} cannot be applied to functions without return value";
 sema_attribute_weak_static = Error (0) "weak declaration cannot have internal linkage";

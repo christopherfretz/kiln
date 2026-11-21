@@ -2,11 +2,14 @@
 //! attribute clang knows that kiln does not implement, with its class and
 //! the reason that class is safe.
 //!
-//! - Class A changes semantics, the ABI or layout. kiln rejects it with
-//!   the error `'X' attribute is not supported by kiln yet` rather than
-//!   compile the program differently from clang. The error is not
-//!   suppressed in system headers or by `-w`, and `__has_attribute`
-//!   reports 0 for it.
+//! - Class A is one clang itself rejects with an error for every unit
+//!   kiln compiles (a language extension kiln has no flag for, a target
+//!   kiln does not have). The row names clang's error, which kiln gives
+//!   in its place; like any error it is not suppressed in system headers
+//!   or by `-w`, and `__has_attribute` answers as clang does. An
+//!   attribute that changes semantics, the ABI or layout and that clang
+//!   accepts is implemented, never a row: kiln has no generic "not
+//!   supported" error to fall back on.
 //! - Class B only steers optimization, instrumentation, debug info or
 //!   hardening. Dropping it is a valid refinement, so kiln accepts it
 //!   silently.
@@ -22,12 +25,13 @@
 //! checks the rows against clang's `__has_attribute` tables.
 
 use kiln_ast::attr::{AttrKind, AttrSyntax};
+use kiln_diag::DiagId;
 
 /// The class of an unimplemented clang attribute (module docs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
-    /// Semantics, ABI or layout: an error until implemented.
-    A,
+    /// One clang rejects for every unit kiln compiles: clang's error.
+    A(DiagId),
     /// Optimization, instrumentation, debug or hardening: ignored.
     B,
     /// Diagnostics or analysis only: ignored.
@@ -41,8 +45,9 @@ pub enum Support {
     Implemented(AttrKind),
     /// clang knows it; it is class B or C and accepted silently.
     Ignored(Class),
-    /// clang knows it; it is class A and kiln rejects it.
-    Unsupported,
+    /// clang knows it; it is class A and kiln rejects it with clang's
+    /// error, this one.
+    Unsupported(DiagId),
     /// clang does not know it (the `unknown attribute` warning).
     Unknown,
 }
@@ -72,8 +77,7 @@ pub struct Row {
     pub spellings: [u8; 4],
     /// The class.
     pub class: Class,
-    /// Why the class is right (class A: the effect kiln would drop, and
-    /// the work package that implements it, if one is assigned).
+    /// Why the class is right (class A: why clang rejects it).
     pub why: &'static str,
 }
 
@@ -121,7 +125,6 @@ pub static TABLE: &[Row] = &[
     r("acquire_shared_capability", G | CL, C, TSA),
     r("acquired_after", G, C, TSA),
     r("acquired_before", G, C, TSA),
-    r("address_space", G | CL, A, "places the pointee in another address space"),
     r("allocating", G | CL, C, ANALYSIS),
     r("amdgpu_flat_work_group_size", G | CL, C, OFFLOAD),
     r("amdgpu_kernel", G | CL, C, OFFLOAD),
@@ -201,7 +204,12 @@ pub static TABLE: &[Row] = &[
     r("locks_excluded", G, C, TSA),
     r22("malloc_span", G | CL, B, HINT),
     r("managed", G, C, OFFLOAD),
-    r("matrix_type", G | CL, A, "defines a vector or matrix type"),
+    r(
+        "matrix_type",
+        G | CL,
+        A(DiagId::sema_matrix_types_disabled),
+        "matrix types need -fenable-matrix, which kiln does not have",
+    ),
     r("mig_server_routine", G | CL, C, ANALYSIS),
     r22("modular_format", G | CL, B, HINT),
     r22("no_cluster", G, C, OFFLOAD),
@@ -250,13 +258,6 @@ pub static TABLE: &[Row] = &[
     r("objc_runtime_name", G | CL, C, OBJC),
     r("objc_runtime_visible", G | CL, C, OBJC),
     r("objc_subclassing_restricted", G | CL, C, OBJC),
-    r("opencl_constant", G | CL, A, "places the pointee in another address space"),
-    r("opencl_generic", G | CL, A, "places the pointee in another address space"),
-    r("opencl_global", G | CL, A, "places the pointee in another address space"),
-    r("opencl_global_device", G | CL, A, "places the pointee in another address space"),
-    r("opencl_global_host", G | CL, A, "places the pointee in another address space"),
-    r("opencl_local", G | CL, A, "places the pointee in another address space"),
-    r("opencl_private", G | CL, A, "places the pointee in another address space"),
     r("opencl_unroll_hint", G, C, OFFLOAD),
     r("os_consumed", G | CL, C, OBJC),
     r("os_consumes_this", G | CL, C, OBJC),
@@ -285,7 +286,12 @@ pub static TABLE: &[Row] = &[
     r("requires_capability", G | CL, C, TSA),
     r("requires_shared_capability", G | CL, C, TSA),
     r("return_typestate", G | CL, C, ANALYSIS),
-    r("riscv_rvv_vector_bits", G, A, "defines a vector or matrix type"),
+    r(
+        "riscv_rvv_vector_bits",
+        G,
+        A(DiagId::sema_riscv_rvv_vector_bits_unsupported),
+        "RISC-V vector extension only; kiln has no RISC-V target",
+    ),
     r("scoped_lockable", G | CL, C, TSA),
     r("sentinel", G | GS, C, ANALYSIS),
     r("set_typestate", G | CL, C, ANALYSIS),
@@ -447,6 +453,20 @@ pub fn attribute_support(
         "cpu_specific" if sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
         // clang 22 `CodeModelAttr`: x86-64 (and LoongArch) only.
         "model" if x86 && compat >= 22 && sp & (G | GS) != 0 => Some(AttrKind::CODE_MODEL),
+        // The address-space type attributes (WP-1803, `addr_space.rs`):
+        // `__attribute__((x))` and `[[clang::x]]`.
+        "address_space"
+        | "opencl_constant"
+        | "opencl_generic"
+        | "opencl_global"
+        | "opencl_global_device"
+        | "opencl_global_host"
+        | "opencl_local"
+        | "opencl_private"
+            if sp & (G | CL) != 0 =>
+        {
+            Some(AttrKind::ADDRESS_SPACE)
+        }
         _ => None,
     };
     if let Some(k) = wp810 {
@@ -458,7 +478,7 @@ pub fn attribute_support(
     }
     match row(name) {
         Some(r) if sp != 0 && r.spellings_at(compat, x86) & sp != 0 => match r.class {
-            A => Support::Unsupported,
+            A(id) => Support::Unsupported(id),
             c => Support::Ignored(c),
         },
         _ => Support::Unknown,
@@ -509,9 +529,19 @@ mod tests {
         assert_eq!(s("Owner", g, None, 19), Support::Unknown);
         assert_eq!(s("no_sanitize_address", x, Some("gnu"), 19), ns);
         assert_eq!(s("no_sanitize_address", x, Some("clang"), 22), Support::Unknown);
-        // Class A: rejected.
-        assert_eq!(s("address_space", g, None, 22), Support::Unsupported);
-        assert_eq!(s("address_space", x, Some("clang"), 19), Support::Unsupported);
+        // Implemented by WP-1803 (formerly class A).
+        let asp = Support::Implemented(AttrKind::ADDRESS_SPACE);
+        assert_eq!(s("address_space", g, None, 22), asp);
+        assert_eq!(s("address_space", x, Some("clang"), 19), asp);
+        assert_eq!(s("opencl_global_host", x, Some("clang"), 22), asp);
+        assert_eq!(s("opencl_local", x, Some("gnu"), 22), Support::Unknown);
+        // Class A: clang's own error.
+        let m = Support::Unsupported(DiagId::sema_matrix_types_disabled);
+        assert_eq!(s("matrix_type", g, None, 22), m);
+        assert_eq!(s("matrix_type", x, Some("clang"), 19), m);
+        let rvv = Support::Unsupported(DiagId::sema_riscv_rvv_vector_bits_unsupported);
+        assert_eq!(s("riscv_rvv_vector_bits", g, None, 19), rvv);
+        assert_eq!(s("riscv_rvv_vector_bits", x, Some("gnu"), 22), Support::Unknown);
         // Implemented by WP-809, some spellings only from clang 22.
         assert!(matches!(s("selectany", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("musttail", x, Some("clang"), 19), Support::Implemented(_)));

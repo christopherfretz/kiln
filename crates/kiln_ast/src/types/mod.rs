@@ -39,8 +39,8 @@ pub use context::{
 };
 pub use func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue, ParamAbi, TypeList, sme};
 pub use kinds::{
-    AutoKeyword, BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeFlags,
-    TypeKind, UnaryTransformKind, VectorKind,
+    AddrSpace, AutoKeyword, BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind,
+    TypeFlags, TypeKind, UnaryTransformKind, VectorKind,
 };
 pub use layout::{FloatFormat, LayoutCache, RecordLayout, TargetTypes};
 pub use names::{DeclSet, TemplateName};

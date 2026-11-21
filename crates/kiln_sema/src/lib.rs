@@ -15,6 +15,7 @@
 )]
 
 mod absolute_value;
+mod addr_space;
 mod align_redecl;
 mod alloc_decl;
 mod annot;

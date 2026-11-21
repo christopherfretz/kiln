@@ -2920,6 +2920,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        // An object in an address space initializes no implicit object
+        // parameter (clang `err_member_function_call_bad_type`, from
+        // `PerformImplicitObjectArgumentInitialization`).
+        if self.ast.types.addr_space(obj_ty) != kiln_ast::types::AddrSpace::DEFAULT {
+            let cty = self.ast.decls.get(declaring).ty().unwrap_or(QualType::ERROR);
+            let param = self.ast.types.qualify(cty, mq & CV);
+            let msg = self
+                .diag(DiagId::sema_member_fn_object_address_space, at)
+                .arg(self.ty_arg(param))
+                .arg(self.ty_arg(obj_ty));
+            self.emit(msg);
+            return None;
+        }
         let dropped = (oq & CV) - mq;
         if !dropped.is_empty() {
             let msg = self

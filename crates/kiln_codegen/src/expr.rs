@@ -968,7 +968,7 @@ impl Cg<'_> {
                 return inner;
             }
         }
-        let z = if ft == LTy::PTR { V::C(self.m.const_null(LTy::PTR)) } else { self.icn(ft, 0) };
+        let z = if self.m.types.is_ptr(ft) { V::C(self.m.const_null(ft)) } else { self.icn(ft, 0) };
         self.icmp(IntPredicate::Ne, v, z)
     }
 
@@ -1150,16 +1150,26 @@ impl Cg<'_> {
             }
             CastKind::NullToPointer => {
                 self.visit_null_operand(s, sq)?;
-                V::C(self.m.const_null(LTy::PTR))
+                let t = self.lty(q);
+                V::C(self.m.const_null(t))
             }
             CastKind::NullToMemberPointer
             | CastKind::BaseToDerivedMemberPointer
             | CastKind::DerivedToBaseMemberPointer
             | CastKind::MemberPointerToBoolean => self.emit_member_ptr_cast(e, ck, q, sq, s)?,
+            // clang `CK_AddressSpaceConversion`: an `addrspacecast`, none
+            // between spaces the target maps to the same LLVM space (the
+            // OpenCL spaces on a CPU target).
+            CastKind::AddressSpaceConversion => {
+                let v = self.emit_scalar(s)?;
+                let t = self.lty(q);
+                self.cast(CastOp::AddrSpaceCast, v, t)
+            }
             CastKind::IntegralToPointer => {
                 let v = self.emit_scalar(s)?;
                 let w = self.int_cast(v, LTy::I64, self.is_signed(sq));
-                self.cast(CastOp::IntToPtr, w, LTy::PTR)
+                let t = self.lty(q);
+                self.cast(CastOp::IntToPtr, w, t)
             }
             CastKind::PointerToIntegral => {
                 let v = self.emit_scalar(s)?;
@@ -2857,7 +2867,10 @@ impl Cg<'_> {
     /// when the referee is incomplete (spec/codegen.md §3, "Reference
     /// loads").
     pub(crate) fn load_reference(&mut self, slot: V, align: u64, rq: QualType) -> V {
-        let p = self.load(LTy::PTR, slot, align, false);
+        // A reference to an object in an address space is a pointer of the
+        // space (no `!nonnull` there: null may be an address of it).
+        let lt = if self.ast.types.is_reference(rq) { self.lty(rq) } else { LTy::PTR };
+        let p = self.load(lt, slot, align, false);
         if self.opts.clang_compat < 22 {
             return p;
         }
@@ -2873,7 +2886,7 @@ impl Cg<'_> {
             return p;
         }
         let i = Fir::last_inst(p);
-        if !self.opts.null_pointer_is_valid {
+        if !self.opts.null_pointer_is_valid && lt == LTy::PTR {
             let k = self.m.md_kind("nonnull");
             let empty = self.m.md_tuple(&[]);
             self.f.fir.add_md(i, k, empty);
@@ -3404,6 +3417,16 @@ impl Cg<'_> {
                 if ast.exprs.cast_kind(e) == CastKind::LValueBitCast {
                     lv.tb = lv.tb.sub();
                 }
+                lv.q = q;
+                Ok(lv)
+            }
+            // clang `EmitCastLValue` `CK_AddressSpaceConversion`: the
+            // operand's address cast to the space of `q`.
+            CastKind::AddressSpaceConversion => {
+                let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                let pt = self.m.types.ptr(ast.types.addr_space(q).llvm());
+                lv.addr.v = self.cast(CastOp::AddrSpaceCast, lv.addr.v, pt);
+                lv.addr.ty = self.mty(q);
                 lv.q = q;
                 Ok(lv)
             }

@@ -142,6 +142,11 @@ impl Sema<'_, '_> {
             Some(i) => format!("{} argument", ordinal(i + 1)),
             None => "object argument".to_owned(),
         };
+        if matches!(b.kind, BadKind::NoConversion | BadKind::LosesQuals(_))
+            && let Some(s) = self.addr_space_mismatch(b.from, b.to)
+        {
+            return format!("{s} in {which}");
+        }
         match b.kind {
             BadKind::NoConversion if let Some(n) = expr.and_then(|e| self.overload_arg_name(e)) => {
                 // clang `note_ovl_candidate_bad_overload`: an overload set
@@ -170,6 +175,14 @@ impl Sema<'_, '_> {
                 let s = if plural { format!("{s} qualifiers") } else { format!("{s} qualifier") };
                 format!("{which} ({}) would lose {s}", self.ty_arg(b.from))
             }
+            BadKind::ObjectQuals
+                if self.ast.types.addr_space(b.from) != kiln_ast::types::AddrSpace::DEFAULT =>
+            {
+                // clang `note_ovl_candidate_bad_addrspace_this`.
+                let have = self.ast.types.addr_space(b.from).describe();
+                let want = self.ast.types.addr_space(b.to).describe();
+                format!("'this' object is in {have}, but method expects object in {want}")
+            }
             BadKind::ObjectQuals => {
                 let have = self.ast.types.effective_quals(b.from);
                 let want = self.ast.types.effective_quals(b.to);
@@ -190,6 +203,39 @@ impl Sema<'_, '_> {
                 format!("cannot convert initializer list argument to {}", self.ty_arg(to))
             }
         }
+    }
+
+    /// clang `note_ovl_candidate_bad_addrspace`: `from` is, cv and address
+    /// space aside, the type `to` refers or points to (the pointees of two
+    /// pointers), in a space `to`'s does not include.
+    fn addr_space_mismatch(
+        &self,
+        from: kiln_ast::QualType,
+        to: kiln_ast::QualType,
+    ) -> Option<String> {
+        let t = &self.ast.types;
+        let is_ref = t.is_reference(to);
+        let (f, p) = if is_ref {
+            (from, t.pointee(to)?)
+        } else if t.is_pointer(from) && t.is_pointer(to) {
+            (t.pointee(from)?, t.pointee(to)?)
+        } else {
+            return None;
+        };
+        let (fs, ps) = (t.addr_space(f), t.addr_space(p));
+        let bare = |q| t.without_addr_space(t.canonical(q)).without_quals();
+        if fs == ps || bare(f) != bare(p) {
+            return None;
+        }
+        if ps.is_superset_of(fs) && t.effective_quals(p).contains(t.effective_quals(f)) {
+            return None;
+        }
+        let (fd, pd) = (fs.describe(), ps.describe());
+        Some(if is_ref {
+            format!("cannot bind reference in {fd} to object in {pd}")
+        } else {
+            format!("cannot pass pointer to {fd} as a pointer to {pd}")
+        })
     }
 
     /// Whether `from` is, cv aside, the type `to` refers or points to.

@@ -27,6 +27,9 @@ pub enum IrType {
     Int(u32),
     /// `ptr`.
     Ptr,
+    /// `ptr addrspace(N)`, `N` nonzero (a pointer or reference to an
+    /// object in an address space, spec/types.md §5).
+    PtrAs(u32),
     /// `half`.
     Half,
     /// `bfloat`.
@@ -270,10 +273,13 @@ impl<'a> IrTypes<'a> {
                     IrType::bytes(bits / 8)
                 }
             }
-            TypeView::Pointer(_)
-            | TypeView::LValueRef(_)
-            | TypeView::RValueRef(_)
-            | TypeView::Function(_) => IrType::Ptr,
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
+                match ast.types.addr_space(p).llvm() {
+                    0 => IrType::Ptr,
+                    n => IrType::PtrAs(n),
+                }
+            }
+            TypeView::Function(_) => IrType::Ptr,
             TypeView::ConstantArray(a) => {
                 let n = ast.types.array_size(q).unwrap_or(0);
                 IrType::Array(Box::new(self.convert_mem(a.elem)), n)
@@ -399,7 +405,7 @@ impl<'a> IrTypes<'a> {
                 let align = int_align(*bits);
                 (store.next_multiple_of(align), align)
             }
-            IrType::Ptr => (8, 8),
+            IrType::Ptr | IrType::PtrAs(_) => (8, 8),
             IrType::Half | IrType::BFloat => (2, 2),
             IrType::Float => (4, 4),
             IrType::Double => (8, 8),

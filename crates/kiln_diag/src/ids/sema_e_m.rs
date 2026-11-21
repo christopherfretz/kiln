@@ -404,6 +404,7 @@ sema_member_def_no_match = Error (2) "out-of-line definition of '{0}' does not m
 sema_member_def_ret_type_mismatch = Error (1) "return type of out-of-line definition of '{0}' differs from that in the declaration";
 sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
+sema_member_fn_object_address_space = Error (2) "cannot initialize object parameter of type {0} with an expression of type {1}";
 sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";
 sema_member_name_of_class = Error (1) "member '{0}' has the same name as its class";
 sema_member_pointer_conv_via_virtual = Error (3) "conversion from pointer to member of class {0} to pointer to member of class {1} via virtual base {2} is not allowed";

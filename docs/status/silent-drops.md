@@ -12,15 +12,19 @@ rows when they land.
 
 What WP-805 changed for every attribute row below:
 
-- Class A attributes clang knows are a hard error, `'X' attribute is not
-  supported by kiln yet` (`sema_attribute_unsupported_by_kiln`). It is not
+- Class A attributes clang knows are a hard error. Since WP-1803 every
+  class-A row left (`matrix_type`, `riscv_rvv_vector_bits`) carries clang's
+  own error for it, and the generic `'X' attribute is not supported by kiln
+  yet` (`sema_attribute_unsupported_by_kiln`) is gone. The error is not
   suppressed in system headers or by `-w`. The table is
   crates/kiln_sema/src/attr_triage.rs.
 - Class B and C attributes clang knows are accepted silently, each row with
   its reason. Names clang does not know keep `-Wunknown-attributes`.
 - `__has_attribute`, `__has_cpp_attribute` and `__has_declspec_attribute`
-  answer 0 for class A attributes, and `__has_builtin` answers 0 for a
-  builtin kiln cannot lower or does not declare
+  answered 0 for class A attributes until WP-1803; now they give clang's
+  answers (clang rejects the class-A rows left with the same error), and
+  `__has_builtin` answers 0 for a builtin kiln cannot lower or does not
+  declare
   (crates/kiln_driver/src/pp_cmd.rs `StagedFeatures`). `-E` keeps clang's
   raw answers. `__has_c_attribute` is not defined in C++ mode, as in clang.
 - AArch64 `aarch64_vector_pcs` was accepted on a declaration only, as an

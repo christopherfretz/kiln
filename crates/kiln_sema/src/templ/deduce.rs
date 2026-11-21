@@ -1297,7 +1297,9 @@ impl Sema<'_, '_> {
             }
             let (pq, aq) = (p.quals_bits(), a.quals_bits());
             let same = if flags.contains(TdfFlags::IGNORE_QUALIFIERS) {
-                p.without_quals() == a.without_quals()
+                // clang `hasSameUnqualifiedType`: the space is a qualifier.
+                let (pu, au) = (t.without_addr_space(p), t.without_addr_space(a));
+                pu.without_quals() == au.without_quals()
             } else if flags.contains(TdfFlags::PARAM_WITH_REFERENCE_TYPE) {
                 p.without_quals() == a.without_quals() && aq & pq == pq
             } else {
@@ -1321,6 +1323,9 @@ impl Sema<'_, '_> {
                 }
             }
             return if same { Tdk::Success } else { mismatch(d) };
+        }
+        if let TypeView::ExtQual { base, word } = t.view(p.ty()) {
+            return self.deduce_spaced(p, base, word, a, flags, d, level);
         }
         let pv = t.view(p.ty());
         // `cv T` ([temp.deduct.type]/8: the forms `T` and `cv T`).
@@ -1378,6 +1383,40 @@ impl Sema<'_, '_> {
             return mismatch(d);
         }
         self.deduce_structural(p, a, flags, d, level + 1)
+    }
+
+    /// [`Self::deduce_ty`] for `P` = `cv ExtQual{base, word}`, in an
+    /// address space (`AS1 T`), a qualifier like cv (clang
+    /// `DeduceTemplateArgumentsByTypeMatch`): unless qualifiers are
+    /// ignored `A` must be in the same space (`Underqualified` for a
+    /// parameter `T`, clang `hasInconsistentOrSupersetQualifiersOf`); the
+    /// deduction continues without `A`'s space.
+    #[allow(clippy::too_many_arguments, reason = "deduce_ty's state plus the split P")]
+    fn deduce_spaced(
+        &mut self,
+        p: QualType,
+        base: QualType,
+        word: u32,
+        a: QualType,
+        flags: TdfFlags,
+        d: &mut DeducedArgs,
+        level: u32,
+    ) -> Tdk {
+        let t = &self.ast.types;
+        let pb = QualType::new(base.ty(), base.quals_bits() | p.quals_bits());
+        if !flags.contains(TdfFlags::IGNORE_QUALIFIERS) && t.addr_space(a).0 != word {
+            d.info.first = Some(TemplateArg::ty(p));
+            d.info.second = Some(TemplateArg::ty(a));
+            if let TypeView::CanonTemplateTypeParm { depth, index, .. } = t.view(pb.ty())
+                && depth == u32::from(d.depth)
+            {
+                d.info.param = u16::try_from(index).ok();
+                return Tdk::Underqualified;
+            }
+            return Tdk::NonDeducedMismatch;
+        }
+        let ab = t.without_addr_space(a);
+        self.deduce_ty(pb, ab, flags, d, level + 1)
     }
 
     /// The structural cases of [`Self::deduce_ty`] once `P` is neither

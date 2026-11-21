@@ -5,7 +5,7 @@ use super::args::{ArgTable, ArgView};
 use super::func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue, ParamAbi, TypeList};
 use super::intern::{InternTable, KeyedTable, fx_hash};
 use super::kinds::{
-    AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
+    AddrSpace, AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
     UnaryTransformKind, VectorKind,
 };
 use super::layout::TargetTypes;
@@ -549,15 +549,57 @@ impl TypeContext {
         }
     }
 
-    /// The kind of the canonical node of `q`.
+    /// The kind of the canonical node of `q`. An address space is a
+    /// qualifier: the kind is that of the type it qualifies (§2).
     #[inline]
     pub fn canonical_kind(&self, q: QualType) -> TypeKind {
-        self.kind(self.canonical(q).ty())
+        self.canonical_node(q).kind()
     }
 
-    /// The canonical node of `q`, decoded.
+    /// The canonical node of `q`, decoded; through an address space, as
+    /// [`Self::canonical_kind`].
     pub fn canonical_view(&self, q: QualType) -> TypeView {
-        self.view(self.canonical(q).ty())
+        self.view(self.canonical_unspaced(q).ty())
+    }
+
+    /// The canonical type of `q` without its address space (and with its
+    /// cv-qualifiers): the type whose node classifies `q`.
+    #[inline]
+    pub fn canonical_unspaced(&self, q: QualType) -> QualType {
+        let c = self.canonical(q);
+        let n = self.node(c.ty());
+        if n.kind() == TypeKind::ExtQual {
+            let base = Self::q_of(self.store.pair(n.data)[0]);
+            QualType::new(base.ty(), base.quals_bits() | c.quals_bits())
+        } else {
+            c
+        }
+    }
+
+    /// The address space of `q` (clang `getAddressSpace`): of its element
+    /// type for an array; [`AddrSpace::DEFAULT`] when it has none.
+    pub fn addr_space(&self, q: QualType) -> AddrSpace {
+        let mut c = self.canonical(q);
+        for _ in 0..4096 {
+            let n = self.node(c.ty());
+            match n.kind() {
+                TypeKind::ExtQual => return AddrSpace(self.store.pair(n.data)[1]),
+                TypeKind::ConstantArray => c = self.store.arrays[n.data as usize].elem,
+                TypeKind::IncompleteArray => c = Self::q_of(n.data),
+                TypeKind::VariableArray | TypeKind::DependentSizedArray => {
+                    c = Self::q_of(self.store.pair(n.data)[0]);
+                }
+                _ => break,
+            }
+            c = self.canonical(c);
+        }
+        AddrSpace::DEFAULT
+    }
+
+    /// The address space of the pointee of pointer or reference type `q`
+    /// ([`AddrSpace::DEFAULT`] for any other type).
+    pub fn pointee_addr_space(&self, q: QualType) -> AddrSpace {
+        self.pointee(q).map_or(AddrSpace::DEFAULT, |p| self.addr_space(p))
     }
 
     /// The id of the parameter ABI list `abis` for
@@ -984,10 +1026,16 @@ impl TypeContext {
         }
     }
 
-    /// The canonical node of `q` (no [`TypeView`] decoding).
+    /// The canonical node of `q` (no [`TypeView`] decoding); through an
+    /// address space, as [`Self::canonical_kind`].
     #[inline]
     pub fn canonical_node(&self, q: QualType) -> TypeNode {
-        self.node(self.canonical(q).ty())
+        let n = self.node(self.canonical(q).ty());
+        if n.kind() == TypeKind::ExtQual {
+            self.node(Self::q_of(self.store.pair(n.data)[0]).ty())
+        } else {
+            n
+        }
     }
 
     /// The node's `QualType` operand (as [`Self::view`] decodes it).
@@ -1142,7 +1190,7 @@ impl TypeContext {
 
     /// True for `void` (any cv).
     pub fn is_void(&self, q: QualType) -> bool {
-        self.canonical(q).ty() == TypeId::VOID
+        self.canonical_unspaced(q).ty() == TypeId::VOID
     }
 
     /// True for the integral builtins and `_BitInt` ([basic.fundamental]).

@@ -291,11 +291,12 @@ clang's help; spec/driver.md, "Options", is the complete list.
 (`crates/kiln_sema/src/attr_triage.rs`, audit in
 [status/silent-drops.md](status/silent-drops.md)):
 
-- Class A attributes would change semantics, the ABI or layout. kiln does
-  not implement a few of them, and those are a hard error,
-  `'X' attribute is not supported by kiln yet`. That error is not
-  silenced by `-w` or in system headers, and `__has_attribute` answers 0
-  for them, so portable code takes its fallback path.
+- Class A attributes would change semantics, the ABI or layout. kiln
+  implements them all except two that clang also rejects for every
+  target kiln supports: `matrix_type` (it needs `-fenable-matrix`) and
+  `riscv_rvv_vector_bits` (RISC-V only). Those give clang's own error,
+  which is not silenced by `-w` or in system headers, and
+  `__has_attribute` answers as clang does.
 - Class B attributes steer only optimization, instrumentation or debug
   information. Class C attributes feed only diagnostics or analyses kiln
   does not run. Both are accepted. Most of class B is implemented

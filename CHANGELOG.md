@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- clang address spaces (WP-1803): `address_space(N)` and the `opencl_*`
+  attributes (`__attribute__` and `[[clang::]]`) are a type qualifier, as
+  in clang: part of the type for overloading, templates and deduction,
+  converted implicitly only into a space that holds the source (a
+  C-style cast converts any), mangled `U3AS<N>` / `U8CLglobal`, lowered
+  to `ptr addrspace(N)`, `addrspace(N)` globals and `addrspacecast`, and
+  transparent to constant evaluation. They were "not supported by kiln
+  yet". A value-dependent `address_space(N)` in a template is not
+  supported yet (WP-1811).
 - `#include <arm_sme.h>` compiles (WP-1794): `__builtin_arm_get_sme_state`
   is declared and lowered as clang does, a call of the SME ABI routine
   `__arm_sme_state`, so `__arm_has_sme()` and `__arm_in_streaming_mode()`

@@ -258,12 +258,19 @@ fn similarly_qualified_pointer(
     // An array type is as cv-qualified as its elements
     // ([basic.type.qualifier]/3): `const int (*)[2]` converts to
     // `const void *`, not `void *` ([conv.ptr]/2).
+    // The address space of the pointee is kept as well (clang
+    // `BuildSimilarlyQualifiedPointerType`): `AS1 int *` converts to `AS1
+    // void *`, which the qualification step then checks against the
+    // target's space.
     let fq = s.ast.types.effective_quals(from_pointee);
+    let fs = s.ast.types.addr_space(from_pointee);
     let ct = s.ast.types.canonical(to_pointee);
-    if fq == ct.quals() {
+    if fq == ct.quals() && fs == s.ast.types.addr_space(ct) {
         return strip_cv(s, to);
     }
-    let p = s.ast.types.qualify(ct.without_quals(), fq);
+    let base = s.ast.types.without_addr_space(ct).without_quals();
+    let p = s.ast.types.qualify(base, fq);
+    let p = s.ast.types.with_addr_space(p, fs);
     s.ast.types.pointer_to(p)
 }
 

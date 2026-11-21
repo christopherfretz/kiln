@@ -3544,6 +3544,34 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.subs.push(key);
     }
 
+    /// The canonical type `q` = `cv ExtQual{base, word}`, in an address
+    /// space: the vendor qualifier `U <name>` before the cv-qualifiers,
+    /// the qualified type one candidate (clang `mangleQualifiers`;
+    /// `PU3AS1Ki`, `PU8CLglobali`). `vm`: `q` is variably modified.
+    fn ext_qual(&mut self, q: QualType, base: QualType, word: u32, vm: bool) {
+        let key = Sub::Type(q);
+        if !vm && self.try_sub(key) {
+            return;
+        }
+        let quals = self.ast.types.effective_quals(q);
+        let name = kiln_ast::types::AddrSpace(word).mangled();
+        if !name.is_empty() {
+            self.out.push('U');
+            self.source_name(&name);
+        }
+        if quals.is_restrict() {
+            self.out.push('r');
+        }
+        if quals.is_volatile() {
+            self.out.push('V');
+        }
+        if quals.is_const() {
+            self.out.push('K');
+        }
+        self.ty(base.without_quals());
+        self.subs.push(key);
+    }
+
     fn ty(&mut self, q: QualType) {
         let ast = self.ast;
         // In a constraint of a member of class template `X` (mangled
@@ -3579,6 +3607,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // `VariableArrayType`, so each one written is a type of its own
         // (`PA_iPA_i` for two `int (*)[n]` parameters).
         let vm = ast.types.flags(q.ty()).intersects(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED);
+        if let TypeView::ExtQual { base, word } = ast.types.view(q.ty()) {
+            self.ext_qual(q, base, word, vm);
+            return;
+        }
         if !quals.is_empty() && !is_array {
             let key = Sub::Type(q);
             if !vm && self.try_sub(key) {
@@ -3828,8 +3860,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             // Never reached by a mangled name (audit, WP-1355): the sugar
             // views and a deduced placeholder canonicalize away; `Invalid`
-            // stops code generation; `ExtQual` is never formed
-            // (`address_space` is rejected); an `UnresolvedUsing` type is
+            // stops code generation; `ExtQual` is mangled before the
+            // match (its vendor qualifier); an `UnresolvedUsing` type is
             // only named in a class template's pattern, whose members are
             // mangled once instantiated. A dependent splice type
             // (`typename [:r:]`) is reflection mangling, still open

@@ -469,7 +469,8 @@ impl Cg<'_> {
             | CastKind::IntegralComplexToReal
             | CastKind::FloatingComplexToReal
             | CastKind::IntegralComplexToBoolean
-            | CastKind::FloatingComplexToBoolean) => {
+            | CastKind::FloatingComplexToBoolean
+            | CastKind::AddressSpaceConversion) => {
                 // Never a complex result (WP-1739): these casts yield a
                 // scalar, pointer, class, union, vector or `void`, so the
                 // scalar, aggregate or ignored emitters lower them;

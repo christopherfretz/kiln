@@ -518,12 +518,17 @@ impl AttrKind {
     /// `swift_error_result`, `swift_indirect_result`; WP-1745): `a` is
     /// the [`crate::types::ParamAbi`], which the function type records.
     pub const SWIFT_PARAM_ABI: AttrKind = AttrKind(288);
+    /// clang `address_space(N)` and the `opencl_*` address-space type
+    /// attributes (`AddressSpaceAttr`; WP-1803), consumed into the
+    /// declared type as an `ExtQual` qualifier: `a` is the
+    /// [`crate::types::AddrSpace`] word. Never attached to a declaration.
+    pub const ADDRESS_SPACE: AttrKind = AttrKind(300);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
     /// [`AttrKind::EXT_VECTOR_TYPE`], [`AttrKind::NEON_VECTOR_TYPE`],
-    /// [`AttrKind::NEON_POLYVECTOR_TYPE`]), or GNU [`AttrKind::MODE`],
-    /// which is consumed the same way.
+    /// [`AttrKind::NEON_POLYVECTOR_TYPE`]), or GNU [`AttrKind::MODE`] and
+    /// [`AttrKind::ADDRESS_SPACE`], which are consumed the same way.
     pub fn is_vector_type(self) -> bool {
         matches!(
             self,
@@ -533,6 +538,7 @@ impl AttrKind {
                 | AttrKind::NEON_POLYVECTOR_TYPE
                 | AttrKind::ARM_SVE_VECTOR_BITS
                 | AttrKind::MODE
+                | AttrKind::ADDRESS_SPACE
         )
     }
 
