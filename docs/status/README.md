@@ -1,4 +1,4 @@
-# Status pages (index, 2026-11-09)
+# Status pages (index, 2026-11-21)
 
 Measured status of kiln, one page per measurement. Each page says how it
 was produced and how to re-run it. The milestones and their exit criteria
@@ -13,11 +13,15 @@ standard, C++98 to C++26, are in
 
 Each number is from the page named, at the run that page records.
 
-- libc++ 22.1.8 suite at `-std=c++26`: 99.4% of 9247 tests
-  ([libcxx-1.0.md](libcxx-1.0.md)). libc++ 19.1.7: 98.3% of `std/`
+- libc++ 22.1.8 suite at `-std=c++26`: 99.4% of 9247 tests at the 1.3.0
+  release gate, 2026-11-19/20 ([release-1.3.0.md](release-1.3.0.md);
+  1.0: [libcxx-1.0.md](libcxx-1.0.md)). libc++ 19.1.7: 98.3% of `std/`
   ([libcxx.md](libcxx.md)).
-- Compile time and memory against clang 19 on the `bench/` corpus:
-  geometric mean 0.21x time, 0.17x peak RSS ([perf.md](perf.md)).
+- Compile time and memory on the `bench/` corpus (2026-11-21, a PGO
+  build of `45d9b1cf2`): against clang 22.1.8, geometric mean 0.15x
+  time, 0.23x peak RSS over 48 entries ([perf.md](perf.md)); against
+  GCC 16.1, 0.21x time, 0.21x peak RSS over 44 entries
+  ([perf-gcc.md](perf-gcc.md)).
 - Open-source projects built with their own build systems and test
   suites: 47, of which 46 at parity with clang 19 or better
   ([../COMPATIBILITY.md](../COMPATIBILITY.md#libraries-and-applications);
@@ -91,8 +95,10 @@ Known gaps:
 
 Performance:
 
-- `perf.md`: `cargo xtask bench` against clang 19 (generated; do not edit
-  by hand), and the 1.0 release measurements.
+- `perf.md`: `cargo xtask bench` against clang 22 (generated; do not edit
+  by hand; clang 19 until 2026-11-21), the 1.0 release measurements and
+  the PGO build.
+- `perf-gcc.md`: the same corpus against GCC 16.1 (generated, WP-1886).
 - `perf-history.md`: the per-work-package measurements made by hand
   before 1.0 (WP-313 to WP-1171), moved verbatim from `perf.md`.
 - `perf-reflection.md`: a large reflection-heavy codebase under

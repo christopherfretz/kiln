@@ -339,6 +339,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- The bench and status numbers are re-measured (WP-1886): `docs/status/perf.md`
+  is now against clang 22.1.8 (it was clang 19), and the new
+  `docs/status/perf-gcc.md` holds the same corpus against GCC 16.1
+  (`cargo xtask bench --compare-with g++-16 --record` writes it). Bench
+  records and pages write a measured compiler's path relative to the
+  checkout (`target/release/kiln++`) or as its name, never a local
+  absolute path, and `cargo xtask ci --step lints` rejects a local
+  absolute path in any tracked file. `scripts/env.sh` takes
+  `KILN_TARGET_ROOT` to move the per-checkout target directories.
 - The release archives are kiln's profile-guided build (WP-1862):
   `release.yml` runs `cargo xtask dist --pgo --check` on aarch64 and
   x86_64, and the release gate builds and tests that same binary (its

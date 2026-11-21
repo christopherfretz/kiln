@@ -22,9 +22,11 @@ done
 # produce the same artifact names and overwrite each other's rlibs and
 # uplifted binaries mid-build ("can't find crate", a kiln binary from
 # another branch). Delete a worktree's dir when the worktree is removed.
-# Override with CARGO_TARGET_DIR.
-_TGT="${KILN_BUILD_ROOT:-$_MAIN/.build}/target-$(basename "$_WS")"
-case "$_MAIN" in /Volumes/AgentWork/kiln-helper/kiln) _TGT="/Volumes/AgentWork/kiln-helper/.build/target-$(basename "$_WS")";; esac
+# KILN_TARGET_ROOT=<dir> (opt-in) moves the per-checkout dirs elsewhere,
+# e.g. next to a wrapper repo: the target dir is then
+# `<dir>/target-<checkout basename>`. KILN_BUILD_ROOT is its older name.
+# Unset, the default above applies. CARGO_TARGET_DIR overrides both.
+_TGT="${KILN_TARGET_ROOT:-${KILN_BUILD_ROOT:-$_MAIN/.build}}/target-$(basename "$_WS")"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$_TGT}"
 # The GCC 16.1 oracle (`oracle: gcc`, spec/harness.md "GCC oracle"): a
 # workspace-local build under .toolchain/gcc-16.1 when there is one; otherwise

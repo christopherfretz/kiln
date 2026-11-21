@@ -2196,12 +2196,12 @@ mod tests {
     fn mount_lookup() {
         let info = "\
 531 152 0:68 / / rw,relatime - overlay overlay rw
-564 531 0:47 /AgentWork/k /Volumes/AgentWork/k rw,relatime - fakeowner /run/host_mark/Volumes rw
+564 531 0:47 /work/k /mnt/work/k rw,relatime - fakeowner /run/host_mark/mnt rw
 565 531 0:48 / /a\\040b rw - tmpfs tmpfs rw
 ";
         let fs = |p: &str| mount_fs_type_in(info, Path::new(p));
-        assert_eq!(fs("/Volumes/AgentWork/k/.build/x").as_deref(), Some("fakeowner"));
-        assert_eq!(fs("/Volumes/AgentWork/kx").as_deref(), Some("overlay"));
+        assert_eq!(fs("/mnt/work/k/.build/x").as_deref(), Some("fakeowner"));
+        assert_eq!(fs("/mnt/work/kx").as_deref(), Some("overlay"));
         assert_eq!(fs("/a b/c").as_deref(), Some("tmpfs"));
         assert_eq!(fs("/tmp").as_deref(), Some("overlay"));
     }

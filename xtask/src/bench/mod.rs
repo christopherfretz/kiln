@@ -503,11 +503,17 @@ type SliceCompiles =
 struct Subject {
     path: PathBuf,
     id: CompilerId,
+    /// The path as records and pages show it ([`recorded_compiler`]).
+    shown: String,
 }
 
 impl Subject {
     fn new(path: &Path) -> Result<Self, String> {
-        Ok(Self { path: path.to_path_buf(), id: identify(path)? })
+        let root = repo_root();
+        let target =
+            std::env::var_os("CARGO_TARGET_DIR").filter(|d| !d.is_empty()).map(|d| root.join(d));
+        let shown = recorded_compiler(path, &root, target.as_deref());
+        Ok(Self { path: path.to_path_buf(), id: identify(path)?, shown })
     }
 
     fn kind(&self) -> &'static str {
@@ -516,7 +522,7 @@ impl Subject {
 
     fn run_record(&self) -> CompilerRun {
         CompilerRun {
-            compiler: self.path.display().to_string(),
+            compiler: self.shown.clone(),
             kind: self.kind().to_owned(),
             version: self.id.version.clone(),
             entries: BTreeMap::new(),
@@ -981,8 +987,22 @@ fn judge_all(
     Ok((report, files))
 }
 
+/// The page a recording against an oracle of `kind` merges into: GCC's
+/// ratios have a page of their own, `perf-gcc.md` next to `perf.md`
+/// (spec/bench.md "Recording"), so a GCC recording never replaces the
+/// clang table.
+pub fn perf_page(perf_md: &Path, kind: CompilerKind) -> PathBuf {
+    match kind {
+        CompilerKind::Gcc => perf_md.with_file_name(PERF_GCC_MD),
+        _ => perf_md.to_path_buf(),
+    }
+}
+
+/// [`perf_page`]'s page for GCC.
+pub const PERF_GCC_MD: &str = "perf-gcc.md";
+
 /// Prints the ratio table (and the libc++ slice's) and, with `--record`,
-/// merges them into `perf.md`.
+/// merges them into `perf.md` (`perf-gcc.md` for a GCC oracle).
 #[allow(clippy::too_many_arguments)]
 fn oracle_report(
     opts: &Options,
@@ -1015,15 +1035,14 @@ fn oracle_report(
     if !opts.record {
         return Ok(());
     }
-    let page = &cx.layout.perf_md;
+    let page = &perf_page(&cx.layout.perf_md, o.id.kind);
     let shown = shown_path(&cx.layout.root, page);
     let old_text = std::fs::read_to_string(page).unwrap_or_else(|e| {
         println!("warning: cannot read {shown} ({e}); writing it from this run only");
         String::new()
     });
     let old = perf_md::split(&old_text);
-    let tpath = test.path.display().to_string();
-    let opath = o.path.display().to_string();
+    let (tpath, opath) = (&test.shown, &o.shown);
     let when = record::human_time(now);
     let host = format!("{}, {} CPUs", cx.host.arch, cx.host.cpus);
     // The main table: the page's other rows are kept (spec/bench.md
@@ -1059,8 +1078,8 @@ fn oracle_report(
             &perf_md::PerfContext {
                 when: &when,
                 stamp,
-                test: (&tpath, test.kind(), &test.id.version),
-                oracle: (&opath, o.kind(), &o.id.version),
+                test: (tpath, test.kind(), &test.id.version),
+                oracle: (opath, o.kind(), &o.id.version),
                 host: host.clone(),
                 runs: cx.runs,
                 rss: cx.probe.source_id(),
@@ -1083,8 +1102,8 @@ fn oracle_report(
             &slice::SectionContext {
                 when: &when,
                 stamp,
-                test: (&tpath, test.kind(), &test.id.version),
-                oracle: (&opath, o.kind(), &o.id.version),
+                test: (tpath, test.kind(), &test.id.version),
+                oracle: (opath, o.kind(), &o.id.version),
                 host,
                 runs: cx.runs,
                 rss: cx.probe.source_id(),
@@ -1418,7 +1437,7 @@ fn sample(
         accounted: None,
         samples_wall_ms: walls.iter().map(|&x| round_to(x, 3)).collect(),
         samples_rss_kb: rss,
-        compiler: s.path.display().to_string(),
+        compiler: s.shown.clone(),
         compiler_version: s.id.version.clone(),
         host: cx.host.clone(),
     })
@@ -1635,6 +1654,27 @@ fn write_file(path: &Path, text: &str) -> Result<(), String> {
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// How the path of a measured compiler is written into baselines, results
+/// files and the status pages (spec/bench.md "Recording"): never an
+/// absolute path of the machine that recorded it. A path under the cargo
+/// target directory `target` is written as `target/<rest>` (what a
+/// checkout with the default target directory records), a path under the
+/// workspace `root` relative to it, a relative path or a bare name (found
+/// on `PATH`) as given, and any other absolute path as its file name (the
+/// version string next to it says which compiler it is).
+pub fn recorded_compiler(p: &Path, root: &Path, target: Option<&Path>) -> String {
+    if !p.is_absolute() {
+        return p.display().to_string();
+    }
+    if let Some(rest) = target.and_then(|t| p.strip_prefix(t).ok()) {
+        return Path::new("target").join(rest).display().to_string();
+    }
+    if let Ok(rest) = p.strip_prefix(root) {
+        return rest.display().to_string();
+    }
+    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 fn shown_path(root: &Path, p: &Path) -> String {

@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn wrapping_and_phony() {
-        let long = format!("/tmp/claude-0/wp14/long/{}.h", "x".repeat(55));
+        let long = format!("/tmp/kiln-dep/wp14/long/{}.h", "x".repeat(55));
         let files: Vec<String> = vec!["t.cpp".into(), long.clone(), "b.h".into()];
         let s = render(&["t.o".into()], &files, true);
         assert_eq!(s, format!("t.o: t.cpp \\\n  {long} \\\n  b.h\n{long}:\nb.h:\n"));

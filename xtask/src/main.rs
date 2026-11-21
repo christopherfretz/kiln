@@ -22,6 +22,7 @@ mod kiln_hod;
 mod landed;
 mod libcxx;
 mod libstdcxx;
+mod local_paths;
 mod oracle;
 mod pgo;
 mod release_gate;
@@ -560,9 +561,10 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
 }
 
 /// Step 0 of `ci`, in-process: the diagnostic tables are split per area
-/// (spec/diag.md §2.4) and the per-WP Landed spec files are well formed
-/// (spec/README.md "Landed sections"). Both report every problem before
-/// failing.
+/// (spec/diag.md §2.4), the per-WP Landed spec files are well formed
+/// (spec/README.md "Landed sections"), no tracked file holds a local
+/// absolute path (WP-1886) and the static-gap inventory is current. Each
+/// reports every problem before failing.
 fn ci_lints(root: &std::path::Path) -> bool {
     let mut ok = true;
     if let Err(problems) = diag_split::check(root) {
@@ -577,6 +579,16 @@ fn ci_lints(root: &std::path::Path) -> bool {
             eprintln!("xtask ci: spec/landed: {p}");
         }
         eprintln!("xtask ci: FAILED: fix the files above (spec/README.md \"Landed sections\")");
+        ok = false;
+    }
+    if let Err(problems) = local_paths::check(root) {
+        for p in &problems {
+            eprintln!("xtask ci: local-paths: {p}");
+        }
+        eprintln!(
+            "xtask ci: FAILED: no tracked file may hold a local absolute path; write it \
+             relative to the checkout or as a placeholder (spec/harness.md \"CI\", step 0)"
+        );
         ok = false;
     }
     if let Err(problems) = static_gaps::check(root) {
