@@ -445,6 +445,12 @@ that had none got one by the same rule: `release.yml` `dist` 15 (median
 `libcxx summary` and `gxx-dg summary` 10 (under 0.5), `oss summary` 10 (no
 successful run yet; a summary like the other two). The sweep's long jobs
 already had theirs (`build` 90, `libcxx` 240, `oss` 355, `gxx-dg` 150).
+WP-1862 made `release.yml` `dist` a PGO build (`dist --pgo --check`:
+an instrumented build, the training, the final build), about three
+times the plain build, so its timeout became 45 (three times 15). The
+sweep's new opt-in `pgo` job (two release builds, the instrumented one
+and the bench of the held-out set) got 120, the `build` job's 90 sized
+for a `dist --pgo` and some margin.
 `ci_tests::every_workflow_job_has_a_timeout` keeps every job of every
 workflow timed.
 
@@ -577,8 +583,12 @@ the same `gcc:16.1.0-trixie` container as the gate. It is never a merge
 gate: it has no `pull_request` or `merge_group` trigger and is not a
 required check (`ci_tests::sweep_never_gates` checks the triggers). Its
 jobs:
-- `build`: `cargo xtask dist` once; every other job installs that kiln++
-  into `/opt/kiln`, so what runs is the release archive's binary.
+- `build`: `cargo xtask dist` once, `dist --pgo` for a `sweep/rc-*`
+  push (the shipped kind, WP-1862); every other job installs that kiln++
+  into `/opt/kiln`, so what runs is the release archive's binary. The
+  dist's `build-info.txt` (plain or PGO, and the profile) and a `commit`
+  file are artifact `kiln-build`, which the release gate's `import-x86`
+  checks.
 - `libcxx K/6`: the libc++ 22.1.8 suite (`std` + `libcxx`, 9247 tests) as
   the aarch64 M5 run takes it (docs/status/libcxx.md "M5"), with libc++ 22
   extracted into `.toolchain/libcxx-22-root` and the lit locales
@@ -620,6 +630,16 @@ jobs:
   rather than shrinking the suite) and `summary` writes the headline,
   classes and buckets; artifact `gxx-dg-summary`. Compare it with an
   aarch64 run at the same commit by `scripts/gxx-dg-compare.py compare`.
+- `pgo <arch>` (opt-in, WP-1862): the PGO measurement on both runner
+  architectures (spec/harness.md "PGO build", measuring it): a plain
+  `cargo xtask build` copied aside, `cargo xtask build --pgo`, then
+  `cargo xtask bench --compiler <PGO> --compare-with <plain>` over the
+  held-out set; artifact `pgo-<arch>` (results JSON, bench output, build
+  log and times). A failed entry fails it, except one over its
+  `budget-time:` (a development-host budget that both binaries can
+  break on a slower runner). It runs for a dispatch with the `pgo` input or a push
+  of a `sweep/pgo-<name>` branch, which runs it and nothing else (the
+  `build`, libc++ and OSS conditions exclude `sweep/pgo-` refs).
 
 The g++.dg jobs run only when asked: a dispatch with the `gxx` input
 (default false), or a push of a `sweep/gxx-<name>` branch, which runs

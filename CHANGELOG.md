@@ -319,6 +319,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   docs/status/static-gaps.md, for gaps with no message of their own in
   the code (WP-1782).
 
+### Changed
+
+- The release archives are kiln's profile-guided build (WP-1862):
+  `release.yml` runs `cargo xtask dist --pgo --check` on aarch64 and
+  x86_64, and the release gate builds and tests that same binary (its
+  record names the profile; `--no-pgo` is the escape hatch for a
+  re-run). On the held-out bench set the PGO binary takes 0.82x the time
+  of the plain one on both aarch64 and x86_64, with 0.96x to 0.97x the
+  memory ([docs/status/perf.md](docs/status/perf.md) "PGO build"). `cargo xtask dist` writes `build-info.txt` beside the
+  archives (plain or PGO, the profile's sha256), and the sweep workflow
+  has an opt-in `pgo` measurement job. The count of functions without
+  profile data no longer puts build scripts and proc macros in kiln's
+  share when cargo prints in color (as on CI runners), nor the proc
+  macro `kiln_snap_derive` at all. `cargo build --release` and
+  `cargo xtask dist` without `--pgo` still build plain; the packager's
+  path is unchanged (`cargo xtask pgo-profile`, README.md "For
+  packagers").
+
 ### Fixed
 
 - A `static_assert` or constant initializer in a lambda body reading an

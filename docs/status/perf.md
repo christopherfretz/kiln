@@ -380,51 +380,150 @@ clang 22 and GCC runs, from their own kiln measurements):
 
 The profile-guided build of kiln (WP-1308; spec/harness.md "PGO build")
 against the plain release build of the same commit, on the held-out set
-that the training never sees. Measured by hand. Neither run used
-`--record`, so the tables above and `bench/baselines/` are unchanged.
+that the training never sees. Since WP-1862 the published release
+archives are PGO builds (`release.yml` runs `cargo xtask dist --pgo
+--check` on both architectures) and the release gate tests that binary.
+Neither measurement used `--record`, so the tables above and
+`bench/baselines/` are unchanged; the baselines stay plain release
+builds, which is what `cargo xtask bench` builds and what CI compares.
 
-- Binaries: `cargo build --release -p kiln_driver` (plain, 121 MB) and
-  `cargo xtask build --pgo` (128 MB), both from `167618a0d` plus this
-  WP's xtask changes, rustc 1.95.0 (LLVM 22.1.2), profile merged with
-  `/usr/lib/llvm-22/bin/llvm-profdata` 22.1.8 from the 44 training cases.
-- Command: `cargo xtask bench --compiler <pgo kiln++> --compare-with
-  <plain kiln++> $(cargo xtask pgo-train --list | awk '$1=="held-out"{print $2}')`,
-  19 entries, 5 runs each, both compilers per entry in turn. The ratios
-  are PGO/plain of the bench's medians. Results file
-  `bench/results/2026-11-11T155238.json`.
-- Host: aarch64, 24 CPUs, shared with three other implementers, load
-  average 12.3 to 13.4 during the run. x86_64 was not measured.
+**Method** (both architectures): a plain `cargo xtask build` (exactly
+`cargo build --release -p kiln_driver`) copied aside, then `cargo xtask
+build --pgo` of the same commit, rustc 1.95.0 (LLVM 22.1.2), the profile
+merged by LLVM 22's `llvm-profdata` from the 44 training cases. Then
+`cargo xtask bench --runs 5 --compiler <PGO kiln++> --compare-with
+<plain kiln++> $(cargo xtask pgo-train --list | awk '$1=="held-out"{print
+$2}')`: 19 entries, 5 runs each, both compilers per entry in turn. The
+ratios are PGO/plain of the bench's medians.
+
+### aarch64
+
+- Commit `26ebc59bf` (WP-1862; the 11-11 table of WP-1308 was at
+  `167618a0d`). Plain binary 164 MB, PGO 169 MB. Results file
+  `bench/results/2026-11-21T161032.json`.
+- Host: the development container, aarch64, 24 CPUs, shared with other
+  implementers, load average 8.1 at the start and 7.3 at the end.
+- The final build counted 0 of kiln's functions without profile data;
+  the 1187 that warned are the build scripts (541) and the proc macro
+  `kiln_snap_derive` (646), which run in the build, never in kiln.
 - Correctness: `cargo xtask test --compiler <kiln++>` on the whole
-  corpus gave the same counts for both binaries: 6612 passed, 0 failed,
-  28 xfail, 116 skipped of 6756.
+  corpus gave the same counts for both binaries: 8486 passed, 0 failed,
+  30 xfail, 143 skipped of 8659 (164 s plain, 154 s PGO).
 
 | Entry | Mode | plain ms | PGO ms | time | plain MB | PGO MB | memory |
 |---|---|--:|--:|--:|--:|--:|--:|
-| `frontend/format-like-g` | emit-llvm | 1050.7 | 935.1 | 0.89x | 90.2 | 90.4 | 1.00x |
-| `frontend/registration-wide-obj` | obj | 8506.7 | 7964.8 | 0.94x | 240.2 | 240.3 | 1.00x |
-| `frontend/templates` | syntax | 343.1 | 275.3 | 0.80x | 47.7 | 49.2 | 1.03x |
-| `frontend/templates-wide-g` | emit-llvm | 585.2 | 494.2 | 0.84x | 124.4 | 123.3 | 0.99x |
-| `frontend/templates_deep` | syntax | 84.3 | 89.4 | 1.06x | 42.9 | 43.3 | 1.01x |
-| `frontend/templates_wide` | syntax | 378.1 | 259.2 | 0.69x | 75.6 | 74.4 | 0.98x |
-| `oven/sort` | syntax | 217.9 | 203.1 | 0.93x | 26.6 | 27.2 | 1.02x |
-| `oven/sort-nohdr` | syntax | 40.0 | 39.6 | 0.99x | 12.3 | 11.6 | 0.95x |
-| `oven/string` | syntax | 230.0 | 221.8 | 0.96x | 26.9 | 27.5 | 1.02x |
-| `oven/table` | syntax | 144.1 | 122.4 | 0.85x | 21.1 | 21.7 | 1.03x |
-| `oven/table-nohdr` | syntax | 71.9 | 74.3 | 1.03x | 12.4 | 11.6 | 0.94x |
-| `overload/arrow-chain` | syntax | 539.3 | 453.0 | 0.84x | 81.2 | 81.0 | 1.00x |
-| `overload/calls` | syntax | 702.4 | 615.1 | 0.88x | 17.4 | 16.5 | 0.95x |
-| `overload/ctors` | syntax | 573.5 | 446.7 | 0.78x | 15.9 | 15.2 | 0.96x |
-| `overload/less-10k` | syntax | 1805.9 | 1555.8 | 0.86x | 21.3 | 21.2 | 1.00x |
-| `reflect/s10` | emit-llvm | 66.8 | 56.9 | 0.85x | 17.5 | 16.0 | 0.92x |
-| `reflect/s6` | syntax | 402.2 | 366.1 | 0.91x | 31.5 | 32.3 | 1.03x |
-| `reflect/s7` | syntax | 656.4 | 555.2 | 0.85x | 42.0 | 43.4 | 1.03x |
-| `reflect/s8` | syntax | 1058.3 | 779.3 | 0.74x | 68.7 | 68.7 | 1.00x |
+| `frontend/format-like-g` | emit-llvm | 941.0 | 801.2 | 0.85x | 90.6 | 90.6 | 1.00x |
+| `frontend/registration-wide-obj` | obj | 6888.9 | 6641.4 | 0.96x | 240.3 | 240.3 | 1.00x |
+| `frontend/templates` | syntax | 278.3 | 217.2 | 0.78x | 52.3 | 52.2 | 1.00x |
+| `frontend/templates-wide-g` | emit-llvm | 485.1 | 375.8 | 0.77x | 127.7 | 125.3 | 0.98x |
+| `frontend/templates_deep` | syntax | 68.8 | 69.7 | 1.01x | 45.8 | 46.5 | 1.02x |
+| `frontend/templates_wide` | syntax | 310.5 | 206.6 | 0.67x | 76.9 | 74.9 | 0.97x |
+| `oven/sort` | syntax | 183.7 | 148.7 | 0.81x | 29.9 | 29.7 | 0.99x |
+| `oven/sort-nohdr` | syntax | 32.3 | 31.9 | 0.99x | 14.7 | 12.7 | 0.86x |
+| `oven/string` | syntax | 184.8 | 164.0 | 0.89x | 30.0 | 30.2 | 1.01x |
+| `oven/table` | syntax | 108.7 | 93.0 | 0.86x | 24.2 | 23.7 | 0.98x |
+| `oven/table-nohdr` | syntax | 54.5 | 49.1 | 0.90x | 14.9 | 13.3 | 0.89x |
+| `overload/arrow-chain` | syntax | 590.7 | 409.5 | 0.69x | 83.6 | 81.8 | 0.98x |
+| `overload/calls` | syntax | 721.2 | 562.8 | 0.78x | 19.6 | 17.8 | 0.91x |
+| `overload/ctors` | syntax | 561.6 | 404.3 | 0.72x | 18.2 | 16.9 | 0.93x |
+| `overload/less-10k` | syntax | 1825.8 | 1362.2 | 0.75x | 23.6 | 22.3 | 0.94x |
+| `reflect/s10` | emit-llvm | 49.6 | 38.9 | 0.78x | 20.4 | 18.0 | 0.88x |
+| `reflect/s6` | syntax | 269.3 | 215.5 | 0.80x | 36.2 | 35.9 | 0.99x |
+| `reflect/s7` | syntax | 447.1 | 352.2 | 0.79x | 46.5 | 46.7 | 1.00x |
+| `reflect/s8` | syntax | 669.8 | 531.5 | 0.79x | 72.9 | 73.2 | 1.00x |
 
-Geometric mean: time 0.87x, memory 0.99x over 19 entries. The memory
-column moves by under 1.5 MB either way, which is run-to-run noise. The
-entries under 100 ms (`templates_deep`, the `-nohdr` cases, `s10`) are
-within noise. The `obj` and `emit-llvm` times include `opt` and `llc`,
-so kiln's own gain there is larger than the ratio shows.
+Geometric mean: time 0.82x, memory 0.96x over 19 entries (WP-1308 on
+11-11: 0.87x and 0.99x). The memory column moves by under 2.5 MB on any
+entry, and the largest relative drops are on the smallest entries
+(`sort-nohdr`, `table-nohdr`, `s10`, 12 to 20 MB): fewer of the binary's
+pages are touched, not less heap. The entries under 100 ms
+(`templates_deep`, the `-nohdr` cases, `s10`) are within noise. The
+`obj` and `emit-llvm` times include `opt` and `llc`, so kiln's own gain
+there is larger than the ratio shows.
+
+Cost: the plain release build took 2m22s at load 13; the PGO build
+4m45s at the same load: the instrumented build 2m06s, the training 26 s,
+the final build 2m10s.
+
+### x86_64
+
+- kiln's code of `26ebc59bf` (the run built WP-1862's branch, whose
+  changes are to xtask, the workflows and docs), sweep workflow run
+  44925276387,
+  job `pgo x86_64`: GitHub's `ubuntu-24.04` runner, 4 CPUs, 15 GB, in
+  the `gcc:16.1.0-trixie` container; load average 2.8 at the end of the
+  bench. Results file `2026-11-21T164432.json` (artifact `pgo-x86_64`).
+- The final build counted 1187 functions without profile data, the same
+  total as on aarch64; the job's cargo printed in color, which the
+  count's split did not read yet, so all of them were put in kiln's
+  share. WP-1862 fixed the split (`pgo.rs` `count_missing` strips the
+  color codes); the profile applied, as the times show.
+- Cost: the plain release build took 180 s, the PGO build 400 s.
+
+| Entry | Mode | plain ms | PGO ms | time | plain MB | PGO MB | memory |
+|---|---|--:|--:|--:|--:|--:|--:|
+| `frontend/format-like-g` | emit-llvm | 1188.6 | 1045.8 | 0.88x | 99.0 | 99.9 | 1.01x |
+| `frontend/registration-wide-obj` | obj | 9354.9 | 8865.3 | 0.95x | 245.9 | 246.2 | 1.00x |
+| `frontend/templates` | syntax | 295.5 | 235.5 | 0.80x | 54.9 | 54.4 | 0.99x |
+| `frontend/templates-wide-g` | emit-llvm | 560.5 | 454.4 | 0.81x | 129.6 | 127.2 | 0.98x |
+| `frontend/templates_deep` | syntax | 65.1 | 74.3 | 1.14x | 49.6 | 49.0 | 0.99x |
+| `frontend/templates_wide` | syntax | 340.3 | 239.2 | 0.70x | 78.9 | 76.5 | 0.97x |
+| `oven/sort` | syntax | 223.6 | 187.6 | 0.84x | 33.8 | 33.9 | 1.00x |
+| `oven/sort-nohdr` | syntax | 22.8 | 20.1 | 0.88x | 18.8 | 16.8 | 0.90x |
+| `oven/string` | syntax | 218.5 | 184.7 | 0.85x | 33.9 | 33.9 | 1.00x |
+| `oven/table` | syntax | 116.3 | 98.1 | 0.84x | 28.1 | 27.5 | 0.98x |
+| `oven/table-nohdr` | syntax | 47.5 | 39.2 | 0.83x | 19.1 | 17.3 | 0.91x |
+| `overload/arrow-chain` | syntax | 630.0 | 507.8 | 0.81x | 85.9 | 84.9 | 0.99x |
+| `overload/calls` | syntax | 807.5 | 604.6 | 0.75x | 23.7 | 21.6 | 0.91x |
+| `overload/ctors` | syntax | 653.8 | 444.1 | 0.68x | 22.2 | 20.8 | 0.94x |
+| `overload/less-10k` | syntax | 2195.6 | 1636.0 | 0.75x | 28.0 | 26.7 | 0.95x |
+| `reflect/s10` | emit-llvm | 35.5 | 27.4 | 0.77x | 24.8 | 20.7 | 0.84x |
+| `reflect/s6` | syntax | 298.7 | 249.3 | 0.83x | 39.8 | 40.2 | 1.01x |
+| `reflect/s7` | syntax | 558.0 | 449.0 | 0.80x | 50.2 | 50.7 | 1.01x |
+| `reflect/s8` | syntax | 1010.4 | 793.7 | 0.79x | 74.8 | 74.8 | 1.00x |
+
+Geometric mean: time 0.82x, memory 0.97x over 19 entries, the same gain
+as on aarch64; the per-entry ratios agree within about 0.05 except
+`templates_deep` (1.14x here, 1.01x on aarch64, a 65 ms entry).
+
+### aarch64, hosted
+
+The same job on GitHub's `ubuntu-24.04-arm` runner (4 CPUs, 15 GB,
+load average 2.5 at the end), artifact `pgo-aarch64`, results file
+`2026-11-21T164518.json`; plain build 189 s, PGO build 429 s. 18 of the
+19 entries compared: `frontend/registration-wide-obj` failed its
+`budget-time: 10500` with both binaries (fastest of 5: 13.2 s PGO,
+13.9 s plain), a budget for the development host that this slower runner
+breaks whichever binary runs, so the bench left the entry out of the
+comparison. The job now tolerates that failure (`sweep.yml` job `pgo`)
+and no other.
+
+| Entry | Mode | plain ms | PGO ms | time | plain MB | PGO MB | memory |
+|---|---|--:|--:|--:|--:|--:|--:|
+| `frontend/format-like-g` | emit-llvm | 1659.8 | 1429.2 | 0.86x | 90.4 | 90.4 | 1.00x |
+| `frontend/registration-wide-obj` | obj | over budget | over budget | - | - | - | - |
+| `frontend/templates` | syntax | 466.8 | 359.3 | 0.77x | 51.7 | 51.8 | 1.00x |
+| `frontend/templates-wide-g` | emit-llvm | 797.6 | 664.0 | 0.83x | 126.0 | 124.2 | 0.99x |
+| `frontend/templates_deep` | syntax | 88.1 | 91.5 | 1.04x | 46.5 | 47.1 | 1.01x |
+| `frontend/templates_wide` | syntax | 478.5 | 345.2 | 0.72x | 76.1 | 73.6 | 0.97x |
+| `oven/sort` | syntax | 339.0 | 283.8 | 0.84x | 30.5 | 30.3 | 0.99x |
+| `oven/sort-nohdr` | syntax | 27.7 | 24.9 | 0.90x | 15.3 | 13.7 | 0.89x |
+| `oven/string` | syntax | 318.7 | 263.9 | 0.83x | 30.8 | 31.0 | 1.01x |
+| `oven/table` | syntax | 170.2 | 136.7 | 0.80x | 24.9 | 24.6 | 0.98x |
+| `oven/table-nohdr` | syntax | 50.8 | 44.4 | 0.87x | 15.7 | 14.1 | 0.90x |
+| `overload/arrow-chain` | syntax | 955.8 | 641.6 | 0.67x | 82.5 | 80.6 | 0.98x |
+| `overload/calls` | syntax | 1132.9 | 865.2 | 0.76x | 20.4 | 18.3 | 0.90x |
+| `overload/ctors` | syntax | 916.8 | 666.1 | 0.73x | 18.9 | 17.3 | 0.91x |
+| `overload/less-10k` | syntax | 2974.7 | 2260.2 | 0.76x | 24.5 | 23.1 | 0.94x |
+| `reflect/s10` | emit-llvm | 51.5 | 39.9 | 0.77x | 21.5 | 19.2 | 0.89x |
+| `reflect/s6` | syntax | 440.4 | 355.1 | 0.81x | 36.5 | 36.4 | 1.00x |
+| `reflect/s7` | syntax | 820.9 | 639.7 | 0.78x | 46.8 | 46.9 | 1.00x |
+| `reflect/s8` | syntax | 1490.9 | 1248.3 | 0.84x | 71.6 | 71.7 | 1.00x |
+
+Geometric mean: time 0.81x, memory 0.96x over 18 entries, within 0.01
+of the development host's 0.82x and 0.96x over 19.
+
+### Earlier checks (WP-1308, 11-11)
 
 The packager's shape was checked too. `cargo xtask pgo-profile` ran with
 `RUSTFLAGS="-Cdebuginfo=2 --remap-path-prefix=<checkout>=/build/kiln"`,
@@ -433,10 +532,6 @@ plus `-Cprofile-use`, in a different target directory. 0 of kiln's
 functions were without profile data (541 build-script functions were).
 On four held-out entries it measured format-like-g 0.86x,
 templates_wide 0.70x, overload/calls 0.86x and reflect/s8 1.00x
-(geomean 0.85x, memory 0.98x, load 13.5). The s8 ratio differs from the
-table's 0.74x on a noisy box.
-
-Cost: the instrumented build took 1m19s, the training 29 s and the final
-build 1m55s, against 1m46s for a plain release build at the same load.
+(geomean 0.85x, memory 0.98x, load 13.5).
 The pre-step in the packager's shape took 285 s, because the new flags
 rebuilt the instrumented tree from scratch.

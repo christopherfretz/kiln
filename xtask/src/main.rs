@@ -939,15 +939,54 @@ mod ci_tests {
         );
         let gxx_push = "startsWith(github.ref, 'refs/heads/sweep/gxx-')";
         let rc_push = "startsWith(github.ref, 'refs/heads/sweep/rc-')";
+        // The PGO measurement (WP-1862) is opt-in the same way: the `pgo`
+        // input or a `sweep/pgo-*` push, which runs it and nothing else.
+        let pgo_push = "startsWith(github.ref, 'refs/heads/sweep/pgo-')";
         for (name, input) in [("libcxx", "libcxx"), ("oss-matrix", "oss"), ("oss", "oss")] {
             has(
                 &job(name),
                 name,
                 &format!(
-                    "if: ${{{{ (github.event_name == 'push' && !{gxx_push}) || inputs.{input} }}}}"
+                    "if: ${{{{ (github.event_name == 'push' && !{gxx_push} && !{pgo_push}) || inputs.{input} }}}}"
                 ),
             );
         }
+        has(
+            &job("build"),
+            "build",
+            &format!("if: ${{{{ github.event_name != 'push' || !{pgo_push} }}}}"),
+        );
+        assert!(
+            on.contains("      pgo:\n") && on.matches("        default: false\n").count() >= 2,
+            "sweep.yml has no `pgo` dispatch input defaulting to false"
+        );
+        let pgo = job("pgo");
+        has(
+            &pgo,
+            "pgo",
+            &format!("if: ${{{{ (github.event_name == 'push' && {pgo_push}) || inputs.pgo }}}}"),
+        );
+        assert!(
+            pgo.contains("cargo xtask build --pgo") && pgo.contains("pgo-train --list"),
+            "sweep.yml job `pgo` does not build with --pgo and bench the held-out set"
+        );
+        // A failed entry fails the measurement, except an entry over its
+        // `budget-time:` (a development-host budget both binaries can
+        // break on a slower runner).
+        assert!(
+            pgo.contains("grep -vc ': over the time budget: '")
+                && pgo.contains("test \"$other\" -eq 0"),
+            "sweep.yml job `pgo` does not fail on a failed entry other than a time budget"
+        );
+        // A release candidate's hosted half runs what ships (WP-1862), and
+        // says so in the artifact import-x86 reads.
+        let build = job("build");
+        assert!(
+            build.contains("refs/heads/sweep/rc-*) pgo=--pgo ;;")
+                && build.contains("cargo xtask dist $pgo ")
+                && build.contains("name: kiln-build"),
+            "sweep.yml job `build` does not build an RC with --pgo and upload kiln-build"
+        );
         let gxx = job("gxx-dg");
         has(
             &gxx,
@@ -1057,6 +1096,27 @@ mod ci_tests {
             }
         }
         (yml, blocks)
+    }
+
+    /// WP-1862: the release archives are kiln's PGO build on both
+    /// architectures (spec/harness.md "Dist", "PGO build"), and the job
+    /// checks that build-info.txt says so.
+    #[test]
+    fn release_ships_pgo() {
+        let path = util::repo_root().join(".github/workflows/release.yml");
+        let (_, jobs) = workflow_jobs(&path);
+        let (_, dist) = jobs.iter().find(|(n, _)| n == "dist").expect("release.yml job `dist`");
+        let code: Vec<&str> = dist.lines().map(str::trim).filter(|l| !l.starts_with('#')).collect();
+        assert!(
+            code.iter().any(|l| l.starts_with("cargo xtask dist --pgo --check ")),
+            "release.yml does not build `cargo xtask dist --pgo --check`"
+        );
+        assert!(
+            !code.iter().any(|l| l.starts_with("cargo xtask dist --check")),
+            "release.yml still builds a plain dist"
+        );
+        assert!(code.contains(&"grep -qx 'pgo: yes' \"$RUNNER_TEMP/dist/build-info.txt\""));
+        assert!(dist.contains("arch: aarch64") && dist.contains("arch: x86_64"));
     }
 
     /// WP-1600: every job of every workflow has a `timeout-minutes`

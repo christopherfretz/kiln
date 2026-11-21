@@ -49,6 +49,9 @@ options for every command:
                            records and its record file say so and never pass check
   --kiln <kiln++>          with --smoke: this kiln++ instead of the archive's
                            (named kiln++, or kiln for the kiln++ beside it)
+  --no-pgo                 the archive step builds `dist --check` without --pgo,
+                           and import-x86 accepts a plain hosted build; the
+                           record says so (the shipped archives are PGO-built)
 ";
 
 /// The free space a step leaves on the state directory's file system.
@@ -78,6 +81,7 @@ struct Opts {
     times: u32,
     out: Option<PathBuf>,
     refresh: bool,
+    no_pgo: bool,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Opts, String> {
@@ -103,6 +107,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Opts, String> {
             "--times" => o.times = val("--times")?.parse().map_err(|e| format!("--times: {e}"))?,
             "--out" => o.out = Some(val("--out")?.into()),
             "--refresh-baselines" => o.refresh = true,
+            "--no-pgo" => o.no_pgo = true,
             "-h" | "--help" => return Err(String::new()),
             s if s.starts_with("--") => return Err(format!("unknown option `{s}`")),
             _ => o.pos.push(a),
@@ -117,7 +122,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Opts, String> {
 }
 
 /// Everything one invocation knows about the gate.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Gate {
     root: PathBuf,
     state: PathBuf,
@@ -125,6 +130,9 @@ struct Gate {
     steps: Vec<Step>,
     kiln: Option<PathBuf>,
     baseline: Vec<(String, String, u64)>,
+    /// Whether the archive is built (and the hosted build must be)
+    /// profile-guided: what ships (`--no-pgo` turns it off).
+    pgo: bool,
 }
 
 pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
@@ -217,7 +225,7 @@ fn load(o: &Opts) -> Result<Gate, String> {
         &fs::read_to_string(root.join("docs/status/release-gate-baseline.tsv")).unwrap_or_default(),
     );
     let ctx = Ctx { commit, version, smoke: o.smoke, kiln: kiln_hash };
-    Ok(Gate { root, state, ctx, steps, kiln, baseline })
+    Ok(Gate { root, state, ctx, steps, kiln, baseline, pgo: !o.no_pgo })
 }
 
 fn rec_path(g: &Gate, id: &str) -> PathBuf {
@@ -373,14 +381,7 @@ pub(super) fn cxx_driver(k: &Path) -> Result<PathBuf, String> {
 
 /// After the archive step: the gate again, with its kiln++.
 fn load_again(g: &Gate) -> Gate {
-    let mut g2 = Gate {
-        root: g.root.clone(),
-        state: g.state.clone(),
-        ctx: g.ctx.clone(),
-        steps: g.steps.clone(),
-        kiln: g.kiln.clone(),
-        baseline: g.baseline.clone(),
-    };
+    let mut g2 = g.clone();
     if let Ok(p) = fs::read_to_string(g.state.join("kiln++.path")) {
         let k = PathBuf::from(p.trim());
         g2.ctx.kiln = fs::read(&k).ok().map(|b| record::fnv64(&b));
@@ -630,7 +631,15 @@ fn execute(g: &Gate, s: &Step, log: &Path) -> Result<Measured, String> {
                     s.id.trim_start_matches("external-")
                 ));
             }
-            let ok = sh(Command::new("sh").arg("-c").arg(command).current_dir(&g.root), log)?;
+            // The archive's kiln++, for a command that builds with kiln.
+            let ok = sh(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .env("KILN_GATE_CXX", &kiln)
+                    .current_dir(&g.root),
+                log,
+            )?;
             let text = read(log)?;
             let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_owned();
             let units = last
@@ -676,10 +685,15 @@ fn gxx_verdict(g: &Gate, tsv: &Path, host: &str, log: &Path) -> Result<Measured,
 }
 
 fn archive(g: &Gate, log: &Path) -> Result<Measured, String> {
-    if !sh(&mut cargo_xtask(g, &["dist", "--check"]), log)? {
-        return Err("cargo xtask dist --check failed".into());
+    let args: &[&str] = if g.pgo { &["dist", "--check", "--pgo"] } else { &["dist", "--check"] };
+    if !sh(&mut cargo_xtask(g, args), log)? {
+        return Err(format!("cargo xtask {} failed", args.join(" ")));
     }
     let dist = util::target_dir(&g.root)?.join("kiln-dist");
+    let info = fs::read_to_string(dist.join(crate::dist::BUILD_INFO))
+        .ok()
+        .and_then(|t| crate::dist::BuildInfo::parse(&t));
+    let (build_ok, build) = build_verdict(info.as_ref(), &g.ctx.commit, g.pgo);
     let o = Command::new("sha256sum")
         .args(["-c", "SHA256SUMS"])
         .current_dir(&dist)
@@ -695,12 +709,13 @@ fn archive(g: &Gate, log: &Path) -> Result<Measured, String> {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .find(|n| n.starts_with(&prefix) && n.ends_with("-linux-gnu.tar.xz"))
         .ok_or("no release archive in the dist directory")?;
-    let into = g.state.join("kiln");
-    fs::create_dir_all(&into).map_err(|e| e.to_string())?;
-    if !sh(Command::new("tar").arg("-xJf").arg(dist.join(&tarball)).arg("-C").arg(&into), log)? {
+    let unpacked = g.state.join("kiln");
+    fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+    if !sh(Command::new("tar").arg("-xJf").arg(dist.join(&tarball)).arg("-C").arg(&unpacked), log)?
+    {
         return Err("cannot unpack the archive".into());
     }
-    let kiln = into.join(tarball.trim_end_matches(".tar.xz")).join("bin/kiln++");
+    let kiln = unpacked.join(tarball.trim_end_matches(".tar.xz")).join("bin/kiln++");
     let v = Command::new(&kiln)
         .arg("--version")
         .output()
@@ -709,12 +724,53 @@ fn archive(g: &Gate, log: &Path) -> Result<Measured, String> {
     fs::write(g.state.join("kiln++.path"), kiln.display().to_string())
         .map_err(|e| e.to_string())?;
     let named = first.contains(&format!("kiln version {}", g.ctx.version));
+    let pgo = info.as_ref().and_then(|i| i.pgo.as_ref());
+    let mut counts = vec![("archives_ok".into(), ok_n), ("pgo".into(), u64::from(pgo.is_some()))];
+    if let Some(p) = pgo {
+        counts.push(("unprofiled".into(), p.unprofiled_kiln as u64));
+    }
     Ok(Measured {
-        counts: vec![("archives_ok".into(), ok_n)],
+        counts,
         units: ok_n,
-        pass: o.status.success() && named,
-        detail: format!("{first}; kiln++ {}", record::fnv64(&fs::read(&kiln).unwrap_or_default())),
+        pass: o.status.success() && named && build_ok,
+        detail: format!(
+            "{first}; kiln++ {}; {build}",
+            record::fnv64(&fs::read(&kiln).unwrap_or_default())
+        ),
     })
+}
+
+/// Most of kiln's functions without profile data: the profile did not
+/// apply to the build (spec/harness.md "PGO build", telling that a profile
+/// applied; a matching one leaves none, a mismatched one tens of
+/// thousands).
+pub(super) const UNPROFILED_MAX: usize = 100;
+
+/// Whether `dist`'s build-info.txt fits the gate: of this commit, and
+/// profile-guided when `pgo` (with the profile applied, at most
+/// [`UNPROFILED_MAX`] of kiln's functions without data); either kind
+/// when not (`--no-pgo`).
+/// The verdict and the text the archive row and the hosted rows carry.
+pub(super) fn build_verdict(
+    info: Option<&crate::dist::BuildInfo>,
+    commit: &str,
+    pgo: bool,
+) -> (bool, String) {
+    let Some(i) = info else {
+        return (false, format!("no readable {}", crate::dist::BUILD_INFO));
+    };
+    let what = i.summary();
+    if i.commit != commit {
+        return (false, format!("{what}, but built from {}", record::short(&i.commit)));
+    }
+    match (&i.pgo, pgo) {
+        (Some(p), true) if p.unprofiled_kiln > UNPROFILED_MAX => {
+            (false, format!("{what}: more than {UNPROFILED_MAX}, the profile did not apply"))
+        }
+        (Some(_), _) => (true, what),
+        (None, false) => (true, format!("{what}, --no-pgo")),
+        (None, true) => (false, format!("{what}, but the release archives are PGO-built")),
+    }
 }
 
 fn oss_local(g: &Gate, p: &str, kiln: &Path, log: &Path) -> Result<Measured, String> {
@@ -776,6 +832,7 @@ fn import_x86(g: &Gate, dir: &str) -> Result<bool, String> {
         e.is_dir()
             && (n.starts_with("libcxx-") && n != "libcxx-summary"
                 || n == "gxx-dg-summary"
+                || n == "kiln-build"
                 || n.starts_with("oss-") && n.ends_with("-kiln"))
     };
     for e in entries.iter().filter(read_by_import) {
@@ -803,10 +860,25 @@ fn import_x86(g: &Gate, dir: &str) -> Result<bool, String> {
             .cloned()
             .collect::<Vec<_>>()
     };
+    // The sweep's build job's build-info.txt (artifact `kiln-build`): the
+    // hosted steps must have run what ships, a PGO build of this commit.
+    // A smoke import goes on without it.
+    let info = fs::read_to_string(dir.join("kiln-build").join(crate::dist::BUILD_INFO))
+        .ok()
+        .and_then(|t| crate::dist::BuildInfo::parse(&t));
+    let (build_ok, build) = build_verdict(info.as_ref(), &g.ctx.commit, g.pgo);
+    if !build_ok && !g.ctx.smoke {
+        return Err(format!("the hosted kiln++ is not what ships: {build}"));
+    }
     let mut all = true;
     let mut put = |id: &str, mut m: Measured, note: String| -> Result<(), String> {
         let s = g.steps.iter().find(|s| s.id == id).ok_or("no such step")?;
         manifest::enforce_min(&mut m, if g.ctx.smoke { s.smoke_min_units } else { s.min_units });
+        m.detail = if m.detail.is_empty() {
+            format!("kiln++: {build}")
+        } else {
+            format!("{}; kiln++: {build}", m.detail)
+        };
         let log = g.state.join("logs").join(format!("{id}.log"));
         fs::write(&log, format!("import-x86 {}\n{note}\n", dir.display()))
             .map_err(|e| e.to_string())?;
