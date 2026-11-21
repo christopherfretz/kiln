@@ -4791,6 +4791,12 @@ impl Cg<'_> {
         let rq = sig.ret;
         let mut ir_args = Vec::new();
         let mut sret_addr = None;
+        // clang `EmitCall`: a `CoerceAndExpand` result's temporary is made
+        // before the arguments' (a Swift vector's; a class's is `dest`).
+        let expand_tmp = (matches!(sig.info.ret.kind, ArgKind::CoerceAndExpand { .. })
+            && !self.is_aggregate(rq)
+            && !self.is_atomic_aggregate(rq))
+        .then(|| self.temp(rq));
         if sig.sret() {
             let a = match dest {
                 Some(d) => d,
@@ -4930,18 +4936,7 @@ impl Cg<'_> {
             };
             let kind = sig.info.ret.kind.clone();
             if let ArgKind::CoerceAndExpand { coerce, parts } = &kind {
-                // clang `EmitCall`, `CoerceAndExpand`: each part of the
-                // result stored as is (still scalable) at its element.
-                for (i, e) in self.expand_elems(d, coerce).iter().enumerate() {
-                    let e = self.expand_gep(e);
-                    let v = if parts.len() > 1 {
-                        let pt = self.ir(&parts[i]);
-                        self.f.fir.push(Op::ExtractValue { agg: r, idx: i as u32 }, pt)
-                    } else {
-                        r
-                    };
-                    self.store(v, e.v, e.align, false);
-                }
+                self.store_expanded(r, d, coerce, parts);
                 return Ok(None);
             }
             let (coerce, offset) = match &kind {
@@ -4963,6 +4958,13 @@ impl Cg<'_> {
                 self.coerced_store_sized(r, &coerce, d, size);
             }
             return Ok(None);
+        }
+        if let ArgKind::CoerceAndExpand { coerce, parts } = &sig.info.ret.kind {
+            // A Swift vector: through a temporary.
+            let t = expand_tmp.unwrap_or_else(|| self.temp(rq));
+            let (coerce, parts) = (coerce.clone(), parts.clone());
+            self.store_expanded(r, t, &coerce, &parts);
+            return Ok(Some(self.load_scalar(t, rq)));
         }
         if rty != self.lty(rq) {
             // A coerced scalar (x86-64 `__int128` as `{ i64, i64 }`):
@@ -5000,6 +5002,27 @@ impl Cg<'_> {
             return Ok(Some(self.load(LTy::BFLOAT, t.v, t.align, false)));
         }
         Ok(Some(r))
+    }
+
+    /// clang `EmitCall`, `CoerceAndExpand`: each part of the result `r`
+    /// stored as is (still scalable) at its element of `d`.
+    fn store_expanded(
+        &mut self,
+        r: V,
+        d: Addr,
+        coerce: &[kiln_abi::irtype::IrType],
+        parts: &[kiln_abi::irtype::IrType],
+    ) {
+        for (i, e) in self.expand_elems(d, coerce).iter().enumerate() {
+            let e = self.expand_gep(e);
+            let v = if parts.len() > 1 {
+                let pt = self.ir(&parts[i]);
+                self.f.fir.push(Op::ExtractValue { agg: r, idx: i as u32 }, pt)
+            } else {
+                r
+            };
+            self.store(v, e.v, e.align, false);
+        }
     }
 
     // ---- aggregates ----------------------------------------------------

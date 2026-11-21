@@ -5960,6 +5960,9 @@ impl Sema<'_, '_> {
                 && adl_single == Some(callee),
             enable_if: true,
         });
+        if !self.check_x86_interrupt_call(callee) {
+            return self.recover_err(&kids, loc);
+        }
         let Some(conv_args) =
             self.convert_call_args(callee_info, callee, args, &mut braced, &proto, loc, rparen)
         else {

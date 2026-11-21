@@ -56,9 +56,8 @@ const fn target_cc(idx: usize, x86: bool) -> Option<CallConv> {
 /// removed) written with `syntax` and normalized scope `scope` on x86-64
 /// (`x86`) or `AArch64`, for the attribute triage (WP-805): None for any
 /// other name, a spelling clang does not give it (`[[clang::ms_abi]]`,
-/// `[[gnu::preserve_most]]`), and for `swiftcall` / `swiftasynccall`,
-/// which kiln does not lower (class A, `__has_attribute` 0). x86
-/// `interrupt` is class A too.
+/// `[[gnu::preserve_most]]`). `swiftcall` / `swiftasynccall` lower
+/// through `kiln_abi::swift` (WP-1745).
 pub(crate) fn cc_attr_kind(
     n: &str,
     syntax: AttrSyntax,
@@ -78,7 +77,7 @@ pub(crate) fn cc_attr_kind(
     }
     let idx = CC_ATTR_SPELLINGS.iter().position(|&s| s == n)?;
     let spelled = if gcc_spelled(idx) { gnu } else { clang };
-    (spelled && !matches!(idx, 11 | 12)).then_some(AttrKind::CALLING_CONV)
+    spelled.then_some(AttrKind::CALLING_CONV)
 }
 
 /// How clang names convention `cc` in `err_attributes_are_not_compatible`
@@ -230,6 +229,22 @@ impl Sema<'_, '_> {
         v.ok().and_then(|v| u32::try_from(v).ok())
     }
 
+    /// clang `supportsVariadicCall`: the callee-cleanup and Swift
+    /// conventions take no `...`; false (after the error at `loc`) drops
+    /// convention attribute `shown` from the variadic prototype `info`.
+    fn cconv_varargs_ok(&mut self, cc: CallConv, info: FuncInfo, loc: Loc, shown: &str) -> bool {
+        let no_va = matches!(
+            cc,
+            CallConv::RegCall | CallConv::VectorCall | CallConv::Swift | CallConv::SwiftAsync
+        );
+        if no_va && info.variadic() && !info.no_proto() {
+            let msg = self.diag(DiagId::sema_cconv_varargs, loc).arg(shown);
+            self.emit(msg);
+            return false;
+        }
+        true
+    }
+
     /// The calling-convention attributes among `attrs` applied to the
     /// declared type `ty` (a function type, or a pointer, reference or
     /// member pointer to one) and removed: clang's `'X' only applies to
@@ -331,6 +346,9 @@ impl Sema<'_, '_> {
                     .arg(cc_name(new))
                     .arg(cc_name(cc));
                 self.emit(msg);
+                continue;
+            }
+            if !self.cconv_varargs_ok(new, info, n.loc, name(n)) {
                 continue;
             }
             cc = new;

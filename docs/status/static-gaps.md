@@ -85,7 +85,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
 | GAP-142 | parse_unsupported | preprocessor/modules | `{what} (the floating-point environment) is not supported yet` ({what}: `'#pragma clang fp eval_method(v)'`, v `double` or `extended`; `'#pragma STDC FENV_ROUND m'`, m a directed mode: `FE_UPWARD`, `FE_DOWNWARD`, `FE_TOWARDZERO`, `FE_TONEARESTFROMZERO`; FENV_ACCESS and the exception behavior landed in WP-1744) | `crates/kiln_parse/src/fp_pragma.rs::fenv_unsupported` | 0 | WP-1744 |
-| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `interrupt`, `model`, the `opencl_*` address spaces, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
+| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` left after WP-1745: `address_space`, the `opencl_*` address spaces and the `swift_*` parameter ABIs `swift_context`, `swift_async_context`, `swift_error_result`, `swift_indirect_result`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
 ## Excluded (clang-matching wording)
 

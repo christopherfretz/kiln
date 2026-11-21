@@ -161,7 +161,7 @@ impl Cg<'_> {
             Linkage::External
         } else if mangle::has_internal_linkage(ast, first) {
             Linkage::Internal
-        } else if ast.is_weak_decl(first) {
+        } else if ast.is_weak(first) {
             Linkage::Weak
         } else {
             Linkage::External

@@ -151,7 +151,11 @@ pub fn classify_call(
     cc: CallConv,
     variadic: bool,
 ) -> CallInfo {
+    // clang `arrangeLLVMFunctionInfo`: the Swift conventions bypass the
+    // target's `ABIInfo` (spec/abi.md §8.33).
+    let swift = matches!(cc, CallConv::Swift | CallConv::SwiftAsync);
     let mut info = match t.target().arch() {
+        _ if swift => crate::swift::classify(t, ret, args),
         Arch::AArch64 => {
             let named = if variadic { n_required } else { args.len() };
             aarch64(t, ret, args, named, cc == CallConv::Win64 && variadic)
@@ -172,8 +176,16 @@ pub fn classify_call(
     }
     let mut w = 0;
     for a in std::iter::once(&info.ret).chain(info.args.iter()) {
-        if let ArgKind::Direct { coerce, .. } = &a.kind {
-            w = w.max(vector_width(t, coerce));
+        match &a.kind {
+            ArgKind::Direct { coerce, .. } => w = w.max(vector_width(t, coerce)),
+            // The parts are the IR arguments (a Swift `<8 x float>` is two
+            // `<4 x float>`; a scalable SVE part counts 0).
+            ArgKind::CoerceAndExpand { parts, .. } => {
+                for p in parts {
+                    w = w.max(vector_width(t, p));
+                }
+            }
+            _ => {}
         }
     }
     info.max_vector_width = w;
@@ -324,8 +336,19 @@ fn no_undef(t: &mut IrTypes<'_>, q: QualType, kind: &ArgKind, check_coerce: bool
     match kind {
         ArgKind::Indirect { .. } | ArgKind::Extend { .. } => return true,
         ArgKind::Ignore => return false,
-        // Always a class (`DetermineNoUndef` gives no class `noundef`).
-        ArgKind::CoerceAndExpand { .. } => return false,
+        // A pure scalable class never is; the coerce type of a Swift
+        // value is its padded struct (a vector can be `noundef`).
+        ArgKind::CoerceAndExpand { coerce, parts } => {
+            if parts.iter().any(|p| matches!(p, IrType::ScalableVector(..)))
+                || !size_equals_store_size(&mem)
+            {
+                return false;
+            }
+            let st = IrType::Struct(coerce.clone(), false);
+            if check_coerce && ir_bits(t, &st) > ir_bits(t, &mem) {
+                return false;
+            }
+        }
         ArgKind::Direct { coerce, .. } => {
             if !size_equals_store_size(&mem) {
                 return false;

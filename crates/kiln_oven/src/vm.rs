@@ -345,7 +345,7 @@ pub(crate) enum Fault {
     },
     LiteralCmp,
     /// `==`/`!=` of pointers to different objects, `p` the address of a
-    /// weak declaration ([`kiln_ast::Ast::is_weak_decl`]), which may be
+    /// weak declaration ([`kiln_ast::Ast::is_weak`]), which may be
     /// null or equal to another object's at run time (clang
     /// `note_constexpr_pointer_weak_comparison`).
     WeakCmp {
@@ -3214,7 +3214,7 @@ impl Oven {
                 _ => None,
             }
         };
-        d.is_some_and(|d| b.ast().is_weak_decl(d))
+        d.is_some_and(|d| b.ast().is_weak(d))
     }
 
     /// `weak`: whether `p` and `q` are addresses of weak declarations

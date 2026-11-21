@@ -1051,8 +1051,12 @@ impl Cg<'_> {
         }
         // A thunk's prolog is its method's (clang `StartThunk`).
         self.restrict_noalias_params(d, &sig, &mut params);
+        let intr = thunk.is_none() && self.x86_interrupt_def(d, &sig, &mut params);
         {
             let func = self.m.func_mut(f);
+            if intr {
+                func.cc = kiln_llvm::CallConv::X86_INTR;
+            }
             func.attrs.func = fa;
             func.attrs.ret = ret;
             func.attrs.params = params;
@@ -1075,6 +1079,35 @@ impl Cg<'_> {
             return err(Some(ast.decls.get(d).loc()), format!("IR lowering failed: {e:?}"));
         }
         Ok(())
+    }
+
+    /// clang `addX86InterruptAttrs`: whether definition `d` is an x86
+    /// `interrupt` handler (spec/sema.md §4.5; WP-1745), which is
+    /// `x86_intrcc` with a `byval` first parameter of its pointee's
+    /// `ConvertType` (`void` is `i8`) among `params`.
+    fn x86_interrupt_def(
+        &mut self,
+        d: DeclId,
+        sig: &Sig,
+        params: &mut [kiln_llvm::AttrSetId],
+    ) -> bool {
+        let k = kiln_ast::attr::AttrKind::X86_INTERRUPT;
+        if !self.ast.attrs.has_kind(k) || !self.has_fn_attr(d, k) {
+            return false;
+        }
+        if let Some(&p) = sig.params.first()
+            && let Some(pointee) = self.ast.types.pointee(p)
+        {
+            let t = match self.ast.types.as_record(pointee) {
+                _ if self.ast.types.is_void(pointee) => LTy::I8,
+                // A class never defined in the translation unit stays
+                // `type opaque` (clang converts it as such).
+                Some(r) if self.ast.definition(r).is_none() => self.opaque_record_ty(r),
+                _ => self.lty(pointee),
+            };
+            self.add_param_attr(params, 0, Attr::ByVal(t));
+        }
+        true
     }
 
     /// Queues the body `fir` of `f` (definition `d`) for
@@ -1151,10 +1184,19 @@ impl Cg<'_> {
             kiln_abi::call::vector_bits(&mut cg.tys, t)
         }
         let mut w = 0;
-        if let ArgKind::Direct { coerce, .. } = &info.ret.kind {
-            w = w.max(vec_bits(self, coerce));
+        match &info.ret.kind {
+            ArgKind::Direct { coerce, .. } => w = w.max(vec_bits(self, coerce)),
+            ArgKind::CoerceAndExpand { parts, .. } => {
+                w = w.max(vec_bits(self, &Cg::expand_ret_type(parts)));
+            }
+            _ => {}
         }
         for a in &info.args {
+            if let ArgKind::CoerceAndExpand { parts, .. } = &a.kind {
+                for p in parts {
+                    w = w.max(vec_bits(self, p));
+                }
+            }
             if let ArgKind::Direct { coerce, .. } = &a.kind {
                 match self.flat_fields(&a.kind) {
                     Some((m, _)) => {
@@ -1666,6 +1708,14 @@ impl Cg<'_> {
                 // extracted from its scalable register type.
                 let align = self.global_align(pq);
                 let alloca = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
+                if self.ast.types.as_complex(pq).is_some() {
+                    // A Swift complex (clang `Expand`, `ExpandTypeFromArgs`):
+                    // the two values stored as a complex.
+                    let (re, im) = (V::Arg(*arg_no), V::Arg(*arg_no + 1));
+                    *arg_no += 2;
+                    self.cx_store((re, im), alloca, pq);
+                    return Ok(ParamVal::Indirect(alloca, false));
+                }
                 for e in self.expand_elems(alloca, coerce) {
                     let e = self.expand_gep(&e);
                     let v = V::Arg(*arg_no);
@@ -1829,12 +1879,33 @@ impl Cg<'_> {
                 Ok(())
             }
             ArgKind::CoerceAndExpand { coerce, parts } => {
+                if self.ast.types.as_complex(q).is_some() {
+                    // A Swift complex (clang `Expand`, `ExpandTypeToArgs`):
+                    // the real and imaginary values themselves.
+                    let (re, im) = match arg {
+                        CallArg::Complex(re, im) => (re, im),
+                        CallArg::Agg(a) => match self.cx_load(a, q, (false, false)) {
+                            (Some(re), Some(im)) => (re, im),
+                            _ => return err(None, "a complex argument without a value"),
+                        },
+                        CallArg::Scalar(_) => unreachable!("a complex argument as a scalar"),
+                    };
+                    out.push(re);
+                    out.push(im);
+                    return Ok(());
+                }
                 // clang `EmitCall`, `CoerceAndExpand`: each part loaded
                 // from the class's memory into its scalable type.
                 let src = match arg {
                     CallArg::Agg(a) => a,
                     CallArg::Scalar(v) => {
-                        let t = self.temp(q);
+                        // A Swift vector: a temporary aligned for the coerce
+                        // struct and the IR scalar's preferred alignment.
+                        let mt = self.mty(q);
+                        let st = IrType::Struct(coerce.clone(), false);
+                        let ir = self.tys.convert(q);
+                        let align = self.tys.size_align(&st).1.max(self.tys.size_align(&ir).1);
+                        let t = Addr { v: self.f.fir.alloca(mt, align), ty: mt, align };
                         self.store_scalar(v, t, q);
                         t
                     }

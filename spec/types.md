@@ -524,10 +524,15 @@ enum ExcSpec /* tag */ {
   `no_caller_saved_registers` merge the same way. A virtual override
   with a different convention is an error, also an implicitly declared
   one (WP-1103, spec/sema.md §4.7 *Implicit members*). Unsupported-on-target
-  conventions warn (`-Wignored-attributes`) and are dropped; `swiftcall`,
-  `swiftasynccall` and x86 `interrupt` are hard errors (lowering not
-  implemented). Mangling follows clang: only `ms_abi` is mangled
-  (`U6ms_abi`); `regcall` prefixes the name with `__regcall3__`.
+  conventions warn (`-Wignored-attributes`) and are dropped. A
+  variadic prototype cannot use `regcall`, `vectorcall`, `swiftcall` or
+  `swiftasynccall` (clang `supportsVariadicCall`: "variadic function
+  cannot use X calling convention", the attribute dropped; WP-1745).
+  `swiftcall` / `swiftasynccall` lower as `swiftcc` / `swifttailcc` with
+  the Swift argument lowering (spec/abi.md §8.33). Mangling follows
+  clang: `ms_abi`, `swiftcall` and `swiftasynccall` are mangled
+  (`U6ms_abi`, `U9swiftcall`, `U14swiftasynccall`); `regcall` prefixes
+  the name with `__regcall3__`.
   `va_start` in an `ms_abi` function on a SysV target is an error
   (clang `checkVAStartABI`; `__builtin_ms_va_list` is not provided).
 - `AArch64` SME keyword attributes (WP-1426, ACLE; clang

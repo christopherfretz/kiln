@@ -126,6 +126,8 @@ sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converte
 sema_cconv_change = Error (2) "function declared '{0}' here was previously declared {1}";
 sema_cconv_incompatible = Error (2) "{0} and {1} attributes are not compatible";
 sema_cconv_unsupported = Warning [IgnoredAttributes] (1) "'{0}' calling convention is not supported for this target";
+// clang `err_cconv_varargs` (`supportsVariadicCall`; WP-1745)
+sema_cconv_varargs = Error (1) "variadic function cannot use {0} calling convention";
 sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires a constant expression";
 sema_circular_arrow = Error (0) "circular pointer delegation detected";

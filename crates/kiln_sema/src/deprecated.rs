@@ -270,6 +270,7 @@ impl Sema<'_, '_> {
         self.take_annotations(ns, &mut attrs);
         self.check_internal_linkage_attrs(ns, &mut attrs);
         self.check_tls_model_attrs(ns, &mut attrs);
+        self.check_code_model_attrs(ns, &mut attrs);
         self.check_visibility_attrs(ns, &mut attrs);
         if attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::VISIBILITY) {
             self.push_namespace_visibility(ns);
@@ -280,6 +281,10 @@ impl Sema<'_, '_> {
             if attr.kind == AttrKind::DEPRECATED && self.ast.decls.get(ns).name().is_empty() {
                 let d = self.diag(DiagId::sema_deprecated_anonymous_namespace, attr.loc);
                 self.emit(d);
+                continue;
+            }
+            // Not a variable or function (WP-1745).
+            if attr.kind == AttrKind::WEAK_IMPORT && !self.check_weak_import(ns, attr) {
                 continue;
             }
             // `abi_tag` applies to an inline, named namespace (an inline

@@ -85,6 +85,9 @@ pub(crate) fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::INTERNAL_LINKAGE => "internal_linkage",
         AttrKind::COMMON => "common",
         AttrKind::TLS_MODEL => "tls_model",
+        AttrKind::CODE_MODEL => "model",
+        AttrKind::X86_INTERRUPT => "interrupt",
+        AttrKind::WEAK_IMPORT => "weak_import",
         AttrKind::RETURNS_TWICE => "returns_twice",
         AttrKind::MUSTTAIL => "musttail",
         AttrKind::TRANSPARENT_UNION => "transparent_union",
@@ -482,6 +485,7 @@ impl Sema<'_, '_> {
             self.check_noreturn_on_first_decl(prev, at, attrs);
         }
         self.check_tls_model_attrs(d, attrs);
+        self.check_code_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);
         self.check_selectany_attrs(d, attrs);
@@ -503,6 +507,7 @@ impl Sema<'_, '_> {
             }
             self.check_decl_attr(d, kind, node)
         });
+        self.add_x86_interrupt_used(attrs);
         self.check_class_b_exclusions(d, attrs);
         self.check_mutual_exclusions(d, attrs);
         self.check_fmv_attrs(d, attrs);
@@ -647,6 +652,8 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NODISCARD => self.check_nodiscard_subject(d, kind, node),
+            AttrKind::X86_INTERRUPT => self.check_x86_interrupt_subject(d, node),
+            AttrKind::WEAK_IMPORT => self.check_weak_import(d, node),
             // Kept only where GCC keeps them, silently dropped elsewhere
             // (WP-1675; `__builtin_has_attribute`).
             AttrKind::NONSTRING => self.nonstring_subject(d, kind),

@@ -2110,6 +2110,59 @@ Tests: `tests/conformance/ext.arm.sve/ir-sve-pure-scalable-types.cpp`,
 `ir-sve-tuples-by-value.cpp` (IR only, no SVE hardware on the test hosts),
 `kiln_driver` `sve_pure_scalable_by_value`.
 
+### 8.33 Landed (WP-1745): Swift calling conventions, x86 interrupt
+`swiftcall` (`swiftcc`) and `swiftasynccall` (`swifttailcc`) bypass the
+target ABI (clang `arrangeLLVMFunctionInfo` → `swiftcall::computeABIInfo`;
+`kiln_abi` `swift.rs`), on both targets:
+- **Classes.** One that cannot be passed in registers is `Indirect`
+  without `byval` (the class's alignment). Otherwise it is lowered
+  (`SwiftAggLowering`) into byte-range entries: the vptr, the
+  non-virtual bases at their offsets and the fields (union members all
+  at the start), down to scalars by `ConvertType` (`bool` stays `i1`);
+  arrays per element, `_Complex` as its two parts, member pointers,
+  bit-fields (the bytes they touch) and illegal integers (other than
+  1, 8, 16, 32, 64, 128 bits) opaque, an `_Atomic` padding opaque. A
+  vector is split into legal vectors (x86-64: more than 8 and at most 16
+  bytes; AArch64: a power-of-2 element count in 8 bytes, or in 16 with
+  more than one element), else elements; a value not at a multiple of
+  its natural alignment (store size rounded to a power of 2) is opaque
+  (a vector is split first). Overlapping entries merge (equal types
+  stay, integer beats pointer, else opaque). Then entries meeting in one
+  8-byte chunk merge when neither is floating-point or a vector, and
+  each run of opaque bytes becomes, per chunk, the smallest aligned
+  power-of-2 integer covering it.
+- **Passing.** No entries: `Ignore`. More than four registers (a
+  pointer one, an integer one per 64 bits, a float or vector one):
+  `Indirect` without `byval` (an `sret` return). Otherwise
+  `ArgKind::CoerceAndExpand`: the entries as separate IR values, each
+  stored to or loaded from the object viewed as the entries' struct with
+  `[N x i8]` padding; a return of several is a non-packed literal struct
+  (an SVE pure scalable return stays packed, §8.32).
+- **Others.** A vector is lowered as a class of its own (so a Swift
+  `<8 x float>` is two `<4 x float>`, `noundef` as its elements; a
+  scalar's temporary is aligned to the larger of the entries' struct and
+  the IR type's preferred alignment, a result's made before the
+  arguments'). `_Complex` is returned `Direct` and passed as its two
+  values (clang `Expand`; written as a `CoerceAndExpand` of the parts).
+  `void` is `Ignore`; everything else is `Direct` with its IR type and
+  no extension attribute. `min-legal-vector-width` counts the expanded
+  parts.
+- **`swiftasynccall` tail calls** (clang `EmitReturnStmt`): in a
+  `swiftasynccall` function, a return whose operand (after its
+  full-expression cleanups) is itself a call of a `swiftasynccall`
+  function type (direct, through a pointer or reference, or a member
+  call; not a member-pointer call, whose callee has the bound member
+  function type) emits that call `musttail` followed by `ret`.
+- **Mangling**: `U9swiftcall` / `U14swiftasynccall` (vendor qualifiers
+  on the function type).
+- **x86 `interrupt`** (spec/sema.md §4.5): a definition gets
+  `x86_intrcc`, its first parameter `byval(T)` of the pointee type (`i8`
+  for `void`, an opaque `type {}` for an incomplete class) and
+  `"disable-tail-calls"="true"`.
+Tests: `tests/conformance/dcl.attr.cconv/ir-swiftcall-{x86_64,aarch64}.cpp`,
+`swiftasync-musttail-{x86_64,aarch64}.cpp`, `swiftcall-diags-x86_64.cpp`,
+`x86-interrupt-ir-x86_64.cpp`.
+
 ## Definition hash (`odr_def`)
 `kiln_abi::odr_def` (WP-1582, package K-3b) is the serializer of a
 function definition for the link-time ODR checks: record kind 2 of

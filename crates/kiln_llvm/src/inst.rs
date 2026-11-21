@@ -443,6 +443,8 @@ impl CallConv {
     pub const WIN64: CallConv = CallConv(79);
     /// `x86_vectorcallcc`.
     pub const X86_VECTORCALL: CallConv = CallConv(80);
+    /// `x86_intrcc` (an x86 `interrupt` handler).
+    pub const X86_INTR: CallConv = CallConv(83);
     /// `x86_regcallcc`.
     pub const X86_REGCALL: CallConv = CallConv(92);
     /// `aarch64_vector_pcs`.
@@ -477,6 +479,7 @@ impl CallConv {
             78 => "x86_64_sysvcc",
             79 => "win64cc",
             80 => "x86_vectorcallcc",
+            83 => "x86_intrcc",
             92 => "x86_regcallcc",
             97 => "aarch64_vector_pcs",
             98 => "aarch64_sve_vector_pcs",

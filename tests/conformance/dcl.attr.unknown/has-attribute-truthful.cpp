@@ -4,11 +4,12 @@
 // and 1 for a builtin kiln lowers (every builtin kiln declares lowers since
 // WP-1739; the clang 22 removals are has-builtin-mmx-removed-clang22.cpp).
 // WP-805; `ms_struct` and `musttail` are implemented since WP-809, the ACLE
-// `rsr` and `trap` since WP-846, the NEON builtins since WP-1421.
+// `rsr` and `trap` since WP-846, the NEON builtins since WP-1421,
+// `weak_import` since WP-1745.
 //@ skip(clang): clang answers 1 for the attributes kiln rejects
 //@ expect: compile-ok
 //@ strict-diags
-static_assert(!__has_attribute(weak_import));
+static_assert(__has_attribute(weak_import) != 0 && __has_cpp_attribute(clang::weak_import) != 0);
 static_assert(!__has_attribute(__address_space__));
 static_assert(!__has_cpp_attribute(clang::matrix_type));
 static_assert(__has_attribute(__ms_struct__) != 0 && __has_cpp_attribute(gnu::ms_struct) != 0);
