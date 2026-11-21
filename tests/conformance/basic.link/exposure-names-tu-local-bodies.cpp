@@ -3,25 +3,26 @@
 // member definition) is not ignored by /15, so naming a TU-local entity in
 // it is an exposure: a call, an address, a local variable's type, a call in
 // a lambda (reported at the lambda), a call to a TU-local inline function,
-// a call on a branch that is never taken. Uses that fold away (a discarded
-// expression naming a function, sizeof) are not; see
-// exposure-names-tu-local-accepted.cpp. GCC 16.1 rejects each (it reports
-// X::f at the qualified name, kiln at f); clang 22 only warns.
+// a call on a branch that is never taken. A use whose full-expression
+// folds is one too (exposure-full-expression-folded.cpp, WP-1847); a
+// constant read is not (exposure-names-tu-local-accepted.cpp). GCC 16.1
+// rejects each (it reports X::f at the qualified name, kiln at f); clang
+// 22 only warns.
 //@ expect: compile-fail
 //@ std: c++20
 //@ skip(clang): clang 22 only warns
 //@ strict-diags
-//@ diag: 34:19 error "declaration of 'body_type' exposes TU-local entity 'S'"
-//@ diag: 35:22 error "declaration of 'cx' exposes TU-local entity 'helper'"
-//@ diag: 36:36 error "declaration of 'templ' exposes TU-local entity 'helper'"
-//@ diag: 37:41 error "declaration of 'via_lambda' exposes TU-local entity 'helper'"
-//@ diag: 38:19 error "declaration of 'via_tu_local' exposes TU-local entity 'local_inline'"
-//@ diag: 39:20 error "declaration of 'address' exposes TU-local entity 'target'"
-//@ diag: 40:19 error "declaration of 'calls' exposes TU-local entity 'helper'"
-//@ diag: 41:19 error "declaration of 'stored' exposes TU-local entity 'helper'"
-//@ diag: 42:19 error "declaration of 'unfolded' exposes TU-local entity 'helper'"
-//@ diag: 43:19 error "declaration of 'spec_local' exposes TU-local entity 'S'"
-//@ diag: 45:15 error "declaration of 'f' exposes TU-local entity 'helper'"
+//@ diag: 35:19 error "declaration of 'body_type' exposes TU-local entity 'S'"
+//@ diag: 36:22 error "declaration of 'cx' exposes TU-local entity 'helper'"
+//@ diag: 37:36 error "declaration of 'templ' exposes TU-local entity 'helper'"
+//@ diag: 38:41 error "declaration of 'via_lambda' exposes TU-local entity 'helper'"
+//@ diag: 39:19 error "declaration of 'via_tu_local' exposes TU-local entity 'local_inline'"
+//@ diag: 40:20 error "declaration of 'address' exposes TU-local entity 'target'"
+//@ diag: 41:19 error "declaration of 'calls' exposes TU-local entity 'helper'"
+//@ diag: 42:19 error "declaration of 'stored' exposes TU-local entity 'helper'"
+//@ diag: 43:19 error "declaration of 'unfolded' exposes TU-local entity 'helper'"
+//@ diag: 44:19 error "declaration of 'spec_local' exposes TU-local entity 'S'"
+//@ diag: 46:15 error "declaration of 'f' exposes TU-local entity 'helper'"
 export module M;
 static int helper() { return 1; }
 static int target;

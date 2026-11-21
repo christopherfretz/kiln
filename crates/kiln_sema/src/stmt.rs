@@ -434,7 +434,6 @@ impl Sema<'_, '_> {
         };
         let e = self.discarded_value_checks(e);
         let e = self.act_on_full_expr(e);
-        self.module_discarded_exposures(e);
         self.builder().expr_stmt(e)
     }
 

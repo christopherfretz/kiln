@@ -1,14 +1,15 @@
 // [basic.link]/15-17: what naming a TU-local entity in a module interface
 // does NOT expose. The body of a non-inline function, the initializer of a
 // non-inline variable, a type alias, a friend declaration, a local class,
-// a constant-initialized const variable's value (also in sizeof), uses that
-// fold away in an inline function (a discarded-value expression naming a
-// function or variable, a constant read), an unexported declaration of a
-// TU-local entity itself, and an inline function naming a function from
-// the global module fragment. GCC 16.1 accepts all of it (warning for the
-// last); clang 22 accepts it, warning on the folded uses and the last. An
-// unevaluated operand names what it names (WP-1821):
-// exposure-unevaluated-discarded.cpp.
+// a constant-initialized const variable's value (also in sizeof), a
+// constant read in an inline function (not an odr-use, /14.4), an
+// unexported declaration of a TU-local entity itself, and an inline
+// function naming a function from the global module fragment. GCC 16.1
+// accepts all of it (warning for the last); clang 22 accepts it, warning
+// on the last. An unevaluated operand names what it names (WP-1821):
+// exposure-unevaluated-discarded.cpp; so does a discarded-value
+// expression or a full-expression that folds (WP-1847):
+// exposure-full-expression-folded.cpp.
 //@ expect: compile-ok
 //@ std: c++20
 module;
@@ -32,11 +33,6 @@ static int also_local(S s) { return s.v; }
 inline int unexported_inline_uses_nothing() { return 0; }
 export inline int reads_constant() { return K; }
 export inline int sizes() { return sizeof(K) + sizeof(int); }
-export inline int discarded() {
-  helper;
-  target;
-  return 0;
-}
 export inline int local_class() {
   struct L { int f() { return 0; } };
   return L{}.f();

@@ -1282,6 +1282,9 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<ExprId, ()> {
         let c = self.ast.first(c);
+        // [basic.link]/14: a concept-name names its concept (a TU-local
+        // one in a module interface, WP-1845).
+        self.module_note_use(c, loc);
         let args: Vec<TemplateArg> = self.ast.types.args(written).to_vec();
         // Dependent, not merely instantiation-dependent, arguments defer
         // the check (clang `anyDependentTemplateArguments`): `C<TC<N>>`

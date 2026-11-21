@@ -708,6 +708,7 @@ impl Parser<'_, '_> {
         self.s.exit_constant_evaluated(None);
         self.s.exit_unevaluated();
         let Some(e) = e else {
+            self.s.act_on_concept_error();
             self.skip_to_semi();
             return;
         };

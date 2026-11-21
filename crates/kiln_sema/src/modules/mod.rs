@@ -100,6 +100,12 @@ pub(crate) struct ModSema {
     /// Per instantiated inline function of a template of this unit's
     /// purview: the instantiations of such templates its body names.
     inst_spec_uses: FxHashMap<DeclId, Vec<DeclId>>,
+    /// Per instantiated function of a template of this unit's purview that
+    /// is not inline (its first declaration): the first TU-local entity
+    /// named in the declarations of a local class or closure type its
+    /// deduced return type names, which makes it TU-local
+    /// ([basic.link]/15.5; `exposure.rs`, WP-1846).
+    escaped_tu_local: FxHashMap<DeclId, DeclId>,
     /// Uses of an instantiation in a part [basic.link]/15 considers,
     /// decided at the end of the unit, with whether a TU-local one is
     /// clang 22's warning (an inline variable's initializer) rather than

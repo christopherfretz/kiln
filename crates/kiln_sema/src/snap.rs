@@ -75,7 +75,7 @@
 //! | `walk_stack`, `conv_walk_stack`, `equiv_scratch`, `cand_scratch`, `deduce_scratch` | scratch | reused walk and deduction buffers |
 //! | `ctx` | transient | the current declaration context: the translation unit at rest (else the prefix ends inside a namespace or linkage specification) |
 //! | `func`, `fn_saved`, `lambdas`, `lambda_base`, `classes`, `suspended_classes`, `defining`, `suspended_defining`, `enums`, `synth` | transient | the function, lambda, class, enumeration and implicit member being defined |
-//! | `prototype_params`, `declarator_records`, `requires_param_scopes`, `nsdmi_this`, `contract_ctx`, `vis_namespaces` | transient | open parameter lists, declarator scopes, default member initializers, contract predicates, namespaces with a visibility attribute |
+//! | `prototype_params`, `declarator_records`, `requires_param_scopes`, `concept_uses`, `nsdmi_this`, `contract_ctx`, `vis_namespaces` | transient | open parameter lists, declarator scopes, the concept definition being parsed, default member initializers, contract predicates, namespaces with a visibility attribute |
 //! | `vararg_copying` | transient | the variadic argument being copied (`Sema::check_variadic_args`) |
 //! | `subst_expr_depth`, `subst_template_id`, `expansion_element_init`, `expansion_vars`, `in_typedef_instantiation`, `instantiating_friend_template`, `friend_cmp_constraints`, `friend_template_apart`, `range_for_outer_depth` | transient | set while one substitution runs |
 //! | `unevaluated`, `immediate`, `constant_full_expr`, `capture_reads_variable`, `discarding_init`, `address_operand`, `deref_after_amp`, `decltype_calls`, `typeid_operands`, `pending_odr`, `potential_caps`, `misaligned`, `deferred_call_refs`, `deferring_call_ref`, `extend_collector` | transient | the expression or full-expression being built |
@@ -164,7 +164,7 @@ macro_rules! sema_fields {
             // a namespace or `extern "C" {`); then the construct stacks.
             transient: [ctx, classes, func, lambdas, enums, defining, suspended_defining, synth, fn_saved,
                 suspended_classes, lambda_base, prototype_params, declarator_records,
-                requires_param_scopes, nsdmi_this, contract_ctx, vis_namespaces,
+                requires_param_scopes, concept_uses, nsdmi_this, contract_ctx, vis_namespaces,
                 subst_expr_depth, subst_template_id, expansion_element_init,
                 expansion_vars, in_typedef_instantiation, instantiating_friend_template, friend_cmp_constraints,
                 friend_template_apart, range_for_outer_depth, unevaluated, immediate,

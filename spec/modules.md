@@ -424,10 +424,19 @@ at its name (`modules/exposure.rs`):
   declaration contains, and /15 ignores neither; GCC 16.1 accepts these
   (it folds them away before its check, except in a template definition)
   and clang 22 warns (not for `sizeof(S)` or in a template definition).
-  Kept as GCC 16.1 (a deliberate compromise with the text): a
-  full-expression that folds to a value that is not TU-local (a constant
-  read), a discarded-value expression that only names a function or
-  variable or takes its address;
+  So is a use in a full-expression that folds to a constant (WP-1847):
+  a discarded-value expression that only names a function or variable or
+  takes its address (`(void)helper;`, `(void)&hidden;`), a branch of a
+  conditional never taken (`0 ? helper() : 1`), an odr-use of a TU-local
+  constant in a comparison that folds (`&K != nullptr`), in an inline
+  function and a default member initializer: /14 names what the
+  expression names, and its only exemption for a value is /14.4 (a
+  reference to a constant that is not an odr-use, so `return K;` stays
+  valid); no CWG issue exempts a folded expression. GCC 16.1 folds these
+  away first and accepts most of them (it rejects a folded conditional in
+  a constexpr function or a default member initializer); clang 22 warns
+  (docs/status/deviations.md). Test:
+  `basic.link/exposure-full-expression-folded.cpp`;
 - the declarations of a local class of an inline function that is not
   TU-local, which are part of its body (WP-1814; also a class nested in
   one, and one in a lambda there): a base class and a data member's type
@@ -436,15 +445,36 @@ at its name (`modules/exposure.rs`):
   function that is inline (written `inline`, `constexpr` or `consteval`;
   the item above). GCC 16.1 rejects each at the same declaration;
 - the declarations of a local class or closure type of a function that
-  is not inline whose deduced return type names it (WP-1820, below);
+  is not inline whose deduced return type names it (WP-1820, below), and
+  of a specialization of a function template so (WP-1846, below);
+- the constraint-expression of a concept that is not TU-local (WP-1845):
+  a concept is a template ([temp.concept]/1) and its
+  concept-definition names what its constraint-expression names, which
+  is neither a function body nor an initializer /14 ignores. A call
+  there (in an unevaluated operand or a requires-expression too, and the
+  overload set of a dependent call), a TU-local type (in `sizeof`, a
+  type-requirement, a requires-expression parameter), a TU-local
+  concept's concept-name, a `decltype` operand, and a use in a lambda
+  there (the error at the lambda) are exposures, "declaration of 'C'
+  exposes TU-local entity 'helper'" at the concept's name; GCC 16.1
+  rejects them (but `decltype`), clang 22 accepts. Collected while the
+  constraint is parsed (`module_start_concept`), decided at the concept
+  (`module_check_concept_exposure`). Not exposures, as everywhere: a
+  constant read without an odr-use (/14.4) and an enumerator of a
+  TU-local enumeration (GCC 16.1 rejects both), a lambda whose body
+  names nothing TU-local (CWG2988, open, asks whether its closure type
+  makes the concept an exposure; kiln does not make a closure type
+  TU-local). A concept in an unnamed namespace is TU-local; a
+  concept-name denoting one in an inline function's body is an exposure
+  too (GCC 16.1 accepts that one). Tests:
+  `basic.link/exposure-concept-definition.cpp`, `-accepted.cpp`;
 - a use of an instantiation that is TU-local by /16.5 (WP-1814): an
   instantiated inline function (of a function template, or a member of an
   instantiated class template) whose instantiated body names a TU-local
   entity, found there (a call resolved by argument-dependent lookup in the
   instantiation) or in the template, or names an instantiation that is
   TU-local so. A use of an instantiation of the purview's templates is
-  held as any other use (a full-expression folding to a pointer to it keeps
-  it) and decided at the end of the unit, after its instantiations
+  held as any other use and decided at the end of the unit, after its instantiations
   (`module_resolve_deferred_exposures`): "declaration of 'call' exposes
   TU-local entity 'by_adl<N::A>'" at the declaration using it. While an
   instantiated function's body is formed, its uses are held for it as
@@ -502,28 +532,48 @@ through the deduced type emits its own internal definition, as clang 22
 declarations (and a lambda around a returned class too); clang 22
 accepts them. [basic.link]'s non-normative example (`int y =
 ([]{f();}(),0);`, "closure type is not TU-local") is about a variable's
-initializer and is kept accepted (/15.1.2, WP-1684). Not followed: the
-local classes of a function template's instantiations. Tests:
+initializer and is kept accepted (/15.1.2, WP-1684). Tests:
 `basic.link/exposure-local-class-escape.cpp`,
 `basic.link/exposure-local-class-not-inline-accepted.cpp`,
 `module.interface/exposure-local-class-importer-run.cpp`.
+
+A function template's deduced return type is known only in its
+specializations (WP-1846): the uses held in the local classes and
+closure types of its definition wait (kept for each instantiation), and
+at the end of an instantiated function that is not inline, the local
+classes and closure types its deduced return type names (instantiated
+from the held ones, or holding a use found in the instantiation: an
+instantiated lambda's body, an instantiated inline member function's
+body, a name argument-dependent lookup finds there) decide it: when one
+names a TU-local entity, the specialization's declaration is an
+exposure, so it is TU-local (/15.5), not an error itself
+(`module_resolve_escapes`). A use of it is held as a use of any
+instantiation of the purview's templates and is an exposure where that
+is (an inline function's body, at the end of the unit): "declaration of
+'u' exposes TU-local entity 'lambda<int>'". A use of an instantiation in
+those classes makes the specialization TU-local when that one is. A
+local class the return type does not name, a member function that is
+not inline, a specialization named only in an ignored body and a
+template never instantiated expose nothing. GCC 16.1 rejects the
+instantiated member function or lambda itself, at the template ("[with
+T = int]"), only where its body names the entity (and also a local class
+not returned); clang 22 warns at some of the uses. Tests:
+`basic.link/exposure-local-class-instantiation.cpp`,
+`module.interface/exposure-local-class-instantiation-importer-run.cpp`.
 
 A variable usable in constant expressions with internal linkage is
 TU-local, but /15.4 ignores a reference to it that is not an odr-use.
 An odr-use of one (`return &K;`, a reference bound to `K`, found where
 the full-expression marks its odr-uses, `module_note_odr_use`) is held
 as any other use (WP-1684): an exposure in an inline function's body, a
-default member initializer and a default argument, unless the
-full-expression is a prvalue that folds to a value that is not TU-local
-(`&K != nullptr`).
+default member initializer and a default argument, whatever the
+full-expression folds to (`&K != nullptr`, WP-1847).
 
 A lambda's body is part of its closure type, whose function call
 operator is inline: a use there is held for the variable being
 initialized, whatever its specifiers, and is an exposure when the
 variable's type is that closure type (`export inline auto f = [] {
-return helper(); };`, the error at the lambda; WP-1684). A
-full-expression containing the whole lambda does not drop the uses in
-its body.
+return helper(); };`, the error at the lambda; WP-1684).
 
 The initializer of a variable is otherwise not an exposure (/15.1.2;
 /17 makes only a constexpr variable's TU-local value one, above). For

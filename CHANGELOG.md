@@ -10,6 +10,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Concept definitions in module interface exposures (WP-1845): a
+  concept that is not TU-local whose constraint-expression names a
+  TU-local entity (a function, also in `sizeof` or a requires-expression,
+  a type, a TU-local concept, a use in a lambda there) is now a
+  "declaration of 'C' exposes TU-local entity" error, as GCC 16.1 rejects
+  it ([basic.link]/14); a concept-name denoting a TU-local concept now
+  names it in an inline function too. A constant read and an enumerator
+  stay valid (GCC 16.1 rejects those).
+- Local classes of function template specializations in module interface
+  exposures (WP-1846): a specialization of a non-inline function template
+  whose deduced return type names a local class or closure type naming a
+  TU-local entity (in a member, a base, a constexpr member function's
+  body, a returned lambda; also through argument-dependent lookup in the
+  instantiation) is TU-local ([basic.link]/15.5), so an inline function
+  using it is now an exposure error naming the specialization; it was
+  accepted. GCC 16.1 rejects some of these at the instantiated member.
+- Folded full-expressions in module interface exposures (WP-1847): a use
+  of a TU-local entity is no longer dropped when its full-expression
+  folds (`(void)helper;`, `0 ? helper() : 1`, `&K != nullptr` in an
+  inline function or a default member initializer): [basic.link]/14
+  names it, so each is now an exposure error. GCC 16.1 folds these away
+  and accepts them (a documented deviation).
 - Overload sets in module interface exposures (WP-1819): an
   id-expression names every function of its overload set
   ([basic.link]/14.5), so a set holding a TU-local function that overload

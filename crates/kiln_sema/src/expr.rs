@@ -801,7 +801,6 @@ impl Sema<'_, '_> {
         if !self.misaligned.is_empty() {
             self.diagnose_misaligned_members(e);
         }
-        self.module_full_expr_exposures(e);
         if self.pending_odr.is_empty() && self.potential_caps.is_empty() {
             return e;
         }
@@ -826,7 +825,6 @@ impl Sema<'_, '_> {
             self.resolve_potential_captures(e, &constant, &mut by_call);
         }
         let pending = std::mem::take(&mut self.pending_odr);
-        let mut held = false;
         for r in pending {
             let d = self.ast.exprs.decl(r);
             // A structured binding named through a by-copy capture
@@ -845,7 +843,7 @@ impl Sema<'_, '_> {
             }
             self.mark_used(d);
             let at = self.eloc(r);
-            held |= self.module_note_odr_use(d, at);
+            self.module_note_odr_use(d, at);
             self.note_undefined_use(d, at);
             self.capture_odr_use(d, at);
             if self.ast.exprs.get(r).has(ExprFlags::REFERS_TO_ENCLOSING)
@@ -855,11 +853,6 @@ impl Sema<'_, '_> {
             {
                 self.ast.exprs.mark_names_closure_copy(r);
             }
-        }
-        if held {
-            // A full-expression folding to a value that is not TU-local
-            // (`&K != nullptr`) exposes nothing.
-            self.module_full_expr_exposures(e);
         }
         e
     }
@@ -7099,9 +7092,6 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         let range = self.paren_type_range(loc, rparen);
-        // The type-id is an unevaluated operand: what it names stays named
-        // whatever the full-expression folds to ([basic.link]/14, WP-1821).
-        self.module_keep_uses_between(loc, rparen);
         self.trait_type_in(kind, ty, loc, rparen, range)
     }
 
