@@ -2286,6 +2286,11 @@ impl Sema<'_, '_> {
                 None,
                 loc,
             );
+            if found.decls.len() > 1 {
+                // [basic.link]/14: the id-expression names every function
+                // template in the set (WP-1819).
+                self.module_note_overload_set(&found.decls, loc);
+            }
             self.set_overload_begin(e, begin, loc);
             return e;
         }
@@ -7028,6 +7033,9 @@ impl Sema<'_, '_> {
         rparen: Loc,
     ) -> ExprId {
         let range = self.paren_type_range(loc, rparen);
+        // The type-id is an unevaluated operand: what it names stays named
+        // whatever the full-expression folds to ([basic.link]/14, WP-1821).
+        self.module_keep_uses_between(loc, rparen);
         self.trait_type_in(kind, ty, loc, rparen, range)
     }
 

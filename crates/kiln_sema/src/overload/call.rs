@@ -45,6 +45,9 @@ impl Sema<'_, '_> {
         // are resolved per instantiation (WP-668).
         let dependent = self.overload_set_is_dependent(decls);
         let e = self.builder().unresolved_lookup_in(name, decls, adl, nns, None, dependent, loc);
+        // [basic.link]/14: the id-expression names every function in the
+        // set (WP-1819).
+        self.module_note_overload_set(decls, loc);
         if naming.is_some() || found.iter().zip(decls).any(|(f, d)| f != d) {
             self.ovl.ule_found.insert(e, UleFound { found: found.to_vec(), naming });
         }
@@ -261,6 +264,12 @@ impl Sema<'_, '_> {
         if adl {
             let at = self.begin_loc(callee);
             self.adl_lookup_dn(name, args, at, &mut cands);
+            // The set the callee refers to includes what
+            // argument-dependent lookup adds ([basic.link]/14, WP-1819).
+            if self.ast.modules.active && cands.len() > decls.len() {
+                let added: Vec<DeclId> = cands[decls.len()..].iter().map(|&(d, _)| d).collect();
+                self.module_note_overload_set(&added, n.loc());
+            }
         }
         let last = cands.last().copied();
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));

@@ -376,6 +376,7 @@ impl Sema<'_, '_> {
             self.depr_points.pop();
             self.flush_delayed_deprecations(l, decl);
         }
+        self.module_drop_declarator_uses(level);
     }
 
     /// Closes the innermost `n` deprecation delay points without
@@ -386,6 +387,7 @@ impl Sema<'_, '_> {
     pub(crate) fn pop_delayed_deprecations(&mut self, n: usize, drop: bool) {
         let level = self.depr_points.len().saturating_sub(n);
         self.depr_points.truncate(level);
+        self.module_drop_declarator_uses(level);
         if drop {
             let keep = self.delayed_deprecations.iter().take_while(|&&(l, ..)| l <= level).count();
             self.delayed_deprecations.truncate(keep);

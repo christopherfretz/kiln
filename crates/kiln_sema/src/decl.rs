@@ -9660,6 +9660,7 @@ impl Sema<'_, '_> {
         }
         self.check_constexpr_body_vars(f, body);
         self.module_flush_exposures(f);
+        self.module_resolve_escapes(f);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

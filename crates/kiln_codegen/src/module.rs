@@ -1703,8 +1703,13 @@ impl<'a> Cg<'a> {
                 return true;
             }
             // An in-class definition attached to a named module is not
-            // inline ([class.mfct]/1): an importer only declares it.
-            in_class && (self.fn_is_inline(r) || !self.owned_by_imported_unit(r))
+            // inline ([class.mfct]/1): an importer only declares it,
+            // unless it has internal linkage (a member of a local class of
+            // a function that is not inline, reached through a deduced
+            // return type): its defining unit emits it only where used,
+            // so an importer emits its own, as clang (WP-1820).
+            in_class
+                && (self.fn_is_inline(r) || self.fn_internal(r) || !self.owned_by_imported_unit(r))
         })
     }
 

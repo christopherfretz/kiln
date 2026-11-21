@@ -857,6 +857,7 @@ impl Sema<'_, '_> {
             let nns = self.ast.templates.expr_nns.get(e).copied();
             let targs = self.ast.templates.expr_targs.get(e).copied();
             let dep = self.overload_set_is_dependent(&decls);
+            self.module_note_overload_set(&decls, n.loc());
             self.builder().unresolved_lookup_in(name, &decls, false, nns, targs, dep, n.loc())
         };
         // A qualified member template-id (`C::f<int>`) keeps its naming
@@ -979,6 +980,10 @@ impl Sema<'_, '_> {
             return self.act_on_error_expr(&[], loc);
         }
         let list = self.ast.types.arg_list(args);
+        if decls.len() > 1 {
+            // [basic.link]/14 names the whole set (WP-1819).
+            self.module_note_overload_set(&decls, loc);
+        }
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, true, None, Some(list), loc)
     }
 
@@ -1125,6 +1130,10 @@ impl Sema<'_, '_> {
                 self.diagnose_args_for_non_template(name, &decls, loc);
                 return self.act_on_error_expr(&[], loc);
             }
+            if decls.len() > 1 {
+                // [basic.link]/14 names the whole set (WP-1819).
+                self.module_note_overload_set(&decls, loc);
+            }
             return self.builder().unresolved_lookup(name, &decls, true, None, Some(list), loc);
         }
         if decls.is_empty() && qualifier.is_none() {
@@ -1137,6 +1146,9 @@ impl Sema<'_, '_> {
             return self.act_on_error_expr(&[], loc);
         }
         let dep = self.overload_set_is_dependent(&decls);
+        // [basic.link]/14: the template-id names every function template
+        // in the set (WP-1819).
+        self.module_note_overload_set(&decls, loc);
         self.builder().unresolved_lookup_in(name, &decls, false, None, Some(list), dep, loc)
     }
 
