@@ -18,7 +18,7 @@ use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
 use crate::templ::args::{ArgLookup, LevelMode};
-use crate::templ::written::WrittenKey;
+use crate::templ::written::{NestedParam, WrittenKey};
 
 impl Substituter<'_, '_, '_> {
     /// `decltype(e)` with `e` substituted (clang `TransformDecltypeType`).
@@ -465,21 +465,45 @@ impl Substituter<'_, '_, '_> {
                 let outer = self.type_begin.take();
                 let name = self.declarator_name.take();
                 let chunk = self.chunk_loc.take();
-                // With Swift parameter ABIs, each parameter is expanded on
-                // its own: a pack's elements carry its ABI (clang
-                // `TransformFunctionTypeParams`' `ExtParameterInfoBuilder`).
+                // The parameters written in this function type, when it is
+                // inside another declarator (or a typedef's or type-id's):
+                // checked as declared parameters (clang `SubstParmVarDecl`
+                // for each `ParmVarDecl` of the `FunctionProtoTypeLoc`). Not
+                // an alias template's aliased type, which clang substitutes
+                // without its `TypeLoc`, nor a function declaration's own
+                // type, whose parameters are instantiated (WP-1823).
+                let own = std::mem::take(&mut self.own_fn_type);
+                let nested: Option<Vec<Option<NestedParam>>> =
+                    (self.written_locs && !own && !self.sema.templ.nested_params.is_empty())
+                        .then(|| {
+                            let anchor = outer.unwrap_or(loc);
+                            params
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &t)| self.sema.nested_param(t, i, anchor))
+                                .collect()
+                        })
+                        .filter(|v: &Vec<Option<NestedParam>>| v.iter().any(Option::is_some));
+                // With Swift parameter ABIs (or written parameters to
+                // check), each parameter is expanded on its own: a pack's
+                // elements carry its ABI (clang `TransformFunctionTypeParams`'
+                // `ExtParameterInfoBuilder`).
                 let mut info = p.info();
-                let (out, abis) = if info.param_abis() == 0 {
-                    (self.expand_types(&params, loc), Vec::new())
+                let (out, abis, origin) = if info.param_abis() == 0 && nested.is_none() {
+                    (self.expand_types(&params, loc), Vec::new(), Vec::new())
                 } else {
                     let mut out = Vec::with_capacity(params.len());
                     let mut abis = Vec::with_capacity(params.len());
+                    let mut origin = Vec::with_capacity(params.len());
                     let mut res = Ok(());
                     for (i, &t) in params.iter().enumerate() {
-                        let abi = self.sema.ast.types.param_abi(info, i);
                         match self.expand_types(&[t], loc) {
                             Ok(v) => {
-                                abis.extend(std::iter::repeat_n(abi, v.len()));
+                                if info.param_abis() != 0 {
+                                    let abi = self.sema.ast.types.param_abi(info, i);
+                                    abis.extend(std::iter::repeat_n(abi, v.len()));
+                                }
+                                origin.extend(std::iter::repeat_n(i, v.len()));
                                 out.extend(v);
                             }
                             Err(e) => {
@@ -488,10 +512,26 @@ impl Substituter<'_, '_, '_> {
                             }
                         }
                     }
-                    (res.map(|()| out), abis)
+                    (res.map(|()| out), abis, origin)
                 };
                 (self.type_begin, self.declarator_name, self.chunk_loc) = (outer, name, chunk);
                 let out = out?;
+                if let Some(nested) = &nested {
+                    for (k, &t) in out.iter().enumerate() {
+                        let i = origin[k];
+                        let Some(np) = nested[i] else { continue };
+                        let abi = if info.param_abis() == 0 {
+                            kiln_ast::types::ParamAbi::Ordinary
+                        } else {
+                            self.sema.ast.types.param_abi(info, i)
+                        };
+                        if !self.sema.check_nested_param(t, np, abi)
+                            && self.sema.inst.stack.is_sfinae()
+                        {
+                            return Err(SubstFail);
+                        }
+                    }
+                }
                 if !abis.is_empty() {
                     // clang `BuildFunctionType`: the convention and order
                     // of the expanded parameters' ABIs are checked again

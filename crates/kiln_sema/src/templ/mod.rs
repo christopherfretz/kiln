@@ -388,6 +388,12 @@ pub struct TemplState {
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
+    /// The dependent parameters of each function type written inside
+    /// another declarator (`T (*)(U)`, a template argument's, a type-id's),
+    /// by (adjusted type, index), sorted by location: substitution checks
+    /// them as declared parameters (§5.8.1, [`Sema::nested_param`]).
+    pub(crate) nested_params:
+        kiln_source::fx::FxHashMap<(QualType, u16), Vec<written::NestedParam>>,
     /// The class-key of each dependent `class-key T::name`, by the
     /// name's written location: a tag-kind mismatch found at
     /// instantiation is reported there (§5.8, clang's elaborated keyword

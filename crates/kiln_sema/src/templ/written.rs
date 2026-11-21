@@ -41,6 +41,22 @@ pub(crate) struct WrittenScope {
     pub bound: Loc,
 }
 
+/// A dependent parameter of a function type written inside another
+/// declarator (§5.8.1): where it is declared, and what its type check at
+/// substitution needs that the function type does not keep (clang keeps a
+/// `ParmVarDecl` per parameter of every `FunctionProtoTypeLoc` and checks
+/// it again in `SubstParmVarDecl`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
+pub(crate) struct NestedParam {
+    /// The parameter's name, or where it would be (clang's `NameLoc`).
+    pub loc: Loc,
+    /// Its Swift parameter ABI attribute, when written (else invalid).
+    pub abi_loc: Loc,
+    /// Declared as an array (adjusted to the pointer the type keeps): its
+    /// element type is the one an address space must not qualify.
+    pub array: bool,
+}
+
 /// A dependent entity whose written locations are recorded.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) enum WrittenKey {
@@ -62,6 +78,72 @@ impl Sema<'_, '_> {
         let i = v.partition_point(|&l| l < loc);
         if v.get(i) != Some(&loc) {
             v.insert(i, loc);
+        }
+    }
+
+    /// Records the dependent parameters `(adjusted type, written)` of a
+    /// function type written inside another declarator (§5.8.1); nothing
+    /// while instantiating.
+    pub(crate) fn note_nested_params(&mut self, params: &[(QualType, NestedParam)]) {
+        if !self.inst.stack.is_empty() {
+            return;
+        }
+        for (i, &(ty, np)) in params.iter().enumerate() {
+            let Ok(i) = u16::try_from(i) else { break };
+            if !np.loc.is_valid() || !self.is_instantiation_dependent_type(ty) {
+                continue;
+            }
+            let v = self.templ.nested_params.entry((ty, i)).or_default();
+            let at = v.partition_point(|p| p.loc < np.loc);
+            if v.get(at).is_none_or(|p| p.loc != np.loc) {
+                v.insert(at, np);
+            }
+        }
+    }
+
+    /// [`Self::note_nested_params`] of a function declarator's `params`
+    /// whose types in the function type are `ptys`.
+    pub(crate) fn note_declarator_nested_params(
+        &mut self,
+        params: &[crate::declspec::ParamInfo],
+        ptys: &[QualType],
+    ) {
+        if !params.iter().any(|p| self.is_instantiation_dependent_type(p.ty)) {
+            return;
+        }
+        let v: Vec<(QualType, NestedParam)> = params
+            .iter()
+            .zip(ptys)
+            .map(|(p, &ty)| {
+                let loc = p.decl.map_or_else(
+                    || p.name.map_or(p.loc, |n| n.1),
+                    |pd| self.ast.decls.get(pd).loc(),
+                );
+                let abi_loc = p
+                    .attrs
+                    .iter()
+                    .map(|&a| self.ast.attrs.get(a))
+                    .find(|n| n.kind == kiln_ast::attr::AttrKind::SWIFT_PARAM_ABI)
+                    .map_or(Loc::INVALID, |n| n.loc);
+                let array = p.original_ty.is_some_and(|o| self.ast.types.is_array(o));
+                (ty, NestedParam { loc, abi_loc, array })
+            })
+            .collect();
+        self.note_nested_params(&v);
+    }
+
+    /// The written parameter `i` (of pattern type `ty`) of a function type
+    /// inside another declarator nearest to `anchor`, if one was recorded
+    /// ([`Self::note_nested_params`]).
+    pub(crate) fn nested_param(&self, ty: QualType, i: usize, anchor: Loc) -> Option<NestedParam> {
+        let v = self.templ.nested_params.get(&(ty, u16::try_from(i).ok()?))?;
+        let at = v.partition_point(|p| p.loc <= anchor);
+        let before = at.checked_sub(1).and_then(|j| v.get(j)).copied();
+        let after = v.get(at).copied();
+        let dist = |p: &NestedParam| p.loc.to_raw().abs_diff(anchor.to_raw());
+        match (before, after) {
+            (Some(b), Some(a)) => Some(if dist(&a) < dist(&b) { a } else { b }),
+            (b, a) => b.or(a),
         }
     }
 

@@ -5099,6 +5099,54 @@ formed it:
   keep their written keys. Types formed during instantiation therefore
   do not need recording.
 
+#### 5.8.1 Function types re-checked after substitution (WP-1823, WP-1839)
+
+A substituted function type is checked again as if its declarator had
+been written with the arguments (clang `TransformFunctionProtoType`:
+`SubstParmVarDecl` → `CheckParameter` for each `ParmVarDecl` of the
+`FunctionProtoTypeLoc`, then `BuildFunctionType` →
+`checkExtParameterInfos`). Under SFINAE each failure is a substitution
+failure; otherwise it is reported with the instantiation note and the
+type is kept.
+
+- **Declared parameter types.** A parameter's address space is checked
+  on its declared type, before the array-to-pointer adjustment, so `int
+  AS(1) a[2]` is rejected, in a template or not (`check_addr_space_param`;
+  a pointer or reference to a qualified type is not). The parameters of
+  a function type written inside another declarator, a typedef, a member
+  alias or another type-id are recorded while parsing in
+  `templ.nested_params`, keyed by (adjusted type, index) and sorted by
+  location (`note_declarator_nested_params`; not a function
+  declaration's own chunk, whose parameters are instantiated as
+  declarations, `Sema::declarator_declares_fn`). The `Function` arm of
+  `Substituter::ty` looks each parameter up nearest its anchor
+  (`Sema::nested_param`) and checks the substituted type
+  (`check_nested_param`): the address space at the parameter (where an
+  unnamed one's name would be), and a Swift parameter ABI's type at its
+  attribute. An alias template's aliased type is not checked this way
+  (`written_locs` off): clang substitutes it without its `TypeLoc`, so
+  `E<int AS(1)>` with `E = void (*)(T)` is accepted. Nor is a function
+  template's own type in deduction (`Substituter::own_fn_type`): its
+  parameters are checked when the specialization's declaration is
+  substituted. Recording happens only while parsing; a module image does
+  not carry the table (a gap: an imported template's nested parameters
+  are not re-checked).
+- **Swift parameter ABIs.** The order and convention of the expanded
+  parameters' ABIs are checked again for every substituted function type
+  (a nested one in `Substituter::ty`, a declaration's own in
+  `check_sig_param_abis`, both for a class member and for a function
+  template's specialization), so an empty pack that leaves a
+  `swift_error_result` without its `swift_context` fails `g3<>(nullptr)`.
+- **Location.** The checks of a function type's own ABIs report at the
+  type's begin: the first type-specifier of the declaration, past a
+  leading attribute or cv-qualifier. The parser passes a member
+  alias-declaration's type-id begin (`Parser::type_id_spec_loc`), and a
+  variable template's instantiation starts at its `type_spec_locs` entry,
+  as clang rebases a substituted `TypeSourceInfo` at its `TypeLoc` begin;
+  so do the return-type checks (`function cannot return array type`).
+  clang reports a variable template's error twice (declaration and
+  definition), kiln once.
+
 ## 6. Function templates
 
 ### 6.1 Pipeline for a call: `deduce_call(ft, explicit, args, ctx)`

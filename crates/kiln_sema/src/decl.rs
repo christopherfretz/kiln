@@ -1549,6 +1549,11 @@ impl Sema<'_, '_> {
         }
         let mut prev_ref = false;
         let recover = std::mem::take(&mut self.declarator_int_recovery);
+        let declares_fn = std::mem::take(&mut self.declarator_declares_fn)
+            && matches!(
+                d.ctx,
+                DeclaratorContext::File | DeclaratorContext::Member | DeclaratorContext::Block
+            );
         self.declarator_distant_exc = false;
         // A failed chunk: the declarator's type is the error type, or
         // `int` under recovery (checked at the next chunk and the end).
@@ -1964,6 +1969,14 @@ impl Sema<'_, '_> {
                         info = info.with_param_abis(self.ast.types.intern_param_abis(&abis));
                     }
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
+                    // The parameters of a function type inside another
+                    // declarator, or of a typedef's or type-id's, are
+                    // checked again when it is substituted (clang
+                    // `SubstParmVarDecl` for each `ParmVarDecl` of the
+                    // `FunctionProtoTypeLoc`; WP-1823).
+                    if (i != 0 || !(declares_fn || d.lambda)) && self.inst.stack.is_empty() {
+                        self.note_declarator_nested_params(params, &ptys);
+                    }
                     if !abis.is_empty() {
                         // The declaration's attributes go to the
                         // function chunk nearest the name (clang
@@ -2486,7 +2499,9 @@ impl Sema<'_, '_> {
         ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
         ty = self.adjust_param_type(ty);
-        let space_invalid = !nttp && self.check_addr_space_param(ty, d.name_loc());
+        // The type as declared: an array of elements in an address space
+        // is not adjusted out of it (clang `CheckParameter`; WP-1823).
+        let space_invalid = !nttp && self.check_addr_space_param(declared, d.name_loc());
         // C17 6.7.6.3p7: the qualifiers in the outermost `[ ]` qualify the
         // adjusted pointer.
         if !d.array_param_quals.is_empty() && self.ast.types.is_array(declared) {
@@ -3905,6 +3920,7 @@ impl Sema<'_, '_> {
             && !ds.is_typedef()
             && ds.friend.is_none()
             && !matches!(ds.storage, Some((StorageSpec::Static, _)));
+        self.declarator_declares_fn = !ds.is_typedef();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         // Left set for `act_on_function`, which takes it.
         let distant_invalid = self.declarator_distant_exc;
@@ -3982,12 +3998,14 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
-            // The function type's own keyword attributes (`template void
-            // f<1>() __arm_streaming;`) are part of the type matched
-            // against the template's (`Sema::apply_cc_attrs`).
-            let mut sme: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
-            sme.retain(|&a| self.ast.attrs.get(a).kind == AttrKind::SME_TYPE);
-            let ty = self.apply_cc_attrs(ty, &mut sme, true);
+            // The function type attributes (`template void f<1>()
+            // __arm_streaming;`, `template<> __attribute__((preserve_most))
+            // void g<2>()`) are part of the type matched against the
+            // template's (`Sema::apply_cc_attrs`; clang
+            // `GetFullTypeForDeclarator`; WP-1843).
+            let mut fn_attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            fn_attrs.retain(|&a| self.ast.attrs.get(a).kind.is_fn_type_attr());
+            let ty = self.apply_cc_attrs(ty, &mut fn_attrs, true);
             match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
                 Ok(r) => return r,
                 // No template to specialize: a plain, invalid function.

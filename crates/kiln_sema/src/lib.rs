@@ -870,6 +870,11 @@ pub struct Sema<'a, 'sm> {
     /// reference to a reference collapses), so the pack check still
     /// runs on it ([dcl.fct]/16; [`Sema::type_for_declarator_at`]).
     pub(crate) declarator_int_recovery: bool,
+    /// The declarator whose type is being formed declares a function (not
+    /// a typedef, parameter or type-id): its own function type's
+    /// parameters are the function's, checked when they are instantiated,
+    /// not as a nested function type's ([`Sema::note_nested_params`]).
+    pub(crate) declarator_declares_fn: bool,
     /// The declarator whose type is being formed declares a non-static
     /// data member: a variable length array bound that does not fold is
     /// clang's `err_typecheck_field_variable_size` there
@@ -1680,6 +1685,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             declarator_int_recovery: false,
+            declarator_declares_fn: false,
             declarator_field: false,
             declarator_distant_exc: false,
             after_def_prev: None,

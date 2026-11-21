@@ -147,6 +147,12 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// nearest to the given location (§5.8); off for an alias template,
     /// whose substitution clang reports at the alias declaration.
     pub(crate) written_locs: bool,
+    /// The function type about to be substituted is a function
+    /// declaration's own, whose parameters are checked one by one (the
+    /// deduction's `Sema::subst_explicit_param_types`): its written
+    /// parameters are not checked again as a nested function type's
+    /// (WP-1823). Taken by that function type.
+    pub(crate) own_fn_type: bool,
     /// The `DependentScopeDeclRefExpr` about to be substituted is a
     /// call's callee: a template-id there is not resolved to its one
     /// specialization (the call deduces). Taken by that node.
@@ -231,6 +237,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             invalid_decl_stmt: false,
             partial_pack: None,
             written_locs: true,
+            own_fn_type: false,
             as_callee: false,
             dtor_template_name: false,
             written_scope: None,

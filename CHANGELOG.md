@@ -321,6 +321,37 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A parameter qualified with an address space in a function type inside
+  another declarator, a typedef or a member alias of a template (`using t
+  = void (*)(T);` with `T = int __attribute__((address_space(1)))`, a
+  function template's parameter or trailing return type) was accepted
+  (WP-1823). It is now checked again at substitution, at the parameter,
+  as clang does: an error with the instantiation note, or a substitution
+  failure, so `requires { f<X>(nullptr); }` is no longer satisfied. A
+  parameter declared as an array of address-space-qualified elements
+  (`void f(int __attribute__((address_space(1))) a[2])`) is rejected too,
+  in a template or not.
+- The Swift parameter ABIs of a function template's own type and of a
+  function type in its trailing return type were not checked again after
+  substitution, so an empty pack leaving a `swift_error_result` without
+  its `swift_context` was accepted (`g3<>(nullptr)`) and satisfied a
+  requirement (WP-1839). The order, convention and nested parameter
+  types are now re-checked for every substituted function type, and a
+  member alias's and a variable template's errors are reported at the
+  first type-specifier of the type, past a leading attribute or
+  cv-qualifier, as clang does.
+- A calling-convention attribute (`preserve_most`, `swiftcall`, ...) on an
+  explicit specialization of a function template drew a stray "only
+  applies to functions and methods" warning, a specialization naming a
+  different convention than the template's was accepted, one adding or
+  dropping `no_caller_saved_registers` matched the template, and an
+  explicit specialization of a member function with a convention
+  (`template <> void A<int>::g() {}` for `__attribute__((preserve_most))
+  void g();`) was rejected as an exception-specification mismatch
+  (WP-1843). The written function type attributes are now part of the
+  matched type; the template's (member's) convention is adopted for the
+  match and a different written one is "function declared 'X' here was
+  previously declared ...", as clang.
 - A `static_assert` or constant initializer in a lambda body reading an
   enclosing `constexpr` variable whose value points to or refers to an
   automatic object (`constexpr const int *p = &b;` of a structured

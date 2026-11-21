@@ -224,6 +224,10 @@ pub struct Parser<'a, 'sm> {
     /// The name and end of the last `typename T...[i]` whose pack index
     /// was consumed after "expected a qualified name after 'typename'".
     pub(crate) typename_pack_index: Option<(Loc, Loc)>,
+    /// The first type-specifier of the last type-id parsed (after its
+    /// attributes and cv-qualifiers): an alias-declaration's substituted
+    /// type reports there (clang's `TypeLoc` begin).
+    pub(crate) type_id_spec_loc: Loc,
     /// Memoized [`Parser::skip_template_args`] results (spec/parse.md
     /// §2.5): parsing `A<B<C<...>>>` scans each nested list once, not
     /// once per enclosing level.
@@ -424,6 +428,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             param_abort: false,
             typename_failed: false,
             typename_pack_index: None,
+            type_id_spec_loc: Loc::INVALID,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,
@@ -475,7 +480,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
-    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc`, `fp_intrin` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `type_id_spec_loc`, `stmt_attrs_loc`, `fp_intrin` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
     /// | `trace` | transient | test-only parse trace |
     ///
     /// No field is state: the late-parse lists end with their class, and
@@ -531,6 +536,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             param_abort: _,
             typename_failed: _,
             typename_pack_index: _,
+            type_id_spec_loc: _,
             targs_memo: _,
             halt,
             decltype_scope,
