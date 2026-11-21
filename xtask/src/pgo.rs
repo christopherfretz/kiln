@@ -474,6 +474,15 @@ fn check_host_target(target: Option<&str>) -> Result<(), String> {
     }
 }
 
+/// What [`make_profile`] made the profile with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Made {
+    /// The `llvm-profdata` that merged it.
+    pub tool: Profdata,
+    /// The training cases compiled.
+    pub cases: usize,
+}
+
 /// Steps 1-3: the instrumented build, the training and the merge into
 /// `out`. The tool is found (and its version checked) before anything is
 /// built.
@@ -484,7 +493,7 @@ pub fn make_profile(
     llvm_dir: Option<&Path>,
     out: &Path,
     verbose: bool,
-) -> Result<(), String> {
+) -> Result<Made, String> {
     check_host_target(plan.target.as_deref())?;
     let tool = find_profdata(root, llvm_dir)?;
     eprintln!(
@@ -505,40 +514,87 @@ pub fn make_profile(
             .map_err(|e| format!("cannot clear {}: {e}", dirs.profiles.display()))?;
     }
     eprintln!("xtask: PGO step 2/3, training {} cases", TRAINING.len());
-    train(root, target_dir, &instrumented, &dirs.profiles, verbose)?;
+    let cases = train(root, target_dir, &instrumented, &dirs.profiles, verbose)?;
     eprintln!("xtask: PGO step 3/3, merging");
     merge(&tool, &dirs.profiles, out)?;
-    Ok(())
+    Ok(Made { tool, cases })
 }
 
 /// Step 4: the final build of `plan` with `profdata`; prints how many
 /// functions the profile did not cover (rustc's warning per function,
-/// [`WARN_MISSING`]).
+/// [`WARN_MISSING`]) and returns the binary with those two counts (kiln's
+/// crates, then the build scripts and proc macros; [`count_missing`]).
 pub fn final_build(
     root: &Path,
     target_dir: &Path,
     plan: &Plan,
     profdata: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, (usize, usize)), String> {
     let use_flag = format!("-Cprofile-use={}", profdata.display());
     let (exe, captured) =
         plan.run(root, target_dir, &[use_flag, WARN_MISSING.to_owned()], "PGO final build", true)?;
-    let (kiln, scripts) = count_missing(&captured);
+    let (kiln, scripts) = count_missing(&captured, &proc_macro_crates(root));
     eprintln!(
         "xtask: PGO: {kiln} function(s) of kiln's crates had no profile data, and {scripts} \
-         of build scripts (which the training never runs); a profile that does not match \
-         the build leaves nearly every function without"
+         of build scripts and proc macros (which run in the build, never in kiln); a profile \
+         that does not match the build leaves nearly every function without"
     );
-    Ok(exe)
+    Ok((exe, (kiln, scripts)))
 }
 
 /// The number of functions rustc found no profile data for: in the
-/// crates' own code units, and in build scripts' (`build_script_build.*`).
-pub fn count_missing(build_output: &str) -> (usize, usize) {
-    let lines = build_output.lines().filter(|l| l.contains(MISSING_MARKER));
-    lines.fold((0, 0), |(k, b), l| {
-        if l.starts_with("warning: build_script_build.") { (k, b + 1) } else { (k + 1, b) }
-    })
+/// crates' own code units, and in the code that runs in the build, never
+/// in kiln: build scripts (`build_script_build.*`) and the proc-macro
+/// crates `proc_macros` (`<crate>.*`), which a build without `--target`
+/// also compiles with the profile flags.
+/// Cargo's colors are taken out first: a CI runner's cargo colors its
+/// output (`warning` and the `:` in escape sequences), which once put
+/// every host-code line in kiln's count (WP-1862's hosted measurement).
+pub fn count_missing(build_output: &str, proc_macros: &[String]) -> (usize, usize) {
+    let host = |l: &str| {
+        let Some(unit) = l.strip_prefix("warning: ") else { return false };
+        let krate = unit.split(['.', ':']).next().unwrap_or("");
+        krate == "build_script_build" || proc_macros.iter().any(|p| p == krate)
+    };
+    let lines = build_output.lines().filter(|l| l.contains(MISSING_MARKER)).map(strip_ansi);
+    lines.fold((0, 0), |(k, b), l| if host(&l) { (k, b + 1) } else { (k + 1, b) })
+}
+
+/// `line` without its ANSI escape sequences (CSI: ESC `[`, parameters,
+/// one final byte in `@`..=`~`).
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.next() == Some('[') {
+            for f in chars.by_ref() {
+                if ('@'..='~').contains(&f) {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The workspace's proc-macro crates (`proc-macro = true` in a
+/// `crates/*/Cargo.toml`), by crate name (`-` as `_`).
+pub fn proc_macro_crates(root: &Path) -> Vec<String> {
+    let Ok(dir) = std::fs::read_dir(root.join("crates")) else { return Vec::new() };
+    let mut v: Vec<String> = dir
+        .flatten()
+        .filter(|e| {
+            std::fs::read_to_string(e.path().join("Cargo.toml"))
+                .is_ok_and(|t| t.lines().any(|l| l.replace(' ', "") == "proc-macro=true"))
+        })
+        .map(|e| e.file_name().to_string_lossy().replace('-', "_"))
+        .collect();
+    v.sort();
+    v
 }
 
 fn absolute(p: &Path) -> Result<PathBuf, String> {
@@ -570,7 +626,7 @@ fn run_build(o: &PgoOpts) -> Result<(), String> {
     let plan = Plan::release(o.target.as_deref(), o.features.as_deref());
     let dirs = PgoDirs::new(&target_dir, &plan);
     make_profile(&root, &target_dir, &plan, o.llvm_dir.as_deref(), &dirs.profdata, o.verbose)?;
-    let exe = final_build(&root, &target_dir, &plan, &dirs.profdata)?;
+    let (exe, _) = final_build(&root, &target_dir, &plan, &dirs.profdata)?;
     eprintln!("xtask build: PGO kiln++ at {}", exe.display());
     Ok(())
 }
@@ -651,14 +707,15 @@ fn has_gcc16() -> bool {
 }
 
 /// Step 2: `compiler` (instrumented) compiles [`TRAINING`] once each,
-/// writing raw profiles into `dir`. Every case must compile.
+/// writing raw profiles into `dir`. Every case must compile. Returns the
+/// number of cases compiled.
 pub fn train(
     root: &Path,
     target_dir: &Path,
     compiler: &Path,
     dir: &Path,
     verbose: bool,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let mut env: Vec<(OsString, OsString)> =
         vec![("LLVM_PROFILE_FILE".into(), dir.join(PROFRAW_PATTERN).into_os_string())];
@@ -702,7 +759,7 @@ pub fn train(
         start.elapsed().as_secs_f64(),
         dir.display()
     );
-    Ok(())
+    Ok(results.len())
 }
 
 /// The `.profraw` files in `dir`, sorted.
@@ -1188,11 +1245,26 @@ mod tests {
     fn missing_function_count() {
         let out = "   Compiling a\nwarning: a.cgu.0: no profile data available for function f \
                    Hash = 1 up to 0 count discarded\n\nwarning: `a` generated 1 warning\n";
-        assert_eq!(count_missing(out), (1, 0));
+        let none: &[String] = &[];
+        assert_eq!(count_missing(out, none), (1, 0));
         let script = "warning: build_script_build.f1-cgu.1: no profile data available for \
                       function g Hash = 2 up to 0 count discarded\n";
-        assert_eq!(count_missing(&format!("{out}{script}{script}")), (1, 2));
-        assert_eq!(count_missing(""), (0, 0));
+        assert_eq!(count_missing(&format!("{out}{script}{script}"), none), (1, 2));
+        assert_eq!(count_missing("", none), (0, 0));
+        // A proc macro runs in rustc, like a build script (WP-1862).
+        let derive = "warning: kiln_snap_derive.bb66-cgu.1: no profile data available for \
+                      function h Hash = 3 up to 0 count discarded\n";
+        let pm = proc_macro_crates(&util::repo_root());
+        assert!(pm.contains(&"kiln_snap_derive".to_owned()), "{pm:?}");
+        assert!(!pm.contains(&"kiln_driver".to_owned()));
+        assert_eq!(count_missing(&format!("{out}{derive}{script}"), &pm), (1, 2));
+        assert_eq!(count_missing(derive, none), (1, 0));
+        // Colored, as cargo prints on a CI runner.
+        let colored = "\u{1b}[1m\u{1b}[33mwarning\u{1b}[0m\u{1b}[1m:\u{1b}[0m \
+                       build_script_build.f1-cgu.1: no profile data available for function g \
+                       Hash = 2 up to 0 count discarded\n";
+        assert_eq!(count_missing(&format!("{colored}{colored}"), none), (0, 2));
+        assert_eq!(strip_ansi("\u{1b}[1;33mwarn\u{1b}[0ming"), "warning");
     }
 
     #[test]

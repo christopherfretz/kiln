@@ -46,7 +46,19 @@ kiln finds `lib/kiln/<major>` next to the binary on its own.
 `-resource-dir=<dir>` or `KILN_RESOURCE_DIR` override that location (see
 spec/driver.md, "Toolchain").
 
-To build the same archives from a checkout, run `cargo xtask dist`. See
+The released binaries are profile-guided builds: kiln was built once
+instrumented, compiled a fixed training corpus, and was built again with
+that profile (see [README.md](../README.md#profile-guided-build)). They
+behave exactly like a plain build and compile faster: about 0.82x the
+time of a plain build on both aarch64 and x86_64 (a geometric mean over
+19 bench programs, in [status/perf.md](status/perf.md#pgo-build)).
+
+To build the same archives from a checkout, run `cargo xtask dist --pgo`
+(about three times as long as a plain build; it needs LLVM 22's
+`llvm-profdata`). `cargo xtask dist` and `cargo build --release` build a
+plain kiln. A packager whose own build is a stock `cargo build --release`
+gets a profile-guided one with the `cargo xtask pgo-profile` pre-step
+(README.md, "For packagers"). See
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ### Run-time dependencies

@@ -108,6 +108,7 @@ fn resumption_and_stale_rule() {
         steps,
         kiln: Some(PathBuf::from("/bin/true")),
         baseline: Vec::new(),
+        pgo: true,
     };
     // The records' logs are /dev/null: hash of nothing.
     for id in ["torture-gnu23", "torture-gnu17", "gxx-dg-aarch64", "oss-fmt"] {
@@ -304,6 +305,8 @@ fn import_x86_fixture() {
         fs::write(f, t).unwrap();
     };
     put("kiln-dist/kiln-1.3.0-x86_64-unknown-linux-gnu.tar.xz", "no commit file: not read");
+    put("kiln-build/commit", &format!("{C1}\n"));
+    put("kiln-build/build-info.txt", &build_info(C1, true).to_text());
     for a in [
         "libcxx-1",
         "libcxx-2",
@@ -334,6 +337,7 @@ fn import_x86_fixture() {
         steps: manifest::steps(&projects(), &[]),
         kiln: None,
         baseline: Vec::new(),
+        pgo: true,
     };
     // All rows pass the smoke minimums; the gxx compare runs the real script.
     let ok = super::import_x86(&g, art.to_str().unwrap()).unwrap();
@@ -344,6 +348,14 @@ fn import_x86_fixture() {
     assert_eq!(rec("gxx-dg-x86_64").units, Some(1));
     let oss = rec("oss-x86_64");
     assert_eq!(oss.counts.iter().find(|c| c.0 == "reported").map(|c| c.1), Some(1));
+    assert!(oss.detail.contains("kiln++: PGO build, profile sha256 0123456789abcdef"), "{oss:?}");
+    // A release import of a plain hosted build records nothing; with
+    // --no-pgo it is accepted.
+    put("kiln-build/build-info.txt", &build_info(C1, false).to_text());
+    let release = Gate { ctx: ctx(), ..g.clone() };
+    let e = super::import_x86(&release, art.to_str().unwrap()).unwrap_err();
+    assert!(e.contains("not what ships: plain build (no PGO), but the release"), "{e}");
+    put("kiln-build/build-info.txt", &build_info(C1, true).to_text());
     assert!(ok || !rec("gxx-dg-x86_64").pass, "only the one-row g++.dg run may fail its compare");
     // An artifact of another commit: nothing is imported.
     put("oss-fmt-kiln/commit", C2);
@@ -385,4 +397,71 @@ fn compiler_is_named_kilnpp() {
     assert!(super::cxx_driver(&lone.join("kiln")).unwrap_err().contains("no such kiln++"));
     let _ = fs::remove_dir_all(&d);
     let _ = fs::remove_dir_all(&lone);
+}
+
+fn build_info(commit: &str, pgo: bool) -> crate::dist::BuildInfo {
+    crate::dist::BuildInfo {
+        version: "1.3.0".into(),
+        triple: "x86_64-unknown-linux-gnu".into(),
+        commit: commit.into(),
+        pgo: pgo.then(|| crate::dist::PgoInfo {
+            profile_sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .into(),
+            profile_bytes: 1234,
+            llvm_profdata: "22.1.8".into(),
+            training_cases: 44,
+            unprofiled_kiln: 0,
+            unprofiled_host_code: 1187,
+        }),
+    }
+}
+
+/// WP-1862: `dist`'s build-info.txt round-trips, and the gate's verdict on
+/// it: a PGO build of this commit whose profile applied passes; a plain
+/// build passes only with `--no-pgo`; another commit, a profile that left
+/// kiln's functions without data, or no file fail. The archive row's
+/// detail reaches the record's summary.
+#[test]
+fn pgo_build_verdict() {
+    use crate::dist::BuildInfo;
+    let pgo = build_info(C1, true);
+    assert_eq!(BuildInfo::parse(&pgo.to_text()), Some(pgo.clone()));
+    let plain = build_info(C1, false);
+    assert_eq!(BuildInfo::parse(&plain.to_text()), Some(plain.clone()));
+    assert_eq!(BuildInfo::parse("version: 1.3.0\n"), None, "no pgo: line");
+    assert_eq!(BuildInfo::parse("pgo: yes\n"), None, "pgo without a profile");
+    let v = |i: Option<&BuildInfo>, pgo: bool| super::build_verdict(i, C1, pgo);
+    let (ok, what) = v(Some(&pgo), true);
+    assert!(ok, "{what}");
+    assert_eq!(
+        what,
+        "PGO build, profile sha256 0123456789abcdef (44 training cases, llvm-profdata 22.1.8; \
+         0 of kiln's functions without profile data)"
+    );
+    assert!(v(Some(&pgo), false).0, "--no-pgo accepts a PGO build too");
+    assert_eq!(v(Some(&plain), false), (true, "plain build (no PGO), --no-pgo".to_owned()));
+    let (ok, what) = v(Some(&plain), true);
+    assert!(!ok && what.contains("but the release archives are PGO-built"), "{what}");
+    let (ok, what) = v(Some(&build_info(C2, true)), true);
+    assert!(!ok && what.ends_with("but built from 222222222"), "{what}");
+    let mut cold = pgo.clone();
+    if let Some(p) = cold.pgo.as_mut() {
+        p.unprofiled_kiln = super::UNPROFILED_MAX + 1;
+    }
+    let (ok, what) = v(Some(&cold), true);
+    assert!(!ok && what.contains("the profile did not apply"), "{what}");
+    assert!(!v(None, true).0);
+
+    let steps = manifest::steps(&projects(), &[("downstream".into(), "x".into())]);
+    let mut st = complete(&steps);
+    let mut a = done("archive", C1, true);
+    a.detail =
+        format!("kiln version 1.3.0; kiln++ k1; {}", super::build_verdict(Some(&pgo), C1, true).1);
+    st[0] = Status::Done(a);
+    let secs = record::render(&steps, &st, &ctx(), "").unwrap();
+    let sum = &secs.iter().find(|(s, _)| *s == "summary").unwrap().1;
+    assert!(sum.contains("is the release archive's: kiln version 1.3.0; kiln++ k1; PGO build, profile sha256 0123456789abcdef"), "{sum}");
+    // The external gets the archive's kiln++ and is tied to its hash.
+    let ext = steps.iter().find(|s| s.id == "external-downstream").unwrap();
+    assert!(ext.uses_kiln() && ext.deps == ["archive"]);
 }

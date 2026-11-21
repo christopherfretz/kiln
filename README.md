@@ -101,7 +101,7 @@ and 19 (`/usr/lib/llvm-22` and `/usr/lib/llvm-19`, with `clang++-22` and
 ```sh
 cargo build --release              # target/release/kiln and kiln++
 cargo xtask ci --quick             # fmt, clippy, unit tests, the corpus through kiln
-cargo xtask dist                   # release archives, as published, from this checkout
+cargo xtask dist                   # release archives from this checkout (plain; see below)
 ```
 
 `cargo xtask dist --check` also extracts the archive and smoke-tests it.
@@ -112,8 +112,11 @@ The archive layout is in [spec/driver.md](spec/driver.md) under
 
 ```sh
 cargo xtask build --pgo            # target/release/kiln++, profile-guided
-cargo xtask dist --pgo             # the release archives, profile-guided
+cargo xtask dist --pgo             # the release archives, as published
 ```
+
+The published release archives are built this way, on both
+architectures, and the release gate tests that binary.
 
 `--pgo` builds kiln instrumented, has it compile a fixed training corpus
 from `bench/`, merges the profile with `llvm-profdata` and builds again
@@ -145,7 +148,8 @@ builds without the profile. To check that the profile applied, add
 `-Cllvm-args=-pgo-warn-missing-function` to the final build's flags.
 rustc then warns once for each function without profile data. With a
 matching profile the only warnings are for functions in
-`build_script_build`, which the training never runs. A mismatched
+`build_script_build` and in the proc macro `kiln_snap_derive`, which run
+in the build and never in kiln. A mismatched
 profile warns for nearly every function of kiln's crates. The `-Cprofile-use` path must be
 absolute. The final build can use any target directory.
 

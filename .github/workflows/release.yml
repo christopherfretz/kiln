@@ -2,9 +2,13 @@ name: release
 # Release archives (WP-927; spec/harness.md "Dist", spec/driver.md
 # "Installation layout"). Runs only when a `v*` tag is pushed: never on a
 # branch push, a pull request or the merge queue. Each architecture builds
-# `cargo xtask dist --check` in the CI reference container (the image and
-# setup of ci-lane.yml), which writes kiln-<ver>-<triple>.tar.xz, the
-# -symbols archive and SHA256SUMS and smoke-tests the extracted tree; the
+# `cargo xtask dist --pgo --check` in the CI reference container (the image
+# and setup of ci-lane.yml), which builds kiln profile-guided (WP-1862;
+# spec/harness.md "PGO build": an instrumented build, the training corpus
+# with the container's LLVM 22, GCC 16.1 and libc++, `llvm-profdata-22
+# merge`, the final build), writes kiln-<ver>-<triple>.tar.xz, the
+# -symbols archive, SHA256SUMS and build-info.txt (which names the
+# profile) and smoke-tests the extracted tree; the
 # last job attaches the four archives and the merged SHA256SUMS to a DRAFT
 # GitHub release for the tag, which a maintainer reviews and publishes.
 # The tag must name the workspace version (`v` + Cargo.toml's
@@ -30,7 +34,9 @@ jobs:
   dist:
     name: dist ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # About three release builds and the training (docs/VALIDATION.md "Job
+    # timeouts"; the plain build's 15 sized for one).
+    timeout-minutes: 45
     # The reference environment of ci-lane.yml: Debian 13 (glibc 2.41) with
     # GCC 16.1 in /usr/local. The binaries need glibc 2.39+ (spec/driver.md
     # "Installation layout", run-time dependencies).
@@ -55,11 +61,13 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           echo "tag $GITHUB_REF_NAME, workspace version $version"
           test "$GITHUB_REF_NAME" = "v$version"
-      - name: cargo xtask dist --check
+      - name: cargo xtask dist --pgo --check
         run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          cargo xtask dist --check --out "$RUNNER_TEMP/dist"
+          cargo xtask dist --pgo --check --out "$RUNNER_TEMP/dist"
           ls -l "$RUNNER_TEMP/dist"
+          cat "$RUNNER_TEMP/dist/build-info.txt"
+          grep -qx 'pgo: yes' "$RUNNER_TEMP/dist/build-info.txt"
           mkdir dist-out
           cp "$RUNNER_TEMP"/dist/*.tar.xz "$RUNNER_TEMP"/dist/SHA256SUMS dist-out/
       # Upload from the workspace: in a container job `runner.temp` is the

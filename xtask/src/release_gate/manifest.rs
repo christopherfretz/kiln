@@ -64,12 +64,19 @@ pub struct Step {
 
 impl Step {
     /// Whether the step runs the archive's `kiln++` (and its record is
-    /// tied to that binary's hash).
+    /// tied to that binary's hash). An external gets it as
+    /// `$KILN_GATE_CXX`. The `ci` steps test the checkout with the debug
+    /// build `ci` makes: they are the merge gate, re-run at the RC.
     pub fn uses_kiln(&self) -> bool {
         self.host == Host::Local
             && matches!(
                 self.kind,
-                Kind::Pch | Kind::Torture { .. } | Kind::Libcxx | Kind::GxxDg | Kind::Oss { .. }
+                Kind::Pch
+                    | Kind::Torture { .. }
+                    | Kind::Libcxx
+                    | Kind::GxxDg
+                    | Kind::Oss { .. }
+                    | Kind::External { .. }
             )
     }
 }
@@ -331,7 +338,7 @@ pub fn steps(projects: &[String], externals: &[(String, String)]) -> Vec<Step> {
             smoke_min_units: 1,
             minutes: 15,
             scratch_gb: 0,
-            deps: Vec::new(),
+            deps: vec!["archive".to_owned()],
             track: 'a',
         });
     }
