@@ -10,6 +10,32 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Overload sets in module interface exposures (WP-1819): an
+  id-expression names every function of its overload set
+  ([basic.link]/14.5), so a set holding a TU-local function that overload
+  resolution does not select (found by lookup or argument-dependent
+  lookup, a function template, a template-id, `operator+(a, b)`) is now a
+  "declaration of 'f' exposes TU-local entity" error in an inline
+  function, a declaration's type or default argument and a default member
+  initializer; an operator expression's candidates are not. GCC 16.1 and
+  clang 22 accept these (a documented deviation).
+- Local classes of non-inline functions in module interfaces (WP-1820):
+  one rule. Such a class is part of the ignored body whatever its
+  members' specifiers (a constexpr member function naming a TU-local
+  entity is no longer an error), except a class the function's deduced
+  return type names, whose declarations are all checked, as GCC 16.1.
+  An importer calling a non-inline member function of such a class
+  through the deduced type now links (it emits its own internal
+  definition, as clang).
+- Unevaluated operands, discarded statements and declarators in module
+  interface exposures (WP-1821): naming a TU-local entity in `sizeof`,
+  `decltype`, `noexcept`, a requires-expression or an `if constexpr`
+  branch not taken in an inline function, or in a declarator's
+  `decltype(helper()) f();`, is now an error, as [basic.link]/14 names
+  them (clang 22 warns, GCC 16.1 accepts). An enumerator or a
+  specialization that is not TU-local used there, and a direct use of an
+  inline template specialization whose body names only such entities,
+  get clang 22's `-WTU-local-entity-exposure` warning.
 - The last TU-local exposures kiln accepted silently in a module
   interface (WP-1814, GAP-174): a local class's base, data member or
   member function signature naming a TU-local entity in an inline

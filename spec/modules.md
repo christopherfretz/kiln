@@ -403,7 +403,12 @@ at its name (`modules/exposure.rs`):
   function's default argument at its end, in the complete-class context
   (WP-1684). In a default argument a TU-local type written in a `sizeof`
   or `alignof` operand or an explicit type conversion counts, and so does
-  an odr-use of a TU-local constant (below);
+  an odr-use of a TU-local constant (below). A name in an unevaluated
+  operand of a declarator counts too (WP-1821): `decltype(helper) *fp;`
+  (the standard's example), `decltype(hidden) v;`, `auto g() ->
+  decltype(helper());`, `void g() noexcept(noexcept(helper()));`,
+  `A<sizeof(hidden)> v;`, a member `decltype(helper()) m;` (the error at
+  its class); GCC 16.1 and clang 22 accept these silently;
 - a default member initializer (WP-1684): a use there is held and the
   error is at its class (at the lambda, for a use in one), when the class
   is not TU-local; for a member of an anonymous struct or union, the named
@@ -411,12 +416,18 @@ at its name (`modules/exposure.rs`):
 - a use in the body of an inline function (`inline`, `constexpr`,
   `consteval`, a member defined in a class not attached to a named
   module, an inline function template), including a lambda there (the
-  error at the lambda) and a call to a TU-local inline function. Uses
-  GCC 16.1 folds away before its check are not exposures: an
-  unevaluated operand, a discarded statement, a full-expression that
-  folds to a value that is not TU-local (a constant read, `sizeof`), a
-  discarded-value expression that only names a function or variable or
-  takes its address;
+  error at the lambda) and a call to a TU-local inline function. A use in
+  an unevaluated operand (`sizeof`, `alignof`, `decltype`, `noexcept`, a
+  requires-expression, a type in `sizeof(S)`) or in a discarded statement
+  (an `if constexpr` branch not taken, in a template definition too) is
+  one (WP-1821): [basic.link]/14 counts every expression and type a
+  declaration contains, and /15 ignores neither; GCC 16.1 accepts these
+  (it folds them away before its check, except in a template definition)
+  and clang 22 warns (not for `sizeof(S)` or in a template definition).
+  Kept as GCC 16.1 (a deliberate compromise with the text): a
+  full-expression that folds to a value that is not TU-local (a constant
+  read), a discarded-value expression that only names a function or
+  variable or takes its address;
 - the declarations of a local class of an inline function that is not
   TU-local, which are part of its body (WP-1814; also a class nested in
   one, and one in a lambda there): a base class and a data member's type
@@ -424,6 +435,8 @@ at its name (`modules/exposure.rs`):
   types and default arguments (at the member), and the body of a member
   function that is inline (written `inline`, `constexpr` or `consteval`;
   the item above). GCC 16.1 rejects each at the same declaration;
+- the declarations of a local class or closure type of a function that
+  is not inline whose deduced return type names it (WP-1820, below);
 - a use of an instantiation that is TU-local by /16.5 (WP-1814): an
   instantiated inline function (of a function template, or a member of an
   instantiated class template) whose instantiated body names a TU-local
@@ -438,6 +451,62 @@ at its name (`modules/exposure.rs`):
   for an inline function and recorded at its end. GCC 16.1 rejects the
   instantiation itself, at the template; clang 22 accepts one found by
   argument-dependent lookup.
+
+**Overload sets (WP-1819).** [basic.link]/14.5 (the working draft's
+/13.5) makes a declaration name a function E when it contains "an
+id-expression that refers to a set of overloads that contains E": every
+function of the set, whether or not overload resolution selects it. So
+an id-expression whose set holds a TU-local function is an exposure
+wherever a use of that function would be: a call (the set lookup found,
+and the functions argument-dependent lookup adds), a conversion to a
+function pointer, a qualified name, an operator function named as a call
+(`operator+(a, b)`), a function template in the set, a template-id
+(`tf<int>(1, 2)`), an unevaluated operand, a default argument, a default
+member initializer, a lambda in an inline variable's initializer:
+"declaration of 'call' exposes TU-local entity 'f'"
+(`module_note_overload_set`). A dependent call in an inline template's
+definition names the set its unqualified lookup finds there (GCC 16.1
+rejects this one too); in an instantiation, a set holding a TU-local
+function that argument-dependent lookup adds makes the instantiated
+declaration an exposure, so the specialization is TU-local (/16.5,
+above: "exposes TU-local entity 'calls_adl<N::A>'"). Not a set: the
+candidates of an operator expression (`a + b` is not an id-expression;
+[over.match.oper] finds them) and a non-dependent name in an
+instantiated declaration ([basic.link] note 8; it was checked in the
+definition). GCC 16.1 checks only the selected function, clang 22
+nothing: a deviation (docs/status/deviations.md). Tests:
+`basic.link/exposure-overload-set.cpp`, `-accepted.cpp`,
+`module.interface/exposure-overload-set-importer-run.cpp`.
+
+**Local classes of functions that are not inline (WP-1820).** /15.1
+ignores the body of a function that is not inline, "but not the deduced
+return type". A local class or closure type is declared in that body and
+is part of it, whatever its members' specifiers: a constexpr or inline
+member function's body, a base, a data member's type, a member's
+signature and a lambda called there name no TU-local entity in an
+exposure (one rule for every member kind; [class.mfct]/1 makes the other
+members of a class attached to a named module not inline). The exception
+is a class the deduced return type names, through pointers, references,
+arrays, function and member pointer types, template arguments, and the
+data members and bases of local classes it names (a class nested in one
+too): /15.1 keeps that type, so the class is reached from an exposure
+and all of its declarations are checked as a local class of an inline
+function's (above): its base and data member types, default member
+initializers (the error at the class), member signatures and default
+arguments, the body of an inline member function, and a returned
+lambda's body (the error at the function). Held per function and
+decided at its end (`module_resolve_escapes`). The body of a member
+function that is not inline stays ignored; an importer that calls it
+through the deduced type emits its own internal definition, as clang 22
+(the member has no linkage, [basic.link]/8). GCC 16.1 rejects the same
+declarations (and a lambda around a returned class too); clang 22
+accepts them. [basic.link]'s non-normative example (`int y =
+([]{f();}(),0);`, "closure type is not TU-local") is about a variable's
+initializer and is kept accepted (/15.1.2, WP-1684). Not followed: the
+local classes of a function template's instantiations. Tests:
+`basic.link/exposure-local-class-escape.cpp`,
+`basic.link/exposure-local-class-not-inline-accepted.cpp`,
+`module.interface/exposure-local-class-importer-run.cpp`.
 
 A variable usable in constant expressions with internal linkage is
 TU-local, but /15.4 ignores a reference to it that is not an odr-use.
@@ -482,9 +551,18 @@ template definition; GCC 16.1 accepts each; WP-1814):
   attached to a named module, [class.mfct]/1): /15.1 ignores that body;
 - a use of a specialization of a function template that is not inline
   whose definition names a TU-local entity where it is written (also
-  explicitly instantiated): /15.1 ignores its body, so it is not TU-local.
+  explicitly instantiated, in an unevaluated operand and in a discarded
+  statement; WP-1821): /15.1 ignores its body, so it is not TU-local.
   A name found by argument-dependent lookup only in the instantiation and
-  a member of a class template get no warning, as clang 22.
+  a member of a class template get no warning, as clang 22;
+- an enumerator in an unevaluated operand or a discarded statement
+  (WP-1821, as the first item);
+- a use of a specialization of an inline function template whose body
+  names only an enumerator or a local class's member function that is
+  not inline (WP-1821): it is not TU-local; the warning is at a direct
+  use only (a call through another template gets none), as clang 22.
+  Tests: `basic.link/exposure-unevaluated-warning.cpp` (and
+  `exposure-unevaluated-discarded.cpp` for the exposures).
 
 Not checked, as the text exempts them: a friend declaration (/15.3), a
 variable that might be usable in constant expressions except an odr-use

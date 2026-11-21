@@ -1,7 +1,8 @@
 // [basic.link]/15-17 (WP-1684): what stays valid next to the forms
 // exposure-member-init-default-arg.cpp and exposure-odr-use-and-closure.cpp
-// reject. A constant read or sizeof of a TU-local type in a default member
-// initializer folds to a value that is not TU-local; a member function
+// reject. A constant read in a default member initializer folds to a value
+// that is not TU-local (a TU-local type in a sizeof operand is named:
+// exposure-unevaluated-discarded.cpp, WP-1821); a member function
 // defined in its class in a named module is not implicitly inline, so its
 // body is ignored (/15.1.1), odr-uses included; a function template's body
 // is checked only when instantiated; a closure type whose call operator
@@ -20,7 +21,6 @@ struct S { int v; };
 }
 
 export struct ReadsConstant { int m = K; };
-export struct SizeofType { unsigned long n = sizeof(S); };
 export inline int read_k() { return K; }
 export struct NotInline {
   const int *address() { return &K; }

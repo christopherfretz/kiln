@@ -105,6 +105,21 @@ pub(crate) struct ModSema {
     /// clang 22's warning (an inline variable's initializer) rather than
     /// an exposure.
     deferred_exposures: Vec<(exposure::PendingExposure, bool)>,
+    /// Held uses in the local classes and closure types of a non-inline
+    /// function's body, decided at its end by its deduced return type
+    /// (`exposure.rs`, WP-1820).
+    escapes: Vec<exposure::PendingExposure>,
+    /// The TU-local functions in an overload set named outside any
+    /// declaration a use is held for (a default argument; WP-1819), at the
+    /// id-expression.
+    set_uses: Vec<(Loc, DeclId)>,
+    /// Uses of TU-local entities in the decl-specifiers and declarators of
+    /// the declarations being parsed, by deprecation delay level
+    /// (`exposure.rs`, WP-1821).
+    decl_uses: Vec<(usize, DeclId, Loc)>,
+    /// Instantiated functions whose uses get clang 22's warning though they
+    /// are not TU-local (WP-1821).
+    inst_warn: kiln_source::fx::FxHashSet<DeclId>,
     /// The first token of the qualified name whose reference is being
     /// built, while it is (where clang 22 warns for a TU-local
     /// enumerator).

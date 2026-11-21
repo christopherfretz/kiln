@@ -6,13 +6,17 @@
 //! its private module fragment, not a header unit), a declaration of an
 //! entity that is not TU-local is ill-formed when it names a TU-local
 //! one outside the parts /15 ignores. kiln checks, at most once per
-//! declaration, the subset GCC 16.1 rejects (clang 22 only warns,
-//! `-WTU-local-entity-exposure`):
+//! declaration (clang 22 only warns, `-WTU-local-entity-exposure`; GCC
+//! 16.1 rejects a subset):
 //! - a use ([`Sema::diagnose_deprecated`], clang's `DiagnoseUseOfDecl`)
 //!   in the body of an inline function (written `inline`, `constexpr` or
 //!   `consteval`, or a member defined in a class attached to the global
 //!   module), also in a lambda there: the error is at the function (the
-//!   lambda);
+//!   lambda); in an unevaluated operand and a discarded statement too
+//!   (WP-1821: they name what they name);
+//! - every function of an overload set an id-expression refers to, the
+//!   selected one or not, with those argument-dependent lookup adds
+//!   ([`Sema::module_note_overload_set`], /14.5; WP-1819);
 //! - a use in a default member initializer, the error at its class
 //!   ([`Sema::module_field_init_exposures`]), and in the body of a lambda
 //!   whose closure type is the type of the variable it initializes, the
@@ -20,12 +24,20 @@
 //! - an odr-use of a TU-local constant in those places
 //!   ([`Sema::module_note_odr_use`]; /15.4 ignores only the other
 //!   references to it);
-//! - the declared type of a function (return and parameter types), of a
-//!   variable, or of a non-static data member (the error at its class),
-//!   and a default argument (a member function's at its end,
+//! - the declared type of a function (return and parameter types, a
+//!   `noexcept` operand), of a variable, or of a non-static data member
+//!   (the error at its class), a name in an unevaluated operand there
+//!   ([`Sema::note_declarator_use`], WP-1821), and a default argument (a
+//!   member function's at its end,
 //!   [`Sema::module_check_delayed_default_arg`]), when written
 //!   ([`Sema::module_check_decl_exposure`]); also in a local class of an
-//!   inline function ([`Sema::local_class_checked`], WP-1814);
+//!   inline function (WP-1814);
+//! - the declarations of a local class or closure type of a function
+//!   that is not inline when its deduced return type names the class
+//!   (/15.1 keeps that type): held as [`PendingExposure::escape`] and
+//!   decided at the function's end ([`Sema::module_resolve_escapes`],
+//!   WP-1820). Any other local class of such a function is part of its
+//!   ignored body, whatever its members' specifiers;
 //! - a use of an instantiated inline function of a template of the
 //!   purview whose instantiated body names a TU-local entity, which makes
 //!   it TU-local (/16.5): held as [`PendingExposure::spec`], decided at
@@ -33,19 +45,24 @@
 //!
 //! A TU-local entity is a function, variable, class, enumeration or
 //! template with internal linkage, or a class template specialization
-//! with a TU-local type argument ([basic.link]/16.1, 16.4). Not checked
-//! (GCC 16.1 accepts each): an unevaluated operand, a discarded
-//! statement, a reference to a variable that might be usable in constant
+//! with a TU-local type argument ([basic.link]/16.1, 16.4). Not checked:
+//! a reference to a variable that might be usable in constant
 //! expressions that is not an odr-use (/15.4), a function or variable
 //! declared outside the purview (GCC 16.1 warns,
 //! `-Wexpose-global-module-tu-local`), an instantiation of a template
-//! declared outside the purview, a friend declaration (/15.3).
+//! declared outside the purview, a friend declaration (/15.3), the
+//! candidates of an operator expression (not an id-expression), and,
+//! as GCC 16.1, a full-expression that folds to a value that is not
+//! TU-local ([`Sema::module_full_expr_exposures`]).
 //!
-//! Not exposures, with clang 22's warning (WP-1814): an enumerator of a
-//! TU-local enumeration (not a TU-local entity, /16.1); a use in the body
-//! of a member function of a local class that is not inline (ignored,
-//! /15.1); a use of a specialization of a function template that is not
-//! inline whose definition names a TU-local entity.
+//! Not exposures, with clang 22's warning (WP-1814, WP-1821): an
+//! enumerator of a TU-local enumeration (not a TU-local entity, /16.1);
+//! a use in the body of a member function of a local class that is not
+//! inline (ignored, /15.1); a use of a specialization of a function
+//! template that is not inline whose definition names a TU-local entity,
+//! also in an unevaluated operand or a discarded statement; a use of a
+//! specialization of an inline template whose body names only those
+//! ([`Sema::note_inst_warning`]).
 //!
 //! The initializer of a variable is not an exposure (/15.1.2; /17 makes
 //! only a constexpr variable's TU-local value one, which
@@ -70,6 +87,11 @@ use crate::Sema;
 /// How many links a walk follows at most.
 const MAX_WALK: usize = 1024;
 
+/// Where a held use belongs ([`Sema::exposure_site`]): the declaration it
+/// would make an exposure, where that is reported, the closure type of
+/// the outermost lambda it is in, and its [`PendingExposure::escape`].
+type Site = (DeclId, Loc, Option<DeclId>, Option<(DeclId, DeclId)>);
+
 /// A use [`Sema::module_note_use`] holds.
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct PendingExposure {
@@ -91,6 +113,31 @@ pub(crate) struct PendingExposure {
     /// ([basic.link]/16.5): decided at the end of the unit
     /// ([`Sema::module_resolve_deferred_exposures`]).
     spec: bool,
+    /// The entity is named whatever the full-expression folds to: the use
+    /// is in an unevaluated operand (WP-1821), or the entity is a member
+    /// of an overload set that is not selected (WP-1819), which
+    /// [basic.link]/14 counts all the same.
+    kept: bool,
+    /// `(F, C)`: the use is in local class or closure type `C` of the body
+    /// of function `F`, which is not inline and has a deduced return type:
+    /// an exposure only if that type names `C` ([`BodyScope::Escape`],
+    /// decided at the end of `F`, [`Sema::module_resolve_escapes`]).
+    escape: Option<(DeclId, DeclId)>,
+}
+
+/// Whether the declarations in a context are part of the body of a
+/// function that is not inline, which [basic.link]/15.1 ignores
+/// ([`Sema::body_scope`]; WP-1820).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyScope {
+    /// No function body around them is ignored.
+    Considered,
+    /// In local class or closure type `C` (the outermost) of the body of
+    /// `F`, which is not inline and has a deduced return type: considered
+    /// only if that type names `C`, which /15.1 keeps (`(F, C)`).
+    Escape(DeclId, DeclId),
+    /// In the body of a function that is not inline, or of a TU-local one.
+    Ignored,
 }
 
 impl Sema<'_, '_> {
@@ -117,18 +164,23 @@ impl Sema<'_, '_> {
             return;
         }
         let in_inst = !self.inst.stack.frames.is_empty();
-        let Some((owner, at, lambda)) = self.exposure_site() else {
+        let Some((owner, at, lambda, escape)) = self.exposure_site() else {
             if !in_inst {
                 self.note_pattern_use(d);
                 self.local_member_body_warning(d, loc);
+                self.note_declarator_use(d, loc);
             }
             return;
         };
         if self.is_tu_local_enumerator(d) {
             // Not a TU-local entity (/16.1 lists types, functions,
             // variables and templates); clang 22 warns, except in a
-            // default member initializer.
-            if !in_inst && self.kind_of(owner) != DeclKind::CXXRecord {
+            // default member initializer, and in an instantiation at a
+            // use of the instantiated function (WP-1821).
+            if escape.is_some() {
+            } else if in_inst || self.in_template() {
+                self.note_inst_warning(owner);
+            } else if self.kind_of(owner) != DeclKind::CXXRecord {
                 let at = self.modules.qualified_use_begin.unwrap_or(loc);
                 self.warn_tu_local_exposed(d, at);
             }
@@ -147,21 +199,112 @@ impl Sema<'_, '_> {
                 lambda,
                 odr_const: false,
                 spec: !tu_local,
+                kept: self.unevaluated > 0,
+                escape,
             };
             self.modules.pending_exposures.push(p);
         }
     }
 
-    /// Whether a use now may be held: not in an unevaluated operand or a
-    /// discarded statement, and either a module interface's purview or an
-    /// instantiation in one ([`Sema::inst_exposure_owner`]).
+    /// A use of `d` at `loc` in the decl-specifiers or a declarator of the
+    /// declaration being parsed (its deprecation delay point, outside its
+    /// initializer): held for [`Sema::module_check_decl_exposure`], which
+    /// takes it. The declaration names `d` there whatever the type it
+    /// forms: `decltype(f) *fp;` is an exposure of `f`, an unevaluated
+    /// operand of the declarator (the standard's example; WP-1821).
+    fn note_declarator_use(&mut self, d: DeclId, loc: Loc) {
+        if self.depr_init.is_none()
+            && self.depr_points.last() == Some(&self.ctx)
+            && !self.kind_of(self.ctx).is_function()
+            && self.module_exposure_purview()
+            && self.is_tu_local_entity(d)
+        {
+            self.modules.decl_uses.push((self.depr_points.len(), d, loc));
+        }
+    }
+
+    /// Drops the declarator uses held above deprecation delay level
+    /// `level` ([`Sema::note_declarator_use`]), whose declaration is done.
+    pub(crate) fn module_drop_declarator_uses(&mut self, level: usize) {
+        if !self.modules.decl_uses.is_empty() {
+            self.modules.decl_uses.retain(|&(l, ..)| l <= level);
+        }
+    }
+
+    /// The held uses from `lo` to `hi` are in an unevaluated operand parsed
+    /// outside the unevaluated context (the type-id of `sizeof(T)`): kept
+    /// as [`PendingExposure::kept`] says.
+    pub(crate) fn module_keep_uses_between(&mut self, lo: Loc, hi: Loc) {
+        let r = lo.to_raw()..=hi.to_raw();
+        for p in &mut self.modules.pending_exposures {
+            if r.contains(&p.loc.to_raw()) {
+                p.kept = true;
+            }
+        }
+    }
+
+    /// The id-expression at `loc` refers to the set of overloads `decls`
+    /// (found by lookup, or added by argument-dependent lookup at a call):
+    /// it names each function and function template in the set, whether
+    /// or not overload resolution selects it ([basic.link]/14; WP-1819),
+    /// so a TU-local one is held as [`Sema::module_note_use`] holds a use
+    /// (the selected one is also used). No warning where the text says
+    /// there is no exposure: clang 22 looks only at the selected function.
+    pub(crate) fn module_note_overload_set(&mut self, decls: &[DeclId], loc: Loc) {
+        if !self.ast.modules.active || !self.exposure_use_point() {
+            return;
+        }
+        for &d in decls {
+            let mut d = self.ast.strip_shadow(d);
+            if self.kind_of(d) == DeclKind::FunctionTemplate {
+                // Its linkage is its pattern's.
+                d = self.pattern_of(d).unwrap_or(d);
+            }
+            if !self.kind_of(d).is_function() || !self.is_tu_local_entity(d) {
+                continue;
+            }
+            match self.exposure_site() {
+                Some((owner, at, lambda, escape)) => {
+                    if self.modules.exposed.contains(&owner) {
+                        return;
+                    }
+                    let p = PendingExposure {
+                        owner,
+                        at,
+                        entity: d,
+                        loc,
+                        lambda,
+                        odr_const: false,
+                        spec: false,
+                        kept: true,
+                        escape,
+                    };
+                    self.modules.pending_exposures.push(p);
+                }
+                // A declarator ([`Sema::note_declarator_use`]); a default
+                // argument is also checked by its walk
+                // ([`Sema::default_arg_tu_local`]).
+                None if self.inst.stack.frames.is_empty() => {
+                    self.modules.set_uses.push((loc, d));
+                    self.note_declarator_use(d, loc);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Whether a use now may be held: a module interface's purview, or
+    /// an instantiation in one ([`Sema::inst_exposure_owner`]). An
+    /// unevaluated operand and a discarded statement name what they name
+    /// ([basic.link]/14 counts every expression a declaration contains:
+    /// WP-1821), as the declarator `decltype(f) *fp;` of the standard's
+    /// example does.
     fn exposure_use_point(&self) -> bool {
-        let here = if self.inst.stack.frames.is_empty() {
+        if self.inst.stack.frames.is_empty() {
             !self.modules.frames.is_empty() && self.module_exposure_purview()
         } else {
             self.exposure_main_unit()
-        };
-        here && self.unevaluated == 0 && !self.in_discarded_statement()
+        }
     }
 
     /// Whether the main unit is a module interface unit or module
@@ -178,11 +321,11 @@ impl Sema<'_, '_> {
     /// The declaration a use now belongs to ([`Sema::exposure_owner`]),
     /// or in an instantiation the instantiated function
     /// ([`Sema::inst_exposure_owner`]).
-    fn exposure_site(&self) -> Option<(DeclId, Loc, Option<DeclId>)> {
+    fn exposure_site(&self) -> Option<Site> {
         if self.inst.stack.frames.is_empty() {
             self.exposure_owner()
         } else {
-            self.inst_exposure_owner()
+            self.inst_exposure_owner().map(|(o, at, l)| (o, at, l, None))
         }
     }
 
@@ -211,7 +354,7 @@ impl Sema<'_, '_> {
             }
             match k {
                 DeclKind::CXXRecord if self.ast.closure_lambda(c).is_some() => {}
-                DeclKind::LinkageSpec | DeclKind::Export => {}
+                DeclKind::LinkageSpec | DeclKind::Export | DeclKind::RequiresExprBody => {}
                 _ => return None,
             }
             c = self.ast.decls.get(c).ctx()?;
@@ -276,7 +419,7 @@ impl Sema<'_, '_> {
             let through = if k.is_function() {
                 self.is_lambda_call_op(c)
             } else {
-                matches!(k, DeclKind::LinkageSpec | DeclKind::Export)
+                matches!(k, DeclKind::LinkageSpec | DeclKind::Export | DeclKind::RequiresExprBody)
                     || k == DeclKind::CXXRecord && self.ast.closure_lambda(c).is_some()
             };
             if !through {
@@ -315,35 +458,224 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(r) = self.ast.decls.get(c).ctx() else { return };
-        if self.local_class_checked(r) && self.is_tu_local_entity(d) {
+        if self.local_class_scope(r) != Some(BodyScope::Considered) {
+            return;
+        }
+        if self.in_template() && (self.is_tu_local_entity(d) || self.is_tu_local_enumerator(d)) {
+            // clang 22 warns at a use of the instantiation (WP-1821).
+            self.note_inst_warning(c);
+        }
+        if self.is_tu_local_entity(d) {
             self.warn_tu_local_exposed(d, loc);
-        } else if self.local_class_checked(r) && self.is_tu_local_enumerator(d) {
+        } else if self.is_tu_local_enumerator(d) {
             let at = self.modules.qualified_use_begin.unwrap_or(loc);
             self.warn_tu_local_exposed(d, at);
         }
     }
 
-    /// Whether `r` is a local class (not a closure type) whose innermost
-    /// enclosing function that is not a lambda's call operator is inline
-    /// and not TU-local: its declarations are part of that function's
-    /// body, which [basic.link]/15.1 does not ignore (WP-1814).
-    fn local_class_checked(&self, r: DeclId) -> bool {
-        if self.kind_of(r) != DeclKind::CXXRecord || self.ast.closure_lambda(r).is_some() {
-            return false;
+    /// The [`Sema::body_scope`] of `r` when it is a local class (not a
+    /// closure type): its declarations are part of the body of the
+    /// function around it (WP-1814, WP-1820).
+    fn local_class_scope(&self, r: DeclId) -> Option<BodyScope> {
+        if self.kind_of(r) != DeclKind::CXXRecord
+            || self.ast.closure_lambda(r).is_some()
+            || !self.in_function_scope(r)
+        {
+            return None;
         }
-        let mut c = self.ast.decls.get(r).ctx();
+        Some(self.body_scope(r))
+    }
+
+    /// Whether the declarations in `d` (and `d` itself) are part of a
+    /// function body [basic.link]/15.1 ignores (WP-1820). A local class or
+    /// closure type of a function is not TU-local unless the function is
+    /// (/16.1.2), and its declarations are part of that function's body:
+    /// considered in an inline function's (WP-1814), ignored with the body
+    /// of one that is not inline, whatever their own specifiers (a
+    /// constexpr member function's body included), except where the
+    /// function's deduced return type, which /15.1 keeps, names the class
+    /// ([`BodyScope::Escape`]; GCC 16.1 checks exactly those). Everything
+    /// in a TU-local function is TU-local, and ignored.
+    fn body_scope(&self, d: DeclId) -> BodyScope {
+        let mut below = (self.kind_of(d) == DeclKind::CXXRecord).then_some(d);
+        let mut ignoring = None;
+        let mut c = self.ast.decls.get(d).ctx();
         for _ in 0..MAX_WALK {
-            let Some(x) = c else { return false };
+            let Some(x) = c else { break };
             let k = self.kind_of(x);
-            if k.is_function() && !self.is_lambda_call_op(x) {
-                return self.is_inline_fn(x) && !self.is_tu_local_entity(x);
-            }
-            if matches!(k, DeclKind::Namespace | DeclKind::TranslationUnit) {
-                return false;
+            if k.is_function() {
+                if self.is_tu_local_entity(x) {
+                    return BodyScope::Ignored;
+                }
+                if !self.is_lambda_call_op(x) && !self.is_inline_fn(x) {
+                    if ignoring.is_some() {
+                        return BodyScope::Ignored;
+                    }
+                    ignoring = Some((x, below));
+                }
+            } else if k == DeclKind::CXXRecord {
+                below = Some(x);
+            } else if matches!(k, DeclKind::Namespace | DeclKind::TranslationUnit) {
+                break;
             }
             c = self.ast.decls.get(x).ctx();
         }
-        false
+        match ignoring {
+            None => BodyScope::Considered,
+            Some((f, Some(r))) if self.declared_with_placeholder_return(f) => {
+                BodyScope::Escape(f, r)
+            }
+            Some(_) => BodyScope::Ignored,
+        }
+    }
+
+    /// Whether function `f` was declared with a placeholder return type
+    /// (deduced since, or not yet).
+    fn declared_with_placeholder_return(&self, f: DeclId) -> bool {
+        if self.fn_spec(f).return_deduced() {
+            return true;
+        }
+        let Some(t) = self.ast.decls.get(f).ty() else { return false };
+        match self.ast.types.view(t.ty()) {
+            TypeView::Function(p) => self.contains_undeduced_auto(p.ret()),
+            _ => false,
+        }
+    }
+
+    /// An exposure of `owner` naming `e`, found where `scope` says: now,
+    /// or at the end of the function whose deduced return type decides it
+    /// ([`Sema::module_resolve_escapes`]).
+    fn report_in_scope(&mut self, owner: DeclId, e: DeclId, scope: BodyScope) {
+        let at = self.ast.decls.get(owner).loc();
+        match scope {
+            BodyScope::Considered => self.report_exposure(owner, at, e),
+            BodyScope::Escape(f, c) => self.modules.escapes.push(PendingExposure {
+                owner,
+                at,
+                entity: e,
+                loc: at,
+                lambda: None,
+                odr_const: false,
+                spec: false,
+                kept: false,
+                escape: Some((f, c)),
+            }),
+            BodyScope::Ignored => {}
+        }
+    }
+
+    /// The end of the definition of function `f`: the held uses in its
+    /// local classes and closure types ([`BodyScope::Escape`]) are
+    /// exposures when its deduced return type names their class (through
+    /// pointers, references, arrays, function types and template
+    /// arguments, and the data members' and base classes' types of a class
+    /// it names), else part of its body, which /15.1 ignores (WP-1820).
+    pub(crate) fn module_resolve_escapes(&mut self, f: DeclId) {
+        if self.modules.escapes.is_empty() {
+            return;
+        }
+        let (mine, rest): (Vec<PendingExposure>, Vec<PendingExposure>) =
+            std::mem::take(&mut self.modules.escapes)
+                .into_iter()
+                .partition(|p| p.escape.is_some_and(|(x, _)| x == f));
+        self.modules.escapes = rest;
+        if mine.is_empty() || self.in_template() {
+            return;
+        }
+        let named = self.escaped_local_classes(f);
+        for p in mine {
+            let Some((_, c)) = p.escape else { continue };
+            if !named.contains(&c) {
+                continue;
+            }
+            if p.spec {
+                let p = PendingExposure { escape: None, ..p };
+                self.modules.deferred_exposures.push((p, false));
+            } else if !self.modules.exposed.contains(&p.owner) {
+                self.report_exposure(p.owner, p.at, p.entity);
+            }
+        }
+    }
+
+    /// The outermost local classes and closure types of function `f` its
+    /// return type names ([`Sema::module_resolve_escapes`]).
+    fn escaped_local_classes(&self, f: DeclId) -> kiln_source::fx::FxHashSet<DeclId> {
+        let mut out = kiln_source::fx::FxHashSet::default();
+        let Some(fty) = self.ast.decls.get(f).ty() else { return out };
+        let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return out };
+        let mut work = vec![p.ret()];
+        let mut seen = kiln_source::fx::FxHashSet::default();
+        let mut n = 0usize;
+        while let Some(t) = work.pop() {
+            n += 1;
+            if n > 100_000 || self.is_error_type(t) {
+                break;
+            }
+            let t = self.ast.types.canonical(t);
+            if !seen.insert(t.ty()) {
+                continue;
+            }
+            match self.ast.types.canonical_view(t) {
+                TypeView::Pointer(x)
+                | TypeView::LValueRef(x)
+                | TypeView::RValueRef(x)
+                | TypeView::IncompleteArray(x)
+                | TypeView::Complex(x)
+                | TypeView::Atomic(x) => work.push(x),
+                TypeView::ConstantArray(a) => work.push(a.elem),
+                TypeView::MemberPointer { pointee, class } => {
+                    work.push(pointee);
+                    work.push(QualType::unqual(class));
+                }
+                TypeView::Function(q) => {
+                    work.push(q.ret());
+                    work.extend(self.ast.types.params(&q).iter().copied());
+                }
+                TypeView::Record(d) => {
+                    if let Some((_, i)) = self.ast.spec_info(d) {
+                        let args = self.ast.types.canonical_args(i.args);
+                        for a in self.ast.types.args(args).to_vec() {
+                            if let ArgView::Type(x) = a.view() {
+                                work.push(x);
+                            }
+                        }
+                    }
+                    let Some(c) = self.outermost_local_of(d, f) else { continue };
+                    out.insert(c);
+                    // What the class holds is reachable with it.
+                    for m in self.ast.decls.members(d).collect::<Vec<_>>() {
+                        if self.kind_of(m) == DeclKind::Field
+                            && let Some(x) = self.ast.decls.get(m).ty()
+                        {
+                            work.push(x);
+                        }
+                    }
+                    work.extend(self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The outermost class around (or being) `d` whose context is in the
+    /// body of function `f`, if `d` is declared there.
+    fn outermost_local_of(&self, d: DeclId, f: DeclId) -> Option<DeclId> {
+        let mut last = d;
+        let mut c = self.ast.decls.get(d).ctx();
+        for _ in 0..MAX_WALK {
+            let x = c?;
+            if x == f {
+                return Some(last);
+            }
+            match self.kind_of(x) {
+                DeclKind::Namespace | DeclKind::TranslationUnit => return None,
+                DeclKind::CXXRecord => last = x,
+                _ => {}
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        None
     }
 
     /// An odr-use at `loc` of `d`, found at the end of its
@@ -357,11 +689,21 @@ impl Sema<'_, '_> {
         if !self.exposure_use_point() || !self.is_tu_local_constant(d) {
             return false;
         }
-        let Some((owner, at, lambda)) = self.exposure_site() else { return false };
+        let Some((owner, at, lambda, escape)) = self.exposure_site() else { return false };
         if self.modules.exposed.contains(&owner) {
             return false;
         }
-        let p = PendingExposure { owner, at, entity: d, loc, lambda, odr_const: true, spec: false };
+        let p = PendingExposure {
+            owner,
+            at,
+            entity: d,
+            loc,
+            lambda,
+            odr_const: true,
+            spec: false,
+            kept: false,
+            escape,
+        };
         self.modules.pending_exposures.push(p);
         true
     }
@@ -394,7 +736,9 @@ impl Sema<'_, '_> {
             .iter()
             .map(|p| {
                 let within = |l: Loc| (b..=end).contains(&l.to_raw());
-                within(p.loc) && !p.lambda.is_some_and(|l| within(self.ast.decls.get(l).loc()))
+                within(p.loc)
+                    && !p.kept
+                    && !p.lambda.is_some_and(|l| within(self.ast.decls.get(l).loc()))
             })
             .collect();
         if !inside.contains(&true) {
@@ -474,7 +818,7 @@ impl Sema<'_, '_> {
             .modules
             .pending_exposures
             .iter()
-            .map(|p| self.warn_only(p) || !(b..=end).contains(&p.loc.to_raw()))
+            .map(|p| self.warn_only(p) || p.kept || !(b..=end).contains(&p.loc.to_raw()))
             .collect();
         let mut i = 0;
         self.modules.pending_exposures.retain(|_| {
@@ -539,6 +883,14 @@ impl Sema<'_, '_> {
             .filter(|p| p.owner == owner)
             .partition(|p| !p.spec);
         self.modules.pending_exposures.retain(|p| p.owner != owner);
+        // The uses in a local class or closure type of a non-inline
+        // function's body wait for its deduced return type (WP-1820).
+        let (escapes, mine): (Vec<PendingExposure>, Vec<PendingExposure>) =
+            mine.into_iter().partition(|p| p.escape.is_some());
+        let (spec_escapes, specs): (Vec<PendingExposure>, Vec<PendingExposure>) =
+            specs.into_iter().partition(|p| p.escape.is_some());
+        self.modules.escapes.extend(escapes);
+        self.modules.escapes.extend(spec_escapes);
         if !self.inst.stack.frames.is_empty() {
             self.record_inst_exposures(owner, &mine, &specs);
             return;
@@ -607,7 +959,11 @@ impl Sema<'_, '_> {
     ) {
         let first = self.ast.first(f);
         if !self.is_inline_fn(first) {
-            // /15.1 ignores its body.
+            // /15.1 ignores its body; in a local class of an inline
+            // instantiation, clang 22 warns at a use of that (WP-1821).
+            if !mine.is_empty() {
+                self.note_inst_warning(first);
+            }
             return;
         }
         if let Some(p) = mine.first() {
@@ -622,6 +978,59 @@ impl Sema<'_, '_> {
                 }
             }
         }
+    }
+
+    /// A use in instantiated function `f` that is not an exposure but gets
+    /// clang 22's warning at a use of the instantiation (WP-1821): an
+    /// enumerator of a TU-local enumeration in an inline one, a TU-local
+    /// entity in a member function that is not inline of a local class of
+    /// an inline one (that one is warned).
+    fn note_inst_warning(&mut self, f: DeclId) {
+        let first = self.ast.first(f);
+        let at = if self.is_inline_fn(first) {
+            Some(first)
+        } else {
+            self.ast.decls.get(first).ctx().and_then(|r| {
+                (self.kind_of(r) == DeclKind::CXXRecord && self.ast.closure_lambda(r).is_none())
+                    .then(|| self.innermost_function_of(r))
+                    .flatten()
+                    .filter(|&x| self.is_inline_fn(x))
+                    .map(|x| self.ast.first(x))
+            })
+        };
+        if let Some(x) = at {
+            self.modules.inst_warn.insert(x);
+        }
+    }
+
+    /// Whether a use of instantiation `s` gets clang 22's warning by
+    /// [`Sema::note_inst_warning`], noted for it or for its template.
+    fn inst_warned(&self, s: DeclId) -> bool {
+        let w = &self.modules.inst_warn;
+        !w.is_empty()
+            && (w.contains(&s)
+                || self
+                    .ast
+                    .instantiated_from(s)
+                    .is_some_and(|p| self.ast.redecls_of(p).any(|r| w.contains(&r))))
+    }
+
+    /// The innermost function around declaration `d` that is not a
+    /// lambda's call operator.
+    fn innermost_function_of(&self, d: DeclId) -> Option<DeclId> {
+        let mut c = self.ast.decls.get(d).ctx();
+        for _ in 0..MAX_WALK {
+            let x = c?;
+            let k = self.kind_of(x);
+            if k.is_function() && !self.is_lambda_call_op(x) {
+                return Some(x);
+            }
+            if matches!(k, DeclKind::Namespace | DeclKind::TranslationUnit) {
+                return None;
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        None
     }
 
     /// The end of the translation unit, after its instantiations: each
@@ -656,7 +1065,9 @@ impl Sema<'_, '_> {
         }
         for (p, _) in deferred {
             let s = self.ast.first(p.entity);
-            if !self.is_inline_fn(s) && self.is_function_spec(s) && self.inst_names_tu_local(s) {
+            if !self.is_inline_fn(s) && self.is_function_spec(s) && self.inst_names_tu_local(s)
+                || self.inst_warned(s)
+            {
                 self.warn_tu_local_exposed(p.entity, p.loc);
             }
         }
@@ -706,7 +1117,7 @@ impl Sema<'_, '_> {
     /// lambda); else the variable being initialized when it is inline and
     /// not constexpr, or when the use is in a lambda there (at the lambda;
     /// [`Sema::module_flush_exposures`]).
-    fn exposure_owner(&self) -> Option<(DeclId, Loc, Option<DeclId>)> {
+    fn exposure_owner(&self) -> Option<Site> {
         let mut c = self.ctx;
         let mut lambda = None;
         for _ in 0..MAX_WALK {
@@ -718,14 +1129,32 @@ impl Sema<'_, '_> {
                     c = parent;
                     continue;
                 }
-                if !self.is_inline_fn(c) || self.is_tu_local_entity(c) {
+                if self.is_tu_local_entity(c) {
                     return None;
                 }
-                return Some((c, self.lambda_or(lambda, c), lambda));
+                if !self.is_inline_fn(c) {
+                    // A lambda in the body of a function that is not
+                    // inline: part of that body, unless its closure type
+                    // is named by the function's deduced return type
+                    // (WP-1820).
+                    let closure = lambda?;
+                    return match self.body_scope(closure) {
+                        BodyScope::Escape(f, r) if f == c => {
+                            Some((c, self.lambda_or(lambda, c), lambda, Some((f, r))))
+                        }
+                        _ => None,
+                    };
+                }
+                let at = self.lambda_or(lambda, c);
+                return match self.body_scope(c) {
+                    BodyScope::Considered => Some((c, at, lambda, None)),
+                    BodyScope::Escape(f, r) => Some((c, at, lambda, Some((f, r)))),
+                    BodyScope::Ignored => None,
+                };
             }
             match k {
                 DeclKind::CXXRecord if self.ast.closure_lambda(c).is_some() => {}
-                DeclKind::LinkageSpec | DeclKind::Export => {}
+                DeclKind::LinkageSpec | DeclKind::Export | DeclKind::RequiresExprBody => {}
                 _ => break,
             }
             c = self.ast.decls.get(c).ctx()?;
@@ -733,8 +1162,8 @@ impl Sema<'_, '_> {
         if let Some(&(field, _)) = self.nsdmi_this.last()
             && self.ast.decls.get(field).ctx() == Some(c)
         {
-            let owner = self.nsdmi_exposure_owner(field)?;
-            return Some((owner, self.lambda_or(lambda, owner), lambda));
+            let (owner, escape) = self.nsdmi_exposure_owner(field)?;
+            return Some((owner, self.lambda_or(lambda, owner), lambda, escape));
         }
         let v = self.depr_init?;
         let inline =
@@ -744,7 +1173,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        Some((v, self.lambda_or(lambda, v), lambda))
+        Some((v, self.lambda_or(lambda, v), lambda, None))
     }
 
     /// Where a use in declaration `d` is reported: at the outermost
@@ -763,9 +1192,11 @@ impl Sema<'_, '_> {
     /// The class a default member initializer of `field` belongs to for
     /// exposures (WP-1684): its class, or for a member of an anonymous
     /// struct or union the named class around it, unless TU-local; a
-    /// local class only in an inline function that is not TU-local (a
-    /// non-inline function's body is ignored, [basic.link]/15.1.1).
-    fn nsdmi_exposure_owner(&self, field: DeclId) -> Option<DeclId> {
+    /// local class only where [`Sema::body_scope`] considers it (in an
+    /// inline function that is not TU-local; a non-inline function's body
+    /// is ignored, [basic.link]/15.1, unless its deduced return type
+    /// names the class: then with the [`PendingExposure::escape`] pair).
+    fn nsdmi_exposure_owner(&self, field: DeclId) -> Option<(DeclId, Option<(DeclId, DeclId)>)> {
         let mut r = self.ast.decls.get(field).ctx()?;
         for _ in 0..MAX_WALK {
             if !self
@@ -784,21 +1215,11 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        let mut c = self.ast.decls.get(r).ctx()?;
-        for _ in 0..MAX_WALK {
-            let k = self.kind_of(c);
-            if k.is_function() {
-                return (!self.is_lambda_call_op(c)
-                    && self.is_inline_fn(c)
-                    && !self.is_tu_local_entity(c))
-                .then_some(r);
-            }
-            if matches!(k, DeclKind::Namespace | DeclKind::TranslationUnit) {
-                return Some(r);
-            }
-            c = self.ast.decls.get(c).ctx()?;
+        match self.body_scope(r) {
+            BodyScope::Considered => Some((r, None)),
+            BodyScope::Escape(f, c) => Some((r, Some((f, c)))),
+            BodyScope::Ignored => None,
         }
-        None
     }
 
     /// The end of the default member initializer of `field`: its held
@@ -808,7 +1229,7 @@ impl Sema<'_, '_> {
         if self.modules.pending_exposures.is_empty() {
             return;
         }
-        if let Some(owner) = self.nsdmi_exposure_owner(field) {
+        if let Some((owner, _)) = self.nsdmi_exposure_owner(field) {
             self.module_flush_exposures(owner);
         }
     }
@@ -826,14 +1247,19 @@ impl Sema<'_, '_> {
         let Some(class) = self.ast.decls.get(f).ctx() else { return };
         if !self.kind_of(f).is_function()
             || self.kind_of(class) != DeclKind::CXXRecord
-            || self.in_function_scope(class)
             || self.modules.exposed.contains(&f)
             || self.is_tu_local_entity(class)
         {
             return;
         }
+        // A local class's member as the class's other declarations
+        // (WP-1820).
+        let scope = match self.decl_context_scope(class) {
+            Some(BodyScope::Ignored) | None => return,
+            Some(s) => s,
+        };
         if let Some(e) = self.default_arg_tu_local(p) {
-            self.report_exposure(f, self.ast.decls.get(f).loc(), e);
+            self.report_in_scope(f, e, scope);
         }
     }
 
@@ -904,6 +1330,15 @@ impl Sema<'_, '_> {
     /// default arguments (see the module docs). `friend` declarations are
     /// ignored ([basic.link]/15.3).
     pub(crate) fn module_check_decl_exposure(&mut self, d: DeclId, friend: bool) {
+        // The uses in its decl-specifiers and declarator.
+        let level = self.depr_points.len();
+        let named = if self.modules.decl_uses.is_empty() {
+            None
+        } else {
+            let first = self.modules.decl_uses.iter().find(|&&(l, ..)| l == level).map(|x| x.1);
+            self.modules.decl_uses.retain(|&(l, ..)| l != level);
+            first
+        };
         if friend || !self.inst.stack.frames.is_empty() || !self.module_exposure_purview() {
             return;
         }
@@ -915,10 +1350,11 @@ impl Sema<'_, '_> {
             k if k.is_function() => d,
             _ => return,
         };
-        if self.in_function_scope(ctx) && !self.local_class_checked(ctx)
-            || self.modules.exposed.contains(&owner)
-            || self.is_tu_local_entity(owner)
-        {
+        let scope = match self.decl_context_scope(ctx) {
+            Some(BodyScope::Ignored) | None => return,
+            Some(s) => s,
+        };
+        if self.modules.exposed.contains(&owner) || self.is_tu_local_entity(owner) {
             return;
         }
         let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
@@ -926,8 +1362,20 @@ impl Sema<'_, '_> {
         if found.is_none() && k.is_function() {
             found = self.default_args_tu_local(d);
         }
-        if let Some(e) = found {
-            self.report_exposure(owner, self.ast.decls.get(owner).loc(), e);
+        if let Some(e) = found.or(named) {
+            self.report_in_scope(owner, e, scope);
+        }
+    }
+
+    /// For a declaration in context `ctx`: [`BodyScope::Considered`]
+    /// outside any function, the [`Sema::local_class_scope`] of a local
+    /// class, `None` in a block scope (a use there is held as the body's,
+    /// [`Sema::module_note_use`]).
+    fn decl_context_scope(&self, ctx: DeclId) -> Option<BodyScope> {
+        if self.in_function_scope(ctx) {
+            self.local_class_scope(ctx)
+        } else {
+            Some(BodyScope::Considered)
         }
     }
 
@@ -955,16 +1403,21 @@ impl Sema<'_, '_> {
         if !self.inst.stack.frames.is_empty() || !self.module_exposure_purview() {
             return;
         }
-        if self.ast.decls.get(r).ctx().is_none_or(|c| self.in_function_scope(c))
-            && !self.local_class_checked(r)
-            || self.modules.exposed.contains(&r)
-            || self.is_tu_local_entity(r)
-        {
+        let Some(ctx) = self.ast.decls.get(r).ctx() else { return };
+        let scope = if self.in_function_scope(ctx) {
+            match self.local_class_scope(r) {
+                Some(BodyScope::Ignored) | None => return,
+                Some(s) => s,
+            }
+        } else {
+            BodyScope::Considered
+        };
+        if self.modules.exposed.contains(&r) || self.is_tu_local_entity(r) {
             return;
         }
         let bases: Vec<QualType> = self.ast.decls.bases(r, &self.ast.lists).map(|b| b.ty).collect();
         if let Some(e) = bases.into_iter().find_map(|t| self.type_tu_local(t, 0)) {
-            self.report_exposure(r, self.ast.decls.get(r).loc(), e);
+            self.report_in_scope(r, e, scope);
         }
     }
 
@@ -1021,6 +1474,17 @@ impl Sema<'_, '_> {
             self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
         self.put_walk_stack(stack);
+        if found.is_none() && !self.modules.set_uses.is_empty() {
+            // A TU-local function in an overload set an id-expression
+            // there refers to (WP-1819; [`Sema::module_note_overload_set`]).
+            let (b, end) = (self.ast.begin_loc(e).to_raw(), self.ast.end_loc(e).to_raw());
+            found = self
+                .modules
+                .set_uses
+                .iter()
+                .find(|(l, _)| (b..=end).contains(&l.to_raw()))
+                .map(|&(_, d)| d);
+        }
         found
     }
 
