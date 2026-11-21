@@ -259,6 +259,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A block-scope `extern` function or variable declaration with an asm
   label (`extern int q(int) asm("qq");`) inside a template keeps its
   label in the instantiation; it was mangled as a local name (WP-1797).
+- A program whose module exports an inline function with a local class
+  now links (WP-1815): the module unit defines the local class's member
+  functions (attached to the module, they are not inline) and its
+  vtables even when it does not emit the function, and an importer's
+  copy of the function names them, as clang does; the vtable is defined
+  even when the module unit does not use it, which clang does not do.
 - Value-dependent conditions in a template definition are no longer
   constant-evaluated (WP-1741).
 - A constant-evaluation note about a pointer into a structured binding

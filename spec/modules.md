@@ -494,6 +494,28 @@ emits them strongly, used or not, right after the namespace-scope class
 that contains them (in member order, nested classes in place; clang
 `HandleInlineFunctionDefinition` / `EmitDeferredDecls`), and importers
 only declare them. Defaulted functions and implicit members stay inline.
+**Local classes** ([class.local], WP-1815) of the purview are attached
+to the module as well, so their in-class definitions are not inline
+either; in an inline function (the members then have the function's
+linkage, not internal) the owning unit emits them strongly whether or
+not it emits the function, right after the top-level declaration whose
+definition encloses them (a member class of a local class, and a local
+class of a local class's member or of a lambda, included; codegen
+`emit_local_class_module_defs`), and an importer's copy of the function
+only declares them, as clang 22 and 19 do. A local class of a non-inline
+function is internal and its members are emitted where used. A local
+class of a function template, or of a member of a class template, is
+instantiated by the unit that instantiates the function, which emits its
+members `linkonce_odr` like any implicit instantiation; a member declared
+`inline` or `constexpr` is emitted `linkonce_odr` where it is used,
+importers included. The vtable of a dynamic local class of an inline
+function is the owning unit's (strong) even when nothing in that unit
+uses it, as for a namespace-scope class below (`module_dynamic_classes`
+lists the local classes too): clang 22 and 19 define it only where the
+module unit uses it (in a constructor or key function it emits), so an
+importer that constructs such an object fails to link with them; kiln's
+importer declares it `external` as theirs do (deviation 13). Tests:
+`module.interface/local-class-members-{link,virtual,nested,lambda,template,owners}-run.cpp`.
 **Vtables** (clang `ActOnTagFinishDefinition`, `isVTableExternal`): a
 dynamic class completed in the purview of an interface or partition unit
 has its vtable used there even when nothing uses it (`kiln_sema`
@@ -811,6 +833,16 @@ files; dependency scanning and CMake are §11.9 (WP-982).
     as clang 22's importer does, so the program links and `&r` is one
     address in every unit; with clang 22 it fails to link
     (`module.import/const-ref-temporary-address-run.cpp`).
+13. **Deliberate, at every compat level (WP-1815).** The vtable of a
+    dynamic local class of an inline function in the purview of an
+    interface or partition unit is a strong definition of that unit
+    whether or not anything there uses it (§7 "Local classes"; Itanium
+    ABI §5.2.3 for one with a key function, which that unit defines).
+    clang 22 and 19 define it only when the unit uses it, while their
+    importers, like kiln's, declare it `external`; an importer that
+    constructs such an object fails to link with them. GCC 16.1 emits it
+    `weak` in the module unit. Test:
+    `module.interface/local-class-vtable-run.cpp`.
 
 ## 11. Part B: module files and separate compilation (WP-917)
 
@@ -3691,14 +3723,9 @@ Still refused in this bucket:
   the requires-expression bodies, which declare its parameters.
 - A lambda-expression or local class in a type's expression section
   (`decltype([]{})`), and a local class used before its definition.
-- An array or range designator.
-
-<!-- kiln-gap: GAP-175 -->
-**Not implemented:** a member function of a local class in an imported
-module's inline function is emitted by neither the module unit nor the
-importer, so the importer's call is an undefined reference at link
-time (the replay has the same gap; xfail
-`module.interface/local-class-members-link-run.cpp`).
+- An array or range designator. (A member function of a local class
+  in an imported module's inline function is the module unit's, §7
+  "Local classes"; WP-1815.)
 
 Two gaps outside the bucket, first reached once libstdc++'s `<compare>`
 was carried, are closed with it: a dependent base named through a

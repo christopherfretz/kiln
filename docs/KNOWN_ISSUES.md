@@ -414,10 +414,6 @@ Templates, lookup and overloading:
 - `stmt.ambig/template-id-qualified-declarator-in-block.cpp`: a
   template-id functional cast whose operand is a qualified-id is parsed
   as an expression, not a declaration. [WP-1746](BACKLOG.md).
-- `module.interface/local-class-members-link-run.cpp`: a local class's
-  member functions in an imported module's inline function are emitted
-  by neither side (undefined reference at link time). GAP-175
-  ([static gaps](status/static-gaps.md)).
 
 Constant evaluation and reflection:
 

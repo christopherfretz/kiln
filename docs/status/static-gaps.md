@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-2 gaps at 2 sites (2 spec paragraphs); 10 of 56,766 g++.dg cases hit
+1 gap at 1 site (1 spec paragraph); 10 of 56,766 g++.dg cases hit
 one at the 1.3.0 release candidate, all since fixed. The last site in
 the source, GAP-149, closed with WP-1803, which also removed the
 generic class-A error `sema_attribute_unsupported_by_kiln`. 4 more
@@ -109,20 +109,19 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| spec | 2 | 2 | 0 |
+| spec | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| modules | 2 (GAP-174, GAP-175) | 2 | 0 | WP-1814, WP-1815 |
+| modules | 1 (GAP-174) | 1 | 0 | WP-1814 |
 
 ## Gaps
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
 | GAP-174 | spec | modules | an exposure of a TU-local entity is accepted silently in three forms clang 22 warns about (`-WTU-local-entity-exposure`): an enumerator of a TU-local enumeration named in an exported inline function, a TU-local entity named in a member of a local class of one, a call instantiating a template that exposes one (`f3<int>`) | `spec/modules.md::§6. Cross-unit deduplication (the substitute for ODR merging)` | 0 | WP-1814 |
-| GAP-175 | spec | modules | a member function of a local class in an imported module's inline function is emitted by neither the module unit nor the importer (undefined reference at link time; xfail `module.interface/local-class-members-link-run.cpp`) | `spec/modules.md::§Part 2a: the declaration and type image (WP-1048)` | 0 | WP-1815 |
 
 ## Excluded (clang-matching wording)
 

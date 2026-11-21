@@ -307,6 +307,10 @@ pub(crate) struct Cg<'a> {
     /// variables) listed in a top-level block that
     /// [`Self::emit_parse_time_defs`] emitted ahead of the block.
     parse_time_handed: FxHashSet<DeclId>,
+    /// The local classes of this module unit's purview by the top-level
+    /// declaration whose definition encloses them
+    /// ([`Self::emit_local_class_module_defs`]), built on first use.
+    pub(crate) local_classes: Option<FxHashMap<DeclId, Vec<DeclId>>>,
     /// The static data members an explicit instantiation definition
     /// names (`template int C<long>::m;`), keyed in
     /// `TemplateTables::explicit_member_insts` (first declarations).
@@ -479,6 +483,7 @@ impl<'a> Cg<'a> {
             explicit_vtables: Vec::new(),
             explicit_anchor: None,
             parse_time_handed: FxHashSet::default(),
+            local_classes: None,
             keyed_explicit_vars: ast
                 .templates
                 .explicit_member_insts_all()
@@ -1056,8 +1061,40 @@ impl<'a> Cg<'a> {
                 }
                 _ => {}
             }
+            if ast.modules.active {
+                self.emit_local_class_module_defs(d)?;
+            }
         }
         Ok(())
+    }
+
+    /// The in-class function definitions of the local classes ([class.local])
+    /// that top-level declaration `d`'s definition encloses (in its body, a
+    /// member's, a lambda's, a local class's member's, at any depth), as
+    /// [`Self::emit_module_class_defs`] emits a namespace-scope class's: a
+    /// local class in the purview is attached to the module, so its members
+    /// are not inline ([class.mfct]/1) and, in an inline function, not
+    /// internal either. They are emitted (strong) whether or not the
+    /// enclosing function is, as clang's `HandleInlineFunctionDefinition`
+    /// does; an importer's copy of the inline function only names them
+    /// (spec/modules.md §7). One pass over the declarations finds the local
+    /// classes the first time.
+    fn emit_local_class_module_defs(&mut self, d: DeclId) -> R<()> {
+        let Some(recs) = self.module_local_classes().get(&d).filter(|v| !v.is_empty()).cloned()
+        else {
+            return Ok(());
+        };
+        for r in recs {
+            self.emit_module_class_defs(r, 0)?;
+        }
+        Ok(())
+    }
+
+    /// The local classes of this module unit's purview by enclosing
+    /// top-level declaration ([`local_classes_by_owner`]), built once.
+    pub(crate) fn module_local_classes(&mut self) -> &FxHashMap<DeclId, Vec<DeclId>> {
+        let ast = self.ast;
+        self.local_classes.get_or_insert_with(|| local_classes_by_owner(ast))
     }
 
     /// clang `EmitGlobal` for a function.
@@ -4707,4 +4744,55 @@ pub(crate) struct DefFnAttrs {
 /// Removes `optsize` and `minsize` (an `optnone` function).
 fn strip_size_attrs(a: &mut Vec<Attr>) {
     a.retain(|x| !matches!(x, Attr::Flag(AttrKind::OptimizeForSize | AttrKind::MinSize)));
+}
+
+/// The local class definitions ([class.local]) of this unit's purview
+/// (not a closure type, not an imported unit's, not in a templated
+/// context), by the top-level declaration that encloses them: the walk
+/// follows lexical contexts, so an out-of-line member function definition
+/// is its own top-level declaration. A member class of a local class is
+/// not listed (its class's [`Cg::emit_module_class_defs`] reaches it).
+fn local_classes_by_owner(ast: &Ast) -> FxHashMap<DeclId, Vec<DeclId>> {
+    use kiln_ast::decl::PayloadClass;
+    let mut out: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
+    // Only a named module unit has a purview of its own.
+    if !ast.modules.units.first().is_some_and(|u| u.kind.is_named()) {
+        return out;
+    }
+    for x in ast.decls.ids() {
+        let n = ast.decls.get(x);
+        if n.kind() != DeclKind::CXXRecord
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || !n.ctx().is_some_and(|c| ast.decls.get(c).kind().payload() == PayloadClass::Function)
+            || ast.definition(x) != Some(x)
+            || ast.closure_lambda(x).is_some()
+            || ast.modules.is_imported_named_unit_decl(x)
+            || ast.module_attachment(x).is_none()
+        {
+            continue;
+        }
+        let mut owner = x;
+        let mut c = ast.decls.lexical_ctx(x);
+        let mut ok = false;
+        for _ in 0..256 {
+            let Some(y) = c else { break };
+            if matches!(
+                ast.decls.get(y).kind(),
+                DeclKind::TranslationUnit
+                    | DeclKind::Namespace
+                    | DeclKind::LinkageSpec
+                    | DeclKind::Export
+            ) {
+                ok = true;
+                break;
+            }
+            owner = y;
+            c = ast.decls.lexical_ctx(y);
+        }
+        if ok {
+            out.entry(owner).or_default().push(x);
+        }
+    }
+    out
 }
