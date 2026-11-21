@@ -168,6 +168,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// `template`: a non-template `Q` is clang's "'Q' does not refer to a
     /// template" (WP-1192). Taken by `member_template_named`.
     pub(crate) dtor_template_name: bool,
+    /// The type about to be substituted is a nested-name-specifier's
+    /// `T::template X<args>::` component, where an injected-class-name
+    /// names its template ([class.qual]/2 does not apply to a name
+    /// followed by `::`). Taken by that type.
+    pub(crate) nns_template_id: bool,
     /// The occurrence rule of the declaration whose type is being
     /// substituted (§5.8; [`Substituter::with_written_scope`]).
     pub(crate) written_scope: Option<crate::templ::written::WrittenScope>,
@@ -247,6 +252,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             skip_param_abis: false,
             as_callee: false,
             dtor_template_name: false,
+            nns_template_id: false,
             written_scope: None,
             written_used: std::cell::RefCell::default(),
             expansions: Vec::new(),
@@ -860,7 +866,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     kiln_ast::types::TypeView::Record(_) => self.written(WrittenKey::Nns(n), loc),
                     _ => loc,
                 };
-                let ty = self.ty(ty, at)?;
+                self.nns_template_id = matches!(
+                    self.sema.ast.types.view(ty.ty()),
+                    kiln_ast::types::TypeView::DependentTemplateSpecialization { .. }
+                );
+                let ty = self.ty(ty, at);
+                self.nns_template_id = false;
+                let ty = ty?;
                 Nns::Type { prefix, ty, template_kw }
             }
             Nns::Identifier { prefix, name } => {

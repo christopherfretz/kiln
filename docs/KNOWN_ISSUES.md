@@ -352,10 +352,14 @@ What is left:
 
 - **4 filesystem permission tests** that cannot pass when the suite runs
   as root (an environment limit, not a kiln failure).
-- **2 failures new at 1.3.0**: `std/containers/views/mdspan/mdspan/mapping.verify.cpp`
-  (an expected `static_assert` diagnostic is not seen) and
-  `std/utilities/meta/meta.const.eval/is_within_lifetime.compile.pass.cpp`
-  (a `static_assert` fails).
+- **1 failure from a recorded deviation**:
+  `std/utilities/meta/meta.const.eval/is_within_lifetime.compile.pass.cpp`.
+  kiln follows P4101R1, under which a default template argument may not
+  point to an escalated immediate function. clang 22 applies the older
+  rule; GCC 16.1 agrees with kiln
+  ([status/deviations.md](status/deviations.md)). The other failure new at
+  1.3.0, `std/containers/views/mdspan/mdspan/mapping.verify.cpp`, is fixed
+  on main (WP-1889).
 - **Expected failures for missing or reworded warnings**, none of them
   wrong code:
   - `-Wnonnull` ×5 ([WP-433](BACKLOG.md))

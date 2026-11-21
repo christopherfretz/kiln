@@ -1760,6 +1760,9 @@ impl Test<'_> {
         // address-space cap: ASan reserves its shadow memory (gigabytes of
         // address space, little of it resident) before `main`.
         let cap = if spec.requires_sanitizer_runtime { None } else { self.mem_limit };
+        // With core dumps off a crash is reported as its signal, also on a
+        // loaded host (WP-1888; spec/harness.md "Resource limits").
+        let cmd = process::without_core_dumps(&cmd);
         let o = self.run_capped(&shown, &cmd, stdin, cap, self.cfg.run_timeout).map_err(|e| {
             let d = format!("could not run `{shown}`: {e}");
             if oracle { Problem::Broken(d) } else { Problem::Fail(d) }

@@ -252,6 +252,7 @@ sema_pure_friend = Error (0) "friend declaration cannot have a pure-specifier";
 sema_pure_not_virtual = Error (1) "'{0}' is not virtual and cannot be declared pure";
 sema_pure_virtual_call_in_cdtor = Warning [CallToPureVirtualFromCtorDtor] (3) "call to pure virtual member function {0} has undefined behavior; overrides of {0} in subclasses are not available in the {1:constructor|destructor} of {2}";
 sema_qualified_ctor_name_as_type = Error (1) "qualified reference to {0} is a constructor name rather than a type in this context";
+sema_qualified_ctor_name_despite_keyword = ExtWarn [InjectedClassName] (3) "ISO C++ specifies that qualified reference to '{0}' is a constructor name rather than a {1:template name|type} in this context, despite preceding '{2:typename|template}' keyword";
 sema_qualified_fn_type = Error (3) "{0:non-member function|static member function} of type {1} cannot have '{2}' qualifier";
 sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
 sema_qualified_param_declarator = Error (0) "parameter declarator cannot be qualified";

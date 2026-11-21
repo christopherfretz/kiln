@@ -2580,7 +2580,9 @@ fn is_access_error(id: DiagId) -> bool {
 /// C++20 that clang and GCC accept only outside SFINAE (WP-1322); so are
 /// a rewritten `operator==` not returning `bool`, too many braces around a
 /// scalar initializer and brace elision in a designated initializer
-/// (clang 19 marks each `SFINAEFailure`, WP-1236).
+/// (clang 19 marks each `SFINAEFailure`, WP-1236). So is a qualified
+/// injected-class-name taken for its type or template despite the
+/// `typename`/`template` keyword ([class.qual]/2, WP-1889).
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,
@@ -2598,5 +2600,6 @@ fn is_sfinae_failure(id: DiagId) -> bool {
             | DiagId::sema_many_braces_around_scalar
             | DiagId::sema_ovl_ambiguous_reversed_operator
             | DiagId::sema_ovl_rewrite_equalequal_not_bool_ext
+            | DiagId::sema_qualified_ctor_name_despite_keyword
     )
 }

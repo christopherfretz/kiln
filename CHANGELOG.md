@@ -483,6 +483,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   declaration or an address whose specialization fails only on its
   ABIs (clang 19's substitution failure at level 19), and a
   specialization already formed invalid noted without a reason.
+- Qualified injected-class-names after `typename` or `template` (WP-1889):
+  in `typename T::template X<A>` or `typename T::X` where `T` is the class
+  `X` itself, the name is the constructor's ([class.qual]/2). As clang
+  does, kiln now takes the template or type with a
+  `-Winjected-class-name` warning, and fails the substitution in a SFINAE
+  context. Since 1.3.0 kiln had taken the template silently, so libc++'s
+  `std::mdspan` did not reject a layout mapping passed as its layout
+  policy (libc++ 22 `mdspan/mapping.verify.cpp` failed; it passes again).
+  The other libc++ 22 test that is new at 1.3.0,
+  `is_within_lifetime.compile.pass.cpp`, comes from a recorded deviation:
+  kiln follows P4101R1 there, where clang 22 applies the older rule (a
+  default template argument may point to an escalated immediate function;
+  GCC 16.1 agrees with kiln). That test stays failing; see
+  docs/status/deviations.md.
+- xtask test: crash fixtures no longer flake under hosted-runner load
+  (WP-1888). Test and oracle binaries run with core dumps off, so a
+  crashing program is reported as a signal and not as a timeout. The
+  fixtures that test the timeout itself have their own directory and keep
+  the short timeout.
 - Emission order of imported `used` functions (WP-1832): an inline
   function with GNU `used` that an importer reaches only through the
   body of an imported function it odr-uses is now defined where clang 22

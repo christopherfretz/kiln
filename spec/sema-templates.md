@@ -4046,7 +4046,26 @@ in-class one. `Substituter::ci_expr_operand_ty` rebuilds the operand of
 | pointer, reference, array, function, member pointer | rebuild through the *checked* `TypeContext` constructors (§5.7). These fail on a reference to `void`, a pointer to a reference, an array of functions, an array bound ≤ 0, a function returning an array or function, or a member pointer into a non-class. |
 | `TemplateSpecialization` | substitute the name and args. An alias goes to §4.10. A class goes to `get_class_spec` and does **not** instantiate. |
 | `DependentName{nns, id}` | substitute `nns`. If it is a class: `require_complete`, then qualified lookup for a type. The failures are clang's: "no type named 'x' in 'Y'", "typename specifier refers to non-type member 'x' in 'Y'", "type 'int' cannot be used prior to '::' because it has no members". |
-| `DependentTemplateSpecialization` | the same, looking for a template and then forming the specialization |
+| `DependentTemplateSpecialization` | the same, looking for a template and then forming the specialization. An injected-class-name followed by `<` names its class template ([temp.local]/1) |
+
+[class.qual]/2 for both rows (WP-1889): when the substituted qualifier
+names class `C` and the name is `C`'s own (`typename T::T`, `typename
+T::template T<A>` with `T` = `C`), lookup finds `C`'s injected-class-name,
+which names the constructor. clang
+(`ext_out_of_line_qualified_id_type_names_constructor`) takes the type or
+template anyway and warns, "ISO C++ specifies that qualified reference to
+'C' is a constructor name rather than a {template name|type} in this
+context, despite preceding '{typename|template}' keyword"
+(`-Winjected-class-name`, `sema_qualified_ctor_name_despite_keyword`), a
+substitution failure in a SFINAE context (§5.7): a requirement `typename
+L::template mapping<E>` is not satisfied by `L = mapping<E>` (libc++'s
+mdspan layout-policy check). The `DependentName` case needs the
+`typename` keyword (a base-specifier or mem-initializer `T::T` has none);
+a `DependentTemplateSpecialization` that is a nested-name-specifier
+component (`T::template T<A>::x`, CWG1835) or a base's injected-class-name
+found in a derived class is not affected
+(`Substituter::nns_template_id`). The non-dependent spellings are not
+diagnosed yet.
 | `DependentDecltype(e)` | substitute `e` in an unevaluated context, then apply the [dcl.type.decltype] rules |
 | `UnaryTransform` | substitute the operand, then apply the builtin (§9.2) |
 | `PackExpansion`, `PackIndexing` | §7 |
@@ -4750,7 +4769,9 @@ member is an error at its instantiation
   ([dcl.init.list]/3.7, [expr.const]), so a trait probing `T{v}` under
   `#pragma GCC diagnostic ignored "-Wnarrowing"` or `-Wno-narrowing`
   still sees the substitution fail (WP-685,
-  `tests/conformance/temp.deduct.general/narrowing-ignored-still-substitution-failure.cpp`).
+  `tests/conformance/temp.deduct.general/narrowing-ignored-still-substitution-failure.cpp`),
+  and `-Winjected-class-name` (the next row's injected-class-name taken
+  despite its keyword).
   When function template deduction forms a specialization, the ones its
   signature substitution produced move to
   `TemplState.suppressed_diags: FxHashMap<DeclId, Vec<Diag>>`, keyed by
