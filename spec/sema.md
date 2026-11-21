@@ -2113,7 +2113,10 @@ Redeclaration and linkage rules:
     `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
     `indeterminate` from C++26, even
     `()`): `attribute 'likely' cannot have an argument list` at the `(`,
-    and drops the attribute (clang `ParseCXX11AttributeArgs`).
+    and drops the attribute (clang `ParseCXX11AttributeArgs`); an empty
+    one on `deprecated` or `nodiscard` likewise (WP-1852; spec/parse.md
+    §6 "Standard attributes' argument clauses",
+    `dcl.attr.grammar/argument-clause-standard-attributes{.cpp,-c.c}`).
   - Codegen ignores them: clang 19 consults likelihood only when
     optimizing (no `!prof` weights or `llvm.expect` at `-O0`;
     `tests/codegen/likelihood_attrs.cpp`). The oven evaluates an
@@ -3472,11 +3475,33 @@ instantiation unless stated.
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
   - **An unknown attribute's argument clause** (WP-1836; clang
-    `ParseCXX11AttributeArgs`, `ParseAttributeArgsCommon`): the parser
-    asks `Sema::attribute_is_unknown(syntax, scope, name)` (the same
-    support test `act_on_attribute` makes, so a name it would warn about
-    as unknown; in C, a C++-only `clang::` spelling such as
-    `clang::warn_unused_result` is unknown). In `[[...]]` (C++ and C23)
+    `ParseCXX11AttributeArgs`, `ParseAttributeArgsCommon`): for `[[...]]`
+    the parser asks `Sema::attribute_is_unknown(syntax, scope, name)`
+    (the same support test `act_on_attribute` makes, so a name it would
+    warn about as unknown; in C, a C++-only `clang::` spelling such as
+    `clang::warn_unused_result` is unknown), clang's `hasAttribute`. For
+    `__attribute__` it asks `Sema::gnu_attribute_is_unknown_to_parser`
+    (WP-1853), clang's `ParsedAttr::UnknownAttribute`, which does not
+    depend on the target: the name is unknown to kiln on x86-64 and on
+    aarch64 and is not one of `attr_triage::OTHER_TARGET_GNU`, the names
+    clang's parser knows for other targets (`long_call`, `signal`,
+    `dllimport`, ...; per clang release). kiln's own argument tables do
+    not decide: `__attribute__((nodiscard(x)))` (no GNU spelling) takes
+    `x` as an identifier argument, as do `gcc_struct(x)` and
+    `coro_await_elidable(x)` at `-fclang-compat=19`, where they are not
+    attributes. An attribute of another target that kiln has as unknown
+    on this one has its arguments parsed as expressions (no identifier
+    rule), then the warning. clang's string-literal argument table is
+    keyed by the name alone and applies to unknown attributes too
+    (`nodiscard(x + 1)` is `expected string literal as argument of
+    'nodiscard' attribute`); clang 22 counts its positions from the first
+    argument, clang 19 from the first after the identifier, so
+    `nodiscard(x, 1)` is only the warning at 22 and an error at `1` at 19.
+    Also at 19, clang's identifier-argument table is not per target:
+    `interrupt` takes a leading identifier on every target (clang 22 only
+    on the targets whose `interrupt` has one).
+    `dcl.attr.unknown/gnu-attribute-arguments-parser-names{,-clang19,-clang22}.cpp`.
+    In `[[...]]` (C++ and C23)
     the clause is balanced tokens, skipped unchecked: `[[clang::deprecated(u8"x")]]`
     and `[[foo::bar(1 2 ;)]]` are only the warning. In `__attribute__`
     it is parsed as clang parses an unknown GNU attribute: a first
@@ -5954,17 +5979,31 @@ diagnostics and IR.
   outside a call of the lambda (a `static_assert` in the body) is not a
   constant expression ("initializer of 'p' is not a constant
   expression"; also through a binding of a reference to an automatic
-  object; spec/oven.md "Freezing", WP-1831). Deliberate
-  narrowing (partial: constexpr declarations only): by
+  object; spec/oven.md "Freezing", WP-1831). **Deliberate deviation
+  (constexpr declarations only; WP-1830, decided 2026-11-21).** By
   [expr.const.init]/2 a non-`constexpr` `auto& e = local;` or `auto* p =
   &local;` would be constant-initialized too, its reference usable in
-  constant expressions and its names `non_odr_use_constant`; kiln does not
-  do that yet, so it stays exactly as clang 22 (not constant-initialized,
-  odr-used, captured; the AST tests `dcl.struct.bind/{array,bitfield,
-  tuple-adl-get}.cpp` run at the default std against clang). That case
-  waits for an oracle: neither clang 22 nor GCC 16 implements P2686's
-  automatic references (clang 22 only the structured-binding part), so the
-  tests of the constexpr cases are `skip(clang)`. The variable being
+  constant expressions ([expr.const]) and its names
+  `non_odr_use_constant`; and since such a reference is usable in
+  constant expressions, its initializer would be manifestly
+  constant-evaluated ([expr.const]): `std::is_constant_evaluated()` and
+  `if consteval` would be true inside every such initializer, so `int& r
+  = pick(x);` with a `pick` that returns its argument when constant
+  evaluated and another object otherwise would bind `x`. Neither clang
+  22/19 nor GCC 16.1 does this (the run-time branch is taken, `r` binds
+  the other object), and real programs depend on that, so kiln keeps it
+  and will not follow the text here: the freeze accepts a value
+  designating an automatic object only for a variable declared
+  `constexpr`, so a non-`constexpr` reference (or pointer) whose value
+  would designate one is not constant-initialized, exactly as clang 22
+  (odr-used, captured; the AST tests `dcl.struct.bind/{array,bitfield,
+  tuple-adl-get}.cpp` run at the default std against clang).
+  docs/status/deviations.md "Kept with clang and GCC against the text";
+  tests `expr.const/nonconstexpr-ref-automatic-not-manifestly-constant{,-gcc}-run.cpp`
+  (clang and GCC oracles). Neither clang 22 nor GCC 16 implements P2686's
+  automatic references for `constexpr` variables either (clang 22 only the
+  structured-binding part), so the tests of the constexpr cases are
+  `skip(clang)`. The variable being
   initialized is one of these objects ([expr.const.init]/4.2 checks its
   value "immediately after the initializing declaration", where it is
   constexpr-referenceable from itself; WP-1680): a `constexpr` local whose
@@ -5992,7 +6031,7 @@ diagnostics and IR.
   '[lx, ly]'`). A tuple-like binding names the object of its holding
   variable `r_i` ([dcl.struct.bind]/7): when `get<i>` returns an lvalue or
   xvalue, `r_i` is a reference and follows references (so a non-`constexpr`
-  one to an automatic object stays under the narrowing above, as `auto& e
+  one to an automatic object stays under the deviation above, as `auto& e
   = l;` does); when it returns a prvalue, `r_i` is an object of type `T_i`
   (CWG 3135: `S T_i r_i = initializer;`), which kiln, as clang, still
   represents as a reference bound to a lifetime-extended temporary of the

@@ -23,6 +23,8 @@ parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an ar
 parse_attribute_forbids_ellipsis = Error (1) "attribute '{0}' cannot be used as an attribute pack";
 parse_attribute_ignored = Warning [IgnoredAttributes] (1) "'{0}' attribute ignored";
 parse_attribute_pack_not_supported = Error (1) "attribute '{0}' does not support argument pack expansion";
+// WP-1852: clang err_attribute_requires_arguments (`[[deprecated()]]`).
+parse_attribute_requires_arguments = Error (1) "parentheses must be omitted if '{0}' attribute's argument list is empty";
 parse_attribute_requires_string = Error (1) "expected string literal as argument of '{0}' attribute";
 parse_attribute_wrong_arg_count = Error (2) "'{0}' attribute takes {1:no arguments|one argument}";
 parse_attributes_misplaced = Error (0) "misplaced attributes; expected attributes here";
