@@ -275,8 +275,10 @@ fn flag_errors() {
             "error: invalid argument '-mfunction-return=' not allowed with 'aarch64-unknown-linux-gnu'\n",
         ),
         (
+            // clang 22 also says the `-c` the loop adds is unused.
             &[a64, "-fsyntax-only", "-mfunction-return=keep"],
-            "error: invalid argument '-mfunction-return=' not allowed with 'aarch64-unknown-linux-gnu'\n",
+            "kiln++: warning: argument unused during compilation: '-c' [-Wunused-command-line-argument]\n\
+             error: invalid argument '-mfunction-return=' not allowed with 'aarch64-unknown-linux-gnu'\n",
         ),
         (
             &[x86, "-mfunction-return=bogus"],

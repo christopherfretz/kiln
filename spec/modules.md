@@ -126,6 +126,25 @@ re-applied on every later import of the same header. An `#include` of an
 importable header stays a textual include: the include-to-import
 translation of [cpp.include]/10 is implementation-defined and not done.
 
+[module.import]/6 (WP-1800): while a header unit is built (at an import,
+or as the main file of a `-fmodule-header` build, where unit 0 is a
+header unit from its first token), a definition of a non-inline function
+or variable whose name has external linkage is clang's `error:
+non-inline external definitions are not permitted in C++ header units`
+at its name, and the declaration is invalid. As clang
+(`ActOnStartOfFunctionDef`, `AddInitializerToDecl`), a function is checked
+at the start of its body and a variable when an initializer is attached:
+a variable without one (`int v;`), an `extern` variable, an inline,
+constexpr, consteval, deleted, defaulted or in-class function, a
+templated entity, an instantiation (explicit or implicit), a variable
+template or static data member specialization, and a static data member
+declared in its class are not diagnosed; explicit function
+specializations, structured bindings, `main` and `extern "C"`
+definitions are. From clang 22 a `weak` or `selectany` entity is exempt
+(`-fclang-compat=19` diagnoses it). `-fsyntax-only` with `-fmodule-header`
+checks the header as a plain header (clang's job then produces nothing),
+so the rule is not applied.
+
 Named module units export no macros.
 
 ## 4. Unit kinds and the preamble (kiln_parse, kiln_sema::modules)
@@ -1376,8 +1395,26 @@ clang's spellings (spec/driver.md, "Modules"):
   exported); the header is not read and the module file, not the header,
   is a dependency. A named module built against one records the module
   file among its imports, so the module's importers find it there.
-  `-fmodule-header` with a source input is `--precompile` of that input
-  (clang 22 preprocesses it to standard output instead). A module
+  `-fmodule-header` with an input that is not a header follows clang's
+  driver (WP-1801): a source (`.cpp`, `-x c`, `-`, `.S`) has no
+  precompile phase, so it is preprocessed, to `-o` or standard output,
+  whatever `-c`, `-S`, `--precompile` or `-fsyntax-only` says; a module
+  unit by its type (`.cppm`, `.ixx`, `-x c++-module`) is precompiled
+  under `--precompile` or `-fclang-compat=19` and preprocessed otherwise;
+  a `.i`/`.ii` or module file is an unused `'compiler'` input, a `.s` an
+  `'assembler'` one and anything else a `'linker'` one. Consecutive
+  inputs of one job kind run together, in order; `-o` with more than one
+  output is `cannot specify -o when generating multiple output files`
+  (also for header-unit `-x` inputs beside others; a lone one writes its
+  module file to `-o`). The phase options such a job leaves unclaimed
+  are `argument unused during compilation`, in command-line order: with
+  a final phase before the backend (`-E`, `-M`, `-fsyntax-only`,
+  `--precompile`, `-fmodule-header`) every `-c` and `-S` from clang 22,
+  and at `-fclang-compat=19` every `-S` when `-c` is also given;
+  `-fsyntax-only` when no input is a header checked by it; and
+  `-fmodule-output[=<path>]` when no input is a header or module unit.
+  As clang's `getFinalPhase`, `-E` beats `-fsyntax-only`, which beats
+  `-c`, `-S` and `-emit-llvm`, wherever each is written. A module
   declaration in a header-unit build is clang's `'module' declaration
   found while building header unit`. Without a module file for the
   header, the header unit is built from its source, as in part A, where

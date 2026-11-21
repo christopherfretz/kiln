@@ -549,7 +549,13 @@ impl Job<'_> {
             std_dir: Some(self.toolchain.libcxx_module_dir()),
             std_cache,
             fingerprint,
-            record: !a.scan_deps && (a.precompile || header_unit || a.module_output.is_some()),
+            // `-fmodule-header` precompiles a module unit at
+            // `-fclang-compat=19` without `--precompile` (WP-1801).
+            record: !a.scan_deps
+                && (a.precompile
+                    || a.action == crate::args::Action::Precompile
+                    || header_unit
+                    || a.module_output.is_some()),
             scan: a.scan_deps,
             text: false,
             header_unit: None,

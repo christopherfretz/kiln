@@ -391,6 +391,11 @@ impl SyntaxJob<'_> {
             image_census: a.bmi_image_census,
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             prefix: a.pch.producing || a.pch.record_lookups,
+            // [module.import]/6 applies to a header unit's build only, as
+            // in clang: `-fsyntax-only` checks a header-unit input as a
+            // header (WP-1800).
+            header_unit: a.header_unit_main.is_some()
+                && a.action == crate::args::Action::Precompile,
             ..job.std.parse_options()
         }
     }

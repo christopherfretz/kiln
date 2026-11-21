@@ -1654,7 +1654,11 @@ or linking (no action option). The phase is:
 | `-c` | object, through `llc -filetype=obj` | `<stem>.o` |
 | none | objects in a temporary directory, then `clang++` links | `a.out` |
 
-`-S` wins over `-c`, as in clang. `<stem>` is the input's file stem in
+`-S` wins over `-c`, as in clang, and `-E` and `-fsyntax-only` win over
+all three wherever they are written (clang's `getFinalPhase`; WP-1801),
+the unclaimed `-c`/`-S` then `argument unused during compilation` (each
+of them from clang 22; at `-fclang-compat=19`, each `-S` given with
+`-c`). `<stem>` is the input's file stem in
 the current directory (standard input is `-`). `-o -` is standard output.
 
 - **Inputs.** A source (`.c .i .cc .cp .cpp .CPP .cxx .c++ .C .ii .cppm
@@ -1878,7 +1882,8 @@ emits only declarations for the non-inline functions and variables of the
 units it imports. `-fmodule-header[=user|system]` and `-x
 c++-user-header`, `-x c++-system-header` and `-x c++-header-unit-header`
 write a header unit's module file (`-o`, else `<stem>.pcm`), which
-`-fmodule-file=<path>` imports (spec/modules.md §11.6); without one, an
+`-fmodule-file=<path>` imports (spec/modules.md §11.6, also for the
+other inputs of `-fmodule-header`: a source is preprocessed); without one, an
 imported header unit is built from its source. `-E` and `-M` print a
 header-unit import as `import "<path as found>";` and list its files,
 and skip a module file input with `<file>: previously preprocessed input`

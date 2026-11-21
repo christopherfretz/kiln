@@ -10,6 +10,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Header units' external definitions (WP-1800): while a header unit is
+  built (by `-fmodule-header` or at an import), a definition of a
+  non-inline function or variable with external linkage is now clang's
+  "non-inline external definitions are not permitted in C++ header units"
+  error ([module.import]/6), with clang's exemptions (no initializer,
+  `extern`, inline, constexpr, templated, instantiated; `weak` and
+  `selectany` from clang 22). PCH snapshot format 108.
+- Header units in the conformance harness (WP-1802): two-step tests and
+  `--bmi-kind` / `--bmi-image` runs now give kiln header-unit module
+  files built with `-fmodule-header` (`header-unit:` tests are selected
+  by `--bmi-kind`), `two-step` accepts `header-unit:` lines, and the new
+  `as-header-unit` directive builds the test file itself as a header unit.
+
 - The Arm FP8 types and intrinsics (WP-1791), as clang 22 has them:
   `__mfp8` (`mfloat8_t`), `__SVMfloat8_t` (`svmfloat8_t`) and its x2/x3/x4
   tuples, NEON vectors of `__mfp8`, and all 325 FP8 SVE and SME builtins
@@ -515,6 +528,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   matched type; the template's (member's) convention is adopted for the
   match and a different written one is "function declared 'X' here was
   previously declared ...", as clang.
+- `-fmodule-header` with inputs that are not headers (WP-1801): a source
+  is now preprocessed, to `-o` or standard output, as clang's driver does,
+  instead of the "--precompile requires a module interface or partition
+  unit" error; a module unit is precompiled only under `--precompile` (or
+  `-fclang-compat=19`), a `.i`, `.s`, object or module file is an unused
+  input, and the `-c`, `-S`, `-fsyntax-only` and `-fmodule-output` it
+  leaves unused are warned about. `-E` and `-fsyntax-only` now win over
+  `-c`, `-S` and `-emit-llvm` wherever they are written (`-E -c` compiled
+  an object), and a lone header-unit `-x` input writes its module file to
+  `-o`.
 - A `static_assert` or constant initializer in a lambda body reading an
   enclosing `constexpr` variable whose value points to or refers to an
   automatic object (`constexpr const int *p = &b;` of a structured
