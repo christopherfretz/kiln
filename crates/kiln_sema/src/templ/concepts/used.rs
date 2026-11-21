@@ -508,6 +508,7 @@ impl Sema<'_, '_> {
             }
             TypeView::DependentSizedArray { elem, size }
             | TypeView::DependentVector { elem, size, .. }
+            | TypeView::DependentAddrSpace { pointee: elem, space: size }
             | TypeView::PackIndexing { pattern: elem, index: size, .. } => {
                 self.used_in_type(elem, u, d)?;
                 self.used_in_operand(size, u, d)

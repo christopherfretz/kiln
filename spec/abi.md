@@ -1325,7 +1325,8 @@ the dependent template-specialization types there are the ones above
 **First spelling per canonical type (WP-790).** clang keeps, in each
 canonical dependent node (template specialization type, dependent
 template specialization, `DependentDecltypeType`,
-`DependentSizedArrayType`), the expressions of the spelling that first
+`DependentSizedArrayType`, `DependentAddressSpaceType`), the expressions
+of the spelling that first
 created it, and mangles every later spelling of that canonical type
 from them. kiln does the same: when `Canon` interns a new canonical
 type of those kinds, `Types::note_arg_origin` records the written

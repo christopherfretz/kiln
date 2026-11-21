@@ -27,8 +27,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   C-style cast converts any), mangled `U3AS<N>` / `U8CLglobal`, lowered
   to `ptr addrspace(N)`, `addrspace(N)` globals and `addrspacecast`, and
   transparent to constant evaluation. They were "not supported by kiln
-  yet". A value-dependent `address_space(N)` in a template is not
-  supported yet (WP-1811).
+  yet".
+- A value-dependent `address_space(N)` in a template (WP-1811, WP-1812,
+  WP-1813): clang's `DependentAddressSpaceType`, with its checks at
+  instantiation, deduction of N, the mangling `U2ASI <expression> E` and
+  modules and PCH carrying it; a space after a grouping `(` of a
+  declarator qualifies the type at the parentheses (a function type
+  there is now the clang error); an alias's decl-specifier space no
+  longer qualifies the whole type; tests for x86's `__seg_gs` /
+  `__seg_fs`.
 - clang's C++ spelling of the `_BitInt` literal suffix, `__wb` / `__uwb`
   (WP-1797): `1__wb` is a `_BitInt(2)`, in expressions and in `#if`, with
   clang's pedantic `-Wbit-int-extension` warning.

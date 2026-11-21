@@ -647,7 +647,8 @@ impl Sema<'_, '_> {
                 self.canon_type_packs(x, out, lvl)?;
             }
             TypeView::DependentSizedArray { elem, size }
-            | TypeView::DependentVector { elem, size, .. } => {
+            | TypeView::DependentVector { elem, size, .. }
+            | TypeView::DependentAddrSpace { pointee: elem, space: size } => {
                 self.canon_type_packs(elem, out, lvl)?;
                 self.expr_pack_ids(expr_op(size)?, out)?;
             }

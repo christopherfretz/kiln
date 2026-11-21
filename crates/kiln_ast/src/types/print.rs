@@ -1424,6 +1424,7 @@ impl Printer<'_> {
                             | TypeView::MemberPointer { .. }
                             | TypeView::Vector { .. }
                             | TypeView::DependentVector { .. }
+                            | TypeView::DependentAddrSpace { .. }
                             | TypeView::Function(_)
                             | TypeView::Paren(_)
                             | TypeView::PackExpansion { .. }
@@ -1722,6 +1723,10 @@ impl Printer<'_> {
                 }
                 self.before(elem);
             }
+            // clang `printDependentAddressSpaceBefore`: the pointee; the
+            // attribute follows the declarator (`int * __attribute__((
+            // address_space(N)))`, as clang prints it).
+            TypeView::DependentAddrSpace { pointee, .. } => self.before(pointee),
             // Printed by `before_node`, which never passes this node.
             TypeView::ExtQual { base, word } => {
                 self.addr_space(AddrSpace(word));
@@ -1996,6 +2001,12 @@ impl Printer<'_> {
                 }
             }
             TypeView::ExtQual { base, .. } => self.after(base),
+            TypeView::DependentAddrSpace { pointee, space } => {
+                self.push(" __attribute__((address_space(");
+                self.operand(space);
+                self.push(")))");
+                self.after(pointee);
+            }
             TypeView::Elaborated { named, .. } => self.with_scope(false, |p| p.after(named)),
             TypeView::QualifiedArray { quals, base } => {
                 self.after(QualType::new(base, quals.bits()));

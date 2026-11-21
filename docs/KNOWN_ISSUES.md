@@ -434,12 +434,6 @@ Attributes, calling conventions and extensions:
 - `dcl.attr.grammar/gnu-attribute-before-statement.cpp`: GNU attributes
   before a statement parse only when a declaration or `;` follows.
   WP-805.
-- `ext.clang.address_space/address-space-dependent.cpp`: a
-  value-dependent `address_space(N)` in a template is rejected as not an
-  integer constant. WP-1811.
-- `ext.clang.address_space/address-space-function-paren.cpp`: an address
-  space inside grouping parentheses on a function type is not diagnosed.
-  WP-1812.
 - `ext.gnu.restrict/restrict-reference-is-a-distinct-type.cpp`:
   `__restrict` on a reference type is dropped, so `int &__restrict` and
   `int &` are one type. [WP-1688](BACKLOG.md) (low priority).

@@ -1390,7 +1390,8 @@ impl Sema<'_, '_> {
                 }
             }
             TypeView::DependentSizedArray { elem, size }
-            | TypeView::DependentVector { elem, size, .. } => {
+            | TypeView::DependentVector { elem, size, .. }
+            | TypeView::DependentAddrSpace { pointee: elem, space: size } => {
                 self.type_packs(elem, out, depth + 1);
                 let size = match size {
                     kiln_ast::types::ExprOperand::Expr(e) => Some(e),

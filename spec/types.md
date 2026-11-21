@@ -464,6 +464,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size, and between a GNU vector and an Ext vector of the same size (an integer scalar and an Ext vector convert only by a scalar splat), the implicit integer → `bool` Ext vector conversion of the same lane count at `-fclang-compat=22` (WP-453, spec/sema.md §5.28), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); vector `?:` (GNU element-wise and scalar-condition forms) and brace elision of GNU vector members (WP-173; spec/sema.md §4.5), constant evaluation of vector values in the Oven (WP-173; spec/oven.md "Vectors"); `__builtin_shufflevector` (spec/oven.md "Vectors"), ext-vector element access (`.x`, `.xy`, `.s3`, `.hi`; WP-307/312, spec/sema.md §5.19, an `ExtVectorElementExpr`); `bool` ext-vector conditions select on their `<N x i1>` lanes (WP-187); `bool` Ext vectors are evaluated by the Oven (WP-450/453: lanes, comparisons, `__builtin_convertvector`, bit casts; spec/oven.md "Vectors") except the integer → `bool` vector conversion, which clang 22 does not evaluate either and kiln rejects (WP-466) |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | the size operand as written: the element count for Ext, the byte size for Generic; substitution rebuilds through `Sema::build_vector_type` |
 | `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | an address space (§2; WP-1803) |
+| `DependentAddrSpace` dep | I | S/C | pairs [pointee QualType, space ExprId / ProfileId] | clang `DependentAddressSpaceType`: `address_space(N)` of a value-dependent N (WP-1811); the pointee keeps its own cv, the node's qualifiers stay outside; substitution rebuilds through `Sema::subst_addr_space` |
 
 ### 5.3 Sugar and dependent kinds
 | kind | k | c | payload | notes |
@@ -736,6 +737,7 @@ canonical form of a dependent type must identify *equivalent* types:
 - dependent template specializations use the canonical `TemplateName`
   and the canonical argument list (§8);
 - types containing an expression (`DependentSizedArray`, `DependentVector`,
+  `DependentAddrSpace`,
   `DependentBitInt`, `DependentDecltype`, `noexcept(expr)`, `Splice`, and
   `PackIndexing` with a dependent index) canonicalize the expression to a
   **`ProfileId`**: the interned sequence of `u32` words produced by
@@ -1259,7 +1261,8 @@ Representation and encodings:
   alias. `CanonTemplateTypeParm` aux = `depth | pack << 15`. `Auto` aux =
   `keyword | pack << 2`.
 - `AUX_PROFILE` (aux bit `0x100`) marks the profile-keyed canonical form of
-  `DependentSizedArray`, `DependentVector`, `PackIndexing`, `TypeOf` and
+  `DependentSizedArray`, `DependentVector`, `DependentAddrSpace`,
+  `PackIndexing`, `TypeOf` and
   `Splice`: the sugar node keys on the written expression, the canonical
   node on the `ProfileId`.
 - Parameter counts are `u16` (65535 parameters); the `noexcept(expr)`
@@ -1313,6 +1316,11 @@ Printing:
   the OpenCL keyword (`__global`, `__local`, `__constant`, `__private`,
   `__generic`, `__global_device`, `__global_host`) for the OpenCL ones
   (`const __attribute__((address_space(1))) int`, `__global int *`).
+  `DependentAddrSpace` prints as clang's `printDependentAddressSpace`:
+  the pointee, then `__attribute__((address_space(N)))` with the
+  expression as written, its qualifiers after the pointee
+  (`int const __attribute__((address_space(N)))`), and after a `*` the
+  attribute follows it (`int * __attribute__((address_space(N)))`).
 - kiln creates no `Elaborated` node for a name written without keyword or
   qualifier (R4), so a written `S` is a bare `Record`: `dump_strings`
   omits the second string when it would repeat the first, where clang

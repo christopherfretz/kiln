@@ -43,6 +43,8 @@ pub(super) enum DepTy {
     MemPtr { pointee: QRef, class: QRef },
     /// A vector of `count` elements of kind `kind`.
     Vector { elem: QRef, count: u32, kind: u8 },
+    /// `base` in address space `word` (an `ExtQual`, WP-1811).
+    Space { base: QRef, word: u32 },
     /// A deduced class template type: the class template's record and
     /// the deduced type; `qual`, a name written with a qualifier
     /// (`ns::X(args)`, WP-1342): its steps and whether `template` was
@@ -67,6 +69,7 @@ const T_VECTOR: u8 = 4;
 const T_DEDUCED: u8 = 5;
 const T_USING: u8 = 6;
 const T_QUAL_TST: u8 = 7;
+const T_SPACE: u8 = 8;
 
 impl Writer<'_, '_, '_> {
     /// The record of type view `v`, `None` when this module does not
@@ -94,6 +97,7 @@ impl Writer<'_, '_, '_> {
             TypeView::Vector { elem, count, kind } => {
                 DepTy::Vector { elem: self.qref(elem)?, count, kind: kind as u8 }
             }
+            TypeView::ExtQual { base, word } => DepTy::Space { base: self.qref(base)?, word },
             TypeView::DeducedTemplateSpecialization { name, deduced } => {
                 const WHY: &str = "a deduced template named through a qualifier or parameter";
                 let types = &self.s.ast.types;
@@ -169,6 +173,11 @@ pub(super) fn encode_dep(w: &mut Wr, d: &DepTy) {
             w.q(*elem);
             w.u32(*count);
             w.u8(*kind);
+        }
+        DepTy::Space { base, word } => {
+            w.u8(T_SPACE);
+            w.q(*base);
+            w.u32(*word);
         }
         DepTy::Deduced { template, deduced, qual } => {
             w.u8(T_DEDUCED);
@@ -246,6 +255,7 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
             DepTy::Deduced { template, deduced, qual }
         }
         T_USING => DepTy::Using(r.u32()?),
+        T_SPACE => DepTy::Space { base: r.q()?, word: r.u32()? },
         T_QUAL_TST => {
             let kw = match r.u8()? {
                 k @ (0 | 1) => k == 1,
@@ -287,7 +297,7 @@ pub(super) fn dep_refs(d: &DepTy) -> (Vec<QRef>, Vec<u32>) {
         }
         DepTy::Transform { base, result, .. } => qs.extend(std::iter::once(*base).chain(*result)),
         DepTy::MemPtr { pointee, class } => qs.extend([*pointee, *class]),
-        DepTy::Vector { elem, .. } => qs.push(*elem),
+        DepTy::Vector { elem, .. } | DepTy::Space { base: elem, .. } => qs.push(*elem),
         DepTy::Deduced { template, deduced, qual } => {
             if let Some((s, _)) = qual {
                 steps(s, &mut qs);
@@ -320,7 +330,10 @@ pub(super) fn dep_ok(img: &Image, d: &DepTy, nd: usize) -> bool {
             };
             named && qual.as_ref().is_none_or(|(s, _)| super::steps_ok(img, s, nd))
         }
-        DepTy::Transform { .. } | DepTy::MemPtr { .. } | DepTy::Vector { .. } => true,
+        DepTy::Transform { .. }
+        | DepTy::MemPtr { .. }
+        | DepTy::Vector { .. }
+        | DepTy::Space { .. } => true,
         // A non-empty qualifier over an unqualified specialization.
         DepTy::QualTst { steps, tst, .. } => {
             !steps.is_empty()
@@ -386,6 +399,10 @@ impl Sema<'_, '_> {
             DepTy::Vector { elem, count, kind } => {
                 let e = qt(self, *elem);
                 self.ast.types.vector(e, *count, VectorKind::from_u8(*kind))
+            }
+            DepTy::Space { base, word } => {
+                let b = qt(self, *base);
+                self.ast.types.ext_qual(b, *word)
             }
             DepTy::Deduced { template, deduced, qual } => {
                 let deduced = deduced.map(|q| qt(self, q));
@@ -496,6 +513,8 @@ mod tests {
         let tst = BUILTINS + 1 + img.types.len() as u32 - 1;
         let steps = vec![NnsRec::Ty(q(t), false)];
         img.types.push(TyRec::Dep(DepTy::QualTst { kw: true, steps, tst: q(tst) }));
+        // An address space (WP-1811).
+        img.types.push(TyRec::Dep(DepTy::Space { base: q(int), word: 0x21 }));
         (img, first as u32)
     }
 

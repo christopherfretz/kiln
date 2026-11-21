@@ -581,7 +581,8 @@ impl DefHasher<'_> {
                 self.u64(a.size);
                 self.ty(a.elem);
             }
-            TypeView::DependentSizedArray { elem, size } => {
+            TypeView::DependentSizedArray { elem, size }
+            | TypeView::DependentAddrSpace { pointee: elem, space: size } => {
                 self.ty(elem);
                 self.operand(size);
             }

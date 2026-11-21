@@ -89,6 +89,7 @@ pub(crate) fn shape(kind: TypeKind) -> Shape {
         | K::Vector
         | K::DependentVector
         | K::ExtQual
+        | K::DependentAddrSpace
         | K::Typedef
         | K::Using
         | K::Elaborated

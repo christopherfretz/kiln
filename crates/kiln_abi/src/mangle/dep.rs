@@ -331,6 +331,47 @@ impl Mangler<'_, '_> {
         self.ty(elem);
     }
 
+    /// `U2ASI <expression> E <CV-qualifiers> <type>` of the canonical
+    /// `cv DependentAddrSpace{pointee, space}` `q` (clang
+    /// `mangleQualifiers` with a `DependentAddressSpaceType`,
+    /// `PU2ASIT_Ei`; WP-1811): the vendor qualifier, then the pointee's
+    /// own cv-qualifiers and type. The node's outer cv-qualifiers are not
+    /// spelled (clang mangles `const int __attribute__((address_space(N)))`
+    /// as the unqualified one); the type is one candidate. The expression
+    /// is the creating spelling's, as a dependent vector's size.
+    pub(super) fn dependent_addr_space(
+        &mut self,
+        q: QualType,
+        pointee: QualType,
+        space: ExprOperand,
+    ) {
+        let key = Sub::Type(q);
+        if self.try_sub(key) {
+            return;
+        }
+        let space = match space {
+            ExprOperand::Profile(p) => {
+                self.ast.types.expr_origin(q.ty(), p).map_or(space, ExprOperand::Expr)
+            }
+            ExprOperand::Expr(_) => space,
+        };
+        self.out.push_str("U2ASI");
+        self.dependent_dimension("", space);
+        self.out.push('E');
+        let quals = pointee.quals();
+        if quals.is_restrict() {
+            self.out.push('r');
+        }
+        if quals.is_volatile() {
+            self.out.push('V');
+        }
+        if quals.is_const() {
+            self.out.push('K');
+        }
+        self.ty(pointee.without_quals());
+        self.subs.push(key);
+    }
+
     // ---- template-argument expressions -----------------------------------
 
     /// A value-dependent template argument (clang `mangleExpression` with

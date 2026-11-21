@@ -571,10 +571,11 @@ pub struct InstState {
     /// parameter whose default argument is substituted at the first use
     /// (`default_args.rs`).
     pub(crate) lazy_defaults: kiln_source::fx::FxHashMap<DeclId, (DeclId, DeclId)>,
-    /// The `vector_size` / `ext_vector_type` attribute location of a
-    /// dependent vector type, by its size operand: clang diagnoses a
-    /// substitution at the attribute, which the type does not keep.
-    pub(crate) vector_attr_locs: kiln_source::fx::FxHashMap<ExprId, Loc>,
+    /// The `vector_size` / `ext_vector_type` / `address_space` attribute
+    /// location of a dependent vector or address-space type, by its
+    /// expression operand: clang diagnoses a substitution at the
+    /// attribute, which the type does not keep.
+    pub(crate) type_attr_locs: kiln_source::fx::FxHashMap<ExprId, Loc>,
     /// The qualifier locations of each nullability-attributed dependent
     /// type, in parse order: clang diagnoses one that substitution makes
     /// a non-pointer at the qualifier, which the interned type does not

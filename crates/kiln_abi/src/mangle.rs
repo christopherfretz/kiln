@@ -3611,6 +3611,10 @@ impl<'a, 'b> Mangler<'a, 'b> {
             self.ext_qual(q, base, word, vm);
             return;
         }
+        if let TypeView::DependentAddrSpace { pointee, space } = ast.types.view(q.ty()) {
+            self.dependent_addr_space(q, pointee, space);
+            return;
+        }
         if !quals.is_empty() && !is_array {
             let key = Sub::Type(q);
             if !vm && self.try_sub(key) {

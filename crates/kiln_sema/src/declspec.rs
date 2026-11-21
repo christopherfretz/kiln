@@ -949,6 +949,12 @@ pub struct Declarator {
     /// (clang's `DeclaratorChunk::Paren`; `ParenType` sugar and
     /// `-Wvexing-parse`'s redundant-parentheses warning, WP-191).
     pub parens: Vec<(usize, Loc, Loc)>,
+    /// The address space written after a grouping `(`
+    /// (`void (__attribute__((address_space(1))) *fp)()`) and the number
+    /// of chunks inside those parentheses: it qualifies the type at the
+    /// parentheses (clang's `DeclaratorChunk::Paren` attributes), here
+    /// the function type (WP-1812).
+    pub paren_spaces: Vec<(usize, AttrId)>,
     /// Not the first declarator of its declaration (clang's
     /// `!isFirstDeclarator()`: a comma precedes it).
     pub after_comma: bool,
@@ -1081,6 +1087,7 @@ impl Declarator {
             knr_idents: None,
             outer_paren: None,
             parens: Vec::new(),
+            paren_spaces: Vec::new(),
             after_comma: false,
             array_param_quals: Quals::NONE,
             array_param_static: None,

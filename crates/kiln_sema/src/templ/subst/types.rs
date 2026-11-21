@@ -941,7 +941,7 @@ impl Substituter<'_, '_, '_> {
                 };
                 let e = self.ty(elem, loc)?;
                 // Diagnosed at the attribute, as clang does.
-                let at = match self.sema.inst.vector_attr_locs.get(&s) {
+                let at = match self.sema.inst.type_attr_locs.get(&s) {
                     Some(&l) => l,
                     None => self.sema.begin_loc(s),
                 };
@@ -954,6 +954,28 @@ impl Substituter<'_, '_, '_> {
                 } else {
                     // clang leaves the type unchanged after the error.
                     Ok(e)
+                }
+            }
+            // clang `TransformDependentAddressSpaceType` (WP-1811): the
+            // space is checked at the attribute; after an error the
+            // pointee stands (clang drops the declaration's type).
+            TypeView::DependentAddrSpace { pointee, space } => {
+                let s = match space {
+                    ExprOperand::Expr(s) => s,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
+                let p = self.ty(pointee, loc)?;
+                let at = match self.sema.inst.type_attr_locs.get(&s) {
+                    Some(&l) => l,
+                    None => self.sema.begin_loc(s),
+                };
+                let s = self.expr(s)?;
+                match self.sema.subst_addr_space(p, s, at) {
+                    Some(t) => Ok(t),
+                    None if self.sema.inst.stack.is_sfinae() => Err(SubstFail),
+                    None => Ok(p),
                 }
             }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
