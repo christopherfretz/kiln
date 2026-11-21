@@ -1327,6 +1327,9 @@ impl Sema<'_, '_> {
         if let TypeView::ExtQual { base, word } = t.view(p.ty()) {
             return self.deduce_spaced(p, base, word, a, flags, d, level);
         }
+        if let TypeView::DependentAddrSpace { pointee, space } = t.view(p.ty()) {
+            return self.deduce_dependent_space(p, pointee, space, a, flags, d, level);
+        }
         let pv = t.view(p.ty());
         // `cv T` ([temp.deduct.type]/8: the forms `T` and `cv T`).
         if let TypeView::CanonTemplateTypeParm { depth, index, pack } = pv {
@@ -1417,6 +1420,43 @@ impl Sema<'_, '_> {
         }
         let ab = t.without_addr_space(a);
         self.deduce_ty(pb, ab, flags, d, level + 1)
+    }
+
+    /// [`Self::deduce_ty`] for `P` = `cv DependentAddrSpace{pointee, space}`
+    /// (`T __attribute__((address_space(N)))`; clang
+    /// `DeduceTemplateArgumentsByTypeMatch`, WP-1811): against another
+    /// dependent space the pointees and the expressions are deduced;
+    /// against a type in a target space (`address_space(M)`, not an
+    /// `opencl_*` or the default one) the pointee against `A` without its
+    /// space, then `N` from `M` as an `int`; anything else is a mismatch.
+    #[allow(clippy::too_many_arguments, reason = "deduce_ty's state plus the split P")]
+    fn deduce_dependent_space(
+        &mut self,
+        p: QualType,
+        pointee: QualType,
+        space: ExprOperand,
+        a: QualType,
+        flags: TdfFlags,
+        d: &mut DeducedArgs,
+        level: u32,
+    ) -> Tdk {
+        let t = &self.ast.types;
+        let pp = QualType::new(pointee.ty(), pointee.quals_bits() | p.quals_bits());
+        let (ap, asize) =
+            if let TypeView::DependentAddrSpace { pointee: x, space: s } = t.view(a.ty()) {
+                (QualType::new(x.ty(), x.quals_bits() | a.quals_bits()), Err(s))
+            } else if let Some(n) = t.addr_space(a).target_number() {
+                (t.without_addr_space(a), Ok(u64::from(n)))
+            } else {
+                d.info.first = Some(TemplateArg::ty(p));
+                d.info.second = Some(TemplateArg::ty(a));
+                return Tdk::NonDeducedMismatch;
+            };
+        let r = self.deduce_ty(pp, ap, flags, d, level + 1);
+        if r != Tdk::Success {
+            return r;
+        }
+        self.deduce_bound(space, Some(asize), d, true)
     }
 
     /// The structural cases of [`Self::deduce_ty`] once `P` is neither

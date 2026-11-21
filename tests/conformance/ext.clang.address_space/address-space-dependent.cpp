@@ -1,6 +1,5 @@
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): WP-1803 follow-up: a value-dependent address_space(N) (clang DependentAddressSpaceType) is rejected as not an integer constant
 // A template's address_space(N) whose N depends on a template parameter
 // takes its space at instantiation (clang DependentAddressSpaceType).
 

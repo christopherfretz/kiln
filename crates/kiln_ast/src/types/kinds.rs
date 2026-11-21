@@ -320,7 +320,7 @@ pub enum TypeKind {
     Vector,
     /// A vector with a value-dependent size.
     DependentVector,
-    /// Extended qualifiers (address spaces; reserved, M7+).
+    /// An address space (spec/types.md §5 "Address spaces").
     ExtQual,
     /// A typedef or alias-declaration name.
     Typedef,
@@ -373,11 +373,15 @@ pub enum TypeKind {
     /// Redundant parentheses in a declarator (clang's `ParenType`): sugar
     /// over the type the parentheses enclose (`T (*)`; WP-191).
     Paren,
+    /// An address space whose number is value-dependent (clang's
+    /// `DependentAddressSpaceType`, WP-1811). Last, so the discriminants
+    /// before it (hashed by the ODR definition hash) keep their values.
+    DependentAddrSpace,
 }
 
 impl TypeKind {
     /// Number of kinds.
-    pub const COUNT: usize = TypeKind::Paren as usize + 1;
+    pub const COUNT: usize = TypeKind::DependentAddrSpace as usize + 1;
 
     const ALL: [TypeKind; TypeKind::COUNT] = [
         TypeKind::Invalid,
@@ -424,6 +428,7 @@ impl TypeKind {
         TypeKind::Splice,
         TypeKind::UnresolvedUsing,
         TypeKind::Paren,
+        TypeKind::DependentAddrSpace,
     ];
 
     /// The kind with discriminant `v` (`Invalid` for out-of-range values).

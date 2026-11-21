@@ -8,6 +8,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclFlags, TlsKind, VarStorage};
+use kiln_ast::ids::RawId;
 use kiln_ast::types::AddrSpace;
 use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_diag::DiagId;
@@ -54,6 +55,25 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             };
+            // A value-dependent `N` (clang `BuildAddressSpaceIndex` checks
+            // nothing yet): the node keeps the expression, and the type is
+            // a `DependentAddrSpace` substituted at instantiation
+            // (WP-1811), diagnosed at this attribute.
+            if self.expr_is_value_dependent(*e) {
+                if self.is_error_type(self.ast.exprs.get(*e).ty()) {
+                    return None;
+                }
+                self.inst.type_attr_locs.insert(*e, loc);
+                let node = AttrNode {
+                    kind: AttrKind::ADDRESS_SPACE,
+                    syntax,
+                    flags: AttrNode::SPACE_DEPENDENT,
+                    loc,
+                    a: (*e).raw(),
+                    b: 0,
+                };
+                return Some(self.ast.attrs.push(node));
+            }
             self.address_space_number(*e, shown, loc)?
         };
         let node =
@@ -63,8 +83,9 @@ impl Sema<'_, '_> {
 
     /// The space `address_space(e)` names: `e` must be an integral
     /// constant expression in `0..=max` (clang's `BuildAddressSpaceAttr`
-    /// wording).
-    fn address_space_number(
+    /// wording). Also the substituted operand of a `DependentAddrSpace`
+    /// at instantiation, where `shown` is `address_space`.
+    pub(crate) fn address_space_number(
         &mut self,
         e: kiln_ast::ExprId,
         shown: &str,
@@ -76,8 +97,6 @@ impl Sema<'_, '_> {
         }
         let quoted = format!("'{shown}'");
         if self.expr_is_value_dependent(e) || !self.is_integral_or_enum(ty) {
-            // A value-dependent space (clang's `DependentAddressSpaceType`)
-            // is not formed by kiln: WP-1803 follow-up.
             let msg = self.diag(DiagId::sema_attribute_requires_integer_constant, loc).arg(quoted);
             self.emit(msg);
             return None;
@@ -108,10 +127,13 @@ impl Sema<'_, '_> {
     /// first (a second space is diagnosed as on any type).
     pub fn fold_space_attrs(&mut self, spaces: &[AttrId]) -> Option<AttrId> {
         let (&first, rest) = spaces.split_first()?;
-        let a = self.ast.attrs.get(first).a;
+        let f = *self.ast.attrs.get(first);
         for &r in rest {
             let n = *self.ast.attrs.get(r);
-            let id = if n.a == a {
+            // A dependent one is never the same space (clang diagnoses a
+            // second space over a `DependentAddressSpaceType`).
+            let dependent = (n.flags | f.flags) & AttrNode::SPACE_DEPENDENT != 0;
+            let id = if n.a == f.a && !dependent {
                 DiagId::sema_address_space_multiple_identical
             } else {
                 DiagId::sema_address_space_multiple
@@ -126,8 +148,13 @@ impl Sema<'_, '_> {
     /// second, different space is an error, the same one again a
     /// warning; on an array type the elements are qualified
     /// ([basic.type.qualifier]/3, as cv). A reference type is left alone.
+    ///
+    /// A value-dependent space ([`AttrNode::SPACE_DEPENDENT`]) makes a
+    /// `DependentAddrSpace` over `ty` (clang `BuildAddressSpaceAttr`):
+    /// over another one it is "multiple address spaces specified for
+    /// type"; over a type already in a space the conflict is diagnosed at
+    /// instantiation ([`Self::subst_addr_space`]).
     pub(crate) fn build_addr_space_type(&mut self, ty: QualType, node: AttrNode) -> QualType {
-        let space = AddrSpace(node.a);
         if self.is_error_type(ty) {
             return ty;
         }
@@ -136,6 +163,16 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_address_space_function_type, node.loc);
             return ty;
         }
+        if node.flags & AttrNode::SPACE_DEPENDENT != 0 {
+            if t.is_dependent_addr_space(ty) {
+                self.error(DiagId::sema_address_space_multiple, node.loc);
+                return ty;
+            }
+            let Some(e) = kiln_ast::ExprId::from_raw(node.a) else { return ty };
+            let p = self.dependent_profile(e);
+            return self.ast.types.dependent_addr_space(ty, e, p);
+        }
+        let space = AddrSpace(node.a);
         if t.is_reference(ty) {
             return ty;
         }
@@ -149,6 +186,45 @@ impl Sema<'_, '_> {
             return ty;
         }
         self.ast.types.with_addr_space(ty, space)
+    }
+
+    /// [temp.inst] of `pointee __attribute__((address_space(e)))`, `e`
+    /// and `pointee` substituted, the attribute at `loc` (clang
+    /// `RebuildDependentAddressSpaceType` → `BuildAddressSpaceAttr`): a
+    /// still value-dependent `e` (a partial substitution) keeps the
+    /// dependent form; else the space is checked as written (`'address_space'
+    /// attribute requires an integer constant`, negative, too large) and
+    /// qualifies `pointee`, a different space already there an error, the
+    /// same one a warning. `None` after an error.
+    pub(crate) fn subst_addr_space(
+        &mut self,
+        pointee: QualType,
+        e: kiln_ast::ExprId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        if self.is_error_type(pointee) {
+            return None;
+        }
+        if self.expr_is_value_dependent(e) {
+            self.inst.type_attr_locs.insert(e, loc);
+            let p = self.dependent_profile(e);
+            return Some(self.ast.types.dependent_addr_space(pointee, e, p));
+        }
+        let space = self.address_space_number(e, "address_space", loc)?;
+        let t = &self.ast.types;
+        if t.is_reference(pointee) {
+            return Some(pointee);
+        }
+        let old = t.addr_space(pointee);
+        if old != AddrSpace::DEFAULT {
+            if old == space {
+                self.error(DiagId::sema_address_space_multiple_identical, loc);
+            } else {
+                self.error(DiagId::sema_address_space_multiple, loc);
+                return None;
+            }
+        }
+        Some(self.ast.types.with_addr_space(pointee, space))
     }
 
     /// A variable `v` whose type is in an address space: an error when it
@@ -175,7 +251,7 @@ impl Sema<'_, '_> {
     /// is in an address space: clang's "parameter may not be qualified
     /// with an address space" (the parameter is invalid).
     pub(crate) fn check_addr_space_param(&mut self, ty: QualType, loc: Loc) -> bool {
-        if self.ast.types.addr_space(ty) == AddrSpace::DEFAULT {
+        if self.ast.types.addr_space(ty) == AddrSpace::DEFAULT || self.is_error_type(ty) {
             return false;
         }
         self.error(DiagId::sema_address_space_parameter, loc);

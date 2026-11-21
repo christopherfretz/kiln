@@ -744,7 +744,7 @@ impl Sema<'_, '_> {
         }
         if self.expr_is_value_dependent(size) || (!ext && elem_dep) {
             let p = self.dependent_profile(size);
-            self.inst.vector_attr_locs.insert(size, loc);
+            self.inst.type_attr_locs.insert(size, loc);
             return self.ast.types.dependent_vector(elem, size, p, kind);
         }
         let name = if ext { "ext_vector_type" } else { "vector_size" };

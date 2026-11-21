@@ -110,6 +110,13 @@ pub enum TypeView {
         base: QualType,
         word: u32,
     },
+    /// `pointee __attribute__((address_space(space)))` of a
+    /// value-dependent `space` (clang `DependentAddressSpaceType`): the
+    /// pointee keeps its own cv-qualifiers, the node's are outside.
+    DependentAddrSpace {
+        pointee: QualType,
+        space: ExprOperand,
+    },
     Typedef {
         decl: DeclId,
         underlying: QualType,
@@ -596,6 +603,27 @@ impl TypeContext {
         AddrSpace::DEFAULT
     }
 
+    /// Whether `q`, or its array element type, is a `DependentAddrSpace`
+    /// (clang `isDependentAddressSpaceType` of the type or its base
+    /// element type): in an address space not known until instantiation.
+    pub fn is_dependent_addr_space(&self, q: QualType) -> bool {
+        let mut c = self.canonical(q);
+        for _ in 0..4096 {
+            let n = self.node(c.ty());
+            match n.kind() {
+                TypeKind::DependentAddrSpace => return true,
+                TypeKind::ConstantArray => c = self.store.arrays[n.data as usize].elem,
+                TypeKind::IncompleteArray => c = Self::q_of(n.data),
+                TypeKind::ExtQual | TypeKind::VariableArray | TypeKind::DependentSizedArray => {
+                    c = Self::q_of(self.store.pair(n.data)[0]);
+                }
+                _ => return false,
+            }
+            c = self.canonical(c);
+        }
+        false
+    }
+
     /// The address space of the pointee of pointer or reference type `q`
     /// ([`AddrSpace::DEFAULT`] for any other type).
     pub fn pointee_addr_space(&self, q: QualType) -> AddrSpace {
@@ -876,6 +904,10 @@ impl TypeContext {
             K::ExtQual => {
                 let [a, b] = s.pair(n.data);
                 TypeView::ExtQual { base: q(a), word: b }
+            }
+            K::DependentAddrSpace => {
+                let [a, b] = s.pair(n.data);
+                TypeView::DependentAddrSpace { pointee: q(a), space: operand(n.aux, b) }
             }
             K::Typedef => {
                 let [a, b] = s.pair(n.data);

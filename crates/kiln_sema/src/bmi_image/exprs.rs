@@ -74,6 +74,9 @@ pub(super) enum ExTy {
     /// `__attribute__((ext_vector_type(N))) T`), `kind` its
     /// `VectorKind`; `canon` as for [`ExTy::DepArray`].
     DepVector { elem: QRef, e: u32, kind: u8, canon: bool },
+    /// `pointee __attribute__((address_space(e)))` of a value-dependent
+    /// `e` (WP-1811); `canon` as for [`ExTy::DepArray`].
+    DepSpace { pointee: QRef, e: u32, canon: bool },
     /// WP-1369: a non-dependent `typeof(e)` / `typeof_unqual(e)` (`e`
     /// its section, `ty` its computed type) or `typeof(type)` (`e`
     /// [`NONE`], `ty` the operand), as `__typeof(f) g;` declares a
@@ -113,6 +116,12 @@ pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
             w.q(*ty);
             w.u8(u8::from(*unqual));
         }
+        ExTy::DepSpace { pointee, e, canon } => {
+            w.u8(5);
+            w.q(*pointee);
+            w.u32(*e);
+            w.u8(u8::from(*canon));
+        }
     }
 }
 
@@ -150,6 +159,13 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
                 _ => return bad("bad typeof type"),
             }
         }
+        5 => {
+            let (pointee, e) = (r.q()?, r.u32()?);
+            match r.u8()? {
+                c @ 0..=1 => ExTy::DepSpace { pointee, e, canon: c != 0 },
+                _ => return bad("bad dependent address space type"),
+            }
+        }
         _ => return bad("bad expression type"),
     })
 }
@@ -158,7 +174,9 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
 pub(super) fn ex_refs(x: &ExTy) -> Vec<QRef> {
     match x {
         ExTy::Decltype { under, .. } => vec![*under],
-        ExTy::DepArray { elem, .. } | ExTy::DepVector { elem, .. } => vec![*elem],
+        ExTy::DepArray { elem, .. }
+        | ExTy::DepVector { elem, .. }
+        | ExTy::DepSpace { pointee: elem, .. } => vec![*elem],
         ExTy::PackN { pattern, .. } => vec![*pattern],
         ExTy::TypeOf { ty, .. } => vec![*ty],
     }
@@ -243,7 +261,10 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
     let mut out = Vec::new();
     match t {
         TyRec::Ex(
-            ExTy::Decltype { e, .. } | ExTy::DepArray { e, .. } | ExTy::DepVector { e, .. },
+            ExTy::Decltype { e, .. }
+            | ExTy::DepArray { e, .. }
+            | ExTy::DepVector { e, .. }
+            | ExTy::DepSpace { e, .. },
         ) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
         TyRec::Ex(ExTy::TypeOf { e, .. }) if *e != NONE => out.push(*e),
@@ -355,6 +376,14 @@ impl Writer<'_, '_, '_> {
                 };
                 let elem = self.qref(elem)?;
                 ExTy::DepVector { elem, e: self.texpr(expr)?, kind: kind as u8, canon }
+            }
+            TypeView::DependentAddrSpace { pointee, space } => {
+                let (expr, canon) = match space {
+                    ExprOperand::Expr(e) => (e, false),
+                    ExprOperand::Profile(p) => (first(p)?, true),
+                };
+                let pointee = self.qref(pointee)?;
+                ExTy::DepSpace { pointee, e: self.texpr(expr)?, canon }
             }
             TypeView::PackExpansion { pattern, num_expansions: Some(n) } => {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
@@ -624,6 +653,13 @@ impl Sema<'_, '_> {
                 let q = self.ast.types.dependent_vector(elem, e, p, VectorKind::from_u8(kind));
                 if canon { self.ast.types.canonical(q) } else { q }
             }
+            ExTy::DepSpace { pointee, e, canon } => {
+                let pointee = qt(self, pointee);
+                let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
+                let p = self.dependent_profile(e);
+                let q = self.ast.types.dependent_addr_space(pointee, e, p);
+                if canon { self.ast.types.canonical(q) } else { q }
+            }
             ExTy::TypeOf { e, ty, unqual } => {
                 let ty = qt(self, ty);
                 if e == NONE {
@@ -674,6 +710,7 @@ mod tests {
             ExTy::DepVector { elem: q, e: 3, kind: 3, canon: false },
             ExTy::TypeOf { e: 5, ty: q, unqual: false },
             ExTy::TypeOf { e: NONE, ty: q, unqual: true },
+            ExTy::DepSpace { pointee: q, e: 6, canon: true },
         ] {
             assert_eq!(round(&x), x);
         }

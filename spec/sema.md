@@ -3085,9 +3085,30 @@ instantiation unless stated.
     parameter may not be qualified with an address space" / "automatic
     variable qualified with an address space" (the declaration is
     invalid). An array's elements take the space. A value-dependent N
-    (clang `DependentAddressSpaceType`) is not formed: it is the integer
-    constant error (WP-1811, xfail
-    `ext.clang.address_space/address-space-dependent.cpp`).
+    forms clang's `DependentAddressSpaceType` (spec/types.md §5,
+    `DependentAddrSpace`; WP-1811): the attribute records the expression
+    and its location (`AttrNode::SPACE_DEPENDENT`), and substitution
+    (`Sema::subst_addr_space`) makes the checks above at that location
+    once N is known (a reference keeps its type; a second space on the
+    instantiated type is the multiple/duplicate diagnostic). A field
+    whose type has a dependent space is rejected at the template's
+    definition, a parameter is a substitution failure ("parameter may not
+    be qualified with an address space"), an automatic variable is
+    rejected at instantiation. Deduction ([temp.deduct.type]) of a
+    `DependentAddrSpace` P takes N from an argument in a target address
+    space (`address_space(M)` deduces `M` as an `int`); an argument in
+    the default or an OpenCL space is clang's "could not match"
+    mismatch, an expression other than a lone N is a non-deduced
+    context. A space written right after a grouping `(` of a declarator
+    qualifies the type at the parentheses, as clang applies a paren
+    chunk's attributes (`Declarator::paren_spaces`; WP-1812):
+    `int (AS *p)` is a pointer to `AS int`, `void (AS *fp)()` the
+    function type error, and a `[[...]]` list there "an attribute list
+    cannot appear here". In an alias's type-id the decl-specifier space
+    qualifies the decl-specifier type, as in a declaration (WP-1811).
+    On x86 the target predefines `__seg_gs` / `__seg_fs` as
+    `address_space(256)` / `address_space(257)` with `__SEG_GS` /
+    `__SEG_FS` (WP-1813).
     **Conversions** (clang `Qualifiers::isAddressSpaceSupersetOf` in
     C++): a space holds itself; `generic` holds every space but
     `constant`, including the default one; `global` holds
@@ -3122,7 +3143,9 @@ instantiation unless stated.
     (an `AddressSpaceConversion` is a no-op, and the Oven interns the
     unspaced type); codegen gives the IR (spec/codegen.md) and kiln_abi
     the vendor qualifier mangling (`U3AS<N>`, `U8CLglobal`, `U7CLlocal`,
-    ...; `address_space(0)` mangles as the default space). Tests
+    ...; `address_space(0)` mangles as the default space; a dependent
+    space `U2ASI <expression> E` then the pointee's own cv, the node's
+    outer cv not mangled, as clang). Tests
     `tests/conformance/ext.clang.address_space/`.
   - `mode(M)` (GNU syntax; `vector.rs`, WP-799; clang `handleModeAttr`,
     `parseModeAttrArg`) takes one identifier (`__M__` is `M`) and is

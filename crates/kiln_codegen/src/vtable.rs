@@ -2174,6 +2174,7 @@ impl Cg<'_> {
             | TypeView::Paren(..)
             | TypeView::DependentVector { .. }
             | TypeView::ExtQual { .. }
+            | TypeView::DependentAddrSpace { .. }
             | TypeView::Typedef { .. }
             | TypeView::Using { .. }
             | TypeView::Elaborated { .. }

@@ -1385,6 +1385,37 @@ int main() { v4 x{}; w4 y{}; b4<int, 4>(x, nullptr);
     }
 }
 
+/// WP-1811: a value-dependent `address_space(N)` (clang
+/// `DependentAddressSpaceType`) in an alias template, function templates
+/// that deduce N from it, and a static data member's type is carried, and
+/// each specialization mangles as clang's `U2ASI <expression> E`.
+#[test]
+fn dependent_address_spaces_mangle_as_replayed() {
+    let header = "\
+template <int N> using sp = int __attribute__((address_space(N)));
+template <int N> int read(const sp<N> *p) { return *p + N; }
+template <int N> int which(int __attribute__((address_space(N))) *) { return N; }
+template <int N> int next(int __attribute__((address_space(N + 1))) *p) { return *p; }
+template <int N> struct box { static sp<N> v; };
+template <int N> sp<N> box<N>::v = N;
+";
+    let tu = "__attribute__((address_space(1))) int g1 = 7;
+__attribute__((address_space(2))) int g2 = 2;
+int main() { return read(&g1) + which(&g2) + next<1>(&g2) + box<3>::v == 14 ? 0 : 1; }\n";
+    carried_1343("wp1811s", header, tu);
+    let d = scratch_of("wp1811s");
+    let ir = ["-std=c++26", "-include-pch", "a.pch", "-S", "-emit-llvm"];
+    let o = ok(&d, &[&ir[..], &["a.cpp", "-o", "-"]].concat());
+    for name in [
+        "@_Z4readILi1EEiPU2ASIT_Ei",
+        "@_Z5whichILi2EEiPU2ASIT_Ei",
+        "@_Z4nextILi1EEiPU2ASIplT_Li1EEi",
+        "@_ZN3boxILi3EE1vE = linkonce_odr dso_local addrspace(3) global i32 3",
+    ] {
+        assert!(o.stdout.contains(name), "{name}: {}", o.stdout);
+    }
+}
+
 /// WP-1350: a dependent base named through a qualifier (`std::X<T>`,
 /// first reached once `<compare>`'s lambdas were carried) and comparison
 /// category values defined out of line, whose aggregate values the image

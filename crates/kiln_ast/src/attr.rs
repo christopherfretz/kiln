@@ -521,7 +521,9 @@ impl AttrKind {
     /// clang `address_space(N)` and the `opencl_*` address-space type
     /// attributes (`AddressSpaceAttr`; WP-1803), consumed into the
     /// declared type as an `ExtQual` qualifier: `a` is the
-    /// [`crate::types::AddrSpace`] word. Never attached to a declaration.
+    /// [`crate::types::AddrSpace`] word, or the expression of a
+    /// value-dependent `N` ([`AttrNode::SPACE_DEPENDENT`], a
+    /// `DependentAddrSpace` type). Never attached to a declaration.
     pub const ADDRESS_SPACE: AttrKind = AttrKind(300);
 
     /// Whether this is one of the vector type attributes, which are
@@ -858,6 +860,10 @@ impl AttrNode {
     /// (after a parameter clause), where it applies to the function type;
     /// elsewhere it `cannot be applied to a declaration` (WP-1426).
     pub const SME_IN_TYPE: u8 = 4;
+    /// [`AttrKind::ADDRESS_SPACE`] flag (bit 2): `address_space(N)` of a
+    /// value-dependent `N`, so `a` is the expression (an `ExprId`), not
+    /// the space word (clang `DependentAddressSpaceType`, WP-1811).
+    pub const SPACE_DEPENDENT: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

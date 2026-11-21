@@ -3198,11 +3198,23 @@ impl Parser<'_, '_> {
     /// ([`Parser::skip_type_position_attrs`]), a GNU declaration
     /// attribute is kept for the declarator, so GNU `noreturn` makes the
     /// declared function type `noreturn` (spec/types.md §5.4, WP-708).
-    fn grouping_paren_attrs(&mut self, d: &mut Declarator) {
+    ///
+    /// clang eats only GNU attributes there: a `[[...]]` is "an attribute
+    /// list cannot appear here" (`ParseDirectDeclarator`). An address
+    /// space is returned (folded, [`Sema::fold_space_attrs`]): it
+    /// qualifies the type at the parentheses (WP-1812).
+    ///
+    /// [`Sema::fold_space_attrs`]: kiln_sema::Sema::fold_space_attrs
+    fn grouping_paren_attrs(&mut self, d: &mut Declarator) -> Option<AttrId> {
+        if self.at(Punct::LSquare) && self.peek_is(1, Punct::LSquare) {
+            self.discard_prohibited_cxx11_attrs();
+        }
         let saved = std::mem::take(&mut self.chunk_decl_attrs);
         self.skip_type_position_attrs();
+        let space = self.take_chunk_space();
         d.attrs.append(&mut self.chunk_decl_attrs);
         self.chunk_decl_attrs = saved;
+        space
     }
 
     /// The lookahead offset past GNU `__attribute__((...))` specifiers
@@ -3526,8 +3538,11 @@ impl Parser<'_, '_> {
             let ellipsis =
                 if d.ctx == DeclaratorContext::Prototype { None } else { d.ellipsis.take() };
             let open = self.bump().span.lo;
-            self.grouping_paren_attrs(d);
+            let space = self.grouping_paren_attrs(d);
             self.parse_declarator(d);
+            if let Some(a) = space {
+                d.paren_spaces.push((d.chunks.len(), a));
+            }
             let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
             if let Some(e) = ellipsis {
@@ -4718,10 +4733,15 @@ impl Parser<'_, '_> {
             kept.extend(ds.attrs.iter().copied());
             self.type_id_attrs = Some(kept);
         }
-        let vec_out = out.is_some();
         if let Some(out) = out {
+            // An address space stays: a type attribute, it qualifies the
+            // decl-specifier type (`using P = int __attribute__((
+            // address_space(1))) *;` points into the space; WP-1812).
             let ast = &self.s.ast;
-            let is_vec = |a: &AttrId| ast.attrs.get(*a).kind.is_vector_type();
+            let is_vec = |a: &AttrId| {
+                let k = ast.attrs.get(*a).kind;
+                k.is_vector_type() && k != AttrKind::ADDRESS_SPACE
+            };
             out.extend(ds.attrs.iter().copied().filter(is_vec));
             ds.attrs.retain(|a| !is_vec(a));
         }
@@ -4744,10 +4764,8 @@ impl Parser<'_, '_> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
         self.parse_declarator_in_group(&ds, &mut d);
-        let mut base = self.s.type_from_declspec(&ds);
-        if !vec_out {
-            base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
-        }
+        let base = self.s.type_from_declspec(&ds);
+        let base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
         self.type_id_constraint = if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             ds.constraint_loc
         } else {

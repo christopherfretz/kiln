@@ -4055,6 +4055,7 @@ in-class one. `Substituter::ci_expr_operand_ty` rebuilds the operand of
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 | `ExtQual{base, word}` | substitute `base`, keep the extended qualifiers (clang `TransformQualifiedType`; WP-1740) |
+| `DependentAddrSpace{pointee, space}` | substitute `pointee` and the space expression, then `Sema::subst_addr_space` checks N at the attribute's location (`TemplateInst::type_attr_locs`) and applies it; a check that fails is a substitution failure in a SFINAE context, else the pointee (clang `TransformDependentAddressSpaceType`, `BuildAddressSpaceAttr`; WP-1811) |
 | `Builtin`, `BitInt` | kept: only the builtin dependent type is dependent, and it stays, as clang's `DependentTy` (`TransformBuiltinType`; WP-1740) |
 
 `DependentBitInt{signed, width}` substitutes the width expression and

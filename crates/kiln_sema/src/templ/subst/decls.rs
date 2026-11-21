@@ -500,7 +500,13 @@ impl Substituter<'_, '_, '_> {
             self.sema.error(kiln_diag::DiagId::sema_param_with_void_type, loc);
             return Err(SubstFail);
         }
-        Ok(self.sema.adjust_param_type(ty))
+        let ty = self.sema.adjust_param_type(ty);
+        // A dependent address space made concrete (WP-1811; clang
+        // `SubstParmVarDecl` → `CheckParameter`).
+        if self.sema.check_addr_space_param(ty, loc) {
+            return Err(SubstFail);
+        }
+        Ok(ty)
     }
 
     /// The parameters of pattern function `f` with substituted types.

@@ -1370,6 +1370,25 @@ impl Sema<'_, '_> {
         ty
     }
 
+    /// `ty` qualified with the address space written after each grouping
+    /// `(` of `d` around exactly `inside` chunks (clang processes a paren
+    /// chunk's attributes on the type there): on a function type, "function
+    /// type may not be qualified with an address space" (WP-1812).
+    fn declarator_paren_spaces(
+        &mut self,
+        mut ty: QualType,
+        d: &Declarator,
+        inside: usize,
+    ) -> QualType {
+        for &(n, a) in &d.paren_spaces {
+            if n == inside && !self.is_error_type(ty) {
+                let node = *self.ast.attrs.get(a);
+                ty = self.build_addr_space_type(ty, node);
+            }
+        }
+        ty
+    }
+
     /// [dcl.fct]/6 (CWG1417): a function type with a cv-qualifier-seq or
     /// ref-qualifier that `d` (whose decl-specifiers are `ds`) declares
     /// through a typedef-name or `decltype` (no function declarator) is
@@ -1547,6 +1566,7 @@ impl Sema<'_, '_> {
                 ty = QualType::INT;
             }
             ty = self.declarator_parens(ty, d, i + 1);
+            ty = self.declarator_paren_spaces(ty, d, i + 1);
             if let Some(which) = self.decltype_auto_compound(ty, chunk) {
                 let loc = Self::chunk_loc(chunk);
                 let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);
@@ -1961,6 +1981,9 @@ impl Sema<'_, '_> {
             if !d.nullability.is_empty() || !moved.is_empty() {
                 ty = self.chunk_nullability(ty, i, d, &moved);
             }
+        }
+        if !self.is_error_type(ty) {
+            ty = self.declarator_paren_spaces(ty, d, 0);
         }
         // [temp.variadic]/5: only a parameter declares a pack (clang
         // `GetFullTypeForDeclarator` drops the `...`).
@@ -6915,8 +6938,12 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(msg);
             QualType::ERROR
-        } else if !invalid && self.ast.types.addr_space(ty) != kiln_ast::types::AddrSpace::DEFAULT {
-            // clang `CheckFieldDecl` (WP-1803).
+        } else if !invalid
+            && (self.ast.types.addr_space(ty) != kiln_ast::types::AddrSpace::DEFAULT
+                || self.ast.types.is_dependent_addr_space(ty))
+        {
+            // clang `CheckFieldDecl` (WP-1803), a dependent space too
+            // (WP-1811).
             self.error(DiagId::sema_address_space_field, d.name_loc());
             QualType::ERROR
         } else if !invalid

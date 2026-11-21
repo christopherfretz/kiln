@@ -441,6 +441,45 @@ impl TypeContext {
         })
     }
 
+    /// `pointee __attribute__((address_space(expr)))` of a value-dependent
+    /// `expr` whose profile is `space` (clang
+    /// `getDependentAddressSpaceType`). The canonical node is keyed by
+    /// the profile over the canonical pointee, which keeps its
+    /// cv-qualifiers (clang: `const T` as the pointee and `const` outside
+    /// the node are distinct types); the creating spelling's expression is
+    /// kept for the mangled `U2ASI <expression> E`.
+    pub fn dependent_addr_space(
+        &mut self,
+        pointee: QualType,
+        expr: ExprId,
+        space: ProfileId,
+    ) -> QualType {
+        let t: TypeId = {
+            let flags = self.qflags(pointee)
+                | sem(self.profile_flags(space))
+                | TypeFlags::DEPENDENT_INSTANTIATION;
+            let key = Key::pair(TypeKind::DependentAddrSpace, 0, raw(pointee), expr.raw());
+            self.intern_with(key, flags, |ctx| {
+                let cp = ctx.canonical(pointee);
+                let c = Self::uq(ctx.dependent_addr_space_canonical(cp, space));
+                ctx.note_expr_origin(c.ty(), expr);
+                Some(c)
+            })
+        };
+        t.into()
+    }
+
+    fn dependent_addr_space_canonical(&mut self, pointee: QualType, space: ProfileId) -> TypeId {
+        let flags = self.qflags(pointee)
+            | sem(self.profile_flags(space))
+            | TypeFlags::DEPENDENT_INSTANTIATION;
+        let key = Key::pair(TypeKind::DependentAddrSpace, AUX_PROFILE, raw(pointee), space.raw());
+        self.intern_with(key, flags, |ctx| {
+            let cp = ctx.canon_if(pointee)?;
+            Some(Self::uq(ctx.dependent_addr_space_canonical(cp, space)))
+        })
+    }
+
     /// `base` in address space `word` ([`AddrSpace`]; spec/types.md §5
     /// "Address spaces"). The canonical form is `ExtQual` over the
     /// canonical, cv-unqualified base with the cv-qualifiers outside
