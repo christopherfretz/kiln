@@ -329,7 +329,6 @@ pub static TABLE: &[Row] = &[
     r("vec_type_hint", G, C, OFFLOAD),
     r("vecreturn", G | CL, C, OFFLOAD),
     r("warn_unused", G | GS, C, ANALYSIS),
-    r("warn_unused_result", CL, C, ANALYSIS),
     r("warning", G | GS, C, DIAG_REJECT),
     r("work_group_size_hint", G, C, OFFLOAD),
 ];
@@ -372,8 +371,14 @@ const CLANG_SCOPED: &[&str] = &[
     "unavailable",
     "uninitialized",
     "using_if_exists",
+    "warn_unused_result",
     "weak_import",
 ];
+
+/// The [`CLANG_SCOPED`] spellings clang has only as `CXX11<"clang", ...>`,
+/// with no C23 spelling: unknown in C (`[[clang::warn_unused_result]]`,
+/// WP-1837).
+pub(crate) const CXX_ONLY_CLANG_SCOPED: &[&str] = &["warn_unused_result"];
 
 /// The table row for `name` (its `__` affixes removed).
 pub fn row(name: &str) -> Option<&'static Row> {

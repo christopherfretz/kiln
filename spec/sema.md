@@ -462,7 +462,19 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   attribute, warns `ignoring {return value|temporary} of type 'T'
   declared with 'nodiscard' attribute` under `-Wunused-value`
   (`unused_type_warning`, `expr.rs`), at the operator call's first token
-  for an overloaded operator. Attributes on a block-scope
+  for an overloaded operator. Which attribute an unused call reports
+  (WP-1837, clang `getUnusedResultAttr`): under `-fclang-compat>=22`
+  the callee's (its latest declaration), then the return type's tag, then
+  each typedef in the sugar chain of the callee's declared return type
+  (`typedef_nodiscard`; a reference return is looked at as written, and a
+  reference to a nodiscard class does not count);
+  under 19 the tag, the typedef chain, then the callee, and every path
+  is `ignoring return value of function declared with ...`. The type path
+  names the declaration unqualified (`'S'`, `'W<int>'`, a typedef's own
+  name), and under 22 the spelling as written (`'gnu::warn_unused_result'`,
+  `'__gnu__::warn_unused_result'`, `'_Clang::warn_unused_result'`;
+  `nodiscard_shown`). A discarded temporary is diagnosed for every
+  spelling under 22, for `[[nodiscard]]` alone under 19. Attributes on a block-scope
   using-declaration or using-directive are diagnosed as statement
   attributes (`act_on_decl_stmt_attrs`).
 - **Template notes** (WP-377). A conversion error in a non-type template
@@ -3459,6 +3471,25 @@ instantiation unless stated.
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
+  - **An unknown attribute's argument clause** (WP-1836; clang
+    `ParseCXX11AttributeArgs`, `ParseAttributeArgsCommon`): the parser
+    asks `Sema::attribute_is_unknown(syntax, scope, name)` (the same
+    support test `act_on_attribute` makes, so a name it would warn about
+    as unknown; in C, a C++-only `clang::` spelling such as
+    `clang::warn_unused_result` is unknown). In `[[...]]` (C++ and C23)
+    the clause is balanced tokens, skipped unchecked: `[[clang::deprecated(u8"x")]]`
+    and `[[foo::bar(1 2 ;)]]` are only the warning. In `__attribute__`
+    it is parsed as clang parses an unknown GNU attribute: a first
+    argument that is a lone identifier before `,` or `)` is an identifier
+    argument, every other argument an assignment-expression (or a braced
+    list); an argument that is invalid or has an unexpanded pack drops
+    the attribute with no warning (after the expression's own error), a
+    `...` is `attribute 'x' does not support argument pack expansion`
+    (error, at the `)`), and a missing `)` is `expected ')'`. A known
+    attribute's arguments keep their own checks (an encoding prefix on
+    `[[deprecated(u8"x")]]` is still an error). A missing second `]` of
+    `]]` is `expected ']'` and skips to the next balanced `]`.
+    `dcl.attr.unknown/unknown-attribute-arguments.cpp`, `-c.c`.
 - **Visibility attributes** (GNU extension, WP-544; clang
   `handleVisibilityAttr`, `mergeVisibilityAttr`,
   `AddPushedVisibilityAttribute`; `visibility.rs`): `visibility(S)` and
@@ -4164,6 +4195,31 @@ instantiation unless stated.
       `__attribute__((warn_unused_result))` there is kept). The GNU
       spellings (`__attribute__`, `[[gnu::...]]`) are told apart by
       `AttrNode::is_gnu_spelling` (the `GNU_SCOPED` flag).
+      `[[clang::warn_unused_result]]` (C++ only; WP-1837) is the same
+      kind with the `CLANG_SCOPED` flag; `AttrNode::is_standard_nodiscard`
+      is the unscoped `[[nodiscard]]`. The variable warning is the
+      standard spelling's alone and keeps the attribute (a call through a
+      `[[nodiscard]]` function pointer still warns); the typedef warning
+      is for `[[nodiscard]]` and `[[gnu::]]` only (`__attribute__` and
+      `clang::` apply to a typedef). Arguments: at most one (`'X'
+      attribute takes no more than 1 argument`, error), an unevaluated
+      string; the message is kept for `[[nodiscard]]`, and under
+      `-fclang-compat>=22` for `clang::` too; the GNU spellings check it
+      and drop it.
+    - GNU `const` / `pure` on a function (WP-1838; clang
+      `Sema::CheckFunctionDeclaration`, `check_pure_const` at the end of
+      `check_decl_attrs`, and in `copy_attrs` for an instantiated
+      function or member, inside its instantiation context so the note is
+      `in instantiation of ...`): reported at the declaration's name and
+      looking at this declaration's attributes only. Both present is
+      `'const' attribute imposes more restrictions; 'pure' attribute
+      ignored` and `pure` is dropped. A non-dependent `void` return type
+      (a constructor and a destructor too; a typedef of `void`; not an
+      undeduced `auto`) is `'const|pure' attribute on function returning
+      'void'; attribute ignored`, and the attribute is dropped: no
+      `memory(none)` / `memory(read)` in the IR, no `ignoring return value
+      ... const attribute`. Both [-Wignored-attributes].
+      `dcl.attr/const-pure-void-return.cpp`, `-c.c`, `-ir.cpp`.
     - The standard `[[noreturn]]` ([dcl.attr.noreturn]/1) on anything
       but a function is `'noreturn' attribute only applies to
       functions` (error). The GNU `noreturn` is accepted on a function

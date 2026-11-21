@@ -372,6 +372,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   prefix 'u8' on an unevaluated string literal has no effect"
   [-Winvalid-unevaluated-string], as in clang (WP-1805); it was an error
   in every mode.
+- The argument clause of an attribute clang does not know is skipped as
+  balanced tokens in `[[...]]` and parsed as clang parses an unknown GNU
+  attribute in `__attribute__` (WP-1836), so `[[clang::deprecated(u8"x")]]`
+  is only "unknown attribute ignored" [-Wunknown-attributes]; it was an
+  error, the arguments being checked as a known attribute's.
+- `[[clang::warn_unused_result]]` is implemented (WP-1837): a discarded
+  call, class or enumeration return, typedef return or temporary warns
+  as for the other `warn_unused_result` spellings, with its message under
+  `-fclang-compat=22`; it was ignored. In C it is an unknown attribute, as
+  in clang. Every spelling now follows clang's order (callee first under
+  22, type first under 19), names the return type unqualified and, under
+  22, the spelling as written (`'gnu::warn_unused_result'`).
+- GNU `const` or `pure` on a function returning `void` is ignored with
+  clang's "'const' attribute on function returning 'void'; attribute
+  ignored" warning [-Wignored-attributes] and dropped from the IR, and
+  `pure` next to `const` is dropped with "'const' attribute imposes more
+  restrictions; 'pure' attribute ignored" (WP-1838); the call kept
+  `memory(none)` / `memory(read)`.
 - The Swift parameter ABIs of an alias template's function type are
   checked again at instantiation, as in clang: a pack expansion that
   moves a `swift_indirect_result` off the front or leaves a

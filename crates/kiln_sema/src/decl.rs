@@ -14022,6 +14022,61 @@ impl Sema<'_, '_> {
         Some(a)
     }
 
+    /// True when clang does not know attribute `scope::name` written with
+    /// `syntax` (WP-1836): clang `hasAttribute` is 0 for a `[[...]]`
+    /// attribute, whose argument clause the parser then skips as balanced
+    /// tokens (`ParseCXX11AttributeArgs`), and `ParsedAttr::UnknownAttribute`
+    /// for an `__attribute__` one, whose arguments are parsed as clang's
+    /// unknown attributes' (`ParseAttributeArgsCommon`). The same triage
+    /// as [`Sema::act_on_attribute`], which then warns `unknown attribute
+    /// 'x' ignored` (spec/sema.md §4.5).
+    pub fn attribute_is_unknown(
+        &self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+    ) -> bool {
+        let raw = sym_str(self, name);
+        let scope_s = scope.map(|s| norm_attr_scope(&sym_str(self, s)).to_owned());
+        let n = if kiln_ast::attr::attr_name_normalizes(syntax, scope_s.as_deref()) {
+            kiln_ast::attr::normalize_attr_name(&raw).to_owned()
+        } else {
+            raw
+        };
+        let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
+        if crate::class_b_attrs::is_c_only(&n, syntax, scope_s.as_deref()) || gnu && n == "format" {
+            return false;
+        }
+        self.attr_support(syntax, scope_s.as_deref(), &n) == crate::attr_triage::Support::Unknown
+    }
+
+    /// [`crate::attr_triage::attribute_support`] for normalized `scope`
+    /// and `n` under this unit's language, release and target. In C, a
+    /// clang attribute spelled only `CXX11<"clang", ...>` (no C23
+    /// spelling: `[[clang::warn_unused_result]]`) is unknown.
+    fn attr_support(
+        &self,
+        syntax: AttrSyntax,
+        scope: Option<&str>,
+        n: &str,
+    ) -> crate::attr_triage::Support {
+        if self.is_c()
+            && syntax == AttrSyntax::Cxx11
+            && scope == Some("clang")
+            && crate::attr_triage::CXX_ONLY_CLANG_SCOPED.contains(&n)
+        {
+            return crate::attr_triage::Support::Unknown;
+        }
+        crate::attr_triage::attribute_support(
+            n,
+            syntax,
+            scope,
+            self.clang_compat,
+            self.std >= kiln_lex::Std::Cxx26,
+            self.abi.triple.arch == kiln_abi::target::Arch::X86_64,
+        )
+    }
+
     /// [`Sema::act_on_attribute`] without the scope flag.
     #[allow(clippy::too_many_lines)]
     fn attribute_node(
@@ -14082,15 +14137,7 @@ impl Sema<'_, '_> {
         // spelling, a clang attribute kiln ignores (class B/C: no
         // diagnostic, nothing attached), one it rejects (class A), or one
         // clang does not know either.
-        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
-        let support = crate::attr_triage::attribute_support(
-            &n,
-            syntax,
-            scope_s.as_deref(),
-            self.clang_compat,
-            cxx26,
-            x86,
-        );
+        let support = self.attr_support(syntax, scope_s.as_deref(), &n);
         let kind = match support {
             crate::attr_triage::Support::Implemented(k) => k,
             crate::attr_triage::Support::Ignored(_) => {
@@ -14258,6 +14305,14 @@ impl Sema<'_, '_> {
             } else {
                 n.clone()
             };
+            // clang `WarnUnusedResult` has an optional `Message`.
+            if kind == AttrKind::NODISCARD {
+                let msg = self
+                    .diag(DiagId::sema_attribute_too_many_arguments_one, loc)
+                    .arg(format!("'{name}'"));
+                self.emit(msg);
+                return None;
+            }
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                 .arg(name)
@@ -14284,6 +14339,14 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 a = e.raw();
+                // clang keeps the message of `[[nodiscard]]` only, and
+                // since clang 22 of `[[clang::warn_unused_result]]`; the
+                // GNU spellings check it and drop it (WP-1837).
+                let standard = syntax == AttrSyntax::Cxx11 && scope.is_none();
+                let clang = scope_s.as_deref() == Some("clang") && self.clang_compat >= 22;
+                if kind == AttrKind::NODISCARD && !standard && !clang {
+                    a = 0;
+                }
             }
             (_, Some(AttrArg::Type(_) | AttrArg::Ident(..))) => {
                 self.error(DiagId::parse_expected_expression, loc);
@@ -14305,6 +14368,8 @@ impl Sema<'_, '_> {
         }
         let flags = if kind == AttrKind::FALLTHROUGH && scope.is_some() {
             AttrNode::FALLTHROUGH_SCOPED
+        } else if kind == AttrKind::NODISCARD && scope_s.as_deref() == Some("clang") {
+            AttrNode::CLANG_SCOPED
         } else {
             0
         };
@@ -15233,7 +15298,10 @@ pub(crate) fn attr_kind_of(
 ) -> Option<AttrKind> {
     let gnu_syntax = syntax == AttrSyntax::Gnu;
     Some(match (n, std, gnu) {
+        // clang `WarnUnusedResult`: `[[nodiscard]]`, GNU
+        // `warn_unused_result` and `[[clang::warn_unused_result]]` (WP-1837).
         ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
+        ("warn_unused_result", _, _) if clang_scope => AttrKind::NODISCARD,
         ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
         ("unused", _, true) => AttrKind::UNUSED,
         ("deprecated", _, _) => AttrKind::DEPRECATED,
