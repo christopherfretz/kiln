@@ -1757,7 +1757,8 @@ pub(super) enum Root {
     /// Constructor record, ctor-initializer position, initializer.
     CtorInit(u32, u32, ExprId),
     /// WP-1278: declaration record, attribute record, argument slot
-    /// (`a`, `b`), the argument.
+    /// (`a`, `b`), the argument. Slot 2 (WP-1806): an index into
+    /// `Attrs::xexprs` instead of the attribute record.
     Attr(u32, u32, u8, ExprId),
     /// Non-type template parameter record, default argument (WP-1279).
     TemplDefault(u32, ExprId),
@@ -3026,6 +3027,7 @@ impl Writer<'_, '_, '_> {
     }
 
     /// Walks one pending root ([`Writer::walk_roots`]).
+    #[allow(clippy::too_many_lines)] // one arm per root kind
     fn walk_root(&mut self, r: Root) -> W<()> {
         {
             match r {
@@ -3087,6 +3089,10 @@ impl Writer<'_, '_, '_> {
                     {
                         inits[k as usize].init = i;
                     }
+                }
+                Root::Attr(_, k, 2, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    self.img.attrs.xexprs[k as usize] = i;
                 }
                 Root::Attr(_, k, slot, e) => {
                     let i = self.walk(Node::E(e))?;

@@ -273,6 +273,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Programs whose importer builds a module from its declaration image
+  (`-fkiln-bmi-image`) link again when an inline function names a
+  constant static data member of an implicit class template
+  specialization (`B<2>::v`); the member was left undefined since
+  WP-1497 (WP-1817). An `alias` or `ifunc` declared in a named module is
+  only declared in an importer (it was rejected there as an alias of an
+  undefined symbol), and two `overloadable` `extern "C"` functions of one
+  name overload instead of conflicting.
+- The declaration image (`-fkiln-bmi-image`) carries every attribute
+  kind (WP-1806): `code_model`, `interrupt`, `weak_import`, `alias`,
+  `ifunc`, `cleanup`, `section`, `target`, `target_version`,
+  `target_clones`, `annotate`, `callback`, the SME keywords, the xray,
+  constructor/destructor priority and speculative-load-hardening
+  attributes, Swift parameter ABIs in function types and the rest,
+  where a module carrying one fell back to replaying its source. A unit
+  test fails when a new attribute kind is neither carried nor exempted
+  with a reason.
 - A block-scope `extern` function or variable declaration with an asm
   label (`extern int q(int) asm("qq");`) inside a template keeps its
   label in the instantiation; it was mangled as a local name (WP-1797).

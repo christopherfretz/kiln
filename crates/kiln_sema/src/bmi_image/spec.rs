@@ -824,9 +824,7 @@ impl Sema<'_, '_> {
                 // did: one usable in constant expressions at once, even
                 // when only named (a non-odr-use, `B<2>::v`), its value
                 // being needed; any other only when odr-used.
-                self.unevaluated += u32::from(!used);
-                self.note_var_referenced(d, loc);
-                self.unevaluated -= u32::from(!used);
+                self.note_var_rereferenced(d, loc, used);
             }
             if used {
                 if func {

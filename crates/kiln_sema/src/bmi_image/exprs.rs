@@ -424,15 +424,13 @@ impl Writer<'_, '_, '_> {
             NoexceptValue::Dependent(_) => NX_DEPENDENT,
         };
         let types = &self.s.ast.types;
-        if p.info().param_abis() != 0 {
-            return Err("a Swift parameter ABI the image does not carry");
-        }
         let ps: Vec<QualType> = types.params(p).to_vec();
         let info = p.info().bits();
         let ret = self.qref(p.ret())?;
         let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
         let t = super::BUILTINS + 1 + self.img.types.len() as u32;
-        self.img.types.push(TyRec::Func { ret, params, info, exc: 0, nx: NONE });
+        let abis = super::param_abis_of(types, p.info(), params.len());
+        self.img.types.push(TyRec::Func { ret, params, info, exc: 0, nx: NONE, abis });
         Ok(Some((QRef { ty: t, quals: fty.quals_bits() }, (exc, expr))))
     }
 
@@ -446,14 +444,12 @@ impl Writer<'_, '_, '_> {
             NoexceptValue::True => NX_TRUE,
             NoexceptValue::Dependent(_) => NX_DEPENDENT,
         };
-        if p.info().param_abis() != 0 {
-            return Err("a Swift parameter ABI the image does not carry");
-        }
         let ps: Vec<QualType> = types.params(&p).to_vec();
         let info = p.info().bits();
         let ret = self.qref(p.ret())?;
         let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
-        Ok(TyRec::Func { ret, params, info, exc, nx: self.texpr(expr)? })
+        let abis = super::param_abis_of(&self.s.ast.types, p.info(), params.len());
+        Ok(TyRec::Func { ret, params, info, exc, nx: self.texpr(expr)?, abis })
     }
 }
 
