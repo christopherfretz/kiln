@@ -247,7 +247,11 @@ clang's `CodeGenModule` pipeline:
    before the function that names it, interleaved with the TU's own
    dynamic initializations in clang's order; a constant-initialized one
    is still deferred to its first use
-   (`tests/codegen/var_template_point_of_instantiation.cpp`).
+   (`tests/codegen/var_template_point_of_instantiation.cpp`). The same
+   table holds the imported inline `used` functions a unit names
+   (WP-1825, spec/modules.md §7 "Imported `used` functions"): each is
+   defined at its anchor, as clang emits the declaration it loads from
+   a module file.
 
    Inside a top-level namespace, linkage specification or export block
    these parse-time handovers (the variables above and the explicit

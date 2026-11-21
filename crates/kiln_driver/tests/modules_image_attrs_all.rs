@@ -4,7 +4,9 @@
 //! target-neutral, x86-64 and `AArch64` attributes, and the effects are
 //! clang's (checked by hand against clang++-22). A precompiled header
 //! of the same declarations restores them from its snapshot with the
-//! IR of the replayed header.
+//! IR of the replayed header. WP-1824: thread-local variables, which the
+//! image carries since; WP-1825: imported inline `used` functions an
+//! importer names (x86-64 interrupt handlers among them).
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -297,4 +299,91 @@ fn pch_attributes_behave_as_replayed() {
         assert!(snap == rep, "{name}: IR differs between the snapshot and the replay");
         let _ = std::fs::remove_dir_all(&d);
     }
+}
+
+/// WP-1824: thread-local variables in every form the image carries.
+const TLS_H: &str = r#"namespace wt {
+inline int trace(int v) { return v; }
+thread_local int k = 3;
+thread_local int d = trace(4);
+extern thread_local int ext;
+__thread int st = 5;
+_Thread_local int c11 = 6;
+[[gnu::tls_model("initial-exec")]] thread_local int ie = trace(7);
+[[gnu::tls_model("local-exec")]] __thread int le = 8;
+constinit thread_local int ci = 9;
+constexpr thread_local int cx = 10;
+thread_local const int cc = trace(11);
+thread_local int arr[2] = {1, trace(12)};
+thread_local int &ref = arr[1];
+inline thread_local int inl = trace(13);
+struct S {
+  static inline thread_local int si = trace(14);
+};
+struct T {
+  int v = trace(15);
+  ~T() {}
+};
+thread_local T t;
+template <class U> thread_local U vt = U(trace(16));
+template <class U> struct Box {
+  static inline thread_local U v = U(trace(17));
+};
+template <class U> U bump() {
+  static thread_local U n{};
+  return ++n;
+}
+inline int counter() {
+  static thread_local int n = 0;
+  return ++n;
+}
+}
+"#;
+
+const TLS_U: &str = "int use() {\n\
+                     \x20 using namespace wt;\n\
+                     \x20 return k + d + ext + st + c11 + ie + le + ci + cx + cc + arr[1] + ref + inl\n\
+                     \x20      + S::si + t.v + vt<int> + Box<long>::v + bump<int>() + counter();\n\
+                     }\n";
+
+#[test]
+fn thread_locals_behave_as_replayed() {
+    let ir = image_ir("tls", TLS_H, TLS_U, &[]);
+    has_all(
+        &ir,
+        &[
+            "@_ZN2wtW1a1kE = external thread_local global i32",
+            "@_ZN2wtW1a2ieE = external thread_local(initialexec) global i32",
+            "@_ZN2wtW1a2leE = external thread_local(localexec) global i32",
+            "@_ZN2wtW1a3inlE = linkonce_odr dso_local thread_local global i32 0, comdat",
+            "@_ZZN2wtW1a7counterEvE1n = linkonce_odr dso_local thread_local global i32 0, comdat",
+            "define linkonce_odr hidden noundef ptr @_ZTWN2wtW1a1dE() #",
+            "declare extern_weak void @_ZTHN2wtW1a1dE()",
+            "define linkonce_odr hidden noundef ptr @_ZTWN2wtW1a3extE() #",
+            "@_ZTHN2wtW1a3inlE = linkonce_odr dso_local alias void (), ptr @__tls_init",
+        ],
+    );
+}
+
+/// WP-1825: the inline functions with GNU `used` an importer names
+/// (an x86-64 interrupt handler is implicitly `used`) are defined there
+/// from the image as from the replay; one it does not name is not.
+#[test]
+fn used_inline_functions_behave_as_replayed() {
+    let h = "struct frame {\n  unsigned long ip, cs, flags, sp, ss;\n};\n\
+             inline __attribute__((interrupt)) void isr(frame *) {}\n\
+             inline __attribute__((interrupt)) void isr_unnamed(frame *) {}\n\
+             inline __attribute__((used)) int pick(int) { return 1; }\n\
+             inline __attribute__((used)) int pick(long) { return 2; }\n";
+    let u = "void *take() { return (void *)&isr; }\nint call() { return pick(1); }\n";
+    let ir = image_ir("used", h, u, &["--target=x86_64-unknown-linux-gnu"]);
+    has_all(
+        &ir,
+        &[
+            "define linkonce_odr dso_local x86_intrcc void @_ZW1a3isrPS_5frame(ptr noundef byval(%struct.frame) %0) #",
+            "define linkonce_odr dso_local noundef i32 @_ZW1a4pickl(i64 noundef %0) #",
+            "@llvm.compiler.used = appending global [3 x ptr]",
+        ],
+    );
+    assert!(!ir.contains("isr_unnamed"), "{ir}");
 }

@@ -385,6 +385,9 @@ pub struct TemplateTables {
     /// `after` (the reference is in a declaration that is no member, such
     /// as a `static_assert`; `anchor` is then the last member before it,
     /// or the namespace itself when it had none). spec/codegen.md §2a.
+    /// Since WP-1825 also the imported inline `used` functions the
+    /// translation unit names (first declarations), which clang hands to
+    /// codegen as it loads them (spec/modules.md §7).
     ref_var_insts: Vec<(DeclId, bool, DeclId)>,
     /// Classes in `explicit_member_insts` whose members codegen defines
     /// only there, not where the class was first declared in its lexical

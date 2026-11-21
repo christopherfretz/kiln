@@ -25,7 +25,7 @@ use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
     FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind,
-    TemplLinkKind, VarSpec, VarStorage,
+    TemplLinkKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
@@ -99,7 +99,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 45;
+pub(crate) const IMAGE_VERSION: u32 = 46;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -961,9 +961,6 @@ fn init_kind_of(k: u8) -> CtorInitKind {
     }
 }
 
-/// Variable specifier bits carried: storage (none, static, extern), the
-/// initialization style, `constexpr`, `constinit`, `inline` (and whether
-/// it is implied), NRVO and range-`for` variables. Thread-local storage is not carried yet.
 /// The ABIs of the first `n` parameters of a function type with `info`
 /// (WP-1806), up to the last one that is not ordinary.
 fn param_abis_of(types: &TypeContext, info: FuncInfo, n: usize) -> Vec<u8> {
@@ -977,11 +974,22 @@ fn param_abis_of(types: &TypeContext, info: FuncInfo, n: usize) -> Vec<u8> {
     v
 }
 
+/// Variable specifier bits carried: storage (none, static, extern), the
+/// thread storage duration (`__thread` / `_Thread_local` static TLS,
+/// `thread_local` dynamic TLS; WP-1824), the initialization style,
+/// `constexpr`, `constinit`, `inline` (and whether it is implied), NRVO
+/// and range-`for` variables.
 fn var_spec(bits: u32) -> Option<VarSpec> {
     let storage = match bits & 7 {
         0 => VarStorage::None,
         1 => VarStorage::Static,
         2 => VarStorage::Extern,
+        _ => return None,
+    };
+    let tls = match (bits >> 3) & 3 {
+        0 => TlsKind::None,
+        1 => TlsKind::Static,
+        2 => TlsKind::Dynamic,
         _ => return None,
     };
     let style = match (bits >> 5) & 3 {
@@ -993,6 +1001,7 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
     let bit = |b: u32| bits & (1 << b) != 0;
     let spec = VarSpec::new()
         .with_storage(storage)
+        .with_tls(tls)
         .with_init_style(style)
         .with_constexpr(bit(7))
         .with_constinit(bit(8))

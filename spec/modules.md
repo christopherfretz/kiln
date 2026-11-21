@@ -615,6 +615,30 @@ when constant (as clang 22). Tests:
 `module.import/const-var-address-run.cpp`,
 `module.import/const-ref-temporary-address-run.cpp`.
 
+**Imported `used` functions (WP-1825).** An inline function an imported
+named unit owns that has GNU `used` (an x86-64 `interrupt` handler is
+implicitly `used`, spec/sema.md §4.5) is the importer's own
+`linkonce_odr` definition once the importer names it, in
+`llvm.compiler.used`, as clang 22 and 19 emit it: clang loads the
+declaration when a name lookup of the importer finds it and hands it to
+codegen at once, where `used` makes it `DeclMustBeEmitted`. Sema records
+it where a reference to it is built (`Sema::note_imported_used_fn`), with
+the other `used` inline functions of that name in its context (the
+lookup's overloads, named in an unevaluated operand too), in
+`TemplateTables::ref_var_insts`; codegen defines it right before the
+namespace-scope declaration that named it (§2a of spec/codegen.md, as a
+variable instantiated at a reference), and one the importer never names
+is not emitted. Before, the importer only declared it, without the
+`x86_intrcc` convention of an interrupt handler (it linked against the
+module's copy). Not followed: clang also loads the declarations an
+imported inline function's body names when the importer names that
+function, so a `used` function reached only through such a body comes
+first in clang's module, and at the end of kiln's (the definition and
+its linkage are the same). Tests: `tests/codegen/module_used_inline_importer.cpp`,
+`tests/codegen/module_x86_interrupt_importer.cpp`,
+`module.interface/image-used-inline-run.cpp`,
+`module.interface/image-x86-interrupt-run.cpp`.
+
 **Explicit instantiations** ([temp.explicit], [temp.spec.general]/5,
 WP-1354; the PCH and module-file image side is WP-1307 in §11.11). The
 unit that writes an explicit instantiation definition owns the
@@ -2262,10 +2286,15 @@ patterns (S4, below); other templates still fall back.
     inline, `constexpr` or `consteval` (its body is carried, "Bodies"),
     have a deduced return type, and have default arguments;
   - since S3, a class and its members as "Classes (S3)" below lists;
-  - a namespace-scope variable that is not a template or
-    `thread_local`. Since S2 it may be `const`, `constexpr`,
-    `constinit` or `inline`, and have an initializer (carried as
-    records, with its evaluated value when that is a scalar);
+  - a namespace-scope variable that is not a template. Since S2 it
+    may be `const`, `constexpr`, `constinit` or `inline`, and have an
+    initializer (carried as records, with its evaluated value when that
+    is a scalar). Since WP-1824 it may have thread storage duration
+    (`thread_local`, `__thread`, `_Thread_local`, with a `tls_model`),
+    as may a static data member and a block-scope `static` of a carried
+    body: an importer then declares and reaches it as after a replay
+    (§10, deviation 9), with the same IR (before, such a unit fell back:
+    "a variable with specifiers the image does not carry");
   - a `static_assert` declaration, which is checked when the module is
     compiled and not carried (since S2);
   - an enumeration (scoped or unscoped, fixed or not) or an enumerator;
@@ -4961,7 +4990,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 45` since WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 46` since WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -5122,7 +5151,11 @@ class template's pattern (S4). The payloads are:
   never itself). Only a first declaration of a member function,
   destructor or conversion function lists any; a redeclaration takes
   its first declaration's list;
-- variable: type, `VarSpec` bits (u32), the initializer (an expression
+- variable: type, `VarSpec` bits (u32: storage 0-2, thread storage
+  duration 3-4 as `TlsKind` since WP-1824, initialization style 5-6,
+  `constexpr` 7, `constinit` 8, `inline` 9, NRVO 10, exception
+  variable 11, range-`for` 12, `inline` implied 13; storage `register`
+  and thread kind 3 are refused), the initializer (an expression
   index or `u32::MAX`) and the evaluation state (`u32::MAX` not
   evaluated, `u32::MAX - 1` not a constant, else a constant index);
 - label (S2, local only): nothing;
