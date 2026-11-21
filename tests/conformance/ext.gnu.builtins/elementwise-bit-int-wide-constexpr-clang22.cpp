@@ -4,7 +4,6 @@
 // x86-64 only (aarch64's __BITINT_MAXWIDTH__ is 128).
 //@ requires: clang>=22
 //@ args: --target=x86_64-unknown-linux-gnu
-//@ xfail(kiln): WP-1741 remainder: the element-wise builtins on a wide _BitInt need its in-memory result (compile/wide.rs)
 using W = _BitInt(200);
 using U = unsigned _BitInt(130);
 constexpr W w = -5;

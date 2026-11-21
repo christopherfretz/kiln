@@ -239,7 +239,9 @@ impl Compiler<'_> {
         }
         let size_loc = ast.exprs.get(size_e).loc();
         let bty = self.ety(stripped);
-        if matches!(self.kind(bty), TyKind::Int { signed: true, .. }) {
+        if matches!(self.kind(bty), TyKind::Int { signed: true, .. })
+            || self.o.types.wide(bty).is_some_and(|(_, s)| s)
+        {
             aux |= new_aux::SIGNED;
         }
         aux |= new_aux::ARRAY;
@@ -316,7 +318,9 @@ impl Compiler<'_> {
         {
             aux |= new_aux::ZERO;
         }
-        let cnt = self.rv_copy(stripped);
+        // A `_BitInt` wider than 128 bits is read from memory, clamped to
+        // 128 bits (any value out of them is too large for every array).
+        let (cnt, _) = self.index_rv(stripped, true);
         if let Some(arg) = place {
             self.placement_new(e, arg, dst, aux, cnt, k, size_loc);
         } else {
@@ -501,13 +505,22 @@ impl Compiler<'_> {
                 "sema converts a delete-expression's operand to a pointer to object type ([expr.delete]/2) or recovers"
             )
         };
-        if ast.types.is_void(pq) {
-            // kiln-gap: GAP-114
-            self.unsupported(e);
-            return;
-        }
+        let void = ast.types.is_void(pq);
         let pointee = self.ty(pq);
         let p = self.rv(arg);
+        if void {
+            // Before C++26 (an extension, -Wdelete-incomplete; P3144 makes
+            // it ill-formed): the object the operand points to is
+            // destroyed by its dynamic type (clang `VisitCXXDeleteExpr`),
+            // which the checks (aux 16) look up and register.
+            let a = u32::from(array) | 16;
+            let mark = self.reg();
+            self.emit(Op::ScopeEnter, 0, &[mark]);
+            self.emit_at(Op::Delete, a | 2, &[p, pointee.0], e);
+            self.emit(Op::ScopeExit, 0, &[mark]);
+            self.emit_at(Op::Delete, a, &[p, pointee.0], e);
+            return;
+        }
         // [expr.delete]/3: through a base class with a virtual destructor,
         // the most-derived object is destroyed and freed (aux 4).
         let vdtor = if array { None } else { self.virtual_dtor(pointee) };

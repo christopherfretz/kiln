@@ -1797,7 +1797,13 @@ literal is one instruction and one step, not an interpreted loop.
   power of two", one above 2^(N-1) for an N-bit source with "requested
   alignment must be M or less for type 'T'; V is invalid"; then
   `(x + mask) & ~mask`, `x & ~mask` or `(x & mask) == 0`, wrapped to the
-  source type. On a pointer source (kbc 28, `PTR_ALIGN`, WP-432; clang
+  source type. A wide `_BitInt` source or alignment (WP-1742) is the wide
+  `ALIGN` sub-op on the source's object; a wide alignment of any source
+  is checked by `ALIGN_ARG` (the same two notes, its value in exact
+  decimal), which gives its log2 to `ALIGN` (`x | 4`) or the alignment
+  itself to the narrow and pointer forms
+  (`ext.gnu.builtins/align-bit-int-wide-alignment-constexpr.cpp`). On a
+  pointer source (kbc 28, `PTR_ALIGN`, WP-432; clang
   `PointerExprEvaluator` / `IntExprEvaluator`, `getBaseAlignment`) the
   known alignment is the complete object's (a variable's
   `SemaBridge::decl_align`, else its type's, a heap or temporary object
@@ -2105,7 +2111,14 @@ lower to the same two ops: `New` with aux `ARRAY | STD` and `ty = T`
   `ARRAY_AS_WRITTEN` says what was written); `operator_delete(e)` must be
   a replaceable global deallocation function for the delete to be
   constant ([expr.const]); `delete_passes(e)` (size, alignment) is
-  a codegen fact. A class's destroying `operator delete`
+  a codegen fact. Before C++26 a `delete` of a `void *` (an extension:
+  P3144 makes it ill-formed) runs as clang's (WP-1741): the checks of any
+  delete-expression against the static type the pointer's conversion to
+  `void *` recorded (its `VOID_TAG`), then the destructor of the
+  allocation's dynamic type, each element's for an array (`Op::Delete`
+  aux 16, `vm.rs` `delete_dynamic`;
+  `expr.delete/void-pointer-constexpr{,-errors}-cxx23.cpp`). A class's
+  destroying `operator delete`
   ([expr.delete]/10) is class-specific, so the delete is not constant
   ("call to class-specific 'operator delete'" at the `delete`), directly
   or through a virtual destructor, as clang 22 and 19 do (WP-457;
@@ -4050,6 +4063,24 @@ exception (see "Bool vectors" below). The operations are in
   `ext.vector/bool-constexpr-union-diagnostics-clang22.cpp`).
   The compat-19 boundary above holds until the oracle switch (WP-184,
   M3 to M4).
+- **Wide `_BitInt` lanes** (WP-1742; `_BitInt(256)
+  __attribute__((ext_vector_type(2)))`, x86-64): the vector is an array
+  of its `WideInt` lanes (`ty.rs`). A lane is memory-class, so its
+  "register" is the address of a temporary holding a copy of its value
+  (`wide_lane_load`; a lane is never written after it is made, so lanes
+  may share one), and the lane operations dispatch to the wide sub-ops
+  (`compile.rs` `arith` / `convert` to `wide_arith` / `wide_convert`,
+  `wide_lane_cmp`, `wide_lane_truth`, `wide_lane_unary`,
+  `wide_lane_elementwise`, `wide_reduce`); a store into the object is a
+  wide `MOV`. A lane subscript is an element place, as for any other
+  lane type, so reads, writes, `++` and compound assignment are the
+  wide scalar forms. Unary `-` wraps (through the unsigned type,
+  `Types::wide_of`), as for narrow lanes; a narrow vector shifted by a
+  wide count (which clang splats) shifts each lane by the count
+  saturated to 128 bits. A comparison's result lanes are narrow (sema's
+  type). clang 22 crashes evaluating a comparison of wide lanes and
+  folds `!` of a zero wide lane to garbage; kiln gives -1, the run-time
+  value (`ext.vector/ext-vector-bit-int-wide-lanes{,-compare,-errors}.cpp`).
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
 
@@ -4204,19 +4235,26 @@ Type rules: spec/types.md §21.
   64 bits. Both conversions note as a narrow operand's do ("cast that
   performs the conversions of a reinterpret_cast", or "reinterpret_cast is
   not allowed" for a `reinterpret_cast`, `reinterpret_cast<S>(s)`
-  included). The wide-`_BitInt` trap in `compile.rs` `rv_inner` remains
-  for the forms that still ask for a wide value in a register: a builtin's
-  argument (`__builtin_add_overflow`, `__builtin_popcountg`, the
-  elementwise builtins), a `new T[n]` size and a vector of wide lanes
-  (`_BitInt(256) __attribute__((ext_vector_type(2)))`, which clang
-  evaluates). `ty.rs` lays such a vector out as an opaque type, so the
-  vector arms do not see it: its value (`rv_inner`), a lane subscript or
-  element access (`lv`), and a lane-wise operation, conversion or
-  reduction of it (`vec_regs`, `vec_reduce`) trap with the same note at
-  the vector (`wide_lane_count`). A write to such a lane is `unsupported` in
-  `wide_store`, `wide_compound_assign` and `wide_float_compound`, and a
-  splat into such a vector (a vector shifted by a wide count) in
-  `wide_to_scalar`.
+  included). A `new T[n]` size is read as a subscript index is.
+- *Builtins on wide operands* (WP-1742; `compile/wide.rs`
+  `wide_builtin_value` / `wide_builtin_init`). The checked arithmetic
+  builtins (`__builtin_add_overflow` / `_sub_` / `_mul_` and the typed
+  forms; `wide_checked`) compute the exact result in a synthetic signed
+  wide type wide enough for it and for every value of the result type
+  (`Types::wide_of`), `CAST` it to the result object and compare it back
+  for the overflow flag: the result object holds the wrapped value
+  (docs/status/deviations.md: clang stores the unwrapped one in constant
+  evaluation, and rejects a signed wide `mul_overflow`). `popcountg`,
+  `clzg`, `ctzg`, `ffsg`, `parityg` and `clrsbg` are the `BITS` sub-op
+  (`wide_bit_count`); the element-wise `abs` / `max` / `min` / `add_sat` /
+  `sub_sat` are their sub-ops (clang 22; at 19 none folds, as for narrow
+  operands); the alignment builtins are under "Builtins";
+  `__builtin_constant_p` of a wide operand is a `TO_BOOL` inside its
+  speculative trial (1 when it evaluates). A wide argument converted to
+  a builtin's narrow parameter type is an ordinary conversion (`TO`).
+- *Vectors of wide lanes* are under "Vectors" (WP-1742). No form traps:
+  `rv_inner` gives a wide expression's register value as the address of
+  a temporary copy (a vector operand's splat, a lane).
 
 ### Complex values — Landed (WP-211)
 A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,
@@ -5237,7 +5275,6 @@ Remaining (each traps with a `kiln:` note today):
 - Lifetime of objects outside `std::allocator` storage (double
   destruction of a local, reads after an explicit destructor call), and
   the other WP-212 deviations listed under "Transient allocation".
-- `delete` through `void*`.
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class-specific `operator new`,
   `delete[] (expr)` when `expr` starts with two identifiers (clang's

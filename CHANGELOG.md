@@ -152,6 +152,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   that performs a reinterpret_cast is reported as clang does, and an
   `std::initializer_list` of another layout is an error ("layout not
   recognized"; the PCH format is now 78).
+- Constant evaluation of the builtins on a `_BitInt` wider than 128 bits
+  (WP-1741, WP-1742): the checked arithmetic builtins
+  (`__builtin_add_overflow` and the rest, wrapping the result as at run
+  time), `__builtin_popcountg`/`clzg`/`ctzg`/`ffsg`/`parityg`/`clrsbg`, the
+  element-wise builtins, `__builtin_align_up`/`_down`/`__builtin_is_aligned`
+  with a wide value or alignment, `__builtin_constant_p`, and a wide
+  `new T[n]` size.
+- Before C++26, constant evaluation of `delete` of a `void *` destroys the
+  allocation's dynamic type, as clang does (WP-1741).
+- Constant evaluation of vectors of `_BitInt` lanes wider than 128 bits
+  (`_BitInt(256) __attribute__((ext_vector_type(2)))`; WP-1742): the
+  operators, lane subscripts and writes, element access,
+  `__builtin_convertvector`, shuffles, splats, reductions and element-wise
+  builtins; a narrow vector shifted by a wide count. The PCH format is
+  now 84.
 - Constant evaluation of a `_BitInt` wider than 128 bits as a subscript,
   a pointer offset (`p + s`, `p += s`), the shift count of a narrow left
   operand (`1 << s`, `x <<= s`) and the operand of an integral to pointer
@@ -172,6 +187,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   constant-evaluated (WP-1741).
 - A pointer to a bit-field member (`&C::b`) is an error, "address of
   bit-field requested", as clang (WP-1742).
+- A failed constant-evaluation read of a `_BitInt` wider than 128 bits is
+  noted at the operand's begin (`v[2]`: at `v`), and a wide lane's
+  overflow or shift-count note names the vector type with its lanes, as
+  clang (WP-1742). The alignment builtins' "requested alignment must be
+  N or less" note names a typedef'd source type with its `aka`.
 - In a constant expression, `p += s` and `p -= s` with a pointer `p` and a
   `_BitInt` `s` wider than 128 bits no longer compute a wrong pointer, and
   `reinterpret_cast<S>(s)` of such a `_BitInt` is not a constant
@@ -179,8 +199,7 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - In a constant expression, a lane subscript (`v[i]`), an element
   access, `__builtin_convertvector`, `__builtin_shufflevector`, a
   reduction or an operator on a vector of `_BitInt` lanes wider than 128
-  bits no longer crashes the compiler: it fails with the note that such
-  a `_BitInt` is not supported yet (WP-1742).
+  bits no longer crashes the compiler (WP-1742).
 - A conditional operator with an `_Atomic` arithmetic operand (`b ? ai :
   1`) is accepted in C and C++; kiln reported "incompatible operand types
   ('int' and 'int')" (WP-1739).

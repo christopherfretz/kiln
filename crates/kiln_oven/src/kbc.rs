@@ -201,7 +201,11 @@ ops! {
     // [p, static pointee type]; aux 1 = `delete[]`; aux 2 = the checks
     // only (made before the destructors run); aux 4 = through a virtual
     // destructor; aux 8 = `std::allocator<T>::deallocate` (`::operator
-    // delete` in it), `p` a pointer to the first `T` of the storage
+    // delete` in it), `p` a pointer to the first `T` of the storage;
+    // aux 16 = a `void *` operand (the static type `void`): the type its
+    // conversion recorded (`VOID_TAG`) is checked as the static type,
+    // and with aux 2 the destruction of the allocation's dynamic type is
+    // registered in the current scope
     Delete = 2,
     // [p, dtor func, type]: registers the destruction of the object at
     // `p` (an array: of each element, in order) by the enclosing scope
@@ -439,6 +443,41 @@ pub(crate) mod wide {
     /// The bit-field of declared type `type` at register `d` (bit
     /// `x & 7`, width `x >> 3`) = `*a`, truncated to the width.
     pub const STORE_BITS: u32 = 23;
+    /// `*d = |*a|`, wrapping (`__builtin_elementwise_abs`: the most
+    /// negative value is its own magnitude).
+    pub const ABS: u32 = 24;
+    /// `*d = max(*a, *b)` (`__builtin_elementwise_max`).
+    pub const MAX: u32 = 25;
+    /// `*d = min(*a, *b)` (`__builtin_elementwise_min`).
+    pub const MIN: u32 = 26;
+    /// `*d = *a + *b`, saturating (`__builtin_elementwise_add_sat`).
+    pub const ADD_SAT: u32 = 27;
+    /// `*d = *a - *b`, saturating (`__builtin_elementwise_sub_sat`).
+    pub const SUB_SAT: u32 = 28;
+    /// `__builtin_align_up` (`x` 0) / `_down` (1) of `*a` to the
+    /// alignment in register `b` (a power of two, checked before): into
+    /// `*d`; `x` 2 (`__builtin_is_aligned`): register `d` = whether `*a`
+    /// is aligned. With `x | 4`, register `b` is the alignment's base-2
+    /// logarithm (from [`ALIGN_ARG`]).
+    pub const ALIGN: u32 = 29;
+    /// Register `d` = the bit count `x & 0xF` (a [`BITS_POPCOUNT`]..
+    /// kind) of `*a`; with `x >> 4 & 1`, register `b` is the result for a
+    /// zero `*a` (`__builtin_clzg`/`ctzg`'s fallback), else a zero `*a`
+    /// of `CLZ`/`CTZ` fails.
+    pub const BITS: u32 = 30;
+    /// Checks the wide alignment `*a` of an alignment builtin whose
+    /// source is `x & 0x7FF` bits wide (clang `getBuiltinAlignArguments`:
+    /// a negative or non-power-of-two alignment, or one above
+    /// 2^(width-1), fails); register `d` = its base-2 logarithm, or with
+    /// `x >> 11 & 1` the alignment itself (then below 2^128).
+    pub const ALIGN_ARG: u32 = 31;
+    /// `BITS` kinds: the GCC generic bit builtins.
+    pub const BITS_POPCOUNT: u32 = 0;
+    pub const BITS_CLZ: u32 = 1;
+    pub const BITS_CTZ: u32 = 2;
+    pub const BITS_FFS: u32 = 3;
+    pub const BITS_PARITY: u32 = 4;
+    pub const BITS_CLRSB: u32 = 5;
     /// The result object begins its lifetime (an initialization).
     pub const INIT: u32 = 1 << 6;
     /// `*a` is the destination read for a read-modify-write (with the

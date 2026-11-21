@@ -152,6 +152,8 @@ pub(crate) struct Types {
     /// differently qualified elements (`const E[3]`, `E[3]`) are one
     /// type, as clang's `getUnqualifiedArrayType` makes them.
     const_arrays: FxHashMap<(OTy, u64), OTy>,
+    /// Synthetic wide integers by (width, signed) ([`Types::wide_of`]).
+    wides: FxHashMap<(u32, bool), OTy>,
     /// The `dsize` of each class whose data ends before its size (its
     /// tail padding may hold a derived class's members).
     data_sizes: FxHashMap<OTy, u64>,
@@ -322,6 +324,7 @@ impl Types {
             || !self.union_pos.iter().all(|&(_, t)| ok(t))
             || !self.map.values().all(|&t| ok(t))
             || !self.arrays.values().chain(self.const_arrays.values()).all(|&t| ok(t))
+            || !self.wides.values().all(|&t| ok(t))
             || !self.provisional.values().chain(self.provisional_slots.iter()).all(|&t| ok(t))
             || !self.nv_views.iter().chain(self.nv_class.iter()).all(|(&a, &b)| ok(a) && ok(b))
             || !self.empty_bases.iter().all(|(&t, v)| ok(t) && v.iter().all(|&(b, _)| ok(b)))
@@ -488,6 +491,7 @@ impl Types {
             + map(&self.map)
             + map(&self.arrays)
             + map(&self.const_arrays)
+            + map(&self.wides)
             + map(&self.data_sizes)
             + map(&self.empty_bases)
             + self.empty_bases.values().map(cap).sum::<usize>()
@@ -796,6 +800,21 @@ impl Types {
         t
     }
 
+    /// A synthetic `_BitInt(width)` (`signed`) wider than 128 bits, laid
+    /// out as the targets lay one out (8-byte words, aligned to 8): the
+    /// type of the exact intermediate results of the checked arithmetic
+    /// builtins on wide operands (`compile/wide.rs`). Its `q` is `q`
+    /// (types are told apart by kind; a note never names such a value).
+    pub fn wide_of(&mut self, width: u32, signed: bool, q: QualType) -> OTy {
+        if let Some(&t) = self.wides.get(&(width, signed)) {
+            return t;
+        }
+        let size = u64::from(width.max(129)).div_ceil(64) * 8;
+        let t = self.simple(q, size, 8, TyKind::WideInt { width: width.max(129), signed });
+        self.wides.insert((width, signed), t);
+        t
+    }
+
     /// Whether `t` is a synthetic array (made by [`Types::array_of`]), whose
     /// `q` names its element type.
     pub fn is_synthetic_array(&self, t: OTy) -> bool {
@@ -986,7 +1005,8 @@ impl Types {
             // elements, padded to the vector's own size and alignment (an
             // `ext_vector_type(3)` occupies 4 lanes); `q` keeps the vector
             // type, so notes name it. A vector of `bool` packs its lanes
-            // into bits (`TyKind::BoolVec`).
+            // into bits (`TyKind::BoolVec`); one of wide `_BitInt` lanes is
+            // an array of them (memory-class lanes, `compile/vector.rs`).
             TypeView::Vector { elem, count, .. } => {
                 let (size, align) = bridge.opaque_size_align(c);
                 let elem = self.intern(bridge, elem);
@@ -995,7 +1015,7 @@ impl Types {
                 if e.kind == TyKind::Bool && n.div_ceil(8) <= size {
                     return self.simple(c, size, align.max(1), TyKind::BoolVec { elem, n });
                 }
-                if !matches!(e.kind, TyKind::Int { .. } | TyKind::Float(_))
+                if !matches!(e.kind, TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_))
                     || e.size.saturating_mul(n) > size
                 {
                     return self.simple(c, size, align.max(1), TyKind::Opaque);

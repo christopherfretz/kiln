@@ -16,7 +16,7 @@ use kiln_ast::expr::{
 };
 use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::stmt::{IfKind, StmtKind};
-use kiln_ast::types::{TypeKind, TypeView};
+use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, StringLitId};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -1535,48 +1535,6 @@ impl<'a> Compiler<'a> {
         self.trap_loc(loc, msg.to_owned());
     }
 
-    /// Whether `q` is a `_BitInt(N)` with `N > 128`.
-    fn is_wide_bit_int(&self, q: QualType) -> bool {
-        let types = &self.b.ast().types;
-        matches!(
-            types.view_if(types.canonical(q).ty(), TypeKind::BitInt),
-            Some(TypeView::BitInt { width, .. }) if width > 128
-        )
-    }
-
-    /// The lane count of `q` if it is a vector of wide `_BitInt` lanes
-    /// (`_BitInt(256) __attribute__((ext_vector_type(2)))`): the Oven lays
-    /// one out as an opaque type (`ty.rs`: its lanes are registers, and a
-    /// wide integer is memory-class), so `lanes` and `is_vector_expr` do
-    /// not see a vector there.
-    pub(super) fn wide_lane_count(&self, q: QualType) -> Option<u32> {
-        match self.b.ast().types.canonical_view(q) {
-            TypeView::Vector { elem, count, .. } if self.is_wide_bit_int(elem) => Some(count),
-            _ => None,
-        }
-    }
-
-    /// Traps (and returns true) if `e` is a `_BitInt(N)` with `N > 128`,
-    /// or a vector of such lanes: the Oven's integers are register values
-    /// of at most 128 bits, and a wide one is memory-class
-    /// (`compile/wide.rs`). The operator, conversion, subscript and
-    /// pointer forms read it from memory; a builtin's argument, a
-    /// `new T[n]` size and a vector of wide lanes (any value of one, a
-    /// lane access or a lane-wise operation on one) still ask for it as a
-    /// register value (spec/oven.md "`_BitInt`").
-    pub(super) fn wide_bit_int(&mut self, e: ExprId) -> bool {
-        let q = self.b.ast().exprs.get(e).ty();
-        let wide = self.is_wide_bit_int(q) || self.wide_lane_count(q).is_some();
-        if wide {
-            self.trap(
-                e,
-                // kiln-gap: GAP-129
-                "kiln: constant evaluation of a _BitInt wider than 128 bits is not supported yet",
-            );
-        }
-        wide
-    }
-
     /// [expr.const]/10.22 (before C++26 and P3068, as clang 19):
     /// evaluating a throw-expression is not a core constant expression;
     /// the generic note at the `throw`.
@@ -1642,52 +1600,6 @@ impl<'a> Compiler<'a> {
         }
         self.trap_loc(at, msg.to_owned());
         true
-    }
-
-    fn unsupported(&mut self, e: ExprId) {
-        let n = self.b.ast().exprs.get(e);
-        let k = n.kind();
-        if k == ExprKind::RecoveryExpr || n.deps().contains(kiln_ast::expr::ExprDeps::ERROR) {
-            // An erroneous expression was diagnosed when it was built: the
-            // evaluation fails without a note (clang fails silently on an
-            // expression that `containsErrors()`).
-            return self.trap(e, "");
-        }
-        if matches!(
-            k,
-            ExprKind::AtomicExpr
-                | ExprKind::VAArgExpr
-                | ExprKind::DesignatedInitUpdateExpr
-                | ExprKind::CoawaitExpr
-                | ExprKind::CoyieldExpr
-                | ExprKind::DependentCoawaitExpr
-        ) {
-            // clang 19 never constant-evaluates an atomic builtin, a
-            // `__builtin_va_arg` or a `DesignatedInitUpdateExpr` (its
-            // evaluator has no visitor for one): the generic note at the
-            // expression (the lock-free queries are folded in
-            // `compile/builtins.rs` before they reach here). Nor a
-            // `co_await`/`co_yield` ([expr.const]/5.23, WP-351).
-            return self.throw_invalid(e);
-        }
-        if k.is_cast() && self.b.ast().exprs.cast_kind(e) == CastKind::BuiltinFnToFnPtr {
-            // A builtin's callee evaluated apart from its call (a call
-            // strips the cast to reach the builtin, `call_inner`): clang's
-            // `PointerExprEvaluator` has no case for the cast, so the
-            // generic note at the callee (WP-996).
-            return self.throw_invalid(e);
-        }
-        if k.is_cast()
-            && self.b.ast().exprs.cast_kind(e) == CastKind::IntegralToBoolean
-            && matches!(self.b.ast().types.canonical_view(n.ty()), TypeView::Vector { .. })
-        {
-            // clang 22's `VectorExprEvaluator` has no case for an integer to
-            // `bool` ext vector conversion (sema's clang 20+
-            // `ICK_Boolean_Conversion` between vectors): the generic note.
-            return self.throw_invalid(e);
-        }
-        // kiln-gap: forward
-        self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 
     fn reg(&mut self) -> u32 {
@@ -3977,7 +3889,17 @@ impl Compiler<'_> {
     }
 
     fn rv_inner(&mut self, e: ExprId, dst: u32) {
-        if self.wide_bit_int(e) || self.variably_modified(e) {
+        if self.variably_modified(e) {
+            return;
+        }
+        if self.is_wide_expr(e) {
+            // A wide `_BitInt` is memory-class: its register value is the
+            // address of a temporary holding a copy (a lane of a vector of
+            // wide lanes, a vector operand's splat).
+            let ty = self.ety(e);
+            let p = self.wide_place(e);
+            let t = self.wide_lane_load(p, ty, e, self.begin(e));
+            self.emit(Op::Mov, 0, &[dst, t]);
             return;
         }
         let n = self.node(e);
@@ -4976,6 +4898,9 @@ impl Compiler<'_> {
     /// `dst = a op b` in type `ty` (`bt`: the right operand's type, for
     /// shifts).
     fn arith(&mut self, iop: Op, ty: OTy, bt: OTy, dst: u32, ra: u32, rb: u32, e: ExprId) {
+        if self.o.types.wide(ty).is_some() || self.o.types.wide(bt).is_some() {
+            return self.wide_arith(iop, ty, bt, dst, ra, rb, e);
+        }
         match self.kind(ty) {
             TyKind::Float(k) => match float_op(iop) {
                 Some(fop) => {
@@ -5005,6 +4930,9 @@ impl Compiler<'_> {
                 if src != dst {
                     self.emit(Op::Mov, 0, &[dst, src]);
                 }
+            }
+            (TyKind::WideInt { .. }, _) | (_, TyKind::WideInt { .. }) => {
+                self.wide_convert(src, from, to, dst, e);
             }
             (TyKind::Int { .. } | TyKind::Bool, TyKind::Bool) => {
                 let (w, _) = int_of(fk).unwrap_or((32, true));
@@ -5824,38 +5752,6 @@ impl Compiler<'_> {
                 Place::Mem(self.fn_lv(e))
             }
             ExprKind::MemberExpr => self.member(e, acc),
-            // A lane of a vector of wide `_BitInt` lanes (an opaque type
-            // to the Oven, which the vector arms below do not see): the
-            // wide-`_BitInt` trap at the vector, as for its value
-            // (`wide_bit_int`). An element access names a lane only of
-            // such a vector when it has a wide type.
-            ExprKind::ArraySubscriptExpr
-                if {
-                    let [a, b] = self.ast().exprs.operands(e);
-                    [a, b].iter().any(|&x| {
-                        let q = self.ast().exprs.get(x).ty();
-                        self.wide_lane_count(q).is_some()
-                    })
-                } =>
-            {
-                let [a, b] = self.ast().exprs.operands(e);
-                let v = if self.wide_lane_count(self.ast().exprs.get(a).ty()).is_some() {
-                    a
-                } else {
-                    b
-                };
-                self.wide_bit_int(v);
-                Place::Mem(self.reg())
-            }
-            ExprKind::ExtVectorElementExpr
-                if {
-                    let q = self.ast().exprs.get(e).ty();
-                    self.is_wide_bit_int(q) || self.wide_lane_count(q).is_some()
-                } =>
-            {
-                self.wide_bit_int(e);
-                Place::Mem(self.reg())
-            }
             ExprKind::ArraySubscriptExpr
                 if self.o.clang_compat >= 22 && {
                     let [a, _] = self.ast().exprs.operands(e);

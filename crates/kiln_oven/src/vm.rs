@@ -274,6 +274,14 @@ pub(crate) enum Fault {
         text: Box<str>,
         width: u32,
     },
+    /// The wide alignment `text` (decimal) of an alignment builtin is
+    /// not a positive power of two (`max` empty), or exceeds `max`, the
+    /// source's 2^(width-1) (clang `note_constexpr_invalid_alignment` /
+    /// `note_constexpr_alignment_too_big`).
+    WideAlign {
+        text: Box<str>,
+        max: Box<str>,
+    },
     /// Float-to-integer conversion out of range.
     FloatRange {
         kind: FloatKind,
@@ -1750,10 +1758,24 @@ impl Oven {
                     1 => DynKind::ArrayNew,
                     _ => DynKind::Std,
                 };
-                if kind == DynKind::New && raw != 0 {
-                    match self.delete_base(raw, pointee, aux & 4 != 0) {
-                        Ok(Some((r, t))) => (raw, pointee) = (r, t),
+                // aux 16: a `void *` operand, checked as a pointer to the
+                // type its conversion recorded (none: any object at the
+                // allocation's start).
+                let void = aux & 16 != 0;
+                let mut stat = Some(pointee);
+                if void {
+                    stat = ((reg!(0) >> 64) as u32).checked_sub(1).map(OTy);
+                }
+                if kind == DynKind::New
+                    && raw != 0
+                    && let Some(t) = stat
+                {
+                    match self.delete_base(raw, t, aux & 4 != 0) {
+                        Ok(Some((r, t))) => (raw, pointee, stat) = (r, t, Some(t)),
                         Ok(None) => {}
+                        Err(Fault::DeleteNonVirtual { dynamic, .. }) if void => {
+                            fail!(Fault::DeleteNonVirtual { stat: pointee, dynamic })
+                        }
                         Err(f) => fail!(f),
                     }
                 }
@@ -1764,12 +1786,19 @@ impl Oven {
                 }
                 // aux 2: the checks only (before the destructors run).
                 let r = if aux & 2 != 0 {
-                    self.mem.heap_check(raw, kind, Some(pointee), &self.types).map(drop)
+                    self.mem.heap_check(raw, kind, stat, &self.types).map(drop)
                 } else {
-                    self.mem.heap_free(raw, kind, Some(pointee), &self.types)
+                    self.mem.heap_free(raw, kind, stat, &self.types)
                 };
                 if let Err(f) = r {
-                    fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
+                    fail!(Fault::Mem { f, ak: ak::READ, ty: stat.unwrap_or(pointee), p: raw });
+                }
+                if void
+                    && aux & 2 != 0
+                    && raw != 0
+                    && let Err(f) = self.delete_dynamic(b.ast(), raw, aux & 1, pc)
+                {
+                    fail!(f);
                 }
                 pc += 3;
             }
@@ -2298,6 +2327,42 @@ impl Oven {
     /// `Op::PushCleanup`: registers the destruction of the object (or
     /// each element of the array) of type `ty` at `raw`.
     #[inline(never)]
+    /// `delete` / `delete[]` (`array` 1) of the `void *` `raw` (checked):
+    /// registers the destruction of the allocation's dynamic type (each
+    /// element's, for an array) in the current scope, as
+    /// `Op::PushCleanup` of its destructor would (clang's
+    /// `VisitCXXDeleteExpr` destroys the `AllocType`).
+    fn delete_dynamic(
+        &mut self,
+        ast: &kiln_ast::Ast,
+        raw: u64,
+        array: u32,
+        pc: usize,
+    ) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let aty = self
+            .mem
+            .alloc_of(p)
+            .map_err(|f| Fault::Mem { f, ak: ak::READ, ty: OTy(0), p: raw })?
+            .ty;
+        let mut t = aty;
+        while let TyKind::Array { elem, .. } = self.types.kind(t) {
+            t = elem;
+        }
+        let TyKind::Record { decl, union, .. } = self.types.kind(t) else { return Ok(()) };
+        let def = ast.definition(decl).unwrap_or(decl);
+        let bits = ast.decls.record(def).map(|x| x.defn).unwrap_or_default();
+        if bits.contains(kiln_ast::decl::DefinitionBits::TRIVIAL_DTOR)
+            || (union && bits.contains(kiln_ast::decl::DefinitionBits::ANONYMOUS))
+        {
+            return Ok(());
+        }
+        let Some(d) = ast.destructor(decl) else { return Ok(()) };
+        let func = self.func_index(ast, d);
+        let ty = if array != 0 { t } else { aty };
+        self.push_cleanup(raw, func, ty, array, pc)
+    }
+
     fn push_cleanup(
         &mut self,
         raw: u64,
