@@ -20,15 +20,21 @@ pub(crate) type FeatureMap = BTreeMap<String, bool>;
 impl Cg<'_> {
     /// The `target("...")` string of function `d`: the first redeclaration
     /// carrying one (an instantiation carries its pattern's attributes).
+    /// WP-1745: the version being emitted ([`crate::multiversion`]) has
+    /// its own string, and an x86-64 `target("default")` none.
     pub(crate) fn target_attr_str(&self, d: DeclId) -> Option<String> {
         let ast = self.ast;
-        ast.redecls_of(d).find_map(|r| {
+        if let Some(c) = self.mv.cur.as_ref().filter(|c| ast.first(d) == c.first) {
+            return c.target.clone();
+        }
+        let s = ast.redecls_of(d).find_map(|r| {
             ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).find_map(|a| {
                 let n = ast.attrs.get(a);
                 let l = StringLitId::from_raw(n.a).filter(|_| n.kind == AttrKind::TARGET)?;
                 Some(String::from_utf8_lossy(ast.strings.bytes(l)).into_owned())
             })
-        })
+        });
+        s.filter(|s| !(self.is_x86() && s == "default"))
     }
 
     /// The features of `d`'s `target("...")` attribute, if it has one and

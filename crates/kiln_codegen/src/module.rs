@@ -270,6 +270,8 @@ pub(crate) struct Cg<'a> {
     pub weakref_syms: FxHashSet<String>,
     /// `alias` / `ifunc` definitions ([`crate::alias`]).
     pub(crate) alias: crate::alias::AliasState,
+    /// x86-64 function multiversioning ([`crate::multiversion`]).
+    pub(crate) mv: crate::multiversion::MvState,
     /// Whether a duplicate mangled name was diagnosed (clang hands no
     /// later declaration to code generation after an error).
     pub dup_reported: bool,
@@ -463,6 +465,7 @@ impl<'a> Cg<'a> {
             reps: FxHashMap::default(),
             weakref_syms: FxHashSet::default(),
             alias: crate::alias::AliasState::default(),
+            mv: crate::multiversion::MvState::default(),
             dup_reported: false,
             thunk_fns: FxHashMap::default(),
             sdone: FxHashSet::default(),
@@ -594,6 +597,8 @@ impl<'a> Cg<'a> {
             self.emit_deferred()?;
         }
         self.emit_vtables_opportunistically()?;
+        // WP-1745: clang `emitMultiVersionFunctions`.
+        self.emit_mv_resolvers()?;
         self.resolve_placeholders()?;
         // WP-1557: the `.mason.meta` unit, before the used lists.
         self.emit_mason_meta();
@@ -1056,6 +1061,10 @@ impl<'a> Cg<'a> {
     fn emit_global_fn(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(fd) = ast.decls.function(d) else { return Ok(()) };
+        // WP-1745: x86-64 multiversioning ([`Cg::emit_mv_global`]).
+        if self.is_x86_multiversion(d) {
+            return self.emit_mv_global(d);
+        }
         if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
         }
@@ -1482,7 +1491,7 @@ impl<'a> Cg<'a> {
     }
 
     /// clang `EmitDeferred`.
-    fn emit_deferred(&mut self) -> R<()> {
+    pub(crate) fn emit_deferred(&mut self) -> R<()> {
         if !self.deferred_vtables.is_empty() {
             self.emit_deferred_vtables()?;
         }
@@ -2957,12 +2966,21 @@ impl<'a> Cg<'a> {
             // names the CPU and drops the default `tune-cpu`. WP-630: so
             // does a `target("arch=<cpu>")`, and `tune=<cpu>` names the
             // tune CPU (clang `getFunctionFeatureMap`'s callers).
-            let a = d.and_then(|d| self.target_attr_features(d)).unwrap_or_default();
+            let mut a = d.and_then(|d| self.target_attr_features(d)).unwrap_or_default();
+            let mv =
+                self.mv.cur.as_ref().filter(|c| d.is_some_and(|d| self.ast.first(d) == c.first));
+            if mv.is_some_and(|c| c.keep_cpu) {
+                a.cpu = None;
+            }
             let mut tune = tune.or(if cpu.is_none() { Some("generic") } else { None });
             if a.cpu.is_some() {
                 tune = None;
             }
             tune = a.tune.as_deref().or(tune);
+            // WP-1745: a `cpu_specific` version tunes for its CPU.
+            if let Some(t) = mv.and_then(|c| c.tune.as_deref()) {
+                tune = Some(t);
+            }
             match a.cpu.as_deref().or(cpu) {
                 Some("native") => {}
                 c => out.push(Attr::string("target-cpu", c.unwrap_or("x86-64"))),
@@ -3051,6 +3069,13 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         let first = ast.first(d);
         if let Some(&f) = self.fns.get(&first) {
+            return Ok(f);
+        }
+        // WP-1745: a multiversioned function is called and addressed
+        // through its resolver (clang `GetOrCreateLLVMFunction`).
+        if self.is_x86_multiversion(first) {
+            let f = self.mv_ref(first)?;
+            self.fns.insert(first, f);
             return Ok(f);
         }
         // WP-810: an alias of a builtin (`__clang_arm_builtin_alias`) has no

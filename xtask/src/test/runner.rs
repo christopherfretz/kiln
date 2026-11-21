@@ -2568,13 +2568,14 @@ fn first_missing_check<'c>(out: &str, checks: &'c [String]) -> Option<&'c str> {
 }
 
 /// An LLVM module without what differs between producers but not in the
-/// program: comment lines and trailing comments (`; preds = ...`), the
+/// program: comment lines and trailing comments (`; preds = ...`, `; No
+/// predecessors!`), the
 /// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
 /// `"... version ..."` string node (`spec/harness.md` "IR tests").
 fn ir_normalize(ir: &str) -> String {
     let mut out = String::new();
     for line in ir.lines() {
-        let line = match line.find("; preds = ") {
+        let line = match line.find("; preds = ").or_else(|| line.find("; No predecessors!")) {
             Some(i) if !line.starts_with(';') => line[..i].trim_end(),
             _ => line,
         };
@@ -3194,14 +3195,15 @@ mod compat_tests {
     fn ir_normalize_drops_producer_lines_and_comments() {
         let clang = "; ModuleID = 'a.cpp'\nsource_filename = \"a.cpp\"\n\n\
                      ; Function Attrs: noinline\ndefine void @f() #0 {\n  br label %1\n\n\
-                     1:                                                ; preds = %0\n  ret void\n}\n\
+                     1:                                                ; preds = %0\n  ret void\n\n\
+                     2:                                                ; No predecessors!\n  ret void\n}\n\
                      !llvm.ident = !{!0}\n!0 = !{!\"Debian clang version 22.1.8\"}\n";
         let kiln = "; ModuleID = 'a.cpp'\nsource_filename = \"b.cpp\"\n\n\
-                    define void @f() #0 {\n  br label %1\n\n1:\n  ret void\n}\n\
+                    define void @f() #0 {\n  br label %1\n\n1:\n  ret void\n\n2:\n  ret void\n}\n\
                     !llvm.ident = !{!0}\n!0 = !{!\"kiln version 0.0.1\"}\n";
         assert_eq!(ir_normalize(clang), ir_normalize(kiln));
         assert!(ir_diff(clang, kiln).is_none());
-        let d = ir_diff(clang, &kiln.replace("ret void", "unreachable")).expect("a diff");
+        let d = ir_diff(clang, &kiln.replacen("ret void", "unreachable", 1)).expect("a diff");
         assert!(d.contains("+  unreachable") && d.contains("-  ret void"), "{d}");
     }
 

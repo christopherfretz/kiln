@@ -377,8 +377,8 @@ fn structor_variants() {
 /// label; an `alias` or `ifunc` symbol gets no row (the aliasee does);
 /// a coroutine's ramp has a row and its outlined parts (internal) none;
 /// an `always_inline` inline function gets none (the always-inliner
-/// deletes it at every `-O`). kiln rejects function multiversioning
-/// (`target`, `target_clones`), so it has no rows to decide.
+/// deletes it at every `-O`). An x86-64 multiversioned function (WP-1745)
+/// has none yet: not its versions, resolver or `ifunc`.
 #[test]
 fn decided_forms() {
     let d = scratch("defs-decide");
@@ -419,19 +419,26 @@ fn decided_forms() {
         Some((IN, 3)),
         "the ramp (a coroutine body, K-3d)"
     );
-    std::fs::write(
-        d.join("mv.cpp"),
-        "__attribute__((target(\"default\"))) int mv() { return 1; }\n\
-         __attribute__((target(\"avx2\"))) int mv() { return 2; }\n",
-    )
-    .unwrap();
-    let r =
-        run(&d, &["--target=x86_64-linux-gnu", "-fmason-metadata", "-c", "mv.cpp", "-o", "mv.o"]);
-    assert!(
-        text(&r.stderr).contains("function multiversioning with 'target' is not supported"),
-        "{}",
-        text(&r.stderr)
-    );
+    let src = "__attribute__((target(\"default\"))) int mv() { return 1; }\n\
+               __attribute__((target(\"avx2\"))) int mv() { return 2; }\n\
+               __attribute__((target_clones(\"avx2\", \"default\"))) inline int tc() { return 3; }\n\
+               int use() { return mv() + tc(); }\n";
+    let ir = ir_of(&d, "mv.cpp", src, &["-std=c++20", "--target=x86_64-linux-gnu"]);
+    // No kind 2 block at all: the unit has no other definition with a row.
+    let rows = def_rows(&ir_bytes(meta_line(&ir).unwrap())).unwrap_or_default();
+    assert!(rows.is_empty(), "{rows:?}");
+    for none in [
+        "_Z2mvv",
+        "_Z2mvv.avx2",
+        "_Z2mvv.resolver",
+        "_Z2mvv.ifunc",
+        "_Z2tcv",
+        "_Z2tcv.avx2.0",
+        "_Z2tcv.default.1",
+        "_Z2tcv.resolver",
+    ] {
+        assert_eq!(row(&rows, none), None, "{none}");
+    }
 }
 
 /// Two library-heavy units per standard library (those of

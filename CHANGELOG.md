@@ -12,6 +12,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 - Every known-incomplete language corner is listed in
   docs/status/static-gaps.md and a lint keeps the list exact (WP-1719).
+- Function multiversioning on x86-64, as clang 22 does it (WP-1745):
+  `target("default")` beside other `target` versions, `target_clones`
+  and `cpu_dispatch` / `cpu_specific` compile to per-version functions
+  and an `ifunc` whose resolver picks one from the running CPU, with
+  clang's redeclaration checks and diagnostics. On AArch64 a non-default
+  `target_version` member or friend is now a specific error.
 - Pack expansions in the contexts that reported "not yet implemented"
   (WP-1733): a mem-initializer pack expansion of a member class
   template's own pack, a using-declarator pack expansion at block scope

@@ -2166,7 +2166,7 @@ impl Sema<'_, '_> {
             self.late_analysis(state.decl, body, state.has_fallthrough, state.expr_start, uninit);
             return wrapped;
         }
-        if !naked && !self.is_main_function(state.decl) {
+        if !naked && !self.is_main_function(state.decl) && !self.is_x86_cpu_dispatch(state.decl) {
             let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}

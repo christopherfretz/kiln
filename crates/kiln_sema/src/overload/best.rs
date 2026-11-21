@@ -69,6 +69,11 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // WP-1745: a non-default `target` version is never viable, and
+        // never noted (clang `isNonViableMultiVersionOverload`).
+        if self.is_nonviable_multiversion(f) {
+            return;
+        }
         self.ovl.stats.candidates += 1;
         let mut cand = Candidate::new(f, found, kind);
         let mut params = std::mem::take(&mut set.params);
@@ -356,14 +361,19 @@ impl Sema<'_, '_> {
 
     /// clang's `enable_if` ranking (`compareEnableIfAttrs`), then a
     /// candidate with `pass_object_size` parameters over one without
-    /// (WP-803): the last tie-breakers of [`Self::better`].
+    /// (WP-803), then the multiversioning ranking (WP-1745): the last
+    /// tie-breakers of [`Self::better`].
     fn better_by_attrs(&self, x: Option<DeclId>, y: Option<DeclId>) -> bool {
         if let Some(b) = x.zip(y).and_then(|(f1, f2)| self.compare_enable_if(f1, f2)) {
             return b;
         }
         let ps =
             |d: Option<DeclId>| d.is_some_and(|d| !self.ast.pass_object_size_params(d).is_empty());
-        ps(x) && !ps(y)
+        if ps(x) && !ps(y) {
+            return true;
+        }
+        // WP-1745: clang `isBetterMultiversionCandidate`.
+        x.zip(y).and_then(|(f1, f2)| self.better_multiversion(f1, f2)).unwrap_or(false)
     }
 
     /// [over.match.best.general]/2.10 (P2582): a guide not formed from an

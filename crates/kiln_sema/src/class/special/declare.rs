@@ -481,6 +481,37 @@ impl Sema<'_, '_> {
             };
             matched = self.ref_qualifier_mix(name, new, sloc);
         }
+        // WP-1745: x86-64 function multiversioning (clang
+        // `CheckMultiVersionFunction`; src/fmv_x86.rs).
+        if self.is_x86_mv() && !*invalid {
+            let mut spec = FnSpec::new().with_inline(ds.inline.is_some());
+            if ds.constexpr.is_some() {
+                spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
+            } else if ds.consteval.is_some() {
+                spec = spec.with_constexpr_kind(ConstexprKind::Consteval);
+            }
+            let attrs: Vec<kiln_ast::AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            let fnew = crate::fmv_x86::FmvNew {
+                ty,
+                loc: sloc,
+                spec: spec.with_virtual(ds.virtual_.is_some()),
+                is_main: false,
+                member: true,
+                template: templ,
+                structor: match shape {
+                    Shape::Ctor => Some(3),
+                    Shape::Dtor => Some(4),
+                    _ => None,
+                },
+            };
+            match self.fmv_x86_redecl(matched, &attrs, &fnew) {
+                crate::fmv_x86::FmvRedecl::Prev(p) => matched = p,
+                crate::fmv_x86::FmvRedecl::Invalid => {
+                    *invalid = true;
+                    matched = None;
+                }
+            }
+        }
         if matched.is_none()
             && !in_class
             && self.at_explicit_head()

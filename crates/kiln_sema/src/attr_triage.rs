@@ -112,8 +112,6 @@ const INSTR: &str = "instrumentation or hardening only; dropping it changes no s
 const HINT: &str = "optimization hint; dropping it is a valid refinement";
 const INLINE: &str = "inlining or call-optimization hint; dropping it changes no semantics";
 const DIAG_REJECT: &str = "only makes clang diagnose a use; no code generation effect";
-const MULTIVERSION: &str =
-    "function multiversioning, which needs resolvers and ifuncs on x86-64 (AArch64: WP-810)";
 
 /// The rows, sorted by name.
 pub static TABLE: &[Row] = &[
@@ -169,8 +167,6 @@ pub static TABLE: &[Row] = &[
     r("coro_wrapper", G | CL, C, ANALYSIS),
     r("counted_by", G | CL, C, ANALYSIS),
     r("counted_by_or_null", G | CL, C, ANALYSIS),
-    rt("cpu_dispatch", [0, 0, G | CL, G | CL], A, MULTIVERSION),
-    rt("cpu_specific", [0, 0, G | CL, G | CL], A, MULTIVERSION),
     r("cudart_builtin", G, C, OFFLOAD),
     r("device", G, C, OFFLOAD),
     r("device_builtin", G, C, OFFLOAD),
@@ -325,8 +321,6 @@ pub static TABLE: &[Row] = &[
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
     r("sycl_special_class", G | CL, C, OFFLOAD),
-    rt("target_clones", [0, 0, G | GS, G | GS], A, MULTIVERSION),
-    rt("target_version", [0, 0, G | GS, 0], A, MULTIVERSION),
     r("test_typestate", G | CL, C, ANALYSIS),
     r("try_acquire_capability", G | CL, C, TSA),
     r("try_acquire_shared_capability", G | CL, C, TSA),
@@ -443,17 +437,19 @@ pub fn attribute_support(
     if name == "interrupt" && x86 && sp & (G | GS) != 0 {
         return Support::Unsupported;
     }
-    // WP-810: dispatched before the triage (`Sema::builtin_alias_attribute`,
-    // `Sema::fmv_attribute`); the x86-64 multiversioning spellings are
-    // class-A rows.
+    // WP-810, WP-1745: dispatched before the triage
+    // (`Sema::builtin_alias_attribute`, `Sema::fmv_attribute`); clang 22
+    // does not know `target_version` on x86-64.
     let wp810 = match name {
         "builtin_alias" if sp == CL => Some(AttrKind::BUILTIN_ALIAS),
         "clang_builtin_alias" if sp == G => Some(AttrKind::BUILTIN_ALIAS),
         "__clang_arm_builtin_alias" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::BUILTIN_ALIAS),
-        "target_version" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_VERSION),
-        "target_clones" if !x86 && sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
-        "cpu_dispatch" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
-        "cpu_specific" if !x86 && sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
+        "target_version" if (!x86 || compat < 22) && sp & (G | GS) != 0 => {
+            Some(AttrKind::TARGET_VERSION)
+        }
+        "target_clones" if sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
+        "cpu_dispatch" if sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
+        "cpu_specific" if sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
         _ => None,
     };
     if let Some(k) = wp810 {
@@ -566,7 +562,7 @@ mod tests {
             Support::Implemented(_)
         ));
         assert_eq!(s("not_an_attribute", g, None, 22), Support::Unknown);
-        // WP-810: implemented on AArch64; multiversioning is class A on x86-64.
+        // WP-810: implemented on AArch64; WP-1745: and on x86-64.
         assert!(matches!(s("arm_sve_vector_bits", g, None, 22), Support::Implemented(_)));
         assert!(matches!(
             s("__clang_arm_builtin_alias", x, Some("clang"), 19),
@@ -574,10 +570,10 @@ mod tests {
         ));
         assert!(matches!(s("target_version", x, Some("gnu"), 22), Support::Implemented(_)));
         let x86 = |n, syn, sc, c| attribute_support(n, syn, sc, c, true, true);
-        assert_eq!(x86("target_clones", g, None, 22), Support::Unsupported);
-        assert_eq!(x86("target_version", g, None, 19), Support::Unsupported);
+        assert!(matches!(x86("target_clones", g, None, 22), Support::Implemented(_)));
+        assert!(matches!(x86("target_version", g, None, 19), Support::Implemented(_)));
         assert_eq!(x86("target_version", g, None, 22), Support::Unknown);
-        assert_eq!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Unsupported);
+        assert!(matches!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Implemented(_)));
         assert_eq!(x86("__clang_arm_builtin_alias", g, None, 19), Support::Unknown);
         assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
     }

@@ -21,6 +21,8 @@ pub mod odr;
 pub mod odr_def;
 pub mod target;
 pub mod vtable;
+#[allow(clippy::unreadable_literal, reason = "feature masks as clang's tables write them")]
+pub mod x86_fmv;
 
 pub use branch_protection::{BranchProtection, SignScope};
 pub use dump::{

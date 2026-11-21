@@ -31,6 +31,7 @@ pub mod lists;
 pub mod lookup;
 pub mod mem;
 pub mod modules;
+pub mod multiversion;
 pub mod names;
 mod neon_builtins;
 pub mod redecl;

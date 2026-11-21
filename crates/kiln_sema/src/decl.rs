@@ -3859,17 +3859,17 @@ impl Sema<'_, '_> {
             let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
             if let Some(at) = self.fmv_hidden_version(&attrs) {
                 if d.ctx == DeclaratorContext::Member {
-                    // clang crashes on this (a friend: `act_on_friend`).
-                    let msg = self
-                        // kiln-gap: GAP-144
-                        .diag(DiagId::sema_multiversion_not_supported, at)
-                        .arg("target_version");
+                    // A hidden member cannot be: clang 22 crashes on its
+                    // definition (a friend: `act_on_friend`;
+                    // docs/status/deviations.md).
+                    // It is not declared either.
+                    let msg = self.diag(DiagId::sema_fmv_hidden_member, at).arg(0u8);
                     self.emit(msg);
                 } else {
                     self.fmv_attached(true, &attrs, true);
-                    self.templ.cur = None;
-                    return None;
                 }
+                self.templ.cur = None;
+                return None;
             }
         }
         if special {
@@ -5473,6 +5473,34 @@ impl Sema<'_, '_> {
                 self.ref_qualifier_mix(dname, new_fn, d.name_loc())
             }
             p => p,
+        };
+        // WP-1745: x86-64 function multiversioning (clang
+        // `CheckMultiVersionFunction`): a new version is a function of its
+        // own (src/fmv_x86.rs).
+        let prev = if self.is_x86_mv() && !invalid_decl && !friend {
+            let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            let fnew = crate::fmv_x86::FmvNew {
+                ty,
+                loc: d.name_loc(),
+                spec: spec.with_virtual(ds.virtual_.is_some()),
+                is_main: !method && self.is_global_main_name(ctx, name),
+                member: method,
+                template: self.templ.cur.is_some(),
+                structor: match d.special {
+                    Some((SpecialName::Constructor(_), _)) => Some(3),
+                    Some((SpecialName::Destructor(_), _)) => Some(4),
+                    _ => None,
+                },
+            };
+            match self.fmv_x86_redecl(prev, &attrs, &fnew) {
+                crate::fmv_x86::FmvRedecl::Prev(p) => p,
+                crate::fmv_x86::FmvRedecl::Invalid => {
+                    invalid_redecl = true;
+                    None
+                }
+            }
+        } else {
+            prev
         };
         // `template<class T> struct X; void X();` (clang's IDNS
         // redeclaration lookup; `kind_conflict`).
@@ -9514,6 +9542,7 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.check_naked_body(f, body);
+        self.check_dispatch_body(f, body);
         let body = self.end_function_body(body, rbrace);
         // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`, against
         // `f`'s own features.
