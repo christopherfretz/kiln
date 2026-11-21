@@ -2292,6 +2292,143 @@ pass only when every job of their architecture succeeded; the jobs share
 their setup through the composite action `.github/actions/kiln-ci`
 (WP-239, WP-692).
 
+### Misbehaviour checks
+
+Three invariants a compiler and its harness hold anyway, enforced on
+GitHub CI by the `guard` job of `.github/workflows/ci-lane.yml` (aarch64
+lane only; WP-1901) through `cargo xtask guard` (`xtask/src/guard.rs`).
+They are not steps of `cargo xtask ci`: strace is not part of the
+development setup, and the job runs in parallel with the others.
+
+**No network, no stray writes.** `cargo xtask guard trace [--log <file>]
+[--allow <path>]... -- <command>` runs the command under `strace -f -y
+-qq -o <log> -e trace=<guard::TRACED>` (default log
+`<target>/guard/strace.log`) with `TMPDIR` set to a fresh
+`<target>/guard/tmp-<pid>` and `CARGO_TARGET_DIR` to the target
+directory, then checks the log (`guard check-log <file> [--allow
+<path>]...` checks an existing one). It fails (exit 1) when the command
+fails, when the log holds no call, or when:
+
+- any traced process calls `socket` with a family outside
+  `guard::ALLOWED_FAMILIES` (empty: on a clean run no process of the
+  slice opens a socket of any family, so `AF_INET`, `AF_INET6`,
+  `AF_UNIX` and `AF_NETLINK` all fail), whether or not the call
+  succeeded, or `connect`s or `bind`s an `AF_INET`/`AF_INET6` address;
+- a **successful** call writes a path outside the allowlist. Writes are
+  `open`/`openat`/`openat2` with `O_WRONLY`, `O_RDWR`, `O_CREAT`,
+  `O_TRUNC`, `O_APPEND` or `O_TMPFILE`, `creat`, `truncate`,
+  `mkdir[at]`, `mknod[at]`, `unlink[at]`, `rmdir`, both paths of
+  `rename[at|at2]`, and the new name of `link[at]` and `symlink[at]`. A
+  path is the argument as written, made absolute with the directory
+  `-y` prints for its dirfd (`AT_FDCWD</cwd>`, `5</dir>`) and `.`/`..`
+  removed lexically; a relative path with no directory (the plain
+  x86-64 forms) cannot be judged and fails. The allowlist (each entry
+  allows itself and everything below it, also in its canonical form):
+  the target directory (test scratch directories, `xdg-cache`, the
+  run's `TMPDIR`), `/dev/null`, `/proc/self`, `/proc/thread-self`, the
+  jobserver FIFO a `--jobserver-auth=fifo:<path>` in `MAKEFLAGS` or
+  `CARGO_MAKEFLAGS` names (opened read-write for tokens, written
+  nothing to; a development machine's pool), and each `--allow`
+  (relative to the root). Read-only opens and failed writes pass.
+
+The job builds first (`cargo build -p kiln_driver -p xtask`), so cargo's
+writes to `$CARGO_HOME` are not traced, then traces
+`target/debug/xtask test --compiler target/debug/kiln++` over
+`tests/conformance/basic.start.main` (run tests),
+`tests/conformance/basic.link` and `tests/conformance/class.static.data`
+(linking, a link failure) and `tests/conformance/module.unit` (module
+units, two-step builds): 108 tests, about 15 s locally. The strace runs
+in the job's ptrace-enabled container. The log line is `xtask guard:
+ok: <calls> calls of <processes> processes, 0 network and 0 write
+violations`, and each violation is listed (`xtask guard: network:
+AF_INET: <call>`, `xtask guard: write: <path>: <call>`, the first 40 of
+each).
+
+**Risky-change flags.** On a `pull_request` run the job first runs
+`cargo xtask guard risky --base HEAD^1 --head HEAD` (the merge commit
+and its base; checkout depth 2). It diffs the two (`git diff
+--name-status --no-renames`) and flags:
+
+- a new or changed entry of a dependency table of any `Cargo.toml`
+  (`[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, under
+  `workspace.` or `target.<cfg>.`, a `[dependencies.<name>]` table,
+  `[patch.<source>]`, `[replace]`), and a `[package] build =` key;
+- a new or changed external package of any `Cargo.lock` (one with a
+  `source`; the workspace's own crates' version bumps are not flagged);
+- a new `build.rs`;
+- a manifest that becomes `[lib] proc-macro = true`;
+- any change under `.github/` or `.cargo/` (linker, runner and rustflags
+  settings run code at build time too).
+
+Each flag is a `::warning file=<path>,title=Risky change: <kind>::<detail>`
+annotation, and the list goes to the job summary (`$GITHUB_STEP_SUMMARY`;
+printed when it is unset). The step **does not fail** (exit 0; `--strict`
+makes a flag exit 1, for a later gate): kiln's own pull requests change
+dependencies and workflows on purpose (this one changes `.github/`), and
+a failing check would need an override that every such PR takes, which
+trains reviewers to click past it. The annotation shows on the PR's
+checks and files, where the reviewer sees it before merging; screening
+outside contributions before they reach CI is a separate gate. A removed
+dependency or package, a deleted `build.rs` and an edit of an existing
+one are not flagged (the edit is ordinary review).
+
+**Read-only default token.** Every workflow sets `permissions: contents:
+read` at top level (`ci.yml`, `ci-lane.yml`, `sweep.yml`,
+`release.yml`). No job of `ci.yml`/`ci-lane.yml` writes to the
+repository or calls the API: caches (`Swatinem/rust-cache`) and
+artifacts use the runner's own token, and the merge queue needs only
+the checks. The one job with more is `release.yml`'s `release`
+(`contents: write`, to create the draft release).
+`ci_tests::workflows_default_to_a_read_only_token` fails on a workflow
+without the block and on a job-level `permissions:` outside
+`ci_tests::WRITE_JOBS`; `ci_tests::workflow_runs_the_guard` checks the
+job's shape and that its slice directories exist. The parser and both
+rules are tested on canned logs in `xtask/src/guard/tests.rs`
+(`an_inet_socket_fails` is the deliberate failing case).
+
+**Tier-0** (WP-1902; docs/VALIDATION.md "Tier-0 (outside pull
+requests)"). Pull requests from forks are screened by a pipeline outside
+this repository (a prefilter, then tier-0, then a static triage, then the
+full CI above); GitHub holds each of their workflow runs for approval, and
+the pipeline approves only the tier-0 run of a head sha and reads only its
+conclusion. The contract it relies on:
+
+- **Path**: the workflow is `.github/workflows/tier0.yml`, matched by that
+  file path; the full CI stays in `ci.yml`.
+- **Trigger**: `pull_request` only (no `pull_request_target`,
+  `workflow_run`, push or schedule).
+- **Permissions**: top-level `permissions: contents: read` and none per
+  job; no `secrets.` reference, no GitHub API call, no uploaded artifact;
+  the cache (`ci-x86_64`) is restored, never saved; the checkout keeps no
+  credentials.
+- **Jobs**: `tier0 lints` (`cargo xtask ci --step lints`: step 0, fmt,
+  clippy) and `tier0 unit` (`cargo test --workspace --lib --exclude
+  xtask`: every crate's library unit tests; no integration test, no
+  xtask test, no corpus), both on `ubuntu-24.04` (x86_64) in the
+  `gcc:16.1.0-trixie` container with the `.github/actions/kiln-ci` setup
+  and `KILN_REQUIRE_LLVM=1`, `KILN_GCC=/usr/local/bin/g++`,
+  `KILN_REQUIRE_GCC=1`. Each has a `timeout-minutes` (15 and 25).
+- **Same-repo skip**: each job has `if:
+  github.event.pull_request.head.repo.full_name != github.repository`, so
+  a same-repo pull request's run has only skipped jobs.
+- **Concurrency**: `tier0-<pull request number>`, `cancel-in-progress:
+  true`: a newer push cancels the same pull request's older run, and runs
+  of different pull requests never cancel each other. Rate limiting is
+  the pipeline's.
+- **Conclusion**: `success` means both jobs ran and passed, so fmt,
+  clippy, the step-0 lints and the library unit tests passed on x86_64 at
+  that head. Any other conclusion (`failure`, `cancelled`, `timed_out`,
+  `skipped`, ...) is not a pass. It says nothing about the corpus,
+  aarch64, the integration tests or the oracles; those are the full CI's.
+
+These hold for the file on `main`: a pull request runs its own merge
+commit's copy of the workflow, the setup action and xtask, so a pull
+request that changes `.github/` or `xtask/` can change what its tier-0 run
+does, and screening that is the prefilter's. `tier0_tests` in xtask
+(`xtask/src/tier0_tests.rs`) checks the trigger, permissions, timeouts,
+secrets, same-repo skip and concurrency group on the real file, and that
+a mutated copy breaks each one.
+
 Landed (WP-096): the kiln-mode run, `--quick`, and the pass criteria above.
 Before it, `ci` ran only the clang self-check, and kiln regressions in the
 corpus went through unnoticed.

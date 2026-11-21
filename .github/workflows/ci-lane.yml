@@ -5,12 +5,19 @@ name: ci-lane
 # `--shard`), so together they are exactly the old serial job:
 #   cargo xtask ci                                   (lints, unit, self-check, kiln)
 #   KILN_ORACLE=19 cargo xtask ci --quick --oracle-only   (ir_vs_clang, kiln)
+# The one exception is `guard` (aarch64 only), the misbehaviour checks,
+# which are not part of `cargo xtask ci` (spec/harness.md "Misbehaviour
+# checks").
 on:
   workflow_call:
     inputs:
       runner: { type: string, required: true }
       # rust-cache's shared-key: one cache per architecture.
       cache-key: { type: string, required: true }
+# Read-only, as in ci.yml (WP-1901); a called workflow can only lower the
+# caller's permissions.
+permissions:
+  contents: read
 # On every job that runs xtask (spec/harness.md "CI"): a missing LLVM tool or
 # GCC oracle is an error, never a skip.
 # Likewise a missing gdb or lldb-19 for a `debugger` test (tests/debuginfo,
@@ -81,6 +88,37 @@ jobs:
       - run: cargo xtask ci --step unit --unit-group ${{ matrix.group }}
       - if: ${{ !cancelled() && matrix.group == 'codegen' }}
         run: KILN_ORACLE=19 cargo xtask ci --oracle-only --step unit
+  # The misbehaviour checks (WP-1901; spec/harness.md "Misbehaviour
+  # checks"), on the aarch64 lane only: there every file syscall is an
+  # `*at` form whose directory strace's `-y` prints, so every path resolves.
+  # On a pull request, `guard risky` first annotates the changes that run
+  # code at build time or change CI (dependencies, build.rs, proc-macro
+  # crates, .github/, .cargo/; never failing, see the spec). Then a corpus
+  # slice (run tests, links, modules) runs under strace with a fresh
+  # $TMPDIR in target/, after the build, so only the test phase is traced:
+  # any socket, or a write outside target/, fails the job. In parallel with
+  # the other jobs, about the length of a kiln-22 shard.
+  guard:
+    name: guard
+    if: ${{ inputs.runner == 'ubuntu-24.04-arm' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 25
+    container: *debugger-container
+    steps:
+      - uses: actions/checkout@v4
+        # The pull request's merge commit and its first parent, the base.
+        with: { fetch-depth: 2 }
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: "${{ inputs.cache-key }}" }
+      - if: ${{ github.event_name == 'pull_request' }}
+        run: cargo xtask guard risky --base HEAD^1 --head HEAD
+      - run: apt-get install -y -qq --no-install-recommends strace >/dev/null && strace -V | head -1
+      - run: cargo build -p kiln_driver -p xtask
+      - run: >-
+          cargo xtask guard trace -- target/debug/xtask test --compiler target/debug/kiln++
+          tests/conformance/basic.start.main tests/conformance/basic.link
+          tests/conformance/class.static.data tests/conformance/module.unit
   # The clang++-22 corpus self-check: the corpus must pass with the
   # reference compiler. No kiln build needed.
   self-check:

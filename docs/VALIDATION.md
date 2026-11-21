@@ -411,7 +411,27 @@ spec/harness.md "CI"). `ci.yml` calls the reusable workflow
 - `self-check K/2`: `ci --step self-check --shard K/2`, the corpus under
   clang;
 - `kiln-22 K/6` and `kiln-19 K/6`: `ci --step kiln --shard K/6`, and the
-  same under `KILN_ORACLE=19 ... --oracle-only`.
+  same under `KILN_ORACLE=19 ... --oracle-only`;
+- `guard` (aarch64 lane only, WP-1901): the misbehaviour checks
+  (spec/harness.md "Misbehaviour checks"). On a pull request `cargo
+  xtask guard risky --base HEAD^1 --head HEAD` annotates the changes
+  that run code at build time or change CI (a new or changed dependency
+  in a `Cargo.toml` or `Cargo.lock`, a new `build.rs` or proc-macro
+  crate, `.github/`, `.cargo/`) as `::warning::` lines and a job
+  summary, without failing: kiln's own PRs make such changes on purpose,
+  and a check every such PR overrides teaches reviewers to ignore it;
+  the annotation puts the change in front of the reviewer instead.
+  Then, after `cargo build -p kiln_driver -p xtask` (so cargo's own
+  writes to `$CARGO_HOME` are not traced), `cargo xtask guard trace --
+  target/debug/xtask test --compiler target/debug/kiln++ <slice>` runs
+  a corpus slice (run tests, links and a link failure, module units;
+  108 tests) under strace and fails on any socket a process creates
+  (no family is allowed: nothing in the slice opens one) and on any
+  write outside the target directory, `/dev/null` and `/proc/self`
+  (the run's `$TMPDIR` is a fresh directory in the target directory, so
+  a compiler's temporary files stay inside). The network namespace
+  route (`unshare -n`) is not open to an unprivileged container, so
+  strace is the only witness.
 
 The shard count `S = 6` is one constant: the anchored matrix list
 `&kiln-shards` in `ci-lane.yml`, which both kiln runs reuse; every job
@@ -422,7 +442,7 @@ over all shards. The fan-in jobs `check` (needs `arm`) and `check-x86_64`
 (needs `x86_64`) run `if: always()` and pass only when the lane's result
 is `success`, so a failed, cancelled or skipped job fails them; they are
 the status checks branch rules name. That is 18 jobs per architecture
-plus the fan-in, 38 per run: on a plan with a 60-job concurrency limit two
+(19 on aarch64 with `guard`) plus the fan-in, 39 per run: on a plan with a 60-job concurrency limit two
 overlapping runs queue each other's jobs.
 
 **Job timeouts** (WP-1600). Every job has a `timeout-minutes` of about
@@ -446,6 +466,19 @@ those (to 2026-11-11) stay under the same maxima (11.3 for `kiln-22`).
 | `kiln-22 K/6` | arm 1/6 | 8.3 | 11.0 (x86_64 1/6) | 25 |
 | `kiln-19 K/6` | arm 6/6 | 7.2 | 10.1 (x86_64 6/6) | 25 |
 | `check`, `check-x86_64` (`ci.yml`) | | 0.1 | 0.1 | 5 |
+| `guard` (arm only, WP-1901) | arm | (no run yet) | | 25 |
+
+`guard` had no hosted run when it landed; it is a kiln build plus a
+traced slice of 108 tests, shorter than a `kiln-22` shard, so it got
+`kiln-22`'s 25 until it has data.
+
+**Token permissions** (WP-1901). Every workflow sets a read-only default
+token, `permissions: contents: read` at top level. Caches and artifacts
+use the runner's own token, and the merge queue needs only the checks,
+so no job of `ci.yml` or `ci-lane.yml` needs more; `release.yml`'s
+`release` job (the draft release) has `contents: write` of its own. A
+job that needs more gets its own `permissions:` block and a row in
+`ci_tests::WRITE_JOBS` (`ci_tests::workflows_default_to_a_read_only_token`).
 
 The callers `arm` and `x86_64` cannot carry a timeout (a job that calls a
 reusable workflow takes none); their jobs do. The other workflows' jobs
@@ -577,6 +610,70 @@ per-job floor are in docs/status/perf-history.md "WP-692: CI fan-out". Locally,
 `cargo xtask ci` is the same gate. Run
 it before pushing `main`, because Actions only reports after the push, and
 the local run is still the merge gate (docs/AGENTS.md rule 3).
+
+### Tier-0 (outside pull requests)
+
+A pull request from a fork runs untrusted code, so it does not get the
+full CI straight away. A pipeline outside this repository screens it: a
+mechanical prefilter, then **tier-0**, then a static triage, then the full
+CI (`ci.yml`). The repository's "Require approval for all external
+contributors" holds every workflow run of such a pull request; the pipeline
+approves only the tier-0 run for a head sha and reads only its conclusion
+(the contract is in spec/harness.md "CI", "Tier-0").
+
+**What it runs** (WP-1902, `.github/workflows/tier0.yml`): two parallel
+jobs on `ubuntu-24.04` (x86_64 only), in the `gcc:16.1.0-trixie`
+container with the `kiln-ci` setup action, like `ci-lane.yml`'s jobs:
+
+- `tier0 lints`: `cargo xtask ci --step lints` (the step-0 lints, then
+  `cargo fmt --all --check` and clippy with `-D warnings`), the same as
+  the full CI's `lints` job;
+- `tier0 unit`: `cargo test --workspace --lib --exclude xtask`, the
+  library unit tests of every crate. The full `unit` step is about 25
+  runner-minutes on x86_64 (`unit rest` alone 20, nearly all of it the
+  crates' integration tests in `tests/*.rs`, which compile and run C++;
+  `unit xtask` 4, mostly the seed-corpus run), too slow for a screen. The
+  library tests are about two of those minutes (`kiln_driver`'s own 2,
+  every other crate's a few seconds) and build no test binary per
+  integration file. No corpus run either: that waits for the triage.
+
+**Cost.** A hosted pull-request run of 2026-11-21 (x86_64): container
+and setup about 1 minute per job; `lints` 1.5 minutes; the full CI's `unit
+rest` built every test target in 1.9 minutes from the `ci-x86_64` cache,
+and the library tests ran about 2.1 minutes of it. Expected wall time is
+therefore about 4 minutes for `tier0 lints` and 5 to 6 for `tier0 unit`,
+in parallel, so 5 to 6 minutes per run and about 10 runner-minutes, well
+inside the 10 to 15 minute target. Locally (24-core aarch64 container,
+shared 8-token jobserver, cold target directory): `ci --step lints` 73 s
+(clippy 39 s), building the library tests 45 s, running them 100 s
+(`kiln_driver` 81 s). The
+timeouts (15 and 25) are about three times the expected durations, as in
+"Job timeouts". Tier-0 restores the `ci-x86_64` cache (a pull request can
+read the default branch's entries) and never saves one.
+
+**Why a separate file.** The pipeline matches the run to approve by its
+workflow file path, so `.github/workflows/tier0.yml` must keep its name
+and hold only tier-0; folding it into `ci.yml` would make the approval
+start the whole fan-out. It triggers only on `pull_request`, with
+`permissions: contents: read`, no secret, no `pull_request_target` or
+`workflow_run`, no artifact and a timeout on every job
+(`tier0_tests` in xtask checks each, and that a mutated copy fails).
+Concurrency is one group per pull request (`tier0-<number>`, cancel in
+progress), never one shared group: GitHub keeps one pending run per group
+and cancels older pending ones, which would silently drop pull requests.
+Rate limiting is the pipeline's job.
+
+**Same-repo skip.** Both jobs carry `if:
+github.event.pull_request.head.repo.full_name != github.repository`: a
+pull request from a branch of this repository (the maintainers') is not
+screened and gets the full CI, which runs everything tier-0 does, so its
+tier-0 run shows two skipped jobs and costs nothing. The test is on the
+head repository, not the author, so every fork's pull request runs it.
+
+What only a real fork pull request proves: that the approval and the run
+happen, that the `if:` admits the fork, that the cache restores across
+the fork boundary, and the actual wall time. A same-repo pull request
+only shows that the file parses (its jobs are skipped).
 
 ### x86_64 sweep
 

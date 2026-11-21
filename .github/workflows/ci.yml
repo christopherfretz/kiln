@@ -3,6 +3,14 @@ on:
   push: { branches: [main] }
   pull_request:
   merge_group:
+# A read-only default token (WP-1901; docs/VALIDATION.md "GitHub
+# Actions"): no job of ci.yml or ci-lane.yml writes to the repository or
+# calls the API. Caches and artifacts use the runner's own token, and the
+# merge queue needs nothing from the workflow but its checks. A job that
+# needs more gets its own `permissions:` block
+# (`ci_tests::workflows_default_to_a_read_only_token`).
+permissions:
+  contents: read
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
