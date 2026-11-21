@@ -293,8 +293,11 @@ experimental gate, `-stdlib=libc++` and `CXX_STANDARD 23`; the gate
 values per CMake version are in
 [COMPATIBILITY.md](COMPATIBILITY.md#c20-modules).
 
-`-fmodule-header` and header-unit module files are not supported yet.
-See [KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
+Header units work as in clang: `kiln++ -std=c++20 -fmodule-header h.h`
+writes `h.pcm`, `-fmodule-header=user` or `=system` looks the header up
+on the include path, and `-fmodule-file=h.pcm` imports it at
+`import "h.h";`. Without a module file, kiln builds an imported header
+unit from its source (clang requires the module file).
 
 **The declaration image (experimental).** `-fkiln-bmi-image` is an
 opt-in, off by default. At `--precompile` or `-fmodule-output` it also

@@ -463,10 +463,12 @@ pub struct Sema<'a, 'sm> {
     /// delete` reports it, the end of the unit reports the rest as
     /// declarations (WP-808).
     pub(crate) no_builtin_pending: Vec<(DeclId, Loc)>,
-    /// `-f[no-]math-errno` (clang `LangOptions::MathErrno`, the Linux
-    /// default on): without it the errno-setting math library functions
-    /// are implicitly `const` (spec/sema.md §5.4, WP-806).
-    pub math_errno: bool,
+    /// The command line's FP semantics (`-ffp-model=`, `-ffast-math`, ...).
+    /// Without `math_errno` (clang `LangOptions::MathErrno`, the Linux
+    /// default on) the errno-setting math library functions are
+    /// implicitly `const` (spec/sema.md §5.4, WP-806); the FP pragmas
+    /// check their value-changing flags (WP-1744).
+    pub fp: kiln_ast::fp::FpOptions,
     /// `-fkiln-dump-cfg`: build the graph of every analysed body and
     /// append its dump to [`Sema::cfg_out`] (spec/sema.md §7.5.1).
     pub cfg_dump: bool,
@@ -1552,7 +1554,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             clang_constexpr_builtin: |_, _| None,
             nc_strict_only: false,
             no_builtin_pending: Vec::new(),
-            math_errno: true,
+            fp: kiln_ast::fp::FpOptions::default(),
             cfg_dump: false,
             cfg_stats: false,
             full_deduction: false,

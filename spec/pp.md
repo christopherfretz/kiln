@@ -1116,9 +1116,11 @@ spec/modules.md §11.13.
     checks every component of a module declaration's name and partition
     ([cpp.module]/2, P3034R1); clang 19 and 22 expand the macros instead
     (`tests/conformance/cpp.module/p3034-probe.cpp` is `xfail(clang)`).
-11. **Header units are built in-process from their source** (no
-    `-fmodule-header` step, spec/modules.md §3); clang requires a
-    prebuilt header unit.
+11. **Header units without a module file are built in-process from their
+    source** (spec/modules.md §3); clang requires a prebuilt header unit
+    (`-fmodule-header`, then `-fmodule-file=`), which kiln also reads
+    (spec/modules.md §11.6). This holds for `-E` and `-M` too, which
+    perform a header-unit import for its macros.
 12. **`PpCallbacks::macro_expands` is not delayed.** clang delays the
     callback for function-like macros until the arguments have been
     collected; kiln calls it when the expansion begins.

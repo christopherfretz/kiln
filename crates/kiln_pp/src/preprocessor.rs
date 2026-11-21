@@ -983,6 +983,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                                     || s == self.syms.import
                                     || s == self.syms.export)
                                 && !self.disable_expand
+                                && self.opts.c.is_none()
+                                && self.opts.cxx20()
                                 && self.maybe_module_directive(t, s)
                             {
                                 continue;

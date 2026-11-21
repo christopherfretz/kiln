@@ -119,6 +119,29 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   "exported templates are unsupported" warning ([diff.cpp03.temp]), and
   any other `export` is clang's "expected template" error, instead of the
   "modules is not supported yet" error (WP-1744).
+- Header units as module files (WP-1744): `-fmodule-header`,
+  `-fmodule-header=user|system`, `-x c++-user-header`,
+  `-x c++-system-header` and `-x c++-header-unit-header` write a header
+  unit's module file, and `-fmodule-file=h.pcm` imports it at
+  `import "h.h";` / `import <h.h>;`, as clang does. `kiln-scan-deps`
+  scans header-unit imports (it used to reject them), and `-E` / `-M`
+  perform them for their macros and print them as clang 22 does.
+- Module directives follow clang outside the usual places (WP-1744):
+  before C++20 `module` and `import` lines are ordinary declarations, a
+  module declaration or import after a `#pragma` that the parser handles
+  is accepted, `-E`/`-M` of a module file is clang's "previously
+  preprocessed input" warning, and `-fdump-ast` of a module file
+  dumps its unit.
+- The floating-point environment pragmas (WP-1744): `#pragma STDC
+  FENV_ACCESS ON`, `#pragma clang fp exceptions(maytrap|strict)`,
+  `#pragma float_control(except, on)` and `#pragma STDC FENV_ROUND
+  FE_TONEAREST|FE_DYNAMIC` make the function `strictfp` and its FP
+  operations `llvm.experimental.constrained.*` calls with the scope's
+  rounding and exception metadata, as clang does; constant expressions
+  are still evaluated in the default environment. clang's "is illegal
+  when precise is disabled" family of errors is reported. A directed
+  `FENV_ROUND` mode and `clang fp eval_method(double|extended)` remain
+  errors.
 - Constant evaluation of the expressions that reported "not supported
   yet" (WP-1741): a `case` label nested in a statement of its switch
   body (Duff's device), the taken branch of an `if constexpr` whose

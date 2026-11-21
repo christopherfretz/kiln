@@ -14,7 +14,8 @@
 //! `float_control(except, on)`, `clang fp exceptions(maytrap|strict)`,
 //! `clang fp eval_method(double|extended)`) are errors, never ignored.
 
-use kiln_ast::fp::{FpContract, fp_bit};
+use kiln_ast::StmtId;
+use kiln_ast::fp::{FpContract, FpExcept, FpRound, fp_bit};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_source::{Loc, Span};
@@ -313,31 +314,36 @@ impl Parser<'_, '_> {
 
     /// Applies `p` to sema's FP state (clang's `ActOnPragmaFPContract`,
     /// `ActOnPragmaFPValueChangingOption`, `ActOnPragmaFloatControl`,
-    /// ...); `in_function`: at the start of a compound statement.
+    /// `ActOnPragmaFEnvAccess`, ...); `in_function`: at the start of a
+    /// compound statement.
     fn apply_fp_pragma(&mut self, p: &FpPragma, in_function: bool) {
         for &a in &p.actions {
             let mut cur = self.s.fp_pragma_state();
+            let eff = cur.apply(self.s.fp);
             match a {
                 FpAction::Contract(c) => cur.set_contract(c),
                 FpAction::Reassociate(on) => cur.set_flag(fp_bit::REASSOC, on),
                 FpAction::Reciprocal(on) => cur.set_flag(fp_bit::ARCP, on),
                 FpAction::CxLimitedRange(v) => cur.cx_limited = v,
-                // kiln's floating-point environment is the default one
-                // (spec/codegen.md): these keep it.
-                FpAction::Exceptions("ignore")
-                | FpAction::EvalMethod("source")
-                | FpAction::FenvAccess(false)
-                | FpAction::FenvRound("FE_TONEAREST")
-                | FpAction::FloatControl { precise: false, on: false, push: false } => {}
-                FpAction::Exceptions(v) => {
-                    self.fenv_unsupported(&format!("'#pragma clang fp exceptions({v})'"), p.loc);
-                }
+                FpAction::Exceptions(v) => cur.set_except(match v {
+                    "ignore" => FpExcept::Ignore,
+                    "maytrap" => FpExcept::MayTrap,
+                    _ => FpExcept::Strict,
+                }),
+                // kiln's evaluation method is the source's (FLT_EVAL_METHOD
+                // 0 on every target it supports).
+                FpAction::EvalMethod("source") => {}
                 FpAction::EvalMethod(v) => {
                     self.fenv_unsupported(&format!("'#pragma clang fp eval_method({v})'"), p.loc);
                 }
-                FpAction::FenvAccess(true) => {
-                    self.fenv_unsupported("'#pragma STDC FENV_ACCESS ON'", p.loc);
+                FpAction::FenvAccess(on) => {
+                    if on && !eff.precise() {
+                        self.fp_illegal("STDC FENV_ACCESS ON", "precise is disabled", p.loc);
+                    }
+                    cur.set_flag(fp_bit::FENV, on);
                 }
+                FpAction::FenvRound("FE_TONEAREST") => cur.set_round(FpRound::Nearest),
+                FpAction::FenvRound("FE_DYNAMIC") => cur.set_round(FpRound::Dynamic),
                 FpAction::FenvRound(m) => {
                     self.fenv_unsupported(&format!("'#pragma STDC FENV_ROUND {m}'"), p.loc);
                 }
@@ -362,17 +368,60 @@ impl Parser<'_, '_> {
                     if push {
                         self.s.fp_pragma_push();
                     }
-                    if !precise {
-                        if on {
-                            self.fenv_unsupported("'#pragma float_control(except, on)'", p.loc);
+                    match (precise, on) {
+                        (false, true) if !eff.precise() => {
+                            let what = "float_control(except, on)";
+                            self.fp_illegal(what, "precise is disabled", p.loc);
                         }
-                        continue;
+                        (false, _) => {
+                            cur.set_except(if on { FpExcept::Strict } else { FpExcept::Ignore });
+                        }
+                        (true, false) if eff.exceptions() == FpExcept::Strict => {
+                            let what = "float_control(precise, off)";
+                            self.fp_illegal(what, "except is enabled", p.loc);
+                        }
+                        (true, false) if eff.fenv_access => {
+                            let what = "float_control(precise, off)";
+                            self.fp_illegal(what, "fenv_access is enabled", p.loc);
+                        }
+                        (true, _) => cur.set_precise(on),
                     }
-                    cur.set_precise(on);
                 }
             }
             self.s.set_fp_pragma_state(cur);
         }
+    }
+
+    /// Parses a function body with `body` (a lambda's or a consteval
+    /// block's too) and marks it `strictfp` when a scope in it is
+    /// FP-constrained (clang `FunctionDecl::usesFPIntrin`); an enclosing
+    /// function is not marked by it.
+    pub(crate) fn fn_body_fp<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> (StmtId, T),
+    ) -> (StmtId, T) {
+        let saved = std::mem::replace(&mut self.fp_intrin, false);
+        self.note_fp_state();
+        let (s, t) = body(self);
+        if std::mem::replace(&mut self.fp_intrin, saved) {
+            self.s.ast.stmts.mark_strict_fn(s);
+        }
+        (s, t)
+    }
+
+    /// Marks the function being parsed `strictfp` when the FP state now
+    /// in effect is constrained: at its start (clang `FunctionDecl::Create`
+    /// with `UsesFPIntrin`) and at the end of each compound statement in
+    /// it (`Sema::ActOnCompoundStmt` sets `FunctionScopeInfo::UsesFPIntrin`).
+    pub(crate) fn note_fp_state(&mut self) {
+        if self.s.fp_pragma_state().apply(self.s.fp).constrained() {
+            self.fp_intrin = true;
+        }
+    }
+
+    fn fp_illegal(&mut self, what: &str, when: &str, loc: Loc) {
+        let d = self.s.diag(DiagId::parse_pragma_fp_illegal, loc).arg(what).arg(when);
+        self.emit(d);
     }
 
     fn fenv_unsupported(&mut self, what: &str, loc: Loc) {

@@ -66,7 +66,7 @@ pub use lookups::{Found, Lookup, LookupForm, LookupLog};
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
     DirectiveKind, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache, StdModuleFile,
-    has_module_lines,
+    has_module_lines, header_unit_key,
 };
 pub use options::{ClangCompat, MetaHint, MetaHintLib, PpOptions};
 pub use predef::{

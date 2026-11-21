@@ -14,7 +14,7 @@ use crate::value::FuncId;
 
 use AttrKind::{
     Cold, Convergent, ImmArg, NoAlias, NoCallback, NoCapture, NoFree, NoReturn, NoSync, NoUndef,
-    NoUnwind, NonNull, ReadOnly, Speculatable, WillReturn, WriteOnly,
+    NoUnwind, NonNull, ReadOnly, Speculatable, StrictFP, WillReturn, WriteOnly,
 };
 
 /// Function-attribute shapes used by the intrinsics below.
@@ -52,11 +52,28 @@ enum Shape {
     WillReturnMem(MemoryEffects),
     /// No attributes (an intrinsic that may throw).
     Throws,
+    /// `nocallback nofree nosync nounwind strictfp willreturn
+    /// memory(inaccessiblemem: readwrite)` (the constrained FP
+    /// intrinsics).
+    StrictFp,
 }
 
 fn fn_attrs(shape: Shape) -> Vec<Attr> {
     let f = Attr::Flag;
     match shape {
+        Shape::StrictFp => vec![
+            f(NoCallback),
+            f(NoFree),
+            f(NoSync),
+            f(NoUnwind),
+            f(StrictFP),
+            f(WillReturn),
+            Attr::Memory(MemoryEffects {
+                argmem: ModRef::None,
+                inaccessiblemem: ModRef::ReadWrite,
+                other: ModRef::None,
+            }),
+        ],
         Shape::ArgMem(m) => vec![
             f(NoCallback),
             f(NoFree),
@@ -988,6 +1005,22 @@ pub fn frexp(m: &mut Module, ty: TypeId, exp: TypeId) -> FuncId {
     let name = overloaded_name(m, "llvm.frexp", &[ty, exp]);
     let ret = m.types.struct_literal(&[ty, exp], false);
     declare(m, &name, ret, &[(ty, &[])], &[], Shape::Pure)
+}
+
+/// `@llvm.experimental.constrained.<op>` (LLVM `ConstrainedOps.def`),
+/// by its overloaded `name`: the value operands `params`, then `md`
+/// metadata operands (the predicate, the rounding mode, the exception
+/// behavior).
+pub fn constrained(
+    m: &mut Module,
+    name: &str,
+    ret: TypeId,
+    params: &[TypeId],
+    md: usize,
+) -> FuncId {
+    let mut ps: Vec<(TypeId, &[Attr])> = params.iter().map(|&t| (t, &[][..])).collect();
+    ps.extend(std::iter::repeat_n((TypeId::METADATA, &[][..]), md));
+    declare(m, name, ret, &ps, &[], Shape::StrictFp)
 }
 
 fn dbg(m: &mut Module, name: &str) -> FuncId {

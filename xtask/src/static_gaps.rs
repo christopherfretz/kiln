@@ -42,8 +42,6 @@ pub const GAP_DIAG_IDS: &[&str] = &[
     "cg_cannot_mangle_expression",
     "drv_not_implemented",
     "parse_unsupported",
-    "pp_header_unit_unsupported",
-    "pp_scan_header_unit",
     "sema_attribute_unsupported_by_kiln",
     "sema_conv_unsupported",
     "sema_unimplemented_template_feature",
@@ -55,7 +53,6 @@ pub const GAP_DIAG_IDS: &[&str] = &[
 pub const WRAPPERS: &[(&str, &str)] = &[
     ("kiln_oven", "not_implemented"),
     ("kiln_oven", "unsupported"),
-    ("kiln_parse", "unsupported"),
     ("kiln_sema", "not_implemented"),
     ("kiln_sema", "templ_unimplemented"),
     ("kiln_sema", "unsupported"),
@@ -766,7 +763,7 @@ mod tests {
     /// or in the comment block above count; test modules are skipped.
     #[test]
     fn scan_finds_marked_sites() {
-        let sites = scan_file("crates/kiln_parse/src/p.rs", SRC);
+        let sites = scan_file("crates/kiln_sema/src/p.rs", SRC);
         let got: Vec<(usize, &str, &str, Option<Marker>)> = sites
             .iter()
             .map(|s| (s.line, s.func.as_str(), s.what.as_str(), s.marker.clone()))
@@ -784,9 +781,9 @@ mod tests {
     /// A clean tree passes.
     #[test]
     fn listed_sites_pass() {
-        let sites = scan_file("crates/kiln_parse/src/p.rs", SRC);
-        let rows = "| GAP-001 | f | misc | `x` | `crates/kiln_parse/src/p.rs::a` | 0 | WP-10 |\n\
-                    | GAP-002 | f | misc | `y` | `crates/kiln_parse/src/p.rs::a` | 0 | excluded: clang's |\n";
+        let sites = scan_file("crates/kiln_sema/src/p.rs", SRC);
+        let rows = "| GAP-001 | f | misc | `x` | `crates/kiln_sema/src/p.rs::a` | 0 | WP-10 |\n\
+                    | GAP-002 | f | misc | `y` | `crates/kiln_sema/src/p.rs::a` | 0 | excluded: clang's |\n";
         assert_eq!(check_with(&sites, &inv(rows), BACKLOG_ROWS), Ok(()));
     }
 
@@ -807,13 +804,13 @@ mod tests {
     /// row and a forward marker outside a wrapper fail.
     #[test]
     fn stale_entries_fail() {
-        let sites = scan_file("crates/kiln_parse/src/p.rs", SRC);
-        let rows = "| GAP-001 | f | misc | `x` | `crates/kiln_parse/src/p.rs::b` | 0 | WP-11 |\n\
-                    | GAP-002 | f | misc | `y` | `crates/kiln_parse/src/p.rs::a` | 0 | WP-12 |\n\
-                    | GAP-003 | f | misc | `z` | `crates/kiln_parse/src/p.rs::a` | 0 | WP-10 |\n";
+        let sites = scan_file("crates/kiln_sema/src/p.rs", SRC);
+        let rows = "| GAP-001 | f | misc | `x` | `crates/kiln_sema/src/p.rs::b` | 0 | WP-11 |\n\
+                    | GAP-002 | f | misc | `y` | `crates/kiln_sema/src/p.rs::a` | 0 | WP-12 |\n\
+                    | GAP-003 | f | misc | `z` | `crates/kiln_sema/src/p.rs::a` | 0 | WP-10 |\n";
         let p = check_with(&sites, &inv(rows), BACKLOG_ROWS).unwrap_err();
         let has = |what: &str| assert!(p.iter().any(|l| l.contains(what)), "{what}\n{p:#?}");
-        has("GAP-001: the sites cell must be: `crates/kiln_parse/src/p.rs::a`");
+        has("GAP-001: the sites cell must be: `crates/kiln_sema/src/p.rs::a`");
         has("GAP-001: row WP-11 is `done`");
         has("GAP-002: row `WP-12` is not a docs/BACKLOG.md row");
         has("GAP-003 has no site left");

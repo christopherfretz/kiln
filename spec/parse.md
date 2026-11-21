@@ -562,11 +562,22 @@ in a class: `this pragma cannot appear in <tag> declaration`;
 `float_control` push/pop in a function: `'#pragma float_control
 push/pop' can only appear at file or namespace scope or within a
 language linkage specification`; a `pop` of an empty stack warns
-`#pragma float_control(pop, ...) failed: stack empty`. The FENV forms
-kiln does not implement (`FENV_ACCESS ON`, `FENV_ROUND` other than
-`FE_TONEAREST`, `float_control(except, on)`, `clang fp
-exceptions(maytrap|strict)`, `eval_method(double|extended)`) are sema
-`unsupported` errors where they take effect (spec/landed/codegen/WP-806.md).
+`#pragma float_control(pop, ...) failed: stack empty`. `FENV_ACCESS`,
+`clang fp exceptions(...)`, `float_control(except, ...)` and
+`FENV_ROUND FE_TONEAREST|FE_DYNAMIC` set the environment fields of the
+state (WP-1744, spec/codegen.md §3.2), with clang's checks against the
+command line's options (`ParseOptions::fp`, `Sema::fp`) and the pragmas:
+`'#pragma STDC FENV_ACCESS ON' is illegal when precise is disabled`,
+`'#pragma float_control(except, on)' is illegal when precise is
+disabled`, `'#pragma float_control(precise, off)' is illegal when except
+is enabled` (strict exceptions) / `... when fenv_access is enabled`, at
+the pragma's name. The parser marks a function body `strictfp`
+(`Parser::fn_body_fp`, `Stmts::mark_strict_fn`) when the state is
+constrained at its start or at the end of a compound statement in it;
+lambda and consteval-block bodies are marked on their own. The forms
+kiln does not implement (a directed `FENV_ROUND` mode,
+`eval_method(double|extended)`) are sema `unsupported` errors where they
+take effect (GAP-142).
 Known divergence: clang's `LexOnOffSwitch` also leaves a stray
 `expected unqualified-id` after `#pragma STDC FP_CONTRACT ON junk`;
 kiln reports only the warning.
@@ -601,9 +612,12 @@ declaration`. A value-dependent value is substituted at instantiation
 a value `0` or `1` turns the hint into `unroll(disable)`.
 
 A `module` or `import` directive ([cpp.module], [cpp.import]) is
-removed from the stream through its `;`. The parser reports `a module
-import is not supported yet` or `a module declaration is not supported
-yet` and continues with the next declaration.
+consumed by the preprocessor (spec/modules.md §3) and reaches the parser
+as its directive, wherever it appears, a `#pragma` region included (as in
+clang 22, a pending `#pragma clang attribute` or FP pragma does not stop
+it). With modules off (before C++20, and in C) the preprocessor never
+treats the line as a directive: `module`, `import` and `export` are
+ordinary identifiers.
 
 **Known divergence: ordering.** The preprocessor processes all the
 directives up to the next token before it returns their markers. So a

@@ -2623,3 +2623,169 @@ int main() {
     let errs = image_round_trip("image-wp1369", "w", src, run, err, "8 2 6 5 7 16\n");
     assert!(errs.contains("functions that differ only in their return type"), "{errs}");
 }
+
+/// `kiln++ -std=c++20 <args>` in `dir`: exit code, stdout, stderr.
+fn kiln_stdout(dir: &Path, args: &[&str]) -> (i32, String, String) {
+    let o: Output = Command::new(kilnpp())
+        .arg("-std=c++20")
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(!stderr.contains("panicked"), "kiln++ {args:?} panicked:\n{stderr}");
+    (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).into_owned(), stderr)
+}
+
+/// WP-1744, spec/modules.md §11.6: a module file is already preprocessed:
+/// `-E` and `-M` print nothing for it, with clang's warning (silenced by
+/// `-Qunused-arguments`); `-fdump-ast` dumps the unit rebuilt from it;
+/// under another `-std=` its fingerprint check reports the mismatch (no
+/// "not implemented").
+#[test]
+fn module_file_input_modes() {
+    let d = setup("modes");
+    for mode in ["-E", "-M"] {
+        let (code, out, err) = kiln_stdout(&d, &[mode, "m.pcm"]);
+        assert_eq!((code, out.as_str()), (0, ""), "{mode}: {err}");
+        assert_eq!(
+            err,
+            "kiln++: warning: m.pcm: previously preprocessed input \
+             [-Wunused-command-line-argument]\n",
+            "{mode}"
+        );
+    }
+    let (code, out, err) = kiln_stdout(&d, &["-E", "-Qunused-arguments", "m.pcm"]);
+    assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""));
+    let (code, out, err) = kiln_stdout(&d, &["-fsyntax-only", "-fdump-ast", "m.pcm"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("TranslationUnitDecl\n"), "{out}");
+    assert!(out.contains("FunctionDecl f 'int ()'") && out.contains("FunctionDecl g"), "{out}");
+    let (code, _, err) = kiln_stdout(&d, &["-std=c++17", "-c", "m.pcm", "-o", "m17.o"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains(
+            "error: module file 'm.pcm' was built with '-std=c++20' but the current \
+             compilation uses '-std=c++17'"
+        ) && err.contains("cannot be loaded due to a configuration mismatch"),
+        "{err}"
+    );
+    assert!(!err.contains("not implemented"), "{err}");
+}
+
+/// WP-1744, spec/modules.md §2: `-E` performs a header-unit import for its
+/// macros ([cpp.import]/5) and prints the import with the header's path as
+/// found, as `clang++-22 -E` does given the header unit; the header's
+/// tokens are not part of the output. Named-module directives stay text.
+#[test]
+fn preprocess_header_unit_import() {
+    let d = scratch("pp-header-unit");
+    std::fs::create_dir_all(d.join("inc")).unwrap();
+    std::fs::write(d.join("h.h"), "#define HM 2\nint in_header;\n").unwrap();
+    std::fs::write(d.join("inc/sy.h"), "#define SYSM 3\n").unwrap();
+    std::fs::write(
+        d.join("e.cpp"),
+        "export module e;\nimport <sy.h>;\nexport import \"h.h\"; int q = HM;\nimport m;\n\
+         #if SYSM == 3\nint z = SYSM + HM;\n#endif\n",
+    )
+    .unwrap();
+    let (code, out, err) = kiln_stdout(&d, &["-E", "-P", "-Iinc", "e.cpp"]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    assert_eq!(
+        out,
+        "export module e;\nimport \"inc/sy.h\";\nexport import \"./h.h\"; int q = 2;\nimport m;\n\
+         int z = 3 + 2;\n"
+    );
+    // The header unit's files are dependencies.
+    let (code, out, err) = kiln_stdout(&d, &["-M", "-Iinc", "e.cpp"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "e.o: e.cpp inc/sy.h h.h\n");
+    // Before C++20 there are no module directives: all of it is text.
+    let (code, out, err) = kiln_stdout(&d, &["-std=c++17", "-E", "-P", "-Iinc", "e.cpp"]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    assert!(out.contains("import <sy.h>;\nexport import \"h.h\"; int q = HM;"), "{out}");
+}
+
+/// WP-1744 (spec/modules.md §11.6 "Header-unit module files"):
+/// `-fmodule-header[=user|system]` and the header-unit `-x` types write a
+/// header unit's module file, and `-fmodule-file=<path>` imports it in
+/// place of building the header from its source.
+#[test]
+fn header_unit_module_files() {
+    let d = scratch("header-unit-files");
+    std::fs::create_dir_all(d.join("inc")).unwrap();
+    std::fs::create_dir_all(d.join("q")).unwrap();
+    std::fs::write(
+        d.join("h.h"),
+        "#pragma once\n#define HV 7\ninline constexpr int hf() { return HV; }\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("inc/sy.h"), "#define SV 3\n").unwrap();
+    std::fs::write(d.join("q/qh.h"), "#define QV 5\n").unwrap();
+    let user = "import \"h.h\";\nimport <sy.h>;\nstatic_assert(hf() + HV + SV == 17);\n";
+    std::fs::write(d.join("u.cpp"), user).unwrap();
+    // `<stem>.pcm` by default; no warning (the header is not promoted
+    // from C, and `#pragma once` is in a header).
+    let o = kiln(&d, &["-fmodule-header", "h.h"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    assert!(std::fs::read(d.join("h.pcm")).unwrap().starts_with(b"KILNBMI\0"));
+    ok(&d, &["-fmodule-header=system", "-Iinc", "sy.h"]);
+    ok(&d, &["-fmodule-header=user", "-Iq", "qh.h", "-o", "qh.pcm"]);
+    ok(&d, &["-x", "c++-header-unit-header", "h.h", "-o", "hx.pcm"]);
+    // No nameless-form warning: a header unit is always given by path.
+    let o = kiln(
+        &d,
+        &["-fsyntax-only", "-Iinc", "-fmodule-file=h.pcm", "-fmodule-file=sy.pcm", "u.cpp"],
+    );
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    // The module file is the unit: a later edit of the header is not seen,
+    // and its source files are not dependencies; the module files are.
+    std::fs::write(d.join("h.h"), "#define HV 9\ninline constexpr int hf() { return HV; }\n")
+        .unwrap();
+    ok(&d, &["-c", "-Iinc", "-fmodule-file=h.pcm", "-fmodule-file=sy.pcm", "u.cpp", "-MD"]);
+    let dep = std::fs::read_to_string(d.join("u.d")).unwrap();
+    assert_eq!(dep, "u.o: h.pcm sy.pcm u.cpp\n");
+    // Without it the header is built from its source, as before.
+    let o = kiln(&d, &["-fsyntax-only", "-Iinc", "-fmodule-file=sy.pcm", "u.cpp"]);
+    assert!(o.stderr.contains("static assertion failed"), "{}", o.stderr);
+    // A named module built against the header unit records its module
+    // file: the module's importer needs neither the header nor the flag.
+    std::fs::write(d.join("h.h"), "#define HV 7\ninline constexpr int hf() { return HV; }\n")
+        .unwrap();
+    ok(&d, &["-fmodule-header", "h.h"]);
+    std::fs::write(
+        d.join("m.cppm"),
+        "export module m;\nimport \"h.h\";\nexport int mf() { return hf() + HV; }\n",
+    )
+    .unwrap();
+    ok(&d, &["-fmodule-file=h.pcm", "--precompile", "m.cppm", "-o", "m.pcm"]);
+    std::fs::rename(d.join("h.h"), d.join("h.away")).unwrap();
+    std::fs::write(d.join("mu.cpp"), "import m;\nint main() { return mf() - 14; }\n").unwrap();
+    ok(&d, &["-fsyntax-only", "-fmodule-file=m=m.pcm", "mu.cpp"]);
+    std::fs::rename(d.join("h.away"), d.join("h.h")).unwrap();
+    // A header-unit `-x` input of a compile is built beside the others.
+    std::fs::write(d.join("b.cpp"), "int main() { return 0; }\n").unwrap();
+    std::fs::remove_file(d.join("h.pcm")).unwrap();
+    ok(&d, &["-x", "c++-user-header", "h.h", "-x", "c++", "-c", "b.cpp"]);
+    assert!(d.join("h.pcm").is_file() && d.join("b.o").is_file());
+    // clang's errors: a header not found by its lookup, and a module
+    // declaration in a header unit.
+    let o = kiln(&d, &["-fmodule-header=user", "qh.h"]);
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.starts_with("fatal error: module header file 'qh.h' not found\n"),
+        "{}",
+        o.stderr
+    );
+    std::fs::write(d.join("bad.h"), "export module bad;\nint x;\n").unwrap();
+    let o = kiln(&d, &["-fmodule-header", "bad.h"]);
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.starts_with(
+            "bad.h:1:8: error: 'module' declaration found while building header unit\n"
+        ),
+        "{}",
+        o.stderr
+    );
+}

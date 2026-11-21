@@ -2164,13 +2164,13 @@ impl Preprocessor<'_, '_> {
         if !ok {
             return false;
         }
-        if self.modules.is_some() {
+        // Preprocessing only (`ModuleOptions::text`): a header-unit
+        // import is performed, everything else stays text.
+        let header =
+            import && !matches!(next.kind, TokKind::Identifier(_) | TokKind::Punct(Punct::Colon));
+        if self.modules.as_ref().is_some_and(|m| !m.opts.text || header) {
             self.module_directive(t, export, import);
             return true;
-        }
-        if import && !matches!(next.kind, TokKind::Identifier(_) | TokKind::Punct(Punct::Colon)) {
-            // kiln-gap: GAP-136
-            self.emit(Diag::new(DiagId::pp_header_unit_unsupported, next.span));
         }
         if let TokKind::Identifier(n) = next.kind
             && self.macros.get(n).is_some_and(|d| !d.function_like)

@@ -1215,9 +1215,41 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   `nofpclass` marks FP parameters and returns under finite math.
 - `-fno-math-errno` makes the errno-setting libm functions `memory(none)`
   and lowers them to their intrinsics (`ldexp`, `exp10` excepted).
-- The floating-point environment is the default one; every flag and
-  pragma that needs another (FENV_ACCESS ON, FENV_ROUND other than
-  FE_TONEAREST, trapping, rounding, a wider eval method) is an error.
+- The floating-point environment (WP-1744): `#pragma STDC FENV_ACCESS`,
+  `#pragma clang fp exceptions(...)`, `#pragma float_control(except,
+  ...)` and `FENV_ROUND FE_TONEAREST|FE_DYNAMIC` set the scope's
+  rounding mode and exception behavior (clang `FPOptions`: the declared
+  mode is `FE_DYNAMIC` by default, which is dynamic under FENV_ACCESS ON
+  and to-nearest otherwise; the exceptions are the pragma's, else strict
+  under FENV_ACCESS ON, else ignored). A scope is *constrained* when its
+  mode is not to-nearest, its exceptions are not ignored, or FENV_ACCESS
+  is on. A function with a constrained scope (its declaration's, or a
+  compound statement's at its end; a lambda's body is its own function;
+  `FpOverride::strict_fn` on the body, kept by instantiation) is
+  `strictfp` (clang `UsesFPIntrin`): every FP binop, `fp_contract(on)`
+  fusion, `fcmp` (`fcmps` for `<` `>` `<=` `>=`), FP conversion and the
+  `ceil`/`floor`/`trunc`/`round`/`roundeven`/`rint`/`nearbyint`/`fma`/
+  `fmax`/`fmin` builtins (the errno-lowered libm intrinsics too) is an
+  `llvm.experimental.constrained.*` call with the scope's `round.*` and
+  `fpexcept.*` metadata (to-nearest and ignored outside the pragma's
+  scope), constants are not folded, every call site is `strictfp`, and
+  the intrinsic declarations carry `strictfp` and
+  `memory(inaccessiblemem: readwrite)`. `fneg`, `fabs` and `copysign`
+  stay plain, as in clang.
+- Folding under a constrained scope: a constant initializer
+  (static storage, `constexpr`, a `const` integral) is evaluated in a
+  constant context, in the default environment ([expr.const]: clang's
+  `checkFloatingPointResult` accepts any result there); a trial fold (a
+  condition, an automatic `const` variable's initializer read through its
+  name) of an expression with an FP operation is not attempted, where
+  clang's fails on an inexact result under the dynamic mode or any
+  exception under strict exceptions. Deviation: kiln does not track the
+  status, so an exact result clang would fold is computed at run time.
+- Still errors (GAP-142): a directed `FENV_ROUND` mode (constant
+  evaluation in that mode is not implemented) and `#pragma clang fp
+  eval_method(double|extended)`; the driver flags that need the
+  environment (`-frounding-math`, `-ffp-exception-behavior=`,
+  `-ffp-model=strict`, `-ffp-eval-method=`, spec/driver.md).
 
 ### 3.3 Pointer alignment (WP-819, WP-829, WP-847, `builtins.rs` `pointer_with_alignment`)
 clang `CodeGenFunction::EmitPointerWithAlignment`, mirrored case by case,

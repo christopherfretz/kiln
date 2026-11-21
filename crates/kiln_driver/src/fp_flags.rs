@@ -421,6 +421,7 @@ impl State {
                 nsz: !self.signed_zeros,
                 afn: self.approx_func,
                 math_errno: self.math_errno,
+                ..FpOptions::default()
             },
             backend_fuse: self.contract == "fast",
             fast_math,

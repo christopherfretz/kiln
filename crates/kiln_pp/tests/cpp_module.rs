@@ -67,20 +67,17 @@ export module x;
 
 /// [cpp.import]/1
 ///
-/// Deviation: header units are not supported (clang looks the header up, then rejects it).
+/// Deviation: clang looks the header up and reports a missing one; kiln keeps the
+/// directive and resolves the header unit where the module files are (spec/modules.md).
 #[test]
 fn import_header_unit() {
-    common::check_diags(
+    common::check(
         r#"import <vector>;
 import "a.h";
 "#,
         r#"import <vector>;
 import "a.h";
 "#,
-        &[
-            r#"1:8: error: importing a header unit is not supported yet"#,
-            r#"2:8: error: importing a header unit is not supported yet"#,
-        ],
     );
 }
 

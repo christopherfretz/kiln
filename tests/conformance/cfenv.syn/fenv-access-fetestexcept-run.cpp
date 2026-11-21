@@ -1,10 +1,8 @@
 // [cfenv.syn], C23 7.6.1: under `#pragma STDC FENV_ACCESS ON` the program
 // may test the floating-point status flags: an inexact division raises
-// FE_INEXACT, an exact one does not, after `feclearexcept`. kiln has no
-// constrained intrinsics yet, so it rejects the pragma (an error, never
-// ignored; spec/codegen.md "Floating-point semantics").
+// FE_INEXACT, an exact one does not, after `feclearexcept` (constrained
+// intrinsics, spec/codegen.md "Floating-point semantics", WP-1744).
 //@ expect: run
-//@ xfail(kiln): WP-806 follow-up, FENV_ACCESS rejected (constrained intrinsics not implemented)
 //@ stdout: exact 0
 //@ stdout: inexact 1
 #include <cfenv>

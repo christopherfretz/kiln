@@ -179,21 +179,30 @@ fn error_directive_is_not_a_scan_failure() {
     );
 }
 
-/// [module.import]p5: header units are WP-983; the scan fails the way
-/// clang-scan-deps fails (header line, no caret, empty document, rc 1, no
-/// depfile).
+/// [module.import]p5, [cpp.import]p5 (WP-1744): a header-unit import is
+/// built from its source during the scan, so its macros decide the
+/// imports after it and its files are dependencies. Like clang-scan-deps
+/// 22 given the header unit's module file, the rule lists no header unit
+/// (P1689 `requires` holds named modules only).
 #[test]
-fn header_unit_import_is_a_clear_error() {
+fn header_unit_import_is_scanned() {
     let d = sources("header-unit");
+    std::fs::write(
+        d.join("hu2.cpp"),
+        "import \"hdr.h\";\n#if HDR == 1\nimport m;\n#else\nimport other;\n#endif\n",
+    )
+    .unwrap();
     let o = p1689(&d, &["-c", "hu.cpp", "-o", "hu.o", "-MT", "hu.ddi", "-MD", "-MF", "hu.ddi.d"]);
-    assert_eq!(o.code, 1);
-    assert_eq!(o.stdout, EMPTY);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.stdout, doc("      \"primary-output\": \"hu.o\"\n"));
+    let dep = std::fs::read_to_string(d.join("hu.ddi.d")).unwrap();
+    assert!(dep.starts_with("hu.ddi:") && dep.contains("hdr.h"), "{dep}");
+    let o = p1689(&d, &["-c", "hu2.cpp", "-o", "hu2.o"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
-        o.stderr,
-        "Diagnostics while scanning dependencies for 'hu.cpp':\nhu.cpp:1:8: error: header unit \"hdr.h\" \
-         cannot be imported: kiln-scan-deps does not support header units yet\n"
+        o.stdout,
+        doc(&format!("      \"primary-output\": \"hu2.o\",\n{}\n", requires(&["m"])))
     );
-    assert!(!d.join("hu.ddi.d").exists());
 }
 
 /// A missing input is a scan failure with the driver's diagnostic.

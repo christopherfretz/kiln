@@ -75,7 +75,8 @@ impl Parser<'_, '_> {
         self.s.act_on_lambda_declarator(id, d, &specs);
         let saved_stmt_expr = std::mem::replace(&mut self.in_stmt_expr, false);
         let typos = self.s.suspend_delayed_typos();
-        let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
+        let (body, rbrace) =
+            self.fn_body_fp(|p| p.with_greater_op(true, |p| p.parse_compound(false)));
         self.s.resume_delayed_typos(typos);
         self.in_stmt_expr = saved_stmt_expr;
         self.sync_attr_macros();

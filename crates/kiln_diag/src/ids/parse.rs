@@ -207,6 +207,11 @@ parse_pragma_file_or_compound_scope = Error (1) "'#pragma {0}' can only appear a
 parse_pragma_float_control_malformed = Error (0) "pragma float_control is malformed; use 'float_control({{push|pop}})' or 'float_control({{precise|except}}, {{on|off}} [,push])'";
 parse_pragma_float_control_pop_failed = Warning [IgnoredPragmas] (0) "#pragma float_control(pop, ...) failed: stack empty";
 parse_pragma_float_control_scope = Error (0) "'#pragma float_control push/pop' can only appear at file or namespace scope or within a language linkage specification";
+// WP-1744: clang `err_pragma_fenv_requires_precise`,
+// `err_pragma_fc_except_requires_precise`,
+// `err_pragma_fc_noprecise_requires_noexcept`,
+// `err_pragma_fc_noprecise_requires_nofenv`.
+parse_pragma_fp_illegal = Error (2) "'#pragma {0}' is illegal when {1}";
 parse_pragma_fp_invalid_argument = Error (3) "unexpected argument '{0}' to '#pragma clang fp {1}'; expected {2}";
 parse_pragma_fp_invalid_option = Error (2) "{0:invalid|missing} option{1}; expected 'contract', 'reassociate', 'reciprocal', or 'exceptions'";
 parse_pragma_invalid_action = Warning [IgnoredPragmas] (1) "unknown action for '#pragma {0}' - ignored";

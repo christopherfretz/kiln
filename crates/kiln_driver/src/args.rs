@@ -29,7 +29,13 @@ impl Lang {
     pub fn from_x(v: &str) -> Option<Lang> {
         match v {
             "c" | "c-header" | "cpp-output" => Some(Lang::C),
-            "c++" | "c++-header" | "c++-cpp-output" | "c++-module" => Some(Lang::Cxx),
+            "c++"
+            | "c++-header"
+            | "c++-cpp-output"
+            | "c++-module"
+            | "c++-user-header"
+            | "c++-system-header"
+            | "c++-header-unit-header" => Some(Lang::Cxx),
             _ => None,
         }
     }
@@ -93,12 +99,28 @@ impl AsmKind {
     }
 }
 
-/// The input type a `-x` sets: a language (and whether it is a
-/// `-header` type), or assembly.
+/// The input type a `-x` sets: a language (whether it is a `-header`
+/// type, and the header-unit types' lookup), or assembly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum XType {
-    Lang(Lang, bool),
+    Lang(Lang, bool, Option<HeaderUnitLookup>),
     Asm(AsmKind),
+}
+
+/// How a header-unit input names its header (spec/modules.md §11.6
+/// "Header-unit module files"): `-fmodule-header` /
+/// `-x c++-header-unit-header` take the path as given,
+/// `-fmodule-header=user` / `-x c++-user-header` look it up as
+/// `#include "..."` does from the working directory, and
+/// `-fmodule-header=system` / `-x c++-system-header` as `#include <...>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderUnitLookup {
+    /// The path as given.
+    Path,
+    /// A quoted lookup.
+    User,
+    /// An angled lookup.
+    System,
 }
 
 /// The driver mode, as clang's (`--driver-mode=`, else the program name;
@@ -160,6 +182,10 @@ pub struct Input {
     /// An assembly input: `-x assembler[-with-cpp]`, or without `-x` a
     /// `.s` / `.S` / `.sx` file (WP-1331). `lang` is `None` then.
     pub asm: Option<AsmKind>,
+    /// `-x c++-user-header`, `-x c++-system-header` or
+    /// `-x c++-header-unit-header`: the input is built as a header unit
+    /// (see [`Args::header_unit_of`]).
+    pub header_unit: Option<HeaderUnitLookup>,
 }
 
 /// The `-ftime-trace` family (spec/driver.md "Time trace").
@@ -725,6 +751,13 @@ pub struct Args {
     pub nameless_module_files: Vec<String>,
     /// `--precompile` (see [`Action::Precompile`]).
     pub precompile: bool,
+    /// `-fmodule-header` / `-fmodule-header=user|system` (the last one):
+    /// header inputs are built as header units, and the action is
+    /// [`Action::Precompile`] (spec/modules.md §11.6).
+    pub module_header: Option<HeaderUnitLookup>,
+    /// The header unit this job's main input is, with its lookup (set by
+    /// the driver on a header-unit job's copy of the arguments).
+    pub header_unit_main: Option<HeaderUnitLookup>,
     /// `-fmodule-output` / `-fmodule-output=<path>` (the last one): the
     /// option as written and its path (spec/modules.md §11.6).
     pub module_output: Option<(String, Option<String>)>,
@@ -1221,12 +1254,12 @@ impl Input {
     /// The input `path` under the `-x` in force (its language, and
     /// whether that is a `-header` type).
     fn under_x(path: &str, x: Option<XType>) -> Input {
-        let (lang, header, asm) = match x {
-            Some(XType::Lang(l, h)) => (Some(l), h, None),
-            Some(XType::Asm(k)) => (None, false, Some(k)),
-            None => (None, false, AsmKind::of_path(path)),
+        let (lang, header, asm, header_unit) = match x {
+            Some(XType::Lang(l, h, u)) => (Some(l), h, None, u),
+            Some(XType::Asm(k)) => (None, false, Some(k), None),
+            None => (None, false, AsmKind::of_path(path), None),
         };
-        Input { path: path.to_owned(), lang, header, asm }
+        Input { path: path.to_owned(), lang, header, asm, header_unit }
     }
 }
 
@@ -1450,7 +1483,9 @@ impl Args {
         // WP-1151: the shadow call stack's register.
         a.sanitize.x18_reserved = a.fixed_x18
             || a.target.as_deref().is_some_and(crate::sanitize::x18_reserved_by_default);
-        if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
+        if (a.precompile || a.module_header.is_some())
+            && matches!(a.action, Action::Link | Action::Compile)
+        {
             a.action = Action::Precompile;
         }
         // `-C`/`-CC` shape `-E` output only; clang rejects them otherwise
@@ -1578,6 +1613,9 @@ impl Args {
     /// header extension clang types as a header (`.h`, `.hh`, `.hpp`,
     /// `.hxx`, `.H`).
     pub fn is_header_input(&self, input: &Input) -> bool {
+        if input.header_unit.is_some() {
+            return false;
+        }
         input.header
             || input.lang.is_none()
                 && input.asm.is_none()
@@ -1587,13 +1625,23 @@ impl Args {
                 )
     }
 
+    /// The header unit `input` is built as, with its lookup: a
+    /// header-unit `-x` type, else under `-fmodule-header` a C++ header
+    /// input (spec/modules.md §11.6).
+    pub fn header_unit_of(&self, input: &Input) -> Option<HeaderUnitLookup> {
+        input.header_unit.or_else(|| {
+            self.module_header
+                .filter(|_| self.is_header_input(input) && self.input_lang(input) == Lang::Cxx)
+        })
+    }
+
     /// The inputs C++ mode compiles as C++ although their extension is C's
     /// (no `-x`), with the [`Promotion`]: clang's deprecated
     /// `treating 'c' input as 'c++'` warning, once per input.
     pub fn promoted_inputs<'a>(&self, inputs: &[&'a Input]) -> Vec<(&'a Input, Promotion)> {
         inputs
             .iter()
-            .filter(|i| i.lang.is_none() && i.asm.is_none())
+            .filter(|i| i.lang.is_none() && i.asm.is_none() && self.header_unit_of(i).is_none())
             .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
             .collect()
     }
@@ -1663,7 +1711,15 @@ impl Args {
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
             "-x" => match Lang::from_x(v) {
-                Some(l) => *x = Some(XType::Lang(l, v.ends_with("-header"))),
+                Some(l) => {
+                    let unit = match v {
+                        "c++-user-header" => Some(HeaderUnitLookup::User),
+                        "c++-system-header" => Some(HeaderUnitLookup::System),
+                        "c++-header-unit-header" => Some(HeaderUnitLookup::Path),
+                        _ => None,
+                    };
+                    *x = Some(XType::Lang(l, v.ends_with("-header"), unit));
+                }
                 None if v == "assembler" => *x = Some(XType::Asm(AsmKind::Plain)),
                 None if v == "assembler-with-cpp" => *x = Some(XType::Asm(AsmKind::Cpp)),
                 None if v == "none" => *x = None,
@@ -1700,6 +1756,9 @@ impl Args {
             "-E" => self.action = Action::Preprocess,
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
             "--precompile" => self.precompile = true,
+            "-fmodule-header" => self.module_header = Some(HeaderUnitLookup::Path),
+            "-fmodule-header=user" => self.module_header = Some(HeaderUnitLookup::User),
+            "-fmodule-header=system" => self.module_header = Some(HeaderUnitLookup::System),
             "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
             "-fkiln-module-cache" => self.module_cache = Some(true),
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
@@ -2593,7 +2652,13 @@ mod tests {
         assert_eq!(a.output.as_deref(), Some("out"));
         assert_eq!(
             a.inputs,
-            [Input { path: "t.cpp".into(), lang: None, header: false, asm: None }]
+            [Input {
+                path: "t.cpp".into(),
+                lang: None,
+                header: false,
+                asm: None,
+                header_unit: None
+            }]
         );
         assert_eq!(a.errors, []);
     }

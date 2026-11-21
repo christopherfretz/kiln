@@ -181,7 +181,8 @@ impl Parser<'_, '_> {
         // The body's statements are full-expressions of their own: their
         // delayed typos are not held for the enclosing statement (WP-330).
         let typos = self.s.suspend_delayed_typos();
-        let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
+        let (body, rbrace) =
+            self.fn_body_fp(|p| p.with_greater_op(true, |p| p.parse_compound(false)));
         if let Some((op, t)) = late {
             self.replay_lambda_contract_specs(op, t);
         }

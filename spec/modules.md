@@ -41,9 +41,16 @@ needed: no dependency edge is added.
 ## 2. Activation and driver flags
 
 Modules are enabled for `-fsyntax-only` and code generation under
-`-std=c++20` and later (`PpOptions::modules = Some(ModuleOptions)`). `-E`
-keeps printing directives as text (as today), and before C++20 a directive
-stays "unsupported".
+`-std=c++20` and later (`PpOptions::modules = Some(ModuleOptions)`).
+`-E` and `-M` run with `ModuleOptions::text` (WP-1744): module
+declarations and named-module imports stay text, printed as written,
+while a header-unit import is performed for its macros (built from its
+source; its tokens are not printed and its files are dependencies) and
+printed as `import "<path as found>";`, as clang 22 prints it. A module
+file given to `-E` or `-M` is skipped with clang's `<file>: previously
+preprocessed input` warning. Before C++20 (and in C) `module`, `import`
+and `export` are ordinary identifiers, as in clang: a line `import m;`
+is a declaration of a variable `m` of an unknown type name.
 
 Module sources are found in this order (spec/driver.md, "Modules"):
 
@@ -110,9 +117,10 @@ and pushes the unit's file. When that file ends, the importer's state is
 restored and `Marker::UnitEnd` is queued. The unit's tokens therefore reach
 the parser between the two markers.
 
-**Header units** ([cpp.import]/5, [module.import]/5). The header is built as
-an implicit header unit in-process: no `-fmodule-header` is needed. When it
-ends, the macros it defined (all definitions whose location is outside
+**Header units** ([cpp.import]/5, [module.import]/5). Given a
+header-unit module file for the header (§11.6), the unit is replayed from
+it. Otherwise the header is built as an implicit header unit in-process:
+no `-fmodule-header` is needed. When it ends, the macros it defined (all definitions whose location is outside
 `<built-in>`) become visible in the importer at the import, and are
 re-applied on every later import of the same header. An `#include` of an
 importable header stays a textual include: the include-to-import
@@ -1047,8 +1055,29 @@ clang's spellings (spec/driver.md, "Modules"):
 - `-x c++-module`, `.cppm`, `.ixx`: a C++ source, as in part A (whether a
   unit is an interface is decided by its module declaration, not its
   suffix).
-- `-fmodule-header`, `-fmodule-header=user|system`, `.pcm` header units:
-  step 2 (§11.10); still `error: unsupported option`.
+- **Header-unit module files (WP-1744).** `-fmodule-header` builds every
+  C++ header input as a header unit and makes the action `--precompile`
+  (its module file is `-o`, else `<stem>.pcm`); `-fmodule-header=user`
+  and `=system` look the input up as `#include "..."` (from the working
+  directory, then the search path) and `#include <...>` would, with
+  clang's `fatal error: module header file 'h.h' not found`. `-x
+  c++-header-unit-header`, `-x c++-user-header` and `-x
+  c++-system-header` do the same per input; under a compile or a link
+  those inputs are built first and the others go on. The module file is
+  a capsule of kind 4 (`UnitKind::HeaderUnit`) whose module is `"` plus
+  the header's canonical path (`kiln_pp::header_unit_key`), so
+  `-fmodule-file=<h.pcm>` (always the nameless form, with no warning)
+  matches every spelling of the import that finds the same file. The
+  importer replays the capsule as a header unit (§3: its macros are
+  exported); the header is not read and the module file, not the header,
+  is a dependency. A named module built against one records the module
+  file among its imports, so the module's importers find it there.
+  `-fmodule-header` with a source input is `--precompile` of that input
+  (clang 22 preprocesses it to standard output instead). A module
+  declaration in a header-unit build is clang's `'module' declaration
+  found while building header unit`. Without a module file for the
+  header, the header unit is built from its source, as in part A, where
+  clang requires one (spec/pp.md deviation 11).
 - `-fkiln-bmi-kind=1|2` (hidden, WP-985): the module file kind written,
   for tests and measurements (§11.11 "Fallback").
 
@@ -1187,9 +1216,12 @@ build tools pass (spec/driver.md "Dependency scanning"):
   '<src>':` and the diagnostics (no caret snippet, no error count) to
   stderr, the empty document `{"revision": 0, "rules": [], "version": 1}`
   to stdout, writes no dependency file and exits 1.
-- `import "h";` / `import <h>;` (a header unit) is `error: header unit "h"
-  cannot be imported: kiln-scan-deps does not support header units yet`
-  at the header name, a scan failure; header units are §11.10.
+- `import "h";` / `import <h>;` (a header unit, WP-1744) is built from
+  the header's source during the scan, as at a compile: its macros decide
+  the conditionals that follow, and its files are dependencies (`-format=
+  make`, `-MF`). It is not a `requires` entry, as in clang-scan-deps 22
+  given the header units' module files; a header-unit build
+  (`-fmodule-header`) provides no named module.
 - No `--` and no `-compilation-database`, or both, is clang's `The
   compilation command line must be provided either via
   '-compilation-database' or after '--'.` (exit 1); an unknown `-format`
@@ -1244,10 +1276,11 @@ build tools pass (spec/driver.md "Dependency scanning"):
   the same module agree.
 
 Deviations: the `-format=make` output names files as kiln's `-M` does
-(`hdr.h`) where clang-scan-deps normalises them (`./hdr.h`); the
-header-unit and one-job messages are kiln's (clang's header-unit error
-says the header "is not known to be a header unit"; its one-job message
-quotes its own expanded command); system headers in the dependency file
+(`hdr.h`) where clang-scan-deps normalises them (`./hdr.h`); a
+header-unit import scans without the header unit's module file (clang
+fails with "header file ... is not known to be a header unit" unless the
+compile line names one); the one-job message is kiln's (clang's quotes
+its own expanded command); system headers in the dependency file
 are spelled with kiln's toolchain paths. With `-compilation-database`:
 a JSON syntax error is reported as `Error while opening JSON database:
 <file>:<line>:<col>: error: <what>` (clang's text is its YAML parser's);
@@ -1293,10 +1326,7 @@ docs/status/oss/cmake_modules.md.
 ### 11.10 Step 2 (follow-up work packages)
 
 - **`import std;` module file.** Landed as §11.12 (WP-984).
-- **Header units as files.** `-fmodule-header[=user|system]` writes a
-  capsule of kind "header unit" (its exported macros are those of its
-  replay, §3), `-fmodule-file=<hdr.pcm>` imports it, and `import "h";`
-  finds it by the header's path.
+- **Header units as files.** Landed in §11.6 (WP-1744).
 - **Serialised-AST format (kind 2).** Designed in §11.11 "Kind 2: the
   serialised-AST module file (WP-985)". Part 1 (WP-985) carries the
   unit's self-contained constant results beside the capsule, so an

@@ -198,10 +198,6 @@ module support works through `kiln-scan-deps` (`FILE_SET CXX_MODULES`,
 3.28+ with Ninja), and so does `import std;` (`CXX_MODULE_STD`). What is
 missing (spec/modules.md §11.10):
 
-- **`-fmodule-header`** and header-unit module files
-  ([WP-983](BACKLOG.md)). Header units work from their headers in a
-  direct compile, but the scanner rejects `import "h";` and
-  `import <h>;`, so a CMake build cannot use them.
 - **Module files hold the module's source, not a serialised AST**, so an
   importer re-parses the module's text. Since WP-985 the file also
   carries the module's constant-evaluation results, so the importer does
@@ -454,8 +450,6 @@ Code generation, ABI and sanitizers:
   immediate invocation in the operand of a polymorphic `typeid` is not
   evaluated at compile time, so the link fails on the `consteval`
   function. [WP-1324](BACKLOG.md).
-- `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
-  FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
 - `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's

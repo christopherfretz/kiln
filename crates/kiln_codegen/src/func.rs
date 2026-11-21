@@ -284,6 +284,10 @@ pub(crate) struct Fx {
     pub fp_ovr: kiln_ast::fp::FpOverride,
     /// The `*-fp-math` attributes an FP scope turned off (`crate::fp`).
     pub fp_attrs_off: u8,
+    /// The function is `strictfp` (a scope in it is FP-constrained,
+    /// [`kiln_ast::fp::FpOverride::strict_fn`]): its FP operations are
+    /// `llvm.experimental.constrained.*` calls (WP-1744, `crate::fp`).
+    pub strict: bool,
     /// clang's per-function `SanOpts` (WP-675, `crate::ubsan`).
     pub san: kiln_ast::sanitize::SanitizerSet,
     /// The sanitizers an ignorelist removes from the function (WP-1032,
@@ -366,6 +370,7 @@ impl Fx {
             fp: kiln_ast::fp::FpOptions::default(),
             fp_ovr: kiln_ast::fp::FpOverride::NONE,
             fp_attrs_off: 0,
+            strict: false,
             san: kiln_ast::sanitize::SanitizerSet::NONE,
             san_ignored: kiln_ast::sanitize::SanitizerSet::NONE,
             ub_traps: Vec::new(),
@@ -508,6 +513,7 @@ impl Cg<'_> {
         self.f = Fx::empty();
         self.f.fir = Fir::new(params);
         self.start_fp();
+        self.f.strict = thunk.is_none() && body.is_some_and(|b| ast.stmts.is_strict_fn(b));
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;
@@ -1052,6 +1058,7 @@ impl Cg<'_> {
             func.attrs.params = params;
         }
         self.nounwind.insert(f, nothrow_def);
+        self.strict_call_sites();
         if thunk.is_none()
             && structor.is_none()
             && self.is_variadic_virtual(d)
@@ -2360,6 +2367,20 @@ impl Cg<'_> {
     }
 
     pub fn bin(&mut self, op: BinOp, flags: Flags, l: V, r: V) -> V {
+        if self.f.strict {
+            let name = match op {
+                BinOp::FAdd => Some("fadd"),
+                BinOp::FSub => Some("fsub"),
+                BinOp::FMul => Some("fmul"),
+                BinOp::FDiv => Some("fdiv"),
+                BinOp::FRem => Some("frem"),
+                _ => None,
+            };
+            if let Some(name) = name {
+                let ty = self.f.fir.ty(&self.m, l);
+                return self.constrained(name, ty, &[ty], vec![l, r], None, true);
+            }
+        }
         if let (Some((ty, a, w)), Some((_, b, _))) = (self.cint(l), self.cint(r))
             && let Some(x) = fold_int_bin(op, a, b, w)
         {
@@ -2435,8 +2456,26 @@ impl Cg<'_> {
         self.f.fir.push(Op::ICmp { p, l, r }, rt)
     }
 
+    /// clang `CreateFCmpS`: a relational comparison, signaling in a
+    /// `strictfp` function (`llvm.experimental.constrained.fcmps`).
+    pub fn fcmp_s(&mut self, p: FloatPredicate, l: V, r: V) -> V {
+        if self.f.strict {
+            return self.constrained_fcmp("fcmps", p, l, r);
+        }
+        self.fcmp(p, l, r)
+    }
+
+    fn constrained_fcmp(&mut self, op: &str, p: FloatPredicate, l: V, r: V) -> V {
+        let ty = self.f.fir.ty(&self.m, l);
+        let rt = self.cmp_ty(l);
+        self.constrained(op, rt, &[ty], vec![l, r], Some(p.name()), false)
+    }
+
     #[allow(clippy::float_cmp, reason = "constant folding is exact IEEE comparison")]
     pub fn fcmp(&mut self, p: FloatPredicate, l: V, r: V) -> V {
+        if self.f.strict && !matches!(p, FloatPredicate::False | FloatPredicate::True) {
+            return self.constrained_fcmp("fcmp", p, l, r);
+        }
         if let (Some(a), Some(b)) = (self.cmp_f64(l), self.cmp_f64(r)) {
             let uno = a.is_nan() || b.is_nan();
             let x = match p {
@@ -2867,6 +2906,21 @@ impl Cg<'_> {
         if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
         {
             return v;
+        }
+        if self.f.strict {
+            // clang `CreateConstrainedFPCast`.
+            let c = match op {
+                CastOp::FPToSI => Some(("fptosi", false)),
+                CastOp::FPToUI => Some(("fptoui", false)),
+                CastOp::SIToFP => Some(("sitofp", true)),
+                CastOp::UIToFP => Some(("uitofp", true)),
+                CastOp::FPTrunc => Some(("fptrunc", true)),
+                CastOp::FPExt => Some(("fpext", false)),
+                _ => None,
+            };
+            if let Some((name, round)) = c {
+                return self.constrained(name, to, &[to, from], vec![v], None, round);
+            }
         }
         if let Some(r) = self.fold_cast(op, v, to).or_else(|| self.fold_vec_cast(op, v, to)) {
             return r;
