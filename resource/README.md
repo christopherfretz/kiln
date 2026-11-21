@@ -2,7 +2,7 @@
 
 Data kiln needs to look like clang 19 to the code it compiles (see
 `docs/ARCHITECTURE.md` principle 3 and `spec/pp.md`). Everything here except
-`include/LICENSE.TXT` and the READMEs is produced by `scripts/gen-resource.sh`
+the `LICENSE.TXT` files and the READMEs is produced by `scripts/gen-resource.sh`
 from the clang 19 oracle in the container. The script is idempotent: rerun it
 after a clang update and review the diff. It refuses to run if `clang-19` is
 not clang 19.
@@ -19,6 +19,13 @@ the local changes of `scripts/resource-include.patch`. kiln's
 `-resource-dir` points here; it takes the place of
 `/usr/lib/llvm-19/lib/clang/19/include` in the search order. Provenance, the
 license, and the skip list are in `include/README.md`.
+
+## include-clang22/ — the clang 22 overlay
+
+clang 22.1.8's `arm_sve.h`, `arm_sme.h` and `arm_vector_types.h`,
+verbatim, searched before `include/` at `-fclang-compat=22` (WP-1842); the
+script copies them from `clang-22` (`CLANG22=`). See
+`include-clang22/README.md`.
 
 ## predefines/ — predefined macros
 

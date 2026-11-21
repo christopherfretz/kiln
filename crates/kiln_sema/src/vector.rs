@@ -824,6 +824,8 @@ impl Sema<'_, '_> {
                         | B::Half
                         | B::BFloat16
                 ) || (wide && b == B::Double)
+                    // clang 20+: `__mfp8` on `AArch64` (WP-1791).
+                    || (aarch64 && b == B::MFloat8)
             }
         });
         if !ok {

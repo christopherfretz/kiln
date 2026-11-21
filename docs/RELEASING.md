@@ -35,9 +35,14 @@ cargo xtask release-gate plan                      # what the gate is, what is d
 cargo xtask release-gate run --external downstream='<command>'
 ```
 
-`run` starts with the release archive (`cargo xtask dist --check`,
-`sha256sum -c`, the unpacked `kiln++ --version`); every later step uses
-that `kiln++`. Then two tracks run side by side on the shared jobserver,
+`run` starts with the release archive (`cargo xtask dist --pgo --check`,
+`sha256sum -c`, the unpacked `kiln++ --version`): a profile-guided build,
+as `release.yml` publishes, whose profile the archive's row and the
+record's summary name; every later step but the merge gate and its
+clang 19 lane uses that `kiln++` (an external gets it as
+`$KILN_GATE_CXX`). `--no-pgo` builds a plain archive instead, for a
+re-run when the PGO training cannot run; the record then says `plain
+build (no PGO)`. Then two tracks run side by side on the shared jobserver,
 as the hand-driven 1.2.1 gate did: the merge gate (`cargo xtask ci`), the
 clang 19 lane, the precompiled-header sweep and the full libc++ suite on
 one; gcc.c-torture at gnu23 and gnu17, the full GCC C++ testsuite
@@ -75,16 +80,19 @@ even when its command exited 0.
 ```sh
 git push origin HEAD:refs/heads/sweep/rc-X.Y.Z    # starts sweep.yml
 gh run list --workflow sweep.yml --branch sweep/rc-X.Y.Z   # wait for it (several hours)
-gh run download <run id> -D <dir> -p 'libcxx-*' -p 'gxx-dg-*' -p 'oss-*'
+gh run download <run id> -D <dir> -p 'libcxx-*' -p 'gxx-dg-*' -p 'oss-*' -p kiln-build
 cargo xtask release-gate import-x86 <dir>
 git push origin --delete sweep/rc-X.Y.Z
 ```
 
-A `sweep/rc-*` push runs the full libc++ suite in six shards, the four
+A `sweep/rc-*` push builds the archive profile-guided (`dist --pgo`, as
+`release.yml`) and runs the full libc++ suite in six shards, the four
 g++.dg shards and their merge, and the OSS matrix (the `sweep = true`
 rows with the clang 19 control). Every result artifact carries a
 `commit` file; `import-x86` refuses artifacts of another commit and
-reads the results files, never the job logs. The boost rows stay
+reads the results files, never the job logs. It also refuses a hosted
+build that is not a PGO build of this commit (the `kiln-build`
+artifact's `build-info.txt`; `--no-pgo` accepts a plain one). The boost rows stay
 local-only: their kiln wall time on the development host (1.8 to 5.1
 hours) with the clang control and a full Boost checkout is too close to
 the runners' 355-minute job limit.

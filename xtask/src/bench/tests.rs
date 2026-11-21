@@ -672,3 +672,27 @@ fn recorded_flags_hide_the_toolchain_path() {
     );
     assert_eq!(f(&["-std=c++26", "-O2"]), "-std=c++26 -O2");
 }
+
+/// spec/bench.md "Recording": a compiler's path is recorded without the
+/// recording machine's directories (WP-1886).
+#[test]
+fn recorded_compiler_is_never_a_local_absolute_path() {
+    let root = Path::new("/w/kiln");
+    let target = Path::new("/w/build/target-x");
+    let r = |p: &str, t: Option<&Path>| recorded_compiler(Path::new(p), root, t);
+    assert_eq!(r("/w/build/target-x/release/kiln++", Some(target)), "target/release/kiln++");
+    assert_eq!(r("/w/kiln/target/release/kiln++", None), "target/release/kiln++");
+    assert_eq!(r("/w/kiln/target/release/kiln++", Some(target)), "target/release/kiln++");
+    assert_eq!(r("/opt/gcc-16.1/bin/g++-16", Some(target)), "g++-16");
+    assert_eq!(r("/usr/bin/clang++-22", None), "clang++-22");
+    assert_eq!(r("clang++-22", Some(target)), "clang++-22");
+    assert_eq!(r("build/kiln++", None), "build/kiln++");
+}
+
+/// spec/bench.md "Recording": a GCC oracle's ratios go to their own page.
+#[test]
+fn gcc_recordings_have_their_own_page() {
+    let p = Path::new("/r/docs/status/perf.md");
+    assert_eq!(perf_page(p, CompilerKind::Clang), p);
+    assert_eq!(perf_page(p, CompilerKind::Gcc), Path::new("/r/docs/status/perf-gcc.md"));
+}

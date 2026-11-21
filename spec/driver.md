@@ -1034,6 +1034,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 <prefix>/bin/clang-scan-deps -> kiln     with clang 19's shapes, WP-1148)
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
+<prefix>/lib/kiln/<major>/include-clang22/  resource/include-clang22: clang
+                                         22's arm_sve.h, arm_sme.h and
+                                         arm_vector_types.h (WP-1842)
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
 <prefix>/lib/kiln/<major>/share/         resource/share/*.txt: the default
                                          sanitizer ignorelists (WP-1032)
@@ -1149,7 +1152,15 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
    - **libc++:** the first of `<llvm>/bin/../include`,
      `<sysroot>/usr/local/include` or `<sysroot>/usr/include` that has a
      `c++/v1`. Its per-target `<triple>/c++/v1` comes first if it exists.
-2. Unless `-nobuiltininc`: `<resource>/include`.
+2. Unless `-nobuiltininc`: `<resource>/include`. At `-fclang-compat=22`
+   (the default) `<resource>/include-clang22` comes first when it exists
+   (WP-1842): clang 22's `arm_sve.h`, `arm_sme.h` and
+   `arm_vector_types.h`, verbatim, so the clang 22-only SVE/SME
+   intrinsics (the FP8 ones, WP-1791) are declared and `<arm_neon.h>`
+   gets clang 22's `mfloat8_t` types; at compat 19 the clang 19 copies in
+   `<resource>/include` serve. clang's own resource directories
+   (`-resource-dir /usr/lib/llvm-19/lib/clang/19`) have no such
+   directory, so their search list is clang's.
 3. Unless `-nostdlibinc`:
    - `<sysroot>/usr/local/include`;
    - `<gcc>/../../../../<triple>/include`;

@@ -39,6 +39,7 @@ fn sve_info(b: BuiltinType) -> Option<(QualType, u32)> {
         B::SvUint64 => (QualType::ULONG, 2),
         B::SvFloat16 => (QualType::HALF, 8),
         B::SvBfloat16 => (QualType::BFLOAT16, 8),
+        B::SvMfloat8 => (QualType::MFLOAT8, 16),
         B::SvFloat32 => (QualType::FLOAT, 4),
         B::SvFloat64 => (QualType::DOUBLE, 2),
         B::SvBool => (QualType::BOOL, 16),
@@ -82,18 +83,40 @@ fn sve_tuple_stem(b: BuiltinType) -> &'static str {
         B::SvFloat32 => "float32",
         B::SvFloat64 => "float64",
         B::SvBfloat16 => "bfloat16",
+        B::SvMfloat8 => "mfloat8",
         _ => "bool",
     }
 }
 
 impl Sema<'_, '_> {
-    /// Declares the implicit typedefs naming the SVE builtins on `AArch64`.
+    /// Declares the implicit typedefs naming the SVE builtins on `AArch64`
+    /// (the FP8 ones are [`Self::declare_fp8_typedefs`]'s).
     pub(crate) fn declare_sve_typedefs(&mut self) {
+        self.declare_arm_typedefs(false);
+    }
+
+    /// Declares the implicit typedefs naming the FP8 builtins on `AArch64`
+    /// (`__mfp8`, `__SVMfloat8_t` and its tuples; WP-1791) from clang 20
+    /// on: called once [`Sema::clang_compat`] is set, after
+    /// [`Self::declare_sve_typedefs`] (so they follow the SVE ones, in
+    /// `BuiltinType::ALL` order, as clang declares them).
+    pub fn declare_fp8_typedefs(&mut self) {
+        if self.clang_compat >= 20 {
+            self.declare_arm_typedefs(true);
+        }
+    }
+
+    /// The implicit typedefs of the sizeless builtins and `__mfp8` that
+    /// are (`fp8`) or are not FP8 types, on `AArch64`.
+    fn declare_arm_typedefs(&mut self, fp8: bool) {
         if self.abi.triple.arch != kiln_abi::target::Arch::AArch64 {
             return;
         }
         let tu = self.ast.tu;
-        for b in BuiltinType::ALL.into_iter().filter(|b| b.is_sizeless()) {
+        for b in BuiltinType::ALL
+            .into_iter()
+            .filter(|b| (b.is_sizeless() || *b == BuiltinType::MFloat8) && b.is_fp8() == fp8)
+        {
             let n = DeclName::ident(self.ast.symbols().intern(b.name()));
             let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
             let _ = self.builder().typedef(h, DeclKind::Typedef, b.qual_type(), None);
@@ -104,8 +127,8 @@ impl Sema<'_, '_> {
     /// (WP-810): one identifier naming an `AArch64` ACLE builtin. clang
     /// accepts the SVE and SME builtins (`SveAliasValid`,
     /// `SmeAliasValid`): kiln accepts those of its table
-    /// ([`kiln_ast::sve`]), every one of which codegen lowers; the FP8 ones
-    /// are not in it (kiln has no FP8 types). `__clang_arm_builtin_alias`
+    /// ([`kiln_ast::sve`]), every one of which codegen lowers (the FP8
+    /// ones too, WP-1791). `__clang_arm_builtin_alias`
     /// is a target attribute (`TargetAnyArm`): unknown, and ignored, on
     /// x86-64.
     pub(crate) fn builtin_alias_attribute(

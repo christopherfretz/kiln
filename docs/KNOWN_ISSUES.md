@@ -341,14 +341,21 @@ warnings clang has are missing. Wording is not covered by
 
 ## libc++ 22 test suite
 
-kiln passes 99.4% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`)
-on the 1.0 release candidate ([status/libcxx-1.0.md](status/libcxx-1.0.md)).
+kiln passes 99.4% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`):
+8748 of the 8801 tests that apply on aarch64 and 8749 on x86_64 at the
+1.3.0 release gate, 2026-11-19/20
+([status/release-1.3.0.md](status/release-1.3.0.md)), as on the 1.0
+release candidate ([status/libcxx-1.0.md](status/libcxx-1.0.md)).
 The 9 correctness failures of the M5 run
 ([status/libcxx-m5.md](status/libcxx-m5.md); WP-460, WP-491) all pass.
 What is left:
 
 - **4 filesystem permission tests** that cannot pass when the suite runs
   as root (an environment limit, not a kiln failure).
+- **2 failures new at 1.3.0**: `std/containers/views/mdspan/mdspan/mapping.verify.cpp`
+  (an expected `static_assert` diagnostic is not seen) and
+  `std/utilities/meta/meta.const.eval/is_within_lifetime.compile.pass.cpp`
+  (a `static_assert` fails).
 - **Expected failures for missing or reworded warnings**, none of them
   wrong code:
   - `-Wnonnull` ×5 ([WP-433](BACKLOG.md))

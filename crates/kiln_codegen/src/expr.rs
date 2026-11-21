@@ -1758,8 +1758,17 @@ impl Cg<'_> {
         let lt = self.f.fir.ty(&self.m, l);
         let float = self.is_float_ty(lt);
         // clang `hasSignedIntegerRepresentation`: a vector's elements;
-        // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
-        let signed = self.is_signed(self.scalar_of(q));
+        // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`). An
+        // SVE vector's `/`, `%` and `>>` are unsigned only for the unsigned
+        // element types (`hasUnsignedIntegerRepresentation`): `svint8_t`
+        // and `svmfloat8_t` divide signed (WP-1791).
+        let signed = match ast.types.builtin(q) {
+            Some(b) if b.is_sizeless() => {
+                use kiln_ast::types::BuiltinType as B;
+                !matches!(b, B::SvUint8 | B::SvUint16 | B::SvUint32 | B::SvUint64)
+            }
+            _ => self.is_signed(self.scalar_of(q)),
+        };
         let nsw = self.ub_nsw(q, self.is_signed(q));
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {

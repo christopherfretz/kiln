@@ -386,6 +386,8 @@ impl<'a> Cg<'a> {
             T::Char if tt.char_signed => "DW_ATE_signed_char",
             T::Char | T::UChar => "DW_ATE_unsigned_char",
             T::SChar => "DW_ATE_signed_char",
+            // `__mfp8` (WP-1791; clang `CreateType`).
+            T::MFloat8 => "DW_ATE_unsigned_char",
             T::Char8 | T::Char16 | T::Char32 => "DW_ATE_UTF",
             T::WChar => {
                 if tt.wchar_signed {
@@ -437,6 +439,7 @@ impl<'a> Cg<'a> {
             T::SvFloat32 => (T::Float, 4),
             T::SvFloat64 => (T::Double, 2),
             T::SvBfloat16 => (T::BFloat16, 8),
+            T::SvMfloat8 => (T::MFloat8, 16),
             // A predicate: 16 one-bit lanes per 128 bits, as bytes.
             _ => (T::UChar, 2),
         };

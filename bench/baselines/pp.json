@@ -31,13 +31,13 @@
         "wall_ms_max": 1222.154,
         "spread_pct": 3.9,
         "max_rss_kb": 102492,
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-487/release/kiln++",
-        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-03T204453"
+        "recorded": "2026-11-21T190038"
       }
     },
     "repetition": {
@@ -69,13 +69,13 @@
         "wall_ms_max": 559.762,
         "spread_pct": 12.22,
         "max_rss_kb": 240540,
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-487/release/kiln++",
-        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-03T204453"
+        "recorded": "2026-11-21T190038"
       }
     },
     "xmacro": {
@@ -107,13 +107,13 @@
         "wall_ms_max": 959.939,
         "spread_pct": 3.08,
         "max_rss_kb": 305444,
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-487/release/kiln++",
-        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-03T204453"
+        "recorded": "2026-11-21T190038"
       }
     }
   }

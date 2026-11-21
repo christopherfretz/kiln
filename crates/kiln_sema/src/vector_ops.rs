@@ -442,6 +442,19 @@ impl Sema<'_, '_> {
         self.builder().compound_assign(op, l, r2, lt0, ty, ty, loc)
     }
 
+    /// Whether a binary operator on vectors `lt` and `rt` is invalid from
+    /// the start: a vector of `__mfp8` has none (clang 20+, WP-1791), an
+    /// Ext vector of `bool` none unless `allow_bool`.
+    fn rejects_binary_ops(&self, lt: QualType, rt: QualType, allow_bool: bool) -> bool {
+        let mfp8 = |t: QualType| {
+            self.vector_parts(t)
+                .is_some_and(|p| self.ast.types.builtin(p.elem) == Some(BuiltinType::MFloat8))
+        };
+        mfp8(lt)
+            || mfp8(rt)
+            || !allow_bool && (self.is_ext_bool_vector(lt) || self.is_ext_bool_vector(rt))
+    }
+
     /// clang's `CheckVectorOperands` (`allow_bool`: its
     /// `AllowBoolOperation`; `report`: its `ReportInvalid`). Converts the
     /// operands in place and returns the result type, or `None` after a
@@ -462,7 +475,7 @@ impl Sema<'_, '_> {
         let lt = conv::strip_cv(self, self.ety(*l));
         let rt = conv::strip_cv(self, self.ety(*r));
         let (lv, rv) = (self.vector_parts(lt), self.vector_parts(rt));
-        if !allow_bool && (self.is_ext_bool_vector(lt) || self.is_ext_bool_vector(rt)) {
+        if self.rejects_binary_ops(lt, rt, allow_bool) {
             if report {
                 self.vector_diag2(DiagId::sema_invalid_operands, lt, rt, loc);
             }

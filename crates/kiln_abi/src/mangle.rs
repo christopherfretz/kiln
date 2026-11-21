@@ -1581,6 +1581,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 (false, Some(B::Half)) => "Float16",
                 (false, Some(B::Double)) => "Float64",
                 (false, Some(B::BFloat16)) => "Bfloat16",
+                (false, Some(B::MFloat8)) => "Mfloat8",
                 (false, _) => "Float32",
             };
             return format!("__{base}x{count}_t");
@@ -4031,6 +4032,10 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::SvBfloat16 => "u14__SVBfloat16_t",
         B::SvBool => "u10__SVBool_t",
         B::SvCount => "u11__SVCount_t",
+        // The FP8 types (WP-1791). `__mfp8` is a vendor type clang does
+        // not make a substitution candidate (`_Z1fu6__mfp8u6__mfp8`).
+        B::SvMfloat8 => "u13__SVMfloat8_t",
+        B::MFloat8 => "u6__mfp8",
         // The SVE tuple types mangle as their ACLE names (clang
         // `AArch64SVEACLETypes.def`; WP-810).
         B::SvInt8x2 => "10svint8x2_t",
@@ -4071,6 +4076,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::SvBfloat16x4 => "14svbfloat16x4_t",
         B::SvBoolx2 => "10svboolx2_t",
         B::SvBoolx4 => "10svboolx4_t",
+        B::SvMfloat8x2 => "13svmfloat8x2_t",
+        B::SvMfloat8x3 => "13svmfloat8x3_t",
+        B::SvMfloat8x4 => "13svmfloat8x4_t",
         // The vendor placeholder for `std::meta::info` until WP-102
         // (GCC 16.1 writes `Dm`; spec/reflection.md §8.3).
         B::MetaInfo => "u6__info",
@@ -4232,6 +4240,7 @@ pub fn sve_fixed_builtin(
         Some(B::ULong | B::ULongLong) => (B::SvUint64, 64),
         Some(B::Half) => (B::SvFloat16, 16),
         Some(B::BFloat16) => (B::SvBfloat16, 16),
+        Some(B::MFloat8) => (B::SvMfloat8, 8),
         Some(B::Double) => (B::SvFloat64, 64),
         _ => (B::SvFloat32, 32),
     };

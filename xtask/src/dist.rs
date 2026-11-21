@@ -26,6 +26,9 @@ Builds kiln with the `dist` profile and feature and writes, in <dir>
                                           .gnu_debuglink to kiln.debug
   kiln-<version>-<triple>-symbols.tar.xz  the same tree with the unstripped binary
   SHA256SUMS                              sha256sum of both
+  build-info.txt                          how the binary was built: version, target,
+                                          commit, and with --pgo the profile's
+                                          sha256, its training and its coverage
 
 Archives are deterministic: sorted entries, owner 0:0, every mtime
 $SOURCE_DATE_EPOCH (default: the commit time of HEAD, else 0).
@@ -145,12 +148,27 @@ fn run(opts: &Opts) -> Result<(), String> {
     let out = absolute(&out)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
     let forbidden = forbidden_paths(&root, &target_dir);
-    let exe = if opts.pgo {
-        pgo_build(&root, &target_dir, opts, &forbidden)?
+    // A build-info.txt of an earlier run must not describe this one's
+    // archives if this one fails.
+    let info_path = out.join(BUILD_INFO);
+    if info_path.exists() {
+        std::fs::remove_file(&info_path).map_err(io_err("remove", &info_path))?;
+    }
+    let (exe, pgo) = if opts.pgo {
+        let (exe, pgo) = pgo_build(&root, &target_dir, opts, &forbidden)?;
+        (exe, Some(pgo))
     } else {
-        build(&root, &target_dir, opts.target.as_deref(), &forbidden)?
+        (build(&root, &target_dir, opts.target.as_deref(), &forbidden)?, None)
     };
     let built = package(&root, &out, &exe, &triple, opts.keep)?;
+    let info = BuildInfo {
+        version: VERSION.to_owned(),
+        triple: triple.clone(),
+        commit: head_commit(&root),
+        pgo,
+    };
+    std::fs::write(&info_path, info.to_text()).map_err(io_err("write", &info_path))?;
+    eprintln!("xtask dist: {} ({})", info_path.display(), info.summary());
     if opts.check {
         check(&root, &out, &built, &triple, &forbidden, opts.keep)?;
         eprintln!("xtask dist: check passed");
@@ -263,13 +281,14 @@ fn build(
 
 /// `--pgo`: the dist build as a [`pgo::Plan`] (the same cargo arguments and
 /// rustflags as [`build`]), its profile made by [`pgo::make_profile`], then
-/// [`pgo::final_build`]; the path of the `kiln` binary.
+/// [`pgo::final_build`]; the path of the `kiln` binary and what
+/// build-info.txt says of the profile.
 fn pgo_build(
     root: &Path,
     target_dir: &Path,
     opts: &Opts,
     forbidden: &[(String, &'static str)],
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, PgoInfo), String> {
     let target_dir = absolute(target_dir)?;
     let mut cargo_args: Vec<String> =
         ["--locked", "--profile", "dist", "-p", "kiln_driver", "--features", "dist"]
@@ -285,10 +304,151 @@ fn pgo_build(
     );
     let plan = pgo::Plan { profile: "dist", cargo_args, flags, target: opts.target.clone() };
     let dirs = pgo::PgoDirs::new(&target_dir, &plan);
-    pgo::make_profile(root, &target_dir, &plan, opts.llvm_dir.as_deref(), &dirs.profdata, false)?;
-    pgo::final_build(root, &target_dir, &plan, &dirs.profdata)?;
+    let made = pgo::make_profile(
+        root,
+        &target_dir,
+        &plan,
+        opts.llvm_dir.as_deref(),
+        &dirs.profdata,
+        false,
+    )?;
+    let (_, (unprofiled_kiln, unprofiled_host_code)) =
+        pgo::final_build(root, &target_dir, &plan, &dirs.profdata)?;
     let exe = plan.exe_dir(&target_dir).join(format!("kiln{}", std::env::consts::EXE_SUFFIX));
-    exe.is_file().then_some(exe.clone()).ok_or_else(|| format!("{} was not built", exe.display()))
+    if !exe.is_file() {
+        return Err(format!("{} was not built", exe.display()));
+    }
+    let o = run_ok(Command::new("sha256sum").arg(&dirs.profdata))?;
+    let profile_sha256 =
+        String::from_utf8_lossy(&o.stdout).split_whitespace().next().unwrap_or("").to_owned();
+    let info = PgoInfo {
+        profile_sha256,
+        profile_bytes: file_size(&dirs.profdata),
+        llvm_profdata: made.tool.version,
+        training_cases: made.cases,
+        unprofiled_kiln,
+        unprofiled_host_code,
+    };
+    Ok((exe, info))
+}
+
+/// The file `dist` writes beside the archives (WP-1862; spec/harness.md
+/// "Dist"): how their binary was built, as [`BuildInfo`]. The release
+/// gate reads it to say whether the binary it tests is profile-guided and
+/// from which profile.
+pub const BUILD_INFO: &str = "build-info.txt";
+
+/// `build-info.txt`: `key: value` lines.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BuildInfo {
+    pub version: String,
+    pub triple: String,
+    /// `git rev-parse HEAD` of the checkout, empty without git.
+    pub commit: String,
+    /// The profile of a `--pgo` build; `None` for a plain one.
+    pub pgo: Option<PgoInfo>,
+}
+
+/// The profile a `--pgo` build applied.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PgoInfo {
+    /// `sha256sum` of the merged `.profdata`.
+    pub profile_sha256: String,
+    pub profile_bytes: u64,
+    /// The `llvm-profdata` version that merged it.
+    pub llvm_profdata: String,
+    /// The training cases compiled ([`pgo::TRAINING`], less any left out).
+    pub training_cases: usize,
+    /// Functions of kiln's crates the final build found no profile data
+    /// for (0 when the profile matches the build).
+    pub unprofiled_kiln: usize,
+    /// The same for build scripts and proc macros, which run in the build,
+    /// never in kiln.
+    pub unprofiled_host_code: usize,
+}
+
+impl BuildInfo {
+    pub fn to_text(&self) -> String {
+        let mut t = format!(
+            "version: {}\ntarget: {}\ncommit: {}\npgo: {}\n",
+            self.version,
+            self.triple,
+            self.commit,
+            if self.pgo.is_some() { "yes" } else { "no" }
+        );
+        if let Some(p) = &self.pgo {
+            for (key, value) in [
+                ("profile-sha256", p.profile_sha256.clone()),
+                ("profile-bytes", p.profile_bytes.to_string()),
+                ("llvm-profdata", p.llvm_profdata.clone()),
+                ("training-cases", p.training_cases.to_string()),
+                ("unprofiled-kiln", p.unprofiled_kiln.to_string()),
+                ("unprofiled-host-code", p.unprofiled_host_code.to_string()),
+            ] {
+                t.push_str(key);
+                t.push_str(": ");
+                t.push_str(&value);
+                t.push('\n');
+            }
+        }
+        t
+    }
+
+    /// Reads [`BuildInfo::to_text`]'s form; `None` without the `pgo:` line,
+    /// or with `pgo: yes` and no `profile-sha256:`.
+    pub fn parse(text: &str) -> Option<BuildInfo> {
+        let get = |k: &str| {
+            text.lines().find_map(|l| l.strip_prefix(k)?.strip_prefix(": ")).map(str::trim)
+        };
+        let num = |k: &str| get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let pgo = match get("pgo")? {
+            "yes" => Some(PgoInfo {
+                profile_sha256: get("profile-sha256").filter(|s| !s.is_empty())?.to_owned(),
+                profile_bytes: num("profile-bytes"),
+                llvm_profdata: get("llvm-profdata").unwrap_or("").to_owned(),
+                training_cases: usize::try_from(num("training-cases")).unwrap_or(0),
+                unprofiled_kiln: usize::try_from(num("unprofiled-kiln")).unwrap_or(0),
+                unprofiled_host_code: usize::try_from(num("unprofiled-host-code")).unwrap_or(0),
+            }),
+            "no" => None,
+            _ => return None,
+        };
+        Some(BuildInfo {
+            version: get("version").unwrap_or("").to_owned(),
+            triple: get("target").unwrap_or("").to_owned(),
+            commit: get("commit").unwrap_or("").to_owned(),
+            pgo,
+        })
+    }
+
+    /// One line: `PGO build, profile sha256 <16 hex digits> (...)` or
+    /// `plain build (no PGO)`.
+    pub fn summary(&self) -> String {
+        match &self.pgo {
+            None => "plain build (no PGO)".to_owned(),
+            Some(p) => format!(
+                "PGO build, profile sha256 {} ({} training cases, llvm-profdata {}; {} of kiln's \
+                 functions without profile data)",
+                p.profile_sha256.get(..16).unwrap_or(&p.profile_sha256),
+                p.training_cases,
+                p.llvm_profdata,
+                p.unprofiled_kiln
+            ),
+        }
+    }
+}
+
+/// `git rev-parse HEAD` in `root`, empty without git.
+fn head_commit(root: &Path) -> String {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// The objcopy to use: `$OBJCOPY`, else `objcopy`, else `llvm-objcopy-19`.
@@ -470,6 +630,8 @@ pub fn rewrite_links(root: &Path, src: &str, text: &str, version: &str) -> Resul
 /// bin/kiln++ -> kiln
 /// bin/kiln-scan-deps, bin/clang-scan-deps-{22,19}, bin/clang-scan-deps -> kiln
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
+/// lib/kiln/<major>/include-clang22/  resource/include-clang22 (clang 22's
+///                                Arm SVE/SME headers, WP-1842)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
 /// lib/kiln/<major>/share/        resource/share/*.txt (default ignorelists)
 /// share/doc/kiln/                DOCS, links rewritten (install_doc)
@@ -488,6 +650,7 @@ pub fn assemble(root: &Path, prefix: &Path, major: &str) -> Result<(), String> {
     let resdir = prefix.join("lib").join("kiln").join(major);
     mkdir(&prefix.join("lib").join("kiln"))?;
     copy_tree(&res.join("include"), &resdir.join("include"))?;
+    copy_tree(&res.join("include-clang22"), &resdir.join("include-clang22"))?;
     let pre = resdir.join("predefines");
     mkdir(&pre)?;
     let src = res.join("predefines");
@@ -797,6 +960,7 @@ fn check_layout(prefix: &Path, triple: &str) -> Result<(), String> {
     for p in [
         bin.join("kiln"),
         resdir.join("include").join("stddef.h"),
+        resdir.join("include-clang22").join("arm_sve.h"),
         resdir.join("predefines").join(format!("{triple}.c++26.txt")),
         prefix.join("share").join("doc").join("kiln").join("STABILITY.md"),
         prefix.join("share").join("doc").join("kiln").join("USER_GUIDE.md"),
@@ -1052,8 +1216,11 @@ mod tests {
         assert!(list.lines().all(|l| l.contains(" 0/0 ")), "{list}");
         assert!(list.contains("kiln-x/bin/kiln++ -> kiln"), "{list}");
         let names: Vec<&str> = list.lines().filter_map(|l| l.split_whitespace().nth(5)).collect();
+        // `tar --sort=name` orders each directory's entries by name, so
+        // `include/` and its files precede `include-clang22/`: compare by
+        // path component, not by the whole path's bytes.
         let mut sorted = names.clone();
-        sorted.sort_unstable();
+        sorted.sort_by(|a, b| a.split('/').cmp(b.split('/')));
         assert_eq!(names, sorted);
         std::fs::remove_dir_all(&d).unwrap();
     }

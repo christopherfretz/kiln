@@ -13,13 +13,13 @@
         "wall_ms_max": 41.119,
         "spread_pct": 4.52,
         "max_rss_kb": 3216,
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-317/release/kiln++",
-        "compiler_version": "kiln version 0.0.1 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-03T123217"
+        "recorded": "2026-11-21T190038"
       }
     }
   }

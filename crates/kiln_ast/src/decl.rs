@@ -6768,16 +6768,14 @@ pub mod builtin {
 
         /// Whether the required-features string `req` holds when exactly
         /// the features `on` accepts are enabled (clang
-        /// `Builtin::evaluateRequiredTargetFeatures`: `,` is all of, `|`
-        /// any of).
+        /// `Builtin::evaluateRequiredTargetFeatures`). The one evaluator
+        /// the NEON, ACLE, x86, SVE and SME tables share (WP-1841):
+        /// [`crate::sve::features_hold`], where `|` binds loosest, then
+        /// `,`, and a parenthesized group is an operand
+        /// (`avx512vl,avx512vnni|avxvnni` is `(avx512vl and avx512vnni)
+        /// or avxvnni`).
         pub fn features_hold(req: &str, on: impl Fn(&str) -> bool) -> bool {
-            req.split(',').all(|all| all.split('|').any(|f| on(f.trim())))
-        }
-
-        /// The first feature of `req` that `on` does not accept (for a
-        /// diagnostic), if any.
-        pub fn first_missing(req: &str, on: impl Fn(&str) -> bool) -> Option<&str> {
-            req.split(',').find(|all| !all.split('|').any(|f| on(f.trim())))
+            crate::sve::features_hold(req, &|f| on(f.trim()))
         }
     }
 

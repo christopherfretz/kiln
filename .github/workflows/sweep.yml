@@ -18,6 +18,10 @@ name: sweep
 #                  g++.dg runner"), `cargo xtask gxx-dg --shard K/N` with
 #                  GCC 16.1 and clang 22 as oracles, one TSV each
 #   gxx-dg-summary merges the shards (scripts/gxx-dg-compare.py merge)
+#   pgo <arch>     the PGO measurement (WP-1862; docs/status/perf.md "PGO
+#                  build"): a plain and a `build --pgo` release build of the
+#                  commit, then `cargo xtask bench` of the held-out set, PGO
+#                  against plain, on x86_64 and aarch64
 # It never gates a merge: no pull_request or merge_group trigger, and it is
 # not a required check. Start it by pushing a `sweep/<name>` branch or with
 # workflow_dispatch (from main). A newer push of the same ref cancels the
@@ -25,9 +29,13 @@ name: sweep
 # push of a `sweep/gxx-<name>` branch, which runs the build and the g++.dg
 # jobs only (no libc++, no OSS); a push of a `sweep/rc-<version>` branch
 # runs all three, the x86-64 half of the release gate (docs/RELEASING.md,
-# `cargo xtask release-gate import-x86`); any other `sweep/` push runs
-# libc++ and OSS as before and no g++.dg job. Every result artifact holds a
-# `commit` file, the commit it was built from, which import-x86 checks.
+# `cargo xtask release-gate import-x86`), on a PGO build (`dist --pgo`, as
+# release.yml ships; WP-1862); any other `sweep/` push runs libc++ and OSS
+# as before and no g++.dg job. The PGO measurement is opt-in too: the `pgo`
+# input, or a push of a `sweep/pgo-<name>` branch, which runs that job and
+# nothing else. Every result artifact holds a `commit` file, the commit it
+# was built from, which import-x86 checks; `kiln-build` holds the build's
+# build-info.txt (plain or PGO, and the profile), which it checks too.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +55,10 @@ on:
         description: run GCC 16.1's C++ testsuite (g++.dg; opt-in)
         type: boolean
         default: false
+      pgo:
+        description: measure kiln's PGO build against the plain one on both architectures (opt-in)
+        type: boolean
+        default: false
   push:
     branches: ["sweep/**"]
 permissions:
@@ -61,8 +73,12 @@ env:
 defaults:
   run: { shell: bash }
 jobs:
+  # A release candidate's build is the shipped kind, profile-guided
+  # (`dist --pgo`, about three release builds); any other sweep's is plain.
+  # build-info.txt says which (artifact `kiln-build`).
   build:
     name: build (dist)
+    if: ${{ github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/sweep/pgo-') }}
     runs-on: ubuntu-24.04
     container: gcc:16.1.0-trixie
     timeout-minutes: 90
@@ -76,8 +92,14 @@ jobs:
       - name: cargo xtask dist
         run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          cargo xtask dist --out "$RUNNER_TEMP/dist"
+          pgo=
+          case "$GITHUB_REF" in refs/heads/sweep/rc-*) pgo=--pgo ;; esac
+          cargo xtask dist $pgo --out "$RUNNER_TEMP/dist"
           ls -l "$RUNNER_TEMP/dist"
+          cat "$RUNNER_TEMP/dist/build-info.txt"
+          mkdir -p kiln-build
+          cp "$RUNNER_TEMP/dist/build-info.txt" kiln-build/
+          echo "$GITHUB_SHA" > kiln-build/commit
       - uses: actions/upload-artifact@v4
         with:
           name: kiln-dist
@@ -85,6 +107,12 @@ jobs:
           path: ${{ runner.temp }}/dist/kiln-*-linux-gnu.tar.xz
           if-no-files-found: error
           retention-days: 7
+      # A workspace-relative path (see the libcxx job).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiln-build
+          path: kiln-build/
+          if-no-files-found: error
 
   # The libc++ 22 suite as the aarch64 M5 run takes it (docs/status/libcxx.md
   # "M5", spec/libcxx.md "Toolchain"): libc++ 22's tests at llvmorg-22.1.8,
@@ -94,7 +122,7 @@ jobs:
   libcxx:
     name: libcxx ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: [build]
-    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.libcxx }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-') && !startsWith(github.ref, 'refs/heads/sweep/pgo-')) || inputs.libcxx }}
     runs-on: ubuntu-24.04
     container: gcc:16.1.0-trixie
     timeout-minutes: 240
@@ -169,7 +197,7 @@ jobs:
   # summary's --expect both read these outputs.
   oss-matrix:
     name: oss matrix
-    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.oss }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-') && !startsWith(github.ref, 'refs/heads/sweep/pgo-')) || inputs.oss }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -197,7 +225,7 @@ jobs:
   oss:
     name: oss ${{ matrix.project }} ${{ matrix.compiler }}
     needs: [build, oss-matrix]
-    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-')) || inputs.oss }}
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/heads/sweep/gxx-') && !startsWith(github.ref, 'refs/heads/sweep/pgo-')) || inputs.oss }}
     runs-on: ubuntu-24.04
     container:
       image: gcc:16.1.0-trixie
@@ -387,3 +415,75 @@ jobs:
             gxx-dg-x86_64.tsv
             gxx-dg-summary.md
             commit
+
+  # The PGO measurement (WP-1862; docs/status/perf.md "PGO build", whose
+  # method it repeats on GitHub's runners): a plain release build (`cargo
+  # xtask build`, copied aside) and a PGO one (`cargo xtask build --pgo`)
+  # of the same commit, then `cargo xtask bench` of the held-out set
+  # (`pgo-train --list`), PGO against plain, 5 runs each. The bench's exit
+  # status 1 for an entry above the aarch64 development host's baselines
+  # is not a failure here, nor is an entry over its `budget-time:` (an
+  # absolute budget for the development host, which a slower runner can
+  # break with both binaries; the comparison then has one entry fewer);
+  # any other failed entry (the bench's `failures:` list) is. Uploads the
+  # results JSON, the bench output, the build log and the build times.
+  pgo:
+    name: pgo ${{ matrix.arch }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/sweep/pgo-')) || inputs.pgo }}
+    runs-on: ${{ matrix.runner }}
+    container: gcc:16.1.0-trixie
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: aarch64, runner: ubuntu-24.04-arm, cache-key: ci-arm }
+          - { arch: x86_64, runner: ubuntu-24.04, cache-key: ci-x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: "${{ matrix.cache-key }}" }
+      - name: cargo xtask build, then build --pgo
+        run: |
+          mkdir -p pgo-out plain
+          { uname -m; nproc; free -g; } | tee pgo-out/host.txt
+          t0=$(date +%s)
+          cargo xtask build
+          t1=$(date +%s)
+          cp target/release/kiln plain/kiln
+          ln -s kiln plain/kiln++
+          cargo xtask build --pgo 2>&1 | tee pgo-out/pgo-build.log
+          t2=$(date +%s)
+          echo "plain release build $((t1 - t0)) s, PGO build $((t2 - t1)) s" | tee pgo-out/times.txt
+          ls -l plain/kiln target/release/kiln
+      - name: cargo xtask bench <held-out> --compiler <PGO> --compare-with <plain>
+        run: |
+          held=$(cargo xtask pgo-train --list | awk '$1 == "held-out" { print $2 }')
+          rc=0
+          # shellcheck disable=SC2086 # held is a list of bench paths
+          cargo xtask bench --runs 5 --compiler "$PWD/target/release/kiln++" \
+            --compare-with "$PWD/plain/kiln++" $held 2>&1 | tee pgo-out/bench.log || rc=$?
+          uptime | tee -a pgo-out/host.txt
+          cp bench/results/*.json pgo-out/
+          echo "$GITHUB_SHA" > pgo-out/commit
+          echo "bench exit status $rc"
+          {
+            echo "### PGO / plain, $(uname -m), held-out set"
+            echo '```'
+            sed -n '/test\/oracle time/,/^geometric mean/p' pgo-out/bench.log
+            cat pgo-out/times.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$rc" -le 1
+          grep -Eq '^bench result: .* [0-9]+ entries: [0-9]+ failed,' pgo-out/bench.log
+          other=$(sed -n '/^failures:$/,/^$/p' pgo-out/bench.log | grep '^  ' \
+            | grep -vc ': over the time budget: ' || true)
+          echo "failed entries other than a time budget: $other"
+          test "$other" -eq 0
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgo-${{ matrix.arch }}
+          path: pgo-out/
+          if-no-files-found: error

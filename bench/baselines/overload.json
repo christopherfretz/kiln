@@ -6,7 +6,7 @@
       "kiln": {
         "mode": "syntax",
         "flags": "-std=c++26 -fsyntax-only",
-        "source_hash": "fnv1a64:2b4b75acdd9392ac",
+        "source_hash": "fnv1a64:85139b844664026c",
         "runs": 5,
         "wall_ms_median": 566.76,
         "wall_ms_min": 541.45,
@@ -25,23 +25,23 @@
           "evaluations": 2
         },
         "accounted": {
-          "live": 68634042,
-          "reserved": 96901466
+          "live": 68636075,
+          "reserved": 96903514
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-1315/release/kiln++",
-        "compiler_version": "kiln version 1.0.2 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-12T031430"
+        "recorded": "2026-11-21T190038"
       }
     },
     "calls": {
       "kiln": {
         "mode": "syntax",
         "flags": "-std=c++26 -fsyntax-only",
-        "source_hash": "fnv1a64:f4c7567eea854eae",
+        "source_hash": "fnv1a64:31e2c4eec648174b",
         "runs": 5,
         "wall_ms_median": 669.518,
         "wall_ms_min": 660.041,
@@ -60,16 +60,16 @@
           "evaluations": 3
         },
         "accounted": {
-          "live": 3691603,
-          "reserved": 6211366
+          "live": 3699860,
+          "reserved": 6219558
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-1315/release/kiln++",
-        "compiler_version": "kiln version 1.0.2 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-12T031430"
+        "recorded": "2026-11-21T190038"
       }
     },
     "ctors": {
@@ -95,23 +95,23 @@
           "evaluations": 67
         },
         "accounted": {
-          "live": 1880800,
-          "reserved": 2774700
+          "live": 1883785,
+          "reserved": 2778428
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-1315/release/kiln++",
-        "compiler_version": "kiln version 1.0.2 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-12T031430"
+        "recorded": "2026-11-21T190038"
       }
     },
     "less-10k": {
       "kiln": {
         "mode": "syntax",
         "flags": "-std=c++26 -fsyntax-only",
-        "source_hash": "fnv1a64:1a0ac3db5821cae5",
+        "source_hash": "fnv1a64:1d9d36c01c1bf3be",
         "runs": 5,
         "wall_ms_median": 1681.425,
         "wall_ms_min": 1662.066,
@@ -130,16 +130,16 @@
           "evaluations": 3
         },
         "accounted": {
-          "live": 3844246,
-          "reserved": 6471111
+          "live": 3849611,
+          "reserved": 6479303
         },
-        "compiler": "/Volumes/AgentWork/kiln-helper/.build/target-wp-1315/release/kiln++",
-        "compiler_version": "kiln version 1.0.2 (C++26 frontend, LLVM IR backend)",
+        "compiler": "target/release/kiln++",
+        "compiler_version": "kiln version 1.3.0 (C++26 frontend, LLVM IR backend)",
         "host": {
           "arch": "aarch64",
           "cpus": 24
         },
-        "recorded": "2026-11-12T031430"
+        "recorded": "2026-11-21T190038"
       }
     }
   }

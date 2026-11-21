@@ -7423,7 +7423,14 @@ The required target features are checked in codegen, as clang's
 than `|`, parentheses group; `kiln_ast::sve::features_hold`) the caller's
 features do not satisfy is "'f' needs target feature E", `E` the
 expression as written (`(sve,(sve2p1|sme))|sme` at 22, `sve2p1|sme` at
-19); the call is still lowered, so a nested call is checked too. Tests:
+19); the call is still lowered, so a nested call is checked too. The
+NEON, ACLE and x86 builtin tables' expressions go through the same
+evaluator (`kiln_ast::decl::neon::features_hold` delegates to it,
+WP-1841): `avx512ifma,avx512vl|avxifma` is both AVX-512 features or
+`avxifma` alone (tests `target.x86/ir-builtin-feature-or-group.cpp`,
+`ext.arm.sve/ir-feature-expression-groups.cpp`, and
+`builtin_feature_expressions_match_clang` in
+crates/kiln_driver/tests/codegen.rs for the errors). Tests:
 `tests/conformance/ext.arm.sve/sve-immediate-checks.cpp`,
 `sve-immediate-enum-cast{,-19}.cpp`,
 `tests/conformance/ext.arm.sme/sme-immediate-checks.cpp`,

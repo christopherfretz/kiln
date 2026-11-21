@@ -6376,6 +6376,13 @@ No lowering changed; the new forms reach codegen as existing AST.
   - A comparison yields `<vscale x N x i1>` (`cmp_ty`), zero-extended to the
     result type unless that is `svbool_t` (`vec_cmp_result`); unsigned
     lanes use the unsigned predicates, floats `fcmp oeq` etc.
+  - `/`, `%` and `>>` are `sdiv`, `srem` and `ashr` for every integer SVE
+    vector but `__SVUint8_t` .. `__SVUint64_t` (`udiv`, `urem`, `lshr`),
+    `__SVMfloat8_t` included (clang's `EmitDiv`/`EmitRem`/`EmitShr` take
+    the signedness of the SVE builtin's element type); before WP-1791 kiln
+    lowered all of them as unsigned (test
+    `ext.arm.sve/ir-sve-signed-division.cpp`). Integer comparisons stay
+    unsigned (`icmp ult` ...) whatever the signedness, as clang's do.
   - `v[i]` (spec/sema.md §5.19a) is a vector element lvalue as for a GNU
     vector (`vec_subscript`, `LValue::MakeVectorElt`): `extractelement`
     on a read, `insertelement` and a store back on a write (test

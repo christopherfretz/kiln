@@ -2,12 +2,14 @@
 # Regenerate kiln's resource/ directory from the clang 19 oracle.
 #
 #   resource/include/         clang 19 builtin headers (filtered copy)
+#   resource/include-clang22/ clang 22's arm_sve.h, arm_sme.h, arm_vector_types.h
 #   resource/predefines/      `-E -dM` predefined-macro sets per (target, std)
 #   resource/include-paths/   clang's C++ system include search order per target
 #   resource/share/           the default sanitizer ignorelists kiln applies
 #
-# Idempotent: running it twice yields no diff. resource/include/LICENSE.TXT and
-# resource/include/README.md are hand-maintained and are left untouched.
+# Idempotent: running it twice yields no diff. The LICENSE.TXT and README.md
+# files of resource/include and resource/include-clang22 are hand-maintained
+# and are left untouched.
 # See resource/README.md for what is produced and why.
 #
 # Usage: scripts/gen-resource.sh            (uses clang-19 / clang++-19 on PATH)
@@ -19,6 +21,7 @@ WS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RES="$WS/resource"
 CLANG="${CLANG:-clang-19}"
 CLANGXX="${CLANGXX:-clang++-19}"
+CLANG22="${CLANG22:-clang-22}"
 
 # ---- 0. Sanity: we import from exactly clang 19 ---------------------------------
 major="$(echo __clang_major__ | "$CLANG" -E -P -x c - | tr -d '[:space:]')"
@@ -92,6 +95,20 @@ done | sed -E 's/.*[<"]([^>"]+)[>"]/\1/' | sort -u | while read -r inc; do
   if [[ -e "$SRC_INC/$inc" && ! -e "$DST_INC/$inc" ]]; then
     echo "gen-resource: note: a kept header #includes excluded '$inc'" >&2
   fi
+done
+
+# ---- 1b. The clang 22 overlay (WP-1842) -----------------------------------------
+# Searched before resource/include at -fclang-compat=22 (spec/driver.md
+# "Toolchain"); verbatim copies, no patch.
+major22="$(echo __clang_major__ | "$CLANG22" -E -P -x c - | tr -d '[:space:]')"
+if [[ "$major22" != 22 ]]; then
+  echo "gen-resource: expected clang 22, $CLANG22 reports __clang_major__=$major22" >&2
+  exit 1
+fi
+SRC22="$("$CLANG22" -print-resource-dir)/include"
+for f in arm_sve.h arm_sme.h arm_vector_types.h; do
+  cp -p "$SRC22/$f" "$RES/include-clang22/$f"
+  chmod 0644 "$RES/include-clang22/$f"
 done
 
 # ---- 2. Predefined macros -------------------------------------------------------

@@ -276,6 +276,15 @@ pub fn render(
             format!("{} steps FAILED: {}.", failed.len(), failed.join(", "))
         }
     );
+    // The binary under test (WP-1862): the archive row's detail names its
+    // version line, hash and build (PGO and the profile, or plain).
+    if let Some((_, r)) = recs.iter().find(|(s, _)| s.id == "archive") {
+        let _ = write!(
+            sum,
+            "\nThe `kiln++` the steps ran is the release archive's: {}.\n",
+            r.detail.trim_end_matches('.')
+        );
+    }
     out.push(("summary", sum));
     for &(sec, _) in &SECTIONS[1..] {
         let mut t = String::from(

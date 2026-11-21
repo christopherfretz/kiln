@@ -22,6 +22,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Static gaps | `docs/status/static-gaps.md`, every source site that reports a known-incomplete language corner ("not supported yet", "not yet implemented", mangling, codegen fallbacks, Oven traps, reflection), checked by `cargo xtask static-gaps` in `ci --step lints` (spec/harness.md "CI", step 0). Each site carries a `// kiln-gap: GAP-NNN` marker naming its entry, so the check ignores line shifts; it fails on an unmarked site, an entry with no site left, an entry whose sites cell is stale, and an entry whose BACKLOG row is not open | No language gap exists that the inventory and a BACKLOG row do not name; a fixed gap leaves the list |
+| Local paths | every tracked text file, checked in `ci --step lints` (`xtask/src/local_paths.rs`, spec/harness.md "CI", step 0) | No committed file holds an absolute path of a developer's machine (`/Volumes/`, `/Users/`, `/home/<user>/`, `/root/`, `/tmp/claude`); records and docs use paths relative to the checkout (bench records write `target/release/kiln++`, spec/bench.md "Recording") |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 | Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
 | External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: crash reproducers and large downstream code compile or fail cleanly |
@@ -49,6 +50,14 @@ lane runs the CMake C++20 modules end-to-end
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
 `cargo xtask libcxx`, `libstdcxx`, `clang-neg`, `gcc-torture`, `gxx-dg` and `features`.
+
+**Build directory.** `source scripts/env.sh` before `cargo` picks the
+toolchain, the jobserver and the target directory: one per checkout,
+`<repo>/.build/target-<checkout basename>` (or the superproject's
+`.build/` when kiln is a submodule), so git worktrees never share one.
+`KILN_TARGET_ROOT=<dir>` moves them to `<dir>/target-<checkout
+basename>` (opt-in; unset, the default applies), and `CARGO_TARGET_DIR`
+overrides both.
 
 **OSS builds** (ROADMAP M8). `scripts/oss/oss-build.sh <project>
 [--compiler kiln|clang]` clones a project of `scripts/oss/projects.toml`
@@ -445,6 +454,12 @@ that had none got one by the same rule: `release.yml` `dist` 15 (median
 `libcxx summary` and `gxx-dg summary` 10 (under 0.5), `oss summary` 10 (no
 successful run yet; a summary like the other two). The sweep's long jobs
 already had theirs (`build` 90, `libcxx` 240, `oss` 355, `gxx-dg` 150).
+WP-1862 made `release.yml` `dist` a PGO build (`dist --pgo --check`:
+an instrumented build, the training, the final build), about three
+times the plain build, so its timeout became 45 (three times 15). The
+sweep's new opt-in `pgo` job (two release builds, the instrumented one
+and the bench of the held-out set) got 120, the `build` job's 90 sized
+for a `dist --pgo` and some margin.
 `ci_tests::every_workflow_job_has_a_timeout` keeps every job of every
 workflow timed.
 
@@ -577,8 +592,12 @@ the same `gcc:16.1.0-trixie` container as the gate. It is never a merge
 gate: it has no `pull_request` or `merge_group` trigger and is not a
 required check (`ci_tests::sweep_never_gates` checks the triggers). Its
 jobs:
-- `build`: `cargo xtask dist` once; every other job installs that kiln++
-  into `/opt/kiln`, so what runs is the release archive's binary.
+- `build`: `cargo xtask dist` once, `dist --pgo` for a `sweep/rc-*`
+  push (the shipped kind, WP-1862); every other job installs that kiln++
+  into `/opt/kiln`, so what runs is the release archive's binary. The
+  dist's `build-info.txt` (plain or PGO, and the profile) and a `commit`
+  file are artifact `kiln-build`, which the release gate's `import-x86`
+  checks.
 - `libcxx K/6`: the libc++ 22.1.8 suite (`std` + `libcxx`, 9247 tests) as
   the aarch64 M5 run takes it (docs/status/libcxx.md "M5"), with libc++ 22
   extracted into `.toolchain/libcxx-22-root` and the lit locales
@@ -620,6 +639,16 @@ jobs:
   rather than shrinking the suite) and `summary` writes the headline,
   classes and buckets; artifact `gxx-dg-summary`. Compare it with an
   aarch64 run at the same commit by `scripts/gxx-dg-compare.py compare`.
+- `pgo <arch>` (opt-in, WP-1862): the PGO measurement on both runner
+  architectures (spec/harness.md "PGO build", measuring it): a plain
+  `cargo xtask build` copied aside, `cargo xtask build --pgo`, then
+  `cargo xtask bench --compiler <PGO> --compare-with <plain>` over the
+  held-out set; artifact `pgo-<arch>` (results JSON, bench output, build
+  log and times). A failed entry fails it, except one over its
+  `budget-time:` (a development-host budget that both binaries can
+  break on a slower runner). It runs for a dispatch with the `pgo` input or a push
+  of a `sweep/pgo-<name>` branch, which runs it and nothing else (the
+  `build`, libc++ and OSS conditions exclude `sweep/pgo-` refs).
 
 The g++.dg jobs run only when asked: a dispatch with the `gxx` input
 (default false), or a push of a `sweep/gxx-<name>` branch, which runs

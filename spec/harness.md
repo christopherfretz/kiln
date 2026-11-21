@@ -1639,7 +1639,7 @@ GB, and its dependencies:
 
 | step | host | pass rule | minimum units |
 |---|---|---|---:|
-| `archive` | local | `dist --check` and `sha256sum -c` exit 0; the unpacked `kiln++ --version` names the version | 2 archives |
+| `archive` | local | `dist --pgo --check` and `sha256sum -c` exit 0; the unpacked `kiln++ --version` names the version; `build-info.txt` is this commit's and says `pgo: yes` with at most 100 of kiln's functions without profile data (below) | 2 archives |
 | `merge-gate` | local | `cargo xtask ci`: exit 0, every `corpus (...)` line `ok.` with 0 failed | 6000 (`corpus (kiln)` passed) |
 | `oracle19` | local | `KILN_ORACLE=19 cargo xtask ci --oracle-only --step kiln`: the same | 6000 |
 | `pch-sweep` | local | `scripts/pch-release-gate.sh <kiln++> <dir> all` prints `pch-release-gate: pass` | 4000 (libc++ pair tests) |
@@ -1657,6 +1657,33 @@ record's "Downstream build" section); a gate without it is incomplete.
 The stored count baselines are `docs/status/release-gate-baseline.tsv`
 (`step`, `count`, value, source); the explained g++.dg cases are
 `docs/status/gxx-dg-explained.txt` (`<test> [<opt>] <reason>`).
+
+**The binary under test is the shipped kind** (WP-1862). The `archive`
+step builds `cargo xtask dist --pgo --check`, the build `release.yml`
+publishes, and every later local step that runs a compiler runs the
+unpacked archive's `kiln++`: `pch-sweep`, `libcxx-aarch64`, the
+torture steps (through the `kiln` beside it), `gxx-dg-aarch64`, every
+`oss-<project>` and every `external-<id>`, which gets it as
+`$KILN_GATE_CXX` (an external depends on `archive` and its record is tied
+to the binary's hash like the others). `merge-gate` and `oracle19` are
+the merge gate re-run at the RC: `cargo xtask ci` tests the checkout with
+the debug build it makes. The archive's row and the record's summary
+say how the binary was built, from `dist`'s `build-info.txt` ("Dist"):
+`PGO build, profile sha256 <first 16 hex digits> (<n> training cases,
+llvm-profdata <version>; <n> of kiln's functions without profile data)`,
+with the counts `pgo=1` and `unprofiled=<n>`. The step fails when the
+file is missing, names another commit, says `pgo: no`, or counts more
+than 100 of kiln's functions without profile data (a profile that did
+not apply; a matching one leaves 0, a mismatched one tens of thousands).
+The hosted half is a PGO build too: a `sweep/rc-*` push builds `dist
+--pgo` and uploads its `build-info.txt` with a `commit` file as the
+artifact `kiln-build`, which `import-x86` reads; when it is missing or
+fails the same checks, a release import records nothing (a smoke
+import goes on), and each hosted row's detail ends with `kiln++:
+<the same line>`. `--no-pgo` (every command) is the escape hatch for a
+re-run: `archive` builds plain `dist --check` (the row says `plain
+build (no PGO), --no-pgo`, `pgo=0`) and `import-x86` accepts a plain
+hosted build.
 
 **g++.dg by case.** The baseline holds kiln's class per case (test id,
 option set) for each host, nothing else (`scripts/gxx-dg-compare.py
@@ -1686,7 +1713,8 @@ table; it decides nothing. `record [--out f] [--refresh-baselines]`
 writes `docs/status/release-<version>.md`; `check <file>` verifies one.
 Options: `--state <dir>` (default `<target>/release-gate`),
 `--external <id>=<command>` (kept in `<state>/externals.tsv`),
-`--smoke` and, with it only, `--kiln <kiln++>`. Every step gets a
+`--smoke` and, with it only, `--kiln <kiln++>`; `--no-pgo` (above).
+Every step gets a
 driver named `kiln++` (kiln picks C or C++ by the name it is invoked
 as): the path is made absolute without resolving symlinks, a `kiln`
 stands for the `kiln++` beside it, and any other name is refused; the
@@ -2075,14 +2103,24 @@ manual / M4-gate check.
 [--unit-group <group>]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
 
-0. three in-process lints, each listing every problem it finds:
+0. four in-process lints, each listing every problem it finds:
    `cargo xtask diag-split --check` (kiln_diag's id and group tables are
    in their area files with empty tails, spec/diag.md §2.4; the failure
    says to run `cargo xtask diag-split`), and the per-WP Landed files
    (spec/README.md "Landed sections", `xtask/src/landed.rs`): each file
    under `spec/landed/` is `<spec>/WP-NNN.md` for an existing
    `spec/<spec>.md`, starts `# WP-NNN — <title>` with its own id, and has
-   a `| WP-NNN |` row in `docs/BACKLOG.md`; and the static-gap inventory
+   a `| WP-NNN |` row in `docs/BACKLOG.md`; the local-path lint
+   (`xtask/src/local_paths.rs`, WP-1886): no file `git ls-files` lists,
+   other than binary (non-UTF-8 or NUL-holding) files, holds an absolute
+   path starting `/Volumes/`, `/Users/`, `/home/<user>/` (a lower-case
+   name and a slash), `/root/` or `/tmp/claude`, followed by more of the
+   path (a bare prefix in prose is not a path), where the `/` starts a
+   path (line start, after a character that cannot be part of a path, or
+   after a one-letter flag such as `-I`); `/home/linuxbrew/` (Homebrew's
+   fixed prefix) is allowed (`local_paths::ALLOWED`), and so is the lint's
+   own source (`local_paths::ALLOWED_FILES`); each hit is reported as
+   `file:line`; and the static-gap inventory
    (`cargo xtask static-gaps`, `xtask/src/static_gaps.rs`, WP-1719). A
    *gap site* is a line of a crate's `src/` outside test modules that
    uses a gap diagnostic (`static_gaps::GAP_DIAG_IDS`), calls a function
@@ -2111,7 +2149,7 @@ runs, stopping at the first failing step:
    for N sites) differs from its markers, or when its row is not an
    `open` / `in progress` row of `docs/BACKLOG.md` or `excluded:
    <reason>`, or when a unit under a gap-list lead has neither a marker
-   nor an open row; line numbers play no part. All three run before `ci` fails;
+   nor an open row; line numbers play no part. All four run before `ci` fails;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun
@@ -2272,10 +2310,12 @@ from `tests/conformance/stress/`, with
 step 1 profile-guided, "PGO build") builds the release archives of the install
 layout (spec/driver.md "Installation layout"). It is not part of `ci`: a
 `dist` build is a full thin-LTO release build, several minutes. The
-tag-only workflow `.github/workflows/release.yml` runs it with `--check`
-on both CI architectures and attaches the results to a draft GitHub
-release; a run of `cargo xtask dist --check` locally is the pre-tag check,
-and a manual run of the workflow (`gh workflow run release.yml --ref
+tag-only workflow `.github/workflows/release.yml` runs it with `--pgo
+--check` on both CI architectures (the published archives are
+profile-guided, WP-1862) and attaches the results to a draft GitHub
+release; a run of `cargo xtask dist --pgo --check` locally is the
+pre-tag check (the release gate's `archive` step, "Release gate"), and
+a manual run of the workflow (`gh workflow run release.yml --ref
 <branch>`) is the same pipeline without the release, the pre-tag check of
 the workflow itself.
 
@@ -2293,7 +2333,8 @@ the workflow itself.
    `bin/kiln` (`$OBJCOPY`, else `objcopy`, else `llvm-objcopy-19`).
 3. **Assemble** `kiln-<version>-<triple>/` (`dist::assemble`): `bin/kiln`,
    `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
-   `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
+   `resource/include`), `lib/kiln/<major>/include-clang22/` (all of
+   `resource/include-clang22`), `lib/kiln/<major>/predefines/*.txt`,
    `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
    binary 0755. The docs install flat (WP-1027): `README.md`,
    `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the two licenses and
@@ -2313,7 +2354,15 @@ the workflow itself.
 4. **Archive** (`dist::tar_xz`), into `--out` (default
    `<target-dir>/kiln-dist`): `kiln-<version>-<triple>.tar.xz` with the
    stripped binary and `kiln-<version>-<triple>-symbols.tar.xz` with the
-   unstripped one, then `SHA256SUMS` (`sha256sum` of both). Archives are
+   unstripped one, then `SHA256SUMS` (`sha256sum` of both), then
+   `build-info.txt` (`dist::BuildInfo`, WP-1862), which is not in
+   `SHA256SUMS` and not published: `key: value` lines `version`,
+   `target`, `commit` (`git rev-parse HEAD`, empty without git) and `pgo`
+   (`yes` or `no`); with `yes` also `profile-sha256` (`sha256sum` of the
+   merged `.profdata`), `profile-bytes`, `llvm-profdata` (its version),
+   `training-cases`, `unprofiled-kiln` and `unprofiled-host-code`
+   (the final build's per-function counts, "PGO build"). An older
+   `build-info.txt` in `<out>` is removed when the run starts. Archives are
    reproducible: GNU tar `--sort=name --format=gnu --owner=0 --group=0
    --numeric-owner --mtime=@<epoch>`, normalized modes, `xz -9 -T1`; the
    epoch is `$SOURCE_DATE_EPOCH`, else HEAD's commit time, else 0. The
@@ -2344,7 +2393,7 @@ the workflow itself.
      binary.
 
    The directories are removed afterwards unless `--keep`. Tests:
-   `xtask/src/dist.rs` `tests` (options, the CRC, the path scan, the
+   `xtask/src/dist.rs` `tests` (options, `build-info.txt`, the CRC, the path scan, the
    layout with the installed docs' link check, the link rewriting, and a
    byte-identical re-archive) and `xtask/src/doclinks.rs` `tests` run in
    `cargo test`; the build
@@ -2356,7 +2405,10 @@ A profile-guided build of kiln itself (WP-1308, `xtask/src/pgo.rs`): the
 same source and Cargo profile, optimized with a profile of kiln compiling
 the training corpus below. It is opt-in; without the switch every command
 here builds exactly what it did before. Not part of `ci` (it is three
-release builds' worth of time).
+release builds' worth of time). The published release archives are PGO
+builds (`release.yml`, "Dist"), and so is the binary the release gate
+tests ("Release gate"); a stock `cargo build --release` stays plain, and
+`pgo-profile` stays the packager's way to a PGO build of their own.
 
 **Commands.**
 
@@ -2404,8 +2456,9 @@ switch and the step-by-step path cannot drift:
 4. *Final build:* the same plan in the normal target directory with
    `-Cprofile-use=<absolute path>` and
    `-Cllvm-args=-pgo-warn-missing-function`; xtask hides those per-function
-   warnings and prints how many there were, in kiln's crates and in build
-   scripts (below).
+   warnings and prints how many there were, in kiln's crates and in the
+   code that runs in the build (build scripts and the workspace's
+   proc-macro crates, `pgo::proc_macro_crates`; below).
 
 **Rustflags.** Both builds get the caller's flags as cargo reads them
 (`CARGO_ENCODED_RUSTFLAGS`, else `RUSTFLAGS`, else
@@ -2432,11 +2485,16 @@ training never reached are in the profile with zero counts and do not
 warn, so a matching profile leaves no kiln function without data (WP-1308
 measured 0 in kiln's crates, with and without a packager's `-C
 debuginfo=2 --remap-path-prefix` given to both builds) and warns only for
-the build scripts (541: built with the flags too when there is no
-`--target`, never run by the training); a mismatched one warns for
+the code that runs in the build, never in kiln: built with the flags too
+when there is no `--target`, never run by the training (WP-1862 at
+26ebc59bf: 541 in build scripts and 646 in the proc macro
+`kiln_snap_derive`, which WP-1308 predates); a mismatched one warns for
 nearly every function of the crates it does not match (the release
 profile used by a `--target aarch64-unknown-linux-gnu` build: 27,013
-warnings across kiln's crates). `cargo build -v`
+warnings across kiln's crates). The count reads each warning's code
+unit (`build_script_build.*`, or a proc-macro crate's name) after taking
+out cargo's color codes, which a CI runner's cargo prints (WP-1862: the
+hosted measurement first counted all 1187 as kiln's). `cargo build -v`
 shows `-Cprofile-use` on each `rustc` line.
 
 **`llvm-profdata` discovery** (`pgo::ToolSearch`), before anything is
@@ -2487,11 +2545,28 @@ S1-S5 include its `<meta>`. Without it they are left out of the training
 with a warning naming them; this is the only part of the corpus that
 depends on the machine.
 
-**Cost and gain** (aarch64; WP-1308, docs/status/perf.md "PGO build"):
+**Cost and gain** (WP-1308, WP-1862; docs/status/perf.md "PGO build"):
 the instrumented build costs about one release build, the training under
 a minute (29 s for the 44 cases at load 12), the final build one more
 release build: 1m19s + 29 s + 1m55s against 1m46s for a plain release
-build on the shared box. The gain is in the status page.
+build on the shared aarch64 box. The gain, on aarch64 and x86_64, is in
+the status page: on the held-out set 0.82x the time of the plain build
+on both (geometric means; memory 0.96x and 0.97x), measured at
+26ebc59bf.
+
+**Measuring it** (WP-1862). On one host: a plain `cargo xtask build`
+copied aside, then `cargo xtask build --pgo`, then `cargo xtask bench
+--compiler <PGO kiln++> --compare-with <plain kiln++> <held-out set>`
+(5 runs; the ratios are PGO over plain of the medians). The sweep
+workflow's opt-in `pgo` job (`.github/workflows/sweep.yml`: the `pgo`
+dispatch input, or a push of a `sweep/pgo-<name>` branch, which runs it
+alone) does exactly that on GitHub's x86_64 and aarch64 runners and
+uploads the results JSON, the bench output and the build times as the
+artifact `pgo-<arch>`. A failed entry fails the job, except an entry over
+its `budget-time:` (spec/bench.md "Directives"): that is an absolute
+budget for the development host, which a slower runner can break with
+both binaries, and the comparison then has one entry fewer (the
+geometric mean names the count).
 
 ## Feature table
 

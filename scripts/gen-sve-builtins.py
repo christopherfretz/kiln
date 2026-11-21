@@ -23,11 +23,13 @@ intrinsics and types that fill it, so the table holds each shape once.
 
 Both clang 22 (the lowering at `-fclang-compat=22`) and clang 19 (the one at
 19, for the builtins clang 19 has) are run; a builtin whose clang 19 recipe
-differs keeps both. Builtins with a type kiln does not have (`svmfloat8_t`,
-`mfloat8_t`, `fpm_t`: clang 21's FP8) are listed, not lowered.
+differs keeps both. The FP8 builtins (`svmfloat8_t`, `mfloat8_t`, `fpm_t`;
+WP-1791) are clang 22's only.
 
 The first run compiles every translation unit with both clangs and writes
-the recipes as JSON (`--raw`); `--from-raw` writes the table from it. With
+the recipes as JSON (`--raw`); `--from-raw` writes the table from it.
+`--reuse OLD` takes the recipes of the builtins `OLD` (an earlier `--raw`)
+has with the same declaration, and compiles only the others. With
 `--census KILN` the same translation units are compiled by kiln (at the
 default `-fclang-compat`, then at 19 for the clang 19 recipes) and each
 caller's IR and the intrinsic declarations are compared with clang's; a
@@ -45,7 +47,7 @@ run over `arm_sve.td` and `arm_sme.td` (clang/include/clang/Basic of the
 llvmorg-22.1.8 and llvmorg-19.1.7 tags; clang-tblgen-22 and
 clang-tblgen-19 from Debian's clang-tools-22 and clang-tools-19).
 
-Usage: scripts/gen-sve-builtins.py --work DIR [--jobs N] [--only REGEX] --raw JSON
+Usage: scripts/gen-sve-builtins.py --work DIR [--jobs N] [--only REGEX] [--reuse OLD] --raw JSON
        scripts/gen-sve-builtins.py --work DIR --from-raw JSON
        scripts/gen-sve-builtins.py --work DIR --from-raw JSON --census KILN --out TSV
        scripts/gen-sve-builtins.py --work DIR --checks --td22 DIR --tblgen22 BIN
@@ -68,7 +70,8 @@ FEATURES = (
     "sve2p2 sme2p2 sve-aes sve-sha3 sve-sm4 sve-bitperm f32mm f64mm i8mm bf16 "
     "sve-b16b16 sme-f64f64 sme-i16i64 sme-f16f16 sme-b16b16 sme-lutv2 lut "
     "faminmax sve-bfscale sme-mop4 sme-tmop sve-aes2 ssve-aes sve-f16f32mm "
-    "ssve-bitperm sme2p1 sve2p1 sme-fa64 fp8"
+    "ssve-bitperm sme2p1 sve2p1 sme-fa64 fp8 f8f16mm f8f32mm fp8dot2 fp8dot4 fp8fma sme-f8f16 "
+    "sme-f8f32 ssve-fp8dot2 ssve-fp8dot4 ssve-fp8fma"
 ).split()
 FEATURES19 = (
     "sve2p1 sme2p1 sve2-aes sve2-sha3 sve2-sm4 sve2-bitperm f32mm f64mm i8mm bf16 b16b16 "
@@ -81,8 +84,7 @@ def march(cc):
     if cc.endswith("19"):
         return "-march=armv9.5-a+" + "+".join(FEATURES19)
     return "-march=armv9.6-a+" + "+".join(FEATURES)
-# The FP8 types kiln does not have.
-UNSUPPORTED_TYPES = re.compile(r"mfloat8|fpm_t")
+
 
 ALIAS = re.compile(
     r"(__aio?) __attribute__\(\(__clang_arm_builtin_alias\((\w+)\)\)\)\s*\n([^;{]*?);"
@@ -113,11 +115,13 @@ def parse_headers(inc):
         if h == "arm_sve.h":
             head = text.split("/* Function attributes */")[0]
             for line in head.splitlines():
-                if line.startswith("typedef") and not UNSUPPORTED_TYPES.search(line):
+                if line.startswith("typedef"):
                     pre.append(line)
             for e in re.findall(r"enum sv\w+\s*\{[^}]*\};", head):
                 pre.append(e)
-    pre.insert(0, "typedef __bf16 bfloat16_t;")
+    # arm_vector_types.h's scalar types the FP8 builtins use.
+    pre[:0] = ["typedef __bf16 bfloat16_t;", "typedef __mfp8 mfloat8_t;",
+               "typedef uint64_t fpm_t;"]
     # The NEON vector types (`svaddqv`, `svget_neonq`) without arm_neon.h.
     for t in ("int8x16", "int16x8", "int32x4", "int64x2", "uint8x16", "uint16x8", "uint32x4",
               "uint64x2", "float16x8", "float32x4", "float64x2", "bfloat16x8"):
@@ -562,6 +566,10 @@ def family_of(b, rec, proto, bases):
             c = fam.typed(x)
             ops.append(" ".join([{"select": "sel", "insertelement": "ie",
                                   "shufflevector": "sv"}[op], a, b, c]))
+        elif op == "extractelement":
+            a = fam.typed(x)
+            x.eat(",")
+            ops.append(f"ee {a} {fam.typed(x)}")
         elif op == "extractvalue":
             a = fam.typed(x)
             x.eat(",")
@@ -918,6 +926,7 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--only")
     ap.add_argument("--raw", help="write the raw recipes as JSON here")
+    ap.add_argument("--reuse", help="an earlier --raw: keep its recipes of unchanged builtins")
     ap.add_argument("--from-raw", help="emit the table from this JSON, compiling nothing")
     ap.add_argument("--census", metavar="KILN", help="compare KILN's lowering with --from-raw's")
     ap.add_argument("--out", help="the census TSV")
@@ -947,13 +956,21 @@ def main():
     d19, _ = parse_headers(clang_include("clang++-19"))
     if a.only:
         d22 = {b: v for b, v in d22.items() if re.search(a.only, b)}
-    skip = {b for b, (r, p) in d22.items() if UNSUPPORTED_TYPES.search(" ".join([r, *p]))}
-    todo = {b: v for b, v in d22.items() if b not in skip}
-    print(f"{len(d22)} builtins, {len(skip)} with FP8 types", file=sys.stderr)
+    old = json.loads(pathlib.Path(a.reuse).read_text()) if a.reuse else None
+    same = set()
+    if old:
+        same = {b for b, v in d22.items() if b in old["r22"] and old["d22"].get(b) == list(v)
+                and (b not in d19 or b in old["r19"])}
+    todo = {b: v for b, v in d22.items() if b not in same}
+    print(f"{len(d22)} builtins, {len(same)} reused", file=sys.stderr)
     r22 = run_all("clang++-22", pre22, todo, work / "c22", a.jobs)
     r19 = run_all("clang++-19", pre22, {b: v for b, v in todo.items() if b in d19},
                   work / "c19", a.jobs)
-    raw = {"d22": d22, "d19": sorted(d19), "skip": sorted(skip), "r22": r22, "r19": r19}
+    for b in same:
+        r22[b] = old["r22"][b]
+        if b in d19:
+            r19[b] = old["r19"][b]
+    raw = {"d22": d22, "d19": sorted(d19), "r22": r22, "r19": r19}
     if a.raw:
         pathlib.Path(a.raw).write_text(json.dumps(raw, indent=1))
 

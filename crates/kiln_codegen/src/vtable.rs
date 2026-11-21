@@ -2148,7 +2148,10 @@ impl Cg<'_> {
             | TypeView::Atomic(_) => "_ZTVN10__cxxabiv123__fundamental_type_infoE",
             TypeView::Builtin(b)
                 if b.is_sizeless()
-                    || matches!(b, BuiltinType::MetaInfo | BuiltinType::BFloat16) =>
+                    || matches!(
+                        b,
+                        BuiltinType::MetaInfo | BuiltinType::BFloat16 | BuiltinType::MFloat8
+                    ) =>
             {
                 "_ZTVN10__cxxabiv123__fundamental_type_infoE"
             }
@@ -2553,9 +2556,11 @@ impl Cg<'_> {
         let ast = self.ast;
         let fund = |q: QualType| match ast.types.canonical_view(q) {
             // clang `TypeInfoIsInStandardLibrary`: not `__bf16` nor the
-            // SVE types (nor kiln's `std::meta::info`).
+            // SVE and FP8 types (nor kiln's `std::meta::info`).
             TypeView::Builtin(b) => {
-                !b.is_placeholder() && !b.is_sizeless() && !matches!(b, B::MetaInfo | B::BFloat16)
+                !b.is_placeholder()
+                    && !b.is_sizeless()
+                    && !matches!(b, B::MetaInfo | B::BFloat16 | B::MFloat8)
             }
             _ => false,
         };

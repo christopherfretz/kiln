@@ -3,9 +3,9 @@
 // bridge, ZA intrinsics (WP-1739), `__arm_has_sme` over
 // `__builtin_arm_get_sme_state` (a call of `__arm_sme_state`, WP-1794),
 // `svundef_za` and the SME support routines (spec/codegen.md "Target
-// builtins"). clang 22's header makes `__arm_in_streaming_mode` a builtin
-// alias where kiln's (clang 19's) defines it inline, so only the -19
-// sibling calls it. Host-restricted (no pinned `--target`): the headers
+// builtins"), and `__arm_in_streaming_mode`, a builtin alias in clang 22's
+// header (which kiln ships for this level, WP-1842) and an inline function
+// over `__builtin_arm_get_sme_state` in clang 19's. Host-restricted (no pinned `--target`): the headers
 // reach <stdint.h>, and on an x86_64 host clang has no AArch64 sysroot.
 // `-ftrivial-auto-var-init=uninitialized`: clang has no C++26 erroneous
 // values.
@@ -27,6 +27,7 @@ void wr(svbool_t pg, svint32_t v) __arm_streaming __arm_inout("za") {
   svwrite_hor_za32_s32_m(0, 1, pg, v);
 }
 bool has() __arm_streaming_compatible { return __arm_has_sme(); }
+bool in_sm() __arm_streaming_compatible { return __arm_in_streaming_mode(); }
 void undef() __arm_out("za") { svundef_za(); }
 void dis() { __arm_za_disable(); }
 void *cp(void *d, const void *s, size_t n) __arm_streaming_compatible {

@@ -458,7 +458,7 @@ impl TypeKind {
 
 macro_rules! builtins {
     ($($(#[$doc:meta])* $konst:ident = $id:literal, $variant:ident, $name:literal;)*) => {
-        /// The builtin types, pre-interned at fixed ids 1..=90 in this
+        /// The builtin types, pre-interned at fixed ids 1..=95 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, kiln_snap::Snap)]
@@ -469,7 +469,7 @@ macro_rules! builtins {
 
         impl BuiltinType {
             /// All builtins in id order.
-            pub const ALL: [BuiltinType; 90] = [$(BuiltinType::$variant,)*];
+            pub const ALL: [BuiltinType; 95] = [$(BuiltinType::$variant,)*];
 
             /// The builtin with type id index `id`, if it is one.
             pub fn from_index(id: u32) -> Option<BuiltinType> {
@@ -702,6 +702,21 @@ builtins! {
     SV_BOOLX2 = 89, SvBoolx2, "__clang_svboolx2_t";
     /// The SVE ACLE tuple type `__clang_svboolx4_t` (`svboolx4_t`).
     SV_BOOLX4 = 90, SvBoolx4, "__clang_svboolx4_t";
+    /// The `AArch64` SVE ACLE FP8 sizeless type `__SVMfloat8_t`
+    /// (`svmfloat8_t`; clang 20 and later, WP-1791).
+    SV_MFLOAT8 = 91, SvMfloat8, "__SVMfloat8_t";
+    /// The SVE ACLE tuple type `__clang_svmfloat8x2_t` (`svmfloat8x2_t`).
+    SV_MFLOAT8X2 = 92, SvMfloat8x2, "__clang_svmfloat8x2_t";
+    /// The SVE ACLE tuple type `__clang_svmfloat8x3_t` (`svmfloat8x3_t`).
+    SV_MFLOAT8X3 = 93, SvMfloat8x3, "__clang_svmfloat8x3_t";
+    /// The SVE ACLE tuple type `__clang_svmfloat8x4_t` (`svmfloat8x4_t`).
+    SV_MFLOAT8X4 = 94, SvMfloat8x4, "__clang_svmfloat8x4_t";
+    /// The `AArch64` ACLE FP8 scalar type `__mfp8` (`mfloat8_t`; clang 20
+    /// and later, WP-1791): one byte, an opaque floating-point format
+    /// chosen at run time by the `fpm_t` argument of an FP8 intrinsic. It
+    /// is neither arithmetic nor scalar: it converts to and from nothing
+    /// (spec/types.md §5.1).
+    MFLOAT8 = 95, MFloat8, "__mfp8";
 }
 
 impl BuiltinType {
@@ -791,13 +806,23 @@ impl BuiltinType {
     /// True for the `AArch64` SVE ACLE sizeless types (`__SVInt8_t` ...
     /// `__SVCount_t`; spec/types.md §5.1): complete, but with no size.
     pub const fn is_sizeless(self) -> bool {
-        ((self as u8) >= 34 && (self as u8) <= 47) || self.is_sve_tuple()
+        ((self as u8) >= 34 && (self as u8) <= 47)
+            || matches!(self, BuiltinType::SvMfloat8)
+            || self.is_sve_tuple()
     }
 
     /// True for the SVE ACLE tuple types (`__clang_svint8x2_t` ...
-    /// `__clang_svboolx4_t`; WP-810): sizeless, as their element type.
+    /// `__clang_svboolx4_t`; WP-810; `__clang_svmfloat8x2_t` ...; WP-1791):
+    /// sizeless, as their element type.
     pub const fn is_sve_tuple(self) -> bool {
-        (self as u8) >= 53 && (self as u8) <= 90
+        ((self as u8) >= 53 && (self as u8) <= 90) || ((self as u8) >= 92 && (self as u8) <= 94)
+    }
+
+    /// True for the `AArch64` ACLE FP8 types clang 20 added (`__mfp8`,
+    /// `__SVMfloat8_t` and its tuples; WP-1791): declared only at
+    /// `-fclang-compat=20` and later.
+    pub const fn is_fp8(self) -> bool {
+        (self as u8) >= 91 && (self as u8) <= 95
     }
 
     /// The vector type and count of an SVE tuple type
@@ -823,6 +848,9 @@ impl BuiltinType {
         if !self.is_sve_tuple() {
             return None;
         }
+        if i >= 92 {
+            return Some((BuiltinType::SvMfloat8, u32::from(i - 90)));
+        }
         if i >= 89 {
             return Some((BuiltinType::SvBool, if i == 89 { 2 } else { 4 }));
         }
@@ -831,7 +859,7 @@ impl BuiltinType {
     }
 
     /// The number of builtin types (the highest fixed id).
-    pub const COUNT: usize = 90;
+    pub const COUNT: usize = 95;
 }
 
 /// The keyword of an elaborated or dependent type name.

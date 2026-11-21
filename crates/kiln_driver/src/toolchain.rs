@@ -339,6 +339,11 @@ pub struct SystemIncludes {
     pub nobuiltininc: bool,
     /// The C++ standard library.
     pub stdlib: StdLib,
+    /// The clang compatibility level's major version (`19`, `22`;
+    /// `-fclang-compat`): from 22, `<resource>/include-clang22` (clang
+    /// 22's `arm_sve.h`, `arm_sme.h` and `arm_vector_types.h`, WP-1842)
+    /// is searched before `<resource>/include`.
+    pub clang_major: u32,
 }
 
 /// The toolchain: everything the driver locates on disk.
@@ -565,6 +570,12 @@ impl Toolchain {
             }
         }
         if !o.nobuiltininc {
+            // WP-1842: the clang 22 overlay, when the resource directory
+            // has one (clang's own resource directories do not).
+            let overlay = join_path(&self.resource_dir, "include-clang22");
+            if o.clang_major >= 22 && Path::new(&overlay).is_dir() {
+                sys(&mut v, overlay);
+            }
             sys(&mut v, join_path(&self.resource_dir, "include"));
         }
         if o.nostdlibinc {
