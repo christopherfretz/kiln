@@ -96,11 +96,14 @@ impl Sema<'_, '_> {
 
     /// Whether function or variable `first` has a definition (a deleted
     /// or defaulted function counts, as in clang `FunctionDecl::isDefined`).
+    /// A builtin alias (`__clang_arm_builtin_alias`, WP-810) is a builtin:
+    /// clang never notes its use (`getBuiltinID` is nonzero).
     fn entity_defined(&self, first: DeclId) -> bool {
         match self.ast.decls.get(first).kind() {
             DeclKind::Var => self.ast.redecls_of(first).any(|r| self.is_var_definition(r)),
             k if k.is_function() => {
                 self.ast.definition(first).is_some()
+                    || self.ast.builtin_alias(first).is_some()
                     || self.ast.redecls_of(first).any(|r| {
                         self.ast.decls.function(r).is_some_and(|x| {
                             x.spec.defaulted() != Defaulted::No || x.spec.is_deleted()

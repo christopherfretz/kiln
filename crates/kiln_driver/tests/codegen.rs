@@ -2357,9 +2357,10 @@ fn sve_pure_scalable_by_value() {
     }
 }
 
-/// WP-810: an `<arm_sve.h>` intrinsic kiln does not lower, a call without
-/// the `sve` feature and an alias whose declaration does not match its
-/// builtin are hard errors.
+/// WP-810, WP-1739: an alias of a builtin clang 19 lacks at
+/// `-fclang-compat=19` (clang 22's `svamax`), an immediate that is not a
+/// constant, a call without the `sve` feature and an alias whose
+/// declaration does not match its builtin are errors.
 /// `-ffreestanding` keeps `<stdint.h>` off the host libc, so the test
 /// runs on an x86-64 host without `AArch64` headers.
 #[test]
@@ -2368,11 +2369,24 @@ fn sve_builtin_alias_errors() {
     let sve = "#include <arm_sve.h>\n";
     let cases = [
         (
-            format!("{sve}svint8x2_t a(svint8_t x) {{ return svcreate2_s8(x, x); }}\n"),
+            format!(
+                "{sve}svfloat32_t f(svbool_t, svfloat32_t, svfloat32_t) \
+                 __attribute__((__clang_arm_builtin_alias(__builtin_sve_svamax_f32_x)));\n"
+            ),
             "-fclang-compat=19",
             "-march=armv8-a+sve",
-            "t.cpp:2:47: error: code generation for SVE builtin '__builtin_sve_svcreate2_s8' \
-             (called as 'svcreate2_s8') is not supported yet",
+            "t.cpp:2:66: error: '__clang_arm_builtin_alias' attribute can only be applied to \
+             an ARM builtin",
+        ),
+        (
+            format!(
+                "{sve}svint8_t f(svint8_t, svint8_t, uint64_t) \
+                 __attribute__((__clang_arm_builtin_alias(__builtin_sve_svext_s8)));\n\
+                 svint8_t a(svint8_t x, int k) {{ return f(x, x, k); }}\n"
+            ),
+            "-fclang-compat=22",
+            "-march=armv8-a+sve",
+            "t.cpp:3:40: error: argument to 'f' must be a constant integer",
         ),
         (
             format!("{sve}uint64_t a() {{ return svcntw(); }}\n"),

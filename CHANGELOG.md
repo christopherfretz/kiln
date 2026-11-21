@@ -93,6 +93,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   reference once the registers run out or for a variadic argument);
   kiln reported "passing or returning 'T' by value is not supported yet"
   (WP-1739).
+- Every SVE, SVE2 and SME ACLE intrinsic (`<arm_sve.h>`, `<arm_sme.h>`,
+  `<arm_neon_sve_bridge.h>`) is lowered as clang lowers it: clang 22's
+  8987 builtins from `-fclang-compat=20`, clang 19's 8628 below, IR equal
+  to clang's, read off clang's own output by
+  `scripts/gen-sve-builtins.py` into a generated table; all but 720 of them
+  reported "code generation for SVE builtin ... is not supported yet".
+  An alias of a name that is not one of these builtins is "can only be
+  applied to an ARM builtin", as in clang; the FP8 intrinsics wait for
+  the FP8 types (WP-1739).
 - `-verify`, the record-layout, vtable-layout and CFG dumps work with
   every action (WP-1745): a codegen job checks its diagnostics and
   writes its output only without errors, and prints the dumps before its

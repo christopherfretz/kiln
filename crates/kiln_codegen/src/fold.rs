@@ -921,7 +921,7 @@ impl Collect<'_> {
                 if crate::builtins::is_fold_candidate(ast, e, self.compat) {
                     self.out.push(e);
                 }
-                self.out.extend(crate::builtins::folded_args(ast, e));
+                self.out.extend(crate::builtins::folded_args(ast, e, self.compat));
                 self.ps_args.extend(crate::builtins::object_size_args(ast, e));
             }
             ExprKind::CXXMemberCallExpr

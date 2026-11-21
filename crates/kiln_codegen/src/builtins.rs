@@ -38,7 +38,7 @@ pub(crate) fn lib_fold_callee(ast: &Ast, e: ExprId) -> Option<u32> {
 }
 
 /// The function `e` calls directly, through parentheses and decays.
-fn direct_fn(ast: &Ast, e: ExprId) -> Option<DeclId> {
+pub(crate) fn direct_fn(ast: &Ast, e: ExprId) -> Option<DeclId> {
     let mut c = ast.exprs.callee(e);
     loop {
         match ast.exprs.get(c).kind() {
@@ -153,9 +153,14 @@ pub(crate) fn object_size_args(ast: &Ast, e: ExprId) -> Vec<(ExprId, u32)> {
 /// the `__builtin_assume_aligned` alignment, an x86 builtin's integer
 /// constant operands, a NEON builtin's lane and type-code immediates), for
 /// the fold prepass.
-pub(crate) fn folded_args(ast: &Ast, e: ExprId) -> Vec<ExprId> {
-    let Some((_, b)) = builtin_callee(ast, e) else { return Vec::new() };
+pub(crate) fn folded_args(ast: &Ast, e: ExprId, compat: u32) -> Vec<ExprId> {
     let args = || ast.lists.iter(ast.exprs.call_args(e));
+    // The immediates of an SVE or SME builtin alias (WP-1739).
+    if let Some((b, _)) = direct_fn(ast, e).and_then(|d| ast.builtin_alias(d)) {
+        let imms = crate::sve::imm_args(ast.symbols().as_str(b), compat);
+        return args().enumerate().filter(|(i, _)| imms.contains(i)).map(|x| x.1).collect();
+    }
+    let Some((_, b)) = builtin_callee(ast, e) else { return Vec::new() };
     if id::x86::is_x86(b) {
         let ice = id::ice_params(b);
         return args()

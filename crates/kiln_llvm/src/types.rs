@@ -777,8 +777,9 @@ impl TypeTable {
             TypeData::Label => s.push_str("label"),
             TypeData::Metadata => s.push_str("Metadata"),
             TypeData::Token => s.push_str("token"),
+            // LLVM `getMangledTypeStr`: `t`, the name (and parameters), `t`.
             TypeData::TargetExt(n) => {
-                let _ = write!(s, "t{n}");
+                let _ = write!(s, "t{n}t");
             }
             TypeData::Half => s.push_str("f16"),
             TypeData::BFloat => s.push_str("bf16"),

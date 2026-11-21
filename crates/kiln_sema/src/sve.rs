@@ -102,11 +102,12 @@ impl Sema<'_, '_> {
 
     /// clang `handleArmBuiltinAliasAttr` (`arm`) / `handleBuiltinAliasAttr`
     /// (WP-810): one identifier naming an `AArch64` ACLE builtin. clang
-    /// accepts the SVE and SME builtins (`SveAliasValid`); kiln knows them
-    /// by their `__builtin_sve_` / `__builtin_sme_` prefix, so a misspelled
-    /// one is accepted and every call of the function is codegen's
-    /// "not supported yet" error. `__clang_arm_builtin_alias` is a target
-    /// attribute (`TargetAnyArm`): unknown, and ignored, on x86-64.
+    /// accepts the SVE and SME builtins (`SveAliasValid`,
+    /// `SmeAliasValid`): kiln accepts those of its table
+    /// ([`kiln_ast::sve`]), every one of which codegen lowers; the FP8 ones
+    /// are not in it (kiln has no FP8 types). `__clang_arm_builtin_alias`
+    /// is a target attribute (`TargetAnyArm`): unknown, and ignored, on
+    /// x86-64.
     pub(crate) fn builtin_alias_attribute(
         &mut self,
         arm: bool,
@@ -135,7 +136,11 @@ impl Sema<'_, '_> {
             return None;
         };
         let name = self.ast.symbols().as_str(sym);
-        let acle = name.starts_with("__builtin_sve_") || name.starts_with("__builtin_sme_");
+        // clang `SveAliasValid` / `SmeAliasValid`: a builtin of the SVE or
+        // SME table of the clang version kiln follows (WP-1739; clang 22's
+        // at -fclang-compat=20 and later).
+        let version = if self.clang_compat >= 20 { 22 } else { 19 };
+        let acle = kiln_ast::sve::lookup(name, version).is_some();
         if !(aarch64 && acle) {
             let msg = if arm {
                 self.diag(DiagId::sema_attribute_arm_builtin_alias, loc)

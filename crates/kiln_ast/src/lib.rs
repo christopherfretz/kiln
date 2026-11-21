@@ -40,6 +40,8 @@ pub mod sanitize;
 pub mod slot;
 pub mod stmt;
 pub mod strings;
+pub mod sve;
+mod sve_builtins;
 pub mod templates;
 pub mod types;
 mod x86_builtins;

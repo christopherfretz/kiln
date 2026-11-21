@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-3 gaps at 3 sites; 10 of 56,766 g++.dg cases hit one at the
+2 gaps at 2 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -70,7 +70,6 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| codegen fallback | 1 | 1 | 0 |
 | parse_unsupported | 1 | 1 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 
@@ -78,7 +77,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| codegen fallbacks | 1 (GAP-062) | 1 | 0 | WP-1739 |
 | preprocessor/modules | 1 (GAP-142) | 1 | 0 | WP-1744 |
 | misc | 1 (GAP-149) | 1 | 0 | WP-1745 |
 
@@ -86,7 +84,6 @@ By area (the BACKLOG row that fixes it, most-hit first):
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-062 | codegen fallback | codegen fallbacks | `code generation for SVE builtin '{name}' (called as '{called}') is not supported yet` | `crates/kiln_codegen/src/sve.rs::emit_sve_alias` | 0 | WP-1739 |
 | GAP-142 | parse_unsupported | preprocessor/modules | `{what} (the floating-point environment) is not supported yet` ({what}: `'#pragma clang fp eval_method(v)'`, v `double` or `extended`; `'#pragma STDC FENV_ROUND m'`, m a directed mode: `FE_UPWARD`, `FE_DOWNWARD`, `FE_TOWARDZERO`, `FE_TONEARESTFROMZERO`; FENV_ACCESS and the exception behavior landed in WP-1744) | `crates/kiln_parse/src/fp_pragma.rs::fenv_unsupported` | 0 | WP-1744 |
 | GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `interrupt`, `model`, the `opencl_*` address spaces, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
