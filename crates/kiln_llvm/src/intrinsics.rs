@@ -559,6 +559,33 @@ pub enum TargetMem {
 }
 
 /// A target intrinsic by full name, return type and parameter types (each
+/// with its attributes), with exactly the function attributes `fattrs`
+/// (WP-1739: the SVE and SME builtins' table records them per LLVM
+/// version).
+pub fn declare_with_attrs(
+    m: &mut Module,
+    name: &str,
+    ret: TypeId,
+    params: &[(TypeId, &[Attr])],
+    fattrs: &[Attr],
+) -> FuncId {
+    if let Some(f) = m.get_function(name) {
+        return f;
+    }
+    let tys: Vec<TypeId> = params.iter().map(|p| p.0).collect();
+    let fn_ty = m.types.function(ret, &tys, false);
+    let f = m.add_function(name, fn_ty).expect("intrinsic type is a function type");
+    let fa = m.attr_set(fattrs);
+    let pa: Vec<_> = params.iter().map(|p| m.attr_set(p.1)).collect();
+    let func = m.func_mut(f);
+    func.attrs.func = fa;
+    for (i, a) in pa.into_iter().enumerate() {
+        func.attrs.set_param(i, a);
+    }
+    f
+}
+
+/// A target intrinsic by full name, return type and parameter types (each
 /// with whether it is `immarg`), with the attributes `mem` names
 /// (WP-630's x86 builtins).
 pub fn target_intrinsic(
