@@ -290,6 +290,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   where a module carrying one fell back to replaying its source. A unit
   test fails when a new attribute kind is neither carried nor exempted
   with a reason.
+- Structured bindings and C++26 constexpr-referenceable objects
+  (WP-1796, P2686R5, CWG 3135): a binding is referenceable and usable
+  exactly as the member access or variable it denotes. A tuple-like
+  binding whose `get` returns a prvalue names an object of type `Ti`
+  (`const auto [a, b] = X{}; static_assert(b == 2);` with a constant
+  `get` is accepted, `&b` is a constant at namespace scope and, at
+  C++26, from a `constexpr` local of the same function), and a `const`
+  class one is not usable. A `static` variable's initializer naming the
+  automatic lifetime-extended temporary of a `constexpr` local reference
+  or binding (`static constexpr const int* p = &r;`) is now rejected as
+  clang 22 rejects it ("pointer to 'r' is not a constant expression").
+
 - A block-scope `extern` function or variable declaration with an asm
   label (`extern int q(int) asm("qq");`) inside a template keeps its
   label in the instantiation; it was mangled as a local name (WP-1797).

@@ -818,7 +818,24 @@ pays nothing for it.
   `StorageDuration::Automatic` extended temporaries as `Origin::Let`
   objects as well as its static ones, the pointer freezes as
   `PtrBase::Temporary(t)`, and `automatic_referent` reports a temporary
-  whose extending variable is a local. Left: a lambda body
+  whose extending variable is a local. Such a temporary is referenceable
+  only as its extending variable (it is `v` of [expr.const.init]/2): an
+  `Origin::Let(t)` whose extending variable is a local freezes into a
+  `static` variable's initializer as an automatic object, so
+  `constexpr const int& r = 1; static constexpr const int* p = &r;` and
+  the same through a `constexpr` structured binding are "pointer to 'r'
+  is not a constant expression" with clang's not-static note (WP-1796).
+  The object a tuple-like binding names when `get` returns a prvalue
+  (CWG 3135: `S Ui ri = initializer;` with `Ui = Ti`) is the holding
+  variable's lifetime-extended temporary (`value::holding_object`): it
+  is referenceable as the binding's complete object, `resolve_let` makes
+  it usable as a variable of type `Ti` (a `constexpr` declaration, or a
+  `const` integral or enumeration type), a namespace-scope one is bound
+  to its temporary instead of P2280's unknown object
+  (`bind_holding_object`), a lax refold never publishes its value, and a
+  read that is not usable names the binding as clang names a variable
+  (`notes.rs`; tests `dcl.struct.bind/p2686-referenceable*.cpp`,
+  `dcl.struct.bind/cwg3135-prvalue-get-object-*.cpp`). Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to an object with thread storage

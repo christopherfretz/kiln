@@ -1878,6 +1878,30 @@ impl Oven {
             MemFault::ModifyGlobal | MemFault::External(_, true) => {
                 "a constant expression cannot modify an object that is visible outside that expression".into()
             }
+            // A holding variable's object (CWG 3135): read as the
+            // variable, with clang's notes for one that is not usable.
+            MemFault::Temporary(t) if crate::value::holding_object(ast, t).is_some() => {
+                let r = crate::value::holding_object(ast, t).unwrap_or(t);
+                extra.push(Note::new(ast.decls.get(r).loc(), "declared here"));
+                let name = name_of(ast, r);
+                let q = ast.decls.get(t).ty().unwrap_or(QualType::INT);
+                let c = ast.types.canonical(q);
+                let integral = ast.types.is_integral(c) || ast.types.as_enum(c).is_some();
+                let quals = ast.types.effective_quals(q);
+                if quals.is_volatile() {
+                    format!("read of volatile object '{name}' is not allowed in a constant expression")
+                } else if quals.is_const() && integral
+                    || ast.decls.var(r).is_some_and(|v| v.spec.is_constexpr())
+                {
+                    format!("initializer of '{name}' is not a constant expression")
+                } else if quals.is_const() || !integral {
+                    format!(
+                        "read of non-constexpr variable '{name}' is not allowed in a constant expression"
+                    )
+                } else {
+                    format!("read of non-const variable '{name}' is not allowed in a constant expression")
+                }
+            }
             // clang's note_constexpr_access_static_temporary.
             MemFault::Temporary(t) => {
                 if let Some(e) = crate::value::let_mte(ast, t) {
