@@ -10,6 +10,24 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Template heads in module interface exposures (WP-1855): a template
+  that is not TU-local whose template-head names a TU-local entity (a
+  type-constraint's concept, also `Hid auto` and a placeholder's in a
+  variable's type, a requires-clause naming a concept, function, type or
+  variable, a template parameter's type or default argument, a lambda's
+  head) is now a "declaration of 'f' exposes TU-local entity" error
+  ([basic.link]/14), as GCC 16.1 rejects; also for partial
+  specializations and deduction guides. It was accepted.
+- Deduced types in module interface exposures (WP-1856): a variable whose
+  placeholder type, or a non-inline function whose return type, is
+  deduced to a TU-local type, or to a local class or closure type of a
+  TU-local specialization, is now an exposure error ([basic.link]/15.1,
+  15.2, 16.5), as GCC 16.1 rejects. It was accepted.
+- Imported templates re-check nested function-type parameters (WP-1859):
+  the module image now carries the written parameters of function types
+  inside declarators, so substituting an imported template rejects an
+  address space or Swift parameter ABI the arguments make invalid, as
+  after a replay. The image version is now 47.
 - Concept definitions in module interface exposures (WP-1845): a
   concept that is not TU-local whose constraint-expression names a
   TU-local entity (a function, also in `sizeof` or a requires-expression,

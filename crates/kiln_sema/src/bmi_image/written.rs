@@ -7,19 +7,35 @@
 //! carries (a type already in the type section, a qualifier whose
 //! components are), so an error substituting an imported pattern sits at
 //! the same name, with the same caret, as after a replay.
+//!
+//! The same holds for the written parameters of function types inside
+//! other declarators (`templ.nested_params`, spec/sema-templates.md
+//! §5.8.1; WP-1859): substituting an imported pattern checks them again
+//! (an address space on the parameter, a Swift-ABI parameter's type).
 
 use kiln_ast::types::Nns;
 use kiln_ast::{DeclId, NnsId, QualType};
 
 use super::{Image, NnsRec, QRef, Rd, Res, Wr, Writer, bad};
 use crate::Sema;
-use crate::templ::written::WrittenKey;
+use crate::templ::written::{NestedParam, WrittenKey};
 
 /// One entry: its key and its locations.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) struct WrittenRec {
     key: Key,
     locs: Vec<u32>,
+}
+
+/// The written parameters `i` of the function types whose parameter
+/// type is `ty` (`templ.nested_params`): per parameter its location, its
+/// Swift parameter ABI attribute's (`NONE` when absent) and whether it
+/// was declared as an array.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(super) struct NestedRec {
+    ty: QRef,
+    index: u16,
+    params: Vec<(u32, u32, bool)>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -56,6 +72,35 @@ impl Writer<'_, '_, '_> {
             a.0.cmp(&b.0).then_with(|| format!("{:?}", a.1).cmp(&format!("{:?}", b.1)))
         });
         self.img.written = out.into_iter().map(|(_, r)| r).collect();
+        self.nested_section();
+    }
+
+    /// Adds the written nested parameters whose type is carried.
+    fn nested_section(&mut self) {
+        let table: Vec<((QualType, u16), Vec<NestedParam>)> =
+            self.s.templ.nested_params.iter().map(|(k, v)| (*k, v.clone())).collect();
+        let mut out: Vec<(u32, NestedRec)> = Vec::new();
+        for ((q, index), v) in table {
+            if !self.tmemo.contains_key(&q.ty()) {
+                continue;
+            }
+            let Ok(ty) = self.qref(q) else { continue };
+            let params: Vec<(u32, u32, bool)> = v
+                .iter()
+                .filter_map(|p| {
+                    let loc = self.loc(p.loc).ok().filter(|&l| l != super::NONE)?;
+                    Some((loc, self.loc(p.abi_loc).unwrap_or(super::NONE), p.array))
+                })
+                .collect();
+            if let Some(&(first, ..)) = params.first() {
+                out.push((first, NestedRec { ty, index, params }));
+            }
+        }
+        // Deterministic: by first location, then key.
+        out.sort_by(|a, b| {
+            a.0.cmp(&b.0).then_with(|| format!("{:?}", a.1).cmp(&format!("{:?}", b.1)))
+        });
+        self.img.nested = out.into_iter().map(|(_, r)| r).collect();
     }
 
     /// Whether every component of qualifier `n` is already carried.
@@ -117,6 +162,48 @@ pub(super) fn decode_written(r: &mut Rd<'_>) -> Res<Vec<WrittenRec>> {
     Ok(v)
 }
 
+pub(super) fn encode_nested(w: &mut Wr, v: &[NestedRec]) {
+    w.len(v.len());
+    for r in v {
+        w.q(r.ty);
+        w.u16(r.index);
+        w.len(r.params.len());
+        for &(loc, abi, array) in &r.params {
+            w.u32(loc);
+            w.u32(abi);
+            w.u8(u8::from(array));
+        }
+    }
+}
+
+pub(super) fn decode_nested(r: &mut Rd<'_>) -> Res<Vec<NestedRec>> {
+    let n = r.count(10)?;
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        let ty = r.q()?;
+        let index = r.u16()?;
+        let k = r.count(9)?;
+        let mut params = Vec::with_capacity(k);
+        for _ in 0..k {
+            let loc = r.u32()?;
+            let abi = r.u32()?;
+            let array = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return bad("bad nested parameter"),
+            };
+            params.push((loc, abi, array));
+        }
+        v.push(NestedRec { ty, index, params });
+    }
+    Ok(v)
+}
+
+/// Checks each nested parameter record's type.
+pub(super) fn validate_nested(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
+    if img.nested.iter().all(|r| qref_ok(r.ty)) { Ok(()) } else { bad("bad nested parameter type") }
+}
+
 /// Checks each key's type and qualifier steps.
 pub(super) fn validate_written(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
     for r in &img.written {
@@ -160,13 +247,28 @@ impl Sema<'_, '_> {
             v.sort_unstable();
             v.dedup();
         }
+        for r in &img.nested {
+            let ty = self.image_ty(img, tys, ids, r.ty);
+            let v = self.templ.nested_params.entry((ty, r.index)).or_default();
+            for &(loc, abi, array) in &r.params {
+                let loc = main.get(loc);
+                if !loc.is_valid() {
+                    continue;
+                }
+                let np = NestedParam { loc, abi_loc: main.get(abi), array };
+                let at = v.partition_point(|p| p.loc < np.loc);
+                if v.get(at).is_none_or(|p| p.loc != np.loc) {
+                    v.insert(at, np);
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::tests::template_sample;
-    use super::super::{BUILTINS, decode, encode};
+    use super::super::{BUILTINS, NONE, decode, encode};
     use super::*;
 
     /// `template_sample` (its parameter `T` is type `t`) with the written
@@ -205,5 +307,20 @@ mod tests {
             f(&mut img);
             assert!(decode(&encode(&img)).is_err(), "{what}");
         }
+    }
+
+    /// spec/modules.md §11.11 "Dependent types" (WP-1859; spec/sema-templates.md
+    /// §5.8.1): the written parameters of nested function types round-trip
+    /// (with and without a Swift ABI attribute); a record naming a type the
+    /// image does not have is an error.
+    #[test]
+    fn nested_params() {
+        let t = QRef { ty: BUILTINS + 1 + 3, quals: 0 };
+        let mut img = template_sample();
+        img.nested =
+            vec![NestedRec { ty: t, index: 1, params: vec![(318, NONE, true), (330, 332, false)] }];
+        assert_eq!(decode(&encode(&img)), Ok(img.clone()));
+        img.nested[0].ty = QRef { ty: 9999, quals: 0 };
+        assert!(decode(&encode(&img)).is_err(), "type out of range");
     }
 }

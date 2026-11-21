@@ -111,6 +111,11 @@ pub(crate) struct ModSema {
     /// clang 22's warning (an inline variable's initializer) rather than
     /// an exposure.
     deferred_exposures: Vec<(exposure::PendingExposure, bool)>,
+    /// Declarations whose type names a local class or closure type of an
+    /// instantiated function of this unit's purview: `(owner, at, class,
+    /// function)`, an exposure if that function is TU-local, decided at
+    /// the end of the unit (`exposure.rs`, WP-1856).
+    deferred_local_types: Vec<(DeclId, Loc, DeclId, DeclId)>,
     /// Held uses in the local classes and closure types of a non-inline
     /// function's body, decided at its end by its deduced return type
     /// (`exposure.rs`, WP-1820).

@@ -730,6 +730,11 @@ impl Sema<'_, '_> {
         full: bool,
         loc: Loc,
     ) -> bool {
+        if self.kind_of(concept) == DeclKind::Concept {
+            // [basic.link]/14: a type-constraint's concept-name names its
+            // concept (a TU-local one in a module interface, WP-1855).
+            self.module_note_use(self.ast.first(concept), loc);
+        }
         if !full {
             if written || self.kind_of(concept) != DeclKind::Concept {
                 return true;

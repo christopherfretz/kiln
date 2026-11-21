@@ -468,6 +468,34 @@ at its name (`modules/exposure.rs`):
   concept-name denoting one in an inline function's body is an exposure
   too (GCC 16.1 accepts that one). Tests:
   `basic.link/exposure-concept-definition.cpp`, `-accepted.cpp`;
+- the template-head of a template-declaration that is not TU-local
+  (WP-1855): /15 ignores no part of it. A type-constraint's concept-name
+  (a type parameter's, an abbreviated function template's `Hid auto`
+  parameter's, a placeholder type's in a variable's type, a
+  return-type-requirement's), a requires-clause (also a trailing one,
+  and a requires-expression in either) naming a TU-local concept,
+  function, type or variable, a template parameter's type and default
+  argument, and a template template parameter's head. Each such use is
+  held for the innermost template-head being parsed that no
+  declaration has taken yet (`note_template_head_use`; a lambda's own
+  head is never that head) and decided when the template is formed
+  (`module_check_head_exposure`, from `finish_template_pattern` and for
+  a partial specialization and a deduction guide; a concept's head with
+  its constraint-expression, `module_check_concept_exposure`):
+  "declaration of 'f1' exposes TU-local entity 'Hid'" at the
+  declaration's name. A use in a
+  lambda's template-head or parameters is a use in the lambda (the
+  error at the variable, or at the lambda in an inline function's body,
+  WP-1684). A friend (/15.3) and a TU-local template are not checked;
+  a constant read without an odr-use (/14.4) and an enumerator of a
+  TU-local enumeration are not exposures (GCC 16.1 rejects both, and
+  the private module fragment's templates too); GCC 16.1 accepts a
+  placeholder's type-constraint (`export Hid auto v = 1;`), which kiln
+  rejects (its text names the concept-name). An odr-use of a TU-local
+  constant in a constraint-expression is not seen: constraints are
+  parsed unevaluated, as clang does (GCC 16.1 rejects `requires (&K !=
+  nullptr)`). Tests: `basic.link/exposure-template-head.cpp`,
+  `-accepted.cpp`;
 - a use of an instantiation that is TU-local by /16.5 (WP-1814): an
   instantiated inline function (of a function template, or a member of an
   instantiated class template) whose instantiated body names a TU-local
@@ -560,6 +588,24 @@ T = int]"), only where its body names the entity (and also a local class
 not returned); clang 22 warns at some of the uses. Tests:
 `basic.link/exposure-local-class-instantiation.cpp`,
 `module.interface/exposure-local-class-instantiation-importer-run.cpp`.
+
+A variable's type and a function's deduced return type are kept by /15
+(WP-1856): a variable declared with a placeholder (`auto`,
+`decltype(auto)`, `auto *`, `const auto &`) whose deduced type names a
+TU-local type, and a function that is not inline whose return type is
+deduced to one, are exposures, "declaration of 'w1' exposes TU-local
+entity 'S'" at the name (`module_check_deduced_exposure`, after the
+initializer or at the end of the function's body). A local class or
+closure type of a specialization the deduced type names (also a
+variable's written type, `decltype(te(2))`, and a parameter's) is
+TU-local when the specialization is (/16.1, /16.5), which is known only
+at the end of the unit: such a declaration is held
+(`modules.deferred_local_types`) and decided after the deferred
+exposures, "declaration of 'v1' exposes TU-local entity 'L'" (a closure
+type printed as `(lambda at ...)`). GCC 16.1 rejects the same programs,
+at the variable for a TU-local type and at the specialization's local
+class or its member otherwise; clang 22 accepts them. Tests:
+`basic.link/exposure-deduced-type.cpp`, `-accepted.cpp`.
 
 A variable usable in constant expressions with internal linkage is
 TU-local, but /15.4 ignores a reference to it that is not an odr-use.
@@ -5028,6 +5074,16 @@ reports a failure there. The `written` section carries the entries
 whose key the image carries (a type of the type table, a qualifier all
 of whose components are carried), so an error substituting an
 imported pattern has the replay's position and caret.
+The `nested` section (WP-1859, right after `written`) carries the
+written parameters of function types inside other declarators
+(`templ.nested_params`, spec/sema-templates.md §5.8.1) whose parameter
+type the type table carries: per key (type, parameter index) each
+parameter's location, its Swift parameter ABI attribute's (`NONE` when
+absent) and whether it was declared as an array. Substituting an
+imported pattern checks them again, as after a replay: an address space
+on a parameter of `void (*)(int __attribute__((address_space(N))))` or a
+Swift-ABI parameter's type, made invalid by the template argument, is
+an error (a deduction failure where one is).
 
 **Deduction guides (WP-1284).** The implicit guides
 ([over.match.class.deduct]/1) are not carried: the importer forms them
@@ -5144,7 +5200,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 46` since WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 47` since WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -5178,6 +5234,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
                                      (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
            cons reqs                 WP-1284 ("Constraints")
            written                   WP-1284 ("Dependent types and names")
+           nested:u32 (ty:qref index:u16 n:u32 (loc:u32 abi:u32 array:u8)*n)*
+                                     WP-1859 ("Written locations")
            lexterns:u32 u32*         WP-1293: block-scope declaration
                                      records, in `local_externs` order
            texprs                    WP-1300 ("Expressions in types")
