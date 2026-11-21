@@ -2387,7 +2387,11 @@ impl Sema<'_, '_> {
             self.set_qualified_begin(e, begin, loc);
             return e;
         }
+        // clang 22 reports a TU-local enumerator at the qualified name's
+        // first token (`modules/exposure.rs`).
+        self.modules.qualified_use_begin = begin.filter(|&b| b != loc);
         let e = self.build_decl_ref_qualified(d, loc, found.shadow(0), nns);
+        self.modules.qualified_use_begin = None;
         self.set_qualified_begin(e, begin, loc);
         self.note_function_name_use(d, e, loc, qualifier.is_none());
         e

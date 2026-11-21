@@ -1244,6 +1244,9 @@ impl Sema<'_, '_> {
     /// the checks that need every definition, the delegation cycles of
     /// constructors ([class.base.init]/6).
     pub fn act_on_end_of_translation_unit(&mut self) {
+        // [basic.link]/16.5: the uses of instantiations an exposure waits
+        // for, now that every instantiation is done (WP-1814).
+        self.module_resolve_deferred_exposures();
         // A last type-id's Swift parameter ABIs (WP-1745).
         self.flush_pending_param_abis();
         // The `TypoExpr`s of expressions the parser dropped come first

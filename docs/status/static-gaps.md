@@ -8,13 +8,16 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-1 gap at 1 site (1 spec paragraph); 10 of 56,766 g++.dg cases hit
-one at the 1.3.0 release candidate, all since fixed. The last site in
-the source, GAP-149, closed with WP-1803, which also removed the
-generic class-A error `sema_attribute_unsupported_by_kiln`. 4 more
-entries (5 sites) use wording that matches clang's for a limit clang
-shares, and 3 spec entries record a limit clang shares or a flag kiln
-rejects by name: they are listed as excluded and stay.
+No gaps are open: every entry the lint found has been fixed and has
+left the list. The last site in the source, GAP-149, closed with
+WP-1803, which also removed the generic class-A error
+`sema_attribute_unsupported_by_kiln`; the last spec entries, GAP-174
+(TU-local exposures) and GAP-175 (local-class members of an imported
+inline function), closed with WP-1814 and WP-1815. At the 1.3.0
+release candidate 10 of 56,766 g++.dg cases hit a gap; all of those are
+fixed. 4 entries (5 sites) use wording that matches clang's for a
+limit clang shares, and 3 spec entries record a limit clang shares or
+a flag kiln rejects by name: they are listed as excluded and stay.
 
 ## Method
 
@@ -66,8 +69,8 @@ had landed; rewritten with the test or code that shows it), several
 were diagnostic, dump or tooling differences (relabelled "Differences
 from clang", "Missing warnings", "Notes"), two were fixed (the asm label
 of a block-scope `extern` declaration in a template, and clang's C++
-`__wb` / `__uwb` literal suffixes), and three are entries here
-(GAP-173..175). No gap list is left in the tree.
+`__wb` / `__uwb` literal suffixes), and three became entries here
+(GAP-173..175; WP-1814 and WP-1815 closed GAP-174 and GAP-175). No gap list is left in the tree.
 
 Each site carries a marker comment on its line or in the comment block
 directly above it: `// kiln-gap: GAP-NNN` names its entry; `// kiln-gap:
@@ -109,19 +112,16 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| spec | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| modules | 1 (GAP-174) | 1 | 0 | WP-1814 |
 
 ## Gaps
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-174 | spec | modules | an exposure of a TU-local entity is accepted silently in three forms clang 22 warns about (`-WTU-local-entity-exposure`): an enumerator of a TU-local enumeration named in an exported inline function, a TU-local entity named in a member of a local class of one, a call instantiating a template that exposes one (`f3<int>`) | `spec/modules.md::§6. Cross-unit deduplication (the substitute for ODR merging)` | 0 | WP-1814 |
 
 ## Excluded (clang-matching wording)
 

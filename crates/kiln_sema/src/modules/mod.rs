@@ -93,6 +93,22 @@ pub(crate) struct ModSema {
     /// Uses of TU-local entities waiting for the end of their
     /// full-expression or declaration (`exposure.rs`).
     pending_exposures: Vec<exposure::PendingExposure>,
+    /// Per instantiated function of a template of this unit's purview
+    /// (its first declaration): the first TU-local entity its body
+    /// names ([basic.link]/16.5; `exposure.rs`, WP-1814).
+    inst_tu_local: FxHashMap<DeclId, DeclId>,
+    /// Per instantiated inline function of a template of this unit's
+    /// purview: the instantiations of such templates its body names.
+    inst_spec_uses: FxHashMap<DeclId, Vec<DeclId>>,
+    /// Uses of an instantiation in a part [basic.link]/15 considers,
+    /// decided at the end of the unit, with whether a TU-local one is
+    /// clang 22's warning (an inline variable's initializer) rather than
+    /// an exposure.
+    deferred_exposures: Vec<(exposure::PendingExposure, bool)>,
+    /// The first token of the qualified name whose reference is being
+    /// built, while it is (where clang 22 warns for a TU-local
+    /// enumerator).
+    pub(crate) qualified_use_begin: Option<Loc>,
     /// Per unit: visible (imported, directly or transitively) from the
     /// current unit.
     visible: Vec<bool>,
