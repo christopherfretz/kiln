@@ -4658,7 +4658,20 @@ kind, says how a kind's words travel, and it is the whole format:
 - plain words with a bound per word (flag-only kinds hold `0, 0`;
   `visibility` and `type_visibility` 0 to 2; `format` and
   `no_sanitize` any);
-- a `Symbol` (`abi_tag`), written as text;
+- a `Symbol` (`abi_tag`, `no_builtin`; `builtin_alias` and
+  `target_clones` with a word `b` of 0 or 1), written as text;
+- an ordinary string literal (`section`, `target`, `weakref`,
+  `omp::assume`, `#pragma clang section` with its section kind in `b`),
+  written as text and interned again as an ordinary literal (WP-1806);
+- a literal and a location (`alias`, `ifunc`, `target_version`: `b` is
+  one past the `)`), written as text and an image location;
+- a function and a location (`cleanup`): `a` is an earlier record (the
+  cleanup function is declared before the variable), `b` a location; a
+  function outside the image falls back with "a cleanup function the
+  image does not carry";
+- an expression list (`annotate`): `a` the first expression, the
+  others a run of `xexprs`;
+- a raw list (`callback`): its words, a run of `words`;
 - expressions (`deprecated`, `nodiscard`, `unavailable`, `alloc_size`,
   `alloc_align`): expression records of the bodies section, built after
   the bodies and attached then;
@@ -4688,9 +4701,21 @@ a wrong attribute on an imported declaration is a miscompile, so the
 image never guesses. `aligned` and `alignas` with an expression or no
 argument are carried since WP-1310 (row `ExprA`: `a` the expression or
 none, the target's biggest alignment; the layout reads the attribute).
-Not carried yet: `preferred_name` (a type argument), `diagnose_if` and
-`enable_if` (conditions evaluated at the call), `alignas(type-id)` (a
-type in `b`), `gsl::Owner` and `gsl::Pointer` with a type argument.
+Every kind in `kiln_ast/src/attr.rs` is either in the table or in its
+exemption list (WP-1806): a unit test (`every_kind_is_carried_or_exempt`)
+fails when a kind is added without one of the two. Exempt, never
+attached to a declaration node: `annotation` (moved into the
+annotations table), `common`, `cpu_dispatch`, `cpu_specific`, the
+statement attributes (`assume`, `fallthrough`, `likely`, `unlikely`,
+`musttail`, the loop hints, `code_align`: carried by the bodies
+section's statement attributes or the body falls back), and the kinds a
+type consumes (vector and function-type attributes, carried in the
+type). A Swift parameter ABI is a function type's `abis` list. A
+`constructor` or `destructor` priority that depends on a template
+parameter falls back. Not carried, and so falling back: `preferred_name`
+(a type argument), `diagnose_if` and `enable_if` (conditions evaluated
+at the call), `alignas(type-id)` (a type in `b`), `gsl::Owner` and
+`gsl::Pointer` with a type argument.
 
 ```
 attrs   := strs:u32 str*
@@ -4699,6 +4724,8 @@ attrs   := strs:u32 str*
            ints:u32 (value:u32 loc:u32)*
            params:u32 (pos:u32 arec)*  WP-1314: parameter attributes,
                                      `decl` the function, ascending
+           xexprs:u32 expr:u32*      WP-1806: `annotate` arguments
+           words:u32 word:u32*       WP-1806: `callback` lists
 arec    := decl:u32 kind:u16 syntax:u8 flags:u8 loc:u32 a:u32 b:u32
            s:u32 scope:u32 name:u32  s, scope, name: strs indices
 ```
@@ -4934,7 +4961,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 44` since WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 45` since WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

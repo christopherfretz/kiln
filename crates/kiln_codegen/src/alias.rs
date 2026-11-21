@@ -88,6 +88,12 @@ impl Cg<'_> {
             return Ok(false);
         }
         let first = ast.first(d);
+        // An alias attached to an imported named module is that unit's
+        // definition: the importer only declares it (clang
+        // `shouldEmitInExternalSource`; spec/modules.md §7).
+        if self.owned_by_imported_unit(first) {
+            return Ok(false);
+        }
         if !self.alias.done.insert(first) {
             return Ok(true);
         }

@@ -1722,6 +1722,38 @@ impl Sema<'_, '_> {
         // ([stmt.if]/2) odr-uses `v`: only a variable usable in constant
         // expressions is instantiated there (clang `DoMarkVarDeclReferenced`).
         let odr = self.unevaluated == 0 && !self.in_discarded_statement();
+        // clang `isPotentiallyConstantEvaluatedContext`: an unevaluated
+        // operand written in the source (`decltype(A<int>::value)`)
+        // outside a constant-evaluated context needs only the declaration
+        // ([temp.inst]/4, /8). The contexts are counters, not a stack, so
+        // an unevaluated operand inside a constant-evaluated one
+        // (`static_assert(sizeof(A<int>::value))`), and any reference
+        // made while instantiating or checking constraints (whose atoms
+        // are constant-evaluated), still instantiates.
+        let decl_only = !odr
+            && self.unevaluated > 0
+            && !self.in_constant_evaluated()
+            && self.inst.stack.frames.is_empty();
+        self.note_var_reference(v, loc, odr, decl_only);
+    }
+
+    /// A reference to variable `v` that a declaration image's importer
+    /// makes again for one its unit's bodies made (spec/modules.md
+    /// "Templates as patterns"): `odr` when the unit odr-used `v`, else
+    /// a potentially-evaluated reference that is not an odr-use (`B<2>::v`
+    /// read as a constant, [basic.def.odr]/4), which instantiates a
+    /// variable usable in constant expressions as the replay's reference
+    /// does (WP-1817: WP-1497's unevaluated-operand rule skipped it when
+    /// the importer marked the reference unevaluated).
+    pub(crate) fn note_var_rereferenced(&mut self, v: DeclId, loc: Loc, odr: bool) {
+        self.note_var_reference(v, loc, odr, false);
+    }
+
+    /// [`Self::note_var_referenced`] with its context decided: `odr`
+    /// whether the reference odr-uses `v`, `decl_only` whether it needs
+    /// only the declaration (an unevaluated operand written in the
+    /// source).
+    fn note_var_reference(&mut self, v: DeclId, loc: Loc, odr: bool, decl_only: bool) {
         let deferred = self.inst.deferred_inits.contains(&v);
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
@@ -1762,22 +1794,7 @@ impl Sema<'_, '_> {
             return;
         }
         let constant = self.might_be_constant_var(v);
-        if !odr && !constant {
-            return;
-        }
-        // clang `isPotentiallyConstantEvaluatedContext`: an unevaluated
-        // operand written in the source (`decltype(A<int>::value)`)
-        // outside a constant-evaluated context needs only the declaration
-        // ([temp.inst]/4, /8). The contexts are counters, not a stack, so
-        // an unevaluated operand inside a constant-evaluated one
-        // (`static_assert(sizeof(A<int>::value))`), and any reference
-        // made while instantiating or checking constraints (whose atoms
-        // are constant-evaluated), still instantiates.
-        if !odr
-            && self.unevaluated > 0
-            && !self.in_constant_evaluated()
-            && self.inst.stack.frames.is_empty()
-        {
+        if !odr && !constant || decl_only {
             return;
         }
         if deferred && constant {

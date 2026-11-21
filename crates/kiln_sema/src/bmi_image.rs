@@ -32,8 +32,8 @@ use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Nns, NoexceptValue, Quals, TagKeyword,
-    TemplateArg, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Nns, NoexceptValue, ParamAbi, Quals, TagKeyword,
+    TemplateArg, TypeContext, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -99,7 +99,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 44;
+pub(crate) const IMAGE_VERSION: u32 = 45;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -263,6 +263,10 @@ enum TyRec {
         /// dependent, [`exprs`]), the expression section of `e`; else
         /// [`NONE`].
         nx: u32,
+        /// WP-1806: the parameters' ABIs (`ParamAbi`, clang
+        /// `ExtParameterInfo`), up to the last one that is not ordinary;
+        /// empty when every parameter is ordinary.
+        abis: Vec<u8>,
     },
     Enum(u32),
     Typedef(u32),
@@ -960,6 +964,19 @@ fn init_kind_of(k: u8) -> CtorInitKind {
 /// Variable specifier bits carried: storage (none, static, extern), the
 /// initialization style, `constexpr`, `constinit`, `inline` (and whether
 /// it is implied), NRVO and range-`for` variables. Thread-local storage is not carried yet.
+/// The ABIs of the first `n` parameters of a function type with `info`
+/// (WP-1806), up to the last one that is not ordinary.
+fn param_abis_of(types: &TypeContext, info: FuncInfo, n: usize) -> Vec<u8> {
+    if info.param_abis() == 0 {
+        return Vec::new();
+    }
+    let mut v: Vec<u8> = (0..n).map(|i| types.param_abi(info, i) as u8).collect();
+    while v.last() == Some(&0) {
+        v.pop();
+    }
+    v
+}
+
 fn var_spec(bits: u32) -> Option<VarSpec> {
     let storage = match bits & 7 {
         0 => VarStorage::None,
@@ -1409,7 +1426,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(*k);
                 w.q(*q);
             }
-            TyRec::Func { ret, params, info, exc, nx } => {
+            TyRec::Func { ret, params, info, exc, nx, abis } => {
                 w.u8(8);
                 w.q(*ret);
                 w.len(params.len());
@@ -1420,6 +1437,10 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(*exc);
                 if *exc >= exprs::NX_FALSE {
                     w.u32(*nx);
+                }
+                w.len(abis.len());
+                for &a in abis {
+                    w.u8(a);
                 }
             }
             TyRec::Enum(d) => (w.u8(9), w.u32(*d)).1,
@@ -2118,7 +2139,20 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                     return bad("bad exception specification");
                 }
                 let nx = if exc >= exprs::NX_FALSE { r.u32()? } else { NONE };
-                TyRec::Func { ret, params, info, exc, nx }
+                let n = r.count(1)?;
+                let mut abis = Vec::with_capacity(n);
+                for _ in 0..n {
+                    abis.push(r.u8()?);
+                }
+                // At most one per parameter, the last not ordinary, each a
+                // `ParamAbi`.
+                if n > params.len()
+                    || abis.last() == Some(&0)
+                    || abis.iter().any(|&a| a > ParamAbi::SwiftIndirectResult as u8)
+                {
+                    return bad("bad parameter ABIs");
+                }
+                TyRec::Func { ret, params, info, exc, nx, abis }
             }
             9 => TyRec::Enum(r.u32()?),
             10 => TyRec::Typedef(r.u32()?),
@@ -3676,14 +3710,12 @@ impl Writer<'_, '_, '_> {
                     }
                     _ => return Err("an exception specification the image does not carry"),
                 };
-                if p.info().param_abis() != 0 {
-                    return Err("a Swift parameter ABI the image does not carry");
-                }
                 let ps: Vec<QualType> = types.params(&p).to_vec();
                 let info = p.info().bits();
+                let abis = param_abis_of(types, p.info(), ps.len());
                 let ret = self.qref(p.ret())?;
                 let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
-                TyRec::Func { ret, params, info, exc, nx: NONE }
+                TyRec::Func { ret, params, info, exc, nx: NONE, abis }
             }
             TypeView::Enum(d) => {
                 if let Some(r) = self.align_val_t_stub(d) {
@@ -4416,15 +4448,13 @@ impl Writer<'_, '_, '_> {
         } else if deferred {
             // The exception specification names the function itself:
             // build the type without it (the importer defers it again).
-            if proto.info().param_abis() != 0 {
-                return Err("a Swift parameter ABI the image does not carry");
-            }
             let ps: Vec<QualType> = ast.types.params(&proto).to_vec();
             let info = proto.info().bits();
+            let abis = param_abis_of(&ast.types, proto.info(), ps.len());
             let ret = self.qref(proto.ret())?;
             let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
             let t = BUILTINS + 1 + self.img.types.len() as u32;
-            self.img.types.push(TyRec::Func { ret, params, info, exc: 0, nx: NONE });
+            self.img.types.push(TyRec::Func { ret, params, info, exc: 0, nx: NONE, abis });
             QRef { ty: t, quals: fty.quals_bits() }
         } else {
             self.qref(fty)?
@@ -6183,7 +6213,7 @@ impl Sema<'_, '_> {
             }
             if !builtin {
                 let qt = &mut |s: &mut Self, q| s.image_ty(img, &mut tys, &ids, q);
-                self.image_attrs(img, i as u32, d, main, &mut attr_exprs, qt);
+                self.image_attrs(img, i as u32, d, &ids, main, &mut attr_exprs, qt);
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
@@ -6221,7 +6251,7 @@ impl Sema<'_, '_> {
         // them (lambdas.rs).
         self.image_lambdas(img, &ids, &params_all, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
-        self.image_attr_exprs(&attr_exprs, &built);
+        self.image_attr_exprs(img, &attr_exprs, &built);
         // WP-1369: after the attributes' expressions (`alignas(A)`).
         self.image_fix_aligned();
         self.image_member_classes(img, &ids);
@@ -6615,11 +6645,16 @@ impl Sema<'_, '_> {
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, cur, q)
             }
-            TyRec::Func { ret, params, info, exc, nx } => {
+            TyRec::Func { ret, params, info, exc, nx, abis } => {
                 let r = qt(self, *ret);
                 let ps: Vec<QualType> = params.iter().map(|&p| qt(self, p)).collect();
                 let exc = self.image_func_exc(*exc, *nx);
-                self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
+                let mut info = FuncInfo::from_bits(*info);
+                if !abis.is_empty() {
+                    let list: Vec<ParamAbi> = abis.iter().map(|&a| ParamAbi::from_u8(a)).collect();
+                    info = info.with_param_abis(self.ast.types.intern_param_abis(&list));
+                }
+                self.ast.types.function(r, &ps, info, exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {
                 decl_ty(self, *d)
@@ -6748,7 +6783,14 @@ mod tests {
             gated: Vec::new(),
             pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),
             types: vec![
-                TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0, nx: NONE },
+                TyRec::Func {
+                    ret: q(int),
+                    params: vec![q(int)],
+                    info: 0,
+                    exc: 0,
+                    nx: NONE,
+                    abis: Vec::new(),
+                },
                 TyRec::Enum(3),
                 TyRec::Pointer(QRef { ty: BUILTINS + 2, quals: 1 }),
             ],
@@ -7030,7 +7072,14 @@ mod tests {
         img.types.extend([
             TyRec::Record(10),
             TyRec::Record(11),
-            TyRec::Func { ret: q(void), params: vec![], info: 0, exc: 0, nx: NONE },
+            TyRec::Func {
+                ret: q(void),
+                params: vec![],
+                info: 0,
+                exc: 0,
+                nx: NONE,
+                abis: Vec::new(),
+            },
             TyRec::ElabQ(0, vec![NnsRec::Ns(0)], q(t + 1)),
         ]);
         let head = |name, ctx, access, loc, payload| DeclRec {
@@ -7382,7 +7431,14 @@ mod tests {
         let t = BUILTINS + 1 + img.types.len() as u32;
         img.types.extend([
             TyRec::Ttp(10),
-            TyRec::Func { ret: q(t), params: vec![q(t)], info: 0, exc: 0, nx: NONE },
+            TyRec::Func {
+                ret: q(t),
+                params: vec![q(t)],
+                info: 0,
+                exc: 0,
+                nx: NONE,
+                abis: Vec::new(),
+            },
         ]);
         let head = |flags, name, loc, payload| DeclRec {
             flags,

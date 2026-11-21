@@ -5470,6 +5470,15 @@ impl Sema<'_, '_> {
                     Some(p) => Some(p),
                     None => self.extern_c_prev(name, false, own, d.name_loc()),
                 };
+                // Two `overloadable` C-linkage functions of different
+                // types overload (clang `IsOverload`); one of the same
+                // type in the scope was found as a redeclaration above.
+                let overloadable = ds
+                    .attrs
+                    .iter()
+                    .chain(&d.attrs)
+                    .any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE);
+                let p = p.filter(|&x| !(overloadable && self.ast.is_overloadable(x)));
                 extern_c_redecl = p.is_some();
                 p
             }

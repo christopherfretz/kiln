@@ -40,8 +40,9 @@ pub(super) const UNCARRIED: &str = "an attribute the image does not carry yet";
 enum Op {
     /// Plain words, at most these values (`a`, `b`).
     Words(u32, u32),
-    /// `a` is a `Symbol` (written as its text), `b` zero.
-    Sym,
+    /// `a` is a `Symbol` (written as its text), `b` a plain word at
+    /// most this value (`builtin_alias`'s spelling, WP-1806).
+    Sym(u32),
     /// `a` and `b` are each an expression or zero.
     Exprs,
     /// `a` is an expression or zero, `b` zero or a type (`aligned(E)`,
@@ -62,6 +63,26 @@ enum Op {
     /// previous declaration, flag 2) also names the first declaration's
     /// symbol (`cold.asm_label`).
     Label,
+    /// WP-1806: `a` is an ordinary string literal (`StringLitId`, written
+    /// as its text) or zero, `b` a plain word at most this value
+    /// (`section`, `target`, `weakref`, `#pragma clang section`'s kind).
+    Lit(u32),
+    /// WP-1806: `a` is an ordinary string literal, `b` a raw location
+    /// (`alias`, `ifunc`: one past the `)`; `target_version`: the
+    /// literal's), written as an image location.
+    LitLoc,
+    /// WP-1806: `a` is a function declared by an earlier record (written
+    /// as that record's index), `b` a raw location (`cleanup`'s checked
+    /// form).
+    DeclLoc,
+    /// WP-1806: `a` is an expression or zero, `b` zero or the `ListId`
+    /// of more expressions (`annotate("s", args...)`), written as a run
+    /// of [`Attrs::xexprs`] (`s` its start, `b` its length).
+    ExprList,
+    /// WP-1806: `a` is the `ListId` of raw words (`callback`'s checked
+    /// argument indices), `b` zero, written as a run of [`Attrs::words`]
+    /// (`a` its start, `b` its length).
+    RawList,
 }
 
 /// Whether an attribute of kind `kind` with words `a`, `b` is one an
@@ -72,7 +93,7 @@ enum Op {
 fn inst_word(kind: AttrKind, a: u32, b: u32) -> bool {
     match op_of(kind) {
         Some(Op::Words(am, bm)) => a <= am && b <= bm,
-        Some(Op::Exprs) => a == 0 && b == 0,
+        Some(Op::Exprs | Op::ExprList) => a == 0 && b == 0,
         _ => false,
     }
 }
@@ -107,7 +128,7 @@ const TABLE: &[(AttrKind, Op)] = &[
     (AttrKind::NOTHROW, FLAG),
     (AttrKind::TRIVIAL_ABI, FLAG),
     (AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION, FLAG),
-    (AttrKind::ABI_TAG, Op::Sym),
+    (AttrKind::ABI_TAG, Op::Sym(0)),
     (AttrKind::INTERNAL_LINKAGE, FLAG),
     // 1 for the implicit object parameter.
     (AttrKind::LIFETIMEBOUND, Op::Words(1, 0)),
@@ -171,6 +192,100 @@ const TABLE: &[(AttrKind, Op)] = &[
     // whether the condition names a parameter.
     (AttrKind::DIAGNOSE_IF, Op::Exprs),
     (AttrKind::ENABLE_IF, Op::Exprs),
+    // WP-1806: the rest of the declaration attributes, so that no kind
+    // is left out (`every_kind_is_carried_or_exempt`).
+    (AttrKind::INDETERMINATE, FLAG),
+    (AttrKind::SECTION, Op::Lit(0)),
+    (AttrKind::USING_IF_EXISTS, FLAG),
+    (AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE, FLAG),
+    // The checked priority (101 to 65535).
+    (AttrKind::INIT_PRIORITY, Op::Words(ANY, 0)),
+    (AttrKind::UNINITIALIZED, FLAG),
+    (AttrKind::TYPE_NULLABLE, FLAG),
+    (AttrKind::TARGET, Op::Lit(0)),
+    (AttrKind::MIN_VECTOR_WIDTH, Op::Words(ANY, 0)),
+    // `a` zero once `weakref("target")` is split into an `alias`.
+    (AttrKind::WEAKREF, Op::Lit(0)),
+    (AttrKind::ALIAS, Op::LitLoc),
+    (AttrKind::IFUNC, Op::LitLoc),
+    // The checked priority; a dependent one (`PRIORITY_DEPENDENT`, its
+    // expression in `a`) is not carried.
+    (AttrKind::CONSTRUCTOR, Op::Words(ANY, 0)),
+    (AttrKind::DESTRUCTOR, Op::Words(ANY, 0)),
+    (AttrKind::CLEANUP, Op::DeclLoc),
+    // The checked model, 1 to 4.
+    (AttrKind::TLS_MODEL, Op::Words(4, 0)),
+    // The object-size type and 1 for the dynamic spelling.
+    (AttrKind::PASS_OBJECT_SIZE, Op::Words(3, 1)),
+    (AttrKind::OVERLOADABLE, FLAG),
+    (AttrKind::TRANSPARENT_UNION, FLAG),
+    (AttrKind::SELECTANY, FLAG),
+    (AttrKind::MS_STRUCT, FLAG),
+    (AttrKind::GCC_STRUCT, FLAG),
+    (AttrKind::NO_BUILTIN, Op::Sym(0)),
+    // 1 for the `__clang_arm_builtin_alias` spelling.
+    (AttrKind::BUILTIN_ALIAS, Op::Sym(1)),
+    (AttrKind::TARGET_VERSION, Op::LitLoc),
+    (AttrKind::TARGET_CLONES, Op::Sym(1)),
+    (AttrKind::PATCHABLE_FUNCTION_ENTRY, Op::Words(ANY, ANY)),
+    (AttrKind::ZERO_CALL_USED_REGS, Op::Words(ZERO_CALL_KINDS, 0)),
+    (AttrKind::SPECULATIVE_LOAD_HARDENING, FLAG),
+    (AttrKind::NO_SPECULATIVE_LOAD_HARDENING, FLAG),
+    (AttrKind::XRAY_INSTRUMENT, Op::Words(1, 0)),
+    (AttrKind::XRAY_LOG_ARGS, Op::Words(ANY, 0)),
+    (AttrKind::NOCF_CHECK, FLAG),
+    (AttrKind::FUNCTION_RETURN, Op::Words(1, 0)),
+    (AttrKind::CFI_CANONICAL_JUMP_TABLE, FLAG),
+    (AttrKind::FORCE_ALIGN_ARG_POINTER, FLAG),
+    (AttrKind::ASSUME_ALIGNED, Op::Words(ANY, ANY)),
+    (AttrKind::ALIGN_VALUE, Op::Words(ANY, 0)),
+    (AttrKind::CALLBACK, Op::RawList),
+    (AttrKind::MAYBE_UNDEF, FLAG),
+    (AttrKind::LOADER_UNINITIALIZED, FLAG),
+    (AttrKind::OMP_ASSUME, Op::Lit(0)),
+    (AttrKind::CORO_AWAIT_ELIDABLE, FLAG),
+    (AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT, FLAG),
+    (AttrKind::ANNOTATE, Op::ExprList),
+    // `b` the keyword's index and its state strings' offsets from `loc`
+    // (`SME_KEYWORDS`), which the locations keep.
+    (AttrKind::ARM_LOCALLY_STREAMING, Op::Words(0, ANY)),
+    // Bit 0 ZA, bit 1 ZT0; `b` as above.
+    (AttrKind::ARM_NEW, Op::Words(3, ANY)),
+    (AttrKind::PRAGMA_CLANG_SECTION, Op::Lit(CLANG_SECTIONS)),
+    // 1 `small`, 2 `large`.
+    (AttrKind::CODE_MODEL, Op::Words(2, 0)),
+    // `a` 1 (a failed signature check) is dropped before it is kept.
+    (AttrKind::X86_INTERRUPT, FLAG),
+    (AttrKind::WEAK_IMPORT, FLAG),
+    // The `ParamAbi` (1 to 4) of a parameter.
+    (AttrKind::SWIFT_PARAM_ABI, Op::Words(4, 0)),
+];
+
+/// The largest `zero_call_used_regs` kind index.
+const ZERO_CALL_KINDS: u32 = kiln_ast::attr::ZERO_CALL_USED_REGS_KINDS.len() as u32 - 1;
+/// The largest `#pragma clang section` kind index.
+const CLANG_SECTIONS: u32 = kiln_ast::attr::CLANG_SECTION_KINDS.len() as u32 - 1;
+
+/// The kinds the table leaves out, each with the reason: none of them is
+/// ever an attribute node of a declaration the image writes
+/// (`every_kind_is_carried_or_exempt` checks that each `AttrKind` is in
+/// exactly one of the two lists).
+#[cfg(test)]
+const NOT_CARRIED: &[(AttrKind, &str)] = &[
+    (AttrKind::ANNOTATION, "moved into `Ast::annots` by sema (the image's annotations)"),
+    (AttrKind::COMMON, "rejected in C++, never attached"),
+    (AttrKind::CPU_DISPATCH, "never attached (invalid on AArch64, unsupported on x86)"),
+    (AttrKind::CPU_SPECIFIC, "never attached (invalid on AArch64, unsupported on x86)"),
+    (AttrKind::ASSUME, "a statement attribute (`body.rs` STMT_ATTRS, else the body falls back)"),
+    (AttrKind::FALLTHROUGH, "a statement attribute, carried by `body.rs` STMT_ATTRS"),
+    (AttrKind::LIKELY, "a statement attribute, carried by `body.rs` STMT_ATTRS"),
+    (AttrKind::UNLIKELY, "a statement attribute, carried by `body.rs` STMT_ATTRS"),
+    (AttrKind::MUSTTAIL, "a statement attribute (`body.rs` STMT_ATTRS, else the body falls back)"),
+    (AttrKind::LOOP_HINT, "a statement attribute (`body.rs` STMT_ATTRS, else the body falls back)"),
+    (
+        AttrKind::CODE_ALIGN,
+        "a statement attribute (`body.rs` STMT_ATTRS, else the body falls back)",
+    ),
 ];
 
 fn op_of(k: AttrKind) -> Option<Op> {
@@ -181,13 +296,23 @@ fn op_of(k: AttrKind) -> Option<Op> {
 pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
     match op_of(node.kind) {
         None => false,
+        Some(Op::Sym(bm)) => (node.a as usize) < nsyms && node.b <= bm,
+        // A priority still dependent holds its expression.
+        Some(Op::Words(..))
+            if node.flags & AttrNode::PRIORITY_DEPENDENT != 0
+                && matches!(node.kind, AttrKind::CONSTRUCTOR | AttrKind::DESTRUCTOR) =>
+        {
+            false
+        }
         Some(Op::Words(am, bm)) => node.a <= am && node.b <= bm,
-        Some(Op::Sym) => (node.a as usize) < nsyms && node.b == 0,
-        Some(Op::Exprs | Op::ExprA) => true,
+        Some(Op::Exprs | Op::ExprA | Op::ExprList) => true,
         Some(Op::Builtin) => node.b == 0 && builtin::info(node.a).is_some(),
         Some(Op::Type) => node.a == 0 && node.b != 0,
         Some(Op::Ints) => node.b == 0,
-        Some(Op::Label) => node.b == 0 && node.a != 0,
+        // A `callback` list is never empty.
+        Some(Op::Label | Op::RawList) => node.b == 0 && node.a != 0,
+        Some(Op::Lit(bm)) => node.b <= bm,
+        Some(Op::LitLoc | Op::DeclLoc) => node.a != 0,
     }
 }
 
@@ -200,6 +325,19 @@ fn syntax_of(b: u8) -> Option<AttrSyntax> {
         4 => AttrSyntax::Pragma,
         _ => return None,
     })
+}
+
+/// The text of ordinary string literal `raw` (a `StringLitId`), or the
+/// census reason: another encoding, or bytes that are not UTF-8, are not
+/// carried.
+fn ordinary_text(s: &Sema<'_, '_>, raw: u32) -> Result<String, &'static str> {
+    let lit = StringLitId::from_raw(raw).ok_or(UNCARRIED)?;
+    let (enc, bytes) = s.ast.strings.get(lit);
+    (enc == StringEncoding::Ordinary)
+        .then(|| std::str::from_utf8(bytes).ok())
+        .flatten()
+        .map(str::to_owned)
+        .ok_or(UNCARRIED)
 }
 
 /// One attribute node of record `decl`.
@@ -215,8 +353,10 @@ pub(super) struct AttrRec {
     /// [`Attrs::ints`] and its length.
     pub(super) a: u32,
     pub(super) b: u32,
-    /// [`Op::Sym`]: the text; [`Op::Builtin`]: the builtin's spelling;
-    /// else [`NONE`] (an index into [`Attrs::strs`]).
+    /// [`Op::Sym`], [`Op::Label`], [`Op::Lit`], [`Op::LitLoc`]: the
+    /// text; [`Op::Builtin`]: the builtin's spelling (an index into
+    /// [`Attrs::strs`]); [`Op::ExprList`]: the start of its run of
+    /// [`Attrs::xexprs`]; else [`NONE`].
     s: u32,
     /// The written scope and name (`Sema::attr_spellings`), or [`NONE`].
     scope: u32,
@@ -257,6 +397,11 @@ pub(super) struct Attrs {
     /// ascending; only kinds whose words are plain ([`Op::Words`]:
     /// `visibility`).
     pub(super) insts: Vec<AttrRec>,
+    /// WP-1806: the further expression arguments of [`Op::ExprList`]
+    /// nodes, as expression records.
+    pub(super) xexprs: Vec<u32>,
+    /// WP-1806: the words of [`Op::RawList`] nodes.
+    words: Vec<u32>,
 }
 
 /// What the writer computed for one declaration, committed with its
@@ -268,6 +413,11 @@ pub(super) struct Pending {
     ints: Vec<Vec<(u32, u32)>>,
     /// The type argument of each record, in order (WP-1345).
     types: Vec<Option<super::QRef>>,
+    /// The further expressions of each [`Op::ExprList`] record, in order
+    /// (WP-1806).
+    xlists: Vec<Vec<ExprId>>,
+    /// The words of each [`Op::RawList`] record, in order (WP-1806).
+    words: Vec<Vec<u32>>,
 }
 
 impl Writer<'_, '_, '_> {
@@ -376,6 +526,7 @@ impl Writer<'_, '_, '_> {
 
     /// The attribute records and builtin identity of `d`, record `rec`
     /// (checked by [`Writer::attrs_carried`] in `head`).
+    #[allow(clippy::too_many_lines)] // one arm per table op, kept together with the format
     pub(super) fn attr_recs(&mut self, d: DeclId, rec: u32) -> W<Pending> {
         let s = self.s;
         let ast = &s.ast;
@@ -417,10 +568,46 @@ impl Writer<'_, '_, '_> {
                     ty = Some(self.qref(q)?);
                     r.b = NONE;
                 }
-                Op::Sym => {
+                Op::Sym(_) => {
                     let t = ast.symbols().as_str(Symbol::from_index(node.a)).to_owned();
                     r.s = self.attr_str(&t);
                     r.a = 0;
+                }
+                Op::Lit(_) => {
+                    if node.a != 0 {
+                        let text = ordinary_text(s, node.a)?;
+                        r.s = self.attr_str(&text);
+                    }
+                    r.a = 0;
+                }
+                Op::LitLoc => {
+                    let text = ordinary_text(s, node.a)?;
+                    r.s = self.attr_str(&text);
+                    r.a = 0;
+                    r.b = self.loc(kiln_source::Loc::from_raw(node.b))?;
+                }
+                Op::DeclLoc => {
+                    let f = DeclId::from_raw(node.a).ok_or(UNCARRIED)?;
+                    if !ast.decls.get(f).kind().is_function() {
+                        return Err(UNCARRIED);
+                    }
+                    r.a =
+                        *self.recs.get(&f).ok_or("a cleanup function the image does not carry")?;
+                    r.b = self.loc(kiln_source::Loc::from_raw(node.b))?;
+                }
+                Op::ExprList => {
+                    exprs = [ExprId::try_new(node.a), None];
+                    let list = ListId::from_raw(node.b).filter(|_| node.b != 0);
+                    let more: Vec<ExprId> =
+                        list.map(|l| ast.lists.iter::<ExprId>(l).collect()).unwrap_or_default();
+                    (r.a, r.b) = (NONE, more.len() as u32);
+                    p.xlists.push(more);
+                }
+                Op::RawList => {
+                    let list = ListId::from_raw(node.a).ok_or(UNCARRIED)?;
+                    let w = ast.lists.get(list).to_vec();
+                    (r.a, r.b) = (0, w.len() as u32);
+                    p.words.push(w);
                 }
                 Op::Exprs => {
                     exprs = [ExprId::try_new(node.a), ExprId::try_new(node.b)];
@@ -453,13 +640,7 @@ impl Writer<'_, '_, '_> {
                     p.ints.push(run);
                 }
                 Op::Label => {
-                    let lit = StringLitId::from_raw(node.a).ok_or(UNCARRIED)?;
-                    let (enc, bytes) = ast.strings.get(lit);
-                    let text = (enc == StringEncoding::Ordinary)
-                        .then(|| std::str::from_utf8(bytes).ok())
-                        .flatten()
-                        .ok_or(UNCARRIED)?
-                        .to_owned();
+                    let text = ordinary_text(s, node.a)?;
                     r.s = self.attr_str(&text);
                     r.a = 0;
                 }
@@ -473,6 +654,8 @@ impl Writer<'_, '_, '_> {
     /// Adds `p` to the image, once its declaration's record is in.
     pub(super) fn attr_commit(&mut self, rec: u32, p: Pending) {
         let mut runs = p.ints.into_iter();
+        let mut xlists = p.xlists.into_iter();
+        let mut words = p.words.into_iter();
         for ((mut r, exprs), ty) in p.recs.into_iter().zip(p.types) {
             if let Some(q) = ty {
                 r.b = self.img.attrs.types.len() as u32;
@@ -483,6 +666,23 @@ impl Writer<'_, '_, '_> {
                 let run = runs.next().unwrap_or_default();
                 r.a = self.img.attrs.ints.len() as u32;
                 self.img.attrs.ints.extend(run);
+            }
+            match op_of(AttrKind(r.kind)) {
+                Some(Op::ExprList) => {
+                    let more = xlists.next().unwrap_or_default();
+                    r.s = self.img.attrs.xexprs.len() as u32;
+                    for e in more {
+                        let x = self.img.attrs.xexprs.len() as u32;
+                        self.img.attrs.xexprs.push(NONE);
+                        self.bs.roots.push(Root::Attr(rec, x, 2, e));
+                    }
+                }
+                Some(Op::RawList) => {
+                    let w = words.next().unwrap_or_default();
+                    r.a = self.img.attrs.words.len() as u32;
+                    self.img.attrs.words.extend(w);
+                }
+                _ => {}
             }
             self.img.attrs.recs.push(r);
             for (slot, e) in (0u8..).zip(exprs) {
@@ -528,6 +728,14 @@ pub(super) fn encode_attrs(w: &mut Wr, a: &Attrs) {
     w.len(a.insts.len());
     for r in &a.insts {
         encode_rec(w, r);
+    }
+    w.len(a.xexprs.len());
+    for &x in &a.xexprs {
+        w.u32(x);
+    }
+    w.len(a.words.len());
+    for &x in &a.words {
+        w.u32(x);
     }
 }
 
@@ -585,10 +793,19 @@ pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
     for _ in 0..n {
         a.insts.push(decode_rec(r)?);
     }
+    let n = r.count(4)?;
+    for _ in 0..n {
+        a.xexprs.push(r.u32()?);
+    }
+    let n = r.count(4)?;
+    for _ in 0..n {
+        a.words.push(r.u32()?);
+    }
     Ok(a)
 }
 
 /// Checks every index of the attribute section.
+#[allow(clippy::too_many_lines)] // one check per table op, in format order
 pub(super) fn validate_attrs(img: &Image) -> Res<()> {
     let a = &img.attrs;
     let str_ok = |i: u32| (i as usize) < a.strs.len();
@@ -611,7 +828,31 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
             && match op_of(AttrKind(r.kind)) {
                 None => false,
                 Some(Op::Words(am, bm)) => r.a <= am && r.b <= bm && r.s == NONE,
-                Some(Op::Sym | Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
+                Some(Op::Sym(bm)) => r.a == 0 && r.b <= bm && str_ok(r.s),
+                Some(Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
+                Some(Op::Lit(bm)) => r.a == 0 && r.b <= bm && (r.s == NONE || str_ok(r.s)),
+                Some(Op::LitLoc) => r.a == 0 && str_ok(r.s),
+                // A function record before the variable's.
+                Some(Op::DeclLoc) => {
+                    r.s == NONE
+                        && r.a < r.decl
+                        && matches!(
+                            img.decls.get(r.a as usize).map(|d| &d.payload),
+                            Some(Payload::Function { .. })
+                        )
+                }
+                Some(Op::ExprList) => {
+                    expr_ok(r.a)
+                        && (r.s as usize)
+                            .checked_add(r.b as usize)
+                            .is_some_and(|e| e <= a.xexprs.len())
+                }
+                Some(Op::RawList) => {
+                    r.s == NONE
+                        && (r.a as usize)
+                            .checked_add(r.b as usize)
+                            .is_some_and(|e| e <= a.words.len())
+                }
                 Some(Op::Exprs) => expr_ok(r.a) && expr_ok(r.b) && r.s == NONE,
                 Some(Op::ExprA) => expr_ok(r.a) && (r.b == NONE || ty_ok(r.b)) && r.s == NONE,
                 Some(Op::Type) => r.a == 0 && ty_ok(r.b) && r.s == NONE,
@@ -626,6 +867,9 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
         if !ok {
             return bad("bad attribute record");
         }
+    }
+    if a.xexprs.iter().any(|&x| (x as usize) >= nexpr) {
+        return bad("bad attribute record");
     }
     let mut last = (0, 0);
     for &(k, ref r) in &a.params {
@@ -675,17 +919,20 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
 
 /// The expression arguments the importer fills in once the bodies are
 /// built: (attribute, `a` record, `b` record, the raw `b` word kept when
-/// `b` is no record).
-pub(super) type AttrExprs = Vec<(AttrId, u32, u32, u32)>;
+/// `b` is no record, and for [`Op::ExprList`] the run of
+/// [`Attrs::xexprs`] that becomes `b`'s list, empty for none).
+pub(super) type AttrExprs = Vec<(AttrId, u32, u32, u32, (u32, u32))>;
 
 impl Sema<'_, '_> {
     /// Attaches record `rec`'s attributes and builtin identity to `d`,
     /// noting the expression arguments in `pending`.
+    #[allow(clippy::too_many_arguments)] // the reader's state, one part each
     pub(super) fn image_attrs(
         &mut self,
         img: &Image,
         rec: u32,
         d: DeclId,
+        recs: &[DeclId],
         main: &Locs,
         pending: &mut AttrExprs,
         qt: &mut dyn FnMut(&mut Self, super::QRef) -> kiln_ast::QualType,
@@ -718,9 +965,19 @@ impl Sema<'_, '_> {
             if kind == AttrKind::DIAGNOSE_IF {
                 self.any_diagnose_if = true;
             }
+            let lit = |s: &mut Self, i: u32| {
+                s.ast.strings.intern(StringEncoding::Ordinary, a.strs[i as usize].as_bytes()).raw()
+            };
             let (x, y) = match op_of(kind) {
-                Some(Op::Sym) => (self.intern(&a.strs[r.s as usize]).index(), 0),
-                Some(Op::Exprs) => (0, 0),
+                Some(Op::Sym(_)) => (self.intern(&a.strs[r.s as usize]).index(), r.b),
+                Some(Op::Exprs | Op::ExprList) => (0, 0),
+                Some(Op::Lit(_)) => (if r.s == NONE { 0 } else { lit(self, r.s) }, r.b),
+                Some(Op::LitLoc) => (lit(self, r.s), main.get(r.b).to_raw()),
+                Some(Op::DeclLoc) => (recs[r.a as usize].raw(), main.get(r.b).to_raw()),
+                Some(Op::RawList) => {
+                    let w = &a.words[r.a as usize..r.a as usize + r.b as usize];
+                    (self.ast.lists.push_raw(w).raw(), 0)
+                }
                 Some(Op::ExprA | Op::Type) => (0, ty),
                 Some(Op::Ints) => {
                     let ty = self.size_type();
@@ -746,10 +1003,13 @@ impl Sema<'_, '_> {
             let id =
                 self.ast.attrs.push(AttrNode { kind, syntax, flags: r.flags, loc, a: x, b: y });
             match op_of(kind) {
-                Some(Op::Exprs) if r.a != NONE || r.b != NONE => pending.push((id, r.a, r.b, 0)),
+                Some(Op::Exprs) if r.a != NONE || r.b != NONE => {
+                    pending.push((id, r.a, r.b, 0, (0, 0)));
+                }
+                Some(Op::ExprList) => pending.push((id, r.a, NONE, 0, (r.s, r.b))),
                 // The type stays in `b` (WP-1345).
                 Some(Op::ExprA) if r.a != NONE => {
-                    pending.push((id, r.a, NONE, ty));
+                    pending.push((id, r.a, NONE, ty, (0, 0)));
                     if kind == AttrKind::ALIGNED {
                         self.image_aligned_pending(id);
                     }
@@ -821,11 +1081,78 @@ impl Sema<'_, '_> {
     }
 
     /// Fills in the expression arguments of the imported attributes.
-    pub(super) fn image_attr_exprs(&mut self, pending: &AttrExprs, built: &super::body::Built) {
+    pub(super) fn image_attr_exprs(
+        &mut self,
+        img: &Image,
+        pending: &AttrExprs,
+        built: &super::body::Built,
+    ) {
         let raw = |i: u32| if i == NONE { 0 } else { built.expr(i).index() };
-        for &(id, a, b, keep) in pending {
-            let b = if b == NONE { keep } else { raw(b) };
+        for &(id, a, b, keep, (start, len)) in pending {
+            let b = if len != 0 {
+                let run = &img.attrs.xexprs[start as usize..(start + len) as usize];
+                let list: Vec<ExprId> = run.iter().map(|&x| built.expr(x)).collect();
+                self.ast.lists.push(&list).raw()
+            } else if b == NONE {
+                keep
+            } else {
+                raw(b)
+            };
             self.ast.attrs.set_args(id, raw(a), b);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AttrKind, NOT_CARRIED, TABLE};
+
+    /// Every `AttrKind` constant of `kiln_ast::attr` (its name and
+    /// number), read from the source so that a new kind is seen without
+    /// a list to keep in step.
+    fn all_kinds() -> Vec<(String, u16)> {
+        let src = include_str!("../../../kiln_ast/src/attr.rs");
+        let mut out = Vec::new();
+        for line in src.lines() {
+            let Some(rest) = line.trim().strip_prefix("pub const ") else { continue };
+            let Some((name, rhs)) = rest.split_once(": AttrKind = AttrKind(") else { continue };
+            let n = rhs.trim_end_matches(");").parse().expect("an AttrKind number");
+            out.push((name.to_owned(), n));
+        }
+        out
+    }
+
+    /// WP-1806: each kind is carried by the table, consumed into a type
+    /// (which the type table carries), or listed in `NOT_CARRIED` with
+    /// the reason no declaration the image writes holds it; never two of
+    /// these. A kind added to `kiln_ast::attr` without a row fails here
+    /// instead of making every declaration with it fall back unnoticed.
+    #[test]
+    fn every_kind_is_carried_or_exempt() {
+        let kinds = all_kinds();
+        assert!(kinds.len() > 140, "the AttrKind constants were not found");
+        let mut missing = Vec::new();
+        for (name, n) in &kinds {
+            let k = AttrKind(*n);
+            let carried = TABLE.iter().filter(|(t, _)| *t == k).count();
+            let exempt = NOT_CARRIED.iter().filter(|(t, _)| *t == k).count();
+            let ty = usize::from(k.is_vector_type() || k.is_fn_type_attr());
+            match carried + exempt + ty {
+                1 => {}
+                0 => missing.push(name.clone()),
+                _ => panic!(
+                    "AttrKind::{name} is in more than one of TABLE, NOT_CARRIED and the type attributes"
+                ),
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "AttrKind constants with no row in bmi_image/attrs.rs TABLE (or a NOT_CARRIED \
+             reason): {missing:?}"
+        );
+        let rows = TABLE.iter().map(|(k, _)| *k).chain(NOT_CARRIED.iter().map(|(k, _)| *k));
+        for k in rows {
+            assert!(kinds.iter().any(|(_, n)| *n == k.0), "a row for unknown kind {}", k.0);
         }
     }
 }
