@@ -1,7 +1,6 @@
 // __builtin_bit_cast (spec/sema-templates.md §9.5, [bit.cast]): the
 // object representation of the operand reinterpreted as the target type,
-// for scalars and classes. (Calling a class template's member function
-// needs template member codegen, WP-079; the Oven side is unowned, §9.5.)
+// for scalars and classes.
 //@ expect: run
 //@ strict-diags
 struct P { float a; int b; };

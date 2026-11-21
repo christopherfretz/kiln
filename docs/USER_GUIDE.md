@@ -767,8 +767,8 @@ See [COMPATIBILITY.md](COMPATIBILITY.md#coverage-and-profiling).
 - **Targets:** `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`
   (and their clang aliases). The default is the host. Any other `--target`
   is `unsupported target`. `-march=`, `-mcpu=`, AArch64's feature flags
-  and x86 `-m<feature>` flags such as `-mavx2` work. x86 function
-  multiversioning and a few x86 code-generation flags do not yet; see
+  and x86 `-m<feature>` flags such as `-mavx2` work, as does x86 function
+  multiversioning. A few x86 code-generation flags do not yet; see
   [KNOWN_ISSUES.md](KNOWN_ISSUES.md#platforms).
 - **LLVM:** 22 (preferred when both are installed) and 19, chosen as in
   [Run-time dependencies](#run-time-dependencies). The LLVM major version

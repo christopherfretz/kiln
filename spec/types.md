@@ -328,14 +328,13 @@ makes a sized vector type, `VectorKind::SveFixedData` /
 - Mangling: `9__SVE_VLSI<sizeless type mangling>Lj<N>EE` (clang
   `mangleAArch64FixedSveVectorType`).
 
-Not yet as clang: a use of an invalid SVE local where the parser
+A diagnostic difference: a use of an invalid SVE local where the parser
 classifies the name (statement start, conditions, after a `(` that could
 open a type-id, a comma's right operand) is reported again by clang, not
-by kiln (WP-459 deferred it as diagnostic fidelity); an SVE subscript
-`v[i]` is "subscripted value is not an array"; under `+sve`, codegen of
-SVE constants (a scalar splat, `-v`, a vector `?:`) is not implemented
-(IR lowering error), and SVE locals are allocated with alignment 1 where
-clang uses 16 (`svbool_t`: 2). Lowering is
+by kiln (WP-459 deferred it as diagnostic fidelity). An SVE subscript
+`v[i]`, SVE constants (a scalar splat, `-v`, a vector `?:`) and SVE
+locals' alignment (16; `svbool_t`: 2) are as clang's
+(`ext.arm.sve/ir-scalable-constants.cpp`). Lowering is
 `<vscale x N x T>` (`__SVCount_t`: `target("aarch64.svcount")`); mangling is
 the vendor-extended `u<len><name>`, a substitution candidate.
 
@@ -1163,11 +1162,10 @@ stores ids.
   kiln creates `Elaborated` only for a written keyword or qualifier; the
   printer's `full_scope` rule (§12) yields the same strings. The dump
   prints the written form, which in the M2 subset coincides with clang's.
-  Known exception (found by WP-062's namespace goldens, not yet fixed):
-  for an enumeration declared in a namespace or class, an enumerator's
-  type, and a written qualified type `N::E`, print `'E':'N::E'` in kiln
-  but `'N::E'` in clang (kiln makes no `Elaborated` node carrying the
-  qualifier there).
+  An enumeration declared in a namespace or class prints as clang's
+  `'N::E'` for an enumerator's type and a written qualified type `N::E`
+  (WP-062's namespace goldens once showed `'E':'N::E'`; fixed since,
+  `dcl.attr.annotation/enumerators-and-params.cpp.expected`).
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
@@ -1305,8 +1303,10 @@ Printing:
   `TypePrinter::printTag`): an explicit specialization or explicit
   instantiation of a class template prints the arguments written on it,
   unscoped as written, in place of `specialization_args` (not under
-  canonical arguments). The diagnostic names (`DiagNames`) supply them;
-  the AST-dump names do not yet (WP-1158; spec/codegen.md "Sanitizers").
+  canonical arguments). The diagnostic names (`DiagNames`) supply them
+  (WP-1158; spec/codegen.md "Sanitizers"); the AST dump's desugared
+  string does not (a dump difference: `'A<X>':'A<N::X>'` where clang
+  prints `'A<X>'`).
 - Nesting deeper than 400 prints `...` (balanced) instead of recursing.
 - `ExtQual` prints as clang's `Qualifiers::print` in C++: after the cv
   qualifiers, `__attribute__((address_space(N)))` for a target space and

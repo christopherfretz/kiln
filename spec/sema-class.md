@@ -1881,7 +1881,7 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   A C-variadic base constructor is inlined at each call by codegen
   (codegen.md); a template-variadic one is inherited per specialization,
   as clang.
-- **Gaps.** The constexpr-variable check runs with the initializer check,
+- **Differences from clang (diagnostics only).** The constexpr-variable check runs with the initializer check,
   so after initializer errors (clang: at the declaration); it covers only
   virtual bases (other non-literal classes keep the "non-constexpr
   constructor" note), and `constinit` keeps the inherited-constructor
@@ -3480,8 +3480,9 @@ access, out-of-line declarator scope.**
   Test for the injected-class-name case:
   `tests/conformance/expr.prim.id.dtor/libstdcxx-injected-class-name-dtor-in-template.cpp`
   (libstdc++ shared_ptr_base.h:625, WP-332). A dependent qualifier
-  (`this->B<T>::~B()`) is still `templ_unimplemented` ("a dependent
-  destructor name").
+  (`this->B<T>::~B()`) names the qualifier's class's destructor, as GCC
+  16.1 (clang 22 compares the destructor's class with the object's and
+  rejects; test `expr.prim.id.dtor/dependent-qualified-base-dtor-run.cpp`).
   A pseudo-destructor on a scalar ([basic.types.general]/9: a pointer
   to member included, `Sema::is_scalar`; libc++'s `std::function` of a
   member function pointer destroys it as `__f_.~_Fp()`; test
@@ -3788,8 +3789,8 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
   068b in `class/compare.rs`, reusing §4.2 deletedness and §4.6 constexpr.
   (Done: WP-082, §4.12.)
 
-- **Q12 WP-082 gaps** (owners proposed; none changes an accepted
-  program's meaning, each is a missing diagnostic or `not supported yet`):
+- **Q12 WP-082 follow-ups** (none changed an accepted program's meaning;
+  re-checked by the WP-1797 audit):
   - *Resolved (WP-456)*: the synthesized three-way comparison
     ([class.spaceship]/1) is built as a `PseudoObjectExpr` (§4.12), with
     AST, dump, Oven and codegen support.
@@ -3801,15 +3802,17 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
     `noexcept` type. A direct `DeclRefExpr` still resolves the exception
     spec before the body is defined (`expr.rs` `resolve_exc_for_type`),
     as clang's `DiagnoseUseOfDecl` does.
-  - The location of a deduced return type in the `deduced return type ...
-    must be 'auto'` error is the type's start column; clang uses the
-    `auto` RetLoc.
-  - Template candidates whose viability is undecided (WP-071/073
-    follow-ups) are assumed usable by the analyzer.
-  - Missing beside clang: no `ExplainConstexpr` notes for a non-constexpr
-    defaulted comparison; no `-Wtautological-compare`; no
-    `ExceptionSpecEvaluation` context note; no consteval or explicit
-    object parameter defaulted comparisons (those features are missing).
+  - Diagnostic location: the `deduced return type ... must be 'auto'`
+    error is at the type's start column; clang uses the `auto` RetLoc.
+  - *Resolved*: template candidates are resolved like any other: one whose
+    constraints fail or whose deduction fails is not viable
+    (`class.compare.default/template-member-candidates.cpp`).
+  - *Resolved*: consteval and explicit-object-parameter defaulted
+    comparisons (`class.compare.default/explicit-object-by-value.cpp`,
+    `dcl.fct.def.default/consteval-special-cxx23.cpp`).
+  - Missing notes and warnings beside clang (diagnostics only): no
+    `ExplainConstexpr` notes for a non-constexpr defaulted comparison; no
+    `-Wtautological-compare`; no `ExceptionSpecEvaluation` context note.
   - *Resolved (WP-456)*: a redeclaration of a defaulted comparison is
     checked against its resolved exception specification, then for a
     `constexpr` mismatch (§4.12 *Redeclarations*).

@@ -834,8 +834,8 @@ before. Tested by
   `-idirafter` directory is the directory as given, a `/` unless it ends
   in one, then the header name (`append_file_to_dir`): `-I //opt/inc/./`
   gives `//opt/inc/./x.h` and `-I inc//` gives `inc//x.h` (clang 22
-  drops one trailing slash there, `inc/x.h`; kiln's `clang` style does
-  not yet). A header found relative to its
+  drops one trailing slash there, `inc/x.h`; kiln's `clang` style keeps
+  both, a cosmetic difference in the name). A header found relative to its
   includer is the includer's GCC name up to its last `/`, then the header
   name (`inc//a.h` including `"../b.h"` gives `inc//../b.h`; from a main
   file `m.cpp`, `b.h`). A header found in a system directory is named by

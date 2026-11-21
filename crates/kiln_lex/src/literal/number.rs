@@ -33,6 +33,22 @@ impl Radix {
     }
 }
 
+/// The `_BitInt` suffix at the start of `rest`, as `(unsigned, length)`:
+/// in C (`c` is `Some`) `wb` or `WB` (not `wB` / `Wb`; a `u` is its own
+/// suffix piece); in C++ clang's spelling `__wb` or `__uwb` (the `u` in
+/// either case, then `wb` or `WB`; `LiteralSupport.cpp`, the `_` case).
+fn bit_int_suffix(rest: &[u8], c: Option<CStd>) -> Option<(bool, usize)> {
+    let (u, wb) = if c.is_some() {
+        (false, rest)
+    } else {
+        let tail = rest.strip_prefix(b"__")?;
+        let u = matches!(tail.first(), Some(b'u' | b'U'));
+        (u, &tail[usize::from(u)..])
+    };
+    let n = if c.is_some() { 2 } else { 4 + usize::from(u) };
+    (wb.starts_with(b"wb") || wb.starts_with(b"WB")).then_some((u, n))
+}
+
 /// The size part of an integer-suffix.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum IntSize {
@@ -45,8 +61,9 @@ pub enum IntSize {
     LongLong,
     /// `z` / `Z` (C++23).
     Size,
-    /// `wb` / `WB` (C23 6.4.4.1, a C23 extension in older C; C only, as
-    /// clang): the type is the narrowest `_BitInt` holding the value.
+    /// `wb` / `WB` (C23 6.4.4.1, a C23 extension in older C), or clang's
+    /// C++ spelling `__wb` / `__uwb`: the type is the narrowest `_BitInt`
+    /// holding the value.
     BitInt,
 }
 
@@ -509,10 +526,10 @@ pub fn classify_number_in(spelling: &str, std: Std, c: Option<CStd>) -> Number<'
         p.diags.push(LexDiagKind::SizeSuffixExtension, suffix_begin, b.len());
     } else if sx.size == IntSize::BitInt {
         // clang points at the literal's start.
-        let kind = if c.is_some_and(|c| c >= CStd::C23) {
-            LexDiagKind::BitIntSuffixCompat
-        } else {
-            LexDiagKind::BitIntSuffixExtension
+        let kind = match c {
+            None => LexDiagKind::BitIntSuffixClang,
+            Some(c) if c >= CStd::C23 => LexDiagKind::BitIntSuffixCompat,
+            Some(_) => LexDiagKind::BitIntSuffixExtension,
         };
         p.diags.push(kind, 0, b.len());
     }
@@ -791,17 +808,18 @@ impl Parser<'_> {
                         true
                     }
                 }
-                // `wb` / `WB` (not `wB` / `Wb`), C only.
-                b'w' | b'W'
-                    if !floating
-                        && !has_size
-                        && self.c.is_some()
-                        && rest.get(1) == Some(&if c == b'w' { b'b' } else { b'B' }) =>
-                {
-                    has_size = true;
-                    sx.size = IntSize::BitInt;
-                    i += 2;
-                    true
+                // `wb` / `WB` in C, `__wb` / `__uwb` in C++ (`bit_int_suffix`).
+                b'w' | b'W' | b'_' if !floating && !has_size => {
+                    match bit_int_suffix(rest, self.c) {
+                        Some((u, n)) => {
+                            has_size = true;
+                            sx.size = IntSize::BitInt;
+                            sx.unsigned |= u;
+                            i += n;
+                            true
+                        }
+                        None => false,
+                    }
                 }
                 b'z' | b'Z' if !floating && !has_size => {
                     has_size = true;

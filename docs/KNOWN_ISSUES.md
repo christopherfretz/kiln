@@ -17,23 +17,22 @@ If you hit something not listed here, please
   for other platforms is not planned.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
-- **x86 function multiversioning** (`target_clones`, several
-  `target("...")` versions of one function) is an error on x86-64:
-  [WP-1059](BACKLOG.md). The `-m<feature>` flags and single
-  `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
-  `-mretpoline` and a few other x86 code-generation flags are still
-  `unknown argument` (spec/driver.md "x86-64 target features").
+- **x86 code-generation flags.** `-mgeneral-regs-only`
+  ([WP-1804](BACKLOG.md)), `-msoft-float`, `-mretpoline` and a few other
+  x86 code-generation flags are `unknown argument` (spec/driver.md
+  "x86-64 target features"). The `-m<feature>` flags, `target("...")`
+  functions and x86 function multiversioning (`target_clones`) work.
 - **OpenCV on x86_64: fixed.** The final release candidate's x86_64
   sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) passes
   OpenCV's 7 tests, as clang. In the first release candidate's sweep 12
   of its `modules/core/*.avx2.cpp` dispatch TUs used x86 builtins kiln
   did not lower (`__builtin_ia32_extract128i256` and others), so 0 of 7
   ran. WP-1242 lowers every x86 builtin clang lowers to generic IR.
-- **23 x86 builtins are not supported**: `__builtin_ia32_maskmovq`, the
-  Key Locker builtins and the AMX `t*_internal` tile builtins.
-  `__has_builtin` answers 0 for each, and a call that reaches code
-  generation is the error "code generation for `<name>` is not supported
-  yet" (WP-1242; spec/landed/codegen/WP-630.md "Generic x86 lowering").
+- **x86 builtins** lower as clang 22's: `_mm_maskmove_si64` and the Key
+  Locker intrinsics compile, and `__has_builtin` answers 0 for
+  `__builtin_ia32_maskmovq`, the Key Locker builtins and the AMX
+  `t*_internal` tile builtins, as clang 22 does (re-checked by WP-1797;
+  spec/landed/codegen/WP-630.md "Generic x86 lowering").
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step
@@ -104,13 +103,14 @@ passes ([status/c-mode.md](status/c-mode.md)). The `-std=gnu17` table on
 that page was measured before the C semantics landed and is not a
 current figure. What is not done yet:
 
-- **Found during release review, tracked as [WP-1331](BACKLOG.md):**
+- **Found during release review:**
   - A `wb` / `uwb` literal over 128 bits (x86-64 allows up to 8388608)
     is "integer literal is too large"; clang types it as `_BitInt(N)`
-    (`tests/c/c23/bitint-literal-wide-x86_64.c`, xfail).
+    (`tests/c/c23/bitint-literal-wide-x86_64.c`, xfail;
+    [WP-1338](BACKLOG.md)).
   - `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`,
     `-Wfortify-source` and `-Warray-bounds` on a constant out-of-range
-    index are not emitted, in C and C++.
+    index are not emitted, in C and C++ ([WP-1333](BACKLOG.md)).
 - **C++ syntax in a C file** (references, `template`, `namespace`,
   `::`, `class`, lambdas) is rejected, but with the C++ parser's errors
   and recovery, not clang's (`tests/c/cxx-only/cxx-syntax-rejected.c`).
@@ -400,34 +400,34 @@ Templates, lookup and overloading:
   conversion check. WP-804.
 - `temp.dep.type/out-of-line-current-instantiation-var-template-unqualified-run.cpp`:
   a variable template-id keeps its written qualifier. WP-1169.
-- `temp.spec.partial.order/typed-nttp-more-specialized-than-auto-run.cpp`:
-  partial ordering of class partial specializations does not check a
-  deduced non-type argument's type against its parameter's
-  (`os<int E>` against `os<auto E>` is called ambiguous).
-  [WP-1236](BACKLOG.md).
-- `module.unit/friend-template-instantiated-attachment.cpp`: a
-  redeclaration made by an importer's instantiation is checked against
-  the importer's module attachment. WP-1307 follow-up.
+- `basic.scope.scope/member-function-after-variable-template.cpp`: a
+  member function declared after a member variable template of the same
+  name is not diagnosed as a conflict. [WP-1756](BACKLOG.md).
+- `class.friend/local-class-friend-class-names-typedef.cpp`: a local
+  class's `friend struct Z;` naming a block-scope typedef `Z` is
+  accepted. [WP-1748](BACKLOG.md).
+- `enum.udecl/using-enum-redeclared-in-class.cpp`: a second `using enum
+  E;` in one class scope is not diagnosed. [WP-1747](BACKLOG.md).
+- `over.match.class.deduct/implicit-guide-dependent-explicit-bool-copy-list-run.cpp`:
+  an implicit deduction guide keeps its constructor's dependent
+  `explicit(b)` as explicit. [WP-1752](BACKLOG.md).
+- `stmt.ambig/template-id-qualified-declarator-in-block.cpp`: a
+  template-id functional cast whose operand is a qualified-id is parsed
+  as an expression, not a declaration. [WP-1746](BACKLOG.md).
+- `module.interface/local-class-members-link-run.cpp`: a local class's
+  member functions in an imported module's inline function are emitted
+  by neither side (undefined reference at link time). GAP-175
+  ([static gaps](status/static-gaps.md)).
 
 Constant evaluation and reflection:
 
-- `class.union/constexpr-placement-same-type.cpp`: Oven pointers carry no
-  union-member designator, so either member of one type at one offset
-  may be the constructed one. [WP-517](BACKLOG.md).
-- `expr.reflect/member-template-of-specialization.cpp`: `^^W<int>::In`
-  (a member template of a specialization) parses as a type-id that needs
-  template arguments. WP-1243 follow-up.
 - `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`: no
   lenient designator for object-size folds. WP-808.
 
 Attributes, calling conventions and extensions:
 
-- `dcl.attr.cconv/ir-swiftcall.cpp`: `swiftcall`/`swiftasynccall` are a
-  hard error. WP-808.
 - `dcl.attr.cconv/override-cc-clang22.cpp`: a written calling convention
   prints after the type (clang 19's form). WP-808.
-- `dcl.attr.cconv/x86-interrupt.cpp`: the x86 `interrupt` attribute is a
-  hard error. WP-808.
 - `dcl.attr.class-b/ir-likely-branch-weights-O1-19.cpp`: no branch
   weights for `[[likely]]`, `[[unlikely]]` or `__builtin_expect` when
   optimizing. WP-813.
@@ -438,19 +438,18 @@ Attributes, calling conventions and extensions:
 - `dcl.attr.grammar/gnu-attribute-before-statement.cpp`: GNU attributes
   before a statement parse only when a declaration or `;` follows.
   WP-805.
-- `ext.clang.address_space/address-space-run.cpp`: `address_space(N)` is
-  a hard error. WP-809.
-- `ext.multiversion/target-clones-x86.cpp`: x86-64 function
-  multiversioning. [WP-1059](BACKLOG.md).
+- `ext.clang.address_space/address-space-dependent.cpp`: a
+  value-dependent `address_space(N)` in a template is rejected as not an
+  integer constant. WP-1811.
+- `ext.clang.address_space/address-space-function-paren.cpp`: an address
+  space inside grouping parentheses on a function type is not diagnosed.
+  WP-1812.
+- `ext.gnu.restrict/restrict-reference-is-a-distinct-type.cpp`:
+  `__restrict` on a reference type is dropped, so `int &__restrict` and
+  `int &` are one type. [WP-1688](BACKLOG.md) (low priority).
 
 Code generation, ABI and sanitizers:
 
-- `basic.link/unnamed-enum-internal-name-run.cpp`: an internal unnamed
-  enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
-- `expr.typeid/polymorphic-operand-immediate-invocation-run.cpp`: an
-  immediate invocation in the operand of a polymorphic `typeid` is not
-  evaluated at compile time, so the link fails on the `consteval`
-  function. [WP-1324](BACKLOG.md).
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
 - `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's
@@ -466,8 +465,6 @@ Diagnostics and dumps:
 - `dcl.fct.def.delete/use-uncalled-comma-operand.cpp`: a deleted
   function as a comma operand also draws two `-Wunused-value` warnings.
   WP-1170.
-- `dcl.array/vla-warning-suppressed-by-wvla-pragma.cpp`: ignoring
-  `-Wvla` by pragma does not silence `-Wvla-cxx-extension`. WP-789.
 - `tests/stress/dump-friend-template-cycle.cpp`: `-fdump-ast` prints a
   befriended class template's pattern where clang prints it
   instantiated. [WP-129](BACKLOG.md).
@@ -477,6 +474,17 @@ C mode:
 - `tests/c/cxx-only/cxx-syntax-rejected.c`: C++-only syntax in a C file
   gets the C++ parser's errors and recovery, not clang's
   ([C mode](#c-mode)). WP-1276 follow-up.
+- `tests/c/c23/bitint-literal-wide-x86_64.c`: a `wb` literal over 128
+  bits is "too large". [WP-1338](BACKLOG.md).
+- `tests/c/expr/struct-argument-uncopied-ir.c`: an lvalue aggregate
+  argument is copied into a temporary before the call.
+  [WP-1773](BACKLOG.md).
+- `tests/c/expr/va-list-record-name-aarch64-ir.c`: the AArch64
+  `va_list` record is named `%"struct.std::__va_list"` in C too.
+  [WP-1774](BACKLOG.md).
+- `tests/c/run/builtin-va-arg-pack-run.c`: `__builtin_va_arg_pack` and
+  `__builtin_va_arg_pack_len` are unknown, as in clang 22 (GAP-171,
+  excluded; WP-1550).
 
 ## Crashes
 

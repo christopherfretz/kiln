@@ -3657,12 +3657,13 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   `inherited_ctor`); notes name a non-constexpr inherited constructor
   (`non-constexpr constructor 'B' ...`) or the base for a constructor
   inherited through a virtual base, as clang.
-- Constant destruction of a non-trivially-destructible temporary bound to
-  a constexpr reference is not checked (clang 19 rejects it as "not yet
-  supported"; kiln accepts it).
-- Codegen of `PtrBase::Temporary` (a constexpr reference to a static
-  temporary used at run time) is WP-079's ("pointers to lifetime-extended
-  temporaries are not supported yet").
+- A non-trivially-destructible temporary bound to a constexpr reference
+  is rejected with clang's note (`check_let_destruction`, GAP-170,
+  excluded: clang's own wording; test
+  `expr.const/constexpr-ref-temporary-nontrivial-dtor.cpp`).
+- `PtrBase::Temporary` (a constexpr reference to a static temporary used
+  at run time) is emitted as clang's static temporary
+  (`tests/codegen/new_cond_throwing_init_and_ref_members.cpp`).
 - Spec gap: `SubobjectId` (spec/sema-class.md §3.5) is not used by the
   Oven; offsets suffice for non-virtual paths, and a path through a
   virtual base is an index into `Virt`'s subobject list (`Op::VBase`,
@@ -5147,11 +5148,10 @@ sema.
 
   An invalid value is a driver error, as clang's is.
 - **The report** is written by `ConstexprOpts::write_report` at the end
-  of each `-fsyntax-only` job, even one with errors. It is not yet written
-  for:
-  - codegen jobs (WP-052 calls the same function);
-  - a job that stops before parsing (an invalid `-fdump-ast` value, an
-    unsupported target).
+  of each `-fsyntax-only` or codegen job, even one with errors
+  (`syntax_cmd.rs`, `codegen_cmd.rs`). A job that stops before parsing
+  (an invalid `-fdump-ast` value, an unsupported target) has no
+  evaluations and writes none.
 - **Conformance.** `tests/conformance/expr.const/` runs through the driver
   and passes with `--compiler clang++-19`:
   - one directory per [expr.const]/5 bullet reachable in M2;

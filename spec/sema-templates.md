@@ -29,7 +29,7 @@ deviation is listed in §1.5.
 | Deduction | calls, explicit args, defaults, address of overload set, conversion functions, `auto`/`decltype(auto)`, NTTP `auto`, partial ordering | deducing `this` (M4) |
 | CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), inherited-constructor guides (P2582, §6.6.1), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | — |
 | Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | expansion statements P1306 (M6, with reflection) |
-| Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 (clang 19 has no support, M4); concept and variable-template template parameters P2841 (M5) |
+| Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 and concept and variable-template template parameters P2841 (both since done, §2.1.1; docs/STANDARD_SUPPORT.md) |
 | Reflection | — | splices as template arguments (M6) |
 
 Concepts are in M3 because the exit headers need them: `<span>`,
@@ -5645,8 +5645,8 @@ member deduce through it, also in templates (`auto (*pa)[K]`). A bound
 must equal the initializer's ([temp.deduct.type]/8), else "variable 'p'
 with type 'auto (*)[1]' has incompatible initializer"; `decltype(auto)
 (*q)[1]` is "cannot form array of 'decltype(auto)'"; `auto y[2] = v;`
-deduces against the decayed initializer and fails; GNU's `auto x[2] =
-{1, 2}` is not implemented. An initializer that names an overload set of
+deduces against the decayed initializer and fails; `auto x[2] = {1,
+2}` is rejected, as GCC 16.1 and clang 22 reject it. An initializer that names an overload set of
 non-templates (`auto p = f;`, `auto p = &X::g;`) deduces from the members
 whose constraints are satisfied, which must all give the same type
 ([temp.deduct.call]/6, CWG2918); a set with a template, explicit template
@@ -6418,7 +6418,9 @@ The `SpecKind` transitions are those of §4.5.
     (`is_structural_at`). A template redeclaration does not compare the
     type of a parameter marked invalid (`templ/equiv.rs`). Test:
     `temp.param/atomic-member-not-structural.cpp`.
-  - Dependent types are checked when substituted (not yet: §11.2 gaps).
+  - Dependent types are checked when substituted: an invalid substituted
+    parameter type is rejected at the argument (clang points at the
+    parameter; diagnostic location only).
 - **Class arguments** (`convert_class_nttp_arg`, hooked from
   `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
   argument, `eval_const` with `EvalContext::converted`, then
@@ -7803,7 +7805,8 @@ constexpr.
 - kiln_pp's `__has_builtin(X)` answers from the **implemented** column
   (Q10).
 - libc++ then falls back to its library implementations for any trait
-  kiln has not implemented yet. That allows staging.
+  the column marks unimplemented. That allowed staging; every row is
+  implemented today.
 
 **Notation.** "complete" means the operand must be complete, or an array
 of unknown bound, or `void`. Otherwise the error is "incomplete type 'X'
@@ -8903,6 +8906,13 @@ Two more are needed:
   §4.11 (R-OVEN-1).
 - R-OVEN-2: frozen values are hash-consed.
 - A new `EvalKind::Constraint`.
+
+**Note (WP-1797 audit).** The *Stubs* lists in the landed records below
+give the state when each record landed; every item has been implemented
+since. Only `templ_unimplemented` (kiln_sema `templ/mod.rs`) can still
+report `sema_unimplemented_template_feature`, and nothing calls it: the
+static-gaps lint (docs/status/static-gaps.md) lists every gap the code
+still reports.
 
 **Landed (WP-069).** Parsing and the parse-time sema for templates are
 in place. The engine (§4–§10) is not.
@@ -11079,7 +11089,7 @@ Each question has a recommendation (R).
     fails where clang succeeds.
 17. **Q17: Deferred C++26 features**: fold-expanded constraints (P2963)
     and concept template parameters (P2841). **R:** M4/M5, when the clang
-    oracle supports them. Structured-binding packs (P1061) and variadic
+    oracle supports them (both since done, docs/STANDARD_SUPPORT.md). Structured-binding packs (P1061) and variadic
     friends (P2893) landed in WP-359 against clang 22 (§7.1).
 
 ### Supervisor decisions

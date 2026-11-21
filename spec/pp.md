@@ -499,8 +499,8 @@ overlays). At level 19 the driver also sets `PpOptions::clang19_escapes`, so
 macros, which say what kiln implements (docs/STANDARD_SUPPORT.md),
 nor what kiln accepts: kiln's builtins are a superset of both clangs'
 (spec/sema-templates.md §9.1 "clang 22 rows"). In compile modes the
-builtins TABLE still stages `__has_builtin` off for unimplemented rows
-at either level, and `__has_builtin` / `__has_constexpr_builtin` answer
+builtins TABLE would stage `__has_builtin` off for an unimplemented row
+at either level (it has none today: no row is `Status::Owner`), and `__has_builtin` / `__has_constexpr_builtin` answer
 0 for a `__builtin_*` name that clang 19 lacks and kiln neither declares
 (`kiln_ast::decl::builtin::by_name`) nor lists in that table (the
 driver's `StagedFeatures::undeclared_clang22`; e.g.
@@ -809,9 +809,9 @@ is a port of clang's `PrintPPOutputPPCallbacks`. It covers:
 - **`-C`** through `PpOptions::keep_comments`, using the lexer's comment
   tokens.
 
-`print_macros` implements `-dM`. `-dD` and `-dI` are not implemented: they
-belong to WP-017, which builds them on `macro_defined` and
-`inclusion_directive` (see the open questions).
+`print_macros` implements `-dM`. `-dD` and `-dI` are built on
+`macro_defined` and `inclusion_directive`, as clang's (spec/driver.md;
+`kiln_driver/tests/driver.rs` `dump_defines_and_includes`).
 
 ### Preprocessor-state record (WP-1280)
 
@@ -1138,9 +1138,8 @@ spec/modules.md §11.13.
 
 17. **`#if` evaluation (WP-015 `IfEval`) differs from clang 19 in
     these minor respects, none of which change a group selection:**
-    `-Wundef-prefix` is not implemented; the `__wb`/`__uwb` (`_BitInt`)
-    literal suffixes, a clang extension in C++, are not supported in
-    `#if`; `defined X` in an
+    `-Wundef-prefix` is a missing warning (an unknown warning option);
+    `defined X` in an
     unevaluated operand still marks `X` used (for `-Wunused-macros`);
     the C++98 and C++20 compatibility warnings (`-Wc++98-compat*`) are
     not emitted; the `-Wexpansion-to-defined` decision ignores clang's

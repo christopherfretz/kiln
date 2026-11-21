@@ -888,6 +888,22 @@ impl Substituter<'_, '_, '_> {
         r.map(Some).ok_or(SubstFail)
     }
 
+    /// The GNU asm label of block-scope declaration `d` (`extern int
+    /// q(int) asm("qq");`, `extern int v asm("vv");`) carried to its
+    /// instantiation `x` ([dcl.asm]; clang `InstantiateAttrs` copies the
+    /// `AsmLabelAttr`): the mangler reads the label recorded on the
+    /// entity's first declaration (`cold.asm_label`), and a block-scope
+    /// declaration's instantiation is not an `instantiated_from` member,
+    /// so it is recorded here unless the entity already has one.
+    fn local_asm_label(&mut self, d: DeclId, x: DeclId) {
+        let ast = &mut self.sema.ast;
+        let (from, to) = (ast.first(d), ast.first(x));
+        if let Some(&lit) = ast.decls.cold.asm_label.get(from) {
+            // `Err` when the entity has its label already.
+            let _ = ast.decls.cold.asm_label.insert(to, lit);
+        }
+    }
+
     /// A declaration of a declaration statement.
     #[allow(clippy::too_many_lines, reason = "one arm per declaration kind, listed exhaustively")]
     fn local_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
@@ -897,7 +913,11 @@ impl Substituter<'_, '_, '_> {
                 self.decomp_decl(d, DeclaratorContext::Block)
             }
             DeclKind::Var if self.is_anonymous_object(d) => self.local_anonymous_object(d),
-            DeclKind::Var => self.var_decl(d, DeclaratorContext::Block),
+            DeclKind::Var => {
+                let x = self.var_decl(d, DeclaratorContext::Block)?;
+                self.local_asm_label(d, x);
+                Ok(x)
+            }
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let x = self.typedef_decl_in(d, DeclaratorContext::Block)?;
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
@@ -951,6 +971,7 @@ impl Substituter<'_, '_, '_> {
             // class's friend finds it ([class.friend]/11).
             DeclKind::Function => {
                 let x = self.function_decl(d, DeclaratorContext::Block, None)?;
+                self.local_asm_label(d, x);
                 self.locals.insert(d, super::DeclOrPack::Decl(x));
                 Ok(x)
             }

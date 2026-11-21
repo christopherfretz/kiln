@@ -846,9 +846,9 @@ function's identity, so a set may hold overloads that differ only in them
   <bare-function-type>`, each condition in declaration order as a template
   argument expression (a non-primary one in `X…E`) inside the function's
   prototype scope (a parameter is `fL0p_`, an enumerator its literal
-  `L <enum-type> <value> E`). The message is not mangled. An unsupported
-  condition falls back to `XLi0EE` (spec/abi.md §8.15), so two such
-  overloads in one translation unit can still collide.
+  `L <enum-type> <value> E`). The message is not mangled. A condition
+  with no Itanium encoding is clang's mangling error (spec/abi.md §8.15:
+  the placeholder written meanwhile is never emitted).
 
 ### 4.3a `pass_object_size` overloads (clang extension; WP-803)
 A function with a `pass_object_size` parameter (spec/sema.md §4) never
@@ -1597,9 +1597,9 @@ Where the code differs from (or details) the design above:
   not converting to an array of unknown bound wins
   (`tests/conformance/over.ics.rank/list-array-bound.cpp`). Binding a
   reference to an array of unknown bound (`const int (&)[]`) to an
-  array of known bound is not implemented yet ([dcl.init.ref]/4 with
-  P0388's array conversions), so a call that selects such an overload
-  still fails after overload resolution.
+  array of known bound ([dcl.init.ref]/4 with P0388's array
+  conversions) binds and compiles
+  (`tests/conformance/over.ics.rank/unknown-bound-array-ref.cpp`).
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's
@@ -1617,11 +1617,10 @@ Where the code differs from (or details) the design above:
   initializations). WP-068b adds `arrow-chain` (a 50-deep `->` chain,
   12,000 accesses) and `less-10k` (10,000 class `a < b` with ADL friends,
   100 unrelated visible overloads and built-in candidates).
-- **Stubs.** `CandidateFailure::BadDeduction` (WP-071),
-  `ConstraintsNotSatisfied` (WP-073) and
-  `SetKind::Address` (WP-071: [over.over] of templates; non-template
-  targets are resolved without a set in `address.rs`) are declared and
-  unused.
+- **Since filled.** `CandidateFailure::BadDeduction` (WP-071) and
+  `ConstraintsNotSatisfied` (WP-073), declared here as stubs, are used;
+  `SetKind::Address` was dropped: [over.over] resolves templates and
+  non-templates in `address.rs` without a set.
 
 ### 10.6 Landed (WP-068b): operators
 Where the code differs from (or details) the design above:
@@ -1706,18 +1705,17 @@ Where the code differs from (or details) the design above:
   delete-expression are odr-used at the expression's location, so a member
   of a class template specialization is instantiated there ([temp.inst]/11;
   WP-686).
-- **Gaps (owners).** Reversed and rewritten operator function template
-  candidates are not formed (see §10.7). Access
-  checks on class `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying
+- **Related rules (owners).** Reversed and rewritten operator function
+  template candidates are formed (§10.7). Access checks on class
+  `operator new`/`delete`: sema.md §5.9 (WP-457). Destroying
   `operator delete` is selected per sema.md §5.9 (WP-336). `x.operator+=(2)`, `x.operator()(1)`,
   `x.operator[](0)` and `x.operator T()` (member access naming an
   operator- or conversion-function-id) resolve as the operator syntax
-  does, in templates too (verified by WP-457 triage).
-  No `note_equality_comparison_to_assign` ("use '=' to turn this equality
-  comparison into an assignment") anywhere in kiln (sema follow-up).
-  `aka` of a template specialization with an expression argument prints
-  `'T<0 + 1>' (aka 'T<1>')` where clang prints no `aka` (types/print).
-  `ovl.*` counters are not printed by the driver (§10.5).
+  does, in templates too (verified by WP-457 triage). An unused `==`
+  gets clang's `note_equality_comparison_to_assign`, and a template
+  specialization with an expression argument prints as clang's
+  (`'T<0 + 1>'`, no `aka`). The `ovl.*` counters are bench data, not
+  printed by the driver (§10.5).
 - **Landed (WP-082).** The built-in `<=>` on scalars
   ([expr.spaceship]) yields the comparison category, or reports
   `sema_cmp_category_not_found` as clang does. The `adl` flag is set on
@@ -1741,10 +1739,8 @@ Where the code differs from (or details) the design above:
   - `resolve_unresolved_call` (named calls; `f<args>` keeps only the
     templates);
   - `resolve_member_call` (`OvlMember::targs` holds `e.f<args>`);
-  - `add_nonmember_oper` and `add_member_opers`, for non-reversed,
-    non-rewritten operator candidates only. A reversed or rewritten
-    template candidate still sets `skipped_templates`, and the
-    operator's resolution then reports "not yet implemented".
+  - `add_nonmember_oper` and `add_member_opers` (reversed and rewritten
+    template candidates: `add_rewritten_template`, below).
 - /2.5 (more specialized template): `order_template_candidates` runs
   `more_specialized` (spec/sema-templates.md §6, `templ/order.rs`) over
   each pair of viable template candidates before `best_viable`. It
@@ -1757,12 +1753,10 @@ Where the code differs from (or details) the design above:
   (`deduce_spec` records the latter as `Candidate::explicit_nondep`, one
   bit per parameter below 64), so it was checked before the
   specialization was formed.
-- Not yet:
-  - `ics.rs` (conversion function templates);
-  - `arrow.rs` (`operator->` templates);
-  - a diagnostic for `&f` when no template matches the target type. That
-    case still reports "not yet implemented", where clang prints
-    `address of overloaded function` with deduction notes.
+- Conversion function templates (`ics.rs`) and `operator->` templates
+  (`arrow.rs`) came later (below). `&f` when no template matches the
+  target type prints clang's `address of overloaded function ... does
+  not match required type` with the deduction notes.
 - Address of a function template ([temp.deduct.funcaddr]):
   - `resolve_single_template_id` resolves `&f<int>` when exactly one
     template accepts the explicit args. The parser calls it for a

@@ -2098,12 +2098,20 @@ runs, stopping at the first failing step:
    `**Unsupported`, ...) is a spec site, for a gap with no text of its
    own in the code (WP-1782); it carries `<!-- kiln-gap: GAP-NNN -->` on
    its line or the line above and is listed as `spec/<file>.md::§<heading>`.
+   A bold lead that opens a list of gaps or limits
+   (`static_gaps::SPEC_LIST_LEADS`: `**Gaps`, `**Known gaps`,
+   `**Limitations`, `**Missing`, `**Open`, `**Remaining`, `**Deferred`,
+   ..., as the whole bold text or followed by `:`, `.` or ` (`; WP-1797)
+   makes each unit under it a spec site: the lead's own paragraph when
+   text follows it, and each list item below it. Such a unit carries a
+   `GAP-NNN` marker or names an open `docs/BACKLOG.md` row (`WP-NNN`).
    The lint fails when a site has no marker or names an id
    `docs/status/static-gaps.md` lacks, when an entry there has no site
    left, when an entry's sites cell (each `` `file::fn` ``, sorted, ` ×N`
    for N sites) differs from its markers, or when its row is not an
    `open` / `in progress` row of `docs/BACKLOG.md` or `excluded:
-   <reason>`; line numbers play no part. All three run before `ci` fails;
+   <reason>`, or when a unit under a gap-list lead has neither a marker
+   nor an open row; line numbers play no part. All three run before `ci` fails;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun
