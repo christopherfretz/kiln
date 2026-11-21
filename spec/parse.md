@@ -2224,8 +2224,9 @@ for `^^`, §5 for splices).
     `exit_immediate_context`.
   - `if constexpr` or `if !` not followed by `(` (or `consteval`) is
     `expected '(' after 'if'`; the parser skips to the next `;`.
-- **Unsupported:** case ranges, statement expressions and range-based
-  `for` are "not supported yet".
+- **GNU statement forms.** Case ranges (spec/sema.md, WP-205),
+  statement expressions (`( { ... } )`, above) and range-based
+  `for` (WP-356) are parsed as clang parses them.
   - **Computed goto (GNU, WP-444):** `goto *e;` (clang
     `ParseGotoStatement`) is "use of GNU indirect-goto extension"
     (`-Wgnu-label-as-value`) at the `*`; the operand is parsed as an

@@ -400,21 +400,26 @@ impl Sema<'_, '_> {
             Reflectee::Annotation(a) => return self.annotation_constant(a, loc),
             Reflectee::Object(p) => return self.object_constant(r, p, ctx, oven),
             Reflectee::Decl(d) => d,
-            _ => return not_splice(loc),
+            // No splice-expression designates a type, a namespace, a
+            // template without arguments, a base, a data member
+            // description or a function parameter ([expr.prim.splice]/2;
+            // `variable_of` turns a parameter into its variable).
+            Reflectee::Null
+            | Reflectee::Type(_)
+            | Reflectee::Namespace(_)
+            | Reflectee::NamespaceAlias(_)
+            | Reflectee::Template(_)
+            | Reflectee::BaseSpec(..)
+            | Reflectee::DataMemberSpec(_)
+            | Reflectee::FnParam(..) => return not_splice(loc),
         };
-        match self.kind_of(d) {
-            DeclKind::EnumConstant | DeclKind::Var | DeclKind::VarTemplateSpecialization => {}
-            // `reflect_function([: r :])`: the function itself; a
-            // non-static member function is no splice-expression's
-            // operand outside a member access ([expr.prim.splice]/2).
-            DeclKind::Function => {
+        match self.constant_of_kind(d) {
+            ConstantOfKind::Value => {}
+            ConstantOfKind::Function => {
                 return Ok(self.intern_reflection(Reflectee::Decl(self.entity_decl(d)), loc)?);
             }
-            DeclKind::CXXMethod if self.is_static_method(self.ast.first(d)) => {
-                return Ok(self.intern_reflection(Reflectee::Decl(self.entity_decl(d)), loc)?);
-            }
-            DeclKind::Binding => return self.binding_constant(d, ctx, oven),
-            _ => return not_splice(loc),
+            ConstantOfKind::Binding => return self.binding_constant(d, ctx, oven),
+            ConstantOfKind::NotSplice => return not_splice(loc),
         }
         let Some(ty) = self.ast.decls.get(d).ty().filter(|&t| t != QualType::ERROR) else {
             return fail(loc, "reflection does not have a type");
@@ -451,6 +456,90 @@ impl Sema<'_, '_> {
         };
         let Some(cv) = value else { return self.not_usable(d, loc) };
         self.constant_of_value(cv, loc)
+    }
+
+    /// How `constant_of` treats declaration `d` ([meta.reflection.queries]
+    /// `constant_of`: whether `[: ^^d :]` is a valid splice-expression,
+    /// and of what). Exhaustive (WP-1782): a kind sent to the failure by
+    /// a `_` arm hid the explicit-object member functions from the
+    /// static-gap inventory.
+    fn constant_of_kind(&self, d: DeclId) -> ConstantOfKind {
+        match self.kind_of(d) {
+            DeclKind::EnumConstant | DeclKind::Var | DeclKind::VarTemplateSpecialization => {
+                ConstantOfKind::Value
+            }
+            // `reflect_function([: r :])`: the function itself. A static or
+            // explicit-object member function (a conversion function, too)
+            // is an lvalue of function type ([expr.prim.splice]/2,
+            // [expr.prim.id.general]/4 restricts only implicit object
+            // member functions); an implicit object member function is no
+            // splice-expression's operand outside a member access or `&`.
+            DeclKind::Function => ConstantOfKind::Function,
+            DeclKind::CXXMethod | DeclKind::CXXConversion
+                if self.is_static_method(self.ast.first(d))
+                    || self.has_explicit_object(self.ast.first(d)) =>
+            {
+                ConstantOfKind::Function
+            }
+            DeclKind::Binding => ConstantOfKind::Binding,
+            // An implicit object member function, a constructor, a
+            // destructor or a non-static data member (also of an anonymous
+            // union) is a splice operand only in a member access or as the
+            // operand of `&` ([expr.prim.id.general]/4); a template needs
+            // its arguments; the rest designate no value or object.
+            DeclKind::CXXMethod
+            | DeclKind::CXXConversion
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::Field
+            | DeclKind::IndirectField
+            | DeclKind::FunctionTemplate
+            | DeclKind::VarTemplate
+            | DeclKind::VarTemplatePartialSpecialization
+            | DeclKind::ClassTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::Concept
+            | DeclKind::BuiltinTemplate
+            | DeclKind::ParmVar
+            | DeclKind::ImplicitParam
+            | DeclKind::TemplateTypeParm
+            | DeclKind::NonTypeTemplateParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::TemplateParamObject
+            | DeclKind::LifetimeExtendedTemporary
+            | DeclKind::TranslationUnit
+            | DeclKind::Namespace
+            | DeclKind::NamespaceAlias
+            | DeclKind::LinkageSpec
+            | DeclKind::Export
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm
+            | DeclKind::UsingDirective
+            | DeclKind::Using
+            | DeclKind::UsingEnum
+            | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UsingPack
+            | DeclKind::UnresolvedUsingValue
+            | DeclKind::UnresolvedUsingTypename
+            | DeclKind::UnresolvedUsingIfExists
+            | DeclKind::Typedef
+            | DeclKind::TypeAlias
+            | DeclKind::Enum
+            | DeclKind::CXXRecord
+            | DeclKind::ClassTemplateSpecialization
+            | DeclKind::ClassTemplatePartialSpecialization
+            | DeclKind::AccessSpec
+            | DeclKind::Friend
+            | DeclKind::FriendTemplate
+            | DeclKind::CXXDeductionGuide
+            | DeclKind::ImplicitConceptSpecialization
+            | DeclKind::RequiresExprBody
+            | DeclKind::StaticAssert
+            | DeclKind::Label
+            | DeclKind::ContractResultName
+            | DeclKind::ConstevalBlock => ConstantOfKind::NotSplice,
+        }
     }
 
     /// `constant_of(^^b)` of structured binding `b` ([dcl.struct.bind]):
@@ -628,4 +717,17 @@ impl Sema<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// What `constant_of` does with a declaration ([`Sema::constant_of_kind`]).
+#[derive(Clone, Copy)]
+enum ConstantOfKind {
+    /// An enumerator or variable: its value.
+    Value,
+    /// A function a splice-expression may designate alone: itself.
+    Function,
+    /// A structured binding: its binding expression's value.
+    Binding,
+    /// Not a valid splice-expression operand.
+    NotSplice,
 }

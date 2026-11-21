@@ -774,7 +774,7 @@ impl Oven {
         let (name, at, here) = match a.origin {
             Origin::Global(d) | Origin::External(d) | Origin::Var(d) => {
                 let mut name = String::new();
-                kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+                kiln_ast::dump::AstNames::new(ast).write_diag_name(d, &mut name);
                 (format!("'{name}'"), ast.decls.get(d).loc(), "declared here")
             }
             Origin::Let(t) => (
@@ -1081,7 +1081,7 @@ impl Oven {
         match a.origin {
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 let mut name = String::new();
-                kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+                kiln_ast::dump::AstNames::new(ast).write_diag_name(d, &mut name);
                 // clang `note_constexpr_non_global`, then
                 // `note_constexpr_not_static` for a `constexpr` local.
                 let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };

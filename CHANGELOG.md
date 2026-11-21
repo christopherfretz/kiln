@@ -203,11 +203,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   a reference template argument designating one, which used to stop with
   an internal error). Every value and object reflection now splices; the
   `std::meta` traits and the query family have no unimplemented row.
+- `std::meta::constant_of` of an explicit-object member function
+  (`void f(this S&)`, also a conversion function, an operator and a
+  member function template specialization) is the function itself, and
+  `extract` of an explicit-object conversion function gives its pointer
+  (WP-1782).
+- The static-gap lint also reads the spec: a `spec/*.md` paragraph led by
+  "Not implemented" or "Unsupported" must be listed in
+  docs/status/static-gaps.md, for gaps with no message of their own in
+  the code (WP-1782).
 
 ### Fixed
 
 - Value-dependent conditions in a template definition are no longer
   constant-evaluated (WP-1741).
+- A constant-evaluation note about a pointer into a structured binding
+  declaration's hidden variable names it as clang does (`'[x, y]'`, was
+  `''`). `reflect_object` of a binding of a namespace-scope
+  decomposition stays accepted, as the standard says; GCC 16.1 rejects
+  it, a recorded deviation (WP-1783).
 - A pointer to a bit-field member (`&C::b`) is an error, "address of
   bit-field requested", as clang (WP-1742).
 - A failed constant-evaluation read of a `_BitInt` wider than 128 bits is

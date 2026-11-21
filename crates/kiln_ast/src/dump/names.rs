@@ -147,6 +147,25 @@ impl<'a> AstNames<'a> {
         self.write_decl_name_value(n.name(), out);
     }
 
+    /// Appends the name a diagnostic gives `d` (clang `printName`): as
+    /// [`Self::write_name`], except that a decomposition variable (the
+    /// hidden variable `e` of a structured binding declaration) is its
+    /// bindings' names in brackets, `[a, b]` (clang
+    /// `DecompositionDecl::printName`).
+    pub fn write_diag_name(&self, d: DeclId, out: &mut String) {
+        let Some(list) = self.ast.decls.decomp_bindings(d) else {
+            return self.write_name(d, out);
+        };
+        out.push('[');
+        for (k, b) in self.ast.lists.iter::<DeclId>(list).enumerate() {
+            if k > 0 {
+                out.push_str(", ");
+            }
+            self.write_name(b, out);
+        }
+        out.push(']');
+    }
+
     /// Appends `name`.
     pub fn write_decl_name_value(&self, name: DeclName, out: &mut String) {
         match self.ast.names.view(name) {

@@ -8216,6 +8216,7 @@ bounds, enumerators and bit-field widths. clang has no `_p` forms, so
 GCC answers 1. Tests: `tests/c/expr/builtin-overflow-p-{run,ice,errors}.c`,
 `tests/conformance/ext.gnu.builtins/overflow-p-constexpr{,-neg}.cpp`.
 
+<!-- kiln-gap: GAP-171 -->
 **Not implemented (WP-1550): GCC's `__builtin_va_arg_pack()` and
 `__builtin_va_arg_pack_len()`**, as in clang. glibc's fortify wrappers
 use them only when `__GNUC_PREREQ (4,3)`, which kiln's `__GNUC__` 4 /

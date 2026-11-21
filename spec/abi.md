@@ -1545,9 +1545,9 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   depth (`TL0__T_`), and a `Tt` nested in that head goes one level
   deeper again; no depth is rebased to the encoding being mangled, as
   in clang (checked against clang 19 by `tests/mangle/tt_requires_depth.cpp`,
-  WP-314). A generic lambda's explicit template-head
-  (`Ul <template-param-decl>* <lambda-sig> E`) is not yet mangled
-  (§8.16 "Not implemented").
+  WP-314). A generic lambda's explicit template-head is part of its
+  closure name, `Ul <template-param-decl>* <lambda-sig> E`
+  (`tests/mangle/lambda_signature.cpp`, WP-818).
 - **Constraint expressions** (`dep.rs`): a concept-id is an unresolved
   name (`[sr <nns> E] <source-name> I <args> E`, packs flattened, the
   written qualifier kept by `Sema::set_template_id_qualifier`); folds are
@@ -1596,9 +1596,10 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   as `Qu7unknown`, a name that differs from clang's).
   An expression splice (P2996) is GCC 16's `DS <expression>
   [<template-args>] E`.
-- **Not implemented:** a generic lambda's explicit template-head in its
-  closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
-  `UlvE_`, which also shifts later discriminators).
+- **Generic lambda template-heads.** A generic lambda's explicit
+  template-head is in its closure type name as clang 22 writes it
+  (`[]<class T>(){}` is `UlTyvE_`), and closures are numbered per
+  signature (`tests/mangle/lambda_signature.cpp`, WP-818).
 - **Anonymous unions at namespace scope (WP-204).** The unnamed variable
   of a namespace-scope anonymous union ([class.union.anon]/2) is mangled
   with the source name of the union's first named data member, found

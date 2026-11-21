@@ -19,6 +19,15 @@
 //! code as a site of its own: a gap whose text is none of the detected
 //! forms (a mangling failure recorded for a later diagnostic).
 //!
+//! A gap can also have no text of its own: a missing match arm that sends
+//! a valid construct to a diagnostic kept for invalid ones (WP-1782: a
+//! `constant_of` arm). Its only trace is the spec saying so, so a *spec
+//! site* is a paragraph of a `spec/*.md` contract (not the `spec/landed/`
+//! records) whose bold lead is a gap phrase ([`SPEC_LEADS`]:
+//! `**Not implemented yet.**`, `- **Unsupported:**`, ...). It carries
+//! `<!-- kiln-gap: GAP-NNN -->` on its line or the line directly above;
+//! its key is `file::§<heading>`, the nearest heading above it.
+//!
 //! [`check`] fails when (a) a site has no marker (or a `forward` marker
 //! outside a wrapper, a `check` marker on another line, or names an id the
 //! inventory lacks), (b) an inventory
@@ -78,6 +87,21 @@ const MACROS: &[&str] = &["todo!", "unimplemented!"];
 /// Source directories never scanned: the diagnostic catalogue (its texts
 /// are definitions; the sites are the ids' uses).
 const SKIP_DIRS: &[&str] = &["crates/kiln_diag/src/ids"];
+
+/// Bold leads (case as written) that make a spec paragraph a gap site:
+/// `**<lead>` at the start of a line, after any indentation and list
+/// marker.
+pub const SPEC_LEADS: &[&str] = &[
+    "Not implemented",
+    "Not yet implemented",
+    "Not supported",
+    "Not yet supported",
+    "Unimplemented",
+    "Unsupported",
+];
+
+/// The spec directory whose top-level `.md` files hold spec sites.
+const SPEC_DIR: &str = "spec";
 
 /// The marker of a site.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -474,6 +498,77 @@ pub fn scan_file(rel: &str, src: &str) -> Vec<Site> {
     out
 }
 
+/// The spec sites of one spec file (`rel` relative to the root): each
+/// line whose bold lead is one of [`SPEC_LEADS`] (outside fenced code),
+/// with the marker on its line or on the line directly above.
+pub fn scan_spec_file(rel: &str, src: &str) -> Vec<Site> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    let mut heading = String::new();
+    let mut fenced = false;
+    for (k, l) in lines.iter().enumerate() {
+        let t = l.trim_start();
+        if t.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        if t.starts_with('#') {
+            heading = t.trim_start_matches('#').trim().replace('`', "");
+            continue;
+        }
+        let item = t
+            .strip_prefix("- ")
+            .or_else(|| t.strip_prefix("* "))
+            .or_else(|| {
+                let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+                (digits > 0).then(|| t[digits..].strip_prefix(". ")).flatten()
+            })
+            .unwrap_or(t);
+        let Some(bold) = item.strip_prefix("**") else { continue };
+        let is_lead = SPEC_LEADS.iter().any(|lead| {
+            bold.strip_prefix(lead)
+                .is_some_and(|r| r.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric()))
+        });
+        if !is_lead {
+            continue;
+        }
+        let marker = std::iter::once(k)
+            .chain(k.checked_sub(1).filter(|&j| lines[j].trim_start().starts_with("<!--")))
+            .find_map(|j| marker_of(lines[j]));
+        out.push(Site {
+            file: rel.to_owned(),
+            line: k + 1,
+            func: format!("§{heading}"),
+            what: "spec".to_owned(),
+            text: t.to_owned(),
+            marker,
+        });
+    }
+    out
+}
+
+/// Every top-level `.md` file of [`SPEC_DIR`], relative to `root`, sorted.
+fn spec_sources(root: &Path) -> std::io::Result<Vec<String>> {
+    let dir = root.join(SPEC_DIR);
+    let mut out = Vec::new();
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(&dir)? {
+            let p = entry?.path();
+            if p.is_file()
+                && p.extension().is_some_and(|e| e == "md")
+                && let Some(n) = p.file_name()
+            {
+                out.push(format!("{SPEC_DIR}/{}", n.to_string_lossy()));
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Every `.rs` file under `crates/*/src`, except test modules and
 /// [`SKIP_DIRS`], relative to `root`, sorted.
 fn sources(root: &Path) -> std::io::Result<Vec<String>> {
@@ -524,6 +619,12 @@ pub fn scan(root: &Path) -> Result<Vec<Site>, String> {
         let src = std::fs::read_to_string(root.join(&rel))
             .map_err(|e| format!("cannot read {rel}: {e}"))?;
         out.extend(scan_file(&rel, &src));
+    }
+    let specs = spec_sources(root).map_err(|e| format!("cannot list {SPEC_DIR}/: {e}"))?;
+    for rel in specs {
+        let src = std::fs::read_to_string(root.join(&rel))
+            .map_err(|e| format!("cannot read {rel}: {e}"))?;
+        out.extend(scan_spec_file(&rel, &src));
     }
     Ok(out)
 }
@@ -615,12 +716,20 @@ pub fn check_with(sites: &[Site], inventory: &str, backlog: &str) -> Result<(), 
     for (s, key) in sites.iter().zip(&keys) {
         let at = format!("{}:{} ({}, {})", s.file, s.line, s.func, s.what);
         match &s.marker {
+            None if s.what == "spec" => problems.push(format!(
+                "{at}: a spec paragraph that declares a gap, without a `<!-- kiln-gap: GAP-NNN \
+                 -->` marker; add an entry to {INVENTORY} (and a BACKLOG row) and mark it, or \
+                 implement it and drop the paragraph"
+            )),
             None => problems.push(format!(
                 "{at}: a gap site without a `// kiln-gap: GAP-NNN` marker; add an entry to \
                  {INVENTORY} (and a BACKLOG row) and mark the site"
             )),
             Some(Marker::Bad(w)) => {
                 problems.push(format!("{at}: `kiln-gap: {w}` is neither GAP-NNN nor forward"));
+            }
+            Some(Marker::Forward | Marker::Check) if s.what == "spec" => {
+                problems.push(format!("{at}: a spec site's marker must name a GAP-NNN"));
             }
             Some(Marker::Check) => {
                 if !s.what.starts_with("DiagId::") || !s.text.contains("==") {
@@ -842,6 +951,34 @@ mod tests {
         let p = check_with(&sites, &inv(rows), BACKLOG_ROWS).unwrap_err();
         assert_eq!(p.len(), 1, "{p:#?}");
         assert!(p[0].contains("m.rs:7") && p[0].contains("compares no gap DiagId"), "{p:#?}");
+    }
+
+    /// A spec paragraph whose bold lead is a gap phrase is a site (WP-1782),
+    /// keyed by its heading; a marker on its line or the comment line above
+    /// counts; other bold leads, fenced code and an unmarked one do not.
+    #[test]
+    fn spec_paragraphs_are_sites() {
+        let spec = "# 3. Failures\n**Not implemented yet.** x fails.\n\
+                    <!-- kiln-gap: GAP-005 -->\n- **Unsupported:** case ranges.\n\
+                    - **Unsupportedness** is a word.\n- **UNSUPPORTED reasons**: counts.\n\
+                    ```\n**Not implemented** in a fence\n```\n\
+                    ## 4. `Rows`\n1. **Not supported yet** <!-- kiln-gap: GAP-006 -->\n";
+        let sites = scan_spec_file("spec/r.md", spec);
+        let got: Vec<(usize, &str, Option<Marker>)> =
+            sites.iter().map(|s| (s.line, s.func.as_str(), s.marker.clone())).collect();
+        assert_eq!(
+            got,
+            [
+                (2, "§3. Failures", None),
+                (4, "§3. Failures", Some(Marker::Gap("GAP-005".into()))),
+                (11, "§4. Rows", Some(Marker::Gap("GAP-006".into()))),
+            ]
+        );
+        let rows = "| GAP-005 | f | misc | `x` | `spec/r.md::§3. Failures` | 0 | WP-10 |\n\
+                    | GAP-006 | f | misc | `y` | `spec/r.md::§4. Rows` | 0 | excluded: as clang |\n";
+        let p = check_with(&sites, &inv(rows), BACKLOG_ROWS).unwrap_err();
+        assert_eq!(p.len(), 1, "{p:#?}");
+        assert!(p[0].contains("spec/r.md:2 (§3. Failures, spec): a spec paragraph"), "{p:#?}");
     }
 
     #[test]

@@ -185,14 +185,15 @@ declarations are in `tests/support/kiln_meta_queries.h`.
 A failing query is not a constant expression. Its `MetaError` note
 follows the shape of GCC 16.1's `std::meta::exception::what()`. Wording
 parity is out of scope. The negative tests are `entity-neg.cpp`,
-`operators-parameters-neg.cpp` and `constant-of-neg.cpp`.
+`operators-parameters-neg.cpp`, `constant-of-neg.cpp` and
+`constant-of-explicit-object-neg.cpp`.
 
 | Op | Fails when | Note |
 |---|---|---|
 | `type_of` | `r` has no type ([meta.reflection.queries] *has-type*; also a function whose type contains an undeduced placeholder, §1) | `'X' has no type` |
 | `parent_of` | `r` is null, the global namespace, a type without a declaration, a value or object, or a function or variable with C language linkage (`has_parent` false) | `reflection does not represent an entity with parent` |
 | `object_of` | `r` is not a variable of static storage duration | `reflection does not represent an object with static storage duration, or a reference to such an object` |
-| `constant_of` | `r` is not a value, annotation, enumerator, object, variable, structured binding or function (a non-static member, a type, a namespace) | `reflection does not represent an annotation or a valid argument to a splice-expression` |
+| `constant_of` | `r` is not a value, annotation, enumerator, object, variable, structured binding or function a splice may designate alone (a non-static data member, an implicit object member function, a template without arguments, a type, a namespace) | `reflection does not represent an annotation or a valid argument to a splice-expression` |
 | `constant_of` | the entity has no type | `reflection does not have a type` |
 | `constant_of` | the variable, binding or (sub)object's complete object is not usable in constant expressions | `the value of 'v' is not usable in a constant expression` |
 | `constant_of` | the value's type is not structural (a `mutable` or non-public member) | `'T' is not a structural type` |
@@ -207,10 +208,19 @@ with members, a union, an array, a pointer to member, a reflection, a
 closure, and a `_BitInt` wider than 128 bits (WP-1743;
 `meta.reflection.queries/constant-of-objects.cpp`).
 
-**Not implemented yet.** This fails with a `kiln:` note:
-- `constant_of` of an explicit-object member function: the
-  "not a valid argument to a splice-expression" note, because only
-  static member functions are handled yet.
+`constant_of` of a function is `reflect_function([: R :])`, the function
+itself, for every function a splice-expression may designate on its own:
+a non-member function, a static member function, and an explicit-object
+member function ([dcl.fct]/6; a conversion function or operator too, and
+a specialization of an explicit-object member function template), which
+[expr.prim.id.general]/4 does not restrict to a member access, so
+`&[: R :]` is an ordinary pointer to function ([expr.unary.op]/3) and
+`extract<F*>` of the reflection gives it. An implicit object member
+function, a constructor, a destructor and a template without arguments
+fail with the splice note above (WP-1782;
+`meta.reflection.queries/constant-of-explicit-object*.cpp`; GCC 16.1
+agrees). The match over reflectee and declaration kinds is exhaustive,
+so a new kind needs a decision.
 
 ## 4. Row semantics that need a word
 - **Linkage** ([basic.link]) belongs to a name. A type alias, a

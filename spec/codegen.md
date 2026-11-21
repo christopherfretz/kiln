@@ -1187,11 +1187,13 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   operand, then the call with the size (`i64`, the
   object size) and the alignment as the deallocation function's
   parameters require. The call is `nounwind` (the callee is `noexcept`).
-- **Unsupported** (`CodegenError`): member-pointer element types, string
-  literal array initializers, a placement argument of class type inside
-  a conditional, non-constant `align_val_t` arguments, the deallocation
-  functions clang does not treat as usual, and every construct Sema
-  reports as unsupported (classes needing constructors or destructors).
+- **Coverage.** Member-pointer element types, string literal array
+  initializers, a placement argument of class type inside a conditional,
+  non-constant `align_val_t` arguments and the deallocation functions
+  clang does not treat as usual are emitted as clang 22 emits them (the
+  libc++ m3 sweep, §7j; `tests/codegen/new_forms_once_unsupported.cpp`,
+  WP-1782). What codegen still cannot emit is in
+  docs/status/static-gaps.md.
 
 ### 3.2 Floating-point semantics (WP-806, `fp.rs`)
 Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
@@ -5211,8 +5213,11 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
   imaginary,limited_range,improved_range}.cpp` and `va_arg_complex.cpp`
   are exact on aarch64 and x86_64; `tests/conformance/ext.complex/
   {limited,improved,full}-range.cpp` (run) observe each range.
-- **Not implemented:** `_Complex _Float16` (parsed; not checked against clang),
-  and `-fcomplex-arithmetic=promoted` (spec/abi.md §8.17 "Deviations").
+- `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
+  <!-- kiln-gap: GAP-172 -->
+- **Not implemented:** `-fcomplex-arithmetic=promoted`, and clang 22's
+  `-ffp-model=fast`, which selects it, are rejected (spec/abi.md §8.17
+  "Deviations").
 
 ## 7o. Landed (WP-351): coroutines (`coro.rs`)
 

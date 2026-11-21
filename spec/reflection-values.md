@@ -68,7 +68,19 @@ shape, so a public name would claim the library template itself.
 2. `reflect_object(o)`: `o` must designate an object with static storage
    duration usable as a template argument (not a local, a temporary or a
    string-literal subobject); the result is `Reflectee::Object` of a
-   pointer constant to it. Equal designations are one reflection.
+   pointer constant to it. Equal designations are one reflection. A
+   structured binding designates an element or member of its decomposed
+   variable `e`, or the object a tuple-like binding's holding reference
+   is bound to ([dcl.struct.bind]/5-7), so `reflect_object(b)` is valid
+   when that object is: `e` of static storage duration, constexpr or not
+   (no value is read), and a holding reference constant-initialized,
+   usable in constant expressions ([expr.const]). A binding of a
+   decomposed temporary (`auto&& [p, q] = P{}`) names a subobject of a
+   temporary ([temp.arg.nontype]/3) and one of an automatic decomposition
+   no permitted result; both fail (clang names `e` `'[x, y]'` in the
+   note). GCC 16.1 rejects every binding: a deviation
+   (docs/status/deviations.md; WP-1783,
+   `meta.reflection.result/reflect-object-structured-binding*.cpp`).
 3. `reflect_function(f)`: `T` must be a function type; the result is the
    reflection of the function's entity (`Sema::entity_decl`), equal to
    `^^f`. An immediate function fails: a reference to it is not a

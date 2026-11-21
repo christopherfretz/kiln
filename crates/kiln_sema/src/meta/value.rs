@@ -594,7 +594,12 @@ impl Sema<'_, '_> {
                     self.extract_local(r, d, (vt, tc), loc, oven)
                 }
                 DeclKind::Function => self.extract_function(r, d, tc, loc),
-                DeclKind::CXXMethod if self.is_static_method(d) || self.has_explicit_object(d) => {
+                // An explicit-object conversion function, too, is a
+                // function whose address is an ordinary pointer
+                // ([expr.unary.op]/3; WP-1782).
+                DeclKind::CXXMethod | DeclKind::CXXConversion
+                    if self.is_static_method(d) || self.has_explicit_object(d) =>
+                {
                     self.extract_function(r, d, tc, loc)
                 }
                 DeclKind::CXXMethod | DeclKind::CXXConversion | DeclKind::Field => {

@@ -2093,7 +2093,12 @@ runs, stopping at the first failing step:
    or in the comment block directly above it (`forward` inside a wrapper
    function, `check` on a line that only compares an id with a gap id),
    and a `GAP-NNN` marker no detected site uses marks the next code line
-   as a site. The lint fails when a site has no marker or names an id
+   as a site. A paragraph of a top-level `spec/*.md` whose bold lead is a
+   gap phrase (`static_gaps::SPEC_LEADS`: `**Not implemented`,
+   `**Unsupported`, ...) is a spec site, for a gap with no text of its
+   own in the code (WP-1782); it carries `<!-- kiln-gap: GAP-NNN -->` on
+   its line or the line above and is listed as `spec/<file>.md::§<heading>`.
+   The lint fails when a site has no marker or names an id
    `docs/status/static-gaps.md` lacks, when an entry there has no site
    left, when an entry's sites cell (each `` `file::fn` ``, sorted, ` ×N`
    for N sites) differs from its markers, or when its row is not an
