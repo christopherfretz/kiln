@@ -1,0 +1,84 @@
+name: tier0
+# Tier-0 CI for outside pull requests (WP-1902; docs/VALIDATION.md "Tier-0
+# (outside pull requests)", spec/harness.md "CI"). A pull request from a
+# fork goes through a screened pipeline that runs outside this repository:
+# a mechanical prefilter, then this small run, then a static triage, then
+# the full CI (ci.yml). GitHub holds every workflow run of an outside
+# contributor's pull request for approval; the pipeline approves only this
+# workflow's run for a given head sha, and reads only its conclusion:
+# `success` means `cargo xtask ci --step lints` (the in-process lints, fmt,
+# clippy) and the workspace's library unit tests passed on x86_64.
+#
+# It is its own file because the pipeline matches runs by workflow file
+# path (`.github/workflows/tier0.yml`): keep the path stable. It must stay
+# safe to run on untrusted code, so (xtask/src/tier0_tests.rs):
+#   - the only trigger is `pull_request` (never `pull_request_target` or
+#     `workflow_run`, which run with the base repository's privileges);
+#   - the token is read-only (`permissions: contents: read`), no secret is
+#     referenced, nothing calls the GitHub API and no artifact is uploaded
+#     for a later workflow to consume; the cache is restored, never saved;
+#     the checkout keeps no credentials (`persist-credentials: false`);
+#   - every job has a `timeout-minutes`.
+# A pull request runs the workflow files of its own merge commit, so these
+# properties hold for the copy on `main`; a pull request that changes this
+# file, the setup action or xtask is the prefilter's to stop.
+#
+# Same-repo pull requests (the maintainers' branches) skip both jobs: they
+# are not screened and already get the full CI, which runs everything here
+# and more, so a tier-0 run would only spend runner time. The skip tests the
+# head repository, not the author, so a fork's pull request always runs.
+#
+# Concurrency is per pull request: a newer push cancels the older run of
+# the same pull request. There is deliberately no shared group as a global
+# cap: GitHub keeps only one pending run per group and cancels the older
+# pending ones, which would silently drop other pull requests. Rate
+# limiting is the pipeline's job (it decides which runs to approve).
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: tier0-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+# As in ci-lane.yml: a missing LLVM tool or GCC oracle is an error, never a
+# skip. The corpus-only switches (debuggers, sanitizer runtimes) are not
+# needed: tier-0 runs no corpus.
+env:
+  KILN_REQUIRE_LLVM: "1"
+  KILN_GCC: /usr/local/bin/g++
+  KILN_REQUIRE_GCC: "1"
+defaults:
+  run: { shell: bash }
+# One architecture (x86_64), in the same container and setup as ci-lane.yml's
+# jobs, restoring the x86_64 lane's cache (`ci-x86_64`, saved by main's
+# `unit rest`; a pull request may read the default branch's cache entries).
+# The timeouts are about three times the expected duration
+# (docs/VALIDATION.md "Job timeouts").
+jobs:
+  lints:
+    name: tier0 lints
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: gcc:16.1.0-trixie
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: ci-x86_64 }
+      - run: cargo xtask ci --step lints
+  # The library unit tests of every workspace crate (`--lib`): the crates'
+  # integration tests (`tests/*.rs`, most of `unit rest`'s 20 minutes) and
+  # xtask's own tests (the seed-corpus run) stay in the full CI.
+  unit:
+    name: tier0 unit
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    container: gcc:16.1.0-trixie
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: ./.github/actions/kiln-ci
+        with: { cache-key: ci-x86_64 }
+      - run: cargo test --workspace --lib --exclude xtask

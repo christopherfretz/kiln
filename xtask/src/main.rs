@@ -17,6 +17,7 @@ mod features;
 mod gcc_tests;
 mod gen_pp;
 mod gen_reflect;
+mod guard;
 mod jobs;
 mod kiln_hod;
 mod landed;
@@ -28,6 +29,8 @@ mod pgo;
 mod release_gate;
 mod static_gaps;
 mod test;
+#[cfg(test)]
+mod tier0_tests;
 mod util;
 
 const USAGE: &str = "\
@@ -87,6 +90,11 @@ commands:
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   static-gaps check docs/status/static-gaps.md against the gap sites in crates/ (part of
               ci); --sites prints every site (spec/harness.md \"CI\", step 0)
+  guard       CI's misbehaviour checks: `guard trace -- <command>` runs a command under
+              strace and fails on any socket or a write outside the target directory;
+              `guard risky --base <rev>` annotates the dependency, build-script,
+              proc-macro and workflow changes of a diff (`cargo xtask guard --help`;
+              spec/harness.md \"Misbehaviour checks\")
   ci          the merge gate: diag-split --check, the spec/landed lint, the static-gap
               lint, fmt --check, clippy
               -D warnings, cargo test, then the corpus twice: xtask test --compiler
@@ -135,6 +143,7 @@ fn command() -> ExitCode {
         Some("release-gate") => release_gate::main(args),
         Some("jobserver") => jobs::main(args),
         Some("static-gaps") => static_gaps::main(args),
+        Some("guard") => guard::main(args),
         Some("ci") => ci(args),
         Some("kiln-hod") => kiln_hod::main(args),
         _ => {
@@ -1160,6 +1169,74 @@ mod ci_tests {
                 let t: u32 = t.trim().parse().unwrap_or_else(|_| panic!("`{name}`: `{t}`"));
                 assert!((1..=360).contains(&t), "{} job `{name}`: {t} minutes", path.display());
             }
+        }
+    }
+
+    /// The jobs that may hold a token with more than `contents: read`
+    /// (WP-1901), as `(workflow file, job id)`: publishing a draft release.
+    const WRITE_JOBS: &[(&str, &str)] = &[("release.yml", "release")];
+
+    /// WP-1901: every workflow sets a read-only default token at top
+    /// level (`permissions:` then exactly `contents: read`), and only the
+    /// jobs of [`WRITE_JOBS`] carry a `permissions:` block of their own.
+    #[test]
+    fn workflows_default_to_a_read_only_token() {
+        let dir = util::repo_root().join(".github/workflows");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "yml" || e == "yaml"))
+            .collect();
+        paths.sort();
+        assert!(paths.len() >= 4);
+        for path in &paths {
+            let file = path.file_name().unwrap().to_str().unwrap();
+            let (yml, jobs) = workflow_jobs(path);
+            let head = &yml[..yml.find("\njobs:\n").unwrap()];
+            assert!(
+                head.contains("\npermissions:\n  contents: read\n"),
+                "{file}: no top-level `permissions: contents: read`"
+            );
+            let block = &head[head.find("\npermissions:\n").unwrap() + 14..];
+            let more = block.lines().skip(1).take_while(|l| l.starts_with("  ")).count();
+            assert_eq!(more, 0, "{file}: the default token grants more than contents: read");
+            for (name, b) in &jobs {
+                if b.lines().any(|l| l.starts_with("    permissions:")) {
+                    assert!(
+                        WRITE_JOBS.contains(&(file, name.as_str())),
+                        "{file} job `{name}` raises its token; list it in WRITE_JOBS"
+                    );
+                }
+            }
+        }
+    }
+
+    /// WP-1901: the aarch64 lane runs the misbehaviour checks: `guard
+    /// risky` on pull requests, and a corpus slice under `guard trace`
+    /// with strace installed and ptrace allowed; the slice's directories
+    /// exist (spec/harness.md "Misbehaviour checks").
+    #[test]
+    fn workflow_runs_the_guard() {
+        let (_, blocks) = lane_workflow();
+        let (_, b) = blocks.iter().find(|(n, _)| n == "guard").expect("ci-lane.yml job `guard`");
+        assert!(b.contains("if: ${{ inputs.runner == 'ubuntu-24.04-arm' }}"));
+        assert!(b.contains("container: *debugger-container"));
+        assert!(b.contains("fetch-depth: 2"));
+        assert!(b.contains(
+            "- if: ${{ github.event_name == 'pull_request' }}\n        run: cargo xtask guard risky --base HEAD^1 --head HEAD\n"
+        ));
+        assert!(b.contains("install -y -qq --no-install-recommends strace"));
+        let trace = b.find(
+            "cargo xtask guard trace -- target/debug/xtask test --compiler target/debug/kiln++",
+        );
+        let build = b.find("run: cargo build -p kiln_driver -p xtask");
+        assert!(build.is_some() && trace.is_some() && build < trace, "build, then trace");
+        let slice = &b[trace.unwrap()..];
+        let dirs: Vec<&str> =
+            slice.split_whitespace().filter(|w| w.starts_with("tests/")).collect();
+        assert!(dirs.len() >= 3, "{dirs:?}");
+        for d in dirs {
+            assert!(util::repo_root().join(d).is_dir(), "the guard slice names {d}");
         }
     }
 

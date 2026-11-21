@@ -378,6 +378,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `-fsanitize=fuzzer`'s `"no-builtin-<name>"` attributes are clang's.
   `-fno-builtin-<name>` now drops a name clang does not know as a
   builtin (`-fno-builtin-memmem` gives no attribute), as clang does.
+- CI misbehaviour checks (WP-1901): a new `guard` job on the aarch64
+  lane runs a corpus slice (run tests, links, modules) under strace
+  (`cargo xtask guard trace`) and fails when any process opens a socket
+  or writes outside the target directory. On a pull request it first
+  annotates the changes that run code at build time or change CI (new
+  or changed dependencies in `Cargo.toml`/`Cargo.lock`, a new `build.rs`
+  or proc-macro crate, `.github/`, `.cargo/`) with `::warning::` lines
+  and a job summary (`cargo xtask guard risky`; it does not fail). Every
+  workflow now has a read-only default token (`permissions: contents:
+  read`).
+- Tier-0 CI for outside pull requests (WP-1902): `.github/workflows/tier0.yml`
+  runs `cargo xtask ci --step lints` and the workspace's library unit
+  tests on x86_64, for pull requests from forks only, with a read-only
+  token, no secrets and a timeout on every job (docs/VALIDATION.md
+  "Tier-0 (outside pull requests)", spec/harness.md "CI").
 
 ### Changed
 
