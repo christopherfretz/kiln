@@ -8,7 +8,7 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-13 gaps at 20 sites; 10 of 56,766 g++.dg cases hit one at the
+12 gaps at 16 sites; 10 of 56,766 g++.dg cases hit one at the
 1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
 wording that matches clang's for a limit clang shares: they are listed
 as excluded and stay.
@@ -22,8 +22,7 @@ reports a gap:
   `drv_not_implemented`, `parse_unsupported`,
   `pp_header_unit_unsupported`, `pp_scan_header_unit`,
   `sema_attribute_unsupported_by_kiln`, `sema_conv_unsupported`,
-  `sema_multiversion_not_supported`, `sema_unimplemented_template_feature`,
-  `sema_vla_unsupported`;
+  `sema_unimplemented_template_feature`, `sema_vla_unsupported`;
 - a call of a function that forwards its text to one: `unsupported`,
   `templ_unimplemented` and `not_implemented` in `kiln_sema`,
   `unsupported` in `kiln_parse`, `unsupported` and `not_implemented` in
@@ -80,7 +79,6 @@ By family:
 | pp_header_unit_unsupported | 1 | 1 | 0 |
 | pp_scan_header_unit | 1 | 1 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
-| sema_multiversion_not_supported | 1 | 4 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
@@ -90,7 +88,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | Oven traps: expressions | 2 (GAP-114..GAP-115) | 3 | 0 | WP-1741 |
 | Oven traps: types | 2 (GAP-126, GAP-129) | 5 | 0 | WP-1742 |
 | preprocessor/modules | 6 (GAP-136, GAP-137, GAP-139..GAP-142) | 6 | 0 | WP-1744 |
-| misc | 2 (GAP-144, GAP-149) | 5 | 0 | WP-1745 |
+| misc | 1 (GAP-149) | 1 | 0 | WP-1745 |
 
 ## Gaps
 
@@ -107,8 +105,7 @@ By area (the BACKLOG row that fixes it, most-hit first):
 | GAP-140 | drv_not_implemented | preprocessor/modules | `{what} is not implemented yet` ({what}: `a module file before C++20`, `preprocessing a module file`) | `crates/kiln_driver/src/pp_cmd.rs::configure_preprocessor` | 0 | WP-1744 |
 | GAP-141 | drv_not_implemented | preprocessor/modules | `-fdump-ast of a module file is not implemented yet` | `crates/kiln_driver/src/syntax_cmd.rs::dump_options` | 0 | WP-1744 |
 | GAP-142 | parse_unsupported | preprocessor/modules | `{what} (the floating-point environment) is not supported yet` ({what}: `'#pragma clang fp exceptions(v)'`, `'#pragma clang fp eval_method(v)'`, `'#pragma STDC FENV_ACCESS ON'`, `'#pragma STDC FENV_ROUND m'`, `'#pragma float_control(except, on)'`) | `crates/kiln_parse/src/fp_pragma.rs::fenv_unsupported` | 0 | WP-1744 |
-| GAP-144 | sema_multiversion_not_supported | misc | `function multiversioning with '{0}' is not supported yet` ({0}: `target_version`, `target`, or the attribute name `fmv_attached` computes) | `crates/kiln_sema/src/class/mod.rs::act_on_friend`, `crates/kiln_sema/src/decl.rs::act_on_declarator_impl`, `crates/kiln_sema/src/fmv.rs::check_fmv_attrs`, `crates/kiln_sema/src/fmv.rs::fmv_attached` | 0 | WP-1745 |
-| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `cpu_dispatch`, `cpu_specific`, `interrupt`, `model`, the `opencl_*` address spaces, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`, `target_clones`, `target_version`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
+| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` (`address_space`, `interrupt`, `model`, the `opencl_*` address spaces, the `swift_*` parameter ABIs, `swiftasynccall`, `swiftcall`) and x86 `interrupt`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
 ## Excluded (clang-matching wording)
 

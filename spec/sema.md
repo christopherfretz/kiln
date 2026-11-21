@@ -3464,6 +3464,91 @@ instantiation unless stated.
   `tests/conformance/ext.gnu.visibility/`,
   `tests/conformance/cpp.pragma/gcc-visibility{,-syntax,-namespace}.cpp`,
   `tests/codegen/visibility_explicit_inst.cpp`.
+- **Function multiversioning** (clang extension; AttrDocs "target",
+  "target_clones", "cpu_dispatch", "cpu_specific"). On AArch64 kiln is
+  clang without the `fmv` target feature (spec/landed/codegen/WP-810.md):
+  a non-default `target_version` version is hidden, and as a member or a
+  friend, which cannot be hidden, it is the error "non-default
+  'target_version' version of a member|friend function is not allowed"
+  (clang 19 and 22 accept the declaration and crash on such a member's
+  definition; docs/status/deviations.md). On x86-64 (WP-1745,
+  `fmv_x86.rs`, clang `CheckMultiVersionFunction`):
+  - *Model.* The versions of a multiversioned function are entities of
+    one name, scope and type, each with its own redeclaration chain: a
+    declaration whose `target` / `target_clones` / `cpu_*` attribute
+    differs from the earlier declarations' is a new version, not a
+    redeclaration. Whether an entity is multiversioned is computed
+    (`Ast::is_multiversion`, `kiln_ast` `multiversion.rs`): it has a
+    `target_clones`, `cpu_specific` or `cpu_dispatch` attribute, a
+    `target("default")`, or a `target` beside another version. Nothing is
+    stored, so the AST is unchanged (the PCH format moved to 83 only for
+    the new diagnostic ids). `target_version`
+    is clang 22's unknown attribute on x86-64; before 22 it is AArch64's
+    hidden version, its names those of `__builtin_cpu_supports`.
+  - *Version strings* (`kiln_abi` `x86_fmv.rs`: clang's
+    `X86TargetParser.def` tables for `__builtin_cpu_supports`,
+    `__builtin_cpu_is`, the FMV priorities and the `cpu_specific`
+    processors). A `target` version's features must be FMV features and
+    its `arch=` an FMV architecture (not the x86-64 levels): "function
+    multiversioning doesn't support feature|architecture 'X'"; a
+    `no-` feature is a feature that is not supported. kiln does not check
+    a `target` string's features for being known to the target (clang's
+    "unsupported 'X' in the 'target' attribute string" warning, which
+    drops the attribute), so an unknown non-FMV feature is that error
+    instead (docs/status/deviations.md). `target_clones` is clang's
+    `checkTargetClonesAttrString`: each comma-separated piece trimmed; an
+    empty piece, a trailing comma, a feature with no FMV priority and an
+    unknown `arch=` (FMV architectures and the x86-64 levels are known)
+    are `-Wignored-attributes` warnings that drop the attribute; a
+    duplicate version (also a second `default`) is "version list
+    contains duplicate entries"; several string literals one of which
+    holds a comma is `-Wtarget-clones-mixed-specifiers`; no `default` is
+    the error "'target_clones' multiversioning requires a default
+    target". A piece is located at its literal plus its byte offset
+    (clang 22; clang 19 one byte later), the mixed-specifier warning at
+    the first literal (clang 19: the attribute). `cpu_specific` /
+    `cpu_dispatch` names must be processors ("invalid option"); two names
+    of one mangling letter are "CPU list contains duplicate entries;
+    attribute ignored".
+  - *Declarations.* A first declaration that is multiversioned (or a
+    `target` that makes an earlier unused declaration multiversioned) is
+    checked for what cannot be: `main` ("'main' cannot be a
+    multiversioned function"), templates, virtual functions,
+    constructors, destructors (checked in `act_on_special_declarator`
+    too), deduced return types, and for `cpu_*` constexpr and consteval
+    functions ("attribute 'A' multiversioned functions do not yet
+    support ..."), and other attributes than `used` (with `target`),
+    `nonnull`, `nothrow` ("attribute 'A' multiversioning cannot be
+    combined with attribute 'B'"). A declaration after the function was
+    odr-used is "function declaration cannot become a multiversioned
+    function after first usage" (with a note at the earlier declaration
+    from clang 22). A later version must agree with the earlier ones on
+    the return type, constexpr and inline specification, linkage
+    ("multiversioned function declaration has a different ...") and
+    exception specification; mixing kinds is "multiversioning attributes
+    cannot be combined"; a plain redeclaration of a `target` or `cpu_*`
+    function is "function declaration is missing 'target' attribute
+    ..." (a plain redeclaration of a `target_clones` function is
+    allowed). `target` versions with equal parsed strings are
+    "multiversioned function redeclarations require identical target
+    attributes" unless they are the same string; a second `cpu_specific`
+    naming a CPU already named is "multiple 'cpu_specific' functions
+    cannot specify the same CPU"; `cpu_dispatch` redeclared with other
+    CPUs is "'cpu_dispatch' function redeclared with different CPUs";
+    `target_clones` redeclared with another list is "'target_clones'
+    attribute does not match previous declaration". A `cpu_dispatch`
+    definition's body is ignored: "body of cpu_dispatch function will be
+    ignored" at its first statement, and no return-value check.
+  - *Overload resolution* (`overload/best.rs`, `overload/address.rs`):
+    a non-default `target` version is not a candidate (calls and
+    addresses name the function's default version, which codegen sends
+    to the `ifunc`); between two `cpu_*` versions the `cpu_dispatch` one
+    is better, then the `cpu_specific` one with fewer CPUs, then the one
+    whose first differing CPU name is less (clang
+    `isBetterMultiversionCandidate`).
+  - Tests: `tests/conformance/ext.multiversion/x86-*.cpp`,
+    `aarch64-target-version-member-hidden.cpp`; codegen is
+    spec/codegen.md "Function multiversioning".
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
@@ -10458,8 +10543,8 @@ behaviour, or proven unreachable (`unreachable!` with the invariant):
   enable it" (kiln has no `-fenable-matrix`), `riscv_rvv_vector_bits`
   clang's "'riscv_rvv_vector_bits' attribute is not supported on targets
   missing 'zve32x'; ..." (no RISC-V target). The other class-A rows
-  (address spaces, the Swift ABI, x86 `interrupt`, x86 multiversioning)
-  are still "not supported by kiln yet". Test
+  (address spaces, the Swift ABI, x86 `interrupt`, `model`) are still
+  "not supported by kiln yet". Test
   `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
 
 ## 6. Initialization (`init.rs`)

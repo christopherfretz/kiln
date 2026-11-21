@@ -263,9 +263,12 @@ impl Sema<'_, '_> {
     fn address_matches(&mut self, d: DeclId, (fnty, member): (QualType, bool)) -> bool {
         // clang `checkAddressOfFunctionIsAvailable`: never a function
         // with `pass_object_size` parameters (WP-803).
+        // WP-1745: never a non-default `target` version
+        // (clang `AddMatchingNonTemplateFunction`).
         if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
             || self.is_implicit_object_member(d) != member
             || !self.ast.pass_object_size_params(d).is_empty()
+            || self.is_nonviable_multiversion(d)
         {
             return false;
         }

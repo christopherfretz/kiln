@@ -798,7 +798,7 @@ named explicitly as `--target=<host arch>-unknown-linux-gnu` to both unless
 `args:` gives a `--target` (the vendor of clang's default triple is a
 build setting: Debian's x86-64 clang says `x86_64-pc-linux-gnu`; unit
 test `ir_tests_name_the_target_triple`), and the two modules must be equal after dropping comment lines and
-trailing comments (`; preds = ...`), the `; ModuleID` and
+trailing comments (`; preds = ...`, `; No predecessors!`), the `; ModuleID` and
 `source_filename` lines, `!llvm.ident` and the producer string node
 (`!N = !{!"... clang version ..."}` / `kiln version`). Nothing else is
 normalized: attributes, attribute group numbers, metadata, alignment,

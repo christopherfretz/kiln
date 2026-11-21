@@ -46,7 +46,6 @@ pub const GAP_DIAG_IDS: &[&str] = &[
     "pp_scan_header_unit",
     "sema_attribute_unsupported_by_kiln",
     "sema_conv_unsupported",
-    "sema_multiversion_not_supported",
     "sema_unimplemented_template_feature",
     "sema_vla_unsupported",
 ];

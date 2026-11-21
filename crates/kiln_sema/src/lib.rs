@@ -63,6 +63,7 @@ mod extern_c;
 mod fallthrough;
 mod flex_array;
 mod fmv;
+mod fmv_x86;
 mod for_loop_analysis;
 mod format_string;
 mod forms;

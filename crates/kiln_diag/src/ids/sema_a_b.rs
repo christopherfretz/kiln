@@ -280,6 +280,8 @@ sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast
 sema_bad_cxx_cast_scalar_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from scalar {1} to vector {2} of different size";
 sema_bad_cxx_cast_vector_to_scalar_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to scalar {2} of different size";
 sema_bad_cxx_cast_vector_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to vector {2} of different size";
+// clang function multiversioning (WP-1745)
+sema_bad_multiversion_option = Error (2) "function multiversioning doesn't support {0:feature|architecture} '{1}'";
 sema_bad_static_cast_member_pointer_nonmp = Error (2) "cannot cast from type {0} to member pointer type {1}";
 sema_bad_static_cast_pointer_nonpointer = Error (2) "cannot cast from type {0} to pointer type {1}";
 sema_base_duplicate = Error (1) "base class {0} specified more than once as a direct base class";

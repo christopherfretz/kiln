@@ -319,12 +319,10 @@ impl Sema<'_, '_> {
         if let Some(d) = d {
             // A non-default `target_version` friend: clang crashes on a
             // definition and drops a later ordinary definition of the
-            // function (src/fmv.rs).
+            // function (src/fmv.rs; docs/status/deviations.md).
             let attrs: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
             if let Some(at) = self.fmv_hidden_version(&attrs) {
-                let msg =
-                    // kiln-gap: GAP-144
-                    self.diag(DiagId::sema_multiversion_not_supported, at).arg("target_version");
+                let msg = self.diag(DiagId::sema_fmv_hidden_member, at).arg(1u8);
                 self.emit(msg);
             }
         }

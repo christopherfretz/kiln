@@ -53,6 +53,7 @@ mod mason_meta;
 mod memptr;
 mod module;
 mod module_init;
+mod multiversion;
 mod neon;
 mod new_delete;
 mod null_init;

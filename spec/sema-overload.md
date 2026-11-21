@@ -1362,8 +1362,9 @@ from 'int' to 'WI' (aka 'W<int>')`, `'CI *const' (aka 'const int
 
 ### 9.3 Deviations from clang 19 (authoritative)
 1. `-fshow-overloads=best` unsupported (always `all`).
-2. No CUDA, `target` multiversioning, ObjC, or C
-   `__attribute__((overloadable))`. (`enable_if` and `diagnose_if` are
+2. No CUDA, ObjC, or C `__attribute__((overloadable))`; function
+   multiversioning only on x86-64 (spec/sema.md "Function
+   multiversioning"). (`enable_if` and `diagnose_if` are
    supported: §4.3, spec/sema.md §4.)
 3. No fix-it hints on candidate notes.
 4. No typo correction of unresolved callees (sema.md).

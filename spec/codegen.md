@@ -2667,8 +2667,8 @@ is keyed by the label. A coroutine's ramp has a row; its outlined parts
 are internal. A closure's call operator and each emitted specialization
 of a generic one have a row whose hash is a function of the closure's
 digest inside its enclosing definition (spec/abi.md "Closure member
-rows"); a closure outside a function is its own context. kiln rejects function multiversioning, so it has no clones
-to decide. Rows are read before LLVM's passes, so `-O` changes none; a
+rows"); a closure outside a function is its own context. An x86-64 multiversioned function (WP-1745: its
+versions, resolver and `ifunc`) has no row yet. Rows are read before LLVM's passes, so `-O` changes none; a
 definition the optimizer deletes leaves an unanchored row (O-4, X1).
 
 The hash (scheme `kiln-odr-1`, WP-1583 K-3c, WP-1584 K-3d, WP-1585 K-3e, WP-1608, WP-1626, WP-1636, WP-1637, WP-1638, frozen by WP-1586 K-3f) is the definition
@@ -6688,6 +6688,71 @@ Tests: `tests/codegen/gnu_alias.cpp`, `tests/codegen/gnu_ifunc.cpp`,
 `tests/codegen/gnu_weakref.cpp` (ir_vs_clang),
 `crates/kiln_driver/tests/codegen.rs` `alias_ifunc_diagnostics`,
 `tests/conformance/ext.gnu.alias/`.
+
+## 10. Function multiversioning (WP-1745; `multiversion.rs`)
+
+x86-64 only (AArch64 without `fmv`: spec/landed/codegen/WP-810.md); the
+sema side is spec/sema.md "Function multiversioning". kiln emits clang
+22's IR at every `-fclang-compat` (clang 19 gives the resolver no
+attributes and no `dso_local`, and tests some `cpu_dispatch` CPUs with
+other feature masks).
+
+- **Symbols.** A version is `<mangled>.<suffix>`: for `target`, the
+  `arch=` CPU as `arch_<cpu>` then the features sorted, joined by `_`
+  (`.arch_haswell`, `.popcnt_sse4.2`); the default version keeps the
+  plain name. A `target_clones` clone is `<mangled>.<clone>.<index>`
+  (`.avx2.0`, `.default.3`; the clone's text with `arch=` as `arch_`, the
+  index its position in the list). A `cpu_specific` version is
+  `<mangled>.<letter>`, the processor's mangling letter (`.S`
+  ivybridge, `.A` generic).
+- **References.** Every reference other than a version's own
+  definition (a call, an address, a version calling the function) goes
+  to the dispatch symbol (clang `GetOrCreateMultiVersionResolver`):
+  `<mangled>.ifunc` for `target` and `cpu_dispatch`, the plain name for
+  `target_clones` (and `<mangled>.ifunc` as an alias of it, added with
+  the resolver). Before its `cpu_dispatch` is seen a `cpu_specific`
+  function's reference is a declaration `<mangled>.ifunc`, replaced by
+  the `ifunc` later.
+- **Versions.** Each version is a function of its own with its
+  attributes (`target-cpu`, `target-features`, `tune-cpu`): a `target`
+  version from its string (the default version from the module's); a
+  clone from its clone string, but an `arch=` clone gives only the
+  features (the module's `target-cpu` stays, no `tune-cpu`); a
+  `cpu_specific` version keeps the module's CPU and adds the processor's
+  features, `tune-cpu` the CPU name as written. A version that is not
+  defined is declared. Versions of an unreferenced `target` function are
+  emitted without a resolver.
+- **Resolvers.** `<mangled>.resolver`, `ptr ()`, `weak_odr` in a comdat of
+  its name (internal and without a comdat for an internal function;
+  `cpu_dispatch`'s keeps the comdat), `dso_local` unless internal, with
+  `{ disable_sanitizer_instrumentation }`. `target` and `target_clones`
+  resolvers are emitted at the end of the module, in order of first
+  reference; a `cpu_dispatch` declaration emits its resolver in place
+  (each declaration again: clang appends a second, unreachable copy of
+  the body), with the `ifunc` and a `weak_odr` alias of the plain name.
+  The body calls `__cpu_indicator_init()`, then tests each option in
+  order and returns the first whose test holds; the default (or
+  `generic`) option is the final plain `ret`; with none the body ends in
+  `llvm.trap` and `unreachable`. A feature test is `__builtin_cpu_supports`
+  (word 0 in `__cpu_model` field 3, words 1-3 in `__cpu_features2`, each
+  `and`, `icmp eq` and `and i1` into the running condition from `true`);
+  an architecture test is `__builtin_cpu_is` (`__cpu_model` field
+  `load` and `icmp eq`), except an x86-64 level, which tests its
+  features. `__cpu_indicator_init`, `__cpu_model` and `__cpu_features2`
+  are `dso_local`.
+- **Order.** `target` and clone options are sorted by FMV priority,
+  highest first, stably (`kiln_abi` `x86_fmv::fmv_priority`: a feature
+  `rank << 1`, an architecture `(rank(key feature) << 1) + 1`, the
+  x86-64 levels keyed on `sse2`, `sse4.2`, `avx2`, `avx512vl`).
+  `cpu_dispatch` options are sorted by feature mask, highest first; of
+  trailing options with an empty mask only the one with the greater
+  version name is kept.
+- Tests: `tests/conformance/ext.multiversion/x86-target-ir.cpp`,
+  `x86-target-clones-ir.cpp`, `x86-cpu-dispatch-ir.cpp`,
+  `x86-multiversion-misc-ir.cpp`, the run test `x86-multiversion-run.cpp`
+  (`requires: target-x86_64`), `target-clones-x86.cpp`; `kiln_driver`
+  tests `multiversion_x86_and_hidden_members`, `mason_defs`
+  `decided_forms`.
 
 ## Landed sections after WP-488: `spec/landed/codegen/`
 

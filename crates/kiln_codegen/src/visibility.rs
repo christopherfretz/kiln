@@ -131,6 +131,11 @@ fn assume_dso_local(
     if g.name.starts_with("llvm.") || g.linkage == Linkage::ExternWeak {
         return Some(false);
     }
+    // WP-1745: the x86 CPU model runtime (clang `EmitX86CpuInit`,
+    // `EmitX86CpuIs`, `EmitX86CpuSupports` call `setDSOLocal(true)`).
+    if matches!(g.name, "__cpu_indicator_init" | "__cpu_model" | "__cpu_features2") {
+        return Some(true);
+    }
     match reloc {
         // Not an executable: only a function definition that can use a
         // local alias, under `-fno-semantic-interposition`

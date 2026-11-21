@@ -1,5 +1,6 @@
-//! Function multiversioning attributes (WP-810; clang `AttrDocs`
-//! `target_version`, `target_clones`, `cpu_dispatch`, `cpu_specific`).
+//! Function multiversioning attributes (WP-810, WP-1745; clang
+//! `AttrDocs` `target_version`, `target_clones`, `cpu_dispatch`,
+//! `cpu_specific`).
 //!
 //! On `AArch64` kiln does what clang does without the `fmv` target
 //! feature, which clang's driver turns off unless the runtime library is
@@ -7,10 +8,10 @@
 //! default version and a `target_clones` function are ordinary
 //! functions, a non-default `target_version` is hidden (not declared, its
 //! body skipped unparsed), and `cpu_dispatch` / `cpu_specific` name no
-//! valid CPU. On x86-64, where clang always multiversions, every
-//! multiversioning form is the hard error "function multiversioning with
-//! 'A' is not supported yet": kiln never silently picks one version.
-//! spec/landed/codegen/WP-810.md.
+//! valid CPU. On x86-64 the attributes multiversion the function as
+//! clang does (`src/fmv_x86.rs`; clang 19's `target_version` there is
+//! the `AArch64` hidden form, clang 22 does not know it).
+//! spec/landed/codegen/WP-810.md, spec/landed/codegen/WP-1745.md.
 
 use kiln_abi::target::Arch;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
@@ -247,12 +248,14 @@ impl Sema<'_, '_> {
                 // The clone list, normalized (`"a,b"` and `"a", "b"` are
                 // one list; WP-1608): `a` = its `Symbol`, `b` = 1.
                 let mut clones: Vec<String> = Vec::new();
+                let mut lits: Vec<(String, Loc)> = Vec::new();
                 for arg in args {
                     match string_at(self, arg) {
-                        Ok((lit, _)) => {
+                        Ok((lit, at)) => {
                             let b = self.ast.strings.bytes(self.ast.exprs.string_lit(lit));
                             let text = String::from_utf8_lossy(b);
                             clones.extend(text.split(',').map(|t| t.trim().to_owned()));
+                            lits.push((text.into_owned(), at));
                         }
                         Err(at) => {
                             let msg = self
@@ -262,6 +265,9 @@ impl Sema<'_, '_> {
                             return Some(None);
                         }
                     }
+                }
+                if self.abi.triple.arch == Arch::X86_64 && !self.x86_target_clones_ok(&lits, loc) {
+                    return Some(None);
                 }
                 node.a = self.intern(&clones.join(",")).index();
                 node.b = 1;
@@ -285,6 +291,12 @@ impl Sema<'_, '_> {
                 }
                 node.a = sym.index();
                 node.b = at.to_raw();
+                if self.abi.triple.arch == Arch::X86_64 {
+                    let Some(list) = self.x86_cpu_list(args, fmv_name(kind), loc) else {
+                        return Some(None);
+                    };
+                    node.a = list;
+                }
             }
         }
         Some(Some(self.ast.attrs.push(node)))
@@ -328,6 +340,11 @@ impl Sema<'_, '_> {
             }
             let earlier = kept.iter().map(|&k| *self.ast.attrs.get(k)).find(|e| {
                 matches!(e.kind, AttrKind::TARGET | AttrKind::TARGET_VERSION) && e.kind != node.kind
+                    || matches!(
+                        (e.kind, node.kind),
+                        (AttrKind::CPU_DISPATCH, AttrKind::CPU_SPECIFIC)
+                            | (AttrKind::CPU_SPECIFIC, AttrKind::CPU_DISPATCH)
+                    )
             });
             if let Some(e) = earlier {
                 if emit {
@@ -342,7 +359,6 @@ impl Sema<'_, '_> {
                 continue;
             }
             let ok = match node.kind {
-                AttrKind::TARGET => true,
                 AttrKind::TARGET_VERSION if self.is_aarch64() => {
                     self.check_target_version_string(&node, emit)
                 }
@@ -363,15 +379,11 @@ impl Sema<'_, '_> {
                     }
                     false
                 }
-                _ => {
-                    if emit {
-                        let msg =
-                            // kiln-gap: GAP-144
-                            self.diag(DiagId::sema_multiversion_not_supported, node.loc).arg(name);
-                        self.emit(msg);
-                    }
-                    false
-                }
+                // x86-64: checked as the attribute was formed; clang 19's
+                // `target_version` against the `__builtin_cpu_supports`
+                // names.
+                AttrKind::TARGET_VERSION => self.check_target_version_string(&node, emit),
+                _ => true,
             };
             if ok {
                 kept.push(a);
@@ -385,9 +397,12 @@ impl Sema<'_, '_> {
     /// attribute is ignored with a warning at the literal.
     fn check_target_version_string(&mut self, node: &AttrNode, emit: bool) -> bool {
         let list = if self.clang_compat < 22 { FMV_19 } else { FMV_22 };
+        let x86 = !self.is_aarch64();
+        let known = |p: &str| {
+            if x86 { kiln_abi::x86_fmv::cpu_supports(p).is_some() } else { list.contains(&p) }
+        };
         let s = self.fmv_string(node);
-        let Some(bad) = s.split('+').map(str::trim).find(|p| *p != "default" && !list.contains(p))
-        else {
+        let Some(bad) = s.split('+').map(str::trim).find(|p| *p != "default" && !known(p)) else {
             return true;
         };
         if emit {
@@ -401,10 +416,8 @@ impl Sema<'_, '_> {
 
     /// The multiversioning checks of declaration `d`
     /// ([`Sema::fmv_attached`]), dropping the attributes that do not
-    /// attach. On x86-64 a `target("default")` or a `target` string that
-    /// differs from an earlier declaration's makes the function
-    /// multiversioned (clang `CheckTargetCausesMultiVersioning`): the hard
-    /// error.
+    /// attach. x86-64 multiversioning itself is checked before the
+    /// declaration is built (`src/fmv_x86.rs`).
     pub(crate) fn check_fmv_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         if !attrs.iter().any(|&a| is_fmv_kind(self.ast.attrs.get(a).kind)) {
             return;
@@ -432,26 +445,6 @@ impl Sema<'_, '_> {
                     attrs.retain(|&a| a != v);
                 }
             }
-            return;
-        }
-        let Some(t) =
-            attrs.iter().map(|&a| *self.ast.attrs.get(a)).find(|n| n.kind == AttrKind::TARGET)
-        else {
-            return;
-        };
-        let s = self.fmv_string(&t);
-        let differs = self.ast.redecls_of(d).filter(|&r| r != d).any(|r| {
-            self.ast
-                .lists
-                .iter::<AttrId>(self.ast.attrs.of_decl(r))
-                .map(|a| *self.ast.attrs.get(a))
-                .any(|n| n.kind == AttrKind::TARGET && self.fmv_string(&n) != s)
-        });
-        if s == "default" || differs {
-            // kiln-gap: GAP-144
-            let msg = self.diag(DiagId::sema_multiversion_not_supported, t.loc).arg("target");
-            self.emit(msg);
-            attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::TARGET);
         }
     }
 
@@ -461,7 +454,7 @@ impl Sema<'_, '_> {
     /// caller diagnoses the attributes ([`Sema::fmv_attached`]), as the
     /// declaration is never built.
     pub(crate) fn fmv_hidden_version(&mut self, attrs: &[AttrId]) -> Option<Loc> {
-        if !self.is_aarch64()
+        if !(self.is_aarch64() || self.clang_compat < 22)
             || !attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::TARGET_VERSION)
         {
             return None;

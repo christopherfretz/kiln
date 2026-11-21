@@ -29,6 +29,7 @@ note_module_export_block_begins = Note (0) "export block begins here";
 note_module_previous_decl = Note (0) "previous module declaration is here";
 note_module_private_begins = Note (0) "private module fragment begins here";
 note_module_using_target = Note (0) "target of using declaration";
+note_multiversioning_caused_here = Note (0) "function multiversioning caused by this declaration";
 note_musttail_callconv_mismatch = Note (2) "target function has calling convention {1} (expected {0})";
 note_musttail_mismatch_arity = Note (2) "target function has different number of parameters (expected {0} but has {1})";
 note_musttail_mismatch_class = Note (2) "target function is a member of different class (expected {0} but has {1})";
