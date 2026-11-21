@@ -266,6 +266,8 @@ pub struct ConstexprLimits {
     pub backtrace_limit: usize,
     /// What the Oven's profile records.
     pub profile: ProfileLevel,
+    /// The evaluator's cost split is armed (`-fconstexpr-profile-split`).
+    pub split: bool,
 }
 
 impl Default for ConstexprLimits {
@@ -276,6 +278,7 @@ impl Default for ConstexprLimits {
             budget: Budget::default(),
             backtrace_limit: 10,
             profile: ProfileLevel::Off,
+            split: false,
         }
     }
 }
@@ -457,6 +460,9 @@ pub fn new_sema<'a, 'sm>(
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     if limits.profile != ProfileLevel::Off {
         s.set_constexpr_profile(limits.profile);
+    }
+    if limits.split {
+        s.set_constexpr_profile_split();
     }
     configure(&mut s, opts);
     s

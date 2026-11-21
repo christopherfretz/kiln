@@ -425,3 +425,35 @@ static_assert(d + a[2] + p.y > 9.0);
     // One object per variable: `d`, `a` and `p` (8 + 24 + 16 bytes).
     assert!(stat <= 48, "static_bytes {stat}");
 }
+
+/// spec/oven.md "Cost split" (WP-1864): `-fconstexpr-profile-split`'s
+/// line. A `split` build samples the VM's phases (a sampler thread; the
+/// shares are not deterministic, the line's shape is); any other build
+/// arms nothing and reports the split unavailable. Unasked, there is no
+/// line, and the evaluation's result and steps are the same either way.
+#[test]
+fn cost_split_line() {
+    let mut tu = Tu::new(LOOP);
+    let mut plain = Oven::new(Budget::default());
+    tu.run(&mut plain).expect("ok");
+    assert_eq!(plain.split_summary(), None);
+    let mut tu = Tu::new(LOOP);
+    let mut oven = Oven::new(Budget::default());
+    oven.set_profile_split(true);
+    tu.run(&mut oven).expect("ok");
+    assert_eq!(oven.stats().last().map(|r| r.steps), plain.stats().last().map(|r| r.steps));
+    let line = oven.split_summary().expect("asked");
+    if cfg!(feature = "split") {
+        assert!(line.starts_with("constexpr: split samples="), "{line}");
+        for p in ["dispatch", "checks", "memory", "memo", "bridge", "frames", "compile"] {
+            assert!(line.contains(&format!(" {p}=")), "{line}");
+        }
+    } else {
+        assert_eq!(
+            line,
+            "constexpr: split unavailable (kiln was built without the kiln_oven/split feature)\n"
+        );
+    }
+    oven.set_profile_split(false);
+    assert_eq!(oven.split_summary(), None);
+}

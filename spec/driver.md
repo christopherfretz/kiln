@@ -104,7 +104,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-reflection-mangling=<gcc\|kiln\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `gcc` (the default, WP-909): GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln`: `L u6__info <kind> <operand> E`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
 | `-f[no-]coro-aligned-allocation` | aligned coroutine frame allocation (default off, as clang; the last one wins): sema looks up the `std::align_val_t` forms of the frame's `operator new`/`delete` first (spec/sema.md §7.13). Passed to sema for `-fsyntax-only` and codegen jobs |
 | `-fconstexpr-report=<path>` | kiln: write the per-TU NDJSON constant-evaluation report (spec/oven.md "Reporting protocol"); `-fsyntax-only` and every codegen job |
-| `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | kiln: after the translation unit, the constant-evaluation summary and the per-function / per-site profile (see "Constexpr profile"; WP-1116); `-fsyntax-only` and every codegen job. An empty `-fconstexpr-profile=` is `drv_missing_value`; a limit that is not an unsigned integer is `drv_invalid_int_value` |
+| `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N`, `-fconstexpr-profile-split` | kiln: after the translation unit, the constant-evaluation summary and the per-function / per-site profile (see "Constexpr profile"; WP-1116), and with `-fconstexpr-profile-split` the sampled cost split (WP-1864); `-fsyntax-only` and every codegen job. `-fconstexpr-profile-split` takes no value (`-fconstexpr-profile-split=…` is an unknown argument). An empty `-fconstexpr-profile=` is `drv_missing_value`; a limit that is not an unsigned integer is `drv_invalid_int_value` |
 | `-ftemplate-depth=N` (GCC's `-ftemplate-depth-N` too, as clang), `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
 | `-fcheck-new`, `-fno-check-new` | clang 22's and GCC 16.1's: every new-expression tests the allocation function's result against null before initializing the object, whatever the allocation function's exception specification (the reserved placement form included, as both compilers do; nothing is tested without an initializer or a class type), and the replaceable `operator new` loses `nonnull` on its declaration and calls (`CodegenOptions::check_new`, spec/codegen.md "Null check"; WP-1485). Off by default; the last one wins. Codegen jobs only. Not part of the PCH configuration (clang does not record it either), so a PCH built with either value is used by the other |
 | `-faligned-allocation`, `-fno-aligned-allocation`, `-faligned-new`, `-fno-aligned-new`, `-faligned-new=N`, `-fnew-alignment=N` | clang 22's (`-faligned-new*` also GCC 16.1's): whether a new-expression of a type with new-extended alignment calls the `std::align_val_t` allocation functions ([expr.new]/19; on by default from C++17, `ParseOptions::aligned_allocation`, spec/sema.md "Implicit global operators") and `__cpp_aligned_new`; `-fnew-alignment=N` sets the alignment `::operator new(size_t)` guarantees (`__STDCPP_DEFAULT_NEW_ALIGNMENT__`, the threshold; 0 restores the target's). `-faligned-new=N` is `-faligned-allocation -fnew-alignment=N`, except that N = 0 is `-fno-aligned-allocation` and N = 1 keeps the target's threshold (GCC's meaning; clang 22 takes 0 as no override and 1 as an alignment of 1). N not a power of 2 is clang's `invalid value 'N' in '<arg>'; alignment must be a power of 2`. `-fno-aligned-new` leaves `__STDCPP_DEFAULT_NEW_ALIGNMENT__` defined, as clang does (GCC undefines it). The last flag of each kind wins (WP-1485). Both are in the PCH configuration, as clang's "aligned allocation" and "maximum alignment guaranteed by '::operator new(size_t)'": a PCH built with another value is not used |
@@ -2889,6 +2889,28 @@ constexpr: meta-ops count=0 splice-fast=0
 constexpr: trials count=0 failed=0 steps=0 wall-us=0
 constexpr: compile functions=3 wall-us=196
 ```
+
+**`-fconstexpr-profile-split`** (WP-1864) implies `-fconstexpr-stats`
+and adds a ninth line after them, the evaluator's sampled cost split
+(spec/oven.md "Cost split"). The split is measured only by a kiln built
+with the `kiln_oven/split` feature (`cargo build --release -p kiln_driver
+--features kiln_oven/split`); any other build prints `constexpr: split
+unavailable (kiln was built without the kiln_oven/split feature)` as the
+ninth line, so a stock build pays nothing for it:
+
+```text
+constexpr: split samples=365 vm-ms=365.2 dispatch=20.5% checks=5.2% memory=60.0% memo=0.0% bridge=0.0% frames=14.0% compile=0.3%
+```
+
+`samples` counts the sampler's ticks (about one per millisecond) that found the
+VM running, `vm-ms` is the time they span, and each share is that phase's
+fraction of them (they sum to 100% up to rounding; `samples=0` with every
+share `-` for a translation unit that evaluates nothing long enough to
+be sampled; ` (no sampler thread)` is appended when the thread could not
+be started). The split is a statistical profile: shares under about 1%,
+or from a few hundred samples, are noise. It costs one byte store per VM
+instruction while armed. It combines with
+`-fconstexpr-profile`, whose tables it leaves unchanged.
 
 **`-fconstexpr-profile`** selects the output as
 `-fkiln-instantiation-report` does:

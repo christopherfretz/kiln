@@ -652,6 +652,26 @@ pub(crate) mod bi {
     /// `t1`/`t2` (the member pointer types' classes): false for a null
     /// value, else `SemaBridge::member_layout` on the designated members.
     pub const MEMBER_LAYOUT: u32 = 45;
+    /// A `std::char_traits<C>` bulk operation (WP-1864, `compile/fast.rs`,
+    /// `vm/fast.rs`; spec/oven.md "Library fast paths") on the arguments
+    /// of the `Call` it precedes, at the call window `[base]` (operands
+    /// `[ok, base, _, _, t1, t2]`, `t1` the element type, `t2` the call's
+    /// result type; sub `TR_*` |
+    /// `TR_UNSIGNED`): when it evaluates the operation, the result is in
+    /// `[base]` and `ok` 1 (the `JmpIf` after it skips the call), else
+    /// `ok` is 0 and the call runs.
+    pub const TRAITS: u32 = 46;
+    /// sub of `TRAITS`: `compare(s1, s2, n)`, -1, 0 or 1.
+    pub const TR_COMPARE: u32 = 0;
+    /// sub of `TRAITS`: `length(s)`, the elements before the first null.
+    pub const TR_LENGTH: u32 = 1;
+    /// sub of `TRAITS`: `find(s, n, a)`, the first of `n` elements at `s`
+    /// equal to `a`, or null.
+    pub const TR_FIND: u32 = 2;
+    /// sub flag of `TRAITS`: elements compare as unsigned
+    /// (`char_traits<char>::lt` compares `unsigned char`s,
+    /// [char.traits.specializations.char]/1).
+    pub const TR_UNSIGNED: u32 = 1 << 4;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

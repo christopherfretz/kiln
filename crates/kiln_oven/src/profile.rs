@@ -345,6 +345,28 @@ impl Oven {
         self.hooks.refresh();
     }
 
+    /// Arms (or disarms) the cost split (`-fconstexpr-profile-split`;
+    /// spec/oven.md "Cost split", [`crate::split`]): in a build with the
+    /// `split` feature a sampler thread starts, and every evaluation from
+    /// the next one records the VM's phases; without it the split is only
+    /// reported unavailable. Disarming stops the sampler and drops its
+    /// counts.
+    pub fn set_profile_split(&mut self, on: bool) {
+        self.hooks.split_asked = on;
+        self.hooks.split =
+            (on && cfg!(feature = "split")).then(|| Box::new(crate::split::Split::start()));
+        self.hooks.refresh();
+    }
+
+    /// The cost split's report line (`constexpr: split ...`), `None`
+    /// unless it was asked for.
+    pub fn split_summary(&self) -> Option<String> {
+        match &self.hooks.split {
+            Some(s) => Some(s.summary()),
+            None => self.hooks.split_asked.then(|| crate::split::UNAVAILABLE.to_owned()),
+        }
+    }
+
     /// The level recorded at.
     pub fn profile_level(&self) -> Level {
         self.hooks.prof.as_ref().map_or(Level::Off, |p| p.level)

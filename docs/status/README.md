@@ -103,6 +103,9 @@ Performance:
   before 1.0 (WP-313 to WP-1171), moved verbatim from `perf.md`.
 - `perf-reflection.md`: a large reflection-heavy codebase under
   kiln, and the perf work packages that followed (WP-551).
+- `oven-profile.md`: the Oven's per-step overhead on standard-library
+  string plumbing, the cost split, and the fast paths that followed
+  (WP-1864).
 - `header-search-syscalls.md`: file-system system calls per TU against
   clang 19 (WP-820).
 - `bench-regressions-WP-798.md`: triage of one bench regression report.

@@ -637,7 +637,7 @@ fn non_replaceable_note(ast: &Ast, d: DeclId) -> String {
 
 /// Whether `d` is in namespace `std` at translation-unit scope (through
 /// inline namespaces).
-fn in_std(ast: &Ast, d: DeclId) -> bool {
+pub(crate) fn in_std(ast: &Ast, d: DeclId) -> bool {
     let decls = &ast.decls;
     let mut ns = decls.get(d).ctx();
     while let Some(n) = ns

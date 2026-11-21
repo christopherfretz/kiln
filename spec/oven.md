@@ -1044,6 +1044,12 @@ asks whether the evaluation is manifestly constant-evaluated.
   or `std::__addressof` is not a call: it costs no step, no frame and no
   depth (clang's `isStdBuiltin` set; `compile.rs` `is_std_builtin`;
   `expr.const/budget/std-builtins*.cpp`; WP-418).
+  The library fast paths ("Library fast paths") charge fewer steps than
+  the library code they stand for, by the rule stated there: a call of a
+  wrapper of the evaluation context costs no step, a `std::char_traits`
+  bulk operation one step per element it examines. Outside them (any
+  code not in namespace `std`, and every other library function) the
+  count is clang's.
 - **Depth** counts active calls as clang's `-fconstexpr-depth` does ("constexpr
   evaluation exceeded maximum depth of N calls"); a nested evaluation counts
   from the depth of the call that started it, plus one (see "Nested
@@ -1299,7 +1305,8 @@ evaluation (`kiln_parse::ConstexprLimits::profile`):
 | `steps` | `count` | their VM steps (memo hits charged their recorded steps: the step budget's count) |
 | `calls` | `count` | their calls, a memo hit counting the calls it stands for (`-fconstexpr-report`'s `calls`) |
 | | `memo-hits`, `memo-misses`, `memo-hit-rate` | the memo table's lookups in the TU, trials included (`Memo::hits` / `misses`; the rate to one decimal, `-` with no lookup) |
-| `memory` | `allocs`, `bytes` | constexpr `new` / `std::allocator` allocations and their bytes (recorded evaluations) |
+| `memory` | `allocs` | constexpr `new` / `std::allocator` allocations (recorded evaluations) |
+| | `bytes` | abstract-memory bytes allocated, cumulative and granule-rounded: every frame object (locals, parameter objects, temporaries) and every heap object (`Memory::allocated`, the report's `bytes`). A loop passing a class by value (a `std::string_view` argument) allocates a parameter object per call, so `bytes` grows with the calls while `peak-live` stays flat: churn the frame reclaims at each return, not heap growth (WP-1864) |
 | | `peak-live` | the most bytes live at once in one evaluation (`Memory::peak`: frames, heap, reflection) |
 | | `reclaimed` | bytes allocated and freed before the evaluation ended: `allocated` minus the frame and heap bytes still held (WP-060) |
 | | `peak-arena` | the largest arena high-water mark |
@@ -1357,6 +1364,98 @@ predictable `hooks.calls` test per call and return, now also per memo
 hit, per `exec` / `trial` return and per exception-popped frame). On:
 the WP-1116 landing note records `cargo xtask bench --filter oven/` with
 each flag.
+
+### Cost split — Landed (WP-1864)
+`-fconstexpr-profile-split` (spec/driver.md "Constexpr profile";
+`Oven::set_profile_split`, `crates/kiln_oven/src/split.rs`) reports where
+the VM's time goes, by phase:
+
+| Phase | What it covers |
+|---|---|
+| `dispatch` | the instruction loop itself: decode, jumps, register arithmetic and moves, `Step`, and every op no other phase claims |
+| `checks` | checks that can only fail: initialization, union active members on a load or store, lifetime ends at a scope's or a frame's end, enumeration ranges, `EndParam` |
+| `memory` | the memory model: a pointer's allocation and bounds, loads and stores of bytes, pointer arithmetic and comparison, allocation and release, typed copies, the memory builtins (and `bi::TRAITS`) |
+| `memo` | memo-table lookups and inserts |
+| `bridge` | sema-bridge callbacks: instantiating a body to compile, resolving a global, reflection meta operations |
+| `frames` | entering a call (depth, registers, the frame push) and returning from one |
+| `compile` | compiling a function to KBC (its body's instantiation is `bridge`) |
+
+**Sampling, not timing.** Armed, the VM stores the current phase into
+one relaxed atomic byte per instruction (`op_phase`) and at each phase
+change inside an instruction. A sampler thread (`kiln-oven-split`) wakes
+about every 100 µs (the OS rounds the sleep up; about 1 kHz on Linux),
+reads the byte and counts it. Nothing is timed on the evaluator's
+thread. A phase's share is its samples over the VM's samples (`idle`,
+outside the VM, excluded); `vm-ms` is the sampler's span times the VM's
+share of all samples. Shares under about 1% of a few thousand samples
+are noise.
+
+**A build feature: zero cost in every other build.** The phase stores
+are compiled only with the `kiln_oven` feature `split` (`cargo build
+--release -p kiln_driver --features kiln_oven/split`, as `op-stats`).
+Without it the VM's loop is the code it was before the split existed,
+`-fconstexpr-profile-split` arms nothing, and its line is `constexpr:
+split unavailable (kiln was built without the kiln_oven/split feature)`.
+In a `split` build the unarmed cost is one test of a register-held
+`Option` per instruction. The first design, a second instantiation of
+the loop chosen once per `exec` / `trial`, had no store or test on the
+unarmed path, but it cost 3-4% of the instructions of call-heavy
+evaluations (`bench/oven/virtual-dispatch.cpp`, `trial-rollback.cpp`,
+callgrind) because two instantiations change what LLVM inlines into the
+loop (`end_life` was outlined; `int_bin` and `store_desig` inlined).
+
+### Library fast paths — Landed (WP-1864)
+Calls of standard-library plumbing the Oven evaluates without running
+the library's code (`compile/fast.rs`, `vm/fast.rs`). Each keeps the
+call's value and every diagnostic; what it changes is the step count,
+by the rule below, and the call's absence from the profile.
+
+- **Wrappers of the evaluation context.** A direct call of a function of
+  namespace `std` (through inline namespaces) with no parameters,
+  returning `bool`, whose definition is one `if consteval` / `if
+  !consteval` returning a different `bool` literal from each branch
+  (libstdc++'s `std::__is_constant_evaluated` and
+  `std::is_constant_evaluated` from C++23), or one `return
+  __builtin_is_constant_evaluated();` (libstdc++'s before C++23,
+  libc++'s `std::__libcpp_is_constant_evaluated`), compiles to
+  `IsConstEval` aux 16, as `if consteval` reads the context
+  (`Compiler::ice_wrapper`). It is no call: no frame, **no step**, no
+  depth, no memo lookup, as clang's `isStdBuiltin` set ("Limits and
+  metrics"). A `std::is_constant_evaluated` whose body is the builtin
+  call is not taken, so its `-Wconstant-evaluated` warning stays.
+- **`std::char_traits<C>` bulk operations.** A direct call of
+  `std::char_traits<C>::compare(s1, s2, n)`, `length(s)` or `find(s, n,
+  a)` for `C` one of `char`, `wchar_t`, `char8_t`, `char16_t`,
+  `char32_t` (`Compiler::traits_fast`, recognized by the declaration's
+  identity: the standard fixes what each computes,
+  [char.traits.require]) is preceded by `Builtin` `bi::TRAITS` and a
+  `JmpIf` over the `Call`. The builtin reads the elements the library's
+  loop reads, in its order, through the same pointer arithmetic and
+  loads; `char` and `char8_t` compare as `unsigned char`
+  ([char.traits.specializations.char]/1), the others as their values.
+  `compare` is -1, 0 or 1 (both libraries' values). A run of elements
+  within one array is checked once (`Oven::tr_run`): the checks of a
+  load pass for all of them exactly when they pass for each. The
+  builtin **declines** (`ok` 0, the call runs) when a read would fault,
+  when the call and its helper would cross the depth limit, when the
+  steps it charges would cross the step limit, and in a
+  potential-constant-expression check: it has changed nothing, so the
+  call diagnoses exactly as before (`char.traits.require/*`).
+  It charges **one step per element it examines** (at least one): the
+  positions `compare` compares, the elements `length` reads including
+  the null, the elements `find` tests.
+- **The step rule and the limits.** A fast path charges no more steps
+  than the call it replaces would, so a program that fits clang's step
+  limit fits kiln's; one that exceeds kiln's limit exceeds clang's, and
+  the limit still fires on a loop of such calls (every iteration's own
+  statements still count; `expr.const/budget/fast-paths*.cpp`). A
+  `bi::TRAITS` that would cross the limit declines, so the limit fires
+  inside the library's loop with the notes it had.
+- **Backtraces and the profile.** A fast path has no frame: a fault
+  after it is reported in its caller, as before, and a fault inside the
+  operation is the declined call's. `-fconstexpr-profile` attributes a
+  fast path's steps to the caller (it is no call: not in the functions
+  table, not counted in `calls`), as `std::move`'s.
 
 ### Builtins — normative (WP-088)
 The §9.5 builtin functions of spec/sema-templates.md, with clang 19's

@@ -91,6 +91,9 @@ pub(crate) struct PathCache {
     hops: RefCell<FxHashMap<HopKey, Hop>>,
     extents: RefCell<FxHashMap<Key, Extent>>,
     subobjects: RefCell<FxHashMap<Key, bool>>,
+    /// [`Types::may_hold`]: whether an object of the first type can hold
+    /// one the second is alike (WP-1864).
+    holds: RefCell<FxHashMap<(OTy, OTy), bool>>,
     front: ExtentFront,
 }
 
@@ -100,6 +103,7 @@ impl PathCache {
         self.hops.get_mut().clear();
         self.extents.get_mut().clear();
         self.subobjects.get_mut().clear();
+        self.holds.get_mut().clear();
         self.front.clear();
     }
 
@@ -111,6 +115,7 @@ impl PathCache {
         map(&self.hops)
             + map(&self.extents)
             + map(&self.subobjects)
+            + map(&self.holds)
             + self.front.e.len() * size_of::<FrontEntry>()
     }
 }
@@ -341,8 +346,9 @@ impl Types {
     /// the extent of byte `o`, is the extent of every byte in it: on the
     /// way down from `root`, no member other than the one holding it
     /// overlaps those bytes ([`Types::extent_in`] then takes the same
-    /// steps for each of them). Records with many members are not
-    /// examined (`false`).
+    /// steps for each of them; a member that cannot hold a `p`,
+    /// [`Types::may_hold`], is never taken). Records with many members
+    /// are not examined (`false`).
     fn extent_unique(&self, mut t: OTy, o: u64, p: OTy, lo: u64, hi: u64) -> bool {
         const FIELDS_MAX: usize = 64;
         let mut base = 0;
@@ -364,11 +370,15 @@ impl Types {
                     if fs.len() > FIELDS_MAX {
                         return false;
                     }
+                    // A member that cannot hold an object alike `p` never
+                    // answers the walk ([`Types::may_hold`]), so it may
+                    // overlap the array: a `basic_string`'s `union {
+                    // char buf[16]; size_t cap; }` (WP-1864).
                     let mut one = None;
                     for f in fs.iter().filter(|f| f.width.is_none()) {
                         let start = base + f.offset;
                         let end = start + self.size(f.ty).max(1);
-                        if start < hi && lo < end {
+                        if start < hi && lo < end && self.may_hold(f.ty, p) {
                             if one.is_some() {
                                 return false;
                             }
@@ -381,6 +391,22 @@ impl Types {
                 _ => return false,
             }
         }
+    }
+
+    /// Whether an object of type `t` may be or hold (as an element, a
+    /// member or a base, at any depth) an object whose type is alike `p`
+    /// ([`Types::alike`]): `false` means [`Types::extent_in`] answers
+    /// `None` for `p` anywhere in a `t`. Conservative (a bit-field counts
+    /// as a member), cached per pair.
+    pub(super) fn may_hold(&self, t: OTy, p: OTy) -> bool {
+        cached(&self.paths.holds, (t, p), || {
+            self.alike(t, p)
+                || match self.kind(t) {
+                    TyKind::Array { elem, .. } => self.may_hold(elem, p),
+                    TyKind::Record { .. } => self.fields(t).iter().any(|f| self.may_hold(f.ty, p)),
+                    _ => false,
+                }
+        })
     }
 
     /// [`Types::has_subobject`] for record `t`, cached.
