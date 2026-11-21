@@ -1114,7 +1114,8 @@ impl Cg<'_> {
     /// clang `addX86InterruptAttrs`: whether definition `d` is an x86
     /// `interrupt` handler (spec/sema.md §4.5; WP-1745), which is
     /// `x86_intrcc` with a `byval` first parameter of its pointee's
-    /// `ConvertType` (`void` is `i8`) among `params`.
+    /// `ConvertType` (`void` and a class never defined are `i8`) among
+    /// `params`.
     fn x86_interrupt_def(
         &mut self,
         d: DeclId,
@@ -1130,9 +1131,15 @@ impl Cg<'_> {
         {
             let t = match self.ast.types.as_record(pointee) {
                 _ if self.ast.types.is_void(pointee) => LTy::I8,
-                // A class never defined in the translation unit stays
-                // `type opaque` (clang converts it as such).
-                Some(r) if self.ast.definition(r).is_none() => self.opaque_record_ty(r),
+                // A class never defined in the translation unit (GCC's
+                // documented `struct interrupt_frame;`): clang's
+                // `byval(%struct.frame)` of its `type opaque` is IR LLVM's
+                // verifier rejects ("Attribute 'byval' does not support
+                // unsized types!"; clang's driver does not verify), so
+                // kiln gives it `void`'s `i8`. The backend ignores the
+                // size of an `x86_intrcc` frame (`CC_X86_Intr`), so the
+                // code is clang's (WP-1833, spec/codegen.md "Deviations").
+                Some(r) if self.ast.definition(r).is_none() => LTy::I8,
                 _ => self.lty(pointee),
             };
             self.add_param_attr(params, 0, Attr::ByVal(t));

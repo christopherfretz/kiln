@@ -339,6 +339,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Emission order of imported `used` functions (WP-1832): an inline
+  function with GNU `used` that an importer reaches only through the
+  body of an imported function it odr-uses is now defined where clang 22
+  and 19 define it (before the declaration that odr-used the function,
+  in the order the module file stores that body; at its first reference
+  for a callee's body, an initializer or a lambda body), in-process and
+  from kind-1, kind-2 and declaration-image module files. Before, it came
+  at the end of the unit. A body the module file does not carry (a
+  non-inline function's) is still not read, a documented deviation.
+  PCH snapshot format 103.
+- An x86 `interrupt` handler whose frame parameter points to a class
+  never defined now compiles (WP-1833): its `byval` is `i8`, as for
+  `void *`. clang emits an opaque struct type there, which LLVM's
+  verifier rejects (a documented deviation).
 - A parameter qualified with an address space in a function type inside
   another declarator, a typedef or a member alias of a template (`using t
   = void (*)(T);` with `T = int __attribute__((address_space(1)))`, a

@@ -6,7 +6,8 @@
 //! of the same declarations restores them from its snapshot with the
 //! IR of the replayed header. WP-1824: thread-local variables, which the
 //! image carries since; WP-1825: imported inline `used` functions an
-//! importer names (x86-64 interrupt handlers among them).
+//! importer names (x86-64 interrupt handlers among them); WP-1832: the
+//! ones it reaches through an imported body, in every import mode.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -386,4 +387,57 @@ fn used_inline_functions_behave_as_replayed() {
         ],
     );
     assert!(!ir.contains("isr_unnamed"), "{ir}");
+}
+
+/// WP-1832: the `used` inline functions an importer reaches only
+/// through the body of an imported function it odr-uses come in clang's
+/// order (`tests/codegen/module_used_inline_body_importer.cpp` pins it to
+/// clang 22 and 19 single-step) whether the module is built in-process,
+/// or imported from a kind-1 or kind-2 module file, replayed or from its
+/// declaration image.
+#[test]
+fn used_inline_bodies_emit_in_order_in_every_mode() {
+    let codegen = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen");
+    let d = scratch("used-bodies");
+    let name = "mod_used_inline_body";
+    std::fs::copy(codegen.join("Inputs/mod_used_inline_body.cppm"), d.join("m.cppm")).unwrap();
+    std::fs::copy(codegen.join("module_used_inline_body_importer.cpp"), d.join("u.cpp")).unwrap();
+    let ir = |pre: &[&str], file: &str| {
+        let mf = format!("-fmodule-file={name}={file}");
+        let v = ok(&d, &[pre, &["-v", &mf, "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]].concat());
+        (std::fs::read_to_string(d.join("u.ll")).unwrap(), v)
+    };
+    let (plain, _) = ir(&[], "m.cppm");
+    for pre in [
+        &["-fkiln-bmi-kind=1"][..],
+        &["-fkiln-bmi-kind=2", "-fno-kiln-bmi-image"],
+        &["-fkiln-bmi-kind=2", "-fkiln-bmi-image"],
+    ] {
+        ok(&d, &[pre, &["--precompile", "m.cppm", "-o", "m.pcm"]].concat());
+        let (got, v) = ir(pre, "m.pcm");
+        if pre.contains(&"-fkiln-bmi-image") {
+            assert!(
+                v.lines()
+                    .any(|l| l == format!("note: imported '{name}' from its declaration image")),
+                "the image is used:\n{v}"
+            );
+        }
+        assert!(got == plain, "{pre:?} differs from the in-process build:\n{got}\n----\n{plain}");
+    }
+    let defs: Vec<&str> = plain
+        .lines()
+        .filter_map(|l| l.strip_prefix("define "))
+        .filter_map(|l| l.split(" @").nth(1)?.split('(').next())
+        .collect();
+    let m = |f: &str| format!("_ZW20mod_used_inline_body{}{f}v", f.len());
+    for run in [
+        vec!["_Z2z0v".to_owned(), m("b2"), m("b1"), m("b3"), "_Z1av".to_owned(), m("order")],
+        vec!["_Z2z1v".to_owned(), m("b6"), m("b5"), "_Z1bv".to_owned()],
+        vec!["_Z2z2v".to_owned(), m("b9"), m("b7"), m("b8"), "_Z1cv".to_owned()],
+        vec![m("twice"), m("b14"), m("inner"), m("b15"), m("b4")],
+    ] {
+        assert!(defs.windows(run.len()).any(|w| w == run.as_slice()), "{run:?} in {defs:?}");
+    }
+    assert!(!defs.contains(&m("b12").as_str()), "{defs:?}");
+    let _ = std::fs::remove_dir_all(&d);
 }

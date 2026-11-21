@@ -85,6 +85,10 @@ impl Sema<'_, '_> {
     /// definition, not from where the instantiation was required).
     #[allow(clippy::too_many_lines, reason = "one save and one restore per piece of parse state")]
     pub(crate) fn in_inst_context<R>(&mut self, ctx: DeclId, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer_anchor = self.inst_outer_anchor;
+        if outer_anchor.is_none() {
+            self.inst_outer_anchor = Some(OuterAnchor(self.parse_anchor()));
+        }
         let tu_dirs = self.scopes.first().map(|s| s.using_dirs.clone()).unwrap_or_default();
         let outer_depth = self.range_for_outer_depth;
         if outer_depth.is_none() {
@@ -189,6 +193,7 @@ impl Sema<'_, '_> {
         self.ast.templates.dependent_depth = saved.dependent_depth;
         self.friend_tag = saved.friend_tag;
         self.address_operand = saved.address_operand;
+        self.inst_outer_anchor = outer_anchor;
         // The outer full-expression's pending names ([`Sema::flush_member_refs`])
         // are not the instantiation's to flush; any it left pending stay so.
         let inner = std::mem::replace(&mut self.member_refs, saved.member_refs);
@@ -1856,6 +1861,13 @@ impl Sema<'_, '_> {
         if self.inst.at_end_of_tu || !self.inst.stack.is_empty() {
             return None;
         }
+        self.parse_anchor()
+    }
+
+    /// [`Self::ref_anchor`] of the current context, inside an
+    /// instantiation too (the anchor of the context it switched from is
+    /// [`Sema::inst_outer_anchor`]).
+    pub(crate) fn parse_anchor(&self) -> Option<(DeclId, bool)> {
         // The innermost enclosing namespace, and its member containing
         // the current context (a function body's context may be the
         // namespace itself: then the function's).
@@ -3095,3 +3107,8 @@ impl Substituter<'_, '_, '_> {
         }))
     }
 }
+
+/// [`Sema::inst_outer_anchor`]: the [`Sema::parse_anchor`] of the context
+/// the outermost [`Sema::in_inst_context`] switched from.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OuterAnchor(pub(crate) Option<(DeclId, bool)>);
