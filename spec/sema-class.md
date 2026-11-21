@@ -2628,7 +2628,7 @@ u16` (abi.md §8.2 sources `ClassDesc.max_field_align` from it).
   first; when the value in effect is the default, the innermost notes
   the pragma that reset it ("did you intend to use '#pragma pack (pop)'
   instead of '#pragma pack()'?").
-- **Not implemented.** clang's include-boundary `-Wpragma-pack` warnings
+- **Missing warnings.** clang's include-boundary `-Wpragma-pack` warnings
   (a non-default value at an `#include` that a class in the header
   uses, a value the header changes); diagnostics only.
 - Tests: `tests/conformance/cpp.pragma/pack-*.cpp`,
