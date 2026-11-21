@@ -3580,10 +3580,43 @@ instantiation unless stated.
   and a comparison of its address against null is not constant). Tests
   `tests/conformance/ext.clang.weak_import/`.
 - **`swiftcall` / `swiftasynccall`** (WP-1745): calling conventions
-  (spec/types.md §5.4), lowered per spec/abi.md §8.33. The Swift
-  parameter ABIs (`swift_context`, `swift_async_context`,
-  `swift_error_result`, `swift_indirect_result`) remain class A
-  (GAP-149).
+  (spec/types.md §5.4), lowered per spec/abi.md §8.33.
+- **Swift parameter ABIs** (clang `ParameterABIAttr`, `swift_abi.rs`;
+  WP-1745): `swift_context`, `swift_async_context`, `swift_error_result`
+  and `swift_indirect_result` (GNU spelling and `[[clang::...]]`, no
+  arguments: "'X' attribute takes no arguments") on a parameter only
+  (elsewhere `-Wignored-attributes` "only applies to parameters"). At
+  the parameter (clang `SemaSwift::AddParameterABIAttr`): a second,
+  different one is "X and 'Y' attributes are not compatible" with the
+  note "conflicting attribute is here" at the first, and dropped; the
+  type must be a pointer or reference (`swift_context`,
+  `swift_async_context`: also `nullptr_t`, where clang 19 and 22 crash),
+  for `swift_error_result` one to an unqualified pointer ("'X' parameter
+  must have pointer[ to unqualified pointer] type; type here is 'T'", at
+  the attribute; a dependent type passes and is checked again at
+  substitution, in the immediate context, so a deduction fails with the
+  error as its note). Each parameter's first one is recorded in the
+  function type (spec/types.md §5.4) and checked once the declaration's
+  calling convention is known (clang `checkExtParameterInfos`; kiln
+  applies a declaration's convention after its declarator, so the check
+  of a declarator's own function type, or the one behind its single
+  pointer, reference or member-pointer chunk, waits for
+  `apply_cc_attrs`, a type-id's for the alias's, and is made at the next
+  declarator at the latest; an instantiated declarator is its pattern's
+  and not checked again): `swift_indirect_result` parameters come first
+  ("parameters must be first parameters of function"),
+  `swift_error_result` right after a `swift_context` ("must follow
+  'swift_context' parameter"), each at its parameter; all but
+  `swift_async_context` need `swiftcall`, or `swiftasynccall` except for
+  `swift_error_result` ("'X' parameter can only be used with swiftcall
+  or swiftasynccall calling convention" / "with swiftcall calling
+  conventions"), reported once per type. A redeclaration differing only
+  in them is "conflicting types for 'f'". A calling convention among a
+  type-id's decl-specifiers (`using F = __attribute__((swiftcall)) void
+  (*)(...)`) applies to its function type as one after the declarator
+  (clang `distributeFunctionTypeAttrFromDeclSpec`). BMI images do not
+  carry the ABIs (a type with them makes the image fall back to source
+  replay). Tests `tests/conformance/ext.clang.swift-param-abi/`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
@@ -10578,11 +10611,9 @@ behaviour, or proven unreachable (`unreachable!` with the invariant):
   enable it" (kiln has no `-fenable-matrix`), `riscv_rvv_vector_bits`
   clang's "'riscv_rvv_vector_bits' attribute is not supported on targets
   missing 'zve32x'; ..." (no RISC-V target). The other class-A rows
-  (the address spaces and the Swift parameter ABIs `swift_context`,
-  `swift_async_context`, `swift_error_result`, `swift_indirect_result`)
-  are still "not supported by kiln yet" (GAP-149; `model`, x86
-  `interrupt`, `weak_import` and the Swift conventions are implemented
-  since WP-1745, §4.5). Test
+  (the address spaces) are still "not supported by kiln yet" (GAP-149;
+  `model`, x86 `interrupt`, `weak_import`, the Swift conventions and the
+  Swift parameter ABIs are implemented since WP-1745, §4.5). Test
   `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
 
 ### 5.35 Excess precision and the rounding scope (`conv/mod.rs`, WP-1744)

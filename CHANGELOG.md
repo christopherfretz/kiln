@@ -28,8 +28,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   vectors into legal vectors), `musttail` for a `swiftasynccall`
   function's returned `swiftasynccall` call, and the "variadic function
   cannot use X calling convention" error (also for `regcall` and
-  `vectorcall`). The Swift parameter attributes (`swift_context` and
-  the like) are still not supported.
+  `vectorcall`).
+- The Swift parameter attributes `swift_context`,
+  `swift_async_context`, `swift_error_result` and
+  `swift_indirect_result` (WP-1745), as clang: part of the function
+  type (and its mangling), clang's position, type and calling
+  convention checks, `swiftself` / `swiftasync` / `swifterror` /
+  `noalias` (+`sret`) in IR, and the `swifterror` temporaries on both
+  sides of a call. A calling convention among a type-id's
+  decl-specifiers (`using F = __attribute__((swiftcall)) void (*)()`)
+  is no longer dropped.
 - x86 `interrupt` handlers (WP-1745): `x86_intrcc` definitions with
   clang's signature checks, the error for a direct call and
   `-Wexcessive-regsave`.

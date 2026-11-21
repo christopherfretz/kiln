@@ -14,7 +14,8 @@ use kiln_ast::ids::RawId;
 use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeFlags, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, ParamAbi, Quals, RefQual, TagKeyword, TypeFlags,
+    TypeView,
 };
 use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId, StringLitId};
 use kiln_diag::{DiagId, FixIt};
@@ -1515,6 +1516,9 @@ impl Sema<'_, '_> {
             self.warn_redundant_parens(None, d);
         }
         self.c_warn_strict_prototypes(d);
+        // An earlier declarator's function types no attribute reached
+        // (`swift_abi.rs`).
+        self.flush_pending_param_abis();
         // Decl-specifier nullability qualifiers that belong to a chunk.
         let (base, moved) = self.declarator_nullability(base, spec_loc, d);
         // [dcl.type.class.deduct]/2.
@@ -1929,7 +1933,25 @@ impl Sema<'_, '_> {
                             *t = self.va_arg_promotion(*t).unwrap_or(*t);
                         }
                     }
+                    // clang `ExtParameterInfo`: the Swift parameter ABIs
+                    // are part of the type (WP-1745).
+                    let abis = self.declarator_param_abis(params);
+                    if !abis.is_empty() {
+                        info = info.with_param_abis(self.ast.types.intern_param_abis(&abis));
+                    }
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
+                    if !abis.is_empty() {
+                        let deferred = i == 0
+                            || (i == 1
+                                && matches!(
+                                    d.chunks[0],
+                                    Chunk::Pointer { .. }
+                                        | Chunk::LRef { .. }
+                                        | Chunk::RRef { .. }
+                                        | Chunk::MemberPointer { .. }
+                                ));
+                        self.param_abis_built(ty, params, deferred);
+                    }
                 }
             }
             if !d.nullability.is_empty() || !moved.is_empty() {
@@ -2470,6 +2492,8 @@ impl Sema<'_, '_> {
                 self.emit(m);
             }
         }
+        // clang `SemaSwift::AddParameterABIAttr` (WP-1745).
+        self.check_param_abi_attrs(ty, &mut attrs);
         ParamInfo {
             name: d.name,
             ty,
@@ -5929,28 +5953,39 @@ impl Sema<'_, '_> {
                     // scope: a later call is no library call (WP-1311).
                     self.builder().unregister_name(p);
                 } else {
-                    let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
-                        (Some(a), Some(b)) => {
-                            let (a, b) = (*a, *b);
-                            let (pa, pb) = (
-                                self.ast.types.params(&a).to_vec(),
-                                self.ast.types.params(&b).to_vec(),
-                            );
-                            pa.len() == pb.len()
-                                && pa.iter().zip(&pb).all(|(x, y)| self.ast.types.same_type(*x, *y))
-                                && a.info().variadic() == b.info().variadic()
-                        }
-                        _ => false,
-                    };
+                    let (same_params, abis_differ) =
+                        match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
+                            (Some(a), Some(b)) => {
+                                let (a, b) = (*a, *b);
+                                let (pa, pb) = (
+                                    self.ast.types.params(&a).to_vec(),
+                                    self.ast.types.params(&b).to_vec(),
+                                );
+                                let same = pa.len() == pb.len()
+                                    && pa
+                                        .iter()
+                                        .zip(&pb)
+                                        .all(|(x, y)| self.ast.types.same_type(*x, *y))
+                                    && a.info().variadic() == b.info().variadic();
+                                // Only the Swift parameter ABIs differ: clang
+                                // `MergeFunctionDecl`'s conflicting types
+                                // (WP-1745).
+                                let abis = same
+                                    && a.info().param_abis() != b.info().param_abis()
+                                    && self.ast.types.same_type(a.ret(), b.ret());
+                                (same, abis)
+                            }
+                            _ => (false, false),
+                        };
                     // clang 22 reports two `extern "C"` declarations
                     // differing in return type as conflicting types
                     // (spec/sema.md §1.1).
                     let both_c = self.clang_compat >= 22
                         && kiln_abi::mangle::is_extern_c(&self.ast, p)
                         && self.ctx_is_extern_c(self.context());
-                    let msg = if same_params && !both_c && !self.is_c() {
+                    let msg = if same_params && !both_c && !self.is_c() && !abis_differ {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
-                    } else if extern_c_redecl || both_c || self.is_c() {
+                    } else if extern_c_redecl || both_c || self.is_c() || abis_differ {
                         invalid_redecl = true;
                         self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {
@@ -14110,6 +14145,14 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_expression, loc);
             return None;
         }
+        if kind == AttrKind::SWIFT_PARAM_ABI {
+            a = match n.as_str() {
+                "swift_context" => ParamAbi::SwiftContext,
+                "swift_async_context" => ParamAbi::SwiftAsyncContext,
+                "swift_error_result" => ParamAbi::SwiftErrorResult,
+                _ => ParamAbi::SwiftIndirectResult,
+            } as u32;
+        }
         let flags = if kind == AttrKind::FALLTHROUGH && scope.is_some() {
             AttrNode::FALLTHROUGH_SCOPED
         } else {
@@ -15060,6 +15103,16 @@ pub(crate) fn attr_kind_of(
         ("weak", _, true) => AttrKind::WEAK,
         // clang `Clang<"weak_import">` (WP-1745).
         ("weak_import", _, _) if gnu_syntax || clang_scope => AttrKind::WEAK_IMPORT,
+        // clang `ParameterABIAttr`s: `Clang<"swift_context">` and its kin
+        // (WP-1745).
+        (
+            "swift_context"
+            | "swift_async_context"
+            | "swift_error_result"
+            | "swift_indirect_result",
+            _,
+            _,
+        ) if gnu_syntax || clang_scope => AttrKind::SWIFT_PARAM_ABI,
         // clang `GCC<"weakref">`, `GCC<"alias">`, `GCC<"ifunc">` (an
         // ELF-only target attribute; every kiln target is ELF).
         ("weakref", _, true) => AttrKind::WEAKREF,

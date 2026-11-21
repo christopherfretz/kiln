@@ -688,6 +688,8 @@ pub enum InstKind {
         align: Align,
         /// `inalloca`.
         inalloca: bool,
+        /// `swifterror`.
+        swifterror: bool,
     },
     /// `load`; the loaded type is the instruction's type.
     Load {

@@ -90,15 +90,28 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::CODE_MODEL => "CodeModel",
         AttrKind::X86_INTERRUPT => "AnyX86Interrupt",
         AttrKind::WEAK_IMPORT => "WeakImport",
-        AttrKind::PRAGMA_CLANG_SECTION => match a.b {
-            0 => "PragmaClangBSSSection",
-            1 => "PragmaClangDataSection",
-            2 => "PragmaClangRodataSection",
-            3 => "PragmaClangTextSection",
-            _ => "PragmaClangRelroSection",
-        },
+        AttrKind::SWIFT_PARAM_ABI | AttrKind::PRAGMA_CLANG_SECTION => variant_class_name(a),
         AttrKind::RETURNS_NONNULL => "ReturnsNonNull",
         AttrKind::LOOP_HINT => "LoopHint",
         _ => return None,
     })
+}
+
+/// The class name of a kind whose clang class depends on its argument.
+fn variant_class_name(a: &AttrNode) -> &'static str {
+    if a.kind == AttrKind::SWIFT_PARAM_ABI {
+        return match a.a {
+            1 => "SwiftContext",
+            2 => "SwiftAsyncContext",
+            3 => "SwiftErrorResult",
+            _ => "SwiftIndirectResult",
+        };
+    }
+    match a.b {
+        0 => "PragmaClangBSSSection",
+        1 => "PragmaClangDataSection",
+        2 => "PragmaClangRodataSection",
+        3 => "PragmaClangTextSection",
+        _ => "PragmaClangRelroSection",
+    }
 }

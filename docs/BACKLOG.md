@@ -817,6 +817,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1805 | a `u8` string literal as an attribute argument is an error in kiln; clang only warns | WP-1745 | open |
 | WP-1806 | `bmi_image` attrs TABLE lacks `CODE_MODEL`, `X86_INTERRUPT` and `WEAK_IMPORT` (added by WP-1745 part c): a module or PCH image may drop them; add them and a two-unit test | WP-1745 | open |
 | WP-1807 | clang's generic "attribute declaration must precede definition" check (`checkNewAttributesAfterDef`) is missing: attributes added on a redeclaration after the definition are accepted silently | WP-1745 | open |
+| WP-1810 | Swift parameter ABIs (`swift_context` etc.) in an alias template are checked on the pattern only; clang re-checks them at instantiation | WP-1745 | open |
 | WP-1761 | `int e; extern int e; int e = 1;` is accepted; clang reports a redefinition (crates/kiln_sema decl.rs, the redeclaration merge near line 7740) | WP-1745 | open |
 | WP-1762 | an enum-qualified declaration `int E::v;` is accepted; clang rejects it (`diagnose_qualified_declaration` in qualified_decl.rs) | WP-1745 | open |
 | WP-1763 | VLAs in template substitution: a function template parameter `T a[n]` substitutes (clang: substitution failure, "array size is not a constant expression") and a VLA deduced through `T&` is accepted (clang: "variably modified template arg") | WP-1745 | open |

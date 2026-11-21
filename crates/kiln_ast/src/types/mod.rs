@@ -37,7 +37,7 @@ pub use args::{ArgKind, ArgView, TemplateArg};
 pub use context::{
     ExprOperand, FIRST_USER_TYPE, TypeContext, TypeOfOperand, TypeOptions, TypeView,
 };
-pub use func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue, TypeList, sme};
+pub use func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue, ParamAbi, TypeList, sme};
 pub use kinds::{
     AutoKeyword, BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeFlags,
     TypeKind, UnaryTransformKind, VectorKind,

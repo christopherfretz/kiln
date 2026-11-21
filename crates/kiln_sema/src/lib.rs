@@ -134,6 +134,7 @@ mod static_tls;
 pub mod stmt;
 mod struct_bind;
 mod sve;
+mod swift_abi;
 mod switch_conv;
 mod switch_enum;
 pub mod target;
@@ -871,6 +872,9 @@ pub struct Sema<'a, 'sm> {
     /// a single level of indirection`). Taken by the declaration and
     /// parameter actions right after the call.
     pub(crate) declarator_distant_exc: bool,
+    /// Function types whose Swift parameter ABIs wait for the
+    /// declaration's calling convention (`swift_abi.rs`, WP-1745).
+    pub(crate) pending_param_abis: Vec<swift_abi::PendingParamAbis>,
     /// While a declarator part that may name `this` is parsed (a trailing
     /// return type): `Some`, holding the first `this` used there
     /// ([`Sema::act_on_start_this_watch`]).
@@ -1659,6 +1663,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_int_recovery: false,
             declarator_field: false,
             declarator_distant_exc: false,
+            pending_param_abis: Vec::new(),
             this_watch: class::ThisWatch::Off,
             pending_alias_vla: None,
             reverse_using_shadows: false,

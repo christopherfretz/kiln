@@ -3676,6 +3676,9 @@ impl Writer<'_, '_, '_> {
                     }
                     _ => return Err("an exception specification the image does not carry"),
                 };
+                if p.info().param_abis() != 0 {
+                    return Err("a Swift parameter ABI the image does not carry");
+                }
                 let ps: Vec<QualType> = types.params(&p).to_vec();
                 let info = p.info().bits();
                 let ret = self.qref(p.ret())?;
@@ -4413,6 +4416,9 @@ impl Writer<'_, '_, '_> {
         } else if deferred {
             // The exception specification names the function itself:
             // build the type without it (the importer defers it again).
+            if proto.info().param_abis() != 0 {
+                return Err("a Swift parameter ABI the image does not carry");
+            }
             let ps: Vec<QualType> = ast.types.params(&proto).to_vec();
             let info = proto.info().bits();
             let ret = self.qref(proto.ret())?;

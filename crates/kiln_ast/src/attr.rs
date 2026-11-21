@@ -513,6 +513,11 @@ impl AttrKind {
     /// the translation unit is a weak reference (`extern_weak`), as
     /// [`crate::Ast::is_weak_decl`] reports.
     pub const WEAK_IMPORT: AttrKind = AttrKind(287);
+    /// A Swift parameter ABI attribute on a parameter (clang
+    /// `ParameterABIAttr`: `swift_context`, `swift_async_context`,
+    /// `swift_error_result`, `swift_indirect_result`; WP-1745): `a` is
+    /// the [`crate::types::ParamAbi`], which the function type records.
+    pub const SWIFT_PARAM_ABI: AttrKind = AttrKind(288);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

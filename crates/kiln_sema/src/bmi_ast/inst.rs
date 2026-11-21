@@ -397,6 +397,10 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     ExcSpec::Nothrow => 1,
                     _ => return None,
                 };
+                // Swift parameter ABIs are not carried (WP-1745).
+                if p.info().param_abis() != 0 {
+                    return None;
+                }
                 self.wrap(TY_FUNCTION, p.ret(), d)?;
                 let params = types.params(&p);
                 put_u32(&mut self.out, params.len() as u32);

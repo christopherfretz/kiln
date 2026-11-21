@@ -262,6 +262,20 @@ impl Sema<'_, '_> {
         attrs: &mut Vec<AttrId>,
         decl: bool,
     ) -> QualType {
+        let ty = self.apply_cc_attrs_inner(ty, attrs, decl);
+        // The Swift parameter ABIs need the convention (WP-1745); a
+        // declaration's attributes are its last (a type-id's and a
+        // typedef's may be followed by the alias's).
+        self.param_abis_after_cc(ty, decl);
+        ty
+    }
+
+    fn apply_cc_attrs_inner(
+        &mut self,
+        ty: QualType,
+        attrs: &mut Vec<AttrId>,
+        decl: bool,
+    ) -> QualType {
         let is_cc = |s: &Self, a: AttrId| s.ast.attrs.get(a).kind.is_fn_type_attr();
         if !attrs.iter().any(|&a| is_cc(self, a)) {
             return ty;

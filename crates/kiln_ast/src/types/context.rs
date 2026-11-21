@@ -2,7 +2,7 @@
 //! §3, §4, §7, §13). The per-kind constructors are in `canon.rs`.
 
 use super::args::{ArgTable, ArgView};
-use super::func::{ExcSpec, FuncProto, NoexceptValue, TypeList};
+use super::func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue, ParamAbi, TypeList};
 use super::intern::{InternTable, KeyedTable, fx_hash};
 use super::kinds::{
     AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
@@ -278,6 +278,11 @@ pub struct TypeContext {
     /// (C17 6.7.6.2p4) shares, an integer literal `0` created by sema at
     /// the first `[*]`: the type prints as `T[*]`.
     pub vla_star_bound: Option<ExprId>,
+    /// The parameter ABI lists of function types ([`FuncInfo::param_abis`]
+    /// `n` is entry `n - 1`): one [`ParamAbi`] byte per parameter, the
+    /// trailing ordinary ones dropped (clang's `ExtParameterInfo` ABIs;
+    /// WP-1745). Few and short, so interned by a linear search.
+    pub(crate) param_abis: Vec<Vec<u8>>,
 }
 
 impl Default for TypeContext {
@@ -344,6 +349,7 @@ impl TypeContext {
             opts,
             exhausted: false,
             vla_star_bound: None,
+            param_abis: Vec::new(),
         };
         for b in BuiltinType::ALL {
             let flags = match b {
@@ -552,6 +558,50 @@ impl TypeContext {
     /// The canonical node of `q`, decoded.
     pub fn canonical_view(&self, q: QualType) -> TypeView {
         self.view(self.canonical(q).ty())
+    }
+
+    /// The id of the parameter ABI list `abis` for
+    /// [`FuncInfo::with_param_abis`]: 0 when every parameter is ordinary
+    /// (and when the table is full, which exhausts the context).
+    pub fn intern_param_abis(&mut self, abis: &[ParamAbi]) -> u16 {
+        let n = abis.iter().rposition(|&a| a != ParamAbi::Ordinary).map_or(0, |i| i + 1);
+        if n == 0 {
+            return 0;
+        }
+        let key: Vec<u8> = abis[..n].iter().map(|&a| a as u8).collect();
+        if let Some(i) = self.param_abis.iter().position(|l| *l == key) {
+            return (i + 1) as u16;
+        }
+        if self.param_abis.len() >= usize::from(u16::MAX) {
+            self.exhaust();
+            return 0;
+        }
+        self.param_abis.push(key);
+        self.param_abis.len() as u16
+    }
+
+    /// The ABI of parameter `i` of a function type with `info`.
+    pub fn param_abi(&self, info: FuncInfo, i: usize) -> ParamAbi {
+        match info.param_abis() {
+            0 => ParamAbi::Ordinary,
+            n => self
+                .param_abis
+                .get(usize::from(n) - 1)
+                .and_then(|l| l.get(i))
+                .map_or(ParamAbi::Ordinary, |&b| ParamAbi::from_u8(b)),
+        }
+    }
+
+    /// The ABIs of the parameters of a function type with `info`, up to
+    /// the last one that is not ordinary (empty: all ordinary).
+    pub fn param_abi_list(&self, info: FuncInfo) -> Vec<ParamAbi> {
+        match info.param_abis() {
+            0 => Vec::new(),
+            n => self
+                .param_abis
+                .get(usize::from(n) - 1)
+                .map_or_else(Vec::new, |l| l.iter().map(|&b| ParamAbi::from_u8(b)).collect()),
+        }
     }
 
     /// The function prototype of node `t` if it is a `Function` node.

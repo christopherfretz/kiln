@@ -412,7 +412,7 @@ impl Fx<'_, '_> {
                 let mem = Self::mem(align, volatile, ordering, scope)?;
                 (ty, ir(self.b.atomic_rmw(op, ty, ptr, value, mem))?)
             }
-            k::InstKind::Alloca { allocated, count, align, inalloca } => {
+            k::InstKind::Alloca { allocated, count, align, inalloca, swifterror } => {
                 let ty = self.br.ty(allocated)?;
                 let count = if count.is_none() { None } else { Some(self.typed(count)?.1) };
                 let module = &mut self.br.module;
@@ -423,7 +423,7 @@ impl Fx<'_, '_> {
                     addr_space: module.types.data_layout().alloca_addr_space,
                     in_entry_block: self.current == 0,
                     in_alloca: inalloca,
-                    swift_error: false,
+                    swift_error: swifterror,
                 };
                 let (result, lowered) = match lower_alloca(module, &mut self.b, &desc) {
                     Ok(done) => done,

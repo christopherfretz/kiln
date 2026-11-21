@@ -105,6 +105,8 @@ pub(crate) fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::NO_DESTROY => "no_destroy",
         AttrKind::ALWAYS_DESTROY => "always_destroy",
         AttrKind::MIN_VECTOR_WIDTH => "min_vector_width",
+        #[allow(clippy::cast_possible_truncation, reason = "a ParamAbi")]
+        AttrKind::SWIFT_PARAM_ABI => kiln_ast::types::ParamAbi::from_u8(node.a as u8).spelling(),
         k if k.is_class_b() => return crate::class_b_attrs::name(node),
         _ => return None,
     })
@@ -743,6 +745,13 @@ impl Sema<'_, '_> {
             // clang `PassObjectSize`: `SubjectList<[ParmVar]>` (WP-803; the
             // parameter's type is checked by
             // [`Sema::check_param_pass_object_size`]).
+            // clang `ParameterABIAttr`: `SubjectList<[ParmVar]>` (WP-1745;
+            // the parameter's type is checked by
+            // [`Sema::check_param_abi_attrs`]).
+            AttrKind::SWIFT_PARAM_ABI if kind != DeclKind::ParmVar => {
+                let name = attr_name(&node).unwrap_or_default();
+                wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "parameters")
+            }
             AttrKind::PASS_OBJECT_SIZE if kind != DeclKind::ParmVar => wrong(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,

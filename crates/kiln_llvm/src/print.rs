@@ -1519,10 +1519,13 @@ impl<'a> Printer<'a> {
                 w.write_str(" to ")?;
                 self.ty(w, inst.ty)?;
             }
-            InstKind::Alloca { allocated, count, align, inalloca } => {
+            InstKind::Alloca { allocated, count, align, inalloca, swifterror } => {
                 w.write_str("alloca ")?;
                 if inalloca {
                     w.write_str("inalloca ")?;
+                }
+                if swifterror {
+                    w.write_str("swifterror ")?;
                 }
                 self.ty(w, allocated)?;
                 if !count.is_none() {
