@@ -5889,7 +5889,11 @@ diagnostics and IR.
   variable in `Sema::auto_referent`) is usable in constant expressions
   only where `enclosing_function(ctx)` is that object's function
   (`Sema::representable_here`), so in a lambda body naming such a
-  reference or pointer is an odr-use and it is captured. Deliberate
+  reference or pointer is an odr-use and it is captured, and reading it
+  outside a call of the lambda (a `static_assert` in the body) is not a
+  constant expression ("initializer of 'p' is not a constant
+  expression"; also through a binding of a reference to an automatic
+  object; spec/oven.md "Freezing", WP-1831). Deliberate
   narrowing (partial: constexpr declarations only): by
   [expr.const.init]/2 a non-`constexpr` `auto& e = local;` or `auto* p =
   &local;` would be constant-initialized too, its reference usable in

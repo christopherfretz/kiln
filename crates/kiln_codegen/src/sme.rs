@@ -2,8 +2,10 @@
 //! `AddAttributesFromFunctionProtoType` and `ConstructAttributeList`):
 //! the streaming mode and the ZA / ZT0 state of a function type become
 //! string attributes of every definition, declaration and call of it;
-//! `__arm_locally_streaming` and `__arm_new` those of the function
-//! declaration (its definition, its declaration and a direct call).
+//! `__arm_locally_streaming` those of the function declaration (its
+//! definition, its declaration and a direct call), and `__arm_new` those
+//! of its definition only (clang `SetLLVMFunctionAttributesForDefinition`;
+//! WP-1826).
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::types::sme;
@@ -12,8 +14,16 @@ use kiln_llvm::Attr;
 
 /// The attributes of the SME bits `bits` of a function type, plus, for
 /// the function declaration `def`, those of its `__arm_locally_streaming`
-/// and `__arm_new` attributes (on any of its declarations).
-pub(crate) fn sme_attrs(ast: &Ast, def: Option<DeclId>, bits: u16, out: &mut Vec<Attr>) {
+/// attribute and, when `definition` (the attributes of `def`'s IR
+/// definition, not of a declaration or a call), of its `__arm_new`
+/// attribute (on any of its declarations).
+pub(crate) fn sme_attrs(
+    ast: &Ast,
+    def: Option<DeclId>,
+    definition: bool,
+    bits: u16,
+    out: &mut Vec<Attr>,
+) {
     let mut push = |s: &str| out.push(Attr::Str(s.into(), "".into()));
     if bits & sme::STREAMING != 0 {
         push("aarch64_pstate_sm_enabled");
@@ -41,7 +51,7 @@ pub(crate) fn sme_attrs(ast: &Ast, def: Option<DeclId>, bits: u16, out: &mut Vec
             let n = ast.attrs.get(a);
             if n.kind == AttrKind::ARM_LOCALLY_STREAMING {
                 body = true;
-            } else if n.kind == AttrKind::ARM_NEW {
+            } else if n.kind == AttrKind::ARM_NEW && definition {
                 new |= n.a;
             }
         }

@@ -135,6 +135,56 @@ impl Compiler<'_> {
         Some(Place::Mem(p))
     }
 
+    /// P2686R5 [expr.const.init]/3-9: the variable `e`, a name of
+    /// variable or binding `d` in a lambda body that denotes an enclosing
+    /// entity (sema's `REFERS_TO_ENCLOSING`) and odr-uses it, evaluated
+    /// outside a call of the lambda (a `static_assert` or a constant
+    /// initializer in the body), reads, when that variable's value refers
+    /// to an automatic object: `d` itself, the decomposition variable of a
+    /// binding of a reference `auto& [a, b] = cl;`, or a tuple-like
+    /// binding's reference holding variable. The automatic object is not
+    /// constexpr-referenceable from the lambda body (another function
+    /// parameter scope), so the value is not constexpr-representable
+    /// there and the variable's object is not usable in constant
+    /// expressions: it is an external object ([`super::GKind::Unrepresentable`]).
+    /// Sema made the name an odr-use for the same reason
+    /// (`Sema::representable_here`). A CWG 3135 holding variable (an
+    /// object of type `Ti`) and a by-copy capture of a non-reference
+    /// (`closure_copy_outside_call`) are not this case.
+    pub(super) fn unrepresentable_here(&mut self, e: ExprId, d: DeclId) -> Option<DeclId> {
+        if self.closure_reg.is_some() || !self.node(e).has(ExprFlags::REFERS_TO_ENCLOSING) {
+            return None;
+        }
+        let ast = self.ast();
+        if ast.exprs.non_odr_use(e) != NonOdrUse::None {
+            return None;
+        }
+        let v = match ast.decls.get(d).kind() {
+            DeclKind::Var => d,
+            DeclKind::Binding => {
+                let v = match ast.decls.binding_var(d) {
+                    Some(h) if crate::value::holding_object_temp(ast, h).is_some() => return None,
+                    Some(h) => h,
+                    None => ast.decls.binding_decomp(d)?,
+                };
+                if !is_reference_decl(ast, v) {
+                    return None;
+                }
+                v
+            }
+            _ => return None,
+        };
+        let v = ast.first(v);
+        let Some(kiln_ast::decl::VarEvalState::Value(c)) = ast
+            .redecls_of(v)
+            .find_map(|r| ast.decls.var(r).filter(|x| x.init.is_some()))
+            .map(|x| x.eval.state())
+        else {
+            return None;
+        };
+        crate::value::automatic_referent(ast, c).map(|_| v)
+    }
+
     /// The place of `e`, a name of variable `d` captured by copy, evaluated
     /// outside a call of its lambda's call operator (a constant expression
     /// in the body: `constexpr int j = *&n;`): an odr-use names a member

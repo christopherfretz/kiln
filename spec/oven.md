@@ -835,9 +835,23 @@ pays nothing for it.
   (`bind_holding_object`), a lax refold never publishes its value, and a
   read that is not usable names the binding as clang names a variable
   (`notes.rs`; tests `dcl.struct.bind/p2686-referenceable*.cpp`,
-  `dcl.struct.bind/cwg3135-prvalue-get-object-*.cpp`). Left: a lambda body
-  reading through such a pointer in its own `static_assert` is accepted
-  (the evaluation point is not known to the Oven).
+  `dcl.struct.bind/cwg3135-prvalue-get-object-*.cpp`). In a lambda body
+  (another function parameter scope) such a value is not
+  constexpr-representable, so the variable's object is not usable there
+  ([expr.const]/9-10): sema makes the name an odr-use
+  (`Sema::representable_here`), and a name that denotes the enclosing
+  variable (`REFERS_TO_ENCLOSING`, an odr-use) evaluated outside a call
+  of the lambda (a `static_assert` or a constant initializer in the
+  body), whose variable's value has an automatic referent
+  (`automatic_referent`), compiles to a `GKind::Unrepresentable` global:
+  an external object, so a read is "initializer of 'p' is not a constant
+  expression". The variable is the name's own, the decomposition
+  variable of a binding of a reference (`constexpr auto& [a, b] = cl;`)
+  or a tuple-like binding's reference holding variable, not a CWG 3135
+  holding object (`Compiler::unrepresentable_here`; by reference or by
+  copy; a fold outside a constant context reads the variable, as for a
+  by-copy capture). Tests `expr.const/p2686-lambda-unrepresentable-*.cpp`
+  (WP-1831).
 - Freezing a pointer or reference to an object with thread storage
   duration fails silently (`FailKind::NotConstant`, clang
   `CheckLValueConstantExpression`): [expr.const]/14 permits static

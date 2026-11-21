@@ -920,7 +920,15 @@ points, thunks and method indices are clang's.
 - **RTTI names of unit-local types** (WP-1651): under libstdc++ the
   `_ZTS` string of a type local to the unit starts with GCC's `*`, so the
   library compares its `type_info` by address; the rule, its exceptions
-  and the switch are spec/landed/abi/WP-1651.md.
+  and the switch are spec/landed/abi/WP-1651.md. This is a deliberate
+  difference from clang (docs/status/deviations.md), re-checked per
+  target by WP-1818: kiln's targets are aarch64 and x86-64 Linux, where
+  clang 22 and 19 write no marker and use unique RTTI (no
+  `classifyRTTIUniqueness` non-unique bit, which clang sets only for
+  Apple arm64, not a kiln target); under libc++ (which compares name
+  addresses) kiln's names are clang's on both targets
+  (tests/codegen/rtti_local_names_libcxx.cpp,
+  expr.typeid/unit-local-type-info-libcxx-run.cpp).
 - **Member function pointers to virtual functions**: see 8.6 (x86-64
   `ptr = offset + 1`; AArch64 `adj = 2 * adj + 1`).
 
