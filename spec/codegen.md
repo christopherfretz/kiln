@@ -1435,6 +1435,18 @@ intrinsics` (`target_nomem`, `target_intrinsic` with a `TargetMem`,
   `llvm.aarch64.chkfeat` (no memory), `llvm.aarch64.prefetch` with the
   five operands, and `trap(n)` as `llvm.aarch64.break(i32 n)` with no
   `unreachable` after it.
+- **SME state** (WP-1794; the helper `<arm_sme.h>`'s `__arm_has_sme`,
+  and clang 19's `__arm_in_streaming_mode`, call): `get_sme_state(p0,
+  p1)` (`"vULi*ULi*"`, nothrow, no target feature, so `<arm_sme.h>`
+  needs none to include) is a plain `call` (never an `invoke`, no
+  `nounwind`, clang `EmitRuntimeCall`) of the SME ABI support routine
+  `declare { i64, i64 } @__arm_sme_state()` (libgcc, compiler-rt) with
+  the calling convention `aarch64_sme_preservemost_from_x2`
+  (`kiln_llvm::CallConv` 103) and the call-site attribute
+  `"aarch64_pstate_sm_compatible"`; field 0 is stored through `p0`, then
+  field 1 through `p1`, each pointer evaluated after the call. Bit 63 of
+  field 0 is "SME implemented", bit 0 "streaming mode on". The same at
+  `-fclang-compat=19` and 22.
 
 **Operand checks** (`kiln_sema` `arm_builtins.rs`, clang 19
 `SemaARM::CheckAArch64BuiltinFunctionCall`), after the arguments are

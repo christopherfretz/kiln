@@ -10,6 +10,10 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- `#include <arm_sme.h>` compiles (WP-1794): `__builtin_arm_get_sme_state`
+  is declared and lowered as clang does, a call of the SME ABI routine
+  `__arm_sme_state`, so `__arm_has_sme()` and `__arm_in_streaming_mode()`
+  work on any AArch64 host.
 - Every known-incomplete language corner is listed in
   docs/status/static-gaps.md and a lint keeps the list exact (WP-1719).
 - Function multiversioning on x86-64, as clang 22 does it (WP-1745):
