@@ -273,6 +273,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- SVE and SME intrinsics' immediate operands are checked in sema, as
+  clang's `CheckSVEBuiltinFunctionCall` / `CheckSMEBuiltinFunctionCall`
+  check them (WP-1792): every ImmCheck kind of clang's `arm_sve.td` /
+  `arm_sme.td` (ranges, lane and tile numbers, shift amounts, extract
+  indices, rotations, multiples of 2), from a table the generator builds
+  out of clang-tblgen's own (clang 22's from `-fclang-compat=20`, clang
+  19's below), and a non-constant immediate is an error under
+  `-fsyntax-only` too; `svext_s8(a, b, 1000)` was accepted. A
+  value-dependent immediate is checked at instantiation. An explicit
+  instantiation or specialization of a function template whose type has
+  `__arm_streaming` or a ZA/ZT0 state attribute matches the template (it
+  was "does not refer to a function template").
+- Each SVE and SME intrinsic needs its own target features (WP-1793):
+  clang's per-builtin feature expression (`sve2p1`, `sme2`, `i8mm`,
+  `bf16`, `sme-f64f64`, ...) from `-march` or the caller's `target`
+  attribute ("'f' needs target feature E"), where kiln required only `sve`
+  or `sme`; and the streaming-mode rules ("builtin can only be called from
+  a streaming function" / "... non-streaming function", clang 22's and
+  clang 19's `VerifyRuntimeMode` evaluation) with the
+  `-Wundefined-arm-za` / `-Wundefined-arm-zt0` state warnings.
 - An attribute that a redeclaration adds after the definition of a
   function, variable, class or enumeration is now ignored with clang's
   "attribute declaration must precede definition" warning

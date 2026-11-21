@@ -33,9 +33,23 @@ default `-fclang-compat`, then at 19 for the clang 19 recipes) and each
 caller's IR and the intrinsic declarations are compared with clang's; a
 TSV row per builtin and version goes to `--out`.
 
+The semantic checks clang's Sema applies to a call of these builtins
+(WP-1792, WP-1793: the required target features, the streaming mode, the
+ZA and ZT0 state and the immediate operands' checks) are not visible in
+the IR; `--checks` writes them to crates/kiln_ast/src/sve_checks.rs from
+the tables clang itself is built with (and BuiltinsAArch64NeonSVEBridge.def
+for the `arm_neon_sve_bridge.h` builtins): clang-tblgen's
+`--gen-arm-{sve,sme}-builtins`, `--gen-arm-{sve,sme}-sema-rangechecks`,
+`--gen-arm-{sve,sme}-streaming-attrs` and `--gen-arm-sme-builtin-za-state`
+run over `arm_sve.td` and `arm_sme.td` (clang/include/clang/Basic of the
+llvmorg-22.1.8 and llvmorg-19.1.7 tags; clang-tblgen-22 and
+clang-tblgen-19 from Debian's clang-tools-22 and clang-tools-19).
+
 Usage: scripts/gen-sve-builtins.py --work DIR [--jobs N] [--only REGEX] --raw JSON
        scripts/gen-sve-builtins.py --work DIR --from-raw JSON
        scripts/gen-sve-builtins.py --work DIR --from-raw JSON --census KILN --out TSV
+       scripts/gen-sve-builtins.py --work DIR --checks --td22 DIR --tblgen22 BIN
+                                   --td19 DIR --tblgen19 BIN
 """
 
 import argparse
@@ -48,6 +62,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "crates/kiln_ast/src/sve_builtins.rs"
+CHECKS_OUT = ROOT / "crates/kiln_ast/src/sve_checks.rs"
 TARGET = "--target=aarch64-unknown-linux-gnu"
 FEATURES = (
     "sve2p2 sme2p2 sve-aes sve-sha3 sve-sm4 sve-bitperm f32mm f64mm i8mm bf16 "
@@ -680,6 +695,147 @@ def emit(raw):
     return "\n".join(out), failed
 
 
+# ---- semantic checks: clang-tblgen's tables (WP-1792, WP-1793) ------------
+
+# The tables each ACLE's `.td` file generates, by clang-tblgen backend.
+TABLES = {"sve": ("builtins", "sema-rangechecks", "streaming-attrs"),
+          "sme": ("builtins", "sema-rangechecks", "streaming-attrs", "builtin-za-state")}
+# clang `SemaARM::ArmStreamingType` as one letter.
+MODES = {"ArmStreaming": "s", "ArmStreamingCompatible": "c", "VerifyRuntimeMode": "v",
+         "ArmNonStreaming": "n"}
+# clang `ArmSMEState` (the ZA state in bits 0-1, the ZT0 state in 2-3).
+STATES = {"ArmInZA": 1, "ArmOutZA": 2, "ArmInOutZA": 3,
+          "ArmInZT0": 4, "ArmOutZT0": 8, "ArmInOutZT0": 12}
+# One type of a builtin prototype string as SveEmitter writes it
+# (`SVEType::builtin_str`): a vector or immediate prefix, a sign, the base
+# type, `C` (const) and `*` (pointer).
+PROTO_TYPE = re.compile(r"(q\d+|V\d+|I)?([SU])?(UWi|LLLi|Wi|Qa|[vbcsihyfdm])(C)?(\*)?")
+
+
+def ice_args(proto):
+    """The arguments of builtin prototype `proto` (return type first) that
+    are integer constant expressions (`I`)."""
+    out, i, k = [], 0, -1
+    while i < len(proto):
+        m = PROTO_TYPE.match(proto, i)
+        if not m or m.end() == i:
+            raise ValueError(f"prototype {proto!r} at {i}")
+        if m.group(1) == "I":
+            out.append(k)
+        i, k = m.end(), k + 1
+    return out
+
+
+def tblgen(bin_, td, work, ver):
+    """{(acle, table): text} of clang-tblgen `bin_` over the `.td` files
+    in directory `td`."""
+    out = {}
+    for acle, tables in TABLES.items():
+        for t in tables:
+            dst = work / f"{acle}-{t}-{ver}.inc"
+            subprocess.run([bin_, f"--gen-arm-{acle}-{t}", "-I", str(td),
+                            str(pathlib.Path(td) / f"arm_{acle}.td"), "-o", str(dst)], check=True)
+            out[(acle, t)] = dst.read_text()
+    return out
+
+
+def imm_kinds(td):
+    """ImmCheckType number -> name (without `ImmCheck`) from the `.td`
+    files in `td` (clang 22: arm_immcheck_incl.td; 19: arm_sve_sme_incl.td)."""
+    kinds = {}
+    for f in ("arm_immcheck_incl.td", "arm_sve_sme_incl.td"):
+        path = pathlib.Path(td) / f
+        if path.exists():
+            for name, n in re.findall(r"^def ImmCheck(\w+)\s*:\s*ImmCheckType<(\d+)>", path.read_text(),
+                                      re.M):
+                kinds[int(n)] = name
+    return kinds
+
+
+def case_groups(text):
+    """(case names, body lines) for each group of `case X::BI__builtin_*:`
+    labels sharing a body."""
+    groups, names, body = [], [], []
+    for line in text.splitlines():
+        line = line.strip()
+        if m := re.match(r"case \w+::BI(__builtin_\w+):$", line):
+            if body:
+                groups.append((names, body))
+                names, body = [], []
+            names.append(m.group(1))
+        elif line and not line.startswith("#") and names:
+            body.append(line)
+    if names:
+        groups.append((names, body))
+    return groups
+
+
+def parse_checks(tabs, kinds, td):
+    """builtin -> (features, mode, state, ice args, imm checks) of one clang.
+    The NEON-SVE bridge builtins (`svget_neonq`, ...) are not in the `.td`
+    files but in BuiltinsAArch64NeonSVEBridge.def of `td`."""
+    out = {}
+    bridge = (pathlib.Path(td) / "BuiltinsAArch64NeonSVEBridge.def").read_text()
+    for acle in TABLES:
+        text = tabs[(acle, "builtins")] + (bridge if acle == "sve" else "")
+        # clang 22: `Builtin::Info{...StrOffsets{n /* name */, n /* proto */,
+        # n /* attrs */, n /* features */}...`; 19: `TARGET_BUILTIN(...)`.
+        rows = re.findall(r"StrOffsets\{\d+ /\* (\w+) \*/, \d+ /\* (\S*) \*/, \d+ /\* \S* \*/, "
+                          r"\d+ /\* (\S*) \*/\}", text)
+        rows = [(f"__builtin_{acle}_{n}", p, f) for n, p, f in rows]
+        rows += re.findall(r'TARGET_BUILTIN\((__builtin_\w+), "([^"]*)", "[^"]*", "([^"]*)"\)', text)
+        for b, proto, feats in rows:
+            out[b] = {"features": feats, "mode": "-", "state": 0, "ice": ice_args(proto),
+                      "imms": []}
+        for names, body in case_groups(tabs[(acle, "sema-rangechecks")]):
+            imms = []
+            for line in body:
+                if m := re.search(r"(?:emplace_back|make_tuple)\((\d+), (\d+), (\d+)\)", line):
+                    imms.append((int(m.group(1)), kinds[int(m.group(2))], int(m.group(3))))
+            for b in names:
+                out[b]["imms"] = imms
+        for names, body in case_groups(tabs[(acle, "streaming-attrs")]):
+            mode = MODES[re.search(r"BuiltinType = (\w+);", " ".join(body)).group(1)]
+            for b in names:
+                out[b]["mode"] = mode
+        if (acle, "builtin-za-state") in tabs:
+            for names, body in case_groups(tabs[(acle, "builtin-za-state")]):
+                state = sum(STATES[x] for x in re.findall(r"Arm\w+", " ".join(body)))
+                for b in names:
+                    out[b]["state"] = state
+    return out
+
+
+def emit_checks(c22, c19):
+    """The text of crates/kiln_ast/src/sve_checks.rs."""
+    feats = {}
+
+    def spec(r):
+        f = feats.setdefault(r["features"], len(feats))
+        imms = ",".join(f"{a}.{k}.{w}" for a, k, w in r["imms"])
+        ice = ".".join(str(k) for k in r["ice"])
+        return f"{f}:{r['mode']}:{r['state']}:{ice}:{imms}"
+
+    rows = []
+    for b in sorted(c22.keys() | c19.keys()):
+        s22 = spec(c22[b]) if b in c22 else "-"
+        s19 = spec(c19[b]) if b in c19 else "-"
+        rows.append(f"{b[len('__builtin_'):]} {s22} {'=' if s19 == s22 else s19}")
+    out = [
+        "// @generated by scripts/gen-sve-builtins.py --checks from clang-tblgen's",
+        "// SVE and SME tables of clang 22 and clang 19 (arm_sve.td, arm_sme.td).",
+        "// Do not edit. Format: crate::sve::checks.",
+        "",
+        "/// The required-feature expressions, one per line.",
+        f'pub(crate) const FEATURES: &str = r"{chr(10).join(feats)}";',
+        "",
+        "/// The builtins, sorted: `name spec22 spec19` (`=`: the same, `-`: none).",
+        f'pub(crate) const CHECKS: &str = r"{chr(10).join(rows)}";',
+        "",
+    ]
+    return "\n".join(out)
+
+
 # ---- census: kiln against clang ----------------------------------------------
 
 def expected(rec):
@@ -765,8 +921,18 @@ def main():
     ap.add_argument("--from-raw", help="emit the table from this JSON, compiling nothing")
     ap.add_argument("--census", metavar="KILN", help="compare KILN's lowering with --from-raw's")
     ap.add_argument("--out", help="the census TSV")
+    ap.add_argument("--checks", action="store_true", help="write the semantic checks' table")
+    for v in ("22", "19"):
+        ap.add_argument(f"--td{v}", help=f"clang {v}'s clang/include/clang/Basic")
+        ap.add_argument(f"--tblgen{v}", default=f"clang-tblgen-{v}", help=f"clang {v}'s clang-tblgen")
     a = ap.parse_args()
     work = pathlib.Path(a.work)
+    if a.checks:
+        work.mkdir(parents=True, exist_ok=True)
+        c22 = parse_checks(tblgen(a.tblgen22, a.td22, work, 22), imm_kinds(a.td22), a.td22)
+        c19 = parse_checks(tblgen(a.tblgen19, a.td19, work, 19), imm_kinds(a.td19), a.td19)
+        CHECKS_OUT.write_text(emit_checks(c22, c19))
+        return
     if a.census:
         census(a.census, json.loads(pathlib.Path(a.from_raw).read_text()), work, a.jobs, a.only,
                a.out)

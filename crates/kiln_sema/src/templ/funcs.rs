@@ -7,6 +7,7 @@
 //! translation unit.
 
 use kiln_ast::QualType;
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::SpecKind;
@@ -1489,6 +1490,9 @@ impl Sema<'_, '_> {
         // specialization with that declaration: a `[[deprecated]]` or
         // `[[nodiscard]]` primary still applies; WP-1221).
         let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+        // The SME keywords are in the declared type (`Sema::apply_cc_attrs`
+        // before the template was matched).
+        attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::SME_TYPE);
         self.take_annotations(f, &mut attrs);
         self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {

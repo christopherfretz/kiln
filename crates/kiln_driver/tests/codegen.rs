@@ -2437,6 +2437,98 @@ fn sve_builtin_alias_errors() {
     assert!(o.status.success(), "{}", text(&o.stderr));
 }
 
+/// WP-1793: each SVE or SME intrinsic needs its own target features
+/// (clang's per-builtin `checkTargetFeatures`, clang 22's expression at
+/// `-fclang-compat=22`, clang 19's at 19), from `-march` or the caller's
+/// `target` attribute; with them it compiles. Checked against clang 22
+/// and 19 (`-ffreestanding` as in [`sve_builtin_alias_errors`]).
+#[test]
+fn sve_builtin_target_features() {
+    let d = scratch("svefeat");
+    let sve = "#include <arm_sve.h>\n";
+    let sme = "#include <arm_sme.h>\n";
+    let clamp = "svint8_t f(svint8_t a) { return svclamp_s8(a, a, a); }\n";
+    let mmla = "svint32_t f(svint32_t a, svint8_t b) { return svmmla_s32(a, b, b); }\n";
+    let bfdot = "svfloat32_t f(svfloat32_t a, svbfloat16_t b) { return svbfdot_f32(a, b, b); }\n";
+    let mopa = "void f(svbool_t p, svfloat64_t a) __arm_streaming __arm_inout(\"za\") \
+                { svmopa_za64_f64_m(0, p, p, a, a); }\n";
+    let cases = [
+        (
+            sve,
+            clamp.to_owned(),
+            "22",
+            "armv8-a+sve",
+            "t.cpp:2:33: error: 'svclamp_s8' needs target feature (sve,(sve2p1|sme))|sme",
+        ),
+        (
+            sve,
+            clamp.to_owned(),
+            "19",
+            "armv8-a+sve",
+            "t.cpp:2:33: error: 'svclamp_s8' needs target feature sve2p1|sme",
+        ),
+        (sve, format!("__attribute__((target(\"sve2p1\"))) {clamp}"), "22", "armv8-a+sve", ""),
+        (sve, clamp.to_owned(), "19", "armv8-a+sve+sve2p1", ""),
+        (sve, clamp.replace(") {", ") __arm_streaming {"), "22", "armv8-a+sme", ""),
+        (
+            sve,
+            mmla.to_owned(),
+            "22",
+            "armv8-a+sve",
+            "t.cpp:2:47: error: 'svmmla_s32' needs target feature sve,i8mm",
+        ),
+        (sve, mmla.to_owned(), "22", "armv8-a+sve+i8mm", ""),
+        (
+            sve,
+            bfdot.to_owned(),
+            "19",
+            "armv8-a+sve",
+            "t.cpp:2:55: error: 'svbfdot_f32' needs target feature (sve,bf16)|(sme,bf16)",
+        ),
+        (sve, bfdot.to_owned(), "22", "armv8.6-a+sve", ""),
+        (
+            sme,
+            mopa.to_owned(),
+            "22",
+            "armv9-a+sme",
+            "t.cpp:2:71: error: 'svmopa_za64_f64_m' needs target feature sme,sme-f64f64",
+        ),
+        (
+            sme,
+            mopa.to_owned(),
+            "19",
+            "armv9-a+sme",
+            "t.cpp:2:71: error: 'svmopa_za64_f64_m' needs target feature sme-f64f64",
+        ),
+        (sme, mopa.to_owned(), "19", "armv9-a+sme-f64f64", ""),
+    ];
+    for (header, body, compat, march, want) in cases {
+        let src = format!("{header}{body}");
+        std::fs::write(d.join("t.cpp"), &src).unwrap();
+        let compat = format!("-fclang-compat={compat}");
+        let march = format!("-march={march}");
+        let args = [
+            compat.as_str(),
+            "--target=aarch64-unknown-linux-gnu",
+            "-ffreestanding",
+            march.as_str(),
+            "-S",
+            "-emit-llvm",
+            "-o",
+            "k.ll",
+            "t.cpp",
+        ];
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        if want.is_empty() {
+            assert!(o.status.success() && err.is_empty(), "{compat} {march} {src}: {err}");
+        } else {
+            assert!(err.starts_with(&format!("{want}\n")), "{compat} {march} {src}: {err}");
+            assert_eq!(o.status.code(), Some(1), "{src}");
+        }
+    }
+}
+
 /// WP-810, WP-1745: every form of function multiversioning clang has on
 /// x86-64 compiles to versions and an `ifunc` (`target_version` is an
 /// unknown attribute from clang 22), and on `AArch64` a non-default

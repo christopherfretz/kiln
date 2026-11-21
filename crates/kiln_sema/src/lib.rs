@@ -137,6 +137,7 @@ mod static_tls;
 pub mod stmt;
 mod struct_bind;
 mod sve;
+mod sve_calls;
 mod swift_abi;
 mod switch_conv;
 mod switch_enum;
