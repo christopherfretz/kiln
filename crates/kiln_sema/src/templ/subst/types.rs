@@ -541,7 +541,9 @@ impl Substituter<'_, '_, '_> {
                     // instantiated (`SubstParmVarDecl`; WP-1810). A
                     // declaration's type reports at its begin.
                     let locs = vec![outer.unwrap_or(loc); abis.len()];
-                    if !self.sema.check_ext_param_infos(info.cc(), &abis, &locs) {
+                    if !self.skip_param_abis
+                        && !self.sema.check_ext_param_infos(info.cc(), &abis, &locs)
+                    {
                         return Err(SubstFail);
                     }
                     info = info.with_param_abis(self.sema.ast.types.intern_param_abis(&abis));
@@ -959,6 +961,11 @@ impl Substituter<'_, '_, '_> {
                         .arg(self.sema.ty_arg(m));
                     self.sema.emit(d);
                     return Err(SubstFail);
+                }
+                if kind == kiln_ast::types::TypeAttrKind::CallingConv {
+                    // An explicitly written default convention (WP-1858).
+                    let spelling = self.sema.ast.types.cc_attr_spelling(q.ty());
+                    return Ok(self.sema.ast.types.attributed_cc(spelling, e));
                 }
                 Ok(self.sema.ast.types.attributed(kind, m, e))
             }

@@ -42,6 +42,7 @@ impl Sema<'_, '_> {
         }
         let Some(ret) = self.pointee_fn_ret(a) else { return p };
         let TypeView::Pointer(f) = self.ast.types.view(p.ty()) else { return p };
+        let f = self.ast.types.desugar_top(f);
         let TypeView::Function(proto) = self.ast.types.view(f.ty()) else { return p };
         let params = self.ast.types.params(&proto).to_vec();
         let exc = self.ast.types.exc_spec(&proto);
@@ -72,6 +73,7 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(fty) = self.ast.decls.get(op_spec).ty() else { return false };
+        let fty = self.ast.types.desugar_top(fty);
         let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return false };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);

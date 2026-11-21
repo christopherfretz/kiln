@@ -545,7 +545,23 @@ enum ExcSpec /* tag */ {
   (`IsOverload`), so a redeclaration differing only in it is the same
   function: a different explicit convention is an error naming the first
   declaration's convention with the note at the first declaration; an
-  implicit (default) later declaration inherits it. `regparm(N)` and
+  implicit (default) later declaration inherits it. A convention is
+  explicit when it is written, the target's default spelled out too
+  (`sysv_abi` or `cdecl` on x86-64, `cdecl` on `AArch64`), and an
+  ignored one (`stdcall` on x86-64) that warns and becomes the default
+  (WP-1858, clang `getCallingConvAttributedType`): the written default
+  is kept as `TypeView::Attributed` sugar of kind `CallingConv` around
+  the function type (`TypeContext::attributed_cc`, the spelling's index
+  into `CC_ATTR_SPELLINGS` in the node's upper aux byte), canonically
+  the type without it, so `void () __attribute__((sysv_abi))` is the
+  same type as `void ()` (overloading, `__is_same`, function-pointer
+  identity, template arguments, mangling, the module image which
+  exports the equivalent type) and prints as written.
+  `Sema::merge_cc_noted` reads it (`Sema::cc_attributed`): `ms_abi`
+  then `sysv_abi` is "function declared 'sysv_abi' here was previously
+  declared 'ms_abi'", and a first explicit default is named rather than
+  "without calling convention". A second, different convention on one
+  declaration conflicts with a written default too. `regparm(N)` and
   `no_caller_saved_registers` merge the same way. A virtual override
   with a different convention is an error, also an implicitly declared
   one (WP-1103, spec/sema.md §4.7 *Implicit members*). Unsupported-on-target

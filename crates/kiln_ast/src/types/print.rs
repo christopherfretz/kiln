@@ -2027,7 +2027,8 @@ impl Printer<'_> {
                 }
             }
             TypeView::Attributed { kind, modified, equivalent } => {
-                self.attributed_after(kind, modified, equivalent);
+                let spelling = self.ctx.cc_attr_spelling(t);
+                self.attributed_after(kind, modified, equivalent, spelling);
             }
             _ => {}
         }
@@ -2035,7 +2036,16 @@ impl Printer<'_> {
 
     /// [`Self::after_node`] of an attributed type: the modified type's
     /// suffix, then the attribute's spelling.
-    fn attributed_after(&mut self, kind: TypeAttrKind, modified: QualType, equivalent: QualType) {
+    /// `spelling`: the written convention of a [`TypeAttrKind::CallingConv`]
+    /// node with the target's default convention
+    /// ([`TypeContext::cc_attr_spelling`]).
+    fn attributed_after(
+        &mut self,
+        kind: TypeAttrKind,
+        modified: QualType,
+        equivalent: QualType,
+        spelling: Option<usize>,
+    ) {
         let saved = self.inside_cc_attr;
         self.inside_cc_attr = kind == TypeAttrKind::CallingConv;
         self.after(modified);
@@ -2051,9 +2061,14 @@ impl Printer<'_> {
             TypeAttrKind::NoReturn => self.push(" __attribute__((noreturn))"),
             TypeAttrKind::CallingConv => {
                 let cc = self.cc_of(equivalent);
-                let spelling = match cc {
-                    CallConv::C | CallConv::Default => "cdecl",
-                    cc => cc.attribute().unwrap_or("cdecl"),
+                // clang prints an ignored `pcs` as the VFP variant (its
+                // convention is not `CC_AAPCS`).
+                let written = spelling.and_then(|i| crate::attr::CC_ATTR_SPELLINGS.get(i));
+                let spelling = match (written, cc) {
+                    (Some(&"pcs"), _) => "pcs(\"aapcs-vfp\")",
+                    (Some(&w), _) => w,
+                    (None, CallConv::C | CallConv::Default) => "cdecl",
+                    (None, cc) => cc.attribute().unwrap_or("cdecl"),
                 };
                 self.push(" __attribute__((");
                 self.push(spelling);

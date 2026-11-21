@@ -1239,6 +1239,25 @@ impl TypeContext {
         t.into()
     }
 
+    /// The function type `ty` with an explicitly written calling
+    /// convention that is the target's default (clang's `AttributedType`
+    /// of a calling-convention attribute whose equivalent type has the
+    /// default convention): sugar over `ty` keeping that the convention was
+    /// written (a redeclaration with another one is an error, clang
+    /// `getCallingConvAttributedType`) and its spelling (index `spelling`
+    /// into [`crate::attr::CC_ATTR_SPELLINGS`], for printing; None prints
+    /// `cdecl`). Spec/types.md §5.4, WP-1858.
+    pub fn attributed_cc(&mut self, spelling: Option<usize>, ty: QualType) -> QualType {
+        let hi = spelling.and_then(|s| u8::try_from(s + 1).ok()).map_or(0, u16::from);
+        let aux = TypeAttrKind::CallingConv as u16 | (hi << 8);
+        let t: TypeId = {
+            let flags = self.qflags(ty);
+            let key = Key::pair(TypeKind::Attributed, aux, raw(ty), raw(ty));
+            self.intern_with(key, flags, |ctx| Some(ctx.canonical(ty)))
+        };
+        t.into()
+    }
+
     /// `typename [: expr :]` (P2996, M6). `designated` is the reflected
     /// type once known; otherwise `profile` is the expression's profile.
     pub fn splice_type(

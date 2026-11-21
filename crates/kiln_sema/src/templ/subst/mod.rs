@@ -153,6 +153,12 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// parameters are not checked again as a nested function type's
     /// (WP-1823). Taken by that function type.
     pub(crate) own_fn_type: bool,
+    /// The Swift parameter ABIs of substituted function types are not
+    /// checked (`checkExtParameterInfos`): clang 22 compares a
+    /// declaration's or an address's deduced function type with the
+    /// target before the specialization's parameters are checked
+    /// (`Sema::abi_mismatch_first`, WP-1857).
+    pub(crate) skip_param_abis: bool,
     /// The `DependentScopeDeclRefExpr` about to be substituted is a
     /// call's callee: a template-id there is not resolved to its one
     /// specialization (the call deduces). Taken by that node.
@@ -238,6 +244,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             partial_pack: None,
             written_locs: true,
             own_fn_type: false,
+            skip_param_abis: false,
             as_callee: false,
             dtor_template_name: false,
             written_scope: None,

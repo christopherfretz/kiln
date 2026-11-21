@@ -2407,7 +2407,9 @@ fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
 /// The class template (its first declaration) deduction guide type
 /// `fty` returns a specialization of, as written: `C<args>` directly.
 fn guided_template(ast: &kiln_ast::Ast, fty: Option<QualType>) -> Option<DeclId> {
-    let TypeView::Function(p) = ast.types.view(fty?.ty()) else { return None };
+    let TypeView::Function(p) = ast.types.view(ast.types.desugar_top(fty?).ty()) else {
+        return None;
+    };
     let TypeView::TemplateSpecialization { name, alias: false, .. } = ast.types.view(p.ret().ty())
     else {
         return None;
@@ -3680,6 +3682,18 @@ impl Writer<'_, '_, '_> {
             return Ok(i);
         }
         let types = &self.s.ast.types;
+        // A written default calling convention's sugar (WP-1858) is not
+        // carried: the importer sees the function type.
+        if let TypeView::Attributed {
+            kind: kiln_ast::types::TypeAttrKind::CallingConv,
+            equivalent,
+            ..
+        } = types.view(t)
+        {
+            let i = self.ty(equivalent.ty())?;
+            self.tmemo.insert(t, i);
+            return Ok(i);
+        }
         let rec = match types.view(t) {
             TypeView::Builtin(b) => {
                 let i = b as u32;

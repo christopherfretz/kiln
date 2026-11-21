@@ -174,10 +174,14 @@ impl Sema<'_, '_> {
         info: impl FnOnce(kiln_ast::types::FuncInfo) -> kiln_ast::types::FuncInfo,
     ) {
         let Some(fty) = self.ast.decls.get(f).ty() else { return };
-        let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return };
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty())
+        else {
+            return;
+        };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
         let nty = self.ast.types.function(p.ret(), &params, info(p.info()), exc);
+        let nty = self.with_cc_sugar_of(nty, fty);
         self.ast.decls.set_ty(f, nty);
     }
 
@@ -238,7 +242,8 @@ impl Sema<'_, '_> {
                     self.ast.decls.set_ty(p0, r);
                     // The function type's parameter follows.
                     if let Some(fty) = self.ast.decls.get(f).ty()
-                        && let TypeView::Function(p) = self.ast.types.view(fty.ty())
+                        && let TypeView::Function(p) =
+                            self.ast.types.view(self.ast.types.desugar_top(fty).ty())
                     {
                         let mut ps = self.ast.types.params(&p).to_vec();
                         let exc = self.ast.types.exc_spec(&p);
@@ -246,6 +251,7 @@ impl Sema<'_, '_> {
                             *x = r;
                         }
                         let nty = self.ast.types.function(p.ret(), &ps, p.info(), exc);
+                        let nty = self.with_cc_sugar_of(nty, fty);
                         self.ast.decls.set_ty(f, nty);
                     }
                 } else {

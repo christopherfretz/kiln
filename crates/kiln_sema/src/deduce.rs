@@ -763,7 +763,12 @@ impl Sema<'_, '_> {
             state.deduced = true;
         }
         let Some(fty) = self.ast.decls.get(f).ty() else { return };
-        let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return };
+        // Through the sugar of a written default calling convention
+        // (WP-1858), which the deduced type keeps.
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty())
+        else {
+            return;
+        };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
         let first = self.ast.first(f);
@@ -772,6 +777,7 @@ impl Sema<'_, '_> {
             self.declared_returns.entry(first).or_insert(p.ret());
         }
         let nty = self.ast.types.function(ret, &params, p.info(), exc);
+        let nty = self.with_cc_sugar_of(nty, fty);
         let redecls: Vec<DeclId> = self.ast.redecls_of(f).collect();
         let deduced = kiln_ast::decl::FnSpec::new().with_return_deduced(true);
         for d in redecls {
@@ -793,10 +799,14 @@ impl Sema<'_, '_> {
     pub(crate) fn declared_fn_type(&mut self, f: DeclId) -> Option<QualType> {
         let fty = self.ast.decls.get(f).ty()?;
         let Some(&ret) = self.declared_returns.get(&self.ast.first(f)) else { return Some(fty) };
-        let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return Some(fty) };
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(fty).ty())
+        else {
+            return Some(fty);
+        };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
-        Some(self.ast.types.function(ret, &params, p.info(), exc))
+        let t = self.ast.types.function(ret, &params, p.info(), exc);
+        Some(self.with_cc_sugar_of(t, fty))
     }
 
     /// A redeclaration of type `ty` (declared with a placeholder return
@@ -808,13 +818,16 @@ impl Sema<'_, '_> {
         else {
             return ty;
         };
-        let TypeView::Function(p) = self.ast.types.view(ty.ty()) else { return ty };
+        let TypeView::Function(p) = self.ast.types.view(self.ast.types.desugar_top(ty).ty()) else {
+            return ty;
+        };
         if !self.contains_undeduced_auto(p.ret()) || self.contains_undeduced_auto(deduced) {
             return ty;
         }
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);
-        self.ast.types.function(deduced, &params, p.info(), exc)
+        let t = self.ast.types.function(deduced, &params, p.info(), exc);
+        self.with_cc_sugar_of(t, ty)
     }
 
     /// Uses of a function whose return type is still undeduced

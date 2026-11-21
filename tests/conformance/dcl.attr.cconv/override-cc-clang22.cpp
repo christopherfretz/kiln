@@ -6,7 +6,7 @@
 // after it. spec/types.md §5.4, WP-808.
 //@ args: --target=x86_64-unknown-linux-gnu
 //@ requires: clang>=22
-//@ xfail(kiln): WP-808 follow-up, kiln keeps no AttributedType sugar for a written calling convention, so it prints every one after the type (clang 19's form)
+//@ xfail(kiln): WP-808 follow-up, kiln keeps AttributedType sugar only for a written default calling convention (WP-1858), so it prints every other one after the type (clang 19's form)
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 19:21 error "virtual function 'v' has different calling convention attributes ('void ()') than the function it overrides (which has calling convention '__attribute__((preserve_most)) void ()')"
