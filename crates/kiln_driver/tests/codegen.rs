@@ -1371,6 +1371,74 @@ fn neon_bf16_call_without_feature() {
     }
 }
 
+/// WP-1841: a builtin's required-feature expression is clang's
+/// (`TargetFeatures::hasRequiredFeatures`): `|` binds loosest, then `,`,
+/// and a parenthesized group is one operand. Each case has one caller the
+/// expression rejects (clang stops at a function's first codegen error);
+/// the IR corpus (tests/conformance/target.x86/ir-builtin-feature-or-group.cpp,
+/// tests/conformance/ext.arm.sve/ir-feature-expression-groups.cpp) has the
+/// callers it accepts. Pinned targets, no headers; against clang++-22 live.
+#[test]
+fn builtin_feature_expressions_match_clang() {
+    let d = scratch("featexpr");
+    let sme = "typedef __UINT32_TYPE__ uint32_t;\n\
+               typedef __SVUint8_t svuint8_t;\n\
+               typedef __clang_svfloat16x2_t svfloat16x2_t;\n\
+               __attribute__((__clang_arm_builtin_alias(__builtin_sme_svadd_za16_f16_vg1x2))) \
+               void svadd_za16_f16_vg1x2(uint32_t, svfloat16x2_t);\n\
+               __attribute__((__clang_arm_builtin_alias(__builtin_sve_svbdep_u8))) \
+               svuint8_t svbdep_u8(svuint8_t, svuint8_t);\n";
+    let cases = [
+        (
+            "--target=x86_64-unknown-linux-gnu".to_owned(),
+            "typedef long long v2di __attribute__((vector_size(16)));\n\
+             __attribute__((target(\"avx512vl\"))) v2di g(v2di a, v2di b, v2di c) { return __builtin_ia32_vpmadd52huq128(a, b, c); }\n"
+                .to_owned(),
+            "t.cpp:2:77: error: '__builtin_ia32_vpmadd52huq128' needs target feature \
+             avx512ifma,avx512vl|avxifma\n",
+        ),
+        (
+            "--target=aarch64-unknown-linux-gnu".to_owned(),
+            format!(
+                "{sme}void neither(uint32_t s, svfloat16x2_t v) __arm_streaming __arm_inout(\"za\") \
+                 {{ svadd_za16_f16_vg1x2(s, v); }}\n"
+            ),
+            "t.cpp:6:79: error: 'svadd_za16_f16_vg1x2' needs target feature sme,(sme-f16f16|sme-f8f16)\n",
+        ),
+        (
+            "--target=aarch64-unknown-linux-gnu".to_owned(),
+            format!(
+                "{sme}__attribute__((target(\"sve2\"))) svuint8_t sve_only(svuint8_t a, svuint8_t b) \
+                 {{ return svbdep_u8(a, b); }}\n"
+            ),
+            "t.cpp:6:87: error: 'svbdep_u8' needs target feature (sve,sve-bitperm)|(sme,ssve-bitperm)\n",
+        ),
+    ];
+    for (target, src, want) in &cases {
+        std::fs::write(d.join("t.cpp"), src).unwrap();
+        let args =
+            [target.as_str(), "-march=armv9-a+sme2", "-S", "-emit-llvm", "-o", "k.ll", "t.cpp"];
+        let args =
+            if target.contains("x86") { [&args[..1], &args[2..]].concat() } else { args.to_vec() };
+        let o = kiln_in(&d, &[&["-fno-caret-diagnostics"], &args[..]].concat());
+        assert_eq!(text(&o.stderr).lines().next().unwrap_or(""), want.trim_end(), "{src}");
+        assert_eq!(o.status.code(), Some(1), "{src}");
+        if have("clang++-22") {
+            let c = Command::new("clang++-22")
+                .arg("-fno-caret-diagnostics")
+                .args(&args)
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(
+                text(&c.stderr).lines().next().unwrap_or(""),
+                want.trim_end(),
+                "clang++-22: {src}"
+            );
+        }
+    }
+}
+
 /// WP-1417: the `always_inline` target-feature error names the caller as
 /// clang does (`FunctionDecl::getDeclName`): `operator==` for a friend
 /// operator, `operator()` for a lambda's call operator, never an empty

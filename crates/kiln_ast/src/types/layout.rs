@@ -47,7 +47,7 @@ impl FloatFormat {
 /// laid out.
 #[derive(Clone, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct TargetTypes {
-    /// `(size in bytes, alignment in bytes)` per builtin id 1..=90 (index
+    /// `(size in bytes, alignment in bytes)` per builtin id 1..=95 (index
     /// 0 unused).
     pub size_align: [(u16, u16); BuiltinType::COUNT + 1],
     /// `char` is signed.

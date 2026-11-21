@@ -401,6 +401,11 @@ impl Cg<'_> {
                 }
                 v
             }
+            "ee" => {
+                let vec = val(self, 0)?;
+                let i = val(self, 1)?;
+                self.extract_elt(vec, i)
+            }
             "ev" => {
                 let agg = val(self, 0)?;
                 self.sve_extract_value(agg, idx(1)?)?

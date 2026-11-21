@@ -278,6 +278,6 @@ Attach both. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
 ## License
 
 Dual-licensed under MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0
-([LICENSE-APACHE](LICENSE-APACHE)), at your option. `resource/include` is
-a copy of clang's builtin headers under the Apache-2.0 with LLVM
-exceptions license; see `resource/include/LICENSE.TXT`.
+([LICENSE-APACHE](LICENSE-APACHE)), at your option. `resource/include` and
+`resource/include-clang22` are copies of clang's builtin headers under the
+Apache-2.0 with LLVM exceptions license; see `resource/include/LICENSE.TXT`.

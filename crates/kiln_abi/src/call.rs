@@ -360,7 +360,9 @@ fn no_undef(t: &mut IrTypes<'_>, q: QualType, kind: &ArgKind, check_coerce: bool
     }
     match view(t, q) {
         TypeView::BitInt { .. } | TypeView::LValueRef(_) | TypeView::RValueRef(_) => true,
-        TypeView::Builtin(BuiltinType::NullPtr) | TypeView::MemberPointer { .. } => false,
+        // `__mfp8` is not a scalar type (clang `DetermineNoUndef`).
+        TypeView::Builtin(BuiltinType::NullPtr | BuiltinType::MFloat8)
+        | TypeView::MemberPointer { .. } => false,
         TypeView::Builtin(b) if b.is_sizeless() => false,
         TypeView::Builtin(_) | TypeView::Pointer(_) | TypeView::Enum(_) => true,
         TypeView::Complex(e) | TypeView::Vector { elem: e, .. } => no_undef(t, e, kind, false),

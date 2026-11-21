@@ -70,7 +70,24 @@ fn sample_rows_carry_their_fields() {
     }
     assert_eq!(neon::required_features("__builtin_neon_vdotq_s32"), Some("dotprod,neon"));
     assert!(neon::features_hold("dotprod,neon", |f| matches!(f, "dotprod" | "neon")));
-    assert_eq!(neon::first_missing("dotprod,neon", |f| f == "neon"), Some("dotprod"));
+    assert!(!neon::features_hold("dotprod,neon", |f| f == "neon"));
+}
+
+// WP-1841: the NEON, ACLE and x86 tables use clang's evaluator
+// (`TargetFeatures::hasRequiredFeatures`): `|` binds loosest, then `,`,
+// and a parenthesized group is an operand.
+#[test]
+fn feature_expressions_follow_clang() {
+    let hold = |req: &str, set: &[&str]| neon::features_hold(req, |f| set.contains(&f));
+    assert!(hold("avx512vl,avx512vnni|avxvnni", &["avxvnni"]));
+    assert!(hold("avx512vl,avx512vnni|avxvnni", &["avx512vl", "avx512vnni"]));
+    assert!(!hold("avx512vl,avx512vnni|avxvnni", &["avx512vl"]));
+    assert!(!hold("avx512vl,avx512vnni|avxvnni", &["avx512vnni"]));
+    assert!(hold("neon,(dotprod|i8mm)", &["neon", "i8mm"]));
+    assert!(!hold("neon,(dotprod|i8mm)", &["dotprod", "i8mm"]));
+    assert!(hold("(neon,dotprod)|sve", &["sve"]));
+    assert!(!hold("(neon,dotprod)|sve", &["neon"]));
+    assert!(hold("", &[]));
 }
 
 #[test]

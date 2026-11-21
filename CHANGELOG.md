@@ -10,6 +10,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The Arm FP8 types and intrinsics (WP-1791), as clang 22 has them:
+  `__mfp8` (`mfloat8_t`), `__SVMfloat8_t` (`svmfloat8_t`) and its x2/x3/x4
+  tuples, NEON vectors of `__mfp8`, and all 325 FP8 SVE and SME builtins
+  (247 + 78) with `fpm_t` operands, lowered as clang 22 lowers them. The
+  types follow clang 22's rules (sizeless SVE vector, opaque byte with no
+  arithmetic or conversions, its mangling, calling convention, RTTI and
+  debug info); at `-fclang-compat=19` they do not exist, as in clang 19.
+  Also fixed on the way: SVE vector `/`, `%` and `>>` on signed element
+  types are now `sdiv`, `srem` and `ashr`, as clang emits them (kiln
+  emitted the unsigned operations).
+- clang 22's `<arm_sve.h>`, `<arm_sme.h>` and `<arm_vector_types.h>`
+  (WP-1842): at the default `-fclang-compat=22` the driver searches
+  `<resource>/include-clang22` first, so clang 22-only SVE/SME intrinsics
+  (the FP8 ones, `__arm_in_streaming_mode` as a builtin) and the
+  `mfloat8_t` / `fpm_t` helpers are declared; `-fclang-compat=19` keeps
+  clang 19's headers. The install tree carries the new directory.
+
 - Template heads in module interface exposures (WP-1855): a template
   that is not TU-local whose template-head names a TU-local entity (a
   type-constraint's concept, also `Hid auto` and a placeholder's in a
@@ -391,6 +408,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Builtin required-feature expressions (WP-1841): the NEON, ACLE and x86
+  builtin checks now use clang's evaluator (`|` loosest, then `,`,
+  parentheses group), shared with SVE and SME, so
+  `__builtin_ia32_vpmadd52huq128` (`avx512ifma,avx512vl|avxifma`) and
+  similar builtins are accepted with only `avxifma`; they were rejected.
 - `[[deprecated()]]` and `[[nodiscard()]]`, an empty argument clause on a
   standard attribute that takes an optional one, were accepted (WP-1852);
   they are now clang's error "parentheses must be omitted if 'x'

@@ -261,6 +261,8 @@ fn target_types(arch: Arch) -> TargetTypes {
             if matches!(b, B::SvBool | B::SvCount | B::SvBoolx2 | B::SvBoolx4) { 2 } else { 16 };
         size_align[b as usize] = (0, a);
     }
+    // `__mfp8` (WP-1791) is one byte; the type exists on `AArch64` only.
+    size_align[B::MFloat8 as usize] = (1, 1);
     TargetTypes {
         size_align,
         char_signed: x86,

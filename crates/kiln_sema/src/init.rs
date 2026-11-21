@@ -1976,6 +1976,15 @@ impl Sema<'_, '_> {
     }
 
     fn init_from_list_in(&mut self, ty: QualType, l: &InitList, entity: Option<Loc>) -> ExprId {
+        // `__mfp8` is neither scalar nor aggregate: no braces, even around
+        // one `__mfp8` (clang `InitListChecker::CheckListElementTypes`,
+        // WP-1791).
+        if self.ast.types.builtin(ty) == Some(kiln_ast::types::BuiltinType::MFloat8) {
+            let msg =
+                self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover(ty, &[], l.lbrace);
+        }
         // `_Atomic(T)` takes no braces (clang `InitListChecker`), but a
         // single element of class type initializes it (WP-165).
         if self.ast.types.as_atomic(ty).is_some() {

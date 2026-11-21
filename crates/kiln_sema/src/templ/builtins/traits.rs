@@ -886,7 +886,9 @@ impl Sema<'_, '_> {
             T::IsArithmetic => self.is_arithmetic_ext(q),
             T::IsFundamental => self.is_fundamental(q),
             // clang `isCompoundType`: the sizeless SVE builtins are neither.
-            T::IsCompound => !self.is_fundamental(q) && !self.ast.types.is_sizeless(q),
+            T::IsCompound => {
+                !self.is_fundamental(q) && !self.ast.types.is_sizeless(q) && !self.is_mfp8(q)
+            }
             T::IsObject => self.is_object_type(q),
             T::IsScalar => self.is_scalar_ext(q),
             T::IsConst => !tys.is_reference(q) && tys.effective_quals(q).is_const(),
@@ -1077,8 +1079,9 @@ impl Sema<'_, '_> {
             return false;
         }
         // clang: the sizeless SVE builtins are trivial, but not
-        // standard-layout or literal.
-        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
+        // standard-layout or literal; `__mfp8` is trivially copyable only
+        // (WP-1791).
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) || self.is_mfp8(e) {
             return true;
         }
         // [class.prop]/1 by eligible members ([special]/6), not clang's
@@ -1087,6 +1090,12 @@ impl Sema<'_, '_> {
             Some(r) => self.is_trivially_copyable_class(r),
             None => false,
         }
+    }
+
+    /// `__mfp8` (WP-1791): an object type that is not scalar, compound,
+    /// trivial or standard-layout, but is trivially copyable (clang).
+    fn is_mfp8(&self, q: QualType) -> bool {
+        self.ast.types.builtin(q) == Some(kiln_ast::types::BuiltinType::MFloat8)
     }
 
     /// [basic.types.general]/9 trivial types.

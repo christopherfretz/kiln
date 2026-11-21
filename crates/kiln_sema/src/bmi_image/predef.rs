@@ -34,9 +34,10 @@ pub(super) const SUGAR_VA_RECORD: u8 = 6;
 /// The first [`super::TyRec::Sugar`] number of the SVE typedefs.
 pub(super) const SUGAR_SVE: u8 = 7;
 
-/// The sizeless builtin types, in `BuiltinType::ALL` order.
+/// The builtin types with a predefined typedef: the sizeless ones and
+/// `__mfp8` (WP-1791), in `BuiltinType::ALL` order.
 fn sizeless() -> impl Iterator<Item = BuiltinType> {
-    BuiltinType::ALL.into_iter().filter(|b| b.is_sizeless())
+    BuiltinType::ALL.into_iter().filter(|b| b.is_sizeless() || *b == BuiltinType::MFloat8)
 }
 
 /// The number of builtin typedef numbers (the six of `image_sugar`, the

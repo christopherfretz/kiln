@@ -380,6 +380,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.gnu89_inline = opts.gnu89_inline;
     s.c = opts.c;
     s.clang_compat = opts.clang_compat;
+    s.declare_fp8_typedefs();
     s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
     s.gnu_lib_builtins = opts.gnu_lib_builtins;

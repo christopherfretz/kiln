@@ -190,6 +190,7 @@ impl Job<'_> {
             nostdlibinc: args.nostdlibinc,
             nobuiltininc: args.nobuiltininc,
             stdlib: args.stdlib.unwrap_or_default(),
+            clang_major: args.predef.clang_compat.major(),
         };
         specs.extend(tc.system_include_specs(&sys, cplusplus));
         // `-cxx-isystem` only applies to C++.

@@ -296,6 +296,47 @@ they mangle as their `<arm_sve.h>` name (`10svint8x2_t`). Passing or
 returning one by value at `-fclang-compat=22` is a codegen hard error
 (spec/landed/codegen/WP-810.md "Builtin aliases").
 
+**FP8 types** (WP-1791; ACLE "Modal 8-bit floating-point types", clang 22
+`AArch64ACLETypes.def`): ids 91..=95 are `__SVMfloat8_t`,
+`__clang_svmfloat8x{2,3,4}_t` and `__mfp8` (`BuiltinType::is_fp8`).
+clang 19 has none of them: they are AArch64-only implicit typedefs (as the
+SVE ones) declared only from `-fclang-compat=22` (`declare_fp8_typedefs`,
+once the level is set), so at 19 the names are ordinary identifiers.
+`<arm_vector_types.h>` names `__mfp8` `mfloat8_t`, `<arm_sve.h>` the SVE
+ones `svmfloat8_t` / `svmfloat8x<N>_t` (clang 22's headers, spec/driver.md
+"Toolchain", WP-1842).
+- `__SVMfloat8_t` is an SVE data vector of 16 x 8 bits per granule: sizeless,
+  needs `+sve` like the others, IR `<vscale x 16 x i8>`, mangled
+  `u13__SVMfloat8_t`; its tuples mangle `13svmfloat8x2_t` (...x3, x4) and
+  are IR structs of the vector. Its operators are the SVE integer vector
+  ones restricted as clang 22's (`+ - * / %`, the comparisons, unary `-`/`+`,
+  subscripts yielding `__mfp8`; signed: `/` is `sdiv`, a comparison yields
+  `__SVInt8_t`); `& | ^ ~ << >> !` and `?:` are "invalid operands" /
+  "invalid argument type" / "not contextually convertible", and a scalar
+  or other vector operand is "cannot convert between ... truncation".
+- `__mfp8` is an opaque byte: size and alignment 1, not sizeless, IR
+  `<1 x i8>` (also in memory and as a member), passed and returned direct
+  without `noundef` and outside the FP registers (a struct of four is an
+  `i64`, not a homogeneous aggregate), mangled `u6__mfp8` and never a
+  substitution candidate (clang mangles a vendor builtin anew each time).
+  It has no arithmetic, comparison, increment or unary operator ("invalid
+  operands" / "invalid argument type" / "cannot increment"), no
+  conversion to or from any other type (casts "C-style cast ... is not
+  allowed", initialization "cannot initialize ...", assignment
+  "incompatible type", no contextual `bool`); only same-type copies and
+  casts and `__builtin_bit_cast`. List-initialization (`{}`, `= {}`,
+  `{x}`) is "illegal initializer type '__mfp8'"; value-initialization
+  (`__mfp8()`) and aggregate members are fine. Traits: trivially
+  copyable, constructible and destructible and an object type, but not
+  trivial, POD, standard-layout, scalar, arithmetic, fundamental,
+  compound or with unique object representations (clang 22's answers).
+  RTTI `_ZTIu6__mfp8` is emitted `linkonce_odr` where used; debug info is
+  `DIBasicType "__mfp8"`, 8 bits, `DW_ATE_unsigned_char`.
+- `neon_vector_type(8)` / `(16)` of `__mfp8` (`mfloat8x8_t`,
+  `mfloat8x16_t`) is a NEON vector of `<8 x i8>` / `<16 x i8>`, mangled
+  `13__Mfloat8x8_t` / `14__Mfloat8x16_t`; it takes unary `-` and subscripts
+  but no binary operator ("invalid operands").
+
 **Fixed-length SVE types** (WP-810; ARM ACLE §3.7.3.3, clang AttrDocs
 "arm_sve_vector_bits", clang `HandleArmSveVectorBitsTypeAttr`): with
 `-msve-vector-bits=N` (128, 256, 512, 1024 or 2048) the type attribute

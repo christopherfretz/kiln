@@ -235,7 +235,7 @@ impl<'a> IrTypes<'a> {
             // A vector value is `<N x T>`; an `ext_vector_type` of `bool`
             // is `<N x i1>` (clang `ConvertType`).
             TypeView::Vector { elem, count, .. } => {
-                return IrType::Vector(Box::new(self.convert(elem)), u64::from(count));
+                return IrType::Vector(Box::new(self.vector_elem(elem, false)), u64::from(count));
             }
             _ => {}
         }
@@ -321,7 +321,7 @@ impl<'a> IrTypes<'a> {
                 if let TypeView::Builtin(BuiltinType::Bool) = ast.types.canonical_view(elem) {
                     IrType::Int(count.max(8))
                 } else {
-                    IrType::Vector(Box::new(self.convert_mem(elem)), u64::from(count))
+                    IrType::Vector(Box::new(self.vector_elem(elem, true)), u64::from(count))
                 }
             }
             // clang `ConvertTypeForMem(_Atomic(T))`: `T`, padded to the
@@ -343,6 +343,15 @@ impl<'a> IrTypes<'a> {
         }
     }
 
+    /// The element type of a vector of `elem` (`mem`: in memory): a
+    /// vector of `__mfp8` is one of `i8` (clang `ConvertType`, WP-1791).
+    fn vector_elem(&mut self, elem: QualType, mem: bool) -> IrType {
+        if self.ast().types.builtin(elem) == Some(BuiltinType::MFloat8) {
+            return IrType::Int(8);
+        }
+        if mem { self.convert_mem(elem) } else { self.convert(elem) }
+    }
+
     fn builtin(&self, b: BuiltinType) -> IrType {
         let t = self.target();
         match b {
@@ -360,6 +369,8 @@ impl<'a> IrTypes<'a> {
             // reflection, a null pointer (spec/codegen.md "Run-time
             // reflections"; P4101R1).
             BuiltinType::NullPtr | BuiltinType::MetaInfo => IrType::Ptr,
+            // `__mfp8` is `<1 x i8>` (clang 20+ `ConvertType`, WP-1791).
+            BuiltinType::MFloat8 => IrType::Vector(Box::new(IrType::Int(8)), 1),
             // clang 20+ makes an SVE tuple a struct of its vectors (an
             // AAPCS64 pure scalable type, passed in consecutive registers;
             // WP-1739); clang 19 one wide vector.
@@ -1314,7 +1325,7 @@ pub(crate) fn sve_type(b: BuiltinType) -> IrType {
         return IrType::ScalableVector(e, n * u64::from(nf));
     }
     let (e, n) = match b {
-        B::SvInt8 | B::SvUint8 => (IrType::Int(8), 16),
+        B::SvInt8 | B::SvUint8 | B::SvMfloat8 => (IrType::Int(8), 16),
         B::SvInt16 | B::SvUint16 => (IrType::Int(16), 8),
         B::SvInt32 | B::SvUint32 => (IrType::Int(32), 4),
         B::SvInt64 | B::SvUint64 => (IrType::Int(64), 2),
@@ -1342,7 +1353,9 @@ mod tests {
         assert_eq!(sve_type(B::SvBfloat16), sv(IrType::BFloat, 8));
         assert_eq!(sve_type(B::SvBool), sv(IrType::Int(1), 16));
         assert_eq!(sve_type(B::SvCount), IrType::TargetExt("aarch64.svcount"));
-        assert_eq!(B::ALL.iter().filter(|b| b.is_sizeless()).count(), 52);
+        assert_eq!(B::ALL.iter().filter(|b| b.is_sizeless()).count(), 56);
+        assert_eq!(sve_type(B::SvMfloat8), sv(IrType::Int(8), 16));
+        assert_eq!(sve_type(B::SvMfloat8x4), sv(IrType::Int(8), 64));
         assert_eq!(sve_type(B::SvInt8x2), sv(IrType::Int(8), 32));
         assert_eq!(sve_type(B::SvBoolx4), sv(IrType::Int(1), 64));
         assert_eq!(sve_type(B::SvFloat64x3), sv(IrType::Double, 6));

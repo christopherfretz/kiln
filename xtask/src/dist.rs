@@ -630,6 +630,8 @@ pub fn rewrite_links(root: &Path, src: &str, text: &str, version: &str) -> Resul
 /// bin/kiln++ -> kiln
 /// bin/kiln-scan-deps, bin/clang-scan-deps-{22,19}, bin/clang-scan-deps -> kiln
 /// lib/kiln/<major>/include/      resource/include (builtin headers)
+/// lib/kiln/<major>/include-clang22/  resource/include-clang22 (clang 22's
+///                                Arm SVE/SME headers, WP-1842)
 /// lib/kiln/<major>/predefines/   resource/predefines/*.txt
 /// lib/kiln/<major>/share/        resource/share/*.txt (default ignorelists)
 /// share/doc/kiln/                DOCS, links rewritten (install_doc)
@@ -648,6 +650,7 @@ pub fn assemble(root: &Path, prefix: &Path, major: &str) -> Result<(), String> {
     let resdir = prefix.join("lib").join("kiln").join(major);
     mkdir(&prefix.join("lib").join("kiln"))?;
     copy_tree(&res.join("include"), &resdir.join("include"))?;
+    copy_tree(&res.join("include-clang22"), &resdir.join("include-clang22"))?;
     let pre = resdir.join("predefines");
     mkdir(&pre)?;
     let src = res.join("predefines");
@@ -957,6 +960,7 @@ fn check_layout(prefix: &Path, triple: &str) -> Result<(), String> {
     for p in [
         bin.join("kiln"),
         resdir.join("include").join("stddef.h"),
+        resdir.join("include-clang22").join("arm_sve.h"),
         resdir.join("predefines").join(format!("{triple}.c++26.txt")),
         prefix.join("share").join("doc").join("kiln").join("STABILITY.md"),
         prefix.join("share").join("doc").join("kiln").join("USER_GUIDE.md"),
@@ -1212,8 +1216,11 @@ mod tests {
         assert!(list.lines().all(|l| l.contains(" 0/0 ")), "{list}");
         assert!(list.contains("kiln-x/bin/kiln++ -> kiln"), "{list}");
         let names: Vec<&str> = list.lines().filter_map(|l| l.split_whitespace().nth(5)).collect();
+        // `tar --sort=name` orders each directory's entries by name, so
+        // `include/` and its files precede `include-clang22/`: compare by
+        // path component, not by the whole path's bytes.
         let mut sorted = names.clone();
-        sorted.sort_unstable();
+        sorted.sort_by(|a, b| a.split('/').cmp(b.split('/')));
         assert_eq!(names, sorted);
         std::fs::remove_dir_all(&d).unwrap();
     }

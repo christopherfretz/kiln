@@ -14,7 +14,7 @@
 //! - `a k`: evaluate argument `k`;
 //! - `c d values...`: call the `d`-th declared intrinsic;
 //! - `ev v i`, `iv agg v i` (`i` a number or immediate `#k`), `ie vec elt
-//!   i`, `sv a b mask` (a `T:Z` mask: a splat), `sel c t f`,
+//!   i`, `ee vec i` (WP-1791), `sv a b mask` (a `T:Z` mask: a splat), `sel c t f`,
 //!   `gep T base idx`, `zext|sext|trunc|bitcast v T`,
 //!   `shl|mul|add[.nuw|.nsw] a b`, `icmp.ne a b`: the instructions;
 //! - `r [v]`: the result.

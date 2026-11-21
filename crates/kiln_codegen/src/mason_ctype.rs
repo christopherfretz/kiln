@@ -274,7 +274,7 @@ impl Writer<'_> {
                 _ => return None,
             },
             B::NullPtr => "Dn",
-            _ if b.is_sizeless() => {
+            _ if b.is_sizeless() || b == B::MFloat8 => {
                 let name = b.name();
                 self.out.push('u');
                 self.out.push_str(&name.len().to_string());

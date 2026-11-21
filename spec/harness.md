@@ -2333,7 +2333,8 @@ the workflow itself.
    `bin/kiln` (`$OBJCOPY`, else `objcopy`, else `llvm-objcopy-19`).
 3. **Assemble** `kiln-<version>-<triple>/` (`dist::assemble`): `bin/kiln`,
    `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
-   `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
+   `resource/include`), `lib/kiln/<major>/include-clang22/` (all of
+   `resource/include-clang22`), `lib/kiln/<major>/predefines/*.txt`,
    `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
    binary 0755. The docs install flat (WP-1027): `README.md`,
    `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the two licenses and

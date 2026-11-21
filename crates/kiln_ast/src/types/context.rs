@@ -333,7 +333,7 @@ impl TypeContext {
     }
 
     /// A context for `target` with default (C++17+) options, with the
-    /// builtins at ids 1..=90 (§5.1).
+    /// builtins at ids 1..=95 (§5.1).
     pub fn new(target: TargetTypes) -> Self {
         Self::with_options(target, TypeOptions::default())
     }
