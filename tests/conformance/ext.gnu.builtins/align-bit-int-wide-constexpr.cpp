@@ -3,7 +3,6 @@
 // BI__builtin_align_up / _down / __builtin_is_aligned). x86-64 only
 // (aarch64's __BITINT_MAXWIDTH__ is 128).
 //@ args: --target=x86_64-unknown-linux-gnu
-//@ xfail(kiln): WP-1741 remainder: the alignment builtins on a wide _BitInt need its in-memory result (compile/wide.rs)
 constexpr unsigned _BitInt(256) x = 37;
 static_assert(__builtin_align_up(x, 16) == 48);
 static_assert(__builtin_align_down(x, 16) == 32);

@@ -73,7 +73,7 @@ impl Cg<'_> {
             let yv = self.emit_scalar(y)?;
             let (v, carry) = self.overflow_intrinsic(OverflowOp::UMul, xv, yv);
             let ty = self.f.fir.ty(&self.m, v);
-            let max = V::C(self.m.const_int(ty, int_max(ri.w)));
+            let max = V::C(self.max_const(ty, ri.w - 1));
             let big = self.icmp(IntPredicate::Ugt, v, max);
             let carry = self.bin(BinOp::Or, Flags::NONE, carry, big);
             let (p, al) = self.ptr_align(r)?;
@@ -195,7 +195,18 @@ impl Cg<'_> {
         let oty = self.f.fir.ty(&self.m, sv);
         let zero = V::C(self.m.const_int(oty, 0));
         let (p, al) = self.ptr_align(r)?;
-        let mty = self.mty(rq);
+        // clang 22 truncates to the value type and widens on the store
+        // (`ConvertType` + `EmitToMemory`: a `bool` result is
+        // `trunc` to `i1`, `zext` to `i8`); clang 19 truncates straight
+        // to the in-memory integer type (`ConvertTypeForMem`). A wide
+        // `_BitInt` whose in-memory type is a byte array always takes
+        // the value type.
+        let mem = self.mty(rq);
+        let mty = if self.opts.clang_compat < 22 && self.m.types.int_width(mem).is_some() {
+            mem
+        } else {
+            self.lty(rq)
+        };
         let neg = self.icmp(IntPredicate::Slt, sv, zero);
         let abs_neg = self.bin(BinOp::Sub, Flags::NONE, zero, sv);
         let abs = self.fold_select(neg, abs_neg, sv);
@@ -203,7 +214,7 @@ impl Cg<'_> {
         let ow = si.w.max(ui.w);
         let carry = if ri.signed {
             // Overflow past `INT_MAX + IsNegative`.
-            let max = V::C(self.m.const_int(oty, int_max(ri.w)));
+            let max = V::C(self.max_const(oty, ri.w - 1));
             let nz = self.cast(CastOp::ZExt, neg, oty);
             let max = self.bin(BinOp::Add, Flags::NONE, max, nz);
             let so = self.icmp(IntPredicate::Ugt, ur, max);
@@ -213,7 +224,7 @@ impl Cg<'_> {
             let under = self.bin(BinOp::And, Flags::NONE, neg, nz);
             let mut c = self.bin(BinOp::Or, Flags::NONE, uo, under);
             if ri.w < ow {
-                let max = V::C(self.m.const_int(oty, uint_max(ri.w)));
+                let max = V::C(self.max_const(oty, ri.w));
                 let to = self.icmp(IntPredicate::Ugt, ur, max);
                 c = self.bin(BinOp::Or, Flags::NONE, c, to);
             }
@@ -260,6 +271,20 @@ impl Cg<'_> {
         (self.fold_select(neg, negr, ur), carry)
     }
 
+    /// The integer of IR type `ty` with its low `bits` bits set
+    /// (`APInt::getSignedMaxValue(bits + 1)`, `getMaxValue(bits)`), of
+    /// any width.
+    fn max_const(&mut self, ty: LTy, bits: u32) -> kiln_llvm::Value {
+        let w = self.m.types.int_width(ty).unwrap_or(bits);
+        let words: Vec<u64> = (0..w.div_ceil(64))
+            .map(|i| match bits.saturating_sub(i * 64) {
+                k if k >= 64 => u64::MAX,
+                k => (1u64 << k) - 1,
+            })
+            .collect();
+        self.m.const_int_words(ty, &words)
+    }
+
     /// `IRBuilder::CreateSelect`: folded only when every operand is a
     /// constant (`ConstantFolder::FoldSelect`).
     fn fold_select(&mut self, c: V, t: V, f: V) -> V {
@@ -273,7 +298,9 @@ impl Cg<'_> {
     /// clang `CreateStore(EmitToMemory(v, q), ...)`: an `i1` is widened,
     /// as is a `_BitInt(N)` stored in a wider slot.
     fn store_mem(&mut self, v: V, q: QualType, p: V, al: u64, vol: bool) {
-        let mty = self.mty(q);
+        // A `_BitInt` whose in-memory type is a byte array is stored as
+        // the integer of its size (clang `convertTypeForLoadStore`).
+        let mty = self.lsty(q);
         let v = if self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, mty)
         } else {
@@ -333,14 +360,4 @@ fn ovf_op(op: u8, signed: bool) -> OverflowOp {
         (_, true) => OverflowOp::SMul,
         (_, false) => OverflowOp::UMul,
     }
-}
-
-/// `APInt::getSignedMaxValue(w)` as the low bits of an `i128`.
-fn int_max(w: u32) -> i128 {
-    if w >= 128 { i128::MAX } else { (1i128 << (w - 1)) - 1 }
-}
-
-/// `APInt::getMaxValue(w)` as the low bits of an `i128`.
-fn uint_max(w: u32) -> i128 {
-    if w >= 128 { -1 } else { ((1u128 << w) - 1) as i128 }
 }

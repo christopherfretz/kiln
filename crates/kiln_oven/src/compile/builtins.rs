@@ -12,7 +12,7 @@ use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use super::{Compiler, float_code, int_of, is_vla, skip_parens};
-use crate::kbc::{Op, ak, bi, cmp};
+use crate::kbc::{Op, ak, bi, cmp, wide};
 use crate::softfloat;
 use crate::ty::TyKind;
 
@@ -208,7 +208,7 @@ fn is_pure_call(ast: &Ast, e: ExprId) -> bool {
 /// its own (clang `Expr::HasSideEffects` without its treatment of calls:
 /// a called function is evaluated, and a failure in it makes the result
 /// 0). `__builtin_constant_p` of such an argument is 0 without evaluating it.
-fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
+pub(super) fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
     side_effects_outside(ast, e, &[])
 }
 
@@ -246,7 +246,7 @@ fn side_effects_outside(ast: &Ast, e: ExprId, skip: &[ExprId]) -> bool {
 
 /// Whether `e` calls a function anywhere outside unevaluated operands
 /// (the third argument of `__builtin_*_overflow_p`, WP-1549).
-fn contains_call(ast: &Ast, e: ExprId) -> bool {
+pub(super) fn contains_call(ast: &Ast, e: ExprId) -> bool {
     let exprs = &ast.exprs;
     let mut stack = vec![e];
     while let Some(x) = stack.pop() {
@@ -812,7 +812,9 @@ impl Compiler<'_> {
                 let x = arg(0)?;
                 let k = self.ety(x);
                 let ptr = matches!(self.kind(k), TyKind::Ptr(_));
+                let wide = matches!(self.kind(k), TyKind::WideInt { .. });
                 let scalar = ptr
+                    || wide
                     || matches!(
                         self.kind(k),
                         TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) | TyKind::NullPtr
@@ -826,7 +828,15 @@ impl Compiler<'_> {
                     // frame's registers: the region ends in a `Ret` of
                     // its value, after which `Speculate` resumes at `end`.
                     let pc = self.emit(Op::Speculate, u32::from(ptr) | 2, &[dst, 0, 0]);
-                    let v = self.rv(x);
+                    // A wide `_BitInt` (memory-class): its value read whole.
+                    let v = if wide {
+                        let p = self.wide_place(x);
+                        let v = self.reg();
+                        self.emit_at(Op::Wide, wide::TO_BOOL, &[v, p, 0, k.0, 0], x);
+                        v
+                    } else {
+                        self.rv(x)
+                    };
                     self.emit(Op::Ret, 1, &[v]);
                     let end = self.here();
                     self.patch(pc + 2, v);
@@ -862,17 +872,20 @@ impl Compiler<'_> {
             | id::CTZLL
             | id::CTZG => {
                 let x = arg(0)?;
+                let clz = matches!(bid, id::CLZ | id::CLZL | id::CLZLL | id::CLZG);
+                if self.is_wide_expr(x) {
+                    // A `_BitInt` wider than 128 bits (`clzg`/`ctzg`).
+                    let k = if clz { wide::BITS_CLZ } else { wide::BITS_CTZ };
+                    self.wide_bit_count(k, x, arg(1), dst, e, begin);
+                    return Some(self.finish_builtin(dst));
+                }
                 let w = self.int_width(x);
                 let a = self.rv(x);
                 let (fb, has) = match arg(1) {
                     Some(f) => (self.rv(f), 1),
                     None => (dst, 0),
                 };
-                let k = if matches!(bid, id::CLZ | id::CLZL | id::CLZLL | id::CLZG) {
-                    bi::CLZ
-                } else {
-                    bi::CTZ
-                };
+                let k = if clz { bi::CLZ } else { bi::CTZ };
                 op(self, k, w | has << 8, [a, fb, dst], [0, 0], begin);
             }
             id::POPCOUNT
@@ -883,6 +896,11 @@ impl Compiler<'_> {
             | id::BSWAP32
             | id::BSWAP64 => {
                 let x = arg(0)?;
+                if self.is_wide_expr(x) {
+                    // `popcountg` of a `_BitInt` wider than 128 bits.
+                    self.wide_bit_count(wide::BITS_POPCOUNT, x, None, dst, e, begin);
+                    return Some(self.finish_builtin(dst));
+                }
                 let w = self.int_width(x);
                 let a = self.rv(x);
                 let k = if matches!(bid, id::BSWAP16 | id::BSWAP32 | id::BSWAP64) {
@@ -1392,6 +1410,17 @@ impl Compiler<'_> {
             _ if int_op(bid).is_some() => {
                 let k = int_op(bid)?;
                 let x = arg(0)?;
+                if self.is_wide_expr(x) {
+                    // `ffsg`/`parityg`/`clrsbg` of a `_BitInt` wider than
+                    // 128 bits (the other kinds take a fixed-width type).
+                    let kind = match k {
+                        bi::FFS => wide::BITS_FFS,
+                        bi::PARITY => wide::BITS_PARITY,
+                        _ => wide::BITS_CLRSB,
+                    };
+                    self.wide_bit_count(kind, x, None, dst, e, begin);
+                    return Some(self.finish_builtin(dst));
+                }
                 let w = self.int_width(x);
                 let a = self.rv(x);
                 let b = match arg(1) {
@@ -1407,6 +1436,12 @@ impl Compiler<'_> {
             _ if id::checked_op(bid).is_some() => {
                 let (k, _) = id::checked_op(bid)?;
                 let (x, y, r) = (arg(0)?, arg(1)?, arg(2)?);
+                let rq = self.ast().exprs.get(r).ty();
+                let rt = self.ty(self.ast().types.pointee(rq)?);
+                if self.is_wide_expr(x) || self.is_wide_expr(y) || self.o.types.wide(rt).is_some() {
+                    self.wide_checked(k, [x, y], (r, true), rt, dst, e, begin);
+                    return Some(self.finish_builtin(dst));
+                }
                 let sa = self.int_ws(x).1;
                 let sb = self.int_ws(y).1;
                 let rq = self.ast().exprs.get(r).ty();
@@ -1444,6 +1479,11 @@ impl Compiler<'_> {
             _ if id::overflow_p_op(bid).is_some() => {
                 let k = id::overflow_p_op(bid)?;
                 let (x, y, r) = (arg(0)?, arg(1)?, arg(2)?);
+                let rt = self.ety(r);
+                if self.is_wide_expr(x) || self.is_wide_expr(y) || self.o.types.wide(rt).is_some() {
+                    self.wide_checked(k, [x, y], (r, false), rt, dst, e, begin);
+                    return Some(self.finish_builtin(dst));
+                }
                 let sa = self.int_ws(x).1;
                 let sb = self.int_ws(y).1;
                 let (wr, sr) = self.int_ws(r);
@@ -1502,32 +1542,41 @@ impl Compiler<'_> {
                 let at = self.begin(al);
                 let t2 = aw | u32::from(asg) << 8;
                 let xt = self.ety(x);
+                if self.o.types.wide(xt).is_some() {
+                    // A `_BitInt` wider than 128 bits (x86-64): the
+                    // operand lives in memory (`wide.rs`), and so does an
+                    // `align_up`/`_down` result, whose call `wide_init`
+                    // initializes in place (here only as a value, an
+                    // address, when evaluated without a destination).
+                    if k == 2 {
+                        self.wide_align(2, [x, al], dst, e);
+                    } else {
+                        self.wide_builtin_value(e, dst);
+                    }
+                    return Some(self.finish_builtin(dst));
+                }
                 let Some((w, s)) = int_of(self.kind(xt)) else {
+                    // Sema takes an integer or a pointer operand (clang
+                    // `checkBuiltinAlignment`).
                     let q = self.ast().exprs.get(x).ty();
                     let Some(et) = self.ast().types.pointee(q) else {
-                        // Sema takes an integer or a pointer operand (clang
-                        // `checkBuiltinAlignment`): the only one left is a
-                        // `_BitInt` wider than 128 bits (x86-64), whose
-                        // result lives in memory (`wide.rs`).
-                        assert!(
-                            matches!(self.kind(xt), TyKind::WideInt { .. }),
-                            "an alignment builtin's operand is an integer or a pointer"
-                        );
-                        // kiln-gap: GAP-115
-                        self.unsupported(e);
-                        return Some(self.finish_builtin(dst));
+                        unreachable!("an alignment builtin's operand is an integer or a pointer")
                     };
                     let t = self.ty(et).0;
                     // The check reads only the alignment's width, at 64.
                     let ws = 64;
+                    let al_rv = |c: &mut Self| match c.wide_align_arg(al, 64, true, e) {
+                        Some(b) => b,
+                        None => c.rv(al),
+                    };
                     let a = if k == 2 {
-                        let b = self.rv(al);
+                        let b = al_rv(self);
                         op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
                         let a = self.rv(x);
                         (a, b)
                     } else {
                         let a = self.rv(x);
-                        let b = self.rv(al);
+                        let b = al_rv(self);
                         op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
                         (a, b)
                     };
@@ -1536,7 +1585,12 @@ impl Compiler<'_> {
                     return Some(self.finish_builtin(dst));
                 };
                 let ws = w | u32::from(s) << 8;
-                let b = self.rv(al);
+                // A wide alignment: checked against the source's width,
+                // then (below 2^w) passes the narrow check.
+                let b = match self.wide_align_arg(al, w, true, e) {
+                    Some(b) => b,
+                    None => self.rv(al),
+                };
                 op(self, bi::ALIGN, ws | 3 << 9, [dst, b, dst], [0, t2], at);
                 let a = self.rv(x);
                 op(self, bi::ALIGN, ws | k << 9, [a, b, dst], [0, t2], at);
@@ -1571,8 +1625,10 @@ impl Compiler<'_> {
                     }
                     TyKind::Float(_) => self.trap(e, ""),
                     // A `_BitInt` wider than 128 bits (x86-64): its result
-                    // lives in memory (`wide.rs`).
-                    TyKind::WideInt { .. } => self.unsupported(e), // kiln-gap: GAP-115
+                    // lives in memory (`wide.rs`); `wide_init` initializes
+                    // a call's result object in place, here only a value
+                    // (an address) evaluated without a destination.
+                    TyKind::WideInt { .. } => self.wide_builtin_value(e, dst),
                     TyKind::Void
                     | TyKind::Ptr(_)
                     | TyKind::NullPtr

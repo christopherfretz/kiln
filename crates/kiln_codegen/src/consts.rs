@@ -162,6 +162,12 @@ impl Cg<'_> {
                     return v;
                 }
                 if let Some(v) = bits.to_u128() {
+                    // Words above the low two are zero: a value of an
+                    // integer wider than 128 bits is zero-extended (`v as
+                    // i128` would sign-extend one at or above 2^127).
+                    if self.m.types.int_width(t).is_some_and(|w| w > 128) {
+                        return Ok(self.m.const_int_words(t, &[v as u64, (v >> 64) as u64]));
+                    }
                     if self.m.types.int_width(t).is_some() {
                         return Ok(self.m.const_int(t, v as i128));
                     }

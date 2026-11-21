@@ -13,11 +13,13 @@
 use kiln_ast::ExprId;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 
+use kiln_source::Loc;
+
 use super::{
     Access, Compiler, Place, REINTERPRET_CONV, cmp_of, eval_int, float_code, int_of, int_op,
     skip_parens,
 };
-use crate::kbc::{Op, ak, cce, int_aux, wide};
+use crate::kbc::{Op, ak, bi, cce, cmp, int_aux, wide};
 use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
@@ -125,12 +127,12 @@ impl Compiler<'_> {
                 self.wide_store(pf, src, ty, k, init, e);
                 self.patch_here(end);
             }
-            // A wide value is memory-class: never a register.
-            Place::Reg(_) => unreachable!("wide value in a register: {e:?}"),
-            // A lane of a vector of wide lanes: the Oven's vector lanes
-            // are registers.
-            // kiln-gap: GAP-126
-            Place::Lane { .. } => self.unsupported(e),
+            // A wide value is memory-class: never a register, nor a lane
+            // place (only a `bool` vector's lanes are: a wide lane is an
+            // array element, `lane_place`).
+            Place::Reg(_) | Place::Lane { .. } => {
+                unreachable!("wide value in a register or a bit lane: {e:?}")
+            }
         }
     }
 
@@ -252,6 +254,13 @@ impl Compiler<'_> {
                 let r = self.ast().exprs.subst_replacement(e);
                 self.init_inner(r, p, ty);
             }
+            ExprKind::CallExpr => return self.wide_builtin_init(e, p, ty),
+            // One lane of a vector of wide lanes (a prvalue vector's).
+            ExprKind::ExtVectorElementExpr => {
+                let lanes = self.ext_elt_regs(e);
+                let Some(&a) = lanes.first() else { return true };
+                self.wide(wide::MOV | init, 0, [p, a, 0], ty, 0, e);
+            }
             ExprKind::InitListExpr => {
                 let inits = self.ast().exprs.init_list_inits(e);
                 match self.ast().lists.get(inits)[..] {
@@ -285,8 +294,11 @@ impl Compiler<'_> {
                         self.wide(wide::FROM | init, 0, [p, v, 0], ty, 64, e);
                     }
                     CastKind::LValueToRValue => {
+                        // The read is noted at the operand's begin, as a
+                        // narrow load's (`v[2]`: at `v`).
                         let a = self.wide_place(op);
-                        self.wide(wide::MOV | init, 0, [p, a, 0], ty, 0, e);
+                        let at = self.begin(e);
+                        self.wide_loc(wide::MOV | init, 0, [p, a, 0], ty, 0, e, at);
                     }
                     CastKind::NoOp if !n.value_category().is_glvalue() => {
                         self.init_inner(op, p, ty);
@@ -475,10 +487,9 @@ impl Compiler<'_> {
                 self.wide(wide::TO, 0, [new, t, 0], ct, lx, e);
                 self.store(place, new, lty, k, e);
             }
-            // A lane of a vector of wide lanes (its bit-fields are in
-            // memory above): the Oven's vector lanes are registers.
-            // kiln-gap: GAP-126
-            _ => self.unsupported(e),
+            // A wide left operand is in memory (a bit-field's above, a
+            // lane of a vector of wide lanes an array element).
+            _ => unreachable!("wide compound assignment to a non-memory place: {e:?}"),
         }
         if let (Some(bf), Place::Mem(t)) = (bf, place) {
             self.wide_write_bits(bf, t, lty, k, false, e);
@@ -539,12 +550,7 @@ impl Compiler<'_> {
                 self.load(place, lty, k, e, old);
                 self.convert(old, lty, ct, a, e);
             }
-            _ => {
-                // A lane of a vector of wide lanes, as `wide_compound_assign`.
-                // kiln-gap: GAP-126
-                self.unsupported(e);
-                return place;
-            }
+            _ => unreachable!("wide floating compound assignment to a non-memory place: {e:?}"),
         }
         let res = self.reg();
         self.arith(iop, ct, rt, res, a, b, e);
@@ -681,17 +687,437 @@ impl Compiler<'_> {
                 let x = self.float_x(ty);
                 self.wide(wide::TO_FLOAT, 0, [dst, a, 0], ot, x, e);
             }
-            // A splat to a vector of wide lanes (a vector shifted by a
-            // wide count: clang's operand conversion): the Oven's vector
-            // lanes are registers.
-            // kiln-gap: GAP-126
-            CastKind::VectorSplat => self.unsupported(e),
             // Otherwise a wide operand with a narrow result is an integral
             // one's conversion: an integral to pointer one is `cast`'s (as
-            // a narrow operand's), and every other kind has an operand or
-            // a result of another category, or a wide result (`wide_init`).
+            // a narrow operand's), a splat to a vector is a vector
+            // operation (`vector.rs`), and every other kind has an operand
+            // or a result of another category, or a wide result
+            // (`wide_init`).
             ck => unreachable!("{ck:?} of a wide operand to a narrow type: {e:?}"),
         }
+    }
+}
+
+impl Compiler<'_> {
+    /// `wide` with its instruction's notes at `loc`.
+    #[allow(clippy::too_many_arguments)]
+    fn wide_loc(&mut self, sub: u32, k: u32, args: [u32; 3], ty: OTy, x: u32, e: ExprId, loc: Loc) {
+        let [d, a, b] = args;
+        self.emit_site(Op::Wide, sub | k << 8, &[d, a, b, ty.0, x], e, loc);
+    }
+
+    /// The width and signedness of integer type `t`, narrow or wide.
+    fn any_int_ws(&self, t: OTy) -> (u32, bool) {
+        self.o.types.wide(t).or_else(|| int_of(self.kind(t))).unwrap_or((1, false))
+    }
+
+    /// The address of a temporary of wide type `to` holding the value of
+    /// integer operand `x` (narrow or wide), converted.
+    fn wide_conv_place(&mut self, x: ExprId, to: OTy, e: ExprId) -> u32 {
+        let xt = self.ety(x);
+        if xt == to {
+            return self.wide_place(x);
+        }
+        let t = self.wide_temp(to, e);
+        if self.o.types.wide(xt).is_some() {
+            let a = self.wide_place(x);
+            self.wide(wide::CAST | wide::INIT, 0, [t, a, 0], to, xt.0, e);
+        } else {
+            let r = self.rv(x);
+            let rx = self.narrow_code(xt);
+            self.wide(wide::FROM | wide::INIT, 0, [t, r, 0], to, rx, e);
+        }
+        t
+    }
+
+    /// The checked arithmetic builtins (`__builtin_add_overflow` and
+    /// kin, `k` 0 add, 1 sub, 2 mul; GCC's `_p` predicates with `p`
+    /// `None`) with a wide `_BitInt` operand or result type `rt`: the
+    /// exact result in a synthetic signed integer wide enough for it,
+    /// then wrapped to `rt` (stored through register `p`); register
+    /// `dst` = whether the wrapped value differs from the exact one
+    /// (clang `IntExprEvaluator` `BI__builtin_*_overflow`, in arbitrary
+    /// precision). `x`, `y`, then `r` are evaluated: `r` the result
+    /// pointer (`store`), else the `_p` form's third argument, evaluated
+    /// only when it has side effects (as `builtin_call`'s narrow form).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn wide_checked(
+        &mut self,
+        k: u8,
+        [x, y]: [ExprId; 2],
+        (r, store): (ExprId, bool),
+        rt: OTy,
+        dst: u32,
+        e: ExprId,
+        loc: Loc,
+    ) {
+        let (xt, yt) = (self.ety(x), self.ety(y));
+        let (wa, _) = self.any_int_ws(xt);
+        let (wb, _) = self.any_int_ws(yt);
+        let (wr, sr) = self.any_int_ws(rt);
+        // Signed, one bit above the exact result's magnitude and above
+        // every value of `rt`.
+        let need = if k == 2 { wa + wb } else { wa.max(wb) + 1 };
+        let q = self.ast().exprs.get(e).ty();
+        let w = self.o.types.wide_of((need + 1).max(wr + 1), true, q);
+        let a = self.wide_conv_place(x, w, e);
+        let b = self.wide_conv_place(y, w, e);
+        let p = if store {
+            Some(self.rv(r))
+        } else {
+            if super::builtins::has_side_effects(self.ast(), r)
+                || super::builtins::contains_call(self.ast(), r)
+            {
+                self.effect(r);
+            }
+            None
+        };
+        let sub = [wide::ADD, wide::SUB, wide::MUL][usize::from(k.min(2))];
+        let exact = self.wide_temp(w, e);
+        self.wide(sub | wide::INIT, 0, [exact, a, b], w, 0, e);
+        let back = self.wide_temp(w, e);
+        if self.o.types.wide(rt).is_some() {
+            let t = self.wide_temp(rt, e);
+            self.wide(wide::CAST | wide::INIT, 0, [t, exact, 0], rt, w.0, e);
+            self.wide(wide::CAST | wide::INIT, 0, [back, t, 0], w, rt.0, e);
+            if let Some(p) = p {
+                self.wide_loc(wide::MOV, ak::ASSIGN, [p, t, 0], rt, 0, e, loc);
+            }
+        } else {
+            let v = self.reg();
+            let rx = wr | u32::from(sr) << 8;
+            self.wide(wide::TO, 0, [v, exact, 0], w, rx, e);
+            self.wide(wide::FROM | wide::INIT, 0, [back, v, 0], w, rx, e);
+            if let Some(p) = p {
+                self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, loc);
+            }
+        }
+        self.wide(wide::CMP, 0, [dst, exact, back], w, cmp::NE, e);
+    }
+
+    /// The GCC generic bit builtin of `BITS` kind `kind` on the wide
+    /// operand `x` into register `dst` (`fb`: `__builtin_clzg`/`ctzg`'s
+    /// fallback for zero, evaluated after `x`).
+    pub(super) fn wide_bit_count(
+        &mut self,
+        kind: u32,
+        x: ExprId,
+        fb: Option<ExprId>,
+        dst: u32,
+        e: ExprId,
+        loc: Loc,
+    ) {
+        let xt = self.ety(x);
+        let a = self.wide_place(x);
+        let (f, has) = match fb {
+            Some(f) => (self.rv(f), 1),
+            None => (dst, 0),
+        };
+        self.wide_loc(wide::BITS, 0, [dst, a, f], xt, kind | has << 4, e, loc);
+    }
+
+    /// `__builtin_is_aligned(x, al)` of a wide `x` into register `dst`, or
+    /// `__builtin_align_up`/`_down` (`k` 0/1) into the wide object at
+    /// `dst` (clang `IntExprEvaluator`: the alignment, evaluated first,
+    /// must be a power of two; the check's note is at the alignment).
+    pub(super) fn wide_align(&mut self, k: u32, [x, al]: [ExprId; 2], dst: u32, e: ExprId) {
+        let xt = self.ety(x);
+        let at = self.begin(al);
+        let (xw, _) = self.o.types.wide(xt).unwrap_or((129, false));
+        let (b, lg) = match self.wide_align_arg(al, xw, false, e) {
+            Some(b) => (b, 4),
+            None => {
+                let alt = self.ety(al);
+                let (aw, asg) = int_of(self.kind(alt)).unwrap_or((64, false));
+                let t2 = aw | u32::from(asg) << 8;
+                let b = self.rv(al);
+                // The check (`bi::ALIGN` kind 3): a wide operand bounds
+                // no narrow alignment (width 0).
+                let c = self.reg();
+                self.emit_site(Op::Builtin, bi::ALIGN | (3 << 9) << 8, &[c, c, b, c, 0, t2], e, at);
+                (b, 0)
+            }
+        };
+        let a = self.wide_place(x);
+        let init = if k == 2 { 0 } else { wide::INIT };
+        self.wide_loc(wide::ALIGN | init, 0, [dst, a, b], xt, k | lg, e, at);
+    }
+
+    /// For a wide alignment `al` of an alignment builtin whose source is
+    /// `sw` bits wide (64 for a pointer): checks it (`wide::ALIGN_ARG`)
+    /// and returns a register holding its base-2 logarithm, or with
+    /// `value` (a source of at most 128 bits) the alignment itself. None
+    /// for a narrow `al`.
+    pub(super) fn wide_align_arg(
+        &mut self,
+        al: ExprId,
+        sw: u32,
+        value: bool,
+        e: ExprId,
+    ) -> Option<u32> {
+        let alt = self.ety(al);
+        self.o.types.wide(alt)?;
+        let at = self.begin(al);
+        let a = self.wide_place(al);
+        let d = self.reg();
+        let x = sw | u32::from(value) << 11;
+        self.wide_loc(wide::ALIGN_ARG, 0, [d, a, 0], alt, x, e, at);
+        Some(d)
+    }
+
+    /// Register `dst` = the address of a temporary holding the wide
+    /// result of builtin call `e` (a call evaluated without a result
+    /// object, as `call_frame` gives a class result one).
+    pub(super) fn wide_builtin_value(&mut self, e: ExprId, dst: u32) {
+        let ty = self.ety(e);
+        self.alloc(dst, ty, Origin::Temp(e), false, e);
+        if !self.wide_builtin_init(e, dst, ty) {
+            unreachable!(
+                "a wide builtin result of an alignment, element-wise or reduction builtin: {e:?}"
+            );
+        }
+    }
+
+    /// Initializes the wide object of type `ty` at `p` from a call `e` of
+    /// builtin `bid` whose result is wide: the alignment builtins, the
+    /// element-wise ones and the reductions of a vector of wide lanes
+    /// (clang 22 `IntExprEvaluator`; clang 19 folds none of the
+    /// element-wise ones or reductions). Returns false for any other call.
+    fn wide_builtin_init(&mut self, e: ExprId, p: u32, ty: OTy) -> bool {
+        use kiln_ast::decl::builtin as id;
+        let Some(bid) = self.direct_builtin(e) else { return false };
+        let ast = self.ast();
+        let args: Vec<ExprId> = ast.lists.iter(ast.exprs.call_args(e)).collect();
+        match (bid, &args[..]) {
+            (id::ALIGN_UP | id::ALIGN_DOWN, &[x, al]) => {
+                let k = u32::from(bid == id::ALIGN_DOWN);
+                self.wide_align(k, [x, al], p, e);
+            }
+            (
+                id::ELEMENTWISE_ABS
+                | id::ELEMENTWISE_MAX
+                | id::ELEMENTWISE_MIN
+                | id::ELEMENTWISE_ADD_SAT
+                | id::ELEMENTWISE_SUB_SAT,
+                &[x, ..],
+            ) => {
+                if self.o.clang_compat < 22 {
+                    let at = self.begin(e);
+                    self.trap_loc(at, super::builtins::INVALID.into());
+                    return true;
+                }
+                let a = self.wide_place(x);
+                let (sub, b) = match (bid, args.get(1)) {
+                    (id::ELEMENTWISE_ABS, _) | (_, None) => (wide::ABS, 0),
+                    (_, Some(&y)) => {
+                        let sub = match bid {
+                            id::ELEMENTWISE_MAX => wide::MAX,
+                            id::ELEMENTWISE_MIN => wide::MIN,
+                            id::ELEMENTWISE_ADD_SAT => wide::ADD_SAT,
+                            _ => wide::SUB_SAT,
+                        };
+                        (sub, self.wide_place(y))
+                    }
+                };
+                self.wide(sub | wide::INIT, 0, [p, a, b], ty, 0, e);
+            }
+            (id::REDUCE_ADD..=id::REDUCE_XOR, &[x]) => self.wide_reduce(e, bid, x, p, ty),
+            _ => return false,
+        }
+        true
+    }
+
+    /// `__builtin_reduce_*(x)` of a vector of wide lanes into the object
+    /// of type `ty` at `p` (as `vec_reduce`: the lanes combined in order,
+    /// an overflow noted at the call).
+    fn wide_reduce(&mut self, e: ExprId, bid: u32, x: ExprId, p: u32, ty: OTy) {
+        use kiln_ast::decl::builtin as id;
+        let begin = self.begin(e);
+        if self.o.clang_compat < 22 {
+            // As a narrow one's (`builtin_call`).
+            return self.trap_loc(begin, "subexpression not valid in a constant expression".into());
+        }
+        let lanes = self.vec_regs(x);
+        let Some((&first, rest)) = lanes.split_first() else { return };
+        self.wide(wide::MOV | wide::INIT, 0, [p, first, 0], ty, 0, e);
+        for &r in rest {
+            let sub = match bid {
+                id::REDUCE_MIN | id::REDUCE_MAX => {
+                    // `*p = r` when `r` orders before (min) / after (max).
+                    let c = if bid == id::REDUCE_MIN { cmp::LT } else { cmp::GT };
+                    let t = self.reg();
+                    self.wide(wide::CMP, 0, [t, r, p], ty, c, e);
+                    let j = self.jmp_if(t, false);
+                    self.wide(wide::MOV, 0, [p, r, 0], ty, 0, e);
+                    self.patch_here(j);
+                    continue;
+                }
+                id::REDUCE_ADD => wide::ADD,
+                id::REDUCE_MUL => wide::MUL,
+                id::REDUCE_AND => wide::AND,
+                id::REDUCE_OR => wide::OR,
+                _ => wide::XOR,
+            };
+            self.wide_loc(sub, 0, [p, p, r], ty, 0, e, begin);
+        }
+    }
+}
+
+/// Lane operations of a vector of wide `_BitInt` lanes (`vector.rs`): a
+/// lane's register holds the address of a temporary holding its value,
+/// which nothing writes after it is made (an operation's result is a new
+/// one), so lanes may share one.
+impl Compiler<'_> {
+    /// A copy of the wide lane of type `ty` at `q`, read (and noted) at
+    /// `loc`: the address of a new temporary.
+    pub(super) fn wide_lane_load(&mut self, q: u32, ty: OTy, e: ExprId, loc: Loc) -> u32 {
+        let t = self.wide_temp(ty, e);
+        self.wide_loc(wide::MOV | wide::INIT, 0, [t, q, 0], ty, 0, e, loc);
+        t
+    }
+
+    /// Initializes the wide lane of type `ty` at `q` from lane `r`.
+    pub(super) fn wide_lane_store(&mut self, q: u32, r: u32, ty: OTy, e: ExprId) {
+        self.wide(wide::MOV | wide::INIT, 0, [q, r, 0], ty, 0, e);
+    }
+
+    /// Register `d` = the comparison `c` of wide lanes `a` and `b`.
+    pub(super) fn wide_lane_cmp(&mut self, c: u32, d: u32, [a, b]: [u32; 2], ty: OTy, e: ExprId) {
+        self.wide(wide::CMP, 0, [d, a, b], ty, c, e);
+    }
+
+    /// Register `d` = whether wide lane `r` is nonzero.
+    pub(super) fn wide_lane_truth(&mut self, d: u32, r: u32, ty: OTy, e: ExprId) {
+        self.wide(wide::TO_BOOL, 0, [d, r, 0], ty, 0, e);
+    }
+
+    /// `-r` (wrapping, as a vector lane's: clang negates `APSInt` lanes
+    /// without an overflow check) or `~r` of wide lane `r`.
+    pub(super) fn wide_lane_unary(&mut self, minus: bool, r: u32, ty: OTy, e: ExprId) -> u32 {
+        let t = self.wide_temp(ty, e);
+        match self.o.types.wide(ty) {
+            Some((width, true)) if minus => {
+                let q = self.o.types.info(ty).q;
+                let u = self.o.types.wide_of(width, false, q);
+                let (a, n) = (self.wide_temp(u, e), self.wide_temp(u, e));
+                self.wide(wide::CAST | wide::INIT, 0, [a, r, 0], u, ty.0, e);
+                self.wide(wide::NEG | wide::INIT, 0, [n, a, 0], u, 0, e);
+                self.wide(wide::CAST | wide::INIT, 0, [t, n, 0], ty, u.0, e);
+            }
+            _ => {
+                let sub = if minus { wide::NEG } else { wide::NOT };
+                self.wide(sub | wide::INIT, 0, [t, r, 0], ty, 0, e);
+            }
+        }
+        t
+    }
+
+    /// `arith` of lanes `ra`, `rb` where the result type `ty` is wide, or
+    /// a shift's count type `bt` is (register `dst` = the result: a new
+    /// temporary's address for a wide `ty`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn wide_arith(
+        &mut self,
+        iop: Op,
+        ty: OTy,
+        bt: OTy,
+        dst: u32,
+        ra: u32,
+        rb: u32,
+        e: ExprId,
+    ) {
+        let shift = matches!(iop, Op::IShl | Op::IShr);
+        let (c, cx) = match self.o.types.wide(bt) {
+            // A wide count, clamped to 128 bits (`shift_count`).
+            Some((_, s)) if shift => {
+                let c = self.reg();
+                let x = 128 | u32::from(s) << 8;
+                self.wide(wide::TO, 0, [c, rb, 0], bt, x | 1 << 9, e);
+                (c, x)
+            }
+            None if shift => (rb, self.narrow_code(bt)),
+            _ => (rb, 0),
+        };
+        if self.o.types.wide(ty).is_none() {
+            // A narrow lane shifted by a wide count.
+            let (w, s) = int_of(self.kind(ty)).unwrap_or((32, true));
+            let aux = int_aux(w as u8, s) | (cx & 0xFF) << 9 | (cx >> 8 & 1) << 17;
+            self.emit_at(iop, aux, &[dst, ra, c], e);
+            return;
+        }
+        let sub = match iop {
+            Op::IAdd => wide::ADD,
+            Op::ISub => wide::SUB,
+            Op::IMul => wide::MUL,
+            Op::IDiv => wide::DIV,
+            Op::IRem => wide::REM,
+            Op::IShl => wide::SHL,
+            Op::IShr => wide::SHR,
+            Op::IAnd => wide::AND,
+            Op::IOr => wide::OR,
+            Op::IXor => wide::XOR,
+            _ => unreachable!("wide lane arithmetic {iop:?}"),
+        };
+        let t = self.wide_temp(ty, e);
+        self.wide(sub | wide::INIT, 0, [t, ra, c], ty, cx, e);
+        self.emit(Op::Mov, 0, &[dst, t]);
+    }
+
+    /// `convert` where `from` or `to` is a wide `_BitInt` (a lane's
+    /// conversion: `__builtin_convertvector`, a splat).
+    pub(super) fn wide_convert(&mut self, src: u32, from: OTy, to: OTy, dst: u32, e: ExprId) {
+        if self.o.types.wide(to).is_some() {
+            let t = self.wide_temp(to, e);
+            let init = wide::INIT;
+            match self.kind(from) {
+                TyKind::WideInt { .. } => {
+                    self.wide(wide::CAST | init, 0, [t, src, 0], to, from.0, e);
+                }
+                TyKind::Float(_) => {
+                    let x = self.float_x(from);
+                    self.wide(wide::FROM_FLOAT | init, 0, [t, src, 0], to, x, e);
+                }
+                _ => {
+                    let x = self.narrow_code(from);
+                    self.wide(wide::FROM | init, 0, [t, src, 0], to, x, e);
+                }
+            }
+            self.emit(Op::Mov, 0, &[dst, t]);
+            return;
+        }
+        match self.kind(to) {
+            TyKind::Bool => self.wide(wide::TO_BOOL, 0, [dst, src, 0], from, 0, e),
+            TyKind::Float(_) => {
+                let x = self.float_x(to);
+                self.wide(wide::TO_FLOAT, 0, [dst, src, 0], from, x, e);
+            }
+            _ => {
+                let x = self.narrow_code(to);
+                self.wide(wide::TO, 0, [dst, src, 0], from, x, e);
+            }
+        }
+    }
+
+    /// An element-wise builtin `bid` on wide lanes `a` (and `b`): the
+    /// address of a new temporary holding the result.
+    pub(super) fn wide_lane_elementwise(
+        &mut self,
+        bid: u32,
+        [a, b]: [u32; 2],
+        ty: OTy,
+        e: ExprId,
+    ) -> u32 {
+        use kiln_ast::decl::builtin as id;
+        let sub = match bid {
+            id::ELEMENTWISE_ABS => wide::ABS,
+            id::ELEMENTWISE_MAX => wide::MAX,
+            id::ELEMENTWISE_MIN => wide::MIN,
+            id::ELEMENTWISE_ADD_SAT => wide::ADD_SAT,
+            _ => wide::SUB_SAT,
+        };
+        let t = self.wide_temp(ty, e);
+        self.wide(sub | wide::INIT, 0, [t, a, b], ty, 0, e);
+        t
     }
 }
 

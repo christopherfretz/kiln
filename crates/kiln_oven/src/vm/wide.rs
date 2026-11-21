@@ -251,9 +251,55 @@ impl Oven {
                 return Ok(Some(u128::from(compare(x, bi::cmp(&va, &vb, signed)))));
             }
             wide::MOV => self.wide_load(a as u64, ty, ak::READ)?,
+            wide::ALIGN_ARG => {
+                let v = self.wide_load(a as u64, ty, ak::READ)?;
+                let ones: u32 = v.iter().map(|w| w.count_ones()).sum();
+                if (signed && bi::is_neg(&v)) || ones != 1 {
+                    let text = bi::to_decimal(&v, signed).into_boxed_str();
+                    return Err(Fault::WideAlign { text, max: "".into() });
+                }
+                let lg: u32 = v.iter().take_while(|w| **w == 0).map(|_| 64).sum::<u32>()
+                    + v.iter().find(|w| **w != 0).map_or(0, |w| w.trailing_zeros());
+                let sw = (x & 0x7FF).max(1);
+                if lg > sw - 1 {
+                    let max =
+                        bi::shl(&bi::from_u128(1, false, (sw as usize).div_ceil(64) + 1), sw - 1);
+                    return Err(Fault::WideAlign {
+                        text: bi::to_decimal(&v, signed).into_boxed_str(),
+                        max: bi::to_decimal(&max, false).into_boxed_str(),
+                    });
+                }
+                return Ok(Some(if x >> 11 & 1 != 0 { 1u128 << lg } else { u128::from(lg) }));
+            }
+            wide::ALIGN => {
+                // `b` is a power of two (the alignment check ran first),
+                // or with `x | 4` its logarithm: `m = b - 1` in the
+                // value's limbs.
+                let v = self.wide_load(a as u64, ty, ak::READ)?;
+                let m = if x & 4 != 0 {
+                    let one = bi::from_u128(1, false, n);
+                    bi::sub(&bi::shl(&one, b as u32), &one)
+                } else {
+                    bi::from_u128(b.wrapping_sub(1), false, n)
+                };
+                let x = x & 3;
+                if x == 2 {
+                    let low = v.iter().zip(&m).all(|(p, q)| p & q == 0);
+                    return Ok(Some(u128::from(low)));
+                }
+                let base = if x == 0 { bi::add(&v, &m) } else { v };
+                let mut r: Vec<u64> = base.iter().zip(&m).map(|(p, q)| p & !q).collect();
+                bi::canon(&mut r, width, signed);
+                r
+            }
+            wide::BITS => {
+                let v = self.wide_load(a as u64, ty, ak::READ)?;
+                return wide_bits(x, &v, width, b).map(Some);
+            }
             _ => {
                 let va = self.wide_load(a as u64, ty, ka)?;
-                let unary = matches!(sub, wide::NEG | wide::NOT | wide::INC | wide::DEC);
+                let unary =
+                    matches!(sub, wide::NEG | wide::NOT | wide::INC | wide::DEC | wide::ABS);
                 let shift = matches!(sub, wide::SHL | wide::SHR);
                 let vb = if unary || shift {
                     Vec::new()
@@ -352,6 +398,87 @@ fn wide_bin(
             bi::canon(&mut r, width, signed);
             Ok(r)
         }
+        wide::ABS => {
+            let mut r = if signed && bi::is_neg(a) { bi::neg(a) } else { a.to_vec() };
+            bi::canon(&mut r, width, signed);
+            Ok(r)
+        }
+        wide::MAX | wide::MIN => {
+            let less = bi::cmp(a, b, signed) == std::cmp::Ordering::Less;
+            Ok(if less == (sub == wide::MIN) { a } else { b }.to_vec())
+        }
+        wide::ADD_SAT | wide::SUB_SAT => {
+            let r = if sub == wide::ADD_SAT {
+                bi::add(&ext(a, n + 1), &ext(b, n + 1))
+            } else {
+                bi::sub(&ext(a, n + 1), &ext(b, n + 1))
+            };
+            if bi::fits(&r, width, signed) {
+                let mut r = r;
+                r.truncate(n);
+                return Ok(r);
+            }
+            // Out of range: the bound on the side the exact result lies
+            // (the bits below the sign bit, or below the width, set; or
+            // the most negative value, or zero).
+            let neg = bi::is_neg(&r);
+            let lim = if signed { width - 1 } else { width };
+            let m: Vec<u64> = (0..n as u32)
+                .map(|i| {
+                    let lo = i * 64;
+                    let below = match lim.checked_sub(lo) {
+                        Some(k) if k >= 64 => u64::MAX,
+                        Some(k) => (1u64 << k) - 1,
+                        None => 0,
+                    };
+                    match (neg, signed) {
+                        (false, _) => below,
+                        (true, true) => !below,
+                        (true, false) => 0,
+                    }
+                })
+                .collect();
+            Ok(m)
+        }
         _ => Err((IntErr::DivZero, String::new())),
     }
+}
+
+/// `wide::BITS` kind `x` (and fallback flag) of the canonical value `v`
+/// of a `width`-bit integer; `fb` the fallback for a zero value.
+fn wide_bits(x: u32, v: &[u64], width: u32, fb: u128) -> Result<u128, Fault> {
+    // The value's `width` bits, zero-extended.
+    let mut u = v.to_vec();
+    bi::canon(&mut u, width, false);
+    let ones: u32 = u.iter().map(|w| w.count_ones()).sum();
+    let tz = || {
+        let i = u.iter().position(|&w| w != 0).unwrap_or(0);
+        i as u32 * 64 + u[i].trailing_zeros()
+    };
+    let lz = |u: &[u64]| {
+        let i = u.iter().rposition(|&w| w != 0).unwrap_or(0);
+        width - (i as u32 * 64 + 64 - u[i].leading_zeros())
+    };
+    let zero = ones == 0;
+    Ok(u128::from(match x & 0xF {
+        wide::BITS_POPCOUNT => ones,
+        wide::BITS_PARITY => ones & 1,
+        wide::BITS_FFS if zero => 0,
+        wide::BITS_FFS => tz() + 1,
+        wide::BITS_CLZ | wide::BITS_CTZ if zero => {
+            // clang: undefined for zero (`Error(E)`) unless `clzg`/`ctzg`
+            // were given a fallback.
+            return if x >> 4 & 1 != 0 { Ok(fb) } else { Err(Fault::Invalid) };
+        }
+        wide::BITS_CLZ => lz(&u),
+        wide::BITS_CTZ => tz(),
+        _ => {
+            // `clrsb`: the redundant sign bits, `clz` of the value (of
+            // its complement when negative) minus one.
+            let neg = u[((width - 1) / 64) as usize] >> ((width - 1) % 64) & 1 != 0;
+            let mut c: Vec<u64> = if neg { u.iter().map(|w| !w).collect() } else { u.clone() };
+            bi::canon(&mut c, width, false);
+            if bi::is_zero(&c) { width - 1 } else { lz(&c) - 1 }
+        }
+    }))
 }

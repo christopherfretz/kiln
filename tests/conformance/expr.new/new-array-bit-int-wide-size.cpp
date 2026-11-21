@@ -3,7 +3,6 @@
 // elements. x86-64 only (aarch64's `__BITINT_MAXWIDTH__` is 128).
 //@ args: --target=x86_64-unknown-linux-gnu
 //@ expect: compile-ok
-//@ xfail(kiln): WP-1742 remainder, a wide _BitInt array new size is requested as a register value (the rv_inner trap)
 
 using S = _BitInt(200);
 constexpr int f() {

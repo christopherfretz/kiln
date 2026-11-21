@@ -390,10 +390,14 @@ impl Oven {
             }
             Fault::Wide { err, text, width } => {
                 // The operation's type as written (`W` keeps its sugar
-                // through the usual arithmetic conversions).
+                // through the usual arithmetic conversions); a vector's
+                // with its lanes.
                 let ty = site.e.map_or_else(
                     || "'_BitInt'".into(),
-                    |e| Self::quoted_aka(ast, ast.exprs.get(e).ty()),
+                    |e| {
+                        let q = ast.exprs.get(e).ty();
+                        Self::quoted_aka(ast, q) + &Self::vector_suffix(ast, q)
+                    },
                 );
                 let msg = match err {
                     IntErr::Overflow => {
@@ -408,6 +412,20 @@ impl Oven {
                 (site.loc, msg)
             }
             Fault::Float(e) => (site.loc, self.float_msg(ast, site, e)),
+            Fault::WideAlign { text, max } if max.is_empty() => {
+                (site.loc, format!("requested alignment {text} is not a positive power of two"))
+            }
+            Fault::WideAlign { text, max } => {
+                let src = site
+                    .e
+                    .and_then(|e| ast.lists.get(ast.exprs.call_args(e)).first().copied())
+                    .map_or_else(String::new, |a| {
+                        Self::quoted_aka(ast, ast.exprs.get(ExprId::new(a)).ty())
+                    });
+                let msg =
+                    format!("requested alignment must be {max} or less for type {src}; {text} is invalid");
+                (site.loc, msg)
+            }
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
@@ -1017,10 +1035,10 @@ impl Oven {
                     .e
                     .and_then(|e| ast.lists.get(ast.exprs.call_args(e)).first().copied())
                     .map_or_else(String::new, |a| {
-                        Self::qname(ast, ast.exprs.get(ExprId::new(a)).ty())
+                        Self::quoted_aka(ast, ast.exprs.get(ExprId::new(a)).ty())
                     });
                 return format!(
-                    "requested alignment must be {max} or less for type '{src}'; {v} is invalid"
+                    "requested alignment must be {max} or less for type {src}; {v} is invalid"
                 );
             }
             _ => {}

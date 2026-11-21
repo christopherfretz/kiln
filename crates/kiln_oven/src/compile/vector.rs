@@ -4,7 +4,10 @@
 //! A vector object is stored as an array of its lanes (`ty.rs`); a
 //! `bool` vector packs one bit per lane (`TyKind::BoolVec`, WP-450): its
 //! lanes move with `LoadBits`/`StoreBits` of width 1 and a lane place is
-//! `Place::Lane` (KBC `LoadLane`/`StoreLane`). The
+//! `Place::Lane` (KBC `LoadLane`/`StoreLane`). A wide `_BitInt` lane
+//! (WP-1742) is memory-class: its register holds the address of a
+//! temporary copy of its value (`wide_lane_load`), and the lane
+//! operations are the wide ones (`compile/wide.rs`). The
 //! operations clang 19's `VectorExprEvaluator` folds are computed lane by
 //! lane in registers: each operand vector is evaluated whole (its lanes
 //! loaded into registers), then the lanes are combined in order, so the
@@ -97,7 +100,7 @@ impl Compiler<'_> {
     }
 
     /// The builtin that call `e` names directly, if any.
-    fn direct_builtin(&self, e: ExprId) -> Option<u32> {
+    pub(super) fn direct_builtin(&self, e: ExprId) -> Option<u32> {
         let ast = self.ast();
         let mut c = skip_parens(ast, ast.exprs.callee(e));
         while ast.exprs.get(c).kind().is_cast()
@@ -197,12 +200,19 @@ impl Compiler<'_> {
         }
         // A vector's lanes are integers, `bool` or floating
         // ([dcl.attr] GNU `vector_size`, `ext_vector_type`: sema checks).
-        let Some((w, s)) = int_of(k) else { unreachable!("vector lane of kind {k:?}") };
         let xs = self.vec_regs(x);
         let ys = match args.get(1) {
             Some(&y) => self.vec_regs(y),
             None => xs.clone(),
         };
+        if self.o.types.wide(elem).is_some() {
+            return xs
+                .into_iter()
+                .zip(ys)
+                .map(|(a, b)| self.wide_lane_elementwise(bid, [a, b], elem, e))
+                .collect();
+        }
+        let Some((w, s)) = int_of(k) else { unreachable!("vector lane of kind {k:?}") };
         xs.into_iter()
             .zip(ys)
             .map(|(a, b)| {
@@ -303,10 +313,16 @@ impl Compiler<'_> {
     fn load_lanes(&mut self, p: u32, vty: OTy, akind: u32, e: ExprId) -> Vec<u32> {
         let Some((elem, n)) = self.lanes(vty) else { return Vec::new() };
         let bits = matches!(self.kind(vty), TyKind::BoolVec { .. });
+        let wide = self.o.types.wide(elem).is_some();
         let es = self.o.types.size(elem);
         let loc = self.begin(e);
         (0..n)
             .map(|i| {
+                if wide {
+                    // A wide lane: a copy (`wide_lane_load`, a read).
+                    let q = self.elem_ptr(p, i * es, e);
+                    return self.wide_lane_load(q, elem, e, loc);
+                }
                 let r = self.reg();
                 if bits {
                     let q = self.elem_ptr(p, i / 8, e);
@@ -333,6 +349,9 @@ impl Compiler<'_> {
                 let q = self.elem_ptr(p, i / 8, e);
                 let bw = (i % 8) as u32 | 1 << 8;
                 self.emit_at(Op::StoreBits, 1, &[q, r, elem.0, bw], e);
+            } else if self.o.types.wide(elem).is_some() {
+                let q = self.elem_ptr(p, i * es, e);
+                self.wide_lane_store(q, r, elem, e);
             } else {
                 let q = self.elem_ptr(p, i * es, e);
                 self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
@@ -344,18 +363,12 @@ impl Compiler<'_> {
     /// (a register may hold several lanes: callers only read them).
     pub(super) fn vec_regs(&mut self, e: ExprId) -> Vec<u32> {
         let e = skip_parens(self.ast(), e);
-        // A vector of wide `_BitInt` lanes (an opaque type to the Oven):
-        // the wide-`_BitInt` trap, with a register per lane for the caller.
-        if let Some(n) = self.wide_lane_count(self.ast().exprs.get(e).ty()) {
-            self.wide_bit_int(e);
-            return (0..n).map(|_| self.reg()).collect();
-        }
         let ty = self.ety(e);
         // Every caller passes a vector-typed expression: an operand
         // `lanes` checked, or one sema gives a vector type (the operand
         // of a vector operator, conversion, shuffle, reduction or
         // element-wise builtin, of `__builtin_convertvector`, an arm of a
-        // vector `?:`), or one of wide lanes (above).
+        // vector `?:`).
         let Some((elem, n)) = self.lanes(ty) else {
             unreachable!("vec_regs of a non-vector {e:?}")
         };
@@ -382,12 +395,9 @@ impl Compiler<'_> {
             ExprKind::BinaryOperator => self.vec_binary(e, elem, n),
             ExprKind::ConvertVectorExpr => {
                 let x = self.ast().exprs.operand(e);
-                if self.wide_lane_count(self.ast().exprs.get(x).ty()).is_some() {
-                    return self.vec_regs(x);
-                }
                 let xt = self.ety(x);
                 // sema requires a vector source (clang's
-                // `err_convertvector_non_vector`), one of wide lanes above.
+                // `err_convertvector_non_vector`).
                 let Some((xe, _)) = self.lanes(xt) else {
                     unreachable!("__builtin_convertvector of a non-vector")
                 };
@@ -470,8 +480,11 @@ impl Compiler<'_> {
             return self.load_lanes(t, ty, ak::READ, e);
         }
         // One lane (a scalar result), never stored.
-        let r = self.reg();
         let loc = self.begin(e);
+        if self.o.types.wide(ty).is_some() {
+            return vec![self.wide_lane_load(t, ty, e, loc)];
+        }
+        let r = self.reg();
         self.emit_site(Op::Load, ak::READ, &[r, t, ty.0], e, loc);
         vec![r]
     }
@@ -517,7 +530,11 @@ impl Compiler<'_> {
         for (i, r) in regs.iter().enumerate() {
             if let Some(r) = *r {
                 let q = self.elem_ptr(p, i as u64 * es, e);
-                self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
+                if self.o.types.wide(elem).is_some() {
+                    self.wide_lane_store(q, r, elem, e);
+                } else {
+                    self.emit_at(Op::InitStore, 0, &[q, r, elem.0], e);
+                }
             }
         }
     }
@@ -624,11 +641,17 @@ impl Compiler<'_> {
             let d = self.reg();
             out.push(d);
             let mark = self.next;
+            let wide = self.o.types.wide(elem).is_some();
             let load = |s: &mut Self, p: u32, i: u32| {
                 let q = s.reg();
                 s.emit_ptr_add(ia, &[q, p, i, elem.0], e);
-                let r = s.reg();
-                s.emit_site(Op::Load, ak::READ, &[r, q, elem.0], e, loc);
+                let r = if wide {
+                    s.wide_lane_load(q, elem, e, loc)
+                } else {
+                    let r = s.reg();
+                    s.emit_site(Op::Load, ak::READ, &[r, q, elem.0], e, loc);
+                    r
+                };
                 s.emit(Op::Mov, 0, &[d, r]);
             };
             let Some(pb) = pb else {
@@ -666,7 +689,8 @@ impl Compiler<'_> {
 
     /// The comparison result `c` (a `bool` register) as a lane of
     /// signed integer type `elem`: all ones when true (a `bool` lane is
-    /// `c` itself).
+    /// `c` itself). Never a wide `_BitInt`: sema gives a comparison of
+    /// wide lanes narrow ones.
     fn lane_mask(&mut self, c: u32, elem: OTy, e: ExprId) -> u32 {
         if self.kind(elem) == TyKind::Bool {
             return c;
@@ -680,12 +704,13 @@ impl Compiler<'_> {
     }
 
     /// Whether lane `r` of type `t` is nonzero, as a `bool` register.
-    fn lane_truth(&mut self, r: u32, t: OTy) -> u32 {
+    fn lane_truth(&mut self, r: u32, t: OTy, e: ExprId) -> u32 {
         let d = self.reg();
         match self.kind(t) {
             TyKind::Float(k) => {
                 self.emit(Op::FToBool, float_code(k), &[d, r]);
             }
+            TyKind::WideInt { .. } => self.wide_lane_truth(d, r, t, e),
             k => {
                 let (w, _) = int_of(k).unwrap_or((32, true));
                 self.emit(Op::ToBool, w, &[d, r]);
@@ -707,6 +732,9 @@ impl Compiler<'_> {
             .map(|r| {
                 let d = self.reg();
                 match (op, self.kind(xe)) {
+                    (UnaryOp::Minus | UnaryOp::Not, TyKind::WideInt { .. }) => {
+                        return self.wide_lane_unary(op == UnaryOp::Minus, r, xe, e);
+                    }
                     (UnaryOp::Minus, TyKind::Float(k)) => {
                         self.emit(Op::FNeg, float_code(k), &[d, r]);
                     }
@@ -724,7 +752,7 @@ impl Compiler<'_> {
                     }
                     _ => {
                         // `!`: the lane compared equal to zero.
-                        let t = self.lane_truth(r, xe);
+                        let t = self.lane_truth(r, xe, e);
                         self.emit(Op::LNot, 0, &[d, t]);
                         return self.lane_mask(d, elem, e);
                     }
@@ -761,12 +789,16 @@ impl Compiler<'_> {
         for (&ra, &rb) in la.iter().zip(&lb) {
             let d = self.reg();
             if let Some(c) = cmp_of(op) {
-                self.compare(e, kinds, c, d, ra, rb);
+                if self.o.types.wide(ae).is_some() {
+                    self.wide_lane_cmp(c, d, [ra, rb], ae, e);
+                } else {
+                    self.compare(e, kinds, c, d, ra, rb);
+                }
                 out.push(self.lane_mask(d, elem, e));
             } else if matches!(op, BinaryOp::LAnd | BinaryOp::LOr) {
                 // Element-wise, without short-circuit.
-                let ta = self.lane_truth(ra, ae);
-                let tb = self.lane_truth(rb, be);
+                let ta = self.lane_truth(ra, ae, e);
+                let tb = self.lane_truth(rb, be, e);
                 // clang 19 gives a true lane the value 1 here (not -1 as
                 // at run time, spec/oven.md "Vectors").
                 let o = if op == BinaryOp::LAnd { Op::IAnd } else { Op::IOr };
@@ -793,14 +825,9 @@ impl Compiler<'_> {
     /// vector is not folded, silently.
     pub(super) fn vec_reduce(&mut self, e: ExprId, bid: u32, x: ExprId, dst: u32) {
         use kiln_ast::decl::builtin as id;
-        // A vector of wide `_BitInt` lanes (an opaque type to the Oven).
-        if self.wide_lane_count(self.ast().exprs.get(x).ty()).is_some() {
-            self.wide_bit_int(x);
-            return;
-        }
         let xt = self.ety(x);
-        // sema requires a vector argument (`builtin_reduce`), one of wide
-        // lanes above.
+        // sema requires a vector argument (`builtin_reduce`); one of wide
+        // lanes has a wide result (`wide_reduce`).
         let Some((elem, _)) = self.lanes(xt) else {
             unreachable!("__builtin_reduce_* of a non-vector")
         };
