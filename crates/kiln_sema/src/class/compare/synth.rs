@@ -231,7 +231,7 @@ impl Sema<'_, '_> {
             return None;
         }
         stmts.push(r);
-        Some(self.builder().compound(&stmts, loc, loc))
+        Some(self.implicit_body(sx.f, &stmts, loc))
     }
 
     /// `e` unless it is an error.

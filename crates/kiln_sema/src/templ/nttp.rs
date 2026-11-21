@@ -700,7 +700,17 @@ impl Sema<'_, '_> {
                 })
             }
             Scalar::Pointer { base, offset: 0, .. } => {
-                let (PtrBase::Decl(d) | PtrBase::Function(d)) = base else { return None };
+                // The object of a CWG 3135 holding variable (a tuple-like
+                // binding whose `get` returns a prvalue) is named by its
+                // binding (WP-1829).
+                let held = match base {
+                    PtrBase::Temporary(t) => Some(self.ast.holding_object_binding(t)?),
+                    _ => None,
+                };
+                let (PtrBase::Decl(d) | PtrBase::Function(d)) = held.map_or(base, PtrBase::Decl)
+                else {
+                    return None;
+                };
                 let r = if self.kind_of(d) == DeclKind::TemplateParamObject {
                     let q = self.ast.decls.get(d).ty()?;
                     self.builder().decl_ref(d, q, loc, None, NonOdrUse::None, ExprFlags::NONE)

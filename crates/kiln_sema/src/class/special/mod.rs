@@ -223,6 +223,14 @@ pub(crate) struct SpecialState {
     /// in C++23 by clang's running `DefaultedDestructorIsConstexpr` flag
     /// (`vbase_flag_cxx23`; spec/sema-class.md §4.6).
     pub vbase_dtor_constexpr: FxHashSet<DeclId>,
+    /// The FP pragma state at the declaration of each implicit or
+    /// explicitly defaulted special member and defaulted comparison (its
+    /// first declaration; an out-of-class `= default` replaces it): its
+    /// implicit definition takes it, so the member is `strictfp` exactly
+    /// when that state is constrained (clang passes
+    /// `getCurFPFeatures().isFPConstrained()` as `UsesFPIntrin` when it
+    /// declares the member; WP-1808).
+    pub fp_at_decl: FxHashMap<DeclId, kiln_ast::fp::FpOverride>,
 }
 
 impl SpecialState {

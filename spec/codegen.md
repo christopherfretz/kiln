@@ -1281,9 +1281,15 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   `StartFunction`), except a function whose body's own state a pragma
   makes unconstrained (`FENV_ROUND FE_TONEAREST` at file scope under
   `-frounding-math`; clang `usesFPIntrin` is the state at the
-  definition). A parsed body's call sites are all `strictfp`, and so
-  are a thunk's to such a body (`Fx::strict_calls`, clang
-  `usesFPIntrin`). Elsewhere only the calls the constrained builder
+  definition). An implicit or defaulted member, a defaulted comparison
+  and an inheriting constructor take the state at their declaration
+  (clang `UsesFPIntrin` at `DeclareImplicit*` / the `= default`; sema
+  `SpecialState::fp_at_decl`, an instantiation its pattern's, WP-1808):
+  `strictfp` when a file-scope `FENV_ACCESS ON` / `FENV_ROUND` there is
+  constrained, not when it is not, wherever they are defined. A parsed
+  body's call sites are all `strictfp`, and so are a thunk's to such a
+  body (`Fx::strict_calls`, clang `StrictFPAttr`); a built body's
+  (defaulted, inheriting) are not. Elsewhere only the calls the constrained builder
   creates itself are: constrained intrinsics, runtime calls
   (`__cxa_guard_*`, `__cxa_atexit`), `llvm.threadlocal.address` and the
   init calls. The calls `emit_call_op` makes (clang `EmitCall`, which
@@ -5957,6 +5963,23 @@ guarantees it a constant initializer and a trivial destructor
     error still applies).
   - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`,
     `crates/kiln_driver/tests/codegen.rs` `x86_avx_calling_convention`.
+- **Calls: AArch64 `-mgeneral-regs-only`** (WP-1804; `psabi.rs`
+  `soft_float_fn_check` / `soft_float_call_check`, clang
+  `AArch64TargetCodeGenInfo::checkFunctionABI` /
+  `checkFunctionCallABISoftFloat`). When the module's features have
+  `-fp-armv8` (spec/driver.md "Target features"), a type needs FP
+  registers if it is floating-point (complex included), a vector or a
+  homogeneous floating-point aggregate (`kiln_abi::call::is_homogeneous_aggregate`).
+  Each emitted function definition checks its return type, then each
+  parameter, at the function's name; each call, direct or through a
+  pointer, checks the return type, then each argument (the prototype's
+  parameter type, through `...` the argument's), at the call's
+  `getExprLoc`. Each hit is `'N' requires 'T' type support, but ABI
+  'aapcs' does not support it` (`cg_target_unsupported_type_for_abi`,
+  clang `err_target_unsupported_type_for_abi`; repeated at one location
+  as clang), N the parameter (`''` when unnamed), the function, the
+  callee, or the calling function for an indirect call. Test:
+  `crates/kiln_driver/tests/codegen.rs` `general_regs_only_abi_errors`.
 - **`bool` ext-vector `?:` conditions** (clang 20+) select on the
   condition's `<N x i1>` lanes with one `select`
   (`emit_vector_conditional`; `ext.vector/ir-bool-conditional*.cpp`,

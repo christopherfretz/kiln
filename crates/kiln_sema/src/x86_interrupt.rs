@@ -161,14 +161,9 @@ impl Sema<'_, '_> {
             return true;
         }
         // clang `hasFeature("sse") || ("x87") || ("mmx")`: the x86-64
-        // base has all three unless a `-target-feature` takes them away.
-        let off = |n: &str| {
-            self.target_features.iter().rev().find_map(|e| match e.split_at_checked(1) {
-                Some((sign, f)) if f == n => Some(sign == "-"),
-                _ => None,
-            }) == Some(true)
-        };
-        if off("sse") && off("x87") && off("mmx") {
+        // base has all three unless `-mno-<feature>` or
+        // `-mgeneral-regs-only` takes them away (WP-1804).
+        if ["sse", "x87", "mmx"].iter().all(|n| self.x86_feature_off(n)) {
             return true;
         }
         if fdecl.is_some_and(|f| self.fn_has_no_csr(f)) {

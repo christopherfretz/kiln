@@ -6036,7 +6036,7 @@ diagnostics and IR.
   (CWG 3135: `S T_i r_i = initializer;`), which kiln, as clang, still
   represents as a reference bound to a lifetime-extended temporary of the
   same storage. The Oven treats that temporary as the variable's object
-  (`kiln_oven::value::holding_object`): it is read only when `r_i` is
+  (`kiln_ast::Ast::holding_object`): it is read only when `r_i` is
   potentially-constant ([expr.const.init]/5: `constexpr`, or `const`
   non-volatile integral or enumeration type) and constant-initialized, so
   `const auto [a, b] = X{};` with a constant `get` makes `b` usable (an
@@ -6054,11 +6054,30 @@ diagnostics and IR.
   constexpr` pointer to one is rejected, the notes naming the variable
   (`pointer to 'r'`, then the not-static note, or "declared here" for a
   holding variable), as clang names the reference (accepted before
-  WP-1796). Such a binding as a constant template argument
-  (`template<const int& R>`) is rejected as clang 22 rejects it, the
-  object being the holding temporary; GCC 16.1 accepts it as the variable
+  WP-1796). Such a binding as a constant template argument (`tm<b>` for
+  `template<int& R>`, `&b` for `template<int* P>`, a subobject `b.m`;
+  WP-1829): [temp.arg.nontype]/6 excludes a temporary object, and under
+  CWG 3135 `r_i` is a variable, not a temporary, so a binding of static
+  storage duration (namespace scope or `static`, `constexpr` or not) is a
+  valid argument and an automatic one is not a constant expression
+  ([expr.const]/14). clang 22 rejects the static ones too: in its model
+  `b` names the lifetime-extended temporary of the reference `r_i` (a
+  non-`constexpr` `r_i` is "not a constant expression" as a reference
+  whose initializer is not constant; a constant one refers to a
+  temporary). Kiln follows the standard and GCC 16.1:
+  `Ast::holding_object` makes the temporary not a temporary for the
+  check (`invalid_arg_pointer`), the substituted argument is the binding
+  (`nttp_value_expr`, `object_lvalue`), a printed argument names it
+  (`tm<b>`), and the mangling is the variable's, `L_Z1bE` (Itanium
+  `<expr-primary> ::= L <mangled-name> E`, the name being the binding's,
+  as the symbol of `r_i` is; `_Z2tmIL_Z1bEEiv` as GCC 16.1 has it). A
+  qualification conversion (an `int` binding for `const int&`) is the
+  converted expression `XcvRKiL_Z1bEE`, as kiln and clang mangle any
+  variable there (GCC 16.1 drops it); a subobject is clang's `so` form
+  (GCC 16.1 spells `XdtL_Z1bE1yE`), as for any variable
   (docs/status/deviations.md). Tests: `dcl.struct.bind/p2686-referenceable{,-errors,-automatic}.cpp`,
-  `dcl.struct.bind/cwg3135-prvalue-get-object{-errors,-run}.cpp`.
+  `dcl.struct.bind/cwg3135-prvalue-get-object{-errors,-run}.cpp`,
+  `temp.arg.nontype/cwg3135-tuple-binding-arg{-run,-errors,-conversion-run}.cpp`.
 - **Lifetime-extended temporaries of a constexpr local reference (C++26,
   P2686R5, WP-1122).** A temporary bound to a `constexpr` reference (or
   `constexpr` structured binding, or a member of an aggregate initializer)
@@ -13578,6 +13597,32 @@ table and the module docs give each non-state field its reason.
 - `target_for_types` maps `TargetTypes` to a layout target.
 - `target_of(ast)` recovers the target an AST was built for.
 - Layout is `kiln_abi`'s Itanium implementation (spec/abi.md).
+
+### 9.1 Target type support
+`long_double.rs` (WP-1804) is clang `Sema::checkTypeSupport`'s
+`long double` rule. On x86-64 with `x87` off in the module's features
+(`-mno-x87`, `-mgeneral-regs-only`; `Sema::x86_features` is the driver's
+item list, spec/driver.md "x86-64 target features") the target has no
+`long double`, and each of these is `'D' requires  'long double' type
+support, but target 'x86_64-unknown-linux-gnu' does not support it`
+(clang `err_target_unsupported_type`, with its double space;
+`sema_target_unsupported_type`), once for each `long double` in the
+type, the type itself, then a function type's parameters and its return
+type:
+- a use of a declaration (clang `DiagnoseUseOfDecl`), with the note `'D'
+  defined here`; a use naming a namespace, typedef or alias is not
+  checked;
+- the end of a function or lambda definition (`ActOnFinishFunctionBody`),
+  at the function's name, with the note;
+- each operand of a built-in binary operator, at the operator, `D` being
+  `expression` and without a note.
+
+Nothing is checked in an unevaluated operand or in a trivial copy or move
+constructor or assignment operator. A declaration reported once is not
+reported again, and a later use of it is an error without a diagnostic
+(clang marks it invalid). Deviation: clang reports again a use that
+begins an expression statement (a second `z = 3;`); kiln does not.
+Test: `tests/conformance/target.x86/general-regs-only-long-double.cpp`.
 
 ## 10. To be implemented (M3+)
 - **Classes:** special members and construction (WP-067), virtual

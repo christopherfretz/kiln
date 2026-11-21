@@ -132,24 +132,16 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
 
 /// CWG 3135 ([dcl.struct.bind]/7, C++26): the holding variable `r` of a
 /// tuple-like structured binding whose initializer (`get<i>`) is a
-/// prvalue is declared `S T_i r = initializer;`, an object of type `T_i`,
-/// not a reference (`T_i` itself not a reference type). Kiln, as clang,
-/// keeps the reference and the lifetime-extended temporary it binds
-/// (the same storage, address and lifetime), so that temporary `t` *is*
-/// the variable's object: it is read as `r` would be (usable only when
-/// `r` is `constexpr` or of `const` integral or enumeration type,
-/// [expr.const.init]/5), its address is that of `r` whether or not `r`
-/// is constant-initialized, and it is constexpr-referenceable as `r`
-/// ([expr.const.init]/2). Returns `r`.
+/// prvalue is an object of type `T_i`, whose object kiln keeps as the
+/// lifetime-extended temporary `t` ([`Ast::holding_object`]): `t` is read
+/// as `r` would be (usable only when `r` is `constexpr` or of `const`
+/// integral or enumeration type, [expr.const.init]/5), its address is
+/// that of `r` whether or not `r` is constant-initialized, and it is
+/// constexpr-referenceable as `r` ([expr.const.init]/2). Returns `r`.
+///
+/// [`Ast::holding_object`]: kiln_ast::Ast::holding_object
 pub(crate) fn holding_object(ast: &Ast, t: DeclId) -> Option<DeclId> {
-    let r = ast.decls.lifetime_extended(t)?.extending;
-    // Holding variables are implicit; the binding scan only for those.
-    if !ast.decls.get(r).has(kiln_ast::decl::DeclFlags::IMPLICIT) {
-        return None;
-    }
-    let ti = ast.decls.get(ast.decls.holding_binding(r)?).ty()?;
-    let tt = ast.decls.get(t).ty()?;
-    (!ast.types.is_reference(ti) && ast.types.same_unqualified(ti, tt)).then_some(r)
+    ast.holding_object(t)
 }
 
 /// The temporary that is holding variable `r`'s object under CWG 3135

@@ -1,5 +1,7 @@
 //! `-Wpsabi`: clang `X86_64TargetCodeGenInfo::checkFunctionCallABI`
-//! (spec/codegen.md "Calls").
+//! (spec/codegen.md "Calls"), and `AArch64TargetCodeGenInfo`'s
+//! `checkFunctionABI` / `checkFunctionCallABISoftFloat` without FP
+//! registers (`-mgeneral-regs-only`, WP-1804).
 
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{TypeView, vector_diag_arg};
@@ -33,6 +35,9 @@ impl Cg<'_> {
         this_arg: bool,
     ) {
         if !self.is_x86() {
+            if let Some(fty) = self.ast.decls.get(callee).ty() {
+                self.soft_float_call_check(e, Some(callee), fty, args);
+            }
             return;
         }
         let ast = self.ast;
@@ -129,6 +134,94 @@ impl Cg<'_> {
             ..=128 => None,
             129..=256 => Some("avx"),
             _ => Some("avx512f"),
+        }
+    }
+
+    /// `AArch64` without `fp-armv8` in the module's features
+    /// (`-mgeneral-regs-only`, `-target-feature -fp-armv8`; clang
+    /// `TI.hasFeature("fp")`, not a function's `target("...")`).
+    fn no_fp_regs(&self) -> bool {
+        !self.is_x86()
+            && self.opts.target_features.iter().rev().find(|f| f.get(1..) == Some("fp-armv8"))
+                == Some(&"-fp-armv8".to_owned())
+    }
+
+    /// clang `diagnoseIfNeedsFPReg`: a floating-point (complex included)
+    /// or vector type, or an HFA/HVA, is passed in FP/SIMD registers:
+    /// `err_target_unsupported_type_for_abi` naming `d` at `span`.
+    fn diagnose_if_needs_fp_reg(&mut self, q: QualType, d: DeclId, span: Span) {
+        let ast = self.ast;
+        let fp = match ast.types.canonical_view(q) {
+            TypeView::Builtin(b) => b.is_floating(),
+            TypeView::Complex(e) => {
+                matches!(ast.types.canonical_view(e), TypeView::Builtin(b) if b.is_floating())
+            }
+            TypeView::Vector { .. } => true,
+            _ => false,
+        };
+        if !fp && !kiln_abi::call::is_homogeneous_aggregate(&mut self.tys, q) {
+            return;
+        }
+        let mut name = String::new();
+        kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+        let names = kiln_ast::diag_names::DiagNames::new(ast, self.sm, self.opts.clang_compat);
+        let shown = names.type_arg(q, None);
+        let diag = Diag::new(DiagId::cg_target_unsupported_type_for_abi, span)
+            .arg(format!("'{name}'"))
+            .arg(shown)
+            .arg("aapcs".to_owned())
+            .allow_duplicate();
+        self.diags.push(diag);
+    }
+
+    /// clang `AArch64TargetCodeGenInfo::checkFunctionABI` (`GenerateCode`)
+    /// for definition `d`: its return type, then each parameter's,
+    /// all at `d`'s location.
+    pub(crate) fn soft_float_fn_check(&mut self, d: DeclId) {
+        if !self.no_fp_regs() {
+            return;
+        }
+        let ast = self.ast;
+        let Some(fty) = ast.decls.get(d).ty() else { return };
+        let TypeView::Function(p) = ast.types.view(ast.types.desugar_top(fty).ty()) else {
+            return;
+        };
+        let span = Span::empty(ast.decls.get(d).loc());
+        self.diagnose_if_needs_fp_reg(p.ret(), d, span);
+        let params = ast.decls.function(d).map(|f| f.params);
+        for prm in params.into_iter().flat_map(|l| ast.lists.iter::<DeclId>(l)) {
+            if let Some(t) = ast.decls.get(prm).ty() {
+                self.diagnose_if_needs_fp_reg(t, prm, span);
+            }
+        }
+    }
+
+    /// clang `checkFunctionCallABISoftFloat` for call `e` of function
+    /// type `fty` to `callee` (`None`: an indirect call): the return type,
+    /// then each argument's type (the prototype's, or the promoted
+    /// argument through `...`), at the call, naming the callee, else the
+    /// calling function.
+    pub(crate) fn soft_float_call_check(
+        &mut self,
+        e: ExprId,
+        callee: Option<DeclId>,
+        fty: QualType,
+        args: &[ExprId],
+    ) {
+        if !self.no_fp_regs() {
+            return;
+        }
+        let Some(callee) = callee.or(self.f.decl) else { return };
+        let ast = self.ast;
+        let TypeView::Function(p) = ast.types.view(ast.types.desugar_top(fty).ty()) else {
+            return;
+        };
+        let params = ast.types.params(&p).to_vec();
+        let span = Span::empty(self.call_loc(e));
+        self.diagnose_if_needs_fp_reg(p.ret(), callee, span);
+        for (i, &a) in args.iter().enumerate() {
+            let ty = params.get(i).copied().unwrap_or_else(|| ast.exprs.get(a).ty());
+            self.diagnose_if_needs_fp_reg(ty, callee, span);
         }
     }
 }

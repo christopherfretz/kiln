@@ -965,6 +965,13 @@ fn pure_scalable(
     }
 }
 
+/// clang `AArch64ABIInfo::isHomogeneousAggregate`: whether `q` is an
+/// HFA/HVA (one to four members of one floating-point or short-vector
+/// base type).
+pub fn is_homogeneous_aggregate(t: &mut IrTypes<'_>, q: QualType) -> bool {
+    homogeneous(t, q).is_some()
+}
+
 /// clang `isHomogeneousAggregate` with `AArch64`'s base-type and size rules.
 fn homogeneous(t: &mut IrTypes<'_>, q: QualType) -> Option<(QualType, u64)> {
     let mut base = None;

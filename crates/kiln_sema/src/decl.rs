@@ -9782,6 +9782,7 @@ impl Sema<'_, '_> {
         // `f`'s own features.
         if let Some(fty) = self.ast.decls.get(f).ty() {
             self.check_sve_support_in(Some(f), fty, self.ast.decls.get(f).loc());
+            self.check_long_double(fty, self.ast.decls.get(f).loc(), Some(f));
         }
         self.finish_source_locs(f);
         match self.ast.definition(f) {

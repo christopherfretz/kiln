@@ -92,6 +92,7 @@ pub mod lambda;
 pub mod literal;
 mod literal_op;
 mod local_friend;
+mod long_double;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
@@ -391,6 +392,11 @@ pub struct Sema<'a, 'sm> {
     /// attribute applies to in the SVE type check ([`Sema::sve_features_of`],
     /// spec/sema.md "SVE").
     pub target_features: Vec<String>,
+    /// x86-64: the module's feature map as `+name`/`-name` (the driver's
+    /// `-march=` / `-m<feature>` / `-mgeneral-regs-only` result, codegen's
+    /// `target_features`; empty: the default `x86-64`'s, where `x87`,
+    /// `mmx` and `sse` are on). [`Sema::x86_feature_off`] reads it.
+    pub x86_features: Vec<String>,
     /// The features of an `AArch64` `target("...")` string over the
     /// module's features (`+name`/`-name`, the last naming a feature
     /// wins) at the clang 22 level or not: the driver's attribute parser,
@@ -1465,6 +1471,9 @@ pub struct Sema<'a, 'sm> {
     /// were already noted (clang notes them on the first abstract-type
     /// diagnostic per class only; WP-078a).
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
+    /// The declarations already reported by the `long double` rule of
+    /// `checkTypeSupport` (clang makes them invalid; `long_double.rs`).
+    pub(crate) long_double_reported: kiln_source::fx::FxHashSet<DeclId>,
     /// State of the source-location builtins (`builtins.rs`).
     pub(crate) srcloc: builtins::SrcLocCache,
     /// The frozen strings and source locations of the `std::meta` names
@@ -1589,6 +1598,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
             target_features: Vec::new(),
+            x86_features: Vec::new(),
             target_attr_features: |_, _, _| Vec::new(),
             nns_start: None,
             gnu_lib_builtins: false,
@@ -1844,6 +1854,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             image_texprs: bmi_image::TexprState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
+            long_double_reported: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
             meta_names: meta::names::NameCache::default(),
             meta_members: meta::member::MemberState::default(),

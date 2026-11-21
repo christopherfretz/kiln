@@ -182,7 +182,7 @@ impl Sema<'_, '_> {
         if failed {
             self.ast.decls.set_flags(dc, DeclFlags::INVALID);
         } else {
-            let body = self.builder().compound(&[], at, at);
+            let body = self.implicit_body(dc, &[], at);
             let _ = self.builder().set_body(dc, body);
         }
         self.pop_synth(saved);

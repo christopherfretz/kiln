@@ -17,10 +17,10 @@ If you hit something not listed here, please
   for other platforms is not planned.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
-- **x86 code-generation flags.** `-mgeneral-regs-only`
-  ([WP-1804](BACKLOG.md)), `-msoft-float`, `-mretpoline` and a few other
-  x86 code-generation flags are `unknown argument` (spec/driver.md
-  "x86-64 target features"). The `-m<feature>` flags, `target("...")`
+- **x86 code-generation flags.** `-msoft-float`, `-mretpoline` and a few
+  other x86 code-generation flags are `unknown argument` (spec/driver.md
+  "x86-64 target features"); `-mgeneral-regs-only` works on both
+  targets. The `-m<feature>` flags, `target("...")`
   functions and x86 function multiversioning (`target_clones`) work.
 - **OpenCV on x86_64: fixed.** The final release candidate's x86_64
   sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) passes

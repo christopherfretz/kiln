@@ -1727,7 +1727,9 @@ impl Sema<'_, '_> {
     /// (bases, members, array elements, a union's active member), must
     /// not point to a string literal, the result of a `typeid`
     /// expression, a predefined `__func__` variable or a temporary object
-    /// (or a subobject of one).
+    /// (or a subobject of one). The object of a tuple-like binding's
+    /// holding variable under CWG 3135 is that variable's, not a temporary
+    /// ([`kiln_ast::Ast::holding_object`]).
     /// Diagnosed at `at` as clang's `err_constexpr_invalid_template_arg`
     /// ("pointer to subobject of string literal is not allowed in a
     /// template argument"), once, for the first such subobject in layout
@@ -2002,6 +2004,10 @@ impl Sema<'_, '_> {
                 (what, !to_array || offset != 0 || past)
             }
             PtrBase::TypeInfo(_) => ("type_info object".to_owned(), offset != 0 || past),
+            // The object of a CWG 3135 holding variable (a tuple-like
+            // binding whose `get` returns a prvalue) is that variable, no
+            // temporary object ([dcl.struct.bind]/7; WP-1829).
+            PtrBase::Temporary(d) if self.ast.holding_object(d).is_some() => return None,
             PtrBase::Temporary(d) => {
                 ("temporary object".to_owned(), !whole(self.ast.decls.get(d).ty()))
             }

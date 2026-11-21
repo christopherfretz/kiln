@@ -74,6 +74,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fexperimental-library`, `-fno-experimental-library` | libc++'s experimental library: `__has_feature(experimental_library)` and `__has_extension(experimental_library)` are 1 (a `kiln_pp` feature overlay, as clang's cc1 flag; libc++ derives `_LIBCPP_ENABLE_EXPERIMENTAL` from it), and the link step gets `-fexperimental-library` (clang adds `-lc++experimental`); the last wins (`Args::experimental_library`, WP-461) |
 | `--target=<triple>` | `aarch64`/`arm64` or `x86_64`/`amd64` Linux; anything else is an error |
 | `-march=<arch>[+ext...]`, `-mcpu=<cpu>[+ext...]`, `-msve-vector-bits=<N\|scalable>`, `-target-feature <±feat>` (usually via `-Xclang`) | AArch64 target features and the `__ARM_*` predefines ("Target features" below, WP-459, WP-469) |
+| `-mgeneral-regs-only` | no floating-point or vector registers: AArch64 disables `fp` and its dependents ("Target features"), x86-64 adds `-x87,-mmx,-sse` in place ("x86-64 target features"; WP-1804) |
 | `--embed-dir=<dir>` | `#embed` search directory |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`, `-MG` | dependency output (see below) |
 | `-fmodule-file-deps`, `-fno-module-file-deps` | list the module files imports read in the dependency output (on by default for `--precompile`; "Dependency output", WP-1051); the last wins |
@@ -524,7 +525,11 @@ implemented or an error; none is accepted and ignored.
     reassociation or `-freciprocal-math` in effect, each one gives the
     error `option 'ffp-eval-method' cannot be used with option
     'fapprox-func'|'mreassociate'|'freciprocal'`
-    (`drv_incompatible_fp_eval_method_options`).
+    (`drv_incompatible_fp_eval_method_options`). A `#pragma
+    float_control(pop)` (or the end of a namespace's pushes) back to a
+    state without an eval method gives `source`, not the command line's
+    (clang applies the popped state to `FPOptions(LangOpts)`; both
+    clang 19 and 22, WP-1808); `__FLT_EVAL_METHOD__` is unchanged.
   - `-fexcess-precision=16` stays the error `'-fexcess-precision=16' is
     not supported by kiln`.
   - clang's `overriding '<a>' option with '<b>'` warnings are not given.
@@ -1317,6 +1322,19 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   `sm4`. clang 22 splits each `sve2-x` into `sve2` + `sve-x` (and accepts
   `sve-aes`, `sve-bitperm`, `sve-sha3`, `sve-sm4`, `sve2p2`, `sve2p3`,
   `fprcvt`, `f16f32dot`, ...), drops `tme`; clang 19 has no `sve-x`.
+- **`-mgeneral-regs-only`** (WP-1804; clang
+  `getAArch64TargetFeatures`, the same in clang 19 and 22) disables `fp`
+  after the `-march=` / `-mcpu=` extensions (without either, on the
+  default `armv8-a` set), with everything depending on it: `neon`, `sve`,
+  `fullfp16`, `aes`, `sha2`, `crypto`, `rdm`, `dotprod`, ... are `-x`, so
+  `__ARM_FP`, `__ARM_NEON`, `__ARM_NEON_FP` and the dependent
+  `__ARM_FEATURE_*` predefines are not defined. A function returning or
+  taking a floating-point, vector or homogeneous floating-point aggregate
+  type, and each call of one, is then clang's codegen error (spec/codegen.md
+  "Calls"). Tests: `tests/conformance/cpp.predefined/arm-feature-macros-general-regs-only.cpp`,
+  `target.neon/ir-general-regs-only.cpp`, `features.rs`
+  `general_regs_only`, `crates/kiln_driver/tests/codegen.rs`
+  `general_regs_only_abi_errors`.
 - **`target("...")` attribute** (WP-1187; clang
   `AArch64TargetInfo::parseTargetAttr`, `ASTContext::getFunctionFeatureMap`,
   `CodeGenModule::GetCPUAndFeaturesAttributes`, `Sema::checkTargetAttr`;
@@ -1470,7 +1488,18 @@ differences).
   which clang claims: `argument unused during compilation`. A non-x86
   `-march=` value on x86-64 (or an x86 CPU on AArch64) is `unsupported
   argument`.
-- **Not modelled.** `-mgeneral-regs-only`, `-msoft-float`,
+- **`-mgeneral-regs-only`** (WP-1804) is the items `-x87`, `-mmx`, `-sse`
+  where it stands among the feature flags (clang `getX86TargetFeatures`):
+  a later `-msse2` turns `sse` and `sse2` back on, an earlier `-mavx2` is
+  undone. The map then has no `sse` (no `__SSE*__`, `__SSE*_MATH__`,
+  `__MMX__` or `_Float16` macros) and, without `x87`, the target has no
+  `long double` (spec/sema.md "Target type support"). With `sse`, `x87`
+  and `mmx` all off, `-Wexcessive-regsave` is not given. Tests:
+  `tests/conformance/cpp.predefined/x86-feature-macros-general-regs-only*.cpp`,
+  `target.x86/ir-target-features-general-regs-only*.cpp`,
+  `target.x86/general-regs-only-long-double.cpp`,
+  `target.x86/general-regs-only-regsave.cpp`.
+- **Not modelled.** `-msoft-float`,
   `-mfp-ret-in-387`, `-mretpoline`, `-mretpoline-external-thunk`,
   `-mlvi-cfi`, `-mseses`, `-mx32` stay unknown arguments; `-Xclang
   -target-feature` is ignored; clang's `-Winvalid-feature-combination`

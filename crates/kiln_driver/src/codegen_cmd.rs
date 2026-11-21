@@ -441,6 +441,7 @@ impl CodegenJob<'_> {
             sve_vector_bits: feats.sve_vector_bits,
             aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
             target_features: if x86 { Vec::new() } else { feats.extra.clone() },
+            x86_features: if x86 { feats.extra.clone() } else { Vec::new() },
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
             cfg_stats: a.cfg_stats,

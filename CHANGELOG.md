@@ -406,6 +406,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   tests on x86_64, for pull requests from forks only, with a read-only
   token, no secrets and a timeout on every job (docs/VALIDATION.md
   "Tier-0 (outside pull requests)", spec/harness.md "CI").
+- `-mgeneral-regs-only` on AArch64 and x86-64 (WP-1804), as clang 22
+  and 19: AArch64 disables `fp` and what depends on it (`neon`, `sve`,
+  `crypto`, ...) after the `-march=` / `-mcpu=` extensions, and a
+  function or call that passes or returns a floating-point, vector or
+  HFA value is the error "requires 'T' type support, but ABI 'aapcs'
+  does not support it"; x86-64 adds `-x87,-mmx,-sse` where the flag
+  stands among the `-m` feature flags, so the SSE and MMX macros go and
+  each use of a `long double` declaration is "requires  'long double'
+  type support". The predefined macros and `"target-features"` follow.
+  The flag was an unknown argument.
 
 ### Changed
 
@@ -502,6 +512,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   crashing program is reported as a signal and not as a timeout. The
   fixtures that test the timeout itself have their own directory and keep
   the short timeout.
+- Structured bindings as constant template arguments (WP-1829, CWG 3135):
+  a tuple-like binding of static storage duration whose `get` returns a
+  prvalue names a variable, not a temporary, so `tm<b>` for
+  `template<int& R>` and `tp<&b>` for `template<int* P>` are now
+  accepted ([temp.arg.nontype]/6) and mangle as the variable
+  (`_Z2tmIL_Z1bEEiv`, as GCC 16.1 has it); they were "reference to
+  temporary object is not allowed in a template argument" errors.
+  clang 22 rejects them (a documented deviation).
+- FP state of implicit members and after `float_control(pop)` (WP-1808):
+  an implicit or defaulted member, a defaulted comparison or an
+  inheriting constructor now takes the FP state at its declaration, as
+  clang does, so one declared where a file-scope `FENV_ACCESS ON` /
+  `FENV_ROUND` pragma leaves the state unconstrained is no longer
+  `strictfp`, and the calls inside a built body are not `strictfp` call
+  sites. A `#pragma float_control(pop)` back to a state without an eval
+  method now gives `source` instead of the `-ffp-eval-method=` value,
+  matching clang 22 and 19.
 - Emission order of imported `used` functions (WP-1832): an inline
   function with GNU `used` that an importer reaches only through the
   body of an imported function it odr-uses is now defined where clang 22

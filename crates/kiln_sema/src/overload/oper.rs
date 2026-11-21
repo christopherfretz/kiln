@@ -1149,6 +1149,7 @@ impl Sema<'_, '_> {
         // operator (the `(` of a call to an object), its return type
         // deduced: an SVE parameter or return type without SVE support.
         self.check_sve_use(f, loc);
+        let _ = self.check_long_double_use(f, loc);
         if adl {
             // clang's `IsADLCandidate` (dumped `adl`).
             let mut c = call;

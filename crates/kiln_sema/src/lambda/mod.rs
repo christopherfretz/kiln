@@ -1073,6 +1073,7 @@ impl Sema<'_, '_> {
                         let by =
                             if self.ast.decls.get(outer).kind().is_function() { outer } else { f };
                         self.check_sve_support_in(Some(by), fty, self.ast.decls.get(f).loc());
+                        self.check_long_double(fty, self.ast.decls.get(f).loc(), Some(f));
                     }
                     let _ = self.builder().set_body(f, b);
                     // [dcl.constexpr]/3 before C++23 (constexpr_body.rs).
