@@ -90,7 +90,7 @@ opt -passes='default<On>' --passes-ep-optimizer-last='<P>' <cl flags>
 
 | sanitizer | `<P>` | cl flags clang sets |
 |---|---|---|
-| fuzzer-no-link | `sancov-module` (runs first) | `-sanitizer-coverage-level=3 -sanitizer-coverage-inline-8bit-counters -sanitizer-coverage-pc-table -sanitizer-coverage-trace-compares -sanitizer-coverage-stack-depth` |
+| fuzzer-no-link, `-fsanitize-coverage=` (WP-1863) | `sancov-module` (runs first) | one per feature (spec/codegen.md "Sanitizer coverage"); the fuzzer set is `-sanitizer-coverage-level=4 -sanitizer-coverage-inline-8bit-counters -sanitizer-coverage-pc-table -sanitizer-coverage-trace-compares -sanitizer-coverage-stack-depth` (level 4 is `edge` with `indirect-calls`) |
 | memory | `msan<eager-checks>`, `msan<recover;eager-checks>`, `msan<track-origins=N;eager-checks>`; at O1 and above followed by `function(early-cse<>,instcombine,jump-threading,gvn<>,instcombine)` | |
 | thread | `tsan-module,function(tsan)` | |
 | address | `asan<>` | `-asan-use-after-scope` when use-after-scope is on (the default; the cl default is off); `-asan-recover` with `-fsanitize-recover=address`; `-asan-use-after-return=<mode>` |

@@ -11,8 +11,9 @@
 use kiln_abi::call::ArgKind;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
+use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{BinOp, CastOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
-use kiln_source::Loc;
+use kiln_source::{Loc, Span};
 
 use crate::ComplexRange;
 use crate::coverage::pgo::Key;
@@ -100,10 +101,29 @@ impl Cg<'_> {
         self.store(im, ip.v, ip.align, vol);
     }
 
-    /// clang `EmitComplexExpr` with both parts wanted.
+    /// clang `EmitComplexExpr` with both parts wanted (a new
+    /// `ComplexExprEmitter`, [`Self::cx_emitter`]).
     pub(crate) fn emit_complex(&mut self, e: ExprId) -> R<(V, V)> {
+        self.cx_emitter(|cg| cg.visit_complex(e))
+    }
+
+    /// clang `ComplexExprEmitter::Visit` with both parts wanted, in the
+    /// current emitter.
+    fn visit_complex(&mut self, e: ExprId) -> R<(V, V)> {
         let c = self.emit_cx(e, ALL)?;
         self.both(c, e)
+    }
+
+    /// `f` in a new clang `ComplexExprEmitter`: its
+    /// `FPHasBeenPromoted` starts clear, and the caller's comes back after
+    /// (clang starts one in `EmitComplexExpr`, `EmitPromotedComplexExpr`,
+    /// `EmitComplexAssignmentLValue` and
+    /// `EmitComplexCompoundAssignmentLValue`).
+    pub(crate) fn cx_emitter<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.f.cx_promoted, false);
+        let r = f(self);
+        self.f.cx_promoted = saved;
+        r
     }
 
     fn both(&self, c: Cx, e: ExprId) -> R<(V, V)> {
@@ -485,6 +505,17 @@ impl Cg<'_> {
     fn cx_convert(&mut self, (r, i): Cx, from: QualType, to: QualType, loc: Option<Loc>) -> R<Cx> {
         let fe = self.cx_elem(from).expect("Sema typed it _Complex");
         let te = self.cx_elem(to).expect("Sema typed it _Complex");
+        self.cx_convert_elem((r, i), fe, te, loc)
+    }
+
+    /// [`Self::cx_convert`] between element types `fe` and `te`.
+    fn cx_convert_elem(
+        &mut self,
+        (r, i): Cx,
+        fe: QualType,
+        te: QualType,
+        loc: Option<Loc>,
+    ) -> R<Cx> {
         let r = r.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
         let i = i.map(|v| self.conv_at(v, fe, te, loc)).transpose()?;
         Ok((r, i))
@@ -498,9 +529,22 @@ impl Cg<'_> {
         let op = ast.exprs.unary_op(e);
         match op {
             UnaryOp::Extension => self.emit_cx(s, ign),
+            UnaryOp::Plus | UnaryOp::Minus
+                if let Some(pe) = self.cx_promotion(ast.exprs.get(s).ty(), false) =>
+            {
+                // clang `VisitUnaryPlus`/`VisitUnaryMinus` of an
+                // excess-precision operand: emitted promoted, negated in
+                // `float`, truncated once.
+                let eq = self.cx_elem(ast.exprs.get(s).ty()).expect("Sema typed it _Complex");
+                let (r, i) = self.cx_emitter(|cg| cg.emit_cx_promoted_expr(s, pe))?;
+                let (r, i) =
+                    if op == UnaryOp::Minus { (self.fneg(r), self.fneg(i)) } else { (r, i) };
+                let t = self.lty(eq);
+                Ok((Some(self.unpromote(r, t)), Some(self.unpromote(i, t))))
+            }
             UnaryOp::Plus => self.emit_cx(s, ALL),
             UnaryOp::Minus | UnaryOp::Not => {
-                let (r, i) = self.emit_complex(s)?;
+                let (r, i) = self.visit_complex(s)?;
                 let neg = |cg: &mut Self, v: V| {
                     let t = cg.f.fir.ty(&cg.m, v);
                     if cg.is_float_ty(t) {
@@ -564,9 +608,13 @@ impl Cg<'_> {
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                 let ty = ast.exprs.get(e).ty();
-                if let Some(fty) = self.cx_promotion(ty) {
+                // clang 22 promotes a quotient by a complex divisor;
+                // clang 19 every quotient (`IsDivOpCode`).
+                let divisor = op == BinaryOp::Div
+                    && (self.opts.clang_compat < 22 || self.is_complex(ast.exprs.get(r).ty()));
+                if let Some(pe) = self.cx_promotion(ty, divisor) {
                     let eq = self.cx_elem(ty).expect("Sema typed it _Complex");
-                    let (r, i) = self.emit_cx_promoted(e, fty)?;
+                    let (r, i) = self.emit_cx_promoted(e, pe)?;
                     let t = self.lty(eq);
                     return Ok((Some(self.unpromote(r, t)), Some(self.unpromote(i, t))));
                 }
@@ -645,7 +693,7 @@ impl Cg<'_> {
     /// and the store.
     pub(crate) fn cx_assign(&mut self, e: ExprId) -> R<(LV, (V, V))> {
         let [l, r] = self.ast.exprs.operands(e);
-        let v = self.emit_complex(r)?;
+        let v = self.visit_complex(r)?;
         let lv = self.emit_lvalue(l)?;
         self.cx_store(v, lv.addr, lv.q);
         Ok((lv, v))
@@ -653,8 +701,10 @@ impl Cg<'_> {
 
     /// clang `ComplexExprEmitter::EmitCompoundAssignLValue`: the right
     /// side first, then the left lvalue and its value converted to the
-    /// computation type; the result converted back and stored. A real
-    /// left side yields `(value, None)`.
+    /// (promoted) computation type; the result converted back and stored.
+    /// A real left side yields `(value, None)`. clang 22 promotes a `/=`
+    /// by a complex divisor under `-fcomplex-arithmetic=promoted`; clang
+    /// 19 never range-promotes a compound assignment.
     pub(crate) fn cx_compound_assign(&mut self, e: ExprId) -> R<(LV, Cx)> {
         let ast = self.ast;
         let ca = *ast.exprs.compound_assign(e);
@@ -666,48 +716,53 @@ impl Cg<'_> {
             _ => BinaryOp::Add,
         };
         let ty = ca.result_ty;
-        let ceq = self.cx_elem(ty).expect("Sema: _Complex computation type");
         let rq = ast.exprs.get(ca.rhs).ty();
-        let pt = self.cx_promotion(ty);
-        let rhs = if let Some(fty) = pt {
-            self.cx_operand_promoted(ca.rhs, fty)?
-        } else if ast.types.is_floating(rq) && !self.is_complex(rq) {
-            (Some(self.emit_scalar(ca.rhs)?), None)
+        let divisor = op == BinaryOp::Div && self.opts.clang_compat >= 22 && self.is_complex(rq);
+        // `PromotionTypeCR`'s element: the computation's.
+        let ce = match self.cx_promotion(ty, divisor) {
+            Some(pe) => pe,
+            None => self.cx_elem(ty).expect("Sema: _Complex computation type"),
+        };
+        let op_ty = self.promoted_cx_type(ce, ty);
+        let rhs = if ast.types.is_floating(rq) && !self.is_complex(rq) {
+            match self.cx_promotion(rq, divisor) {
+                Some(p) => (Some(self.emit_promoted_as(ca.rhs, p)?), None),
+                None => (Some(self.emit_scalar(ca.rhs)?), None),
+            }
         } else {
-            self.emit_cx(ca.rhs, ALL)?
+            match self.cx_promotion(rq, divisor) {
+                Some(pe) => {
+                    let (r, i) = self.cx_emitter(|cg| cg.emit_cx_promoted_expr(ca.rhs, pe))?;
+                    (Some(r), Some(i))
+                }
+                None => self.emit_cx(ca.rhs, ALL)?,
+            }
         };
         let lv = self.emit_lvalue(l)?;
         let lq = ast.types.as_atomic(lv.q).unwrap_or(lv.q);
-        let lhs = if self.is_complex(lq) {
+        let le = self.cx_promotion(ca.lhs_ty, divisor).unwrap_or(ce);
+        let loc = self.ub_expr_loc(e);
+        let lhs = if let Some(lqe) = self.cx_elem(lq) {
             let v = self.cx_load(lv.addr, lv.q, ALL);
-            self.cx_convert(v, lq, ty, self.ub_expr_loc(e))?
+            self.cx_convert_elem(v, lqe, le, loc)?
         } else {
             let v = self.load_lv(lv);
             if ast.types.is_floating(lq) {
-                (Some(self.conv(v, lq, ceq)), None)
+                (Some(self.conv(v, lq, le)), None)
             } else {
-                let v = self.conv(v, lq, ceq);
+                let v = self.conv(v, lq, ce);
                 let t = self.f.fir.ty(&self.m, v);
                 (Some(v), Some(V::C(self.m.const_zero(t))))
             }
         };
-        let res = match pt {
-            Some(fty) => {
-                let lhs = self.cx_ext(lhs, ceq);
-                let (r, i) = self.cx_arith(op, &Ops { lhs, rhs, ty: fty })?;
-                let f = QualType::FLOAT;
-                (self.conv(r, f, ceq), self.conv(i, f, ceq))
-            }
-            None => self.cx_arith(op, &Ops { lhs, rhs, ty })?,
-        };
-        if self.is_complex(lq) {
-            let (r, i) =
-                self.cx_convert((Some(res.0), Some(res.1)), ty, lq, self.ub_expr_loc(e))?;
+        let res = self.cx_arith(op, &Ops { lhs, rhs, ty: op_ty })?;
+        if let Some(lqe) = self.cx_elem(lq) {
+            let (r, i) = self.cx_convert_elem((Some(res.0), Some(res.1)), ce, lqe, loc)?;
             let v = self.both((r, i), e)?;
             self.cx_store(v, lv.addr, lv.q);
             Ok((lv, (Some(v.0), Some(v.1))))
         } else {
-            let v = self.cx_to_scalar(res, ty, lq, self.ub_expr_loc(e))?;
+            let v = self.cx_to_scalar_elem(res, ce, lq, loc)?;
             self.store_lv(v, lv, false);
             Ok((lv, (Some(v), None)))
         }
@@ -723,6 +778,17 @@ impl Cg<'_> {
         loc: Option<Loc>,
     ) -> R<V> {
         let fe = self.cx_elem(from).expect("Sema typed it _Complex");
+        self.cx_to_scalar_elem((r, i), fe, to, loc)
+    }
+
+    /// [`Self::cx_to_scalar`] from a pair of element type `fe`.
+    fn cx_to_scalar_elem(
+        &mut self,
+        (r, i): (V, V),
+        fe: QualType,
+        to: QualType,
+        loc: Option<Loc>,
+    ) -> R<V> {
         if self.is_bool(to) {
             let r = self.conv(r, fe, to);
             let i = self.conv(i, fe, to);
@@ -731,61 +797,115 @@ impl Cg<'_> {
         self.conv_at(r, fe, to, loc)
     }
 
-    /// clang `getPromotionType` on a complex type: `_Complex float` when
-    /// the element is excess-precision (`__bf16`; `_Float16` on x86-64,
-    /// `f16_excess`). Its arithmetic runs in `float` (`__mulsc3`,
-    /// `__divsc3`) and is truncated once at the end, as clang does for
-    /// `_Complex _Float16` and GCC 14 for `_Complex __bf16` (spec/abi.md).
-    fn cx_promotion(&self, ty: QualType) -> Option<QualType> {
-        let eq = self.cx_elem(ty)?;
-        if !self.f16_excess(eq) {
-            return None;
+    /// clang `getPromotionType`: the element type a complex `ty`'s
+    /// arithmetic runs in (the promoted type itself for a real `ty`), or
+    /// `None` when it is not promoted. A `divisor` (clang 22: a quotient
+    /// by a complex value; clang 19: any quotient) of a floating element
+    /// under `-fcomplex-arithmetic=promoted` without a `#pragma STDC
+    /// CX_LIMITED_RANGE` override runs in the next wider type
+    /// ([`Self::cx_higher_precision`]). Otherwise an excess-precision
+    /// element (`__bf16`; `_Float16` on x86-64, `f16_excess`) runs in
+    /// `float` (`__mulsc3`, `__divsc3`) and is truncated once at the end,
+    /// as clang does for `_Complex _Float16` and GCC 14 for `_Complex
+    /// __bf16` (spec/abi.md).
+    fn cx_promotion(&mut self, ty: QualType, divisor: bool) -> Option<QualType> {
+        let Some(eq) = self.cx_elem(ty) else {
+            return self.f16_excess(ty).then_some(QualType::FLOAT);
+        };
+        if divisor
+            && self.complex_range() == ComplexRange::Promoted
+            && let Some(p) = self.ast.types.complex_division_promotion(eq)
+        {
+            return self.cx_higher_precision(p);
         }
-        self.ast.types.find_complex(QualType::FLOAT)
+        self.f16_excess(eq).then_some(QualType::FLOAT)
     }
 
-    /// The pair `cx` of element type `eq` extended to `float`.
-    fn cx_ext(&mut self, (r, i): Cx, eq: QualType) -> Cx {
-        let f = QualType::FLOAT;
-        (r.map(|v| self.conv(v, eq, f)), i.map(|v| self.conv(v, eq, f)))
+    /// clang `HigherPrecisionTypeForComplexArithmetic` on
+    /// [`kiln_ast::types::TypeCtx::complex_division_promotion`]'s
+    /// verdict: a wider type that holds twice the element's exponent range
+    /// sets the emitter's `FPHasBeenPromoted` (the quotient is then
+    /// algebraic); none (`long double`, `__float128`) leaves the quotient
+    /// unpromoted, to Smith's algorithm, and clang 19 warns
+    /// `-Whigher-precision-fp` without a location.
+    fn cx_higher_precision(&mut self, p: Result<QualType, QualType>) -> Option<QualType> {
+        if let Ok(w) = p {
+            self.f.cx_promoted = true;
+            return Some(w);
+        }
+        if self.opts.clang_compat < 22 {
+            let id = DiagId::cg_next_larger_fp_type_same_size;
+            self.diags.push(Diag::new(id, Span::INVALID));
+        }
+        None
     }
 
-    /// clang `EmitPromoted` on a complex `+ - * /` of an excess-precision
-    /// element: both operands are emitted promoted (nested arithmetic
-    /// stays in `float`), each extended as soon as it is loaded.
-    fn emit_cx_promoted(&mut self, e: ExprId, fty: QualType) -> R<(V, V)> {
+    /// The `_Complex` type of the promoted element `pe` for
+    /// [`Ops::ty`] (`orig` when it is not interned: its only readers
+    /// are the library calls and integer quotients, which a range
+    /// promotion never reaches).
+    fn promoted_cx_type(&self, pe: QualType, orig: QualType) -> QualType {
+        if self.cx_elem(orig) == Some(pe) {
+            return orig;
+        }
+        self.ast.types.find_complex(pe).unwrap_or(orig)
+    }
+
+    /// clang `EmitPromoted` on a complex `+ - * /` whose arithmetic runs
+    /// in the element type `pe`: both operands are emitted promoted
+    /// (`EmitPromotedComplexOperand`).
+    fn emit_cx_promoted(&mut self, e: ExprId, pe: QualType) -> R<(V, V)> {
         let ast = self.ast;
         let [l, r] = ast.exprs.operands(e);
         let op = ast.exprs.binary_op(e);
-        let lhs = self.cx_operand_promoted(l, fty)?;
-        let rhs = self.cx_operand_promoted(r, fty)?;
-        self.cx_arith(op, &Ops { lhs, rhs, ty: fty })
+        let lhs = self.cx_operand_promoted(l, pe)?;
+        let rhs = self.cx_operand_promoted(r, pe)?;
+        let ty = self.promoted_cx_type(pe, ast.exprs.get(e).ty());
+        self.cx_arith(op, &Ops { lhs, rhs, ty })
     }
 
-    /// clang `EmitPromotedComplexOperand`: a complex operand in `float`
-    /// parts, or a real operand alone (`EmitPromotedScalarExpr`).
-    fn cx_operand_promoted(&mut self, x: ExprId, fty: QualType) -> R<Cx> {
+    /// clang `EmitPromotedComplexOperand`: a complex operand in `pe`
+    /// parts (`EmitPromotedComplexExpr`, a new emitter), or a real
+    /// operand alone (`EmitPromotedScalarExpr`).
+    fn cx_operand_promoted(&mut self, x: ExprId, pe: QualType) -> R<Cx> {
+        if !self.is_complex(self.ast.exprs.get(x).ty()) {
+            return Ok((Some(self.emit_promoted_as(x, pe)?), None));
+        }
+        let (r, i) = self.cx_emitter(|cg| cg.emit_cx_promoted_expr(x, pe))?;
+        Ok((Some(r), Some(i)))
+    }
+
+    /// clang `ComplexExprEmitter::EmitPromoted` (in the caller's new
+    /// emitter): `+ - * /` recurse in `pe`, unary `-`/`+` emit their
+    /// operand promoted; anything else is visited and extended
+    /// (`EmitPromotedValue`).
+    fn emit_cx_promoted_expr(&mut self, x: ExprId, pe: QualType) -> R<(V, V)> {
         let ast = self.ast;
-        let q = ast.exprs.get(x).ty();
-        if !self.is_complex(q) {
-            return Ok((Some(self.emit_promoted(x)?), None));
-        }
         let y = self.skip_parens(x);
-        if ast.exprs.get(y).kind() == ExprKind::BinaryOperator
-            && matches!(
-                ast.exprs.binary_op(y),
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
-            )
-            && self.cx_promotion(q).is_some()
-        {
-            let (r, i) = self.emit_cx_promoted(y, fty)?;
-            return Ok((Some(r), Some(i)));
+        match ast.exprs.get(y).kind() {
+            ExprKind::BinaryOperator
+                if matches!(
+                    ast.exprs.binary_op(y),
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                ) =>
+            {
+                return self.emit_cx_promoted(y, pe);
+            }
+            ExprKind::UnaryOperator
+                if matches!(ast.exprs.unary_op(y), UnaryOp::Minus | UnaryOp::Plus) =>
+            {
+                let s = ast.exprs.operand(y);
+                let (r, i) = self.cx_emitter(|cg| cg.emit_cx_promoted_expr(s, pe))?;
+                if ast.exprs.unary_op(y) == UnaryOp::Plus {
+                    return Ok((r, i));
+                }
+                return Ok((self.fneg(r), self.fneg(i)));
+            }
+            _ => {}
         }
-        let v = self.emit_cx(x, ALL)?;
-        let (r, i) = v;
-        let ext =
-            |c: &mut Self, v: Option<V>| v.map(|v| c.cast_unscoped(CastOp::FPExt, v, LTy::FLOAT));
-        Ok((ext(self, r), ext(self, i)))
+        let (r, i) = self.visit_complex(y)?;
+        let t = self.lty(pe);
+        Ok((self.cast_unscoped(CastOp::FPExt, r, t), self.cast_unscoped(CastOp::FPExt, i, t)))
     }
 
     /// clang `EmitBinAdd`/`Sub`/`Mul`/`Div`.
@@ -939,6 +1059,13 @@ impl Cg<'_> {
                 ComplexRange::Full => {}
                 ComplexRange::Improved => return Ok(self.cx_div_smith(t, a, b, c, d)),
                 ComplexRange::Basic => return Ok(self.cx_div_algebraic(true, a, b, c, d)),
+                // clang `EmitBinDiv`: algebraic in the wider type, Smith's
+                // algorithm when no wider type exists (or the quotient's
+                // emitter never promoted).
+                ComplexRange::Promoted if self.f.cx_promoted => {
+                    return Ok(self.cx_div_algebraic(true, a, b, c, d));
+                }
+                ComplexRange::Promoted => return Ok(self.cx_div_smith(t, a, b, c, d)),
             }
             let name = match self.m.types.float_width(t) {
                 Some(16) => "__divhc3",
@@ -1087,7 +1214,7 @@ impl Cg<'_> {
             self.emit_ignored(a)?;
             return Ok(None);
         }
-        self.emit_complex(a).map(Some)
+        self.visit_complex(a).map(Some)
     }
 
     /// The complex result of a call returning `rq` directly as `r`
@@ -1127,7 +1254,7 @@ impl Cg<'_> {
             let lv = self.emit_lvalue(e)?;
             return Ok(Some(self.load_lv(lv)));
         }
-        let (r, i) = self.emit_cx(s, (imag, !imag))?;
+        let (r, i) = self.cx_emitter(|cg| cg.emit_cx(s, (imag, !imag)))?;
         let v = if imag { i } else { r };
         match v {
             Some(v) => Ok(Some(v)),

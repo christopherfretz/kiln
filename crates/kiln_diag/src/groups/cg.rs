@@ -5,5 +5,7 @@
 AtomicAlignment = "atomic-alignment" [];
 // WP-448: kiln-only remark group (`-Rauto-var-init`).
 AutoVarInit = "auto-var-init" [];
+// clang 19 only (WP-1795).
+HigherPrecisionFp = "higher-precision-fp" [];
 Psabi = "psabi" [];
 SyncAlignment = "sync-alignment" [];

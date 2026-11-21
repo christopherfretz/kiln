@@ -2075,6 +2075,57 @@ The checks kiln does not emit yet (vptr, function, nullability-*,
 local-bounds) and the other gaps are listed with their BACKLOG rows in
 spec/landed/codegen/WP-675.md and spec/landed/codegen/WP-871.md.
 
+#### Sanitizer coverage (WP-1863; `class_b.rs`, `ignorelist.rs`)
+
+The features (spec/driver.md "Sanitizers") are LLVM's
+`SanitizerCoverage`; kiln runs it as clang's `addSanitizers` does, as
+`sancov-module` first at the optimizer-last extension point, at every
+`-O` level, with the `cl::opt`s of clang's `SanitizerCoverageOptions`
+(`OverrideFromCL`): `-sanitizer-coverage-level=` 1 (`func`), 2 (`bb`),
+3 (`edge`) or 4 (`edge` with `indirect-calls`), and
+`-sanitizer-coverage-trace-compares`, `-trace-divs`, `-trace-geps`,
+`-trace-pc`, `-trace-pc-guard`, `-inline-8bit-counters`,
+`-inline-bool-flag`, `-pc-table`, `-prune-blocks=0` (`no-prune`),
+`-stack-depth`, `-trace-loads`, `-trace-stores`, `-control-flow`
+(`trace-bb` and `8bit-counters` instrument nothing, as in LLVM), and
+`-sanitizer-coverage-stack-depth-callback-min=<n>` for a non-zero
+`-fsanitize-coverage-stack-depth-callback-min=` (LLVM 22 only: LLVM
+19's pass has no such option, and kiln passes nothing). The
+pass instruments nothing without an insertion point, so without one it
+does not run. The frontend's part:
+
+- `__attribute__((no_sanitize("coverage")))` gives `nosanitize_coverage`
+  when coverage is on (clang `hasSanitizeCoverage`), and the pass leaves
+  the function alone; `disable_sanitizer_instrumentation` keeps its own
+  attribute;
+- `-fsanitize=fuzzer`/`fuzzer-no-link` gives every definition and call
+  site the `"no-builtin-<name>"` attributes of the driver's list
+  (spec/driver.md "Sanitizers").
+- The coverage allowlist and ignorelist: clang hands them to the pass,
+  which `opt` cannot take, so kiln applies them in the frontend. A
+  definition the lists leave out (an allowlist that does not match the
+  module's source file name under `src:` or the function's symbol under
+  `fun:`, in a section whose name matches `coverage`, or an ignorelist
+  that matches either) gets `nosanitize_coverage`
+  (`CoverageLists::excludes`, `coverage_list_attrs`), so the pass skips
+  it as it skips the functions clang's lists exclude.
+
+Deviations from clang's IR, the same machine code: the left-out
+definitions carry `nosanitize_coverage`; when the lists leave out the
+whole source file, clang's pass returns before declaring anything and
+kiln's IR keeps the callback declarations and `__sancov_lowest_stack`
+unused; and clang 22's module constructor (`sancov.module_ctor_*`) has
+`"target-cpu"`/`"target-features"` attributes that `opt`'s lacks.
+`indirect-calls` with `func` or `bb` (the fuzzer set with
+`-fno-sanitize-coverage=inline-8bit-counters` gives `func` from
+`stack-depth`) cannot be asked through the `cl::opt`s: kiln instruments
+the functions or blocks without the `__sanitizer_cov_trace_pc_indir`
+calls (a WP-1863 follow-up).
+
+Tests: `crates/kiln_driver/tests/sanitize_coverage.rs` (the diagnostics
+and the instrumentation against clang++-22 and clang++-19, both
+targets); `tests/conformance/driver.sanitize/coverage-*.cpp`.
+
 ### 5.3 LTO (WP-873; `module.rs`, `vtable.rs`)
 `CodegenOptions::lto` (`Lto::Full` / `Lto::Thin { split }`, set from
 spec/driver.md "Codegen flags" `-flto[=thin]`) makes the module an LTO
@@ -5292,9 +5343,8 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
     the plain product; `EmitRangeReductionDiv` (Smith): `fcmp ugt` of
     the `llvm.fabs` of `c` and `d`, a block scaling by `d/c`, one by
     `c/d`, and a `phi` per part.
-  - `promoted` is not supported (the driver rejects it, spec/abi.md
-    §8.17, also as clang 22's `-ffp-model=fast` default, spec/driver.md
-    "Floating-point flags").
+  - `Promoted` (`-fcomplex-arithmetic=promoted`, clang 22's
+    `-ffp-model=fast`): see "Promoted complex arithmetic" below.
   - `#pragma STDC CX_LIMITED_RANGE ON|OFF` selects `Basic` / `Full` in
     its scope (§3.2, WP-806).
 - **Calls.** A complex argument or return goes through the target
@@ -5306,10 +5356,50 @@ full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
   are exact on aarch64 and x86_64; `tests/conformance/ext.complex/
   {limited,improved,full}-range.cpp` (run) observe each range.
 - `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
-  <!-- kiln-gap: GAP-172 -->
-- **Not implemented:** `-fcomplex-arithmetic=promoted`, and clang 22's
-  `-ffp-model=fast`, which selects it, are rejected (spec/abi.md §8.17
-  "Deviations").
+- **Promoted complex arithmetic** (WP-1795; `ComplexRange::Promoted`,
+  clang's `CX_Promoted`). The product is the plain one (no NaN check).
+  A quotient whose operator is a *promotion point* is emitted in the
+  next wider element type (clang `getPromotionType` /
+  `HigherPrecisionTypeForComplexArithmetic`): `_Float16` → `float`,
+  `float`/`__bf16` → `double`, `double` → `long double`
+  (`TypeCtx::complex_division_promotion`), accepted when the wider
+  type's maximum exponent is at least twice the element's plus one, so
+  never for `long double` or `__float128`. Its operands are emitted
+  promoted (`EmitPromotedComplexOperand`: nested `+ - * /` and unary
+  `-`/`+` recurse in the wider type, anything else is extended with
+  `fpext`; a real operand through the scalar `EmitPromoted`), the
+  quotient is algebraic, and the pair is truncated once (`fptrunc`).
+  Without a wider type the quotient is not promoted (an excess-precision
+  `_Float16`/`__bf16` element still runs in `float`) and uses Smith's
+  algorithm.
+  - Promotion points: clang 22 a `/` whose right operand is complex and
+    a `/=` by a complex value; clang 19 (`-fclang-compat=19`) every `/`
+    (a real divisor too) and never a compound assignment.
+  - clang's `FPHasBeenPromoted` is per `ComplexExprEmitter`, and the
+    quotient takes the algebraic form only if its emitter promoted
+    something. Kiln keeps the flag in `FnCtx::cx_promoted`, saved and
+    cleared by `Cg::cx_emitter` wherever clang starts a new emitter
+    (`EmitComplexExpr`, `EmitPromotedComplexExpr`, the assignment and
+    compound-assignment lvalue emitters). So in `a / b / c` the inner
+    quotient, emitted inside the outer one's promoted operand, takes
+    Smith's algorithm in the wider type, and a `long double` quotient
+    after a promoted one in the same emitter is algebraic, as in clang.
+  - `#pragma STDC CX_LIMITED_RANGE ON|OFF` in scope disables the
+    promotion (its range is `Basic` / `Full`); `DEFAULT` keeps it.
+  - Diagnostics: clang 22 warns in Sema
+    (`sema_excess_precision_not_supported`,
+    `-Whigher-precision-for-complex-division`, spec/sema.md). clang 19
+    warns in codegen, once per quotient without a wider type and without
+    a location (`cg_next_larger_fp_type_same_size`,
+    `-Whigher-precision-fp`).
+  - Also new for every range: a unary `-`/`+` of an excess-precision
+    complex operand (`_Complex _Float16` on x86-64) emits the operand
+    promoted, negates in `float` and truncates (clang `VisitUnaryMinus`
+    with a promotion type).
+  - `tests/codegen/complex_promoted_range.cpp` and
+    `complex_promoted_half.cpp` (exact under clang 19, structural under
+    22, both targets); `tests/conformance/ext.complex/promoted-range.cpp`
+    (run) and `promoted-range-warning*.cpp`.
 
 ## 7o. Landed (WP-351): coroutines (`coro.rs`)
 

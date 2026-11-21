@@ -50,6 +50,12 @@ cg_error = Error (1) "{0}";
 cg_function_needs_feature = Error (3) "always_inline function '{1}' requires target feature '{2}', but would be inlined into function '{0}' that is compiled without support for '{2}'";
 // clang `err_ifunc_resolver_return` (`checkAliases`); WP-763.
 cg_ifunc_resolver_return = Error (0) "ifunc resolver function must return a pointer";
+// clang 19 `warn_next_larger_fp_type_same_size_than_fp`
+// (`HigherPrecisionTypeForComplexArithmetic`, no location): a promoted
+// complex quotient (`-fcomplex-arithmetic=promoted`) of an element with
+// no wider type; clang 22 dropped it for Sema's
+// `sema_excess_precision_not_supported`. WP-1795.
+cg_next_larger_fp_type_same_size = Warning [HigherPrecisionFp] (0) "higher precision floating-point type size has the same size than floating-point type size";
 // clang `err_store_value_to_reg` (`EmitAsmStores`): a register output
 // of aggregate type whose size is no integer type's; WP-1456.
 cg_store_value_to_reg = Error (0) "impossible constraint in asm: cannot store value into a register";

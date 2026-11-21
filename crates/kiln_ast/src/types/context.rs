@@ -392,6 +392,46 @@ impl TypeContext {
         &self.target
     }
 
+    /// The format of the floating builtin `b` on this target (`None`
+    /// for any other builtin).
+    #[must_use]
+    pub fn float_format(&self, b: BuiltinType) -> Option<super::layout::FloatFormat> {
+        use super::layout::FloatFormat as F;
+        Some(match b {
+            BuiltinType::Half | BuiltinType::Float16 => F::IeeeHalf,
+            BuiltinType::BFloat16 => F::BFloat,
+            BuiltinType::Float | BuiltinType::Float32 => F::IeeeSingle,
+            BuiltinType::Double | BuiltinType::Float64 | BuiltinType::Float32x => F::IeeeDouble,
+            BuiltinType::LongDouble | BuiltinType::Float64x => self.target.long_double,
+            BuiltinType::Float128 | BuiltinType::StdFloat128 => F::IeeeQuad,
+            _ => return None,
+        })
+    }
+
+    /// The type a complex division by a complex divisor of floating
+    /// element `elem` runs in under promoted complex arithmetic
+    /// (`-fcomplex-arithmetic=promoted`; spec/codegen.md "Promoted complex
+    /// arithmetic"): clang `ASTContext::GetHigherPrecisionFPType` (`_Float16`
+    /// to `float`, `float` and `__bf16` to `double`, `double` to `long
+    /// double`, any other type to itself), `Ok` when it holds the
+    /// intermediate values (twice the element's largest exponent, plus
+    /// one, fits its exponent range), else `Err` with it (the type clang's
+    /// `-Whigher-precision-for-complex-division` counts). `None` for a
+    /// non-floating element.
+    #[must_use]
+    pub fn complex_division_promotion(&self, elem: QualType) -> Option<Result<QualType, QualType>> {
+        let b = self.builtin(elem)?;
+        let from = self.float_format(b)?;
+        let wider = match b {
+            BuiltinType::Half | BuiltinType::Float16 => QualType::FLOAT,
+            BuiltinType::Float | BuiltinType::BFloat16 => QualType::DOUBLE,
+            BuiltinType::Double => QualType::LONGDOUBLE,
+            _ => b.qual_type(),
+        };
+        let to = self.float_format(self.builtin(wider)?)?;
+        Some(if from.max_exponent() * 2 < to.max_exponent() { Ok(wider) } else { Err(wider) })
+    }
+
     /// True once an id space or arena ran out: the driver must emit a
     /// fatal "too many types" diagnostic. Constructors then return
     /// `QualType::ERROR` instead of panicking.

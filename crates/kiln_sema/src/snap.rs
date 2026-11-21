@@ -63,6 +63,7 @@
 //! | `char8` | configuration | `-f[no-]char8_t` |
 //! | `lib_builtin_name`, `clang_constexpr_builtin` | configuration | the preprocessor's builtin tables (`fn`s) |
 //! | `fp`, `fp_eval_on_command_line` | configuration | `-ffp-model=`, `-ffast-math`, `-f[no-]math-errno`, `-ffp-eval-method=`, ... |
+//! | `complex_promoted` | configuration | `-fcomplex-arithmetic=promoted`, clang 22's `-ffp-model=fast` |
 //! | `cfg_dump`, `cfg_stats`, `cfg_max_elems` | configuration | `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=` |
 //! | `full_deduction`, `full_redecl_scan` | configuration | test hooks of `ParseOptions` |
 //! | `tu_prefix` | configuration | `ParseOptions::prefix` (a header being precompiled) |
@@ -74,6 +75,7 @@
 //! | `imported_bodies_walked` | rebuilt | imported bodies already walked for `used` functions; a walk again hands nothing new (the handed ones are in the AST) |
 //! | `cfg_body`, `uninit_scratch` | scratch | the flow graph and analysis buffers of the body being finished |
 //! | `walk_stack`, `conv_walk_stack`, `equiv_scratch`, `cand_scratch`, `deduce_scratch` | scratch | reused walk and deduction buffers |
+//! | `complex_div_unmet` | scratch | the prefix's own end-of-TU warning list: clang does not serialize `ExcessPrecisionNotSatisfied`, so the consumer warns only about its own divisions (WP-1795) |
 //! | `ctx` | transient | the current declaration context: the translation unit at rest (else the prefix ends inside a namespace or linkage specification) |
 //! | `func`, `fn_saved`, `lambdas`, `lambda_base`, `classes`, `suspended_classes`, `defining`, `suspended_defining`, `enums`, `synth` | transient | the function, lambda, class, enumeration and implicit member being defined |
 //! | `prototype_params`, `declarator_records`, `requires_param_scopes`, `concept_uses`, `nsdmi_this`, `contract_ctx`, `vis_namespaces` | transient | open parameter lists, declarator scopes, the concept definition being parsed, default member initializers, contract predicates, namespaces with a visibility attribute |
@@ -160,7 +162,7 @@ macro_rules! sema_fields {
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
                 target_features, target_attr_features,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, contracts, sized_deallocation,
-                aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, fp_eval_on_command_line, cfg_dump,
+                aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, fp_eval_on_command_line, complex_promoted, cfg_dump,
                 cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],
             // `ctx` first: the most telling refusal (a prefix ending inside
             // a namespace or `extern "C" {`); then the construct stacks.
@@ -187,7 +189,7 @@ macro_rules! sema_fields {
                 declspec_nulls, image_texprs, bmi, extensions_silenced,
                 temp_copy_second_step, vararg_copying, inst_outer_anchor],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
-                cand_scratch, deduce_scratch],
+                cand_scratch, deduce_scratch, complex_div_unmet],
             rebuilt: [spare_oven, classify_memo, imported_bodies_walked],
             reference: [diags],
             owned_root: [ast, oven],

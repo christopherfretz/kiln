@@ -10347,6 +10347,24 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   operator with the right operand's range, through the runtime-behaviour
   deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
   `CheckRemainderOperands` with `IsCompAssign`).
+- **Complex division without a wider type (WP-1795, clang 22 only).**
+  Under `-fcomplex-arithmetic=promoted` (`Sema::complex_promoted`, also
+  clang 22's `-ffp-model=fast`), a `/` or `/=` whose right operand,
+  after the usual arithmetic conversions, is a complex floating type
+  whose element has no wider type with twice its exponent range (`long
+  double`, `__float128`; `TypeCtx::complex_division_promotion`) is
+  recorded (clang `DetectPrecisionLossInComplexDivision`): the first
+  such operator's location, and per wider type a count that starts at
+  the type's index in the list. At the end of the translation unit,
+  after the unterminated-pragma checks, each recorded type warns
+  `sema_excess_precision_not_supported`
+  (`-Whigher-precision-for-complex-division`) at that first location,
+  with the "additional uses ... were found but not diagnosed" clause when
+  its count is not 0 (clang `DiagnosePrecisionLossInComplexDivision`).
+  A precompiled header warns at its own end; its list is not in the
+  snapshot (`Sema::complex_div_unmet` is scratch, as clang does not
+  serialize it), so the including unit warns only about its own
+  divisions. Tests: `ext.complex/promoted-range-warning*.cpp`.
 - **Never constant (WP-468, WP-873, WP-945).** A `constexpr` or `consteval`
   function that can never be constant is ill-formed, no diagnostic
   required ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on

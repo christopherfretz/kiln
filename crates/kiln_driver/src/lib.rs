@@ -210,6 +210,17 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::MalformedIgnorelist(m) => {
             Diag::new(DiagId::drv_malformed_sanitizer_ignorelist, Span::INVALID).arg(m)
         }
+        ArgError::MalformedCoverageList(allow, m) => {
+            let id = if *allow {
+                DiagId::drv_malformed_sanitizer_coverage_allowlist
+            } else {
+                DiagId::drv_malformed_sanitizer_coverage_ignorelist
+            };
+            Diag::new(id, Span::INVALID).arg(m)
+        }
+        ArgError::DeprecatedArg(a, r) => {
+            Diag::new(DiagId::drv_deprecated_arg, Span::INVALID).arg(a).arg(r)
+        }
         ArgError::IncompatibleFpEvalMethod(i) => {
             Diag::new(DiagId::drv_incompatible_fp_eval_method_options, Span::INVALID).arg(*i)
         }
@@ -567,6 +578,34 @@ pub(crate) fn syntax_only(
 /// x86-64), and clang's `-mlarge-data-threshold=` warning without a
 /// medium or large x86-64 code model (WP-1419). `true` when `-Werror`
 /// made one an error (clang then runs no job).
+/// WP-1795: the FP state machine's overriding warnings, once per compile
+/// job (clang `RenderFloatingPointOptions`; not for a `.s` input, which
+/// `ClangAs` assembles).
+fn fp_warning_diags(args: &Args, inputs: &[&args::Input]) -> Vec<Diag> {
+    let jobs = inputs
+        .iter()
+        .filter(|i| codegen_cmd::is_source(i) && i.asm != Some(args::AsmKind::Plain))
+        .count();
+    let one: Vec<Diag> = args
+        .fp_model()
+        .warnings
+        .iter()
+        .map(|w| match w {
+            fp_flags::FpWarning::ComplexRange { implied_by, flag, old, new } => {
+                Diag::new(DiagId::drv_overriding_complex_range, Span::INVALID)
+                    .arg(implied_by)
+                    .arg(flag)
+                    .arg(*old)
+                    .arg(*new)
+            }
+            fp_flags::FpWarning::Option(old, new) => {
+                Diag::new(DiagId::drv_overriding_option, Span::INVALID).arg(old).arg(new)
+            }
+        })
+        .collect();
+    (0..jobs).flat_map(|_| one.iter().cloned()).collect()
+}
+
 fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
@@ -594,6 +633,9 @@ fn driver_warnings(
         unused_xray.extend(time_trace::unused(args).iter().cloned());
         // WP-1044: the driver's separate `-ftrapv-handler <name>`.
         unused_xray.extend(args.codegen.trapv_handler_separate.iter().cloned());
+        // WP-1863: the coverage lists without coverage.
+        let san = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0;
+        unused_xray.extend(args.sanitize.unused_coverage_lists(&san));
     }
     // WP-1000: the x86 feature flags clang claims on `AArch64` without an
     // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
@@ -614,7 +656,9 @@ fn driver_warnings(
     // WP-1419: clang's x86-64 `-mlarge-data-threshold=` without
     // `-mcmodel=medium` / `large`, once per job.
     let threshold_ignored = args.codegen.large_data_threshold_ignored(!tc.target.is_aarch64());
+    let fp_warnings = fp_warning_diags(args, inputs);
     if promoted.is_empty()
+        && fp_warnings.is_empty()
         && ignored.is_none()
         && !no_outline
         && !threshold_ignored
@@ -633,6 +677,9 @@ fn driver_warnings(
     );
     for (_, (from, to)) in promoted {
         Diag::new(DiagId::drv_treating_input_as_cxx, Span::INVALID).arg(from).arg(to).emit(&e);
+    }
+    for d in fp_warnings {
+        d.emit(&e);
     }
     if let Some(on) = ignored {
         let flag = if on { "-moutline-atomics" } else { "-mno-outline-atomics" };
@@ -817,6 +864,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
     for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
     {
+        emit_arg_error(e, &drv);
+    }
+    // WP-1863: `-fsanitize-coverage=` and its lists come next in clang.
+    for e in &args.sanitize.coverage_errors(sanitize.opts.kinds, args.clang22()) {
         emit_arg_error(e, &drv);
     }
     // WP-1138: clang checks the target feature after the option errors.

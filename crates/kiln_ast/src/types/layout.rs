@@ -27,6 +27,20 @@ pub enum FloatFormat {
     PpcDoubleDouble,
 }
 
+impl FloatFormat {
+    /// The binary exponent of the largest finite value (LLVM
+    /// `APFloat::semanticsMaxExponent`; double-double reports `double`'s).
+    #[must_use]
+    pub fn max_exponent(self) -> i32 {
+        match self {
+            FloatFormat::IeeeHalf => 15,
+            FloatFormat::BFloat | FloatFormat::IeeeSingle => 127,
+            FloatFormat::IeeeDouble | FloatFormat::PpcDoubleDouble => 1023,
+            FloatFormat::X87Extended | FloatFormat::IeeeQuad => 16383,
+        }
+    }
+}
+
 /// Target facts about the builtin types, filled by
 /// `kiln_abi::target(triple)`. The `Default` value describes an unknown
 /// target (all sizes 0); it is only for tests and for ASTs that are never

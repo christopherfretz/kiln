@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use kiln_ast::sanitize::{GROUPS, SanitizerSet as S, parse_name};
 use kiln_codegen::SanitizeOptions;
-use kiln_codegen::ignorelist::{IgnorelistError, SanitizerIgnorelist};
+use kiln_codegen::ignorelist::{CoverageLists, IgnorelistError, SanitizerIgnorelist};
 
 use crate::args::ArgError;
 
@@ -55,6 +55,15 @@ pub struct SanitizeFlags {
     pub track_origins: Option<u32>,
     /// The last of `-shared-libsan` (true) / `-static-libsan`.
     pub shared_libsan: Option<bool>,
+    /// The `-fsanitize-coverage=` (`false`) and `-fno-sanitize-coverage=`
+    /// (`true`) values, in order (WP-1863).
+    coverage: Vec<(bool, String)>,
+    /// The `-fsanitize-coverage-allowlist=` (`true`) and `-ignorelist=`
+    /// files, in order.
+    pub coverage_lists: Vec<(bool, String)>,
+    /// Each `-fsanitize-coverage-stack-depth-callback-min=` (clang 22's),
+    /// as written, and its value; the last one counts.
+    pub stack_depth_callback_min: Vec<(String, String)>,
     /// `AArch64` x18 is reserved: `-ffixed-x18` was given or the
     /// `--target=` OS reserves it ([`x18_reserved_by_default`]; set by
     /// the argument parser, WP-1151).
@@ -77,6 +86,86 @@ pub struct Sanitize {
     /// not implement but checks for the `mte` feature
     /// ([`Sanitize::hardware_errors`]).
     pub memtag_stack: bool,
+    /// The `-fsanitize-coverage=` features ([`cov`] bits; WP-1863), with
+    /// `-fsanitize=fuzzer`'s and the implied insertion point.
+    pub coverage: u32,
+    /// `-fsanitize-coverage-stack-depth-callback-min=` (0: not given or
+    /// invalid): `stack-depth` calls `__sanitizer_cov_stack_depth` only
+    /// in functions with a frame at least this large.
+    pub stack_depth_callback_min: u32,
+}
+
+/// clang's `CoverageFeature` bits (`SanitizerArgs.cpp`; WP-1863).
+pub mod cov {
+    /// `func`: function entry blocks.
+    pub const FUNC: u32 = 1 << 0;
+    /// `bb`: every block.
+    pub const BB: u32 = 1 << 1;
+    /// `edge`: blocks and critical edges.
+    pub const EDGE: u32 = 1 << 2;
+    /// `indirect-calls`.
+    pub const INDIRECT_CALLS: u32 = 1 << 3;
+    /// `trace-bb` (deprecated; LLVM ignores it).
+    pub const TRACE_BB: u32 = 1 << 4;
+    /// `trace-cmp`.
+    pub const TRACE_CMP: u32 = 1 << 5;
+    /// `trace-div`.
+    pub const TRACE_DIV: u32 = 1 << 6;
+    /// `trace-gep`.
+    pub const TRACE_GEP: u32 = 1 << 7;
+    /// `8bit-counters` (deprecated; LLVM ignores it).
+    pub const COUNTERS_8BIT: u32 = 1 << 8;
+    /// `trace-pc`.
+    pub const TRACE_PC: u32 = 1 << 9;
+    /// `trace-pc-guard`.
+    pub const TRACE_PC_GUARD: u32 = 1 << 10;
+    /// `no-prune`.
+    pub const NO_PRUNE: u32 = 1 << 11;
+    /// `inline-8bit-counters`.
+    pub const INLINE_8BIT_COUNTERS: u32 = 1 << 12;
+    /// `pc-table`.
+    pub const PC_TABLE: u32 = 1 << 13;
+    /// `stack-depth`.
+    pub const STACK_DEPTH: u32 = 1 << 14;
+    /// `inline-bool-flag`.
+    pub const INLINE_BOOL_FLAG: u32 = 1 << 15;
+    /// `trace-loads`.
+    pub const TRACE_LOADS: u32 = 1 << 16;
+    /// `trace-stores`.
+    pub const TRACE_STORES: u32 = 1 << 17;
+    /// `control-flow`.
+    pub const CONTROL_FLOW: u32 = 1 << 18;
+
+    /// The `-fsanitize-coverage=` values, in clang's order.
+    pub const NAMES: [(&str, u32); 19] = [
+        ("func", FUNC),
+        ("bb", BB),
+        ("edge", EDGE),
+        ("indirect-calls", INDIRECT_CALLS),
+        ("trace-bb", TRACE_BB),
+        ("trace-cmp", TRACE_CMP),
+        ("trace-div", TRACE_DIV),
+        ("trace-gep", TRACE_GEP),
+        ("8bit-counters", COUNTERS_8BIT),
+        ("trace-pc", TRACE_PC),
+        ("trace-pc-guard", TRACE_PC_GUARD),
+        ("no-prune", NO_PRUNE),
+        ("inline-8bit-counters", INLINE_8BIT_COUNTERS),
+        ("inline-bool-flag", INLINE_BOOL_FLAG),
+        ("pc-table", PC_TABLE),
+        ("stack-depth", STACK_DEPTH),
+        ("trace-loads", TRACE_LOADS),
+        ("trace-stores", TRACE_STORES),
+        ("control-flow", CONTROL_FLOW),
+    ];
+
+    /// The insertion points (`-fsanitize-coverage-type=` 1, 2, 3).
+    pub const INSERTION_POINTS: u32 = FUNC | BB | EDGE;
+
+    /// What `-fsanitize=fuzzer[-no-link]` turns on (Linux: with
+    /// `stack-depth`).
+    pub const FUZZER: u32 =
+        INLINE_8BIT_COUNTERS | INDIRECT_CALLS | TRACE_CMP | PC_TABLE | STACK_DEPTH;
 }
 
 /// The pass sanitizers' runtimes, named on the link line.
@@ -248,8 +337,24 @@ impl SanitizeFlags {
                 "0" | "1" | "2" => self.track_origins = v.parse().ok(),
                 _ => return Some(Err(ArgError::InvalidFlagValue(arg.into(), v.into()))),
             }
+        } else if let Some(v) = arg.strip_prefix("-fsanitize-coverage=") {
+            self.coverage.push((false, v.to_owned()));
+        } else if let Some(v) = arg.strip_prefix("-fno-sanitize-coverage=") {
+            self.coverage.push((true, v.to_owned()));
+        } else if let Some(f) = arg.strip_prefix("-fsanitize-coverage-allowlist=") {
+            self.coverage_lists.push((true, f.to_owned()));
+        } else if let Some(f) = arg.strip_prefix("-fsanitize-coverage-ignorelist=") {
+            self.coverage_lists.push((false, f.to_owned()));
+        } else if let Some(v) = arg.strip_prefix("-fsanitize-coverage-stack-depth-callback-min=") {
+            self.stack_depth_callback_min.push((arg.to_owned(), v.to_owned()));
+        } else if arg.starts_with("-fsanitize-coverage-")
+            || arg.starts_with("-fno-sanitize-coverage-")
+        {
+            // clang's driver has no other: the retired `-whitelist=` /
+            // `-blacklist=` spellings and the `-cc1` options are unknown.
+            return Some(Err(ArgError::Unknown(arg.to_owned())));
         } else if arg.starts_with("-fsanitize-") || arg.starts_with("-fno-sanitize-") {
-            // The coverage, minimal-runtime, CFI, … options.
+            // The minimal-runtime, CFI, … options.
             return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
         } else {
             return None;
@@ -450,6 +555,7 @@ impl SanitizeFlags {
         let trap = trap.intersect(kinds);
         let recover = recover.intersect(kinds).without(S::UNRECOVERABLE).without(trap);
         let use_after_scope = self.use_after_scope.unwrap_or(true);
+        let coverage = self.coverage_features(kinds.has_any(S::FUZZER_NO_LINK)).0;
         let s = Sanitize {
             opts: SanitizeOptions {
                 kinds,
@@ -458,14 +564,196 @@ impl SanitizeFlags {
                 merge: merge.map(|m| m.intersect(kinds)),
                 use_after_scope: use_after_scope
                     && kinds.has_any(S::ADDRESS.union(S::KERNEL_ADDRESS)),
+                coverage: coverage_on(coverage),
                 ..SanitizeOptions::default()
             },
             use_after_scope,
             use_after_return: self.use_after_return,
             track_origins: self.track_origins.unwrap_or(0),
             memtag_stack,
+            coverage,
+            stack_depth_callback_min: self.callback_min().unwrap_or(0),
         };
         (s, errors)
+    }
+
+    /// The `-fsanitize-coverage-stack-depth-callback-min=` value, 0 when
+    /// not given; `None` for one clang rejects (not an `int` by
+    /// `getAsInteger(0)`, or negative).
+    fn callback_min(&self) -> Option<u32> {
+        self.stack_depth_callback_min
+            .last()
+            .map_or(Some(0), |(_, v)| legacy_int(v).and_then(|n| u32::try_from(n).ok()))
+    }
+
+    /// clang's `-f[no-]sanitize-coverage=` resolution (WP-1863): the
+    /// features, starting from `-fsanitize=fuzzer`'s when `fuzzer`, then
+    /// the options in order (a single number is the legacy form: it
+    /// clears them, deprecated unless 0), the insertion point a feature
+    /// implies (`edge`; `func` for `stack-depth`), and the diagnostics in
+    /// clang's order.
+    fn coverage_features(&self, fuzzer: bool) -> (u32, Vec<ArgError>) {
+        let mut errors = Vec::new();
+        let mut f = if fuzzer { cov::FUZZER } else { 0 };
+        for (no, v) in &self.coverage {
+            let opt = if *no { "-fno-sanitize-coverage=" } else { "-fsanitize-coverage=" };
+            // clang's `CommaJoined` values: empty ones are dropped.
+            let vals: Vec<&str> = v.split(',').filter(|v| !v.is_empty()).collect();
+            if !*no
+                && let [n] = vals[..]
+                && let Some(n) = legacy_int(n)
+            {
+                f = 0;
+                if n != 0 {
+                    errors.push(ArgError::DeprecatedArg(
+                        format!("{opt}{v}"),
+                        "-fsanitize-coverage=trace-pc-guard".into(),
+                    ));
+                }
+                continue;
+            }
+            let mut parsed = 0;
+            for v in vals {
+                match cov::NAMES.iter().find(|(n, _)| *n == v) {
+                    Some((_, b)) => parsed |= b,
+                    None => errors.push(ArgError::UnsupportedValue(opt.into(), v.into())),
+                }
+            }
+            if *no {
+                f &= !parsed;
+            } else {
+                f |= parsed;
+            }
+        }
+        for (a, b) in [(cov::FUNC, cov::BB), (cov::FUNC, cov::EDGE), (cov::BB, cov::EDGE)] {
+            if f & a != 0 && f & b != 0 {
+                let name = |x| cov::NAMES.iter().find(|(_, b)| *b == x).map_or("", |n| n.0);
+                errors.push(ArgError::NotAllowedWith(
+                    format!("-fsanitize-coverage={}", name(a)),
+                    format!("-fsanitize-coverage={}", name(b)),
+                ));
+            }
+        }
+        for (b, n) in [(cov::TRACE_BB, "trace-bb"), (cov::COUNTERS_8BIT, "8bit-counters")] {
+            if f & b != 0 {
+                errors.push(ArgError::DeprecatedArg(
+                    format!("-fsanitize-coverage={n}"),
+                    "-fsanitize-coverage=trace-pc-guard".into(),
+                ));
+            }
+        }
+        let instrumentation = cov::TRACE_PC
+            | cov::TRACE_PC_GUARD
+            | cov::INLINE_8BIT_COUNTERS
+            | cov::TRACE_LOADS
+            | cov::TRACE_STORES
+            | cov::INLINE_BOOL_FLAG
+            | cov::CONTROL_FLOW;
+        if f & cov::INSERTION_POINTS != 0 && f & instrumentation == 0 {
+            errors.push(ArgError::DeprecatedArg(
+                "-fsanitize-coverage=[func|bb|edge]".into(),
+                "-fsanitize-coverage=[func|bb|edge],[trace-pc-guard|trace-pc],[control-flow]"
+                    .into(),
+            ));
+        }
+        if f & cov::INSERTION_POINTS == 0 {
+            if f & (cov::TRACE_PC
+                | cov::TRACE_PC_GUARD
+                | cov::INLINE_8BIT_COUNTERS
+                | cov::INLINE_BOOL_FLAG
+                | cov::CONTROL_FLOW)
+                != 0
+            {
+                f |= cov::EDGE;
+            }
+            if f & cov::STACK_DEPTH != 0 {
+                f |= cov::FUNC;
+            }
+        }
+        (f, errors)
+    }
+
+    /// The `-fsanitize-coverage=` diagnostics and those of its lists
+    /// (WP-1863), in clang's order: the options', then, with coverage
+    /// on, each allowlist then ignorelist file that does not exist and
+    /// the lists LLVM's `SpecialCaseList` rejects (read as clang 22 or 19
+    /// does). `kinds` are the resolved sanitizers.
+    #[must_use]
+    pub fn coverage_errors(&self, kinds: S, clang22: bool) -> Vec<ArgError> {
+        let mut errors = Vec::new();
+        // clang 22 checks the callback minimum first (clang 19 does not
+        // know the option: `Args::unknown_at_compat_19`).
+        if let Some((a, v)) = self.stack_depth_callback_min.last()
+            && clang22
+            && self.callback_min().is_none()
+        {
+            errors.push(ArgError::InvalidFlagValue(a.clone(), v.clone()));
+        }
+        let (f, e) = self.coverage_features(kinds.has_any(S::FUZZER_NO_LINK));
+        errors.extend(e);
+        if f == 0 {
+            return errors;
+        }
+        for allow in [true, false] {
+            let mut existing = Vec::new();
+            for (_, p) in self.coverage_lists.iter().filter(|l| l.0 == allow) {
+                if Path::new(p).exists() {
+                    existing.push(p.clone());
+                } else {
+                    errors.push(ArgError::NoSuchFile(p.clone()));
+                }
+            }
+            if existing.is_empty() {
+                continue;
+            }
+            let parsed = read_ignorelists(&existing).and_then(|t| parse_ignorelists(&t, clang22));
+            if let Err(ArgError::MalformedIgnorelist(m)) = parsed {
+                errors.push(ArgError::MalformedCoverageList(allow, m));
+            }
+        }
+        errors
+    }
+
+    /// The coverage lists codegen applies (WP-1863): `None` without
+    /// coverage or lists, or when one is malformed
+    /// ([`Self::coverage_errors`] reported it).
+    #[must_use]
+    pub fn coverage_lists(&self, s: &Sanitize, clang22: bool) -> Option<Arc<CoverageLists>> {
+        if s.coverage == 0 {
+            return None;
+        }
+        let read = |allow: bool| -> Option<Option<SanitizerIgnorelist>> {
+            let existing: Vec<String> = self
+                .coverage_lists
+                .iter()
+                .filter(|(a, p)| *a == allow && Path::new(p).exists())
+                .map(|l| l.1.clone())
+                .collect();
+            if existing.is_empty() {
+                return Some(None);
+            }
+            read_ignorelists(&existing).and_then(|t| parse_ignorelists(&t, clang22)).ok().map(Some)
+        };
+        let allow = read(true)?;
+        let ignore = read(false)?;
+        (allow.is_some() || ignore.is_some()).then(|| Arc::new(CoverageLists { allow, ignore }))
+    }
+
+    /// The coverage list options clang leaves unclaimed, as written:
+    /// all of them when no coverage is on (WP-1863; "argument unused
+    /// during compilation").
+    #[must_use]
+    pub fn unused_coverage_lists(&self, s: &Sanitize) -> Vec<String> {
+        if s.coverage != 0 {
+            return Vec::new();
+        }
+        self.coverage_lists
+            .iter()
+            .map(|(allow, f)| {
+                let kind = if *allow { "allowlist" } else { "ignorelist" };
+                format!("-fsanitize-coverage-{kind}={f}")
+            })
+            .collect()
     }
 
     /// clang's `parseSanitizeTrapArgs`: the trap lists, last first.
@@ -618,6 +906,43 @@ fn parse_ignorelists(
         .map_err(|IgnorelistError::Malformed(m)| ArgError::MalformedIgnorelist(m))
 }
 
+/// clang `CodeGenOptions::hasSanitizeCoverage` of features `c`
+/// ([`cov`]).
+fn coverage_on(c: u32) -> bool {
+    c & (cov::INSERTION_POINTS
+        | cov::INDIRECT_CALLS
+        | cov::TRACE_CMP
+        | cov::TRACE_LOADS
+        | cov::TRACE_STORES
+        | cov::CONTROL_FLOW)
+        != 0
+}
+
+/// LLVM `StringRef::getAsInteger(0, int)`: an optional `-`, then
+/// digits in the base a `0x`, `0b`, `0o` or `0` prefix picks (else
+/// decimal), the whole string, in `int`'s range.
+fn legacy_int(s: &str) -> Option<i64> {
+    let (neg, s) = s.strip_prefix('-').map_or((false, s), |r| (true, r));
+    let lower = s.to_ascii_lowercase();
+    let (radix, digits) = if let Some(r) = lower.strip_prefix("0x") {
+        (16, r)
+    } else if let Some(r) = lower.strip_prefix("0b") {
+        (2, r)
+    } else if let Some(r) = lower.strip_prefix("0o") {
+        (8, r)
+    } else if lower.len() > 1 && lower.starts_with('0') && lower.as_bytes()[1].is_ascii_digit() {
+        (8, &lower[1..])
+    } else {
+        (10, lower.as_str())
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    let v = i64::from_str_radix(digits, radix).ok()?;
+    let v = if neg { -v } else { v };
+    i32::try_from(v).ok().map(i64::from)
+}
+
 /// The values' union, unknown names ignored.
 fn values_set(l: &ListArg) -> S {
     l.values.iter().filter_map(|v| parse_name(v, l.list != List::Add)).fold(S::NONE, S::union)
@@ -690,18 +1015,45 @@ impl Sanitize {
         let rec = self.opts.recover;
         let mut passes: Vec<String> = Vec::new();
         let mut cl: Vec<String> = Vec::new();
-        if k.has_any(S::FUZZER_NO_LINK) {
+        // WP-1863: `SanitizerCoveragePass` with clang's options, through
+        // the pass's `cl::opt`s (`OverrideFromCL`). It instruments nothing
+        // without an insertion point, so it runs only with one.
+        let c = self.coverage;
+        let level = [(cov::EDGE, 3), (cov::BB, 2), (cov::FUNC, 1)]
+            .iter()
+            .find(|(b, _)| c & b != 0)
+            .map_or(0, |l| l.1);
+        if level != 0 {
             passes.push("sancov-module".into());
-            cl.extend(
-                [
-                    "-sanitizer-coverage-level=3",
-                    "-sanitizer-coverage-inline-8bit-counters",
-                    "-sanitizer-coverage-pc-table",
-                    "-sanitizer-coverage-trace-compares",
-                    "-sanitizer-coverage-stack-depth",
-                ]
-                .map(str::to_owned),
-            );
+            // Level 4 is `edge` with indirect calls; the `cl::opt`s cannot
+            // ask indirect calls with `func` or `bb`.
+            let level = if level == 3 && c & cov::INDIRECT_CALLS != 0 { 4 } else { level };
+            cl.push(format!("-sanitizer-coverage-level={level}"));
+            for (b, flag) in [
+                (cov::TRACE_CMP, "-sanitizer-coverage-trace-compares"),
+                (cov::TRACE_DIV, "-sanitizer-coverage-trace-divs"),
+                (cov::TRACE_GEP, "-sanitizer-coverage-trace-geps"),
+                (cov::TRACE_PC, "-sanitizer-coverage-trace-pc"),
+                (cov::TRACE_PC_GUARD, "-sanitizer-coverage-trace-pc-guard"),
+                (cov::INLINE_8BIT_COUNTERS, "-sanitizer-coverage-inline-8bit-counters"),
+                (cov::INLINE_BOOL_FLAG, "-sanitizer-coverage-inline-bool-flag"),
+                (cov::PC_TABLE, "-sanitizer-coverage-pc-table"),
+                (cov::NO_PRUNE, "-sanitizer-coverage-prune-blocks=0"),
+                (cov::STACK_DEPTH, "-sanitizer-coverage-stack-depth"),
+                (cov::TRACE_LOADS, "-sanitizer-coverage-trace-loads"),
+                (cov::TRACE_STORES, "-sanitizer-coverage-trace-stores"),
+                (cov::CONTROL_FLOW, "-sanitizer-coverage-control-flow"),
+            ] {
+                if c & b != 0 {
+                    cl.push(flag.into());
+                }
+            }
+            if self.stack_depth_callback_min != 0 {
+                cl.push(format!(
+                    "-sanitizer-coverage-stack-depth-callback-min={}",
+                    self.stack_depth_callback_min
+                ));
+            }
         }
         if k.has_any(S::MEMORY) {
             let mut p = String::new();
@@ -748,7 +1100,8 @@ impl Sanitize {
     /// The `-fsanitize=` options `ClangFeatures::from_args` and the
     /// predefines see: one per feature group the set touches (clang's
     /// `__has_feature(undefined_behavior_sanitizer)` is any `undefined`
-    /// check).
+    /// check), and `-fsanitize-coverage=on` for [`Self::has_coverage`]
+    /// (`__has_feature(coverage_sanitizer)`).
     #[must_use]
     pub fn feature_args(&self) -> Vec<String> {
         let k = self.opts.kinds;
@@ -770,7 +1123,17 @@ impl Sanitize {
         .iter()
         .filter(|n| parse_name(n, false).is_some_and(|s| k.has_any(s)))
         .map(|n| format!("-fsanitize={n}"))
+        .chain(self.has_coverage().then(|| "-fsanitize-coverage=on".to_owned()))
         .collect()
+    }
+
+    /// clang `CodeGenOptions::hasSanitizeCoverage` (WP-1863): an insertion
+    /// point, `indirect-calls`, `trace-cmp`, `trace-loads`, `trace-stores`
+    /// or `control-flow` (`__has_feature(coverage_sanitizer)`, and
+    /// `no_sanitize("coverage")` makes `nosanitize_coverage`).
+    #[must_use]
+    pub fn has_coverage(&self) -> bool {
+        coverage_on(self.coverage)
     }
 
     /// The predefined macros clang 22 adds (`__SANITIZE_ADDRESS__`,
@@ -890,8 +1253,92 @@ mod tests {
         let (r, e) = f.resolve(false, true, false, "t");
         assert_eq!(e, []);
         assert!(!r.opts.kinds.has_any(S(S::VPTR.0 | S::OBJECT_SIZE.0)));
-        let (_, e) = flags("-fsanitize-coverage=trace-pc");
-        assert_eq!(e, [ArgError::UnsupportedByKiln("-fsanitize-coverage=trace-pc".into())]);
+        let (_, e) = flags("-fsanitize-minimal-runtime");
+        assert_eq!(e, [ArgError::UnsupportedByKiln("-fsanitize-minimal-runtime".into())]);
+    }
+
+    /// clang's `-f[no-]sanitize-coverage=` resolution and the `opt`
+    /// flags it maps to (WP-1863).
+    #[test]
+    fn coverage() {
+        let feats = |s: &str, fuzzer: bool| flags(s).0.coverage_features(fuzzer);
+        let (f, e) = feats("-fsanitize-coverage=trace-pc-guard,trace-cmp", false);
+        assert_eq!((f, e), (cov::TRACE_PC_GUARD | cov::TRACE_CMP | cov::EDGE, vec![]));
+        let (f, _) = feats("-fsanitize-coverage=stack-depth", false);
+        assert_eq!(f, cov::STACK_DEPTH | cov::FUNC);
+        let (f, _) = feats("-fno-sanitize-coverage=trace-cmp", true);
+        // Both implied points: the counters' `edge`, `stack-depth`'s `func`.
+        assert_eq!(f, (cov::FUZZER & !cov::TRACE_CMP) | cov::EDGE | cov::FUNC);
+        // The legacy integers clear the features.
+        let (f, e) = feats("-fsanitize-coverage=trace-pc -fsanitize-coverage=0x2", false);
+        let dep = |a: &str| {
+            ArgError::DeprecatedArg(a.into(), "-fsanitize-coverage=trace-pc-guard".into())
+        };
+        assert_eq!((f, e), (0, vec![dep("-fsanitize-coverage=0x2")]));
+        assert_eq!(feats("-fsanitize-coverage=0", false), (0, vec![]));
+        assert_eq!(
+            (legacy_int("010"), legacy_int("0b11"), legacy_int("x")),
+            (Some(8), Some(3), None)
+        );
+        let (_, e) = feats("-fsanitize-coverage=func,edge,trace-bb,bogus", false);
+        assert_eq!(
+            e,
+            [
+                uv("-fsanitize-coverage=", "bogus"),
+                ArgError::NotAllowedWith(
+                    "-fsanitize-coverage=func".into(),
+                    "-fsanitize-coverage=edge".into()
+                ),
+                dep("-fsanitize-coverage=trace-bb"),
+                ArgError::DeprecatedArg(
+                    "-fsanitize-coverage=[func|bb|edge]".into(),
+                    "-fsanitize-coverage=[func|bb|edge],[trace-pc-guard|trace-pc],[control-flow]"
+                        .into()
+                ),
+            ]
+        );
+        let (r, e) = resolve("-fsanitize-coverage=trace-pc-guard,indirect-calls,no-prune");
+        assert_eq!(e, []);
+        assert!(r.has_coverage() && r.opts.coverage);
+        let (p, cl) = r.optimizer_last(0).unwrap();
+        assert_eq!(p, "sancov-module");
+        assert_eq!(
+            cl,
+            [
+                "-sanitizer-coverage-level=4",
+                "-sanitizer-coverage-trace-pc-guard",
+                "-sanitizer-coverage-prune-blocks=0"
+            ]
+        );
+        let (r, e) = resolve(
+            "-fsanitize-coverage=stack-depth -fsanitize-coverage-stack-depth-callback-min=0x20",
+        );
+        assert_eq!(e, []);
+        assert_eq!(
+            r.optimizer_last(0).unwrap().1,
+            [
+                "-sanitizer-coverage-level=1",
+                "-sanitizer-coverage-stack-depth",
+                "-sanitizer-coverage-stack-depth-callback-min=32"
+            ]
+        );
+        let (f, _) = flags("-fsanitize-coverage-stack-depth-callback-min=-1");
+        assert_eq!(
+            f.coverage_errors(S::NONE, true),
+            [ArgError::InvalidFlagValue(
+                "-fsanitize-coverage-stack-depth-callback-min=-1".into(),
+                "-1".into()
+            )]
+        );
+        assert_eq!(f.coverage_errors(S::NONE, false), []);
+        // No insertion point: nothing to instrument.
+        let (r, _) = resolve("-fsanitize-coverage=trace-cmp");
+        assert!(r.has_coverage() && r.optimizer_last(0).is_none());
+        let (f, _) = flags("-fsanitize-coverage-allowlist=a.txt");
+        assert_eq!(
+            f.unused_coverage_lists(&resolve("").0),
+            ["-fsanitize-coverage-allowlist=a.txt"]
+        );
     }
 
     /// clang 19 and 22 `SanitizerArgs` on x86-64 and `AArch64` Linux

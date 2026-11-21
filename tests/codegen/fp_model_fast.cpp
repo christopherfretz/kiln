@@ -1,8 +1,8 @@
-// -ffp-model=fast is -ffast-math under clang 19, and fast math that
-// keeps NaNs and infinities under clang 22, whose promoted complex
-// division kiln does not implement (an error unless a complex-range flag
-// follows; spec/driver.md "Floating-point flags", WP-806).
-//@ args: -ffp-model=fast -fcomplex-arithmetic=basic
+// -ffp-model=fast is -ffast-math under clang 19, and under clang 22 fast
+// math that keeps NaNs and infinities and selects promoted complex
+// arithmetic: `cdiv` divides in `double` (spec/driver.md "Floating-point
+// flags", WP-806, WP-1795).
+//@ args: -ffp-model=fast
 extern "C" {
 double sqrt(double);
 float sqrtf(float);

@@ -1671,13 +1671,11 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   result. A `const` one (`cproj`) whose argument or result is passed by
   address (x86-64 `_Complex long double`) is `memory(argmem: readwrite)`
   (clang `AddPotentialArgAccess`). `tests/codegen/complex_math_builtins.cpp`.
-- **Deviations.** `-fcomplex-arithmetic=promoted` (clang widens a
-  division's operands to the next type with twice the exponent range,
-  warning when none exists) is rejected with "unsupported argument", and
-  clang 22's `-ffp-model=fast`, which selects it, with
-  `drv_unsupported_flag` (spec/driver.md "Floating-point flags");
-  clang's `-Woverriding-option` warnings between complex-range flags are
-  not issued. `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
+- **Promoted range** (WP-1795). `-fcomplex-arithmetic=promoted` (and
+  clang 22's `-ffp-model=fast`) divides in the next wider type with twice
+  the exponent range, and with Smith's algorithm when none exists
+  (spec/codegen.md §7n "Promoted complex arithmetic").
+- **Deviations.** `_Complex _Float16` is supported (`ext.complex/complex-half.cpp`).
   `_Complex __bf16` (spelled directly or through a type-name, as
   libstdc++ `<complex>` writes `__complex__ decltype(0.0bf16)` under
   `__STDCPP_BFLOAT16_T__`) is accepted as GCC 14 accepts it, where clang

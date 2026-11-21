@@ -507,6 +507,7 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 let mut set = SanitizerSet::NONE;
+                let mut coverage = false;
                 let mut not_global = Vec::new();
                 for arg in args {
                     let at = self.arg_loc(arg, loc);
@@ -533,6 +534,7 @@ impl Sema<'_, '_> {
                             self.emit(msg);
                         }
                         s => {
+                            coverage |= s.is_none();
                             set = set.union(s.unwrap_or(SanitizerSet::NONE));
                             if !matches!(text.as_str(), "address" | "hwaddress" | "memtag") {
                                 not_global.push(text);
@@ -541,6 +543,9 @@ impl Sema<'_, '_> {
                     }
                 }
                 (a, b) = kiln_ast::sanitize::no_sanitize_words(set, 0);
+                if coverage {
+                    b |= kiln_ast::sanitize::NO_SANITIZE_COVERAGE;
+                }
                 let id = self.ast.attrs.push(AttrNode { kind, syntax, flags: 0, loc, a, b });
                 if !not_global.is_empty() {
                     self.no_sanitize_not_global.insert(id, not_global);

@@ -16,8 +16,10 @@ WP-1803, which also removed the generic class-A error
 inline function), closed with WP-1814 and WP-1815. At the 1.3.0
 release candidate 10 of 56,766 g++.dg cases hit a gap; all of those are
 fixed. 4 entries (5 sites) use wording that matches clang's for a
-limit clang shares, and 3 spec entries record a limit clang shares or
+limit clang shares, and 2 spec entries record a limit clang shares or
 a flag kiln rejects by name: they are listed as excluded and stay.
+GAP-172 (promoted complex arithmetic, `-fcomplex-arithmetic=promoted`
+and clang 22's `-ffp-model=fast`) closed with WP-1795.
 
 ## Method
 
@@ -52,7 +54,8 @@ directly above; its sites cell names it `spec/<file>.md::§<heading>`
 explicit-object gap (fixed), 4 stale ones (closure template-heads,
 GNU statements, new-expression forms, `_Complex _Float16`: implemented
 since, rewritten), a missing warning (relabelled "Missing warnings",
-not a language corner) and the 2 excluded entries GAP-171 and GAP-172.
+not a language corner) and the 2 excluded entries GAP-171 and GAP-172
+(GAP-172 since fixed, WP-1795).
 
 A *gap list* is a spec paragraph whose bold lead opens a list of gaps or
 limits (`static_gaps::SPEC_LIST_LEADS`: `**Gaps`, `**Known gaps`,
@@ -134,8 +137,7 @@ words, so these are not kiln gaps.
 | GAP-169 | Oven trap | excluded | `constexpr bit cast involving type '{n}' is not yet supported` | `crates/kiln_oven/src/compile/bitcast.rs::bit_cast_unsupported` ×2 | 0 | excluded: clang's note `note_constexpr_bit_cast_unsupported_type`, same cases |
 | GAP-170 | Oven trap | excluded | `non-trivial destruction of lifetime-extended temporary with type '{t}' used in the result of a constant expression is not yet supported` | `crates/kiln_oven/src/value.rs::check_let_destruction` | 0 | excluded: clang's note `note_constexpr_unsupported_temporary_nontrivial_dtor`, same cases |
 | GAP-171 | spec | excluded | `__builtin_va_arg_pack()` / `__builtin_va_arg_pack_len()` are undeclared (C++) or an unknown builtin (C) | `spec/sema-templates.md::§9.5 __builtin_* functions used by the M3 headers` | 0 | excluded: clang 22 implements neither, and glibc uses them only for a `__GNUC_PREREQ (4,3)` kiln's clang version macros do not meet (WP-1550) |
-| GAP-172 | spec | excluded | `-fcomplex-arithmetic=promoted` is "unsupported argument", `-ffp-model=fast` (which selects it) "'…' is not supported by kiln" | `spec/codegen.md::§7n. Landed (WP-211): GNU _Complex (complex.rs)` | 0 | excluded: a driver flag kiln rejects by name, as every `drv_unsupported_flag` use is (outside this page's language corners); promoted complex division is a proposed follow-up row (WP-1782) |
-| GAP-173 | spec | excluded | the fixed-point literal suffixes (`k`, `r`, `hk`, `uk`, ...; ISO/IEC TR 18037) are invalid suffixes, and `-ffixed-point` is an unknown argument | `spec/lex.md::§Deviations from clang` | 0 | excluded: a clang extension off by default behind `-ffixed-point`, a driver flag kiln rejects by name (as GAP-172); without the flag clang rejects the suffixes too |
+| GAP-173 | spec | excluded | the fixed-point literal suffixes (`k`, `r`, `hk`, `uk`, ...; ISO/IEC TR 18037) are invalid suffixes, and `-ffixed-point` is an unknown argument | `spec/lex.md::§Deviations from clang` | 0 | excluded: a clang extension off by default behind `-ffixed-point`, a driver flag kiln rejects by name; without the flag clang rejects the suffixes too |
 | GAP-041 | cg_cannot_mangle_expression | excluded | `cannot yet mangle expression type {kind}` ({kind}: the kinds clang has no encoding for either, under Enumerated kinds) | `crates/kiln_codegen/src/module.rs::run_with_stats` | 0 | excluded: clang's own error (`CXXNameMangler::mangleExpression`) for the same kinds; every kind clang mangles has its encoding (WP-1736, spec/abi.md §8.15) |
 
 ## Enumerated kinds

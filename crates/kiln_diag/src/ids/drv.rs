@@ -16,6 +16,8 @@ drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to
 drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
 // WP-920: `-MJ <file>` (clang's JSON compilation-database fragment).
 drv_compilation_database = Error (2) "compilation database '{0}' could not be opened: {1}";
+// WP-1863: the legacy `-fsanitize-coverage=` values.
+drv_deprecated_arg = Warning [Deprecated] (2) "argument '{0}' is deprecated, use '{1}' instead";
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 // WP-1371: `-fkiln-backend=hod` (spec/driver.md "Back-end selection").
@@ -51,6 +53,9 @@ drv_llvm_not_found = Error (1) "no supported LLVM installation found (kiln suppo
 drv_llvm_not_on_path = Note (1) "not found on PATH: {0}";
 drv_llvm_tried = Note (2) "skipped '{0}': {1}";
 drv_llvm_unsupported = Error (4) "unsupported LLVM major {0} at '{1}' (from {2}); kiln supports LLVM {3}";
+// WP-1863: `-fsanitize-coverage-allowlist=` / `-ignorelist=`.
+drv_malformed_sanitizer_coverage_allowlist = Error (1) "malformed sanitizer coverage allowlist: '{0}'";
+drv_malformed_sanitizer_coverage_ignorelist = Error (1) "malformed sanitizer coverage ignorelist: '{0}'";
 // WP-1032: a sanitizer ignorelist LLVM's `SpecialCaseList` rejects.
 drv_malformed_sanitizer_ignorelist = Error (1) "malformed sanitizer ignorelist: '{0}'";
 // WP-920: `-MG` lists missing headers only for `-M`/`-MM`.
@@ -68,6 +73,12 @@ drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on thi
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+// WP-1795: clang 22 `warn_drv_overriding_complex_range`: {0} the flag
+// that implied the old range, {1} the overriding flag, {2}/{3} the old
+// and new range names.
+drv_overriding_complex_range = Warning [OverridingComplexRange] (4) "'{1}' sets complex range to \"{3}\" overriding the setting of \"{2}\" that was implied by '{0}'";
+// WP-1795: clang `warn_drv_overriding_option` (the `-ffp-model=` cases).
+drv_overriding_option = Warning [OverridingOption] (2) "overriding '{0}' option with '{1}'";
 // WP-1023: precompiled headers (spec/driver.md "Precompiled headers");
 // a `{N:}` in a `_19` row consumes the precompiled file's name, which
 // clang 19's wording does not show.

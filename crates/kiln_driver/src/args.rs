@@ -617,6 +617,13 @@ pub enum ArgError {
     /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
     /// message (WP-1032).
     MalformedIgnorelist(String),
+    /// "malformed sanitizer coverage allowlist / ignorelist: '{1}'"
+    /// (`true`: the allowlist; WP-1863).
+    MalformedCoverageList(bool, String),
+    /// The warning "argument '{0}' is deprecated, use '{1}' instead"
+    /// (`-Wdeprecated`; the legacy `-fsanitize-coverage=` values,
+    /// WP-1863).
+    DeprecatedArg(String, String),
     /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
     /// (WP-1138; clang's "requires hardware support (+memtag)").
     MemtagStackRequiresMte,
@@ -1253,6 +1260,19 @@ const SEPARATE_OR_EQ: &[&str] = &[
 /// nothing ([`crate::codegen_flags::CodegenFlags::trapv_handler_separate`]).
 const SEPARATE: &[&str] = &["-ftrapv-handler", "-include-pch"];
 
+/// The library builtins clang declares in namespace `std` (the
+/// `Builtins.td` rows with the `z` attribute), which `-fno-builtin-`
+/// names with a `std-` prefix ([`Args::no_builtin_fns`]).
+const STD_BUILTINS: &[&str] = &[
+    "__addressof",
+    "addressof",
+    "as_const",
+    "forward",
+    "forward_like",
+    "move",
+    "move_if_noexcept",
+];
+
 impl Input {
     /// The input `path` under the `-x` in force (its language, and
     /// whether that is a `-header` type).
@@ -1580,12 +1600,18 @@ impl Args {
     }
 
     /// The options clang 19 does not know, as its "unknown argument" at
-    /// `-fclang-compat=19` (WP-1044: the sanitize-merge flags).
+    /// `-fclang-compat=19` (WP-1044: the sanitize-merge flags; WP-1863:
+    /// `-fsanitize-coverage-stack-depth-callback-min=`).
     fn unknown_at_compat_19(&self) -> Vec<ArgError> {
         if self.clang22() {
             return Vec::new();
         }
-        self.sanitize_merge_written.iter().cloned().map(ArgError::Unknown).collect()
+        self.sanitize_merge_written
+            .iter()
+            .cloned()
+            .chain(self.sanitize.stack_depth_callback_min.iter().map(|m| m.0.clone()))
+            .map(ArgError::Unknown)
+            .collect()
     }
 
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
@@ -2290,6 +2316,40 @@ impl Args {
             return Vec::new();
         }
         let mut v = self.no_builtin_names.clone();
+        // WP-1863: clang's `SanitizerArgs::addArgs` keeps the calls
+        // libFuzzer intercepts library calls under `fuzzer-no-link`.
+        if self.sanitize.any()
+            && self
+                .sanitize(false, "")
+                .0
+                .opts
+                .kinds
+                .has_any(kiln_ast::sanitize::SanitizerSet::FUZZER_NO_LINK)
+        {
+            v.extend(
+                [
+                    "bcmp",
+                    "memcmp",
+                    "strncmp",
+                    "strcmp",
+                    "strncasecmp",
+                    "strcasecmp",
+                    "strstr",
+                    "strcasestr",
+                    "memmem",
+                ]
+                .map(str::to_owned),
+            );
+        }
+        // clang `getAllNoBuiltinFuncValues` keeps only the names
+        // `Builtin::Context::isBuiltinFunc` knows: library builtins, the
+        // `std-` ones spelled with the prefix (so `memmem`, `strcasestr`
+        // and unknown names give no attribute).
+        let clang22 = self.clang22();
+        v.retain(|n| {
+            let (std, name) = n.strip_prefix("std-").map_or((false, n.as_str()), |s| (true, s));
+            STD_BUILTINS.contains(&name) == std && kiln_pp::is_builtin_func(name, clang22)
+        });
         v.sort_unstable();
         v.dedup();
         v
@@ -3235,7 +3295,7 @@ mod tests {
 
     #[test]
     fn complex_range_last_wins() {
-        use ComplexRange::{Basic, Full, Improved};
+        use ComplexRange::{Basic, Full, Improved, Promoted};
         let r = |s| parse(s).complex_range();
         assert_eq!(r("a.cpp"), Full);
         assert_eq!(r("-fcx-limited-range a.cpp"), Basic);
@@ -3257,21 +3317,17 @@ mod tests {
         assert_eq!(r("-fclang-compat=19 -ffp-model=fast a.cpp"), Basic);
         assert_eq!(r("-fclang-compat=19 -ffast-math -ffp-model=precise a.cpp"), Basic);
         assert_eq!(r("-ffp-model=fast -fcomplex-arithmetic=basic a.cpp"), Basic);
-        for v in ["promoted", "bogus"] {
-            let a = parse(&format!("-fcomplex-arithmetic={v} a.cpp"));
-            let e = ArgError::UnsupportedValue("-fcomplex-arithmetic=".into(), v.into());
-            assert_eq!((a.complex_range(), a.errors), (Full, vec![e]));
-        }
-        // clang 22's -ffp-model=fast promotes complex division: not
-        // implemented, an error.
+        // WP-1795: promoted complex arithmetic (clang 22's
+        // -ffp-model=fast, and -fcomplex-arithmetic=promoted in both).
+        assert_eq!(r("-ffp-model=fast a.cpp"), Promoted);
+        assert_eq!(r("-fcomplex-arithmetic=promoted a.cpp"), Promoted);
+        assert_eq!(r("-fclang-compat=19 -fcomplex-arithmetic=promoted a.cpp"), Promoted);
+        assert_eq!(r("-Ofast -ffp-model=fast a.cpp"), Basic);
+        let a = parse("-fcomplex-arithmetic=bogus a.cpp");
+        let e = ArgError::UnsupportedValue("-fcomplex-arithmetic=".into(), "bogus".into());
+        assert_eq!((a.complex_range(), a.errors), (Full, vec![e]));
         let e = |s| parse(s).errors;
-        assert_eq!(
-            e("-ffp-model=fast a.cpp"),
-            vec![ArgError::UnsupportedByKiln(
-                "-ffp-model=fast (promoted complex arithmetic; add -fcomplex-arithmetic=basic)"
-                    .into()
-            )]
-        );
+        assert_eq!(e("-ffp-model=fast a.cpp"), vec![]);
         assert_eq!(e("-ffp-model=fast -fcx-limited-range a.cpp"), vec![]);
         assert_eq!(
             e("-fclang-compat=19 -ffp-model=aggressive a.cpp"),

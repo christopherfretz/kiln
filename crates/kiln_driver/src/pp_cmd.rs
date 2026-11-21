@@ -598,7 +598,16 @@ impl Job<'_> {
         let mut fargs: Vec<String> = a
             .argv
             .iter()
-            .filter(|s| !s.starts_with("-fsanitize=") && !s.starts_with("-fno-sanitize="))
+            .filter(|s| {
+                ![
+                    "-fsanitize=",
+                    "-fno-sanitize=",
+                    "-fsanitize-coverage=",
+                    "-fno-sanitize-coverage=",
+                ]
+                .iter()
+                .any(|p| s.starts_with(p))
+            })
             .cloned()
             .collect();
         fargs.extend(a.sanitize(!self.toolchain.target.is_aarch64(), triple).0.feature_args());

@@ -55,7 +55,8 @@ pub use callbacks::{
 pub use cond::{IfContext, IfEvaluator};
 pub use diag_map::literal_diags;
 pub use features::{
-    ClangFeatures, FeatureFlag, FeatureTable, TargetBuiltins, is_library_builtin, table_keys,
+    ClangFeatures, FeatureFlag, FeatureTable, TargetBuiltins, is_builtin_func, is_library_builtin,
+    table_keys,
 };
 pub use ifeval::IfEval;
 pub use include::{

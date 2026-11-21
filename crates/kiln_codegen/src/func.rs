@@ -214,6 +214,11 @@ pub(crate) struct Fx {
     /// The `(real, imag)` value of the last call returning `_Complex`
     /// (`call_vals_to` returns no scalar for it; spec/codegen.md §3.12).
     pub cx_ret: Option<(V, V)>,
+    /// clang `ComplexExprEmitter::FPHasBeenPromoted`: the current complex
+    /// emitter widened a division (promoted complex arithmetic), so its
+    /// later quotients are algebraic rather than Smith's. Saved and
+    /// cleared where clang starts a new emitter (`Cg::cx_emitter`).
+    pub cx_promoted: bool,
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     /// The loop statement about to be emitted and the `AttributedStmt`
@@ -355,6 +360,7 @@ impl Fx {
             vector_width: 0,
             call_loc: None,
             cx_ret: None,
+            cx_promoted: false,
             calls: Vec::new(),
             loop_hints: None,
             stmt_calls: crate::class_b::StmtCalls::default(),

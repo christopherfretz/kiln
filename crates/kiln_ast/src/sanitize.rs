@@ -318,7 +318,18 @@ pub const fn no_sanitize_set(a: u32, b: u32) -> SanitizerSet {
 /// attribute node's `b` word.
 #[must_use]
 pub const fn no_sanitize_tag(b: u32) -> usize {
-    (b >> 28) as usize
+    ((b >> 28) & 7) as usize
+}
+
+/// The `b`-word bit of a `no_sanitize` attribute node that names
+/// `coverage` (clang `NoSanitizeAttr::hasCoverage`; WP-1863), above the
+/// spelling index.
+pub const NO_SANITIZE_COVERAGE: u32 = 1 << 31;
+
+/// Whether a `no_sanitize` attribute node's `b` word names `coverage`.
+#[must_use]
+pub const fn no_sanitize_coverage(b: u32) -> bool {
+    b & NO_SANITIZE_COVERAGE != 0
 }
 
 #[cfg(test)]

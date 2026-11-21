@@ -4582,6 +4582,7 @@ impl<'a> Cg<'a> {
             self.m.external_name_collisions()
         );
         self.finish_dso_local();
+        self.coverage_list_attrs();
         let fp = self.frame_pointer().module_flag();
         let direct_access = self.direct_access_external_data();
         self.finish_debug_info();
