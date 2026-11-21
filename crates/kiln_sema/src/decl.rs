@@ -3937,6 +3937,12 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
+            // The function type's own keyword attributes (`template void
+            // f<1>() __arm_streaming;`) are part of the type matched
+            // against the template's (`Sema::apply_cc_attrs`).
+            let mut sme: Vec<AttrId> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+            sme.retain(|&a| self.ast.attrs.get(a).kind == AttrKind::SME_TYPE);
+            let ty = self.apply_cc_attrs(ty, &mut sme, true);
             match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
                 Ok(r) => return r,
                 // No template to specialize: a plain, invalid function.

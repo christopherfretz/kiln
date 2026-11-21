@@ -573,7 +573,10 @@ enum ExcSpec /* tag */ {
   bit 3 and ZT0 state at bit 6 (1 in, 2 out, 3 inout, 4 preserves). The
   bits are part of type identity (no implicit conversion between
   `void()` and `void() __arm_streaming`); a redeclaration or an override
-  with other bits is an error, checked before the calling convention.
+  with other bits is an error, checked before the calling convention. An
+  explicit instantiation or specialization of a function template has
+  the bits it writes in the type matched against the template's
+  (WP-1792).
   Two streaming modes, or two states for ZA or ZT0, conflict. The
   declaration attributes `__arm_locally_streaming` and `__arm_new("za",
   "zt0")` apply to functions only (`cannot be applied to types` after a

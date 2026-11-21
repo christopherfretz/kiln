@@ -42,6 +42,7 @@ pub mod stmt;
 pub mod strings;
 pub mod sve;
 mod sve_builtins;
+mod sve_checks;
 pub mod templates;
 pub mod types;
 mod x86_builtins;

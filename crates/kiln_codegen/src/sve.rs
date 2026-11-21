@@ -9,9 +9,10 @@
 //! lowering in the generated table ([`kiln_ast::sve`]): clang 22's at
 //! `-fclang-compat=20` and later, clang 19's below, each intrinsic declared
 //! with the attributes of the LLVM version the IR is for. Sema accepts
-//! only the table's builtins as an alias. The calling function needs
-//! target feature `sve` or `sme` (clang `checkTargetFeatures`,
-//! `err_builtin_needs_feature`).
+//! only the table's builtins as an alias, and checks the call's streaming
+//! mode, state and immediates (WP-1792). The calling function needs the
+//! builtin's required features (WP-1793; clang `checkTargetFeatures`,
+//! `err_builtin_needs_feature`: [`sve::checks`]' expression).
 
 use kiln_ast::sve::{self, Lowering};
 use kiln_ast::{DeclId, ExprId};
@@ -155,17 +156,19 @@ impl Cg<'_> {
         let ast = self.ast;
         let name = ast.symbols().as_str(b).to_owned();
         let on = self.feature_map(self.f.decl);
-        if on.get("sve") != Some(&true) && on.get("sme") != Some(&true) {
+        // WP-1793: the builtin's own required-feature expression.
+        let req =
+            sve::checks(&name, version(self.opts.clang_compat)).map_or("sve|sme", |c| c.features);
+        if !sve::features_hold(req, &|n| on.get(n) == Some(&true)) {
             // clang `checkTargetFeatures`: the error names the function
-            // called, then emission goes on with a poison value.
+            // called, then the call is emitted as usual (an operand's own
+            // builtin call is checked too).
             let called =
                 ast.decls.get(d).name().as_ident().map(|s| ast.symbols().as_str(s).to_owned());
             let diag = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(ast.begin_loc(e)))
                 .arg(called.unwrap_or_default())
-                .arg("sve|sme".to_owned());
+                .arg(req.to_owned());
             self.diags.push(diag);
-            let rty = self.lty(ast.exprs.get(e).ty());
-            return Ok((rty != LTy::VOID).then(|| V::C(self.m.const_poison(rty))));
         }
         let Some(l) = sve::lookup(&name, version(self.opts.clang_compat)) else {
             unreachable!("sema accepts only the SVE and SME builtins of the table: {name}")
@@ -206,8 +209,8 @@ impl Cg<'_> {
         for (k, t) in sig.split(' ').skip(1).enumerate() {
             if t == "#" {
                 let Some(v) = self.fold_int(args[k]) else {
-                    // clang's wording, at the call (clang reports it in
-                    // Sema, kiln here).
+                    // clang's wording, at the call: Sema reports it first
+                    // (WP-1792), so this is not reached.
                     let ast = self.ast;
                     let called = crate::builtins::direct_fn(ast, e)
                         .and_then(|d| ast.decls.get(d).name().as_ident())

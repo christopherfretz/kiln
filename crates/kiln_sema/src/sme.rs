@@ -187,12 +187,12 @@ impl Sema<'_, '_> {
     }
 
     /// The SME bits of function `f`'s type.
-    fn fn_sme_bits(&self, f: DeclId) -> u16 {
+    pub(crate) fn fn_sme_bits(&self, f: DeclId) -> u16 {
         self.ast.decls.get(f).ty().and_then(|t| self.fn_info_through(t)).map_or(0, FuncInfo::sme)
     }
 
     /// The ZA (bit 0) and ZT0 (bit 1) of `__arm_new` on function `f`.
-    fn arm_new_of(&self, f: DeclId) -> u32 {
+    pub(crate) fn arm_new_of(&self, f: DeclId) -> u32 {
         self.find_attr(f, AttrKind::ARM_NEW).map_or(0, |a| self.ast.attrs.get(a).a)
     }
 
@@ -268,7 +268,7 @@ impl Sema<'_, '_> {
     }
 
     /// clang `ActOnFunctionDeclarator` for a definition: a streaming
-    /// function needs `sme`, ZA state `sme` and ZT0 state `sme2`.
+    /// function needs `sme`, else ZA state `sme`; ZT0 state `sme2`.
     pub(crate) fn check_sme_definition(&mut self, f: DeclId) {
         let bits = self.fn_sme_bits(f);
         let new = self.arm_new_of(f);
@@ -279,10 +279,11 @@ impl Sema<'_, '_> {
         let at = self.ast.decls.get(f).loc();
         let has_sme = self.fn_feature(Some(f), "sme", self.module_feature("sme"));
         let has_v2 = self.fn_feature(Some(f), "sme2", self.module_feature("sme2"));
+        // One of the two errors: streaming first (clang's `else`; found by
+        // WP-1792).
         if streaming && !has_sme {
             self.error(DiagId::sema_sme_definition_sm_no_sme, at);
-        }
-        if (sme::za(bits) != 0 || new & 1 != 0) && !has_sme {
+        } else if (sme::za(bits) != 0 || new & 1 != 0) && !has_sme {
             self.error(DiagId::sema_sme_definition_za_no_sme, at);
         }
         if (sme::zt0(bits) != 0 || new & 2 != 0) && !has_v2 {

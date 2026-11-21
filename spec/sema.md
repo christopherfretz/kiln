@@ -7216,6 +7216,79 @@ under its own name, the same signature, gating and codegen
   `-Wformat-truncation`/`-Wformat-overflow`. Test:
   `tests/conformance/ext.gnu.builtins/format-security-specifiers.cpp`. Dependent calls are checked
   at instantiation.
+
+#### SVE and SME builtin calls (`sve_calls.rs`, WP-1792, WP-1793)
+
+A call of an alias of an SVE or SME builtin (`__clang_arm_builtin_alias`,
+spec/landed/codegen/WP-810.md) is checked as clang's
+`Sema::CheckBuiltinFunctionCall` then `SemaARM::CheckSVEBuiltinFunctionCall`
+/ `CheckSMEBuiltinFunctionCall` check it, after the checks of the call
+itself (`CheckFunctionCall`: the SME call rules of spec/types.md §5.4).
+The data is clang's own, per builtin: `kiln_ast::sve::checks` reads the
+table `kiln_ast/src/sve_checks.rs`, which `scripts/gen-sve-builtins.py
+--checks` generates from clang-tblgen's SVE and SME backends
+(`-gen-arm-{sve,sme}-builtins`, `-sema-rangechecks`, `-streaming-attrs`,
+`-builtin-za-state`) over clang 22's and clang 19's `arm_sve.td` /
+`arm_sme.td` (and `BuiltinsAArch64NeonSVEBridge.def`): the required
+target-feature expression, the streaming mode, the ZA/ZT0 state, the
+operands that must be integer constant expressions (prototype `I`) and
+the immediate checks (operand, ImmCheck kind, element width). Clang 22's
+rows apply from `-fclang-compat=20`, clang 19's below, as for the
+lowering. Every diagnostic is at the call's start; a value-dependent
+operand is checked when its template is instantiated; an error makes the
+call invalid.
+
+1. **Integer constants**: an `I` operand that is not an integer constant
+   expression (evaluated as one, so at 22 `(svpattern)32`, outside the
+   enumeration's values, is not one; at 19 it is 32) is "argument to 'f'
+   must be a constant integer", `f` the alias.
+2. **Streaming mode** (clang `checkArmStreamingBuiltin`, when the call is
+   in a function: at 22 a lambda's call operator is the caller, at 19 the
+   function the lambda is in): the caller is streaming
+   (`__arm_streaming` or `__arm_locally_streaming`), streaming-compatible
+   or not. A streaming builtin from a non-streaming or
+   streaming-compatible caller is "builtin can only be called from a
+   streaming function"; a non-streaming one from a streaming or
+   streaming-compatible caller "... from a non-streaming function". A
+   builtin valid in either mode (`VerifyRuntimeMode`) is checked against
+   the caller's target features (`-march`, `-target-feature` and its
+   `target` attribute): a streaming caller without `sme` is not checked;
+   at 22 the feature expression is split at its first top-level `|` into
+   the non-streaming and the streaming half and each is evaluated; at 19
+   it is evaluated with every `sme*` feature off, then with every `sve*`
+   one off, and a streaming-compatible caller satisfying the first is
+   accepted. Exactly one half holding requires that mode, as above.
+3. **ZA and ZT0 state**: a builtin that uses ZA (ZT0) called from a
+   function with no ZA (ZT0) state and no `__arm_new` for it warns
+   "builtin call is not valid when calling from a function without active
+   ZA state" (`-Wundefined-arm-za`; ZT0: `-Wundefined-arm-zt0`).
+4. **Immediates** (clang `CheckImmediateArg`, every check, each failing one
+   reported; the value is the operand's in its type, compared
+   sign-extended): `ImmCheck0_N`/`1_N` ranges, `2_4_Mul2` ([2, 4] and
+   "argument should be a multiple of 2"), the tile and slice numbers of
+   SME, a shift amount by the element width `w` (`ShiftRight` [1, w],
+   `ShiftRightNarrow` [1, w/2], `ShiftLeft` [0, w-1]), `Extract` [0,
+   2048/w-1], `LaneIndex` [0, 128/w-1], `LaneIndexCompRotate` [0,
+   128/(2w)-1], `LaneIndexDot` [0, 128/(4w)-1] ("argument value N is
+   outside the valid range [lo, hi]"), `ComplexRot90_270` ("argument
+   should be the value 90 or 270") and `ComplexRotAll90` ("... 0, 90, 180
+   or 270"). A range is not checked in a constant-evaluated context
+   (clang `BuiltinConstantArgRange`).
+
+The required target features are checked in codegen, as clang's
+`checkTargetFeatures`: a call whose feature expression (`,` binds tighter
+than `|`, parentheses group; `kiln_ast::sve::features_hold`) the caller's
+features do not satisfy is "'f' needs target feature E", `E` the
+expression as written (`(sve,(sve2p1|sme))|sme` at 22, `sve2p1|sme` at
+19); the call is still lowered, so a nested call is checked too. Tests:
+`tests/conformance/ext.arm.sve/sve-immediate-checks.cpp`,
+`sve-immediate-enum-cast{,-19}.cpp`,
+`tests/conformance/ext.arm.sme/sme-immediate-checks.cpp`,
+`sme-builtin-streaming-mode{,-22,-19}.cpp`; `kiln_driver` `codegen.rs`
+`sve_builtin_target_features`. Deviation: kiln reports every
+needs-feature error of a translation unit, where clang's codegen stops
+after the first top-level declaration with one.
+
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:

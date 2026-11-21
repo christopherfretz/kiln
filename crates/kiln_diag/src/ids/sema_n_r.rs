@@ -327,5 +327,7 @@ sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning addres
 sema_return_local_temp_ref = Warning [ReturnStackAddress] (0) "returning reference to local temporary object";
 sema_return_missing_expr = Error (1) "non-void function '{0}' should return a value";
 sema_riscv_rvv_vector_bits_unsupported = Error (0) "'riscv_rvv_vector_bits' attribute is not supported on targets missing 'zve32x'; specify an appropriate -march= or -mcpu=";
+sema_rotation_argument_to_cadd = Error (0) "argument should be the value 90 or 270";
+sema_rotation_argument_to_cmla = Error (0) "argument should be the value 0, 90, 180 or 270";
 sema_rref_in_exception_spec = Error (1) "rvalue reference type {0} is not allowed in exception specification";
 sema_rvalue_ref_bind_to_lvalue = Error (2) "rvalue reference to type {0} cannot bind to lvalue of type {1}";

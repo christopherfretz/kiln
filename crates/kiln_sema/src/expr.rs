@@ -6011,6 +6011,15 @@ impl Sema<'_, '_> {
             self.check_absolute_value(d, callee, &conv_args);
         }
         self.check_sme_call(proto.info(), rparen);
+        // A call of an SVE or SME builtin alias (WP-1792, WP-1793), after the
+        // checks of the call itself (clang `CheckFunctionCall` precedes
+        // `CheckBuiltinFunctionCall`).
+        if let Some(d) = named
+            && let Some((b, _)) = self.ast.builtin_alias(d)
+            && !self.check_sve_builtin_call(d, b, callee, &conv_args)
+        {
+            return self.recover_err(&kids, loc);
+        }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         // `__builtin_assume(e)` never evaluates `e`: with possible side
