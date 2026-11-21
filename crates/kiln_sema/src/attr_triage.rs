@@ -193,7 +193,6 @@ pub static TABLE: &[Row] = &[
     r("iboutlet", G | CL, C, OBJC),
     r("iboutletcollection", G | CL, C, OBJC),
     r("intel_reqd_sub_group_size", G, C, OFFLOAD),
-    rt("interrupt", [0, 0, 0, G | GS], A, "calling convention: changes the call ABI (WP-808)"),
     rt("kernel", [G, 0, G, 0], C, OFFLOAD),
     r("launch_bounds", G, C, OFFLOAD),
     r22("lifetime_capture_by", G | CL, C, LIFETIME),
@@ -204,7 +203,6 @@ pub static TABLE: &[Row] = &[
     r("managed", G, C, OFFLOAD),
     r("matrix_type", G | CL, A, "defines a vector or matrix type"),
     r("mig_server_routine", G | CL, C, ANALYSIS),
-    rt("model", [0, 0, 0, G | GS], A, "x86-64 code model of the variable's section"),
     r22("modular_format", G | CL, B, HINT),
     r22("no_cluster", G, C, OFFLOAD),
     r("no_randomize_layout", G | GS, B, HINT),
@@ -315,8 +313,6 @@ pub static TABLE: &[Row] = &[
     r("swift_objc_members", G, C, SWIFT),
     r("swift_private", G, C, SWIFT),
     r("swift_wrapper", G, C, SWIFT),
-    r("swiftasynccall", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
-    r("swiftcall", G | CL, A, "calling convention: changes the call ABI (WP-808)"),
     r22("sycl_external", CL, C, OFFLOAD),
     r("sycl_kernel", G | CL, C, OFFLOAD),
     r22("sycl_kernel_entry_point", CL, C, OFFLOAD),
@@ -333,7 +329,6 @@ pub static TABLE: &[Row] = &[
     r("warn_unused", G | GS, C, ANALYSIS),
     r("warn_unused_result", CL, C, ANALYSIS),
     r("warning", G | GS, C, DIAG_REJECT),
-    r("weak_import", G | CL, A, "`extern_weak` linkage on ELF"),
     r("work_group_size_hint", G, C, OFFLOAD),
 ];
 
@@ -371,6 +366,7 @@ const CLANG_SCOPED: &[&str] = &[
     "unavailable",
     "uninitialized",
     "using_if_exists",
+    "weak_import",
 ];
 
 /// The table row for `name` (its `__` affixes removed).
@@ -426,16 +422,15 @@ pub fn attribute_support(
         }
     }
     // The calling conventions, `regparm` and `no_caller_saved_registers`
-    // (WP-808; `swiftcall` / `swiftasynccall` stay class A).
+    // (WP-808; `swiftcall` / `swiftasynccall` since WP-1745).
     if let Some(k) = crate::cconv::cc_attr_kind(name, syntax, scope, x86) {
         return Support::Implemented(k);
     }
     let sp = spelling_of(syntax, scope);
     // clang 19 handles x86 `interrupt` (`handleAnyX86InterruptAttr`)
-    // although its `__has_attribute` answers 0 there: class A at every
-    // release, not the unknown-attribute warning (WP-808 follow-up).
+    // although its `__has_attribute` answers 0 there (WP-1745).
     if name == "interrupt" && x86 && sp & (G | GS) != 0 {
-        return Support::Unsupported;
+        return Support::Implemented(AttrKind::X86_INTERRUPT);
     }
     // WP-810, WP-1745: dispatched before the triage
     // (`Sema::builtin_alias_attribute`, `Sema::fmv_attribute`); clang 22
@@ -450,6 +445,8 @@ pub fn attribute_support(
         "target_clones" if sp & (G | GS) != 0 => Some(AttrKind::TARGET_CLONES),
         "cpu_dispatch" if sp & (G | CL) != 0 => Some(AttrKind::CPU_DISPATCH),
         "cpu_specific" if sp & (G | CL) != 0 => Some(AttrKind::CPU_SPECIFIC),
+        // clang 22 `CodeModelAttr`: x86-64 (and LoongArch) only.
+        "model" if x86 && compat >= 22 && sp & (G | GS) != 0 => Some(AttrKind::CODE_MODEL),
         _ => None,
     };
     if let Some(k) = wp810 {
@@ -526,10 +523,11 @@ mod tests {
         assert!(matches!(s("ext_vector_type", g, None, 19), Support::Implemented(_)));
         assert!(matches!(s("cleanup", g, None, 22), Support::Implemented(_)));
         assert!(matches!(s("mode", x, Some("gnu"), 19), Support::Implemented(_)));
-        assert_eq!(s("swiftcall", x, Some("clang"), 22), Support::Unsupported);
+        let cc = Support::Implemented(AttrKind::CALLING_CONV);
+        assert_eq!(s("swiftcall", x, Some("clang"), 22), cc);
+        assert_eq!(s("swiftasynccall", g, None, 19), cc);
         // The calling conventions (WP-808): each spelling clang 19 gives
         // it, on every target (one the target ignores warns, as clang).
-        let cc = Support::Implemented(AttrKind::CALLING_CONV);
         assert_eq!(s("aarch64_vector_pcs", g, None, 19), cc);
         assert_eq!(attribute_support("aarch64_vector_pcs", g, None, 19, true, true), cc);
         assert_eq!(s("preserve_most", x, Some("clang"), 22), cc);
@@ -544,8 +542,13 @@ mod tests {
         assert!(matches!(s("no_builtin", x, Some("clang"), 19), Support::Implemented(_)));
         // Target- and release-dependent rows.
         assert_eq!(s("interrupt", g, None, 22), Support::Unknown);
-        assert_eq!(attribute_support("interrupt", g, None, 22, true, true), Support::Unsupported);
-        assert_eq!(attribute_support("interrupt", g, None, 19, true, true), Support::Unsupported);
+        let intr = Support::Implemented(AttrKind::X86_INTERRUPT);
+        assert_eq!(attribute_support("interrupt", g, None, 22, true, true), intr);
+        assert_eq!(attribute_support("interrupt", g, None, 19, true, true), intr);
+        assert_eq!(
+            attribute_support("interrupt", x, Some("clang"), 22, true, true),
+            Support::Unknown
+        );
         assert_eq!(s("kernel", g, None, 19), Support::Ignored(C));
         assert_eq!(s("kernel", g, None, 22), Support::Unknown);
         // Implemented spellings win; other spellings of the same name do not.
@@ -576,6 +579,11 @@ mod tests {
         assert!(matches!(x86("cpu_dispatch", x, Some("clang"), 19), Support::Implemented(_)));
         assert_eq!(x86("__clang_arm_builtin_alias", g, None, 19), Support::Unknown);
         assert!(matches!(x86("clang_builtin_alias", g, None, 19), Support::Implemented(_)));
+        // WP-1745: clang 22 `model` on x86-64 only.
+        assert_eq!(x86("model", g, None, 19), Support::Unknown);
+        assert!(matches!(x86("model", x, Some("gnu"), 22), Support::Implemented(_)));
+        assert_eq!(x86("model", x, Some("clang"), 22), Support::Unknown);
+        assert_eq!(s("model", g, None, 22), Support::Unknown);
     }
 
     /// The class B attributes WP-813 implements (`class_b_attrs.rs`).
@@ -584,15 +592,6 @@ mod tests {
         for n in ["flatten", "no_stack_protector", "nomerge", "callback"] {
             let k = attribute_support(n, AttrSyntax::Gnu, None, 19, true, false);
             assert!(matches!(k, Support::Implemented(_)), "{n}");
-        }
-    }
-
-    /// The conventions kiln does not lower yet stay class A (WP-808
-    /// follow-ups).
-    #[test]
-    fn unlowered_conventions_are_class_a() {
-        for n in ["swiftcall", "swiftasynccall", "interrupt"] {
-            assert_eq!(row(n).map(|r| r.class), Some(A), "{n}");
         }
     }
 }

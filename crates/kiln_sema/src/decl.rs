@@ -6105,6 +6105,7 @@ impl Sema<'_, '_> {
         }) {
             self.inline_fn_begin_locs.insert(f, ds.lead_cxx11.unwrap_or(ds.loc));
         }
+        self.check_x86_interrupt_signature(f, ds, d);
         // The return type's innermost `*`/`[` ([`Sema::inner_chunk_locs`]).
         let chunk = Self::inner_chunk_loc(d);
         if chunk.is_valid()
@@ -6411,6 +6412,10 @@ impl Sema<'_, '_> {
         if node.kind == AttrKind::NONSTRING {
             return self.nonstring_subject(pd, DeclKind::ParmVar);
         }
+        if node.kind == AttrKind::WEAK_IMPORT {
+            // A parameter is a definition (WP-1745).
+            return self.check_weak_import(pd, node);
+        }
         if node.kind == AttrKind::REQUIRE_CONSTANT_INIT {
             // Not a global variable (WP-954).
             return self.check_require_constant_init_attr(pd, DeclKind::ParmVar, node);
@@ -6508,6 +6513,7 @@ impl Sema<'_, '_> {
                 self.check_cleanup_attrs(pd, &mut attrs);
                 self.check_internal_linkage_attrs(pd, &mut attrs);
                 self.check_tls_model_attrs(pd, &mut attrs);
+                self.check_code_model_attrs(pd, &mut attrs);
                 attrs.retain(|&a| self.keep_param_attr(pd, a));
                 self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
@@ -13980,6 +13986,9 @@ impl Sema<'_, '_> {
         if kind == AttrKind::TLS_MODEL {
             return self.tls_model_attribute(syntax, &n, args, loc);
         }
+        if kind == AttrKind::CODE_MODEL {
+            return self.code_model_attribute(syntax, args, loc);
+        }
         if kind == AttrKind::INIT_PRIORITY {
             return self.init_priority_attribute(syntax, &shown, args, loc);
         }
@@ -14045,6 +14054,9 @@ impl Sema<'_, '_> {
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
+            // clang's `AnyX86Interrupt` parses its own arguments and
+            // ignores them (`HasCustomParsing`).
+            AttrKind::X86_INTERRUPT => usize::MAX,
             AttrKind::ALIGNED => {
                 usize::from(syntax != AttrSyntax::Keyword)
                     + usize::from(syntax == AttrSyntax::Keyword)
@@ -15046,6 +15058,8 @@ pub(crate) fn attr_kind_of(
         ("always_inline", _, _) if gnu || clang_scope => AttrKind::ALWAYS_INLINE,
         ("gnu_inline", _, true) => AttrKind::GNU_INLINE,
         ("weak", _, true) => AttrKind::WEAK,
+        // clang `Clang<"weak_import">` (WP-1745).
+        ("weak_import", _, _) if gnu_syntax || clang_scope => AttrKind::WEAK_IMPORT,
         // clang `GCC<"weakref">`, `GCC<"alias">`, `GCC<"ifunc">` (an
         // ELF-only target attribute; every kiln target is ELF).
         ("weakref", _, true) => AttrKind::WEAKREF,

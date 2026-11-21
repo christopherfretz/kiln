@@ -17,13 +17,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::UNLIKELY => "Unlikely",
         AttrKind::MAYBE_UNUSED | AttrKind::UNUSED => "Unused",
         AttrKind::NODISCARD => "WarnUnusedResult",
-        AttrKind::NORETURN => {
-            if a.syntax == AttrSyntax::Cxx11 {
-                "CXX11NoReturn"
-            } else {
-                "NoReturn"
-            }
-        }
+        AttrKind::NORETURN if a.syntax == AttrSyntax::Cxx11 => "CXX11NoReturn",
+        AttrKind::NORETURN => "NoReturn",
         AttrKind::NO_UNIQUE_ADDRESS => "NoUniqueAddress",
         AttrKind::ANNOTATION => "Annotation",
         AttrKind::ALWAYS_INLINE => "AlwaysInline",
@@ -92,6 +87,9 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::NONNULL => "NonNull",
         AttrKind::NONSTRING => "NonString",
         AttrKind::NOCOMMON => "NoCommon",
+        AttrKind::CODE_MODEL => "CodeModel",
+        AttrKind::X86_INTERRUPT => "AnyX86Interrupt",
+        AttrKind::WEAK_IMPORT => "WeakImport",
         AttrKind::PRAGMA_CLANG_SECTION => match a.b {
             0 => "PragmaClangBSSSection",
             1 => "PragmaClangDataSection",

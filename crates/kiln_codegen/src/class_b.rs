@@ -568,7 +568,7 @@ impl Cg<'_> {
     }
 
     /// Adds `attr` to IR parameter `at` of `params`.
-    fn add_param_attr(&mut self, params: &mut [AttrSetId], at: usize, attr: Attr) {
+    pub(crate) fn add_param_attr(&mut self, params: &mut [AttrSetId], at: usize, attr: Attr) {
         let Some(s) = params.get(at).copied() else { return };
         let mut v = self.m.attrs_of(s).to_vec();
         v.push(attr);

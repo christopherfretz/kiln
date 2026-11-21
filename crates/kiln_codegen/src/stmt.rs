@@ -540,6 +540,66 @@ impl Cg<'_> {
             rv = Some(self.sub(e));
         }
         self.dbg_count_return(rv);
+        // clang `EmitReturnStmt`: in a `swiftasynccall` function, a
+        // returned call of a `swiftasynccall` callee is the musttail call.
+        let swift_tail = rv.filter(|&e| self.is_swift_async_tail(e));
+        let saved_tail = match swift_tail {
+            Some(e) => self.f.musttail.replace(e),
+            None => self.f.musttail,
+        };
+        let r = self.emit_return_value(s, rv);
+        self.f.musttail = saved_tail;
+        r?;
+        self.end_scope(sc);
+        let rd = self.f.ret_dest.expect("set by the prologue");
+        self.branch_through_cleanup(rd);
+        Ok(())
+    }
+
+    /// clang `isSwiftAsyncCallee` of a returned `e` in a `swiftasynccall`
+    /// function: `e` is a call whose callee's function type (through a
+    /// pointer, reference or member pointer) is `swiftasynccall`.
+    fn is_swift_async_tail(&self, e: ExprId) -> bool {
+        use kiln_ast::types::CallConv;
+        let ast = self.ast;
+        if self.f.sig.as_ref().is_none_or(|g| g.cc != CallConv::SwiftAsync) {
+            return false;
+        }
+        if !matches!(
+            ast.exprs.get(e).kind(),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+        ) {
+            return false;
+        }
+        let callee = ast.exprs.callee(e);
+        // A member-pointer call's callee is of the bound member function
+        // type, which is no function type (and `getMethodDecl` is null).
+        let mut c = callee;
+        while ast.exprs.get(c).kind() == ExprKind::ParenExpr {
+            c = ast.exprs.operand(c);
+        }
+        if ast.exprs.get(c).kind() == ExprKind::BinaryOperator {
+            return false;
+        }
+        // A member call: the method's type (clang `getMethodDecl`).
+        let ct = if ast.exprs.get(c).kind() == ExprKind::MemberExpr {
+            ast.decls.get(ast.exprs.decl(c)).ty().unwrap_or_else(|| ast.exprs.get(callee).ty())
+        } else {
+            ast.exprs.get(callee).ty()
+        };
+        let ft = match ast.types.canonical_view(ct) {
+            kiln_ast::types::TypeView::Pointer(p)
+            | kiln_ast::types::TypeView::LValueRef(p)
+            | kiln_ast::types::TypeView::RValueRef(p)
+            | kiln_ast::types::TypeView::MemberPointer { pointee: p, .. } => p,
+            _ => ct,
+        };
+        ast.types.proto(ft).is_some_and(|p| p.info().cc() == CallConv::SwiftAsync)
+    }
+
+    /// The value part of [`Self::emit_return`].
+    fn emit_return_value(&mut self, s: StmtId, rv: Option<ExprId>) -> R<()> {
+        let ast = self.ast;
         let nrvo = ast.stmts.return_nrvo(s).filter(|&v| {
             self.opts.elide_constructors && ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
         });
@@ -555,9 +615,6 @@ impl Cg<'_> {
             self.store_return_value(e)?;
             self.guard_return_value(ast.exprs.get(e).ty());
         }
-        self.end_scope(sc);
-        let rd = self.f.ret_dest.expect("set by the prologue");
-        self.branch_through_cleanup(rd);
         Ok(())
     }
 

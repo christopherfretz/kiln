@@ -18,6 +18,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   and an `ifunc` whose resolver picks one from the running CPU, with
   clang's redeclaration checks and diagnostics. On AArch64 a non-default
   `target_version` member or friend is now a specific error.
+- The `swiftcall` and `swiftasynccall` calling conventions (WP-1745):
+  `swiftcc` / `swifttailcc` with clang's Swift argument lowering on
+  x86-64 and AArch64 (classes split into at most four register values,
+  vectors into legal vectors), `musttail` for a `swiftasynccall`
+  function's returned `swiftasynccall` call, and the "variadic function
+  cannot use X calling convention" error (also for `regcall` and
+  `vectorcall`). The Swift parameter attributes (`swift_context` and
+  the like) are still not supported.
+- x86 `interrupt` handlers (WP-1745): `x86_intrcc` definitions with
+  clang's signature checks, the error for a direct call and
+  `-Wexcessive-regsave`.
+- The x86-64 GNU `model("small" | "large")` variable attribute
+  (WP-1745, clang 22) and clang's `weak_import` (WP-1745: `extern_weak`
+  declarations, warnings on definitions).
 - Pack expansions in the contexts that reported "not yet implemented"
   (WP-1733): a mem-initializer pack expansion of a member class
   template's own pack, a using-declarator pack expansion at block scope

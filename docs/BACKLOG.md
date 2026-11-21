@@ -807,6 +807,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1786 | ODR metadata (`-fmason-metadata`) for multiversioned functions: the versions, the resolver and the ifunc have no metadata row yet (spec/codegen.md §10 says so) | WP-1745 | open |
 | WP-1787 | `__attribute__((target("...")))` on a redeclaration after the function's definition is accepted; clang reports "attribute declaration must precede definition" (every target) | WP-1745 | open |
 | WP-1788 | x86 `target("...")` feature strings are not validated against clang's feature list (e.g. `cmov`; docs/status/deviations.md row): reject or warn as clang 22 does | WP-1745 | open |
+| WP-1803 | `address_space(N)` and the `opencl_*` address-space attributes (GAP-149 remainder): a canonical address-space qualifier in the type system (conversions, overloading, `U3AS<N>` mangling, `addrspace(N)` IR, the Oven); still "not supported by kiln yet" | WP-1745 | open |
+| WP-1804 | `-mgeneral-regs-only` (aarch64 and x86): clang's `-Wexcessive-regsave` text suggests it and kiln rejects the flag | WP-1745 | open |
+| WP-1805 | a `u8` string literal as an attribute argument is an error in kiln; clang only warns | WP-1745 | open |
+| WP-1806 | `bmi_image` attrs TABLE lacks `CODE_MODEL`, `X86_INTERRUPT` and `WEAK_IMPORT` (added by WP-1745 part c): a module or PCH image may drop them; add them and a two-unit test | WP-1745 | open |
+| WP-1807 | clang's generic "attribute declaration must precede definition" check (`checkNewAttributesAfterDef`) is missing: attributes added on a redeclaration after the definition are accepted silently | WP-1745 | open |
 | WP-1761 | `int e; extern int e; int e = 1;` is accepted; clang reports a redefinition (crates/kiln_sema decl.rs, the redeclaration merge near line 7740) | WP-1745 | open |
 | WP-1762 | an enum-qualified declaration `int E::v;` is accepted; clang rejects it (`diagnose_qualified_declaration` in qualified_decl.rs) | WP-1745 | open |
 | WP-1763 | VLAs in template substitution: a function template parameter `T a[n]` substitutes (clang: substitution failure, "array size is not a constant expression") and a VLA deduced through `T&` is accepted (clang: "variably modified template arg") | WP-1745 | open |

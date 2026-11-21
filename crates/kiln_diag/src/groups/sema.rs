@@ -68,6 +68,7 @@ ElaboratedEnumClass = "elaborated-enum-class" [];
 EmptyBody = "empty-body" [];
 Exceptions = "exceptions" [];
 ExcessInitializers = "excess-initializers" [];
+ExcessiveRegsave = "excessive-regsave" [];
 ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 ExternInitializer = "extern-initializer" [];
 // ----- WP-197 (DR482 namespace extra qualification)

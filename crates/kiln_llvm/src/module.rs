@@ -102,6 +102,16 @@ pub enum TlsModel {
     LocalExec,
 }
 
+/// A global's `code_model` (`llvm::CodeModel::Model`; x86-64 GNU
+/// `model`).
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum CodeModel {
+    /// `code_model "small"`.
+    Small,
+    /// `code_model "large"`.
+    Large,
+}
+
 /// Comdat selection kinds.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
 #[allow(missing_docs)]
@@ -154,6 +164,8 @@ pub struct GlobalVar {
     pub align: Option<u64>,
     /// The sanitizer metadata (`no_sanitize_address`, ...).
     pub sanitizer: GlobalSanitizer,
+    /// `code_model "..."`.
+    pub code_model: Option<CodeModel>,
     pub(crate) md: Vec<(MdKindId, MetadataId)>,
     /// The global's attributes (`llvm::GlobalVariable::getAttributes`:
     /// clang's `"bss-section"`, ... of `#pragma clang section`), printed
@@ -996,6 +1008,7 @@ impl Module {
             addrspace: 0,
             externally_initialized: false,
             sanitizer: GlobalSanitizer::default(),
+            code_model: None,
             section: None,
             comdat: None,
             align: None,

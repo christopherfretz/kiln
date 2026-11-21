@@ -85,6 +85,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "internal_linkage"
             | "common"
             | "tls_model"
+            | "model"
             | "returns_twice"
             | "mode"
             | "arm_sve_vector_bits"
@@ -169,8 +170,10 @@ fn takes_ident_list(name: &str) -> bool {
 fn string_literal_arg(name: &str, i: usize) -> bool {
     match kiln_ast::attr::normalize_attr_name(name) {
         // WP-954: clang's `StringArgument` first also for `unavailable`'s
-        // optional message and `annotate`'s annotation.
-        "target" | "target_version" | "unavailable" | "annotate" => i == 0,
+        // optional message and `annotate`'s annotation; WP-1745: and for
+        // `model` (clang `CodeModelAttr`), known to the parser on every
+        // target and release.
+        "target" | "target_version" | "unavailable" | "annotate" | "model" => i == 0,
         "target_clones" | "no_sanitize" => true,
         _ => false,
     }

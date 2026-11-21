@@ -3549,6 +3549,41 @@ instantiation unless stated.
   - Tests: `tests/conformance/ext.multiversion/x86-*.cpp`,
     `aarch64-target-version-member-hidden.cpp`; codegen is
     spec/codegen.md "Function multiversioning".
+- **`model("small" | "large")`** (x86-64 GNU, clang 22
+  `handleCodeModelAttr`, `code_model.rs`; WP-1745): an error on anything
+  but a non-TLS global variable, exactly one string argument, and the
+  model one of `small`, `large` ("code model 'X' is not supported on
+  this target"); codegen gives the global `code_model "large"`. clang 19
+  and AArch64 do not know it (the unknown-attribute warning). Tests
+  `tests/conformance/ext.gnu.model/`.
+- **x86 `interrupt`** (`x86_interrupt.rs`, clang
+  `handleAnyX86InterruptAttr`; WP-1745): its arguments are ignored. On
+  an instance member function or a static `operator new`/`delete`/`()`/
+  `[]` it warns "only applies to non-K&R-style functions" and is dropped;
+  otherwise the signature must be `void (T *)` or `void (T *, U)` with
+  `U` a 64-bit unsigned integer (an error naming the failed rule, the
+  attribute dropped). A valid one implies `used`. A direct call naming
+  a handler (through parentheses or `&`) is "interrupt service routine
+  cannot be called directly"; a call from a handler or a
+  `no_caller_saved_registers` function of a callee without
+  `no_caller_saved_registers` warns `-Wexcessive-regsave` unless SSE, x87
+  and MMX are all disabled by `-target-feature`. Codegen: `x86_intrcc`,
+  the first parameter `byval` of its pointee, `disable-tail-calls`.
+  Tests `tests/conformance/dcl.attr.cconv/x86-*.cpp`.
+- **`weak_import`** (clang `WeakImportAttr`, `weak_import.rs`;
+  WP-1745): on a variable or function only; on a variable definition
+  or a parameter it warns "'weak_import' attribute cannot be specified
+  on a definition" and is dropped, after a definition without it
+  "attribute declaration must precede definition". A declaration (not a
+  definition) carrying it, also through a redeclaration or the template
+  it is instantiated from, is weak (`Ast::is_weak`: `extern_weak` in IR,
+  and a comparison of its address against null is not constant). Tests
+  `tests/conformance/ext.clang.weak_import/`.
+- **`swiftcall` / `swiftasynccall`** (WP-1745): calling conventions
+  (spec/types.md §5.4), lowered per spec/abi.md §8.33. The Swift
+  parameter ABIs (`swift_context`, `swift_async_context`,
+  `swift_error_result`, `swift_indirect_result`) remain class A
+  (GAP-149).
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in
@@ -10543,8 +10578,11 @@ behaviour, or proven unreachable (`unreachable!` with the invariant):
   enable it" (kiln has no `-fenable-matrix`), `riscv_rvv_vector_bits`
   clang's "'riscv_rvv_vector_bits' attribute is not supported on targets
   missing 'zve32x'; ..." (no RISC-V target). The other class-A rows
-  (address spaces, the Swift ABI, x86 `interrupt`, `model`) are still
-  "not supported by kiln yet". Test
+  (the address spaces and the Swift parameter ABIs `swift_context`,
+  `swift_async_context`, `swift_error_result`, `swift_indirect_result`)
+  are still "not supported by kiln yet" (GAP-149; `model`, x86
+  `interrupt`, `weak_import` and the Swift conventions are implemented
+  since WP-1745, §4.5). Test
   `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
 
 ## 6. Initialization (`init.rs`)

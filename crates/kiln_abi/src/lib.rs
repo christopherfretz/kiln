@@ -19,6 +19,7 @@ pub mod mangle;
 pub mod mangle_decomp;
 pub mod odr;
 pub mod odr_def;
+mod swift;
 pub mod target;
 pub mod vtable;
 #[allow(clippy::unreadable_literal, reason = "feature masks as clang's tables write them")]

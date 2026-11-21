@@ -499,6 +499,20 @@ impl AttrKind {
     /// thread storage duration (one node per active data kind) or a
     /// function definition (`text`).
     pub const PRAGMA_CLANG_SECTION: AttrKind = AttrKind(284);
+    /// GNU `model("small" | "large")` on a non-TLS global variable
+    /// (clang 22 `CodeModelAttr`, x86-64; WP-1745): `a` is 1 for
+    /// `small`, 2 for `large` (the global's `code_model`).
+    pub const CODE_MODEL: AttrKind = AttrKind(285);
+    /// x86-64 GNU `interrupt` on a function (clang `AnyX86InterruptAttr`;
+    /// WP-1745): its definition is `x86_intrcc` with a `byval` frame
+    /// pointer, and it cannot be called directly. `a` = 1 marks one whose
+    /// signature check failed (dropped by the subject check).
+    pub const X86_INTERRUPT: AttrKind = AttrKind(286);
+    /// clang `weak_import` on a variable or function declaration
+    /// (`WeakImportAttr`; WP-1745): an entity without a definition in
+    /// the translation unit is a weak reference (`extern_weak`), as
+    /// [`crate::Ast::is_weak_decl`] reports.
+    pub const WEAK_IMPORT: AttrKind = AttrKind(287);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],

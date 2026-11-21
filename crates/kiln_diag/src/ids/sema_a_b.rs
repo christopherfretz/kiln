@@ -73,6 +73,12 @@ sema_anon_struct_not_member = Error (0) "anonymous structs and classes must be c
 sema_anon_union_not_static = Error (0) "anonymous unions at namespace or global scope must be declared 'static'";
 // WP-1645: clang err_anonymous_union_with_storage_spec ([class.union.anon]/2).
 sema_anon_union_with_storage_spec = Error (0) "anonymous union at class scope must not have a storage specifier";
+// WP-1745: clang `warn_anyx86_excessive_regsave` (a call from an x86 interrupt handler or a `no_caller_saved_registers` function).
+sema_anyx86_excessive_regsave = Warning [ExcessiveRegsave] (1) "{0:interrupt service routine|function with attribute 'no_caller_saved_registers'} should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only'";
+// WP-1745: clang `err_anyx86_interrupt_attribute` (x86-64; {1} the word-sized unsigned type).
+sema_anyx86_interrupt_attribute = Error (2) "x86-64 'interrupt' attribute only applies to functions that have {0:a 'void' return type|only a pointer parameter optionally followed by an integer parameter|a pointer as the first parameter|a {1} type as the second parameter}";
+// WP-1745: clang `err_anyx86_interrupt_called`.
+sema_anyx86_interrupt_called = Error (0) "interrupt service routine cannot be called directly";
 // WP-1740: clang 22 err_arg_is_not_destructurable
 // (`__builtin_structured_binding_size` of a type with no decomposition;
 // clang 22 wording, as the builtin is clang 21+).
@@ -192,6 +198,8 @@ sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operat
 sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified|integer} type {1}";
 sema_attr_cond_never_constant_expr = Error (1) "{0} attribute expression never produces a constant expression";
 sema_attr_tlsmodel_arg = Error (0) "tls_model must be \"global-dynamic\", \"local-dynamic\", \"initial-exec\" or \"local-exec\"";
+// WP-1745: clang 22 `err_attr_codemodel_arg` (x86-64 `model`).
+sema_attr_unsupported_code_model = Error (1) "code model '{0}' is not supported on this target";
 sema_attribute_arg_not_supported = Warning [IgnoredAttributes] (2) "{0} attribute argument not supported: {1}";
 sema_attribute_argument_out_of_range = Error (3) "{0} attribute requires integer constant between {1} and {2} inclusive";
 sema_attribute_arm_builtin_alias = Error (0) "'__clang_arm_builtin_alias' attribute can only be applied to an ARM builtin";
@@ -201,6 +209,8 @@ sema_attribute_ignored_on_type = Warning [IgnoredAttributes] (1) "attribute {0} 
 sema_attribute_ignored_parsing_type = Warning [IgnoredAttributes] (1) "{0} attribute ignored when parsing type";
 sema_attribute_implicit_this_arg = Error (1) "{0} attribute is invalid for the implicit this argument";
 sema_attribute_invalid_argument = Error (2) "{0:a reference type|an array type|a non-vector or non-vectorizable scalar type} is an invalid argument to attribute {1}";
+// WP-1745: clang `warn_attribute_invalid_on_definition` (`weak_import`).
+sema_attribute_invalid_on_definition = Warning [IgnoredAttributes] (1) "'{0}' attribute cannot be specified on a definition";
 sema_attribute_missing_on_first_decl = Error (1) "{0} attribute does not appear on the first declaration";
 sema_attribute_no_calls_in_stmt = Warning [IgnoredAttributes] (1) "{0} attribute is ignored because there exists no call expression inside the statement";
 sema_attribute_no_effect_on_using = Warning [IgnoredAttributes] (1) "{0} currently has no effect on a using declaration";

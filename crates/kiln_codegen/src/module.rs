@@ -2135,15 +2135,7 @@ impl<'a> Cg<'a> {
         if let Some(&t) = self.named.get(&first) {
             return t;
         }
-        // clang `addRecordTypeName`: an unnamed class (without a typedef
-        // name for linkage) is plain `anon`; LLVM uniquifies a repeated
-        // name with one module-wide counter.
-        let leaf = if mangle::decl_name(self.ast, first).is_empty() {
-            "anon".to_owned()
-        } else {
-            self.qualified_name(first)
-        };
-        let name = format!("{}.{leaf}", record_kind_prefix(self.ast, first));
+        let name = self.record_ty_name(first);
         let t = self.m.types.named_struct(&name);
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
@@ -2161,6 +2153,32 @@ impl<'a> Cg<'a> {
         }
         let _ = self.m.types.set_body(t, &fields, rec.packed);
         t
+    }
+
+    /// The IR type of class `d`, which has no definition, as an opaque
+    /// named struct (clang `ConvertRecordDeclType` of an incomplete
+    /// class).
+    pub(crate) fn opaque_record_ty(&mut self, d: DeclId) -> LTy {
+        let first = self.ast.first(d);
+        if let Some(&t) = self.named.get(&first) {
+            return t;
+        }
+        let name = self.record_ty_name(first);
+        let t = self.m.types.named_struct(&name);
+        self.named.insert(first, t);
+        t
+    }
+
+    /// clang `addRecordTypeName`: the IR name of class `first` (an
+    /// unnamed class without a typedef name for linkage is plain `anon`;
+    /// LLVM uniquifies a repeated name with one module-wide counter).
+    fn record_ty_name(&self, first: DeclId) -> String {
+        let leaf = if mangle::decl_name(self.ast, first).is_empty() {
+            "anon".to_owned()
+        } else {
+            self.qualified_name(first)
+        };
+        format!("{}.{leaf}", record_kind_prefix(self.ast, first))
     }
 
     pub(crate) fn qualified_name(&self, d: DeclId) -> String {
@@ -2635,13 +2653,15 @@ impl<'a> Cg<'a> {
         self.m.types.function(rt, &ps, variadic)
     }
 
-    /// clang `getUnpaddedCoerceAndExpandType`: a pure scalable type is
-    /// returned as its one part or a packed literal struct of its parts.
+    /// clang `getUnpaddedCoerceAndExpandType`: a value is returned as its
+    /// one part or a literal struct of its parts, packed for a pure
+    /// scalable type, not for a Swift value (`getCoerceAndExpandTypes`).
     pub(crate) fn expand_ret_type(parts: &[IrType]) -> IrType {
-        match parts {
-            [p] => p.clone(),
-            _ => IrType::Struct(parts.to_vec(), true),
+        if let [p] = parts {
+            return p.clone();
         }
+        let sve = parts.iter().any(|p| matches!(p, IrType::ScalableVector(..)));
+        IrType::Struct(parts.to_vec(), sve)
     }
 
     /// The return and parameter attributes of `sig` (`ConstructAttributeList`).
@@ -2678,7 +2698,13 @@ impl<'a> Cg<'a> {
                 self.ref_attrs(sig.ret, &mut ret);
                 ret.extend(self.no_fp_class(sig.ret, coerce, false));
             }
-            ArgKind::Ignore | ArgKind::CoerceAndExpand { .. } => {}
+            // A Swift vector (`DetermineNoUndef` is kind-independent).
+            ArgKind::CoerceAndExpand { .. } => {
+                if sig.info.ret.noundef {
+                    ret.push(Attr::Flag(AttrKind::NoUndef));
+                }
+            }
+            ArgKind::Ignore => {}
         }
         if let Some(t) = sig.this {
             // ConstructAttributeList: `nonnull dereferenceable(N) align A`
@@ -2936,7 +2962,9 @@ impl<'a> Cg<'a> {
         self.branch_protection_attrs(out, d);
         self.default_fn_attrs(out);
         if let Some(d) = d
-            && self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
+            && (self.has_fn_attr(d, kiln_ast::attr::AttrKind::DISABLE_TAIL_CALLS)
+                || self.ast.attrs.has_kind(kiln_ast::attr::AttrKind::X86_INTERRUPT)
+                    && self.has_fn_attr(d, kiln_ast::attr::AttrKind::X86_INTERRUPT))
         {
             out.push(Attr::string("disable-tail-calls", "true"));
         }
@@ -3195,6 +3223,34 @@ impl<'a> Cg<'a> {
         Some(String::from_utf8_lossy(self.ast.strings.bytes(lit)).into())
     }
 
+    /// clang `GetOrCreateLLVMGlobal`: the `code_model` of the global
+    /// created for variable declaration `d`, from the x86-64 GNU `model`
+    /// attribute `d` has or inherits from an earlier declaration (its
+    /// first one on the latest such declaration), or from the pattern
+    /// it was instantiated from (WP-1745). A later declaration's
+    /// attribute does not reach a global an earlier use created.
+    pub(crate) fn code_model_of(&self, d: DeclId) -> Option<kiln_llvm::CodeModel> {
+        let ast = self.ast;
+        if !ast.attrs.has_kind(kiln_ast::attr::AttrKind::CODE_MODEL) {
+            return None;
+        }
+        let own = std::iter::successors(Some(d), |&x| ast.prev(x)).take(4096).find_map(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| *ast.attrs.get(a))
+                .find(|n| n.kind == kiln_ast::attr::AttrKind::CODE_MODEL)
+        });
+        let node = own.or_else(|| {
+            let p = ast.instantiated_from(ast.first(d)).filter(|&p| p != d)?;
+            ast.inherited_attr(p, kiln_ast::attr::AttrKind::CODE_MODEL)
+        })?;
+        match node.a {
+            1 => Some(kiln_llvm::CodeModel::Small),
+            2 => Some(kiln_llvm::CodeModel::Large),
+            _ => None,
+        }
+    }
+
     pub(crate) fn declare_fn(&mut self, name: &str, first: DeclId, sig: &Sig) -> R<FuncId> {
         let ast = self.ast;
         // spec/codegen.md "One global per symbol" (WP-1663): a symbol
@@ -3444,7 +3500,7 @@ impl<'a> Cg<'a> {
         let vis = self.decl_visibility(first, false);
         // clang `SetFunctionAttributes`: a declaration of a `weak`
         // function is an `extern_weak` reference.
-        let weak = ast.is_weak_decl(first) && ast.weakref_target(first).is_none();
+        let weak = ast.is_weak(first) && ast.weakref_target(first).is_none();
         let section = self.decl_section(first);
         let cc = sig.llvm_cc();
         {
@@ -3685,13 +3741,15 @@ impl<'a> Cg<'a> {
         let constant = constant_storage(ast, ty);
         let vis = self.decl_visibility(first, false);
         // clang `GetOrCreateLLVMGlobal`: a declaration of a `weak`
-        // variable is an `extern_weak` reference.
-        let weak = ast.is_weak_decl(first);
+        // variable (or a weak imported one) is an `extern_weak` reference.
+        let weak = ast.is_weak(first);
         let section = self.decl_section(first);
+        let code_model = self.code_model_of(d);
         let gv = self.m.global_mut(g);
         gv.linkage = if weak { Linkage::ExternWeak } else { Linkage::External };
         gv.visibility = vis;
         gv.section = section;
+        gv.code_model = code_model;
         gv.align = Some(align);
         gv.is_constant = constant;
         self.gvars.insert(first, g);
@@ -3986,6 +4044,7 @@ impl<'a> Cg<'a> {
             };
             self.gvars.insert(first, g);
             self.mark_tls(first, g, false);
+            self.m.global_mut(g).code_model = self.code_model_of(d);
             g
         };
         let internal = mangle::is_internal_symbol(ast, d);

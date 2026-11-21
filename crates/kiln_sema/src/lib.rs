@@ -36,6 +36,7 @@ pub mod cfg;
 pub mod class;
 mod class_b_attrs;
 mod cleanup_attr;
+mod code_model;
 mod complex;
 mod const_init_attr;
 mod consteval;
@@ -154,6 +155,8 @@ mod vector_ops;
 mod vexing;
 mod visibility;
 mod vla;
+mod weak_import;
+mod x86_interrupt;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, print_type};

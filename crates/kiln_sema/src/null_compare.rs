@@ -193,7 +193,7 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr | ExprKind::MemberExpr => self.ast.exprs.decl(e),
             _ => return None,
         };
-        if self.ast.is_weak_decl(d) {
+        if self.ast.is_weak(d) {
             return None;
         }
         if self.ast.decls.get(d).kind() == DeclKind::ParmVar

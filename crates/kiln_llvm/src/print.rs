@@ -18,7 +18,9 @@ use crate::inst::{
     Align, CallConv, Clause, FastMath, Flags, GepFlags, InstKind, Ordering, SyncScope,
 };
 use crate::metadata::{MdField, MdNode};
-use crate::module::{ComdatKind, DllStorage, Linkage, Module, TlsModel, UnnamedAddr, Visibility};
+use crate::module::{
+    CodeModel, ComdatKind, DllStorage, Linkage, Module, TlsModel, UnnamedAddr, Visibility,
+};
 use crate::types::{TypeData, TypeId};
 use crate::value::{AttrSetId, BlockId, ComdatId, FuncId, MdKindId, MetadataId, Value, ValueRef};
 
@@ -1274,6 +1276,12 @@ impl<'a> Printer<'a> {
             w.write_str(", section \"")?;
             write_escaped(w, s.as_bytes())?;
             w.write_char('"')?;
+        }
+        if let Some(cm) = g.code_model {
+            w.write_str(match cm {
+                CodeModel::Small => ", code_model \"small\"",
+                CodeModel::Large => ", code_model \"large\"",
+            })?;
         }
         let san = g.sanitizer;
         for (on, kw) in [

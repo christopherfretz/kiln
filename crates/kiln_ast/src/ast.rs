@@ -919,13 +919,31 @@ impl Ast {
         None
     }
 
-    /// Whether `d` is a weak declaration (clang `Decl::isWeak`): some
-    /// declaration of it carries GNU `weak` or `weakref`. Its address may
-    /// be null at run time, so a test of it is not a constant expression
-    /// ([expr.const]) and is not folded.
+    /// Whether some declaration of `d` carries GNU `weak` or `weakref`
+    /// (a definition is emitted weak).
     pub fn is_weak_decl(&self, d: DeclId) -> bool {
         self.any_redecl_has(d, crate::attr::AttrKind::WEAK)
             || self.any_redecl_has(d, crate::attr::AttrKind::WEAKREF)
+    }
+
+    /// Whether `d` is a weak declaration (clang `Decl::isWeak`):
+    /// [`Ast::is_weak_decl`] or [`Ast::is_weak_imported`]. Its address
+    /// may be null at run time, so a test of it is not a constant
+    /// expression ([expr.const]) and is not folded.
+    pub fn is_weak(&self, d: DeclId) -> bool {
+        self.is_weak_decl(d) || self.is_weak_imported(d)
+    }
+
+    /// clang `Decl::isWeakImported`: `d` (or the pattern it was
+    /// instantiated from) carries `weak_import` on some declaration, and
+    /// it is not a function the translation unit defines (sema dropped
+    /// the attribute from a variable's definition, and codegen emits a
+    /// definition with its own linkage).
+    pub fn is_weak_imported(&self, d: DeclId) -> bool {
+        let k = crate::attr::AttrKind::WEAK_IMPORT;
+        self.attrs.has_kind(k)
+            && self.inherited_attr(d, k).is_some()
+            && (self.decls.function(d).is_none() || self.definition(d).is_none())
     }
 
     /// The symbol a GNU `weakref` declaration `d` refers to: the target of
