@@ -391,6 +391,29 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `[[deprecated()]]` and `[[nodiscard()]]`, an empty argument clause on a
+  standard attribute that takes an optional one, were accepted (WP-1852);
+  they are now clang's error "parentheses must be omitted if 'x'
+  attribute's argument list is empty" and the attribute is dropped. The
+  no-argument check ("attribute 'x' cannot have an argument list") now
+  covers the `__x__` spellings (`[[__noreturn__()]]`) and
+  `[[clang::fallthrough()]]` too, and in C only the attributes C has. As
+  in clang, the clause is parsed first, so an invalid one reports only its
+  own error (`[[deprecated(x)]]` is "expected string literal as argument
+  of 'deprecated' attribute", not an undeclared `x`).
+- The arguments of an `__attribute__` clang's parser does not know are
+  parsed by clang's unknown-attribute rule even when kiln has its own
+  table for the name (WP-1853): `__attribute__((nodiscard(x)))` and, at
+  `-fclang-compat=19`, `gcc_struct(x)` / `coro_await_elidable(x)` are only
+  "unknown attribute" warnings, no longer "use of undeclared identifier".
+  Conversely an attribute clang knows for another target (`long_call`,
+  `signal`, `dllimport`) has its arguments parsed as expressions, as
+  clang does.
+- The non-`constexpr` reference case of P2686R5 (a local reference to an
+  automatic object, `int& r = x;`, constant-initialized by the C++26 text,
+  so `std::is_constant_evaluated()` would be true in its initializer) is
+  now a recorded deliberate deviation (WP-1830): kiln keeps clang's and
+  GCC's run-time behaviour, pinned by run tests against both.
 - A calling convention written as the target's default (WP-1858):
   `__attribute__((sysv_abi))` or `cdecl` on x86-64, `cdecl` on AArch64,
   and an ignored convention that warns and becomes the default, now count

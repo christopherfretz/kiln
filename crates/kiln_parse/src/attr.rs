@@ -185,9 +185,13 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
         // WP-954: clang's `StringArgument` first also for `unavailable`'s
         // optional message and `annotate`'s annotation; WP-1745: and for
         // `model` (clang `CodeModelAttr`), known to the parser on every
-        // target and release.
-        "target" | "target_version" | "unavailable" | "annotate" | "model" => i == 0,
-        "target_clones" | "no_sanitize" => true,
+        // target and release. WP-1853: clang's table is keyed by the name
+        // alone, so it holds for an `__attribute__((nodiscard(...)))`
+        // clang does not know.
+        "target" | "target_version" | "unavailable" | "annotate" | "model" | "nodiscard"
+        | "warn_unused_result" | "section" | "tls_model" => i == 0,
+        "deprecated" => i <= 1,
+        "target_clones" | "no_sanitize" | "abi_tag" | "no_builtin" => true,
         _ => false,
     }
 }
@@ -230,19 +234,51 @@ fn takes_ident_arg(name: &str) -> bool {
     )
 }
 
-/// True for the standard attributes that take no argument list
-/// (clang `IsBuiltInOrStandardCXX11Attribute` with no arguments).
-fn forbids_args(name: &str) -> bool {
-    matches!(
-        name,
-        "carries_dependency"
-            | "fallthrough"
-            | "noreturn"
-            | "no_unique_address"
-            | "likely"
-            | "unlikely"
-            | "maybe_unused"
-    )
+/// How clang checks the argument clause of a standard attribute once it
+/// has parsed it (clang `ParseCXX11AttributeArgs` for an
+/// `IsBuiltInOrStandardCXX11Attribute`, [dcl.attr.grammar]/4; WP-1852).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StdArgClause {
+    /// It takes none, not even `()`: "attribute 'x' cannot have an
+    /// argument list".
+    Forbidden,
+    /// It takes an optional one, which must not be empty:
+    /// `[[deprecated()]]` is "parentheses must be omitted if 'deprecated'
+    /// attribute's argument list is empty".
+    NonEmpty,
+}
+
+/// The [`StdArgClause`] of the `[[...]]` attribute `scope::name` (`c`: a
+/// C unit), if it has one. As clang: `__x__` is `x` (clang's attribute
+/// kind), except for `nodiscard` and `maybe_unused`, whose kinds are
+/// shared with GNU attributes (`warn_unused_result`, `unused`) and so are
+/// matched by their exact names; scoped, only `[[clang::fallthrough]]`
+/// (C++ only). In C, the C++-only attributes are unknown and not checked.
+fn std_arg_clause(
+    name: &str,
+    scope: Option<&str>,
+    c: bool,
+    std: kiln_lex::Std,
+) -> Option<StdArgClause> {
+    let n = kiln_ast::attr::normalize_attr_name(name);
+    if let Some(sc) = scope {
+        return (matches!(sc, "clang" | "_Clang") && !c && n == "fallthrough")
+            .then_some(StdArgClause::Forbidden);
+    }
+    match name {
+        "nodiscard" => return Some(StdArgClause::NonEmpty),
+        "maybe_unused" => return Some(StdArgClause::Forbidden),
+        _ => {}
+    }
+    match n {
+        "deprecated" => Some(StdArgClause::NonEmpty),
+        "fallthrough" | "noreturn" => Some(StdArgClause::Forbidden),
+        "no_unique_address" | "likely" | "unlikely" if !c => Some(StdArgClause::Forbidden),
+        // P3475R2: no longer a standard attribute in C++26.
+        "carries_dependency" if !c && std < kiln_lex::Std::Cxx26 => Some(StdArgClause::Forbidden),
+        "indeterminate" if !c && std >= kiln_lex::Std::Cxx26 => Some(StdArgClause::Forbidden),
+        _ => None,
+    }
 }
 
 impl Parser<'_, '_> {
@@ -896,22 +932,36 @@ impl Parser<'_, '_> {
                 // at its name when it has an argument list.
                 loc = name_loc;
                 self.parse_gsl_type_arg()
-            } else if scope.is_none()
-                && self.at(Punct::LParen)
-                && ((forbids_args(&text)
-                    // P3475R2: no longer a standard attribute in C++26.
-                    && !(text == "carries_dependency" && self.std >= kiln_lex::Std::Cxx26))
-                    || (text == "indeterminate" && self.std >= kiln_lex::Std::Cxx26))
+            } else if let Some(clause) = self.at(Punct::LParen).then(|| {
+                let sc = scope.map(|s| self.s.ast.symbols().as_str(s));
+                std_arg_clause(&text, sc, self.s.is_c(), self.std)
+            }) && let Some(clause) = clause
             {
-                // clang `ParseCXX11AttributeArgs`: a standard attribute
-                // without arguments takes no argument list, even `()`.
-                let d = self
-                    .s
-                    .diag(DiagId::parse_attribute_forbids_arguments, self.loc())
-                    .arg(text.as_str());
-                self.emit(d);
-                self.parse_attr_args(name);
-                None
+                // clang `ParseCXX11AttributeArgs` (WP-1852): the clause is
+                // parsed first (an attribute with no arguments takes
+                // expressions); only when that succeeds is its presence, or
+                // an empty one, an error, and the attribute dropped.
+                let lparen = self.loc();
+                let args = match clause {
+                    StdArgClause::Forbidden => self.parse_common_attr_args(name, false),
+                    StdArgClause::NonEmpty => self.parse_attr_args(name),
+                };
+                match args {
+                    Some(args) if clause == StdArgClause::NonEmpty && !args.is_empty() => {
+                        Some(args)
+                    }
+                    Some(_) => {
+                        let id = if clause == StdArgClause::Forbidden {
+                            DiagId::parse_attribute_forbids_arguments
+                        } else {
+                            DiagId::parse_attribute_requires_arguments
+                        };
+                        let d = self.s.diag(id, lparen).arg(text.as_str());
+                        self.emit(d);
+                        None
+                    }
+                    None => None,
+                }
             } else if self.at(Punct::LParen)
                 && self.s.attribute_is_unknown(AttrSyntax::Cxx11, scope, name)
             {
@@ -1024,11 +1074,18 @@ impl Parser<'_, '_> {
                 }
                 // clang 19 `Clang<"assume">`: `[[assume]]`'s argument.
                 _ if self.s.ast.symbols().as_str(name) == "assume" => self.parse_assume_arg(name),
+                // WP-1853: whether clang's parser knows the name decides,
+                // not kiln's own argument tables.
+                _ if self.at(Punct::LParen) && self.s.gnu_attribute_is_unknown_to_parser(name) => {
+                    self.parse_common_attr_args(name, true)
+                }
+                // One clang knows for another target (`long_call`): its
+                // arguments are expressions, then `unknown attribute`.
                 _ if self.at(Punct::LParen)
                     && !takes_expr_args(self.s.ast.symbols().as_str(name))
                     && self.s.attribute_is_unknown(AttrSyntax::Gnu, None, name) =>
                 {
-                    self.parse_unknown_gnu_attr_args(name)
+                    self.parse_common_attr_args(name, false)
                 }
                 _ => self.parse_attr_args(name),
             };
@@ -1102,9 +1159,12 @@ impl Parser<'_, '_> {
         }
         let mut args = Vec::new();
         let mut ok = true;
-        if takes_ident_arg(&text)
-            && let Some(id) = self.ident()
-        {
+        // clang 19's identifier-argument table is not per target: its
+        // `interrupt` (ARM's, MIPS', RISC-V's) takes one everywhere.
+        let ident_first = takes_ident_arg(&text)
+            || (self.s.clang_compat < 22
+                && kiln_ast::attr::normalize_attr_name(&text) == "interrupt");
+        if ident_first && let Some(id) = self.ident() {
             let at = self.bump().span.lo;
             args.push(AttrArg::Ident(id, at));
             if self.eat(Punct::Comma).is_none() {
@@ -1173,27 +1233,44 @@ impl Parser<'_, '_> {
         ok.then_some(args)
     }
 
-    /// The arguments of an `__attribute__` clang does not know, at the
-    /// `(` (clang `ParseAttributeArgsCommon` for an `UnknownAttribute`,
-    /// WP-1836): an identifier alone before `,` or `)` is an identifier
-    /// argument, the others are assignment-expressions (a string literal
-    /// an ordinary one), each perhaps a pack expansion. `None` when one is
-    /// invalid: clang then drops the attribute without its `unknown
-    /// attribute` warning.
-    fn parse_unknown_gnu_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+    /// The arguments of attribute `name` in clang's common form, at the
+    /// `(` (clang `ParseAttributeArgsCommon` with no argument grammar of
+    /// its own: an `__attribute__` clang does not know, WP-1836, or a
+    /// standard attribute that takes no arguments, WP-1852). With
+    /// `lone_ident` (an unknown attribute) an identifier alone before `,`
+    /// or `)` is an identifier argument; the others are
+    /// assignment-expressions or braced lists (a string literal an
+    /// ordinary one, except where clang's per-name table wants one,
+    /// [`string_literal_arg`]), each perhaps a pack expansion. `None` when
+    /// one is invalid: clang then drops the attribute without its
+    /// `unknown attribute` warning.
+    fn parse_common_attr_args(&mut self, name: Symbol, lone_ident: bool) -> Option<Vec<AttrArg>> {
         self.bump();
+        let text = self.s.ast.symbols().as_str(name).to_owned();
         let mut args = Vec::new();
         let mut more = !self.at(Punct::RParen);
-        if let Some(id) = self.ident()
+        if lone_ident
+            && let Some(id) = self.ident()
             && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen))
         {
             let at = self.bump().span.lo;
             args.push(AttrArg::Ident(id, at));
             more = self.eat(Punct::Comma).is_some();
         }
+        // clang 22 counts the string-literal positions from the first
+        // argument, clang 19 from the first after the identifier.
+        let skipped = if self.s.clang_compat >= 22 { 0 } else { args.len() };
         let mut pack = false;
         while more {
-            let e = if self.at(Punct::LBrace) {
+            if !self.at_string() && string_literal_arg(&text, args.len() - skipped) {
+                let d = self.s.diag(DiagId::parse_attribute_requires_string, self.loc()).arg(text);
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            }
+            let e = if self.at_string() && string_literal_arg(&text, args.len() - skipped) {
+                self.parse_string_literal(true)
+            } else if self.at(Punct::LBrace) {
                 self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
             } else {
                 self.parse_assignment_expr()
@@ -1209,10 +1286,9 @@ impl Parser<'_, '_> {
             args.push(AttrArg::Expr(e));
             more = self.eat(Punct::Comma).is_some();
         }
-        // No unknown attribute takes a pack expansion (clang
+        // No such attribute takes a pack expansion (clang
         // `attributeAcceptsExprPack`), reported at the `)`.
         if pack {
-            let text = self.s.ast.symbols().as_str(name).to_owned();
             let d = self.s.diag(DiagId::parse_attribute_pack_not_supported, self.loc()).arg(text);
             self.emit(d);
             self.skip_until(&[Punct::RParen], true, true);

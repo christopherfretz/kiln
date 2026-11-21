@@ -2473,12 +2473,42 @@ for `^^`, §5 for splices).
   is not an identifier, parse as expressions. `flag_enum` and
   `enum_extensibility` parse their arguments (so Sema can count them);
   other attributes outside `takes_expr_args` skip theirs.
-- **No argument list (WP-182):** a standard attribute that takes no
-  arguments (`carries_dependency` before C++26, P3475R2, `fallthrough`, `noreturn`,
-  `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
-  unscoped in `[[...]]` with `(...)`, even empty, reports `attribute 'x'
-  cannot have an argument list` at the `(`; its tokens are skipped and
-  the attribute is dropped.
+- **Standard attributes' argument clauses (WP-182, WP-1852; clang
+  `ParseCXX11AttributeArgs` for an `IsBuiltInOrStandardCXX11Attribute`,
+  `std_arg_clause`):** in `[[...]]`, a standard attribute that takes no
+  arguments (`carries_dependency` before C++26, P3475R2, `fallthrough`,
+  `noreturn`, `no_unique_address`, `likely`, `unlikely`, `maybe_unused`,
+  `indeterminate` from C++26; in C only `fallthrough`, `noreturn`,
+  `maybe_unused`) with `(...)`, even empty, reports `attribute 'x'
+  cannot have an argument list` at the `(`; `deprecated` and `nodiscard`
+  with an empty `()` report `parentheses must be omitted if 'x'
+  attribute's argument list is empty` there. Either way the clause is
+  parsed first (the no-argument attributes' as a list of expressions,
+  clang's `ParseAttributeArgsCommon`), and when that fails only its own
+  error is reported (`[[noreturn(undeclared)]]` is `use of undeclared
+  identifier`, `[[deprecated(x)]]` `expected string literal as argument
+  of 'deprecated' attribute`); the attribute is dropped. As clang, the
+  name is the attribute kind's, so `__noreturn__` counts as `noreturn`,
+  except `nodiscard` and `maybe_unused`, whose kinds have GNU spellings
+  too and which clang matches by their exact names (`[[__nodiscard__()]]`
+  is valid); the diagnostic shows the name as written. Of the scoped
+  spellings only `[[clang::fallthrough]]` (and `_Clang::`, C++ only) is
+  checked; `[[gnu::...]]` follows the GNU attribute, which accepts `()`.
+  Not followed: clang checks the last attribute it has added, which is
+  an earlier one when the current one's clause failed
+  (`[[nodiscard, deprecated(x)]]` also reports the empty clause and drops
+  `nodiscard`), a defect on code that already has an error.
+- **String-literal arguments (WP-954, WP-1853; clang
+  `attributeStringLiteralListArg`, `string_literal_arg`):** the argument
+  positions clang parses as an unevaluated string literal: the first of
+  `target`, `target_version`, `unavailable`, `annotate`, `model`,
+  `nodiscard`, `warn_unused_result`, `section` and `tls_model`, the first
+  two of `deprecated`, every one of `target_clones`, `no_sanitize`,
+  `abi_tag` and `no_builtin`. Another token there is `expected string
+  literal as argument of 'x' attribute` at that token, the rest of the
+  clause is skipped and the attribute dropped, without the token being
+  parsed as an expression (`[[deprecated(x)]]` reports no undeclared
+  `x`).
 - **Attribute-list recovery (WP-182):** after an attribute in `[[...]]`,
   anything but `,` or `]` reports `expected ','` after the previous token
   (`[[assume x]]`, `[[assume(x)(x)]]`), then skips to the `]` (stopping

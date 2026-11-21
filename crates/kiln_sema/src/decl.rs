@@ -14078,6 +14078,40 @@ impl Sema<'_, '_> {
         self.attr_support(syntax, scope_s.as_deref(), &n) == crate::attr_triage::Support::Unknown
     }
 
+    /// True when clang's parser does not know `__attribute__((name))`
+    /// (`ParsedAttr::UnknownAttribute`, WP-1853): its arguments are then
+    /// parsed as clang's unknown attributes' (`ParseAttributeArgsCommon`,
+    /// a lone identifier kept as an identifier). Unlike
+    /// [`Sema::attribute_is_unknown`] this does not depend on the target:
+    /// clang's parser knows an attribute of any target, so the name must
+    /// be unknown to kiln on both of its targets and not one of
+    /// [`crate::attr_triage::OTHER_TARGET_GNU`]; it depends on the clang
+    /// release (`gcc_struct` is new in clang 22).
+    pub fn gnu_attribute_is_unknown_to_parser(&self, name: Symbol) -> bool {
+        let raw = sym_str(self, name);
+        let n = kiln_ast::attr::normalize_attr_name(&raw);
+        if crate::class_b_attrs::is_c_only(n, AttrSyntax::Gnu, None) || n == "format" {
+            return false;
+        }
+        let compat = self.clang_compat;
+        if crate::attr_triage::OTHER_TARGET_GNU
+            .iter()
+            .any(|&(o, from, until)| o == n && (from..until).contains(&compat))
+        {
+            return false;
+        }
+        [false, true].into_iter().all(|x86| {
+            crate::attr_triage::attribute_support(
+                n,
+                AttrSyntax::Gnu,
+                None,
+                compat,
+                self.std >= kiln_lex::Std::Cxx26,
+                x86,
+            ) == crate::attr_triage::Support::Unknown
+        })
+    }
+
     /// [`crate::attr_triage::attribute_support`] for normalized `scope`
     /// and `n` under this unit's language, release and target. In C, a
     /// clang attribute spelled only `CXX11<"clang", ...>` (no C23
@@ -14376,6 +14410,9 @@ impl Sema<'_, '_> {
                     a = 0;
                 }
             }
+            // Its arguments are ignored, an identifier too (clang 19
+            // parses one there, WP-1853).
+            (AttrKind::X86_INTERRUPT, _) => {}
             (_, Some(AttrArg::Type(_) | AttrArg::Ident(..))) => {
                 self.error(DiagId::parse_expected_expression, loc);
                 return None;

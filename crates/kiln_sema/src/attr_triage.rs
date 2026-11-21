@@ -380,6 +380,39 @@ const CLANG_SCOPED: &[&str] = &[
 /// WP-1837).
 pub(crate) const CXX_ONLY_CLANG_SCOPED: &[&str] = &["warn_unused_result"];
 
+/// The `__attribute__` names clang's parser knows (a `ParsedAttr` kind,
+/// so `ParseAttributeArgsCommon` parses a lone identifier argument as an
+/// expression) although they belong to targets other than x86-64 and
+/// aarch64, so that kiln has them as unknown on both (WP-1853). Each with
+/// the clang releases that have it, as `[from, until)` `-fclang-compat`
+/// levels. Measured with clang 19 and 22 on both targets: the names whose
+/// `(x)` with an undeclared `x` is "use of undeclared identifier 'x'"
+/// that kiln reports as `unknown attribute`. Sorted by name.
+pub const OTHER_TARGET_GNU: &[(&str, u32, u32)] = &[
+    ("__clang_arm_mve_strict_polymorphism", 0, u32::MAX),
+    ("bpf_fastcall", 22, u32::MAX),
+    ("cmse_nonsecure_call", 0, u32::MAX),
+    ("cmse_nonsecure_entry", 0, u32::MAX),
+    ("dllexport", 0, u32::MAX),
+    ("dllimport", 0, u32::MAX),
+    ("far", 0, u32::MAX),
+    ("hybrid_patchable", 0, u32::MAX),
+    ("long_call", 0, u32::MAX),
+    ("micromips", 0, u32::MAX),
+    ("mips16", 0, u32::MAX),
+    ("near", 0, u32::MAX),
+    ("nomicromips", 0, u32::MAX),
+    ("nomips16", 0, u32::MAX),
+    // clang 22 makes it a spelling of `device_kernel`, which kiln knows.
+    ("nvptx_kernel", 0, 22),
+    ("preserve_access_index", 0, u32::MAX),
+    ("preserve_static_offset", 0, u32::MAX),
+    ("riscv_vector_cc", 0, u32::MAX),
+    ("riscv_vls_cc", 22, u32::MAX),
+    ("short_call", 0, u32::MAX),
+    ("signal", 0, u32::MAX),
+];
+
 /// The table row for `name` (its `__` affixes removed).
 pub fn row(name: &str) -> Option<&'static Row> {
     TABLE.binary_search_by(|r| r.name.cmp(name)).ok().map(|i| &TABLE[i])
