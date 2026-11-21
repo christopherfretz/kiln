@@ -235,7 +235,9 @@ impl Substituter<'_, '_, '_> {
             // A local variable's `cleanup` names a function, not a dependent
             // entity (WP-807); clang's `annotate` is lowered on every
             // instantiated variable (WP-1113); a `#pragma clang section`
-            // one is cloned (WP-1744).
+            // one is cloned (WP-1744); so is a member typedef's or a
+            // function pointer's `warn_unused_result`, which a call
+            // through it reads (WP-1837).
             .filter(|(_, n)| {
                 !only_aligned
                     || matches!(
@@ -244,6 +246,7 @@ impl Substituter<'_, '_, '_> {
                             | AttrKind::CLEANUP
                             | AttrKind::ANNOTATE
                             | AttrKind::PRAGMA_CLANG_SECTION
+                            | AttrKind::NODISCARD
                     )
             })
             // clang does not clone a visibility attribute (`Clone = 0`):
@@ -339,6 +342,24 @@ impl Substituter<'_, '_, '_> {
             }
             out.push(self.sema.ast.attrs.push(node));
         }
+        self.instantiated_pure_const(spec, &mut out);
         let _ = self.sema.builder().attach_attrs(spec, &out);
+    }
+
+    /// A `const` / `pure` function whose substituted result is `void`
+    /// (clang `CheckFunctionDeclaration` on the instantiation, in the
+    /// specialization's own context when it is deduced; WP-1838).
+    fn instantiated_pure_const(&mut self, spec: DeclId, out: &mut Vec<AttrId>) {
+        if !self.sema.kind_of(spec).is_function() {
+            return;
+        }
+        let mut done = false;
+        let _ = self.sema.as_spec_instantiation(spec, |s| {
+            s.check_pure_const(spec, out);
+            done = true;
+        });
+        if !done {
+            self.sema.check_pure_const(spec, out);
+        }
     }
 }

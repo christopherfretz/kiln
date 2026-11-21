@@ -864,6 +864,10 @@ impl AttrNode {
     /// value-dependent `N`, so `a` is the expression (an `ExprId`), not
     /// the space word (clang `DependentAddressSpaceType`, WP-1811).
     pub const SPACE_DEPENDENT: u8 = 4;
+    /// [`AttrKind::NODISCARD`] flag (bit 2): spelled
+    /// `[[clang::warn_unused_result]]`, neither the standard nor the GNU
+    /// spelling (clang `CXX11<"clang", "warn_unused_result">`; WP-1837).
+    pub const CLANG_SCOPED: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and
@@ -889,6 +893,13 @@ impl AttrNode {
     /// True for the GNU spelling: `__attribute__((x))` or `[[gnu::x]]`.
     pub const fn is_gnu_spelling(&self) -> bool {
         matches!(self.syntax, AttrSyntax::Gnu) || self.flags & Self::GNU_SCOPED != 0
+    }
+
+    /// True for a `NODISCARD` node spelled `[[nodiscard]]` (C++ or C23),
+    /// not `warn_unused_result` in any of its spellings (clang
+    /// `isStandardAttributeSyntax() && !getScopeName()`).
+    pub const fn is_standard_nodiscard(&self) -> bool {
+        !self.is_gnu_spelling() && self.flags & Self::CLANG_SCOPED == 0
     }
 }
 

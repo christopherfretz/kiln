@@ -22,8 +22,8 @@ use crate::declspec::DeclSpec;
 /// a type position.
 pub(crate) fn attr_name(node: &AttrNode) -> Option<&'static str> {
     Some(match node.kind {
-        AttrKind::NODISCARD if node.is_gnu_spelling() => "warn_unused_result",
-        AttrKind::NODISCARD => "nodiscard",
+        AttrKind::NODISCARD if node.is_standard_nodiscard() => "nodiscard",
+        AttrKind::NODISCARD => "warn_unused_result",
         AttrKind::ALIGNED if node.syntax == AttrSyntax::Keyword => "alignas",
         AttrKind::ALIGNED => "aligned",
         AttrKind::ASSUME => "assume",
@@ -522,6 +522,51 @@ impl Sema<'_, '_> {
         self.check_new_attrs_after_def(d, attrs, false);
         self.unify_fn_section(d, attrs);
         self.check_no_builtin_attrs(d, attrs);
+        self.check_pure_const(d, attrs);
+    }
+
+    /// GNU `const` / `pure` on function declaration `d` (WP-1838), as
+    /// clang's `CheckFunctionDeclaration` with the declaration's own
+    /// attributes, at its name: both written, "'const' attribute imposes
+    /// more restrictions; 'pure' attribute ignored"; a function returning
+    /// `void` (a constructor or destructor too, not an undeduced `auto`
+    /// or a dependent type), "'X' attribute on function returning 'void';
+    /// attribute ignored". The ignored attribute is dropped, so codegen
+    /// does not mark the function `memory(none)` / `memory(read)`.
+    pub(crate) fn check_pure_const(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
+        let has = |s: &Self, attrs: &[AttrId], k: AttrKind| {
+            attrs.iter().any(|&a| s.ast.attrs.get(a).kind == k)
+        };
+        if !has(self, attrs, AttrKind::CONST) && !has(self, attrs, AttrKind::PURE) {
+            return;
+        }
+        if !self.kind_of(d).is_function() {
+            return;
+        }
+        let at = self.ast.decls.get(d).loc();
+        if has(self, attrs, AttrKind::CONST) && has(self, attrs, AttrKind::PURE) {
+            let msg = self.diag(DiagId::sema_const_attr_with_pure, at);
+            self.emit(msg);
+            attrs.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::PURE);
+        }
+        let Some(ret) = self
+            .ast
+            .decls
+            .get(d)
+            .ty()
+            .and_then(|t| self.ast.types.proto(t))
+            .map(kiln_ast::types::FuncProto::ret)
+        else {
+            return;
+        };
+        if !self.ast.types.is_void(ret) || self.ast.types.is_dependent(ret) {
+            return;
+        }
+        let k = if has(self, attrs, AttrKind::CONST) { AttrKind::CONST } else { AttrKind::PURE };
+        let name = if k == AttrKind::CONST { "const" } else { "pure" };
+        let msg = self.diag(DiagId::sema_const_pure_void_return, at).arg(name);
+        self.emit(msg);
+        attrs.retain(|&a| self.ast.attrs.get(a).kind != k);
     }
 
     /// The `no_builtin` attributes of function declaration `d` (clang
@@ -1385,16 +1430,19 @@ impl Sema<'_, '_> {
         None
     }
 
-    /// `[[nodiscard]]` / GNU `warn_unused_result` ([dcl.attr.nodiscard]/1,
+    /// `[[nodiscard]]` / `warn_unused_result` ([dcl.attr.nodiscard]/1,
     /// clang `WarnUnusedResult` subjects and `handleWarnUnusedResult`): a
     /// class, enumeration, function, function pointer or typedef; not a
     /// function returning `void` other than a constructor; the standard
-    /// spelling not a variable; on a typedef only the GNU syntax.
+    /// spelling on a variable (a function pointer) is warned about but
+    /// kept; on a typedef only the GNU syntax and
+    /// `[[clang::warn_unused_result]]` (WP-1837).
     fn check_nodiscard_subject(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
         let gnu = node.is_gnu_spelling();
+        let standard = node.is_standard_nodiscard();
         let name = format!(
             "'{}'",
-            self.attr_shown(&node, if gnu { "warn_unused_result" } else { "nodiscard" })
+            self.attr_shown(&node, if standard { "nodiscard" } else { "warn_unused_result" })
         );
         let typedef = matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias);
         let fty = self.decl_function_type(d, kind);
@@ -1422,14 +1470,16 @@ impl Sema<'_, '_> {
         {
             return warn(self, DiagId::sema_attribute_void_function, None);
         }
-        if !gnu && is_var_kind(kind) {
-            return warn(
+        // clang warns and still adds the attribute: a call through the
+        // pointer is checked.
+        if standard && is_var_kind(kind) {
+            warn(
                 self,
                 DiagId::sema_attribute_wrong_decl_type,
                 Some("functions, classes, or enumerations"),
             );
         }
-        if typedef && node.syntax != AttrSyntax::Gnu {
+        if typedef && node.syntax != AttrSyntax::Gnu && (standard || gnu) {
             let spelling = if gnu { "'[[gnu::warn_unused_result]]'" } else { "'[[nodiscard]]'" };
             let msg = self.diag(DiagId::sema_unused_result_typedef, node.loc).arg(spelling);
             self.emit(msg);

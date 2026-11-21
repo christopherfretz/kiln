@@ -5,7 +5,7 @@
 //! Each `act_on_*` builds the typed node clang builds, with the implicit
 //! conversions of [`crate::conv`] spelled out as `ImplicitCastExpr`s.
 
-use kiln_ast::attr::AttrKind;
+use kiln_ast::attr::{AttrKind, AttrNode};
 use kiln_ast::consts::{IntBits, Scalar};
 use kiln_ast::decl::{DeclFlags, DeclKind, InitStyle};
 use kiln_ast::expr::{
@@ -1504,12 +1504,15 @@ impl Sema<'_, '_> {
     fn unused_type_warning(
         &self,
         which: &str,
-        ty: QualType,
+        decl: DeclId,
         name: String,
         text: Option<String>,
         at: Loc,
     ) -> (DiagId, Loc, Vec<String>) {
-        let mut args = vec![which.to_owned(), self.ty_arg(ty), name];
+        // clang names the class, enumeration or typedef declaration
+        // (unqualified, `'W<int>'`), not the type.
+        let shown = format!("'{}'", self.name_for_diagnostic(decl));
+        let mut args = vec![which.to_owned(), shown, name];
         let id = match text {
             Some(t) => {
                 args.push(t);
@@ -1805,35 +1808,53 @@ impl Sema<'_, '_> {
     /// callee declaration (`getCalleeDecl`), reported at `at`: a
     /// nodiscard result type or callee, else a `pure` / `const` callee.
     fn unused_call_result(&self, x: ExprId, at: Loc) -> Option<(DiagId, Loc, Vec<String>)> {
-        let f = self.referenced_decl_of_callee(self.ast.exprs.callee(x))?;
-        if self.ast.types.is_void(self.ast.exprs.get(x).ty()) {
+        let f = self.referenced_decl_of_callee(self.ast.exprs.callee(x));
+        let t = self.ast.exprs.get(x).ty();
+        if self.ast.types.is_void(t) {
             return None;
         }
-        // clang `getUnusedResultAttr`: a nodiscard class or
-        // enumeration returned by value first, then the callee
-        // ([dcl.attr.nodiscard]/2).
-        let t = self.ast.exprs.get(x).ty();
-        let by_type = if self.call_returns_reference(x) {
-            None
-        } else {
-            let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
-            tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
+        // clang `getUnusedResultAttr`: a nodiscard class or enumeration
+        // returned by value, a `warn_unused_result` typedef the result
+        // type names (through further typedefs), and the callee
+        // ([dcl.attr.nodiscard]/2); clang 22 asks the callee first.
+        let by_tag = || {
+            if self.call_returns_reference(x) {
+                return None;
+            }
+            let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t))?;
+            Some((self.find_attr(tag, AttrKind::NODISCARD)?, tag))
         };
+        // The typedef path reads the call's return type as declared
+        // (clang `getCallReturnType`): a reference return keeps its
+        // typedef there, not in the call's (dereferenced) type.
+        let ret = if self.call_returns_reference(x) {
+            f.and_then(|f| self.ast.decls.get(f).ty())
+                .and_then(|ft| self.sugared_proto(ft))
+                .map(|p| p.ret())
+        } else {
+            Some(t)
+        };
+        let by_type = || by_tag().or_else(|| ret.and_then(|r| self.typedef_nodiscard(r)));
         // The latest declaration's, an explicit specialization's own
         // included (clang `getUnusedResultAttr` on the most recent one).
-        let by_callee = || self.find_attr(self.ast.latest(f), AttrKind::NODISCARD);
-        if let Some(a) = by_type.or_else(by_callee) {
+        let by_callee = || f.and_then(|f| self.find_attr(self.ast.latest(f), AttrKind::NODISCARD));
+        let found = if self.clang_compat >= 22 {
+            by_callee().map(|a| (a, None)).or_else(|| by_type().map(|(a, t)| (a, Some(t))))
+        } else {
+            by_type().map(|(a, t)| (a, Some(t))).or_else(|| by_callee().map(|a| (a, None)))
+        };
+        if let Some((a, ty)) = found {
             // clang appends the attribute's message
             // ([dcl.attr.nodiscard]/4).
             let attr = *self.ast.attrs.get(a);
             let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
-            // clang names the spelling: `warn_unused_result` for the GNU
-            // forms.
-            let name = format!("'{}'", crate::decl_attrs::attr_name(&attr).unwrap_or("nodiscard"));
+            let name = format!("'{}'", self.nodiscard_shown(&attr));
             // clang 22 `warn_unused_return_type`: a nodiscard
             // type is named, under -Wunused-value.
-            if by_type.is_some() && self.clang_compat >= 22 {
-                return Some(self.unused_type_warning("0", t, name, text, at));
+            if let Some(ty) = ty
+                && self.clang_compat >= 22
+            {
+                return Some(self.unused_type_warning("0", ty, name, text, at));
             }
             return Some(match text {
                 Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
@@ -1842,6 +1863,7 @@ impl Sema<'_, '_> {
         }
         // clang `warn_unused_call`: a `pure` / `const` callee
         // whose result is not `void` (WP-182).
+        let f = f?;
         for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
             if self.find_attr(f, k).is_some() {
                 return Some((DiagId::sema_unused_call, at, vec![name.to_owned()]));
@@ -1850,9 +1872,46 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// The `warn_unused_result` attribute of the first typedef in `t`'s
+    /// sugar that has one (clang `getAs<TypedefType>` and `desugar`, in
+    /// `getUnusedResultAttr`), with that typedef (WP-1837).
+    fn typedef_nodiscard(&self, t: QualType) -> Option<(AttrId, DeclId)> {
+        let types = &self.ast.types;
+        let mut q = t;
+        for _ in 0..256 {
+            if let TypeView::Typedef { decl, .. } = types.view(q.ty())
+                && let Some(a) = self.find_attr(decl, AttrKind::NODISCARD)
+            {
+                return Some((a, decl));
+            }
+            let next = types.desugar_once(q);
+            if next.ty() == q.ty() {
+                return None;
+            }
+            q = next;
+        }
+        None
+    }
+
+    /// The name clang gives a `NODISCARD` attribute in the unused-result
+    /// warnings: `nodiscard` or `warn_unused_result`, after the scope as
+    /// written under clang 22 (`'gnu::warn_unused_result'`,
+    /// `'_Clang::warn_unused_result'`).
+    pub(crate) fn nodiscard_shown(&self, node: &AttrNode) -> String {
+        let canonical = crate::decl_attrs::attr_name(node).unwrap_or("nodiscard");
+        if self.clang_compat >= 22
+            && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11
+            && let Some(&(Some(scope), _)) = self.attr_spellings.get(&node.loc)
+        {
+            return format!("{}::{canonical}", self.ast.symbols().as_str(scope));
+        }
+        canonical.to_owned()
+    }
+
     /// A discarded temporary `x` of a nodiscard class, or made by a
     /// nodiscard constructor ([dcl.attr.nodiscard]/4, clang
-    /// `warn_unused_constructor`), reported at `loc`.
+    /// `warn_unused_constructor`), reported at `loc`. Before clang 22 only
+    /// the `[[nodiscard]]` spelling (clang `IsCXX11NoDiscard`) applies.
     fn unused_construct_result(&self, x: ExprId, loc: Loc) -> Option<(DiagId, Loc, Vec<String>)> {
         let n = *self.ast.exprs.get(x);
         let ctor = self.ast.exprs.constructor(x);
@@ -1861,11 +1920,18 @@ impl Sema<'_, '_> {
             let class = self.ast.types.as_record(n.ty())?;
             self.find_attr(class, AttrKind::NODISCARD)
         })?;
+        let class = self.ast.types.as_record(n.ty());
         let attr = *self.ast.attrs.get(a);
-        let name = "'nodiscard'".to_owned();
-        if by_ctor.is_none() && self.clang_compat >= 22 {
+        if self.clang_compat < 22 && !attr.is_standard_nodiscard() {
+            return None;
+        }
+        let name = format!("'{}'", self.nodiscard_shown(&attr));
+        if by_ctor.is_none()
+            && self.clang_compat >= 22
+            && let Some(class) = class
+        {
             let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
-            return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
+            return Some(self.unused_type_warning("1", class, name, text, loc));
         }
         Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m)) {
             Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),

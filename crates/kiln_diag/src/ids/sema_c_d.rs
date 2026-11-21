@@ -166,7 +166,9 @@ sema_conflicting_overriding_attributes = Error (3) "virtual function '{0}' has d
 // clang `err_conflicting_overriding_cc_attributes` (WP-808)
 sema_conflicting_overriding_cc = Error (3) "virtual function '{0}' has different calling convention attributes ({1}) than the function it overrides (which has calling convention {2})";
 sema_conflicting_types = Error (1) "conflicting types for '{0}'";
+sema_const_attr_with_pure = Warning [IgnoredAttributes] (0) "'const' attribute imposes more restrictions; 'pure' attribute ignored";
 sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
+sema_const_pure_void_return = Warning [IgnoredAttributes] (1) "'{0}' attribute on function returning 'void'; attribute ignored";
 sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
 sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
 sema_constant_logical_operand = Warning [ConstantLogicalOperand] (1) "use of logical '{0}' with constant operand";

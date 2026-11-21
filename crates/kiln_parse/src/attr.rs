@@ -912,6 +912,16 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 self.parse_attr_args(name);
                 None
+            } else if self.at(Punct::LParen)
+                && self.s.attribute_is_unknown(AttrSyntax::Cxx11, scope, name)
+            {
+                // clang `ParseCXX11AttributeArgs` (WP-1836): the argument
+                // clause of an attribute clang does not know is balanced
+                // tokens, skipped unparsed; only `unknown attribute 'x'
+                // ignored` follows ([dcl.attr.grammar]/6).
+                self.bump();
+                self.skip_until(&[Punct::RParen], false, true);
+                Some(Vec::new())
             } else {
                 self.parse_attr_args(name)
             };
@@ -939,7 +949,11 @@ impl Parser<'_, '_> {
             }
         }
         if self.eat(Punct::RSquare).is_some() {
-            self.expect(Punct::RSquare);
+            // clang: a second `]` that is missing is "expected ']'", then
+            // `SkipUntil(r_square)` (balanced, consuming).
+            if self.expect(Punct::RSquare).is_none() {
+                self.skip_until(&[Punct::RSquare], false, true);
+            }
         } else {
             self.expect_closing(Punct::RSquare, Punct::LSquare, open);
             self.skip_until(&[Punct::RSquare], false, true);
@@ -1010,6 +1024,12 @@ impl Parser<'_, '_> {
                 }
                 // clang 19 `Clang<"assume">`: `[[assume]]`'s argument.
                 _ if self.s.ast.symbols().as_str(name) == "assume" => self.parse_assume_arg(name),
+                _ if self.at(Punct::LParen)
+                    && !takes_expr_args(self.s.ast.symbols().as_str(name))
+                    && self.s.attribute_is_unknown(AttrSyntax::Gnu, None, name) =>
+                {
+                    self.parse_unknown_gnu_attr_args(name)
+                }
                 _ => self.parse_attr_args(name),
             };
             if let Some(args) = args
@@ -1151,6 +1171,66 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         ok.then_some(args)
+    }
+
+    /// The arguments of an `__attribute__` clang does not know, at the
+    /// `(` (clang `ParseAttributeArgsCommon` for an `UnknownAttribute`,
+    /// WP-1836): an identifier alone before `,` or `)` is an identifier
+    /// argument, the others are assignment-expressions (a string literal
+    /// an ordinary one), each perhaps a pack expansion. `None` when one is
+    /// invalid: clang then drops the attribute without its `unknown
+    /// attribute` warning.
+    fn parse_unknown_gnu_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+        self.bump();
+        let mut args = Vec::new();
+        let mut more = !self.at(Punct::RParen);
+        if let Some(id) = self.ident()
+            && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen))
+        {
+            let at = self.bump().span.lo;
+            args.push(AttrArg::Ident(id, at));
+            more = self.eat(Punct::Comma).is_some();
+        }
+        let mut pack = false;
+        while more {
+            let e = if self.at(Punct::LBrace) {
+                self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
+            } else {
+                self.parse_assignment_expr()
+            };
+            let expansion = self.eat(Punct::Ellipsis).is_some();
+            pack |= expansion;
+            let Some(e) = e.filter(|&e| {
+                !self.s.contains_errors(e) && (expansion || self.s.check_attribute_arg_packs(e))
+            }) else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            args.push(AttrArg::Expr(e));
+            more = self.eat(Punct::Comma).is_some();
+        }
+        // No unknown attribute takes a pack expansion (clang
+        // `attributeAcceptsExprPack`), reported at the `)`.
+        if pack {
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let d = self.s.diag(DiagId::parse_attribute_pack_not_supported, self.loc()).arg(text);
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        // clang `ExpectAndConsume(tok::r_paren)`: "expected ')'" after the
+        // previous token, no note, nothing skipped; the attribute is
+        // dropped.
+        if self.eat(Punct::RParen).is_none() {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected, self.expected_loc())
+                .arg(crate::parser::quote(Punct::RParen))
+                .allow_duplicate();
+            self.emit(d);
+            return None;
+        }
+        Some(args)
     }
 
     /// The argument of `[[assume(conditional-expression)]]`
