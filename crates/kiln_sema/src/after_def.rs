@@ -58,6 +58,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The declaration whose attributes declaration `d`'s are merged with
+    /// (clang's `Old` in `mergeDeclAttributes`): its previous declaration,
+    /// or for a redeclaration an error left out of the chain, the one it
+    /// would have followed, and none for one clang rejects before merging
+    /// (`Sema::after_def_prev`, WP-1840).
+    pub(crate) fn attr_merge_prev(&self, d: DeclId) -> Option<DeclId> {
+        match self.after_def_prev {
+            Some((n, p)) if n == d => p,
+            _ => self.ast.prev(d),
+        }
+    }
+
     /// The definition of `d`'s entity that an earlier declaration is
     /// (clang `getDefinition` of the previous declaration): a function's
     /// body (or `= delete` / `= default`), a variable definition (in C
@@ -65,9 +77,13 @@ impl Sema<'_, '_> {
     /// `alias`), a class or enumeration's. None for every other kind, for
     /// an explicit or partial specialization of a class template (clang
     /// merges no attributes into one), and when `d` itself is the
-    /// definition.
+    /// definition. An invalid redeclaration out of the chain is checked
+    /// against the declaration it would have followed (an `inline` or
+    /// `constexpr` mismatch after a definition, a variable redefinition or
+    /// conflicting redeclaration), and a `static` function redeclaration of
+    /// a non-static one against none (WP-1840).
     fn prior_definition(&self, d: DeclId) -> Option<DeclId> {
-        let prev = self.ast.prev(d)?;
+        let prev = self.attr_merge_prev(d)?;
         let kind = self.kind_of(d);
         if kind.is_function() {
             // A deleted or defaulted function is defined too.

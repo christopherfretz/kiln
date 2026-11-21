@@ -3774,12 +3774,57 @@ impl Sema<'_, '_> {
         base: QualType,
         d: &Declarator,
     ) -> Option<DeclId> {
+        // Read before the declaration consumes them.
+        let def = self.templ.fn_def_next;
+        let explicit = self.has_explicit_spec_head()
+            || self.has_explicit_inst_head()
+            || self.templ.member_spec.is_some()
+            || !self.templ.spec_headers.is_empty();
         let r = self.act_on_declarator_impl(ds, base, d);
+        self.after_def_prev = None;
         // [basic.link]/15: its declared type may make it an exposure.
         if let Some(x) = r {
             self.module_check_decl_exposure(x, ds.friend.is_some());
+            if !def && !explicit && ds.friend.is_none() && d.qualifier.is_some() {
+                self.check_out_of_line_member_decl(x, d.name_loc());
+            }
         }
         r
+    }
+
+    /// [class.mfct]/1: outside its class, a member function is redeclared
+    /// only by a definition. clang reports a redeclaration that is not
+    /// one as the default-error extension -Wout-of-line-declaration
+    /// (`ext_out_of_line_declaration`), after the redeclaration checks and
+    /// the attributes (WP-1835). Explicit specializations and explicit
+    /// instantiations (excluded by the caller, [temp.expl.spec]/2),
+    /// friends and invalid declarations are not reported. Static data
+    /// members, nested classes and enumerations have errors of their own.
+    fn check_out_of_line_member_decl(&mut self, f: DeclId, at: Loc) {
+        let n = *self.ast.decls.get(f);
+        if !matches!(
+            n.kind(),
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        ) || n.has(DeclFlags::INVALID)
+            || self.ast.prev(f).is_none()
+        {
+            return;
+        }
+        // Declared at namespace scope: in a class or a block, the
+        // qualified name is an error of its own.
+        let (Some(ctx), Some(lexical)) = (n.ctx(), self.ast.decls.lexical_ctx(f)) else { return };
+        let lk = self.kind_of(lexical);
+        if self.ast.first(ctx) == self.ast.first(lexical)
+            || lk.payload() == kiln_ast::decl::PayloadClass::Record
+            || lk.is_function()
+            || self.in_local_scope()
+        {
+            return;
+        }
+        self.emit(self.diag(DiagId::sema_out_of_line_declaration, at));
     }
 
     #[allow(clippy::too_many_lines, reason = "one flat dispatch over declarator kinds")]
@@ -5284,6 +5329,9 @@ impl Sema<'_, '_> {
         // The non-function member an out-of-line member function
         // declaration names (`X S::x();` for `static X x;`).
         let mut other_kind_member = None;
+        // The declaration this one's attributes are checked against after
+        // a definition when it differs from `prev_ok` (`after_def_prev`).
+        let mut attr_prev = None;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -5923,6 +5971,8 @@ impl Sema<'_, '_> {
                             prev_ok = None;
                             invalid_redecl = true;
                         }
+                        // clang returns before merging attributes.
+                        attr_prev = Some(None);
                     }
                     // [dcl.link]/6: the language linkage is the first
                     // declaration's (clang `err_different_language_linkage`).
@@ -5949,6 +5999,8 @@ impl Sema<'_, '_> {
                     {
                         prev_ok = None;
                         invalid_redecl = true;
+                        // clang merges the attributes first (WP-1840).
+                        attr_prev = Some(Some(p));
                     } else if ok != nk
                         && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
                     {
@@ -5961,6 +6013,7 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         prev_ok = None;
                         invalid_redecl = true;
+                        attr_prev = Some(Some(p));
                     }
                 } else if self.same_ignoring_exc_spec(pty, ty) {
                     // [except.spec]/5: every declaration of a function with
@@ -6151,6 +6204,9 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_auto_fn_virtual, vloc);
         }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
+        if let Some(p) = attr_prev {
+            self.after_def_prev = Some((f, p));
+        }
         self.finish_virtual_decl(f, &virt);
         if let Some(Chunk::Function { trailing: Some((t, arrow)), .. }) = d.chunks.first()
             && self.is_instantiation_dependent_type(*t)
@@ -7816,6 +7872,10 @@ impl Sema<'_, '_> {
         // (clang `setInvalidDecl`), so a later lookup that also finds the
         // earlier declaration names that one, not an ambiguous set.
         let mut redefined = false;
+        // The variable an invalid redeclaration's attributes are still
+        // checked against (`after_def_prev`; clang `MergeVarDecl` merges
+        // them before its type and redefinition checks, WP-1840).
+        let mut attr_prev = None;
         let mut c_hidden = false;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let (independent, local) = self.var_prev_local(spec, d, name);
@@ -7874,6 +7934,7 @@ impl Sema<'_, '_> {
                         };
                     if conflict {
                         redefined = true;
+                        attr_prev = Some(p);
                     } else {
                         prev_ok = Some(p);
                     }
@@ -7894,6 +7955,7 @@ impl Sema<'_, '_> {
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
                     redefined = true;
+                    attr_prev = Some(p);
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -7915,11 +7977,20 @@ impl Sema<'_, '_> {
             }
         }
         let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
+        let mut spec = spec;
+        if let Some(p) = prev_ok
+            && self.constinit_added_too_late(p, ds)
+        {
+            spec = spec.with_constinit(false);
+        }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        if let Some(p) = attr_prev {
+            self.after_def_prev = Some((v, Some(p)));
+        }
         if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
@@ -8816,6 +8887,41 @@ impl Sema<'_, '_> {
         {
             self.constinit_locs.insert(v, at);
         }
+    }
+
+    /// [dcl.constinit]/1: `constinit` on a redeclaration of `prev`'s
+    /// variable is too late once an earlier declaration initialized it
+    /// (clang `mergeDeclAttributes` with `diagnoseMissingConstinit`, the
+    /// specifier form of `err_constinit_added_too_late`; WP-1834). Not when
+    /// an earlier declaration already has `constinit` or the
+    /// `require_constant_initialization` attribute (clang compares only
+    /// whether the two have a `ConstInitAttr`). The initializing
+    /// declaration is the one with an initializer, else the definition
+    /// (clang `VarDecl::getInitializingDeclaration`). Whether it was
+    /// reported: the specifier is then dropped.
+    pub(crate) fn constinit_added_too_late(&mut self, prev: DeclId, ds: &DeclSpec) -> bool {
+        let Some(at) = ds.constinit else { return false };
+        let earlier: Vec<DeclId> = self.ast.redecls_of(prev).take(4096).collect();
+        if earlier.iter().any(|&r| {
+            self.constinit_locs.contains_key(&r)
+                || self.find_attr(r, AttrKind::REQUIRE_CONSTANT_INIT).is_some()
+        }) {
+            return false;
+        }
+        let with_init = |s: &Self, r: DeclId| s.ast.decls.var(r).is_some_and(|x| x.init.is_some());
+        let Some(init) = earlier
+            .iter()
+            .copied()
+            .find(|&r| with_init(self, r))
+            .or_else(|| earlier.iter().copied().find(|&r| self.is_var_definition(r)))
+        else {
+            return false;
+        };
+        let here =
+            self.diag(DiagId::note_constinit_add_specifier_here, self.ast.decls.get(init).loc());
+        let msg = self.diag(DiagId::sema_constinit_added_too_late, at).with_note(here);
+        self.emit(msg);
+        true
     }
 
     /// The declaration of `v`'s entity that has `constinit`, and where

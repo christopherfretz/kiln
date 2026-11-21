@@ -58,6 +58,7 @@ note_constexpr_read_past_end = Note (0) "read of dereferenced one-past-the-end p
 note_constexpr_unsupported_call = Note (1) "call to '{0}' cannot be evaluated yet";
 note_constexpr_var_init_unknown = Note (1) "initializer of '{0}' is unknown";
 note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
+note_constinit_add_specifier_here = Note (0) "add the 'constinit' specifier to the initializing declaration here";
 note_constinit_missing_here = Note (0) "variable declared constinit here";
 note_constinit_specified_here = Note (0) "required by 'constinit' specifier here";
 note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";

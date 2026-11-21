@@ -153,6 +153,7 @@ NullDereference = "null-dereference" [];
 Nullability = "nullability" [];
 NullabilityDeclspec = "nullability-declspec" [];
 OrderedCompareFunctionPointers = "ordered-compare-function-pointers" [];
+OutOfLineDeclaration = "out-of-line-declaration" [];
 OutOfScopeFunction = "out-of-scope-function" [];
 OverloadedVirtual = "overloaded-virtual" [];
 PointerBoolConversion = "pointer-bool-conversion" [];
