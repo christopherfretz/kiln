@@ -1843,8 +1843,18 @@ impl Sema<'_, '_> {
     /// during the end-of-TU drain, is left to codegen's first use (not
     /// recorded).
     fn record_ref_var_inst(&mut self, v: DeclId) {
+        if let Some((d, after)) = self.ref_anchor() {
+            self.ast.templates.add_ref_var_inst(d, after, v);
+        }
+    }
+
+    /// Where [`Self::record_ref_var_inst`] hands a definition named at
+    /// the current point to codegen: `(anchor, after)` as in
+    /// `TemplateTables::ref_var_insts`, or `None` inside an instantiation
+    /// or during the end-of-TU drain.
+    pub(crate) fn ref_anchor(&self) -> Option<(DeclId, bool)> {
         if self.inst.at_end_of_tu || !self.inst.stack.is_empty() {
-            return;
+            return None;
         }
         // The innermost enclosing namespace, and its member containing
         // the current context (a function body's context may be the
@@ -1855,19 +1865,17 @@ impl Sema<'_, '_> {
         {
             (ns, below) = self.enclosing_ns_member(f);
         }
-        let Some(ns) = ns else { return };
+        let ns = ns?;
         // A namespace-scope variable whose initializer is parsed.
         let below = below.or_else(|| {
             self.depr_init
                 .or(self.initializing)
                 .filter(|&d| self.ast.decls.lexical_ctx(d) == Some(ns))
         });
-        if let Some(d) = below {
-            self.ast.templates.add_ref_var_inst(d, false, v);
-        } else {
-            let last = self.ast.decls.member_list(ns).and_then(|l| l.last);
-            self.ast.templates.add_ref_var_inst(last.unwrap_or(ns), true, v);
-        }
+        Some(match below {
+            Some(d) => (d, false),
+            None => (self.ast.decls.member_list(ns).and_then(|l| l.last).unwrap_or(ns), true),
+        })
     }
 
     /// The innermost namespace (or linkage specification) enclosing `d`

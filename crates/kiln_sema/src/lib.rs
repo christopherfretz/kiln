@@ -76,6 +76,7 @@ mod gnu_typeof;
 mod has_attribute;
 mod impcast;
 mod implicit_fallthrough;
+mod imported_used;
 mod infinite_recursion;
 pub mod init;
 mod init_dtor;

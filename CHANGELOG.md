@@ -273,6 +273,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The declaration image (`-fkiln-bmi-image`) carries variables with
+  thread storage duration (WP-1824): `thread_local`, `__thread` and
+  `_Thread_local` variables, static data members and block-scope
+  statics, with their `tls_model`, where a module exporting one fell
+  back to replaying its source. An importer reaches them through the
+  same `_ZTW` wrappers and `_ZTH` initializers, with the same IR as a
+  replay; a precompiled header's snapshot carries them too (tested).
+- An importer that names an imported inline function with GNU `used`,
+  an x86-64 `interrupt` handler among them, defines it `linkonce_odr` in
+  `llvm.compiler.used` before the declaration that names it, with the
+  `used` overloads of its name, as clang 22 and 19 do (WP-1825); it was
+  only declared, without the handler's `x86_intrcc` convention.
 - Programs whose importer builds a module from its declaration image
   (`-fkiln-bmi-image`) link again when an inline function names a
   constant static data member of an implicit class template

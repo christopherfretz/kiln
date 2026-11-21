@@ -2784,6 +2784,8 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+        } else {
+            self.note_imported_used_fn(d);
         }
         if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) {
             self.count_var_ref(d);

@@ -1130,9 +1130,16 @@ impl<'a> Cg<'a> {
         {
             // A definition owned by an imported named-module unit (its
             // purview or its global module fragment) belongs to that
-            // unit's object file (spec/modules.md §7).
+            // unit's object file (spec/modules.md §7). An inline one that
+            // is only `used` (an x86 `interrupt` handler is implicitly)
+            // is not emitted here eagerly, but when this unit names it,
+            // as any imported inline function (clang 22: a deserialized
+            // declaration is not `DeclMustBeEmitted`; WP-1825).
             if self.owned_by_imported_unit(d) {
-                return Ok(());
+                if !self.discardable_fn(d) || self.is_ctor_dtor_fn(d) {
+                    return Ok(());
+                }
+                return self.defer_global_fn(d, first);
             }
             // clang `MayBeEmittedEagerly`: a `target_version` function
             // that is not multiversioned (always, without `fmv`) is
@@ -1149,6 +1156,14 @@ impl<'a> Cg<'a> {
             }
             return self.emit_fn_def(d);
         }
+        self.defer_global_fn(d, first)
+    }
+
+    /// [`Self::emit_global_fn`]'s deferred definition `d` (first
+    /// declaration `first`): emitted now when a reference already
+    /// declared it, else when one does.
+    fn defer_global_fn(&mut self, d: DeclId, first: DeclId) -> R<()> {
+        let ast = self.ast;
         if let Some(&f) = self.fns.get(&first) {
             if self.m.func(f).is_declaration() {
                 self.to_emit.push(Def::Decl(d));
@@ -1506,6 +1521,14 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         if !self.held.remove(&first) {
             return Ok(());
+        }
+        // An imported inline `used` function the importer named
+        // (`Sema::note_imported_used_fn`, WP-1825).
+        if ast.decls.function(first).is_some() {
+            return match ast.definition(first) {
+                Some(def) => self.emit_fn_def(def),
+                None => Ok(()),
+            };
         }
         // The out-of-line definition Sema instantiated, with or without an
         // initializer (`template<class T> T A<T>::s;`).
