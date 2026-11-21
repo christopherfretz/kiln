@@ -181,7 +181,8 @@ usage: cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard <K/N>]
                                as its own command
                    self-check  the clang++-N corpus self-check
                    kiln        cargo build -p kiln_driver, then the kiln corpus run,
-                               its --bmi-kind runs and the --pch-diff slice
+                               its --bmi-kind runs (kind 2 also with --bmi-image)
+                               and the --pch-diff slice
                  an unselected step prints `skipped (--step)`
   --shard <K/N>  run only shard K of N of each corpus run (`cargo xtask test
                  --shard K/N`); needs a selected self-check or kiln step
@@ -496,17 +497,23 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
     };
     // The module-file kind variant (spec/harness.md "Module-file kinds"):
     // every `module:` test again, kiln two-step, under each kind.
-    let bmi_kind = |k: u8| match &kiln {
+    // Then kind 2 with `--bmi-image` (WP-1828): the units the
+    // declaration image covers are imported through it.
+    let bmi_kind = |k: u8, image: bool| match &kiln {
         Some(kiln) => ci_corpus(
-            &format!("--compiler {} --bmi-kind {k}", kiln.display()),
+            &format!(
+                "--compiler {} --bmi-kind {k}{}",
+                kiln.display(),
+                if image { " --bmi-image" } else { "" }
+            ),
             Some(kiln.clone()),
             require_gcc,
             args.shard,
-            Some(k),
+            Some((k, image)),
         ),
         None => test::CorpusOutcome::Skipped("--step".to_owned()),
     };
-    let (bmi1, bmi2) = (bmi_kind(1), bmi_kind(2));
+    let (bmi1, bmi2, bmi_image) = (bmi_kind(1, false), bmi_kind(2, false), bmi_kind(2, true));
     // The PCH differential's slice (spec/harness.md "PCH differential"):
     // the replay fallback and the snapshot, kiln only.
     let pch_diff = |m: util::pch_diff::PchDiff| match &kiln {
@@ -524,6 +531,7 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
     let kiln_name = format!("kiln{shard}");
     let bmi1_name = format!("kiln --bmi-kind 1{shard}");
     let bmi2_name = format!("kiln --bmi-kind 2{shard}");
+    let bmi_image_name = format!("kiln --bmi-kind 2 --bmi-image{shard}");
     let pch_replay_name = format!("kiln --pch-diff replay{shard}");
     let pch_snapshot_name =
         format!("kiln --pch-diff snapshot --pch-diff-require-restore --pch-diff-extra-dir{shard}");
@@ -532,6 +540,7 @@ fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
         (kiln_name.as_str(), kiln_mode),
         (bmi1_name.as_str(), bmi1),
         (bmi2_name.as_str(), bmi2),
+        (bmi_image_name.as_str(), bmi_image),
         (pch_replay_name.as_str(), pch_replay),
         (pch_snapshot_name.as_str(), pch_snapshot),
     ];
@@ -585,13 +594,13 @@ fn ci_lints(root: &std::path::Path) -> bool {
 
 /// One `cargo xtask test` run over the default corpus, with `compiler`
 /// (`require_gcc`: `KILN_REQUIRE_GCC=1`; `shard`: `--shard K/N`;
-/// `bmi_kind`: `--bmi-kind`).
+/// `bmi`: `--bmi-kind`, and whether with `--bmi-image`).
 fn ci_corpus(
     what: &str,
     compiler: Option<std::path::PathBuf>,
     require_gcc: bool,
     shard: Option<test::Shard>,
-    bmi_kind: Option<u8>,
+    bmi: Option<(u8, bool)>,
 ) -> test::CorpusOutcome {
     let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
     eprintln!("xtask ci: cargo xtask test {what}{shard_flag}");
@@ -601,7 +610,8 @@ fn ci_corpus(
         require_debuggers: test::require_debuggers_from_env(),
         require_sanitizer_runtime: test::require_sanitizer_runtime_from_env(),
         shard,
-        bmi_kind,
+        bmi_kind: bmi.map(|(k, _)| k),
+        bmi_image: bmi.is_some_and(|(_, image)| image),
         ..test::Options::default()
     };
     let start = std::time::Instant::now();

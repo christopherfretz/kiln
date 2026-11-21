@@ -6,3 +6,4 @@ Cxx14BinaryLiteral = "c++14-binary-literal" [];
 Cxx17Extensions = "c++17-extensions" [];
 FourByteMultiChar = "four-char-constants" [];
 InvalidSourceEncoding = "invalid-source-encoding" [];
+InvalidUnevaluatedString = "invalid-unevaluated-string" [];

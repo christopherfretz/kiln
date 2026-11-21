@@ -38,5 +38,6 @@ lit_size_t_ext = ExtWarn [Cxx23Extensions] (0) "'size_t' suffix for literals is 
 lit_ucn_escape_incomplete = Error (0) "incomplete universal character name";
 lit_unevaluated_escape = Error (1) "invalid escape sequence '{0}' in an unevaluated string literal";
 lit_unevaluated_prefix = Error (0) "an unevaluated string literal cannot have an encoding prefix";
+lit_unevaluated_prefix_ignored = Warning [InvalidUnevaluatedString] (2) "encoding prefix '{0}' on an unevaluated string literal has no effect{1:| and is incompatible with c++2c}";
 lit_unevaluated_udl = Error (0) "an unevaluated string literal cannot be a user-defined literal";
 lit_unknown_escape = ExtWarn [UnknownEscapeSequence] (1) "unknown escape sequence '\\{0}'";

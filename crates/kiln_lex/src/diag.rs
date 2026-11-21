@@ -255,9 +255,17 @@ pub enum LexDiagKind {
     /// [`LexDiagKind::InvalidEncoding`]: an extra highlighted range of that
     /// diagnostic, not a diagnostic of its own.
     InvalidEncodingRange,
-    /// An encoding prefix on an unevaluated string
+    /// An encoding prefix on an unevaluated string in C++26
     /// (`err_unevaluated_string_prefix`).
     UnevaluatedStringPrefix,
+    /// An encoding prefix on an unevaluated string before C++26 or in C
+    /// (`warn_unevaluated_string_prefix`, [diff.cpp23.lex]/1): it has no
+    /// effect. `cxx`: C++, where the warning adds that it is
+    /// incompatible with C++2c.
+    UnevaluatedStringPrefixIgnored {
+        /// C++ rather than C.
+        cxx: bool,
+    },
     /// A numeric or unknown escape sequence in an unevaluated string
     /// (`err_unevaluated_string_invalid_escape_sequence`).
     UnevaluatedStringEscape {
@@ -397,6 +405,7 @@ impl LexDiagKind {
             | K::SpaceshipCompat
             | K::UnknownEscape { .. }
             | K::MultiCharLiteral
+            | K::UnevaluatedStringPrefixIgnored { .. }
             | K::CharConstantTooLong => LexSeverity::Warning,
             K::UnicodeWhitespace { .. }
             | K::BackslashNewlineEof

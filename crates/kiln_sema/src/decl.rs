@@ -1965,15 +1965,12 @@ impl Sema<'_, '_> {
                     }
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                     if !abis.is_empty() {
-                        let deferred = i == 0
-                            || (i == 1
-                                && matches!(
-                                    d.chunks[0],
-                                    Chunk::Pointer { .. }
-                                        | Chunk::LRef { .. }
-                                        | Chunk::RRef { .. }
-                                        | Chunk::MemberPointer { .. }
-                                ));
+                        // The declaration's attributes go to the
+                        // function chunk nearest the name (clang
+                        // `distributeFunctionTypeAttr`), through any
+                        // pointer, reference, member pointer or array.
+                        let deferred =
+                            !d.chunks[..i].iter().any(|c| matches!(c, Chunk::Function { .. }));
                         self.param_abis_built(ty, params, deferred);
                     }
                 }
@@ -14727,6 +14724,16 @@ impl Sema<'_, '_> {
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
+            // `enum E;` after its definition names it (no declaration of
+            // its own): clang's check after the definition all the same.
+            // A class template specialization merges no attributes.
+            if use_ == TagUse::Declaration
+                && matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Enum)
+                && self.ast.spec_info(d).is_none()
+                && self.ast.definition(d) == Some(d)
+            {
+                self.check_new_attrs_after_def(d, &mut attrs, true);
+            }
         }
         attrs.extend(transparent);
         if matches!(use_, TagUse::Declaration | TagUse::Definition) {
@@ -14878,9 +14885,10 @@ impl Sema<'_, '_> {
     /// the indices (one-based; index 1 of an implicit object member
     /// function is `this`) must name integer parameters (clang
     /// `handleRestrictAttr` / `handleAllocSizeAttr` / `AddAllocAlignAttr`).
-    pub(crate) fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) {
+    /// False drops the attribute (after a warning or an error).
+    pub(crate) fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) -> bool {
         let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
-            return;
+            return true;
         };
         let name = match node.kind {
             AttrKind::MALLOC => "'malloc'",
@@ -14898,10 +14906,10 @@ impl Sema<'_, '_> {
             };
             let msg = self.diag(id, node.loc).arg(name);
             self.emit(msg);
-            return;
+            return false;
         }
         if node.kind == AttrKind::MALLOC {
-            return;
+            return true;
         }
         let params = self.ast.types.params(proto).to_vec();
         let this = u32::from(self.is_implicit_object_member(d));
@@ -14912,7 +14920,7 @@ impl Sema<'_, '_> {
             if this == 1 && n == 1 {
                 let msg = self.diag(DiagId::sema_attribute_implicit_this_arg, node.loc).arg(name);
                 self.emit(msg);
-                return;
+                return false;
             }
             let k = n.checked_sub(1 + u64::from(this)).and_then(|k| usize::try_from(k).ok());
             let Some(&p) = k.and_then(|k| params.get(k)) else {
@@ -14921,7 +14929,7 @@ impl Sema<'_, '_> {
                     .arg(name)
                     .arg(pos);
                 self.emit(msg);
-                return;
+                return false;
             };
             // clang `checkParamIsIntegerType`: a dependent parameter is
             // not an integer either. alloc_align also takes
@@ -14931,9 +14939,10 @@ impl Sema<'_, '_> {
                 let at = self.ast.exprs.get(e).loc();
                 let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
                 self.emit(msg);
-                return;
+                return false;
             }
         }
+        true
     }
 
     /// clang `Type::isAlignValT`: `q` is (sugar for) an enumeration

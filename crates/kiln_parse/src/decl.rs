@@ -3058,6 +3058,7 @@ impl Parser<'_, '_> {
                 self.bump();
                 let (quals, nulls) = self.parse_ptr_quals();
                 let space = self.take_chunk_space();
+                self.mark_chunk_fn_type_attrs();
                 d.attrs.append(&mut self.chunk_decl_attrs);
                 self.parse_declarator(d);
                 d.push_chunk(Chunk::Pointer { quals, loc, space }, nulls);
@@ -3065,12 +3066,16 @@ impl Parser<'_, '_> {
             Some(Punct::Amp) => {
                 self.bump();
                 let nulls = self.parse_ref_quals();
+                self.mark_chunk_fn_type_attrs();
+                d.attrs.append(&mut self.chunk_decl_attrs);
                 self.parse_declarator(d);
                 d.push_chunk(Chunk::LRef { loc }, nulls);
             }
             Some(Punct::AmpAmp) => {
                 self.bump();
                 let nulls = self.parse_ref_quals();
+                self.mark_chunk_fn_type_attrs();
+                d.attrs.append(&mut self.chunk_decl_attrs);
                 self.parse_declarator(d);
                 d.push_chunk(Chunk::RRef { loc }, nulls);
             }
@@ -3154,6 +3159,7 @@ impl Parser<'_, '_> {
             self.bump();
         }
         let (quals, nulls) = self.parse_ptr_quals();
+        self.mark_chunk_fn_type_attrs();
         d.attrs.append(&mut self.chunk_decl_attrs);
         rest(self, d);
         d.push_chunk(Chunk::MemberPointer { qual, quals, loc, star: star_loc }, nulls);
@@ -3212,9 +3218,25 @@ impl Parser<'_, '_> {
         let saved = std::mem::take(&mut self.chunk_decl_attrs);
         self.skip_type_position_attrs();
         let space = self.take_chunk_space();
+        self.mark_chunk_fn_type_attrs();
         d.attrs.append(&mut self.chunk_decl_attrs);
         self.chunk_decl_attrs = saved;
         space
+    }
+
+    /// Marks the function type attributes among
+    /// [`Parser::chunk_decl_attrs`] [`AttrNode::IN_CHUNK`]: clang applies
+    /// them at their chunk, after the function type they reach was built
+    /// and its parameter ABIs checked (WP-1827).
+    ///
+    /// [`AttrNode::IN_CHUNK`]: kiln_ast::attr::AttrNode::IN_CHUNK
+    fn mark_chunk_fn_type_attrs(&mut self) {
+        for &a in &self.chunk_decl_attrs {
+            let n = *self.s.ast.attrs.get(a);
+            if n.kind.is_fn_type_attr() {
+                self.s.ast.attrs.set_flags(a, n.flags | kiln_ast::attr::AttrNode::IN_CHUNK);
+            }
+        }
     }
 
     /// The lookahead offset past GNU `__attribute__((...))` specifiers
@@ -3347,7 +3369,9 @@ impl Parser<'_, '_> {
     /// a GNU extension clang accepts silently (`ParseTypeQualifierListOpt`
     /// then `DeclaratorChunk::getReference`); kiln drops it, as it is only
     /// an aliasing hint (spec/parse.md "GNU `__restrict` on references").
+    /// The GNU attributes are left in [`Parser::chunk_decl_attrs`].
     pub(crate) fn parse_ref_quals(&mut self) -> Vec<NullSpec> {
+        self.chunk_decl_attrs.clear();
         let mut nulls = Vec::new();
         loop {
             if self.at_kw(Kw::Restrict) {
@@ -3363,6 +3387,17 @@ impl Parser<'_, '_> {
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
                 self.s.reject_annotations_in(&attrs, None);
+                // A GNU declaration or function type attribute is kept
+                // for the declarator, as after a `*`
+                // ([`Parser::skip_type_position_attrs`]; clang
+                // `ProcessDeclAttributes` walks the chunks; WP-1827).
+                attrs.retain(|&a| {
+                    let n = self.s.ast.attrs.get(a);
+                    n.syntax == AttrSyntax::Gnu
+                        && !n.kind.is_vector_type()
+                        && n.kind != AttrKind::ADDRESS_SPACE
+                });
+                self.chunk_decl_attrs.extend(attrs);
             } else {
                 return nulls;
             }
