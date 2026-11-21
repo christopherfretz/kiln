@@ -1,7 +1,7 @@
 // [basic.link]/15-17 (WP-1684): what stays valid next to the forms
 // exposure-member-init-default-arg.cpp and exposure-odr-use-and-closure.cpp
-// reject. A constant read in a default member initializer folds to a value
-// that is not TU-local (a TU-local type in a sizeof operand is named:
+// reject. A constant read in a default member initializer is not an
+// odr-use (/14.4; a TU-local type in a sizeof operand is named:
 // exposure-unevaluated-discarded.cpp, WP-1821); a member function
 // defined in its class in a named module is not implicitly inline, so its
 // body is ignored (/15.1.1), odr-uses included; a function template's body

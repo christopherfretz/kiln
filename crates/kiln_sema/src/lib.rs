@@ -721,6 +721,11 @@ pub struct Sema<'a, 'sm> {
     /// ([`Sema::act_on_start_requires_params`]), prototype scopes for
     /// `ParamData::scope_depth` alongside `prototype_params`.
     pub(crate) requires_param_scopes: usize,
+    /// While a concept's constraint-expression is parsed in a module
+    /// interface's purview: the TU-local entities it names, with where and
+    /// the closure type of the outermost lambda around the use
+    /// ([`Sema::act_concept`] reports the first, [basic.link]/14; WP-1845).
+    pub(crate) concept_uses: Option<Vec<(DeclId, Loc, Option<DeclId>)>>,
     /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
@@ -1646,6 +1651,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_records: Vec::new(),
             unowned_params: kiln_source::fx::FxHashSet::default(),
             requires_param_scopes: 0,
+            concept_uses: None,
             decomp_written: kiln_source::fx::FxHashMap::default(),
             binding_packs: kiln_source::fx::FxHashSet::default(),
             shadow_ctor: Vec::new(),
