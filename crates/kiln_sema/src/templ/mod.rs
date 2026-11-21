@@ -329,6 +329,14 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// The (invalid) specializations of [`Self::fn_spec_failures`] failing
+    /// on their Swift parameter ABIs that clang 22 never forms: matched
+    /// only against declarations and addresses whose types differ, so
+    /// rejected before their declaration is instantiated
+    /// ([`Sema::abi_mismatch_first`]). Any other memoized ABI failure is
+    /// a formed invalid declaration, a later deduction's substitution
+    /// failure without a reason (WP-1857).
+    pub(crate) fn_spec_unformed: kiln_source::fx::FxHashSet<DeclId>,
     /// Templated functions made invalid by their body (the constexpr
     /// variable rule, `constexpr_body.rs`), not by their declaration: a
     /// deduction still runs, and its specialization is a substitution

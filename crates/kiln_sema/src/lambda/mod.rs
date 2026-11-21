@@ -1310,6 +1310,8 @@ impl Sema<'_, '_> {
         }
         let lbracket = l.lbracket;
         let Some(fty) = self.ast.decls.get(call_op).ty() else { return };
+        // Through a written default convention's sugar (WP-1858).
+        let fty = self.ast.types.desugar_top(fty);
         let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return };
         let params = self.ast.types.params(&p).to_vec();
         let exc = self.ast.types.exc_spec(&p);

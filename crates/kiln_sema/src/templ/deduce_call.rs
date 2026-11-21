@@ -540,6 +540,22 @@ impl Sema<'_, '_> {
                 }
                 None => None,
             };
+            // The written parameters' Swift ABIs against their substituted
+            // types (clang `SubstParmVarDecl` instantiates the ABI
+            // attributes: "'swift_context' parameter must have pointer
+            // type", a substitution failure; WP-1857).
+            if let Some(fty) = f
+                && let Some(p) = sub.sema.ast.types.proto(fty).copied()
+                && p.info().param_abis() != 0
+            {
+                let params = sub.sema.ast.types.params(&p).to_vec();
+                for (i, &t) in params.iter().enumerate() {
+                    let abi = sub.sema.ast.types.param_abi(p.info(), i);
+                    if !sub.sema.param_abi_type_ok(abi, t, name_loc) {
+                        return Err(crate::templ::subst::SubstFail);
+                    }
+                }
+            }
             // A trailing return type, after the parameters (clang
             // substitutes in lexical order).
             if let Some(ExplicitRet::Trailing(r, levels)) = ret {
@@ -1044,7 +1060,8 @@ impl Sema<'_, '_> {
                 // `type-parameter-0-0 *`).
                 let mismatch = r == Tdk::NonDeducedMismatch && self.clang_compat >= 22;
                 if (r == Tdk::Underqualified || mismatch)
-                    && let TypeView::Function(f) = self.ast.types.view(pfn.ty())
+                    && let TypeView::Function(f) =
+                        self.ast.types.view(self.ast.types.desugar_top(pfn).ty())
                 {
                     let written = self.non_reference(f.ret());
                     self.resugar_mismatch(written, &mut d);
@@ -1448,13 +1465,42 @@ impl Sema<'_, '_> {
             }
             Some((_, failed)) => {
                 let mut diag = failed.err().flatten();
-                if let Some(spec) = self.ast.templates.find_spec(ft, canonical) {
-                    match &diag {
-                        Some(x) => {
-                            self.templ.fn_spec_failures.entry(spec).or_insert_with(|| x.clone());
-                        }
-                        None => diag = self.templ.fn_spec_failures.get(&spec).cloned(),
+                let spec = self.ast.templates.find_spec(ft, canonical);
+                let mut memo = false;
+                if let Some(spec) = spec {
+                    if let Some(x) = &diag {
+                        self.templ.fn_spec_failures.entry(spec).or_insert_with(|| x.clone());
+                    } else {
+                        diag = self.templ.fn_spec_failures.get(&spec).cloned();
+                        memo = true;
                     }
+                }
+                let abi = diag.as_ref().is_some_and(|x| x.id().is_some_and(is_param_abi_failure));
+                let unformed = spec.is_some_and(|s| self.templ.fn_spec_unformed.contains(&s));
+                if abi && memo && !unformed {
+                    // clang instantiates the declaration, then fails on
+                    // its parameters' ABIs: a later deduction finds it
+                    // invalid, a substitution failure without a reason.
+                    let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+                    f.args = Some(sugared);
+                    return Err(f);
+                }
+                if abi && let Some((p, a)) = self.abi_mismatch_first(ft, pfn, &d, sugared, target) {
+                    if let Some(s) = spec {
+                        self.templ.fn_spec_unformed.insert(s);
+                    }
+                    d.info.first = Some(TemplateArg::ty(p));
+                    d.info.second = Some(TemplateArg::ty(a));
+                    return Err(DeductionFailure::new(Tdk::NonDeducedMismatch, d));
+                }
+                // A call, or a match the type comparison passes, forms it
+                // (not kiln's own resolution of an explicit
+                // specialization, `DeduceTarget::None` without a call).
+                if let Some(s) = spec
+                    && (call.is_some()
+                        || matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)))
+                {
+                    self.templ.fn_spec_unformed.remove(&s);
                 }
                 let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                 f.args = Some(sugared);
@@ -1462,6 +1508,58 @@ impl Sema<'_, '_> {
                 Err(f)
             }
         }
+    }
+
+    /// clang 22 compares the deduced function type of a declaration's or
+    /// an address's match with the target type ([temp.deduct.decl],
+    /// [temp.deduct.funcaddr]) before the specialization's parameters are
+    /// checked: a specialization failing only on its Swift parameter ABIs
+    /// (`'swift_error_result' parameter must follow 'swift_context'
+    /// parameter`, a `swift_context` of non-pointer type) against a valid
+    /// target, whose ABIs then differ, is "could not match" the
+    /// substituted type (unchecked) against the target, not a
+    /// substitution failure as in clang 19 (WP-1857). `pfn`: the
+    /// template's function type (its explicit arguments substituted).
+    /// The pair to note, or None.
+    fn abi_mismatch_first(
+        &mut self,
+        ft: DeclId,
+        pfn: QualType,
+        d: &DeducedArgs,
+        sugared: ArgListId,
+        target: DeduceTarget,
+    ) -> Option<(QualType, QualType)> {
+        let (DeduceTarget::FuncAddr(a) | DeduceTarget::Decl(a)) = target else { return None };
+        if self.clang_compat < 22 {
+            return None;
+        }
+        // A declaration's type adopts the template's convention and GNU
+        // `noreturn` (as matched above).
+        let a = if matches!(target, DeduceTarget::Decl(_)) {
+            let pi = self.ast.types.proto(pfn).map(kiln_ast::types::FuncProto::info)?;
+            let a0 = self.with_exc_spec(a, ExcSpec::None);
+            let a0 = self.with_fn_noreturn(a0, pi.noreturn(), false).unwrap_or(a0);
+            let adopt = move |i: kiln_ast::types::FuncInfo| i.with_cc(pi.cc());
+            self.with_fn_info(a0, &adopt, false).unwrap_or(a0)
+        } else {
+            a
+        };
+        let depth = self.template_param_depth(ft);
+        let levels = self.prior_levels(ft, depth, &d.args);
+        let loc = d.loc;
+        let r = self.in_sfinae(FrameKind::DeducedArgSubstitution, ft, Some(sugared), loc, |s| {
+            s.in_template_context(ft, |s| {
+                let mut sub = Substituter::new(s, &levels);
+                sub.final_subst = true;
+                sub.own_fn_type = true;
+                sub.skip_param_abis = true;
+                sub.ty(pfn, loc)
+            })
+        });
+        let Some((Ok(p), Ok(()))) = r else { return None };
+        let (pn, an) = (self.with_exc_spec(p, ExcSpec::None), self.with_exc_spec(a, ExcSpec::None));
+        let t = &self.ast.types;
+        (t.canonical(pn) != t.canonical(an)).then_some((p, a))
     }
 
     /// Whether `p` names a template parameter of `d.depth` in a deduced
@@ -2895,4 +2993,17 @@ enum ExplicitRet<'a> {
     /// after the parameters with these arguments, only for the closures
     /// it numbers (WP-1086).
     Trailing(QualType, &'a crate::templ::args::MultiLevelArgs),
+}
+
+/// A substitution failure on the Swift parameter ABIs of the
+/// specialization's parameters (clang reports these as it instantiates
+/// the declaration, WP-1857).
+fn is_param_abi_failure(id: DiagId) -> bool {
+    matches!(
+        id,
+        DiagId::sema_swift_error_result_not_after_swift_context
+            | DiagId::sema_swift_indirect_result_not_first
+            | DiagId::sema_swift_abi_parameter_wrong_type
+            | DiagId::sema_swift_param_attr_not_swiftcall
+    )
 }

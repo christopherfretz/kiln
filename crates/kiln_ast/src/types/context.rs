@@ -222,6 +222,10 @@ pub enum TypeView {
 /// sugar form holds an `ExprId` (`DependentSizedArray`, `PackIndexing`,
 /// `TypeOf`, Splice).
 pub(crate) const AUX_PROFILE: u16 = 0x100;
+/// The `aux` bits of an `Attributed` node holding its [`TypeAttrKind`];
+/// above them a [`TypeAttrKind::CallingConv`] node keeps its written
+/// spelling plus one ([`TypeContext::attributed_cc`]).
+pub(crate) const ATTRIBUTED_KIND_MASK: u16 = 0xff;
 /// `aux` bits of `TypeOf`.
 pub(crate) const TYPEOF_UNQUAL: u16 = 1;
 pub(crate) const TYPEOF_TYPE: u16 = 2;
@@ -674,6 +678,20 @@ impl TypeContext {
         }
     }
 
+    /// The written spelling of an explicitly written calling convention
+    /// that the target treats as its default (`sysv_abi`, `cdecl`, or
+    /// one it ignores) of the [`TypeAttrKind::CallingConv`] node `t`, an
+    /// index into [`crate::attr::CC_ATTR_SPELLINGS`] (made by
+    /// [`TypeContext::attributed_cc`]); None for any other node.
+    pub fn cc_attr_spelling(&self, t: TypeId) -> Option<usize> {
+        let n = self.node(t);
+        let hi = n.aux >> 8;
+        (n.kind() == TypeKind::Attributed
+            && TypeAttrKind::from_u16(n.aux & ATTRIBUTED_KIND_MASK) == TypeAttrKind::CallingConv
+            && hi != 0)
+            .then(|| usize::from(hi - 1))
+    }
+
     /// The function prototype of node `t` if it is a `Function` node.
     pub fn proto_of(&self, t: TypeId) -> Option<&FuncProto> {
         let n = self.node(t);
@@ -1046,7 +1064,7 @@ impl TypeContext {
             K::Attributed => {
                 let [a, b] = s.pair(n.data);
                 TypeView::Attributed {
-                    kind: TypeAttrKind::from_u16(n.aux),
+                    kind: TypeAttrKind::from_u16(n.aux & ATTRIBUTED_KIND_MASK),
                     modified: q(a),
                     equivalent: q(b),
                 }

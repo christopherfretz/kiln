@@ -829,6 +829,7 @@ impl Sema<'_, '_> {
     fn escaped_local_classes(&self, f: DeclId) -> kiln_source::fx::FxHashSet<DeclId> {
         let mut out = kiln_source::fx::FxHashSet::default();
         let Some(fty) = self.ast.decls.get(f).ty() else { return out };
+        let fty = self.ast.types.desugar_top(fty);
         let TypeView::Function(p) = self.ast.types.view(fty.ty()) else { return out };
         let mut work = vec![p.ret()];
         let mut seen = kiln_source::fx::FxHashSet::default();

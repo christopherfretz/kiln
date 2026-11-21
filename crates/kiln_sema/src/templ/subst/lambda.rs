@@ -327,7 +327,7 @@ impl Substituter<'_, '_, '_> {
         data: &kiln_ast::lambda::LambdaData,
         loc: Loc,
     ) -> Option<Declarator> {
-        let t = self.decl_ty(call_op);
+        let t = self.sema.ast.types.desugar_top(self.decl_ty(call_op));
         let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else { return None };
         let info = p.info();
         let params = self.param_infos(call_op).ok()?;

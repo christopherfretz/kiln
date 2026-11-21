@@ -12,6 +12,7 @@ use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::type_diff::DiffArgs as _;
 
 /// How a failed resolution is reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1048,12 +1049,32 @@ impl Sema<'_, '_> {
         let mut failed: Vec<(Loc, Diag)> = Vec::new();
         if detailed {
             for &(d, _) in cands {
-                if self.kind_of(d) == DeclKind::FunctionTemplate
-                    && let Err(f) = self.deduce_funcaddr(d, explicit, fnty, loc)
-                    && f.tdk != crate::templ::deduce::Tdk::Invalid
-                {
-                    let at = self.ast.decls.get(d).loc();
-                    failed.push((at, self.deduction_note(d, &f, at)));
+                if self.kind_of(d) != DeclKind::FunctionTemplate {
+                    continue;
+                }
+                let at = self.ast.decls.get(d).loc();
+                match self.deduce_funcaddr(d, explicit, fnty, loc) {
+                    Err(f) if f.tdk != crate::templ::deduce::Tdk::Invalid => {
+                        failed.push((at, self.deduction_note(d, &f, at)));
+                    }
+                    // A specialization whose type differs from the target's
+                    // in what deduction does not compare (the calling
+                    // convention, GNU `noreturn`, the Swift parameter ABIs):
+                    // clang's `DeduceTemplateArguments` checks it against
+                    // `ArgFunctionType` (`isSameOrCompatibleFunctionType`)
+                    // and notes the pair (WP-1857).
+                    Ok(spec) => {
+                        let member = self.is_implicit_object_member(self.templated_or_self(d));
+                        if !self.address_matches_ignoring_exc(spec, (fnty, member))
+                            && let Some(sty) = self.ast.decls.get(spec).ty()
+                        {
+                            let n = self
+                                .diag(DiagId::note_deduction_non_deduced_mismatch, at)
+                                .diff_args(self, sty, fnty);
+                            failed.push((at, n));
+                        }
+                    }
+                    Err(_) => {}
                 }
             }
         }

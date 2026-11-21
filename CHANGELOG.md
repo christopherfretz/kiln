@@ -339,6 +339,25 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A calling convention written as the target's default (WP-1858):
+  `__attribute__((sysv_abi))` or `cdecl` on x86-64, `cdecl` on AArch64,
+  and an ignored convention that warns and becomes the default, now count
+  as explicit, as in clang: `ms_abi void f(); sysv_abi void f();` is the
+  "function declared 'cdecl' here was previously declared 'ms_abi'"
+  error (it was accepted), a second convention on the same declaration
+  conflicts with it, and the type prints as written
+  (`'void () __attribute__((sysv_abi))'`). The type stays the type
+  without the convention.
+- Swift parameter ABIs in template argument deduction (WP-1857):
+  deduction ignores them, as clang does, and the checks that follow
+  reject the same programs as clang; now with clang's notes: "could not
+  match" for an address whose specialization does not match (it was
+  "candidate function template"), explicit arguments checked against
+  each parameter's ABI before deduction (`h2<int>` with a
+  `swift_context` `T`), at `-fclang-compat=22` "could not match" for a
+  declaration or an address whose specialization fails only on its
+  ABIs (clang 19's substitution failure at level 19), and a
+  specialization already formed invalid noted without a reason.
 - Emission order of imported `used` functions (WP-1832): an inline
   function with GNU `used` that an importer reaches only through the
   body of an imported function it odr-uses is now defined where clang 22

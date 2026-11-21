@@ -8,7 +8,7 @@
 //! and the IR calling convention.
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax, CC_ATTR_SPELLINGS};
-use kiln_ast::types::{CallConv, FuncInfo, TypeView};
+use kiln_ast::types::{CallConv, FuncInfo, TypeAttrKind, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -291,6 +291,7 @@ impl Sema<'_, '_> {
         ty
     }
 
+    #[allow(clippy::too_many_lines, reason = "clang's per-attribute checks, in its order")]
     fn apply_cc_attrs_inner(
         &mut self,
         ty: QualType,
@@ -350,7 +351,12 @@ impl Sema<'_, '_> {
             return ty;
         };
         let mut cc = info.cc();
-        let mut written = false;
+        // A convention already written on the type (clang
+        // `getCallingConvAttributedType`): a typedef's `sysv_abi`.
+        let mut written = self.cc_attributed(ty);
+        // The spelling of a written convention that is the target's
+        // default (or one it ignores): kept as sugar (WP-1858).
+        let mut default_spelling = None;
         let mut no_csr = info.no_caller_saved_regs();
         let mut regparm = info.regparm();
         let sme = self.merge_sme_attrs(info, &nodes);
@@ -368,13 +374,17 @@ impl Sema<'_, '_> {
                 regparm = Some(v);
                 continue;
             }
-            if n.a == UNSUPPORTED {
+            // clang `CheckCallingConvAttr`: one the target ignores warns
+            // and is the default convention, still written.
+            let new = if n.a == UNSUPPORTED {
                 let msg = self.diag(DiagId::sema_cconv_unsupported, n.loc).arg(name(n));
                 self.emit(msg);
-                continue;
-            }
-            #[allow(clippy::cast_possible_truncation, reason = "a CallConv discriminant")]
-            let new = CallConv::from_u8(n.a as u8);
+                CallConv::Default
+            } else {
+                #[allow(clippy::cast_possible_truncation, reason = "a CallConv discriminant")]
+                let v = n.a as u8;
+                CallConv::from_u8(v)
+            };
             if new != cc && (written || cc != CallConv::Default) {
                 let msg = self
                     .diag(DiagId::sema_cconv_incompatible, n.loc)
@@ -388,11 +398,102 @@ impl Sema<'_, '_> {
             }
             cc = new;
             written = true;
+            default_spelling = (cc == CallConv::Default).then_some(n.b as usize);
         }
         let f = move |i: FuncInfo| {
             i.with_cc(cc).with_no_caller_saved_regs(no_csr).with_regparm(regparm).with_sme(sme)
         };
-        self.with_fn_info(ty, &f, true).unwrap_or(ty)
+        let ty = self.with_fn_info(ty, &f, true).unwrap_or(ty);
+        match default_spelling {
+            Some(sp) => self.wrap_fn_type(ty, &|t, f| t.attributed_cc(Some(sp), f)).unwrap_or(ty),
+            None => ty,
+        }
+    }
+
+    /// Whether the function type `ty` is, through its sugar, has a
+    /// calling-convention attribute written (clang
+    /// `getCallingConvAttributedType`): a convention other than the
+    /// default always is; the default one (`sysv_abi`, `cdecl`, one the
+    /// target ignores) is when its [`kiln_ast::types::TypeAttrKind::CallingConv`]
+    /// sugar is there (WP-1858).
+    pub(crate) fn cc_attributed(&self, ty: QualType) -> bool {
+        let t = &self.ast.types;
+        let mut q = ty;
+        for _ in 0..1024 {
+            if let TypeView::Attributed { kind: TypeAttrKind::CallingConv, .. } = t.view(q.ty()) {
+                return true;
+            }
+            let n = t.desugar_once(q);
+            if n == q {
+                break;
+            }
+            q = n;
+        }
+        false
+    }
+
+    /// The function type `ty` rebuilt from `of`, with the sugar of a
+    /// default calling convention written on `of` (its top-level sugar,
+    /// [`Self::cc_attributed`]); `ty` when `of` has none.
+    pub(crate) fn with_cc_sugar_of(&mut self, ty: QualType, of: QualType) -> QualType {
+        let t = &self.ast.types;
+        let mut q = of;
+        for _ in 0..1024 {
+            if let TypeView::Attributed { kind: TypeAttrKind::CallingConv, .. } = t.view(q.ty()) {
+                let sp = t.cc_attr_spelling(q.ty());
+                return self.ast.types.attributed_cc(sp, ty);
+            }
+            let n = t.desugar_once(q);
+            if n == q {
+                break;
+            }
+            q = n;
+        }
+        ty
+    }
+
+    /// `ty` (a function type, or one reached through pointers,
+    /// references, member pointers and arrays, as [`Sema::with_fn_info`])
+    /// with that function type, sugar included, wrapped by `f`; None when
+    /// it reaches none.
+    fn wrap_fn_type(
+        &mut self,
+        ty: QualType,
+        f: &dyn Fn(&mut kiln_ast::types::TypeContext, QualType) -> QualType,
+    ) -> Option<QualType> {
+        if self.ast.types.is_function(ty) {
+            let q = ty.quals();
+            let w = f(&mut self.ast.types, ty.without_quals());
+            return Some(self.ast.types.qualify(w, q));
+        }
+        let built = match self.ast.types.view(self.ast.types.desugar_top(ty).ty()) {
+            TypeView::Pointer(p) => {
+                let g = self.wrap_fn_type(p, f)?;
+                self.ast.types.pointer_to(g)
+            }
+            TypeView::LValueRef(p) => {
+                let g = self.wrap_fn_type(p, f)?;
+                self.ast.types.lvalue_ref_to(g)
+            }
+            TypeView::RValueRef(p) => {
+                let g = self.wrap_fn_type(p, f)?;
+                self.ast.types.rvalue_ref_to(g)
+            }
+            TypeView::MemberPointer { pointee, class } => {
+                let g = self.wrap_fn_type(pointee, f)?;
+                self.ast.types.member_pointer(g, class)
+            }
+            TypeView::ConstantArray(a) => {
+                let g = self.wrap_fn_type(a.elem, f)?;
+                self.ast.types.constant_array(g, a.size, a.size_expr)
+            }
+            TypeView::IncompleteArray(e) => {
+                let g = self.wrap_fn_type(e, f)?;
+                self.ast.types.incomplete_array(g)
+            }
+            _ => return None,
+        };
+        Some(self.ast.types.qualify(built, ty.quals()))
     }
 
     /// [`Sema::apply_cc_attrs`] over a borrowed list (the attributes stay
@@ -484,20 +585,21 @@ impl Sema<'_, '_> {
         };
         let mut cc = new.cc();
         if cc != old.cc() {
-            if cc != CallConv::Default {
+            // A redeclaration naming no convention inherits it; one naming
+            // any, the target's default included (`sysv_abi`, `cdecl`;
+            // clang `getCallingConvAttributedType`, WP-1858), must agree.
+            if cc != CallConv::Default || self.cc_attributed(ty) {
                 // clang names the first declaration's convention, and puts
                 // the note there, "since it is the one that matters".
                 let first = self.ast.first(prev);
-                let fcc = self
-                    .ast
-                    .decls
-                    .get(first)
-                    .ty()
-                    .and_then(|t| self.ast.types.proto(t))
-                    .map_or(old.cc(), |p| p.info().cc());
-                let was = match fcc.attribute() {
-                    Some(a) => format!("'{a}'"),
-                    None => "without calling convention".to_owned(),
+                let fty = self.ast.decls.get(first).ty();
+                let fcc =
+                    fty.and_then(|t| self.ast.types.proto(t)).map_or(old.cc(), |p| p.info().cc());
+                let was = if fcc != CallConv::Default || fty.is_some_and(|t| self.cc_attributed(t))
+                {
+                    format!("'{}'", cc_name(fcc))
+                } else {
+                    "without calling convention".to_owned()
                 };
                 let msg = self.diag(DiagId::sema_cconv_change, at).arg(cc_name(cc)).arg(was);
                 let msg = note(self, msg, first);

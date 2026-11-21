@@ -5139,6 +5139,26 @@ type is kept.
   `check_sig_param_abis`, both for a class member and for a function
   template's specialization), so an empty pack that leaves a
   `swift_error_result` without its `swift_context` fails `g3<>(nullptr)`.
+  Deduction itself ignores the ABIs (clang
+  `DeduceTemplateArgumentsByTypeMatch` compares neither them nor the
+  `ExtInfo` of a function type): a P and an A differing only in them
+  deduce, and the result is rejected afterwards, as in clang, by the
+  original-argument check of a call ([temp.deduct.call]/4: "deduced type
+  ... does not match adjusted type"), by the function type match of an
+  address or a declaration ("could not match"), or by the identity of a
+  partial specialization's arguments (WP-1857). The explicit-argument
+  step checks each written parameter's ABI against its substituted type
+  (clang `SubstParmVarDecl`: `h2<int>` with `T swift_context` is a
+  substitution failure). At `-fclang-compat=22` a declaration's or an
+  address's match (§6.1 step 4) whose specialization fails only on its
+  ABIs, against a target type that the substituted type (unchecked,
+  `Substituter::skip_param_abis`) differs from, is "could not match"
+  that type against the target (`Sema::abi_mismatch_first`; clang 22
+  compares before it instantiates the declaration; clang 19 reports the
+  substitution failure). Such a specialization is not formed in clang
+  (`templ.fn_spec_unformed`); any other memoized ABI failure is a formed
+  invalid declaration, which a later deduction reports as a substitution
+  failure without a reason (both versions).
 - **Location.** The checks of a function type's own ABIs report at the
   type's begin: the first type-specifier of the declaration, past a
   leading attribute or cv-qualifier. The parser passes a member
