@@ -648,6 +648,9 @@ u8_enum!(
         IntegralComplexToFloatingComplex = "IntegralComplexToFloatingComplex",
         /// Complex conversions.
         FloatingComplexToIntegralComplex = "FloatingComplexToIntegralComplex",
+        /// A pointer to one in another address space (clang
+        /// `CK_AddressSpaceConversion`, LLVM `addrspacecast`).
+        AddressSpaceConversion = "AddressSpaceConversion",
     }
 );
 

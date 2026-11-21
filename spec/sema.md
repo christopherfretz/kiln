@@ -2842,14 +2842,17 @@ instantiation unless stated.
 - **Policy: kiln never accepts a semantics-changing construct without
   implementing it** (WP-805). An attribute clang knows that kiln does not
   implement is triaged by `attr_triage::TABLE`: class A (semantics, ABI,
-  layout) is the error `'X' attribute is not supported by kiln yet`,
-  which system headers and `-w` do not suppress; class B (optimization,
+  layout, and no unit kiln compiles can enable it) carries clang's own
+  error for it as a `DiagId` (`Class::A(DiagId)`), which system headers
+  and `-w` do not suppress; there is no generic "not supported" error,
+  so a class-A row cannot be added without clang's diagnostic; class B (optimization,
   instrumentation, debug, hardening) and class C (diagnostics or
   analyses only) are accepted silently. A name clang does not know keeps
   the `unknown attribute` warning. spec/landed/sema/WP-805.md.
 - **Truthful feature tests** (WP-805): in compile modes
-  `__has_attribute` / `__has_cpp_attribute` answer 0 for a class-A
-  name, and `__has_builtin` answers 0 for a builtin kiln does not
+  `__has_attribute` / `__has_cpp_attribute` answer as clang does,
+  also for a class-A name (clang rejects it with the same error; WP-1803
+  dropped the 0 kiln gave for its own "not supported" error), and `__has_builtin` answers 0 for a builtin kiln does not
   declare; every builtin kiln declares lowers or folds (the list of
   unlowered ones is gone since WP-1739, which lowered its last entries,
   and `kiln_driver/tests/builtin_lowering.rs` checks it per target and
@@ -3058,6 +3061,70 @@ instantiation unless stated.
     as type attributes (`Sema::apply_type_id_vector_attrs`, clang
     `processTypeAttrs`), so `ext_vector_type` is accepted at clang 19
     too (WP-187; `ext.vector/type-id-run.cpp`).
+  - **Address spaces**: `address_space(N)` and the OpenCL spaces
+    `opencl_global`, `opencl_local`, `opencl_constant`, `opencl_private`,
+    `opencl_generic`, `opencl_global_device`, `opencl_global_host` (GNU
+    and `[[clang::]]` syntax; `addr_space.rs`, WP-1803; clang
+    `HandleAddressSpaceTypeAttribute`, `BuildAddressSpaceAttr`). They are
+    type attributes consumed into the type as an `ExtQual` qualifier
+    (spec/types.md §2), never attached: among the decl-specifiers they
+    qualify the decl-specifier type, after a `*` the pointer. A `[[]]`
+    spelling before a declaration still applies to the type, with
+    clang's -Wdeprecated-attributes warning "applying attribute
+    '<name>' to a declaration is deprecated; apply it to the type
+    instead" (the name `clang::address_space` at -fclang-compat=22,
+    `address_space` at 19). N is an integral constant expression
+    (`'address_space' attribute requires an integer constant`), not
+    negative (`address space is negative`), at most clang's
+    `MaxAddressSpace` less its first target space (`address space is
+    larger than the maximum supported (8388581)`, 8388586 at 19); the
+    OpenCL attributes take no argument. A second, different space on one
+    type is "multiple address spaces specified for type", the same one a
+    -Wduplicate-decl-specifier warning; a function type "function type may
+    not be qualified with an address space"; a field, a parameter and an
+    automatic variable (not a static or `extern` local) are "field /
+    parameter may not be qualified with an address space" / "automatic
+    variable qualified with an address space" (the declaration is
+    invalid). An array's elements take the space. A value-dependent N
+    (clang `DependentAddressSpaceType`) is not formed: it is the integer
+    constant error (WP-1811, xfail
+    `ext.clang.address_space/address-space-dependent.cpp`).
+    **Conversions** (clang `Qualifiers::isAddressSpaceSupersetOf` in
+    C++): a space holds itself; `generic` holds every space but
+    `constant`, including the default one; `global` holds
+    `global_device` and `global_host`; a target space and the default
+    space hold only themselves (`address_space(0)` and the default space
+    convert neither way). In the qualification conversion
+    ([conv.qual]) the space is a qualifier of each level: only the first
+    pointee level may differ, into a space that holds the source's
+    (`conv/qual.rs`; the composite pointer type takes the holding space,
+    else the pointers are distinct pointer types). A pointer conversion
+    to `void *` keeps the pointee's space. A conversion that changes the
+    space is `CastKind::AddressSpaceConversion` (clang
+    `CK_AddressSpaceConversion`); a C-style cast converts between any
+    two spaces, `static_cast`, `reinterpret_cast` and `const_cast` are
+    "is not allowed" across spaces the target does not hold. A
+    reference binds directly only when its referee's space holds the
+    object's ("binding reference of type X to value of type Y changes
+    address space"); a temporary is in the default space. In overload
+    resolution an argument whose space the parameter's does not hold is
+    not viable, with clang's notes "cannot pass pointer to <space> as a
+    pointer to <space>" and "cannot bind reference in <space> to object in
+    <space>" (`generic address space`, `address space '1'`, `address
+    space '__global'`); a member function's implicit object parameter is
+    in the default space ("'this' object is in address space '1', but
+    method expects object in generic address space"; with one candidate,
+    "cannot initialize object parameter of type 'S' with an expression
+    of type '__attribute__((address_space(1))) S'"). A member of an
+    object in a space is in that space. In template argument deduction
+    the space of `P` is a qualifier like cv: unless qualifiers are
+    ignored `A` must be in the same space (`Underqualified`), and the
+    deduced type drops it. The constant evaluator does not model spaces
+    (an `AddressSpaceConversion` is a no-op, and the Oven interns the
+    unspaced type); codegen gives the IR (spec/codegen.md) and kiln_abi
+    the vendor qualifier mangling (`U3AS<N>`, `U8CLglobal`, `U7CLlocal`,
+    ...; `address_space(0)` mangles as the default space). Tests
+    `tests/conformance/ext.clang.address_space/`.
   - `mode(M)` (GNU syntax; `vector.rs`, WP-799; clang `handleModeAttr`,
     `parseModeAttrArg`) takes one identifier (`__M__` is `M`) and is
     consumed into the declared type like `vector_size`. Modes:
@@ -10611,10 +10678,18 @@ behaviour, or proven unreachable (`unreachable!` with the invariant):
   enable it" (kiln has no `-fenable-matrix`), `riscv_rvv_vector_bits`
   clang's "'riscv_rvv_vector_bits' attribute is not supported on targets
   missing 'zve32x'; ..." (no RISC-V target). The other class-A rows
-  (the address spaces) are still "not supported by kiln yet" (GAP-149;
-  `model`, x86 `interrupt`, `weak_import`, the Swift conventions and the
-  Swift parameter ABIs are implemented since WP-1745, §4.5). Test
-  `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`.
+  are implemented: `model`, x86 `interrupt`, `weak_import`, the Swift
+  conventions and the Swift parameter ABIs since WP-1745 (§4.5), the
+  address spaces since WP-1803 (GAP-149 closed). Each class-A row
+  carries its clang `DiagId` (`attr_triage::Class::A`), and
+  `decl.rs` reports exactly that; the generic "'X' attribute is not
+  supported by kiln yet" error and its id are gone, so no class-A row
+  can come back as a static gap. `__has_attribute` answers 1 for both,
+  as clang 22 and 19 do (`gnu::riscv_rvv_vector_bits` 0). Tests
+  `dcl.attr.grammar/matrix-and-rvv-attribute-errors.cpp`,
+  `dcl.attr.unknown/class-a-error-in-system-header.cpp`,
+  `dcl.attr.unknown/class-a-error-under-w.cpp`,
+  `dcl.attr.unknown/has-attribute-truthful.cpp`.
 
 ### 5.35 Excess precision and the rounding scope (`conv/mod.rs`, WP-1744)
 

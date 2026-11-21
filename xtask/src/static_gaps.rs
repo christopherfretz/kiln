@@ -51,7 +51,6 @@ pub const GAP_DIAG_IDS: &[&str] = &[
     "cg_cannot_mangle_expression",
     "drv_not_implemented",
     "parse_unsupported",
-    "sema_attribute_unsupported_by_kiln",
     "sema_conv_unsupported",
     "sema_unimplemented_template_feature",
     "sema_vla_unsupported",

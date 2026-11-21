@@ -1588,7 +1588,7 @@ impl Sema<'_, '_> {
             }
             let t = &self.ast.types;
             match chunk {
-                Chunk::Pointer { quals, loc } => {
+                Chunk::Pointer { quals, loc, space } => {
                     if t.is_reference(ty) {
                         let msg = self
                             .diag(DiagId::sema_pointer_to_reference, *loc)
@@ -1602,6 +1602,10 @@ impl Sema<'_, '_> {
                     }
                     let p = self.ast.types.pointer_to(ty);
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
+                    if let Some(a) = *space {
+                        let node = *self.ast.attrs.get(a);
+                        ty = self.build_addr_space_type(ty, node);
+                    }
                     prev_ref = false;
                 }
                 Chunk::MemberPointer { qual, quals, loc, .. } => {
@@ -2462,6 +2466,7 @@ impl Sema<'_, '_> {
         ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
         ty = self.adjust_param_type(ty);
+        let space_invalid = !nttp && self.check_addr_space_param(ty, d.name_loc());
         // C17 6.7.6.3p7: the qualifiers in the outermost `[ ]` qualify the
         // adjusted pointer.
         if !d.array_param_quals.is_empty() && self.ast.types.is_array(declared) {
@@ -2500,7 +2505,7 @@ impl Sema<'_, '_> {
             original_ty,
             loc: d.name_loc(),
             attrs,
-            invalid: ds.invalid || d.invalid || recovered || distant_invalid,
+            invalid: ds.invalid || d.invalid || recovered || distant_invalid || space_invalid,
             default_arg: DefaultArg::None,
             default_loc: Loc::INVALID,
             range: (ds.loc, d.name_loc()),
@@ -6910,6 +6915,10 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
             self.emit(msg);
             QualType::ERROR
+        } else if !invalid && self.ast.types.addr_space(ty) != kiln_ast::types::AddrSpace::DEFAULT {
+            // clang `CheckFieldDecl` (WP-1803).
+            self.error(DiagId::sema_address_space_field, d.name_loc());
+            QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
             && !self.require_complete(self.field_complete_type(ty), d.name_loc())
@@ -7907,6 +7916,7 @@ impl Sema<'_, '_> {
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);
         self.check_sizeless_var(v, self.in_local_scope());
+        self.check_addr_space_var(v, self.in_local_scope());
         self.record_constinit(v, ds);
         self.check_constexpr_var_literal(v);
         // clang: not a redeclaration, a placeholder or a block-scope
@@ -8339,6 +8349,7 @@ impl Sema<'_, '_> {
             // A deduced sizeless type is checked as a written one (clang
             // `CheckVariableDeclarationType` after deduction).
             self.check_sizeless_var(v, self.in_local_scope());
+            self.check_addr_space_var(v, self.in_local_scope());
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
         }
@@ -13951,21 +13962,11 @@ impl Sema<'_, '_> {
                 let node = AttrNode { kind, syntax, flags: 0, loc, a: 0, b: 0 };
                 return Some(self.ast.attrs.push(node));
             }
-            // clang's own errors where the attribute cannot apply to any
-            // unit kiln compiles (WP-1745): kiln has no `-fenable-matrix`,
-            // and neither target has the RISC-V vector extension.
-            crate::attr_triage::Support::Unsupported if n == "matrix_type" => {
-                self.error(DiagId::sema_matrix_types_disabled, loc);
-                return None;
-            }
-            crate::attr_triage::Support::Unsupported if n == "riscv_rvv_vector_bits" => {
-                self.error(DiagId::sema_riscv_rvv_vector_bits_unsupported, loc);
-                return None;
-            }
-            crate::attr_triage::Support::Unsupported => {
-                // kiln-gap: GAP-149
-                let msg = self.diag(DiagId::sema_attribute_unsupported_by_kiln, loc).arg(shown);
-                self.emit(msg);
+            // Class A: clang's own error where the attribute cannot apply
+            // to any unit kiln compiles (kiln has no `-fenable-matrix`, and
+            // neither target has the RISC-V vector extension; WP-1745).
+            crate::attr_triage::Support::Unsupported(id) => {
+                self.error(id, loc);
                 return None;
             }
             crate::attr_triage::Support::Unknown => {
@@ -13979,6 +13980,9 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
+        if kind == AttrKind::ADDRESS_SPACE {
+            return self.address_space_attribute(&n, syntax, &shown, args, loc);
+        }
         // The calling conventions, function type attributes (WP-808).
         if kind.is_fn_type_attr() {
             return self.cc_attribute(syntax, scope_s.as_deref(), &n, args, loc).flatten();

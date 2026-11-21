@@ -468,9 +468,11 @@ impl Sema<'_, '_> {
     }
 
     /// The canonical type of `q` without its qualifiers, including an
-    /// array's element qualifiers (clang `getUnqualifiedArrayType`).
+    /// array's element qualifiers (clang `getUnqualifiedArrayType`) and
+    /// an address space.
     fn unqualified_canonical(&mut self, q: QualType) -> QualType {
         let c = self.ast.types.canonical(q);
+        let c = self.ast.types.without_addr_space(c);
         let u = self.ast.types.unqualified(c);
         self.ast.types.canonical(u)
     }
@@ -516,7 +518,11 @@ impl Sema<'_, '_> {
         if related && !q1.contains(q2) && self.unknown_bound_of(u1, u2) {
             related = false;
         }
-        let compatible = related && q1.contains(q2) && similar_rel != Some(false);
+        // An address space is a qualifier: compatible only into a superset
+        // (clang `compatiblyIncludes`).
+        let (s1, s2) = (self.ast.types.addr_space(t1), self.ast.types.addr_space(a.ty));
+        let space_ok = s1.is_superset_of(s2);
+        let compatible = related && q1.contains(q2) && space_ok && similar_rel != Some(false);
         let lv = a.vk == ValueCategory::LValue;
         let base =
             if lref { RefBinding::IS_REF.with(RefBinding::LVALUE_REF) } else { RefBinding::IS_REF };
@@ -590,10 +596,18 @@ impl Sema<'_, '_> {
         if !lref && lv && related {
             return Ics::bad(BadKind::RvalueRequired, a.ty, to);
         }
+        if related && !space_ok {
+            return Ics::bad(BadKind::NoConversion, a.ty, to);
+        }
         if related && !q1.contains(q2) {
             return Ics::bad(BadKind::LosesQuals(q2 - q1), a.ty, to);
         }
-        if opts.contains(IcsOptions::NO_TEMPORARY) || is_fn {
+        // No temporary is made in a space the default one is not in
+        // (clang `FK_ReferenceAddrSpaceMismatchTemporary`).
+        if opts.contains(IcsOptions::NO_TEMPORARY)
+            || is_fn
+            || !s1.is_superset_of(kiln_ast::types::AddrSpace::DEFAULT)
+        {
             return Ics::bad(BadKind::NoConversion, a.ty, to);
         }
         // /5.4.2: a temporary copy-initialized from the argument. A class
@@ -680,7 +694,10 @@ impl Sema<'_, '_> {
             return Ics::bad(BadKind::NoConversion, o.ty, param);
         };
         let oq = self.ast.types.effective_quals(o.ty);
-        if !q.contains(oq) {
+        // The implicit object parameter is in the default space (clang
+        // `isAtLeastAsQualifiedAs` counts the space).
+        let os = self.ast.types.addr_space(o.ty);
+        if !q.contains(oq) || !kiln_ast::types::AddrSpace::DEFAULT.is_superset_of(os) {
             return Ics::bad(BadKind::ObjectQuals, o.ty, param);
         }
         let lv = o.vk == ValueCategory::LValue;

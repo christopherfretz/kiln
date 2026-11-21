@@ -33,7 +33,7 @@ pub(crate) mod scs;
 pub(crate) mod soft;
 
 use kiln_ast::expr::{CastKind, ExprKind, ObjectKind, ValueCategory};
-use kiln_ast::types::{Quals, TypeView};
+use kiln_ast::types::{AddrSpace, Quals, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
@@ -173,9 +173,11 @@ fn is_error(s: &Sema<'_, '_>, q: QualType) -> bool {
     s.ast.types.canonical(q).without_quals() == QualType::ERROR
 }
 
-/// `q` without cv-qualifiers, keeping as much sugar as possible: clang's
-/// `getUnqualifiedType` (sugar carrying qualifiers is looked through).
+/// `q` without cv-qualifiers or address space, keeping as much sugar as
+/// possible: clang's `getUnqualifiedType` (sugar carrying qualifiers is
+/// looked through).
 pub fn strip_cv(s: &Sema<'_, '_>, q: QualType) -> QualType {
+    let q = s.ast.types.without_addr_space(q);
     let mut cur = q;
     for _ in 0..256 {
         let u = cur.without_quals();
@@ -953,12 +955,14 @@ fn bind_reference(
     let vk = n.value_category();
     let (rq, fq) = (s.ast.types.effective_quals(referee), s.ast.types.effective_quals(from));
     // Unqualified through arrays, so `const int[3]` is related to
-    // `int[3]`.
+    // `int[3]`; an address space is a qualifier too.
     let unqual = |s: &mut Sema<'_, '_>, q: QualType| {
         let c = s.ast.types.canonical(q);
+        let c = s.ast.types.without_addr_space(c);
         let u = s.ast.types.unqualified(c);
         s.ast.types.canonical(u)
     };
+    let (rs, fs) = (s.ast.types.addr_space(referee), s.ast.types.addr_space(from));
     let f_un = unqual(s, from);
     let r_un = unqual(s, referee);
     // Reference-related: same type, or `referee` a base of `from`
@@ -1007,6 +1011,26 @@ fn bind_reference(
     let strs = |s: &Sema<'_, '_>| s.ty_diff(to_ty, from);
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
+    // clang `TryReferenceInitializationCore`: a reference binds only an
+    // object in a subset of its space (`FK_ReferenceInitDropsQualifiers`),
+    // an lvalue reference a temporary only when its space includes the
+    // default one, and no temporary is made in another space
+    // (`FK_ReferenceAddrSpaceMismatchTemporary`).
+    if rs != fs || rs != AddrSpace::DEFAULT {
+        let fails = if rvalue_ref {
+            (related && !rs.is_superset_of(fs))
+                || (!related && !rs.is_superset_of(AddrSpace::DEFAULT))
+        } else {
+            !rs.is_superset_of(fs) && (related || vk != ValueCategory::LValue)
+        };
+        if fails {
+            let (to_str, from_str) = strs(s);
+            return Err(ConvError::new(
+                DiagId::sema_address_space_ref_bind,
+                vec![to_str, from_str],
+            ));
+        }
+    }
     // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue (or a
     // function lvalue) to an rvalue reference or a const lvalue
     // reference directly.
@@ -1069,7 +1093,7 @@ fn bind_reference(
             x = qualify_prvalue(s, x, target);
         }
         let x = s.materialize_temporary(x, target, !rvalue_ref);
-        return Ok(x);
+        return Ok(temporary_to_space(s, x, rs, rvalue_ref));
     }
     if !related
         && s.ast.types.is_function(r_un)
@@ -1250,10 +1274,14 @@ fn bind_reference(
     let out_vk = vk;
     let target = strip_cv(s, referee);
     let target = s.ast.types.qualify(target, rq);
+    let target = s.ast.types.with_addr_space(target, rs);
     match base {
         BaseSearch::NotDerived => {
             if s.ast.types.canonical(from) == s.ast.types.canonical(target) {
                 Ok(e)
+            } else if rs != fs {
+                // clang `PerformQualificationConversion` of the glvalue.
+                Ok(raw_cast(s, CastKind::AddressSpaceConversion, e, target, out_vk, None))
             } else if n.kind() == ExprKind::ImplicitCastExpr
                 && s.ast.exprs.cast_kind(e) == CastKind::NoOp
             {
@@ -1277,6 +1305,7 @@ fn bind_reference(
                 e
             } else {
                 let qd = s.ast.types.qualify(d, rq);
+                let qd = s.ast.types.with_addr_space(qd, fs);
                 raw_cast(s, CastKind::NoOp, e, qd, out_vk, None)
             };
             Ok(raw_cast(s, CastKind::DerivedToBase, x, target, out_vk, Some(list)))
@@ -1339,7 +1368,10 @@ fn bind_to_temporary(
     let x = s.materialize_temporary(x, qualified, !rvalue_ref);
     let vk = if rvalue_ref { ValueCategory::XValue } else { ValueCategory::LValue };
     match base {
-        BaseSearch::NotDerived => Ok(x),
+        BaseSearch::NotDerived => {
+            let rs = s.ast.types.addr_space(referee);
+            Ok(temporary_to_space(s, x, rs, rvalue_ref))
+        }
         BaseSearch::Unique(p) => {
             let at = s.begin_loc(e);
             let b = strip_cv(s, referee);
@@ -1356,6 +1388,19 @@ fn bind_to_temporary(
             ))
         }
     }
+}
+
+/// The materialized temporary `x` (in the default space) as a glvalue in
+/// the reference's space `rs`, a superset of the default one (clang's
+/// `CK_AddressSpaceConversion` after `SK_BindReferenceToTemporary`).
+fn temporary_to_space(s: &mut Sema<'_, '_>, x: ExprId, rs: AddrSpace, rvalue_ref: bool) -> ExprId {
+    if rs == AddrSpace::DEFAULT {
+        return x;
+    }
+    let vk = if rvalue_ref { ValueCategory::XValue } else { ValueCategory::LValue };
+    let t = ty(s, x);
+    let t = s.ast.types.with_addr_space(t, rs);
+    raw_cast(s, CastKind::AddressSpaceConversion, x, t, vk, None)
 }
 
 /// The prvalue `e` with the qualifiers of `to` (its own type plus cv): a

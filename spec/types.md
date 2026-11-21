@@ -40,8 +40,27 @@ bitflags Quals: u8 { CONST = 1, VOLATILE = 2, RESTRICT = 4 }  // the "fast" qual
   out; exhaustion is a fatal diagnostic, never a panic).
 - `RESTRICT` is GNU `__restrict` (glibc headers declare `memcpy` with it).
 - All other qualifiers (address spaces, `__ptrauth`, `__unaligned`) are
-  *not* bits: they are an `ExtQual` node kind (§5, reserved, M7+), as
-  clang's `ExtQuals`. C++26 conformance and libc++ need none of them.
+  *not* bits: they are an `ExtQual` node kind (§5), as clang's
+  `ExtQuals`. Only address spaces are formed (WP-1803; `__ptrauth` and
+  `__unaligned` are not). The canonical form is `cv ExtQual{base, word}`
+  with `base` canonical and cv-unqualified: the cv bits stay on the
+  `QualType` outside the node, as clang keeps the fast qualifiers outside
+  `ExtQuals`, and the same space applied twice is idempotent. An array is
+  never wrapped: the space goes on its element type, as cv does
+  ([basic.type.qualifier]/3; `TypeContext::with_addr_space`).
+  Classification (`canonical_node`, `canonical_kind`, `canonical_view`,
+  `is_void` and the predicates built on them) looks through the node, so
+  `__attribute__((address_space(1))) int` is integral and an `S` in a space
+  is a record; identity (`canonical`, type equality) keeps it.
+  `addr_space(q)` reads the space (of the element for an array),
+  `without_addr_space(q)` and `canonical_unspaced(q)` drop the top-level
+  one. The `AddrSpace` word is kiln's own numbering, independent of
+  clang's `LangAS` (which moved between clang 19 and 22): `0` the default
+  space, `1..=7` the OpenCL `global`, `local`, `constant`, `private`,
+  `generic`, `global_device` and `global_host`, `0x20 + N` the target space
+  `N` of `address_space(N)` (so `address_space(0)` is a type distinct
+  from the default space, as in clang). Conversions between spaces are
+  spec/sema.md "Address spaces".
 - `QualType::ty()`, `quals()`, `without_quals()` are pure bit operations.
   **Adding** qualifiers is `TypeContext::qualify(q, quals)`, never a bit
   operation, because of the array rule below.
@@ -445,7 +464,7 @@ libstdc++ 14's `<complex>` uses them where `_Float128` is not
 | `Atomic` | I | C | data = value QualType | `_Atomic(T)` (WP-154); size is `T`'s rounded up to a power of two when it is at most 16 bytes, alignment is that size (clang's `getTypeInfo` of `AtomicType`); libc++ `<atomic>` uses it via `__c11_atomic_*`. `Sema::act_on_atomic_type` rejects an array, function, reference, atomic, cv-qualified or `_BitInt` operand (clang `BuildAtomicType`; tests `ext.c11.atomic/atomic-specifier.cpp`, `atomic-specifier-bitint.cpp`) |
 | `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size, and between a GNU vector and an Ext vector of the same size (an integer scalar and an Ext vector convert only by a scalar splat), the implicit integer → `bool` Ext vector conversion of the same lane count at `-fclang-compat=22` (WP-453, spec/sema.md §5.28), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); vector `?:` (GNU element-wise and scalar-condition forms) and brace elision of GNU vector members (WP-173; spec/sema.md §4.5), constant evaluation of vector values in the Oven (WP-173; spec/oven.md "Vectors"); `__builtin_shufflevector` (spec/oven.md "Vectors"), ext-vector element access (`.x`, `.xy`, `.s3`, `.hi`; WP-307/312, spec/sema.md §5.19, an `ExtVectorElementExpr`); `bool` ext-vector conditions select on their `<N x i1>` lanes (WP-187); `bool` Ext vectors are evaluated by the Oven (WP-450/453: lanes, comparisons, `__builtin_convertvector`, bit casts; spec/oven.md "Vectors") except the integer → `bool` vector conversion, which clang 22 does not evaluate either and kiln rejects (WP-466) |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | the size operand as written: the element count for Ext, the byte size for Generic; substitution rebuilds through `Sema::build_vector_type` |
-| `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | reserved: address spaces etc. (M7+) |
+| `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | an address space (§2; WP-1803) |
 
 ### 5.3 Sugar and dependent kinds
 | kind | k | c | payload | notes |
@@ -1289,8 +1308,11 @@ Printing:
   canonical arguments). The diagnostic names (`DiagNames`) supply them;
   the AST-dump names do not yet (WP-1158; spec/codegen.md "Sanitizers").
 - Nesting deeper than 400 prints `...` (balanced) instead of recursing.
-- `ExtQual` prints `__attribute__((address_space(N))) T` (approximate: the
-  ext-qual word is printed raw).
+- `ExtQual` prints as clang's `Qualifiers::print` in C++: after the cv
+  qualifiers, `__attribute__((address_space(N)))` for a target space and
+  the OpenCL keyword (`__global`, `__local`, `__constant`, `__private`,
+  `__generic`, `__global_device`, `__global_host`) for the OpenCL ones
+  (`const __attribute__((address_space(1))) int`, `__global int *`).
 - kiln creates no `Elaborated` node for a name written without keyword or
   qualifier (R4), so a written `S` is a bare `Record`: `dump_strings`
   omits the second string when it would repeat the first, where clang

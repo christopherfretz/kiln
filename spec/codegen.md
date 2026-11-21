@@ -1392,6 +1392,33 @@ pointee alignment (clang `EmitCXXDeleteExpr` uses
 `EmitPointerWithAlignment`); it only affects the array-cookie and vtable
 loads.
 
+### 3.3a Address spaces (WP-1803)
+
+A type in an address space (spec/types.md §2, spec/sema.md "Address
+spaces") lowers as clang does on x86-64 and AArch64, whose targets have no
+address-space map: `address_space(N)` is LLVM address space `N`, every
+OpenCL space (and the default one) LLVM address space 0
+(`AddrSpace::llvm`).
+
+- A pointer or reference to a type in LLVM space `N != 0` is
+  `ptr addrspace(N)` (`IrType::PtrAs` in kiln_abi's memory types); loads,
+  stores, GEPs (whose result keeps the base's pointer type), compares,
+  null constants and `ptrtoint`/`inttoptr` use it.
+- A global variable or static local whose type is in space `N` is an
+  `addrspace(N) global` (declarations, definitions and the globals an
+  earlier use created).
+- `CastKind::AddressSpaceConversion` is `addrspacecast`, nothing when
+  both sides lower to the same LLVM type (two OpenCL spaces), and a
+  constant expression for a constant operand (clang folds it the same
+  way); on a glvalue (a reference binding into another space) the
+  address is cast.
+- A reference parameter to a nonzero LLVM space gets no `nonnull`, and a
+  load of such a reference no `!nonnull` (clang adds both only in address
+  space 0, where null is not a valid address).
+
+Tests `tests/conformance/ext.clang.address_space/address-space-ir-x86_64.cpp`
+and `address-space-ir-aarch64.cpp`.
+
 ### 3.4 Target builtins (`arm.rs`; WP-724, WP-846)
 
 The `AArch64` ACLE builtins (`__builtin_arm_*`, `kiln_ast::decl::

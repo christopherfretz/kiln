@@ -333,7 +333,11 @@ impl Substituter<'_, '_, '_> {
                 // The written innermost `*` ([`Self::chunk_loc`]) is the
                 // first pointer rebuilt.
                 let at = self.chunk_loc.take().unwrap_or(loc);
-                self.chunk(p, Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc: at }, loc)
+                self.chunk(
+                    p,
+                    Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc: at, space: None },
+                    loc,
+                )
             }
             TypeView::LValueRef(p) => {
                 let at = self.ref_loc.take().unwrap_or(loc);
@@ -1034,7 +1038,8 @@ impl Substituter<'_, '_, '_> {
             // the extended qualifiers kept.
             TypeView::ExtQual { base, word } => {
                 let b = self.ty(base, loc)?;
-                Ok(self.sema.ast.types.ext_qual(b, word))
+                let space = kiln_ast::types::AddrSpace(word);
+                Ok(self.sema.ast.types.with_addr_space(b, space))
             }
             TypeView::Invalid => {
                 unreachable!(

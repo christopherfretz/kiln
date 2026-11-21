@@ -26,7 +26,8 @@ use super::args::{ArgView, TemplateArg};
 use super::context::{ExprOperand, TypeContext, TypeOfOperand, TypeView};
 use super::func::ExcSpec;
 use super::kinds::{
-    BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind, VectorKind,
+    AddrSpace, BuiltinType, CallConv, Quals, RefQual, TagKeyword, TypeAttrKind, TypeKind,
+    VectorKind,
 };
 use super::names::TemplateName;
 use super::nns::Nns;
@@ -1467,24 +1468,59 @@ impl Printer<'_> {
     }
 
     fn before_node(&mut self, t: TypeId, quals: Quals) {
+        // An address space is a qualifier (clang's `Qualifiers`): it
+        // prints after the cv-qualifiers, where they print (`const
+        // __global int`, `int *__attribute__((address_space(1)))`).
+        let (t, quals, space) = match self.ctx.view(t) {
+            TypeView::ExtQual { base, word } => {
+                let (bt, bq) = split(self.ctx, base);
+                (bt, quals | bq, Some(AddrSpace(word)))
+            }
+            _ => (t, quals, None),
+        };
         let saved_ph = self.empty_ph;
         let prefix = self.can_prefix_quals(t);
-        if prefix && !quals.is_empty() {
-            quals.write(&mut self.out);
+        let any = !quals.is_empty() || space.is_some();
+        if prefix && any {
+            self.quals_and_space(quals, space);
             self.out.push(' ');
         }
-        let after_quals = !prefix && !quals.is_empty();
+        let after_quals = !prefix && any;
         if after_quals {
             self.empty_ph = false;
         }
         self.before_kind(t);
         if after_quals {
-            quals.write(&mut self.out);
+            self.quals_and_space(quals, space);
             if !saved_ph {
                 self.out.push(' ');
             }
         }
         self.empty_ph = saved_ph;
+    }
+
+    /// clang `Qualifiers::print`: the cv-qualifiers, then the address
+    /// space.
+    fn quals_and_space(&mut self, quals: Quals, space: Option<AddrSpace>) {
+        quals.write(&mut self.out);
+        if let Some(a) = space {
+            if !quals.is_empty() {
+                self.out.push(' ');
+            }
+            self.addr_space(a);
+        }
+    }
+
+    /// clang `Qualifiers::getAddrSpaceAsString` in C++: the `opencl_*`
+    /// keyword, else `__attribute__((address_space(N)))`.
+    fn addr_space(&mut self, a: AddrSpace) {
+        if let Some(k) = a.opencl_keyword() {
+            self.push(k);
+        } else {
+            self.push("__attribute__((address_space(");
+            self.num(a.target_number().unwrap_or(0));
+            self.push(")))");
+        }
     }
 
     #[allow(clippy::too_many_lines, reason = "one arm per type kind, as clang's TypePrinter")]
@@ -1686,10 +1722,10 @@ impl Printer<'_> {
                 }
                 self.before(elem);
             }
+            // Printed by `before_node`, which never passes this node.
             TypeView::ExtQual { base, word } => {
-                self.push("__attribute__((address_space(");
-                self.num(word);
-                self.push("))) ");
+                self.addr_space(AddrSpace(word));
+                self.push(" ");
                 self.before(base);
             }
             TypeView::Typedef { decl, .. } | TypeView::Using { shadow: decl, .. } => {

@@ -272,8 +272,9 @@ impl Parser<'_, '_> {
             Some(Punct::Star) => {
                 self.bump();
                 let (quals, nulls) = self.parse_ptr_quals();
+                let space = self.take_chunk_space();
                 self.parse_new_declarator(d);
-                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
+                d.push_chunk(Chunk::Pointer { quals, loc, space }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();

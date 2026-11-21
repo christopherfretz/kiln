@@ -6831,7 +6831,13 @@ impl Sema<'_, '_> {
             if mutable {
                 q = q - kiln_ast::types::Quals::CONST;
             }
-            if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) }
+            let t = if q.is_empty() { declared } else { self.ast.types.qualify(declared, q) };
+            // The member of an object in an address space is in it (clang
+            // `BuildFieldReferenceExpr`).
+            let obj = self.ast.exprs.get(base).ty();
+            let obj = if arrow { self.ast.types.pointee(obj).unwrap_or(obj) } else { obj };
+            let space = self.ast.types.addr_space(obj);
+            self.ast.types.with_addr_space(t, space)
         };
         self.build_member_expr(base, f, ty, arrow, loc, extra)
     }
@@ -7918,6 +7924,28 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// clang `TryReinterpretCast` `IsAddressSpaceConversion` for the
+    /// pointers `from` and `to`: the cast kind, `AddressSpaceConversion`
+    /// when the pointee's address space changes; `None` when a
+    /// `reinterpret_cast` may not change it (only into a superset of the
+    /// pointee's space; a C-style cast between any two).
+    fn reinterpret_space(
+        &self,
+        from: QualType,
+        to: QualType,
+        style: CastStyle,
+    ) -> Option<CastKind> {
+        let fs = self.ast.types.pointee_addr_space(from);
+        let ts = self.ast.types.pointee_addr_space(to);
+        if fs == ts {
+            return Some(CastKind::BitCast);
+        }
+        if style == CastStyle::Reinterpret && !ts.is_superset_of(fs) {
+            return None;
+        }
+        Some(CastKind::AddressSpaceConversion)
+    }
+
     /// The `reinterpret_cast` part of cast `style` from `from` to `to`
     /// ([expr.reinterpret.cast]; clang `TryReinterpretCast`): the cast
     /// kind, `Ok(None)` when it does not apply (the caller reports the
@@ -7964,6 +7992,9 @@ impl Sema<'_, '_> {
         }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
+            let Some(kind) = self.reinterpret_space(from, to, style) else {
+                return Ok(None);
+            };
             // [expr.reinterpret.cast]/2, [expr.const.cast]/8: not casting
             // away constness at any level (clang `CastsAwayConstness`;
             // between levels of different kinds clang only warns, an
@@ -7982,7 +8013,7 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return Err(());
             }
-            return Ok(Some(CastKind::BitCast));
+            return Ok(Some(kind));
         }
         // [expr.reinterpret.cast]/10: a pointer to member of `X` of type
         // `T1` to a pointer to member of `Y` of type `T2` when both are

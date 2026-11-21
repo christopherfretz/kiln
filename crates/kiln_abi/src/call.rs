@@ -1773,7 +1773,7 @@ fn integer_at(
     src_off: u64,
 ) -> IrType {
     if ir_off == 0 {
-        if matches!(ir, IrType::Ptr | IrType::Int(64)) {
+        if matches!(ir, IrType::Ptr | IrType::PtrAs(_) | IrType::Int(64)) {
             return ir.clone();
         }
         if let IrType::Int(w @ (8 | 16 | 32)) = ir

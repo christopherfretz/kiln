@@ -8,7 +8,7 @@ use super::context::{
 };
 use super::func::{ExcSpec, FuncInfo, FuncProto, NoexceptValue};
 use super::kinds::{
-    AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
+    AddrSpace, AutoKeyword, BuiltinType, Quals, TagKeyword, TypeAttrKind, TypeFlags, TypeKind,
     UnaryTransformKind, VectorKind,
 };
 use super::names::TemplateName;
@@ -441,17 +441,72 @@ impl TypeContext {
         })
     }
 
-    /// A type with extended qualifiers (address space, GC, ...) packed in
-    /// `word`.
+    /// `base` in address space `word` ([`AddrSpace`]; spec/types.md §5
+    /// "Address spaces"). The canonical form is `ExtQual` over the
+    /// canonical, cv-unqualified base with the cv-qualifiers outside
+    /// (clang keeps the fast qualifiers outside `ExtQuals`), so `const
+    /// AS1 int` and `AS1 const int` are one type; a space over a type
+    /// already in a space replaces it (sema diagnoses a conflict first).
+    /// The default space is no node at all.
     pub fn ext_qual(&mut self, base: QualType, word: u32) -> QualType {
+        if word == AddrSpace::DEFAULT.0 {
+            return base;
+        }
         let t: TypeId = {
             let key = Key::pair(TypeKind::ExtQual, 0, raw(base), word);
             self.intern_with(key, self.qflags(base), |ctx| {
-                let cb = ctx.canon_if(base)?;
-                Some(Self::uq(ctx.ext_qual(cb, word)))
+                let cb = ctx.canonical_unspaced(base);
+                if cb == base && base.quals().is_empty() && ctx.kind(cb.ty()) != TypeKind::ExtQual {
+                    return None;
+                }
+                let inner = Self::uq(ctx.ext_qual(cb.without_quals(), word));
+                Some(QualType::new(inner.ty(), cb.quals_bits()))
             })
         };
         t.into()
+    }
+
+    /// `q` in `space`: on an array type the elements are put in it (an
+    /// array's qualifiers are its element type's, §2.1).
+    pub fn with_addr_space(&mut self, q: QualType, space: AddrSpace) -> QualType {
+        if space == AddrSpace::DEFAULT {
+            return q;
+        }
+        match self.canonical_view(q) {
+            TypeView::ConstantArray(a) => {
+                let e = self.with_addr_space(a.elem, space);
+                self.constant_array(e, a.size, a.size_expr)
+            }
+            TypeView::IncompleteArray(e) => {
+                let e = self.with_addr_space(e, space);
+                self.incomplete_array(e)
+            }
+            _ => self.ext_qual(q, space.0),
+        }
+    }
+
+    /// `q` without its top-level address space, the sugar above the
+    /// `ExtQual` node peeled (clang `getUnqualifiedType` for the space
+    /// alone); `q` when it has none. Keeps `q`'s cv-qualifiers.
+    pub fn without_addr_space(&self, q: QualType) -> QualType {
+        if self.kind(self.canonical(q).ty()) != TypeKind::ExtQual {
+            return q;
+        }
+        let mut cur = q;
+        let mut quals = q.quals_bits();
+        for _ in 0..4096 {
+            if let TypeView::ExtQual { base, .. } = self.view(cur.ty()) {
+                return QualType::new(base.ty(), base.quals_bits() | quals);
+            }
+            let next = self.desugar_once(cur);
+            if next == cur {
+                break;
+            }
+            quals |= next.quals_bits();
+            cur = next;
+        }
+        let c = self.canonical_unspaced(q);
+        QualType::new(c.ty(), c.quals_bits() | quals)
     }
 
     // ----- functions -------------------------------------------------------

@@ -2100,6 +2100,7 @@ impl<'a> Cg<'a> {
             IrType::Int(128) => LTy::I128,
             IrType::Int(n) => self.m.types.int(*n),
             IrType::Ptr => LTy::PTR,
+            IrType::PtrAs(n) => self.m.types.ptr(*n),
             IrType::Half => LTy::HALF,
             IrType::BFloat => LTy::BFLOAT,
             IrType::Float => LTy::FLOAT,
@@ -2387,10 +2388,11 @@ impl<'a> Cg<'a> {
 
     /// clang `ConstructAttributeList` for a reference parameter or return:
     /// `nonnull align A dereferenceable(N)` (no `nonnull` under
-    /// `-fno-delete-null-pointer-checks`).
+    /// `-fno-delete-null-pointer-checks`, nor for a referee in a nonzero
+    /// LLVM address space, where null may be valid).
     fn ref_attrs(&mut self, q: QualType, out: &mut Vec<Attr>) {
         let Some(p) = self.referee(q) else { return };
-        if !self.opts.null_pointer_is_valid {
+        if !self.opts.null_pointer_is_valid && self.ast.types.addr_space(p).llvm() == 0 {
             out.push(Attr::Flag(AttrKind::NonNull));
         }
         if self.ast.types.is_function(p) {
@@ -3833,6 +3835,12 @@ impl<'a> Cg<'a> {
         gv.code_model = code_model;
         gv.align = Some(align);
         gv.is_constant = constant;
+        // A variable in an address space is a global of the space (clang
+        // `GetOrCreateLLVMGlobal`'s `getGlobalVarAddressSpace`).
+        let space = ast.types.addr_space(ty).llvm();
+        if space != 0 {
+            self.m.set_global_addrspace(g, space);
+        }
         self.gvars.insert(first, g);
         self.mark_tls(first, g, false);
         self.available_externally(first, g, ty)?;
@@ -4128,6 +4136,12 @@ impl<'a> Cg<'a> {
             self.m.global_mut(g).code_model = self.code_model_of(d);
             g
         };
+        // The definition of a variable in an address space (as
+        // `get_gvar`'s declaration).
+        let space = ast.types.addr_space(ty).llvm();
+        if space != 0 {
+            self.m.set_global_addrspace(g, space);
+        }
         let internal = mangle::is_internal_symbol(ast, d);
         let instantiated = self.var_instantiation_linkage(first);
         let inline = self.var_is_inline(d) || instantiated.is_some();
@@ -4264,6 +4278,10 @@ impl<'a> Cg<'a> {
         let name = mangle::mangle_static_local(ast, &mut self.anon, first, index);
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
+        let space = ast.types.addr_space(ty).llvm();
+        if space != 0 {
+            self.m.set_global_addrspace(g, space);
+        }
         self.gi.local_index.insert(first, index);
         let align = self.var_align(d);
         let init_expr = v.init.filter(|&e| !ast.is_trivial_default_construction(e));

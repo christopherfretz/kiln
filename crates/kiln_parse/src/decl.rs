@@ -3057,9 +3057,10 @@ impl Parser<'_, '_> {
             Some(Punct::Star) => {
                 self.bump();
                 let (quals, nulls) = self.parse_ptr_quals();
+                let space = self.take_chunk_space();
                 d.attrs.append(&mut self.chunk_decl_attrs);
                 self.parse_declarator(d);
-                d.push_chunk(Chunk::Pointer { quals, loc }, nulls);
+                d.push_chunk(Chunk::Pointer { quals, loc, space }, nulls);
             }
             Some(Punct::Amp) => {
                 self.bump();
@@ -3171,8 +3172,24 @@ impl Parser<'_, '_> {
         attrs.retain(|&a| {
             let n = self.s.ast.attrs.get(a);
             n.syntax == AttrSyntax::Gnu && !n.kind.is_vector_type()
+                || n.kind == AttrKind::ADDRESS_SPACE
         });
         self.chunk_decl_attrs.extend(attrs);
+    }
+
+    /// The address-space attributes after a `*` (left in
+    /// [`Parser::chunk_decl_attrs`] by [`Parser::parse_ptr_quals`]),
+    /// removed from there: they qualify that pointer (clang
+    /// `processTypeAttrs` on the pointer chunk; WP-1803).
+    pub(crate) fn take_chunk_space(&mut self) -> Option<AttrId> {
+        let ast = &self.s.ast;
+        let is_space = |a: &AttrId| ast.attrs.get(*a).kind == AttrKind::ADDRESS_SPACE;
+        let spaces: Vec<AttrId> = self.chunk_decl_attrs.iter().copied().filter(is_space).collect();
+        if spaces.is_empty() {
+            return None;
+        }
+        self.chunk_decl_attrs.retain(|a| !spaces.contains(a));
+        self.s.fold_space_attrs(&spaces)
     }
 
     /// The attributes after a grouping `(` of a declarator

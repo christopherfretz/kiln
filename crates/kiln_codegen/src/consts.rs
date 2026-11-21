@@ -191,7 +191,10 @@ impl Cg<'_> {
                 }
             }
             Scalar::Float { bits, .. } => Ok(self.m.const_float_bits(t, bits)),
-            Scalar::Null { kind: NullKind::Pointer, .. } => Ok(self.m.const_null(LTy::PTR)),
+            Scalar::Null { kind: NullKind::Pointer, .. } => {
+                let t = if self.m.types.is_ptr(t) { t } else { LTy::PTR };
+                Ok(self.m.const_null(t))
+            }
             Scalar::Null { kind: NullKind::MemberData, .. } => Ok(self.m.const_int(t, -1)),
             Scalar::Null { kind: NullKind::MemberFunction, .. } => Ok(self.m.const_zero(t)),
             Scalar::MemberPtr { member, kind, derived, path, .. } => {
@@ -257,6 +260,15 @@ impl Cg<'_> {
                     return self
                         .m
                         .const_cast(kiln_llvm::CastOp::PtrToInt, p, t)
+                        .map_err(|e| ir_err(&e));
+                }
+                // An address in another space than the pointer's: the
+                // constant `addrspacecast` (clang folds the
+                // `CK_AddressSpaceConversion` into one).
+                if self.m.types.is_ptr(t) && self.m.const_type(p) != t {
+                    return self
+                        .m
+                        .const_cast(kiln_llvm::CastOp::AddrSpaceCast, p, t)
                         .map_err(|e| ir_err(&e));
                 }
                 Ok(p)
@@ -548,12 +560,12 @@ impl Cg<'_> {
                 }
                 Ok(self.m.const_float_bits(t, v))
             }
-            IrType::Ptr => match img.reloc(off) {
+            IrType::Ptr | IrType::PtrAs(_) => match img.reloc(off) {
                 Some(r) => match self.ast.consts.get(r) {
-                    ConstValue::Scalar(s) => self.scalar_const(s, LTy::PTR),
+                    ConstValue::Scalar(s) => self.scalar_const(s, t),
                     ConstValue::Aggregate(_) => err(None, "malformed pointer relocation"),
                 },
-                None => Ok(self.m.const_null(LTy::PTR)),
+                None => Ok(self.m.const_null(t)),
             },
             IrType::Array(et, n) => {
                 let (es, _) = self.tys.size_align(et);

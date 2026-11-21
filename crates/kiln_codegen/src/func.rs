@@ -3024,9 +3024,25 @@ impl Cg<'_> {
 
     pub fn cast(&mut self, op: CastOp, v: V, to: LTy) -> V {
         let from = self.f.fir.ty(&self.m, v);
-        if from == to && matches!(op, CastOp::BitCast | CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+        if from == to
+            && matches!(
+                op,
+                CastOp::BitCast
+                    | CastOp::ZExt
+                    | CastOp::SExt
+                    | CastOp::Trunc
+                    | CastOp::AddrSpaceCast
+            )
         {
             return v;
+        }
+        // A constant address in another space: the constant expression
+        // (clang's `IRBuilder` folds the `addrspacecast`).
+        if op == CastOp::AddrSpaceCast
+            && let V::C(c) = v
+            && let Ok(x) = self.m.const_cast(op, c, to)
+        {
+            return V::C(x);
         }
         if self.f.strict {
             // clang `CreateConstrainedFPCast`.
@@ -3305,7 +3321,10 @@ impl Cg<'_> {
                 return V::C(c);
             }
         }
-        self.f.fir.push(Op::Gep { src, base, idx, flags }, LTy::PTR)
+        // The result is a pointer of the base's address space.
+        let bt = self.f.fir.ty(&self.m, base);
+        let rt = if self.m.types.is_ptr(bt) { bt } else { LTy::PTR };
+        self.f.fir.push(Op::Gep { src, base, idx, flags }, rt)
     }
 
     pub fn select(&mut self, c: V, t: V, f: V) -> V {

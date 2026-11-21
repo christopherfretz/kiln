@@ -5042,11 +5042,15 @@ impl Compiler<'_> {
                 let begin = self.begin(op);
                 self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
             }
+            // An address space is not modelled by the evaluator: a pointer
+            // converted to another space designates the same object (clang
+            // evaluates `CK_AddressSpaceConversion` as a no-op).
             CastKind::NoOp
             | CastKind::UserDefinedConversion
             | CastKind::ConstructorConversion
             | CastKind::NonAtomicToAtomic
-            | CastKind::AtomicToNonAtomic => {
+            | CastKind::AtomicToNonAtomic
+            | CastKind::AddressSpaceConversion => {
                 self.rv_inner(op, dst);
             }
             CastKind::DerivedToBase
@@ -5991,6 +5995,7 @@ impl Compiler<'_> {
                     CastKind::NoOp
                         | CastKind::UserDefinedConversion
                         | CastKind::ConstructorConversion
+                        | CastKind::AddressSpaceConversion
                 ) =>
             {
                 let op = self.ast().exprs.operand(e);

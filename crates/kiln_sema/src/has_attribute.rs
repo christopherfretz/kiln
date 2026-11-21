@@ -131,7 +131,7 @@ impl Sema<'_, '_> {
             (None, Support::Ignored(_)) if n == "nonstring" => AttrKind::NONSTRING,
             (None, Support::Ignored(_)) if n == "nocommon" => AttrKind::NOCOMMON,
             // Parsed and dropped (or rejected when written): never stored.
-            (None, Support::Ignored(_) | Support::Unsupported) => return false,
+            (None, Support::Ignored(_) | Support::Unsupported(_)) => return false,
         };
         // A bare name asks for the attribute with any arguments (GCC lets
         // it omit required ones: `alloc_size`, `alias`); written

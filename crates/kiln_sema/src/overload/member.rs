@@ -412,6 +412,8 @@ impl Sema<'_, '_> {
         self.defer_templates(&mut set);
         let mark = self.push_call_args(&mut set, args, braced);
         let obj = self.ast.types.qualify(self.tag_type(m.def), quals);
+        let space = self.ast.types.addr_space(m.obj_ty);
+        let obj = self.ast.types.with_addr_space(obj, space);
         set.object = Some(ArgInfo::of_type(obj, vk));
         for (&d, &f) in m.decls.iter().zip(&m.found) {
             if self.ast.decls.get(d).has(DeclFlags::INVALID) {

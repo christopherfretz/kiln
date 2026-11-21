@@ -7,7 +7,6 @@ use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 
-use kiln_ast::attr::AttrSyntax;
 use kiln_diag::verify::Verifier;
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
@@ -1183,8 +1182,10 @@ pub const UNPARSED_KEYWORD_BUILTINS: &[&str] = &[
 /// answers 0 for a builtin function kiln does not declare (every builtin
 /// kiln declares lowers or folds, WP-1739).
 /// `__has_attribute`, `__has_cpp_attribute` and
-/// `__has_declspec_attribute` answer 0 for a class-A attribute kiln
-/// rejects ([`kiln_sema::attr_triage`]). `-E` keeps clang's raw answers.
+/// `__has_declspec_attribute` give clang's answers: every attribute clang
+/// accepts is implemented or safely ignored, and the class-A rows of
+/// [`kiln_sema::attr_triage`] are ones clang rejects too, with the same
+/// error. `-E` keeps clang's raw answers.
 struct StagedFeatures(ClangFeatures, ClangFeatures);
 
 impl StagedFeatures {
@@ -1220,32 +1221,6 @@ impl StagedFeatures {
             && !kiln_pp::Builtin::ALL.iter().any(|&(n, _)| n == name)
             && kiln_sema::templ::builtins::table::lookup(name).is_none()
     }
-
-    /// Whether attribute `name` written with `syntax` and `scope` is one
-    /// kiln rejects as class A (and so feature-tests as absent).
-    fn unsupported_attribute(&self, syntax: AttrSyntax, scope: Option<&str>, name: &str) -> bool {
-        let scope = scope.map(|s| match s {
-            "__gnu__" => "gnu",
-            "_Clang" => "clang",
-            s => s,
-        });
-        // Normalized as `Sema::act_on_attribute` normalizes it (clang
-        // `normalizeAttrName`: `__clang_arm_builtin_alias` and `__const`
-        // keep their leading `__`).
-        let name = if kiln_ast::attr::attr_name_normalizes(syntax, scope) {
-            kiln_ast::attr::normalize_attr_name(name)
-        } else {
-            name
-        };
-        kiln_sema::attr_triage::attribute_support(
-            name,
-            syntax,
-            scope,
-            self.0.compat().major(),
-            self.0.is_cxx26(),
-            self.0.is_x86_64(),
-        ) == kiln_sema::attr_triage::Support::Unsupported
-    }
 }
 
 impl kiln_pp::FeatureQueries for StagedFeatures {
@@ -1276,24 +1251,19 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
     }
 
     fn has_attribute(&self, name: &str) -> u32 {
-        let v = self.0.has_attribute(name);
-        if v != 0 && self.unsupported_attribute(AttrSyntax::Gnu, None, name) { 0 } else { v }
+        self.0.has_attribute(name)
     }
 
     fn has_cpp_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
-        let v = self.0.has_cpp_attribute(scope, name);
-        if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
+        self.0.has_cpp_attribute(scope, name)
     }
 
     fn has_c_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
-        // C23 `[[attr]]` is the C++11 syntax to attribute triage.
-        let v = self.0.has_c_attribute(scope, name);
-        if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
+        self.0.has_c_attribute(scope, name)
     }
 
     fn has_declspec_attribute(&self, name: &str) -> bool {
         self.0.has_declspec_attribute(name)
-            && !self.unsupported_attribute(AttrSyntax::Declspec, None, name)
     }
 
     fn is_keyword(&self, name: &str) -> bool {

@@ -878,6 +878,127 @@ impl TagKeyword {
     }
 }
 
+/// An address space, the extended qualifier of an `ExtQual` node (its
+/// `word`; spec/types.md §5 "Address spaces"): clang's `LangAS` in kiln's
+/// own stable numbering. `0` is the default space; `1..=7` are the `opencl_*`
+/// spaces clang accepts in C++ (`opencl_global` ... `opencl_global_host`);
+/// `address_space(N)` is `TARGET_BASE + N`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct AddrSpace(pub u32);
+
+impl AddrSpace {
+    /// No address space qualifier.
+    pub const DEFAULT: AddrSpace = AddrSpace(0);
+    /// `opencl_global` (`__global`).
+    pub const OPENCL_GLOBAL: AddrSpace = AddrSpace(1);
+    /// `opencl_local` (`__local`).
+    pub const OPENCL_LOCAL: AddrSpace = AddrSpace(2);
+    /// `opencl_constant` (`__constant`).
+    pub const OPENCL_CONSTANT: AddrSpace = AddrSpace(3);
+    /// `opencl_private` (`__private`).
+    pub const OPENCL_PRIVATE: AddrSpace = AddrSpace(4);
+    /// `opencl_generic` (`__generic`).
+    pub const OPENCL_GENERIC: AddrSpace = AddrSpace(5);
+    /// `opencl_global_device` (`__global_device`).
+    pub const OPENCL_GLOBAL_DEVICE: AddrSpace = AddrSpace(6);
+    /// `opencl_global_host` (`__global_host`).
+    pub const OPENCL_GLOBAL_HOST: AddrSpace = AddrSpace(7);
+    /// The word of `address_space(0)`.
+    pub const TARGET_BASE: u32 = 0x20;
+
+    /// `address_space(n)`.
+    pub const fn target(n: u32) -> AddrSpace {
+        AddrSpace(Self::TARGET_BASE + n)
+    }
+
+    /// `N` of an `address_space(N)` space.
+    pub const fn target_number(self) -> Option<u32> {
+        if self.0 >= Self::TARGET_BASE { Some(self.0 - Self::TARGET_BASE) } else { None }
+    }
+
+    /// The `opencl_*` space named by attribute `name` (its `__` affixes
+    /// removed).
+    pub fn opencl(name: &str) -> Option<AddrSpace> {
+        Some(match name {
+            "opencl_global" => Self::OPENCL_GLOBAL,
+            "opencl_local" => Self::OPENCL_LOCAL,
+            "opencl_constant" => Self::OPENCL_CONSTANT,
+            "opencl_private" => Self::OPENCL_PRIVATE,
+            "opencl_generic" => Self::OPENCL_GENERIC,
+            "opencl_global_device" => Self::OPENCL_GLOBAL_DEVICE,
+            "opencl_global_host" => Self::OPENCL_GLOBAL_HOST,
+            _ => return None,
+        })
+    }
+
+    /// The `opencl_*` keyword clang prints for an `opencl_*` space
+    /// (`Qualifiers::getAddrSpaceAsString`).
+    pub const fn opencl_keyword(self) -> Option<&'static str> {
+        Some(match self.0 {
+            1 => "__global",
+            2 => "__local",
+            3 => "__constant",
+            4 => "__private",
+            5 => "__generic",
+            6 => "__global_device",
+            7 => "__global_host",
+            _ => return None,
+        })
+    }
+
+    /// The Itanium vendor qualifier name (clang `mangleQualifiers`):
+    /// `AS<N>` for a target space, `CLglobal`, ... for the `opencl_*` ones;
+    /// none for `address_space(0)` (clang mangles no target space 0).
+    pub fn mangled(self) -> String {
+        match self.0 {
+            Self::TARGET_BASE => String::new(),
+            1 => "CLglobal".into(),
+            2 => "CLlocal".into(),
+            3 => "CLconstant".into(),
+            4 => "CLprivate".into(),
+            5 => "CLgeneric".into(),
+            6 => "CLdevice".into(),
+            7 => "CLhost".into(),
+            _ => format!("AS{}", self.0.saturating_sub(Self::TARGET_BASE)),
+        }
+    }
+
+    /// The LLVM address space on the x86-64 and `AArch64` targets (clang's
+    /// `X86TargetInfo` / `AArch64TargetInfo` have no address space map:
+    /// every `opencl_*` space is 0; `address_space(N)` is `N`).
+    pub const fn llvm(self) -> u32 {
+        match self.target_number() {
+            Some(n) => n,
+            None => 0,
+        }
+    }
+
+    /// The space as clang's diagnostics name it: "generic address space"
+    /// for the default one, else "address space '__global'" or "address
+    /// space '1'".
+    pub fn describe(self) -> String {
+        if let Some(k) = self.opencl_keyword() {
+            format!("address space '{k}'")
+        } else if let Some(n) = self.target_number().filter(|_| self != AddrSpace::DEFAULT) {
+            format!("address space '{n}'")
+        } else {
+            "generic address space".to_owned()
+        }
+    }
+
+    /// clang `Qualifiers::isAddressSpaceSupersetOf(self, other)` for kiln's
+    /// targets: a pointer to `other` converts implicitly to a pointer to
+    /// `self`. Equal spaces; `__generic` over every space but
+    /// `__constant`; `__global` over `__global_device` and `__global_host`.
+    pub const fn is_superset_of(self, other: AddrSpace) -> bool {
+        self.0 == other.0
+            || (self.0 == Self::OPENCL_GENERIC.0 && other.0 != Self::OPENCL_CONSTANT.0)
+            || (self.0 == Self::OPENCL_GLOBAL.0
+                && (other.0 == Self::OPENCL_GLOBAL_DEVICE.0
+                    || other.0 == Self::OPENCL_GLOBAL_HOST.0))
+    }
+}
+
 /// The flavor of a vector type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]

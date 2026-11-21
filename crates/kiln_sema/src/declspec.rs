@@ -705,6 +705,9 @@ pub enum Chunk {
         quals: Quals,
         /// The `*`.
         loc: Loc,
+        /// The address-space attribute after the `*`, which qualifies
+        /// this pointer (`int *__attribute__((address_space(1))) *p`).
+        space: Option<AttrId>,
     },
     /// `nested-name-specifier * cv` ([dcl.mptr]): a pointer to a member
     /// of the class the qualifier names (checked by

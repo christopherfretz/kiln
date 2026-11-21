@@ -8,10 +8,12 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-1 gap at 1 site; 10 of 56,766 g++.dg cases hit one at the
-1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
-wording that matches clang's for a limit clang shares: they are listed
-as excluded and stay.
+No gaps are open: every entry the lint found has been fixed and has
+left the list (the last, GAP-149, with WP-1803, which also removed the
+generic class-A error `sema_attribute_unsupported_by_kiln`). At the
+1.3.0 release candidate 10 of 56,766 g++.dg cases hit a gap; all of
+those are fixed. 4 entries (5 sites) remain as excluded: their wording
+matches clang's for a limit clang shares, so they are not gaps.
 
 ## Method
 
@@ -19,8 +21,7 @@ A *site* is a line in a crate's `src/` (test modules excluded) that
 reports a gap:
 
 - a use of a gap diagnostic: `cg_cannot_mangle_expression`,
-  `drv_not_implemented`, `parse_unsupported`,
-  `sema_attribute_unsupported_by_kiln`, `sema_conv_unsupported`,
+  `drv_not_implemented`, `parse_unsupported`, `sema_conv_unsupported`,
   `sema_unimplemented_template_feature`, `sema_vla_unsupported`;
 - a call of a function that forwards its text to one: `unsupported`,
   `templ_unimplemented` and `not_implemented` in `kiln_sema`,
@@ -88,19 +89,16 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| misc | 1 (GAP-149) | 1 | 0 | WP-1745 |
 
 ## Gaps
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` left after WP-1745: `address_space` and the `opencl_*` address spaces) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
 ## Excluded (clang-matching wording)
 

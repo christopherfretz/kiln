@@ -682,7 +682,10 @@ impl Types {
 
     /// Interns `q` (any qualifiers and sugar are dropped).
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
-        let c = bridge.ast().types.canonical(q).without_quals();
+        // The evaluator does not model address spaces (WP-1803): an object
+        // in one is the object of the unspaced type, so the subobject
+        // walks compare it with glvalues of either.
+        let c = bridge.ast().types.canonical_unspaced(q).without_quals();
         if let Some(&t) = self.map.get(&c) {
             if !self.provisional_slots.is_empty() && self.provisional_slots.contains(&t) {
                 self.upgrade(bridge, t);

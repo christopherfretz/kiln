@@ -42,8 +42,7 @@ pub fn size_align(ast: &Ast, ty: QualType, target: &Target) -> Option<(u64, u64)
 /// True if `ty` is a complete object type (its size is known).
 pub fn is_complete_object(ast: &Ast, ty: QualType) -> bool {
     let t = &ast.types;
-    let c = t.canonical(ty);
-    match t.view(c.ty()) {
+    match t.canonical_view(ty) {
         TypeView::Builtin(b) => b.is_sizeless() || t.target().builtin_size_align(b).0 != 0,
         TypeView::LValueRef(r) | TypeView::RValueRef(r) => is_complete_object(ast, r),
         TypeView::ConstantArray(a) => is_complete_object(ast, a.elem),

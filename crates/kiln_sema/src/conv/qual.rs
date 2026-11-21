@@ -1,7 +1,7 @@
 //! Qualification conversions ([conv.qual]) and function pointer
 //! conversions ([conv.fctptr]).
 
-use kiln_ast::types::{BuiltinType, ExcSpec, Quals, TypeView};
+use kiln_ast::types::{AddrSpace, BuiltinType, ExcSpec, Quals, TypeView};
 use kiln_ast::{QualType, TypeId};
 
 use crate::Sema;
@@ -54,8 +54,7 @@ fn effective_quals(s: &Sema<'_, '_>, q: QualType) -> Quals {
 /// The qualification-decomposition ([conv.qual]/1) of `q`, as deep as
 /// it goes.
 fn step(s: &Sema<'_, '_>, q: QualType) -> Option<(Level, QualType)> {
-    let c = s.ast.types.canonical(q);
-    match s.ast.types.view(c.ty()) {
+    match s.ast.types.canonical_view(q) {
         TypeView::Pointer(p) => Some((Level::Pointer, s.ast.types.canonical(p))),
         TypeView::MemberPointer { pointee, class } => {
             let cls = s.ast.types.canonical(QualType::unqual(class)).ty();
@@ -89,30 +88,58 @@ struct Combined {
     p1: Vec<Level>,
     p2: Vec<Level>,
     p3: Vec<Level>,
+    /// The address spaces of the levels, as `cv1` .. `cv3`.
+    as1: Vec<AddrSpace>,
+    as2: Vec<AddrSpace>,
+    as3: Vec<AddrSpace>,
     /// The innermost type U of the first (canonical, its own cv kept).
     inner: QualType,
 }
 
 /// Decomposes `a` and `b` under [conv.qual] and forms their cv-combined
 /// decomposition (/3), or `None` if they are not similar (/2).
+///
+/// An address space is a qualifier of its level (clang
+/// `isQualificationConversionStep`): the levels must agree on it, except
+/// the first pointee level, where the combined space is the one that is
+/// a superset of the other (the `__generic` and `__global`
+/// rules); a top-level space is ignored, as top-level cv.
 fn combine(s: &Sema<'_, '_>, a: QualType, b: QualType) -> Option<Combined> {
     // lv[j] = (cv1_{j+1}, P1_j, cv2_{j+1}, P2_j) in the notation of
     // [conv.qual]/3: P_j sits between cv_j and cv_{j+1}.
     let mut lv: Vec<(Quals, Level, Quals, Level)> = Vec::new();
+    let mut spaces: Vec<(AddrSpace, AddrSpace)> = Vec::new();
     let (mut a, mut b) = (s.ast.types.canonical(a), s.ast.types.canonical(b));
     loop {
         match (step(s, a), step(s, b)) {
             (Some((la, na)), Some((lb, nb))) if levels_match(la, lb) && lv.len() < 4096 => {
                 lv.push((effective_quals(s, na), la, effective_quals(s, nb), lb));
+                spaces.push((s.ast.types.addr_space(na), s.ast.types.addr_space(nb)));
                 a = na;
                 b = nb;
             }
             _ => break,
         }
     }
-    if !s.ast.types.same_type(a.without_quals(), b.without_quals()) {
+    let (ua, ub) = (s.ast.types.without_addr_space(a), s.ast.types.without_addr_space(b));
+    if !s.ast.types.same_type(ua.without_quals(), ub.without_quals()) {
         return None;
     }
+    let mut as3 = Vec::with_capacity(spaces.len());
+    for (j, &(x, y)) in spaces.iter().enumerate() {
+        let z = if x == y {
+            x
+        } else if j == 0 && y.is_superset_of(x) {
+            y
+        } else if j == 0 && x.is_superset_of(y) {
+            x
+        } else {
+            return None;
+        };
+        as3.push(z);
+    }
+    let as1: Vec<AddrSpace> = spaces.iter().map(|p| p.0).collect();
+    let as2: Vec<AddrSpace> = spaces.iter().map(|p| p.1).collect();
     let n = lv.len();
     let cv1: Vec<Quals> = lv.iter().map(|l| l.0).collect();
     let cv2: Vec<Quals> = lv.iter().map(|l| l.2).collect();
@@ -142,7 +169,7 @@ fn combine(s: &Sema<'_, '_>, a: QualType, b: QualType) -> Option<Combined> {
             }
         }
     }
-    Some(Combined { cv1, cv2, cv3, p1, p2, p3, inner: a })
+    Some(Combined { cv1, cv2, cv3, p1, p2, p3, as1, as2, as3, inner: ua })
 }
 
 /// The cv-combined type of `a` and `b` ([conv.qual]/3), unqualified at
@@ -156,6 +183,7 @@ pub(crate) fn cv_combined_type(s: &mut Sema<'_, '_>, a: QualType, b: QualType) -
     let mut t = ty.unqualified(c.inner);
     if n > 0 {
         t = ty.qualify(t, c.cv3[n - 1]);
+        t = ty.with_addr_space(t, c.as3[n - 1]);
     }
     for j in (0..n).rev() {
         t = match c.p3[j] {
@@ -166,6 +194,7 @@ pub(crate) fn cv_combined_type(s: &mut Sema<'_, '_>, a: QualType, b: QualType) -
         };
         if j > 0 {
             t = ty.qualify(t, c.cv3[j - 1]);
+            t = ty.with_addr_space(t, c.as3[j - 1]);
         }
     }
     Some(t)
@@ -174,7 +203,8 @@ pub(crate) fn cv_combined_type(s: &mut Sema<'_, '_>, a: QualType, b: QualType) -
 /// Classifies `from` and `to` under [conv.qual] (top-level cv-qualifiers
 /// are ignored).
 pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) -> QualRelation {
-    let Some(Combined { cv1, cv2, cv3, p1, p2, p3, .. }) = combine(s, from, to) else {
+    let Some(Combined { cv1, cv2, cv3, p1, p2, p3, as1, as2, as3, .. }) = combine(s, from, to)
+    else {
         return QualRelation::NotSimilar;
     };
     let n = cv1.len();
@@ -189,8 +219,8 @@ pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) ->
             }
         }
     }
-    let identical = (0..n).all(|j| cv1[j] == cv2[j] && p1[j] == p2[j]);
-    let convertible = (0..n).all(|j| cv3[j] == cv2[j] && p3[j] == p2[j]);
+    let identical = (0..n).all(|j| cv1[j] == cv2[j] && p1[j] == p2[j] && as1[j] == as2[j]);
+    let convertible = (0..n).all(|j| cv3[j] == cv2[j] && p3[j] == p2[j] && as3[j] == as2[j]);
     if !convertible && !drops_outer && !drops_nested {
         drops_nested = true;
     }

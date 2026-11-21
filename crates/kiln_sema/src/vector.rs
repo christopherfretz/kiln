@@ -524,6 +524,17 @@ impl Sema<'_, '_> {
                 ty = self.apply_mode(ty, node);
                 continue;
             }
+            if node.kind == AttrKind::ADDRESS_SPACE {
+                ty = self.build_addr_space_type(ty, node);
+                let pos = match pos {
+                    VectorAttrPos::Type(Some(end)) if node.loc < end => VectorAttrPos::Decl,
+                    p => p,
+                };
+                if node.syntax == AttrSyntax::Cxx11 && !matches!(pos, VectorAttrPos::Type(_)) {
+                    self.type_attr_on_decl(node, pos, "address_space");
+                }
+                continue;
+            }
             if node.kind == AttrKind::ARM_SVE_VECTOR_BITS {
                 if self.is_error_type(ty) {
                     continue;
@@ -580,7 +591,13 @@ impl Sema<'_, '_> {
     /// legacy slide of a type attribute to the decl-specifiers).
     fn neon_attr_on_decl(&mut self, node: AttrNode, pos: VectorAttrPos) {
         let poly = node.kind == AttrKind::NEON_POLYVECTOR_TYPE;
-        let shown = self.attr_shown(&node, neon_attr_name(poly));
+        self.type_attr_on_decl(node, pos, neon_attr_name(poly));
+    }
+
+    /// [`Self::neon_attr_on_decl`] for any `[[clang::]]` type attribute
+    /// `name` written where it appertains to the declaration.
+    fn type_attr_on_decl(&mut self, node: AttrNode, pos: VectorAttrPos, name: &str) {
+        let shown = self.attr_shown(&node, name);
         let id = if pos == VectorAttrPos::Typedef {
             DiagId::sema_stmt_attribute_on_decl
         } else {
