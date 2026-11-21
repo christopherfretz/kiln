@@ -549,10 +549,69 @@ pub fn usual_unary_conversions(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     let bw = bit_field_width(s, e);
     let e = decay(s, e);
     let t = ty(s, e);
+    if let Some((kind, to)) = excess_precision(s, t) {
+        return cast_to(s, kind, e, to, None);
+    }
     if s.ast.types.builtin(t) == Some(kiln_ast::types::BuiltinType::Half) {
         return cast_to(s, CastKind::FloatingCast, e, QualType::FLOAT, None);
     }
     promote_int(s, e, bw)
+}
+
+/// clang's floating rank (`getFloatingRank`): `__bf16` < `_Float16` <
+/// `__fp16` < `float` < `double` < `long double` < `__float128`; the
+/// P1467 types rank as their twins.
+fn clang_float_rank(b: kiln_ast::types::BuiltinType) -> Option<u8> {
+    use kiln_ast::types::BuiltinType as B;
+    Some(match b.abi_twin() {
+        B::BFloat16 => 0,
+        B::Float16 => 1,
+        B::Half => 2,
+        B::Float => 3,
+        B::Double => 4,
+        B::LongDouble => 5,
+        B::Float128 => 6,
+        _ => return None,
+    })
+}
+
+/// The excess-precision conversion of an operand of floating (or
+/// complex floating) type `t` under the evaluation method in effect
+/// (clang `UsualUnaryConversions`, `#pragma clang fp eval_method`,
+/// `-ffp-eval-method=`; spec/sema.md "Excess precision"): a type ranked
+/// below `double` (`double`) or `long double` (`extended`) converts to
+/// it.
+fn excess_precision(s: &mut Sema<'_, '_>, t: QualType) -> Option<(CastKind, QualType)> {
+    use kiln_ast::fp::FpEval;
+    let ovr = &s.fp_pragma.0;
+    let eval = if ovr.mask & kiln_ast::fp::fp_bit::EVAL != 0 {
+        ovr.vals.eval
+    } else if ovr.mask != 0 || ovr.cx_limited.is_some() {
+        // clang applies a pragma's override to `FPOptions(LangOpts)`,
+        // which leaves out `-ffp-eval-method=` (WP-1798).
+        FpEval::Source
+    } else {
+        s.fp.eval
+    };
+    let to = match eval {
+        FpEval::Source => return None,
+        FpEval::Double => QualType::DOUBLE,
+        FpEval::Extended => QualType::LONGDOUBLE,
+    };
+    let c = s.ast.types.canonical(t);
+    let (elem, complex) = match s.ast.types.as_complex(c) {
+        Some(el) => (s.ast.types.canonical(el), true),
+        None => (c, false),
+    };
+    let rank = clang_float_rank(s.ast.types.builtin(elem)?)?;
+    if rank >= clang_float_rank(s.ast.types.builtin(to)?)? {
+        return None;
+    }
+    Some(if complex {
+        (CastKind::FloatingComplexCast, s.ast.types.complex(to))
+    } else {
+        (CastKind::FloatingCast, to)
+    })
 }
 
 /// True if `e` is a null pointer constant ([conv.ptr]/1): an integer

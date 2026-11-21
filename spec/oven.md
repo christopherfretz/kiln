@@ -97,6 +97,33 @@ the evaluator's flattened type table.
   Double, `_Float128` Quad, so they evaluate exactly as `float`,
   `double` and `__float128` (test:
   `tests/conformance/basic.extended.fp/p1467-constexpr.cpp`).
+  **Rounding modes** (`#pragma STDC FENV_ROUND`, C23 7.6.2, WP-1744): each
+  rounding instruction carries the mode declared where its expression is
+  written (`ExprArena::fp_round`, spec/sema.md §5.35; `compile.rs`
+  `round_code`): 0 to nearest even (also `FE_DYNAMIC`, as clang's
+  `getActiveRoundingMode`), 1 upward, 2 downward, 3 toward zero, 4 to
+  nearest with ties away (`softfloat::Rm`). It is aux bits 4..6 of
+  `FAdd`/`FSub`/`FMul`/`FDiv` (binary arithmetic, compound assignment,
+  `++`/`--`, a complex `++`/`--`'s real part and the real-by-complex
+  products and quotients clang evaluates with `handleFloatFloatBinOp`),
+  bits 8..10 of `FCast` and bits 13..15 of `IToF`. Mode 0 is the
+  unchanged fast path (`arith::float_bin` etc., the host for binary32/
+  binary64); a directed mode runs every format through the soft-float
+  (`softfloat::bin_rm`, `cast_rm`, `from_int_rm`): one rounding in the
+  mode, an overflow to the largest finite value where the mode rounds
+  that sign toward zero, a subnormal rounded away from zero instead of
+  flushed to zero, and an exact zero sum of opposite signs `-0` only
+  downward. Not affected, as in clang: the full complex `*` and `/` and
+  complex `+`/`-` (`APFloat` operators, to nearest), the P0533 math
+  builtins (below; clang 22 evaluates none of them under a directed
+  mode, kiln rounds them to nearest) and float-to-integer conversions
+  (truncation). A `_BitInt` wider than 128 bits converted to a float
+  rounds in the mode too (`wide::TO_FLOAT`, mode in `x` bits 4..6,
+  `softfloat::from_limbs_rm`).
+  Tests: `tests/conformance/expr.const/fenv-round-constexpr*.cpp`,
+  `tests/conformance/cfenv.syn/fenv-round-run.cpp`; operands fuzzed
+  against clang 22 on aarch64 and x86-64 (every mode, all six formats,
+  literals, conversions, compound assignment, `++`/`--`).
 - Compilation is lazy, per function, on first call. A function that cannot
   be called in a constant expression (not constexpr, or no body) compiles
   to a one-instruction stub that traps with clang's note on call, so sema
@@ -1428,8 +1455,8 @@ literal is one instruction and one step, not an interpreted loop.
   exactly in the operand's format: binary16, bfloat16, binary32,
   binary64, x87 80-bit and binary128 all go through the integer
   significand code in `softfloat` (no host libm, no host float
-  arithmetic; one rounding, nearest-even, the only mode a constant
-  expression sees). `_Float16`/`__bf16`/`_Float32`/`_Float64` reach the
+  arithmetic; one rounding, nearest-even, also under a directed
+  `FENV_ROUND`, where clang 22 does not evaluate them). `_Float16`/`__bf16`/`_Float32`/`_Float64` reach the
   `float`/`double` forms by conversion, as libstdc++'s overloads do.
   Policy (C23 Annex F, as GCC folds): a call is not a constant
   (`Fault::Invalid`; "subexpression not valid in a constant expression"
@@ -4201,9 +4228,9 @@ Type rules: spec/types.md §21.
   words; thaw re-extends them over the slot.
 - *Floating conversions, bit-fields, `switch`, `<=>`, literals* (WP-465).
   `TO_FLOAT` converts the exact value to a float kind
-  (`softfloat::from_limbs`: the top 128 significant bits plus a sticky
-  bit, rounded to nearest even; past the format's range it is infinity,
-  as clang folds it); `FROM_FLOAT` truncates toward zero
+  (`softfloat::from_limbs_rm`: the top 128 significant bits plus a sticky
+  bit, rounded to nearest even, or in a directed `FENV_ROUND` mode
+  (WP-1744); past the format's range it is infinity, as clang folds it); `FROM_FLOAT` truncates toward zero
   (`softfloat::trunc_limbs`) and faults `FloatRange` when the result does
   not fit N bits (a negative value for an unsigned type, NaN, infinity),
   noted at the operand's begin with the destination type as written and its

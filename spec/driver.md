@@ -431,7 +431,7 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
 Tests: `debug_flags.rs` unit tests; `crates/kiln_driver/tests/driver.rs`
 `debug_info_flags_reach_the_ir`.
 
-### Floating-point flags (WP-806)
+### Floating-point flags (WP-806, WP-1798)
 
 `FpFlags` (`crates/kiln_driver/src/fp_flags.rs`) records the FP flags in
 command-line order and runs clang's `RenderFloatingPointOptions` state
@@ -445,10 +445,11 @@ implemented or an error; none is accepted and ignored.
   `-f[no-]finite-math-only`, `-f[no-]honor-infinities`,
   `-f[no-]honor-nans`, `-f[no-]approx-func`, `-f[no-]math-errno`,
   `-f[no-]associative-math`, `-f[no-]reciprocal-math`,
-  `-f[no-]signed-zeros`, `-fno-trapping-math`, `-fno-rounding-math`,
+  `-f[no-]signed-zeros`, `-f[no-]trapping-math`, `-f[no-]rounding-math`,
   `-ffp-contract=on|off|fast|fast-honor-pragmas`,
-  `-ffp-model=precise|fast` (and `aggressive` at compat 22),
-  `-ffp-exception-behavior=ignore`, `-ffp-eval-method=source`,
+  `-ffp-model=precise|fast|strict` (and `aggressive` at compat 22),
+  `-ffp-exception-behavior=ignore|maytrap|strict`,
+  `-ffp-eval-method=source|double|extended`,
   `-fexcess-precision=fast|standard`, `-fdenormal-fp-math=<m>[,<m>]`
   (`ieee`, `preserve-sign`, `positive-zero`, `dynamic`: the
   `denormal-fp-math` attribute), and `-Ofast` when it is the last `-O`
@@ -470,21 +471,36 @@ implemented or an error; none is accepted and ignored.
   final complex range, it is the error `'-ffp-model=fast (promoted
   complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported
   by kiln`. Any later complex-range flag avoids it.
-- **The floating-point environment.** Each flag whose final effect needs
-  it is the error `'<flag>' is not supported by kiln`
-  (`drv_unsupported_flag`, one per flag, exit 1):
-  - `-ftrapping-math`, `-ffp-exception-behavior=maytrap|strict`;
-  - `-frounding-math`;
-  - `-ffp-model=strict`;
-  - `-ffp-eval-method=double|extended`;
-  - `-fexcess-precision=16`.
-  A later flag that undoes the effect avoids the error: `-frounding-math
-  -fno-rounding-math` is accepted, and so is `-ffp-model=strict
-  -fno-rounding-math -ffp-exception-behavior=ignore`. A later
-  `-ffp-model=precise` does not undo it, as in clang. The FP pragmas
-  implement the environment per scope (WP-1744, spec/codegen.md §3.2);
-  these flags would set it for the whole unit and stay errors. The
-  command line's options reach sema (`ParseOptions::fp`) for the
+- **The floating-point environment (WP-1798).** These flags set the
+  unit's FP state, which the FP pragmas then change per scope
+  (spec/codegen.md §3.2). The resulting cc1 state matches clang 19's and
+  22's `-###`:
+  - `-ffp-exception-behavior=` gives `FpOptions::except`.
+    `-ftrapping-math` gives `strict` and `-fno-trapping-math` gives
+    `ignore`. The fast-math flags and `-funsafe-math-optimizations`
+    reset it to unset. An explicit `ignore` holds under `FENV_ACCESS ON`
+    too, while an unset one is `strict` there.
+  - `-frounding-math` gives `FpOptions::rounding_math`, so `FE_DYNAMIC`
+    is the dynamic mode everywhere. The fast-math flags clear it.
+  - `-ffp-model=strict` sets both (`strict`, rounding math) and
+    `contract` off. A later `-ffp-model=precise` keeps the rounding and
+    the exceptions, as in clang.
+  - Strict exceptions (clang's `TrappingMath`) turn off reassociation,
+    and so the unsafe and fast math (`-mreassociate`,
+    `-funsafe-math-optimizations`, `__FAST_MATH__`). May-trap ones do
+    not.
+  - `-ffp-eval-method=` gives `FpOptions::eval` and
+    `FpModel::eval_on_command_line` (sema's `fp_eval_on_command_line`):
+    `__FLT_EVAL_METHOD__` is its value, and `#pragma clang fp
+    reassociate(on)` / `reciprocal(on)` are errors. With `-fapprox-func`,
+    reassociation or `-freciprocal-math` in effect, each one gives the
+    error `option 'ffp-eval-method' cannot be used with option
+    'fapprox-func'|'mreassociate'|'freciprocal'`
+    (`drv_incompatible_fp_eval_method_options`).
+  - `-fexcess-precision=16` stays the error `'-fexcess-precision=16' is
+    not supported by kiln`.
+  - clang's `overriding '<a>' option with '<b>'` warnings are not given.
+  The command line's options reach sema (`ParseOptions::fp`) for the
   pragmas' precise checks: under `-ffast-math`, `#pragma STDC
   FENV_ACCESS ON` is an error, as in clang.
 - **Macros.**
@@ -492,7 +508,8 @@ implemented or an error; none is accepted and ignored.
   - `__FINITE_MATH_ONLY__ 1`: no infinities and no NaNs.
   - `__NO_MATH_ERRNO__`: `-fno-math-errno`.
   - AArch64 `__ARM_FP_FAST`: unsafe math.
-  - `__FLT_EVAL_METHOD__` stays 0.
+  - `__FLT_EVAL_METHOD__`: the `-ffp-eval-method=` value (0, 1, 2),
+    else the target's (0).
 - **Backend.** Function attributes carry the semantics. `llc` gets
   `-fp-contract=fast` only for exactly `-ffp-contract=fast` (clang's
   `AllowFPOpFusion`; `fast-honor-pragmas` does not), except x86 with

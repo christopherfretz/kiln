@@ -6,6 +6,7 @@
 //! format on the target (`long double` per `TargetTypes::long_double`).
 
 use kiln_ast::consts::{FloatKind, Scalar};
+use kiln_ast::fp::FpRound;
 use kiln_ast::types::{BuiltinType, Quals};
 use kiln_ast::{ConstValueId, QualType};
 use kiln_diag::DiagId;
@@ -209,8 +210,9 @@ fn range_strings(kind: FloatKind) -> (&'static str, &'static str) {
     }
 }
 
-/// The exact value of `lit` rounded to `kind`.
-fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
+/// The exact value of `lit` rounded to `kind` in mode `rm` (the
+/// `#pragma STDC FENV_ROUND` in effect, clang `BuildFloatingLiteral`).
+fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>, rm: FpRound) -> soft::Rounded {
     let zero = soft::Rounded { bits: 0, overflow: false, inexact: false, underflow_to_zero: false };
     let frac_len = i64::try_from(lit.frac_digits.len()).unwrap_or(i64::MAX);
     if lit.radix == Radix::Hex {
@@ -227,7 +229,7 @@ fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
         // value = all * 16^(stripped - frac_len) * 2^exponent
         let scale =
             lit.exponent.saturating_add(4 * (i64::try_from(stripped).unwrap_or(0) - frac_len));
-        return soft::round_rational(kind, false, &num, &Big::from_u128(1), scale);
+        return soft::round_rational_rm(kind, false, &num, &Big::from_u128(1), scale, rm);
     }
     let int = lit.int_digits.trim_start_matches('0');
     let mut all = String::with_capacity(int.len() + lit.frac_digits.len());
@@ -246,25 +248,20 @@ fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
     // every format's range, short-circuit.
     let mag = digits.saturating_add(e10);
     if mag > 5000 {
-        return soft::Rounded {
-            bits: soft::infinity(kind, false),
-            overflow: true,
-            inexact: true,
-            underflow_to_zero: false,
-        };
+        return soft::overflow_rm(kind, false, rm);
     }
     if mag < -5000 {
-        return soft::Rounded { bits: 0, overflow: false, inexact: true, underflow_to_zero: true };
+        return soft::tiny(kind, false, rm, soft::min_exp(kind));
     }
     let mut num = Big::from_decimal(body);
     if e10 >= 0 {
         #[allow(clippy::cast_sign_loss, reason = "checked non-negative")]
         num.mul_pow10(e10 as u64);
-        soft::round_rational(kind, false, &num, &Big::from_u128(1), 0)
+        soft::round_rational_rm(kind, false, &num, &Big::from_u128(1), 0, rm)
     } else {
         let mut den = Big::from_u128(1);
         den.mul_pow10(e10.unsigned_abs());
-        soft::round_rational(kind, false, &num, &den, 0)
+        soft::round_rational_rm(kind, false, &num, &den, 0, rm)
     }
 }
 
@@ -275,7 +272,8 @@ fn round_literal(kind: FloatKind, lit: &FloatLiteral<'_>) -> soft::Rounded {
 /// `f32x` (`_Float32x`) and `f64x` (`_Float64x`), and GNU `q`
 /// (`__float128`); the value is
 /// the literal's exact value rounded to nearest-even in the type's format
-/// (no double rounding: `bf16` rounds from the decimal value).
+/// (no double rounding: `bf16` rounds from the decimal value), or in the
+/// directed mode of a `#pragma STDC FENV_ROUND` in effect.
 ///
 /// A value that overflows to infinity or underflows to zero comes back
 /// with clang's `-Wliteral-range` warning.
@@ -301,7 +299,8 @@ pub fn classify_float_literal(
     };
     let b = s.ast.types.builtin(ty).unwrap_or(BuiltinType::Double);
     let kind = float_kind(s, b).unwrap_or(FloatKind::Double);
-    let r = round_literal(kind, lit);
+    let rm = s.ast.exprs.round_scope.unwrap_or(FpRound::Nearest);
+    let r = round_literal(kind, lit, rm);
     let (max, min) = range_strings(kind);
     let warning = if r.overflow {
         Some(LiteralError::new(DiagId::sema_float_literal_overflow, vec![s.ty_arg(ty), max.into()]))

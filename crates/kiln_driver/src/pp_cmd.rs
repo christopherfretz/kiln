@@ -609,6 +609,16 @@ impl Job<'_> {
         if let Some(c) = self.std.c {
             features = features.map(|f| f.with_c(c, self.std.gnu));
         }
+        let fp = a.fp_model();
+        if fp.eval_on_command_line {
+            // WP-1798: clang's `-ffp-eval-method=` value.
+            let v = match fp.opts.eval {
+                kiln_ast::fp::FpEval::Source => 0,
+                kiln_ast::fp::FpEval::Double => 1,
+                kiln_ast::fp::FpEval::Extended => 2,
+            };
+            features = features.map(|f| f.with_flt_eval_method(v));
+        }
         if self.toolchain.target.is_aarch64() {
             // WP-558: the NEON builtins answer from the enabled features.
             let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();

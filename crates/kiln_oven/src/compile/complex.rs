@@ -313,7 +313,8 @@ impl Compiler<'_> {
             TyKind::Float(k) => {
                 self.konst(one, crate::arith::int_to_float(k, 1, true));
                 let fop = if inc { Op::FAdd } else { Op::FSub };
-                self.emit_at(fop, float_code(k), &[new, old[0], one], e);
+                let rc = super::round_code(self.ast().exprs.fp_round(e));
+                self.emit_at(fop, float_code(k) | rc << 4, &[new, old[0], one], e);
             }
             k => {
                 let (w, s) = int_of(k).unwrap_or((32, true));
@@ -383,21 +384,25 @@ impl Compiler<'_> {
         let aux = match self.kind(elem) {
             TyKind::Float(k) => {
                 let fc = float_code(k);
+                // `handleFloatFloatBinOp` rounds in the declared mode; the
+                // full complex forms below (`cx_op`) round to nearest, as
+                // clang's `APFloat` operators do.
+                let fr = fc | super::round_code(self.ast().exprs.fp_round(e)) << 4;
                 match (sub, lreal, rreal) {
                     // (a)(c + id), (a + ib)(c): `handleFloatFloatBinOp`.
                     (cx::MUL, true, _) => {
-                        self.emit_at(Op::FMul, fc, &[dr, ra, rc], e);
-                        self.emit_at(Op::FMul, fc, &[di, ra, id], e);
+                        self.emit_at(Op::FMul, fr, &[dr, ra, rc], e);
+                        self.emit_at(Op::FMul, fr, &[di, ra, id], e);
                         return [dr, di];
                     }
                     (cx::MUL, _, true) => {
-                        self.emit_at(Op::FMul, fc, &[dr, rc, ra], e);
-                        self.emit_at(Op::FMul, fc, &[di, rc, ia], e);
+                        self.emit_at(Op::FMul, fr, &[dr, rc, ra], e);
+                        self.emit_at(Op::FMul, fr, &[di, rc, ia], e);
                         return [dr, di];
                     }
                     (cx::DIV, _, true) => {
-                        self.emit_at(Op::FDiv, fc, &[dr, ra, rc], e);
-                        self.emit_at(Op::FDiv, fc, &[di, ia, rc], e);
+                        self.emit_at(Op::FDiv, fr, &[dr, ra, rc], e);
+                        self.emit_at(Op::FDiv, fr, &[di, ia, rc], e);
                         return [dr, di];
                     }
                     _ => {}

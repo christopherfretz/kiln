@@ -157,7 +157,7 @@ impl SemaBridge for Bridge<'_> {
 }
 
 /// Folds every candidate expression of the translation unit.
-pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
+pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target, fp: FpOptions) -> Folds {
     let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists, fams, no_trial) = {
         let mut c = Collect {
             ast,
@@ -174,6 +174,8 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             fams: Vec::new(),
             cover: None,
             no_trial: FxHashSet::default(),
+            float_checked: FxHashSet::default(),
+            fp,
         };
         c.tu();
         (
@@ -515,9 +517,17 @@ struct Collect<'a> {
     /// being walked: an array list, or a variable initializer whose value
     /// is emitted as a constant when it folds.
     cover: Option<ExprId>,
-    /// The candidates of FP-constrained scopes that involve floating
+    /// The candidates of FP scopes whose results depend on the dynamic
+    /// environment ([`FpOptions::env_dependent`]) that involve floating
     /// values: never trial-folded ([`prepass`]).
     no_trial: FxHashSet<ExprId>,
+    /// The candidates already tested by [`involves_float`]: under an
+    /// environment-dependent command line every enclosing block is
+    /// strict, and each would test its nested blocks' candidates again
+    /// (quadratic in the nesting depth).
+    float_checked: FxHashSet<ExprId>,
+    /// The command line's FP options.
+    fp: FpOptions,
 }
 
 impl Collect<'_> {
@@ -652,7 +662,7 @@ impl Collect<'_> {
         let n = *ast.stmts.get(s);
         match n.kind() {
             StmtKind::CompoundStmt => {
-                let strict = ast.stmts.compound_fp(s).apply(FpOptions::default()).constrained();
+                let strict = ast.stmts.compound_fp(s).apply(self.fp).env_dependent();
                 let from = self.out.len();
                 for &c in ast.lists.get(ast.stmts.compound_body(s)) {
                     self.stmt(StmtId::new(c));
@@ -660,7 +670,7 @@ impl Collect<'_> {
                 if strict {
                     for i in from..self.out.len() {
                         let e = self.out[i];
-                        if involves_float(ast, e) {
+                        if self.float_checked.insert(e) && involves_float(ast, e) {
                             self.no_trial.insert(e);
                         }
                     }
@@ -1080,6 +1090,9 @@ fn involves_float(ast: &Ast, e: ExprId) -> bool {
     };
     let mut work = vec![e];
     let mut kids = Vec::new();
+    // The initializers already queued: a chain of `const` locals reads
+    // each one's initializer from every later one.
+    let mut inits = FxHashSet::default();
     while let Some(x) = work.pop() {
         kids.clear();
         ast.exprs.children_into(x, &ast.lists, &mut kids);
@@ -1110,6 +1123,7 @@ fn involves_float(ast: &Ast, e: ExprId) -> bool {
                     && let Some(v) = ast.decls.var(d)
                     && !v.spec.is_constexpr()
                     && let Some(init) = v.init
+                    && inits.insert(init)
                 {
                     work.push(init);
                 }

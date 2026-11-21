@@ -8,10 +8,10 @@ by a stable id (`GAP-NNN`), each pointing at the BACKLOG row that fixes it.
 `cargo xtask ci --step lints` keeps the list exact (spec/harness.md "CI",
 step 0): a new site needs an entry and a row, and a fixed gap must leave.
 
-2 gaps at 2 sites; 10 of 56,766 g++.dg cases hit one at the
-1.3.0 release candidate, all since fixed. 6 more entries (7 sites) are
-listed as excluded and stay: 5 use wording that matches clang's for a
-limit clang shares, 1 is a driver flag kiln rejects by name.
+1 gap at 1 site; 10 of 56,766 g++.dg cases hit one at the
+1.3.0 release candidate, all since fixed. 4 more entries (5 sites) use
+wording that matches clang's for a limit clang shares: they are listed
+as excluded and stay.
 
 ## Method
 
@@ -88,21 +88,18 @@ By family:
 
 | family | gaps | sites | reach |
 |---|---|---|---|
-| parse_unsupported | 1 | 1 | 0 |
 | sema_attribute_unsupported_by_kiln | 1 | 1 | 0 |
 
 By area (the BACKLOG row that fixes it, most-hit first):
 
 | area | gaps | sites | reach | row |
 |---|---|---|---|---|
-| preprocessor/modules | 1 (GAP-142) | 1 | 0 | WP-1744 |
 | misc | 1 (GAP-149) | 1 | 0 | WP-1745 |
 
 ## Gaps
 
 | gap | family | area | text | sites | reach | row |
 |---|---|---|---|---|---|---|
-| GAP-142 | parse_unsupported | preprocessor/modules | `{what} (the floating-point environment) is not supported yet` ({what}: `'#pragma clang fp eval_method(v)'`, v `double` or `extended`; `'#pragma STDC FENV_ROUND m'`, m a directed mode: `FE_UPWARD`, `FE_DOWNWARD`, `FE_TOWARDZERO`, `FE_TONEARESTFROMZERO`; FENV_ACCESS and the exception behavior landed in WP-1744) | `crates/kiln_parse/src/fp_pragma.rs::fenv_unsupported` | 0 | WP-1744 |
 | GAP-149 | sema_attribute_unsupported_by_kiln | misc | `'{0}' attribute is not supported by kiln yet` ({0}: the class-A rows of `attr_triage` left after WP-1745: `address_space`, the `opencl_*` address spaces and the `swift_*` parameter ABIs `swift_context`, `swift_async_context`, `swift_error_result`, `swift_indirect_result`) | `crates/kiln_sema/src/decl.rs::attribute_node` | 0 | WP-1745 |
 
 ## Excluded (clang-matching wording)

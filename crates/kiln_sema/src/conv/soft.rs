@@ -10,6 +10,7 @@
 use std::cmp::Ordering;
 
 use kiln_ast::consts::FloatKind;
+use kiln_ast::fp::FpRound;
 
 /// An unsigned big integer, little-endian 32-bit limbs, no high zero limbs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -303,13 +304,63 @@ pub(crate) fn decode(kind: FloatKind, bits: u128) -> Decoded {
     Decoded::Finite { neg, mant, exp: f - emax - lead }
 }
 
-/// Rounds `num / den * 2^scale` (with sign `neg`) to `kind`.
+/// Rounds `num / den * 2^scale` (with sign `neg`) to `kind`, to nearest.
 pub(crate) fn round_rational(
     kind: FloatKind,
     neg: bool,
     num: &Big,
     den: &Big,
     scale: i64,
+) -> Rounded {
+    round_rational_rm(kind, neg, num, den, scale, FpRound::Nearest)
+}
+
+/// Whether rounding in mode `rm` takes a value of sign `neg` away from
+/// zero, given the remainder past the kept bits (`half`: against half a
+/// unit, `inexact`: nonzero) and the kept value's parity.
+fn rounds_away(rm: FpRound, neg: bool, half: Ordering, inexact: bool, odd: bool) -> bool {
+    match rm {
+        FpRound::Upward => inexact && !neg,
+        FpRound::Downward => inexact && neg,
+        FpRound::TowardZero => false,
+        FpRound::NearestAway => half != Ordering::Less,
+        // `FE_DYNAMIC` reads as to nearest (clang `BuildFloatingLiteral`).
+        FpRound::Nearest | FpRound::Dynamic => match half {
+            Ordering::Greater => true,
+            Ordering::Equal => odd,
+            Ordering::Less => false,
+        },
+    }
+}
+
+/// The result of a value of sign `neg` past the largest finite one in
+/// mode `rm`: infinity, or the largest finite value where the mode
+/// rounds that sign toward zero (IEEE 754-2019 §7.4).
+fn overflowed(kind: FloatKind, neg: bool, rm: FpRound) -> Rounded {
+    let (p, emax, _) = params(kind);
+    let to_max = match rm {
+        FpRound::Upward => neg,
+        FpRound::Downward => !neg,
+        FpRound::TowardZero => true,
+        _ => false,
+    };
+    let bits = if to_max {
+        encode(kind, neg, (1u128 << p) - 1, emax - (i64::from(p) - 1))
+    } else {
+        infinity(kind, neg)
+    };
+    Rounded { bits, overflow: true, inexact: true, underflow_to_zero: false }
+}
+
+/// [`round_rational`] in rounding mode `rm` (`#pragma STDC FENV_ROUND`,
+/// C23 7.6.2: literals and conversions in its scope).
+pub(crate) fn round_rational_rm(
+    kind: FloatKind,
+    neg: bool,
+    num: &Big,
+    den: &Big,
+    scale: i64,
+    rm: FpRound,
 ) -> Rounded {
     let (p, emax, emin) = params(kind);
     if num.is_zero() {
@@ -326,21 +377,11 @@ pub(crate) fn round_rational(
     // `scale` saturates for a huge literal exponent (`0x1p99999999999999999999`).
     let top = (ln - ld).saturating_add(scale); // the leading bit's exponent is top - 1 or top
     if top - 1 > emax + 1 {
-        return Rounded {
-            bits: infinity(kind, neg),
-            overflow: true,
-            inexact: true,
-            underflow_to_zero: false,
-        };
+        return overflowed(kind, neg, rm);
     }
     let min_e = emin - (i64::from(p) - 1);
     if top < min_e - 2 {
-        return Rounded {
-            bits: encode(kind, neg, 0, 0),
-            overflow: false,
-            inexact: true,
-            underflow_to_zero: true,
-        };
+        return tiny(kind, neg, rm, min_e);
     }
     // Choose e so the quotient has p or p + 1 bits.
     let mut e = (top - i64::from(p) - 1).max(min_e);
@@ -360,12 +401,7 @@ pub(crate) fn round_rational(
         e += 1;
         (q, half, inexact) = attempt(e);
     }
-    let round_up = match half {
-        Ordering::Greater => true,
-        Ordering::Equal => q & 1 == 1,
-        Ordering::Less => false,
-    };
-    if round_up {
+    if rounds_away(rm, neg, half, inexact, q & 1 == 1) {
         q += 1;
         if q >> p != 0 {
             q >>= 1;
@@ -374,12 +410,7 @@ pub(crate) fn round_rational(
     }
     let lead_exp = if q == 0 { min_e } else { e + 127 - i64::from(q.leading_zeros()) };
     if q != 0 && lead_exp > emax {
-        return Rounded {
-            bits: infinity(kind, neg),
-            overflow: true,
-            inexact: true,
-            underflow_to_zero: false,
-        };
+        return overflowed(kind, neg, rm);
     }
     if q == 0 {
         return Rounded {
@@ -392,6 +423,37 @@ pub(crate) fn round_rational(
     // Normalise a normal result to exactly p bits at exponent e.
     let bits = encode(kind, neg, q, e);
     Rounded { bits, overflow: false, inexact, underflow_to_zero: false }
+}
+
+/// A nonzero value below half the smallest subnormal of `kind`: zero, or
+/// that subnormal where `rm` rounds the sign away from zero.
+pub(crate) fn tiny(kind: FloatKind, neg: bool, rm: FpRound, min_e: i64) -> Rounded {
+    if rounds_away(rm, neg, Ordering::Less, true, false) {
+        return Rounded {
+            bits: encode(kind, neg, 1, min_e),
+            overflow: false,
+            inexact: true,
+            underflow_to_zero: false,
+        };
+    }
+    Rounded {
+        bits: encode(kind, neg, 0, 0),
+        overflow: false,
+        inexact: true,
+        underflow_to_zero: true,
+    }
+}
+
+/// The smallest exponent of a subnormal of `kind`: the `min_e` of
+/// [`tiny`].
+pub(crate) fn min_exp(kind: FloatKind) -> i64 {
+    let (p, _, emin) = params(kind);
+    emin - (i64::from(p) - 1)
+}
+
+/// [`overflowed`] for the literal short cut.
+pub(crate) fn overflow_rm(kind: FloatKind, neg: bool, rm: FpRound) -> Rounded {
+    overflowed(kind, neg, rm)
 }
 
 /// Rounds the integer `±v` to `kind`.

@@ -9,13 +9,11 @@
 //! consumed: at namespace scope and at the start of a compound statement
 //! they change the FP state sema records in each compound statement
 //! ([`kiln_ast::fp::FpOverride`]); before any other statement or in a
-//! class they are errors. The FENV pragmas kiln does not implement
-//! (`FENV_ACCESS ON`, a rounding mode other than `FE_TONEAREST`,
-//! `float_control(except, on)`, `clang fp exceptions(maytrap|strict)`,
-//! `clang fp eval_method(double|extended)`) are errors, never ignored.
+//! class they are errors. `clang fp eval_method` also marks its scope in
+//! the preprocessor, where `__FLT_EVAL_METHOD__` is then an error.
 
 use kiln_ast::StmtId;
-use kiln_ast::fp::{FpContract, FpExcept, FpRound, fp_bit};
+use kiln_ast::fp::{FpContract, FpEval, FpExcept, FpRound, fp_bit};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_source::{Loc, Span};
@@ -322,19 +320,36 @@ impl Parser<'_, '_> {
             let eff = cur.apply(self.s.fp);
             match a {
                 FpAction::Contract(c) => cur.set_contract(c),
-                FpAction::Reassociate(on) => cur.set_flag(fp_bit::REASSOC, on),
-                FpAction::Reciprocal(on) => cur.set_flag(fp_bit::ARCP, on),
+                FpAction::Reassociate(on) => {
+                    self.value_changing_with_eval(on, 4, p.loc);
+                    cur.set_flag(fp_bit::REASSOC, on);
+                }
+                FpAction::Reciprocal(on) => {
+                    self.value_changing_with_eval(on, 5, p.loc);
+                    cur.set_flag(fp_bit::ARCP, on);
+                }
                 FpAction::CxLimitedRange(v) => cur.cx_limited = v,
                 FpAction::Exceptions(v) => cur.set_except(match v {
                     "ignore" => FpExcept::Ignore,
                     "maytrap" => FpExcept::MayTrap,
                     _ => FpExcept::Strict,
                 }),
-                // kiln's evaluation method is the source's (FLT_EVAL_METHOD
-                // 0 on every target it supports).
-                FpAction::EvalMethod("source") => {}
+                // clang `ActOnPragmaFPEvalMethod`: value-changing command
+                // line options conflict with it.
                 FpAction::EvalMethod(v) => {
-                    self.fenv_unsupported(&format!("'#pragma clang fp eval_method({v})'"), p.loc);
+                    for (on, why) in
+                        [(self.s.fp.afn, 0), (self.s.fp.reassoc, 1), (self.s.fp.arcp, 2)]
+                    {
+                        if on {
+                            self.eval_method_unsafe(0, why, p.loc);
+                        }
+                    }
+                    cur.set_eval(match v {
+                        "double" => FpEval::Double,
+                        "extended" => FpEval::Extended,
+                        _ => FpEval::Source,
+                    });
+                    self.set_fp_eval_pragma(Some(p.loc));
                 }
                 FpAction::FenvAccess(on) => {
                     if on && !eff.precise() {
@@ -342,11 +357,14 @@ impl Parser<'_, '_> {
                     }
                     cur.set_flag(fp_bit::FENV, on);
                 }
-                FpAction::FenvRound("FE_TONEAREST") => cur.set_round(FpRound::Nearest),
-                FpAction::FenvRound("FE_DYNAMIC") => cur.set_round(FpRound::Dynamic),
-                FpAction::FenvRound(m) => {
-                    self.fenv_unsupported(&format!("'#pragma STDC FENV_ROUND {m}'"), p.loc);
-                }
+                FpAction::FenvRound(m) => cur.set_round(match m {
+                    "FE_TONEAREST" => FpRound::Nearest,
+                    "FE_UPWARD" => FpRound::Upward,
+                    "FE_DOWNWARD" => FpRound::Downward,
+                    "FE_TOWARDZERO" => FpRound::TowardZero,
+                    "FE_TONEARESTFROMZERO" => FpRound::NearestAway,
+                    _ => FpRound::Dynamic,
+                }),
                 FpAction::FloatControlPush
                 | FpAction::FloatControlPop
                 | FpAction::FloatControl { push: true, .. }
@@ -424,8 +442,29 @@ impl Parser<'_, '_> {
         self.emit(d);
     }
 
-    fn fenv_unsupported(&mut self, what: &str, loc: Loc) {
-        // kiln-gap: GAP-142
-        self.s.unsupported(&format!("{what} (the floating-point environment)"), loc);
+    /// clang `ActOnPragmaFPValueChangingOption`: turning reassociation
+    /// (`what` 4) or reciprocals (5) on where an evaluation method is set,
+    /// by a pragma in scope (named first) or `-ffp-eval-method=`.
+    fn value_changing_with_eval(&mut self, on: bool, what: u32, loc: Loc) {
+        if !on {
+            return;
+        }
+        let pragma = self.fp_eval_pragma().is_some();
+        if pragma {
+            self.eval_method_unsafe(0, what, loc);
+        } else if self.s.fp_eval_on_command_line {
+            self.eval_method_unsafe(1, what, loc);
+        }
+    }
+
+    fn eval_method_unsafe(&mut self, by: u32, what: u32, loc: Loc) {
+        let d = self
+            .s
+            .diag(DiagId::parse_pragma_eval_method_unsafe, loc)
+            .arg(by.to_string())
+            .arg(what.to_string())
+            // One error per conflicting option at the pragma (clang).
+            .allow_duplicate();
+        self.emit(d);
     }
 }

@@ -39,6 +39,7 @@ impl Parser<'_, '_> {
         // ([stmt.block]; C23 7.12.2/2), which restores the enclosing state
         // at its end.
         let fp_outer = self.s.fp_pragma_state();
+        let eval_outer = self.fp_eval_pragma();
         self.take_fp_pragmas(FpAt::Compound);
         let mut stmts = Vec::new();
         self.parse_local_labels(&mut stmts);
@@ -62,6 +63,7 @@ impl Parser<'_, '_> {
         self.note_fp_state();
         let fp = self.s.fp_pragma_state();
         self.s.set_fp_pragma_state(fp_outer);
+        self.set_fp_eval_pragma(eval_outer);
         let block = self.s.act_on_compound_fp(&stmts, lbrace, rbrace, fp);
         self.s.check_empty_loop_bodies(&stmts);
         (block, rbrace)

@@ -416,6 +416,7 @@ impl Cg<'_> {
         let dest = if cannot_throw { None } else { self.invoke_dest() };
         let r = self.call_or_invoke_to(fn_ty, callee, args, opts, rty, dest);
         self.f.calls.push((Fir::last_inst(r), fid, site_nounwind));
+        self.f.emit_calls.push(Fir::last_inst(r));
         r
     }
 

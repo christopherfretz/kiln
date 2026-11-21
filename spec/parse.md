@@ -563,9 +563,10 @@ in a class: `this pragma cannot appear in <tag> declaration`;
 push/pop' can only appear at file or namespace scope or within a
 language linkage specification`; a `pop` of an empty stack warns
 `#pragma float_control(pop, ...) failed: stack empty`. `FENV_ACCESS`,
-`clang fp exceptions(...)`, `float_control(except, ...)` and
-`FENV_ROUND FE_TONEAREST|FE_DYNAMIC` set the environment fields of the
-state (WP-1744, spec/codegen.md §3.2), with clang's checks against the
+`clang fp exceptions(...)`, `float_control(except, ...)` and every
+`FENV_ROUND` mode set the environment fields of the state, and `clang fp
+eval_method(source|double|extended)` its evaluation method (WP-1744,
+spec/codegen.md §3.2, spec/sema.md "Excess precision"), with clang's checks against the
 command line's options (`ParseOptions::fp`, `Sema::fp`) and the pragmas:
 `'#pragma STDC FENV_ACCESS ON' is illegal when precise is disabled`,
 `'#pragma float_control(except, on)' is illegal when precise is
@@ -574,10 +575,27 @@ is enabled` (strict exceptions) / `... when fenv_access is enabled`, at
 the pragma's name. The parser marks a function body `strictfp`
 (`Parser::fn_body_fp`, `Stmts::mark_strict_fn`) when the state is
 constrained at its start or at the end of a compound statement in it;
-lambda and consteval-block bodies are marked on their own. The forms
-kiln does not implement (a directed `FENV_ROUND` mode,
-`eval_method(double|extended)`) are sema `unsupported` errors where they
-take effect (GAP-142).
+lambda and consteval-block bodies are marked on their own. A directed
+`FENV_ROUND` mode is also Sema's *rounding scope*
+(`ExprArena::round_scope`, kept in step by `Sema::set_fp_pragma_state`):
+the builder records it on each expression that can round
+(`ExprKind::may_round`: arithmetic, compound assignment, `++`/`--`,
+casts; `ExprArena::fp_round`), and floating literals round in it (clang
+`BuildFloatingLiteral`), so constant evaluation and code generation
+read the mode per expression, as clang reads `FPOptions` per node.
+`eval_method`: under `-ffast-math`'s `-fapprox-func`, reassociation or
+reciprocals the pragma is an error for each (`'#pragma clang fp
+eval_method' cannot be used with option 'fapprox-func'|'mreassociate'|
+'freciprocal'`), and `reassociate(on)`/`reciprocal(on)` in its scope are
+errors (`... cannot be used with '#pragma clang fp reassociate'`; with
+no pragma but `-ffp-eval-method=` on the command line, `option
+'ffp-eval-method' cannot be used with ...`), at the pragma's `fp`. The
+pragma's location is also the preprocessor's `fp_eval_pragma`, saved and
+restored around each compound statement as clang's
+`CurrentFPEvalMethod` scope is: inside it `__FLT_EVAL_METHOD__` is an
+error (`'__FLT_EVAL_METHOD__' cannot be expanded inside a scope
+containing '#pragma clang fp eval_method'`, note `#pragma entered
+here`); outside, it expands to the command line's method.
 Known divergence: clang's `LexOnOffSwitch` also leaves a stray
 `expected unqualified-id` after `#pragma STDC FP_CONTRACT ON junk`;
 kiln reports only the warning.

@@ -127,8 +127,78 @@ fn shr_sticky(x: u128, d: u32) -> u128 {
     }
 }
 
-/// Rounds `m * 2^(e - 127)` to the format.
-fn pack(kind: FloatKind, sign: bool, mut e: i32, mut m: u128) -> u128 {
+/// A rounding-direction attribute (IEEE 754-2019 §4.3, C23 7.6.2
+/// `FENV_ROUND`): the `round` field of a KBC float instruction's aux
+/// (spec/oven.md "Floating point").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Rm {
+    /// roundTiesToEven (0, every operation outside a `FENV_ROUND` scope).
+    Nearest,
+    /// roundTowardPositive (1).
+    Up,
+    /// roundTowardNegative (2).
+    Down,
+    /// roundTowardZero (3).
+    Zero,
+    /// roundTiesToAway (4).
+    Away,
+}
+
+impl Rm {
+    /// The mode with aux code `c` ([`Rm::code`]).
+    pub(crate) fn from_code(c: u32) -> Rm {
+        match c & 7 {
+            1 => Rm::Up,
+            2 => Rm::Down,
+            3 => Rm::Zero,
+            4 => Rm::Away,
+            _ => Rm::Nearest,
+        }
+    }
+
+    /// The aux code: 0 for round to nearest even.
+    pub(crate) fn code(self) -> u32 {
+        self as u32
+    }
+
+    /// Whether a value of sign `sign` whose magnitude is past the
+    /// largest finite one rounds to infinity (else to the largest finite
+    /// value, IEEE 754-2019 §7.4).
+    fn overflows_to_inf(self, sign: bool) -> bool {
+        match self {
+            Rm::Nearest | Rm::Away => true,
+            Rm::Up => !sign,
+            Rm::Down => sign,
+            Rm::Zero => false,
+        }
+    }
+
+    /// Whether the kept magnitude `kept` with remainder `rem` (of `half`
+    /// for exactly half a unit) rounds away from zero.
+    fn round_up(self, sign: bool, kept: u128, rem: u128, half: u128) -> bool {
+        match self {
+            Rm::Nearest => rem > half || (rem == half && kept & 1 == 1),
+            Rm::Away => rem >= half && rem != 0,
+            Rm::Up => rem != 0 && !sign,
+            Rm::Down => rem != 0 && sign,
+            Rm::Zero => false,
+        }
+    }
+}
+
+/// The largest finite value of sign `sign`.
+fn pack_max(f: Fmt, sign: bool) -> u128 {
+    let s = u128::from(sign) << (f.total() - 1);
+    s | (f.emask() - 1) << f.mfield() | ((1u128 << f.mfield()) - 1)
+}
+
+/// Rounds `m * 2^(e - 127)` to the format, to nearest even.
+fn pack(kind: FloatKind, sign: bool, e: i32, m: u128) -> u128 {
+    pack_rm(kind, sign, e, m, Rm::Nearest)
+}
+
+/// Rounds `m * 2^(e - 127)` to the format in mode `rm`.
+fn pack_rm(kind: FloatKind, sign: bool, mut e: i32, mut m: u128, rm: Rm) -> u128 {
     let f = Fmt::of(kind);
     if m == 0 {
         return pack_zero(f, sign);
@@ -148,7 +218,7 @@ fn pack(kind: FloatKind, sign: bool, mut e: i32, mut m: u128) -> u128 {
     } else {
         (m >> shift, m & ((1u128 << shift) - 1), 1u128 << (shift - 1))
     };
-    if rem > half || (rem == half && kept & 1 == 1) {
+    if rm.round_up(sign, kept, rem, half) {
         kept += 1;
         if kept >> f.p != 0 {
             kept >>= 1;
@@ -156,7 +226,7 @@ fn pack(kind: FloatKind, sign: bool, mut e: i32, mut m: u128) -> u128 {
         }
     }
     if e > f.bias() {
-        return pack_inf(f, sign);
+        return if rm.overflows_to_inf(sign) { pack_inf(f, sign) } else { pack_max(f, sign) };
     }
     if kept == 0 {
         return pack_zero(f, sign);
@@ -168,12 +238,16 @@ fn pack(kind: FloatKind, sign: bool, mut e: i32, mut m: u128) -> u128 {
 }
 
 fn repack(kind: FloatKind, v: Val) -> u128 {
+    repack_rm(kind, v, Rm::Nearest)
+}
+
+fn repack_rm(kind: FloatKind, v: Val, rm: Rm) -> u128 {
     let f = Fmt::of(kind);
     match v {
         Val::Zero(s) => pack_zero(f, s),
         Val::Inf(s) => pack_inf(f, s),
         Val::NaN(s, m) => pack_nan(f, s, m),
-        Val::Fin(s, e, m) => pack(kind, s, e, m),
+        Val::Fin(s, e, m) => pack_rm(kind, s, e, m, rm),
     }
 }
 
@@ -191,6 +265,11 @@ pub(crate) fn from_f64(kind: FloatKind, v: f64) -> u128 {
 
 pub(crate) fn cast(from: FloatKind, to: FloatKind, a: u128) -> u128 {
     repack(to, unpack(from, a))
+}
+
+/// [`cast`] rounded in mode `rm`.
+pub(crate) fn cast_rm(from: FloatKind, to: FloatKind, a: u128, rm: Rm) -> u128 {
+    repack_rm(to, unpack(from, a), rm)
 }
 
 pub(crate) fn cmp(kind: FloatKind, a: u128, b: u128) -> Option<Ordering> {
@@ -211,12 +290,17 @@ pub(crate) fn cmp(kind: FloatKind, a: u128, b: u128) -> Option<Ordering> {
 }
 
 pub(crate) fn from_int(kind: FloatKind, v: u128, signed: bool) -> u128 {
+    from_int_rm(kind, v, signed, Rm::Nearest)
+}
+
+/// [`from_int`] rounded in mode `rm`.
+pub(crate) fn from_int_rm(kind: FloatKind, v: u128, signed: bool, rm: Rm) -> u128 {
     let neg = signed && (v as i128) < 0;
     let mag = if neg { (v as i128).unsigned_abs() } else { v };
     if mag == 0 {
         return pack_zero(Fmt::of(kind), false);
     }
-    pack(kind, neg, 127, mag)
+    pack_rm(kind, neg, 127, mag, rm)
 }
 
 /// Truncation toward zero: `(negative, magnitude)`; `None` for
@@ -237,10 +321,10 @@ pub(crate) fn trunc(kind: FloatKind, a: u128) -> Option<(bool, u128)> {
     }
 }
 
-/// The float nearest `±mag` (`mag`: magnitude limbs, least significant
-/// first), round to nearest even, overflowing to infinity (`APFloat`
-/// `convertFromAPInt`): the conversion of a `_BitInt` wider than 128 bits.
-pub(crate) fn from_limbs(kind: FloatKind, neg: bool, mag: &[u64]) -> u128 {
+/// `±mag` (`mag`: magnitude limbs, least significant first) rounded in
+/// mode `rm` (`APFloat::convertFromAPInt`): the conversion of a `_BitInt`
+/// wider than 128 bits.
+pub(crate) fn from_limbs_rm(kind: FloatKind, neg: bool, mag: &[u64], rm: Rm) -> u128 {
     let Some(top) = mag.iter().rposition(|&w| w != 0) else {
         return pack_zero(Fmt::of(kind), false);
     };
@@ -249,7 +333,7 @@ pub(crate) fn from_limbs(kind: FloatKind, neg: bool, mag: &[u64]) -> u128 {
     let bit = |i: u32| -> u128 { u128::from(mag[(i / 64) as usize] >> (i % 64) & 1) };
     if t < 128 {
         let m = u128::from(mag[0]) | mag.get(1).map_or(0, |&w| u128::from(w) << 64);
-        return pack(kind, neg, 127, m);
+        return pack_rm(kind, neg, 127, m, rm);
     }
     // The top 128 bits, the lowest of them sticky for everything below.
     let lo = t - 127;
@@ -258,7 +342,7 @@ pub(crate) fn from_limbs(kind: FloatKind, neg: bool, mag: &[u64]) -> u128 {
         m = m << 1 | bit(i);
     }
     let below = (0..lo).any(|i| bit(i) != 0);
-    pack(kind, neg, t as i32, m | u128::from(below))
+    pack_rm(kind, neg, t as i32, m | u128::from(below), rm)
 }
 
 /// Truncation toward zero into `n` limbs: `(negative, magnitude)`;
@@ -299,6 +383,13 @@ pub(crate) fn trunc_limbs(kind: FloatKind, a: u128, n: usize) -> Option<(bool, V
 }
 
 fn add(kind: FloatKind, x: Val, y: Val) -> Val {
+    add_rm(kind, x, y, Rm::Nearest)
+}
+
+/// `x + y` before rounding; an exact zero sum of operands of opposite
+/// signs is `-0` only when rounding downward (IEEE 754-2019 §6.3).
+fn add_rm(kind: FloatKind, x: Val, y: Val, rm: Rm) -> Val {
+    let down = rm == Rm::Down;
     match (x, y) {
         // The first NaN operand (`APFloat::addOrSubtractSpecials`).
         (Val::NaN(..), _) => x,
@@ -311,7 +402,7 @@ fn add(kind: FloatKind, x: Val, y: Val) -> Val {
             }
         }
         (Val::Inf(a), _) | (_, Val::Inf(a)) => Val::Inf(a),
-        (Val::Zero(a), Val::Zero(b)) => Val::Zero(a && b),
+        (Val::Zero(a), Val::Zero(b)) => Val::Zero(if down { a || b } else { a && b }),
         (Val::Zero(_), v) | (v, Val::Zero(_)) => v,
         (Val::Fin(sa, ea, ma), Val::Fin(sb, eb, mb)) => {
             let ((sa, ea, ma), (sb, eb, mb)) = if (ea, ma) >= (eb, mb) {
@@ -323,7 +414,7 @@ fn add(kind: FloatKind, x: Val, y: Val) -> Val {
             let b = shr_sticky(mb >> 1 | (mb & 1), (ea - eb).min(200) as u32);
             let (s, m) = if sa == sb { (sa, a + b) } else { (sa, a - b) };
             if m == 0 {
-                return Val::Zero(false);
+                return Val::Zero(down);
             }
             let lz = m.leading_zeros();
             let _ = kind;
@@ -402,10 +493,16 @@ fn div(kind: FloatKind, x: Val, y: Val) -> Val {
 
 /// `a op b` in `kind`.
 pub(crate) fn bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
+    bin_rm(op, kind, a, b, Rm::Nearest)
+}
+
+/// `a op b` in `kind`, rounded in mode `rm` (every format, binary32 and
+/// binary64 included: the host's arithmetic only rounds to nearest).
+pub(crate) fn bin_rm(op: Op, kind: FloatKind, a: u128, b: u128, rm: Rm) -> Option<u128> {
     let (x, y) = (unpack(kind, a), unpack(kind, b));
     let v = match op {
-        Op::FAdd => add(kind, x, y),
-        Op::FSub => add(
+        Op::FAdd => add_rm(kind, x, y, rm),
+        Op::FSub => add_rm(
             kind,
             x,
             match y {
@@ -415,12 +512,13 @@ pub(crate) fn bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
                 // A NaN keeps its sign (`APFloat::subtract`).
                 n @ Val::NaN(..) => n,
             },
+            rm,
         ),
         Op::FMul => mul(kind, x, y),
         Op::FDiv => div(kind, x, y),
         _ => return None,
     };
-    Some(repack(kind, v))
+    Some(repack_rm(kind, v, rm))
 }
 
 /// `ilogb(a)` as `APFloat`'s `ilogb`: the unbiased exponent of a finite
@@ -477,6 +575,86 @@ mod tests {
             cast(FloatKind::Double, FloatKind::Single, d(0.1)),
             u128::from(0.1f32.to_bits())
         );
+    }
+
+    // FENV_ROUND (C23 7.6.2): binary32 `+ - *` of operands within a few
+    // binades is exact in binary64, so each directed result is checked
+    // against the exact value: up >= exact >= down, the two adjacent or
+    // equal, toward zero the smaller magnitude, and nearest the host's.
+    #[test]
+    fn directed_rounding_brackets_exact() {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let m = (x >> 40) as f32 / (1u64 << 24) as f32 + 0.5;
+            let e = ((x >> 8) % 9) as i32 - 4;
+            let v = m * 2f32.powi(e);
+            if x & 1 == 1 { -v } else { v }
+        };
+        let f = |v: f32| u128::from(v.to_bits());
+        let g = |b: u128| f64::from(f32::from_bits(b as u32));
+        for _ in 0..20_000 {
+            let (a, b) = (next(), next());
+            for (op, exact) in [
+                (Op::FAdd, f64::from(a) + f64::from(b)),
+                (Op::FSub, f64::from(a) - f64::from(b)),
+                (Op::FMul, f64::from(a) * f64::from(b)),
+            ] {
+                let r = |rm| g(bin_rm(op, FloatKind::Single, f(a), f(b), rm).unwrap());
+                let (up, down, zero) = (r(Rm::Up), r(Rm::Down), r(Rm::Zero));
+                assert!(down <= exact && exact <= up, "{op:?} {a} {b}");
+                let nearest = match op {
+                    Op::FAdd => a + b,
+                    Op::FSub => a - b,
+                    _ => a * b,
+                };
+                assert_eq!(r(Rm::Nearest), f64::from(nearest));
+                if up == down {
+                    assert_eq!(zero, exact);
+                } else {
+                    let lo = down as f32;
+                    let succ = match lo {
+                        0.0 => f32::from_bits(1),
+                        v if v > 0.0 => f32::from_bits(v.to_bits() + 1),
+                        v => f32::from_bits(v.to_bits() - 1),
+                    };
+                    assert_eq!(f64::from(succ), up, "{op:?} {a} {b}: not adjacent");
+                    assert_eq!(zero, if exact > 0.0 { down } else { up });
+                    let away = r(Rm::Away);
+                    assert!(away == up || away == down);
+                }
+            }
+        }
+    }
+
+    // Overflow goes to the largest finite value in the directions that
+    // round toward zero, and an exact zero sum is -0 only downward.
+    #[test]
+    fn directed_overflow_and_zero_sign() {
+        let k = FloatKind::Double;
+        let max = d(f64::MAX);
+        let up = bin_rm(Op::FAdd, k, max, max, Rm::Up).unwrap();
+        assert_eq!(up, d(f64::INFINITY));
+        assert_eq!(bin_rm(Op::FAdd, k, max, max, Rm::Down).unwrap(), max);
+        assert_eq!(bin_rm(Op::FAdd, k, max, max, Rm::Zero).unwrap(), max);
+        let nmax = d(-f64::MAX);
+        assert_eq!(bin_rm(Op::FAdd, k, nmax, nmax, Rm::Up).unwrap(), nmax);
+        assert_eq!(bin_rm(Op::FAdd, k, nmax, nmax, Rm::Down).unwrap(), d(f64::NEG_INFINITY));
+        assert_eq!(bin_rm(Op::FSub, k, d(1.0), d(1.0), Rm::Down).unwrap(), d(-0.0));
+        assert_eq!(bin_rm(Op::FSub, k, d(1.0), d(1.0), Rm::Up).unwrap(), d(0.0));
+        assert_eq!(bin_rm(Op::FAdd, k, d(0.0), d(-0.0), Rm::Down).unwrap(), d(-0.0));
+        assert_eq!(bin_rm(Op::FAdd, k, d(0.0), d(-0.0), Rm::Zero).unwrap(), d(0.0));
+        let third = |rm| bin_rm(Op::FDiv, k, d(1.0), d(3.0), rm).unwrap();
+        assert_eq!(third(Rm::Up), 0x3FD5_5555_5555_5556);
+        assert_eq!(third(Rm::Down), 0x3FD5_5555_5555_5555);
+        let x87max = pack_max(Fmt::of(FloatKind::X87Extended), false);
+        assert_eq!(x87max, 0x7FFE_FFFF_FFFF_FFFF_FFFF);
+        let tiny = bin_rm(Op::FMul, k, d(f64::MIN_POSITIVE), d(1e-300), Rm::Up).unwrap();
+        assert_eq!(tiny, 1);
+        assert_eq!(from_int_rm(FloatKind::Single, (1u128 << 24) + 1, false, Rm::Up), 0x4B80_0001);
+        assert_eq!(cast_rm(k, FloatKind::Single, d(0.1), Rm::Down), 0x3DCC_CCCC);
     }
 
     // x87 extended: 1/3 has a 64-bit significand.

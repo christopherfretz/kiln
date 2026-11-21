@@ -288,6 +288,14 @@ pub(crate) struct Fx {
     /// [`kiln_ast::fp::FpOverride::strict_fn`]): its FP operations are
     /// `llvm.experimental.constrained.*` calls (WP-1744, `crate::fp`).
     pub strict: bool,
+    /// The call sites of a [`Fx::strict`] function are `strictfp` (clang
+    /// `CurFuncDecl->usesFPIntrin()`: a parsed body, or a thunk's
+    /// method's); otherwise only the calls the constrained builder
+    /// creates itself, not [`Cg::emit_call_op`]'s (WP-1798).
+    pub strict_calls: bool,
+    /// The calls [`Cg::emit_call_op`] made (clang `EmitCall`, which
+    /// replaces the call's attributes).
+    pub emit_calls: Vec<u32>,
     /// clang's per-function `SanOpts` (WP-675, `crate::ubsan`).
     pub san: kiln_ast::sanitize::SanitizerSet,
     /// The sanitizers an ignorelist removes from the function (WP-1032,
@@ -371,6 +379,8 @@ impl Fx {
             fp_ovr: kiln_ast::fp::FpOverride::NONE,
             fp_attrs_off: 0,
             strict: false,
+            strict_calls: false,
+            emit_calls: Vec::new(),
             san: kiln_ast::sanitize::SanitizerSet::NONE,
             san_ignored: kiln_ast::sanitize::SanitizerSet::NONE,
             ub_traps: Vec::new(),
@@ -513,7 +523,19 @@ impl Cg<'_> {
         self.f = Fx::empty();
         self.f.fir = Fir::new(params);
         self.start_fp();
-        self.f.strict = thunk.is_none() && body.is_some_and(|b| ast.stmts.is_strict_fn(b));
+        // A function whose definition's FP state is constrained (clang
+        // `FunctionDecl::usesFPIntrin`: the parser marks a body under
+        // constrained command-line options too). Under constrained
+        // command-line options a thunk is `strictfp` (clang `StartFunction`
+        // without a declaration), and so is a body whose own state does
+        // not undo them: an implicit member's, but not one a pragma makes
+        // unconstrained (`FENV_ROUND FE_TONEAREST` under `-frounding-math`,
+        // WP-1798).
+        self.f.strict_calls = body.is_some_and(|b| ast.stmts.is_strict_fn(b));
+        let own = body.and_then(|b| ast.stmts.fn_body_fp(b));
+        let cmd = self.opts.fp.constrained()
+            && (thunk.is_some() || own.is_none_or(|o| o.apply(self.opts.fp).constrained()));
+        self.f.strict = cmd || (thunk.is_none() && self.f.strict_calls);
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;

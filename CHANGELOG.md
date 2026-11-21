@@ -162,9 +162,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   operations `llvm.experimental.constrained.*` calls with the scope's
   rounding and exception metadata, as clang does; constant expressions
   are still evaluated in the default environment. clang's "is illegal
-  when precise is disabled" family of errors is reported. A directed
-  `FENV_ROUND` mode and `clang fp eval_method(double|extended)` remain
-  errors.
+  when precise is disabled" family of errors is reported.
+- Directed rounding modes and evaluation methods (WP-1744): `#pragma
+  STDC FENV_ROUND FE_UPWARD|FE_DOWNWARD|FE_TOWARDZERO|FE_TONEARESTFROMZERO`
+  emits clang 22's constrained intrinsics with the mode, and constant
+  evaluation rounds every operation, conversion and literal in the mode
+  written at it, in every float format (functions and templates keep
+  their definition's mode). `#pragma clang fp eval_method(double|extended)`
+  promotes lower-ranked operands as clang does, in code and in constant
+  evaluation, with clang's `__FLT_EVAL_METHOD__` and fast-math errors.
+- The floating-point environment flags (WP-1798): `-frounding-math`,
+  `-ftrapping-math`, `-ffp-exception-behavior=maytrap|strict`,
+  `-ffp-model=strict` and `-ffp-eval-method=double|extended` are no
+  longer errors. They set the unit's rounding, exception and evaluation
+  state, emitting clang 22's IR (`strictfp` functions and constrained
+  intrinsics), its `__FLT_EVAL_METHOD__` and its `option 'ffp-eval-method'
+  cannot be used with ...` errors.
+- A function with many nested blocks or a long chain of `const` locals
+  no longer takes minutes to compile when its floating-point environment
+  is dynamic (`-frounding-math`, or `FENV_ACCESS ON` in a block): the
+  check that keeps such code from being folded is now linear (WP-1798).
 - Constant evaluation of the expressions that reported "not supported
   yet" (WP-1741): a `case` label nested in a statement of its switch
   body (Duff's device), the taken branch of an `if constexpr` whose

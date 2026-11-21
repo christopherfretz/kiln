@@ -298,6 +298,7 @@ impl Preprocessor<'_, '_> {
             comment_handler: _,
             modules,
             module_lines: _,
+            fp_eval_pragma: _,
             name_gate: _,
             predef_file,
             state_hooks: _,

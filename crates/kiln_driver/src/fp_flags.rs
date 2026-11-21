@@ -3,12 +3,13 @@
 //! `-ffast-math`, its parts, `-ffp-model=`, `-ffp-contract=` and the
 //! floating-point environment flags, in command-line order.
 //!
-//! The flags that would need the floating-point environment (trapping,
-//! dynamic rounding, a wider evaluation method) are errors, never
-//! silently ignored: kiln does not implement `#pragma STDC FENV_ACCESS`
-//! semantics (spec/codegen.md "Floating-point semantics").
+//! The environment flags (`-f[no-]trapping-math`, `-f[no-]rounding-math`,
+//! `-ffp-exception-behavior=`, `-ffp-model=strict`, `-ffp-eval-method=`)
+//! set the translation unit's FP state as the pragmas set a scope's
+//! (WP-1798, spec/codegen.md "Floating-point semantics");
+//! `-fexcess-precision=16` stays an error.
 
-use kiln_ast::fp::{FpContract, FpOptions};
+use kiln_ast::fp::{FpContract, FpEval, FpExcept, FpOptions};
 use kiln_codegen::ComplexRange;
 
 use crate::args::ArgError;
@@ -63,6 +64,10 @@ pub struct FpFlags {
 
 /// The floating-point semantics a command line selects.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent cc1 flags, as clang's driver tracks them"
+)]
 pub struct FpModel {
     /// The translation unit's FP options (clang's cc1 `-menable-no-infs`,
     /// `-mreassociate`, ..., `-ffp-contract=`).
@@ -75,6 +80,11 @@ pub struct FpModel {
     pub fast_math: bool,
     /// clang's cc1 `-funsafe-math-optimizations`: `__ARM_FP_FAST`.
     pub unsafe_math: bool,
+    /// `-ffp-eval-method=` was given (any value; clang
+    /// `FEM_UnsetOnCommandLine` otherwise): `__FLT_EVAL_METHOD__` is
+    /// [`FpOptions::eval`]'s, and `#pragma clang fp reassociate(on)` /
+    /// `reciprocal(on)` are errors.
+    pub eval_on_command_line: bool,
     /// The `-fdenormal-fp-math=` mode, `"output,input"` (`None`: IEEE).
     pub denormal: Option<String>,
     /// The `_Complex` multiply/divide algorithm (clang's cc1
@@ -179,13 +189,13 @@ struct State {
     assoc: bool,
     recip: bool,
     signed_zeros: bool,
-    /// The flag that made math trap (`-ftrapping-math`,
-    /// `-ffp-exception-behavior=maytrap|strict`, `-ffp-model=strict`).
-    trapping: Option<String>,
-    /// The flag that turned on dynamic rounding.
-    rounding: Option<String>,
-    /// The flag that selected a wider evaluation method.
-    eval: Option<String>,
+    /// clang's cc1 `-ffp-exception-behavior=` (`None`: not given;
+    /// `-f[no-]trapping-math`, `-ffp-model=strict` set it too).
+    except: Option<FpExcept>,
+    /// `-frounding-math` (`-ffp-model=strict` too).
+    rounding: bool,
+    /// `-ffp-eval-method=` (`None`: not given).
+    eval: Option<FpEval>,
     /// The flag that selected `_Float16` without excess precision.
     excess: Option<String>,
     contract: &'static str,
@@ -216,8 +226,8 @@ impl State {
             assoc: false,
             recip: false,
             signed_zeros: true,
-            trapping: None,
-            rounding: None,
+            except: None,
+            rounding: false,
             eval: None,
             excess: None,
             contract: "on",
@@ -245,8 +255,8 @@ impl State {
         self.recip = true;
         self.approx_func = true;
         self.signed_zeros = false;
-        self.trapping = None;
-        self.rounding = None;
+        self.except = None;
+        self.rounding = false;
         self.contract = "fast";
         self.seen_unsafe = true;
     }
@@ -262,7 +272,6 @@ impl State {
     }
 
     fn apply(&mut self, a: &str, ofast: bool) {
-        let owned = || Some(a.to_owned());
         match a {
             "-Ofast" if ofast => self.fast_math(a),
             "-Ofast" => {}
@@ -286,7 +295,7 @@ impl State {
                 self.recip = true;
                 self.signed_zeros = false;
                 self.approx_func = true;
-                self.trapping = None;
+                self.except = None;
                 self.contract = "fast";
                 self.seen_unsafe = true;
             }
@@ -313,10 +322,10 @@ impl State {
             "-fno-reciprocal-math" => self.recip = false,
             "-fsigned-zeros" => self.signed_zeros = true,
             "-fno-signed-zeros" => self.signed_zeros = false,
-            "-ftrapping-math" => self.trapping = owned(),
-            "-fno-trapping-math" => self.trapping = None,
-            "-frounding-math" => self.rounding = owned(),
-            "-fno-rounding-math" => self.rounding = None,
+            "-ftrapping-math" => self.except = Some(FpExcept::Strict),
+            "-fno-trapping-math" => self.except = Some(FpExcept::Ignore),
+            "-frounding-math" => self.rounding = true,
+            "-fno-rounding-math" => self.rounding = false,
             "-fcx-limited-range" => self.set_range(Range::Kiln(ComplexRange::Basic), a),
             "-fcx-fortran-rules" => self.set_range(Range::Kiln(ComplexRange::Improved), a),
             "-fno-cx-limited-range" | "-fno-cx-fortran-rules" => {
@@ -355,8 +364,8 @@ impl State {
                 "aggressive" if self.clang22 => self.fast_math(a),
                 "aggressive" => self.aggressive19 = true,
                 "strict" => {
-                    self.trapping = owned();
-                    self.rounding = owned();
+                    self.except = Some(FpExcept::Strict);
+                    self.rounding = true;
                     self.contract = "off";
                 }
                 _ => {}
@@ -365,9 +374,17 @@ impl State {
                 self.set_range(Range::Kiln(ComplexRange::Full), a);
             }
         } else if let Some(v) = a.strip_prefix("-ffp-exception-behavior=") {
-            self.trapping = (v != "ignore").then(owned).flatten();
+            self.except = Some(match v {
+                "maytrap" => FpExcept::MayTrap,
+                "strict" => FpExcept::Strict,
+                _ => FpExcept::Ignore,
+            });
         } else if let Some(v) = a.strip_prefix("-ffp-eval-method=") {
-            self.eval = (v != "source").then(owned).flatten();
+            self.eval = Some(match v {
+                "double" => FpEval::Double,
+                "extended" => FpEval::Extended,
+                _ => FpEval::Source,
+            });
         } else if let Some(v) = a.strip_prefix("-fexcess-precision=") {
             self.excess = (v == "16").then(owned).flatten();
         } else if let Some(v) = a.strip_prefix("-fcomplex-arithmetic=") {
@@ -381,13 +398,8 @@ impl State {
     }
 
     fn finish(self, errors: &mut Vec<ArgError>) -> FpModel {
-        let mut named: Vec<&String> = Vec::new();
-        for f in [&self.trapping, &self.rounding, &self.eval, &self.excess].into_iter().flatten() {
-            // One error per flag (`-ffp-model=strict` sets two fields).
-            if !named.contains(&f) {
-                named.push(f);
-                errors.push(ArgError::UnsupportedByKiln(f.clone()));
-            }
+        if let Some(f) = &self.excess {
+            errors.push(ArgError::UnsupportedByKiln(f.clone()));
         }
         if self.aggressive19 {
             errors.push(ArgError::UnsupportedValue("-ffp-model=".into(), "aggressive".into()));
@@ -405,8 +417,20 @@ impl State {
                 ComplexRange::Full
             }
         };
-        let unsafe_math = self.assoc && self.recip && !self.signed_zeros && self.approx_func;
+        // Trapping math (clang's `TrappingMath`: strict exceptions) keeps
+        // reassociation and so the unsafe and fast math off.
+        let trapping = self.except == Some(FpExcept::Strict);
+        let reassoc = self.assoc && !self.signed_zeros && !trapping;
+        let unsafe_math = reassoc && self.recip && self.approx_func;
         let fast_math = !self.honor_infs && !self.honor_nans && !self.math_errno && unsafe_math;
+        if self.eval.is_some() {
+            // clang `FixupInvocation`: an evaluation method with a
+            // value-changing option, one error per option.
+            let opts = [(self.approx_func, 0), (reassoc, 1), (self.recip, 2)];
+            for (_, i) in opts.into_iter().filter(|o| o.0) {
+                errors.push(ArgError::IncompatibleFpEvalMethod(i));
+            }
+        }
         FpModel {
             opts: FpOptions {
                 contract: match self.contract {
@@ -414,18 +438,22 @@ impl State {
                     "on" => FpContract::On,
                     _ => FpContract::Fast,
                 },
-                reassoc: self.assoc && !self.signed_zeros,
+                reassoc,
                 arcp: self.recip,
                 nnan: !self.honor_nans,
                 ninf: !self.honor_infs,
                 nsz: !self.signed_zeros,
                 afn: self.approx_func,
                 math_errno: self.math_errno,
+                except: self.except,
+                rounding_math: self.rounding,
+                eval: self.eval.unwrap_or_default(),
                 ..FpOptions::default()
             },
             backend_fuse: self.contract == "fast",
             fast_math,
             unsafe_math,
+            eval_on_command_line: self.eval.is_some(),
             denormal: self.denormal,
             complex_range,
         }
@@ -517,17 +545,77 @@ mod tests {
     }
 
     #[test]
-    fn environment_flags_are_errors() {
+    fn environment_flags() {
+        // clang 19 and 22 `-###`: the cc1 `-frounding-math`,
+        // `-ffp-exception-behavior=` and `-ffp-eval-method=` they pass.
+        let ok = |a: &[&str]| {
+            let (m, e) = model(a);
+            assert!(e.is_empty(), "{a:?}: {e:?}");
+            m
+        };
+        let m = ok(&["-frounding-math"]);
+        assert!(m.opts.rounding_math && m.opts.except.is_none());
+        assert_eq!(m.opts.rounding(), kiln_ast::fp::FpRound::Dynamic);
+        assert!(m.opts.constrained() && m.opts.exceptions() == FpExcept::Ignore);
+        assert!(!ok(&["-frounding-math", "-fno-rounding-math"]).opts.constrained());
+        assert!(!ok(&["-frounding-math", "-ffast-math"]).opts.rounding_math);
+        let m = ok(&["-ffp-model=strict"]);
+        assert!(m.opts.rounding_math && m.opts.except == Some(FpExcept::Strict));
+        assert_eq!(m.opts.contract, FpContract::Off);
+        let m = ok(&["-ffp-model=strict", "-ffp-model=precise"]);
+        assert!(m.opts.rounding_math && m.opts.except == Some(FpExcept::Strict));
+        assert_eq!(m.opts.contract, FpContract::On);
+        let m = ok(&["-ffp-model=strict", "-fno-trapping-math"]);
+        assert!(m.opts.rounding_math && m.opts.except == Some(FpExcept::Ignore));
+        assert_eq!(ok(&["-ftrapping-math"]).opts.except, Some(FpExcept::Strict));
+        assert_eq!(ok(&["-fno-trapping-math"]).opts.except, Some(FpExcept::Ignore));
+        assert_eq!(ok(&["-ftrapping-math", "-ffast-math"]).opts.except, None);
+        assert_eq!(
+            ok(&["-ftrapping-math", "-fno-trapping-math"]).opts.except,
+            Some(FpExcept::Ignore)
+        );
+        let m = ok(&["-ffp-exception-behavior=maytrap"]);
+        assert!(m.opts.except == Some(FpExcept::MayTrap) && !m.opts.rounding_math);
+        assert_eq!(
+            ok(&["-ffp-exception-behavior=maytrap", "-fno-trapping-math"]).opts.except,
+            Some(FpExcept::Ignore)
+        );
+        // Strict exceptions keep reassociation, and so the unsafe and
+        // fast math, off; may-trap ones do not.
+        let m = ok(&["-ffast-math", "-ftrapping-math"]);
+        assert!(!m.opts.reassoc && m.opts.arcp && m.opts.afn && m.opts.nsz);
+        assert!(!m.unsafe_math && !m.fast_math);
+        assert!(!ok(&["-ftrapping-math", "-fassociative-math", "-fno-signed-zeros"]).opts.reassoc);
+        let m = ok(&[
+            "-ffp-exception-behavior=maytrap",
+            "-fassociative-math",
+            "-fno-signed-zeros",
+            "-freciprocal-math",
+            "-fapprox-func",
+        ]);
+        assert!(m.opts.reassoc && m.unsafe_math);
+        let m = ok(&["-ffp-eval-method=double"]);
+        assert!(m.eval_on_command_line && m.opts.eval == FpEval::Double);
+        let m = ok(&["-ffp-eval-method=source"]);
+        assert!(m.eval_on_command_line && m.opts.eval == FpEval::Source);
+        assert!(!ok(&[]).eval_on_command_line);
+        assert_eq!(ok(&["-ffp-eval-method=extended"]).opts.eval, FpEval::Extended);
+        // With a value-changing option: one error per option (clang
+        // `FixupInvocation`).
         let e = |a: &[&str]| model(a).1;
         assert_eq!(
-            e(&["-frounding-math"]),
-            [ArgError::UnsupportedByKiln("-frounding-math".into())]
+            e(&["-ffp-eval-method=source", "-ffast-math"]),
+            [0, 1, 2].map(ArgError::IncompatibleFpEvalMethod)
         );
-        assert_eq!(e(&["-ffp-model=strict"]).len(), 1);
-        assert!(e(&["-ffp-model=strict", "-fno-rounding-math", "-fno-trapping-math"]).is_empty());
-        assert!(e(&["-ftrapping-math", "-ffast-math"]).is_empty());
-        assert!(e(&["-ffp-exception-behavior=ignore", "-ffp-eval-method=source"]).is_empty());
-        assert_eq!(e(&["-ffp-eval-method=double"]).len(), 1);
+        assert_eq!(
+            e(&["-ffp-eval-method=double", "-fapprox-func", "-freciprocal-math"]),
+            [0, 2].map(ArgError::IncompatibleFpEvalMethod)
+        );
+        assert!(e(&["-ffp-eval-method=double", "-fassociative-math"]).is_empty());
+        assert_eq!(
+            e(&["-fexcess-precision=16"]),
+            [ArgError::UnsupportedByKiln("-fexcess-precision=16".into())]
+        );
         assert_eq!(
             e(&["-ffp-contract=bogus"]),
             [ArgError::UnsupportedValue("-ffp-contract=".into(), "bogus".into())]

@@ -226,6 +226,21 @@ struct Breakable {
     cont_depth: usize,
 }
 
+/// The rounding code ([`crate::softfloat::Rm::code`]) of the declared
+/// `#pragma STDC FENV_ROUND` mode `r` of an operation (0: to nearest,
+/// `FENV_ROUND FE_DYNAMIC` included, as clang's `getActiveRoundingMode`).
+pub(crate) fn round_code(r: Option<kiln_ast::fp::FpRound>) -> u32 {
+    use crate::softfloat::Rm;
+    use kiln_ast::fp::FpRound;
+    match r {
+        Some(FpRound::Upward) => Rm::Up.code(),
+        Some(FpRound::Downward) => Rm::Down.code(),
+        Some(FpRound::TowardZero) => Rm::Zero.code(),
+        Some(FpRound::NearestAway) => Rm::Away.code(),
+        _ => Rm::Nearest.code(),
+    }
+}
+
 pub(crate) fn float_code(k: FloatKind) -> u32 {
     match k {
         FloatKind::Half => 0,
@@ -4435,9 +4450,10 @@ impl Compiler<'_> {
                 let one = self.reg();
                 let bits = crate::arith::int_to_float(k, 1, true);
                 self.konst(one, bits);
+                let rc = round_code(self.ast().exprs.fp_round(e));
                 self.emit_at(
                     if inc { Op::FAdd } else { Op::FSub },
-                    float_code(k),
+                    float_code(k) | rc << 4,
                     &[new, old, one],
                     e,
                 );
@@ -4904,7 +4920,8 @@ impl Compiler<'_> {
         match self.kind(ty) {
             TyKind::Float(k) => match float_op(iop) {
                 Some(fop) => {
-                    self.emit_at(fop, float_code(k), &[dst, ra, rb], e);
+                    let rc = round_code(self.ast().exprs.fp_round(e));
+                    self.emit_at(fop, float_code(k) | rc << 4, &[dst, ra, rb], e);
                 }
                 None => unreachable!(
                     "sema accepts only `+ - * /` on a floating operand ([expr.mul]/2, [expr.shift]/1, [expr.bit.and]/1): {iop:?}"
@@ -4945,7 +4962,9 @@ impl Compiler<'_> {
             }
             (TyKind::Int { .. } | TyKind::Bool, TyKind::Float(k)) => {
                 let (w, s) = int_of(fk).unwrap_or((32, true));
-                self.emit_at(Op::IToF, w | u32::from(s) << 8 | float_code(k) << 9, &[dst, src], e);
+                let rc = round_code(self.ast().exprs.fp_round(e));
+                let aux = w | u32::from(s) << 8 | float_code(k) << 9 | rc << 13;
+                self.emit_at(Op::IToF, aux, &[dst, src], e);
             }
             (TyKind::Float(k), TyKind::Bool) => {
                 self.emit(Op::FToBool, float_code(k), &[dst, src]);
@@ -4955,7 +4974,9 @@ impl Compiler<'_> {
                 self.emit_at(Op::FToI, aux, &[dst, src], e);
             }
             (TyKind::Float(a), TyKind::Float(b)) => {
-                self.emit_at(Op::FCast, float_code(a) | float_code(b) << 4, &[dst, src], e);
+                let rc = round_code(self.ast().exprs.fp_round(e));
+                let aux = float_code(a) | float_code(b) << 4 | rc << 8;
+                self.emit_at(Op::FCast, aux, &[dst, src], e);
             }
             (TyKind::Ptr(_), TyKind::Bool) => {
                 self.emit(Op::PtrToBool, 0, &[dst, src]);

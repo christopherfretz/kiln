@@ -108,6 +108,9 @@ pub struct ParseOptions {
     pub char8: Option<bool>,
     /// The command line's FP semantics ([`kiln_sema::Sema::fp`]).
     pub fp: kiln_ast::fp::FpOptions,
+    /// `-ffp-eval-method=` was given
+    /// ([`kiln_sema::Sema::fp_eval_on_command_line`]).
+    pub fp_eval_on_command_line: bool,
     /// The `AArch64` `sve` target feature (`-march=armv8-a+sve`;
     /// [`kiln_sema::Sema::sve`]).
     pub sve: bool,
@@ -194,6 +197,7 @@ impl Default for ParseOptions {
             short_enums: false,
             char8: None,
             fp: kiln_ast::fp::FpOptions::default(),
+            fp_eval_on_command_line: false,
             sve: false,
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
@@ -386,6 +390,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.clang_constexpr_builtin = clang_constexpr_builtin;
     s.fp = opts.fp;
+    s.fp_eval_on_command_line = opts.fp_eval_on_command_line;
     s.sve = opts.sve;
     s.sve_vector_bits = opts.sve_vector_bits;
     s.aarch64_cpu_valid = opts.aarch64_cpu_valid;

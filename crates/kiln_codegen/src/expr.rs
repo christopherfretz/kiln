@@ -1431,7 +1431,7 @@ impl Cg<'_> {
             UnaryOp::Minus | UnaryOp::Plus if self.f16_excess(q) => {
                 let v = self.emit_promoted(e)?;
                 let t = self.lty(q);
-                Ok(self.cast(CastOp::FPTrunc, v, t))
+                Ok(self.unpromote(v, t))
             }
             UnaryOp::Plus | UnaryOp::Extension => self.emit_scalar(s),
             UnaryOp::Minus => {
@@ -1634,7 +1634,7 @@ impl Cg<'_> {
             _ if self.f16_excess(ast.exprs.get(e).ty()) && is_promotable_op(op) => {
                 let v = self.emit_promoted(e)?;
                 let t = self.lty(ast.exprs.get(e).ty());
-                self.cast(CastOp::FPTrunc, v, t)
+                self.unpromote(v, t)
             }
             _ => {
                 let lv = self.emit_scalar(l)?;
@@ -1670,6 +1670,25 @@ impl Cg<'_> {
         }
     }
 
+    /// clang `EmitUnPromotedValue`: the `fptrunc` of an excess-precision
+    /// result back to its type, emitted outside the expression's
+    /// `CGFPOptionsRAII`, so under the command line's rounding and
+    /// exception behavior rather than a pragma's (still constrained in a
+    /// `strictfp` function).
+    pub(crate) fn unpromote(&mut self, v: V, t: LTy) -> V {
+        self.cast_unscoped(CastOp::FPTrunc, v, t)
+    }
+
+    /// A cast under the command line's FP options (clang
+    /// `EmitPromotedValue`/`EmitUnPromotedValue`: the `IRBuilder`'s
+    /// function defaults, outside an expression's `CGFPOptionsRAII`).
+    pub(crate) fn cast_unscoped(&mut self, op: CastOp, v: V, t: LTy) -> V {
+        let scoped = std::mem::replace(&mut self.f.fp, self.opts.fp);
+        let r = self.cast(op, v, t);
+        self.f.fp = scoped;
+        r
+    }
+
     /// clang `ScalarExprEmitter::EmitPromoted` to `float`: `+ - * /` and
     /// unary `-`/`+` of an excess-precision `_Float16` keep their operands
     /// in `float`; anything else is emitted and extended.
@@ -1697,7 +1716,7 @@ impl Cg<'_> {
             }
         }
         let v = self.emit_scalar(e)?;
-        Ok(self.cast(CastOp::FPExt, v, LTy::FLOAT))
+        Ok(self.cast_unscoped(CastOp::FPExt, v, LTy::FLOAT))
     }
 
     /// Binary arithmetic, comparison and pointer arithmetic on emitted

@@ -2109,31 +2109,16 @@ fn coverage_mapping_end_to_end() {
     }
 }
 
-/// spec/driver.md "Floating-point flags" (WP-806): flags whose final
-/// effect needs the floating-point environment ([cfenv.syn]) or promoted
-/// complex division are driver errors, never ignored; a later flag that
-/// restores the default clears the error.
+/// spec/driver.md "Floating-point flags" (WP-806, WP-1798): the
+/// environment flags are accepted; promoted complex division and
+/// `-fexcess-precision=16` are driver errors, never ignored, and
+/// `-ffp-eval-method=` with a value-changing option is clang's error.
 #[test]
-fn fp_environment_flags_rejected() {
+fn fp_environment_flags() {
     let d = scratch("fpenv-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
     for (flags, want) in [
-        (&["-frounding-math"][..], "'-frounding-math' is not supported by kiln"),
-        (
-            &["-ffp-exception-behavior=strict"],
-            "'-ffp-exception-behavior=strict' is not supported by kiln",
-        ),
-        (
-            &["-ffp-exception-behavior=maytrap"],
-            "'-ffp-exception-behavior=maytrap' is not supported by kiln",
-        ),
-        (&["-ffp-model=strict"], "'-ffp-model=strict' is not supported by kiln"),
-        // `precise` keeps `strict`'s rounding and exception behavior.
-        (
-            &["-ffp-model=strict", "-ffp-model=precise"],
-            "'-ffp-model=strict' is not supported by kiln",
-        ),
-        (&["-ffp-eval-method=double"], "'-ffp-eval-method=double' is not supported by kiln"),
+        (&["-fexcess-precision=16"][..], "'-fexcess-precision=16' is not supported by kiln"),
         (
             &["-ffp-model=fast"],
             "'-ffp-model=fast (promoted complex arithmetic; add -fcomplex-arithmetic=basic)' is not supported by kiln",
@@ -2141,6 +2126,10 @@ fn fp_environment_flags_rejected() {
         (
             &["-fclang-compat=19", "-ffp-model=aggressive"],
             "unsupported argument 'aggressive' to option '-ffp-model='",
+        ),
+        (
+            &["-ffp-eval-method=double", "-fapprox-func"],
+            "option 'ffp-eval-method' cannot be used with option 'fapprox-func'",
         ),
     ] {
         let mut args = flags.to_vec();
@@ -2153,7 +2142,15 @@ fn fp_environment_flags_rejected() {
         );
     }
     for flags in [
-        &["-frounding-math", "-fno-rounding-math"][..],
+        &["-frounding-math"][..],
+        &["-ftrapping-math"],
+        &["-ffp-exception-behavior=maytrap"],
+        &["-ffp-exception-behavior=strict"],
+        &["-ffp-model=strict"],
+        &["-ffp-model=strict", "-ffp-model=precise"],
+        &["-ffp-eval-method=double"],
+        &["-ffp-eval-method=extended"],
+        &["-frounding-math", "-fno-rounding-math"],
         &["-ffp-model=strict", "-fno-rounding-math", "-ffp-exception-behavior=ignore"],
         &["-ffp-model=fast", "-fcx-limited-range"],
         &["-fclang-compat=19", "-ffp-model=fast"],

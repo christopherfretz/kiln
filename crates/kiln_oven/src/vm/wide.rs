@@ -208,7 +208,8 @@ impl Oven {
                 let v = self.wide_load(a as u64, ty, ka)?;
                 let neg = signed && bi::is_neg(&v);
                 let mag = if neg { bi::neg(&v) } else { v };
-                return Ok(Some(softfloat::from_limbs(float_of(x), neg, &mag)));
+                let rm = softfloat::Rm::from_code(x >> 4);
+                return Ok(Some(softfloat::from_limbs_rm(float_of(x), neg, &mag, rm)));
             }
             wide::FROM_FLOAT => {
                 let kind = float_of(x);

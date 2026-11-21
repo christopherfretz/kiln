@@ -234,6 +234,11 @@ impl Cg<'_> {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
         self.def_attrs(&mut a);
+        if self.opts.fp.constrained() {
+            // clang `StartFunction` without a declaration: `strictfp`
+            // when the command line's FP options are constrained (WP-1798).
+            a.push(Attr::Flag(AttrKind::StrictFP));
+        }
         self.vscale_attr(&mut a, None);
         self.target_attrs(&mut a);
         if self.is_x86() {
@@ -259,6 +264,7 @@ impl Cg<'_> {
         self.f = Fx::empty();
         self.f.fir = Fir::new(Vec::new());
         self.start_fp();
+        self.f.strict = self.opts.fp.constrained();
         self.f.func = Some(f);
         self.f.san = self.opts.sanitize.kinds;
         self.ignore_sanitizers(f, None);
@@ -286,6 +292,8 @@ impl Cg<'_> {
         self.emit_return_block();
         self.emit_epilog()?;
         self.finish_eh();
+        // A `strictfp` initialization function's builder calls (WP-1798).
+        self.strict_call_sites();
         self.emit_unreachable_if_used();
         if let Some(e) = self.f.error.take() {
             return Err(e);

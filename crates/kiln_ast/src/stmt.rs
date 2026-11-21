@@ -646,8 +646,14 @@ impl StmtArena {
 
     /// Whether function body `s` is `strictfp` ([`Self::mark_strict_fn`]).
     pub fn is_strict_fn(&self, s: StmtId) -> bool {
+        self.fn_body_fp(s).is_some_and(|fp| fp.strict_fn)
+    }
+
+    /// The FP state of function body `s` (its compound statement, or a
+    /// function-try-block's): the state at the definition.
+    pub fn fn_body_fp(&self, s: StmtId) -> Option<crate::fp::FpOverride> {
         let s = if self.get(s).kind == StmtKind::CXXTryStmt { self.try_block(s) } else { s };
-        self.get(s).kind == StmtKind::CompoundStmt && self.compound_fp(s).strict_fn
+        (self.get(s).kind == StmtKind::CompoundStmt).then(|| self.compound_fp(s))
     }
 
     pub(crate) fn clear_return_nrvo(&mut self, s: StmtId) {

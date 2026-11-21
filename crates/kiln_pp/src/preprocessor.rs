@@ -313,6 +313,10 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) syms: Syms,
     /// Directive-name classification by symbol.
     pub(crate) dirs: crate::directive::DirTable,
+    /// The `#pragma clang fp eval_method` whose scope the parser is in
+    /// (clang `Preprocessor::getLastFPEvalPragmaLocation`): set and
+    /// restored by the parser; `__FLT_EVAL_METHOD__` is an error there.
+    pub(crate) fp_eval_pragma: Option<Loc>,
     pub(crate) counter: u32,
     pub(crate) once_files: FxHashSet<FileId>,
     /// Files with a detected include guard, and its macro.
@@ -439,6 +443,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             syms,
             dirs: crate::directive::DirTable::new(interner),
             counter: 0,
+            fp_eval_pragma: None,
             once_files: FxHashSet::default(),
             guards: FxHashMap::default(),
             if_ndef: None,
@@ -540,6 +545,19 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// The source manager.
     pub fn source_manager(&self) -> &'a SourceManager {
         self.sm
+    }
+
+    /// The `#pragma clang fp eval_method` in effect, if any
+    /// ([`Self::set_fp_eval_pragma`]).
+    pub fn fp_eval_pragma(&self) -> Option<Loc> {
+        self.fp_eval_pragma
+    }
+
+    /// Enters (`Some`: the pragma's location) or leaves the scope of a
+    /// `#pragma clang fp eval_method` (clang
+    /// `Preprocessor::setCurrentFPEvalMethod`, called by sema).
+    pub fn set_fp_eval_pragma(&mut self, at: Option<Loc>) {
+        self.fp_eval_pragma = at;
     }
 
     /// The identifier interner.
