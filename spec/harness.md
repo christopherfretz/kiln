@@ -2103,14 +2103,24 @@ manual / M4-gate check.
 [--unit-group <group>]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
 
-0. three in-process lints, each listing every problem it finds:
+0. four in-process lints, each listing every problem it finds:
    `cargo xtask diag-split --check` (kiln_diag's id and group tables are
    in their area files with empty tails, spec/diag.md §2.4; the failure
    says to run `cargo xtask diag-split`), and the per-WP Landed files
    (spec/README.md "Landed sections", `xtask/src/landed.rs`): each file
    under `spec/landed/` is `<spec>/WP-NNN.md` for an existing
    `spec/<spec>.md`, starts `# WP-NNN — <title>` with its own id, and has
-   a `| WP-NNN |` row in `docs/BACKLOG.md`; and the static-gap inventory
+   a `| WP-NNN |` row in `docs/BACKLOG.md`; the local-path lint
+   (`xtask/src/local_paths.rs`, WP-1886): no file `git ls-files` lists,
+   other than binary (non-UTF-8 or NUL-holding) files, holds an absolute
+   path starting `/Volumes/`, `/Users/`, `/home/<user>/` (a lower-case
+   name and a slash), `/root/` or `/tmp/claude`, followed by more of the
+   path (a bare prefix in prose is not a path), where the `/` starts a
+   path (line start, after a character that cannot be part of a path, or
+   after a one-letter flag such as `-I`); `/home/linuxbrew/` (Homebrew's
+   fixed prefix) is allowed (`local_paths::ALLOWED`), and so is the lint's
+   own source (`local_paths::ALLOWED_FILES`); each hit is reported as
+   `file:line`; and the static-gap inventory
    (`cargo xtask static-gaps`, `xtask/src/static_gaps.rs`, WP-1719). A
    *gap site* is a line of a crate's `src/` outside test modules that
    uses a gap diagnostic (`static_gaps::GAP_DIAG_IDS`), calls a function
@@ -2139,7 +2149,7 @@ runs, stopping at the first failing step:
    for N sites) differs from its markers, or when its row is not an
    `open` / `in progress` row of `docs/BACKLOG.md` or `excluded:
    <reason>`, or when a unit under a gap-list lead has neither a marker
-   nor an open row; line numbers play no part. All three run before `ci` fails;
+   nor an open row; line numbers play no part. All four run before `ci` fails;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun

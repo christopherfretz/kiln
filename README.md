@@ -19,29 +19,50 @@ has no LLVM FFI: it writes IR as text and runs LLVM's tools. On the
 command line and in its predefined macros kiln looks like clang, so build
 systems and standard libraries work with it unchanged.
 
+**Status:** version 1.3.0, Linux on aarch64 and x86_64 only. kiln passes
+99.4% of libc++ 22.1.8's test suite (1.3.0 release gate). It is usable
+for experimenting and for constexpr-heavy code; it is not yet
+production-ready. What does not work yet is in
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md), and how to report a bug in
+[docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md). kiln is written and
+maintained by AI agents ([Development](#development)).
+
 ## Numbers
 
 Each number links to the page that records how it was measured.
 
-- **Constant evaluation.** On kiln's benchmark corpus, compared with
-  clang 19 (37 entries, aarch64, 2026-11-03): geometric mean **0.21x**
-  clang's time and **0.17x** its peak memory. Constexpr-bound entries such
-  as `oven/fib` (0.05x) and `oven/churn-vector` (0.03x) gain the most.
-  [docs/status/perf.md](docs/status/perf.md)
+- **Constant evaluation and compile time.** On kiln's benchmark corpus
+  (aarch64, 2026-11-21; kiln at `45d9b1cf2`, 1.3.0 plus later commits,
+  built with PGO as the release archives are): compared with clang 22.1.8
+  (48 entries), geometric mean **0.15x** clang's time and **0.23x** its
+  peak memory; compared with GCC 16.1 (44 entries), **0.21x** GCC's time
+  and **0.21x** its peak memory. Entries a compiler cannot compile are
+  left out of its means. Constexpr-bound entries such as `oven/churn-vector`
+  (0.02x clang's time) gain the most. The PGO training uses most of these
+  entries, and the host was shared with other builds; both are described
+  on the pages. [docs/status/perf.md](docs/status/perf.md),
+  [docs/status/perf-gcc.md](docs/status/perf-gcc.md)
 - **Constexpr-heavy libraries.** Built per TU against a control compiler
-  (ctre, mp-units, daw_json_link, Glaze, scnlib, reflect-cpp): **0.39x to
-  0.47x** the control's peak RSS (geomean per project), at 0.91x to 1.06x
-  its time. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#constexpr-and-compile-time-performance)
+  (ctre, mp-units, daw_json_link, Glaze, scnlib, reflect-cpp; clang 19.1.7,
+  and GCC 16.1 for mp-units, which clang 19 cannot build; aarch64,
+  2026-11-07, a pre-1.0 kiln): **0.39x to 0.47x** the control's peak RSS
+  (geomean per project), at 0.91x to 1.06x its time. Not re-measured
+  since. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#constexpr-and-compile-time-performance)
 - **libc++ 22.1.8** test suite (9247 tests, `-std=c++26`): **99.4%**
-  pass. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries),
-  [docs/status/libcxx-1.0.md](docs/status/libcxx-1.0.md)
+  pass (8748 of the 8801 tests that apply on aarch64, 8749 on x86_64), at
+  the 1.3.0 release gate, 2026-11-19/20.
+  [docs/status/release-1.3.0.md](docs/status/release-1.3.0.md),
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries)
 - **47 open-source projects** built with their own build systems and test
-  suites: 46 Flawless, 1 Near-perfect. They include all of LLVM
-  (`check-llvm`: 38434 tests passed, at 0.94x clang's summed TU time and
-  0.63x its peak TU RSS), Boost and folly.
-  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications)
-- **Language support:** 260 of 261 rows of the C++98 to C++26 paper table
-  are done and 1 is partial.
+  suites: 46 Flawless, 1 Near-perfect against clang 19.1.7 (the 1.0
+  release run, 2026-11-09/10); the 1.3.0 release gate (2026-11-19/20)
+  rebuilt and tested every one at or above that baseline. They include
+  all of LLVM 19.1.7 (`check-llvm`: 38434 tests passed, at 0.94x clang
+  19's summed TU time and 0.63x its peak TU RSS, 2026-11-07), Boost and
+  folly. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications),
+  [docs/status/release-1.3.0.md](docs/status/release-1.3.0.md)
+- **Language support:** 261 of 262 rows of the C++98 to C++26 paper table
+  are done and 1 is partial (P2786, removed from the C++26 DIS).
   [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md)
 
 ## Quick start
@@ -241,8 +262,8 @@ For contributors:
 
 ## Development
 
-kiln is written by agents working on work packages, coordinated by a
-supervisor. Their contract is [docs/AGENTS.md](docs/AGENTS.md). The test
+kiln is written and maintained by AI agents working on work packages,
+coordinated by a supervisor. Their contract is [docs/AGENTS.md](docs/AGENTS.md). The test
 layers, the test directive format and perf tracking are described in
 [docs/VALIDATION.md](docs/VALIDATION.md). Human contributors start with
 [CONTRIBUTING.md](CONTRIBUTING.md).

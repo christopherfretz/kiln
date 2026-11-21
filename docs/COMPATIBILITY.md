@@ -10,7 +10,7 @@ the exact commands to reproduce each run, is in
 **Language support** is tracked separately. The standards support matrix
 is in [STANDARD_SUPPORT.md](STANDARD_SUPPORT.md): one row per paper, from
 C++98 to C++26 plus reflection, in the style of clang's `cxx_status`. Its
-summary table counts 260 rows done, 1 partial (P2786, in C++26) and 0
+summary table counts 261 rows done, 1 partial (P2786, in C++26) and 0
 todo or untested, over C++98/03, C++11, C++14,
 C++17, C++20, C++23, C++26, C++26 reflection, the DR-level papers and the
 kiln extensions.
@@ -126,7 +126,7 @@ selected with `-stdlib=libc++` ([spec/driver.md](../spec/driver.md)).
 
 | Standard library | Test suite | Pass rate | Rating |
 |---|---|---|---|
-| libc++ 22.1.8 | libc++'s own test suite (9247 tests), `-std=c++26` | 99.4% on both 1.0 release candidates ([status/libcxx-1.0.md](status/libcxx-1.0.md)); the 4 failures are permission tests that cannot pass as root | **Near-perfect** |
+| libc++ 22.1.8 | libc++'s own test suite (9247 tests), `-std=c++26` | 99.4% at the 1.3.0 release gate, 2026-11-19/20: 8748 (aarch64) and 8749 (x86_64) of the 8801 tests that apply ([status/release-1.3.0.md](status/release-1.3.0.md)); 6 failures: 4 permission tests that cannot pass as root and 2 new at 1.3.0 ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#libc-22-test-suite)). 99.4% on both 1.0 release candidates too ([status/libcxx-1.0.md](status/libcxx-1.0.md)) | **Near-perfect** |
 | libc++ 19.1.7 | libc++'s own test suite (`std/`) | 98.3% | **Solid** |
 | libc++ 19 | The 10 wave-1 open-source projects' test suites, built with `-stdlib=libc++` | 100% of clang's passing tests | **Flawless** |
 | libstdc++ (GCC 14, the default) | Every public header (109) compiled at `-std=c++20` and `-std=c++26` | 100% | **Flawless** |
@@ -282,7 +282,7 @@ Differences from clang's PCH (spec/pch.md "Deviations from clang"):
 
 ## Libraries and applications
 
-47 projects: 46 **Flawless**, 1 **Near-perfect** (the Boost metaprogramming libraries: 5 TUs that clang 19 accepts and clang 22 rejects, as kiln does). The 1.0 release run (2026-11-09/10, [status/release-1.0.md](status/release-1.0.md) "(d)") put every project at parity with clang 19 or better; the rows below give its numbers where they changed. The final RC (`ae54fd2fa`) re-ran the 40 aarch64 projects with the same outcome as the first RC, apart from flakes that clang shares or that pass on re-run (eigen `matrix_function_1` on a random seed, a spdlog filesystem race). The libc++ column is the WP-694 run against
+47 projects: 46 **Flawless**, 1 **Near-perfect** (the Boost metaprogramming libraries: 5 TUs that clang 19 accepts and clang 22 rejects, as kiln does). The latest full run is the 1.3.0 release gate (2026-11-19/20, [status/release-1.3.0.md](status/release-1.3.0.md) "Open-source projects"): every project built and tested on aarch64 (14 also on x86_64) at or above its recorded baseline. The 1.0 release run (2026-11-09/10, [status/release-1.0.md](status/release-1.0.md) "(d)") put every project at parity with clang 19 or better; the rows below give its numbers where they changed. The final RC (`ae54fd2fa`) re-ran the 40 aarch64 projects with the same outcome as the first RC, apart from flakes that clang shares or that pass on re-run (eigen `matrix_function_1` on a random seed, a spdlog filesystem race). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -525,4 +525,5 @@ time and 0.63x its peak TU RSS ([status/oss/llvm_full.md](status/oss/llvm_full.m
 
 ---
 
-Last updated 2026-11-10, reflecting kiln `main` at `e51da36a9`.
+Last updated 2026-11-21 (WP-1886: the 1.3.0 release gate's libc++ and
+open-source results), reflecting kiln `main` at `45d9b1cf2`.

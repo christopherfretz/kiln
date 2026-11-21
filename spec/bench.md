@@ -18,7 +18,7 @@ cargo xtask bench [options] [paths...]
 | `--compiler <path>` | Compiler to measure. Default: `cargo build --release -p kiln_driver`, then `<target>/release/kiln++` (a debug kiln says nothing about performance). |
 | `--baseline <dir>` | Baseline directory. Default `bench/baselines`. Relative paths are taken from the repo root. |
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
-| `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference), or `clang++-19` for the history of `docs/status/perf.md`. |
+| `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference, and the compiler of `docs/status/perf.md` since WP-1886), `clang++-19` for history, or `g++-16` (flags mapped as for the GCC oracle; its `--record` page is `docs/status/perf-gcc.md`). |
 | `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
 | `--keep-timing` | With `--record` only (a usage error otherwise): an entry that already has a baseline of the same compiler kind keeps that baseline's `runs`, `wall_ms_*`, `spread_pct` and `max_rss_kb`; everything else (counters, `accounted`, flags, source hash, version) is re-recorded. For a host too loaded for a trustworthy time baseline (see "Recording"). |
 | `--label <name>` | `bench/pch` only: with `--record`, write region `<name>` of `docs/status/pch.md` and no baselines ("The pch group"). Default `main`; `--label main` is a usage error, since only `--record` without `--label` writes that region (with the baselines). |
@@ -604,8 +604,23 @@ classifies them; `docs/status/bench-regressions-WP-798.md` is the model.
   with a build per commit and `/usr/bin/time -f %M` or
   `-fconstexpr-report`.
 
+A record never holds an absolute path of the machine that recorded it
+(WP-1886; the `lints` step of `cargo xtask ci` rejects one in any tracked file). The
+`compiler` of a measurement and of a results file's compiler run is
+written as follows: a path under the cargo target directory as
+`target/<rest>` (what a checkout with the default target directory
+records, whatever `CARGO_TARGET_DIR` was), a path under the workspace
+relative to it, a relative path or a bare name (found on `PATH`) as given,
+and any other absolute path as its file name; the `compiler_version` next
+to it names the compiler. The status pages' headers use the same form
+(`bench::recorded_compiler`).
+
 With `--compare-with`, `--record` also **merges** the ratio table (see
-"Output") into `docs/status/perf.md`, the same way:
+"Output") into `docs/status/perf.md`, the same way. An oracle of kind
+`gcc` (`--compare-with g++-16`) merges into `docs/status/perf-gcc.md`
+instead, a page of the same shape (`bench::perf_page`), so a GCC
+recording never replaces the clang table and the two are read back
+separately:
 
 - Every entry the run selected (after `--filter` and `paths`) gets a row
   from this run, replacing its old row or adding one. A failed side shows
@@ -871,6 +886,10 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
   and total budgets.
 - `xtask/src/bench/stats.rs`: median after dropping min and max, spread.
 - `xtask/src/bench/record.rs`: results and baseline round-trips, timestamps.
+- `xtask/src/bench/tests.rs` `recorded_compiler_is_never_a_local_absolute_path`
+  and `gcc_recordings_have_their_own_page`: the recorded compiler path
+  (target directory, workspace, bare name, other absolute path) and the
+  GCC page (WP-1886).
 - `xtask/src/bench/compare.rs`: every verdict and threshold boundary, the
   absolute floor, advisories, tables, ratios and geometric means.
 - `xtask/src/bench/perf_md.rs`: merging `perf.md` rows (kept verbatim,

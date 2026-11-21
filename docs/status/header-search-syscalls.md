@@ -4,8 +4,8 @@ File-system system calls, wall time, sys time and peak RSS of kiln++
 against clang++-19 for three TUs. The change itself is described in
 spec/landed/pp/WP-820.md and spec/pp.md "Lookup caching (WP-820)".
 
-Host: aarch64 Debian 13 container, workspace on a bind mount
-(`/Volumes/AgentWork`), where every file-system call blocks. The load
+Host: aarch64 Debian 13 container, workspace on a host bind mount
+(virtiofs), where every file-system call blocks. The load
 average was about 24 during all runs, so wall times vary by tens of
 percent between runs. System-call counts are exact and repeat.
 
