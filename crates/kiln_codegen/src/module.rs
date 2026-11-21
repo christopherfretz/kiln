@@ -3625,7 +3625,7 @@ impl<'a> Cg<'a> {
         if sig.no_csr {
             fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
         }
-        crate::sme::sme_attrs(ast, Some(first), sig.sme, &mut fa);
+        crate::sme::sme_attrs(ast, Some(first), false, sig.sme, &mut fa);
         // clang `ConstructAttributeList` under `-fno-plt`: a function not
         // yet defined is `nonlazybind` (kiln: none in the translation unit;
         // spec/codegen.md "Hardening and overflow options").

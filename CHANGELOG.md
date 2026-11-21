@@ -299,6 +299,29 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A `static_assert` or constant initializer in a lambda body reading an
+  enclosing `constexpr` variable whose value points to or refers to an
+  automatic object (`constexpr const int *p = &b;` of a structured
+  binding `b`, a reference to a local, a binding of a reference to a
+  local) was accepted (WP-1831). Such a value is not
+  constexpr-representable in the lambda body (another function parameter
+  scope, P2686R5 [expr.const.init], the working draft's own
+  `[&] { static_assert(a.r != nullptr); }` example), so the read is now
+  "initializer of 'p' is not a constant expression", by-reference and
+  by-copy captures alike; the same name in its own function, a nested
+  block, an unevaluated operand and the run-time read through the capture
+  are unchanged. PCH snapshot format 99.
+- `__arm_new("za")` / `__arm_new("zt0")` (WP-1826): `"aarch64_new_za"` /
+  `"aarch64_new_zt0"` are now attributes of the function's definition
+  only, not also of its declarations and of the calls to it, as clang 22
+  and 19 emit them.
+- RTTI names of unit-local types (WP-1818): re-checked on both Linux
+  targets. Under libc++ the `_ZTS` strings are clang 22's and 19's
+  exactly (no `*` marker; new IR and two-unit run tests); under libstdc++
+  kiln keeps GCC's `*` marker on purpose (WP-1651, a listed deviation),
+  without which libstdc++ compares two units' same-named unit-local types
+  equal.
+
 - `constinit` added by a redeclaration after the variable was
   initialized (`int c = 1; extern constinit int c;`) is rejected with
   clang's "'constinit' specifier added after initialization of variable"

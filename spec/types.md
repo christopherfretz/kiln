@@ -592,9 +592,12 @@ enum ExcSpec /* tag */ {
   clang 19 does not mangle the bits. Codegen gives every definition,
   declaration and call the clang 19 string attributes
   (`"aarch64_pstate_sm_enabled"`, `"aarch64_pstate_sm_compatible"`,
-  `"aarch64_pstate_sm_body"`, `"aarch64_{in,out,inout,preserves,new}_{za,zt0}"`,
-  `"aarch64_za_state_agnostic"`); kiln does not lower the mode switches
-  itself, LLVM does. Off `AArch64` every keyword is `not supported on
+  `"aarch64_pstate_sm_body"`, `"aarch64_{in,out,inout,preserves}_{za,zt0}"`,
+  `"aarch64_za_state_agnostic"`), except `"aarch64_new_{za,zt0}"`, which
+  only the definition of an `__arm_new` function carries (clang 19 and 22
+  `SetLLVMFunctionAttributesForDefinition`; not its declarations nor the
+  calls to it, WP-1826); kiln does not lower the mode switches itself,
+  LLVM does. Off `AArch64` every keyword is `not supported on
   this target`.
 - Canonicalization: params and return canonical; `trailing_return` cleared;
   `exc` canonical: from C++17 `Nothrow`/`None`/`DependentNoexcept`/

@@ -1692,11 +1692,26 @@ impl Oven {
                     GKind::Capture(d, ty)
                 }
             }
+            // As a by-copy capture: a fold outside a constant context
+            // reads the variable, as before (codegen's fold of the body).
+            GKind::Unrepresentable(d) => {
+                self.provisional.push(g);
+                if self.run.fold_outer && self.ctx_depth == 1 {
+                    GKind::Var(d)
+                } else {
+                    GKind::Unrepresentable(d)
+                }
+            }
             k => k,
         };
         let p = match kind {
             GKind::Str(s, ty, e) => self.alloc_string(b, s, ty, e),
             GKind::Capture(d, ty) => self.closure_copy_object(d, ty),
+            GKind::Unrepresentable(d) => {
+                let q = var_info(b.ast(), d).ty;
+                let ty = self.types.intern(b, q);
+                self.external(b, ty, d)
+            }
             GKind::Var(d) => {
                 // A variable with no initializer yet (`extern const int
                 // n;` before its definition) may get one later in the

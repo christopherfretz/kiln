@@ -138,6 +138,12 @@ pub(crate) enum GKind {
     /// outside a call of the call operator (no closure object exists:
     /// [`Oven::closure_copy_object`], spec/sema-lambda.md §7).
     Capture(DeclId, OTy),
+    /// The variable `.0` named in a lambda body outside a call of the
+    /// lambda, where its value is not constexpr-representable (it refers
+    /// to an automatic object of the enclosing function, P2686R5
+    /// [expr.const.init]/3-9): an external object, so a read is "initializer
+    /// of 'v' is not a constant expression" ([`Compiler::unrepresentable_here`]).
+    Unrepresentable(DeclId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
@@ -443,6 +449,19 @@ impl Oven {
         let i = self.globals.len() as u32;
         self.globals.push(Global {
             kind: GKind::Capture(d, ty),
+            state: GState::Unresolved,
+            slot: 0,
+        });
+        i
+    }
+
+    /// A global for variable `d` named where its value is not
+    /// constexpr-representable ([`GKind::Unrepresentable`]): one per
+    /// compiled name.
+    pub(crate) fn unrepresentable_global(&mut self, d: DeclId) -> u32 {
+        let i = self.globals.len() as u32;
+        self.globals.push(Global {
+            kind: GKind::Unrepresentable(d),
             state: GState::Unresolved,
             slot: 0,
         });
@@ -1240,6 +1259,12 @@ pub(crate) struct Compiler<'a> {
     /// In a lambda call operator: the closure object (`this_reg`, or the
     /// explicit object parameter as the closure type).
     closure_reg: Option<u32>,
+    /// While a structured binding named in a lambda body outside a call
+    /// of the lambda compiles its expression: the variable it reads
+    /// through that is not constexpr-representable there
+    /// ([`Compiler::unrepresentable_here`]), and the binding's name (the
+    /// site of the faulting access).
+    unrep_var: Option<(DeclId, ExprId)>,
     /// The storage of the lifetime-extended temporaries of the variable
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
@@ -1338,6 +1363,7 @@ impl<'a> Compiler<'a> {
             lambda_this: None,
             this_postfix: None,
             closure_reg: None,
+            unrep_var: None,
             ext_temps: FxHashMap::default(),
             held: None,
             ext_flags: FxHashMap::default(),
@@ -5687,7 +5713,12 @@ impl Compiler<'_> {
                         self.trap(e, "");
                         return Place::Mem(self.reg());
                     };
-                    return self.lv(b, acc);
+                    let unrep = self.unrepresentable_here(e, d).map(|v| (v, e));
+                    let saved = self.unrep_var;
+                    self.unrep_var = unrep.or(saved);
+                    let p = self.lv(b, acc);
+                    self.unrep_var = saved;
+                    return p;
                 }
                 if let Some(l) = self.locals.get(&d).copied() {
                     return match l {
@@ -5720,7 +5751,17 @@ impl Compiler<'_> {
                         "a glvalue DeclRefExpr names a variable, a parameter, a template parameter object, a binding, a function, a member or a result name, not a {k:?}: a non-type template parameter is replaced by its argument, and a value-dependent expression is never evaluated (`value::eval_at`)"
                     ),
                 }
-                let g = self.o.global_index(self.b.ast(), d);
+                // The access through a binding's variable is the binding's.
+                let (unrep, e) = match self.unrep_var {
+                    Some((v, at)) if v == self.ast().first(d) => (true, at),
+                    _ => (self.unrepresentable_here(e, d).is_some(), e),
+                };
+                let g = if unrep {
+                    let d = self.ast().first(d);
+                    self.o.unrepresentable_global(d)
+                } else {
+                    self.o.global_index(self.b.ast(), d)
+                };
                 let r = self.reg();
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
                 if is_reference_var(self.b.ast(), d) {
