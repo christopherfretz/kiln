@@ -902,7 +902,8 @@ direct- versus copy-initialization are those of the written form. An
 init-capture pack (`[...xs = ts]`, `[...xs(ts)]`, `[&...xs{ts}]`) becomes
 one init-capture per element, each with the element's initializer in the
 pattern's style. A capture pack of a pack that is still unexpanded (in a
-generic lambda substituted one level) remains "not yet implemented".
+generic lambda substituted one level) stays a pack and is expanded with
+the inner lambda (`expr.prim.lambda.capture/capture-pack-of-generic-lambda-pack.cpp`).
 
 Uses of `this` in a rebuilt body capture it again (`note_this_use`);
 `note_shared_this` keeps the enclosing lambda's `this` capture in step.
@@ -983,7 +984,7 @@ lambda-default-argument-siblings.cpp; WP-1497).
   `lambda_init_capture_forms.cpp`: IR-exact.
 - `xtask clang-ast` prints `LambdaExpr` and its implicit members.
 
-## 11. Deviations, open questions and gaps
+## 11. Deviations and open questions
 
 1. **Instantiation notes on warnings.** spec/diag.md §7.4 drops a
    diagnostic with an instantiation context that duplicates one
@@ -995,9 +996,8 @@ lambda-default-argument-siblings.cpp; WP-1497).
 2. **Capture of `might_be_constant` variables** is decided at the end of
    the full-expression; clang's finer `NonOdrUseReason` tracking is not
    modelled. No known divergence in the tests.
-3. **Gaps** (each reported as `not yet implemented` / `not supported`):
-   a capture pack of a pack still unexpanded after substitution (§9).
-   Init-captures of every form (WP-518), capture packs, `consteval` and
+3. **Coverage.** A capture pack of a pack still unexpanded after
+   substitution (§9), init-captures of every form (WP-518), capture packs, `consteval` and
    immediate-escalating lambdas, a lambda-expression as a template
    argument, calling an `auto` template parameter whose default is a
    closure (`template-argument.cpp`), and `x.template operator()<T>()`

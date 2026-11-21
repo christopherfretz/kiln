@@ -943,10 +943,15 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
     (`Sema::undecayed_void_ptr_arg`): clang ignores that decay.
     Pointers of different types (`&arr` vs `&arr[0]`) were already
     distinct.
-  - **Open: bit-fields.** Bit-level padding inside a bit-field storage unit
-    (unnamed bit-fields, unused high bits) is not tracked. Those bits must
-    be zero.
-  - **Open: byte order.** Big-endian targets are unsupported.
+  - **Bit-fields.** The store keeps no bit-level padding inside a
+    bit-field storage unit (unnamed bit-fields, unused high bits): those
+    bits are stored as zero. No constant evaluation reads them: the Oven
+    bit-casts a bit-field object member by member and skips unnamed
+    bit-fields (`kiln_oven/src/vm/bitcast.rs`), so they stay
+    indeterminate, as [bit.cast]/2 says
+    (`bit.cast/constexpr-bit-field-padding-of-constant.cpp`).
+  - **Byte order.** Every kiln target (aarch64 and x86-64 Linux) is
+    little-endian; the image is laid out for that.
 
 ### 9.2 Where values are cached
 | cache | content |

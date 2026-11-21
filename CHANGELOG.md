@@ -19,6 +19,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   transparent to constant evaluation. They were "not supported by kiln
   yet". A value-dependent `address_space(N)` in a template is not
   supported yet (WP-1811).
+- clang's C++ spelling of the `_BitInt` literal suffix, `__wb` / `__uwb`
+  (WP-1797): `1__wb` is a `_BitInt(2)`, in expressions and in `#if`, with
+  clang's pedantic `-Wbit-int-extension` warning.
 - `#include <arm_sme.h>` compiles (WP-1794): `__builtin_arm_get_sme_state`
   is declared and lowered as clang does, a call of the SME ABI routine
   `__arm_sme_state`, so `__arm_has_sme()` and `__arm_in_streaming_mode()`
@@ -253,6 +256,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A block-scope `extern` function or variable declaration with an asm
+  label (`extern int q(int) asm("qq");`) inside a template keeps its
+  label in the instantiation; it was mangled as a local name (WP-1797).
 - Value-dependent conditions in a template definition are no longer
   constant-evaluated (WP-1741).
 - A constant-evaluation note about a pointer into a structured binding

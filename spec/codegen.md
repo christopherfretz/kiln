@@ -921,9 +921,11 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   linkage name (`kiln_abi::mangle::asm_label`); an instantiated
   function or variable, which has no recorded label, takes the
   `AsmLabel` attribute sema copied from its pattern (WP-449,
-  `tests/codegen/asm_label_member.cpp`). **Known gap:** a block-scope
-  `extern` function declaration in a template is instantiated as a
-  local entity (mangled `_ZZ…E1qi`, its label dropped). clang prefixes LLVM's
+  `tests/codegen/asm_label_member.cpp`). A block-scope `extern`
+  function or variable declaration in a template keeps its label in the
+  instantiation: `local_decl` (kiln_sema `templ/subst/stmts.rs`) records
+  the pattern's label on the instantiated entity unless it has one
+  (WP-1797; `dcl.asm/asm-label-block-scope-template-run.cpp`). clang prefixes LLVM's
   `\01` "no global prefix" marker only when the target's user-label
   prefix is non-empty (Mach-O); every kiln target is ELF, so the label
   is the symbol verbatim, and a `\01` the user wrote is kept (LLVM
@@ -1109,8 +1111,8 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `default_new_align` (16) or the type's alignment when aligned, raised to
   `bit_floor(min(16, sizeof(T)))` for a replaceable, unaligned
   allocation, as clang's `EmitCXXNewExpr`). An
-  `align_val_t` argument is the constant alignment (a non-constant one
-  is unsupported).
+  `align_val_t` argument is the constant alignment; a non-constant one
+  is passed as written (§"Coverage" below).
 - **Size** (`EmitCXXNewAllocSize`): the count is Sema's `size_t`
   conversion of the first bound. A constant count folds, to `-1` (all
   ones) on overflow or when the count is below the number of explicit
@@ -1162,8 +1164,8 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   replaceable `operator new` gets no `nonnull` on its declaration or its
   calls; without an initializer and with a non-class type there is still
   no test.
-- **Cleanup emulation.** clang pushes an EH cleanup that frees the memory
-  if initialization throws. kiln has no EH yet: when the initializer
+- **Cleanup.** clang pushes an EH cleanup that frees the memory if
+  initialization throws, and so does kiln (§7b); when the initializer
   cannot throw, the cleanup is never used, but clang's -O0 IR still shows
   its traces. Inside a conditional evaluation (an arm of `?:`, the right
   of `&&`/`||`; `FunctionCtx::conds`, pushed by `cond_eval`), the
@@ -1171,8 +1173,9 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   entry block are saved to `alloca`s (preferred alignment:
   `pref_align`: at least 4 for integers of 2 to 16 bits on aarch64),
   and an `i1` active flag is stored `false` before the terminator of
-  the outermost conditional's start block and `true` after the call. A
-  may-throw initializer is unsupported.
+  the outermost conditional's start block and `true` after the call; a
+  may-throw initializer's cleanup tests the flag
+  (`tests/codegen/new_cond_throwing_init_and_ref_members.cpp`).
 - **Initialization.** A scalar or aggregate initializer is stored
   through the result (`EmitAggExpr` rules of §3). An array
   (`EmitNewArrayInitializer`) stores the explicit elements, moving a
@@ -3367,10 +3370,10 @@ changes nothing:
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
   as a direct use of its referee's address (`EmitDeclRefLValue` for
-  `NOUR_Constant`: `e.y`, `h[0]` with a non-constant index); kiln loads
-  the reference's slot (a dead `load ptr @e`). Sema does not yet mark a
-  reference bound to a static class or array temporary as a constant
-  non-odr-use (`is_static_lvalue` is syntactic). No corpus case covers it.
+  `NOUR_Constant`: `e.y`, `h[0]` with a non-constant index), and so
+  does kiln; a reference bound to a lifetime-extended class or array
+  temporary at namespace scope is loaded, as clang loads it
+  (`tests/codegen/ref_constant_lvalue_use.cpp`).
 - **Namespace-scope and static reference variables** are emitted as
   clang does (a constant initializer when the referee is a constant
   address, else dynamic initialization, §7e); only their uses differ, as
@@ -3400,8 +3403,8 @@ changes nothing:
   extension yet", `sawArrayRangeDesignator`); GCC evaluates it once.
   Side-effect-free ranges match clang's IR
   (`tests/codegen/union_nsdmi_and_array_ranges.cpp`).
-- **Reference members** (`struct S { int& r; }`) are diagnosed (`a
-  reference member is not supported yet`).
+- **Reference members** (`struct S { int& r; }`) are initialized and
+  read as clang does (`tests/codegen/new_cond_throwing_init_and_ref_members.cpp`).
 - **`dereferenceable(N)` of a reference to a class** uses the class's
   non-virtual size (`nv_size`, at least 1). clang's
   `getMinimumObjectSize` uses the full size for a `final` class; with no
@@ -3695,15 +3698,15 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
     `class.static.data/static-members`, `class.derived/derived-to-base`,
     `expr.mptr.oper/ptr-to-member` and `conv.mem/base-to-derived`.
 
-**Gaps (owned elsewhere or open):**
-- No EH: there are no `invoke`s, landing pads or terminate scopes.
-  Corpus cases call `noexcept` functions, so clang emits no EH either.
-  A throwing call inside a cleanup scope is emitted as a plain `call`.
-- WP-080 owns virtual functions, virtual bases, D0, and pointers to
-  virtual member functions.
-- A C1 that is not discardable is an alias. clang uses a COMDAT or a
-  `weak_odr` C1 in some linkage combinations, which kiln has not
-  covered yet.
+**Notes.** The limits this record listed when it landed are gone (WP-1797
+audit): EH is §7b (WP-100); virtual functions, virtual bases, D0 and
+pointers to virtual member functions are §7a (WP-080); a C1 that is not
+discardable is a COMDAT member or a `weak_odr` definition as clang's
+(`class.rs` `complete_is_rauw` and `weak_structor`;
+`tests/codegen/explicit_instantiation.cpp`); sema synthesizes non-trivial
+copy and move assignment operators (`tests/codegen/class_copy.cpp`,
+`implicit_array_assign.cpp`); class template member calls work
+(`templates/builtins/builtin.bit-cast-run.cpp`).
 - A `CXXDefaultInitExpr` is emitted with the enclosing `this`, except
   inside an aggregate's initializer list, where `this` (and its class)
   is the aggregate being initialized ([class.mem.general]/9; clang's
@@ -3713,11 +3716,7 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
   is emitted. Before WP-792 a `[this]` capture there panicked in a free
   function and captured the enclosing closure in a lambda. Test:
   `dcl.init.aggr/default-member-init-this-in-aggregate.cpp`.
-- Sema does not yet synthesize calls to non-trivial `operator=` for
-  classes, so codegen sees only trivial assignments.
 - Class `new[]`/`delete[]` with array cookies: see §7g (WP-118).
-- The comment in `templates/builtins/builtin.bit-cast-run.cpp` defers
-  class-template member calls. That test has no `xfail` and passes.
 
 ## 7a. Landed (WP-080): virtual functions
 Lowering of polymorphic classes (`vtable.rs`, `dyncast.rs`, plus hooks in
@@ -4152,7 +4151,7 @@ after, clang 22 12.1 s; depth 20: 5.0 s before, 0.8 s after; depth 32:
 - Corpus: `virtual_rtti_memptr`, `virtual_global_delete`,
   `virtual_base_dyncast_hint` (the `-1` `__dynamic_cast` hint).
 
-**Gaps (owned elsewhere or open):**
+**Inheriting constructors and RTTI.**
 - Inheriting constructors (WP-114): `CI1`/`CI2` structors mangled with
   the base as a `<name>` (not a substitution candidate, clang
   `mangleCXXCtorType`), defined from the `CXXInheritedCtorInitExpr`
@@ -4169,17 +4168,19 @@ after, clang 22 12.1 s; depth 20: 5.0 s before, 0.8 s after; depth 32:
   reloaded, then the ctor-initializers emitted with the call's evaluated
   arguments (`Fx::inh_args`) forwarded by the `CXXInheritedCtorInitExpr`,
   recursively when that base constructor is itself such an inheriting
-  constructor; no `CI` symbol is emitted. Gap: inlining the base variant
-  of a class with virtual bases (it needs the caller's VTT) is a
-  "not supported yet" error. An inherited constructor template
+  constructor; no `CI` symbol is emitted. The inlined base variant of a
+  class with virtual bases takes the caller's VTT (WP-159;
+  `tests/conformance/class.inhctor.init/run-variadic-vbase.cpp`). An inherited constructor template
   specialization is mangled `CI1`/`CI2` <base> <template-args> with the
   pattern's signature (clang `InheritedTemplateArgs`), and a constructor
   template specialization's base variant is `C2` (WP-146; corpus
   `class_inheriting_ctors_variadic`).
-- (Resolved by WP-100: `__cxa_bad_cast` / `__cxa_bad_typeid` are
-  invoked inside EH scopes, §7b.)
+- `__cxa_bad_cast` / `__cxa_bad_typeid` are invoked inside EH scopes
+  (§7b).
 - RTTI of a pointer to member function with method qualifiers
-  (`void (S::*)() const`, an abominable pointee) is not covered.
+  (`void (S::*)() const`, an abominable pointee) names the qualified
+  function type, as clang (`M1SKFvvE`; test
+  `expr.typeid/member-function-pointer-qualifiers-run.cpp`).
 
 ## 7b. Landed (WP-100): exceptions
 Itanium EH as clang 19 emits it at -O0 (CGException.cpp, CGCleanup.cpp,
@@ -5915,7 +5916,7 @@ it is declared `[[indeterminate]]` ([dcl.attr.indet]).
   `tests/conformance/basic.indet/` (`run-erroneous-zero.cpp`,
   `run-byte-read.cpp`, `run-threshold.cpp`, `indeterminate-compiles.cpp`,
   `ir-cxx23-unchanged.cpp`).
-- **Remaining:** the run-time EB diagnosis P2795 recommends is today's
+- **As clang (not planned):** the run-time EB diagnosis P2795 recommends is today's
   `-Wuninitialized` (no sanitizer). A variable whose declaration a
   `goto` (or `switch` case label) jumps over stays unwritten, as in
   clang: the fill is at the declaration, which control never reaches.
@@ -6511,8 +6512,8 @@ or `[[clang::uninitialized]]`.
   the default is `-ftrivial-auto-var-init=zero`, although
   [basic.indet] only covers automatic variables. clang's
   `-ftrivial-auto-var-init-stop-after=N` counter (`stopAutoInit`, which
-  counts alloca fills with variable fills) is not implemented: the
-  driver does not accept the flag.
+  counts alloca fills with variable fills), a bisection aid, is not
+  offered: the driver rejects it as an unknown argument.
 - **Size limit.** The §7r limit and remark apply to every fill except
   a VLA's and an alloca's. A limit of 0 is none.
 - **`[[clang::uninitialized]]`** (`AttrKind::UNINITIALIZED`, GNU
@@ -6893,18 +6894,14 @@ part 1: internal-linkage variable mangling, static-local discriminators,
 and indirect returns with `byval` (clang's `getNaturalAlignIndirect`, so
 no `result.ptr` spill).
 
-**Remaining (M3):**
-1. Oven folding of constant-initialized references, for the
-   direct-referee use (deviations above).
-2. The Sema gaps above, then corpus cases for them: class copy-init,
-   braced returns, reference casts, temporaries, range-for over arrays.
-3. Bit-field and base-class constants, reference members.
-4. Header-dependent `run` tests, once `decltype` parses (drop their
-   `xfail(kiln)`).
-5. WP-202 follow-ups: `p->m` through a base-to-derived (or derived-to-base)
-   cast uses the pointee's natural alignment rather than clang's
-   `EmitPointerWithAlignment` (e.g. `align 4` vs `align 8` for a base of an
-   8-aligned class); the Itanium mangling of a dependent-sized array
-   (`A <expression> _`, emitted as `u7unknown` for `T (&&)[N]`); class-type
-   compound literals and list-initialized array temporaries (`A{1, 2}` with
-   `using A = int[2]`) in sema.
+**Since done.** The M3 list this record ended with is done (WP-1797
+audit): a use of a constant-initialized reference folds to its referee
+(`tests/codegen/ref_constant_lvalue_use.cpp`); class copy-init, braced
+returns, reference casts, temporaries, range-for over arrays, bit-field
+and base-class constants and reference members have corpus cases; the
+header-dependent `run` tests carry no `xfail(kiln)`; a base-to-derived
+member access takes clang's alignment (`tests/codegen/cast_base_to_derived.cpp`),
+a dependent-sized array mangles as `A <expression> _`
+(`tests/mangle/dependent_array.cpp`), and class compound literals and
+list-initialized array temporaries compile
+(`tests/codegen/compound_literal_array.cpp`, `array_temporary.cpp`).

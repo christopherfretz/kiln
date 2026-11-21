@@ -98,7 +98,8 @@ shape, so a public name would claim the library template itself.
    whose size covers the literal's terminator keeps it as a character. The result is `Reflectee::Object` of a `PtrBase::Const`
    constant array of the elements, interned by content, so equal
    contents give one object and one reflection. An empty
-   `reflect_constant_array` is `unsupported` (the IS gives `array<T, 0>`).
+   `reflect_constant_array` reflects a `const std::array<T, 0>` object,
+   as the IS and GCC 16.1 (`meta.reflection.result/real-meta-empty-const.cpp`).
 
 ## 4. Static storage ([meta.define.static])
 

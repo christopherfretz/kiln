@@ -254,8 +254,24 @@ fn bit_int_suffixes() {
     for sp in ["1wB", "1Wb", "1wbl", "1lwb", "1wbwb", "1uwbu", "1.0wb", "1zwb"] {
         assert_eq!(c(sp, CStd::C23).0, None, "{sp}");
     }
-    // C++ has no such suffix.
+    // C++ has no such suffix, but clang's `__wb` / `__uwb` spelling.
     assert_eq!(diags_in("1wb", Std::Cxx26), [D::InvalidSuffix { floating: false }]);
+    let cxx = |sp| {
+        let n = classify_number_in(sp, Std::Cxx26, None);
+        let kinds: Vec<D> = n.diags.iter().map(|d| d.kind).collect();
+        match n.class {
+            NumberClass::Integer(l) => (Some((l.suffix, l.value())), kinds),
+            _ => (None, kinds),
+        }
+    };
+    assert_eq!(cxx("1__wb"), (Some((bit(false), Some(1))), vec![D::BitIntSuffixClang]));
+    assert_eq!(cxx("3__WB").0, Some((bit(false), Some(3))));
+    for sp in ["3__uwb", "3u__wb", "3__UWB", "3__uWB", "3__wbu"] {
+        assert_eq!(cxx(sp).0, Some((bit(true), Some(3))), "{sp}");
+    }
+    for sp in ["3__wb1", "3__wB", "3__uwbu", "3u__uwbu", "3__w", "1.0__wb", "3l__wb"] {
+        assert_eq!(cxx(sp).0, None, "{sp}");
+    }
 }
 
 /// Diagnostic ranges point into the spelling.

@@ -477,8 +477,9 @@ the target:
     "ambiguous" where GCC says "no matching function", and the rank
     warning is not repeated per candidate.
 
-## 10. Not yet (M3+)
-- Conversion warnings (§9.3) and fix-its.
+## 10. Later work (since landed)
+- Conversion warnings (§9.3; `kiln_sema` `impcast.rs`) and fix-it hints
+  (`kiln_diag`) landed after M3.
 
 User-defined conversions, class initialization, base access checks,
 temporaries and reference-binding ranking landed with WP-067/WP-068a

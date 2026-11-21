@@ -660,8 +660,10 @@ label's address, the JSON its `labelDeclId`, which the normalizer
 drops). **WP-182**
 keeps `[[likely]]`, `[[unlikely]]` and `[[fallthrough]]` too
 (`LikelyAttr`, `UnlikelyAttr`, `FallThroughAttr`, without children).
-Other statement attributes are not yet kept (kiln drops them; the
-normalizer rejects their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
+Other statement attributes are kept in the AST and print as
+`UnknownAttr kind=N` (`[[clang::musttail]]`, `[[clang::nomerge]]`;
+clang prints `MustTailAttr`, `NoMergeAttr`): a dump difference, which
+the normalizer rejects, so no golden has them. `tests/conformance/ast/stmt.label/`,
 `tests/conformance/ast/dcl.attr.assume/`,
 `tests/conformance/ast/dcl.attr.likelihood/`.
 

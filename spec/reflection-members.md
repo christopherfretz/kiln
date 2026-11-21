@@ -216,16 +216,18 @@ other than null or complete class type reflection", "current scope does
 not represent a function". The negative files in the five test
 directories list every one.
 
-## 7. Known gaps
+## 7. Notes (the former known gaps)
 
-1. `^^C::priv` names a private member from outside without an error
-   (GCC rejects); the operand check belongs to the reflect operand
-   (`crates/kiln_sema/src/reflect_operand.rs`).
-2. `constexpr auto v = annotations_of(r)[0];` is rejected (the
-   temporary vector escapes): P3032R2's manifestly-constant-evaluated
-   immediate context is not implemented; `static_assert` forms work.
-3. The `Vector` recipe stores the result element by element
+The WP-1797 audit found three of the four gaps this section listed
+fixed:
+
+1. `^^C::priv` from outside the class is "'priv' is a private member of
+   'C'", as GCC (`expr.reflect/member-access-neg.cpp`).
+2. `constexpr auto v = annotations_of(r)[0];` is accepted: the vector is
+   a temporary of the manifestly constant-evaluated initializer (P3032R2;
+   `meta.reflection.annotation/element-in-constexpr-variable.cpp`).
+3. Performance: the `Vector` recipe stores the result element by element
    (`crates/kiln_oven/src/meta/materialize.rs`), which dominates a large
    query's cost; a bulk store would remove it.
-4. A base-specifier's annotations are not recorded
-   (spec/annotations.md §9 item 1), so `annotations_of` of a base is empty.
+4. A base-specifier's annotations are recorded and `annotations_of` of a
+   `bases_of` reflection reads them (spec/annotations.md "Base-specifiers").

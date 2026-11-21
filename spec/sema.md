@@ -2387,17 +2387,16 @@ and returns the scope it names:
   them, so their tests are `skip(clang)` and the standard's example is
   the contract.
 
-**Deferred (no candidate, or diagnosed as unsupported).**
-- Guides from constructor templates of a member class template of an
-  instantiated class template (only its non-template constructors and
-  user guides are used).
-- Qualified CTAD through a template-id, `Outer<int>::In x(…)`: the
-  parser classifies `In` as a dependent name, giving a variable of a
-  dependent type with no diagnostic (name classification, not CTAD;
-  `using O = Outer<int>; O::In x(…)` works).
-- `sema_ctad_deleted` (a deleted constructor selected) and
-  `sema_ctad_not_allowed` (a placeholder in a non-deducible position)
-  are reserved ids that nothing emits yet.
+**Member templates and qualified names.** Guides come from every
+constructor of a member class template of an instantiated class
+template, constructor templates included, and qualified CTAD through a
+template-id (`Outer<int>::In x(…)`) deduces as through an alias of the
+specialization (`over.match.class.deduct/member-class-template-of-specialization.cpp`).
+A deleted constructor selected and a placeholder in a non-deducible
+position get clang's diagnostics ("call to deleted constructor of
+'S<int>'"; "use of class template 'V' requires template arguments;
+argument deduction not allowed in function prototype"); the ids
+`sema_ctad_deleted` and `sema_ctad_not_allowed` are not used.
 
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
@@ -4747,7 +4746,7 @@ specification as written (`TypeNames` prints ` noexcept`,
   exception specifications` (`-Wdynamic-exception-spec`, default error)
   with a `use 'noexcept(false)' instead` note, then `Dynamic(types)`;
   before C++17 it is valid and silent (clang's off-by-default
-  `-Wdeprecated-dynamic-exception-spec` is not implemented; WP-709).
+  `-Wdeprecated-dynamic-exception-spec` is a missing warning).
   The C++17 error is decided on the types the parser accepted, before
   the checks below drop any (clang `ParseDynamicExceptionSpecification`).
   Template substitution substitutes the type-id-list (WP-709).
@@ -6160,7 +6159,7 @@ the initializer, or after default initialization, and before the
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
-  - `<`, `>`, `<=`, `>=` (and `<=>`, not yet distinguished) are
+  - `<`, `>`, `<=`, `>=` and `<=>` (the same message as clang) are
     `invalid operands to binary expression ('int B::*' and 'int B::*')`;
   - a null pointer constant on either side (`0`, `nullptr`, checked
     right operand first) converts to the other operand's type
@@ -8560,7 +8559,7 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   Each queued diagnostic has an optional anchor expression; an anchored
   one is dropped at the flush when the anchor is unreachable (see the
   unused-value reachability rule, WP-203).
-  **Gaps:** the `diag_runtime_behavior` callers queue without an anchor,
+  **Differences from clang (warnings only):** the `diag_runtime_behavior` callers queue without an anchor,
   so clang's CFG reachability filter does not apply to them
   (`if (0) va_arg(ap, char)` is silent there, reported here), and a
   non-dependent expression shared by a template and its instantiation is
@@ -11577,7 +11576,7 @@ innermost enclosing loop). Kiln follows clang (19 and 22 agree, C++):
   `do` or `for` header targets the enclosing statement there. Kiln
   follows the released clangs; revisit when the oracle moves past 22.
 - **Expansion statements' headers** (`template for`): §7.6a.
-- **Not covered:** clang's dropping of the erroneous jump (a `StmtError`), which lets it
+- **Missing warning:** clang's dropping of the erroneous jump (a `StmtError`), which lets it
   still report "no case matching constant switch condition" after
   `switch (({ continue; 1; }))` with no loop; kiln keeps the statement and
   misses that warning.
@@ -12464,7 +12463,7 @@ conflict check;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
 
-**Deferred (WP-160 item 4): macro `!srcloc` parity.** For a string from a
+**Macro `!srcloc` parity (WP-160 item 4; metadata only).** For a string from a
 macro expansion, clang emits `2^31 + offset`, where the offset is into
 clang's unified source-location space. That space holds, in order: entry 0
 (2 bytes), the main file (size + 1), the predefines buffer (20928 bytes on
@@ -12710,13 +12709,11 @@ wide signed bit-field reports `... to a one-bit wide bit-field ...`
   `InitListExpr`; the significant-bits rule does not apply to the
   second).
 - Each template instantiation is checked again (`allow_duplicate`).
-- **Gaps.** A default member initializer of a class template
-  specialization is instantiated with the class rather than at its
-  first use, so its warnings carry `in instantiation of template class`
-  instead of clang's default-member-initializer notes. The enumeration
-  checks of `AnalyzeBitFieldAssignment` for a non-constant value
+- **Missing warnings.** The enumeration checks of
+  `AnalyzeBitFieldAssignment` for a non-constant value
   (`-Wbitfield-enum-conversion`) and `-Wsigned-enum-bitfield` are not
-  implemented.
+  emitted. A default member initializer of a class template
+  specialization warns with clang's default-member-initializer notes.
 
 ### 7.13 Coroutines (`coroutine.rs`, WP-351)
 
@@ -13037,7 +13034,7 @@ variable, for a `ConstRefUse` reached `Uninitialized`.
   The analysis does not report them a second time, because
   `ContainsReference` sees the same `DeclRefExpr` and reports it once.
 
-**Gaps.**
+**Missing warnings.**
 - clang 21's `-Wuninitialized-const-pointer` (a `const T*` argument
   `&x`) is not implemented, so clang 22 warns there and kiln does not.
 - Field uses in constructor initializers (`S() : x(std::move(x))`) belong

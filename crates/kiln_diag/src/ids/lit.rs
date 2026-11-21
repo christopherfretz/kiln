@@ -7,6 +7,8 @@ lit_bad_char_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal charac
 lit_bad_string_encoding = Error (0) "illegal character encoding in string literal";
 lit_bad_string_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal character encoding in string literal";
 lit_binary_ext = Extension [Cxx14BinaryLiteral] (0) "binary integer literals are a C++14 extension";
+// WP-1797: clang's C++ `__wb`/`__uwb` suffix (`ext_cxx_bitint_suffix`).
+lit_bit_int_suffix_clang = Extension [BitIntExtension] (0) "'_BitInt' suffix for literals is a Clang extension";
 // WP-1331: a `wb`/`uwb` suffix from C23 on, off by default (clang 19/22
 // `warn_c23_compat_bitint_suffix`).
 lit_bit_int_suffix_compat = WarningOff [CPre23Compat] (0) "'_BitInt' suffix for literals is incompatible with C standards before C23";

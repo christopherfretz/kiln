@@ -413,9 +413,9 @@ clang's `Parser` over `Preprocessor::Lex`.
   name" plus "a type specifier is required"; kiln reports the two in the
   opposite order and without the qualifier range). `R::g;` (an access
   declaration, clang's `ext_access_declaration` plus "using declaration
-  in class refers into 'R', which is not a class") is not implemented
-  and keeps "expected member name or ';'"
-  (`tests/conformance/class.mem/qualified-member-no-type.cpp`).
+  in class refers into 'R', which is not a class") gets clang's two
+  diagnostics (`tests/conformance/class.mem/access-declaration-not-a-class.cpp`;
+  the other forms: `class.mem/qualified-member-no-type.cpp`).
   A constructor name `C::C(...)` ([class.qual]/2) with no
   decl-specifiers whose parameter had an error (`X<T>::X(nosuch) {}`,
   which the constructor lookahead could not take for one) is typed as a
@@ -1688,8 +1688,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `decltype(auto)` is `'decltype(auto)' not allowed here` and counts as
   a failed initializer, `QualType::ERROR`, so no implicit base or member
   initializers are added — a constant evaluation of that constructor
-  sees the bases it does not initialize as never constructed); qualified
-  non-types are unsupported. Known Oven gap (WP-385, same for
+  sees the bases it does not initialize as never constructed); a
+  qualified non-type is clang's `member initializer 'x' does not name a
+  non-static data member or base class`. Oven notes differ (WP-385,
+  diagnostics of an already rejected constructor; the same for
   `decltype(t)(t)` naming a non-class in a non-template): clang reports
   `constructor of base class 'B' is not called` at the base-specifier and
   a later read of a base member as `read of object outside its
@@ -1945,8 +1947,8 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 `ParseCXXDeleteExpression`; `parse_cast_expr` dispatches at `new`,
 `delete`, and `::` followed by either.
 - **Placement or type-id.** After `new (`, `paren_is_type_id` decides
-  without a tentative parse (clang's `isTypeIdInParens`; TODO(M3) for
-  the shapes needing one): the tokens must start a type-id; then
+  without a tentative parse (clang's `isTypeIdInParens`; every shape
+  tested matches clang's choice): the tokens must start a type-id; then
   simple-type keywords and type names are skipped, and the next token
   decides. `{` means an expression (`new (int{1}) T` is a placement); a
   `(` is a type-id only when followed by `* & && ^ ) [ ( ...`, a type-id
@@ -2622,9 +2624,9 @@ the qualifiers `volatile`, `inline`, `goto` (duplicates diagnosed,
 `( template : outputs : inputs : clobbers [: labels] )`, operands
 `[name] "constraint" ( expression )`, goes to `act_on_gcc_asm_stmt`. A
 wide, Unicode or empty literal is diagnosed at the following token, as
-clang does. `asm goto` is parsed and then reported as
-`'asm goto' is not supported yet` (callbr lowering is not implemented).
-Not implemented: `asm goto`, MS-style `__asm { }` blocks.
+clang does. `asm goto` lowers to `callbr` (`dcl.asm/asm-goto.cpp`).
+MS-style `__asm { }` blocks are a Microsoft extension kiln does not
+offer (as `-fms-extensions` is not accepted).
 
 **Landed (WP-140).** The predefined identifiers `__func__`,
 `__FUNCTION__` and `__PRETTY_FUNCTION__` are keywords and primary

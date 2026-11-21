@@ -28,13 +28,23 @@
 //! `<!-- kiln-gap: GAP-NNN -->` on its line or the line directly above;
 //! its key is `file::§<heading>`, the nearest heading above it.
 //!
+//! A spec paragraph whose bold lead opens a list of gaps or limits
+//! ([`SPEC_LIST_LEADS`]: `**Gaps.**`, `**Known gaps (owners):**`,
+//! `**Remaining:**`, `**Open: x.**`, ...; WP-1797) makes each unit under
+//! it a site too: its own text when text follows the lead, and each list
+//! item below it. Such a unit either carries a `GAP-NNN` marker (it is
+//! then a spec site of that entry) or names an open BACKLOG row
+//! (`WP-NNN`); a unit that does neither is a gap with no owner, or text
+//! that is not a gap and must not be led as one.
+//!
 //! [`check`] fails when (a) a site has no marker (or a `forward` marker
 //! outside a wrapper, a `check` marker on another line, or names an id the
 //! inventory lacks), (b) an inventory
 //! entry has no site left (stale: delete it once the gap is fixed), (c) an
 //! entry's sites cell is not the `file::fn` list its markers give, or (d) an
-//! entry's BACKLOG row is missing or neither `open` nor `in progress`. The
-//! markers make it insensitive to line shifts.
+//! entry's BACKLOG row is missing or neither `open` nor `in progress`, or
+//! (e) a unit under a gap-list lead names no open row and has no marker.
+//! The markers make it insensitive to line shifts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -97,6 +107,32 @@ pub const SPEC_LEADS: &[&str] = &[
     "Not yet supported",
     "Unimplemented",
     "Unsupported",
+];
+
+/// Bold leads (case as written) that open a list of gaps or limits
+/// (WP-1797): the bold text is the lead itself, or the lead followed by
+/// `:`, `.` or ` (` (`**Gaps (owners).**`, `**Open: bit-fields.**`, but
+/// not `**Missing warnings.**` or `**Deferred deactivation**`). Every
+/// unit under such a lead (the lead's own paragraph when text follows
+/// it, and each list item below it) carries a `<!-- kiln-gap: GAP-NNN
+/// -->` marker (then it is a spec site of that entry) or names an open
+/// BACKLOG row (`WP-NNN`).
+pub const SPEC_LIST_LEADS: &[&str] = &[
+    "Deferred",
+    "Gap",
+    "Gaps",
+    "Known gap",
+    "Known gaps",
+    "Known limitation",
+    "Known limitations",
+    "Limitations",
+    "Missing",
+    "Not covered",
+    "Not yet",
+    "Open",
+    "Remaining",
+    "Stubs",
+    "TODO",
 ];
 
 /// The spec directory whose top-level `.md` files hold spec sites.
@@ -499,14 +535,18 @@ pub fn scan_file(rel: &str, src: &str) -> Vec<Site> {
 
 /// The spec sites of one spec file (`rel` relative to the root): each
 /// line whose bold lead is one of [`SPEC_LEADS`] (outside fenced code),
-/// with the marker on its line or on the line directly above.
+/// with the marker on its line or on the line directly above; and each
+/// unit under a [`SPEC_LIST_LEADS`] lead (`what` = `spec-list`).
 pub fn scan_spec_file(rel: &str, src: &str) -> Vec<Site> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Vec::new();
     let mut heading = String::new();
     let mut fenced = false;
-    for (k, l) in lines.iter().enumerate() {
+    let mut k = 0;
+    while k < lines.len() {
+        let l = lines[k];
         let t = l.trim_start();
+        k += 1;
         if t.starts_with("```") {
             fenced = !fenced;
             continue;
@@ -518,35 +558,104 @@ pub fn scan_spec_file(rel: &str, src: &str) -> Vec<Site> {
             heading = t.trim_start_matches('#').trim().replace('`', "");
             continue;
         }
-        let item = t
-            .strip_prefix("- ")
-            .or_else(|| t.strip_prefix("* "))
-            .or_else(|| {
-                let digits = t.bytes().take_while(u8::is_ascii_digit).count();
-                (digits > 0).then(|| t[digits..].strip_prefix(". ")).flatten()
-            })
-            .unwrap_or(t);
+        let item = list_body(t).unwrap_or(t);
         let Some(bold) = item.strip_prefix("**") else { continue };
+        let site = |line: usize, what: &str, text: String| Site {
+            file: rel.to_owned(),
+            line: line + 1,
+            func: format!("§{heading}"),
+            what: what.to_owned(),
+            text,
+            marker: marker_near(&lines, line),
+        };
         let is_lead = SPEC_LEADS.iter().any(|lead| {
             bold.strip_prefix(lead)
                 .is_some_and(|r| r.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric()))
         });
-        if !is_lead {
+        if is_lead {
+            out.push(site(k - 1, "spec", t.to_owned()));
             continue;
         }
-        let marker = std::iter::once(k)
-            .chain(k.checked_sub(1).filter(|&j| lines[j].trim_start().starts_with("<!--")))
-            .find_map(|j| marker_of(lines[j]));
-        out.push(Site {
-            file: rel.to_owned(),
-            line: k + 1,
-            func: format!("§{heading}"),
-            what: "spec".to_owned(),
-            text: t.to_owned(),
-            marker,
-        });
+        let Some(close) = bold.find("**") else { continue };
+        let lead_text = &bold[..close];
+        if !SPEC_LIST_LEADS.iter().any(|lead| {
+            lead_text.strip_prefix(lead).is_some_and(|r| {
+                r.is_empty() || r.starts_with(':') || r.starts_with('.') || r.starts_with(" (")
+            })
+        }) {
+            continue;
+        }
+        let ind = indent(l);
+        let lead_item = list_body(t).is_some();
+        // The lead's own paragraph, when text follows the bold lead.
+        let end = unit_end(&lines, k - 1, ind);
+        let after = bold[close + 2..].trim_start_matches([':', '.']).trim();
+        if !after.is_empty() || end > k {
+            out.push(site(k - 1, "spec-list", lines[k - 1..end].join(" ")));
+        }
+        k = end;
+        // The list items below it.
+        loop {
+            let mut j = k;
+            while lines.get(j).is_some_and(|l| l.trim().is_empty() || l.trim().starts_with("<!--"))
+            {
+                j += 1;
+            }
+            let Some(&l2) = lines.get(j) else { break };
+            let i2 = indent(l2);
+            let t2 = l2.trim_start();
+            let below = if lead_item { i2 > ind } else { i2 >= ind };
+            if t2.starts_with("```") || t2.starts_with('#') || list_body(t2).is_none() || !below {
+                break;
+            }
+            let end2 = unit_end(&lines, j, i2);
+            out.push(site(j, "spec-list", lines[j..end2].join(" ")));
+            k = end2;
+        }
     }
     out
+}
+
+/// The text of a list item after its marker (`- `, `* `, `N. `).
+fn list_body(t: &str) -> Option<&str> {
+    t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).or_else(|| {
+        let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+        (digits > 0).then(|| t[digits..].strip_prefix(". ")).flatten()
+    })
+}
+
+/// The indentation of a line, in bytes.
+fn indent(l: &str) -> usize {
+    l.len() - l.trim_start().len()
+}
+
+/// The end (exclusive) of the paragraph or list item starting at line
+/// `start` with indentation `ind`: its continuation lines run to a blank
+/// line, a heading, a fence, or a list item indented no deeper than
+/// `ind` plus two (the next item, or the first of a nested list).
+fn unit_end(lines: &[&str], start: usize, ind: usize) -> usize {
+    let mut j = start + 1;
+    while let Some(&l) = lines.get(j) {
+        let t = l.trim_start();
+        if t.is_empty()
+            || t.starts_with('#')
+            || t.starts_with("```")
+            || (list_body(t).is_some() && indent(l) <= ind + 3)
+            || t.starts_with("<!--")
+        {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// The marker of the spec unit at line `k`: on its line, or on a comment
+/// line directly above it.
+fn marker_near(lines: &[&str], k: usize) -> Option<Marker> {
+    std::iter::once(k)
+        .chain(k.checked_sub(1).filter(|&j| lines[j].trim_start().starts_with("<!--")))
+        .find_map(|j| marker_of(lines[j]))
 }
 
 /// Every top-level `.md` file of [`SPEC_DIR`], relative to `root`, sorted.
@@ -684,6 +793,21 @@ fn backlog_status(backlog: &str) -> BTreeMap<&str, &str> {
         .collect()
 }
 
+/// Whether a BACKLOG status cell is open: `open` (with an optional
+/// parenthesized note, `open (low priority)`) or `in progress`.
+fn is_open(st: &str) -> bool {
+    st == "open" || st == "in progress" || st.starts_with("open (")
+}
+
+/// The `WP-NNN` ids a text names (`WP-1797`, `WP-1745c` as `WP-1745c`).
+fn wp_ids(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.match_indices("WP-").filter_map(|(at, _)| {
+        let rest = &text[at + 3..];
+        let n = rest.bytes().take_while(u8::is_ascii_alphanumeric).count();
+        (n > 0 && rest.as_bytes()[0].is_ascii_digit()).then(|| format!("WP-{}", &rest[..n]))
+    })
+}
+
 /// The lint: `Err` lists every problem, one per line.
 pub fn check(root: &Path) -> Result<(), Vec<String>> {
     let sites = scan(root).map_err(|e| vec![e])?;
@@ -715,6 +839,18 @@ pub fn check_with(sites: &[Site], inventory: &str, backlog: &str) -> Result<(), 
     for (s, key) in sites.iter().zip(&keys) {
         let at = format!("{}:{} ({}, {})", s.file, s.line, s.func, s.what);
         match &s.marker {
+            None if s.what == "spec-list" => {
+                let owned =
+                    wp_ids(&s.text).any(|id| status.get(id.as_str()).is_some_and(|st| is_open(st)));
+                if !owned {
+                    problems.push(format!(
+                        "{at}: an item under a gap-list lead (static_gaps::SPEC_LIST_LEADS) that \
+                         names no open {BACKLOG} row and has no `<!-- kiln-gap: GAP-NNN -->` \
+                         marker; name its row, add an entry to {INVENTORY}, or reword it if it is \
+                         not a gap"
+                    ));
+                }
+            }
             None if s.what == "spec" => problems.push(format!(
                 "{at}: a spec paragraph that declares a gap, without a `<!-- kiln-gap: GAP-NNN \
                  -->` marker; add an entry to {INVENTORY} (and a BACKLOG row) and mark it, or \
@@ -727,7 +863,7 @@ pub fn check_with(sites: &[Site], inventory: &str, backlog: &str) -> Result<(), 
             Some(Marker::Bad(w)) => {
                 problems.push(format!("{at}: `kiln-gap: {w}` is neither GAP-NNN nor forward"));
             }
-            Some(Marker::Forward | Marker::Check) if s.what == "spec" => {
+            Some(Marker::Forward | Marker::Check) if s.what.starts_with("spec") => {
                 problems.push(format!("{at}: a spec site's marker must name a GAP-NNN"));
             }
             Some(Marker::Check) => {
@@ -775,7 +911,7 @@ pub fn check_with(sites: &[Site], inventory: &str, backlog: &str) -> Result<(), 
                 "{INVENTORY}: {}: row `{}` is not a {BACKLOG} row (or `excluded: <reason>`)",
                 e.id, e.row
             )),
-            Some(&st) if st == "open" || st == "in progress" => {}
+            Some(&st) if is_open(st) => {}
             Some(st) => problems.push(format!(
                 "{INVENTORY}: {}: row {} is `{st}`, not open (a fixed gap leaves no site)",
                 e.id, e.row
@@ -978,6 +1114,36 @@ mod tests {
         let p = check_with(&sites, &inv(rows), BACKLOG_ROWS).unwrap_err();
         assert_eq!(p.len(), 1, "{p:#?}");
         assert!(p[0].contains("spec/r.md:2 (§3. Failures, spec): a spec paragraph"), "{p:#?}");
+    }
+
+    #[test]
+    fn spec_gap_lists_name_rows() {
+        let spec = "# 5. Calls\n- **Gaps (owners).** owned by WP-10.\n  - nested, WP-11 only.\n\
+                    \n  - owned, WP-10.\n- Next item, not under the lead.\n\
+                    **Remaining:**\n1. done long ago, WP-11\n   continued.\n\
+                    <!-- kiln-gap: GAP-007 -->\n2. marked.\n\nProse ends it.\n- **Missing warnings.** x\n\
+                    - **Deferred deactivation** is a feature.\n**Open: bytes.** WP-12 nothing.\n";
+        let sites = scan_spec_file("spec/c.md", spec);
+        let got: Vec<(usize, &str, Option<Marker>)> =
+            sites.iter().map(|s| (s.line, s.what.as_str(), s.marker.clone())).collect();
+        assert_eq!(
+            got,
+            [
+                (2, "spec-list", None),
+                (3, "spec-list", None),
+                (5, "spec-list", None),
+                (8, "spec-list", None),
+                (11, "spec-list", Some(Marker::Gap("GAP-007".into()))),
+                (16, "spec-list", None),
+            ]
+        );
+        let rows = "| GAP-007 | f | misc | `z` | `spec/c.md::§5. Calls` | 0 | WP-10 |\n";
+        let p = check_with(&sites, &inv(rows), BACKLOG_ROWS).unwrap_err();
+        let at: Vec<&str> = p.iter().map(|m| m.split(' ').next().unwrap_or("")).collect();
+        assert_eq!(at, ["spec/c.md:3", "spec/c.md:8", "spec/c.md:16"], "{p:#?}");
+        assert!(p[0].contains("names no open docs/BACKLOG.md row"), "{p:#?}");
+        assert_eq!(wp_ids("WP-10, WP-1745c and WP-x").collect::<Vec<_>>(), ["WP-10", "WP-1745c"]);
+        assert!(is_open("open (low priority)") && !is_open("done: x") && !is_open("opened"));
     }
 
     #[test]

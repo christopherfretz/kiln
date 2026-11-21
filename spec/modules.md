@@ -446,15 +446,22 @@ constant, kiln gives clang 22's warning at the use, "TU local entity 'hidden' is
 constant-initialized to a TU-local value (`export inline int *ip =
 &hidden;`): kiln follows the text and clang (docs/status/deviations.md).
 
-Not checked (GCC 16.1 accepts each, or kiln does not yet): a friend
-declaration (/15.3), a local class (except its default member
-initializer in an inline function), an enumerator, a variable that
-might be usable in constant expressions except an odr-use of one, a
-function or variable from
-the global module fragment (GCC 16.1 only warns,
-`-Wexpose-global-module-tu-local`), a template instantiation, a
-non-module or implementation unit, a header unit, the private module
-fragment. Kept against GCC 16.1 (it rejects, the text exempts; clang 22
+Not checked, as the text exempts them: a friend declaration (/15.3), a
+variable that might be usable in constant expressions except an odr-use
+of one, a non-module or implementation unit, a header unit, the private
+module fragment; and, as GCC 16.1 (which only warns,
+`-Wexpose-global-module-tu-local`), a function or variable from the
+global module fragment.
+
+<!-- kiln-gap: GAP-174 -->
+**Not implemented:** three exposures are accepted silently, where clang
+22 warns (`-WTU-local-entity-exposure`) and GCC 16.1 accepts: an
+enumerator of a TU-local enumeration named in an exported inline
+function (`return e1;`), a TU-local entity named in a member of a local
+class of one (except a default member initializer), and a call that
+instantiates a template exposing a TU-local entity (`f3<int>`).
+
+Kept against GCC 16.1 (it rejects, the text exempts; clang 22
 accepts, docs/status/deviations.md): a default argument that only reads
 a TU-local constant (/15.4), the initializer of a class template's static
 inline data member or of a variable template, an inline variable
@@ -3684,10 +3691,14 @@ Still refused in this bucket:
   the requires-expression bodies, which declare its parameters.
 - A lambda-expression or local class in a type's expression section
   (`decltype([]{})`), and a local class used before its definition.
-- An array or range designator, and a member function of a local class
-  in an imported module's inline function (the replay has the same
-  gap: neither side emits it; xfail
-  `module.interface/local-class-members-link-run.cpp`).
+- An array or range designator.
+
+<!-- kiln-gap: GAP-175 -->
+**Not implemented:** a member function of a local class in an imported
+module's inline function is emitted by neither the module unit nor the
+importer, so the importer's call is an undefined reference at link
+time (the replay has the same gap; xfail
+`module.interface/local-class-members-link-run.cpp`).
 
 Two gaps outside the bucket, first reached once libstdc++'s `<compare>`
 was carried, are closed with it: a dependent base named through a

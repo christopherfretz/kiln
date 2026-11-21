@@ -2863,7 +2863,7 @@ Driver diagnostics, in clang's wording:
 - `no input files`
 - `unsupported target '<t>'` (kiln only)
 - `unsupported argument '<v>' to option '--driver-mode='`
-- `<action> is not implemented yet` (kiln only)
+- `<action> is not implemented yet` (kiln only; reserved, no driver path reports it today)
 - `cannot specify -o when generating multiple output files`
 - `-emit-llvm cannot be used when linking`
 - `unable to execute command: Executable "<tool>" doesn't exist!`

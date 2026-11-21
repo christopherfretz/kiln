@@ -558,9 +558,16 @@ search over blocks with a fixed 128-byte key buffer: no allocation.
 ### Deviations from clang
 - `f32 f64 f128 bf16` accepted (clang 19 and 22 reject them; an
   extension before C++23, above); `f16` in every mode (clang: targets
-  with `_Float16`); GNU `q`/`w`, MS `i64`,
-  fixed-point and `_BitInt` (`wb`) suffixes are not supported (invalid
-  suffix).
+  with `_Float16`). GNU `q` (`__float128`) is accepted, as clang. `w`,
+  MS `i64` and C's `wb` are invalid suffixes in C++, as in clang 22;
+  clang's C++ `_BitInt` spelling `__wb` / `__uwb` is accepted, with
+  clang's pedantic `-Wbit-int-extension` warning (WP-1797;
+  `lex.icon/bit-int-suffix-cxx.cpp`).
+<!-- kiln-gap: GAP-173 -->
+- **Not supported:** the fixed-point suffixes (`k`, `r`, `hk`, `uk`, ...;
+  ISO/IEC TR 18037, clang's off-by-default `-ffixed-point`): kiln has no
+  `-ffixed-point` (`unknown argument`), and without it clang rejects them
+  too (invalid suffix).
 - `i`/`if`/`il` on a number are a ud-suffix (the standard library's
   `operator""i`), not the GNU imaginary suffix.
 - `FourCharLiteral` is Extension (clang's `-Wfour-char-constants` is off by

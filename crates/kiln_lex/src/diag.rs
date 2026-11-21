@@ -312,6 +312,8 @@ pub enum LexDiagKind {
     SizeSuffixExtension,
     /// A `wb`/`uwb` suffix in C before C23 (`ext_c23_bitint_suffix`).
     BitIntSuffixExtension,
+    /// A `__wb`/`__uwb` suffix in C++ (`ext_cxx_bitint_suffix`, pedantic).
+    BitIntSuffixClang,
     /// A `wb`/`uwb` suffix in C23 and later
     /// (`warn_c23_compat_bitint_suffix`, off by default).
     BitIntSuffixCompat,
@@ -412,6 +414,7 @@ impl LexDiagKind {
             | K::HexFloatExtension
             | K::SizeSuffixExtension
             | K::BitIntSuffixExtension
+            | K::BitIntSuffixClang
             | K::BitIntSuffixCompat
             | K::FloatSuffixExtension
             | K::FloatSuffixGnu
