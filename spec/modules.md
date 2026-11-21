@@ -416,7 +416,28 @@ at its name (`modules/exposure.rs`):
   unevaluated operand, a discarded statement, a full-expression that
   folds to a value that is not TU-local (a constant read, `sizeof`), a
   discarded-value expression that only names a function or variable or
-  takes its address.
+  takes its address;
+- the declarations of a local class of an inline function that is not
+  TU-local, which are part of its body (WP-1814; also a class nested in
+  one, and one in a lambda there): a base class and a data member's type
+  (the error at the class), a member function's return and parameter
+  types and default arguments (at the member), and the body of a member
+  function that is inline (written `inline`, `constexpr` or `consteval`;
+  the item above). GCC 16.1 rejects each at the same declaration;
+- a use of an instantiation that is TU-local by /16.5 (WP-1814): an
+  instantiated inline function (of a function template, or a member of an
+  instantiated class template) whose instantiated body names a TU-local
+  entity, found there (a call resolved by argument-dependent lookup in the
+  instantiation) or in the template, or names an instantiation that is
+  TU-local so. A use of an instantiation of the purview's templates is
+  held as any other use (a full-expression folding to a pointer to it keeps
+  it) and decided at the end of the unit, after its instantiations
+  (`module_resolve_deferred_exposures`): "declaration of 'call' exposes
+  TU-local entity 'by_adl<N::A>'" at the declaration using it. While an
+  instantiated function's body is formed, its uses are held for it as
+  for an inline function and recorded at its end. GCC 16.1 rejects the
+  instantiation itself, at the template; clang 22 accepts one found by
+  argument-dependent lookup.
 
 A variable usable in constant expressions with internal linkage is
 TU-local, but /15.4 ignores a reference to it that is not an odr-use.
@@ -446,20 +467,36 @@ constant, kiln gives clang 22's warning at the use, "TU local entity 'hidden' is
 constant-initialized to a TU-local value (`export inline int *ip =
 &hidden;`): kiln follows the text and clang (docs/status/deviations.md).
 
+Not exposures by the text, with clang 22's warning "TU local entity
+'e1' is exposed" at each use (from `-fclang-compat=22`, not in a
+template definition; GCC 16.1 accepts each; WP-1814):
+- an enumerator of a TU-local enumeration of the purview, named in an
+  inline function's body (a lambda there, a local class's member), in
+  an inline variable's initializer, with or without its enumeration (the
+  warning at the qualified name's first token): /16.1 makes only a type,
+  function, variable or template TU-local, and GCC 16.1 replaces an
+  enumerator by its value. No warning in a default member initializer
+  or a default argument, as clang 22;
+- a TU-local entity named in the body of a member function of a local
+  class of an inline function that is not inline itself (a class
+  attached to a named module, [class.mfct]/1): /15.1 ignores that body;
+- a use of a specialization of a function template that is not inline
+  whose definition names a TU-local entity where it is written (also
+  explicitly instantiated): /15.1 ignores its body, so it is not TU-local.
+  A name found by argument-dependent lookup only in the instantiation and
+  a member of a class template get no warning, as clang 22.
+
 Not checked, as the text exempts them: a friend declaration (/15.3), a
 variable that might be usable in constant expressions except an odr-use
 of one, a non-module or implementation unit, a header unit, the private
 module fragment; and, as GCC 16.1 (which only warns,
 `-Wexpose-global-module-tu-local`), a function or variable from the
-global module fragment.
-
-<!-- kiln-gap: GAP-174 -->
-**Not implemented:** three exposures are accepted silently, where clang
-22 warns (`-WTU-local-entity-exposure`) and GCC 16.1 accepts: an
-enumerator of a TU-local enumeration named in an exported inline
-function (`return e1;`), a TU-local entity named in a member of a local
-class of one (except a default member initializer), and a call that
-instantiates a template exposing a TU-local entity (`f3<int>`).
+global module fragment. As clang 22, the instantiations of a template
+declared outside the purview (the global module fragment, a header unit,
+an imported module) are not followed: a standard library template
+instantiated with a module's type whose body finds a TU-local operator by
+argument-dependent lookup leaves the inline function calling it valid
+(GCC 16.1 rejects `std::less<void>::operator()`'s instantiation; WP-1814).
 
 Kept against GCC 16.1 (it rejects, the text exempts; clang 22
 accepts, docs/status/deviations.md): a default argument that only reads
@@ -471,7 +508,11 @@ Tests: `basic.link/exposure-names-tu-local-entity.cpp`,
 `basic.link/exposure-inline-var-initializer.cpp`,
 `basic.link/exposure-member-init-default-arg.cpp`, `-accepted.cpp`,
 `basic.link/exposure-odr-use-and-closure.cpp`,
-`basic.link/exposure-initializer-gcc-rejects.cpp`.
+`basic.link/exposure-initializer-gcc-rejects.cpp`,
+`basic.link/exposure-enumerator-warning.cpp`,
+`basic.link/exposure-local-class-members.cpp`, `-accepted.cpp`,
+`basic.link/exposure-instantiation.cpp`, `-accepted.cpp`,
+`-gmf-accepted.cpp`.
 
 ## 7. Code generation and mangling
 

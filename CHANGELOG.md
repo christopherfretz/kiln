@@ -10,6 +10,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The last TU-local exposures kiln accepted silently in a module
+  interface (WP-1814, GAP-174): a local class's base, data member or
+  member function signature naming a TU-local entity in an inline
+  function, and a use of an inline template's instantiation whose body
+  names one (an argument-dependent call in the instantiation too,
+  [basic.link]/16.5) are now "declaration of 'f' exposes TU-local entity"
+  errors, as GCC 16.1 rejects them. An enumerator of a TU-local
+  enumeration, a non-inline local-class member's body and a non-inline
+  function template's specialization are not exposures by the text and
+  get clang 22's `-WTU-local-entity-exposure` warning.
 - clang address spaces (WP-1803): `address_space(N)` and the `opencl_*`
   attributes (`__attribute__` and `[[clang::]]`) are a type qualifier, as
   in clang: part of the type for overloading, templates and deduction,
