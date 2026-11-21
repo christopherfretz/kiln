@@ -5840,6 +5840,45 @@ diagnostics and IR.
   automatic object (spec/codegen.md `fold.rs`). Before C++26 the freeze
   rejects as before. Validation: `tests/conformance/expr.const/constexpr-ref-automatic{,-errors,-run}.cpp`,
   `tests/conformance/dcl.struct.bind/constexpr-ref-automatic.cpp`.
+- **Structured bindings and constexpr-referenceable objects (C++26,
+  P2686R5, CWG 3135, WP-1796).** A binding names a member or element of
+  the decomposed variable `e` ([dcl.struct.bind]/6, /8), so its address
+  is a permitted result exactly where the member access it denotes is:
+  `auto [lx, ly] = l; constexpr int* p = &ly;` is constant-initialized in
+  `l`'s function as `&l.y` is (the rule above, `v` = `e`), and rejected
+  from a `static`/`thread_local` initializer, a lambda body, or after the
+  function returns, with clang 22's notes (`pointer to subobject of
+  '[lx, ly]'`). A tuple-like binding names the object of its holding
+  variable `r_i` ([dcl.struct.bind]/7): when `get<i>` returns an lvalue or
+  xvalue, `r_i` is a reference and follows references (so a non-`constexpr`
+  one to an automatic object stays under the narrowing above, as `auto& e
+  = l;` does); when it returns a prvalue, `r_i` is an object of type `T_i`
+  (CWG 3135: `S T_i r_i = initializer;`), which kiln, as clang, still
+  represents as a reference bound to a lifetime-extended temporary of the
+  same storage. The Oven treats that temporary as the variable's object
+  (`kiln_oven::value::holding_object`): it is read only when `r_i` is
+  potentially-constant ([expr.const.init]/5: `constexpr`, or `const`
+  non-volatile integral or enumeration type) and constant-initialized, so
+  `const auto [a, b] = X{};` with a constant `get` makes `b` usable (an
+  array bound), a `const` class `T_i` is not read, and a `constexpr`
+  declaration's non-`const` `T_i` is; its address is constant whether or
+  not `r_i` is constant-initialized (`bind_holding_object` rebinds the
+  reference to the temporary's object instead of P2280's unknown object),
+  so `&b` is constant at namespace scope and, at C++26, from a `constexpr`
+  local of the same function; a lax refold of the initializer does not
+  record the temporary's value. Applied in every mode (GCC 16.1 applies
+  it from C++20; clang 22 not at all; docs/status/deviations.md). The
+  automatic lifetime-extended temporaries of a `constexpr` local
+  reference or binding (WP-1122) are constexpr-referenceable as their
+  extending variable is (`v` of [expr.const.init]/2): a `static
+  constexpr` pointer to one is rejected, the notes naming the variable
+  (`pointer to 'r'`, then the not-static note, or "declared here" for a
+  holding variable), as clang names the reference (accepted before
+  WP-1796). Such a binding as a constant template argument
+  (`template<const int& R>`) is rejected as clang 22 rejects it, the
+  object being the holding temporary; GCC 16.1 accepts it as the variable
+  (docs/status/deviations.md). Tests: `dcl.struct.bind/p2686-referenceable{,-errors,-automatic}.cpp`,
+  `dcl.struct.bind/cwg3135-prvalue-get-object{-errors,-run}.cpp`.
 - **Lifetime-extended temporaries of a constexpr local reference (C++26,
   P2686R5, WP-1122).** A temporary bound to a `constexpr` reference (or
   `constexpr` structured binding, or a member of an aggregate initializer)

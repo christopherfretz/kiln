@@ -130,6 +130,43 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     info
 }
 
+/// CWG 3135 ([dcl.struct.bind]/7, C++26): the holding variable `r` of a
+/// tuple-like structured binding whose initializer (`get<i>`) is a
+/// prvalue is declared `S T_i r = initializer;`, an object of type `T_i`,
+/// not a reference (`T_i` itself not a reference type). Kiln, as clang,
+/// keeps the reference and the lifetime-extended temporary it binds
+/// (the same storage, address and lifetime), so that temporary `t` *is*
+/// the variable's object: it is read as `r` would be (usable only when
+/// `r` is `constexpr` or of `const` integral or enumeration type,
+/// [expr.const.init]/5), its address is that of `r` whether or not `r`
+/// is constant-initialized, and it is constexpr-referenceable as `r`
+/// ([expr.const.init]/2). Returns `r`.
+pub(crate) fn holding_object(ast: &Ast, t: DeclId) -> Option<DeclId> {
+    let r = ast.decls.lifetime_extended(t)?.extending;
+    // Holding variables are implicit; the binding scan only for those.
+    if !ast.decls.get(r).has(kiln_ast::decl::DeclFlags::IMPLICIT) {
+        return None;
+    }
+    let ti = ast.decls.get(ast.decls.holding_binding(r)?).ty()?;
+    let tt = ast.decls.get(t).ty()?;
+    (!ast.types.is_reference(ti) && ast.types.same_unqualified(ti, tt)).then_some(r)
+}
+
+/// The temporary that is holding variable `r`'s object under CWG 3135
+/// ([`holding_object`]): the one its initializer materializes, if any.
+pub(crate) fn holding_object_temp(ast: &Ast, r: DeclId) -> Option<DeclId> {
+    let mut e = ast.decls.var(r)?.init?;
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::ExprWithCleanups | ExprKind::ConstantExpr => e = ast.exprs.operand(e),
+            ExprKind::MaterializeTemporaryExpr => break,
+            _ => return None,
+        }
+    }
+    let t = ast.exprs.lifetime_extended_temporary(e)?;
+    (holding_object(ast, t).map(|x| ast.first(x)) == Some(ast.first(r))).then_some(t)
+}
+
 /// Why a value cannot be frozen.
 pub(crate) enum Freeze {
     Fault(FailKind),
@@ -562,6 +599,14 @@ impl Oven {
         }
         self.let_pending.clear();
         for (t, v) in out {
+            // A lax evaluation's value is not a constant one: a holding
+            // variable's object (CWG 3135) is read through it only once
+            // its variable is constant-initialized (`refold_var_init` of
+            // a `const int` binding whose `get` reads a non-constexpr
+            // object, WP-1796).
+            if self.run.lax && holding_object(b.ast(), t).is_some() {
+                continue;
+            }
             b.set_temporary_value(t, v);
         }
         Ok(())
@@ -969,6 +1014,34 @@ impl Oven {
         let referenceable = automatic
             && matches!(a.origin, Origin::Global(d) | Origin::External(d)
                 if self.referenceable_from_object(b, d));
+        // A temporary whose lifetime an automatic variable extends
+        // ([class.temporary]/6) is an automatic object too: by
+        // [expr.const.init]/2 (`v` is that variable) it is
+        // constexpr-referenceable exactly where that variable's own object
+        // would be, so not from a `static` variable's initializer nor
+        // from another function (`constexpr const int &r = 1; static
+        // constexpr const int *p = &r;`, WP-1796). The variable being
+        // initialized may hold its own: a `constexpr` local's
+        // (`referenceable_from_object`), or a holding variable's object
+        // under CWG 3135 ([`holding_object`]) in any mode.
+        let let_local = match a.origin {
+            Origin::Let(t) => b
+                .ast()
+                .decls
+                .lifetime_extended(t)
+                .map(|l| l.extending)
+                .filter(|&x| is_local_var(b.ast(), x)),
+            _ => None,
+        };
+        let let_referenceable = match (a.origin, let_local) {
+            (Origin::Let(t), Some(x)) => {
+                let ast = b.ast();
+                self.referenceable_from_object(b, x)
+                    || holding_object(ast, t).is_some()
+                        && self.run.object.is_some_and(|o| ast.first(o) == ast.first(x))
+            }
+            _ => true,
+        };
         // The object of unknown value of a namespace-scope reference
         // (P2280; clang `CheckLValueConstantExpression`
         // `allowConstexprUnknown`).
@@ -999,7 +1072,7 @@ impl Oven {
         {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
-        if p.is_static() && (!automatic || referenceable) {
+        if p.is_static() && (!automatic || referenceable) && let_referenceable {
             self.check_ref_past_end(b, q, pointee, p, &a, loc)?;
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
@@ -1022,6 +1095,7 @@ impl Oven {
         // ([class.temporary]/6): its value is frozen with the result.
         if let Origin::Let(t) = a.origin
             && a.live
+            && let_referenceable
             && self.extends_object(b.ast(), t)
         {
             // clang `CheckLValueConstantExpression`: a lifetime-extended
@@ -1078,7 +1152,15 @@ impl Oven {
         let what = if sub { "subobject of " } else { "" };
         let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
-        match a.origin {
+        // An automatic lifetime-extended temporary is named by its
+        // variable, as clang names the reference it does not evaluate
+        // (`pointer to 'r'`; a structured binding's holding variable is
+        // only "declared here").
+        let origin = match let_local {
+            Some(x) => Origin::Var(x),
+            None => a.origin,
+        };
+        match origin {
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) | Origin::Unknown(d) => {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_diag_name(d, &mut name);
@@ -1091,7 +1173,8 @@ impl Oven {
                 ));
                 let constexpr_local = ast.decls.get(d).kind() == DeclKind::Var
                     && is_local_var(ast, d)
-                    && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+                    && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr())
+                    && !(let_local.is_some() && ast.decls.is_holding_var(d));
                 let here = if constexpr_local {
                     format!(
                         "address of non-static constexpr variable '{name}' may differ on each invocation of the enclosing function; add 'static' to give it a constant address"
@@ -1639,6 +1722,7 @@ impl Oven {
                     // P2280R4 is a defect report: every mode from C++11
                     // (as GCC; clang 22 only from C++23, WP-1527).
                     let p = self.resolve_var(b, g, d, top);
+                    let p = self.bind_holding_object(b, d, p, top);
                     let p = self.bind_unknown(b, d, p);
                     match ty {
                         Some(t) => _ = self.provisional_objs.insert(g, (t, p)),
@@ -1691,19 +1775,26 @@ impl Oven {
         let ast = b.ast();
         let q = ast.decls.get(t).ty().unwrap_or(QualType::INT);
         let l = ast.decls.lifetime_extended(t).copied();
-        // An array temporary is const through its elements. A `constexpr`
-        // tuple-like structured binding's prvalue `get<i>` initializes an
-        // object, not a reference ([dcl.struct.bind]/4: U_i is T_i), a
-        // `constexpr` variable usable in constant expressions; kiln (as
-        // clang) holds it in a reference to a lifetime-extended
-        // temporary, so the temporary is that object.
+        // An array temporary is const through its elements. A tuple-like
+        // structured binding's prvalue `get<i>` initializes an object,
+        // not a reference (CWG 3135, [`holding_object`]): it is usable
+        // when that variable is potentially-constant ([expr.const.init]/4:
+        // `constexpr`, or of `const` integral or enumeration type), not
+        // whenever it is `const`, as a temporary extended by a reference
+        // would be.
         let is_const =
             ast.types.canonical(q).has_const_bit() || ast.types.effective_quals(q).is_const();
         let usable = l.is_some_and(|l| {
             var_info(ast, l.extending).usable
-                && (is_const
-                    || ast.decls.var(l.extending).is_some_and(|v| v.spec.is_constexpr())
-                        && ast.decls.is_holding_var(l.extending))
+                && match holding_object(ast, t) {
+                    Some(r) => {
+                        let c = ast.types.canonical(q);
+                        let integral = ast.types.is_integral(c) || ast.types.as_enum(c).is_some();
+                        ast.decls.var(r).is_some_and(|v| v.spec.is_constexpr())
+                            || is_const && integral && !ast.types.effective_quals(q).is_volatile()
+                    }
+                    None => is_const,
+                }
         });
         let value = l.and_then(|l| l.value);
         let ty = self.types.intern(b, q);
@@ -1769,6 +1860,13 @@ impl Oven {
             self.unknowns.insert(d, u);
             u
         };
+        self.rebind_ref_slot(pp, slot_ty, d, u);
+        p
+    }
+
+    /// Makes reference variable `d`'s external object `pp` (of type
+    /// `slot_ty`) a constant reference to the object at `u`.
+    fn rebind_ref_slot(&mut self, pp: Ptr, slot_ty: OTy, d: DeclId, u: u64) {
         let slot = (pp.slot & !crate::mem::STATIC_BIT) as usize;
         let base = u64::from(self.mem.statics[slot].base) + u64::from(pp.off);
         let len = self.types.size(slot_ty).min(8);
@@ -1778,6 +1876,29 @@ impl Oven {
         self.mem.stat.write(base, len, u128::from(u));
         self.mem.stat.set_init(base, len, true);
         self.mem.stat.set_ptr(base, len, true);
+    }
+
+    /// CWG 3135: a holding variable `d` whose object is its temporary
+    /// ([`holding_object`]) designates that object whether or not it is
+    /// constant-initialized. When `d` resolved to an external object (its
+    /// initializer is not a constant expression), its reference is
+    /// rebound to the temporary's object, external too, instead of to an
+    /// object of unknown value (P2280): `&b` is then the address of `b`'s
+    /// object, and reading `b` is diagnosed as a read of the variable.
+    fn bind_holding_object(&mut self, b: &mut dyn SemaBridge, d: DeclId, p: u64, top: u32) -> u64 {
+        let pp = Ptr::decode(p);
+        let Some(a) = self.mem.alloc_any(pp) else { return p };
+        if !matches!(a.origin, Origin::External(x) if x == d) {
+            return p;
+        }
+        let slot_ty = a.ty;
+        let ast = b.ast();
+        if !ast.decls.get(d).ty().is_some_and(|q| ast.types.is_reference(q)) {
+            return p;
+        }
+        let Some(t) = holding_object_temp(ast, d) else { return p };
+        let u = self.resolve_let(b, t, top);
+        self.rebind_ref_slot(pp, slot_ty, d, u);
         p
     }
 

@@ -460,11 +460,16 @@ impl Compiler<'_> {
     /// from its initializing declaration, so its value may designate
     /// them too (`constexpr const int &r = 42;` in a function); like the
     /// automatic variables of WP-467, narrowed to `constexpr` variables.
+    /// A holding variable whose object is its temporary (CWG 3135,
+    /// [`crate::value::holding_object`]) holds it in every mode: it is
+    /// that variable's own object, not a referent.
     pub(super) fn begin_static_extended(&mut self, init: ExprId, d: DeclId) {
         let mut temps = self.extended_temps(init, StorageDuration::Static);
-        if self.b.cxx26()
-            && crate::compile::is_local_var(self.ast(), d)
-            && self.ast().decls.var(d).is_some_and(|v| v.spec.is_constexpr())
+        let ast = self.ast();
+        let local = crate::compile::is_local_var(ast, d);
+        if local
+            && (self.b.cxx26() && ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr())
+                || crate::value::holding_object_temp(ast, d).is_some())
         {
             temps.extend(self.extended_temps(init, StorageDuration::Automatic));
         }
