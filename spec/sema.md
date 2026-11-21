@@ -2723,6 +2723,34 @@ instantiation unless stated.
   declaration of 'f' follows non-inline definition" at the name with a
   note at the definition; also for friends, function templates, qualified
   and block-scope redeclarations. Tests: dcl.fct.spec/inline-after-definition*.cpp.
+- **`constinit` added after initialization** ([dcl.constinit]/1,
+  `Sema::constinit_added_too_late`, WP-1834): a variable redeclaration
+  (namespace or block scope, `extern` or not, a static data member's
+  out-of-class declaration, a variable template, `thread_local`) whose
+  `constinit` is the first on its entity, after a declaration that
+  initialized it, is "'constinit' specifier added after initialization of
+  variable" at `constinit`, with "add the 'constinit' specifier to the
+  initializing declaration here" at that declaration (the one with an
+  initializer, else the definition; clang
+  `VarDecl::getInitializingDeclaration`); the specifier is dropped. Not
+  when an earlier declaration has `constinit` or
+  `require_constant_initialization`, nor on an explicit specialization.
+  `constinit` before the initializing declaration is the existing
+  -Wmissing-constinit warning at it. Same at every clang level. Tests:
+  dcl.constinit/constinit-added-after-initialization.cpp.
+- **Out-of-line member declarations** ([class.mfct]/1, [temp.expl.spec]/2;
+  `Sema::check_out_of_line_member_decl`, WP-1835): a member function,
+  constructor, destructor, conversion function or member (function)
+  template of a class or class template redeclared at namespace scope by
+  a qualified declaration that is not a definition (no body, `= default`
+  or `= delete`) is "out-of-line declaration of a member must be a
+  definition" at the declarator-id, a warning that is an error by default
+  (-Wout-of-line-declaration, clang `ext_out_of_line_declaration`; not
+  shown in system headers), given after the declaration's own checks and
+  attributes. Not for an explicit specialization or explicit
+  instantiation (any `template<>` head), a friend, an invalid
+  declaration, or a qualified declaration in a class or a block (errors
+  of their own). Tests: dcl.meaning/out-of-line-member-declaration*.cpp.
 - **Template parameter shadowing** ([temp.local]/6, `check_template_param_shadow`,
   WP-1042): besides the declarations checked before, an alias-declaration
   or alias template, a nested template head's parameter, a function
@@ -3741,7 +3769,18 @@ instantiation unless stated.
   `nothrow`, vector, calling-convention and SME attributes,
   `lifetimebound`, the Swift parameter ABIs) and annotations; from clang
   22 (`-fclang-compat>=22`) `deprecated`, `nodiscard`, `maybe_unused` /
-  `unused` in the standard `[[...]]` syntax with any scope. Tests
+  `unused` in the standard `[[...]]` syntax with any scope. A
+  redeclaration an error leaves out of the chain is still checked
+  against the declaration it would have followed, as clang merges the
+  attributes first (`Sema::after_def_prev`, `attr_merge_prev`; WP-1840):
+  an `inline` function declaration after a non-inline definition, a
+  `constexpr`/`consteval` mismatch, and every variable or static data
+  member redeclaration of a variable (a redefinition, another type, a
+  `static` or `thread_local` mismatch); [dcl.attr.noreturn]/1's
+  "'noreturn' attribute does not appear on the first declaration" is
+  checked against it too. A function declared `static` after a
+  non-static one is rejected before clang merges attributes: neither is
+  given there. Tests
   `tests/conformance/dcl.attr/attribute-after-definition*.{cpp,c}`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and

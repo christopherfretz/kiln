@@ -474,7 +474,7 @@ impl Sema<'_, '_> {
         self.check_cleanup_attrs(d, attrs);
         self.check_internal_linkage_attrs(d, attrs);
         if self.kind_of(d).is_function()
-            && let Some(prev) = self.ast.prev(d)
+            && let Some(prev) = self.attr_merge_prev(d)
         {
             // The first declaration of an explicit specialization is the
             // one formed from the template: clang gives it the location of

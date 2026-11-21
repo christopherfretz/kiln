@@ -213,6 +213,8 @@ sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{
 // [basic.link]/15.2, /17: a constexpr variable of a module interface initialized to a TU-local value is an exposure (GCC 16.1 rejects; clang 22 has no diagnostic; WP-1669).
 sema_constexpr_var_tu_local_value = Error (2) "constexpr variable '{0}' is initialized to a TU-local value: it exposes TU-local entity '{1}'";
 sema_constexpr_virtual_base = Error (3) "constexpr {0:member function|constructor} not allowed in {1:struct|interface|class} with virtual base {2:class|classes}";
+// WP-1834: clang `err_constinit_added_too_late`, `note_constinit_missing_here` (specifier form).
+sema_constinit_added_too_late = Error (0) "'constinit' specifier added after initialization of variable";
 sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
 sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
 sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";

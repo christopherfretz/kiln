@@ -142,6 +142,8 @@ sema_operator_overload_subscript_params = Error (2) "overloaded '{0}' cannot hav
 sema_operator_overload_variable = Error (1) "'{0}' cannot be the name of a variable or data member";
 sema_operator_overload_variadic = Error (1) "overloaded '{0}' cannot be variadic";
 sema_ordered_pointer_zero = Error (2) "ordered comparison between pointer and zero ({0} and {1})";
+// WP-1835: clang `ext_out_of_line_declaration` (DefaultError).
+sema_out_of_line_declaration = WarningError [OutOfLineDeclaration] (0) "out-of-line declaration of a member must be a definition";
 sema_out_of_line_default_deletes = Error (1) "defaulting this {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} would delete it after its first declaration";
 sema_overflow_builtin_int = Error (1) "operand argument to overflow builtin must be an integer type ({0} invalid)";
 sema_overflow_builtin_ptr_int = Error (1) "result argument to overflow builtin must be a pointer to a non-const integer type ({0} invalid)";
