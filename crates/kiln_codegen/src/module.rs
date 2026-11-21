@@ -1505,6 +1505,15 @@ impl<'a> Cg<'a> {
                         self.emit_global_structor(def)?;
                     }
                 }
+                // An imported inline `used` function whose body the
+                // drain read (`Sema::note_imported_body_used`, WP-1832).
+                _ if ast.modules.is_imported_named_unit_decl(first)
+                    && self.has_fn_attr(first, kiln_ast::attr::AttrKind::USED) =>
+                {
+                    if let Some(def) = ast.definition(first) {
+                        self.emit_fn_def(def)?;
+                    }
+                }
                 _ => {
                     if let Some(def) = ast.definition(first) {
                         self.emit_global_fn(def)?;
@@ -2221,20 +2230,6 @@ impl<'a> Cg<'a> {
             let _ = self.m.types.set_body(bt, &bf, rec.packed);
         }
         let _ = self.m.types.set_body(t, &fields, rec.packed);
-        t
-    }
-
-    /// The IR type of class `d`, which has no definition, as an opaque
-    /// named struct (clang `ConvertRecordDeclType` of an incomplete
-    /// class).
-    pub(crate) fn opaque_record_ty(&mut self, d: DeclId) -> LTy {
-        let first = self.ast.first(d);
-        if let Some(&t) = self.named.get(&first) {
-            return t;
-        }
-        let name = self.record_ty_name(first);
-        let t = self.m.types.named_struct(&name);
-        self.named.insert(first, t);
         t
     }
 
@@ -3330,11 +3325,39 @@ impl<'a> Cg<'a> {
         self.ann_note_fn(&name, first);
         self.fns.insert(first, f);
         if let Some(def) = self.deferred.remove(&first) {
-            self.to_emit.push(Def::Decl(def));
+            if self.read_with_imported_body(def) {
+                // clang reads this part of the imported body only now
+                // and hands the `used` function it names at once: it is
+                // defined before the body being emitted is finished
+                // (`TryMarkNoThrow` sees it), at its first use's place.
+                let saved = std::mem::replace(&mut self.f, Fx::empty());
+                let r = self.emit_fn_def(def);
+                self.f = saved;
+                r?;
+            } else {
+                self.to_emit.push(Def::Decl(def));
+            }
         } else if let Some(def) = self.inline_def(first) {
             self.to_emit.push(Def::Decl(def));
         }
         Ok(f)
+    }
+
+    /// Whether deferred definition `def`, first referenced now, is an
+    /// imported inline `used` function the body being emitted names, the
+    /// body being an imported named unit's (spec/modules.md §7
+    /// "Imported `used` functions", WP-1832): clang loads that body (a
+    /// function codegen reaches first, a local variable's initializer, a
+    /// lambda's body) only as it emits it, so the declarations it names
+    /// are handed to codegen then, and `used` makes such a one emitted
+    /// right away. One the importer's Sema handed over is not deferred.
+    fn read_with_imported_body(&self, def: DeclId) -> bool {
+        let modules = &self.ast.modules;
+        self.f.decl.is_some_and(|cur| modules.is_imported_named_unit_decl(cur))
+            && modules.is_imported_named_unit_decl(def)
+            && self.has_fn_attr(def, kiln_ast::attr::AttrKind::USED)
+            && self.discardable_fn(def)
+            && !self.is_ctor_dtor_fn(def)
     }
 
     /// The symbol a use of the GNU `weakref` declaration `first` refers

@@ -243,6 +243,8 @@ impl Sema<'_, '_> {
             self.note_used_for_instantiation(f, loc);
             return;
         }
+        // An imported function's body is read (WP-1832).
+        self.note_imported_body_used(first);
         // A member function of a class template specialization is
         // instantiated ([temp.inst]/5).
         self.mark_used_at(f, loc);

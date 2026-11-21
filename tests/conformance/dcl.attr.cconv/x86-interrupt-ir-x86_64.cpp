@@ -1,14 +1,15 @@
 // The x86 `interrupt` attribute (clang `AnyX86InterruptAttr`,
 // `addX86InterruptAttrs`): a handler's definition is `x86_intrcc` with
 // a `byval` first parameter of the pointee's IR type (`i8` for `void`,
-// `type opaque` for a class never defined, `i1` for `bool`), and
+// `i1` for `bool`; a class never defined is
+// x86-interrupt-incomplete-frame-run.cpp), and
 // `"disable-tail-calls"="true"`; it is implicitly `used` (in
 // `llvm.compiler.used`, so an inline one is emitted); a declaration
 // keeps the C calling convention. Arguments of the attribute are
 // ignored. spec/sema.md §4.5, spec/abi.md, WP-1745.
 //@ expect: ir
 //@ args: --target=x86_64-unknown-linux-gnu
-struct frame;
+struct frame { unsigned long ip; };
 struct full { unsigned long ip, cs, flags, sp, ss; };
 typedef unsigned long uword;
 __attribute__((interrupt)) void h1(frame *f) {}

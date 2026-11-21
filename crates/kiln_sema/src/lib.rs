@@ -1128,6 +1128,14 @@ pub struct Sema<'a, 'sm> {
     /// The name-classification memo ([`Sema::classify_name`], spec/parse.md
     /// §2.5): results valid while [`Sema::lookup_stamp`] is unchanged.
     pub(crate) classify_memo: std::cell::RefCell<decl::ClassifyMemo>,
+    /// Imported functions (first declarations) whose bodies
+    /// [`Sema::note_imported_body_used`] walked: a memo, walking one again
+    /// hands nothing new (spec/modules.md §7, WP-1832).
+    pub(crate) imported_bodies_walked: kiln_source::fx::FxHashSet<DeclId>,
+    /// Inside [`Sema::in_inst_context`]: the [`Sema::parse_anchor`] of
+    /// the context the outermost switch left, where a definition handed
+    /// to codegen from inside the instantiation goes (`None` outside).
+    pub(crate) inst_outer_anchor: Option<templ::class::OuterAnchor>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
     pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
@@ -1749,6 +1757,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth_noted: std::cell::Cell::new(0),
             walk_stack: std::cell::RefCell::new(Vec::new()),
             classify_memo: std::cell::RefCell::default(),
+            imported_bodies_walked: kiln_source::fx::FxHashSet::default(),
+            inst_outer_anchor: None,
             conv_walk_stack: Vec::new(),
             equiv_scratch: std::cell::RefCell::default(),
             cand_scratch: Vec::new(),

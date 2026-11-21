@@ -3378,6 +3378,18 @@ changes nothing:
   does kiln; a reference bound to a lifetime-extended class or array
   temporary at namespace scope is loaded, as clang loads it
   (`tests/codegen/ref_constant_lvalue_use.cpp`).
+- **x86 `interrupt` handler with a frame of a class never defined**
+  (WP-1833): the `byval` attribute of its first parameter is `i8`, as for
+  `void *` (spec/sema.md §4.5). clang 22 and 19 give it the class's
+  opaque struct type, IR LLVM's verifier rejects ("Attribute 'byval'
+  does not support unsized types!"; clang's driver does not run the
+  verifier, so clang builds the program). The program is valid (a
+  pointer to an incomplete class is a pointer type, which is all the
+  attribute requires), and LLVM's `CC_X86_Intr` lowering takes the frame
+  as the stack pointer without reading the size, so the object code is
+  clang's (`x86_interrupt_incomplete_frame_is_i8` in
+  `crates/kiln_codegen/tests/lower.rs`,
+  `dcl.attr.cconv/x86-interrupt-incomplete-frame-run.cpp`).
 - **Namespace-scope and static reference variables** are emitted as
   clang does (a constant initializer when the referee is a constant
   address, else dynamic initialization, §7e); only their uses differ, as

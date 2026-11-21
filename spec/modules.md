@@ -758,14 +758,40 @@ namespace-scope declaration that named it (§2a of spec/codegen.md, as a
 variable instantiated at a reference), and one the importer never names
 is not emitted. Before, the importer only declared it, without the
 `x86_intrcc` convention of an interrupt handler (it linked against the
-module's copy). Not followed: clang also loads the declarations an
-imported inline function's body names when the importer names that
-function, so a `used` function reached only through such a body comes
-first in clang's module, and at the end of kiln's (the definition and
-its linkage are the same). Tests: `tests/codegen/module_used_inline_importer.cpp`,
+module's copy).
+
+The body of an imported function (WP-1832): clang 22 and 19 read it
+when the importer odr-uses the function (`MarkFunctionReferenced`: not
+in an unevaluated operand, not in a template definition), and every
+`used` inline function it names is handed to codegen then, in the order
+the module file stores the body (`ASTStmtWriter` writes a node's
+sub-statements and the reader resolves them last to first, each subtree
+before its node's own declaration: `if` is init, else, then, condition;
+`switch` init, body, condition; `do` body, condition; `while`/`for` body,
+increment, condition, init). The body's callees, its local variables'
+initializers, its lambdas' bodies and the default arguments it uses are
+not read with it; their bodies come when codegen reaches them, which
+emits the `used` functions they name right there. Sema walks the body in
+that order (`Sema::note_imported_body_used`, once per function) and
+records the functions at the namespace-scope declaration being parsed
+(for a use inside an instantiation, the one the instantiation was
+started from) or, for an instantiation of the end-of-unit drain, among
+the definitions the drain hands over; codegen emits one that a lazily
+read part names (an imported inline callee's body, an initializer, a
+lambda's body) as it creates its reference, nested, so the enclosing
+function's `nounwind` is clang's. Not followed: a body the module file
+does not carry for the importer (a non-inline function's, and a member
+function's defined in a named module's class, [class.mfct]/1, §11.11):
+clang reads it too and emits the `used` inline functions it names; kiln
+does not (the module unit's own object defines them, so only the IR
+differs, by those extra `linkonce_odr` copies). Tests:
+`tests/codegen/module_used_inline_importer.cpp`,
+`tests/codegen/module_used_inline_body_importer.cpp`,
 `tests/codegen/module_x86_interrupt_importer.cpp`,
 `module.interface/image-used-inline-run.cpp`,
-`module.interface/image-x86-interrupt-run.cpp`.
+`module.interface/used-inline-body-run.cpp`,
+`module.interface/image-x86-interrupt-run.cpp`, the driver test
+`used_inline_bodies_emit_in_order_in_every_mode`.
 
 **Explicit instantiations** ([temp.explicit], [temp.spec.general]/5,
 WP-1354; the PCH and module-file image side is WP-1307 in §11.11). The

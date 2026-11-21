@@ -3716,7 +3716,8 @@ instantiation unless stated.
   `no_caller_saved_registers` function of a callee without
   `no_caller_saved_registers` warns `-Wexcessive-regsave` unless SSE, x87
   and MMX are all disabled by `-target-feature`. Codegen: `x86_intrcc`,
-  the first parameter `byval` of its pointee, `disable-tail-calls`.
+  the first parameter `byval` of its pointee (`i8` for a class never
+  defined, WP-1833, spec/codegen.md "Deviations"), `disable-tail-calls`.
   Tests `tests/conformance/dcl.attr.cconv/x86-*.cpp`.
 - **`weak_import`** (clang `WeakImportAttr`, `weak_import.rs`;
   WP-1745): on a variable or function only; on a variable definition

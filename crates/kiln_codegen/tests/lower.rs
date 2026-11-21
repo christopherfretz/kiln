@@ -917,3 +917,30 @@ fn expansion_statement_lowers_in_order() {
         r.unwrap_or_else(|e| panic!("opt: {e}\n{ir}"));
     }
 }
+
+/// An x86-64 `interrupt` handler whose frame pointee is a class never
+/// defined (WP-1833): clang 22 and 19 give its `byval` an opaque struct
+/// type, which LLVM's verifier rejects ("Attribute 'byval' does not
+/// support unsized types!"), so kiln uses `i8`, as for `void *`
+/// (spec/codegen.md "Deviations"); the IR verifies and LLVM's x86
+/// backend lowers it (`CC_X86_Intr` does not read the size).
+#[test]
+fn x86_interrupt_incomplete_frame_is_i8() {
+    let src = "struct frame;\n\
+               __attribute__((interrupt)) void isr(frame *) {}\n\
+               __attribute__((interrupt)) void err(frame *, unsigned long) {}\n";
+    for (major, compat) in [(19, 19), (22, 22)] {
+        let ir = kiln_ir_arch(src, Arch::X86_64, major, compat).expect("lowers");
+        assert!(ir.contains("x86_intrcc void @_Z3isrP5frame(ptr noundef byval(i8) %0)"), "{ir}");
+        assert!(ir.contains("x86_intrcc void @_Z3errP5framem(ptr noundef byval(i8) %0"), "{ir}");
+        assert!(!ir.contains("type opaque"), "{ir}");
+        let verify = ["-S", "-passes=verify", "-o", "-"];
+        if let Some(r) = pipe(&format!("opt-{major}"), &verify, &ir) {
+            r.unwrap_or_else(|e| panic!("opt-{major}: {e}\n{ir}"));
+        }
+        let llc = ["-mtriple=x86_64-unknown-linux-gnu", "-filetype=asm", "-o", "-"];
+        if let Some(r) = pipe(&format!("llc-{major}"), &llc, &ir) {
+            r.unwrap_or_else(|e| panic!("llc-{major}: {e}\n{ir}"));
+        }
+    }
+}
