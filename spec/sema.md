@@ -3688,11 +3688,24 @@ instantiation unless stated.
   function type (spec/types.md §5.4) and checked once the declaration's
   calling convention is known (clang `checkExtParameterInfos`; kiln
   applies a declaration's convention after its declarator, so the check
-  of a declarator's own function type, or the one behind its single
-  pointer, reference or member-pointer chunk, waits for
-  `apply_cc_attrs`, a type-id's for the alias's, and is made at the next
-  declarator at the latest; an instantiated declarator is its pattern's
-  and not checked again): `swift_indirect_result` parameters come first
+  of the function chunk nearest the name, behind any pointer, reference,
+  member-pointer and array chunks (clang `distributeFunctionTypeAttr`),
+  waits for `apply_cc_attrs`, a type-id's for the alias's, and is made at
+  the next declarator at the latest; an instantiated declarator is its
+  pattern's and not checked again). A function type attribute written
+  after a `*`, `&`, `&&`, member pointer or grouping `(` (flag
+  `AttrNode::IN_CHUNK`, set by the parser) applies after that check, as
+  clang applies it at its chunk, so `typedef int (__attribute__((swiftcall))
+  *fp)(int, void *__attribute__((swift_context)))` is rejected (WP-1827);
+  a GNU attribute after a `&` / `&&` appertains to the declarator as one
+  after a `*` does. Function type attributes (calling conventions, GNU
+  `noreturn`) apply through any number of pointers, references, member
+  pointers and arrays (clang `FunctionTypeUnwrapper`). When an alias
+  template or another type with ABIs is substituted, the convention and
+  the order are checked again for the expanded parameters (clang
+  `BuildFunctionType`), at the alias's `using` or the declaration's
+  type, a substitution failure in a SFINAE context; the parameter types
+  are not (WP-1810): `swift_indirect_result` parameters come first
   ("parameters must be first parameters of function"),
   `swift_error_result` right after a `swift_context` ("must follow
   'swift_context' parameter"), each at its parameter; all but
@@ -3706,6 +3719,30 @@ instantiation unless stated.
   (clang `distributeFunctionTypeAttrFromDeclSpec`). BMI images do not
   carry the ABIs (a type with them makes the image fall back to source
   replay). Tests `tests/conformance/ext.clang.swift-param-abi/`.
+- **Attributes after the definition** (clang
+  `checkNewAttributesAfterDef`, `after_def.rs`; WP-1807): an attribute
+  that a redeclaration of a function (a deleted or defaulted one too), a
+  variable, a class or an enumeration adds after the entity's definition
+  is `attribute declaration must precede definition`
+  [-Wignored-attributes], with `previous definition is here`, and
+  dropped, after its own subject checks (`check_decl_attrs`; an
+  attribute a handler drops, e.g. an `alloc_size` on a non-pointer
+  return, is not reported again). Not when the definition or a
+  declaration before it has one of the same clang class (`maybe_unused`
+  is `unused`). In C the definition is one with an initializer (a
+  tentative definition is not). An explicit or partial specialization of
+  a class template merges nothing and is not checked. Exempt: the
+  attributes with rules of their own after a definition (`alias`,
+  `ifunc`, `alignas` (an error, align_redecl.rs), `visibility`,
+  `internal_linkage`, `weak_import`, `selectany`, `ms_struct` /
+  `gcc_struct`, `require_constant_initialization`, the multiversioning
+  attributes), C11 `_Noreturn`, `enable_if` (an overload in clang), the
+  type attributes kiln keeps on a declaration (GNU `noreturn` and
+  `nothrow`, vector, calling-convention and SME attributes,
+  `lifetimebound`, the Swift parameter ABIs) and annotations; from clang
+  22 (`-fclang-compat>=22`) `deprecated`, `nodiscard`, `maybe_unused` /
+  `unused` in the standard `[[...]]` syntax with any scope. Tests
+  `tests/conformance/dcl.attr/attribute-after-definition*.{cpp,c}`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in

@@ -870,6 +870,12 @@ impl AttrNode {
     /// after a function declarator it makes a misplaced attribute a
     /// warning rather than an error (clang `isGNUScope`).
     pub const GNU_SCOPED: u8 = 8;
+    /// Flag (bit 4, the function type attributes,
+    /// [`AttrKind::is_fn_type_attr`]): written after a ptr-operator or a
+    /// grouping `(` of the declarator (`int (__attribute__((swiftcall))
+    /// *p)(...)`), so clang applies it to the type there, after the
+    /// function type it reaches was built (WP-1827).
+    pub const IN_CHUNK: u8 = 16;
 
     /// Implicit flag (bit 0): added by sema, not written.
     pub const IMPLICIT: u8 = 1;

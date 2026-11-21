@@ -519,6 +519,7 @@ impl Sema<'_, '_> {
         self.check_class_b_exclusions(d, attrs);
         self.check_mutual_exclusions(d, attrs);
         self.check_fmv_attrs(d, attrs);
+        self.check_new_attrs_after_def(d, attrs, false);
         self.unify_fn_section(d, attrs);
         self.check_no_builtin_attrs(d, attrs);
     }
@@ -822,8 +823,7 @@ impl Sema<'_, '_> {
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "non-K&R-style functions")
             }
             AttrKind::MALLOC | AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
-                self.check_alloc_attr(d, node);
-                true
+                self.check_alloc_attr(d, node)
             }
             AttrKind::RETURNS_NONNULL => self.check_returns_nonnull_attr(d, kind, node),
             AttrKind::FORMAT => self.check_format_decl_attr(d, kind, node),
@@ -1442,7 +1442,8 @@ impl Sema<'_, '_> {
     /// on a declaration: a function type attribute (clang
     /// `warn_type_attribute_wrong_type`): accepted on a function, or a
     /// variable, data member or typedef whose type is a function type
-    /// or a pointer, reference or member pointer to one; on a tag or
+    /// or reaches one through pointers, references, member pointers and
+    /// arrays; on a tag or
     /// other declaration `'noreturn' attribute only applies to functions
     /// and methods`.
     fn check_gnu_noreturn(&mut self, d: DeclId, kind: DeclKind, node: AttrNode) -> bool {
@@ -1457,10 +1458,12 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return false;
         };
-        let t = &self.ast.types;
-        let fnish = t.is_function(ty)
-            || t.is_dependent(ty)
-            || t.pointee(ty).is_some_and(|p| t.is_function(p) || t.is_dependent(p));
+        // Through any pointers, references, member pointers and arrays
+        // (clang `FunctionTypeUnwrapper`).
+        let fnish = self.fn_type_through(ty).is_some() || {
+            let t = &self.ast.types;
+            t.is_dependent(ty) || t.pointee(ty).is_some_and(|p| t.is_dependent(p))
+        };
         if fnish {
             return true;
         }
@@ -1595,9 +1598,10 @@ impl Sema<'_, '_> {
         self.with_fn_info(ty, &|i| i.with_noreturn(v), outer)
     }
 
-    /// `ty` (a function type, or a pointer, reference or member pointer
-    /// to one when `outer`) with its function type's [`FuncInfo`] mapped
-    /// by `f`; None when it is no such type or `f` changes nothing.
+    /// `ty` (a function type, or when `outer` one reached through
+    /// pointers, references, member pointers and arrays, clang
+    /// `FunctionTypeUnwrapper`) with its function type's [`FuncInfo`]
+    /// mapped by `f`; None when it is no such type or `f` changes nothing.
     pub(crate) fn with_fn_info(
         &mut self,
         ty: QualType,
@@ -1632,25 +1636,35 @@ impl Sema<'_, '_> {
             w @ (TypeView::Pointer(_)
             | TypeView::LValueRef(_)
             | TypeView::RValueRef(_)
-            | TypeView::MemberPointer { .. }) => w,
+            | TypeView::MemberPointer { .. }
+            | TypeView::ConstantArray(_)
+            | TypeView::IncompleteArray(_)) => w,
             _ => self.ast.types.canonical_view(ty),
         };
         let built = match view {
             TypeView::Pointer(p) => {
-                let g = self.with_fn_info(p, f, false)?;
+                let g = self.with_fn_info(p, f, true)?;
                 self.ast.types.pointer_to(g)
             }
             TypeView::LValueRef(p) => {
-                let g = self.with_fn_info(p, f, false)?;
+                let g = self.with_fn_info(p, f, true)?;
                 self.ast.types.lvalue_ref_to(g)
             }
             TypeView::RValueRef(p) => {
-                let g = self.with_fn_info(p, f, false)?;
+                let g = self.with_fn_info(p, f, true)?;
                 self.ast.types.rvalue_ref_to(g)
             }
             TypeView::MemberPointer { pointee, class } => {
-                let g = self.with_fn_info(pointee, f, false)?;
+                let g = self.with_fn_info(pointee, f, true)?;
                 self.ast.types.member_pointer(g, class)
+            }
+            TypeView::ConstantArray(a) => {
+                let g = self.with_fn_info(a.elem, f, true)?;
+                self.ast.types.constant_array(g, a.size, a.size_expr)
+            }
+            TypeView::IncompleteArray(e) => {
+                let g = self.with_fn_info(e, f, true)?;
+                self.ast.types.incomplete_array(g)
             }
             _ => return None,
         };

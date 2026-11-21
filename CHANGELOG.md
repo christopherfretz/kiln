@@ -273,6 +273,34 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An attribute that a redeclaration adds after the definition of a
+  function, variable, class or enumeration is now ignored with clang's
+  "attribute declaration must precede definition" warning
+  [-Wignored-attributes] and a note at the definition (WP-1807); it was
+  merged silently. clang 22's exemptions apply (an attribute the
+  definition already has, `alias`, C11 `_Noreturn`, the type attributes,
+  and the standard-syntax `deprecated` / `nodiscard` / `maybe_unused`).
+- An encoding prefix on an unevaluated string literal (`u8`, `u`, `U`,
+  `L` on an attribute's string argument, a static_assert message or a
+  language linkage) is only a warning before C++26 and in C, "encoding
+  prefix 'u8' on an unevaluated string literal has no effect"
+  [-Winvalid-unevaluated-string], as in clang (WP-1805); it was an error
+  in every mode.
+- The Swift parameter ABIs of an alias template's function type are
+  checked again at instantiation, as in clang: a pack expansion that
+  moves a `swift_indirect_result` off the front or leaves a
+  `swift_error_result` without its `swift_context` is an error there
+  (WP-1810); the parameter types are not checked again (`A<int>` with a
+  `swift_context` on `T` was rejected).
+- A calling convention written after a `*`, `&` or grouping `(`
+  (`typedef int (__attribute__((swiftcall)) *fp)(int, void
+  *__attribute__((swift_context)))`) applies after the function type's
+  Swift parameter ABIs are checked, so they are rejected as in clang
+  (WP-1827); one in the decl-specifiers reaches the function type through
+  several pointers and arrays, a GNU attribute after a `&` appertains to
+  the declarator, and GNU `noreturn` on a pointer to pointer or an array
+  of function pointers no longer warns that it only applies to function
+  types.
 - The declaration image (`-fkiln-bmi-image`) carries variables with
   thread storage duration (WP-1824): `thread_local`, `__thread` and
   `_Thread_local` variables, static data members and block-scope

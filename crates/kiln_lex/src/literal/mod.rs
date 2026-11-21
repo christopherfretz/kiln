@@ -963,8 +963,15 @@ fn decode_string_impl<'s>(
     let mut encoding = parts.encoding;
     if unevaluated {
         if encoding != Encoding::Ordinary {
+            // [lex.string.uneval]/1 (P2361R6): ill-formed from C++26; before
+            // it and in C, clang only warns that the prefix has no effect.
             let len = encoding.prefix().len();
-            diags.push(LexDiagKind::UnevaluatedStringPrefix, 0, len);
+            let kind = if opts.c.is_none() && opts.std >= Std::Cxx26 {
+                LexDiagKind::UnevaluatedStringPrefix
+            } else {
+                LexDiagKind::UnevaluatedStringPrefixIgnored { cxx: opts.c.is_none() }
+            };
+            diags.push(kind, 0, len);
             encoding = Encoding::Ordinary;
         }
         if parts.ud_suffix.is_some() {
@@ -1015,7 +1022,8 @@ fn decode_string_impl<'s>(
         );
     }
     StringLiteral {
-        encoding: parts.encoding,
+        // An unevaluated string is ordinary whatever its prefix.
+        encoding,
         raw: parts.raw,
         units,
         ud_suffix: parts.ud_suffix,

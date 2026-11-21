@@ -484,7 +484,12 @@ variants are additions to a `#[non_exhaustive]` enum.
   each further bad sequence; a character literal gets one at its start.
   A raw string body is one fragment.
 - Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
-  unknown escape is an error (`UnevaluatedString*`). The escape error
+  unknown escape is an error (`UnevaluatedString*`), except that before
+  C++26 and in C an encoding prefix is only the warning
+  `UnevaluatedStringPrefixIgnored` (clang `warn_unevaluated_string_prefix`,
+  `-Winvalid-unevaluated-string`, "... has no effect[ and is
+  incompatible with c++2c]", once per prefixed piece at its start;
+  [diff.cpp23.lex]/1; WP-1805): the string is then ordinary. The escape error
   follows the escape's own diagnostics (`OctalEscapeTooLarge`, a missing
   `{` after `\o`, ...) and its range is the whole escape, backslash to
   end (`'\x01b'`, `'\o{101}'`; clang 22 `ProcessCharEscape`). `\x` with

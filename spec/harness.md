@@ -952,7 +952,7 @@ build), so a unit inside the image's coverage (spec/modules.md §11.11
 "Part 2a") is written with an image and imported from it, and every other
 unit falls back to replay as before. The run therefore checks that
 image-built imports give the same diagnostics, program output and IR as
-replay. `ci` does not run it while the flag is off by default.
+replay. `ci` runs it after the two kinds (below; WP-1828).
 
 ### PCH differential
 
@@ -2145,7 +2145,9 @@ if the first fails, so one cannot hide the other:
    without clang it ends in an infrastructure error and `ci` fails.
 5. **module-file kinds** (WP-985): `cargo xtask test --compiler <that
    kiln> --bmi-kind 1`, then `--bmi-kind 2` (printed as `corpus (kiln
-   --bmi-kind N)`; "Module-file kinds"). They run with run 4, are
+   --bmi-kind N)`; "Module-file kinds"), then `--bmi-kind 2 --bmi-image`
+   (WP-1828, printed as `corpus (kiln --bmi-kind 2 --bmi-image)`: the
+   imports the declaration image covers). They run with run 4, are
    selected by `--step kiln`, take the same `--shard`, and are judged like
    it.
 6. **PCH differential** (WP-1036): `cargo xtask test --compiler <that

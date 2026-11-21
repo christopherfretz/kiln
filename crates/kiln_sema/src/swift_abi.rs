@@ -6,7 +6,10 @@
 //! recorded in the function type ([`kiln_ast::types::FuncInfo::param_abis`],
 //! clang's `ExtParameterInfo`), whose calling convention and parameter
 //! order are checked once the convention is known (clang
-//! `checkExtParameterInfos`).
+//! `checkExtParameterInfos`): a convention written at a pointer,
+//! reference or grouping chunk comes too late for that (WP-1827). A
+//! substituted function type's convention and order are checked again
+//! for its expanded parameters (clang `BuildFunctionType`, WP-1810).
 
 use kiln_ast::attr::{AttrKind, AttrNode};
 use kiln_ast::types::{BuiltinType, CallConv, FuncInfo, ParamAbi, TypeView};
@@ -179,9 +182,16 @@ impl Sema<'_, '_> {
     /// `locs[i]`): `swift_indirect_result` parameters come first and
     /// `swift_error_result` follows `swift_context`; all but
     /// `swift_async_context` need `swiftcall` (or `swiftasynccall`,
-    /// except for `swift_error_result`), reported once.
-    pub(crate) fn check_ext_param_infos(&mut self, cc: CallConv, abis: &[ParamAbi], locs: &[Loc]) {
+    /// except for `swift_error_result`), reported once. False after an
+    /// error.
+    pub(crate) fn check_ext_param_infos(
+        &mut self,
+        cc: CallConv,
+        abis: &[ParamAbi],
+        locs: &[Loc],
+    ) -> bool {
         let mut reported = false;
+        let mut ok = true;
         let at = |i: usize| locs.get(i).copied().unwrap_or(Loc::INVALID);
         let prev = |i: usize| if i == 0 { ParamAbi::Ordinary } else { abis[i - 1] };
         for (i, &abi) in abis.iter().enumerate() {
@@ -190,8 +200,8 @@ impl Sema<'_, '_> {
                 ParamAbi::SwiftErrorResult => true,
                 ParamAbi::SwiftIndirectResult | ParamAbi::SwiftContext => false,
             };
-            let ok = cc == CallConv::Swift || (!only_swift && cc == CallConv::SwiftAsync);
-            if !ok && !reported {
+            let cc_ok = cc == CallConv::Swift || (!only_swift && cc == CallConv::SwiftAsync);
+            if !cc_ok && !reported {
                 let msg = self
                     .diag(DiagId::sema_swift_param_attr_not_swiftcall, at(i))
                     .arg(abi.spelling())
@@ -199,18 +209,22 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 reported = true;
             }
+            ok &= cc_ok;
             match abi {
                 ParamAbi::SwiftIndirectResult
                     if i != 0 && prev(i) != ParamAbi::SwiftIndirectResult =>
                 {
                     self.error(DiagId::sema_swift_indirect_result_not_first, at(i));
+                    ok = false;
                 }
                 ParamAbi::SwiftErrorResult if prev(i) != ParamAbi::SwiftContext => {
                     self.error(DiagId::sema_swift_error_result_not_after_swift_context, at(i));
+                    ok = false;
                 }
                 _ => {}
             }
         }
+        ok
     }
 
     /// The function chunk of a declarator with parameters `params` built
@@ -247,7 +261,7 @@ impl Sema<'_, '_> {
 
     fn check_pending_param_abis(&mut self, p: &PendingParamAbis, cc: CallConv) {
         let abis = self.ast.types.param_abi_list(p.info);
-        self.check_ext_param_infos(cc, &abis, &p.locs);
+        let _ = self.check_ext_param_infos(cc, &abis, &p.locs);
     }
 
     /// Checks every pending function type with the convention it was
@@ -265,16 +279,23 @@ impl Sema<'_, '_> {
     /// (`last`: the declaration's own attributes were applied), and then
     /// so is every other pending one, with its own.
     pub(crate) fn param_abis_after_cc(&mut self, ty: QualType, last: bool) {
+        self.param_abis_reached(ty, last, false);
+    }
+
+    /// The pending function type `ty` reaches checked now, with the
+    /// convention it has: the function type attributes written at a
+    /// pointer, reference or grouping chunk apply after it was built
+    /// (clang `processTypeAttrs` on that chunk; WP-1827).
+    pub(crate) fn param_abis_before_chunk_attrs(&mut self, ty: QualType) {
+        self.param_abis_reached(ty, false, true);
+    }
+
+    fn param_abis_reached(&mut self, ty: QualType, last: bool, now: bool) {
         if self.pending_param_abis.is_empty() {
             return;
         }
+        let reached = self.fn_type_through(ty);
         let t = &self.ast.types;
-        let reached = match t.canonical_view(ty) {
-            TypeView::Function(_) => Some(ty),
-            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
-            TypeView::MemberPointer { pointee, .. } => Some(pointee),
-            _ => None,
-        };
         let found = reached.and_then(|f| t.proto(f)).and_then(|p| {
             let params = t.params(p);
             let id = p.info().param_abis();
@@ -284,7 +305,7 @@ impl Sema<'_, '_> {
                 .map(|i| (i, p.info().cc()))
         });
         if let Some((i, cc)) = found
-            && (last || cc != CallConv::Default)
+            && (last || now || cc != CallConv::Default)
         {
             let p = self.pending_param_abis.remove(i);
             self.check_pending_param_abis(&p, cc);

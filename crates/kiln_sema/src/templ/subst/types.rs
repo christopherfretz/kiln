@@ -493,10 +493,16 @@ impl Substituter<'_, '_, '_> {
                 (self.type_begin, self.declarator_name, self.chunk_loc) = (outer, name, chunk);
                 let out = out?;
                 if !abis.is_empty() {
-                    for (&t, &abi) in out.iter().zip(&abis) {
-                        if !self.sema.param_abi_type_ok(abi, t, loc) {
-                            return Err(SubstFail);
-                        }
+                    // clang `BuildFunctionType`: the convention and order
+                    // of the expanded parameters' ABIs are checked again
+                    // (`checkExtParameterInfos`, every one at the
+                    // substitution's location), their types are not: a
+                    // declaration's parameters are, when they are
+                    // instantiated (`SubstParmVarDecl`; WP-1810). A
+                    // declaration's type reports at its begin.
+                    let locs = vec![outer.unwrap_or(loc); abis.len()];
+                    if !self.sema.check_ext_param_infos(info.cc(), &abis, &locs) {
+                        return Err(SubstFail);
                     }
                     info = info.with_param_abis(self.sema.ast.types.intern_param_abis(&abis));
                 }

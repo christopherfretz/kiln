@@ -262,7 +262,28 @@ impl Sema<'_, '_> {
         attrs: &mut Vec<AttrId>,
         decl: bool,
     ) -> QualType {
-        let ty = self.apply_cc_attrs_inner(ty, attrs, decl);
+        let in_chunk = |s: &Self, a: AttrId| {
+            let n = s.ast.attrs.get(a);
+            n.kind.is_fn_type_attr() && n.flags & AttrNode::IN_CHUNK != 0
+        };
+        let ty = if attrs.iter().any(|&a| in_chunk(self, a)) {
+            // Those written at a pointer, member pointer or grouping
+            // chunk apply after the function type they reach was built
+            // and its parameter ABIs checked (WP-1827).
+            let mut chunk = Vec::new();
+            attrs.retain(|&a| {
+                let c = in_chunk(self, a);
+                if c {
+                    chunk.push(a);
+                }
+                !c
+            });
+            let ty = self.apply_cc_attrs_inner(ty, attrs, decl);
+            self.param_abis_before_chunk_attrs(ty);
+            self.apply_cc_attrs_inner(ty, &mut chunk, decl)
+        } else {
+            self.apply_cc_attrs_inner(ty, attrs, decl)
+        };
         // The Swift parameter ABIs need the convention (WP-1745); a
         // declaration's attributes are its last (a type-id's and a
         // typedef's may be followed by the alias's).
@@ -382,17 +403,32 @@ impl Sema<'_, '_> {
     }
 
     /// The [`FuncInfo`] of the function type `ty` is, or points, refers
-    /// or member-points to.
+    /// or member-points to, through any number of those and of arrays
+    /// (clang `FunctionTypeUnwrapper`).
     pub(crate) fn fn_info_through(&self, ty: QualType) -> Option<FuncInfo> {
+        let f = self.fn_type_through(ty)?;
+        self.ast.types.proto(f).map(kiln_ast::types::FuncProto::info)
+    }
+
+    /// The (canonical) function type `ty` is, or reaches through pointers,
+    /// references, member pointers and arrays of known or unknown bound
+    /// (clang `FunctionTypeUnwrapper`, which a function type attribute
+    /// applies through).
+    pub(crate) fn fn_type_through(&self, ty: QualType) -> Option<QualType> {
         let t = &self.ast.types;
-        let c = t.canonical(ty);
-        let inner = match t.view(c.ty()) {
-            TypeView::Function(p) => return Some(p.info()),
-            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
-            TypeView::MemberPointer { pointee, .. } => pointee,
-            _ => return None,
-        };
-        t.proto(inner).map(kiln_ast::types::FuncProto::info)
+        let mut c = t.canonical(ty);
+        for _ in 0..1024 {
+            c = match t.view(c.ty()) {
+                TypeView::Function(_) => return Some(c),
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+                TypeView::MemberPointer { pointee, .. } => pointee,
+                TypeView::ConstantArray(a) => a.elem,
+                TypeView::IncompleteArray(e) => e,
+                _ => return None,
+            };
+            c = t.canonical(c);
+        }
+        None
     }
 
     /// The calling convention and `no_caller_saved_registers` of a

@@ -2005,7 +2005,7 @@ public:
   static int g() { return int(x); }
 };
 struct mr { int k = 6; };
-inline mr* def() noexcept { static mr m; return &m; }
+mr* def() noexcept;
 template <class T> struct pa {
   mr* r;
   pa() noexcept { extern mr* def() noexcept __attribute__((__returns_nonnull__)); r = def(); }
@@ -2013,7 +2013,8 @@ template <class T> struct pa {
 inline int plain() { extern mr* def() noexcept; return def()->k; }
 asm(\".globl wp1345_sym\\n.set wp1345_sym, 0\");
 ";
-    let tu = "int main() { te t; pa<int> p;
+    let tu = "mr* def() noexcept { static mr m; return &m; }
+int main() { te t; pa<int> p;
   return t.f() + int(te::c) + te::g() + p.r->k + plain() - 24; }\n";
     carried_1343("wp1345p", header, tu);
     // The private enumerator stays private.

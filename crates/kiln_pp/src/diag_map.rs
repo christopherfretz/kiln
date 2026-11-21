@@ -260,6 +260,11 @@ pub fn literal_diags(
             // [lex.string.uneval]; clang reports the prefix and the escape
             // sequence as ranges, the ud-suffix at the token.
             K::UnevaluatedStringPrefix => Diag::new(DiagId::lit_unevaluated_prefix, start),
+            K::UnevaluatedStringPrefixIgnored { cxx } => {
+                Diag::new(DiagId::lit_unevaluated_prefix_ignored, start)
+                    .arg(range)
+                    .arg(i32::from(cxx))
+            }
             K::UnevaluatedStringEscape { ch } => {
                 let esc =
                     if range.starts_with('\\') { range.to_owned() } else { format!("\\{ch}") };
