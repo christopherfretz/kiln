@@ -181,6 +181,9 @@ impl Sema<'_, '_> {
         let ctx = self.ast.definition(ctx).unwrap_or(ctx);
         let loc = d.name_loc();
         let mut prev_ok = None;
+        // The member an invalid redeclaration's attributes are still
+        // checked against (`after_def_prev`).
+        let mut attr_prev = None;
         let mut invalid = false;
         if d.qualifier.is_none() {
             if self.templ.local_template {
@@ -290,12 +293,16 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, p, prev_def.is_some());
                         self.emit(msg);
                         invalid = true;
+                        // Its attributes are still checked after the
+                        // definition (WP-1840).
+                        attr_prev = Some(p);
                     } else if let Some(def) = prev_def.filter(|_| !spec_decl) {
                         let msg =
                             self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
                         let msg = self.note_prev(msg, def, true);
                         self.emit(msg);
                         invalid = true;
+                        attr_prev = Some(p);
                     } else if self.has_explicit_spec_head()
                         && !self.act_on_explicit_member_var_spec(p, loc)
                     {
@@ -329,10 +336,21 @@ impl Sema<'_, '_> {
             }
         }
         let ty = prev_ok.map_or(ty, |p| self.redecl_var_type(p, ty));
+        // [dcl.constinit]/1 (WP-1834); an explicit specialization declares
+        // another variable.
+        if let Some(p) = prev_ok
+            && !self.has_explicit_spec_head()
+            && self.constinit_added_too_late(p, ds)
+        {
+            spec = spec.with_constinit(false);
+        }
         let mut h = DeclHead::new(ctx, DeclName::ident(name), loc);
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        if let Some(p) = attr_prev {
+            self.after_def_prev = Some((v, Some(p)));
+        }
         // The decl-specifiers' start, for the instantiation's written
         // locations (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != loc && self.is_instantiation_dependent_type(ty) {

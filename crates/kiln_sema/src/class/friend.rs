@@ -438,6 +438,8 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(f, &mut attrs);
             let _ = self.builder().attach_attrs(f, &attrs);
         }
+        // Read by the attribute checks above only.
+        self.after_def_prev = None;
         if !def {
             self.check_friend_template_defaults(head);
         }

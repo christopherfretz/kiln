@@ -299,6 +299,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `constinit` added by a redeclaration after the variable was
+  initialized (`int c = 1; extern constinit int c;`) is rejected with
+  clang's "'constinit' specifier added after initialization of variable"
+  and a note at the initializing declaration (WP-1834,
+  [dcl.constinit]/1); it was accepted.
+- A member function redeclared outside its class by a declaration that
+  is not a definition (`void S::f();`, `D::D() __attribute__((cold));`
+  after `D::D() = default;`) is rejected with clang's "out-of-line
+  declaration of a member must be a definition", an error by default
+  [-Wout-of-line-declaration] (WP-1835, [class.mfct]); it was accepted.
+  Explicit specializations and instantiations are not affected.
+- "attribute declaration must precede definition" is also given on a
+  redeclaration rejected as an `inline` declaration after a non-inline
+  definition, a `constexpr` mismatch, or a variable redefinition or
+  conflicting redeclaration, and the `[[noreturn]]` first-declaration
+  error on the first two, as in clang; neither is given any more on a
+  function declared `static` after a non-static one (WP-1840).
 - SVE and SME intrinsics' immediate operands are checked in sema, as
   clang's `CheckSVEBuiltinFunctionCall` / `CheckSMEBuiltinFunctionCall`
   check them (WP-1792): every ImmCheck kind of clang's `arm_sve.td` /

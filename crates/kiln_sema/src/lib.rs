@@ -876,6 +876,15 @@ pub struct Sema<'a, 'sm> {
     /// a single level of indirection`). Taken by the declaration and
     /// parameter actions right after the call.
     pub(crate) declarator_distant_exc: bool,
+    /// A redeclaration left out of its entity's redeclaration chain by an
+    /// error (an `inline` declaration after a non-inline definition, a
+    /// variable redefinition, ...), with the declaration it would have
+    /// followed: the attributes it adds after the definition are still
+    /// checked against it, as clang merges them first (`after_def.rs`,
+    /// WP-1840). `None` for a redeclaration whose attributes clang never
+    /// merges (a `static` function after a non-static one). Set by the
+    /// declaration action, cleared when the declarator is done.
+    pub(crate) after_def_prev: Option<(DeclId, Option<DeclId>)>,
     /// Function types whose Swift parameter ABIs wait for the
     /// declaration's calling convention (`swift_abi.rs`, WP-1745).
     pub(crate) pending_param_abis: Vec<swift_abi::PendingParamAbis>,
@@ -1667,6 +1676,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_int_recovery: false,
             declarator_field: false,
             declarator_distant_exc: false,
+            after_def_prev: None,
             pending_param_abis: Vec::new(),
             this_watch: class::ThisWatch::Off,
             pending_alias_vla: None,
