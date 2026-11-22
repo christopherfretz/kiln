@@ -646,8 +646,9 @@ pub enum TemplLinkKind {
     Specialization = 2,
     /// A member of a class template specialization.
     MemberOfSpecialization = 3,
-    /// A dependent friend function template specialization.
-    DependentFriend = 4,
+    // Tag 4 is unused: it was `DependentFriend`, which nothing
+    // constructed (spec/ast.md §8.2, WP-2026). A raw link with tag 4
+    // reads as none.
     /// A class template partial specialization (index into
     /// `templates.partials`, WP-070b).
     PartialSpecialization = 5,
@@ -673,7 +674,6 @@ impl TemplLink {
             1 => Some((TemplLinkKind::Pattern, idx)),
             2 => Some((TemplLinkKind::Specialization, idx)),
             3 => Some((TemplLinkKind::MemberOfSpecialization, idx)),
-            4 => Some((TemplLinkKind::DependentFriend, idx)),
             5 => Some((TemplLinkKind::PartialSpecialization, idx)),
             _ => None,
         }
@@ -1709,8 +1709,6 @@ pub struct ColdDeclData {
     pub alignment: ColdMap<DeclId, ExprId>,
     /// `[[deprecated("msg")]]` messages.
     pub deprecation: ColdMap<DeclId, StringLitId>,
-    /// The pattern of instantiated decls without a `TemplLink` (§8.2).
-    pub instantiated_from: ColdMap<DeclId, DeclId>,
     /// Injection points of `define_aggregate` members (§10).
     pub injection_point: ColdMap<DeclId, Loc>,
     /// A bodiless member function declaration → the start of the last
@@ -1763,6 +1761,15 @@ pub struct ColdDeclData {
     /// Using-shadow in a class → the member of the class that hides it
     /// ([namespace.udecl]/14; recorded at the class's `}`).
     pub hidden_shadow: ColdMap<DeclId, DeclId>,
+    /// Using-declaration (a `Using` or `UsingEnum`) → the `UsingShadow`s
+    /// (`ConstructorUsingShadow`s for an inheriting-constructor one) it
+    /// introduced, in introduction order: a `ListId` of `DeclId`s,
+    /// write-once, absent when it introduced none (spec/ast.md §4.2,
+    /// WP-2025; `Ast::using_shadows`).
+    pub using_shadows: ColdMap<DeclId, ListId>,
+    /// Shadow → the using-declaration that introduced it (the reverse of
+    /// `using_shadows`; `Ast::shadow_using`).
+    pub shadow_using: ColdMap<DeclId, DeclId>,
     /// Conversion function template specialization → the target type its
     /// name prints with (the pattern's, substituted before any return
     /// type deduction; clang's instantiated declaration name). The
@@ -1805,7 +1812,6 @@ impl Default for ColdDeclData {
             asm_label: ColdMap::new("asm_label"),
             alignment: ColdMap::new("alignment"),
             deprecation: ColdMap::new("deprecation"),
-            instantiated_from: ColdMap::new("instantiated_from"),
             injection_point: ColdMap::new("injection_point"),
             declarator_end: ColdMap::new("declarator_end"),
             builtin_id: ColdMap::new("builtin_id"),
@@ -1820,6 +1826,8 @@ impl Default for ColdDeclData {
             inheriting_ctor: ColdMap::new("inheriting_ctor"),
             inherited_ctor: ColdMap::new("inherited_ctor"),
             hidden_shadow: ColdMap::new("hidden_shadow"),
+            using_shadows: ColdMap::new("using_shadows"),
+            shadow_using: ColdMap::new("shadow_using"),
             conversion_spec_target: ColdMap::new("conversion_spec_target"),
             compound_literal: ColdMap::new("compound_literal"),
             init_fp: ColdMap::new("init_fp"),
@@ -1829,7 +1837,7 @@ impl Default for ColdDeclData {
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 34] {
+    fn rows(&self) -> [MemRow; 35] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1846,7 +1854,6 @@ impl ColdDeclData {
             self.asm_label.mem_row(),
             self.alignment.mem_row(),
             self.deprecation.mem_row(),
-            self.instantiated_from.mem_row(),
             self.injection_point.mem_row(),
             self.declarator_end.mem_row(),
             self.builtin_id.mem_row(),
@@ -1861,6 +1868,8 @@ impl ColdDeclData {
             self.inheriting_ctor.mem_row(),
             self.inherited_ctor.mem_row(),
             self.hidden_shadow.mem_row(),
+            self.using_shadows.mem_row(),
+            self.shadow_using.mem_row(),
             self.conversion_spec_target.mem_row(),
             self.compound_literal.mem_row(),
             self.init_fp.mem_row(),
@@ -2484,6 +2493,36 @@ impl DeclArena {
     /// If `s` is already recorded hidden.
     pub fn set_hidden_shadow(&mut self, s: DeclId, by: DeclId) -> Result<(), AlreadySet> {
         self.cold.hidden_shadow.insert(s, by)
+    }
+
+    /// Records the shadows using-declaration `using` introduced (`list`
+    /// holds `shadows`) and links each back to it. Write-once.
+    ///
+    /// # Errors
+    /// If `using` already has shadows or a shadow already has a
+    /// using-declaration.
+    pub fn set_using_shadows(
+        &mut self,
+        using: DeclId,
+        list: ListId,
+        shadows: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        self.cold.using_shadows.insert(using, list)?;
+        for &s in shadows {
+            self.cold.shadow_using.insert(s, using)?;
+        }
+        Ok(())
+    }
+
+    /// The shadows using-declaration `u` introduced (a `ListId` of
+    /// `DeclId`s), if any.
+    pub fn using_shadow_list(&self, u: DeclId) -> Option<ListId> {
+        self.cold.using_shadows.get(u).copied()
+    }
+
+    /// The using-declaration that introduced shadow `s`.
+    pub fn shadow_using(&self, s: DeclId) -> Option<DeclId> {
+        self.cold.shadow_using.get(s).copied()
     }
 
     /// Records decomposition `v`'s bindings and links each back to `v`.

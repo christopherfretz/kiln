@@ -372,6 +372,29 @@ impl Ast {
         }
     }
 
+    /// The shadows using-declaration `u` introduced, in introduction
+    /// order (spec/ast.md §4.2, WP-2025): for a `Using`, the `UsingShadow`
+    /// of each declaration its using-declarator named (at namespace,
+    /// block or class scope; a `ConstructorUsingShadow` per inherited
+    /// constructor for `using B::B;`); for a `UsingEnum`, one per
+    /// enumerator. Empty for any other declaration, for a using-declaration
+    /// whose names were all already introduced, and for a dependent
+    /// using-declarator (`UnresolvedUsingValue`/`UnresolvedUsingTypename`),
+    /// which introduces nothing until instantiated: the instantiation's
+    /// `Using` has the shadows. A shadow a later member hides
+    /// ([namespace.udecl]/14) stays in the list ([`crate::decl::DeclArena::hidden_shadow`]).
+    pub fn using_shadows(&self, u: DeclId) -> impl ExactSizeIterator<Item = DeclId> + '_ {
+        let list = self.decls.using_shadow_list(u).unwrap_or(crate::ids::ListId::EMPTY);
+        self.lists.iter::<DeclId>(list)
+    }
+
+    /// The using-declaration (`Using` or `UsingEnum`) that introduced
+    /// shadow `s` (the reverse of [`Ast::using_shadows`]); `None` for a
+    /// declaration that is not a shadow.
+    pub fn shadow_using(&self, s: DeclId) -> Option<DeclId> {
+        self.decls.shadow_using(s)
+    }
+
     /// The template (a `StringLiteral`) of a `FileScopeAsm` declaration.
     pub fn file_scope_asm_string(&self, d: DeclId) -> Option<ExprId> {
         let n = self.decls.get(d);

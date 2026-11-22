@@ -499,7 +499,7 @@ mod tests {
         ];
         let got: Vec<_> = sizes.iter().map(|&(n, s)| format!("{n}={s:?}")).collect();
         let want = "ExprNode=Some(20) DeclNode=Some(28) TypeNode=Some(8) TemplateArg=Some(9) \
-                    ListEntry=Some(13) StmtNode=Some(16) [u32; 3]=Some(12) (u32, u32)=Some(8) \
+                    ListEntry=Some(13) StmtNode=Some(15) [u32; 3]=Some(12) (u32, u32)=Some(8) \
                     QualType=Some(4) FunctionData=Some(24) ParamData=Some(12) RecordData=Some(37) \
                     VarData=Some(24) TypedefData=Some(16)";
         assert_eq!(got.join(" "), want);

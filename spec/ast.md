@@ -191,6 +191,21 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
 | synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `ConstevalBlock` (the StaticAssert payload: cond = the call of the block's synthesized consteval lambda, no message; P3289R1, spec/consteval-blocks.md), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
+**Reserved declaration kinds** (WP-2026). `UsingPack`, `FriendTemplate`,
+`ImplicitParam` and `ImplicitConceptSpecialization` are in `DeclKind` but
+nothing constructs them: a using-declarator pack (`using Ts::f...;`)
+expands at instantiation into one `Using` per element (clang groups
+them in a `UsingPackDecl`); a friend template is a `Friend` naming the
+template; `this` is
+`CXXThisExpr` and the coroutine frame has no declaration; a concept-id is
+checked in place (spec/sema-templates.md). They are kept, not removed,
+because the numbering is stable: `DeclKind as u8` is part of the ODR
+definition hash (spec/abi.md, `ODR_DEF_SCHEME`), of the PCH snapshot and
+of the module image, and removing one renumbers every later kind. A
+consumer may treat them as unreachable; the match arms that name them
+stay so a later kiln can start building one without a format change.
+
+
 Using-family payloads (WP-062; one inline `Payload::None(u32)` word,
 read with `Ast::using_target`/`Ast::using_qualifier`):
 
@@ -212,6 +227,51 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   the dump prints no `prev`.
 - `DeclRefExtra::found_decl` records the `UsingShadow` a `DeclRefExpr`'s
   name was found through (clang's `FoundDecl`).
+- **Shadows of a using-declaration** (WP-2025, for tooling clients that
+  read the `Ast` after the translation unit). `Ast::using_shadows(u)`
+  gives the shadows using-declaration `u` introduced, in introduction
+  order; `Ast::shadow_using(s)` the using-declaration of shadow `s`.
+  Two write-once cold maps hold them: `using_shadows: ColdMap<DeclId,
+  ListId>` (a `Using` or `UsingEnum` → a `ListId` of its shadows, no
+  entry when it introduced none) and `shadow_using: ColdMap<DeclId,
+  DeclId>` (the reverse). Sema writes both with
+  `AstBuilder::set_using_shadows` once the declaration's last shadow is
+  made: a namespace-, block- or class-scope `using N::f;` (one
+  `UsingShadow` per declaration the lookup found that was not already
+  introduced, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
+  inheriting-constructor `using B::B;` (one `ConstructorUsingShadow` per
+  constructor of the base, its implicit copy and move constructors
+  included, that no constructor the class declared earlier hides), and `using
+  enum E;` (one per enumerator). A dependent using-declarator
+  (`UnresolvedUsingValue`, `UnresolvedUsingTypename`) introduces none;
+  the `Using` its instantiation makes in the class specialization (or in
+  the instantiated function body) has the instantiation's shadows. A
+  shadow hidden later ([namespace.udecl]/14, `hidden_shadow`) stays in
+  the list. The module image carries the link (each shadow record names
+  its using-declaration's record, spec/modules.md §11.11 kind 21), and a
+  snapshot carries the maps. Cost: a forward-map entry and an 8 B list
+  span per using-declaration, 4 B per shadow in the list arena and a
+  reverse-map entry per shadow (9 B live each); about 24 KB on a TU of
+  fifteen standard headers, spec/landed/ast/WP-2025.md.
+- **Repeated using-declarations and namespace aliases** ([namespace.udecl],
+  [namespace.alias]; WP-2025 Q14). Two using-declarations of the same
+  name in one scope are two `Using` declarations, never chained: each
+  has its own shadows, and a shadow of a target an earlier shadow of the
+  same scope already introduced (`using N::f; using N::f;` at namespace
+  or block scope) is a new `UsingShadow` that replaces the earlier one in
+  the lookup table (`prev` above), not a redeclaration of it
+  (`Ast::first(s2) == s2`). In a class the second introduces nothing
+  new through another class ([namespace.udecl]/10 diagnoses the same
+  class twice). Two namespace aliases of one name (`namespace A = N;
+  namespace A = N;`) are likewise two `NamespaceAlias` declarations, the
+  later one in the lookup table, each its own first declaration; one
+  naming another namespace is an error
+  (`sema_redefinition_different_namespace_alias`). This matches the
+  standard: a using-declarator and a namespace alias declare names, not
+  entities ([basic.pre]/3 lists neither); both denote the same entity
+  (`Ast::strip_shadow`, `Ast::resolve_alias`), which is what
+  [namespace.udecl]/1 and [namespace.alias]/2 require. Pinned by
+  `crates/kiln_parse/tests/using_linkage.rs` `repeated_using_and_alias`.
 
 Hot payloads (dense arenas, one record per decl of the kind):
 ```rust
@@ -371,6 +431,51 @@ merging a redeclaration walks it only when the walk can change the
 result; otherwise a file of N redeclarations of one entity is O(N²)
 (spec/landed/abi/WP-1076.md).
 
+### 4.5 Linkage and language linkage (WP-2025)
+`kiln_ast::linkage` computes both, from the `Ast` alone, so that sema,
+mangling, reflection and tooling clients (which read the `Ast` after the
+translation unit, when sema is gone) ask one computation:
+
+- `Ast::linkage(d) -> Linkage { None, Internal, Module, External }` is
+  the language rule of [basic.link]/3-6. A variable, function, named
+  class or enumeration (or one with a typedef name for linkage
+  purposes), template or concept at namespace scope is internal in an
+  unnamed namespace or when `static` (or a non-template, non-volatile
+  `const` variable that is not `inline`, `extern`, attached to a named
+  module or of C language linkage), module when attached to a named
+  module and not exported, else external. A member takes its class's
+  linkage. A local entity has none, except a block-scope function
+  declaration or `extern` variable, which has its first declaration's
+  ([basic.link]/6; external when it is the first). A namespace is
+  internal when unnamed or inside an unnamed one. Anything else (an
+  alias, a data member, an enumerator, a parameter, a deduction guide, a
+  closure type, a using-declaration or shadow) has none. Reflection's
+  `has_internal_linkage`/`has_external_linkage`/`has_module_linkage`
+  read it (spec/reflection.md).
+- `Ast::is_extern_c(d)` is clang's `isExternC`, the symbol view mangling
+  and codegen read (`kiln_abi::mangle::is_extern_c` delegates): the
+  first declaration is lexically inside an `extern "C"` linkage
+  specification, the innermost one deciding (through enclosing
+  functions and classes: a block-scope `extern` declaration in an
+  `extern "C"` function has it), it is no class member, no member-like
+  constrained friend ([dcl.link]/5) and has no internal linkage. A
+  function or variable in an unnamed namespace first declared in an
+  `extern "C"` context keeps it, as in clang. In C every function and
+  variable with linkage has it.
+- `Ast::language_linkage(d) -> LanguageLinkage { Cxx, C, None }` is
+  [dcl.link] for tooling clients: `C` when `is_extern_c(d)` (and `d`
+  has linkage), `Cxx` for any other function or variable whose name has
+  external linkage, `None` for everything else (types, namespaces,
+  templates, data members, enumerators, parameters, local variables,
+  deduction guides, names with internal or module linkage:
+  [dcl.link]/1 gives a language linkage to functions and variables with
+  external linkage only). A redeclaration answers its first
+  declaration's ([dcl.link]/6). A static data member or member function
+  in an `extern "C"` block is `Cxx` ([dcl.link]/5).
+
+Nothing is stored: each query walks the context chain (bounded) and
+reads the payloads. Tests: `crates/kiln_parse/tests/using_linkage.rs`.
+
 ## 5. Expressions
 ### 5.1 Header
 ```rust
@@ -448,6 +553,16 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr` (WP-171: `a` = the `va_list` operand, `b` = the written type, `cold.trait_rhs_loc` = the type's begin, `cold.end_loc` = the `)`; the node type is the written type without references, always a prvalue; accessor `ExprArena::va_arg`), `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr` (`__builtin_shufflevector`; WP-282: `a` = a list of the operands as written, the two vectors then the indices (`shuffle_subs`); `aux` bit 0 = the mask is known, then `b` = a raw list of the `u32` lane indices, `u32::MAX` for -1 (`shuffle_mask`); `cold.end_loc` = the `)`; dumped and printed as clang), `ConvertVectorExpr`, `ExtVectorElementExpr` (WP-307/312: `a` = the base vector, or for `->` (`ExprFlags::ARROW`) the pointer to it (`operand`), `b` = the accessor's `Symbol` (`ext_vector_accessor`); for `.` the value category is the base's, a glvalue with `ObjectKind::VectorComponent`; built by `Builder::ext_vector_element`; `kiln_ast::expr::ext_vector_access` decodes the accessor to lane numbers as clang's `getEncodedElementAccess`; dumped `ExtVectorElementExpr '<type>' <accessor>`) |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated; a dependent `template [: e :] < args >` keeps its arguments in the cold `splice_args` map, `Exprs::splice_template_args`, WP-482) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
+
+**Reserved expression kinds** (WP-2026). `UserDefinedLiteral`,
+`EmbedExpr` and `UnresolvedMemberExpr` are in `ExprKind` but nothing
+constructs them: a user-defined literal is a plain `CallExpr`
+(spec/sema-overload.md §6.7), `#embed` reaches the parser as the tokens
+of its bytes (spec/pp.md), and an overloaded member access is a
+`MemberExpr` of type `QualType::OVERLOAD` (§5.10). They are kept for the
+same reason as the reserved declaration kinds (§4.2): `0x21 + ExprKind`
+is part of the ODR definition hash, and the numbering is stable.
+
 
 Class-feature payloads (`a`, `b`, `aux` of `CXXConstructExpr`,
 `CXXTemporaryObjectExpr`, `CXXInheritedCtorInitExpr`,
@@ -731,8 +846,11 @@ implicit `this->`, `p->Base::f<int>(x)` and `p->Base::f<T>(x)`).
 
 ## 6. Statements
 ```rust
-struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
+struct StmtNode { kind: StmtKind /*u8*/, /* 1 padding byte */ aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
 ```
+A statement has no flags byte: the former `flags: u8` had no reader or
+writer and was removed (WP-2026); per-kind bits live in `aux`.
+
 | kind | payload / notes |
 |---|---|
 | `CompoundStmt` (M2) | `a` = `ListId` of statements; rbrace loc in `b` |
@@ -815,7 +933,8 @@ pub struct TemplLink(u32);    // 0 = None; else 3-bit tag (bits 29..=31) + 29-bi
     // Specialization(SpecId)       implicit/explicit specialization or instantiation of a template
     // MemberOfSpecialization(MemberSpecId)  member of a class template specialization
     //                              (clang's MemberSpecializationInfo)
-    // DependentFriend(FriendSpecId) friend function template specializations (M3 detail)
+    // (tag 4, once DependentFriend, is unused: nothing built it; WP-2026.
+    //  A dependent friend template specialization is a Friend, spec/sema-templates.md)
 struct SpecInfo {             // templates.specs, 24 bytes
     template: DeclId,         // first decl of the primary template
     args: ArgListId,          // as written (sugared); canonical via spec/types.md §8.3

@@ -100,7 +100,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 58;
+pub(crate) const IMAGE_VERSION: u32 = 61;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -636,9 +636,13 @@ enum Payload {
     Using {
         steps: Vec<NnsRec>,
     },
-    /// The shadow a using-declarator introduces (S6) for `target`.
+    /// The shadow a using-declarator introduces (S6) for `target`;
+    /// `using` is the record of the using-declaration (a [`Payload::Using`]
+    /// or [`Payload::UsingEnum`] before it, in the same context) that
+    /// introduced it, or [`NONE`] (WP-2025, `Ast::using_shadows`).
     Shadow {
         target: u32,
+        using: u32,
     },
     /// A using-directive (S6) nominating namespace record `ns` (a first
     /// declaration).
@@ -1331,8 +1335,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u8(u8::from(*typename));
             w.steps(steps);
         }
-        Payload::Shadow { target: x }
-        | Payload::AnonObj { rec: x }
+        Payload::Shadow { target, using } => {
+            w.u32(*target);
+            w.u32(*using);
+        }
+        Payload::AnonObj { rec: x }
         | Payload::Indirect { obj: x }
         | Payload::Asm { string: x }
         | Payload::UsingDir { ns: x }
@@ -1884,7 +1891,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::DepUsing { typename, steps: r.steps()? }
         }
-        K_SHADOW => Payload::Shadow { target: r.u32()? },
+        K_SHADOW => Payload::Shadow { target: r.u32()?, using: r.u32()? },
         K_ANON_OBJ => Payload::AnonObj { rec: r.u32()? },
         K_INDIRECT => Payload::Indirect { obj: r.u32()? },
         K_ASM => Payload::Asm { string: r.u32()? },
@@ -2976,6 +2983,17 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if d.prev != NONE && !kind_of(d.prev).is_some_and(|p| same_kind(&p.payload, &d.payload)) {
             return bad("bad previous declaration");
         }
+        // WP-2025: a shadow's using-declaration is an earlier one of its
+        // context.
+        if let Payload::Shadow { using, .. } = d.payload
+            && using != NONE
+            && !kind_of(using).is_some_and(|u| {
+                u.ctx == d.ctx
+                    && matches!(u.payload, Payload::Using { .. } | Payload::UsingEnum { .. })
+            })
+        {
+            return bad("bad shadow's using-declaration");
+        }
         let ident = |n: u32| (n as usize) < img.names.len();
         let name_ok = match &d.payload {
             Payload::Export
@@ -3338,7 +3356,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad using-declaration");
                 }
             }
-            Payload::Shadow { target } => {
+            Payload::Shadow { target, .. } => {
                 let ok = kind_of(*target).is_some_and(|t| {
                     t.flags & DEP == 0
                         && t.name == d.name
@@ -3898,16 +3916,17 @@ impl Writer<'_, '_, '_> {
                 let q = ast.using_qualifier(d).ok_or("a using-declaration without a qualifier")?;
                 Payload::Using { steps: self.nns_steps(q)? }
             }
-            DeclKind::UsingShadow if class_using => {
-                Payload::Shadow { target: class_shadow.ok_or(classusing::CLASS_USING)? }
-            }
+            DeclKind::UsingShadow if class_using => Payload::Shadow {
+                target: class_shadow.ok_or(classusing::CLASS_USING)?,
+                using: NONE,
+            },
             DeclKind::UsingShadow => {
                 let t = rec(ast.using_target(d))
                     .ok_or("a using-declaration naming a declaration outside the image")?;
                 if self.img.decls[t as usize].flags & DEP != 0 {
                     return Err("a using-declaration naming a template pattern");
                 }
-                Payload::Shadow { target: t }
+                Payload::Shadow { target: t, using: NONE }
             }
             DeclKind::UsingDirective => {
                 let ns = rec(ast.using_target(d).map(|x| ast.first(x)))
@@ -4380,7 +4399,6 @@ impl Writer<'_, '_, '_> {
             || (c.asm_label.contains(d) && !self.own_asm_label(d))
             || c.alignment.contains(d)
             || c.deprecation.contains(d)
-            || c.instantiated_from.contains(d)
             || c.injection_point.contains(d)
             || c.conversion_spec_target.contains(d)
         {
@@ -4960,6 +4978,7 @@ impl Writer<'_, '_, '_> {
                 df.key = r;
             }
         }
+        self.shadow_usings()?;
         self.friend_lists()?;
         self.anon_typedefs()?;
         self.decl_locs()?;
@@ -5179,6 +5198,46 @@ impl Writer<'_, '_, '_> {
 
     /// A fix-up of record `rec` names a declaration outside the image:
     /// the census counts it, the writer falls back.
+    /// WP-2025: the `using` word of each shadow record, from the
+    /// using-declaration that introduced it (`Ast::using_shadows`). The
+    /// importer rebuilds the list from the shadow records in record order,
+    /// so every shadow of a carried using-declaration must have a record
+    /// after it, in introduction order; anything else is a fallback, not
+    /// a shorter list.
+    fn shadow_usings(&mut self) -> W<()> {
+        let s = self.s;
+        let ast = &s.ast;
+        let mut usings: Vec<(u32, DeclId)> = self
+            .recs
+            .iter()
+            .filter(|&(&d, _)| ast.decls.using_shadow_list(d).is_some())
+            .map(|(&d, &i)| (i, d))
+            .collect();
+        usings.sort_unstable();
+        for (ui, u) in usings {
+            let mut last = ui;
+            for sh in ast.using_shadows(u) {
+                match self.recs.get(&sh).copied() {
+                    Some(si) if si > last => {
+                        if let Payload::Shadow { using, .. } =
+                            &mut self.img.decls[si as usize].payload
+                        {
+                            *using = ui;
+                        }
+                        last = si;
+                    }
+                    _ => {
+                        self.miss(
+                            ui,
+                            "a using-declaration whose shadows are not carried in order",
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn miss(&mut self, rec: u32, why: &'static str) -> W<()> {
         if self.census.is_none() {
             return Err(why);
@@ -6215,7 +6274,7 @@ impl Sema<'_, '_> {
                     });
                     self.builder().using_decl(h, nns)
                 }
-                Payload::Shadow { target } => {
+                Payload::Shadow { target, .. } => {
                     let t = ids[*target as usize];
                     h.name = self.ast.decls.get(t).name();
                     self.builder().using_shadow(h, t, prev)
@@ -6262,6 +6321,22 @@ impl Sema<'_, '_> {
             self.image_anon_typedef(img, i as u32, &ids);
         }
         self.ast.templates.dependent_depth = saved_depth;
+        // WP-2025: each using-declaration's shadows, in record order (the
+        // writer's introduction order, `shadow_usings`).
+        let mut shadows: Vec<(u32, DeclId)> = img
+            .decls
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| match r.payload {
+                Payload::Shadow { using, .. } if using != NONE => Some((using, ids[i])),
+                _ => None,
+            })
+            .collect();
+        shadows.sort_by_key(|&(u, _)| u);
+        for group in shadows.chunk_by(|a, b| a.0 == b.0) {
+            let list: Vec<DeclId> = group.iter().map(|&(_, d)| d).collect();
+            let _ = self.builder().set_using_shadows(ids[group[0].0 as usize], &list);
+        }
         if let Some((e, computed)) = open.take() {
             self.image_complete_enum(img, &mut tys, &ids, e, computed);
         }
@@ -7384,13 +7459,13 @@ mod tests {
         };
         img.decls.extend([
             rec(1, Payload::Using { steps: vec![NnsRec::Ns(0)] }),
-            rec(1, Payload::Shadow { target: 2 }),
+            rec(1, Payload::Shadow { target: 2, using: 10 }),
             rec(na, Payload::NsAlias { target: 0 }),
             rec(2, Payload::UsingEnum { e: 3 }),
             rec(NONE, Payload::UsingDir { ns: 0 }),
             rec(5, Payload::Using { steps: vec![NnsRec::Global, NnsRec::Alias(12)] }),
-            rec(5, Payload::Shadow { target: 6 }),
-            rec(1, Payload::Shadow { target: 11 }),
+            rec(5, Payload::Shadow { target: 6, using: 15 }),
+            rec(1, Payload::Shadow { target: 11, using: NONE }),
         ]);
         img.decls[14].owner = 1;
         img.gated = gated_names(&img);
@@ -7424,12 +7499,22 @@ mod tests {
         let img = using_sample();
         assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
         assert_eq!(decode(&encode(&img)), Ok(img));
-        let corrupt: [Corrupt; 12] = [
+        let corrupt: [Corrupt; 14] = [
             ("shadow of a later declaration", |i| {
-                i.decls[11].payload = Payload::Shadow { target: 16 }
+                i.decls[11].payload = Payload::Shadow { target: 16, using: 10 }
             }),
-            ("shadow of itself", |i| i.decls[11].payload = Payload::Shadow { target: 11 }),
-            ("shadow of a namespace", |i| i.decls[11].payload = Payload::Shadow { target: 0 }),
+            ("shadow of itself", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 11, using: 10 }
+            }),
+            ("shadow of a namespace", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 0, using: 10 }
+            }),
+            ("shadow of a later using-declaration", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 2, using: 15 }
+            }),
+            ("shadow whose using-declaration is an alias", |i| {
+                i.decls[16].payload = Payload::Shadow { target: 6, using: 12 }
+            }),
             ("shadow under another name", |i| i.decls[11].name = 2),
             ("directive naming an export block", |i| {
                 i.decls[14].payload = Payload::UsingDir { ns: 1 };
