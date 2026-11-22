@@ -4755,6 +4755,24 @@ instantiation unless stated.
     from a macro argument ends after the last token, measured where it
     is spelled (WP-410). Test:
     `dcl.pre/static-assert-full-expression-note.cpp`.
+  - The note's operands are evaluated again, each on its own and
+    manifestly constant-evaluated as the condition was ([expr.const]/22;
+    clang `EvaluateAsRValue(InConstantContext=true)`;
+    `Sema::fold_manifest`): `if consteval` takes its compound statement
+    and `std::is_constant_evaluated()` is true. The failing conjunct is
+    found by a plain fold, not manifestly constant-evaluated, as clang's
+    `findFailedBooleanCondition` finds it (`static_assert(t() && f() ==
+    1001)` with `t()` false only when manifestly constant-evaluated
+    names `f() == 1001`). The constraint notes that print operand values
+    do the same (`'f() == 5' (1001 == 5) evaluated to false`, and which
+    operands of a `&&` chain were false; clang `EvaluateAsInt` /
+    `EvaluateKnownConstInt` in a constant context). The operands are
+    evaluated again rather than read from the condition's evaluation: the
+    note is made only on failure, the operands' values are not kept by
+    the compiled condition (a trial fast path may not compute them at
+    all), and two operands of one comparison share no object a separate
+    evaluation could see differently (WP-1943). Test:
+    `dcl.pre/static-assert-note-manifestly-constant-evaluated.cpp`.
   - In a template definition (`in_template()`, or a context flagged
     `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
     value-dependent (P2593R1, a DR; clang's

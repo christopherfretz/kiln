@@ -520,6 +520,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `nvptx_kernel` argument is parsed as an expression (WP-1880..1883). PCH
   snapshot format 117.
 
+- The "expression evaluates to 'L == R'" note of a failed `static_assert`
+  evaluates the operands manifestly constant-evaluated, as the condition
+  was, so `if consteval` and `std::is_constant_evaluated()` take the same
+  branch there (`'1001 == 5'`, not `'1 == 5'`); so do the unsatisfied
+  constraint notes that print operand values or pick the false operands
+  of a `&&` (WP-1943).
+- A failed constant evaluation that computes `a + 4` over `int a[3]`
+  before a one-past-the-end read is reported at the pointer arithmetic,
+  the first operation that is not constant ([expr.add]/4); clang reports
+  the later read. Recorded in docs/status/deviations.md (WP-1944).
+- The "exceeded maximum depth" note of a member call (`r.get()`,
+  `p->get()`) or an overloaded operator call (`a + b`, `a == b`) is at the
+  member name or the operator, as clang puts it, and so is the "non-constexpr
+  function"/"undefined function" note of an overloaded operator call;
+  kiln put them at the call's first token (WP-1942).
 - An address space written over a template parameter or a dependent
   `address_space(N)` type (`T __attribute__((address_space(1)))`) whose
   substituted type is already in another space is now clang's

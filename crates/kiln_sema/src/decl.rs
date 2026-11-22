@@ -12467,7 +12467,14 @@ impl Sema<'_, '_> {
         if Self::is_literal_expr(&self.ast, l) && Self::is_literal_expr(&self.ast, r) {
             return d;
         }
-        let (Some(lv), Some(rv)) = (self.try_fold(l), self.try_fold(r)) else { return d };
+        // clang `DiagnoseStaticAssertDetails`: each operand is evaluated
+        // again, manifestly constant-evaluated as the condition was
+        // ([expr.const]/22; `if consteval`, `is_constant_evaluated()`;
+        // WP-1943). The failing conjunct was found by a plain fold, as
+        // clang's `findFailedBooleanCondition` finds it.
+        let (Some(lv), Some(rv)) = (self.fold_manifest(l), self.fold_manifest(r)) else {
+            return d;
+        };
         // clang's `ConvertAPValueToString` prints no lvalue or member
         // pointer: a pointer comparison gets no note (`&a == &b`, `&&l ==
         // &&m`).

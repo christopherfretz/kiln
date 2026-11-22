@@ -1270,6 +1270,26 @@ impl Oven {
         r
     }
 
+    /// As [`Oven::try_fold`], manifestly constant-evaluated
+    /// ([expr.const]/22: `__builtin_is_constant_evaluated()` yields true,
+    /// `if consteval` takes its compound statement): clang's
+    /// `EvaluateAsRValue(InConstantContext=true)`, which the "expression
+    /// evaluates to" note of a failed `static_assert` uses for each
+    /// operand of the failed comparison, as the condition itself was
+    /// evaluated (WP-1943). Silent and not recorded in the statistics.
+    pub fn fold_manifest(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+    ) -> Option<ConstValueId> {
+        let mark = self.trial_mark();
+        let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        if r.is_none() {
+            self.reclaim_failed(mark);
+        }
+        r
+    }
+
     /// As [`Oven::try_fold`], laxly (clang `Expr::EvaluateAsRValue`, as
     /// codegen's `tryEmitAsConstant` and a folded array bound use it): a
     /// `const` non-volatile variable with an initializer is read even if
