@@ -2661,8 +2661,14 @@ impl Substituter<'_, '_, '_> {
                 Ok(Some(sub.local_class(m, local.as_deref_mut())))
             } else {
                 let salt = std::mem::replace(&mut sub.sema.inst.stack.member_salt, m.index());
+                let after = sub.sema.decl_count();
                 let r = sub.guarded_member(m, spec, |s| s.member(m));
                 sub.sema.inst.stack.member_salt = salt;
+                // The member claims the closures of its substituted
+                // declaration (spec/sema-lambda.md §3.6).
+                if let Ok(Some(x)) = r {
+                    sub.sema.claim_substituted_closures(after, x, m);
+                }
                 r
             };
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);

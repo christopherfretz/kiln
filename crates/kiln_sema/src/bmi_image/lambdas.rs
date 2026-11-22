@@ -23,7 +23,10 @@
 //! implicit member records. The closure type's identity is the replay's:
 //! the image carries the mangling number and context sema gave it, so
 //! `Ul..E[n]_` names agree; a closure without a number (`$_N`) is named
-//! when it is first mangled, as in replay.
+//! when it is first mangled, as in replay. The closure's owner
+//! (`Ast::closure_owner`, WP-2023) is carried beside them when it is not
+//! the closure's context; an owner outside the image is a fallback, as a
+//! mangling context is.
 //!
 //! [`F::LB`]: super::body::F::LB
 
@@ -88,6 +91,9 @@ pub(super) struct LambdaRec {
     /// The mangling number (0: none) and context declaration word.
     number: u32,
     context: u32,
+    /// The closure's owner (`Ast::closure_owner`, WP-2023) when it is not
+    /// its context: a declaration word, or [`NONE`].
+    owner: u32,
     caps: Vec<CapRec>,
     /// The unexpanded parameter packs the lambda's body names
     /// (declaration words), which sema keeps beside the lambda.
@@ -126,6 +132,8 @@ pub(super) struct LamState {
     ranges: Vec<(u32, u32)>,
     /// Lambda records whose mangling context was not yet recorded.
     pending: Vec<(u32, DeclId)>,
+    /// Lambda records whose owner was not yet recorded.
+    pending_owner: Vec<(u32, DeclId)>,
     /// The tags that could not be written, and why.
     failed: kiln_source::fx::FxHashMap<DeclId, &'static str>,
     /// Lambda → section record.
@@ -495,6 +503,19 @@ impl Writer<'_, '_, '_> {
             }
             None => NONE,
         };
+        // The owner, when stored (otherwise the closure's context): a
+        // variable, field, parameter, alias or template parameter, often
+        // written after the closure.
+        let owner = match self.s.ast.decls.cold.closure_owner.get(t).copied() {
+            Some(o) if self.recs.contains_key(&o) || self.bs.params.contains_key(&o) => {
+                self.lam_dref(o)?
+            }
+            Some(o) => {
+                self.bs.lam.pending_owner.push((k, o));
+                NONE
+            }
+            None => NONE,
+        };
         let pack_decls: Vec<DeclId> = self.s.lambda_packs.get(&l).cloned().unwrap_or_default();
         let mut packs = Vec::with_capacity(pack_decls.len());
         for d in pack_decls {
@@ -514,6 +535,7 @@ impl Writer<'_, '_, '_> {
             flags,
             number: data.mangling.number,
             context,
+            owner,
             caps,
             packs,
             inits: Vec::new(),
@@ -584,6 +606,14 @@ impl Writer<'_, '_, '_> {
                 }
             }
         }
+        for (k, o) in std::mem::take(&mut self.bs.lam.pending_owner) {
+            let Some(r) = self.img.lambdas.recs.get(k as usize) else { continue };
+            let closure = r.closure;
+            match self.recs.get(&o) {
+                Some(&w) => self.img.lambdas.recs[k as usize].owner = w,
+                None => self.miss(closure, "a lambda whose owner is outside the image")?,
+            }
+        }
         Ok(())
     }
 
@@ -644,8 +674,16 @@ impl Writer<'_, '_, '_> {
 pub(super) fn encode_lambdas(w: &mut Wr, s: &Lambdas) {
     w.len(s.recs.len());
     for r in &s.recs {
-        for x in [r.closure, r.call_op, r.default_loc, r.lbracket, r.rbracket, r.number, r.context]
-        {
+        for x in [
+            r.closure,
+            r.call_op,
+            r.default_loc,
+            r.lbracket,
+            r.rbracket,
+            r.number,
+            r.context,
+            r.owner,
+        ] {
             w.u32(x);
         }
         w.u8(r.default);
@@ -670,14 +708,14 @@ pub(super) fn encode_lambdas(w: &mut Wr, s: &Lambdas) {
 }
 
 pub(super) fn decode_lambdas(r: &mut Rd) -> Res<Lambdas> {
-    let n = r.count(34)?;
+    let n = r.count(38)?;
     let mut recs = Vec::with_capacity(n);
     for _ in 0..n {
-        let mut w = [0u32; 7];
+        let mut w = [0u32; 8];
         for x in &mut w {
             *x = r.u32()?;
         }
-        let [closure, call_op, default_loc, lbracket, rbracket, number, context] = w;
+        let [closure, call_op, default_loc, lbracket, rbracket, number, context, owner] = w;
         let default = r.u8()?;
         let flags = r.u8()?;
         let nc = r.count(18)?;
@@ -708,6 +746,7 @@ pub(super) fn decode_lambdas(r: &mut Rd) -> Res<Lambdas> {
             flags,
             number,
             context,
+            owner,
             caps,
             packs,
             inits,
@@ -781,6 +820,7 @@ pub(super) fn validate_lambdas(img: &Image, nparams: usize) -> Res<()> {
             || r.default > 2
             || r.flags > L_PARAMS | L_RESULT | L_MUTABLE | L_INITS
             || !word_ok(r.context)
+            || !word_ok(r.owner)
             || (r.flags & L_INITS == 0 && !r.inits.is_empty())
             || r.inits.iter().any(|&e| e as usize >= ne)
             || r.packs.iter().any(|&p| p == NONE || !super::body::dc_ok(img, nparams, p, Dc::Pack))
@@ -869,6 +909,10 @@ impl Sema<'_, '_> {
             x.mutable = r.flags & L_MUTABLE != 0;
             x.mangling.number = r.number;
             x.mangling.context = decl(r.context);
+            if let Some(o) = decl(r.owner) {
+                let c = ids[r.closure as usize];
+                self.ast.set_closure_owner(c, o);
+            }
             let packs: Vec<DeclId> = r.packs.iter().filter_map(|&w| decl(w)).collect();
             if !packs.is_empty() {
                 self.lambda_packs.insert(l, packs);

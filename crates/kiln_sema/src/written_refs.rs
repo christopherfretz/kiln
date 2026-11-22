@@ -136,18 +136,53 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The table position, for [`claim_written_refs`](Self::claim_written_refs).
+    /// The table position and declaration count, for
+    /// [`claim_written_refs`](Self::claim_written_refs). Taken whether or
+    /// not names are recorded: the same claims decide closure owners
+    /// (spec/ast.md §5.9).
     #[inline]
     pub fn written_ref_mark(&self) -> Option<RefMark> {
-        self.records_written_refs().then(|| self.ast.written_ref_mark())
+        Some(self.ast.written_ref_mark())
     }
 
     /// Declaration `d` claims the names recorded since `m` (spec/ast.md
-    /// §18.3).
+    /// §18.3) and the closures created since (§5.9).
     #[inline]
     pub fn claim_written_refs(&mut self, m: Option<RefMark>, d: Option<DeclId>) {
         if let (Some(m), Some(d)) = (m, d) {
-            self.ast.written_refs.claim(m, d);
+            if self.records_written_refs() {
+                self.ast.written_refs.claim(m, d);
+            }
+            self.claim_closures(m.decls, d);
+        }
+    }
+
+    /// [`claim_written_refs`](Self::claim_written_refs) by the template
+    /// parameter just parsed since `m` (closures only: template parameters
+    /// do not claim names yet, spec/ast.md §18.3).
+    #[inline]
+    pub fn claim_template_param(&mut self, m: Option<RefMark>) {
+        if let Some(m) = m {
+            self.claim_template_param_closures(m.decls);
+        }
+    }
+
+    /// The alias-declaration `d`, whose type-id was parsed since `m`,
+    /// claims its closures (spec/ast.md §5.9; its names stay enclosed by
+    /// the context, §18.3).
+    #[inline]
+    pub fn claim_alias_closures(&mut self, m: Option<RefMark>, d: DeclId) {
+        if let Some(m) = m {
+            self.claim_closures(m.decls, d);
+        }
+    }
+
+    /// The closures of the innermost template head opened since `m`
+    /// (its requires-clause) go to the templated declaration it declared.
+    #[inline]
+    pub fn claim_template_head(&mut self, m: Option<RefMark>) {
+        if let Some(m) = m {
+            self.claim_template_head_closures(m.decls);
         }
     }
 

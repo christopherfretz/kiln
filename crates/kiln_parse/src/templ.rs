@@ -136,6 +136,19 @@ impl Parser<'_, '_> {
         self.skip_unsupported_declaration();
     }
 
+    /// Opens a template parameter list at `<` (`l_angle`) of the head at
+    /// `loc`, returning the mark its declaration claims closures from
+    /// (the head's requires-clause, spec/ast.md §5.9).
+    fn template_params_start(
+        &mut self,
+        loc: Loc,
+        l_angle: Loc,
+    ) -> Option<kiln_ast::written_refs::RefMark> {
+        let wmark = self.s.written_ref_mark();
+        self.s.act_on_template_params_start(loc, l_angle);
+        wmark
+    }
+
     /// A declaration starting at `template` or `extern template`
     /// ([temp.pre]/1, [temp.explicit], [temp.expl.spec]) in namespace
     /// (`File`) or class (`Member`) scope.
@@ -233,7 +246,7 @@ impl Parser<'_, '_> {
             self.s.begin_delayed_access();
         }
         let l_angle = self.bump().span.lo;
-        self.s.act_on_template_params_start(loc, l_angle);
+        let wmark = self.template_params_start(loc, l_angle);
         let r_angle = self.parse_template_param_list_tail();
         let requires = if self.at_kw(Kw::Requires) {
             self.bump();
@@ -253,6 +266,7 @@ impl Parser<'_, '_> {
             self.template_delay_level = Some(level);
         }
         self.parse_templated_declaration(ctx, head, loc);
+        self.s.claim_template_head(wmark); // its requires-clause (spec/ast.md §5.9)
         if delays {
             self.template_delay_level = None;
             self.s.end_delayed_access_to(level, None);
@@ -728,7 +742,12 @@ impl Parser<'_, '_> {
                 // A failed parameter is skipped to the next `,` or the
                 // closing `>`; the list goes on after a `,` (clang's
                 // `ParseTemplateParameterList`).
-                if !self.parse_template_param() {
+                // The parameter claims the closures of its type and
+                // default argument (spec/ast.md §5.9).
+                let wmark = self.s.written_ref_mark();
+                let ok = self.parse_template_param();
+                self.s.claim_template_param(wmark);
+                if !ok {
                     self.skip_until(
                         &[Punct::Comma, Punct::Greater, Punct::GreaterGreater],
                         true,

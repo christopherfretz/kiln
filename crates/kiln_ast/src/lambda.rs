@@ -237,6 +237,65 @@ impl crate::Ast {
         self.decls.record(self.first(r)).and_then(|x| x.lambda)
     }
 
+    /// The declaration whose source text holds the lambda-expression of
+    /// closure type `r` (spec/ast.md §5.9 "Closure owners", WP-2023):
+    /// the innermost of a template parameter (a default template
+    /// argument), the parameter (a default argument or a parameter
+    /// type), the field (a default member initializer), the variable (its
+    /// initializer), the alias, the function (its signature, a trailing
+    /// requires-clause) or the templated declaration a template head
+    /// declares (its requires-clause). A closure in a function body is
+    /// owned by the function, the call operator for a lambda's body;
+    /// block-scope declarations are never owners. Otherwise (a
+    /// `static_assert`, an expression at namespace scope) the closure's
+    /// context: its namespace, class or the translation unit. An
+    /// instantiated closure is owned by the instantiation of its
+    /// pattern's owner. `None` when `r` is not a closure type.
+    ///
+    /// Not the mangling context: `LambdaMangling` follows the Itanium
+    /// numbering rules, which leave many of these closures without one.
+    pub fn closure_owner(&self, r: DeclId) -> Option<DeclId> {
+        let r = self.first(r);
+        self.closure_lambda(r)?;
+        if let Some(&o) = self.decls.cold.closure_owner.get(r) {
+            return Some(o);
+        }
+        Some(self.closure_owner_default(r))
+    }
+
+    /// The owner of closure type `r` when [`ColdDeclData::closure_owner`]
+    /// has none: its context, past a requires-expression's parameter
+    /// scope (which is not a declaration a reader names).
+    ///
+    /// [`ColdDeclData::closure_owner`]: crate::decl::ColdDeclData::closure_owner
+    pub fn closure_owner_default(&self, r: DeclId) -> DeclId {
+        let mut c = self.decls.get(r).ctx().unwrap_or(self.tu);
+        while self.decls.get(c).kind() == crate::decl::DeclKind::RequiresExprBody
+            && let Some(p) = self.decls.get(c).ctx()
+        {
+            c = p;
+        }
+        c
+    }
+
+    /// Sets the owner of closure type `r` ([`Self::closure_owner`]); the
+    /// default ([`Self::closure_owner_default`]) is not stored.
+    pub fn set_closure_owner(&mut self, r: DeclId, owner: DeclId) {
+        let default = self.closure_owner_default(r);
+        let m = &mut self.decls.cold.closure_owner;
+        if owner == default {
+            // Back to the default: the map keeps a value once set, so an
+            // entry is overwritten rather than removed.
+            if m.contains(r) {
+                let _ = m.refine(r, owner);
+            }
+            return;
+        }
+        if !m.refine(r, owner) {
+            let _ = m.insert(r, owner);
+        }
+    }
+
     /// The lambda whose function call operator is `f`: the call operator
     /// itself or, for a generic lambda, a specialization of its template.
     pub fn call_op_lambda(&self, f: DeclId) -> Option<LambdaId> {

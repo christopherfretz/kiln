@@ -2403,6 +2403,19 @@ impl InstState {
 }
 
 impl TemplState {
+    /// The last parameter of the innermost head being built (closure
+    /// owners, `Sema::claim_template_param_closures`).
+    pub(crate) fn last_param(&self) -> Option<DeclId> {
+        self.heads.last().and_then(|h| h.params.last().copied())
+    }
+
+    /// The parameter list of the innermost written head, past the
+    /// invented heads above it (closure owners,
+    /// `Sema::claim_template_head_closures`).
+    pub(crate) fn innermost_list(&self) -> Option<TemplateParamListId> {
+        self.heads.iter().rev().find(|h| !h.invented).and_then(|h| h.list)
+    }
+
     /// The first transient part not at rest at a snapshot point
     /// (spec/sema.md "Snapshots"): an open template head, expansion
     /// statement or requires-clause context.

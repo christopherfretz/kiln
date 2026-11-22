@@ -1448,6 +1448,12 @@ pub struct Sema<'a, 'sm> {
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
+    /// The closure types substitution created in the current top-level
+    /// declaration, in creation (id) order: the parser's claims skip them,
+    /// as their lambda-expressions are not in the claimer's text
+    /// (spec/sema-lambda.md §3.6). Emptied at each top-level
+    /// declaration's end.
+    pub(crate) subst_closures: Vec<DeclId>,
     /// The contract assertions whose predicates are being analysed,
     /// innermost last (spec/contracts.md §5).
     pub(crate) contract_ctx: Vec<contracts::ContractCtx>,
@@ -1863,6 +1869,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special_friends: kiln_source::fx::FxHashMap::default(),
             member_friends: class::member_friend::MemberFriends::default(),
             nsdmi_this: Vec::new(),
+            subst_closures: Vec::new(),
             contract_ctx: Vec::new(),
             has_contracts: false,
             post_param_diagnosed: kiln_source::fx::FxHashSet::default(),

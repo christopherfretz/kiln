@@ -136,6 +136,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "binding_var",
     "builtin_id",
     "cast_written",
+    "closure_owner",
     "compound_literal",
     "contract_sites",
     "contracts",
