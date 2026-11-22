@@ -13,11 +13,9 @@ use kiln_source::{Loc, SourceManager, Span};
 use crate::diag::{Diag, Diagnostic, Level};
 use crate::groups::Flavor;
 use crate::ids::DiagId;
-use crate::json::JsonSink;
-use crate::options::{DiagOptions, Format};
+use crate::options::DiagOptions;
 use crate::policy::{Policy, Severity};
 use crate::pragma::{PragmaSnapshot, Pragmas};
-use crate::text::TextSink;
 
 mod snap;
 
@@ -29,6 +27,16 @@ pub trait DiagSink {
 
     /// Flushes buffered output.
     fn flush(&mut self) {}
+}
+
+impl<S: DiagSink + ?Sized> DiagSink for Box<S> {
+    fn emit(&mut self, sm: &SourceManager, d: &Diagnostic) {
+        (**self).emit(sm, d);
+    }
+
+    fn flush(&mut self) {
+        (**self).flush();
+    }
 }
 
 struct State<'sm> {
@@ -146,10 +154,7 @@ impl<'sm> DiagEngine<'sm> {
 
     /// An engine writing to standard error in `opts.format`.
     pub fn with_stderr(sm: &'sm SourceManager, opts: &DiagOptions) -> DiagEngine<'sm> {
-        match opts.format {
-            Format::Text => DiagEngine::new(sm, opts, TextSink::new(io::stderr(), opts)),
-            Format::Json => DiagEngine::new(sm, opts, JsonSink::new(io::stderr(), opts)),
-        }
+        DiagEngine::new(sm, opts, crate::render::format_sink(io::stderr(), opts, None))
     }
 
     /// How many warnings and errors the prefix of the snapshot this

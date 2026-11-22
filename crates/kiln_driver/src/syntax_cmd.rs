@@ -588,7 +588,7 @@ impl SyntaxJob<'_> {
         sm: &'sm SourceManager,
         engine: &'a DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
-        host: Box<dyn kiln_parse::HostCalls>,
+        host: Box<dyn kiln_parse::HostCalls + Send>,
     ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>)> {
         let job = &self.0;
         let inputs = job.pp_inputs(sm, engine)?;

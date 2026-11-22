@@ -19,7 +19,9 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId};
 use kiln_diag::{DiagEngine, DiagId, Diagnostic};
 use kiln_oven::RunRaw;
-pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError};
+pub use kiln_oven::{
+    CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, UNCAUGHT_SCALARS,
+};
 use kiln_oven::{HostCalls, MetaOp, NestedCost, Oven, SemaBridge, SessUnit};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -41,7 +43,7 @@ pub struct EvalSession<'a, 'sm> {
     sema: Sema<'a, 'sm>,
     /// The records of §5.1 and §7 (in `sema` while a run is running).
     replay: Box<Replay>,
-    tu_host: Option<Box<dyn HostCalls>>,
+    tu_host: Option<Box<dyn HostCalls + Send>>,
     /// The declaration count at open: `decl` of a result is given only
     /// for what existed then (§4.1).
     open_decls: usize,
@@ -871,7 +873,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
 
     /// The handler the translation unit was parsed with, taken out of the
     /// Oven at [`EvalSession::open`] (runs never use it).
-    pub fn take_tu_host_calls(&mut self) -> Option<Box<dyn HostCalls>> {
+    pub fn take_tu_host_calls(&mut self) -> Option<Box<dyn HostCalls + Send>> {
         self.tu_host.take()
     }
 
@@ -1061,7 +1063,8 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
 
     /// Runs `entry` once (spec/eval-session.md §4): host calls reach
     /// `host`, the run stops at `budget` or when `cancel` is cancelled.
-    /// The session is usable after any outcome.
+    /// The session is usable after any outcome. `host` is borrowed for
+    /// the call and never stored (§6), so it need not be `Send`.
     pub fn run(
         &mut self,
         entry: Entry,

@@ -53,8 +53,9 @@ impl HostCalls for TestHandler {
 }
 
 /// The handler `args` registers, if any.
-pub(crate) fn handler(args: &Args) -> Option<Box<dyn HostCalls>> {
-    args.host_call_test_handler.then(|| Box::new(TestHandler::default()) as Box<dyn HostCalls>)
+pub(crate) fn handler(args: &Args) -> Option<Box<dyn HostCalls + Send>> {
+    args.host_call_test_handler
+        .then(|| Box::new(TestHandler::default()) as Box<dyn HostCalls + Send>)
 }
 
 /// The output of this compile that would outlive it, which a host-call

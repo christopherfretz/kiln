@@ -7,10 +7,14 @@ use crate::Oven;
 
 /// A host-call handler: each evaluated `__builtin_kiln_host_call(op, in,
 /// n_in, bin, n_bin, out, cap_out, bout, cap_bout)` calls
-/// [`HostCalls::call`] once (spec/host-calls.md §2). `Send`, so that an
-/// Oven holding one can still move to another thread (an Oven is used by
-/// one thread at a time; nothing needs `Sync`).
-pub trait HostCalls: Send {
+/// [`HostCalls::call`] once (spec/host-calls.md §2). The trait has no
+/// bound (WP-2321): a *registered* handler is a `Box<dyn HostCalls +
+/// Send>` ([`Oven::set_host_calls`]), so that an Oven holding one can
+/// still move to another thread (an Oven is used by one thread at a time;
+/// nothing needs `Sync`), while an evaluation-session run's handler is
+/// only borrowed for the call (`&mut dyn HostCalls`) and may hold an `Rc`
+/// or borrow another unit's AST.
+pub trait HostCalls {
     /// Runs operation `op` on the integer arguments `ints` (the `n_in`
     /// elements at `in`) and the byte arguments `bytes` (the `n_bin` at
     /// `bin`), writing its results to `out`. The `Ok` value is the
@@ -126,7 +130,7 @@ pub(crate) enum HostMode {
 
 /// The Oven's host-call state.
 pub(crate) struct Host {
-    pub(crate) handler: Option<Box<dyn HostCalls>>,
+    pub(crate) handler: Option<Box<dyn HostCalls + Send>>,
     /// The running evaluation's mode; `Silent` at rest.
     pub(crate) mode: HostMode,
     /// Calls the handler received.
@@ -168,13 +172,13 @@ impl Oven {
     /// declared by sema (`kiln_sema::Sema::set_host_calls`), not here.
     pub fn set_host_calls(
         &mut self,
-        handler: Option<Box<dyn HostCalls>>,
-    ) -> Option<Box<dyn HostCalls>> {
+        handler: Option<Box<dyn HostCalls + Send>>,
+    ) -> Option<Box<dyn HostCalls + Send>> {
         std::mem::replace(&mut self.host.handler, handler)
     }
 
     /// Removes and returns the registered handler.
-    pub fn take_host_calls(&mut self) -> Option<Box<dyn HostCalls>> {
+    pub fn take_host_calls(&mut self) -> Option<Box<dyn HostCalls + Send>> {
         self.host.handler.take()
     }
 

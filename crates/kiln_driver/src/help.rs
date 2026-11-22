@@ -355,6 +355,7 @@ KILN DEVELOPMENT:
                           gcc (default), kiln or kiln-hashed
   -fkiln-reproducible-time
                           [kiln] Fixed __DATE__, __TIME__ and __TIMESTAMP__
+                          (epoch 0: Thu Jan  1 00:00:00 1970, in every file)
   -fkiln-source-path-style=<style>
                           [kiln] File names in source locations: clang
                           (default) or gcc

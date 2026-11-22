@@ -665,6 +665,42 @@ fn reproducible_time() {
     assert_eq!(o.stdout, "\"Jan  1 1970\" \"00:00:00\"\n");
 }
 
+/// WP-2323 (spec/driver.md "Reproducible time"; `__TIMESTAMP__` is the
+/// GNU extension beside [cpp.predefined]'s `__DATE__` and `__TIME__`):
+/// under a fixed epoch
+/// `__TIMESTAMP__` is that epoch's spelling, the same in two files whose
+/// modification times differ; `-fkiln-reproducible-time` and
+/// `SOURCE_DATE_EPOCH` pin it as they pin `__DATE__` and `__TIME__`.
+#[test]
+fn reproducible_timestamp() {
+    let d = scratch("timestamp");
+    let h = d.join("h.h");
+    let t = d.join("t.cpp");
+    std::fs::write(&h, "const char *in_header = __TIMESTAMP__;\n").unwrap();
+    std::fs::write(&t, "#include \"h.h\"\nconst char *in_main = __TIMESTAMP__;\n").unwrap();
+    let day = std::time::Duration::from_hours(24 * 400);
+    let touch = |p: &Path, t: std::time::SystemTime| {
+        std::fs::File::options().write(true).open(p).unwrap().set_modified(t).unwrap();
+    };
+    touch(&h, std::time::SystemTime::UNIX_EPOCH + day);
+    touch(&t, std::time::SystemTime::UNIX_EPOCH + day * 20);
+    let expect = |stamp: &str| {
+        format!("const char *in_header = \"{stamp}\";\nconst char *in_main = \"{stamp}\";\n")
+    };
+    let o = kiln(&["-E", "-P", "-fkiln-reproducible-time", t.to_str().unwrap()], "");
+    assert_eq!((o.code, o.stdout), (0, expect("Thu Jan  1 00:00:00 1970")), "{}", o.stderr);
+    let kilnpp = Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let o = std::process::Command::new(&kilnpp)
+        .args(["-E", "-P", t.to_str().unwrap()])
+        .env_remove("KILN_REPRODUCIBLE_TIME")
+        .env("SOURCE_DATE_EPOCH", "1709214307")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(String::from_utf8_lossy(&o.stdout), expect("Thu Feb 29 13:45:07 2024"));
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
 #[test]
 fn dependencies() {
     let d = scratch("deps");

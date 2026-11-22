@@ -636,6 +636,43 @@ fn preprocessing_record() {
     assert_eq!(r.value.unwrap(), ["SQ", "SQ", "TWO", "TWO"]);
 }
 
+/// WP-2320: `FrontEndOptions::written_refs` records the written-reference
+/// table (spec/ast.md §18) and prints nothing; the table the closure reads
+/// on the finished tree renders exactly as the executable's
+/// `-fkiln-dump-written-refs` output for the same input (spec/driver.md
+/// "Front-end library entry"). Off, the table is empty.
+#[test]
+fn written_refs_equal_the_dump() {
+    let s = Scratch::new("written-refs");
+    s.write("h.h", b"namespace n { template <class T> T twice(T x) { return x + x; } }\n");
+    let main = s.write(
+        "main.cpp",
+        b"#include \"h.h\"\n#define CALL(f) n::f(2)\nstruct S { int m; };\n\
+          int g(S s) { return n::twice(s.m) + CALL(twice<long>); }\n",
+    );
+    let cl = argv(&["-std=c++26", "-fsyntax-only", &main]);
+    let off = run_front_end("kiln++", &cl, quiet(), |fe| fe.ast.written_refs.len()).unwrap();
+    assert_eq!((off.errors, off.value), (0, Some(0)));
+    let (mut on, buf) = captured();
+    on.written_refs = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        assert!(fe.parse_options.written_refs);
+        fe.ast.written_refs.dump(fe.ast, fe.sm, fe.main_file)
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0, "{:?}", r.first_error);
+    assert_eq!(buf.contents(), "", "the switch prints nothing");
+    let table = r.value.unwrap();
+    let kilnpp = std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let mut dump_cl = cl.clone();
+    dump_cl.insert(2, "-fkiln-dump-written-refs".to_owned());
+    let out = Command::new(&kilnpp).args(&dump_cl).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let dump = String::from_utf8(out.stdout).unwrap();
+    assert!(dump.contains("'twice'") && dump.contains("h.h:"), "{dump}");
+    assert_eq!(table, dump);
+}
+
 /// The process's current directory, which no test of this file changes.
 fn process_cwd() -> PathBuf {
     std::env::current_dir().unwrap()

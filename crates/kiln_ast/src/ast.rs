@@ -31,7 +31,7 @@ use crate::types::{LayoutCache, TypeContext};
 /// The typed AST of one translation unit.
 ///
 /// Created by sema at TU start, owned by `kiln_sema::Sema` while parsing,
-/// then moved to codegen. `Send`, not shared during construction
+/// then moved to codegen. `Send + Sync`; one thread builds it
 /// (spec/ast.md §13 Q8). Nodes are appended through
 /// the [`AstBuilder`](crate::AstBuilder) and never removed.
 #[derive(Debug)]
@@ -104,6 +104,14 @@ pub struct Ast {
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
+
+// A finished AST may be shared by reference across threads, as a tooling
+// client's host-call handler that reads another unit's tree does
+// (spec/ast.md §2.2, WP-2321); a field that is not `Sync` fails here.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Ast>();
+};
 
 /// Bytes appended to the AST node arenas while instantiating (spec/ast.md
 /// §13 Q6, §15): reported as the `instantiation.retained` row.

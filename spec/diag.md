@@ -962,6 +962,24 @@ U+0000-U+001F and U+007F as `\u00xx` (lowercase hex), and copies
 everything else, non-ASCII included. Output lines never contain raw
 control characters.
 
+### 10.3 Rendering records (WP-2324)
+
+There is one rendering path for both formats. `format_sink(out, opts,
+prefix)` is the sink for `opts.format`: a text sink (§9) with `opts`'
+display settings, preceded by `prefix: ` when a prefix is given (the
+driver's own reports name the program), or a JSON sink (§10.1), which
+takes no prefix. The driver's engines render with it
+(`kiln_driver::make_engine`, the library entry's engines,
+`DiagEngine::with_stderr`). `render_diagnostics(sm, opts, records)`
+sends records a caller holds (`Diagnostic`s a sink received, e.g. an
+evaluation-session run's, spec/eval-session.md §7) through one such
+sink, with no prefix, against `sm`, and returns the text. That text is
+byte for byte what the driver printed for the same records in the same
+order, the include stack included (it is printed once per run of
+records in a file, §9.6). The engine's summary line (§7.5) is not a
+record and is not rendered. `impl DiagSink for Box<S>` lets an engine
+own the boxed sink directly.
+
 ## 11. Verify mode (`-verify`)
 
 `kiln_diag::verify` is a port of clang 19's `VerifyDiagnosticConsumer`

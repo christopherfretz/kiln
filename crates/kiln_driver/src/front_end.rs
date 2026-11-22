@@ -16,9 +16,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use kiln_ast::Ast;
-use kiln_diag::{
-    Diag, DiagEngine, DiagId, DiagOptions, DiagSink, Diagnostic, Format, JsonSink, Level, TextSink,
-};
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, DiagSink, Diagnostic, Level};
 use kiln_parse::{ParseOptions, ParsedTu};
 use kiln_pp::{LookupLog, Preprocessor, SearchEvent};
 use kiln_sema::Oven;
@@ -36,7 +34,8 @@ use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
-/// no preprocessing record, the process's working directory (read once).
+/// no preprocessing record, no written-reference table, the process's
+/// working directory (read once).
 #[non_exhaustive]
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools, reason = "independent switches")]
@@ -65,6 +64,12 @@ pub struct FrontEndOptions {
     /// "Preprocessing record"): the closure reads it as
     /// `fe.pp.record()`. Off by default (WP-2110).
     pub pp_record: bool,
+    /// Record the written-reference table (`ParseOptions::written_refs`,
+    /// spec/ast.md §18), as `-fkiln-written-refs` on the command line
+    /// does, and print nothing: the closure reads it as
+    /// `fe.ast.written_refs`, with the content `-fkiln-dump-written-refs`
+    /// prints for the same input. Off by default (WP-2320).
+    pub written_refs: bool,
     /// The directory every relative path of the run opens against (the
     /// main input, `-I` and the other search directories, `-include`,
     /// `#embed`, module files, `@file`s), as clang's `-working-directory`
@@ -87,6 +92,7 @@ impl Default for FrontEndOptions {
             pch_probe: true,
             environment: Environment::process(),
             pp_record: false,
+            written_refs: false,
             working_directory: None,
         }
     }
@@ -101,6 +107,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pch_probe", &self.pch_probe)
             .field("environment", &self.environment)
             .field("pp_record", &self.pp_record)
+            .field("written_refs", &self.written_refs)
             .field("working_directory", &self.working_directory)
             .finish()
     }
@@ -320,7 +327,7 @@ pub fn run_front_end<R: Send>(
 }
 
 /// A panic payload as text: a `&str` or `String` message, else a stand-in.
-fn payload_text(p: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn payload_text(p: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = p.downcast_ref::<&str>() {
         (*s).to_owned()
     } else if let Some(s) = p.downcast_ref::<String>() {
@@ -439,7 +446,7 @@ fn consulted(
 /// The entry's [`Engines`]: every engine's sink is a [`Tee`] (the text or
 /// JSON sink over `options.stderr`, if any, and the first error), and
 /// each engine's totals are added up when it is done.
-struct Host {
+pub(crate) struct Host {
     out: Option<SharedWriter>,
     first: Arc<Mutex<Option<FirstError>>>,
     errors: Cell<u32>,
@@ -448,7 +455,7 @@ struct Host {
 }
 
 impl Host {
-    fn new(out: Option<SharedWriter>) -> Host {
+    pub(crate) fn new(out: Option<SharedWriter>) -> Host {
         Host {
             out,
             first: Arc::new(Mutex::new(None)),
@@ -458,7 +465,7 @@ impl Host {
         }
     }
 
-    fn first_error(&self) -> Option<FirstError> {
+    pub(crate) fn first_error(&self) -> Option<FirstError> {
         self.first.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
@@ -470,15 +477,8 @@ impl Engines for Host {
         opts: &DiagOptions,
         prefix: Option<&str>,
     ) -> DiagEngine<'s> {
-        // As `crate::make_engine`: JSON has no prefix.
-        let inner: Option<Box<dyn DiagSink + Send>> = self.out.as_ref().map(|w| {
-            let w = w.clone();
-            match (opts.format, prefix) {
-                (Format::Json, _) => Box::new(JsonSink::new(w, opts)) as Box<dyn DiagSink + Send>,
-                (Format::Text, None) => Box::new(TextSink::new(w, opts)),
-                (Format::Text, Some(p)) => Box::new(TextSink::new(w, opts).with_prefix(p)),
-            }
-        });
+        // As `crate::make_engine`.
+        let inner = self.out.as_ref().map(|w| kiln_diag::format_sink(w.clone(), opts, prefix));
         let tee = Tee { inner, first: Arc::clone(&self.first), show_option: opts.show_option };
         DiagEngine::new(sm, opts, tee)
     }
@@ -590,7 +590,11 @@ fn run_here<R>(
     base: &WorkDir,
     f: impl FnOnce(&FrontEnd<'_, '_>) -> R,
 ) -> Result<FrontEndReport<R>, FrontEndError> {
-    let args = entry_args(argv0, command_line, &options.environment, base);
+    let mut args = entry_args(argv0, command_line, &options.environment, base);
+    // The command line's `-fkiln-written-refs`: the parser's option, and
+    // the module cache's key of a module built in process (a module file
+    // carries the table its producer recorded, spec/ast.md §18.10.2).
+    args.written_refs |= options.written_refs;
     structural_checks(&args)?;
     crate::crash_for_testing(&args);
     let host = Host::new(options.stderr.clone());

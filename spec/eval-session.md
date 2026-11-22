@@ -53,6 +53,8 @@ EvalSession::open(sema: Sema<'a, 'sm>) -> Result<EvalSession<'a, 'sm>, OpenError
 kiln_parse::parse_preprocessed_retained(pp, interner, diags, target, opts, limits, tu_host)
     -> (Sema<'a, 'sm>, Preprocessor<'sm, 'a>);
 kiln_driver::session::with_eval_session(argv0, command_line, io, |front_end| ...) -> R;
+front_end.render(&report.diagnostics) -> String;          // §7 (WP-2324)
+kiln_diag::render_diagnostics(sm, &diag_options, records) -> String;
 
 // Entries.
 session.entry(f: DeclId) -> Result<Entry, EntryError>;
@@ -82,7 +84,9 @@ drop(session); session.into_sema() -> Sema;
   include paths, `-D`/`-U`, `-std=`, `-resource-dir`, `-stdlib=`,
   `--target=`, `-W` options and constexpr limits apply as for
   `-fsyntax-only`) and calls the closure with a `SessionFrontEnd`
-  (`#[non_exhaustive]`: the session, the source manager, the main file;
+  (`#[non_exhaustive]`: the session, the source manager, the main file,
+  the command line's `DiagOptions` and the translation unit's own
+  diagnostics, `tu_diagnostics`, its warnings and remarks as printed;
   later fields may be added) or with the reason no session was opened.
   The builtin is visible (a placeholder handler that fails every call is
   the translation unit's). The translation unit's own diagnostics go to
@@ -91,11 +95,38 @@ drop(session); session.into_sema() -> Sema;
   which borrows the source manager, both owned by the call.
 - **Refusal.** `open` fails with `OpenError::TuHasErrors { errors }`
   when the translation unit reported an error (an error-limit fatal
-  included); `with_eval_session` then also reports
+  included). `with_eval_session` says why it opened no session with a
+  `SessionRefused` (`#[non_exhaustive]`; WP-2322), one case each:
+  - `CommandLine { message }`: the command line does not name exactly
+    one C++ source input (`message` says so), or the driver rejected it
+    before the translation unit's job ran (an unknown `-std=`, a missing
+    input, an unusable toolchain): `message` is the driver's first error
+    as the text form prints it after `error: ` (with its ` [option]`
+    suffix when options are shown), the whole report on standard error;
+  - `TuHasErrors { errors, diagnostics }`: the unit reported errors and
+    no fatal error but the error limit's (`diag_too_many_errors`: the
+    limit only cuts the list; it counts as one error); `diagnostics` is
+    every record the unit's engine sent to its sink, warnings included,
+    in order (`kiln_diag::Diagnostic`, as `RunReport::diagnostics`);
+  - `Stopped { diagnostics }`: the front end stopped: a fatal error other
+    than the error limit's (a header not found, an internal limit such as
+    the include depth), the fatal record last; or no tree was built (the
+    job's preprocessor or target could not be set up, with what it
+    reported);
+  - `Panicked(text)`: the front end panicked; the payload as text, as
+    `run_front_end`'s `FrontEndError::Panicked` (spec/driver.md
+    "Front-end library entry"). The panic is caught (the panic hook is
+    not touched) and the closure is called with this; a panic of the
+    closure itself is not caught and propagates to the caller.
+
+  The records' locations are the unit's source manager's, which ends
+  with the call; their text is also on standard error as the driver
+  printed it. A unit with errors or a stopped one also gets
   `drv_eval_session_tu_errors` ("cannot open an evaluation session: the
-  translation unit has N error(s)") on standard error. A command line
-  that does not name one C++ source input, or that the driver rejects,
-  is `SessionRefused::CommandLine`.
+  translation unit has N error(s)") on standard error. Test:
+  `crates/kiln_driver/tests/eval_session.rs` `refusals_say_why` (each
+  case, the error limit, `-fkiln-crash-for-testing=parse`, a panicking
+  closure).
 - **The driver's stages** (WP-2120). `with_eval_session` runs the
   command line through the front-end library entry's stages
   (`front_end::prepare`, spec/driver.md "Front-end library entry"): the
@@ -768,23 +799,40 @@ as before, and bench/oven counters stay identical.
 
 A run is not speculative: host calls are allowed (spec/host-calls.md
 §4 "Runs"). The handler is **given per run**, borrowed (`&mut dyn
-HostCalls`, any lifetime): the Oven reaches it through the run's bridge
-(`SemaBridge::host_calls`), not through a registered handler. Nested
+HostCalls`, any lifetime, no `Send` bound): the Oven reaches it through
+the run's bridge (`SemaBridge::host_calls`), not through a registered
+handler, and nothing keeps it after `run` returns. Nested
 evaluations of semantic work the run triggers (§5.1) have no handler:
 a host call there is refused, as what they compute is kept across runs
 and must not depend on one run's handler. The translation unit's
 handler (given to the parse) is not used by runs.
 
-The refusal's note is `host call in semantic work a run triggered (its
-result is kept across runs)`, and the refused call bumps `run.impure`
-as every refused call does (spec/host-calls.md §5), so no call around
-it is memoized. It is a structured failure of the unit (§5.1 rule 1),
-kept and replayed like any other diagnostic (§7), so every run that
-reaches the work gets it identically, with the same `RunError` kind
-(`Failed`), on a fresh or a used session alike: a static member's
-initializer that makes a host call reports its error with that note
-once, records it, and every run that reaches the initializer replays
-it. A client that needs the handler
+The refusal's note says it in the author's terms (WP-2325): `a host
+call cannot be evaluated here: this expression is evaluated when the
+code is instantiated, not when it runs`, under the error of the
+evaluation that made the call (`constexpr variable 'v' must be
+initialized by a constant expression` for a static member's
+initializer), whose context notes are the ones the diagnostic engine
+gives any instantiation (`in instantiation of static data member
+'H<int>::v' requested here`, `in instantiation of member function ...`;
+on replay, those of the reach, §7), and above the call stack (`in call
+to 'hc(1)'`). The refused call bumps `run.impure` as every refused call
+does (spec/host-calls.md §5), so no call around it is memoized.
+
+**Requirement: every run that reaches the work fails identically.** The
+refusal is a structured failure of the unit (§5.1 rule 1), kept and
+replayed like any other diagnostic (§7). Every run that reaches the
+work, from the first that triggers it to any later one, on a fresh or a
+used session alike, returns the same `RunError` (`Failed`) and the same
+diagnostics: records equal field by field, so their rendering (§7) is
+the same text. A static member's initializer that makes a host call
+reports its error with that note once, records it, and every run that
+reaches the initializer replays it. Test:
+`crates/kiln_parse/tests/eval_session_nested.rs`
+`every_run_reaching_a_refused_host_call_fails_identically` (five runs,
+the instantiation first reached in run 1, rendered by the public
+renderer) and `a_host_call_in_nested_work_fails_every_run_alike` (fresh
+and used sessions, two entries in both orders). A client that needs the handler
 calls it from the run's own code (the entry's body and what it calls),
 never from a `static_assert`, a `constexpr` variable or a template
 argument of an instantiation.
@@ -799,7 +847,27 @@ evaluation").
 
 A run's diagnostics are returned in `RunReport::diagnostics` as
 `kiln_diag::Diagnostic` records (the same records a sink receives:
-id, level, message, span, notes), never printed. While a run is in
+id, level, message, span, notes), never printed.
+
+**Rendering (WP-2324).** `SessionFrontEnd::render(&records)` renders
+records against the session's source manager exactly as the driver
+renders diagnostics on standard error for the command line, in its
+format (text, or JSON under `-fdiagnostics-format=json`), every note
+and call-stack frame under its diagnostic. It is
+`kiln_diag::render_diagnostics(sm, &diag_options, records)`, the one
+rendering path: `kiln_diag::format_sink(out, opts, prefix)` is the sink
+every driver engine renders with (`make_engine`, the library entry's
+engines, `DiagEngine::with_stderr`), and `render_diagnostics` sends the
+records through one such sink without a prefix, so an include stack is
+printed once per run of diagnostics as the driver prints it. The
+summary line (`1 error generated.`) is the driver's, not a record's. A
+client of `parse_preprocessed_retained` calls `render_diagnostics` with
+its own engine's options. Test: `crates/kiln_driver/tests/eval_session.rs`
+`run_diagnostics_render_as_the_driver` (the translation unit's warning
+in a header with its note, text and JSON, equal to `kiln++
+-fsyntax-only`'s standard error; a run's failure with its call stack);
+kiln's session tests render with it (`crates/kiln_parse/tests/eval_session.rs`,
+`eval_session_nested.rs`). While a run is in
 progress the session's `DiagEngine` captures every diagnostic instead
 of sending it to its sink (`DiagEngine::capture_begin` /
 `capture_end`): the error and warning counts and the fatal flag are
@@ -993,18 +1061,53 @@ rule.
 | `DepthLimit` | `budget.depth` exceeded |
 | `Cancelled` | the token was cancelled; note `evaluation was cancelled` |
 | `Host { message }` | the handler returned `Err` (`message` is its message; note `host call failed: <message>`), or the call's checks failed (spec/host-calls.md §2; `message` is the note) |
-| `Uncaught { type_name, what }` | an exception left the entry: its type, and its `what()` when it derives from `std::exception` |
+| `Uncaught { type_name, what, scalars }` | an exception left the entry: its type, its `what()` when it derives from `std::exception`, and `scalars` (WP-2324, below) |
 | `ResultTooLarge` | (WP-2071) the result's tree would exceed `budget.result_bytes` (§4.1); note `the result needs more than N bytes on the host (the run's result budget)` |
 
 Every kind comes with its diagnostic (§7). After any of them the
 session is usable and the next run behaves as on a fresh session.
 
+**`Uncaught`'s scalars** (WP-2324): `scalars: Vec<u64>` holds the values
+of the thrown object's first `UNCAUGHT_SCALARS` (4) non-static data
+members of integral or enumeration type (`bool`, the character and
+integer types, `_BitInt(N)` with N <= 128, an enumeration by its
+underlying type), in declaration order, for any class type, derived
+from `std::exception` or not, read when the exception leaves the entry
+(before the failure is rendered):
+- **Bases.** A class's direct non-virtual base subobjects come first, in
+  base-specifier order, each read the same way (its bases, then its own
+  members), so the members of a complete object count in the order they
+  are initialized ([class.base.init]/13). A virtual base is not read.
+- **Other members are skipped**, not counted: members of class, union,
+  array, pointer, pointer-to-member, floating-point, `std::nullptr_t`
+  or `std::meta::info` type (a class member's own members are not
+  read), and static members.
+- **Bit-fields** count, with their value (the field's bits, sign-extended
+  for a signed type); an unnamed bit-field is no member
+  ([class.bit]/2) and does not count.
+- **Values.** A signed value is in two's complement, sign-extended to 64
+  bits (`-2` is `0xFFFF_FFFF_FFFF_FFFE`); `bool` is 0 or 1; a value wider
+  than 64 bits (`__int128`) keeps its low 64 bits.
+- **Ends.** A member whose value is not initialized ends the list (the
+  ones before it stay), so a position is the same member in every
+  report of a type that has one.
+- **Empty** for a thrown object that is not of class type (`throw 1;`:
+  `type_name` says `int`), for a union, and for a class with no such
+  member.
+
+Test: `crates/kiln_parse/tests/eval_session.rs`
+`uncaught_exceptions_carry_their_leading_scalars` (a `std::exception`
+class, a plain one with a base, a bit-field and an unnamed one, an
+empty class, a scalar, an uninitialized member).
+
 ## 9. Threading
 
 `EvalSession: Send` (not `Sync`): a client may move a session to a
 worker thread (a scoped thread, as it borrows the engine), one per
-worker. `RunReport: Send`. `CancelToken: Send + Sync`. A `HostCalls`
-handler is `Send` (spec/host-calls.md §3).
+worker. `RunReport: Send`. `CancelToken: Send + Sync`. The
+translation unit's handler, which the session keeps, is `Send`
+(`Box<dyn HostCalls + Send>`); a run's handler need not be, as it is
+only borrowed for the run (§6, spec/host-calls.md §3; WP-2321).
 
 ## 10. Cost
 
