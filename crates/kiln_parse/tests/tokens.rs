@@ -129,3 +129,51 @@ fn window_matches_whole_buffer() {
     assert_eq!(window.dump, whole.dump);
     window.assert_dump("FunctionDecl f599");
 }
+
+/// The tokens the preprocessor delivers to the parser ([lex.pptoken],
+/// [cpp.replace]: after macro expansion; the end of file not counted) are
+/// counted in `ParsedTu::tokens`, the same on every run; a fatal error
+/// ([cpp.include]/2: a missing header) ends the stream early, and the
+/// count is the tokens read before it.
+#[test]
+fn lex_pptoken_count_after_expansion() {
+    use std::sync::Arc;
+
+    use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
+    use kiln_sema::target::{Arch, Target};
+    use kiln_source::SourceManager;
+    use kiln_source::symbol::Interner;
+
+    fn count(src: &str) -> (u64, u32) {
+        let sm = SourceManager::new();
+        let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+        let interner = Arc::new(Interner::new());
+        let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+        let target = Target::for_arch(Arch::X86_64);
+        let tu = kiln_parse::parse_tu(
+            &sm,
+            &interner,
+            file,
+            &engine,
+            target,
+            &common::opts19(),
+            kiln_parse::ConstexprLimits::default(),
+        );
+        (tu.tokens, engine.error_count())
+    }
+    // `int x = 1 ;` (5) + `int y = 2 + 3 ;` (7) after expansion; the
+    // directive's tokens are not delivered.
+    let src = "#define SUM 2 + 3\nint x = 1;\nint y = SUM;\n";
+    assert_eq!(count(src), (12, 0));
+    assert_eq!(count(src), (12, 0));
+    assert_eq!(count(""), (0, 0));
+    // `int a ;`, then the token the preprocessor returns after the fatal
+    // `#include` (`int` of the next line); the stream ends at the next
+    // read.
+    let fatal = "int a;\n#include \"no-such-header.h\"\nint b;\n";
+    let (n, errors) = count(fatal);
+    assert_eq!(errors, 1);
+    assert_eq!(n, 4);
+    assert_eq!(count(fatal).0, n);
+    assert_eq!(count("int a;\n#include \"no-such-header.h\"\n"), (3, 1));
+}
