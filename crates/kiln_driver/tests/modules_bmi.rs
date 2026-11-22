@@ -2789,3 +2789,108 @@ fn header_unit_module_files() {
         o.stderr
     );
 }
+
+/// WP-1800, [module.import]/6 (spec/modules.md §3 "Header units"): a
+/// non-inline definition of a function or variable with external linkage
+/// is an error while a header unit is built, by `-fmodule-header` and at
+/// an import; `-fsyntax-only` checks the header as a plain header.
+#[test]
+fn header_unit_external_definitions() {
+    const WANT: [&str; 2] = [
+        "e.h:2:5: error: non-inline external definitions are not permitted in C++ header units",
+        "e.h:4:5: error: non-inline external definitions are not permitted in C++ header units",
+    ];
+    let d = scratch("header-unit-extdef");
+    std::fs::write(
+        d.join("e.h"),
+        "#pragma once\nint ef() { return 1; }\ninline int ok1() { return 2; }\nint ev = 3;\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-fmodule-header", "e.h"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let lines: Vec<&str> = o.stderr.lines().filter(|l| l.contains(": error:")).collect();
+    assert_eq!(lines, WANT, "{}", o.stderr);
+    assert!(!d.join("e.pcm").exists());
+    let o = kiln(&d, &["-fsyntax-only", "-fmodule-header", "e.h"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    std::fs::write(d.join("u.cpp"), "import \"e.h\";\nint main() { return ok1(); }\n").unwrap();
+    // The import finds the header next to the importer: `./e.h`.
+    let o = kiln(&d, &["-fsyntax-only", "u.cpp"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    let lines: Vec<String> =
+        o.stderr.lines().filter(|l| l.contains(": error:")).map(|l| l.replace("./", "")).collect();
+    assert_eq!(lines, WANT, "{}", o.stderr);
+    // A source that includes the header is not a header unit.
+    std::fs::write(d.join("i.cpp"), "#include \"e.h\"\nint main() { return ef(); }\n").unwrap();
+    ok(&d, &["-fsyntax-only", "i.cpp"]);
+}
+
+/// WP-1801 (spec/modules.md §11.6): `-fmodule-header` with a source input
+/// preprocesses it, as clang's driver does (its phases end before the
+/// precompile phase), to `-o` or standard output; other inputs are
+/// unused, and the phase options it leaves unclaimed are warned about.
+#[test]
+fn module_header_source_inputs() {
+    let d = scratch("module-header-sources");
+    std::fs::write(d.join("hm.h"), "#pragma once\ninline int hf() { return 1; }\n").unwrap();
+    std::fs::write(d.join("src.cpp"), "#include \"hm.h\"\nint main() { return hf(); }\n").unwrap();
+    let (code, plain, err) = kiln_stdout(&d, &["-E", "src.cpp"]);
+    assert_eq!((code, err.as_str()), (0, ""));
+    for flags in [
+        &["-fmodule-header", "src.cpp"][..],
+        &["-fmodule-header=user", "src.cpp"],
+        &["-fmodule-header=system", "src.cpp"],
+        &["-fmodule-header", "--precompile", "src.cpp"],
+    ] {
+        let (code, out, err) = kiln_stdout(&d, flags);
+        assert_eq!((code, err.as_str()), (0, ""), "{flags:?}");
+        assert_eq!(out, plain, "{flags:?}");
+    }
+    // `-o` takes the text, whatever its name.
+    ok(&d, &["-fmodule-header", "src.cpp", "-o", "srcY"]);
+    assert_eq!(std::fs::read_to_string(d.join("srcY")).unwrap(), plain);
+    // A header and a source: the header unit, and the source's text.
+    let (code, out, err) = kiln_stdout(&d, &["-fmodule-header", "hm.h", "src.cpp"]);
+    assert_eq!((code, err.as_str()), (0, ""));
+    assert_eq!(out, plain);
+    assert!(std::fs::read(d.join("hm.pcm")).unwrap().starts_with(b"KILNBMI\0"));
+    let o = kiln(&d, &["-fmodule-header", "hm.h", "src.cpp", "-o", "zz"]);
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "kiln++: error: cannot specify -o when generating multiple output files\n"
+    );
+    // A source named as a header by its type is a header unit.
+    std::fs::write(d.join("hs.cpp"), "inline int hs() { return 1; }\n").unwrap();
+    ok(&d, &["-x", "c++-user-header", "hs.cpp", "-o", "srcH.pcm"]);
+    assert!(std::fs::read(d.join("srcH.pcm")).unwrap().starts_with(b"KILNBMI\0"));
+    // Unused inputs and options.
+    let o = kiln(&d, &["-fmodule-header", "-fmodule-output=q.pcm", "-c", "-S", "src.cpp"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let unused = |a: &str| {
+        format!(
+            "kiln++: warning: argument unused during compilation: '{a}' \
+             [-Wunused-command-line-argument]\n"
+        )
+    };
+    let want = [unused("-fmodule-output=q.pcm"), unused("-c"), unused("-S")].concat();
+    assert_eq!(o.stderr, want);
+    let o = kiln(&d, &["-fclang-compat=19", "-fmodule-header", "-c", "-S", "src.cpp"]);
+    assert_eq!(o.stderr, unused("-S"));
+    let o = kiln(&d, &["-fmodule-header", "-fsyntax-only", "src.cpp"]);
+    assert_eq!(o.stderr, unused("-fsyntax-only"));
+    let o = kiln(&d, &["-fmodule-header", "-fsyntax-only", "hm.h"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    std::fs::write(d.join("cc.o"), b"").unwrap();
+    let o = kiln(&d, &["-fmodule-header", "cc.o"]);
+    assert_eq!(
+        o.stderr,
+        "kiln++: warning: cc.o: 'linker' input unused [-Wunused-command-line-argument]\n"
+    );
+    // `-E` and `-fsyntax-only` end the job before `-c` wherever it is.
+    let (code, out, err) = kiln_stdout(&d, &["-E", "-c", "src.cpp"]);
+    assert_eq!((code, out.as_str(), err.as_str()), (0, plain.as_str(), unused("-c").as_str()));
+    let o = kiln(&d, &["-c", "-fsyntax-only", "src.cpp"]);
+    assert_eq!(o.stderr, unused("-c"));
+    assert!(!d.join("src.o").exists());
+}

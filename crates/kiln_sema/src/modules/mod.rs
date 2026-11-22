@@ -17,6 +17,7 @@ use kiln_source::fx::FxHashMap;
 use crate::Sema;
 
 mod exposure;
+mod header_unit;
 use crate::lookup::{Found, LookupKind};
 use crate::scope::{Scope, ScopeKind};
 
@@ -263,6 +264,11 @@ impl Sema<'_, '_> {
     /// deduplication records when it activates modules.
     pub fn take_prefix_keys(&mut self) -> Vec<PrefixKey> {
         std::mem::take(&mut self.modules.prefix_keys)
+    }
+
+    /// The unit the declarations made now belong to (0: the main file).
+    pub(crate) fn module_cur_unit(&self) -> u16 {
+        self.modules.cur()
     }
 
     /// True while modules are tracked.

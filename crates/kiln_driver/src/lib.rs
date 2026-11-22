@@ -491,7 +491,8 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
 
 /// Builds each of `units` (header-unit `-x` inputs of a compile or a
 /// link) as a header unit, as `--precompile` would (spec/modules.md
-/// §11.6): its module file is `<stem>.pcm`. Returns the errors.
+/// §11.6): its module file is `-o` for the only input, else
+/// `<stem>.pcm`. Returns the errors.
 fn build_header_units(
     args: &Args,
     tc: &Toolchain,
@@ -501,7 +502,9 @@ fn build_header_units(
 ) -> u32 {
     let mut a = args.clone();
     a.action = Action::Precompile;
-    a.output = None;
+    if units.len() > 1 {
+        a.output = None;
+    }
     let mut errors = 0;
     for u in units {
         a.header_unit_main = args.header_unit_of(u);
@@ -633,6 +636,8 @@ fn driver_warnings(
         unused_xray.extend(time_trace::unused(args).iter().cloned());
         // WP-1044: the driver's separate `-ftrapv-handler <name>`.
         unused_xray.extend(args.codegen.trapv_handler_separate.iter().cloned());
+        // WP-1801: the phase options a job that ends early leaves unused.
+        unused_xray.extend(unused_phase_args(args, inputs));
         // WP-1863: the coverage lists without coverage.
         let san = args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0;
         unused_xray.extend(args.sanitize.unused_coverage_lists(&san));
@@ -722,6 +727,40 @@ fn driver_warnings(
     }
     e.flush();
     e.error_count() > 0
+}
+
+/// The `-c`, `-S`, `-fsyntax-only` and `-fmodule-output` that clang's
+/// driver leaves unclaimed, in command-line order (WP-1801). With a final
+/// phase before the backend (`-E`, `-M`, `-fsyntax-only`, `--precompile`,
+/// `-fmodule-header`), clang 22 claims no `-c` or `-S`, and clang 19 no
+/// `-S` when `-c` is also given. `-fmodule-header` claims `-fsyntax-only`
+/// only when a header is checked, and `-fmodule-output` only with a header
+/// or module unit input.
+fn unused_phase_args(args: &Args, inputs: &[&args::Input]) -> Vec<String> {
+    // `-fdump-ast` makes the job syntax-only as clang's `-cc1 -ast-dump`
+    // does, behind a driver phase that claims `-c` and `-S`.
+    let dumped = args.dump_ast.is_some() && !args.phase_args.iter().any(|a| a == "-fsyntax-only");
+    let early =
+        (matches!(args.action, Action::Preprocess | Action::SyntaxOnly | Action::Precompile)
+            && !dumped)
+            || args.deps.only.is_some();
+    let has_c = args.phase_args.iter().any(|a| a == "-c");
+    let mh = args.module_header.is_some()
+        && args.deps.only.is_none()
+        && matches!(args.action, Action::Precompile | Action::SyntaxOnly);
+    let builds =
+        || inputs.iter().any(|i| args.module_header_job(i) == args::ModuleHeaderJob::Build);
+    let module_input = || inputs.iter().any(|i| args.is_module_header_or_unit(i));
+    args.phase_args
+        .iter()
+        .filter(|a| match a.as_str() {
+            "-c" => early && args.clang22(),
+            "-S" => early && (args.clang22() || has_c),
+            "-fsyntax-only" => mh && !builds(),
+            _ => mh && !module_input(),
+        })
+        .cloned()
+        .collect()
 }
 
 /// clang's x86-64 warning for `-mlarge-data-threshold=` without
@@ -949,6 +988,103 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
+    match module_header_jobs(&args, &inputs, &diag_opts, &io.stderr) {
+        Err(()) => 1,
+        Ok(Some(groups)) => groups
+            .into_iter()
+            .map(|(a, group)| {
+                run_jobs(a.as_ref().unwrap_or(&args), &tc, group, &diag_opts, &mut io)
+            })
+            .max()
+            .unwrap_or(0),
+        Ok(None) => run_jobs(&args, &tc, inputs, &diag_opts, &mut io),
+    }
+}
+
+/// The jobs of a `-fmodule-header` run (spec/modules.md §11.6; WP-1801),
+/// in command-line order: each run of consecutive inputs that are built
+/// (`None`: under `args`) or preprocessed (under a copy of `args` with
+/// `-E`'s action, to `-o` or standard output), after clang's warning for
+/// each unused input. `Err` after clang's error for `-o` with more than
+/// one output. `Ok(None)` without `-fmodule-header` (or under `-M`).
+type ModuleHeaderGroups<'a> = Vec<(Option<Args>, Vec<&'a args::Input>)>;
+
+fn module_header_jobs<'a>(
+    args: &Args,
+    inputs: &[&'a args::Input],
+    diag_opts: &DiagOptions,
+    stderr: &SharedWriter,
+) -> Result<Option<ModuleHeaderGroups<'a>>, ()> {
+    use args::ModuleHeaderJob as J;
+    if args.module_header.is_none()
+        || args.deps.only.is_some()
+        || !matches!(args.action, Action::Precompile | Action::SyntaxOnly)
+    {
+        return Ok(None);
+    }
+    let sm = SourceManager::new();
+    let e = make_engine(
+        &sm,
+        &codegen_cmd::driver_diag_options(diag_opts),
+        stderr.clone(),
+        Some(&args.program),
+    );
+    let jobs: Vec<(J, &args::Input)> =
+        inputs.iter().map(|&i| (args.module_header_job(i), i)).collect();
+    let outputs = jobs.iter().filter(|(j, _)| !matches!(j, J::Unused(_))).count();
+    if outputs > 1 && args.output.is_some() {
+        Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
+        e.flush();
+        return Err(());
+    }
+    let mut groups: ModuleHeaderGroups<'a> = Vec::new();
+    let mut last: Option<bool> = None;
+    for (job, input) in jobs {
+        let pp = match job {
+            J::Unused(kind) => {
+                if !args.quiet_unused_arguments && !args.no_unused.quiet(&input.path) {
+                    let d = if kind == "linker" {
+                        Diag::new(DiagId::drv_linker_input_unused, Span::INVALID).arg(&input.path)
+                    } else {
+                        Diag::new(DiagId::drv_input_unused, Span::INVALID)
+                            .arg(&input.path)
+                            .arg(kind)
+                    };
+                    d.emit(&e);
+                }
+                continue;
+            }
+            J::Build => false,
+            J::Preprocess => true,
+        };
+        if last == Some(pp)
+            && let Some((_, g)) = groups.last_mut()
+        {
+            g.push(input);
+            continue;
+        }
+        let a = pp.then(|| {
+            let mut a = args.clone();
+            a.action = Action::Preprocess;
+            a
+        });
+        groups.push((a, vec![input]));
+        last = Some(pp);
+    }
+    e.flush();
+    Ok(Some(groups))
+}
+
+/// The jobs of `inputs` under `args` (the action's in-process steps, or
+/// the code generation of `codegen_cmd`); returns the exit status.
+#[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
+fn run_jobs(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: Vec<&args::Input>,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+) -> i32 {
     // WP-1037: clang's driver turns the first `-include <h>` into
     // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
     // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
@@ -963,14 +1099,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 )
         })
         .count();
-    let Ok(probed) = pch::probe(&args, jobs, &diag_opts, &io.stderr) else {
+    let Ok(probed) = pch::probe(args, jobs, diag_opts, &io.stderr) else {
         return 1;
     };
-    let args: &Args = probed.as_ref().unwrap_or(&args);
+    let args: &Args = probed.as_ref().unwrap_or(args);
     // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
     // checked PCH replays as `-include`s.
     pch_snapshot::phase("driver checks");
-    let Ok(pch_args) = pch::consumer(args, &tc, &inputs, &diag_opts, &io.stderr) else {
+    let Ok(pch_args) = pch::consumer(args, tc, &inputs, diag_opts, &io.stderr) else {
         return 1;
     };
     pch_snapshot::phase("pch record and snapshot validation");
@@ -980,7 +1116,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         let sm = SourceManager::new();
         let e = make_engine(
             &sm,
-            &codegen_cmd::driver_diag_options(&diag_opts),
+            &codegen_cmd::driver_diag_options(diag_opts),
             io.stderr.clone(),
             Some(&args.program),
         );
@@ -997,7 +1133,22 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 && args.header_unit_of(i).is_some()
         });
     if !units.is_empty() {
-        let errors = build_header_units(args, &tc, &units, &diag_opts, &io);
+        // clang writes one output to `-o`: a lone header unit's module
+        // file goes there, and `-o` with more outputs is an error
+        // (WP-1801).
+        if args.output.is_some() && units.len() + inputs.len() > 1 {
+            let sm = SourceManager::new();
+            let e = make_engine(
+                &sm,
+                &codegen_cmd::driver_diag_options(diag_opts),
+                io.stderr.clone(),
+                Some(&args.program),
+            );
+            Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
+            e.flush();
+            return 1;
+        }
+        let errors = build_header_units(args, tc, &units, diag_opts, io);
         if errors > 0 || inputs.is_empty() {
             return i32::from(errors > 0);
         }
@@ -1008,7 +1159,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let (producers, inputs): (Vec<&args::Input>, Vec<&args::Input>) =
         inputs.into_iter().partition(|i| pch::is_producer(args, i));
     if !producers.is_empty() {
-        let errors = pch::produce(args, &tc, &producers, all_inputs, &diag_opts, &mut io);
+        let errors = pch::produce(args, tc, &producers, all_inputs, diag_opts, io);
         if errors > 0 || inputs.is_empty() {
             return i32::from(errors > 0);
         }
@@ -1018,7 +1169,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         // WP-1745: `-###` with `-E`, `-M` or `-fsyntax-only`: the version
         // block, then the in-process step of each input (spec/driver.md
         // "`-###`"); nothing runs.
-        print_version(&mut io.stderr, &tc, false);
+        print_version(&mut io.stderr, tc, false);
         let mut err = io.stderr.clone();
         for input in inputs.iter().filter(|i| i.asm != Some(args::AsmKind::Plain)) {
             let line = if args.action == Action::SyntaxOnly && input.asm.is_none() {
@@ -1035,14 +1186,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if codegen {
-        return codegen_cmd::compile(
-            args,
-            &tc,
-            &inputs,
-            stdin_text.as_deref(),
-            &diag_opts,
-            &mut io,
-        );
+        return codegen_cmd::compile(args, tc, &inputs, stdin_text.as_deref(), diag_opts, io);
     }
 
     let mut output = String::new();
@@ -1059,8 +1203,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         let jobs: Vec<_> =
             inputs.iter().map(|&input| cdb::CdbJob { input, output: out.clone() }).collect();
         let sm = SourceManager::new();
-        let e = make_engine(&sm, &diag_opts, io.stderr.clone(), Some(&args.program));
-        if !cdb::write(args, &tc, &jobs, &e) {
+        let e = make_engine(&sm, diag_opts, io.stderr.clone(), Some(&args.program));
+        if !cdb::write(args, tc, &jobs, &e) {
             errors += 1;
         }
         e.flush();
@@ -1073,7 +1217,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 let sm = SourceManager::new();
                 let e = make_engine(
                     &sm,
-                    &codegen_cmd::driver_diag_options(&diag_opts),
+                    &codegen_cmd::driver_diag_options(diag_opts),
                     io.stderr.clone(),
                     Some(&args.program),
                 );
@@ -1095,7 +1239,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 let sm = SourceManager::new();
                 let e = make_engine(
                     &sm,
-                    &codegen_cmd::driver_diag_options(&diag_opts),
+                    &codegen_cmd::driver_diag_options(diag_opts),
                     io.stderr.clone(),
                     Some(&args.program),
                 );
@@ -1111,7 +1255,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             Ok(s) => s,
             Err(d) => {
                 let sm = SourceManager::new();
-                let e = make_engine(&sm, &diag_opts, io.stderr.clone(), None);
+                let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
                 (*d).emit(&e);
                 e.flush();
                 errors += 1;
@@ -1141,7 +1285,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             let r = {
                 let _frontend = kiln_source::trace::Phase::new("Frontend");
                 let a = unit_args.as_ref().unwrap_or(args);
-                syntax_only(a, &tc, std, &input.path, stdin, &diag_opts, &io)
+                syntax_only(a, tc, std, &input.path, stdin, diag_opts, io)
             };
             if let (Some(mut j), Some(log)) = (stats, &stats_log) {
                 j.failed = r.errors > 0;
@@ -1151,13 +1295,13 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 t.failed = r.errors > 0;
                 if let Err((path, e)) = t.finish(&args.program) {
                     // clang: reported, the exit status unchanged.
-                    report_output_error(&diag_opts, &io.stderr, &path, &e);
+                    report_output_error(diag_opts, &io.stderr, &path, &e);
                 }
             }
             errors += r.errors;
             output.push_str(&r.output);
             if let Some(list) = r.dep_list
-                && !deps::write_side_file(args, &input.path, &list.borrow(), &diag_opts, &mut io)
+                && !deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
             {
                 errors += 1;
             }
@@ -1165,11 +1309,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }
         let job = Job {
             args,
-            toolchain: &tc,
+            toolchain: tc,
             std,
             path: &input.path,
             stdin_text: if input.path == "-" { stdin_text.clone() } else { None },
-            diag_opts: &diag_opts,
+            diag_opts,
             stderr: io.stderr.clone(),
             asm: input.asm == Some(args::AsmKind::Cpp),
         };
@@ -1188,7 +1332,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             t.failed = r.errors > 0;
             if let Err((path, e)) = t.finish(&args.program) {
                 // clang: reported, the exit status unchanged.
-                report_output_error(&diag_opts, &io.stderr, &path, &e);
+                report_output_error(diag_opts, &io.stderr, &path, &e);
             }
         }
         output.push_str(&r.output);
@@ -1201,7 +1345,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }
     }
 
-    write_results(args, &diag_opts, &mut io, &output, errors, side_deps)
+    write_results(args, diag_opts, io, &output, errors, side_deps)
 }
 
 /// A module file input (spec/modules.md §11.6): a `.pcm` with no `-x`

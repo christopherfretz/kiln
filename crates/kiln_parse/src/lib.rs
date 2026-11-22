@@ -167,6 +167,9 @@ pub struct ParseOptions {
     /// The unit is a prefix ([`kiln_sema::Sema::tu_prefix`]): a header
     /// being precompiled, or the PCH producer's snapshot pass.
     pub prefix: bool,
+    /// The main file is a header unit being built (spec/modules.md
+    /// §11.6; [`kiln_sema::Sema::act_on_main_header_unit`]).
+    pub header_unit: bool,
 }
 
 impl Default for ParseOptions {
@@ -176,6 +179,7 @@ impl Default for ParseOptions {
             c: None,
             keep_tokens: false,
             record_carried: false,
+            header_unit: false,
             record_image: false,
             image_census: false,
             prefix: false,
@@ -493,6 +497,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
+    if opts.header_unit {
+        p.main_header_unit();
+    }
     // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.warn_if_empty_c_translation_unit();
@@ -635,6 +642,9 @@ pub fn continue_preprocessed<'a, 'sm>(
     let mut p = Parser::new(sema, src, lit_opts);
     // A restored snapshot's unit is its consumer's, not the producer's.
     p.s.tu_prefix = opts.prefix;
+    if opts.header_unit {
+        p.main_header_unit();
+    }
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.parse_translation_unit();
     drop(phase);

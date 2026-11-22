@@ -103,8 +103,33 @@ impl AsmKind {
 /// type, and the header-unit types' lookup), or assembly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum XType {
-    Lang(Lang, bool, Option<HeaderUnitLookup>),
+    Lang(Lang, bool, Option<HeaderUnitLookup>, Option<SourceType>),
     Asm(AsmKind),
+}
+
+/// A `-x` source type that `-fmodule-header` treats apart (WP-1801):
+/// clang's `c++-module` and `[c++-]cpp-output`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceType {
+    /// `-x c++-module`.
+    Module,
+    /// `-x cpp-output` / `-x c++-cpp-output`.
+    Preprocessed,
+}
+
+/// What a `-fmodule-header` run does with an input (spec/modules.md
+/// §11.6; WP-1801): clang's final phase is then the precompile phase, so
+/// an input is built (a header unit, a precompiled header, and a module
+/// unit where clang precompiles one), preprocessed (a source, whose
+/// phases end before it), or unused (clang's `'<kind>' input unused`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModuleHeaderJob {
+    /// Built (or, under `-fsyntax-only`, checked) as the action says.
+    Build,
+    /// Preprocessed, to `-o` or standard output.
+    Preprocess,
+    /// Unused: `compiler`, `assembler` or `linker`.
+    Unused(&'static str),
 }
 
 /// How a header-unit input names its header (spec/modules.md §11.6
@@ -186,6 +211,8 @@ pub struct Input {
     /// `-x c++-header-unit-header`: the input is built as a header unit
     /// (see [`Args::header_unit_of`]).
     pub header_unit: Option<HeaderUnitLookup>,
+    /// `-x c++-module` or `-x [c++-]cpp-output` (WP-1801).
+    pub source_type: Option<SourceType>,
 }
 
 /// The `-ftime-trace` family (spec/driver.md "Time trace").
@@ -761,6 +788,11 @@ pub struct Args {
     pub nameless_module_files: Vec<String>,
     /// `--precompile` (see [`Action::Precompile`]).
     pub precompile: bool,
+    /// `-c`, `-S`, `-fsyntax-only` and `-fmodule-output[=<path>]` as
+    /// written, in order: the ones a job that ends before the backend
+    /// leaves unused (clang's `argument unused during compilation`;
+    /// WP-1801).
+    pub phase_args: Vec<String>,
     /// `-fmodule-header` / `-fmodule-header=user|system` (the last one):
     /// header inputs are built as header units, and the action is
     /// [`Action::Precompile`] (spec/modules.md §11.6).
@@ -1277,12 +1309,12 @@ impl Input {
     /// The input `path` under the `-x` in force (its language, and
     /// whether that is a `-header` type).
     fn under_x(path: &str, x: Option<XType>) -> Input {
-        let (lang, header, asm, header_unit) = match x {
-            Some(XType::Lang(l, h, u)) => (Some(l), h, None, u),
-            Some(XType::Asm(k)) => (None, false, Some(k), None),
-            None => (None, false, AsmKind::of_path(path), None),
+        let (lang, header, asm, header_unit, source_type) = match x {
+            Some(XType::Lang(lang, h, unit, ty)) => (Some(lang), h, None, unit, ty),
+            Some(XType::Asm(k)) => (None, false, Some(k), None, None),
+            None => (None, false, AsmKind::of_path(path), None, None),
         };
-        Input { path: path.to_owned(), lang, header, asm, header_unit }
+        Input { path: path.to_owned(), lang, header, asm, header_unit, source_type }
     }
 }
 
@@ -1506,8 +1538,11 @@ impl Args {
         // WP-1151: the shadow call stack's register.
         a.sanitize.x18_reserved = a.fixed_x18
             || a.target.as_deref().is_some_and(crate::sanitize::x18_reserved_by_default);
+        // `-M`/`-MM` (an action of their own in clang) stay dependency
+        // output (WP-1801).
         if (a.precompile || a.module_header.is_some())
             && matches!(a.action, Action::Link | Action::Compile)
+            && a.deps.only.is_none()
         {
             a.action = Action::Precompile;
         }
@@ -1664,6 +1699,58 @@ impl Args {
         })
     }
 
+    /// What `-fmodule-header` does with `input` (see [`ModuleHeaderJob`]):
+    /// a header unit or precompiled header is built; a module unit by its
+    /// type (`.cppm`, `.ixx`, `-x c++-module`) is built under
+    /// `--precompile` or at `-fclang-compat=19` and preprocessed otherwise
+    /// (clang 22 left it out of the precompile phase); any other source,
+    /// standard input and `.S` are preprocessed; a preprocessed source and
+    /// a module file are unused `compiler` inputs, a `.s` an `assembler`
+    /// one and anything else a `linker` one.
+    pub fn module_header_job(&self, input: &Input) -> ModuleHeaderJob {
+        use std::path::Path;
+        if self.header_unit_of(input).is_some() || self.is_header_input(input) {
+            return ModuleHeaderJob::Build;
+        }
+        match input.asm {
+            Some(AsmKind::Plain) => return ModuleHeaderJob::Unused(AsmKind::Plain.type_name()),
+            Some(AsmKind::Cpp) => return ModuleHeaderJob::Preprocess,
+            None => {}
+        }
+        let ext = Path::new(&input.path).extension().and_then(|e| e.to_str());
+        match Self::source_type(input) {
+            Some(SourceType::Module) if self.precompile || !self.clang22() => {
+                ModuleHeaderJob::Build
+            }
+            Some(SourceType::Module) => ModuleHeaderJob::Preprocess,
+            Some(SourceType::Preprocessed) => ModuleHeaderJob::Unused("compiler"),
+            None if input.lang.is_none() && ext == Some("pcm") => {
+                ModuleHeaderJob::Unused("compiler")
+            }
+            None if crate::codegen_cmd::is_source(input) => ModuleHeaderJob::Preprocess,
+            None => ModuleHeaderJob::Unused("linker"),
+        }
+    }
+
+    /// A module unit (`.cppm`, `.ixx`, `-x c++-module`) or preprocessed
+    /// (`.i`, `.ii`, `-x c++-cpp-output`) input.
+    fn source_type(input: &Input) -> Option<SourceType> {
+        let ext = std::path::Path::new(&input.path).extension().and_then(|e| e.to_str());
+        input.source_type.or(match (input.lang, ext) {
+            (None, Some("cppm" | "ixx")) => Some(SourceType::Module),
+            (None, Some("i" | "ii")) => Some(SourceType::Preprocessed),
+            _ => None,
+        })
+    }
+
+    /// A header, header-unit or module unit input: the ones that claim
+    /// `-fmodule-output` under `-fmodule-header` (WP-1801).
+    pub fn is_module_header_or_unit(&self, input: &Input) -> bool {
+        self.header_unit_of(input).is_some()
+            || self.is_header_input(input)
+            || Self::source_type(input) == Some(SourceType::Module)
+    }
+
     /// The inputs C++ mode compiles as C++ although their extension is C's
     /// (no `-x`), with the [`Promotion`]: clang's deprecated
     /// `treating 'c' input as 'c++'` warning, once per input.
@@ -1747,7 +1834,12 @@ impl Args {
                         "c++-header-unit-header" => Some(HeaderUnitLookup::Path),
                         _ => None,
                     };
-                    *x = Some(XType::Lang(l, v.ends_with("-header"), unit));
+                    let source_type = match v {
+                        "c++-module" => Some(SourceType::Module),
+                        "cpp-output" | "c++-cpp-output" => Some(SourceType::Preprocessed),
+                        _ => None,
+                    };
+                    *x = Some(XType::Lang(l, v.ends_with("-header"), unit, source_type));
                 }
                 None if v == "assembler" => *x = Some(XType::Asm(AsmKind::Plain)),
                 None if v == "assembler-with-cpp" => *x = Some(XType::Asm(AsmKind::Cpp)),
@@ -1778,17 +1870,36 @@ impl Args {
         true
     }
 
+    /// `-c`, `-S` or `-emit-llvm`: a compile unless `-E` or
+    /// `-fsyntax-only` ends the job earlier (clang's `getFinalPhase`).
+    fn compile_phase(&mut self, flag: Option<&str>) {
+        if !matches!(self.action, Action::Preprocess | Action::SyntaxOnly) {
+            self.action = Action::Compile;
+        }
+        self.phase_args.extend(flag.map(str::to_owned));
+    }
+
     /// Plain flags. Returns false if `arg` is not one.
     #[allow(clippy::too_many_lines, reason = "one arm per plain flag")]
     fn flag(&mut self, arg: &str) -> bool {
         match arg {
             "-E" => self.action = Action::Preprocess,
-            "-fsyntax-only" => self.action = Action::SyntaxOnly,
+            // clang's `getFinalPhase`: `-E` beats `-fsyntax-only`, which
+            // beats `-S` and `-c`, wherever they are written (WP-1801).
+            "-fsyntax-only" => {
+                if self.action != Action::Preprocess {
+                    self.action = Action::SyntaxOnly;
+                }
+                self.phase_args.push(arg.to_owned());
+            }
             "--precompile" => self.precompile = true,
             "-fmodule-header" => self.module_header = Some(HeaderUnitLookup::Path),
             "-fmodule-header=user" => self.module_header = Some(HeaderUnitLookup::User),
             "-fmodule-header=system" => self.module_header = Some(HeaderUnitLookup::System),
-            "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
+            "-fmodule-output" => {
+                self.module_output = Some((arg.to_owned(), None));
+                self.phase_args.push(arg.to_owned());
+            }
             "-fkiln-module-cache" => self.module_cache = Some(true),
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-fkiln-new-bound-check" => self.new_bound_check = Some(true),
@@ -1799,9 +1910,18 @@ impl Args {
             "-fno-check-new" => self.check_new = false,
             "-felide-constructors" => self.elide_constructors = Some(true),
             "-fno-elide-constructors" => self.elide_constructors = Some(false),
-            "-c" => (self.action, self.compile.object) = (Action::Compile, true),
-            "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
-            "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
+            "-c" => {
+                self.compile.object = true;
+                self.compile_phase(Some(arg));
+            }
+            "-S" => {
+                self.compile.assembly = true;
+                self.compile_phase(Some(arg));
+            }
+            "-emit-llvm" => {
+                self.compile.emit_llvm = true;
+                self.compile_phase(None);
+            }
             // WP-1023 (spec/driver.md "Precompiled headers").
             "-emit-pch" => self.pch.emit = true,
             "-fno-validate-pch" => self.pch.no_validate = true,
@@ -2015,6 +2135,7 @@ impl Args {
                     }
                 } else if let Some(v) = arg.strip_prefix("-fmodule-output=") {
                     self.module_output = Some((arg.to_owned(), Some(v.to_owned())));
+                    self.phase_args.push(arg.to_owned());
                 } else if let Some((opt, v)) = ["-ffile-prefix-map=", "-fmacro-prefix-map="]
                     .iter()
                     .find_map(|p| arg.strip_prefix(p).map(|v| (p, v)))
@@ -2720,7 +2841,8 @@ mod tests {
                 lang: None,
                 header: false,
                 asm: None,
-                header_unit: None
+                header_unit: None,
+                source_type: None
             }]
         );
         assert_eq!(a.errors, []);

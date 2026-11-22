@@ -66,6 +66,13 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The main file is a header unit being built (spec/modules.md
+    /// §11.6): module tracking is on and unit 0 is a header unit.
+    pub(crate) fn main_header_unit(&mut self) {
+        self.module_activate();
+        self.s.act_on_main_header_unit();
+    }
+
     /// Records the keys of a restored snapshot's prefix (WP-1395), as a
     /// replay of it would have recorded its declarations.
     fn prefix_keys(&mut self) {

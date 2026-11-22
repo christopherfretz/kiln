@@ -312,8 +312,8 @@ impl Test<'_> {
         if self.cfg.debug_sweep.is_some() {
             return debug_sweep_skip(spec);
         }
-        if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() {
-            return Some("no `module:` lines (`--bmi-kind`)".to_owned());
+        if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() && spec.header_units.is_empty() {
+            return Some("no `module:` or `header-unit:` lines (`--bmi-kind`)".to_owned());
         }
         if self.cfg.pch_diff.is_some() {
             let synthetic = self.cfg.pch_synthetic.is_some();
@@ -628,14 +628,17 @@ impl Test<'_> {
         if self.is_kiln(program) {
             c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
         }
+        // `as-header-unit`: the test file is built as a header unit in
+        // place of `-fsyntax-only` (WP-1802).
+        let header_unit = spec.as_header_unit && mode.first() == Some(&"-fsyntax-only");
         match (self.case.lang, self.case.is_header) {
             (Lang::C, _) => {
                 c.args(["-x", "c"]);
             }
-            (Lang::Cxx, true) => {
+            (Lang::Cxx, true) if !header_unit => {
                 c.args(["-x", "c++"]);
             }
-            (Lang::Cxx, false) => {}
+            (Lang::Cxx, _) => {}
         }
         c.arg(format!("-std={}", spec.std));
         // A crashing test must not leave a reproducer in $TMPDIR, nor a
@@ -645,7 +648,11 @@ impl Test<'_> {
         c.args(self.no_crash_reports(program));
         let gcc = self.gcc_under_test(program);
         let args = self.args_for(program, spec);
-        let mode: Vec<String> = mode.iter().map(|m| (*m).to_owned()).collect();
+        let mode: Vec<String> = mode
+            .iter()
+            .map(|m| if header_unit && *m == "-fsyntax-only" { "-fmodule-header=user" } else { m })
+            .map(|m| (*m).to_owned())
+            .collect();
         c.args(self.flags_for(program, &mode));
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
@@ -670,12 +677,22 @@ impl Test<'_> {
                 }
                 c.arg(src);
             }
+            _ if header_unit => {
+                c.args(["-x", "c++-user-header"]).arg(&self.case.name);
+            }
             _ => {
                 c.arg(&self.case.name);
             }
         }
         if let Some(o) = out {
             c.arg("-o").arg(o);
+        } else if header_unit {
+            // A scratch directory that cannot be made fails the compile's
+            // write, which the test then reports.
+            let _ = self.scratch();
+            let name =
+                if program == self.cfg.compiler { "main-hu.pcm" } else { "oracle-main-hu.pcm" };
+            c.arg("-o").arg(self.dir.join(name));
         }
         if gcc && out.is_some() && gcc_links(&mode, &args) {
             c.arg(GCC_LINK_LIB);
@@ -775,7 +792,8 @@ impl Test<'_> {
     /// `two-step`; under `--bmi-kind` and `--pch-diff`, every test with
     /// `module:` lines (kiln's in-process build of a unit reads the
     /// importer's `-include-pch`, as it reads its `-include`s, and a PCH
-    /// before `module;` is an error; spec/harness.md "PCH differential").
+    /// before `module;` is an error; spec/harness.md "PCH differential"),
+    /// and under `--bmi-kind` every test with `header-unit:` lines.
     fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
             || (spec.expect == Expect::Run
@@ -784,20 +802,21 @@ impl Test<'_> {
                     || !spec.header_units.is_empty()))
             || ((self.cfg.bmi_kind.is_some() || self.cfg.pch_diff.is_some())
                 && !spec.modules.is_empty())
+            || (self.cfg.bmi_kind.is_some() && !spec.header_units.is_empty())
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
     /// lines for `program`: kiln builds each from its source unless the
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
-    /// A clang also gets `-fmodule-file=<file>` for each `header-unit:`
-    /// first ([`Self::build_header_units`]); kiln builds header units
-    /// in-process and gets nothing for them.
+    /// It also gets `-fmodule-file=<file>` for each `header-unit:` first
+    /// ([`Self::build_header_units`]), except kiln single-step, which
+    /// builds header units in-process and gets nothing for them.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
         let kiln = self.is_kiln(program);
         let source = kiln && !self.two_step(spec);
         let oracle = program != self.cfg.compiler;
-        let header_units = if kiln { 0 } else { spec.header_units.len() };
+        let header_units = if source { 0 } else { spec.header_units.len() };
         let hu = (0..header_units).map(|i| {
             let mut f = std::ffi::OsString::from("-fmodule-file=");
             f.push(self.header_unit_bmi(i, oracle));
@@ -826,12 +845,16 @@ impl Test<'_> {
     /// `program`: `<program> -std=<std> <args...> -fmodule-header=user -x
     /// c++-user-header <path> -o <file>` (a quoted path, relative to the
     /// test's directory), or `-fmodule-header=system -x c++-system-header
-    /// <name>` (an angled name). Kiln builds nothing: it builds a header
-    /// unit in-process at its import (spec/modules.md §3; header-unit
-    /// module files are §11.10). A header unit the compiler under test
-    /// rejects fails the test; one the oracle rejects makes it broken.
+    /// <name>` (an angled name). Kiln builds them the same way when the
+    /// test is [two-step](Self::two_step) (with its `-fclang-compat=`,
+    /// `-fkiln-bmi-kind=` and `-fkiln-bmi-image` flags; WP-1802), and
+    /// otherwise builds nothing: it builds a header unit in-process at its
+    /// import (spec/modules.md §3; header-unit module files are §11.6). A
+    /// header unit the compiler under test rejects fails the test; one the
+    /// oracle rejects makes it broken.
     fn build_header_units(&mut self, program: &Path, spec: &TestSpec) -> Result<(), Problem> {
-        if spec.header_units.is_empty() || self.is_kiln(program) {
+        let kiln = self.is_kiln(program);
+        if spec.header_units.is_empty() || (kiln && !self.two_step(spec)) {
             return Ok(());
         }
         self.scratch()?;
@@ -841,9 +864,23 @@ impl Test<'_> {
             let mut c = Command::new(program);
             crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
+            if kiln {
+                c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+            }
             c.arg(format!("-std={}", spec.std));
             c.args(self.no_crash_reports(program));
+            if let Some(n) = self.clang_compat(program, spec) {
+                c.arg(format!("-fclang-compat={n}"));
+            }
             c.args(self.args_for(program, spec));
+            if kiln {
+                if let Some(k) = self.cfg.bmi_kind {
+                    c.arg(format!("-fkiln-bmi-kind={k}"));
+                }
+                if self.cfg.bmi_image && !oracle {
+                    c.arg("-fkiln-bmi-image");
+                }
+            }
             if hu.system {
                 c.args(["-fmodule-header=system", "-x", "c++-system-header", &hu.name]);
             } else {
@@ -2420,6 +2457,9 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     }
     if !spec.header_units.is_empty() && !kind.speaks_clang() {
         return needs("header-unit:", "kiln or clang");
+    }
+    if spec.as_header_unit && !kind.speaks_clang() {
+        return needs("as-header-unit", "kiln or clang");
     }
     if spec.pch.is_some() && !kind.speaks_clang() {
         return needs("pch:", "kiln or clang");

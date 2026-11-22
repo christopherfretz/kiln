@@ -8141,6 +8141,11 @@ impl Sema<'_, '_> {
             // `'extern' variable has an initializer`).
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
+        // clang `AddInitializerToDecl`: [module.import]/6 (WP-1800), after
+        // a placeholder's deduction (a variable deduced from an invalid
+        // one is invalid and not diagnosed).
+        let deduce_first = self.has_undeduced_type(v);
+        let header_unit_def = !deduce_first && self.check_header_unit_var_def(v);
         let mut init = self.reject_objectless_method_init(init);
         // A reference bound to, or a placeholder deduced from, a variable
         // template specialization or static data member of unknown bound
@@ -8159,6 +8164,11 @@ impl Sema<'_, '_> {
         let deduces = self.ast.modules.active
             && self.ast.decls.get(v).ty().is_some_and(|t| self.contains_undeduced_auto(t));
         self.act_on_init_inner(v, init);
+        if header_unit_def
+            || (deduce_first && !self.deduced_from_error(v) && self.check_header_unit_var_def(v))
+        {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         if deduces {
             // [basic.link]/15.2: not the variable's type (WP-1856).
             self.module_check_deduced_exposure(v);
@@ -9644,6 +9654,9 @@ impl Sema<'_, '_> {
         // The return type as written: diagnostics name its typedef.
         let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let pushed = self.enter_definition_scopes(f);
+        // clang `ActOnStartOfFunctionDef`: [module.import]/6 (WP-1800),
+        // once the implicit `inline` of a definition in its class is known.
+        self.check_header_unit_function_def(f);
         self.fn_saved.push(crate::class::SavedFn {
             func: self.func.take(),
             pushed,

@@ -107,6 +107,7 @@ sema_ext_vector_component_exceeds_length = Error (1) "vector component access ex
 sema_ext_vector_component_name_illegal = Error (1) "illegal vector component name '{0}'";
 sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
 sema_extern_c_global_conflict = Error (2) "declaration of '{1}' {0:with C language linkage|in global scope} conflicts with declaration {0:in global scope|with C language linkage}";
+sema_extern_def_in_header_unit = Error (0) "non-inline external definitions are not permitted in C++ header units";
 sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
 sema_extern_non_extern = Error (1) "extern declaration of '{0}' follows non-extern declaration";
 sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization or out-of-line template definition";

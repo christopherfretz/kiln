@@ -361,10 +361,14 @@ pub struct TestSpec {
     /// and reads with `-fmodule-file=` (kiln builds them in-process;
     /// `spec/harness.md` "Modules"; WP-986).
     pub header_units: Vec<HeaderUnit>,
-    /// `two-step`: kiln, too, compiles the `module:` units to module files
-    /// (the test then imports those) instead of reading their sources.
-    /// Implied for `run` tests.
+    /// `two-step`: kiln, too, compiles the `module:` units and
+    /// `header-unit:` headers to module files (the test then imports
+    /// those) instead of reading their sources. Implied for `run` tests.
     pub two_step: bool,
+    /// `as-header-unit`: the test file itself is built as a header unit
+    /// (`-fmodule-header=user -x c++-user-header`, its module file in the
+    /// scratch directory) in place of `-fsyntax-only` (WP-1802).
+    pub as_header_unit: bool,
     /// `pch: <path>`: a header (relative to the test's directory) each
     /// compiler first builds into a precompiled header (`-x c++-header`)
     /// that the test file's compile then reads with `-include-pch`
@@ -603,6 +607,7 @@ struct Parser {
     header_unit_line: usize,
     /// Line of `two-step` (0: absent).
     two_step_line: usize,
+    as_header_unit_line: usize,
     pch: Option<PathBuf>,
     /// Line of `pch:` (0: absent).
     pch_line: usize,
@@ -678,6 +683,7 @@ impl Parser {
             header_units: Vec::new(),
             header_unit_line: 0,
             two_step_line: 0,
+            as_header_unit_line: 0,
             pch: None,
             pch_line: 0,
             min_oracle: None,
@@ -948,6 +954,16 @@ impl Parser {
                 self.err(line, "duplicate `two-step`");
             } else {
                 self.two_step_line = line;
+            }
+            return None;
+        }
+        if name == "as-header-unit" {
+            if value.is_some() {
+                self.err(line, "`as-header-unit` takes no value");
+            } else if self.as_header_unit_line != 0 {
+                self.err(line, "duplicate `as-header-unit`");
+            } else {
+                self.as_header_unit_line = line;
             }
             return None;
         }
@@ -1442,9 +1458,23 @@ impl Parser {
             let line = self.pch_line;
             self.err(line, "`pch` only applies to `compile-ok`, `compile-fail` and `run` tests");
         }
-        if self.two_step_line != 0 && (self.module_line == 0 || expect == Expect::Run) {
+        if self.two_step_line != 0
+            && ((self.module_line == 0 && self.header_unit_line == 0) || expect == Expect::Run)
+        {
             let line = self.two_step_line;
-            self.err(line, "`two-step` needs `module:` lines and is implied for `run` tests");
+            self.err(
+                line,
+                "`two-step` needs `module:` or `header-unit:` lines and is implied for `run` tests",
+            );
+        }
+        if self.as_header_unit_line != 0
+            && (verify || !matches!(expect, Expect::CompileOk | Expect::CompileFail))
+        {
+            let line = self.as_header_unit_line;
+            self.err(
+                line,
+                "`as-header-unit` only applies to `compile-ok` and `compile-fail` tests",
+            );
         }
         if expect == Expect::Pp {
             for line in std::mem::take(&mut self.oven_lines) {
@@ -1514,6 +1544,7 @@ impl Parser {
             link_fails: self.link_fail_line != 0,
             header_units: self.header_units,
             two_step: self.two_step_line != 0,
+            as_header_unit: self.as_header_unit_line != 0,
             pch: self.pch,
             min_oracle: self.min_oracle,
             requires_llvm: self.requires_llvm,
@@ -2039,6 +2070,23 @@ mod tests {
         }
         let e = errs("//@ expect: pp\n//@ pch: p.h\n");
         assert!(e.iter().any(|e| e.contains("`pch` only applies")), "{e:?}");
+    }
+
+    /// WP-1802: `as-header-unit`, and `two-step` with `header-unit:`
+    /// lines (`spec/harness.md` "Directives").
+    #[test]
+    fn as_header_unit_directive() {
+        assert!(!ok("int x;\n").as_header_unit);
+        assert!(ok("//@ expect: compile-fail\n//@ as-header-unit\n").as_header_unit);
+        let e = errs("//@ as-header-unit\n//@ as-header-unit\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `as-header-unit`")), "{e:?}");
+        let e = errs("//@ expect: run\n//@ as-header-unit\n");
+        assert!(e.iter().any(|e| e.contains("only applies to `compile-ok`")), "{e:?}");
+        let e = errs("//@ as-header-unit: x\n");
+        assert!(e.iter().any(|e| e.contains("takes no value")), "{e:?}");
+        let e = errs("//@ two-step\n");
+        assert!(e.iter().any(|e| e.contains("`header-unit:` lines")), "{e:?}");
+        assert!(ok("//@ header-unit: \"a.h\"\n//@ two-step\n").two_step);
     }
 
     /// WP-986: `header-unit: "<path>"` / `header-unit: <name>`
