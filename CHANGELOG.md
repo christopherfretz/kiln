@@ -635,6 +635,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Evaluation sessions key the diagnostics a reflection query records by
+  the content of its operands, not by their addresses (WP-2074,
+  spec/eval-session.md §7): a `substitute` over a vector a run built, a
+  `define_static_string` or a filtered `members_of` replays its
+  warnings in a later run that builds the same content elsewhere, and a
+  run that builds other content at the same address no longer gets the
+  earlier run's warnings. The spec lists every key and cache a run
+  reads or fills and why none holds an address. No change without a
+  session.
+- A function given a reflection of an automatic variable (`f(^^x)`) and
+  reading it with `extract` or `constant_of` is no longer memoized by the
+  reflection's bits (WP-2074): a second call after `x` changed returned
+  the first call's value, in any constant evaluation and across the runs
+  of an evaluation session.
 - A parenthesised call of `std::min` or `std::max` read for its value,
   `1ull << (std::min((size_t)31, n))`, no longer stops the Oven with an
   internal error ("expected a call, found ParenExpr") (WP-2061): the

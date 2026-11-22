@@ -10,6 +10,7 @@ mod define;
 mod ext;
 mod gcc_names;
 mod iterate;
+mod key;
 pub(crate) mod member;
 pub(crate) mod names;
 mod query;

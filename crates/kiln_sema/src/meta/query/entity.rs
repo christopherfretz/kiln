@@ -413,6 +413,7 @@ impl Sema<'_, '_> {
             | Reflectee::DataMemberSpec(_)
             | Reflectee::FnParam(..) => return not_splice(loc),
         };
+        self.note_frame_read(d, oven);
         match self.constant_of_kind(d) {
             ConstantOfKind::Value => {}
             ConstantOfKind::Function => {

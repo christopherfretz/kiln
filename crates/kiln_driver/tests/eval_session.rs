@@ -352,3 +352,241 @@ fn measure() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// WP-2074: reflection queries whose operands a run built (a vector, a
+/// `define_static_string`, a filtered `members_of`). `Old<int>::get` is
+/// deprecated: instantiating `v<int>` (or `w<s>` of a string starting
+/// with 'i') warns, once per translation unit, so a later run reports
+/// that warning only by replaying it (spec/eval-session.md §7). Every
+/// entry allocates its operands first, at the same heap address; the
+/// `later_*` entries allocate before them, so theirs land elsewhere.
+const RUN_BUILT: &str = "#include <string_view>\n\
+#include <vector>\n\
+#include \"kiln_meta.h\"\n\
+using namespace std::meta;\n\
+template <class T> struct Old { static constexpr int get() { return 2; } };\n\
+template <> struct Old<int> { [[deprecated(\"use new\")]] static constexpr int get() { return 1; } };\n\
+template <class T> constexpr int v = Old<T>::get();\n\
+template <bool> struct Pick { using type = long; };\n\
+template <> struct Pick<true> { using type = int; };\n\
+template <const char* P> constexpr int w = Old<typename Pick<P[0] == 'i'>::type>::get();\n\
+struct S { long a; int b; char c; };\n\
+consteval int sub(info t) {\n\
+  std::vector<info> a;\n\
+  a.push_back(t);\n\
+  return extract<int>(substitute(^^v, a));\n\
+}\n\
+consteval int a_int() { return sub(^^int); }\n\
+consteval int a_long() { return sub(^^long); }\n\
+consteval int later_int() {\n\
+  std::vector<int> pad(100, 1);\n\
+  return sub(^^int) + pad[0] - 1;\n\
+}\n\
+consteval int str(char c) {\n\
+  char* p = new char[3]{c, 'n', 't'};\n\
+  const char* s = std::define_static_string(std::string_view(p, 3));\n\
+  delete[] p;\n\
+  std::vector<info> a;\n\
+  a.push_back(reflect_constant(s));\n\
+  return extract<int>(substitute(^^w, a));\n\
+}\n\
+consteval int str_i() { return str('i'); }\n\
+consteval int str_x() { return str('x'); }\n\
+consteval int later_str_i() {\n\
+  std::vector<int> pad(7, 1);\n\
+  return str('i') + pad[0] - 1;\n\
+}\n\
+consteval int member_typed(int size) {\n\
+  std::vector<info> a;\n\
+  for (info m : nonstatic_data_members_of(^^S, access_context::unchecked()))\n\
+    if (size_of(m) == sizeof(int) * size) a.push_back(type_of(m));\n\
+  return extract<int>(substitute(^^v, a));\n\
+}\n\
+consteval int filtered_int() { return member_typed(1); }\n\
+consteval int later_filtered_int() {\n\
+  std::vector<int> pad(3, 1);\n\
+  return member_typed(1) + pad[0] - 1;\n\
+}\n\
+consteval int rd(info r) { return extract<int>(r); }\n\
+consteval int local_k(int k) { int x = k; return rd(^^x); }\n\
+consteval int local_one() { return local_k(1); }\n\
+consteval int local_two() { return local_k(2); }\n\
+consteval int many() {\n\
+  int s = 0;\n\
+  for (int i = 0; i < 2000; ++i) s += sub(i % 2 ? ^^int : ^^long);\n\
+  return s;\n\
+}\n\
+consteval int many_long() {\n\
+  int s = 0;\n\
+  for (int i = 0; i < 2000; ++i) s += sub(^^long);\n\
+  return s;\n\
+}\n";
+
+/// A run's result, steps and diagnostics (level, message, span).
+type Seen = (Result<RunValue, kiln_parse::RunError>, u64, Vec<String>);
+
+fn seen(session: &mut EvalSession<'_, '_>, name: &str) -> Seen {
+    let e = session.entry_named(name).unwrap();
+    let r = session.run(e, &mut Seven, RunBudget::PROGRAM, &CancelToken::new());
+    let diags = r.diagnostics.iter().map(|d| format!("{:?} {} {:?}", d.level, d.message, d.span));
+    (r.result, r.steps, diags.collect())
+}
+
+/// Opens a session on [`RUN_BUILT`] and runs `f` on it.
+fn run_built<R>(test: &str, f: impl FnOnce(&mut EvalSession<'_, '_>) -> R) -> R {
+    let d = scratch(test, &[("t.cpp", RUN_BUILT)]);
+    let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/support");
+    let err = Captured::default();
+    let cl = [
+        "-std=c++26".to_owned(),
+        "-freflection".to_owned(),
+        format!("-I{}", support.display()),
+        d.join("t.cpp").to_string_lossy().into_owned(),
+    ];
+    let r = with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let mut fe = fe.unwrap_or_else(|e| panic!("{e:?}: {}", err.text()));
+        f(&mut fe.session)
+    });
+    assert_eq!(err.text(), "");
+    std::fs::remove_dir_all(&d).unwrap();
+    r
+}
+
+fn deprecated(s: &Seen) -> bool {
+    s.2.iter().any(|d| d.contains("'get' is deprecated"))
+}
+
+#[test]
+fn run_built_operands_replay_by_content() {
+    run_built("content", |s| {
+        for (first, later, other) in [
+            ("a_int", "later_int", "a_long"),
+            ("str_i", "later_str_i", "str_x"),
+            // After `a_int`: the same query from another function (and
+            // another loop) replays `a_int`'s record.
+            ("filtered_int", "later_filtered_int", "a_long"),
+        ] {
+            let a = seen(s, first);
+            assert_eq!(a.0, Ok(RunValue::Signed(1)), "{first}: {:?}", a.2);
+            assert!(deprecated(&a), "{first}: {:?}", a.2);
+            // The same content at another address: the warning replays.
+            let l = seen(s, later);
+            assert_eq!((&l.0, &l.2), (&a.0, &a.2), "{later}");
+            // Other content at the same address: no warning.
+            let o = seen(s, other);
+            assert_eq!(o.0, Ok(RunValue::Signed(2)), "{other}: {:?}", o.2);
+            assert!(o.2.is_empty(), "{other}: {:?}", o.2);
+            assert_eq!(seen(s, first), a, "{first} again");
+        }
+    });
+}
+
+#[test]
+fn a_run_does_not_depend_on_the_runs_before_it() {
+    for (a, b) in [("a_int", "a_long"), ("str_i", "str_x"), ("filtered_int", "a_long")] {
+        let (aba, fresh) = (
+            run_built("aba", |s| {
+                let first = seen(s, a);
+                assert!(deprecated(&first), "{a}: {:?}", first.2);
+                // At the address `a`'s operands had: none of its warnings.
+                let other = seen(s, b);
+                assert_eq!((other.0, other.2), (Ok(RunValue::Signed(2)), vec![]), "{b}");
+                seen(s, a)
+            }),
+            run_built("fresh", |s| seen(s, a)),
+        );
+        assert_eq!(aba, fresh, "{a} after {a} {b}");
+        let (ba, fresh) = (
+            run_built("ba", |s| {
+                assert!(seen(s, b).0.is_ok());
+                seen(s, a)
+            }),
+            run_built("fresh", |s| seen(s, b)),
+        );
+        assert!(deprecated(&ba), "{a} after {b}: {:?}", ba.2);
+        assert!(fresh.2.is_empty(), "{b}: {:?}", fresh.2);
+    }
+}
+
+/// The memoization cache keys calls by scalar arguments only: a function
+/// given a pointer or a reference (an address of the run) is not
+/// memoized, so the same address with other content is computed again.
+#[test]
+fn memoized_results_are_not_keyed_by_addresses() {
+    let d = scratch(
+        "memo",
+        &[(
+            "t.cpp",
+            "constexpr int sum(const int* p, int n) { int s = 0; for (int i = 0; i < n; ++i) s += p[i]; return s; }\n\
+             constexpr int first(const int& r) { return r * 3; }\n\
+             constexpr int sq(int x) { int s = 0; for (int i = 0; i < x; ++i) s += x; return s; }\n\
+             consteval int with(int k) {\n\
+               int* p = new int[3]{k, k, k};\n\
+               int r = sum(p, 3) * 100 + first(p[0]) * 10 + sq(k);\n\
+               delete[] p;\n\
+               return r;\n\
+             }\n\
+             consteval int ones() { return with(1); }\n\
+             consteval int twos() { return with(2); }\n",
+        )],
+    );
+    let err = Captured::default();
+    let cl = ["-std=c++26".to_owned(), d.join("t.cpp").to_string_lossy().into_owned()];
+    with_eval_session(&kilnpp(), &cl, io(&err), |fe| {
+        let s = &mut fe.expect("session opens").session;
+        let (one, two) = (seen(s, "ones"), seen(s, "twos"));
+        assert_eq!(one.0, Ok(RunValue::Signed(300 + 30 + 1)));
+        assert_eq!(two.0, Ok(RunValue::Signed(600 + 60 + 4)));
+        // `with` and `sq` are memoized (scalar arguments), `sum` and
+        // `first` are not.
+        let entries = s.kept().memo_entries;
+        assert!(entries > 0);
+        for _ in 0..3 {
+            assert_eq!(seen(s, "ones"), one);
+            assert_eq!(seen(s, "twos"), two);
+        }
+        assert_eq!(s.kept().memo_entries, entries);
+    });
+    assert_eq!(err.text(), "");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// A reflection of an automatic variable is the same `info` in every run
+/// (and every call), but `extract` of it reads the variable of the call
+/// that runs: a function given it is not memoized by its bits.
+#[test]
+fn reflections_of_locals_are_not_memoized() {
+    run_built("locals", |s| {
+        for _ in 0..3 {
+            assert_eq!(seen(s, "local_one").0, Ok(RunValue::Signed(1)));
+            assert_eq!(seen(s, "local_two").0, Ok(RunValue::Signed(2)));
+        }
+    });
+}
+
+/// What content keying costs a run that makes 2000 `substitute` calls,
+/// each over a vector it built (spec/eval-session.md §10): `many_long`
+/// computes no key while no `substitute` call has a record, and one per
+/// call once one has (`a_int`'s).
+#[test]
+#[ignore = "measurement: run in a release build with --ignored --nocapture"]
+fn measure_content_keys() {
+    run_built("measure-keys", |s| {
+        let time = |s: &mut EvalSession<'_, '_>, name: &str| {
+            let start = Instant::now();
+            let r = seen(s, name);
+            assert!(r.0.is_ok(), "{name}: {:?}", r.2);
+            start.elapsed()
+        };
+        time(s, "many_long");
+        let unkeyed = (0..20).map(|_| time(s, "many_long")).min().unwrap();
+        time(s, "a_int");
+        let keyed = (0..20).map(|_| time(s, "many_long")).min().unwrap();
+        let mixed = (0..20).map(|_| time(s, "many")).min().unwrap();
+        println!(
+            "2000 substitute calls per run: no key {unkeyed:?}, content keys {keyed:?}, \
+             half replaying {mixed:?}; kept {:?}",
+            s.kept()
+        );
+    });
+}

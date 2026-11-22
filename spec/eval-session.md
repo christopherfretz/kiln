@@ -246,8 +246,66 @@ duplicates of another run or of the translation unit.
   original did (an invalid instantiation makes the call fail).
   Limits: diagnostics of semantic work done by a nested evaluation
   inside other semantic work are replayed with the outer work only;
-  a reflection query whose operands are addresses (a string, a range)
-  is keyed by the addresses.
+  a record is keyed by the query, not by the work it did, so a
+  different query that needs the same (already done) work replays
+  nothing; a replayed diagnostic has the location of its recording.
+- **Keys are content.** No replay key, memoization key or kept result
+  depends on an address or on what earlier runs did. A reflection
+  query is keyed by its op, the context it reads (whether it is a
+  trial and whether it runs inside semantic work; for the ops that
+  read them only, the evaluation point's scope, the nested evaluation
+  point, whether the evaluation is plainly constant-evaluated) and each
+  operand as the intrinsic reads it, read through the same Oven
+  accessors (`crates/kiln_sema/src/meta/key.rs`; every operand of
+  every op has a row there, checked by a unit test): an `info`, an
+  integer or an `access_context` by its bits; a range of `info`
+  (`substitute`'s arguments, a trait's types, `define_aggregate`'s
+  descriptions) by its length and elements; a `(const info *, n)`
+  trait form by its `n` elements; `reflect_constant_string` /
+  `reflect_constant_array`'s range by its element type, count and
+  elements frozen as the op freezes them (a content-interned constant);
+  `reflect_constant`'s operand frozen at its type; `reflect_object` /
+  `reflect_function`'s address frozen as a pointer (the entity and
+  offset, not the encoding); `is_string_literal`'s by its answer;
+  `data_member_spec`'s options by what is read from them (name bytes,
+  alignment, width, `no_unique_address`, annotations); a name by its
+  bytes; a value op's specialization types. An operand the op rejects
+  by its type alone keys as rejected; a read that fails ends the
+  operand (the op stopped reading there too). The encoding is exact
+  (lengths before elements, the whole key compared), so equal content
+  hits the same record from any address and different content never
+  does. The key is computed after the call and only when needed: the
+  call reported something, or some call of the same op has a record.
+  What computing it interns (a value the op did not freeze, as it
+  failed first) is not charged to the run (`Oven::meta_uncharged`).
+
+**Keys and caches a run reads or fills** (WP-2074). "Address" is a
+frame or heap encoding (slot | generation | offset), which `reset`
+reuses in every run; a static encoding names one object for the
+session (static slots are reused only after a scratch object is freed,
+with the next generation). Ids interned on first sight (`ReflectionId`,
+`ConstValueId`, an Oven function index) are numbered by history but
+are a bijection with their content for the session's lifetime, so
+they key exactly.
+
+| key or cache | site | key holds | why it is exact |
+|---|---|---|---|
+| replay `Key::Meta` | `kiln_sema` `session.rs` `Replay::records`; `oven_bridge.rs` `meta` | content (above) | fixed by WP-2074; tests `run_built_operands_replay_by_content`, `a_run_does_not_depend_on_the_runs_before_it` |
+| replay `Key::Func` | `session.rs`; `kiln_oven` `session.rs` `noisy` | Oven function index | one index per function for the session |
+| replay `Key::Nothrow` | `oven_bridge.rs` `is_nothrow` | `DeclId` | no address |
+| memoization | `kiln_oven` `memo.rs` `MemoKey`; eligibility `compile.rs` (`memo =`) | function index, flags, up to 4 scalar arguments | only integer, `bool`, floating and `info` parameters, no `this`, no pointer result: a pointer or reference argument (an address) makes the function not memoizable; an `info` of an automatic variable is a handle to the running evaluation's frame, so `extract` and `constant_of` of one mark the calls in progress impure (fixed by WP-2074: a call given `^^x` was memoized by its bits and read a stale `x`); otherwise a memoized function reaches only static objects; tests `memoized_results_are_not_keyed_by_addresses`, `reflections_of_locals_are_not_memoized`, `tests/conformance/meta.reflection.extract/local-reflection-argument-memo.cpp` |
+| `substitute` memo | `kiln_sema` `meta/templ.rs` `SubstMemo` | template and argument reflection bits | the arguments are read from the range before the lookup |
+| member lists | `kiln_oven` `meta/member_cache.rs` `MemberCache` | `DeclId` and list kind | no address |
+| union path memo | `kiln_oven` `vm/umemo.rs`, `Memory::union_epoch` | allocation key (slot, generation) | an entry is trusted only at the epoch it was computed at; every change to the union state bumps the epoch, and `reset` bumps it when it drops a run's union entries, so an entry a later run can hit was computed with no union state of that object, a function of the types and offset (also in the key) |
+| union designators | `vm/udesig.rs` | (designator, type) interned | content |
+| address/integer cells | `kiln_oven` `addr_int_disps`, `label_diff_cells`, `synth` | (space, address) | written only when folding C static initializers (`set_fold_c_static`, codegen), never in a session |
+| thawed constants, literal objects, globals | `thawed`, `lit_exprs`, `lets`, `unknowns`, `provisional_objs`, `global_map` | `ConstValueId`, `ExprId`, `DeclId`, global index | values are static addresses, valid for the session |
+| thunks, compiled code | `thunks`, `thunks_at`, `func_map`, `ctor_steps` | `ExprId`, `DeclId` | no address |
+| member pointers, virtual calls | `mp`, `virt` | interned members, class and function types | content |
+| data member descriptions | `kiln_oven` `meta/define.rs` `DmsTable` | the description (`Dms`), annotation lists | content |
+| host-call taint | `kiln_sema` `consteval.rs` `host_failed` | `ExprId` | filled only when a handler call is made outside a run; nested evaluations of runs have no handler |
+| entry stubs | `kiln_oven` `session.rs` `stubs` | `DeclId` | no address |
+| reflection charge | `kiln_oven` `meta/intern.rs` `charge_refl` | interned growth | not a key: what an intrinsic call is charged depends on whether its result was already interned (spec/oven.md "Reflection bytes") |
 
 ## 8. Budgets, cancellation, errors
 
@@ -319,6 +377,19 @@ handler is `Send` (spec/host-calls.md §3).
   A `std::vector<int>` of 10^6 `push_back`s: 0.46 s and 3.8e7 steps
   per run, peak 6 MiB; `kept()` after run 1000 equals `kept()` after
   run 2 and the process RSS does not move between them.
+- **Content keys** (WP-2074), measured by the ignored test
+  `measure_content_keys` (same file; `--profile harness`, aarch64 Linux
+  development host, min of 20 runs): a run making 2000 `substitute`
+  calls, each over a `std::vector<info>` it built, takes 4.65 ms while
+  no `substitute` call has a record (no key is computed), 4.76 ms (+2.4%,
+  about 55 ns per call) once one has (every call computes its content
+  key), and 4.92 ms when half the calls also hit the record and replay
+  it. A record's key words count in `kept().replay`. Without a session
+  no key is computed: bench/oven counters (steps, evaluation bytes,
+  accounted memory) are those of the base on all 29 entries (none
+  reflects; the only change outside sessions is that `extract` and
+  `constant_of` of an automatic variable mark the calls in progress
+  impure, spec/oven.md "Reflected locals").
 - **Flat over runs.** A run records no evaluation statistics
   (`-fconstexpr-report` rows) and its entry stub is compiled once; the
   frame and heap spaces' buffers are released after a run down to
@@ -343,4 +414,11 @@ session's translation unit is parsed without recording either.
   error, a refused translation unit.
 - `crates/kiln_driver/tests/eval_session.rs`: `with_eval_session` from a
   command line (an include path and a define, a refused translation
-  unit).
+  unit); content keys (WP-2074): a query over operands a run built
+  (`substitute` of a vector, of a `define_static_string`, of a filtered
+  `members_of`) replays its warning in a later run that builds them at
+  another address and not in one that builds other content at the same
+  address, a run after others reports what a fresh session's would, and
+  the memoization cache skips pointer and reference arguments.
+- `crates/kiln_sema/src/meta/key.rs` (unit tests): every operand of
+  every reflection op has a key row.

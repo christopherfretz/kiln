@@ -44,6 +44,15 @@ impl Oven {
         ReflMark { content: b.consts().content_bytes(), entries, seen: self.refl_seen }
     }
 
+    /// Attributes `content` constant store bytes and `entries` reflection
+    /// entries interned by the bridge during an intrinsic call, but not
+    /// for it (an evaluation session's replay key, spec/eval-session.md
+    /// §7), so the call's charge leaves them out.
+    pub fn meta_uncharged(&mut self, content: u64, entries: u64) {
+        self.refl_seen.content += content;
+        self.refl_seen.entries += entries;
+    }
+
     /// Charges what the translation unit's interned tables grew by since
     /// `m`, less what calls nested in this one attributed, to the running
     /// evaluation. New reflection entries count for every op; constant

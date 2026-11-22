@@ -27,7 +27,7 @@ use crate::templ::builtins::{LibFailure, TraitFailure};
 const RANGE_INLINE: usize = 8;
 
 /// The longest range a range form accepts (a bound on a bogus size).
-const MAX_RANGE: u64 = 1 << 16;
+pub(super) const MAX_RANGE: u64 = 1 << 16;
 
 /// What a trait op computes, once its operands are types.
 #[derive(Clone, Copy)]
@@ -260,7 +260,7 @@ pub(super) fn range_n(op: TraitOp) -> Option<(TraitOp, usize)> {
 }
 
 /// Whether `op` is a `(const info*, size_t)` range form.
-fn is_range_n(op: TraitOp) -> bool {
+pub(super) fn is_range_n(op: TraitOp) -> bool {
     use TraitOp as O;
     matches!(
         op,
