@@ -29,7 +29,7 @@ use super::{holding_vars, is_std_builtin, is_std_function, skip_parens};
 
 /// The direct callee of call `e`, as `Compiler::call_inner` finds it
 /// (through parentheses, function-to-pointer decay and no-op casts).
-fn direct_callee(ast: &Ast, e: ExprId) -> Option<DeclId> {
+pub(super) fn direct_callee(ast: &Ast, e: ExprId) -> Option<DeclId> {
     let mut c = skip_parens(ast, ast.exprs.callee(e));
     while ast.exprs.get(c).kind().is_cast()
         && matches!(

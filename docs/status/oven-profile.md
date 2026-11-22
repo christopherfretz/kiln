@@ -298,3 +298,125 @@ What is left, from these counts:
   every call, 2 x 338 thousand allocations.
 - **`char_traits<C>::assign(c1, c2)`** as a fast path, for libstdc++
   `push_back`'s `__c`.
+
+## After WP-1907 (light frames, `std::min`/`max`, `char_traits::assign`)
+
+**The premise was partly right.** Frame mechanics are a real share of a
+call, but most of a call is not frame-object work. Callgrind on a loop of
+200,000 calls of an empty function puts a call at about 249
+instructions: about 75 for dispatching `Call`, the callee's `Step` and
+`Ret`, 70 in `enter`, 60 in the `Ret` arm, 20 for the outlined
+`Memory::release` prologue and 37 for the frame push and pop. A member
+call that reads one field (`s.size()`) costs about 456. In a reduced
+`string-view-find-if` (40 rounds), `enter`, the return and `release`
+are about 8% of the instructions directly and 9-12% with their
+dispatch, which matches the 11-17% "frames" share of the split.
+
+Only about a sixth of a call is the frame-object work a function with no
+frame object can skip: the memory mark, the frame serial, the release
+scan and the `cur_frame` restore. That is what was built (spec/oven.md
+"Light frames"). Every frame is still pushed, so steps, the depth limit,
+the "in call to" notes, memoization and the profile are unchanged.
+`Memory::release` now tests inline whether anything was allocated since
+the mark. An empty call goes from 246.8 to 236.8 million instructions
+for the 200,000-call loop (-50 per call).
+
+KBC inlining of small callees would remove most of the rest, but it
+needs pseudo-frames for the notes and the depth limit, a register remap
+at each call site, and an answer for callees compiled after their
+callers. It is left for a follow-up row.
+
+The two library rows were the larger win on the WP-1864 entries:
+
+- **`std::min`/`std::max` of two scalars** (WP-1917) run as a builtin
+  before the call. Read for its value, as in `substr`'s
+  `std::min(__n, this->size() - __pos)`, a register local stays in its
+  register and a scalar temporary is never allocated. This was the
+  2 x 338 thousand allocations of `string-view-find-if`.
+- **`char_traits<C>::assign(c1, c2)`** (WP-1918) is a native
+  assignment. It declines through unions, `mutable` members and const
+  paths, where libstdc++'s `construct_at` and an assignment could
+  differ.
+
+Bench: `bench/oven`, kiln before (46575c3f0) and after on the same host,
+7 interleaved runs each (the order flips every run), median times.
+`bytes` is the `-fconstexpr-stats` memory counter. Steps change only
+where a `std::min`, `std::max` or `assign` call now costs one step.
+
+| entry | before ms | after ms | time | steps | before bytes | after bytes |
+|---|---|---|---|---|---|---|
+| builtins-memcpy | 24.6 | 21.8 | -11.4% | 10,215 | 65,536 | 65,536 |
+| builtins-popcount | 70.6 | 70.8 | +0.3% | 1,600,010 | 0 | 0 |
+| builtins-strlen | 21.0 | 20.9 | -0.7% | 14,115 | 4,096 | 4,096 |
+| churn-list | 31.8 | 33.0 | +3.6% | 610,005 | 1,600,000 | 1,600,000 |
+| churn-mixed | 19.9 | 19.7 | -1.1% | 100,102 | 425,248 | 425,248 |
+| churn-string | 449.4 | 446.0 | -0.8% | 6,002,085 | 3,399,552 | 3,399,552 |
+| churn-tree | 41.9 | 40.9 | -2.4% | 1,179,557 | 1,572,480 | 1,572,480 |
+| churn-vector | 506.1 | 513.7 | +1.5% | 8,398,277 | 33,554,432 | 33,554,432 |
+| class-churn | 162.1 | 162.7 | +0.4% | 2,960,095 | 10,240,016 | 10,240,016 |
+| fib | 15.6 | 16.1 | +3.6% | 786,024 | 0 | 0 |
+| inplace-alloc | 177.1 | 181.9 | +2.7% | 2,500,536 | 1,608,688 | 1,608,688 |
+| inplace-union | 182.0 | 181.1 | -0.5% | 2,500,518 | 1,608,672 | 1,608,672 |
+| sieve-nohdr | 22.6 | 22.5 | -0.4% | 253,992 | 100,000 | 100,000 |
+| sieve | 90.1 | 88.8 | -1.4% | 684,419 | 50,448 | 50,448 |
+| soa | 67.2 | 66.0 | -1.7% | 1,745,460 | 73,736 | 73,736 |
+| sort-nohdr | 33.8 | 33.2 | -1.6% | 727,499 | 25,600 | 25,600 |
+| sort | 201.3 | 204.6 | +1.6% | 1,659,900 | 293,888 | 293,888 |
+| string-view-find-if | 605.1 | 557.7 | -7.8% | 14,479,696 to 13,197,908 | 40,767,320 | 31,768,984 |
+| string-view-pairs | 539.0 | 536.4 | -0.5% | 13,275,413 to 12,458,145 | 22,804,752 | 22,804,208 |
+| string | 204.1 | 205.9 | +0.9% | 1,796,322 to 1,790,230 | 557,008 | 556,312 |
+| switch-dense | 240.3 | 246.0 | +2.4% | 34,951,678 | 0 | 0 |
+| table-nohdr | 61.8 | 59.4 | -3.9% | 854,380 | 330,240 | 330,240 |
+| table | 116.1 | 115.7 | -0.4% | 1,248,889 | 200,560 | 200,560 |
+| time-trace | 461.1 | 464.5 | +0.7% | 9,000,005 | 8 | 8 |
+| trial-rollback | 70.3 | 76.6 | +8.9% | 460,007 | 1,280,256 | 1,280,256 |
+| vector-alloc | 508.1 | 491.9 | -3.2% | 9,587,208 to 9,587,028 | 3,461,664 | 3,460,800 |
+| virtual-dispatch | 46.1 | 49.0 | +6.1% | 375,540 | 2,176 | 2,176 |
+| wide-struct-read | 332.4 | 336.9 | +1.4% | 4,199,431 | 32,768 | 32,768 |
+| wide-struct-store | 151.2 | 155.2 | +2.6% | 69,647 | 16,384 | 16,384 |
+
+`string-view-find-if` runs 7.8% faster, with 22% fewer bytes and 9% fewer
+steps. Callgrind on its 41-round reduction counts 2,153,896,951
+instructions before and 2,090,017,419 after (-3.0%; the full entry runs
+out of address space under valgrind's 3 GB cap).
+`string-view-pairs` spends 6% fewer steps and the same time.
+
+The time differences above +2% are noise or layout. Callgrind counts:
+
+- `trial-rollback` (+8.9%): +0.47% instructions. On 15 interleaved runs
+  its time is -5.0%.
+- `virtual-dispatch` (+6.1%): -3.0% instructions. On 15 runs it is
+  +4.6%.
+- `fib` (+3.6%): -0.04% instructions. On 15 runs it is -2.4%.
+- `churn-list` (+3.6%): +0.17% instructions. On 15 runs it is +2.2%.
+- `inplace-alloc` (+2.7%): out of address space under valgrind. On 15
+  runs it is -1.6%.
+- `switch-dense` (+2.4%), cut to `run(200000)`: +0.64% instructions
+  (405,920,838 to 408,520,604). It makes no call, so the extra
+  instructions are code generation in `run_loop`, about 0.6 per
+  dispatched op. They are not from the inline `release`: a build with
+  the old outlined `release` counts the same.
+
+`-fconstexpr-profile-split` (`split` feature builds, 3 interleaved runs
+each, medians):
+
+- `string-view-find-if`: VM time 363.6 to 361.6 ms. The memory share
+  goes from 56.5% to 55.3%, frames from 17.4% to 17.2%, dispatch from
+  21.7% to 21.3%.
+- `string-view-pairs`: VM time 357.6 to 357.4 ms. The memory share goes
+  from 63.5% to 65.8%, frames from 11.9% to 9.4%, dispatch from 18.5% to
+  19.6%.
+
+The split builds show no change in VM time. The stock builds above show
+-7.8% for `string-view-find-if`. The split's sampling overhead hides
+differences of this size.
+
+What is left, from these counts:
+
+- **KBC inlining of one-return callees**, with pseudo-frames that keep
+  the notes, the depth limit and the profile exact. This is most of the
+  remaining ~240 instructions of a call.
+- **Fewer register moves in KBC**: a compound assignment emits about
+  five `Mov`s, and dispatch is the largest single share of a call.
+- **Scalar replacement of small class parameters** (WP-1916) can now
+  build on light frames.

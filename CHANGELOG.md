@@ -451,6 +451,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `-fconstexpr-stats` memory counters (`bytes`, `peak-live`,
   `reclaimed`, `peak-arena`) drop where such locals were in memory
   (spec/oven.md "Register locals").
+- Cheaper constant-evaluation calls (WP-1907, WP-1917, WP-1918). A call
+  of a function that makes no frame object (a light frame) skips the
+  Oven's memory mark, frame serial and release. `std::min` and
+  `std::max` of two arithmetic values (with no comparator, or a
+  `std::less`/`std::greater` one) and `std::char_traits<C>::assign(c1,
+  c2)` are evaluated natively, declining to the library call whenever it
+  would diagnose or a limit would be crossed; read for its value, a
+  `std::min`/`std::max` leaves its locals in VM registers and allocates
+  no temporary. The `string-view-find-if` bench runs 7.8% faster with
+  22% fewer bytes. Each such call now costs one `-fconstexpr-steps` step
+  (spec/oven.md "Library fast paths", "Light frames"); light frames
+  change no step count.
 - The bench and status numbers are re-measured (WP-1886): `docs/status/perf.md`
   is now against clang 22.1.8 (it was clang 19), and the new
   `docs/status/perf-gcc.md` holds the same corpus against GCC 16.1

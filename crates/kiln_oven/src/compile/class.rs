@@ -1459,10 +1459,15 @@ impl Compiler<'_> {
         let pc = match callee {
             Callee::Direct(d) => {
                 let f = self.o.func_index(self.b.ast(), d);
-                // A `std::char_traits` bulk operation evaluated natively
-                // skips the call (spec/oven.md "Library fast paths").
+                // A `std::char_traits` operation or a `std::min`/`max` of
+                // two scalars evaluated natively skips the call
+                // (spec/oven.md "Library fast paths").
+                let glvalue = self.node(e).value_category().is_glvalue();
                 let fast = (!is_sret && this.is_none())
-                    .then(|| self.traits_fast(d, args.len()))
+                    .then(|| {
+                        self.traits_fast(d, args.len())
+                            .or_else(|| glvalue.then(|| self.minmax_fast(d, args.len())).flatten())
+                    })
                     .flatten()
                     .map(|(aux, et)| {
                         let ok = self.reg();

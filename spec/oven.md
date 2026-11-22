@@ -1444,6 +1444,48 @@ by the rule below, and the call's absence from the profile.
   It charges **one step per element it examines** (at least one): the
   positions `compare` compares, the elements `length` reads including
   the null, the elements `find` tests.
+- **`std::char_traits<C>::assign(c1, c2)`** (WP-1918), for the same `C`,
+  is `bi::TRAITS` sub `TR_ASSIGN`: a read of `c2` and an assignment to
+  `c1` (`Oven::store`, as `c1 = c2`), one step. libstdc++'s
+  `std::construct_at(&c1, c2)` in a constant evaluation and libc++'s
+  `c1 = c2` agree wherever that assignment passes on an object neither
+  in or through a union, nor inside a `mutable` member, nor on a const
+  path; elsewhere, and on any fault, the builtin declines (also above
+  the depth limit less two, at the step limit, and in a
+  potential-constant-expression check) and the library code runs.
+- **`std::min`/`std::max` of two scalars** (WP-1917). A direct call of
+  `std::min` or `std::max` with two `const T&` parameters and a
+  reference result (`Compiler::minmax_fast`), `T` an arithmetic type (no
+  enumeration, no pointer, no `volatile`), with no comparator or a
+  `std::less<U>`/`std::greater<U>` one, `U` `T` or `void`, is preceded
+  by `Builtin` `bi::MINMAX` (sub `MM_MAX`, `MM_GREATER`) and a `JmpIf`
+  over the `Call`. [alg.min.max] fixes the result, and both libraries
+  compute it as `b < a ? b : a` (`min`) and `a < b ? b : a` (`max`),
+  with `comp(x, y)` for `x < y`: the builtin reads both arguments
+  through their references (checked loads), compares them as `T`'s
+  values (floating-point unordered is not less) and leaves the address
+  of the chosen argument in the result register. It charges one step.
+  It declines when a read would fault, when the call would come within
+  three calls of the depth limit (libc++'s two-argument form calls the
+  comparator form, which calls the comparator), at the step limit, and
+  in a potential-constant-expression check. The comparator parameter
+  object is still constructed and destroyed as for the call.
+  **Read for its value** (the call the operand of an lvalue-to-rvalue
+  conversion, two arguments: `fast::minmax_args`,
+  `Compiler::minmax_value`), the builtin (`MM_VALUE`) takes a local
+  named by an argument (through no-op `const` casts) in its register,
+  and a scalar temporary argument (`MaterializeTemporaryExpr` of the
+  full-expression) as the value of its initializer, and leaves the
+  chosen value in the result register: the register-locals scan reads
+  such a local instead of binding it, so it stays in a register, and the
+  temporary is never allocated (bench `string-view-find-if`: `substr`'s
+  `std::min(__n, size() - __pos)`). The arguments are evaluated once, in
+  order, before the builtin reads any (`x` in `std::min(x, x++)` is read
+  after the increment, as the call reads it). On a decline the call runs
+  with its reference parameters bound to the arguments as evaluated: the
+  temporary is allocated then and initialized with that value, and a
+  register local is copied to a temporary named by the variable
+  (`bind_ref`; the call only reads it, and the result is only read).
 - **The step rule and the limits.** A fast path charges no more steps
   than the call it replaces would, so a program that fits clang's step
   limit fits kiln's; one that exceeds kiln's limit exceeds clang's, and
@@ -1456,6 +1498,35 @@ by the rule below, and the call's absence from the profile.
   operation is the declined call's. `-fconstexpr-profile` attributes a
   fast path's steps to the caller (it is no call: not in the functions
   table, not counted in `calls`), as `std::move`'s.
+
+### Light frames — Landed (WP-1907)
+A call pushes a `Frame` (callee, return pc, frame base, memory mark,
+call pc, memo slot, frame serial). The memory mark and the serial exist
+for the callee's frame objects: `Ret` releases the allocations made
+since the mark (`Memory::release`, which also ends the lifetimes the
+frame's scopes did not) and restores `Memory::cur_frame`, the serial
+the callee's own objects are tagged with (the "in its own initializer"
+and dangling-local checks read it). A function is **light**
+(`Func::light`) when its code makes no frame object, i.e. no `Alloc`
+instruction (`kbc::makes_frame_object`, a walk of the instructions;
+`Alloc` is the only instruction that allocates a frame object), and it
+is no constructor or destructor (their entry and exit hooks track the
+object under construction by serial). A light function's call takes
+the mark `BOTTOM` and keeps the caller's serial: it takes no mark,
+draws no serial, and its return releases nothing and restores nothing.
+Nothing observable differs: the callee has no object a serial could
+tag or a release could free, and anything it allocates on the heap
+(`New`) is not frame-owned. Everything else about the call is
+unchanged: the frame is pushed (the depth limit, "in call to" notes,
+`-fconstexpr-backtrace-limit`, the profile and the cost split see it),
+its steps are charged, memoization and `consteval` checks run as
+before. `Memory::release` itself tests inline whether anything was
+allocated since the mark and calls out only when something was.
+
+Inlining small callees into the caller's code was measured and not
+taken here (WP-1907 notes in `docs/status/oven-profile.md`): it would
+remove most of a call's ~250 instructions, but needs pseudo-frames for
+notes and the depth limit and a register remap at every call site.
 
 ### Register locals — Landed (M2; widened by WP-1908)
 A local variable or parameter lives in a VM register (no allocation, no

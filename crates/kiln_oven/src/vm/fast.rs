@@ -1,5 +1,6 @@
-//! `bi::TRAITS`: a `std::char_traits<C>` bulk operation evaluated
-//! natively (WP-1864; `compile/fast.rs`; spec/oven.md "Library fast
+//! `bi::TRAITS`: a `std::char_traits<C>` operation evaluated natively
+//! (WP-1864, WP-1918), and `bi::MINMAX`, a `std::min`/`std::max` of two
+//! scalars (WP-1917; `compile/fast.rs`; spec/oven.md "Library fast
 //! paths").
 //!
 //! The operation reads the elements the library's loop reads, in its
@@ -17,9 +18,10 @@
 //! the same scalar position of one array. A run that does not pass is
 //! read element by element, as the loop reads it.
 
+use super::udesig;
 use super::{Fault, value_len};
 use crate::Oven;
-use crate::arith::canon;
+use crate::arith::{canon, float_cmp};
 use crate::kbc::{ak, bi};
 use crate::mem::{Sp, flags};
 use crate::ty::{OTy, TyKind};
@@ -43,6 +45,9 @@ impl Oven {
         let TyKind::Int { width, signed } = self.types.kind(et) else { return false };
         let cmp = Cmp { width: u32::from(width), signed: signed && sub & bi::TR_UNSIGNED == 0 };
         let arg = |i: usize| self.regs[nb + i];
+        if sub & 0xF == bi::TR_ASSIGN {
+            return left > 0 && self.tr_assign(arg(0), arg(1), et);
+        }
         let done = match sub & 0xF {
             bi::TR_COMPARE => {
                 self.tr_compare(arg(0) as u64, arg(1) as u64, arg(2) as u64, et, cmp, left)
@@ -62,6 +67,84 @@ impl Oven {
         };
         self.run.counters.steps += steps;
         self.regs[nb] = v;
+        true
+    }
+
+    /// `assign(c1, c2)` (libstdc++: `std::construct_at(&c1, c2)` in a
+    /// constant evaluation, libc++: `c1 = c2`), as the assignment: a read
+    /// of `c2` and a write of `c1` that both pass, with one step. A
+    /// target in or through a union, inside a `mutable` member or on a
+    /// const path declines, as does any fault: there construction and
+    /// assignment may differ, and the library code diagnoses.
+    fn tr_assign(&mut self, p: u128, q: u128, et: OTy) -> bool {
+        if udesig::desig_of(p) != 0 || udesig::desig_of(q) != 0 {
+            return false;
+        }
+        let (p, q) = (p as u64, q as u64);
+        let Ok(v) = self.load(q, et, ak::READ) else { return false };
+        let len = value_len(self.types.info(et).size, self.types.info(et).kind);
+        let Ok((_, _, a)) = self.mem.check(p, len, true) else { return false };
+        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE | flags::CONST_PATH) != 0
+            || self.store(p, et, v, ak::ASSIGN, false).is_err()
+        {
+            return false;
+        }
+        self.run.counters.steps += 1;
+        true
+    }
+
+    /// `bi::MINMAX` `sub` on the two `const T&` arguments at `regs[nb..]`
+    /// (`T` the scalar type `t`; WP-1917): whether it evaluated the call
+    /// (the address of the argument it returns is then in `regs[nb]`).
+    /// `min(a, b)` is `b < a ? b : a` and `max(a, b)` is `a < b ? b : a`
+    /// in both libraries (with `comp(x, y)` for `x < y` given a
+    /// comparator); both reads must pass, and it charges one step.
+    pub(super) fn minmax_fast(&mut self, nb: usize, sub: u32, t: OTy) -> bool {
+        // The call, libc++'s comparator overload, and its comparator call.
+        if self.run.potential.is_some()
+            || self.active_calls() + 3 > self.budget.depth
+            || self.run.counters.steps >= self.budget.steps
+        {
+            return false;
+        }
+        let (ra, rb) = (self.regs[nb], self.regs[nb + 1]);
+        let arg = |r: u128, value: bool| {
+            if value {
+                Some(r)
+            } else if udesig::desig_of(r) != 0 {
+                None
+            } else {
+                self.load(r as u64, t, ak::READ).ok()
+            }
+        };
+        let (Some(a), Some(b)) =
+            (arg(ra, sub & bi::MM_VAL_A != 0), arg(rb, sub & bi::MM_VAL_B != 0))
+        else {
+            return false;
+        };
+        // `x < y` (or `y < x` for `std::greater`) picks `b`.
+        let (x, y) = if sub & bi::MM_MAX != 0 { (a, b) } else { (b, a) };
+        let (x, y) = if sub & bi::MM_GREATER != 0 { (y, x) } else { (x, y) };
+        let less = match self.types.kind(t) {
+            TyKind::Int { width, signed: true } => {
+                let w = u32::from(width);
+                (canon(x, w, true) as i128) < (canon(y, w, true) as i128)
+            }
+            TyKind::Int { width, signed: false } => {
+                let w = u32::from(width);
+                canon(x, w, false) < canon(y, w, false)
+            }
+            TyKind::Bool => (x & 1) < (y & 1),
+            TyKind::Float(k) => float_cmp(k, x, y) == Some(std::cmp::Ordering::Less),
+            _ => return false,
+        };
+        self.run.counters.steps += 1;
+        self.regs[nb] = match (sub & bi::MM_VALUE != 0, less) {
+            (true, true) => b,
+            (true, false) => a,
+            (false, true) => rb,
+            (false, false) => ra,
+        };
         true
     }
 
