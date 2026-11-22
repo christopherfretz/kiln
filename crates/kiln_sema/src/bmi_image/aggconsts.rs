@@ -44,7 +44,7 @@ pub(super) const TAG_AGG: u8 = 5;
 
 pub(super) fn encode(w: &mut Wr, c: &ConstRec) {
     match c {
-        ConstRec::Ptr { ty, base, offset, designated, past } => {
+        ConstRec::Ptr { ty, base, offset, designated, past, unions } => {
             w.u8(TAG_PTR);
             w.q(*ty);
             match *base {
@@ -78,6 +78,10 @@ pub(super) fn encode(w: &mut Wr, c: &ConstRec) {
                 }
             }
             w.u8(u8::from(*past));
+            w.len(unions.len());
+            for &f in unions {
+                w.u32(f);
+            }
         }
         ConstRec::Agg { ty, bytes, relocs, padding, unions } => {
             w.u8(TAG_AGG);
@@ -118,7 +122,12 @@ pub(super) fn decode(r: &mut Rd<'_>, tag: u8, ty: QRef) -> Res<ConstRec> {
             1 => true,
             _ => return bad("bad pointer constant"),
         };
-        return Ok(ConstRec::Ptr { ty, base, offset, designated, past });
+        let n = r.count(4)?;
+        let mut unions = Vec::with_capacity(n);
+        for _ in 0..n {
+            unions.push(r.u32()?);
+        }
+        return Ok(ConstRec::Ptr { ty, base, offset, designated, past, unions });
     }
     let n = r.count(1)?;
     let bytes = r.take(n)?.to_vec();
@@ -154,8 +163,9 @@ pub(super) fn validate(
             && matches!(consts.get(x as usize), Some(ConstRec::Ptr { .. } | ConstRec::Null { .. }))
     };
     match consts.get(k) {
-        Some(ConstRec::Ptr { base, designated, .. }) => {
+        Some(ConstRec::Ptr { base, designated, unions, .. }) => {
             designated.is_none_or(qref_ok)
+                && unions.iter().all(|&f| decl(f, Dc::Field))
                 && match *base {
                     PtrRec::Decl(x) => decl(x, Dc::Var),
                     PtrRec::Function(x) => decl(x, Dc::Value),
@@ -184,7 +194,9 @@ impl Writer<'_, '_, '_> {
     pub(super) fn agg_const(&mut self, c: ConstValueId) -> W<Option<ConstRec>> {
         let s = self.s;
         let consts = &s.ast.consts;
-        if let Some(Scalar::Pointer { ty, base, offset, designated, past }) = consts.scalar(c) {
+        if let Some(Scalar::Pointer { ty, base, offset, designated, past, unions }) =
+            consts.scalar(c)
+        {
             if self.bs.texpr > 0 {
                 return Ok(None);
             }
@@ -205,8 +217,12 @@ impl Writer<'_, '_, '_> {
                 Some(q) => Some(self.qref(q)?),
                 None => None,
             };
+            let mut fields = Vec::new();
+            for &f in consts.union_path(unions) {
+                fields.push(self.dref(f, Dc::Field)?);
+            }
             let ty = self.qref(ty)?;
-            return Ok(Some(ConstRec::Ptr { ty, base, offset, designated, past }));
+            return Ok(Some(ConstRec::Ptr { ty, base, offset, designated, past, unions: fields }));
         }
         let Some(a) = consts.aggregate(c) else { return Ok(None) };
         if self.bs.texpr > 0 && !(a.relocs.is_empty() && a.unions.is_empty()) {
@@ -243,7 +259,7 @@ impl Sema<'_, '_> {
     ) -> Option<ConstValueId> {
         let id = |w: u32| ids.get(w as usize).copied();
         match c {
-            ConstRec::Ptr { base, offset, designated, past, .. } => {
+            ConstRec::Ptr { base, offset, designated, past, unions, .. } => {
                 let base = match *base {
                     PtrRec::Decl(x) => PtrBase::Decl(self.ast.first(id(x)?)),
                     PtrRec::Function(x) => PtrBase::Function(id(x)?),
@@ -252,7 +268,10 @@ impl Sema<'_, '_> {
                     PtrRec::Const(x) => PtrBase::Const(*consts.get(x as usize)?),
                 };
                 let designated = designated.map(|t| q(self, t));
-                let s = Scalar::Pointer { ty, base, offset: *offset, designated, past: *past };
+                let path: Vec<DeclId> = unions.iter().map(|&f| id(f)).collect::<Option<_>>()?;
+                let unions = self.ast.consts.push_union_path(&path).ok()?;
+                let s =
+                    Scalar::Pointer { ty, base, offset: *offset, designated, past: *past, unions };
                 self.ast.consts.push_scalar(s).ok()
             }
             ConstRec::Agg { bytes, relocs, padding, unions, .. } => {

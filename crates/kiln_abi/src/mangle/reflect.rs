@@ -786,7 +786,7 @@ impl Mangler<'_, '_> {
     fn refl_pointer(&mut self, v: ConstValueId, addr: bool) {
         let ast = self.ast;
         let ty = ast.consts.ty(v);
-        let ConstValue::Scalar(Scalar::Pointer { base, offset, designated, .. }) =
+        let ConstValue::Scalar(Scalar::Pointer { base, offset, designated, unions, .. }) =
             ast.consts.get(v)
         else {
             self.value_in_arg(ty, v, false);
@@ -819,7 +819,7 @@ impl Mangler<'_, '_> {
             }
         }
         let at = self.out.len();
-        self.pointer_value(ty, base, offset, designated, false);
+        self.pointer_value(ty, base, offset, designated, ast.consts.union_path(unions), false);
         if !addr && !is_ref && self.out[at..].starts_with("ad") {
             self.out.replace_range(at..at + 2, "");
         }

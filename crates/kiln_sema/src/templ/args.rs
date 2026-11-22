@@ -1802,7 +1802,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return true;
         }
-        let Some(Scalar::Pointer { ty, base, offset, past, designated }) = scalar else {
+        let Some(Scalar::Pointer { ty, base, offset, past, designated, .. }) = scalar else {
             return false;
         };
         let t = &self.ast.types;

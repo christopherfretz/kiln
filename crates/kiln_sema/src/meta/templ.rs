@@ -204,7 +204,14 @@ impl Sema<'_, '_> {
         let ty = self.ast.types.pointer_to(obj);
         self.ast
             .consts
-            .push_scalar(Scalar::Pointer { ty, base, offset, designated: None, past: false })
+            .push_scalar(Scalar::Pointer {
+                ty,
+                base,
+                offset,
+                designated: None,
+                past: false,
+                unions: kiln_ast::consts::UnionPath::NONE,
+            })
             .map_err(|_| MetaError::note(loc, "too many constant values"))
     }
 

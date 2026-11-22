@@ -4,6 +4,7 @@
 
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
+    UnionPath,
 };
 use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::expr::{ExprDeps, ExprKind};
@@ -733,7 +734,10 @@ impl Oven {
             },
             TyKind::Ptr(pointee) => {
                 let desig = self.void_designated(pointee, (v >> 64) as u32);
-                self.ptr_of(b, info.q, pointee, v as u64, desig, loc)?
+                // The union members its designator names (`vm/udesig.rs`)
+                // are kept as the constant's union path (WP-2200).
+                let ud = crate::vm::udesig::desig_of(v);
+                self.ptr_of(b, info.q, pointee, v as u64, (desig, ud), loc)?
             }
             _ => {
                 return Err(Freeze::Notes(vec![Note::new(
@@ -896,13 +900,14 @@ impl Oven {
                 offset,
                 designated: None,
                 past,
+                unions: UnionPath::NONE,
             });
         }
         let Some(a) = self.mem.static_in_slot(p.slot).filter(|a| a.live) else {
             return Err(Freeze::Fault(FailKind::NotConstant));
         };
         let raw = Ptr { generation: a.generation, ..p }.encode();
-        self.ptr_of(b, q, pointee, raw, None, loc)
+        self.ptr_of(b, q, pointee, raw, (None, 0), loc)
     }
 
     /// [`Self::nowhere_of`] of an [`Oven::synth`] entry: `base`'s
@@ -920,7 +925,7 @@ impl Oven {
         let sc = if base == 0 {
             Scalar::Null { ty: q, kind: NullKind::Pointer }
         } else {
-            self.ptr_of(b, q, pointee, base, None, loc)?
+            self.ptr_of(b, q, pointee, base, (None, 0), loc)?
         };
         Ok(match sc {
             Scalar::Pointer { ty, base, offset, .. } => Scalar::Pointer {
@@ -929,6 +934,7 @@ impl Oven {
                 offset: offset.wrapping_add(d.cast_unsigned()),
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             },
             Scalar::Null { ty, .. } => Scalar::Pointer {
                 ty,
@@ -936,18 +942,22 @@ impl Oven {
                 offset: d.cast_unsigned(),
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             },
             _ => return Err(Freeze::Fault(FailKind::NotConstant)),
         })
     }
 
+    /// The store form of pointer `raw` of type `q`: `designated` is a
+    /// `void *`'s designated type, `desig` the register's union member
+    /// designator (`vm/udesig.rs`; 0: none).
     fn ptr_of(
         &mut self,
         b: &mut dyn SemaBridge,
         q: QualType,
         pointee: OTy,
         raw: u64,
-        designated: Option<QualType>,
+        (designated, desig): (Option<QualType>, u32),
         loc: Loc,
     ) -> Result<Scalar<'static>, Freeze> {
         if raw == 0 {
@@ -968,6 +978,7 @@ impl Oven {
                         offset: 0,
                         designated: None,
                         past: false,
+                        unions: UnionPath::NONE,
                     })
                 }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
@@ -1081,7 +1092,8 @@ impl Oven {
                 }
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
-            return Ok(Scalar::Pointer { ty: q, base, offset, designated, past });
+            let unions = self.frozen_union_path(b, base, offset, q, designated, past, desig);
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated, past, unions });
         }
         // A temporary extended by the variable being initialized
         // ([class.temporary]/6): its value is frozen with the result.
@@ -1099,13 +1111,9 @@ impl Oven {
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }
-            return Ok(Scalar::Pointer {
-                ty: q,
-                base: PtrBase::Temporary(t),
-                offset,
-                designated,
-                past,
-            });
+            let base = PtrBase::Temporary(t);
+            let unions = self.frozen_union_path(b, base, offset, q, designated, past, desig);
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated, past, unions });
         }
         // The variable being initialized: a permitted result when it has
         // static storage duration, or (C++26) when it is a `constexpr`
@@ -1127,13 +1135,9 @@ impl Oven {
             if ast.decls.var(d).is_some_and(|v| v.spec.tls() != kiln_ast::decl::TlsKind::None) {
                 return Err(Freeze::Fault(FailKind::NotConstant));
             }
-            return Ok(Scalar::Pointer {
-                ty: q,
-                base: PtrBase::Decl(ast.first(d)),
-                offset,
-                designated,
-                past,
-            });
+            let base = PtrBase::Decl(ast.first(d));
+            let unions = self.frozen_union_path(b, base, offset, q, designated, past, desig);
+            return Ok(Scalar::Pointer { ty: q, base, offset, designated, past, unions });
         }
         if self.run.silent {
             return Err(Freeze::Fault(FailKind::NotConstant));
@@ -1209,6 +1213,57 @@ impl Oven {
             )),
         }
         Err(Freeze::Notes(notes))
+    }
+
+    /// The union path ([`Scalar::Pointer`] `unions`, spec/ast.md §9.1
+    /// "Union paths") of a pointer to `offset` of `base` of type `q`
+    /// whose register carried union member designator `desig`: each
+    /// level of the designator as its member's `FieldDecl`, kept where it
+    /// is not its union's default member. [`UnionPath::NONE`] without a
+    /// designator (no work), past the end, or without a pointee type.
+    #[allow(clippy::too_many_arguments, reason = "the parts of one pointer")]
+    fn frozen_union_path(
+        &self,
+        b: &mut dyn SemaBridge,
+        base: PtrBase,
+        offset: u64,
+        q: QualType,
+        designated: Option<QualType>,
+        past: bool,
+        desig: u32,
+    ) -> UnionPath {
+        if desig == 0 || past {
+            return UnionPath::NONE;
+        }
+        self.frozen_union_path_slow(b, base, offset, q, designated, desig)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn frozen_union_path_slow(
+        &self,
+        b: &mut dyn SemaBridge,
+        base: PtrBase,
+        offset: u64,
+        q: QualType,
+        designated: Option<QualType>,
+        desig: u32,
+    ) -> UnionPath {
+        let ast = b.ast();
+        let root = match base {
+            PtrBase::Decl(d) | PtrBase::Temporary(d) => ast.decls.get(d).ty(),
+            PtrBase::Const(c) => Some(ast.consts.ty(c)),
+            _ => None,
+        };
+        let pointee = designated.or_else(|| ast.types.pointee(q));
+        let (Some(root), Some(pointee)) = (root, pointee) else { return UnionPath::NONE };
+        let sel: Vec<DeclId> = self
+            .udesig
+            .levels(desig)
+            .filter_map(|(u, i)| self.types.fields(u).get(i as usize).map(|f| f.decl))
+            .collect();
+        let path = kiln_ast::consts::canonical_union_path(ast, root, offset, pointee, &sel);
+        b.consts().push_union_path(&path).unwrap_or(UnionPath::NONE)
     }
 
     pub(crate) fn freeze_aggregate(
@@ -1301,7 +1356,7 @@ impl Oven {
         if let Some(k) = crate::mem::label_diff_idx(raw) {
             return Ok(self.label_diff_of(q, t, k, disp));
         }
-        let sc = self.ptr_of(b, q, t, raw, None, loc)?;
+        let sc = self.ptr_of(b, q, t, raw, (None, 0), loc)?;
         if disp == 0 {
             return Ok(sc);
         }
@@ -1312,6 +1367,7 @@ impl Oven {
                 offset: offset.wrapping_add(disp.cast_unsigned()),
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             },
             Scalar::Null { .. } => {
                 let w = u32::from(width);
@@ -1334,6 +1390,7 @@ impl Oven {
             offset: disp.cast_unsigned(),
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         }
     }
 
@@ -1423,9 +1480,9 @@ impl Oven {
                 if !sp.is_init(abs, info.size) {
                     return Err(self.uninit(b, field, t, loc));
                 }
-                // A `void *` keeps the designated type of its tag.
-                // (Not its union member designator, `vm/udesig.rs`.)
-                let tag = self.mem.void_tag(st, abs) as u32;
+                // A `void *` keeps the designated type of its tag, any
+                // pointer its union member designator (`vm/udesig.rs`).
+                let tag = self.mem.void_tag(st, abs);
                 let v = sp.read(abs, info.size) | u128::from(tag) << 64;
                 let sc = self.scalar_of(b, t, v, loc)?;
                 let id =
@@ -2366,9 +2423,9 @@ impl Oven {
     /// Writes thawed pointer register value `v` (tag bits included) to
     /// static byte `abs`, with its pointer mark.
     fn put_thawed_ptr(&mut self, abs: u64, v: u128) {
-        let mark = match (v as u64, (v >> 64) as u32) {
+        let mark = match (v as u64, (v >> 64) as u64) {
             (0, _) => 0,
-            (_, tag) => self.mem.set_void_tag(crate::mem::Sp::Static, abs, u64::from(tag)),
+            (_, tag) => self.mem.set_void_tag(crate::mem::Sp::Static, abs, tag),
         };
         self.mem.stat.write(abs, 8, u128::from(v as u64));
         self.mem.stat.set_ptr_mark(abs, 8, mark);
@@ -2384,7 +2441,8 @@ impl Oven {
         ty: OTy,
         top: u32,
     ) -> u128 {
-        let Some(Scalar::Pointer { base, offset, designated, past, .. }) = b.consts().scalar(cv)
+        let Some(Scalar::Pointer { ty: sty, base, offset, designated, past, unions }) =
+            b.consts().scalar(cv)
         else {
             return 0;
         };
@@ -2392,7 +2450,66 @@ impl Oven {
             Some(d) => u128::from(self.types.intern(b, d).0 + 1) << 64,
             None => 0,
         };
-        u128::from(self.thaw_ptr_raw(b, base, offset, past, ty, top)) | tag
+        let raw = self.thaw_ptr_raw(b, base, offset, past, ty, top);
+        let v = u128::from(raw) | tag;
+        // A pointer into an object holding a union is tagged with every
+        // union member its designator enters, the default ones too: a
+        // pointer derived from it (`&p->x` of `p = &u.t`) designates the
+        // same members (spec/oven.md "Freeze and thaw").
+        if past || (unions.is_none() && !self.in_union_object(raw)) {
+            return v;
+        }
+        let desig = self.thaw_union_path(b, base, offset, (sty, designated), unions);
+        crate::vm::udesig::with_desig(v, desig)
+    }
+
+    /// Whether `raw` points into an allocation holding a union.
+    #[inline]
+    fn in_union_object(&self, raw: u64) -> bool {
+        self.mem.alloc_of(Ptr::decode(raw)).is_ok_and(|a| {
+            a.flags & flags::HAS_UNION != 0
+                || ((a.ty.0 as usize) < self.types.infos.len() && self.types.info(a.ty).has_union)
+        })
+    }
+
+    /// The union member designator (`vm/udesig.rs`) of a pointer thawed
+    /// with union path `p` (WP-2200): each union member its designator
+    /// enters (`kiln_ast::consts::union_members_entered`: the listed one,
+    /// else the default), as its union and index, outermost first.
+    #[cold]
+    #[inline(never)]
+    fn thaw_union_path(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        base: PtrBase,
+        offset: u64,
+        (sty, designated): (QualType, Option<QualType>),
+        p: UnionPath,
+    ) -> u32 {
+        let sel = b.consts().union_path(p).to_vec();
+        let ast = b.ast();
+        let root = match base {
+            PtrBase::Decl(d) | PtrBase::Temporary(d) => ast.decls.get(d).ty(),
+            PtrBase::Const(c) => Some(ast.consts.ty(c)),
+            _ => None,
+        };
+        let pointee = designated.or_else(|| ast.types.pointee(sty));
+        let fields = match (root, pointee) {
+            (Some(r), Some(pt)) => {
+                kiln_ast::consts::union_members_entered(ast, r, offset, pt, &sel)
+            }
+            _ => sel,
+        };
+        let mut t = 0;
+        for f in fields {
+            let ast = b.ast();
+            let Some(parent) = ast.decls.get(f).ctx() else { continue };
+            let Some(rq) = ast.decls.get(ast.first(parent)).ty() else { continue };
+            let u = self.types.intern(b, rq);
+            let Some(i) = self.types.fields(u).iter().position(|x| x.decl == f) else { continue };
+            t = self.udesig.extend(t, u, i as u32);
+        }
+        t
     }
 
     fn thaw_ptr_raw(

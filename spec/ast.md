@@ -1039,7 +1039,8 @@ enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified
     Null { ty, kind: NullKind },                  // Pointer | MemberData | MemberFunction
     Pointer { ty, base: PtrBase, offset: u64,     // also references; byte offset
               designated: Option<QualType>,       // `void *`: the designated object's type
-              past: bool },                       // one past the end of a subobject (WP-948)
+              past: bool,                         // one past the end of a subobject (WP-948)
+              unions: UnionPath },                // union members entered off default (WP-2200)
     MemberPtr { ty, member: DeclId, kind: MemberKind, derived: bool, path: &'a [DeclId] },
     Reflection { ty, id: ReflectionId },          // std::meta::info (M6)
 }
@@ -1065,8 +1066,37 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   `u128`. Bits above `kind.bits()` are `Malformed`. X87 is 80 bits with an
   explicit integer bit. PPC double-double is not supported.
 - **Pointers** are `(base, byte offset)`, as in the Oven's memory model
-  (spec/oven.md). Identity is `(type, base, offset)`. The designator path
-  is not stored: printing recovers it from the type and offset (§9.3).
+  (spec/oven.md). Identity is `(type, base, offset, designated, past,
+  unions)`. The designator path is not stored: printing, mangling and
+  substitution recover it from the type and offset (§9.3), except for the
+  members of unions it enters, which type and offset cannot tell apart
+  (`union { int a; int b; } u`: `&u.a` and `&u.b`), below.
+  - **Union paths** (WP-2200; [temp.type]/2.4: `&u.a` and `&u.b` are
+    different template arguments, and clang's lvalue path mangles them
+    `soiL_Z1uE_E` and `soiL_Z1uE_0E`). `unions` is an interned list of
+    `FieldDecl`s (`UnionPath`, an id: `NONE` is 0 and the store keeps
+    the lists in its `paths` pool, deduplicated, so equal lists have
+    equal ids and the value stays `Copy` and is compared by id). Each
+    entry is a member of a union the designator path from `base`'s
+    object to the designated subobject (of the pointee type, or the
+    `designated` type of a `void *`) enters, outermost first, and it is
+    listed **only when it is not that union's default member**: the
+    first non-bit-field member in declaration order whose bytes hold the
+    position and that has a subobject of the pointee type there
+    (`consts::union_default_member`, the one rule every reader applies
+    where the list names no member of the union). The field also
+    identifies its union, and a path crosses a union type at most once
+    (no union contains itself), so a reader at a union takes the listed
+    member of it, if any, else the default. This is the canonical form:
+    a pointer to `u.a` is `NONE` however it was formed, and a pointer
+    that crosses no union (the common case) is always `NONE` and costs
+    nothing. `consts::canonical_union_path` (given a `PrintEnv`, the
+    base object's type, the offset, the pointee and the members the
+    pointer's designator names) computes it; the Oven calls it when it
+    freezes a pointer whose register carries a union member designator
+    (spec/oven.md "Union member designators"). A pointer without a
+    pointee type (a `void *` with no `designated`) and a past-the-end
+    pointer keep `NONE`.
   - `Function` bases carry offset 0 except in a C address constant
     (`(char *)f + 1`, C23 6.6p9, WP-1304).
   - A `LabelDiff` base is the difference of two label addresses as an
@@ -1137,6 +1167,9 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
     - `bytes`, `relocs`, `padding` and `unions` return the image tables
       (empty for scalars). `shadow` iterates the runs above.
     - `reloc_width`; `len` and `ids`.
+    - `push_union_path(&[DeclId]) -> Result<UnionPath, ConstError>`
+      interns a union path (the empty list is `UnionPath::NONE`);
+      `union_path(UnionPath) -> &[DeclId]` reads one.
   - `ConstError` is either `Capacity` (an id space or a 4 GiB pool is full;
     a fatal diagnostic) or `Malformed` (a canonical-form violation; an
     internal error in the caller).
@@ -1149,7 +1182,7 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   | int ≤ 64 bits, bool, float ≤ 64 bits, null, reflection | 16 |
   | wider int | 16 + 8 per word |
   | x87 or quad float | 16 + 16 |
-  | pointer | 16 (+8 if the offset is ≥ 2^32; +16 for a designated type) |
+  | pointer | 16 (+8 if the offset is ≥ 2^32; +16 for a designated type; +16 for a union path, whose list costs 8 + 4 per entry once per distinct list) |
   | member pointer | 16 + 4 per path entry |
   | aggregate | 16 + 24 (pool starts and cached 64-bit hash) + `sizeof(T)` + 8 per relocation, padding run and union entry |
 
@@ -1159,8 +1192,14 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
   - An aggregate's hash is cached, so growing the table never rehashes
     images.
   - Pools are `u32`-indexed: 4 GiB of image bytes in total.
+  - A pointer with a union path sets bit 4 of the node's extra field
+    (its base code is bits 0-3) and keeps its offset in the word pool,
+    followed by the base's second id, the designated type and the
+    `UnionPath`, each when present. Union path `i + 1` is the span
+    `upaths[i]` of the `paths` pool; an index rebuilt from the pool
+    (also after a snapshot restore) deduplicates them.
   - `HeapSize` reports these rows: `nodes`, `words`, `paths`, `aggs`,
-    `bytes`, `relocs`, `padding`, `unions`, `intern`.
+    `bytes`, `relocs`, `padding`, `unions`, `upaths`, `intern`.
   - `content_bytes() -> u64` is the interned content: the length of every
     pool times its element size (the rows above except `intern`, without
     spare capacity). It is deterministic on every 64-bit host and does not
@@ -1188,7 +1227,7 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
     pools. `BlobId` is unused.
   - **Pointers.** Bases gained `Function` and `Const`; `Decl` is
     variables and template parameter objects only. Pointers store no
-    `path`. The offset is unsigned: a pointer before its base is never a
+    `path` but the non-default union members on it (`unions`, WP-2200). The offset is unsigned: a pointer before its base is never a
     constant.
   - **Nulls and member pointers.** `NullPtr` became `Null { kind }` so that
     the image width is known. Member pointers carry `kind`.
@@ -1249,6 +1288,10 @@ context-free defaults (`NoEnv`):
   - `Unknown`.
 - Names: `decl_name` (default `#d17`), `decl_type`, `type_name` (default
   `#t5`), `enumerator`, `reflection` (default `^^#r3`).
+- A pointer's designator (`&u.b`, `&v.t.x`) enters each union by the
+  member its union path names, else by the union's default member
+  (§9.1 "Union paths"); other records are walked as before, each member
+  holding the byte tried in order until one holds the pointee.
 
 `PrintOptions { style, max_depth: 10, max_elems: 32, include_type: true,
 enum_cast: false }` are the defaults (`PrintOptions::DEFAULT`).

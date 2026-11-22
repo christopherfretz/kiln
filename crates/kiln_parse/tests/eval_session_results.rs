@@ -369,6 +369,40 @@ fn pointers_designators_and_member_pointers() {
 }
 
 #[test]
+fn pointers_into_unions_name_the_member() {
+    // Members of one union that share an offset and a type: the path names
+    // the member the pointer designates (its union path, spec/ast.md §9.1),
+    // through nested unions and array elements too.
+    session(
+        "union U { int a; int b; };\n\
+         union In { int p; int q; };\n\
+         union Out { In i; In j; };\n\
+         struct H { int pad; U arr[2]; Out o; };\n\
+         constexpr U u{.b = 1};\n\
+         constexpr H h{};\n\
+         struct Ptrs { const int* a; const int* b; const int* nest; const int* elem; \
+           const int* dflt; };\n\
+         consteval Ptrs p() { return {&u.a, &u.b, &h.o.j.q, &h.arr[1].b, &h.o.i.p}; }\n\
+         constexpr Ptrs tu = p();\n\
+         constexpr const int* pb = &u.b;\n",
+        |s| {
+            let run = tree(s, "p");
+            let path = |v: &RunValue, f: &str| pointer(v.field(f).unwrap()).path.to_vec();
+            assert_eq!(path(&run.root, "a"), [member("a")]);
+            assert_eq!(path(&run.root, "b"), [member("b")]);
+            assert_eq!(path(&run.root, "nest"), [member("o"), member("j"), member("q")]);
+            assert_eq!(path(&run.root, "elem"), [member("arr"), PathStep::Index(1), member("b")]);
+            assert_eq!(path(&run.root, "dflt"), [member("o"), member("i"), member("p")]);
+            // The translation unit's own constants say the same.
+            let cap = RunBudget::PROGRAM.result_bytes;
+            assert_eq!(s.variable_value_named("tu", cap), Ok(run));
+            let pb = s.variable_value_named("pb", cap).expect("pb");
+            assert_eq!(&*pointer(&pb.root).path, &[member("b")][..]);
+        },
+    );
+}
+
+#[test]
 fn reflections() {
     session(
         "constexpr int g = 3;\n\

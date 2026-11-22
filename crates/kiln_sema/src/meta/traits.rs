@@ -547,6 +547,7 @@ impl Sema<'_, '_> {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: kiln_ast::consts::UnionPath::NONE,
             })
             .map_err(|_| MetaError::memory())?;
         *out = MetaOut::Deref(p);

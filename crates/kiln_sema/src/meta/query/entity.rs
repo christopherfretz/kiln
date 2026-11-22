@@ -310,6 +310,7 @@ impl Sema<'_, '_> {
             offset: 0,
             designated: None,
             past: false,
+            unions: kiln_ast::consts::UnionPath::NONE,
         }) {
             Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),
@@ -329,7 +330,7 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
         let v = self.var_init_value(d, oven).and_then(|cv| self.ast.consts.scalar(cv));
-        let Some(Scalar::Pointer { ty, base, offset, .. }) = v else {
+        let Some(Scalar::Pointer { ty, base, offset, unions, .. }) = v else {
             return fail(
                 loc,
                 format!("reference '{}' is not usable in constant expressions", self.decl_name(d)),
@@ -364,6 +365,7 @@ impl Sema<'_, '_> {
             offset,
             designated: None,
             past: false,
+            unions,
         }) {
             Ok(cv) => Ok(self.intern_reflection(Reflectee::Object(cv), loc)?),
             Err(_) => fail(loc, "kiln: constant store exhausted"),

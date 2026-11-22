@@ -456,10 +456,17 @@ impl Sema<'_, '_> {
                 }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, designated, past, .. }) => Ok(self
+                Some(Scalar::Pointer { base, offset, designated, past, unions, .. }) => Ok(self
                     .ast
                     .consts
-                    .push_scalar(Scalar::Pointer { ty: canon, base, offset, designated, past })
+                    .push_scalar(Scalar::Pointer {
+                        ty: canon,
+                        base,
+                        offset,
+                        designated,
+                        past,
+                        unions,
+                    })
                     .unwrap_or(v)),
                 _ => Ok(v),
             }
@@ -489,6 +496,7 @@ impl Sema<'_, '_> {
             offset: 0,
             designated: Some(t),
             past: false,
+            unions,
         }) = self.ast.consts.scalar(v)
         else {
             return v;
@@ -506,6 +514,7 @@ impl Sema<'_, '_> {
                     offset: 0,
                     designated: Some(whole),
                     past: false,
+                    unions,
                 };
                 self.ast.consts.push_scalar(s).unwrap_or(v)
             }
@@ -672,20 +681,20 @@ impl Sema<'_, '_> {
             // A reference argument bound to such an object (a
             // `reflect_constant_array` result substituted for `const T
             // (&)[N]`): the lvalue `*p` of that constant pointer.
-            Scalar::Pointer { base: base @ PtrBase::Const(_), offset, .. }
+            Scalar::Pointer { base: base @ PtrBase::Const(_), offset, unions, .. }
                 if self.ast.types.is_reference(ty) =>
             {
                 let target = self.ast.types.pointee(ty)?;
-                self.const_object_lvalue(base, offset, target, loc)
+                self.const_object_lvalue(base, offset, target, unions, loc)
             }
             Scalar::Pointer { base: PtrBase::Const(_), .. } => {
                 let o = self.builder().opaque_value_of(ty, ValueCategory::PRValue, loc);
                 Some(self.builder().constant_expr(o, Some(v)))
             }
-            Scalar::Pointer { ty: pty, base, offset, .. }
+            Scalar::Pointer { ty: pty, base, offset, unions, .. }
                 if self.is_subobject_ptr(pty, base, offset) =>
             {
-                self.subobject_arg_expr(ty, pty, base, offset, loc).or_else(|| {
+                self.subobject_arg_expr(ty, pty, base, (offset, unions), loc).or_else(|| {
                     // A pointer past the end of an object or array (`arr
                     // + 4`, `&x + 1`; [temp.arg.nontype]/3 does not
                     // exclude it, [basic.compound]/3): no subobject lies

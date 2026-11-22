@@ -459,15 +459,26 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
             ConstValue::Scalar(Scalar::Null { kind, .. }) => {
                 self.out.extend_from_slice(&[TAG_MEMBER_NULL, kind as u8]);
             }
-            ConstValue::Scalar(Scalar::Pointer { base, offset, designated, past, .. }) => {
+            ConstValue::Scalar(Scalar::Pointer {
+                base, offset, designated, past, unions, ..
+            }) => {
                 self.out.extend_from_slice(&[
                     TAG_POINTER,
-                    u8::from(past) | u8::from(designated.is_some()) << 1,
+                    u8::from(past)
+                        | u8::from(designated.is_some()) << 1
+                        | u8::from(!unions.is_none()) << 2,
                 ]);
                 self.ptr_base(base, d)?;
                 put_var(&mut self.out, offset);
                 if let Some(q) = designated {
                     self.vty(q, d)?;
+                }
+                if !unions.is_none() {
+                    let path = store.union_path(unions);
+                    put_var(&mut self.out, path.len() as u64);
+                    for &f in path {
+                        self.ent(f, d)?;
+                    }
                 }
             }
             ConstValue::Scalar(Scalar::MemberPtr { member, kind, derived, path, .. }) => {
@@ -894,7 +905,7 @@ impl Ck<'_> {
             }
             TAG_POINTER => {
                 let flags = self.r.u8()?;
-                if flags > 3 {
+                if flags > 7 {
                     return bad("bad pointer flags");
                 }
                 match self.r.u8()? {
@@ -923,6 +934,11 @@ impl Ck<'_> {
                 self.r.var()?;
                 if flags & 2 != 0 {
                     self.ty(d)?;
+                }
+                if flags & 4 != 0 {
+                    for _ in 0..self.r.var_count(1)? {
+                        self.ent(d)?;
+                    }
                 }
             }
             TAG_MEMBER_POINTER => {

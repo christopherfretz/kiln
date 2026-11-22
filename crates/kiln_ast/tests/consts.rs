@@ -12,7 +12,8 @@ use std::mem::size_of;
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstError, ConstStore, ConstValue, FloatKind, IntBits, IntStyle, Member,
     MemberKind, NoEnv, NullKind, PrintEnv, PrintOptions, PrintStyle, PtrBase, Reloc, Scalar,
-    ShadowKind, ShadowRun, Shape, UnionMember, ValueKind, format_float_clang, to_f64,
+    ShadowKind, ShadowRun, Shape, UnionMember, UnionPath, ValueKind, canonical_union_path,
+    format_float_clang, to_f64,
 };
 use kiln_ast::strings::{StringEncoding, StringPool};
 use kiln_ast::{
@@ -53,6 +54,7 @@ const BITINT200: u32 = 57;
 const LDOUBLE: u32 = 58; // x87 long double, 16 bytes
 const LD_HOLDER: u32 = 59; // struct { long double v; }
 const BI_ARR: u32 = 60; // _BitInt(200)[1]
+const UU: u32 = 61; // union { int a; int b; P s; } (size 16)
 
 fn int(v: i128) -> Scalar<'static> {
     Scalar::Int { ty: ty(INT), signed: true, bits: IntBits::from_i128(32, v) }
@@ -140,6 +142,14 @@ impl PrintEnv for Env {
                     union: false,
                 }
             }
+            UU => Shape::Record {
+                members: vec![
+                    member("a", INT, 0, 4, 111),
+                    member("b", INT, 0, 4, 112),
+                    member("s", PAIR, 0, 16, 113),
+                ],
+                union: true,
+            },
             LD_HOLDER => {
                 Shape::Record { members: vec![member("v", LDOUBLE, 0, 16, 110)], union: false }
             }
@@ -156,6 +166,7 @@ impl PrintEnv for Env {
             5 => "S::m",
             6 => "S::g",
             7 => "ref_tmp",
+            8 => "u",
             _ => "?",
         });
     }
@@ -166,6 +177,7 @@ impl PrintEnv for Env {
             2 => Some(ty(ARR3)),
             3 => Some(ty(NEST)),
             7 => Some(ty(INT)),
+            8 => Some(ty(UU)),
             _ => None,
         }
     }
@@ -350,7 +362,14 @@ fn every_scalar_kind_roundtrips() {
     ] {
         let id = roundtrip(
             &mut st,
-            Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None, past: false },
+            Scalar::Pointer {
+                ty: ty(INT_PTR),
+                base,
+                offset: 0,
+                designated: None,
+                past: false,
+                unions: UnionPath::NONE,
+            },
         );
         assert_eq!(st.kind(id), ValueKind::Pointer);
         // A label address difference relocates as wide as its integer,
@@ -366,6 +385,7 @@ fn every_scalar_kind_roundtrips() {
                     offset: 12,
                     designated: None,
                     past: false,
+                    unions: UnionPath::NONE,
                 },
             );
             // Offsets beyond 32 bits go to the word pool.
@@ -377,6 +397,7 @@ fn every_scalar_kind_roundtrips() {
                     offset: 1 << 40,
                     designated: None,
                     past: false,
+                    unions: UnionPath::NONE,
                 },
             );
             // A `void *`'s designated type is part of its identity: the
@@ -388,6 +409,7 @@ fn every_scalar_kind_roundtrips() {
                 offset: 4,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             });
             for (off, d) in [(4, INT), (4, PAIR), (1 << 40, INT)] {
                 let at = Scalar::Pointer {
@@ -396,6 +418,7 @@ fn every_scalar_kind_roundtrips() {
                     offset: off,
                     designated: Some(ty(d)),
                     past: false,
+                    unions: UnionPath::NONE,
                 };
                 let id = roundtrip(&mut st, at);
                 assert_ne!(Ok(id), plain);
@@ -410,6 +433,7 @@ fn every_scalar_kind_roundtrips() {
         offset: 1,
         designated: None,
         past: false,
+        unions: UnionPath::NONE,
     };
     let (p9, p10) = (roundtrip(&mut st, at(9)), roundtrip(&mut st, at(10)));
     assert_ne!(p9, p10);
@@ -461,6 +485,7 @@ fn reloc_widths() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap();
     let n = st.push_scalar(Scalar::Null { ty: ty(INT_PTR), kind: NullKind::Pointer }).unwrap();
@@ -504,6 +529,7 @@ fn aggregate_with_nested_relocations() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap();
     let bytes = le(&[7, 0, 0, 0]);
@@ -522,6 +548,7 @@ fn aggregate_with_nested_relocations() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap();
     let bytes2 = le(&[9, 0, 0, 0]);
@@ -753,6 +780,7 @@ fn malformed_scalars_are_rejected() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         },
     );
     assert!(st.is_empty());
@@ -882,6 +910,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&x",
             "&x",
@@ -893,6 +922,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&x",
             "x",
@@ -904,6 +934,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&ref_tmp",
             "ref_tmp",
@@ -915,6 +946,7 @@ fn print_scalars() {
                 offset: 8,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr[2]",
             "&arr[2]",
@@ -926,6 +958,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr[0]",
             "&arr[0]",
@@ -937,6 +970,7 @@ fn print_scalars() {
                 offset: 12,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr[3]",
             "&arr[3]",
@@ -948,6 +982,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr",
             "&arr",
@@ -959,6 +994,7 @@ fn print_scalars() {
                 offset: 6,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr+6",
             "&arr+6",
@@ -970,6 +1006,7 @@ fn print_scalars() {
                 offset: 16,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&arr+16",
             "&arr+16",
@@ -981,6 +1018,7 @@ fn print_scalars() {
                 offset: 4,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&s.in.y",
             "&s.in.y",
@@ -992,6 +1030,7 @@ fn print_scalars() {
                 offset: 12,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&s.arr[1]",
             "&s.arr[1]",
@@ -1003,6 +1042,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&s.x",
             "&s.x",
@@ -1014,6 +1054,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "\"hi\"",
             "\"hi\"",
@@ -1025,6 +1066,7 @@ fn print_scalars() {
                 offset: 1,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&\"hi\"[1]",
             "&\"hi\"[1]",
@@ -1036,6 +1078,7 @@ fn print_scalars() {
                 offset: 2,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&u\"ab\"[1]",
             "&u\"ab\"[1]",
@@ -1047,6 +1090,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&f",
             "&f",
@@ -1058,6 +1102,7 @@ fn print_scalars() {
                 offset: 0,
                 designated: None,
                 past: false,
+                unions: UnionPath::NONE,
             }),
             "&typeid(short)",
             "&typeid(short)",
@@ -1087,9 +1132,50 @@ fn print_scalars() {
             offset: 4,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap();
     assert_eq!(st.display(p, &strings, &NoEnv, &PrintOptions::DEFAULT), "&#d9+4");
+}
+
+/// A pointer names the union members its union path lists, else each
+/// union's default member (spec/ast.md §9.1 "Union paths", WP-2200).
+#[test]
+fn print_union_paths() {
+    let mut st = ConstStore::default();
+    let strings = StringPool::new();
+    let (a, b, s_) = (DeclId::new(111), DeclId::new(112), DeclId::new(113));
+    // The canonical path drops the default member (`a` for an int at 0,
+    // `s` for its `a` member's int at 0 only when named).
+    assert!(canonical_union_path(&Env, ty(UU), 0, ty(INT), &[a]).is_empty());
+    assert_eq!(canonical_union_path(&Env, ty(UU), 0, ty(INT), &[b]), [b]);
+    assert_eq!(canonical_union_path(&Env, ty(UU), 0, ty(INT), &[s_]), [s_]);
+    assert!(canonical_union_path(&Env, ty(UU), 8, ty(INT_PTR), &[s_]).is_empty());
+    assert!(canonical_union_path(&Env, ty(UU), 0, ty(INT), &[]).is_empty());
+    let mut ptr = |offset, path: &[DeclId]| {
+        let unions = st.push_union_path(path).unwrap();
+        st.push_scalar(Scalar::Pointer {
+            ty: ty(INT_PTR),
+            base: PtrBase::Decl(DeclId::new(8)),
+            offset,
+            designated: None,
+            past: false,
+            unions,
+        })
+        .unwrap()
+    };
+    let cases = [
+        (ptr(0, &[]), "&u.a"),
+        (ptr(0, &[b]), "&u.b"),
+        (ptr(0, &[s_]), "&u.s.a"),
+        (ptr(8, &[]), "&u.s.p"),
+    ];
+    let mut seen = Vec::new();
+    for (id, want) in cases {
+        assert_eq!(st.display(id, &strings, &Env, &PrintOptions::DEFAULT), want);
+        assert!(!seen.contains(&id));
+        seen.push(id);
+    }
 }
 
 /// `print_exact` reports placeholders, and `enum_cast` keeps the cast of
@@ -1135,6 +1221,7 @@ fn print_exact_and_enum_cast() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap();
     assert!(!exact(&st, p, &opts).1);
@@ -1359,6 +1446,7 @@ fn truncate_to_a_mark() {
             offset: 0,
             designated: None,
             past: false,
+            unions: UnionPath::NONE,
         })
         .unwrap()
     };

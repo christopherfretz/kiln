@@ -2931,8 +2931,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             Scalar::Float { kind, bits, .. } => self.float_literal(ty, kind.bits(), bits),
             Scalar::Null { .. } => self.null_literal(ty),
-            Scalar::Pointer { base, offset, designated, .. } => {
-                self.pointer_value(ty, base, offset, designated, top);
+            Scalar::Pointer { base, offset, designated, unions, .. } => {
+                let sel = self.ast.consts.union_path(unions);
+                self.pointer_value(ty, base, offset, designated, sel, top);
             }
             Scalar::MemberPtr { member, path, .. } => {
                 // `[X] [mc <type>] adL <member> E [E] [E]`.
@@ -3032,6 +3033,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         base: PtrBase,
         offset: u64,
         designated: Option<QualType>,
+        sel: &[DeclId],
         top: bool,
     ) {
         let ast = self.ast;
@@ -3068,7 +3070,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             _ => ast.decls.get(d).ty(),
         };
         let path = match base {
-            PtrBase::Decl(_) | PtrBase::Temporary(_) => self.lvalue_path(obj_ty, offset, pointee),
+            PtrBase::Decl(_) | PtrBase::Temporary(_) => {
+                self.lvalue_path(obj_ty, offset, pointee, sel)
+            }
             _ => LvaluePath::default(),
         };
         // A whole object whose type is not the parameter's pointee (a
@@ -3122,12 +3126,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
 
     /// The lvalue path from an object of type `obj` to the subobject at
     /// byte `offset` of type `pointee` (kiln pointers are `(base,
-    /// offset)`; clang keeps the path).
+    /// offset)`; clang keeps the path). A union is entered by the member
+    /// union path `sel` names, else by its default member
+    /// ([`kiln_ast::consts::union_path_member`], WP-2200).
     fn lvalue_path(
         &self,
         obj: Option<QualType>,
         offset: u64,
         pointee: Option<QualType>,
+        sel: &[DeclId],
     ) -> LvaluePath {
         let ast = self.ast;
         let same = |a: QualType, b: QualType| {
@@ -3163,13 +3170,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
                             && at <= off
                             && (off < at + m.size || (off == at && m.size == 0))
                     };
-                    let hit = members
-                        .iter()
-                        .filter(inside)
-                        .find(|m| {
-                            off == m.offset_bits / 8 && pointee.is_some_and(|p| same(p, m.ty))
-                        })
-                        .or_else(|| members.iter().find(inside));
+                    let hit = if union {
+                        kiln_ast::consts::union_path_member(ast, &members, off, pointee, sel)
+                    } else {
+                        members
+                            .iter()
+                            .filter(inside)
+                            .find(|m| {
+                                off == m.offset_bits / 8 && pointee.is_some_and(|p| same(p, m.ty))
+                            })
+                            .or_else(|| members.iter().find(inside))
+                    };
                     let Some(m) = hit else {
                         // No member holds the byte: one past the end of the
                         // last member or of a member array (`s.a + 2`),

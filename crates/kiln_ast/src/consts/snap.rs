@@ -5,6 +5,7 @@
 //! |---|---|---|
 //! | `pools` | state | as data (value headers, words, paths, aggregate records with their stored hashes, image bytes, relocations, padding, union tables) |
 //! | `table` | rebuilt | every value is interned: re-inserted in id order with the hash [`Pools::hash_of`] gives (an aggregate's stored hash, a scalar's recomputed one), so a later intern of an existing value returns the old id |
+//! | `upath_ix` | rebuilt | every union path re-inserted in id order, so a later intern of an existing path returns the old id |
 //!
 //! Validation on read: every value decodes without a panic (its kind
 //! known, its pool indices and aggregate ranges in range, its integer
@@ -16,7 +17,8 @@ use hashbrown::HashTable;
 use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 use super::{
-    ConstStore, ConstValue, F_AUX, F_DESIG, F_WIDE, FloatKind, IntBits, Pools, PtrBase, kind,
+    ConstStore, ConstValue, F_AUX, F_DESIG, F_WIDE, FloatKind, IntBits, Pools, PtrBase, X_CODE,
+    X_UPATH, hash_path, kind,
 };
 use crate::ids::{ConstValueId, DeclId, ReflectionId};
 
@@ -46,16 +48,30 @@ impl Pools {
             },
             kind::PTR => {
                 let f = n.flags();
+                let up = n.extra() & X_UPATH != 0;
+                if n.extra() & !(X_CODE | X_UPATH) != 0 {
+                    return false;
+                }
                 let wide = f & (F_AUX | F_WIDE | F_DESIG) != 0;
-                let need = 1 + usize::from(f & F_AUX != 0) + usize::from(f & F_DESIG != 0);
+                if up && !wide {
+                    return false;
+                }
+                let need = 1
+                    + usize::from(f & F_AUX != 0)
+                    + usize::from(f & F_DESIG != 0)
+                    + usize::from(up);
                 if wide && !words(n.b, need) {
                     return false;
                 }
+                if up && self.words[n.b as usize + need - 1] > u64::from(u32::MAX) {
+                    return false;
+                }
+                let code = n.extra() & X_CODE;
                 if f & F_AUX != 0 {
                     let aux = self.words[n.b as usize + 1] as u32;
-                    PtrBase::from_parts_aux(n.extra(), n.a, aux).is_some()
+                    PtrBase::from_parts_aux(code, n.a, aux).is_some()
                 } else {
-                    PtrBase::from_parts(n.extra(), n.a).is_some()
+                    PtrBase::from_parts(code, n.a).is_some()
                 }
             }
             kind::MEMPTR => {
@@ -92,6 +108,15 @@ impl Pools {
         {
             return Err("aggregate ranges out of order or range");
         }
+        if self.upaths.iter().any(|r| {
+            r.len == 0
+                || (r.start as usize)
+                    .checked_add(r.len as usize)
+                    .is_none_or(|e| e > self.paths.len())
+        }) || self.upaths.len() >= u32::MAX as usize
+        {
+            return Err("union path out of range");
+        }
         for i in 1..=self.nodes.len() as u32 {
             let id = ConstValueId::new(i);
             if !self.decodable(id) {
@@ -112,7 +137,7 @@ impl Pools {
 /// The constant store as a snapshot root; see the module docs.
 impl Snap for ConstStore {
     fn put(&self, w: &mut Writer) {
-        let ConstStore { pools, table: _ } = self;
+        let ConstStore { pools, table: _, upath_ix: _ } = self;
         pools.put(w);
     }
 
@@ -129,18 +154,24 @@ impl Snap for ConstStore {
             }
             table
         });
-        Ok(ConstStore { pools, table })
+        let mut upath_ix = HashTable::with_capacity(pools.upaths.len());
+        for i in 1..=pools.upaths.len() as u32 {
+            upath_ix.insert_unique(hash_path(pools.upath(i)), i, |&i| hash_path(pools.upath(i)));
+        }
+        Ok(ConstStore { pools, table, upath_ix })
     }
 
     const SCHEMA_HASH: u64 = SchemaHash::new("root", "ConstStore")
         .field::<Pools>("pools")
         .skip("table", "HashTable<ConstValueId>")
+        .skip("upath_ix", "HashTable<u32>")
         .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
             .hash(Self::SCHEMA_HASH)
             .field::<Pools>("pools")
-            .skip::<HashTable<ConstValueId>>("table");
+            .skip::<HashTable<ConstValueId>>("table")
+            .skip::<HashTable<u32>>("upath_ix");
         if s.register::<Self>(d) {
             Pools::schema(s);
         }
