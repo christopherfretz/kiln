@@ -89,6 +89,14 @@ drop(session); session.into_sema() -> Sema;
   translation unit has N error(s)") on standard error. A command line
   that does not name one C++ source input, or that the driver rejects,
   is `SessionRefused::CommandLine`.
+- **The driver's stages** (WP-2120). `with_eval_session` runs the
+  command line through the front-end library entry's stages
+  (`front_end::prepare`, spec/driver.md "Front-end library entry"): the
+  same checks, toolchain, driver warnings, `-v` block, standard and job
+  as `kiln -fsyntax-only`, with the action forced to `-fsyntax-only`
+  (so `-c` / `-o` on the line are accepted and nothing is written), the
+  PCH probe off, `-verify` and `-include-pch` refused, the module cache
+  read only, and the process environment.
 
 ## 3. Entries
 

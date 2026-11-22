@@ -245,11 +245,16 @@ pub struct Search {
 impl Search {
     /// The driver's search: `flag` and the process environment.
     pub fn from_env(flag: Option<&str>) -> Search {
+        Search::from_environment(flag, &crate::env::Environment::process())
+    }
+
+    /// The driver's search: `flag` and the environment `env`.
+    pub fn from_environment(flag: Option<&str>, env: &crate::env::Environment) -> Search {
         Search {
             flag: flag.map(str::to_owned),
-            env: std::env::var("KILN_LLVM_DIR").ok().filter(|d| !d.is_empty()),
+            env: env.var("KILN_LLVM_DIR").filter(|d| !d.is_empty()),
             build_default: BUILD_DEFAULT_LLVM_DIR.map(str::to_owned),
-            path: std::env::var_os("PATH"),
+            path: env.var_os("PATH"),
             root: String::new(),
         }
     }

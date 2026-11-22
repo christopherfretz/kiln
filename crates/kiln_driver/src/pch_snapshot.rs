@@ -131,7 +131,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 129;
+pub(crate) const FORMAT_VERSION: u32 = 130;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -178,6 +178,9 @@ fn excluded(args: &Args) -> Args {
         no_crash_diagnostics: d.no_crash_diagnostics,
         crash_diagnostics_dir: d.crash_diagnostics_dir,
         crash_for_testing: d.crash_for_testing,
+        // A library entry's (which refuses `-include-pch`).
+        env: d.env,
+        no_side_outputs: d.no_side_outputs,
         // Dependency output, the PCH options themselves, and the
         // `-include`s (the PCH's own are matched by the record; the
         // consumer's later ones are entered after the restore).
@@ -320,7 +323,7 @@ fn identity_and_list(
     add("source path style", format!("{:?}", args.source_path_style));
     add(
         "reproducible time",
-        format!("{:?}", crate::time::reproducible_epoch(args.reproducible_time)),
+        format!("{:?}", crate::time::reproducible_epoch(args.reproducible_time, &args.env)),
     );
     add("options", format!("{rest:#?}"));
     (out, list)

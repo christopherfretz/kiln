@@ -1653,6 +1653,95 @@ A codegen job (`-c`, `-S`, `-emit-llvm`, a link) writes the
 record-layout, vtable-layout and CFG dumps to standard output after the
 parse, in the order above, before its IR or object (WP-1745).
 
+### Front-end library entry (WP-2120 for tooling clients)
+
+`kiln_driver::front_end::run_front_end(argv0, command_line, options, f)`
+runs one `-fsyntax-only` job as a call and calls `f` with the parsed unit
+(`FrontEnd`: the source manager, interner, job engine, AST, Oven,
+preprocessor, target, standard, parser options, main file, token count,
+consulted paths, lookup log) once the AST is final and before anything
+is dropped, whenever a parse happened (errors or not, a fatal error
+included). `FrontEnd`, `FrontEndError`, `JobConfig` are
+`#[non_exhaustive]`.
+
+One code path with the executable. The command line goes through the
+same argument parser and the same stages as `kiln -fsyntax-only`, the
+functions `run_as` / `run_jobs` call (`lib.rs`): `command_line_checks`,
+the toolchain and `toolchain_checks`, the `-v` block, `input_checks`
+plus the driver warnings (`input_stage`), the PCH probe and consumer
+plus the host-call artifact check (`jobs_stage`), the job's standard
+(`job_std`) and a header unit's arguments (`header_unit_args`), then
+the job (`SyntaxJob::run_hooked`, which shares `SyntaxJob::parse` and
+`after_parse` with the executable's job). `front_end::prepare` is that
+sequence; the evaluation session (spec/eval-session.md §2) uses it too.
+
+- Refused before anything runs: an action other than `-fsyntax-only`,
+  or `--help`, `-###`, a `-print-*` / `-dump*` probe, `-M` / `-MM`, a
+  `-fmodule-header` input not built (`NotSyntaxOnly`); other than one
+  input, `-` or an assembler input (`NotOneInput`).
+- Refused with the driver error `drv_front_end_unsupported` (`'<flag>'
+  is not supported by the front-end library entry`): `-verify` and
+  `-include-pch` (written, or made by the PCH probe of `-include`). The
+  PCH snapshot phase does not run (a snapshot PCH is never consumed).
+- Suppressed, not refused: nothing is written but diagnostics. No
+  `-o`, no dependency file (`-MD` is still lexed to the end, as for
+  `-fsyntax-only`), no module file, no `-fconstexpr-report=` /
+  `-fconstexpr-profile` output, no dumps, no `-MJ`, no time trace
+  (`-ftime-trace[=]` is accepted and checked, the trace is not written),
+  no statistics log (`KILN_STATS_LOG` is not read); `--version` prints
+  nothing (`-v`'s block goes to `options.stderr`). The flags stay
+  accepted so that a compile command line runs unchanged.
+- The module-file cache of `import std;` (spec/modules.md §11.12) is
+  read only: a valid entry is used; a miss builds the module in process
+  and stores nothing; no use is noted, nothing is pruned, no stale lock
+  is removed. `-v` says which (`using '<pcm>' for 'std'`, `no entry in '<dir>' for
+  'std'; building it from its source`).
+- Every engine's sink renders to `options.stderr` (text or JSON, as
+  `make_engine`) when set and keeps the first error or fatal error; the
+  report's totals are the engines' own, every diagnostic of every engine
+  counted (the in-process module build's included), `driver_errors` the
+  part reported before the job.
+- `consulted`: `__has_include` / `__has_embed` hits and `#embed`
+  resources (header search's events), in the order first met, each
+  once, without the files the preprocessor entered (their bytes are the
+  source manager's). `content` is the bytes' size and FNV-1a 128 digest
+  (`Content`, `content_digest`): a `__has_include` hit's file as the
+  source manager holds it, a `#embed` / `__has_embed` resource's whole
+  file (not its `limit` / `offset` window); `None` for a `__has_include`
+  hit whose buffer was not loaded.
+- A panic of the front end or of `f` is `FrontEndError::Panicked` (the
+  payload's text) with `own_thread` (a scoped thread of
+  `-fkiln-stack-size=`, stack guard installed) or without (caught on
+  the caller's thread); the panic hook is not touched.
+
+Options (`FrontEndOptions`, `#[non_exhaustive]`, `Default`): `stderr`,
+`record_lookups`, `own_thread` (default on), `pch_probe` (default on;
+off, `-include h` is the header even with `h.pch` or `h.gch` beside
+it: the driver's PCH probe, spec/driver.md "Precompiled headers", does
+not run), and `environment` (an `env::Environment`,
+default the process's). Under a fixed environment the driver reads
+every variable it consults from it and never from the process:
+`KILN_RESOURCE_DIR`, `KILN_LLVM_DIR` and the LLVM search's variables,
+`KILN_BACKEND` / `KILN_HOD`, `PATH` (the GCC driver's and hod's search),
+`SOURCE_DATE_EPOCH` (`__DATE__` / `__TIME__`), `HOME` /
+`XDG_CACHE_HOME` and `KILN_MODULE_CACHE_*` (the module cache); the GCC
+driver run to locate libstdc++ gets exactly that environment.
+Developer switches that change no result (`KILN_BACKTRACE` /
+`RUST_BACKTRACE` of the panic hook, `KILN_PP_PROFILE` of the
+`pp-profile` build, `KILN_WREF_RAW` of the written-references dump)
+still read the process. The working directory is the process's
+(relative paths on the command line resolve against it; the entry never
+calls `set_current_dir`).
+
+`front_end::std_config(std, options)` is the configuration the driver
+builds for `kiln++ -fsyntax-only -std=<std>` with no other flag
+(`JobConfig`): the standard, target, parser options, preprocessor
+options (predefines included; `modules` is `None`), the `#if` evaluator,
+the staged feature queries (`pp_cmd::StagedFeatures`) and the header
+search list, for a caller that runs an in-memory front end exactly as
+configured. `Args::complex_promoted()` is `-fcomplex-arithmetic=promoted`
+as the parser options take it.
+
 ## `-verify`
 
 `-verify` is clang's `-cc1 -verify` (WP-143). The consumer, its

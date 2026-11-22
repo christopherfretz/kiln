@@ -8,17 +8,15 @@
 use std::io::Write as _;
 use std::sync::Arc;
 
-use kiln_diag::{Diag, DiagId, DiagOptions, Format};
+use kiln_diag::{Diag, DiagId, Format};
 use kiln_lex::Interner;
 use kiln_parse::{EvalSession, HostCalls, HostError, HostOut, OpenError};
 use kiln_source::{FileId, SourceManager, Span};
 
-use crate::args::{Args, Lang};
+use crate::args::{Action, Lang};
 use crate::pp_cmd::Job;
 use crate::syntax_cmd::SyntaxJob;
-use crate::{
-    Io, codegen_cmd, emit_arg_error, existing_inputs, input_std, make_engine, rsp, toolchain_of,
-};
+use crate::{Io, codegen_cmd, make_engine, rsp};
 
 /// The finished front end of a translation unit with its session
 /// (spec/eval-session.md §2). Fields may be added.
@@ -68,9 +66,11 @@ impl HostCalls for Placeholder {
 /// Parses the one C++ source input of `command_line` (the driver's
 /// arguments after `argv0`) as `-fsyntax-only` would, opens an
 /// evaluation session on it and calls `f` with the front end, or with
-/// why there is none. The translation unit's diagnostics go to `io`'s
-/// standard error as the driver prints them; runs' diagnostics are
-/// returned in their reports.
+/// why there is none. The command line goes through the driver's stages
+/// as the front-end library entry's does ([`crate::front_end::prepare`],
+/// the PCH probe off), whatever action it names. The translation unit's
+/// diagnostics go to `io`'s standard error as the driver prints them;
+/// runs' diagnostics are returned in their reports.
 pub fn with_eval_session<R>(
     argv0: &str,
     command_line: &[String],
@@ -79,56 +79,46 @@ pub fn with_eval_session<R>(
 ) -> R {
     let stderr = io.stderr;
     let command_line = rsp::expand(command_line);
-    let mut args = Args::parse_as(argv0, &command_line);
+    let mut args =
+        crate::front_end::entry_args(argv0, &command_line, &crate::env::Environment::process());
+    args.action = Action::SyntaxOnly;
     args.host_call_test_handler = false;
     args.host_calls_visible = true;
-    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
-    diag_opts.clang_compat = args.predef.clang_compat.major();
-    let dsm = SourceManager::new();
-    let drv = make_engine(
-        &dsm,
-        &codegen_cmd::driver_diag_options(&diag_opts),
-        stderr.clone(),
-        Some(&args.program),
-    );
-    for e in &args.errors {
-        emit_arg_error(e, &drv);
-    }
-    let tc = toolchain_of(&args, &drv);
-    let inputs = existing_inputs(&args, &drv);
-    let input = match inputs.as_slice() {
-        [i] if i.path != "-" && codegen_cmd::is_source(i) && args.input_lang(i) == Lang::Cxx => {
-            Some(*i)
-        }
-        _ => None,
+    let one_cxx_source = match args.inputs.as_slice() {
+        [i] => i.path != "-" && codegen_cmd::is_source(i) && args.input_lang(i) == Lang::Cxx,
+        _ => false,
     };
-    let std = match input.map(|_| input_std(&args, Lang::Cxx)) {
-        Some(Ok(s)) => Some(s),
-        Some(Err(d)) => {
-            (*d).emit(&drv);
-            None
-        }
-        None => None,
-    };
-    drv.flush();
-    let (Some(input), Some(std)) = (input, std) else { return f(Err(SessionRefused::CommandLine)) };
-    if drv.error_count() != 0 {
+    if !one_cxx_source {
         return f(Err(SessionRefused::CommandLine));
     }
-    let job = Job {
-        args: &args,
-        toolchain: &tc,
-        std,
-        path: &input.path,
-        stdin_text: None,
-        diag_opts: &diag_opts,
-        stderr: stderr.clone(),
-        asm: false,
-    };
+    let mut f = Some(f);
+    let rules = crate::EntryRules { pch_probe: false };
+    let opened = crate::front_end::prepare(&args, rules, &stderr, &stderr, |job| {
+        let f = f.take()?;
+        Some(open(job, &stderr, f))
+    });
+    match (opened.flatten(), f.take()) {
+        (Some(r), _) => r,
+        (None, Some(f)) => f(Err(SessionRefused::CommandLine)),
+        // `f` is taken only by the job, which returns its result.
+        (None, None) => unreachable!("the session's closure was called and its result lost"),
+    }
+}
+
+/// The job of [`with_eval_session`]: the parse, the session opened, `f`
+/// called.
+fn open<R>(
+    job: Job<'_>,
+    stderr: &crate::SharedWriter,
+    f: impl for<'a, 'sm> FnOnce(Result<SessionFrontEnd<'a, 'sm>, SessionRefused>) -> R,
+) -> R {
+    let diag_opts = job.diag_opts;
+    let path = job.path.to_owned();
+    let program = job.args.program.clone();
     let sm = SourceManager::new();
     let interner = Arc::new(Interner::new());
-    let engine = make_engine(&sm, &diag_opts, stderr.clone(), None);
-    let parsed = crate::crash::catching(&input.path, None, &sm, || {
+    let engine = make_engine(&sm, diag_opts, stderr.clone(), None);
+    let parsed = crate::crash::catching(&path, None, &sm, || {
         SyntaxJob(job).parse_retained(&sm, &engine, &interner, Box::new(Placeholder))
     });
     let summary = |engine: &kiln_diag::DiagEngine<'_>| {
@@ -155,6 +145,13 @@ pub fn with_eval_session<R>(
                 OpenError::TuHasErrors { errors } => errors,
                 _ => 1,
             };
+            let dsm = SourceManager::new();
+            let drv = make_engine(
+                &dsm,
+                &codegen_cmd::driver_diag_options(diag_opts),
+                stderr.clone(),
+                Some(&program),
+            );
             Diag::new(DiagId::drv_eval_session_tu_errors, Span::INVALID)
                 .arg(errors.to_string())
                 .emit(&drv);

@@ -3,15 +3,16 @@
 
 /// The fixed time to use, in seconds since the Unix epoch, if any:
 /// `-fkiln-reproducible-time` (epoch 0), else `KILN_REPRODUCIBLE_TIME`
-/// (a non-number means 0), else `SOURCE_DATE_EPOCH` (as clang).
-pub fn reproducible_epoch(flag: bool) -> Option<i64> {
+/// (a non-number means 0), else `SOURCE_DATE_EPOCH` (as clang), both
+/// read from `env`.
+pub fn reproducible_epoch(flag: bool, env: &crate::env::Environment) -> Option<i64> {
     if flag {
         return Some(0);
     }
-    if let Ok(v) = std::env::var("KILN_REPRODUCIBLE_TIME") {
+    if let Some(v) = env.var("KILN_REPRODUCIBLE_TIME") {
         return Some(v.trim().parse().unwrap_or(0));
     }
-    std::env::var("SOURCE_DATE_EPOCH").ok().and_then(|v| v.trim().parse().ok())
+    env.var("SOURCE_DATE_EPOCH").and_then(|v| v.trim().parse().ok())
 }
 
 const MONTHS: [&str; 12] =

@@ -847,6 +847,10 @@ MUST record, for clang-equivalent output:
 - The option suffix (§7.1) is omitted when empty or under
   `-fno-diagnostics-show-option`; notes have none.
 - No word wrapping (D3).
+- `kiln_diag::text_position(sm, &Diagnostic)` gives the header's
+  `<file>`, `<line>` and `<col>` as printed with the location and column
+  shown, or `None` when no location is printed (KF1,
+  `kiln_driver::front_end`).
 
 ### 9.2 Colors
 

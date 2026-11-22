@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The front end as a library call for tooling clients (WP-2120):
+  `kiln_driver::front_end::run_front_end(argv0, command_line, options, f)`
+  runs one `-fsyntax-only` job through the same driver stages as `kiln`
+  and hands `f` the parsed unit (AST, Oven, source manager, preprocessor,
+  the files `__has_include` / `__has_embed` / `#embed` consulted with
+  their size and digest); nothing is written but diagnostics and the
+  `import std;` module cache is read only. Options: a fixed
+  `Environment` (no process variable is read), the PCH probe off.
+  `front_end::std_config(std, options)` gives the configuration of
+  `-std=<std>` with no other flag; the tables an `Ast` holds have
+  (hidden) public paths.
 - Two queries for tooling clients that read the `Ast` after the
   translation unit (WP-2025): `Ast::using_shadows(u)` gives the shadows a
   using-declaration introduced, in introduction order (namespace-, block-

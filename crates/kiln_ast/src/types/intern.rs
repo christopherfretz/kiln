@@ -205,9 +205,11 @@ mod tests {
 }
 
 /// One entry of a [`KeyedTable`]: a four-word key, the entry's canonical
-/// id and its flags.
+/// id and its flags. (Like [`KeyedTable`], public for tooling clients
+/// that name every type an AST holds, WP-2120; the fields are not.)
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-pub(crate) struct KeyedEntry {
+pub struct KeyedEntry {
     pub(crate) key: [u32; 4],
     pub(crate) canon: u32,
     pub(crate) flags: u8,
@@ -215,8 +217,9 @@ pub(crate) struct KeyedEntry {
 
 /// An interned table of fixed four-word keys (template names,
 /// nested-name-specifiers). Index 0 is a dummy.
+#[doc(hidden)]
 #[derive(Debug)]
-pub(crate) struct KeyedTable {
+pub struct KeyedTable {
     pub(crate) entries: Vec<KeyedEntry>,
     pub(super) intern: InternTable,
 }

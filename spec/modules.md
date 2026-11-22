@@ -6127,6 +6127,16 @@ each. The cache is pruned as clang prunes its implicit module cache
   cannot be read. `-v` also says `pruning '<root>'` and `removed unused
   '<entry>'`.
 
+**Read only** (WP-2120). Under the front-end library entry (spec/driver.md
+"Front-end library entry") the cache is read and never written: a hit is
+a valid entry (stamp, then module file) and takes no lock and notes no
+use; a miss builds the module in process, as when the cache cannot be
+written, and stores nothing; there is no pruning and no stale lock is
+removed. The key's executable is the program that calls the entry, so
+`kiln++`'s entries are not that program's. `-v` says `using '<pcm>' for
+'<name>'` or `no entry in '<entry>' for '<name>'; building it from its
+source`.
+
 **Dependency output** (WP-1051). The hook returns the module file and
 the files its build read, as the stamp lists them (on a miss, the list
 the new stamp is written from). `kiln_pp` reports the read through

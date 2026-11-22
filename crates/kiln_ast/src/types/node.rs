@@ -150,9 +150,11 @@ impl Key<'_> {
 
 /// The node arena and its side arenas. A separate struct from the intern
 /// table so that probing (which reads keys back from here) and inserting
-/// borrow disjoint fields.
+/// borrow disjoint fields. Public for tooling clients that name every
+/// type an AST holds (WP-2120); the fields are not.
+#[doc(hidden)]
 #[derive(Debug, kiln_snap::Snap)]
-pub(crate) struct Store {
+pub struct Store {
     pub(crate) nodes: Vec<TypeNode>,
     pub(crate) canon: Vec<QualType>,
     pub(crate) protos: Vec<FuncProto>,

@@ -104,6 +104,13 @@ Buffers:
 - `file_count()`, `text(FileId) -> &str` (always valid UTF-8),
   `file_name(FileId) -> &str`, `load_report(FileId) -> &LoadReport` (empty
   for virtual buffers).
+- `file_ids()` (every buffer, in `FileId` order), `file_origin(FileId) ->
+  FileOrigin` (`Disk`, `Virtual`, `Lazy`), `original_bytes(FileId) ->
+  Option<Cow<[u8]>>`: the bytes a buffer was decoded from, rebuilt from
+  the text and the load report's replacements (borrowed when the file was
+  valid UTF-8; a virtual buffer's text); `None` for a lazy buffer not read
+  yet or whose text is not the file's (a copy, or unavailable). None of
+  the three reads a lazy buffer (KF1, `kiln_driver::front_end`).
 - `loc(FileId, offset) -> Loc` (panics if `offset > len`; `offset == len`
   is the EOF location), `file_span(FileId) -> Span` (`[0, len)`): both in
   the buffer's own range,
