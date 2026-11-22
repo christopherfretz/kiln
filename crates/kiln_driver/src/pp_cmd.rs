@@ -483,9 +483,12 @@ impl Job<'_> {
         result
     }
 
-    /// The header search list of this job (`-I`, the environment's
-    /// `CPATH`-style lists, the sysroot, the GCC installation, the
-    /// standard library and the resource directory, resolved).
+    /// The header search list of this job (`-I` and the other
+    /// command-line directories, the sysroot, the GCC installation, the
+    /// standard library and the resource directory, resolved). No
+    /// environment variable adds to it: kiln reads none of `CPATH`,
+    /// `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH` and
+    /// `SDKROOT` (spec/driver.md "Toolchain").
     pub(crate) fn search_list(&self) -> SearchList {
         let cplusplus = self.std.cplusplus;
         let header_sysroot =

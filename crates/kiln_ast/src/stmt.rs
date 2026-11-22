@@ -209,11 +209,12 @@ pub enum IfKind {
     NotConsteval = 3,
 }
 
-/// The 16-byte statement header (spec/ast.md §6).
+/// The 16-byte statement header (spec/ast.md §6; one byte of padding
+/// after `kind`: the per-kind flags byte was always zero and is gone,
+/// WP-2026, per-kind bits live in `aux`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct StmtNode {
     kind: StmtKind,
-    flags: u8,
     aux: u16,
     loc: Loc,
     a: u32,
@@ -223,15 +224,11 @@ pub struct StmtNode {
 impl StmtNode {
     /// A header (the builder; the module image's loader).
     pub const fn new(kind: StmtKind, aux: u16, loc: Loc, a: u32, b: u32) -> Self {
-        StmtNode { kind, flags: 0, aux, loc, a, b }
+        StmtNode { kind, aux, loc, a, b }
     }
     /// The kind.
     pub const fn kind(&self) -> StmtKind {
         self.kind
-    }
-    /// Per-kind flags.
-    pub const fn flags(&self) -> u8 {
-        self.flags
     }
     /// Per-kind auxiliary value (`IfKind` for `IfStmt`).
     pub const fn aux(&self) -> u16 {

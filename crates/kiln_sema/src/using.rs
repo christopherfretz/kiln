@@ -219,7 +219,8 @@ impl Sema<'_, '_> {
                 let using = self.new_using_decl(name, name_loc, q.nns);
                 let h = DeclHead::new(self.ctx, name, using_loc);
                 let uuie = self.builder().unresolved_using_if_exists(h);
-                let _ = self.introduce_shadow(name, name_loc, uuie);
+                let shadow = self.introduce_shadow(name, name_loc, uuie);
+                self.link_using_shadows(using, shadow.as_slice());
                 return Some(using);
             }
             let msg = self
@@ -242,9 +243,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let using = self.new_using_decl(name, name_loc, q.nns);
-        for &t in &found.decls {
-            let _ = self.introduce_shadow(name, name_loc, t);
-        }
+        let shadows: Vec<DeclId> =
+            found.decls.iter().filter_map(|&t| self.introduce_shadow(name, name_loc, t)).collect();
+        self.link_using_shadows(using, &shadows);
         Some(using)
     }
 
@@ -517,9 +518,9 @@ impl Sema<'_, '_> {
         if self.reverse_using_shadows {
             targets.reverse();
         }
-        for t in targets {
-            let _ = self.introduce_shadow(name, name_loc, t);
-        }
+        let shadows: Vec<DeclId> =
+            targets.into_iter().filter_map(|t| self.introduce_shadow(name, name_loc, t)).collect();
+        self.link_using_shadows(using, &shadows);
         Some(using)
     }
 
@@ -732,13 +733,15 @@ impl Sema<'_, '_> {
         if self.reverse_using_shadows {
             inherited.reverse();
         }
+        let mut shadows = Vec::with_capacity(inherited.len());
         for (target, nominated) in inherited {
             if own.iter().any(|&c| self.hides_ctor(c, target)) {
                 continue;
             }
             let h = DeclHead::new(self.ctx, cname, name_loc).access(access);
-            let _ = self.builder().constructor_using_shadow(h, target, nominated);
+            shadows.push(self.builder().constructor_using_shadow(h, target, nominated));
         }
+        self.link_using_shadows(using, &shadows);
         using
     }
 
@@ -961,6 +964,13 @@ impl Sema<'_, '_> {
             }
         }
         Some(s)
+    }
+
+    /// Records the shadows using-declaration `using` introduced
+    /// (`Ast::using_shadows`, spec/ast.md §4.2; WP-2025).
+    pub(crate) fn link_using_shadows(&mut self, using: DeclId, shadows: &[DeclId]) {
+        let r = self.builder().set_using_shadows(using, shadows);
+        debug_assert!(r.is_ok(), "using-declaration shadows linked twice: {r:?}");
     }
 
     /// "target of using declaration conflicts with declaration already in
@@ -1381,11 +1391,14 @@ impl Sema<'_, '_> {
             .members(def)
             .filter(|&m| self.kind_of(m) == DeclKind::EnumConstant)
             .collect();
-        for c in enumerators {
-            if let Some(n) = self.ast.decls.get(c).name().as_ident() {
-                let _ = self.introduce_shadow(DeclName::ident(n), name_loc, c);
-            }
-        }
+        let shadows: Vec<DeclId> = enumerators
+            .into_iter()
+            .filter_map(|c| {
+                let n = self.ast.decls.get(c).name().as_ident()?;
+                self.introduce_shadow(DeclName::ident(n), name_loc, c)
+            })
+            .collect();
+        self.link_using_shadows(ud, &shadows);
         ud
     }
 

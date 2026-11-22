@@ -166,7 +166,6 @@ const COLD_MAP_NAMES: &[&str] = &[
     "inheriting_ctor",
     "init_fp",
     "injection_point",
-    "instantiated_from",
     "key_function",
     "lexical_ctx",
     "lib_builtin",
@@ -182,6 +181,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "pseudo_dtor_first",
     "pseudo_dtor_name",
     "record_pack",
+    "shadow_using",
     "size_of_pack_origin",
     "size_of_pack_partial",
     "source_loc",
@@ -195,6 +195,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "ttp_owner",
     "typedef_for_anon",
     "union_field",
+    "using_shadows",
 ];
 
 /// A cold map is its name and its entries (spec/ast.md "Snapshots"): the

@@ -270,7 +270,7 @@ impl Sema<'_, '_> {
             }
             _ => d,
         };
-        self.semantic_parent(self.ast.first(d))
+        self.ast.semantic_parent(self.ast.first(d))
     }
 
     /// The access of the class member or base specifier `x` reflects

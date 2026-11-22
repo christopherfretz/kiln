@@ -4868,7 +4868,16 @@ kinds:
   target's. Its `prev` is the earlier shadow of the same target in the
   same scope that it replaces in lookup (a repeated using-declarator).
   The reader rebuilds each one with `AstBuilder::using_shadow`, so the
-  shadow set of a using-declarator is the records that follow it.
+  shadow set of a using-declarator is the records that follow it. A
+  second word (WP-2025, `IMAGE_VERSION` 61) is the record of the
+  using-declaration or using-enum-declaration that introduced the
+  shadow, an earlier record of the same context, or `NONE`: the reader
+  links each using-declaration to its shadows in record order
+  (`AstBuilder::set_using_shadows`, so `Ast::using_shadows` and
+  `Ast::shadow_using` answer as in the replay). The writer
+  (`shadow_usings`) refuses a carried using-declaration one of whose
+  shadows has no record after it in introduction order (a fallback,
+  never a shorter list).
 - kind 22, *using-directive*: an unnamed record whose payload is the
   nominated namespace's first record. The reader adds the directive to
   the lookup tables of its context's namespace (or the translation
@@ -5312,7 +5321,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 58` since WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 61` since WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -5531,7 +5540,9 @@ class template's pattern (S4). The payloads are:
 - member reference (S4b): the specialization reference record and the
   pattern member record.
 - using-declaration (S6): the qualifier (n, then `step`s);
-- using-shadow, namespace alias and using-enum (S6): the target record;
+- using-shadow (S6): the target record, then the using-declaration's
+  record or `NONE` (WP-2025);
+- namespace alias and using-enum (S6): the target record;
 - using-directive (S6): the nominated namespace's first record.
 
 **Bodies (S2, WP-1064).** The four body sections follow the lookup

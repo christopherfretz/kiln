@@ -70,7 +70,7 @@ pub(super) fn class_using_rec_ok(img: &Image, class: &DeclRec, d: &DeclRec, i: u
     }
     match &d.payload {
         Payload::Using { steps } => !steps.is_empty() && super::steps_ok(img, steps, i),
-        Payload::Shadow { target } => {
+        Payload::Shadow { target, .. } => {
             (*target as usize) < i
                 && img.decls.get(*target as usize).is_some_and(|t| {
                     t.flags & DEP == 0

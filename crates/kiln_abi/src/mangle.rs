@@ -12,9 +12,7 @@ use kiln_ast::Ast;
 use kiln_ast::RawId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
-use kiln_ast::decl::{
-    DeclFlags, DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage,
-};
+use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, TemplLinkKind, VarStorage};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{
     ArgListId, ConstValueId, DeclId, ExprId, QualType, TemplateNameId, TemplateParamListId,
@@ -396,64 +394,18 @@ pub fn local_extern_ns(ast: &Ast, d: DeclId) -> Option<DeclId> {
 }
 
 /// True if the function or variable `d` has C language linkage
-/// ([dcl.link]/4-5; clang `getDeclLanguageLinkage`, `isExternC`): its
-/// first declaration is lexically inside an `extern "C"` linkage
-/// specification, through enclosing functions and classes
-/// ([`in_extern_c_context`]: a block-scope `extern` declaration, or a
-/// friend declared in a class, in an `extern "C"` block), and it has
-/// external linkage. A class member has C++ language linkage; an entity
-/// with internal linkage (`extern "C" { static int x; }`, a `const`
-/// variable in a braced specification) or a local variable has none,
-/// and is mangled (`_ZL1x`).
+/// ([dcl.link]/4-6): [`Ast::is_extern_c`], which owns the rule (spec/ast.md
+/// §4.5). An entity with internal linkage (`extern "C" { static int x;
+/// }`, a `const` variable in a braced specification) or a local variable
+/// has none, and is mangled (`_ZL1x`).
 pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
-    let first = ast.first(d);
-    let n = ast.decls.get(first);
-    // In C every entity with external linkage has C language linkage
-    // (clang `getDeclLanguageLinkage`): a local variable has none unless
-    // it is a block-scope `extern` declaration.
-    if ast.lang_c {
-        if !matches!(n.kind(), DeclKind::Function | DeclKind::Var) {
-            return false;
-        }
-        let local_var = n.kind() == DeclKind::Var
-            && enclosing_function(ast, first).is_some()
-            && ast.decls.var(first).is_none_or(|v| v.spec.storage() != VarStorage::Extern);
-        return !local_var && !internal_by_storage(ast, first);
-    }
-    let Some(c) = n.ctx() else { return false };
-    let ck = ast.decls.get(c).kind();
-    if is_record_kind(ck) {
-        return false;
-    }
-    if is_function_kind(ck)
-        && n.kind() != DeclKind::Function
-        && ast.decls.var(first).is_none_or(|v| v.spec.storage() != VarStorage::Extern)
-    {
-        return false;
-    }
-    in_extern_c_context(ast, first) && !has_internal_linkage(ast, first)
+    ast.is_extern_c(d)
 }
 
 /// True if `d` is lexically inside an `extern "C"` linkage
-/// specification, the innermost one deciding, through any enclosing
-/// namespaces, functions and classes (clang `isInExternCContext`).
+/// specification, the innermost one deciding ([`Ast::in_extern_c_context`]).
 pub fn in_extern_c_context(ast: &Ast, d: DeclId) -> bool {
-    let mut c = ast.decls.lexical_ctx(d);
-    for _ in 0..10_000 {
-        let Some(ctx) = c else { return false };
-        match ast.decls.get(ctx).kind() {
-            DeclKind::LinkageSpec => {
-                return ast
-                    .decls
-                    .scope(ctx)
-                    .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
-            }
-            DeclKind::TranslationUnit => return false,
-            _ => {}
-        }
-        c = ast.decls.lexical_ctx(ctx);
-    }
-    false
+    ast.in_extern_c_context(d)
 }
 
 fn is_record_kind(k: DeclKind) -> bool {
@@ -478,63 +430,19 @@ fn is_function_kind(k: DeclKind) -> bool {
 
 /// True if `ns` is an unnamed namespace.
 fn is_anon_ns(ast: &Ast, ns: DeclId) -> bool {
-    ast.decls.namespace(ns).is_some_and(|n| n.flags & NamespaceData::ANONYMOUS != 0)
+    ast.is_anonymous_namespace(ns)
 }
 
 /// True if some enclosing namespace of `d` is unnamed.
 #[must_use]
 pub fn in_anon_ns(ast: &Ast, d: DeclId) -> bool {
-    let mut c = ast.decls.get(d).ctx();
-    while let Some(ctx) = c {
-        if ast.decls.get(ctx).kind() == DeclKind::Namespace && is_anon_ns(ast, ctx) {
-            return true;
-        }
-        c = ast.decls.get(ctx).ctx();
-    }
-    false
+    ast.in_anonymous_namespace(d)
 }
 
 /// True if the namespace-scope function or variable `d` has internal
-/// linkage by its own declaration ([basic.link]/3): `static`, or a
-/// non-`extern`/non-`inline` non-volatile `const` variable.
+/// linkage by its own declaration ([basic.link]/3; [`Ast::internal_by_storage`]).
 fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
-    let first = ast.first(d);
-    let n = ast.decls.get(first);
-    if !is_file_context(ast, first) {
-        return false;
-    }
-    // clang `internal_linkage` (a class's too: clang
-    // `isInternalLinkageDecl` mangles it with `L`).
-    if ast.has_internal_linkage_attr(first) {
-        return true;
-    }
-    match n.kind() {
-        DeclKind::Function => {
-            ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static)
-        }
-        DeclKind::Var | DeclKind::VarTemplateSpecialization => {
-            let Some(v) = ast.decls.var(first) else { return false };
-            if v.spec.storage() == VarStorage::Static {
-                return true;
-            }
-
-            let q = ast.types.canonical(n.ty().unwrap_or(QualType::INT));
-            // [basic.link]/3.2: only a non-volatile `const` type gives
-            // internal linkage (`const volatile int cv = 1;` is external).
-            // P2788: a `const` variable attached to a named module has
-            // module (or, exported, external) linkage.
-            // In C a file-scope `const` object has external linkage
-            // ([C17 6.2.2]/5).
-            !ast.lang_c
-                && const_non_volatile(ast, q)
-                && !v.spec.is_inline()
-                && (!ast.modules.active || ast.module_attachment(first).is_none())
-                && v.spec.storage() != VarStorage::Extern
-                && !ast.decls.is_single_line_linkage(first)
-                && !matches!(v.templ.get(), Some((TemplLinkKind::Specialization, _)))
-        }
-        _ => false,
-    }
+    ast.internal_by_storage(d)
 }
 
 /// True if `d` is emitted with internal linkage: it has internal linkage
@@ -924,19 +832,6 @@ fn fn_is_inline(ast: &Ast, f: DeclId) -> bool {
                 || x.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
         })
     })
-}
-
-/// Whether canonical type `q` is const-qualified and not volatile
-/// ([basic.link]/3.2), the qualifiers of an array being those of its
-/// element type ([basic.type.qualifier]/3).
-fn const_non_volatile(ast: &Ast, q: QualType) -> bool {
-    let mut q = q;
-    let mut quals = ast.types.effective_quals(q);
-    while let Some(e) = ast.types.element(q) {
-        q = ast.types.canonical(e);
-        quals |= ast.types.effective_quals(q);
-    }
-    quals.is_const() && !quals.is_volatile()
 }
 
 /// The spelling of `d`'s name (empty for unnamed entities).

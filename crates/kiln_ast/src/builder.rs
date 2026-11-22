@@ -270,6 +270,27 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// Records the shadows using-declaration `using` (a `Using` or
+    /// `UsingEnum`) introduced, in introduction order, for
+    /// [`Ast::using_shadows`] and [`Ast::shadow_using`] (spec/ast.md §4.2,
+    /// WP-2025). Nothing is recorded for an empty `shadows`. Called once
+    /// per using-declaration, after its last shadow.
+    ///
+    /// # Errors
+    /// If `using` already has shadows or a shadow already has a
+    /// using-declaration.
+    pub fn set_using_shadows(
+        &mut self,
+        using: DeclId,
+        shadows: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        if shadows.is_empty() {
+            return Ok(());
+        }
+        let list = self.ast.lists.push(shadows);
+        self.ast.decls.set_using_shadows(using, list, shadows)
+    }
+
     /// The implicit `ConstructorUsingShadow` an inheriting-constructor
     /// using-declaration (`using B::B;`, [namespace.udecl]/3) introduces
     /// into class `h.ctx` for constructor (or constructor template)

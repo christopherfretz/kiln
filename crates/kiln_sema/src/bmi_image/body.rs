@@ -1080,7 +1080,7 @@ pub(super) fn local_using_ok(img: &Image, i: usize, d: &DeclRec) -> bool {
     };
     match &d.payload {
         Payload::Using { steps } => d.name != NONE && super::steps_ok(img, steps, i),
-        Payload::Shadow { target } => before(*target).is_some_and(|t| {
+        Payload::Shadow { target, .. } => before(*target).is_some_and(|t| {
             t.flags & DEP == 0
                 && !is_local(img, t)
                 && same_name(d, t)
@@ -1146,7 +1146,8 @@ fn param_dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
 /// when the chain does not point strictly backwards.
 fn shadow_end(img: &Image, w: u32) -> Option<u32> {
     let mut at = w;
-    while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) = img.decls.get(at as usize)
+    while let Some(DeclRec { payload: Payload::Shadow { target, .. }, .. }) =
+        img.decls.get(at as usize)
     {
         if *target >= at {
             return None;
@@ -2223,7 +2224,7 @@ impl Writer<'_, '_, '_> {
                 // A block's FP state is carried ([`Bodies::fp`], WP-1923):
                 // `emit` writes its index.
                 let aux_ok = k == StmtKind::CompoundStmt || stmt_aux_ok(k, n.aux(), 0);
-                if n.flags() != 0 || !aux_ok {
+                if !aux_ok {
                     return Err("a statement the image does not carry");
                 }
                 let v = self.slots_fv(node, stmt_shape(k), [n.a(), n.b()])?;

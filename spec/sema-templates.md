@@ -1966,8 +1966,7 @@ pub struct TemplateInfo {                    // 24 B
 | pattern of a class, function or variable template, or of a partial specialization | `Pattern(TemplateIndex)` |
 | class, function or variable specialization (implicit or explicit) | `Specialization(SpecId)` |
 | member function, static data member, member class or member enum of a class specialization | `MemberOfSpecialization(MemberSpecId)` |
-| friend template whose target is dependent | `DependentFriend` |
-| any other decl that was instantiated | `instantiated_from` (sparse map) |
+| any other decl that was instantiated | none: a local one is found through the running `Substituter`'s `LocalInstScope` (the `DependentFriend` link and the cold `instantiated_from` map once reserved here had no writer and were removed, WP-2026) |
 
 `member_map` serves `find_instantiated_decl` (§5.3) for members of class
 specializations. Function-local decls use the scoped `LocalInstScope` of

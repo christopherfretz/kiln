@@ -1620,12 +1620,7 @@ impl<'a> Cg<'a> {
             }
             if matches!(
                 ast.templ_link(x).get(),
-                Some((
-                    TemplLinkKind::Pattern
-                        | TemplLinkKind::PartialSpecialization
-                        | TemplLinkKind::DependentFriend,
-                    _
-                ))
+                Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _))
             ) {
                 return true;
             }

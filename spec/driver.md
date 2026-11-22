@@ -1196,6 +1196,16 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 list is realized by `kiln_pp::SearchList::build` (`spec/pp.md` "Header
 search"), which drops nonexistent and duplicate directories.
 
+**No environment search lists** (WP-2026). The search list comes from
+the command line and the toolchain alone: kiln reads none of `CPATH`,
+`C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `OBJC_INCLUDE_PATH` (clang adds
+their directories after `-I` and, for the language-specific ones, as
+`-isystem`) and `SDKROOT` (clang's sysroot default on Darwin, a target
+kiln does not support). A build that sets them gets the same search list
+as one that does not; pass the directories as `-I`/`-isystem` (or
+`--sysroot`) instead. This is a deviation from clang 19 ("Deviations
+from clang 19").
+
 ### LLVM discovery (WP-1016)
 
 kiln 1.0 supports LLVM **22 and 19** (`llvm::SUPPORTED_LLVM_MAJORS`, in

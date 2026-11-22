@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Two queries for tooling clients that read the `Ast` after the
+  translation unit (WP-2025): `Ast::using_shadows(u)` gives the shadows a
+  using-declaration introduced, in introduction order (namespace-, block-
+  and class-scope using-declarations, `using enum`, inheriting
+  constructors, and a dependent using-declaration's instantiations), and
+  `Ast::shadow_using(s)` the reverse; `Ast::language_linkage(d)` gives a
+  function's or variable's language linkage ([dcl.link]: C, C++ or none),
+  from the one computation mangling and reflection now share (which also
+  gives a block-scope `extern` declaration external linkage in
+  reflection's `has_external_linkage`). Module images carry the link
+  (image format 61); PCH snapshot format 127 (spec/ast.md §4.2, §4.5).
 - Two facts overload resolution and instantiation read now stay in the
   `Ast` after the translation unit, for tooling clients (WP-2020,
   WP-2021): an overloaded member access's qualifier, explicit template
