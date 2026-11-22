@@ -4,6 +4,8 @@
 //! the evaluation is not silent, while the call stack is still intact.
 
 use std::cmp::Ordering;
+#[cfg(feature = "split")]
+use std::sync::Arc;
 
 use kiln_ast::consts::FloatKind;
 use kiln_ast::expr::ExprKind;
@@ -23,12 +25,14 @@ use crate::mem::{
 };
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::softfloat::Rm;
+use crate::split::{self, Phase};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
 use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
 pub(crate) mod exc;
+mod fast;
 mod life;
 mod meta;
 #[cfg(feature = "op-stats")]
@@ -529,6 +533,59 @@ impl Fault {
 
 type Exit = Result<(), (Fault, usize)>;
 
+/// The cost split's phase of the instruction `op` ([`crate::split`]): the
+/// one it starts in (an arm moves to another for its checks, its memo
+/// lookup or a bridge callback).
+#[cfg(feature = "split")]
+fn op_phase(op: Op) -> Phase {
+    match op {
+        Op::PtrAdd
+        | Op::PtrSub
+        | Op::PtrCmp
+        | Op::PtrToBool
+        | Op::Field
+        | Op::Downcast
+        | Op::VBase
+        | Op::Load
+        | Op::Store
+        | Op::InitStore
+        | Op::LoadBits
+        | Op::StoreBits
+        | Op::LoadLane
+        | Op::StoreLane
+        | Op::Copy
+        | Op::ZeroInit
+        | Op::Alloc
+        | Op::ScopeEnter
+        | Op::ScopeExit
+        | Op::GlobalAddr
+        | Op::VoidCast
+        | Op::New
+        | Op::Delete
+        | Op::Placement
+        | Op::MakeConst
+        | Op::SetActive
+        | Op::Builtin
+        | Op::EndLife
+        | Op::AddrInt
+        | Op::MpCast
+        | Op::MpAddr
+        | Op::MpFn => Phase::Memory,
+        Op::EnumCheck | Op::ActiveCheck | Op::RefChk | Op::MpActive | Op::EndParam => Phase::Checks,
+        Op::Call
+        | Op::CallInd
+        | Op::VCall
+        | Op::Ret
+        | Op::PushCleanup
+        | Op::TryEnter
+        | Op::Throw
+        | Op::Unwind
+        | Op::Catch
+        | Op::CatchBegin => Phase::Frames,
+        _ => Phase::Dispatch,
+    }
+}
+
 /// The value length of a scalar of `kind` in memory.
 #[inline]
 pub(crate) fn value_len(size: u64, kind: TyKind) -> u64 {
@@ -614,7 +671,7 @@ impl Oven {
         let excs = self.exc.lens();
         let exc_base = std::mem::replace(&mut self.exc.base, excs);
         let entry_pc = self.funcs[func as usize].entry as usize;
-        let r = self.run_loop(b, func, entry_pc, fb);
+        let r = self.run_loop_gated(b, func, entry_pc, fb);
         if self.hooks.calls {
             self.hook_call_unwind(b, entry);
         }
@@ -692,6 +749,10 @@ impl Oven {
         }
         if aux & 0xff == crate::kbc::bi::META_EXC {
             return self.exec_meta_exc(b, pc, fb);
+        }
+        if aux & 0xff == crate::kbc::bi::TRAITS {
+            let nb = fb + arg(1);
+            return Ok(u128::from(self.traits_fast(nb, aux >> 8, OTy(t1), OTy(t2))));
         }
         let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {
@@ -809,7 +870,7 @@ impl Oven {
         }
         self.run.cev_warn = false;
         self.mem.checkpoint(mode);
-        let r = self.run_loop(b, func, pc0, fb as u32);
+        let r = self.run_loop_gated(b, func, pc0, fb as u32);
         if self.hooks.calls {
             self.hook_call_unwind(b, entry);
         }
@@ -890,7 +951,45 @@ impl Oven {
         Ok(())
     }
 
+    /// [`Oven::run_loop`], restoring the cost split's phase after it
+    /// when the split is armed (feature `split`, [`crate::split`]): the
+    /// phase the run interrupted (a bridge callback's, for a nested
+    /// evaluation).
+    #[inline]
+    fn run_loop_gated(&mut self, b: &mut dyn SemaBridge, func: u32, pc0: usize, fb0: u32) -> Exit {
+        #[cfg(feature = "split")]
+        if let Some(s) = self.hooks.split.as_ref() {
+            let sp = Arc::clone(&s.shared);
+            let old = sp.get();
+            let r = self.run_loop(b, func, pc0, fb0);
+            sp.set(old);
+            return r;
+        }
+        self.run_loop(b, func, pc0, fb0)
+    }
+
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, pc0: usize, fb0: u32) -> Exit {
+        // The cost split's handle while it is armed. Without the `split`
+        // feature it is a constant `None` and every phase store below is
+        // compiled out: the loop is the uninstrumented one (spec/oven.md
+        // "Cost split"). A second instantiation of the loop for the split,
+        // chosen at run time, cost 3-4% of the instructions of call-heavy
+        // evaluations through changed inlining (WP-1864).
+        #[cfg(feature = "split")]
+        let sp: Option<Arc<split::Shared>> =
+            self.hooks.split.as_ref().map(|s| Arc::clone(&s.shared));
+        #[cfg(feature = "split")]
+        let spl = sp.as_deref();
+        #[cfg(not(feature = "split"))]
+        let spl: Option<&split::Shared> = None;
+        macro_rules! phase {
+            ($p:ident) => {
+                #[cfg(feature = "split")]
+                if let Some(s) = spl {
+                    s.set(Phase::$p);
+                }
+            };
+        }
         let mut pc = pc0;
         let mut fb = fb0 as usize;
         self.grow_regs(fb + self.funcs[func as usize].nregs as usize + 1);
@@ -915,6 +1014,10 @@ impl Oven {
             let aux = w >> 8;
             #[cfg(feature = "op-stats")]
             opstats::count(op);
+            #[cfg(feature = "split")]
+            if let Some(s) = spl {
+                s.set(op_phase(op));
+            }
             macro_rules! arg {
                 ($i:expr) => {
                     win[1 + $i] as usize
@@ -1186,7 +1289,7 @@ impl Oven {
                 Op::Load => {
                     let ty = OTy(arg!(2) as u32);
                     let raw = reg!(1) as u64;
-                    match self.load_desig(raw, udesig::desig_of(reg!(1)), ty, aux) {
+                    match self.load_desig_in(raw, udesig::desig_of(reg!(1)), ty, aux, spl) {
                         Ok(v) => reg!(0) = v,
                         Err(f) => fail!(f),
                     }
@@ -1200,6 +1303,8 @@ impl Oven {
                         if op == Op::InitStore { (ak::INIT, true) } else { (aux, false) };
                     let r = if op == Op::InitStore && is_addr_int(v) && aux != 0 {
                         self.store_addr_int(raw, ty, v)
+                    } else if cfg!(feature = "split") {
+                        self.store_desig_in(raw, udesig::desig_of(reg!(0)), ty, v, k, init, spl)
                     } else {
                         self.store_desig(raw, udesig::desig_of(reg!(0)), ty, v, k, init)
                     };
@@ -1265,10 +1370,12 @@ impl Oven {
                         }
                         continue;
                     }
-                    if self.mem.life_above(m as u64)
-                        && let Err(f) = self.scope_life(b.ast(), m as u64, life::Objs::All)
-                    {
-                        fail!(f);
+                    if self.mem.life_above(m as u64) {
+                        phase!(Checks);
+                        if let Err(f) = self.scope_life(b.ast(), m as u64, life::Objs::All) {
+                            fail!(f);
+                        }
+                        phase!(Memory);
                     }
                     self.mem.release(m as u64, &self.types);
                     pc += 2;
@@ -1291,7 +1398,7 @@ impl Oven {
                         }
                         Err(f) => fail!(f),
                     };
-                    match self.enter(b, callee, pc, pc + 5, fb, base) {
+                    match self.enter(b, callee, pc, pc + 5, fb, base, spl) {
                         Ok(Some((npc, nfb))) => {
                             pc = npc;
                             fb = nfb;
@@ -1322,7 +1429,7 @@ impl Oven {
                         }
                         p.off
                     };
-                    match self.enter(b, callee, pc, pc + 3, fb, arg!(1)) {
+                    match self.enter(b, callee, pc, pc + 3, fb, arg!(1), spl) {
                         Ok(Some((npc, nfb))) => {
                             pc = npc;
                             fb = nfb;
@@ -1348,9 +1455,12 @@ impl Oven {
                     if let Some(fr) = self.stack.last()
                         && fr.mark != BOTTOM
                         && self.mem.life_above(fr.mark)
-                        && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Locals)
                     {
-                        fail!(f);
+                        phase!(Checks);
+                        if let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Locals) {
+                            fail!(f);
+                        }
+                        phase!(Frames);
                     }
                     let v = reg!(0);
                     self.regs[fb] = v;
@@ -1369,6 +1479,7 @@ impl Oven {
                     }
                     self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
                     if fr.memo {
+                        phase!(Memo);
                         self.finish_memo(v);
                     }
                     if self.stack.len() <= self.run.entry {
@@ -1388,6 +1499,7 @@ impl Oven {
                             p
                         }
                         GState::Unresolved => {
+                            phase!(Bridge);
                             let cur = self.stack[self.stack.len() - 1].func;
                             let top = fb + self.funcs[cur as usize].nregs as usize + 1;
                             self.resolve_global(b, g as u32, top as u32)
@@ -2328,7 +2440,7 @@ impl Oven {
         let base = self.funcs[cur as usize].nregs as usize;
         self.grow_regs(fb + base + 2);
         self.regs[fb + base] = u128::from(c.this);
-        self.enter(b, c.func, c.pc as usize, ret, fb, base).map_err(|f| (f, c.pc as usize))
+        self.enter(b, c.func, c.pc as usize, ret, fb, base, None).map_err(|f| (f, c.pc as usize))
     }
 
     /// `Op::PushCleanup`: registers the destruction of the object (or
@@ -2415,11 +2527,13 @@ impl Oven {
 
     /// Enters function `callee` (called by the instruction at `pc`,
     /// returning to `ret_pc`, arguments at `fb + base`): the new pc and
-    /// frame base, or `None` if a memoized result was used.
+    /// frame base, or `None` if a memoized result was used. `sp` is the
+    /// cost split's handle when it is armed ([`crate::split`]; `None`, a
+    /// constant, from the unarmed loop and `run_cleanup`).
     // Always inlined: `run_cleanup` is a second caller, and an
     // outlined `enter` costs ~6% of the instructions of a call-heavy
     // evaluation (bench/oven/churn-tree.cpp).
-    #[allow(clippy::inline_always)]
+    #[allow(clippy::inline_always, clippy::too_many_arguments)]
     #[inline(always)]
     fn enter(
         &mut self,
@@ -2429,6 +2543,7 @@ impl Oven {
         ret_pc: usize,
         fb: usize,
         base: usize,
+        sp: Option<&split::Shared>,
     ) -> Result<Option<(usize, usize)>, Fault> {
         if matches!(self.funcs[callee as usize].state, FState::Stub | FState::Undefined) {
             self.hook_compile(b, callee);
@@ -2448,6 +2563,9 @@ impl Oven {
         let memo = f.memo && self.memo.enabled();
         let (entry, nregs) = (f.entry as usize, f.nregs as usize);
         if memo {
+            if let Some(s) = sp {
+                s.set(Phase::Memo);
+            }
             // A call's result can depend on the evaluation context
             // (`__builtin_is_constant_evaluated` in a callee): the context
             // is part of the key, with the plain bit (consteval blocks).
@@ -2495,6 +2613,9 @@ impl Oven {
             self.mem.peak = live;
             self.mem.arena_peak = arena;
             self.run.maxd = active + 1;
+            if let Some(s) = sp {
+                s.set(Phase::Frames);
+            }
         }
         self.run.counters.calls += 1;
         self.run.maxd = self.run.maxd.max(active + 1);
@@ -3947,18 +4068,41 @@ impl Oven {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn load_desig(&self, raw: u64, desig: u32, ty: OTy, k: u32) -> Result<u128, Fault> {
+        self.load_desig_in(raw, desig, ty, k, None)
+    }
+
+    /// [`Oven::load_desig`], recording the cost split's phases through
+    /// `split` when it is armed ([`crate::split`]): the pointer's
+    /// allocation and bounds and the read are the memory model, the union,
+    /// initialization and pointer-ness tests are checks.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub(crate) fn load_desig_in(
+        &self,
+        raw: u64,
+        desig: u32,
+        ty: OTy,
+        k: u32,
+        split: Option<&split::Shared>,
+    ) -> Result<u128, Fault> {
         let info = self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) =
             self.rmw_check(raw, len, ty, k).map_err(|f| self.desig_first(raw, desig, ty, k, f))?;
+        if let Some(s) = split {
+            s.set(Phase::Checks);
+        }
         if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
             self.slow_access(a, raw, desig, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
             return Err(fault(MemFault::Uninit));
+        }
+        if let Some(s) = split {
+            s.set(Phase::Memory);
         }
         let v = sp.read(abs, len);
         if sp.any_ptr(abs, len) != is_ptr && !(is_ptr && v == 0) {
@@ -3996,6 +4140,23 @@ impl Oven {
         k: u32,
         init: bool,
     ) -> Result<(), Fault> {
+        self.store_desig_in(raw, desig, ty, v, k, init, None)
+    }
+
+    /// [`Oven::store_desig`], recording the cost split's phases through
+    /// `split` when it is armed, as [`Oven::load_desig_in`] does.
+    #[allow(clippy::inline_always, clippy::too_many_arguments)]
+    #[inline(always)]
+    pub(crate) fn store_desig_in(
+        &mut self,
+        raw: u64,
+        desig: u32,
+        ty: OTy,
+        v: u128,
+        k: u32,
+        init: bool,
+        split: Option<&split::Shared>,
+    ) -> Result<(), Fault> {
         let info = *self.types.info(ty);
         let len = value_len(info.size, info.kind);
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
@@ -4004,6 +4165,9 @@ impl Oven {
             .mem
             .check(raw, len, true)
             .map_err(|f| self.desig_first(raw, desig, ty, k, fault(f)))?;
+        if let Some(s) = split {
+            s.set(Phase::Checks);
+        }
         if !init && let Some(f) = write_fault(st, a, ty) {
             return Err(fault(f));
         }
@@ -4025,6 +4189,9 @@ impl Oven {
                 self.desig_check(raw, desig, ty, k)?;
             }
             self.union_path_in(aty, raw, ty, k)?;
+        }
+        if let Some(s) = split {
+            s.set(Phase::Memory);
         }
         // A pointer keeps its `void *` tag (`kbc::VOID_TAG`) and its union
         // member designator (`vm/udesig.rs`) in its mark; static memory,

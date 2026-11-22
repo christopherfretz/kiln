@@ -968,6 +968,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
     }
 
+    /// Arms the evaluator's cost split (`-fconstexpr-profile-split`;
+    /// spec/oven.md "Cost split"). Call before parsing.
+    pub fn set_constexpr_profile_split(&mut self) {
+        if let Some(o) = &mut self.oven {
+            o.set_profile_split(true);
+        }
+    }
+
     /// The AST and the evaluator, at the end of the translation unit (the
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
     pub fn into_parts(self) -> (Ast, Oven) {

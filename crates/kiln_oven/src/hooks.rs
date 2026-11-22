@@ -20,6 +20,7 @@ use kiln_source::Loc;
 use kiln_source::trace::{self, Arg, Span};
 
 use crate::profile::{Level, Profile, Spent};
+use crate::split::{Phase, Split};
 use crate::{Cost, EvalContext, EvalKind, Oven, SemaBridge, notes};
 
 /// The hooks' switches and the open call marks.
@@ -40,6 +41,13 @@ pub(crate) struct Hooks {
     marks: Vec<CallMark>,
     /// The profile sink (`-fconstexpr-stats`, `-fconstexpr-profile`).
     pub(crate) prof: Option<Box<Profile>>,
+    /// The cost split's sampler (`-fconstexpr-profile-split`,
+    /// [`crate::split`]): while armed, the VM records its phases. Only a
+    /// build with the `split` feature arms it.
+    pub(crate) split: Option<Box<Split>>,
+    /// The cost split was asked for (armed or not: a build without the
+    /// `split` feature reports it unavailable).
+    pub(crate) split_asked: bool,
 }
 
 impl Hooks {
@@ -102,8 +110,22 @@ impl Hooks {
         let trace = trace::enabled();
         let level = self.prof.as_ref().map_or(Level::Off, |p| p.level);
         self.trace_calls = trace && trace::verbose();
-        self.on = trace || level != Level::Off;
+        self.on = trace || level != Level::Off || self.split.is_some();
         self.calls = self.trace_calls || level == Level::Calls;
+    }
+
+    /// Records the cost split's phase `p` while the VM runs (the phase is
+    /// not [`Phase::Idle`]), when the split is armed; returns the phase it
+    /// replaced. Cold paths only: the VM's hot loop stores through its own
+    /// handle.
+    #[inline]
+    pub(crate) fn split_phase(&self, p: Phase) -> Option<Phase> {
+        let s = self.split.as_ref()?;
+        let old = s.shared.get();
+        if old != Phase::Idle {
+            s.shared.set(p);
+        }
+        Some(old)
     }
 
     fn profiling_calls(&self) -> bool {
@@ -354,7 +376,11 @@ impl Oven {
     fn traced_compile(&mut self, b: &mut dyn SemaBridge, func: u32) {
         let span = trace::begin_on("OvenCompile");
         let start = self.hooks.prof.is_some().then(Instant::now);
+        let phase = self.hooks.split_phase(Phase::Compile);
         self.compile_func(b, func);
+        if let Some(p) = phase {
+            self.hooks.split_phase(p);
+        }
         if let (Some(t), Some(p)) = (start, self.hooks.prof.as_mut()) {
             p.compiles += 1;
             p.compile_ns += u64::try_from(t.elapsed().as_nanos()).unwrap_or(0);
@@ -376,6 +402,7 @@ impl Oven {
         if let Some(p) = self.hooks.prof.as_mut() {
             p.meta_ops += 1;
         }
+        self.hooks.split_phase(Phase::Bridge);
         trace::begin_on("OvenMetaOp")
     }
 

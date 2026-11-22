@@ -32,6 +32,7 @@ mod builtins;
 mod class;
 mod complex;
 mod except;
+mod fast;
 mod lambda;
 mod mptr;
 mod new_delete;
@@ -1015,7 +1016,14 @@ impl Oven {
             return;
         }
         self.funcs[idx as usize].state = FState::Compiling;
-        let Some(body) = b.ensure_body(d, self) else {
+        // The cost split (`crate::split`): instantiating the body is a
+        // bridge callback, compiling it is not.
+        let phase = self.hooks.split_phase(crate::split::Phase::Bridge);
+        let body = b.ensure_body(d, self);
+        if phase.is_some() {
+            self.hooks.split_phase(crate::split::Phase::Compile);
+        }
+        let Some(body) = body else {
             self.funcs[idx as usize].state = FState::Undefined;
             return;
         };
@@ -7521,6 +7529,20 @@ impl Compiler<'_> {
                 site.loc = loc;
             }
             self.uses_cc = true;
+            return r;
+        }
+        // A library wrapper of the evaluation context is the context, as
+        // `if consteval` reads it: no call (spec/oven.md "Library fast
+        // paths", WP-1864).
+        if let Some(d) = direct
+            && args.is_empty()
+            && let Some(neg) = self.ice_wrapper(d)
+        {
+            let r = self.reg();
+            self.emit(Op::IsConstEval, 16, &[r]);
+            if neg {
+                self.emit(Op::LNot, 0, &[r, r]);
+            }
             return r;
         }
         // `std::uncaught_exceptions()` declared `constexpr` (P3068R6, a

@@ -52,6 +52,7 @@ mod reclaim;
 pub mod report;
 mod snap;
 mod softfloat;
+mod split;
 mod stats;
 #[cfg(feature = "op-stats")]
 pub mod trial_stats;

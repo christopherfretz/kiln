@@ -17,7 +17,10 @@
 //! - `-fconstexpr-profile[=json|text|<file>]`: the per-function and
 //!   per-evaluation-site profile, as text or NDJSON (`=json`, or a file
 //!   name ending in `.json`), on stderr or to `<file>`;
-//!   `-fconstexpr-profile-limit=N` rows per table (20; 0: all).
+//!   `-fconstexpr-profile-limit=N` rows per table (20; 0: all);
+//! - `-fconstexpr-profile-split`: the evaluator's sampled cost split
+//!   (`spec/oven.md` "Cost split"), one more `constexpr: split` line after
+//!   the summary, which it implies.
 
 use kiln_ast::Ast;
 use kiln_diag::{Diag, DiagEngine, DiagId};
@@ -47,6 +50,8 @@ pub struct ConstexprOpts {
     pub profile: Option<ProfileOut>,
     /// `-fconstexpr-profile-limit=`.
     pub profile_limit: Option<usize>,
+    /// `-fconstexpr-profile-split` (implies `-fconstexpr-stats`).
+    pub split: bool,
 }
 
 /// Where and how `-fconstexpr-profile` writes the profile.
@@ -71,9 +76,11 @@ impl ConstexprOpts {
         match arg {
             "-fconstexpr-stats" => self.stats = true,
             "-fconstexpr-profile" => self.profile = Some(ProfileOut::Text),
+            "-fconstexpr-profile-split" => (self.split, self.stats) = (true, true),
             _ => {}
         }
-        if matches!(arg, "-fconstexpr-stats" | "-fconstexpr-profile") {
+        if matches!(arg, "-fconstexpr-stats" | "-fconstexpr-profile" | "-fconstexpr-profile-split")
+        {
             return Some(Ok(()));
         }
         let (flag, v) = arg.split_once('=')?;
@@ -125,6 +132,7 @@ impl ConstexprOpts {
         } else {
             Level::Off
         };
+        l.split = self.split;
         l
     }
 
@@ -180,6 +188,11 @@ impl ConstexprOpts {
         }
         if self.stats {
             let _ = err.write_all(oven.stats_summary().as_bytes());
+        }
+        if self.split
+            && let Some(line) = oven.split_summary()
+        {
+            let _ = err.write_all(line.as_bytes());
         }
     }
 
@@ -309,5 +322,18 @@ mod tests {
         assert_eq!(o.profile, Some(ProfileOut::File("p.json".into())));
         let o = opts(&["-fconstexpr-profile-limit=0", "-fconstexpr-stats", "-fconstexpr-profile"]);
         assert_eq!((o.profile_limit, o.limits().profile), (Some(0), Level::Calls));
+        assert!(!o.limits().split);
+    }
+
+    /// `-fconstexpr-profile-split` arms the cost split and implies
+    /// `-fconstexpr-stats` (spec/driver.md "Constexpr profile", WP-1864).
+    #[test]
+    fn profile_split_flag() {
+        let o = opts(&["-fconstexpr-profile-split"]);
+        assert!(o.split && o.stats && o.profiling());
+        assert_eq!((o.limits().split, o.limits().profile), (true, Level::Stats));
+        let o = opts(&["-fconstexpr-profile-split", "-fconstexpr-profile=json"]);
+        assert_eq!((o.limits().split, o.limits().profile), (true, Level::Calls));
+        assert_eq!(ConstexprOpts::default().parse_arg("-fconstexpr-profile-split=1"), None);
     }
 }

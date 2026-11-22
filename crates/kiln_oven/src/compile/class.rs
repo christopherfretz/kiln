@@ -1458,7 +1458,21 @@ impl Compiler<'_> {
         let pc = match callee {
             Callee::Direct(d) => {
                 let f = self.o.func_index(self.b.ast(), d);
-                self.emit_at(Op::Call, 0, &[f, base], e)
+                // A `std::char_traits` bulk operation evaluated natively
+                // skips the call (spec/oven.md "Library fast paths").
+                let fast = (!is_sret && this.is_none())
+                    .then(|| self.traits_fast(d, args.len()))
+                    .flatten()
+                    .map(|(aux, et)| {
+                        let ok = self.reg();
+                        self.emit(Op::Builtin, aux, &[ok, base, 0, 0, et.0, rty.0]);
+                        self.jmp_if(ok, true)
+                    });
+                let pc = self.emit_at(Op::Call, 0, &[f, base], e);
+                if let Some(j) = fast {
+                    self.patch_here(j);
+                }
+                pc
             }
             Callee::Base(d) => {
                 let f = self.o.func_index_base(self.b.ast(), d);

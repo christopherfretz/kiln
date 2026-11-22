@@ -20,6 +20,11 @@ op-stats = []
 # Checks every trial-fold fast-path answer against the full path
 # (`leaf.rs`; WP-656), a validation build: `--features kiln_oven/leaf-check`.
 leaf-check = []
+# The cost split's phase stores in the VM (`-fconstexpr-profile-split`,
+# `split.rs`; WP-1864), a measurement aid: `cargo build --release -p
+# kiln_driver --features kiln_oven/split`. Without it the flag reports the
+# split unavailable and the VM's loop has no instrumentation.
+split = []
 
 [dev-dependencies]
 # Record layouts and target sizes for the test bridge (the real bridge is

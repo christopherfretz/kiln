@@ -366,6 +366,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   "Not implemented" or "Unsupported" must be listed in
   docs/status/static-gaps.md, for gaps with no message of their own in
   the code (WP-1782).
+- `-fconstexpr-profile-split` (WP-1864): a sampled split of the
+  constant evaluator's time by phase (instruction dispatch, checks, the
+  memory model, the memo table, sema-bridge callbacks, call frames,
+  compiling to bytecode), one more `constexpr: split` line after the
+  `-fconstexpr-stats` summary. It is measured by a kiln built with the
+  `kiln_oven/split` feature; any other build reports it unavailable and
+  pays nothing for it (spec/driver.md "Constexpr profile", spec/oven.md
+  "Cost split").
 - Promoted complex arithmetic (WP-1795, GAP-172):
   `-fcomplex-arithmetic=promoted`, and `-ffp-model=fast`, which selects
   it, no longer stop with "not supported by kiln". A complex division is
@@ -419,6 +427,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Faster constant evaluation of standard-library string plumbing
+  (WP-1864): `std::string_view` comparisons over many `std::string`s
+  run 4-5x faster on libstdc++ (an N=4300 all-pairs comparison: 32 s
+  to 6 s). The Oven now reads the evaluation context for a call of
+  `std::is_constant_evaluated` or the library's own wrapper of it without
+  running the call, evaluates `std::char_traits<C>::compare`, `length`
+  and `find` natively (declining, so the library's code runs and
+  diagnoses, whenever a read would be invalid or a limit would be
+  crossed), caches the element extent of an array inside a union
+  (std::string's small buffer), and keeps two union paths per
+  allocation in its path memo. A call of one of these library functions
+  now costs fewer `-fconstexpr-steps` than in clang: none for the
+  wrapper, one per element examined for a bulk operation (spec/oven.md
+  "Library fast paths"); user code is counted as before.
 - The bench and status numbers are re-measured (WP-1886): `docs/status/perf.md`
   is now against clang 22.1.8 (it was clang 19), and the new
   `docs/status/perf-gcc.md` holds the same corpus against GCC 16.1

@@ -309,6 +309,11 @@ COMPILE-TIME EVALUATION:
                           or to <file> (json if it ends in .json)
   -fconstexpr-profile-limit=<n>
                           [kiln] Rows per profile table (default 20; 0: all)
+  -fconstexpr-profile-split
+                          [kiln] Sample where constant evaluation spends its
+                          time (VM dispatch, checks, memory, memo, bridge,
+                          frames, compile) in a kiln_oven/split build;
+                          implies -fconstexpr-stats
   -ftemplate-depth=<n>    Template instantiation depth limit (default 1024)
   -ftemplate-backtrace-limit=<n>
                           Notes per instantiation backtrace (default 10)
@@ -540,6 +545,7 @@ mod tests {
             "-fconstexpr-stats",
             "-fconstexpr-profile[=<format>|<file>]",
             "-fconstexpr-profile-limit=<n>",
+            "-fconstexpr-profile-split",
         ] {
             assert!(all.contains(&want), "--help does not list {want}");
         }

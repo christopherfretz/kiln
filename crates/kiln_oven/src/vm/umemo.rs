@@ -26,7 +26,11 @@
 //! way (`inplace_vector`'s `construct_at(&data[n])`).
 //!
 //! The table is direct-mapped and fixed-size: a collision overwrites, so
-//! the memo's memory does not grow with the evaluation.
+//! the memo's memory does not grow with the evaluation. A region entry
+//! has two ways (its slot and the one next to it, the latest first): a
+//! loop comparing two strings of one allocation reads the buffers of
+//! two elements in turn, and one way would trade them on every load
+//! (WP-1864).
 
 use std::cell::Cell;
 
@@ -139,7 +143,9 @@ impl UnionMemo {
                 && d < e.len
                 && d % e.stride == e.phase
         };
-        m(self.e[slot(w, akey, ty, u64::MAX)].get())
+        let r = slot(w, akey, ty, u64::MAX);
+        m(self.e[r].get())
+            || m(self.e[r ^ 1].get())
             || m(self.e[slot(w, akey, ty, off.into())].get())
     }
 
@@ -152,7 +158,15 @@ impl UnionMemo {
             }
         };
         let (epoch, rebuilt) = (stamp.epoch, stamp.rebuilt);
-        self.e[i].set(Entry { walk: w, akey, epoch, rebuilt, aty, ty, lo, len, stride, phase });
+        let new = Entry { walk: w, akey, epoch, rebuilt, aty, ty, lo, len, stride, phase };
+        if matches!(cover, Cover::Region { .. }) {
+            // The way the latest region leaves becomes the second one.
+            let old = self.e[i].get();
+            if old.epoch == epoch && (old.akey, old.aty, old.ty, old.lo) != (akey, aty, ty, lo) {
+                self.e[i ^ 1].set(old);
+            }
+        }
+        self.e[i].set(new);
     }
 }
 
@@ -176,6 +190,20 @@ mod tests {
         assert!(!m.hit(A, 7, a, t, 16, Stamp { epoch: 1, rebuilt: 0 }));
         assert!(!m.hit(A, 7, a, t, 16, Stamp { epoch: 0, rebuilt: 1 }));
         assert!(!m.hit(Walk::Place, 7, a, t, 16, S0));
+    }
+
+    #[test]
+    fn two_regions_of_one_allocation_are_both_remembered() {
+        let m = UnionMemo::default();
+        let (a, t) = (OTy(3), OTy(4));
+        let r = |lo| Cover::Region { lo, len: 16, stride: 1, phase: 0 };
+        m.put(A, 7, a, t, r(16), S0);
+        m.put(A, 7, a, t, r(48), S0);
+        assert!(m.hit(A, 7, a, t, 20, S0) && m.hit(A, 7, a, t, 50, S0));
+        m.put(A, 7, a, t, r(80), S0);
+        assert!(!m.hit(A, 7, a, t, 20, S0));
+        assert!(m.hit(A, 7, a, t, 50, S0) && m.hit(A, 7, a, t, 90, S0));
+        assert!(!m.hit(A, 7, a, t, 50, Stamp { epoch: 1, rebuilt: 0 }));
     }
 
     #[test]
