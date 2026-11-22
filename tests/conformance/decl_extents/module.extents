@@ -1,0 +1,18 @@
+Export '(anonymous)'  full=extents_mod.cppm:4:1-extents_mod.cppm:11:2 }
+Namespace 'geo'  full=extents_mod.cppm:4:1-extents_mod.cppm:11:2 } name=extents_mod.cppm:4:18-extents_mod.cppm:4:21 'geo' body=extents_mod.cppm:4:22-extents_mod.cppm:11:2
+CXXRecord 'geo::Pt'  full=extents_mod.cppm:5:1-extents_mod.cppm:8:3 ; own=extents_mod.cppm:5:1-extents_mod.cppm:8:2 name=extents_mod.cppm:5:8-extents_mod.cppm:5:10 'Pt' body=extents_mod.cppm:5:11-extents_mod.cppm:8:2
+Field 'geo::Pt::x'  full=extents_mod.cppm:6:3-extents_mod.cppm:6:12 ; own=extents_mod.cppm:6:7-extents_mod.cppm:6:8 name=extents_mod.cppm:6:7-extents_mod.cppm:6:8 'x' specs-end=extents_mod.cppm:6:6
+Field 'geo::Pt::y'  full=extents_mod.cppm:6:3-extents_mod.cppm:6:12 ; own=extents_mod.cppm:6:10-extents_mod.cppm:6:11 name=extents_mod.cppm:6:10-extents_mod.cppm:6:11 'y' specs-end=extents_mod.cppm:6:6
+CXXMethod 'geo::Pt::sum'  full=extents_mod.cppm:7:3-extents_mod.cppm:7:36 } own=extents_mod.cppm:7:7-extents_mod.cppm:7:36 name=extents_mod.cppm:7:7-extents_mod.cppm:7:10 'sum' body=extents_mod.cppm:7:19-extents_mod.cppm:7:36 specs-end=extents_mod.cppm:7:6
+TemplateTypeParm 'geo::T'  full=extents_mod.cppm:9:11-extents_mod.cppm:9:18 - name=extents_mod.cppm:9:17-extents_mod.cppm:9:18 'T'
+ParmVar 'v'  full=extents_mod.cppm:9:28-extents_mod.cppm:9:31 - own=extents_mod.cppm:9:30-extents_mod.cppm:9:31 name=extents_mod.cppm:9:30-extents_mod.cppm:9:31 'v' specs-end=extents_mod.cppm:9:29
+Function 'geo::twice'  full=extents_mod.cppm:9:1-extents_mod.cppm:9:53 } own=extents_mod.cppm:9:22-extents_mod.cppm:9:53 name=extents_mod.cppm:9:22-extents_mod.cppm:9:27 'twice' body=extents_mod.cppm:9:33-extents_mod.cppm:9:53 specs-end=extents_mod.cppm:9:21
+FunctionTemplate 'geo::twice'  full=extents_mod.cppm:9:1-extents_mod.cppm:9:53 } own=extents_mod.cppm:9:22-extents_mod.cppm:9:53 name=extents_mod.cppm:9:22-extents_mod.cppm:9:27 'twice' body=extents_mod.cppm:9:33-extents_mod.cppm:9:53 specs-end=extents_mod.cppm:9:21
+Enum 'geo::Color'  full=extents_mod.cppm:10:1-extents_mod.cppm:10:33 ; own=extents_mod.cppm:10:1-extents_mod.cppm:10:32 name=extents_mod.cppm:10:12-extents_mod.cppm:10:17 'Color' body=extents_mod.cppm:10:18-extents_mod.cppm:10:32
+EnumConstant 'geo::Color::red'  full=extents_mod.cppm:10:20-extents_mod.cppm:10:23 - name=extents_mod.cppm:10:20-extents_mod.cppm:10:23 'red'
+EnumConstant 'geo::Color::green'  full=extents_mod.cppm:10:25-extents_mod.cppm:10:30 - name=extents_mod.cppm:10:25-extents_mod.cppm:10:30 'green'
+Export '(anonymous)'  full=extents_mod.cppm:12:1-extents_mod.cppm:14:2 } body=extents_mod.cppm:12:8-extents_mod.cppm:14:2
+ParmVar 'a'  full=extents_mod.cppm:13:9-extents_mod.cppm:13:14 - own=extents_mod.cppm:13:13-extents_mod.cppm:13:14 name=extents_mod.cppm:13:13-extents_mod.cppm:13:14 'a' specs-end=extents_mod.cppm:13:12
+ParmVar 'b'  full=extents_mod.cppm:13:16-extents_mod.cppm:13:25 - own=extents_mod.cppm:13:20-extents_mod.cppm:13:25 name=extents_mod.cppm:13:20-extents_mod.cppm:13:21 'b' specs-end=extents_mod.cppm:13:19
+Function 'top'  full=extents_mod.cppm:13:1-extents_mod.cppm:13:27 ; own=extents_mod.cppm:13:5-extents_mod.cppm:13:26 name=extents_mod.cppm:13:5-extents_mod.cppm:13:8 'top' specs-end=extents_mod.cppm:13:4
+Function 'use'  full=11:1-11:45 } own=11:5-11:45 name=11:5-11:8 'use' body=11:11-11:45 specs-end=11:4

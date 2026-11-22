@@ -1324,6 +1324,10 @@ impl Sema<'_, '_> {
             }
             // [dcl.attr.annotation]/1: not on a `void` parameter.
             self.reject_annotations_in(&params[0].attrs, Some("a parameter of type 'void'"));
+            // No parameter: no extents (spec/ast.md §19.1).
+            if let Some(d) = params[0].decl {
+                self.ast.decl_extents.forget(d);
+            }
             return Vec::new();
         }
         let mut out = Vec::with_capacity(params.len());

@@ -153,6 +153,15 @@ pub struct Parser<'a, 'sm> {
     /// ([`Parser::note_type_name`]): the outermost name of the type just
     /// parsed, which a base-specifier or mem-initializer re-roles.
     pub(crate) last_tname: Option<kiln_ast::written_refs::WrittenRefId>,
+    /// The first token of the declaration about to be parsed, noted by
+    /// the construct that starts it (spec/ast.md §19; [`crate::extents`]).
+    pub(crate) ext_lead: Option<Loc>,
+    /// The qualifier start of the class-head-name being parsed, for the
+    /// template-id tag it continues into ([`crate::extents`]).
+    pub(crate) ext_tag_qual: Loc,
+    /// The template parameter the last template-parameter parsed
+    /// declared (spec/ast.md §19).
+    pub(crate) ext_tparam: Option<DeclId>,
     /// The `(` of a C-style cast's parenthesized operand, `(T)(a, b)`:
     /// clang parses it as a `ParenListExpr` whose commas are built at
     /// the `(` (`MaybeConvertParenListExprToParenExpr`).
@@ -436,6 +445,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             nns_link: RefQualifier::NONE,
             member_ref_mark: None,
             last_tname: None,
+            ext_lead: None,
+            ext_tag_qual: Loc::INVALID,
+            ext_tparam: None,
             cast_paren_list: None,
             paren_callee: None,
             comma_loc: None,
@@ -549,6 +561,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             nns_link: _,
             member_ref_mark: _,
             last_tname: _,
+            ext_lead: _,
+            ext_tag_qual: _,
+            ext_tparam: _,
             cast_paren_list: _,
             paren_callee: _,
             comma_loc: _,

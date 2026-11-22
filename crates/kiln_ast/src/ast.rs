@@ -98,6 +98,9 @@ pub struct Ast {
     /// The written-reference table (§18): opt-in, off by default;
     /// transient in snapshots.
     pub written_refs: crate::written_refs::WrittenRefs,
+    /// The declaration-extent table (§19): opt-in, off by default;
+    /// written into snapshots.
+    pub decl_extents: crate::decl_extents::DeclExtents,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -325,6 +328,7 @@ impl Ast {
             freestanding: false,
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             written_refs: crate::written_refs::WrittenRefs::default(),
+            decl_extents: crate::decl_extents::DeclExtents::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -1485,6 +1489,14 @@ impl Ast {
         self.written_refs.mark(self.decls.len())
     }
 
+    /// The source extents of declaration `d` as written (§19), when it
+    /// was parsed with the declaration-extent table on. A template
+    /// shares its pattern's; implicit declarations and instantiations
+    /// have none.
+    pub fn decl_extent(&self, d: DeclId) -> Option<&crate::decl_extents::DeclExtent> {
+        self.decl_extents.get(d)
+    }
+
     /// The memory report of every arena (spec/ast.md §2.3), the
     /// redeclaration index's change journals (`journal.*`), plus the
     /// derived `instantiation.retained` row (count = instantiations, bytes
@@ -1516,6 +1528,9 @@ impl Ast {
         r.push(self.decls.ty_journal.mem_row("journal.decl_types"));
         r.push(self.redecls.journal.mem_row("journal.redecls"));
         if let Some(row) = self.written_refs.mem_row() {
+            r.push(row);
+        }
+        if let Some(row) = self.decl_extents.mem_row() {
             r.push(row);
         }
         r.push(MemRow::new(

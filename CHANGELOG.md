@@ -46,6 +46,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   statement holds is checked; implicit attributes are built checked,
   and PCH snapshots and module images carry the bit in the existing
   flags byte (no format change).
+- A declaration-extent table for tooling clients (WP-2090):
+  `-fkiln-decl-extents` records, for every declaration as written, its
+  full range from its first token (an attribute, a template head, a
+  braceless `extern "C"`) to its `;` or `}`, its own declarator range in
+  a declarator group, its name and qualifier, its body (with
+  ctor-initializers and handlers, or `= default`/`= delete`/`= 0`) and
+  where its decl-specifiers end (`Ast::decl_extent`);
+  `-fkiln-dump-decl-extents` prints them. Off by default; carried in PCH
+  snapshots (format 129) and module images (version 62)
+  (spec/ast.md §19).
 - A written-reference table for tooling clients (WP-1930, stage 1):
   `-fkiln-dump-written-refs` records, for each expression name, member
   name and nested-name-specifier component written in the source, the

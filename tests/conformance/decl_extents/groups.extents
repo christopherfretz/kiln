@@ -1,0 +1,28 @@
+Var 'a'  full=8:1-8:15 ; own=8:5-8:6 name=8:5-8:6 'a' specs-end=8:4
+Var 'b'  full=8:1-8:15 ; own=8:8-8:14 name=8:9-8:10 'b' specs-end=8:4
+Var 'c'  full=9:1-9:43 ; own=9:18-9:31 name=9:18-9:19 'c' specs-end=9:17
+Var 'd'  full=9:1-9:43 ; own=9:33-9:42 name=9:34-9:35 'd' specs-end=9:17
+CXXRecord 'P'  full=10:1-12:10 ; own=10:1-12:2 name=10:8-10:9 'P' body=10:10-12:2
+Field 'P::x'  full=11:3-11:23 ; own=11:7-11:8 name=11:7-11:8 'x' specs-end=11:6
+Field 'P::y'  full=11:3-11:23 ; own=11:10-11:15 name=11:10-11:11 'y' specs-end=11:6
+Field 'P::z'  full=11:3-11:23 ; own=11:17-11:22 name=11:17-11:18 'z' specs-end=11:6
+Var 'p'  full=10:1-12:10 ; own=12:3-12:4 name=12:3-12:4 'p' specs-end=12:2
+Var 'pp'  full=10:1-12:10 ; own=12:6-12:9 name=12:7-12:9 'pp' specs-end=12:2
+CXXRecord 'Two'  full=13:1-15:3 ; own=13:1-15:2 name=13:8-13:11 'Two' body=13:12-15:2
+Field 'Two::l'  full=14:3-14:12 ; own=14:7-14:8 name=14:7-14:8 'l' specs-end=14:6
+Field 'Two::r'  full=14:3-14:12 ; own=14:10-14:11 name=14:10-14:11 'r' specs-end=14:6
+Binding 'u'  full=16:1-16:21 ; own=16:7-16:8 name=16:7-16:8 'u'
+Binding 'v'  full=16:1-16:21 ; own=16:10-16:11 name=16:10-16:11 'v'
+Var '(anonymous)'  full=16:1-16:21 ; own=16:6-16:20 specs-end=16:5
+Namespace 'm'  full=17:1-20:2 } name=17:11-17:12 'm' body=17:13-20:2
+Function 'm::f'  full=18:1-18:9 ; own=18:5-18:8 name=18:5-18:6 'f' specs-end=18:4
+Function 'm::g'  full=19:1-19:9 ; own=19:5-19:8 name=19:5-19:6 'g' specs-end=19:4
+Using 'f'  full=21:1-21:18 ; own=21:7-21:11 name=21:10-21:11 'f' qual=21:7
+Using 'g'  full=21:1-21:18 ; own=21:13-21:17 name=21:16-21:17 'g' qual=21:13
+Typedef 'I1'  full=22:1-22:21 ; own=22:13-22:15 name=22:13-22:15 'I1' specs-end=22:12
+Typedef 'I2'  full=22:1-22:21 ; own=22:17-22:20 name=22:18-22:20 'I2' specs-end=22:12
+ParmVar 'first'  full=23:9-23:18 - own=23:13-23:18 name=23:13-23:18 'first' specs-end=23:12
+ParmVar '(anonymous)'  full=23:20-23:27 - own=23:24-23:27 specs-end=23:23
+ParmVar '(anonymous)'  full=23:39-23:42 - own=23:42-23:42 specs-end=23:42
+ParmVar 'cb'  full=23:29-23:53 - own=23:33-23:53 name=23:35-23:37 'cb' specs-end=23:32
+Function 'fn'  full=23:1-23:55 ; own=23:6-23:54 name=23:6-23:8 'fn' specs-end=23:5

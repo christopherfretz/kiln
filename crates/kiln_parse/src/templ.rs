@@ -673,6 +673,7 @@ impl Parser<'_, '_> {
     /// `concept name = constraint-expression ;` after a template head
     /// ([temp.concept]/1).
     fn parse_concept_definition(&mut self, head: kiln_ast::ids::TemplateParamListId) {
+        let begin = self.ext_begin();
         self.bump();
         if self.at_kw(Kw::Bool) {
             // The Concepts TS form `concept bool`, diagnosed at the name
@@ -686,6 +687,7 @@ impl Parser<'_, '_> {
             return;
         };
         let name_loc = self.bump().span.lo;
+        let name_span = kiln_source::Span::new(name_loc, self.prev_end());
         if self.s.ast.templates.param_list(head).requires.is_some() {
             // [temp.concept]/4: a requires-clause in the template head,
             // diagnosed at the name.
@@ -731,6 +733,8 @@ impl Parser<'_, '_> {
         let c = self.s.act_concept(head, name, name_loc, e);
         self.s.claim_written_refs(wmark, Some(c));
         self.expect_semi_after("concept definition");
+        self.ext_name_span(c, Loc::INVALID, name_span);
+        self.ext_finish(&[c], begin);
     }
 
     // -- template parameters -----------------------------------------------------------
@@ -743,11 +747,21 @@ impl Parser<'_, '_> {
                 // A failed parameter is skipped to the next `,` or the
                 // closing `>`; the list goes on after a `,` (clang's
                 // `ParseTemplateParameterList`).
+                let begin = self.loc();
+                self.ext_tparam = None;
                 // The parameter claims the closures of its type and
                 // default argument (spec/ast.md §5.9).
                 let wmark = self.s.written_ref_mark();
                 let ok = self.parse_template_param();
                 self.s.claim_template_param(wmark);
+                // A template-parameter's range ends before its `,` or `>`
+                // (spec/ast.md §19.3).
+                if let Some(p) = self.ext_tparam.take()
+                    && self.ext_on()
+                {
+                    self.ext_ident_name(p);
+                    self.ext_finish_inner(Some(p), begin);
+                }
                 if !ok {
                     self.skip_until(
                         &[Punct::Comma, Punct::Greater, Punct::GreaterGreater],
@@ -854,6 +868,7 @@ impl Parser<'_, '_> {
     fn parse_type_param_default(&mut self, p: DeclId) -> bool {
         let ok = self.parse_type_param_default_arg(p);
         self.s.act_on_template_param_end(p);
+        self.ext_tparam = Some(p);
         ok
     }
 
@@ -1020,6 +1035,7 @@ impl Parser<'_, '_> {
         // ([basic.scope.pdecl]/9).
         let ok = self.parse_template_template_param_default(p);
         self.s.act_on_template_param_end(p);
+        self.ext_tparam = Some(p);
         ok
     }
 
@@ -1226,6 +1242,7 @@ impl Parser<'_, '_> {
         // Its name is not in scope in its own default
         // ([basic.scope.pdecl]/9).
         self.s.act_on_template_param_end(p);
+        self.ext_tparam = Some(p);
         ok
     }
 

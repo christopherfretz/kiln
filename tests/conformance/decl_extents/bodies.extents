@@ -1,0 +1,20 @@
+CXXRecord 'B'  full=7:1-18:3 ; own=7:1-18:2 name=7:8-7:9 'B' body=7:10-18:2
+Field 'B::m'  full=8:3-8:9 ; own=8:7-8:8 name=8:7-8:8 'm' specs-end=8:6
+CXXConstructor 'B::B'  full=9:3-9:16 } name=9:3-9:4 'B' body=9:7-9:16
+ParmVar 'v'  full=10:5-10:10 - own=10:9-10:10 name=10:9-10:10 'v' specs-end=10:8
+CXXConstructor 'B::B'  full=10:3-12:4 } name=10:3-10:4 'B' body=10:12-12:4
+ParmVar '(anonymous)'  full=13:5-13:14 - own=13:13-13:14 specs-end=13:12
+CXXConstructor 'B::B'  full=13:3-13:26 ; own=13:3-13:25 name=13:3-13:4 'B' body=13:16-13:25
+ParmVar '(anonymous)'  full=14:16-14:25 - own=14:24-14:25 specs-end=14:23
+CXXMethod 'B::operator='  full=14:3-14:49 ; own=14:5-14:48 name=14:6-14:15 'operator=' body=14:27-14:48 specs-end=14:4
+CXXMethod 'B::pure'  full=15:3-15:27 ; own=15:16-15:26 name=15:16-15:20 'pure' body=15:23-15:26 specs-end=15:15
+CXXDestructor 'B::~B'  full=16:3-16:16 ; own=16:11-16:15 name=16:11-16:13 '~B' specs-end=16:10
+CXXMethod 'B::late'  full=17:3-17:15 ; own=17:8-17:14 name=17:8-17:12 'late' specs-end=17:7
+CXXDestructor 'B::~B'  full=19:1-19:19 ; own=19:1-19:18 name=19:4-19:6 '~B' qual=19:1 body=19:9-19:18
+CXXMethod 'B::late'  full=20:1-20:18 } own=20:6-20:18 name=20:9-20:13 'late' qual=20:6 body=20:16-20:18 specs-end=20:5
+Enum 'E'  full=21:1-21:33 ; own=21:1-21:32 name=21:12-21:13 'E' body=21:20-21:32
+EnumConstant 'E::a'  full=21:22-21:23 - name=21:22-21:23 'a'
+EnumConstant 'E::b'  full=21:25-21:30 - name=21:25-21:26 'b'
+LinkageSpec '(anonymous)'  full=22:1-24:2 } body=22:14-24:2
+Function 'in_linkage'  full=23:1-23:19 ; own=23:6-23:18 name=23:6-23:16 'in_linkage' specs-end=23:5
+Function 'main'  full=25:1-29:2 } own=25:5-29:2 name=25:5-25:9 'main' body=25:12-29:2 specs-end=25:4

@@ -316,6 +316,10 @@ pub struct TestSpec {
     /// (`-fkiln-dump-written-refs`, spec/ast.md §18.6), relative to the
     /// test's directory; compared with the compile's standard output.
     pub written_refs: Option<PathBuf>,
+    /// `decl-extents:`: the golden declaration-extent dump
+    /// (`-fkiln-dump-decl-extents`, spec/ast.md §19.7), relative to the
+    /// test's directory; compared with the compile's standard output.
+    pub decl_extents: Option<PathBuf>,
     /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
     /// `xtask clang-ast --implicit`).
     pub ast_implicit: bool,
@@ -534,7 +538,10 @@ impl TestSpec {
 
     /// Does this test use directives only kiln can check?
     pub fn is_kiln_specific(&self) -> bool {
-        !self.oven.is_empty() || self.inst_report.is_some() || self.written_refs.is_some()
+        !self.oven.is_empty()
+            || self.inst_report.is_some()
+            || self.written_refs.is_some()
+            || self.decl_extents.is_some()
     }
 }
 
@@ -588,6 +595,8 @@ struct Parser {
     inst_report_line: usize,
     written_refs: Option<PathBuf>,
     written_refs_line: usize,
+    decl_extents: Option<PathBuf>,
+    decl_extents_line: usize,
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
@@ -673,6 +682,8 @@ impl Parser {
             inst_report_line: 0,
             written_refs: None,
             written_refs_line: 0,
+            decl_extents: None,
+            decl_extents_line: 0,
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
@@ -825,6 +836,16 @@ impl Parser {
                 } else {
                     self.written_refs_line = line;
                     self.written_refs = Some(PathBuf::from(value));
+                }
+            }
+            "decl-extents" => {
+                if self.decl_extents.is_some() {
+                    self.err(line, "duplicate `decl-extents`");
+                } else if value.is_empty() {
+                    self.err(line, "`decl-extents` requires a path");
+                } else {
+                    self.decl_extents_line = line;
+                    self.decl_extents = Some(PathBuf::from(value));
                 }
             }
             "exit" => {
@@ -1445,6 +1466,18 @@ impl Parser {
             let line = self.written_refs_line;
             self.err(line, "`written-refs` only applies to `compile-ok` and `compile-fail` tests");
         }
+        if self.decl_extents.is_some() {
+            let line = self.decl_extents_line;
+            if !matches!(expect, Expect::CompileOk | Expect::CompileFail) {
+                self.err(
+                    line,
+                    "`decl-extents` only applies to `compile-ok` and `compile-fail` tests",
+                );
+            } else if self.written_refs.is_some() {
+                // Both dumps go to standard output.
+                self.err(line, "`decl-extents` and `written-refs` cannot share a test");
+            }
+        }
         if self.module_line != 0
             && (verify
                 || !matches!(
@@ -1554,6 +1587,7 @@ impl Parser {
             cfg_diverges: self.cfg_diverges,
             inst_report: self.inst_report,
             written_refs: self.written_refs,
+            decl_extents: self.decl_extents,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,

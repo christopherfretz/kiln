@@ -14,6 +14,7 @@ mod consteval_block;
 mod contracts;
 mod decl;
 mod expr;
+mod extents;
 mod fp_pragma;
 pub mod keywords;
 mod lambda;
@@ -138,6 +139,9 @@ pub struct ParseOptions {
     /// Record the written-reference table (`-fkiln-dump-written-refs`;
     /// spec/ast.md §18): off by default.
     pub written_refs: bool,
+    /// Record the declaration-extent table (`-fkiln-decl-extents`,
+    /// `-fkiln-dump-decl-extents`; spec/ast.md §19): off by default.
+    pub decl_extents: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
     pub cfg_stats: bool,
     /// `-fkiln-cfg-max-elems=` ([`kiln_sema::Sema::cfg_max_elems`]).
@@ -225,6 +229,7 @@ impl Default for ParseOptions {
             target_attr_features: |_, _, _| Vec::new(),
             cfg_dump: false,
             written_refs: false,
+            decl_extents: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
@@ -425,6 +430,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.target_attr_features = opts.target_attr_features;
     s.cfg_dump = opts.cfg_dump;
     s.ast.written_refs.set_on(opts.written_refs);
+    s.ast.decl_extents.set_on(opts.decl_extents);
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
@@ -728,6 +734,8 @@ pub fn continue_preprocessed<'a, 'sm>(
     p.s.tu_prefix = opts.prefix;
     // The table is transient in snapshots (spec/ast.md §18.5).
     p.s.ast.written_refs.set_on(opts.written_refs);
+    // The consumer records from its own options (spec/ast.md §19.6).
+    p.s.ast.decl_extents.set_on(opts.decl_extents);
     if opts.header_unit {
         p.main_header_unit();
     }

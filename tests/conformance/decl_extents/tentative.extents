@@ -1,0 +1,22 @@
+CXXRecord 'T'  full=11:1-17:3 ; own=11:1-17:2 name=11:8-11:9 'T' body=11:10-17:2
+CXXConstructor 'T::T'  full=12:3-12:7 ; own=12:3-12:6 name=12:3-12:4 'T'
+ParmVar '(anonymous)'  full=13:5-13:8 - own=13:8-13:8 specs-end=13:8
+CXXConstructor 'T::T'  full=13:3-13:10 ; own=13:3-13:9 name=13:3-13:4 'T'
+Field 'T::v'  full=14:3-14:20 ; own=14:7-14:19 name=14:7-14:8 'v' specs-end=14:6
+Var 'T::k'  full=15:3-15:26 ; own=15:20-15:25 name=15:20-15:21 'k' specs-end=15:19
+ParmVar 'd'  full=16:11-16:20 - own=16:15-16:20 name=16:15-16:16 'd' specs-end=16:14
+CXXMethod 'T::get'  full=16:3-16:45 } own=16:7-16:45 name=16:7-16:10 'get' body=16:28-16:45 specs-end=16:6
+Var 'x'  full=18:1-18:11 ; own=18:5-18:10 name=18:5-18:6 'x' specs-end=18:4
+Function 'stmts'  full=19:1-25:2 } own=19:6-25:2 name=19:6-19:11 'stmts' body=19:14-25:2 specs-end=19:5
+Var 'y'  full=20:3-20:8 ; own=20:4-20:7 name=20:5-20:6 'y' specs-end=20:4
+Var 'z'  full=21:3-21:15 ; own=21:4-21:14 name=21:5-21:6 'z' specs-end=21:4
+ParmVar '(anonymous)'  full=22:9-22:12 - own=22:12-22:12 specs-end=22:12
+Var 'p'  full=22:3-22:14 ; own=22:4-22:13 name=22:6-22:7 'p' specs-end=22:4
+Var 'x'  full=23:3-23:14 ; own=23:6-23:13 name=23:7-23:8 'x' specs-end=23:6
+ParmVar '(anonymous)'  full=24:9-24:12 - own=24:12-24:12 specs-end=24:12
+ParmVar '(anonymous)'  full=24:7-24:13 - own=24:8-24:13 specs-end=24:8
+Function 'stmts()::t'  full=24:3-24:15 ; own=24:5-24:14 name=24:5-24:6 't' specs-end=24:4
+TemplateTypeParm 'U'  full=26:11-29:5 - name=26:17-26:18 'U'
+Var '(lambda at tentative.cpp:26:30)::local'  full=27:3-27:17 ; own=27:7-27:16 name=27:7-27:12 'local' specs-end=27:6
+CXXRecord 'L'  full=26:1-30:13 ; own=30:1-30:12 name=30:8-30:9 'L' body=30:10-30:12
+ClassTemplate 'L'  full=26:1-30:13 ; own=30:1-30:12 name=30:8-30:9 'L' body=30:10-30:12

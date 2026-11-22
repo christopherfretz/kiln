@@ -1,0 +1,5 @@
+Var 'from_macro'  full=13:6-7:40 ; own=13:11-7:39 name=13:11-13:21 'from_macro' specs-end=13:9 exp=13:1
+Var 'named_by_arg'  full=14:1-9:15 ; own=14:10-14:22 name=14:10-14:22 'named_by_arg' specs-end=14:4
+Namespace 'wrapped'  full=10:21-11:17 } name=15:10-15:17 'wrapped' body=10:33-11:17 exp=15:1
+Var 'wrapped::inside'  full=16:1-16:12 ; own=16:5-16:11 name=16:5-16:11 'inside' specs-end=16:4
+Var 'pasted'  full=18:1-18:20 ; own=<scratch space>:1:1-<scratch space>:1:7 name=<scratch space>:1:1-<scratch space>:1:7 'pasted' specs-end=18:4

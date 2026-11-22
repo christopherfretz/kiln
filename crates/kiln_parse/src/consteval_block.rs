@@ -27,7 +27,9 @@ impl Parser<'_, '_> {
     /// consteval-block-declaration, at `consteval {`. C++26 only (no
     /// `-freflection` needed).
     pub(crate) fn parse_consteval_block(&mut self) -> DeclId {
+        let begin = self.ext_begin();
         let loc = self.bump().span.lo;
+        let open = self.loc();
         if self.std < Std::Cxx26 {
             let d = self.s.diag(DiagId::parse_consteval_block_cxx26, loc);
             self.emit(d);
@@ -35,7 +37,10 @@ impl Parser<'_, '_> {
         self.s.enter_constant_evaluated();
         let call = self.parse_consteval_block_call(loc);
         self.s.exit_constant_evaluated(Some(call));
-        self.s.act_on_consteval_block(call, loc)
+        let d = self.s.act_on_consteval_block(call, loc);
+        self.ext_body(Some(d), open);
+        self.ext_finish(&[d], begin);
+        d
     }
 
     /// A consteval block as a statement at `loc` (a block-declaration's

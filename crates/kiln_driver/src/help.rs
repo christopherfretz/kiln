@@ -336,6 +336,10 @@ KILN DEVELOPMENT:
   -fkiln-dump-written-refs
                           [kiln] Dump each written name and the declaration
                           it denotes
+  -fkiln-decl-extents     [kiln] Record the source extents of every
+                          declaration as written (for tooling clients)
+  -fkiln-dump-decl-extents
+                          [kiln] Record and dump the declaration extents
   -fkiln-cfg-stats        [kiln] With -fsyntax-only: control-flow graph sizes
   -fkiln-cfg-max-elems=<n>
                           [kiln] Control-flow graph element limit per body
