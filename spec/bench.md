@@ -417,7 +417,12 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   detected once per run (GNU time must accept the format and write a number).
   Without it, memory is not measured and the records say `"rss_source": "none"`.
   The child runs in its own process group, so a timeout kills the wrapper and
-  the compiler together.
+  the compiler together. The figure includes the pages of the compiler's own
+  executable that are mapped in (shared page cache, which the kernel's
+  fault-around widens), so it rises with kiln's code size even when no
+  allocation grows: on a header-free `oven` entry they are about 13.5 MiB of
+  15 MiB (docs/status/perf.md "Peak RSS since 1.1.0 (WP-1891)"). kiln's own tables are
+  gated by `accounted` ("Regression policy").
 - **Resource limits**: every run is capped at `--mem-limit` MiB of address
   space (`RLIMIT_AS`), exactly as in `cargo xtask test` (`spec/harness.md`
   "Resource limits"): the `sh -c 'ulimit -v ...; exec "$@"'` wrapper, run
