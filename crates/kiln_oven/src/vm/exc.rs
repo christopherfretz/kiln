@@ -482,8 +482,9 @@ impl Oven {
         if matches!(self.funcs[func as usize].state, FState::Stub | FState::Undefined) {
             self.compile_func(b, func);
         }
+        let state = self.func_state(func);
         let f = &self.funcs[func as usize];
-        let (FState::Ready, RetKind::Scalar(rt), Some(tr)) = (f.state, f.ret, f.this_reg) else {
+        let (FState::Ready, RetKind::Scalar(rt), Some(tr)) = (state, f.ret, f.this_reg) else {
             return None;
         };
         let TyKind::Ptr(ch) = self.types.kind(rt) else { return None };

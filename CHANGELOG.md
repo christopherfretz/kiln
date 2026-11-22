@@ -565,6 +565,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Evaluation sessions charge nested work to the run (WP-2073,
+  spec/eval-session.md §5.1): constant evaluations that semantic work
+  needs during a run (an instantiation's `static_assert`, a static
+  member's initializer, a reflection query) run to completion under the
+  translation unit's limits, are recorded once per unit, and are charged
+  to every run that reaches them. `RunReport` gains `nested_steps` and
+  `nested_calls`; `steps` and `calls` stay the run's own. The step, byte
+  and depth budgets apply to the run's own plus its charged nested cost,
+  so a run that does the work and one that replays it get the same
+  counts, budget decision and diagnostics. A host call in nested work
+  is refused with the note "host call in semantic work a run triggered
+  (its result is kept across runs)". Fixed: a memoized call could skip
+  a replay of diagnostics; work shared by two units was replayed with
+  the first only; an initializer read under a small run budget kept its
+  failure for later runs. PCH snapshot format version 135.
+
 - Peak memory since 1.1.0 measured and explained (WP-1891,
   docs/status/perf.md "Peak RSS since 1.1.0 (WP-1891)"): kiln's peak RSS
   is 1.4-5.1 MiB higher than 1.1.0's. Nearly all of the rise is kiln's own

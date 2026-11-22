@@ -15,19 +15,22 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{DiagEngine, DiagId, Diagnostic};
 pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, RunValue};
-use kiln_oven::{HostCalls, MetaOp, Oven, SemaBridge};
+use kiln_oven::{HostCalls, MetaOp, NestedCost, Oven, SemaBridge, SessUnit};
+use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::lookup::LookupKind;
 use crate::oven_bridge::Bridge;
+use crate::templ::stack::{FrameKind, InstFrame};
 
 /// A finished translation unit kept to run entries (spec/eval-session.md
 /// §2). `Send`, not `Sync` (§9).
 pub struct EvalSession<'a, 'sm> {
     sema: Sema<'a, 'sm>,
-    replay: Replay,
+    /// The records of §5.1 and §7 (in `sema` while a run is running).
+    replay: Box<Replay>,
     tu_host: Option<Box<dyn HostCalls>>,
 }
 
@@ -140,14 +143,20 @@ impl std::error::Error for EntryError {}
 pub struct RunReport {
     /// The entry's value, or how the run failed.
     pub result: Result<RunValue, RunError>,
-    /// Steps the run executed.
+    /// Steps the run executed itself (§4).
     pub steps: u64,
+    /// Steps of the nested work the run was charged (§5.1): with
+    /// [`RunReport::steps`], what the step budget was checked against.
+    pub nested_steps: u64,
     /// Handler calls the run made.
     pub host_calls: u64,
-    /// The run's peak live frame and heap bytes.
+    /// The run's peak live frame and heap bytes, its charged nested
+    /// work's included.
     pub peak_heap: u64,
-    /// Function calls the run made.
+    /// Function calls the run made itself.
     pub calls: u64,
+    /// Function calls of the nested work the run was charged.
+    pub nested_calls: u64,
     /// The run's diagnostics, in order (§7).
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -175,40 +184,96 @@ impl KeptMemory {
     }
 }
 
-/// What a recorded diagnostic belongs to (spec/eval-session.md §7).
+/// A unit of nested work a run records (spec/eval-session.md §5.1, §7).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Key {
     /// The compilation of the Oven's function (by index).
     Func(u32),
+    /// The evaluation of the initializer of the Oven's global (by index).
+    Var(u32),
+    /// The instantiation of a variable's initializer (a static data
+    /// member's, a variable template specialization's).
+    Init(DeclId),
+    /// The instantiation of a member function's definition.
+    Inst(DeclId),
     /// A reflection intrinsic with its operands.
     Meta(MetaOp, Box<[u128]>),
     /// A `noexcept` query.
     Nothrow(DeclId),
 }
 
-/// One recorded piece: diagnostics, or what a nested key recorded.
+impl From<SessUnit> for Key {
+    fn from(u: SessUnit) -> Self {
+        match u {
+            SessUnit::Func(f) => Key::Func(f),
+            SessUnit::Var(g) => Key::Var(g),
+        }
+    }
+}
+
+/// One recorded piece: diagnostics, or what a nested key recorded, with
+/// the context notes it had there.
 #[derive(Clone, Debug)]
 enum Seg {
     Diags(Vec<Diagnostic>),
-    Child(Key),
+    Child(Key, Vec<Diagnostic>),
 }
 
-/// A recording in progress: from capture index `from`, with the nested
-/// keys recorded or replayed inside it (key, capture range).
+/// The instantiation frame a unit opens (its context note names where it
+/// was required, which is where a later reach requires it).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnitFrame {
+    kind: FrameKind,
+    entity: DeclId,
+    template: DeclId,
+    sfinae: Option<bool>,
+}
+
+/// What a unit recorded: its diagnostics (with the units nested in it
+/// that reported, in order), the context notes they had, its own nested
+/// evaluations' cost and the units it reached (charged with it).
+#[derive(Clone, Debug, Default)]
+struct Rec {
+    segs: Vec<Seg>,
+    ctx: Vec<Diagnostic>,
+    frame: Option<UnitFrame>,
+    own: NestedCost,
+    kids: Vec<Key>,
+}
+
+/// A recording in progress: from capture index `from`, in context `ctx`,
+/// with the nested keys recorded or replayed inside it (key, their
+/// context, capture range), the units it reached and its own cost so far.
 #[derive(Debug)]
 struct Window {
     from: usize,
-    children: Vec<(Key, usize, usize)>,
+    ctx: Vec<Diagnostic>,
+    frame: Option<UnitFrame>,
+    children: Vec<(Key, Vec<Diagnostic>, usize, usize)>,
+    kids: Vec<Key>,
+    own: NestedCost,
 }
 
-/// The diagnostics semantic work reported in runs, replayed by later
-/// runs (spec/eval-session.md §7).
+impl Window {
+    /// Whether nothing was recorded or reached in it so far.
+    fn is_empty(&self) -> bool {
+        self.children.is_empty() && self.kids.is_empty() && self.own.is_zero()
+    }
+}
+
+/// What semantic work did in runs, for later runs: its diagnostics,
+/// replayed, and its cost, charged (spec/eval-session.md §5.1, §7).
 #[derive(Debug, Default)]
 pub(crate) struct Replay {
-    records: FxHashMap<Key, Vec<Seg>>,
-    /// The keys reported in the running run.
+    records: FxHashMap<Key, Rec>,
+    /// The keys whose diagnostics were reported in the running run.
     done: FxHashSet<Key>,
+    /// The keys whose cost was charged to the running run.
+    charged: FxHashSet<Key>,
     windows: Vec<Window>,
+    /// Charges made with no unit open and no Oven at hand, for the Oven to
+    /// take (`SemaBridge::session_settle`).
+    loose: NestedCost,
     /// Diagnostics recorded (for [`KeptMemory::replay`]).
     count: usize,
     /// The reflection intrinsics with a record (a call of another one
@@ -221,29 +286,297 @@ pub(crate) struct Replay {
 /// A run's state on the bridge.
 pub(crate) struct RunCtx<'r> {
     pub(crate) host: &'r mut (dyn HostCalls + 'r),
-    replay: &'r mut Replay,
+}
+
+/// `notes` with the last run of `from` in them replaced by `to` (nothing
+/// changes when `from` is empty or not there).
+fn recontext(notes: &[Diagnostic], from: &[Diagnostic], to: &[Diagnostic]) -> Vec<Diagnostic> {
+    let same = |a: &Diagnostic, b: &Diagnostic| a.message == b.message && a.span == b.span;
+    if from.is_empty() || notes.len() < from.len() {
+        return notes.to_vec();
+    }
+    let Some(at) = (0..=notes.len() - from.len())
+        .rev()
+        .find(|&i| notes[i..i + from.len()].iter().zip(from).all(|(a, b)| same(a, b)))
+    else {
+        return notes.to_vec();
+    };
+    let mut out = notes[..at].to_vec();
+    out.extend_from_slice(to);
+    out.extend_from_slice(&notes[at + from.len()..]);
+    out
 }
 
 impl Replay {
-    /// Reports the diagnostics of `k`, if it has any and they were not
-    /// reported in this run yet.
-    fn replay(&mut self, diags: &DiagEngine<'_>, k: &Key) {
-        if !self.records.contains_key(k) || !self.done.insert(k.clone()) {
+    /// Reports the diagnostics of `k` in context `target` (its recorded
+    /// one when `None`), if it has any and they were not reported in this
+    /// run yet; an open window records it as a child either way.
+    fn replay(&mut self, diags: &DiagEngine<'_>, k: &Key, target: Option<Vec<Diagnostic>>) {
+        let Some(r) = self.records.get(k) else { return };
+        if r.segs.is_empty() {
             return;
         }
+        let target = target.unwrap_or_else(|| r.ctx.clone());
         let start = diags.captured_len();
-        let segs = self.records.get(k).cloned().unwrap_or_default();
-        for s in &segs {
-            match s {
-                Seg::Diags(v) => diags.capture_replay(v),
-                Seg::Child(c) => self.replay(diags, c),
+        if self.done.insert(k.clone()) {
+            let segs = r.segs.clone();
+            let from = (r.ctx != target).then(|| r.ctx.clone());
+            for s in &segs {
+                match (s, &from) {
+                    (Seg::Diags(v), None) => diags.capture_replay(v),
+                    (Seg::Diags(v), Some(from)) => {
+                        let v: Vec<Diagnostic> = v
+                            .iter()
+                            .map(|d| Diagnostic {
+                                notes: recontext(&d.notes, from, &target),
+                                ..d.clone()
+                            })
+                            .collect();
+                        diags.capture_replay(&v);
+                    }
+                    (Seg::Child(c, edge), None) => self.replay(diags, c, Some(edge.clone())),
+                    (Seg::Child(c, edge), Some(from)) => {
+                        self.replay(diags, c, Some(recontext(edge, from, &target)));
+                    }
+                }
             }
         }
         let end = diags.captured_len();
-        if end > start
-            && let Some(w) = self.windows.last_mut()
-        {
-            w.children.push((k.clone(), start, end));
+        if let Some(w) = self.windows.last_mut() {
+            w.children.push((k.clone(), target, start, end));
+        }
+    }
+
+    /// The run reaches recorded unit `k` in context `target`: its
+    /// diagnostics are replayed; inside an open window it is that unit's
+    /// (charged with it), else its cost is what the run is charged now.
+    fn reach(
+        &mut self,
+        diags: &DiagEngine<'_>,
+        k: &Key,
+        target: Option<Vec<Diagnostic>>,
+    ) -> NestedCost {
+        if !self.records.contains_key(k) {
+            return NestedCost::ZERO;
+        }
+        self.replay(diags, k, target);
+        self.place(k.clone())
+    }
+
+    /// The cost of `k` and every unit it reached not charged in this run
+    /// yet (each once).
+    fn charge(&mut self, k: &Key) -> NestedCost {
+        let mut total = NestedCost::ZERO;
+        let mut todo = vec![k.clone()];
+        while let Some(k) = todo.pop() {
+            if !self.charged.insert(k.clone()) {
+                continue;
+            }
+            if let Some(r) = self.records.get(&k) {
+                total.add(r.own);
+                todo.extend(r.kids.iter().rev().cloned());
+            }
+        }
+        total
+    }
+
+    /// Opens a window at capture index `from` in context `ctx`.
+    fn begin(&mut self, from: usize, ctx: Vec<Diagnostic>, frame: Option<UnitFrame>) {
+        self.windows.push(Window {
+            from,
+            ctx,
+            frame,
+            children: Vec::new(),
+            kids: Vec::new(),
+            own: NestedCost::ZERO,
+        });
+    }
+
+    /// Closes the innermost window (begun at `mark`) as unit `key`:
+    /// whether `key` is recorded, and what the run is to be charged now.
+    /// A unit recorded in an earlier run (a query asked again) keeps its
+    /// record's cost; new diagnostics replace its old ones, else those are
+    /// replayed.
+    fn end(&mut self, diags: &DiagEngine<'_>, key: Key, mark: usize) -> (bool, NestedCost) {
+        let Some(w) = self.windows.pop() else { return (false, NestedCost::ZERO) };
+        debug_assert_eq!(w.from, mark, "session windows nest");
+        let end = diags.captured_len();
+        let mut segs = Vec::new();
+        if end > w.from || !w.children.is_empty() {
+            let all = diags.captured_from(w.from);
+            let mut at = w.from;
+            for (c, ctx, s, e) in w.children {
+                if s > at {
+                    segs.push(Seg::Diags(all[at - w.from..s - w.from].to_vec()));
+                }
+                segs.push(Seg::Child(c, ctx));
+                at = e.max(at);
+            }
+            if end > at {
+                segs.push(Seg::Diags(all[at - w.from..].to_vec()));
+            }
+        }
+        let fresh_diags = end > w.from;
+        if let Some(r) = self.records.get_mut(&key) {
+            if fresh_diags {
+                r.segs = segs;
+                r.ctx.clone_from(&w.ctx);
+                self.done.insert(key.clone());
+                if let Some(p) = self.windows.last_mut() {
+                    p.children.push((key.clone(), w.ctx, w.from, end));
+                }
+            } else {
+                self.replay(diags, &key, Some(w.ctx));
+            }
+            return (true, self.place(key));
+        }
+        if segs.is_empty() && w.own.is_zero() && w.kids.is_empty() {
+            return (false, NestedCost::ZERO);
+        }
+        self.count +=
+            segs.iter().map(|s| if let Seg::Diags(v) = s { v.len() } else { 0 }).sum::<usize>();
+        if let Key::Meta(op, words) = &key {
+            self.meta_ops.insert(*op);
+            self.key_words += words.len();
+        }
+        if let Some(p) = self.windows.last_mut() {
+            p.children.push((key.clone(), w.ctx.clone(), w.from, end));
+        }
+        self.records.insert(
+            key.clone(),
+            Rec { segs, ctx: w.ctx, frame: w.frame, own: w.own, kids: w.kids },
+        );
+        self.done.insert(key.clone());
+        (true, self.place(key))
+    }
+
+    /// Recorded unit `key` was reached: the open window's, or charged now.
+    fn place(&mut self, key: Key) -> NestedCost {
+        if let Some(p) = self.windows.last_mut() {
+            if !p.kids.contains(&key) {
+                p.kids.push(key);
+            }
+            return NestedCost::ZERO;
+        }
+        self.charge(&key)
+    }
+
+    /// A nested evaluation cost `c`: the open window's own, or (`Some`)
+    /// the run's now.
+    fn nested(&mut self, c: NestedCost) -> Option<NestedCost> {
+        match self.windows.last_mut() {
+            Some(w) => {
+                w.own.add(c);
+                None
+            }
+            None => Some(c),
+        }
+    }
+}
+
+impl Sema<'_, '_> {
+    /// The context notes a diagnostic emitted now would have.
+    fn sess_context(&self) -> Vec<Diagnostic> {
+        if self.inst.stack.is_empty() {
+            return Vec::new();
+        }
+        // Computing the notes marks them printed (`last_emitted`); the
+        // real diagnostics that follow must still print theirs.
+        let printed = self.inst.stack.last_emitted.get();
+        self.inst.stack.last_emitted.set(0);
+        let notes = self.inst_context_notes();
+        self.inst.stack.last_emitted.set(printed);
+        self.diags.note_records(notes)
+    }
+
+    /// Opens a recording window in a session's run (§7) for a unit whose
+    /// instantiation frame is the innermost one; its mark.
+    pub(crate) fn sess_unit_begin(&mut self) -> Option<usize> {
+        self.eval_replay.as_ref()?;
+        let ctx = self.sess_context();
+        let frame = self.inst.stack.frames.last().map(|f| UnitFrame {
+            kind: f.kind,
+            entity: f.entity,
+            template: f.template,
+            sfinae: f.sfinae,
+        });
+        let from = self.diags.captured_len();
+        self.eval_replay.as_deref_mut()?.begin(from, ctx, frame);
+        Some(from)
+    }
+
+    /// Closes the window `mark` opened as unit `key`, charging the run
+    /// what it is to be charged now.
+    pub(crate) fn sess_window_end(&mut self, key: Key, mark: Option<usize>) {
+        let Some(mark) = mark else { return };
+        let diags = self.diags;
+        let Some(rp) = self.eval_replay.as_deref_mut() else { return };
+        let (recorded, c) = rp.end(diags, key, mark);
+        if recorded {
+            self.sess_impure();
+        }
+        self.sess_charge(c);
+    }
+
+    /// The run reaches unit `key` (recorded in an earlier run, or not),
+    /// required at `poi`: its diagnostics are reported with the context
+    /// notes they would have now.
+    pub(crate) fn sess_reach_at(&mut self, key: &Key, poi: Loc) {
+        let Some(frame) =
+            self.eval_replay.as_deref().and_then(|rp| rp.records.get(key)).map(|r| r.frame)
+        else {
+            return;
+        };
+        let target = match frame {
+            Some(f) => {
+                self.inst.stack.push(InstFrame {
+                    kind: f.kind,
+                    entity: f.entity,
+                    template: f.template,
+                    poi,
+                    sfinae: f.sfinae,
+                    args: None,
+                    start: None,
+                    start_bytes: 0,
+                    start_nodes: 0,
+                    child_ns: 0,
+                    trace: None,
+                });
+                let ctx = self.sess_context();
+                let _ = self.inst.stack.pop();
+                Some(ctx)
+            }
+            None => None,
+        };
+        let diags = self.diags;
+        let Some(rp) = self.eval_replay.as_deref_mut() else { return };
+        let c = rp.reach(diags, key, target);
+        self.sess_impure();
+        self.sess_charge(c);
+    }
+
+    /// Whether unit `key` has a record (in a session's run).
+    pub(crate) fn sess_recorded(&self, key: &Key) -> bool {
+        self.eval_replay.as_deref().is_some_and(|rp| rp.records.contains_key(key))
+    }
+
+    /// The calls in progress reached recorded work: not memoized.
+    fn sess_impure(&mut self) {
+        if let Some(o) = self.oven.as_deref_mut() {
+            o.mark_impure();
+        }
+    }
+
+    /// Charges the run `c`: to the Oven when it is lent here, else kept
+    /// for the Oven to take.
+    fn sess_charge(&mut self, c: NestedCost) {
+        if c.is_zero() {
+            return;
+        }
+        if let Some(o) = self.oven.as_deref_mut() {
+            o.session_charge(c);
+        } else if let Some(rp) = self.eval_replay.as_deref_mut() {
+            rp.loose.add(c);
         }
     }
 }
@@ -251,66 +584,67 @@ impl Replay {
 impl Bridge<'_, '_, '_> {
     /// Opens a recording window (§7); its mark.
     pub(crate) fn window_begin(&mut self) -> usize {
-        let Some(run) = self.run.as_mut() else { return 0 };
         let from = self.sema.diags.captured_len();
-        run.replay.windows.push(Window { from, children: Vec::new() });
+        if self.sema.eval_replay.is_some() {
+            let ctx = self.sema.sess_context();
+            if let Some(rp) = self.sema.eval_replay.as_deref_mut() {
+                rp.begin(from, ctx, None);
+            }
+        }
         from
     }
 
-    /// Closes the window `mark` opened, recording its diagnostics under
-    /// `key`: whether there were any.
-    pub(crate) fn window_end(&mut self, key: Key, mark: usize) -> bool {
-        let Some(run) = self.run.as_mut() else { return false };
-        let Some(w) = run.replay.windows.pop() else { return false };
-        debug_assert_eq!(w.from, mark, "session windows nest");
+    /// Closes the window `mark` opened as unit `key`: whether it is
+    /// recorded, and what the run is to be charged now.
+    pub(crate) fn window_end(&mut self, key: Key, mark: usize) -> (bool, NestedCost) {
         let diags = self.sema.diags;
-        let end = diags.captured_len();
-        if end <= w.from {
-            return false;
+        match self.sema.eval_replay.as_deref_mut() {
+            Some(rp) => rp.end(diags, key, mark),
+            None => (false, NestedCost::ZERO),
         }
-        let all = diags.captured_from(w.from);
-        let mut segs = Vec::new();
-        let mut at = w.from;
-        for (c, s, e) in w.children {
-            if s > at {
-                segs.push(Seg::Diags(all[at - w.from..s - w.from].to_vec()));
-            }
-            segs.push(Seg::Child(c));
-            at = e;
-        }
-        if end > at {
-            segs.push(Seg::Diags(all[at - w.from..].to_vec()));
-        }
-        let rp = &mut *run.replay;
-        rp.count +=
-            segs.iter().map(|s| if let Seg::Diags(v) = s { v.len() } else { 0 }).sum::<usize>();
-        if let Key::Meta(op, words) = &key {
-            rp.meta_ops.insert(*op);
-            if !rp.records.contains_key(&key) {
-                rp.key_words += words.len();
-            }
-        }
-        rp.records.insert(key.clone(), segs);
-        rp.done.insert(key.clone());
-        if let Some(p) = rp.windows.last_mut() {
-            p.children.push((key, w.from, end));
-        }
-        true
     }
 
-    /// Reports the recorded diagnostics of `key` (§7).
-    pub(crate) fn replay(&mut self, key: &Key) {
+    /// The run reaches recorded unit `key` (§5.1): what it is to be
+    /// charged now.
+    pub(crate) fn reach(&mut self, key: &Key) -> NestedCost {
         let diags = self.sema.diags;
-        if let Some(run) = self.run.as_mut() {
-            run.replay.replay(diags, key);
+        // Reported in the context of the reach when they were recorded in
+        // one (not at a run's own level).
+        let target = self
+            .sema
+            .eval_replay
+            .as_deref()
+            .and_then(|rp| rp.records.get(key))
+            .filter(|r| !r.ctx.is_empty())
+            .map(|_| self.sema.sess_context());
+        match self.sema.eval_replay.as_deref_mut() {
+            Some(rp) => rp.reach(diags, key, target),
+            None => NestedCost::ZERO,
         }
+    }
+
+    /// A nested evaluation cost `c` (§5.1): the open unit's, or the run's
+    /// now.
+    pub(crate) fn nested_cost(&mut self, c: NestedCost) -> Option<NestedCost> {
+        match self.sema.eval_replay.as_deref_mut() {
+            Some(rp) => rp.nested(c),
+            None => Some(c),
+        }
+    }
+
+    /// The charges kept for the Oven.
+    pub(crate) fn settle(&mut self) -> NestedCost {
+        self.sema
+            .eval_replay
+            .as_deref_mut()
+            .map_or(NestedCost::ZERO, |rp| std::mem::take(&mut rp.loose))
     }
 
     /// `f` (semantic work a bridge callback does) recorded under `key`
-    /// in a run: what it reports is recorded; when it reports nothing
-    /// but reported something in an earlier run, that is replayed. Either
-    /// makes the calls in progress impure, so no memoized result skips
-    /// it in a later run.
+    /// in a run (§5.1): what it reports and costs is recorded; when it
+    /// was recorded in an earlier run, that is replayed and charged.
+    /// Either makes the calls in progress impure, so no memoized result
+    /// skips it in a later run.
     pub(crate) fn tracked<R>(
         &mut self,
         key: Key,
@@ -322,8 +656,9 @@ impl Bridge<'_, '_, '_> {
 
     /// [`Bridge::tracked`] with the key computed after `f`, by `key`, and
     /// only when it is needed: always, unless `op` is a reflection
-    /// intrinsic that reported nothing and has no record (no key of the
-    /// op can be known then).
+    /// intrinsic that has no record and whose call left nothing to
+    /// record (no diagnostics, no nested work, no unit reached): no key
+    /// of the op can be known then.
     pub(crate) fn tracked_by<R>(
         &mut self,
         op: Option<MetaOp>,
@@ -331,33 +666,29 @@ impl Bridge<'_, '_, '_> {
         oven: &mut Oven,
         f: impl FnOnce(&mut Self, &mut Oven) -> R,
     ) -> R {
-        if self.run.is_none() {
+        if self.sema.eval_replay.is_none() {
             return f(self, oven);
         }
         let mark = self.window_begin();
         let r = f(self, oven);
         let quiet = self.sema.diags.captured_len() <= mark;
         if let (Some(op), true) = (op, quiet)
-            && let Some(run) = self.run.as_mut()
-            && !run.replay.meta_ops.contains(&op)
+            && let Some(rp) = self.sema.eval_replay.as_deref_mut()
+            && !rp.meta_ops.contains(&op)
+            && rp.windows.last().is_some_and(Window::is_empty)
         {
-            let w = run.replay.windows.pop();
+            let w = rp.windows.pop();
             debug_assert!(w.is_some_and(|w| w.from == mark), "session windows nest");
             return r;
         }
         let key = key(self, oven);
-        let known = self.run.as_ref().is_some_and(|run| run.replay.records.contains_key(&key));
-        let impure = if known {
-            if !self.window_end(key.clone(), mark) {
-                self.replay(&key);
-            }
-            true
-        } else {
-            self.window_end(key, mark)
-        };
-        if impure {
+        // A known record is replayed and charged by `window_end` when the
+        // window recorded nothing new (`Replay::end`).
+        let (recorded, c) = self.window_end(key, mark);
+        if recorded {
             oven.mark_impure();
         }
+        oven.session_charge(c);
         r
     }
 }
@@ -377,7 +708,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let oven = oven_mut(&mut sema);
         let tu_host = oven.take_host_calls();
         oven.session_begin();
-        Ok(EvalSession { sema, replay: Replay::default(), tu_host })
+        Ok(EvalSession { sema, replay: Box::default(), tu_host })
     }
 
     /// The translation unit's state (read only).
@@ -531,7 +862,10 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let mark = diags.capture_begin();
         let errors = diags.error_count();
         self.replay.done.clear();
+        self.replay.charged.clear();
         self.replay.windows.clear();
+        self.replay.loose = NestedCost::ZERO;
+        self.sema.eval_replay = Some(std::mem::take(&mut self.replay));
         let fatal = self.sema.inst.fatal;
         let saved_loc = self.sema.inst.eval_loc.replace(at);
         let mut oven =
@@ -542,11 +876,14 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let year = Bridge { sema: &mut self.sema, run: None }.cxx_year();
         oven.set_cxx_year(year);
         let out = {
-            let mut ctx = RunCtx { host, replay: &mut self.replay };
+            let mut ctx = RunCtx { host };
             let mut b = Bridge { sema: &mut self.sema, run: Some(&mut ctx) };
             oven.session_run(&mut b, f, at, budget, cancel)
         };
         self.sema.oven = Some(oven);
+        if let Some(rp) = self.sema.eval_replay.take() {
+            self.replay = rp;
+        }
         self.sema.inst.eval_loc = saved_loc;
         self.sema.inst.fatal = fatal;
         self.sema.inst.meta_calls.clear();
@@ -571,9 +908,11 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         RunReport {
             result,
             steps: out.steps,
+            nested_steps: out.nested_steps,
             host_calls: out.host_calls,
             peak_heap: out.peak_heap,
             calls: out.calls,
+            nested_calls: out.nested_calls,
             diagnostics,
         }
     }
@@ -587,7 +926,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             sema: self.sema.memory().reserved_bytes(),
             oven: oven.footprint() as u64,
             replay: (self.replay.count * size_of::<Diagnostic>()
-                + self.replay.records.capacity() * size_of::<(Key, Vec<Seg>)>()
+                + self.replay.records.capacity() * size_of::<(Key, Rec)>()
                 + self.replay.key_words * size_of::<u128>()) as u64,
             memo_entries: oven.memo_len(),
         }

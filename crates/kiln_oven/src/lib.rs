@@ -87,7 +87,8 @@ pub use meta::{
 };
 pub use notes::FrameMark;
 pub use session::{
-    CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, RunOutcome, RunValue,
+    CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, RunBudget, RunError, RunOutcome,
+    RunValue, SessUnit,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
@@ -509,25 +510,41 @@ pub trait SemaBridge {
         None
     }
 
-    /// A session's run starts compiling a function: a mark for
-    /// [`SemaBridge::session_window_end`] (spec/eval-session.md §7).
+    /// A session's run starts a unit of nested work (spec/eval-session.md
+    /// §5.1, §7): a mark for [`SemaBridge::session_window_end`].
     fn session_window_begin(&mut self) -> usize {
         0
     }
 
-    /// The compilation of function `func` that
-    /// [`SemaBridge::session_window_begin`] (returning `mark`) began has
-    /// ended: whether it reported diagnostics (they are recorded for
-    /// replay).
-    fn session_window_end(&mut self, func: u32, mark: usize) -> bool {
-        let _ = (func, mark);
-        false
+    /// The unit `unit` that [`SemaBridge::session_window_begin`]
+    /// (returning `mark`) began has ended: whether it was recorded (it
+    /// reported diagnostics or did nested work), and what the run is to be
+    /// charged now (nothing while an enclosing unit is open).
+    fn session_window_end(&mut self, unit: SessUnit, mark: usize) -> (bool, NestedCost) {
+        let _ = (unit, mark);
+        (false, NestedCost::ZERO)
     }
 
-    /// A session's run reaches function `func`, whose compilation in an
-    /// earlier run reported diagnostics: report them again.
-    fn session_replay(&mut self, func: u32) {
-        let _ = func;
+    /// A session's run reaches unit `unit`, recorded in an earlier run:
+    /// its diagnostics are reported again (once per run), and what the run
+    /// is to be charged now is returned (its recorded cost, once per run;
+    /// nothing while an enclosing unit is open, which records the reach).
+    fn session_reach(&mut self, unit: SessUnit) -> NestedCost {
+        let _ = unit;
+        NestedCost::ZERO
+    }
+
+    /// A nested evaluation in a session's run cost `c`: it is the open
+    /// unit's own cost (`None`), or, with no unit open, charged to the run
+    /// now (`Some`).
+    fn session_nested_cost(&mut self, c: NestedCost) -> Option<NestedCost> {
+        Some(c)
+    }
+
+    /// The charges semantic work recorded where the Oven could not take
+    /// them, to charge the run now.
+    fn session_settle(&mut self) -> NestedCost {
+        NestedCost::ZERO
     }
 }
 
@@ -2132,6 +2149,7 @@ impl Oven {
         self.mem.heap_allocs = 0;
         self.mem.ctx = ctx;
         let r = self.run_job(bridge, e, object, fb);
+        let maxd = self.run.maxd;
         let steps1 = self.run.counters.steps;
         let c = vm::Counters {
             steps: steps1 - start,
@@ -2178,6 +2196,17 @@ impl Oven {
         ) = mem;
         if let Some(s) = sess {
             self.session_nested_end(s);
+            // Its cost is the open unit's, or the run's now (§5.1).
+            let cost = NestedCost {
+                steps: c.steps,
+                calls: c.calls,
+                peak: c.peak,
+                arena: c.arena,
+                depth: maxd,
+            };
+            if let Some(now) = bridge.session_nested_cost(cost) {
+                self.session_charge(now);
+            }
         }
         (r, c)
     }

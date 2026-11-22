@@ -974,6 +974,9 @@ pub struct Sema<'a, 'sm> {
     /// Oven slot while the running Oven is lent, kept for the next loan
     /// (a loan allocates no Oven of its own).
     pub(crate) spare_oven: Option<Box<Oven>>,
+    /// An evaluation session's records while one of its runs runs
+    /// (spec/eval-session.md §5.1, §7); `None` otherwise.
+    pub(crate) eval_replay: Option<Box<session::Replay>>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -1757,6 +1760,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             typeid_operands: Vec::new(),
             meta_subst: meta::SubstMemo::default(),
             spare_oven: None,
+            eval_replay: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             omitted_inits: Vec::new(),

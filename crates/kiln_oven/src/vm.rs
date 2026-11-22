@@ -1080,17 +1080,24 @@ impl Oven {
                     if before + n > self.step_stop {
                         // A session's cancellation check, or the limit
                         // (spec/eval-session.md §8).
-                        if let Err(cancelled) = crate::session::step_over(
+                        if let Err(stop) = crate::session::step_over(
                             &mut self.step_stop,
                             self.budget.steps,
                             self.sess.as_deref(),
                             before + n,
                         ) {
-                            if cancelled {
-                                return Err((Fault::Cancelled, $at));
-                            }
-                            let i = $idx as usize + (self.budget.steps - before) as usize;
-                            return Err((Fault::Steps(self.step_locs[i]), $at));
+                            let i = $idx as usize
+                                + self.budget.steps.saturating_sub(before).min(n.saturating_sub(1))
+                                    as usize;
+                            return Err((
+                                match stop {
+                                    crate::session::Stop::Cancelled => Fault::Cancelled,
+                                    crate::session::Stop::Memory => Fault::Memory,
+                                    crate::session::Stop::Depth => Fault::Depth,
+                                    crate::session::Stop::Limit => Fault::Steps(self.step_locs[i]),
+                                },
+                                $at,
+                            ));
                         }
                     }
                     self.run.counters.steps = before + n;
@@ -2619,7 +2626,9 @@ impl Oven {
             if matches!(self.funcs[callee as usize].state, FState::Stub | FState::Undefined) {
                 self.hook_compile(b, callee);
             }
-            if self.funcs[callee as usize].state != FState::Ready {
+            if self.funcs[callee as usize].state != FState::Ready
+                && self.func_state(callee) != FState::Ready
+            {
                 return Err(Fault::Callee(callee));
             }
         }
@@ -2652,6 +2661,7 @@ impl Oven {
             if let Some(v) = self.memo.get(&key) {
                 let (live, arena) = (self.mem.live_bytes(), self.mem.arena());
                 if c.steps + v.steps <= self.budget.steps
+                    && (self.sess.is_none() || c.steps + v.steps <= self.step_stop)
                     && active + v.depth <= self.budget.depth
                     && arena + v.arena <= self.mem.limit
                 {

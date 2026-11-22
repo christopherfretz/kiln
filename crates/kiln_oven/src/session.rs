@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kiln_ast::DeclId;
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::compile::{FState, RetKind};
 use crate::host::HostMode;
@@ -28,6 +28,11 @@ pub const CANCEL_INTERVAL: u64 = 65_536;
 /// After a run, the frame and heap spaces' buffers are released down to
 /// this many bytes each (spec/eval-session.md §10).
 pub const RELEASE_FLOOR: usize = 1 << 20;
+
+/// The note of a host call refused in semantic work a run triggered
+/// (spec/eval-session.md §6).
+pub(crate) const NESTED_HOST_NOTE: &str =
+    "host call in semantic work a run triggered (its result is kept across runs)";
 
 /// The limits of one run (spec/eval-session.md §8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,18 +148,68 @@ pub enum RunError {
     },
 }
 
+/// What a unit of nested work cost (spec/eval-session.md §5.1): its
+/// nested evaluations' steps and calls summed, their peak bytes and call
+/// depth the largest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NestedCost {
+    /// Steps executed.
+    pub steps: u64,
+    /// Function calls made.
+    pub calls: u64,
+    /// Peak live frame and heap bytes.
+    pub peak: u64,
+    /// Peak address space.
+    pub arena: u64,
+    /// Nested call depth.
+    pub depth: u32,
+}
+
+impl NestedCost {
+    /// Nothing.
+    pub const ZERO: NestedCost = NestedCost { steps: 0, calls: 0, peak: 0, arena: 0, depth: 0 };
+
+    /// Whether this costs nothing.
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        *self == NestedCost::ZERO
+    }
+
+    /// Adds `o`: steps and calls sum, the peaks and depth take the larger.
+    pub fn add(&mut self, o: NestedCost) {
+        self.steps = self.steps.saturating_add(o.steps);
+        self.calls = self.calls.saturating_add(o.calls);
+        self.peak = self.peak.max(o.peak);
+        self.arena = self.arena.max(o.arena);
+        self.depth = self.depth.max(o.depth);
+    }
+}
+
+/// A unit of nested work the Oven sees (spec/eval-session.md §5.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SessUnit {
+    /// The compilation of the Oven's function (by index).
+    Func(u32),
+    /// The evaluation of the initializer of the Oven's global (by index).
+    Var(u32),
+}
+
 /// What [`Oven::session_run`] produced.
 #[derive(Debug)]
 pub struct RunOutcome {
     /// The value, or the kind of failure with its notes.
     pub result: Result<RunValue, (RunError, EvalFailure)>,
-    /// Steps the run executed.
+    /// Steps the run executed itself.
     pub steps: u64,
+    /// Steps of the nested work the run was charged (§5.1).
+    pub nested_steps: u64,
+    /// Calls of the nested work the run was charged.
+    pub nested_calls: u64,
     /// Handler calls the run made.
     pub host_calls: u64,
     /// The run's peak live frame and heap bytes.
     pub peak_heap: u64,
-    /// Function calls the run made.
+    /// Function calls the run made itself.
     pub calls: u64,
 }
 
@@ -163,12 +218,34 @@ pub struct RunOutcome {
 pub(crate) struct SessionState {
     /// The compiled call stub of each entry run so far.
     stubs: FxHashMap<DeclId, u32>,
-    /// The functions whose compilation in a run reported diagnostics,
-    /// with their real state: set back to a stub at the end of every
-    /// run, so the next run's first call replays them (§7).
-    noisy: FxHashMap<u32, FState>,
+    /// The functions whose compilation in a run was recorded (it
+    /// reported diagnostics or did nested work, §5.1), with their real
+    /// state: they stay stubs while the session is open, so every call
+    /// reaches the record and is impure (no memoized result skips it).
+    tracked: FxHashMap<u32, FState>,
+    /// The globals whose initializer's evaluation in a run was recorded,
+    /// with their object: unresolved again after every run, so the next
+    /// run's first read reaches the record.
+    kept_vars: FxHashMap<u32, u64>,
+    /// The tracked functions reached by the running run outside nested
+    /// work (a later call there needs no reach).
+    reached: FxHashSet<u32>,
     /// The running run's state.
     pub(crate) arm: Option<Arm>,
+}
+
+/// Why the next step check stops a run that was charged past its budget
+/// (spec/eval-session.md §5.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// The step budget (or the run's charge over it).
+    Limit,
+    /// The cancellation token.
+    Cancelled,
+    /// Charged nested work's bytes over the budget.
+    Memory,
+    /// Charged nested work's depth over the budget.
+    Depth,
 }
 
 /// A run in progress.
@@ -179,11 +256,23 @@ pub(crate) struct Arm {
     /// evaluations run under them, §5).
     tu: Budget,
     tu_limit: u64,
+    /// The run's own budget.
+    run: RunBudget,
     /// Nested evaluations open: no cancellation and no fault
     /// classification inside them.
     nested: u32,
     /// The kind of the run's last fault.
     fault: Option<RunError>,
+    /// The nested work charged so far (§5.1).
+    nested_steps: u64,
+    nested_calls: u64,
+    /// The run's peak with its charged nested work's.
+    peak: u64,
+    /// Charges made while a nested evaluation is open, applied when the
+    /// last one ends.
+    pending: NestedCost,
+    /// The charge put the run over its budget: the next step check stops.
+    over: Option<Stop>,
 }
 
 /// What [`Oven::session_nested_begin`] saved.
@@ -191,6 +280,18 @@ pub(crate) struct NestedSaved {
     budget: Budget,
     limit: u64,
     step_stop: u64,
+}
+
+/// What [`Oven::session_var_begin`] saved.
+pub(crate) struct VarSaved {
+    nested: NestedSaved,
+    mark: usize,
+    depth_base: u32,
+    maxd: u32,
+    peak: u64,
+    live0: u64,
+    arena_peak: u64,
+    arena0: u64,
 }
 
 impl Oven {
@@ -206,8 +307,11 @@ impl Oven {
     /// real state again.
     pub fn session_end(&mut self) {
         if let Some(s) = self.sess.take() {
-            for (idx, state) in s.noisy {
+            for (idx, state) in s.tracked {
                 self.funcs[idx as usize].state = state;
+            }
+            for (g, p) in s.kept_vars {
+                self.globals[g as usize].state = crate::compile::GState::Resolved(p);
             }
         }
     }
@@ -243,6 +347,8 @@ impl Oven {
         let fail = |k: RunError| RunOutcome {
             result: Err((k, EvalFailure::silent(FailKind::NotConstant))),
             steps: 0,
+            nested_steps: 0,
+            nested_calls: 0,
             host_calls: 0,
             peak_heap: 0,
             calls: 0,
@@ -270,7 +376,20 @@ impl Oven {
         self.budget.depth = budget.depth;
         self.mem.limit = budget.bytes;
         if let Some(s) = self.sess.as_mut() {
-            s.arm = Some(Arm { cancel: cancel.clone(), tu, tu_limit, nested: 0, fault: None });
+            s.arm = Some(Arm {
+                cancel: cancel.clone(),
+                tu,
+                tu_limit,
+                run: budget,
+                nested: 0,
+                fault: None,
+                nested_steps: 0,
+                nested_calls: 0,
+                peak: 0,
+                pending: NestedCost::ZERO,
+                over: None,
+            });
+            s.reached.clear();
         }
         let inner = std::mem::take(&mut self.inner);
         let calls0 = self.host.calls;
@@ -281,6 +400,13 @@ impl Oven {
         self.run.object = None;
         self.let_pending.clear();
         let r = self.exec(b, stub, 0).and_then(|()| {
+            // Charged past the budget after the last step check.
+            let loose = b.session_settle();
+            self.session_charge(loose);
+            if let Some(stop) = self.sess.as_ref().and_then(|s| s.arm.as_ref()).and_then(|a| a.over)
+            {
+                return Err(self.session_over_failure(b, stop, at));
+            }
             let v = match self.funcs[stub as usize].ret {
                 RetKind::Scalar(ty) => {
                     let raw = self.regs[0];
@@ -309,8 +435,10 @@ impl Oven {
         self.mem.limit = tu_limit;
         self.step_stop = tu.steps;
         let arm = self.sess.as_mut().and_then(|s| s.arm.take());
-        self.session_reset_noisy();
+        self.session_reset_vars();
         self.release_spaces();
+        let (nested_steps, nested_calls, peak) =
+            arm.as_ref().map_or((0, 0, 0), |a| (a.nested_steps, a.nested_calls, a.peak));
         let result = r.map_err(|e| {
             let k = arm.and_then(|a| a.fault).unwrap_or(RunError::Failed);
             (k, e)
@@ -318,15 +446,23 @@ impl Oven {
         RunOutcome {
             result,
             steps: c.steps,
+            nested_steps,
+            nested_calls,
             host_calls: self.host.calls - calls0,
-            peak_heap: c.peak,
+            peak_heap: c.peak.max(peak),
             calls: c.calls,
         }
     }
 
     /// [`step_over`] of this Oven.
-    pub(crate) fn step_over(&mut self, need: u64) -> Result<(), bool> {
+    pub(crate) fn step_over(&mut self, need: u64) -> Result<(), Stop> {
         step_over(&mut self.step_stop, self.budget.steps, self.sess.as_deref(), need)
+    }
+
+    /// Whether nested work of a session's run is running (its host calls
+    /// are refused, §6).
+    pub(crate) fn session_in_nested(&self) -> bool {
+        self.sess.as_ref().and_then(|s| s.arm.as_ref()).is_some_and(|a| a.nested != 0)
     }
 
     /// Whether a host call of the running run is cancelled (checked
@@ -384,58 +520,237 @@ impl Oven {
 
     /// Ends what [`Oven::session_nested_begin`] started.
     pub(crate) fn session_nested_end(&mut self, saved: NestedSaved) {
+        let mut pending = NestedCost::ZERO;
         if let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) {
             a.nested -= 1;
+            if a.nested == 0 {
+                pending = std::mem::take(&mut a.pending);
+            }
         }
         self.budget = saved.budget;
         self.mem.limit = saved.limit;
         self.step_stop = saved.step_stop;
+        self.session_charge(pending);
+    }
+
+    /// Charges the running run nested work's cost `c` (spec/eval-session.md
+    /// §5.1): its steps count against the run's step budget, its bytes and
+    /// depth on top of the run's live ones. A charge that puts the run
+    /// over its budget stops it at its next step check. Inside a nested
+    /// evaluation the charge waits until the last one ends. Nothing
+    /// outside a run.
+    pub fn session_charge(&mut self, c: NestedCost) {
+        if c.is_zero() {
+            return;
+        }
+        let live = self.mem.live_bytes();
+        let arena = self.mem.arena();
+        let active = self.active_calls();
+        let own = self.run.counters.steps;
+        let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) else { return };
+        if a.nested != 0 {
+            a.pending.add(c);
+            return;
+        }
+        a.nested_steps = a.nested_steps.saturating_add(c.steps);
+        a.nested_calls = a.nested_calls.saturating_add(c.calls);
+        a.peak = a.peak.max(live.saturating_add(c.peak));
+        // The run's own steps may use what its nested work left.
+        self.budget.steps = a.run.steps.saturating_sub(a.nested_steps);
+        let over = if own > self.budget.steps || a.nested_steps > a.run.steps {
+            Some(Stop::Limit)
+        } else if arena.saturating_add(c.arena) > a.run.bytes {
+            Some(Stop::Memory)
+        } else if active.saturating_add(c.depth) > a.run.depth {
+            Some(Stop::Depth)
+        } else {
+            None
+        };
+        if over.is_some() && a.over.is_none() {
+            a.over = over;
+        }
+        if a.over.is_some() {
+            self.step_stop = 0;
+        } else {
+            self.step_stop = self.step_stop.min(self.budget.steps);
+        }
+    }
+
+    /// The failure of a run that ended charged past its budget (`stop`),
+    /// reported at `at`.
+    #[cold]
+    fn session_over_failure(&mut self, b: &dyn SemaBridge, stop: Stop, at: Loc) -> EvalFailure {
+        let f = match stop {
+            Stop::Memory => Fault::Memory,
+            Stop::Depth => Fault::Depth,
+            Stop::Limit | Stop::Cancelled => Fault::Steps(at),
+        };
+        self.session_note_fault_at_top(b, &f);
+        let kind = f.kind();
+        let msg = match stop {
+            Stop::Memory => format!(
+                "constexpr evaluation exceeded the memory limit of {} bytes",
+                self.budget.bytes
+            ),
+            Stop::Depth => format!(
+                "constexpr evaluation exceeded maximum depth of {} calls",
+                self.budget.depth
+            ),
+            Stop::Limit | Stop::Cancelled => {
+                "constexpr evaluation hit maximum step limit; possible infinite loop?".to_owned()
+            }
+        };
+        EvalFailure { kind, notes: vec![crate::Note::new(at, msg)] }
+    }
+
+    /// [`Oven::session_note_fault`] at the run's own level.
+    fn session_note_fault_at_top(&mut self, b: &dyn SemaBridge, f: &Fault) {
+        let depth = std::mem::replace(&mut self.ctx_depth, 1);
+        self.session_note_fault(b, f);
+        self.ctx_depth = depth;
+    }
+
+    /// The state of function `idx` as its compilation left it (a tracked
+    /// function's is kept aside while it stays a stub, §5.1).
+    pub(crate) fn func_state(&self, idx: u32) -> FState {
+        let s = self.funcs[idx as usize].state;
+        if s == FState::Stub
+            && let Some(&r) = self.sess.as_ref().and_then(|x| x.tracked.get(&idx))
+        {
+            return r;
+        }
+        s
+    }
+
+    /// A read of global `g` in a run whose initializer's evaluation an
+    /// earlier run recorded: reaches the record (§5.1) and resolves `g`
+    /// to its kept object. `None` when `g` has no record.
+    #[cold]
+    pub(crate) fn session_kept_var(&mut self, b: &mut dyn SemaBridge, g: u32) -> Option<u64> {
+        let s = self.sess.as_ref()?;
+        s.arm.as_ref()?;
+        let p = *s.kept_vars.get(&g)?;
+        self.globals[g as usize].state = crate::compile::GState::Resolved(p);
+        self.run.impure += 1;
+        let c = b.session_reach(SessUnit::Var(g));
+        self.session_charge(c);
+        Some(p)
+    }
+
+    /// The evaluation of global `g`'s initializer in a run starts
+    /// (`eval_var_init`): it runs as nested work (§5.1), under the
+    /// translation unit's limits, recorded under its own unit. `None`
+    /// outside a run.
+    pub(crate) fn session_var_begin(&mut self, b: &mut dyn SemaBridge) -> Option<VarSaved> {
+        let nested = self.session_nested_begin()?;
+        let mark = b.session_window_begin();
+        let saved = VarSaved {
+            nested,
+            mark,
+            depth_base: self.run.depth_base,
+            maxd: self.run.maxd,
+            peak: self.mem.peak,
+            live0: self.mem.live_bytes(),
+            arena_peak: self.mem.arena_peak,
+            arena0: self.mem.arena(),
+        };
+        self.run.depth_base = 0;
+        self.run.maxd = 0;
+        self.mem.peak = saved.live0;
+        self.mem.arena_peak = saved.arena0;
+        Some(saved)
+    }
+
+    /// Ends what [`Oven::session_var_begin`] started, the initializer's
+    /// evaluation having made object `p`, counted `counters` and peaked at
+    /// `peak` live bytes.
+    pub(crate) fn session_var_end(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        g: u32,
+        p: u64,
+        (counters, peak): (crate::vm::Counters, u64),
+        saved: VarSaved,
+    ) {
+        let cost = NestedCost {
+            steps: counters.steps,
+            calls: counters.calls,
+            peak: peak.saturating_sub(saved.live0),
+            arena: self.mem.arena_peak.saturating_sub(saved.arena0),
+            depth: self.run.maxd,
+        };
+        self.run.depth_base = saved.depth_base;
+        self.run.maxd = saved.maxd;
+        self.mem.peak = saved.peak;
+        self.mem.arena_peak = saved.arena_peak;
+        // Its cost is its unit's own.
+        let loose = b.session_nested_cost(cost).unwrap_or(NestedCost::ZERO);
+        let (recorded, charge) = b.session_window_end(SessUnit::Var(g), saved.mark);
+        if recorded {
+            if let Some(s) = self.sess.as_mut() {
+                s.kept_vars.insert(g, p);
+            }
+            self.run.impure += 1;
+        }
+        self.session_nested_end(saved.nested);
+        self.session_charge(loose);
+        self.session_charge(charge);
     }
 
     /// [`Oven::compile_func`] in a session: during a run, a function
-    /// whose compilation reports diagnostics is remembered (and not
-    /// inlined), and one set back to a stub replays them through the
-    /// bridge and gets its real state back without compiling again (§7).
-    /// Either makes the calls in progress impure, so no memoized result
-    /// skips the replay in a later run.
+    /// whose compilation is recorded (it reported diagnostics or did nested
+    /// work, §5.1) stays a stub, is not inlined, and every later call of it
+    /// in any run reaches the record (its diagnostics replayed, its cost
+    /// charged once per run) and makes the calls in progress impure, so no
+    /// memoized result skips the reach.
     #[cold]
     #[inline(never)]
     pub(crate) fn session_compile(&mut self, b: &mut dyn SemaBridge, idx: u32) {
-        let armed = self.sess.as_ref().is_some_and(|s| s.arm.is_some());
-        if !armed {
-            self.compile_func_body(b, idx);
+        let Some(s) = self.sess.as_ref() else { return };
+        let real = s.tracked.get(&idx).copied();
+        if s.arm.is_none() {
+            if real.is_none() {
+                self.compile_func_body(b, idx);
+            }
             return;
         }
-        let real = self.sess.as_ref().and_then(|s| s.noisy.get(&idx).copied());
-        if let Some(state) = real
-            && self.funcs[idx as usize].state == FState::Stub
+        // A declared function is retried at every call; its compilation is
+        // recorded again.
+        if let Some(r) = real
+            && r != FState::Undefined
         {
-            b.session_replay(idx);
-            self.funcs[idx as usize].state = state;
             self.run.impure += 1;
+            let first = self.sess.as_mut().is_some_and(|s| {
+                s.reached.insert(idx) || s.arm.as_ref().is_some_and(|a| a.nested != 0)
+            });
+            if first {
+                let c = b.session_reach(SessUnit::Func(idx));
+                self.session_charge(c);
+            }
             return;
         }
         let w = b.session_window_begin();
         self.compile_func_body(b, idx);
-        if b.session_window_end(idx, w) {
+        let (recorded, charge) = b.session_window_end(SessUnit::Func(idx), w);
+        if recorded || real.is_some() {
             let state = self.funcs[idx as usize].state;
             self.funcs[idx as usize].inline = false;
+            self.funcs[idx as usize].state = FState::Stub;
             if let Some(s) = self.sess.as_mut() {
-                s.noisy.insert(idx, state);
+                s.tracked.insert(idx, state);
+                s.reached.insert(idx);
             }
             self.run.impure += 1;
         }
+        self.session_charge(charge);
     }
 
-    /// Sets every function with recorded diagnostics back to a stub.
-    fn session_reset_noisy(&mut self) {
-        let Some(s) = self.sess.as_mut() else { return };
-        for (&idx, real) in &mut s.noisy {
-            let f = &mut self.funcs[idx as usize];
-            if f.state != FState::Stub {
-                *real = f.state;
-            }
-            f.state = FState::Stub;
+    /// Sets every global whose initializer's evaluation was recorded back
+    /// to unresolved.
+    fn session_reset_vars(&mut self) {
+        let Some(s) = self.sess.as_ref() else { return };
+        for &g in s.kept_vars.keys() {
+            self.globals[g as usize].state = crate::compile::GState::Unresolved;
         }
     }
 
@@ -454,9 +769,8 @@ impl Oven {
 }
 
 /// The step check's slow path ([`CANCEL_INTERVAL`]): `need` steps passed
-/// `step_stop` (`limit` the step budget). `Err(true)`: the run is
-/// cancelled; `Err(false)`: the budget is exceeded; `Ok`: `step_stop`
-/// moved on.
+/// `step_stop` (`limit` the step budget). `Err`: why the run stops (a
+/// run's charge past its budget first, §5.1); `Ok`: `step_stop` moved on.
 #[cold]
 #[inline(never)]
 pub(crate) fn step_over(
@@ -464,18 +778,22 @@ pub(crate) fn step_over(
     limit: u64,
     sess: Option<&SessionState>,
     need: u64,
-) -> Result<(), bool> {
-    if need > limit {
-        return Err(false);
+) -> Result<(), Stop> {
+    let arm = sess.and_then(|s| s.arm.as_ref()).filter(|a| a.nested == 0);
+    if let Some(stop) = arm.and_then(|a| a.over) {
+        return Err(stop);
     }
-    match sess.and_then(|s| s.arm.as_ref()) {
-        Some(a) if a.nested == 0 => {
+    if need > limit {
+        return Err(Stop::Limit);
+    }
+    match arm {
+        Some(a) => {
             if a.cancel.is_cancelled() {
-                return Err(true);
+                return Err(Stop::Cancelled);
             }
             *step_stop = limit.min(need.saturating_add(CANCEL_INTERVAL));
         }
-        _ => *step_stop = limit,
+        None => *step_stop = limit,
     }
     Ok(())
 }

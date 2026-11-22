@@ -1526,6 +1526,11 @@ impl Sema<'_, '_> {
     pub fn instantiate_function_definition(&mut self, f: DeclId, poi: Loc) {
         let f = self.member_redecl_instance(f);
         if self.ast.definition(f).is_some() || self.instantiation_stopped() {
+            // Instantiated by an earlier run of an evaluation session: this
+            // use reaches it (spec/eval-session.md §5.1).
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Inst(f), poi);
+            }
             return;
         }
         // [temp.expl.spec]/7: an explicit specialization is never
@@ -1629,6 +1634,9 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one run may need it (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         if let Some((i, _)) = self.ast.member_spec_info(f) {
             self.ast.templates.update_member_spec(i, |m| {
                 if m.point_of_instantiation == Loc::INVALID {
@@ -1644,6 +1652,7 @@ impl Sema<'_, '_> {
             sub.function_def(f, pdef, body);
         });
         self.replay_dependent_access(pdef, f);
+        self.sess_window_end(crate::session::Key::Inst(f), unit);
         self.pop_inst_frame();
     }
 
@@ -1760,6 +1769,17 @@ impl Sema<'_, '_> {
     /// source).
     fn note_var_reference(&mut self, v: DeclId, loc: Loc, odr: bool, decl_only: bool) {
         let deferred = self.inst.deferred_inits.contains(&v);
+        // A reference that would instantiate the initializer an earlier
+        // run of an evaluation session instantiated reaches its record
+        // (spec/eval-session.md §5.1).
+        if self.eval_replay.is_some()
+            && !decl_only
+            && !deferred
+            && !self.inst.member_defs.contains(&v)
+            && self.might_be_constant_var(v)
+        {
+            self.sess_reach_at(&crate::session::Key::Init(v), loc);
+        }
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
                 let used = odr;
@@ -2092,6 +2112,9 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one run may need it (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         // Inline as the pattern is: an explicitly `inline` one, or a
         // `constexpr` one from C++17 only ([dcl.constexpr]/1, WP-1517).
         let pspec = self.ast.decls.var(pattern).map(|x| x.spec).unwrap_or_default();
@@ -2120,6 +2143,7 @@ impl Sema<'_, '_> {
             // A failure was diagnosed; the variable is left uninitialized.
             let _ = sub.var_init(pattern, v);
         });
+        self.sess_window_end(crate::session::Key::Init(v), unit);
         self.pop_inst_frame();
     }
 
@@ -2220,6 +2244,11 @@ impl Sema<'_, '_> {
     pub(crate) fn note_used_for_instantiation(&mut self, f: DeclId, loc: Loc) {
         let f = self.member_redecl_instance(f);
         if self.ast.definition(f).is_some() || self.ast.instantiated_from(f).is_none() {
+            // Instantiated already: a session's run reaches the kept work
+            // (spec/eval-session.md §7).
+            if self.eval_replay.is_some() && self.ast.instantiated_from(f).is_some() {
+                self.sess_reach_at(&crate::session::Key::Inst(f), loc);
+            }
             return;
         }
         if !matches!(
