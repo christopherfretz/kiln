@@ -463,6 +463,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   22% fewer bytes. Each such call now costs one `-fconstexpr-steps` step
   (spec/oven.md "Library fast paths", "Light frames"); light frames
   change no step count.
+- Inlined constant-evaluation calls of small leaf functions (WP-1924).
+  At its first execution, a direct call of a short function that makes
+  no call, no frame object and no allocation and is not memoized (an
+  accessor, `operator[]`, an iterator step) is replaced by a copy of the
+  callee's body in the caller's code. That saves about 80 instructions
+  per call. Steps, the depth limit, values, the memo and every
+  diagnostic, with its "in call to" note, are unchanged. The bench's
+  steps, calls and bytes are identical. Evaluation time drops 1.6% for
+  `string-view-find-if`, 3.4% for `sort` and 7.5% for `table`
+  (spec/oven.md "Inlining"). PCH snapshot format 116.
 - The bench and status numbers are re-measured (WP-1886): `docs/status/perf.md`
   is now against clang 22.1.8 (it was clang 19), and the new
   `docs/status/perf-gcc.md` holds the same corpus against GCC 16.1

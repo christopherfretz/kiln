@@ -562,6 +562,9 @@ pub struct Oven {
     pub(crate) budget: Budget,
     /// Call frames shown in a failure's backtrace (0: all).
     pub(crate) backtrace_limit: usize,
+    /// Whether calls of small leaf callees are inlined at their call
+    /// sites (spec/oven.md "Inlining"; [`Oven::set_inlining`]).
+    pub(crate) inlining: bool,
     /// The clang release whose note wording failures follow
     /// (`-fclang-compat=`; [`Oven::set_clang_compat`]).
     pub(crate) clang_compat: u32,
@@ -614,6 +617,9 @@ pub struct Oven {
     pub(crate) step_locs: Vec<Loc>,
     pub(crate) origins: Vec<mem::Origin>,
     pub(crate) traps: Vec<TrapInfo>,
+    /// The inlined call sites, by the pc of their copies (spec/oven.md
+    /// "Inlining", `vm/inline.rs`).
+    pub(crate) inl: Vec<vm::InlSite>,
     pub(crate) funcs: Vec<Func>,
     pub(crate) func_map: FxHashMap<DeclId, u32>,
     /// The base-object variants of constructors and destructors of
@@ -775,6 +781,7 @@ impl Oven {
         Oven {
             budget,
             backtrace_limit: notes::BACKTRACE_LIMIT,
+            inlining: true,
             clang_compat: 22,
             cxx_year: 2026,
             cev_warn_next: false,
@@ -795,6 +802,7 @@ impl Oven {
             step_locs: Vec::new(),
             origins: Vec::new(),
             traps: Vec::new(),
+            inl: Vec::new(),
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
             base_funcs: FxHashMap::default(),
@@ -952,6 +960,20 @@ impl Oven {
     /// The backtrace limit ([`Oven::set_backtrace_limit`]).
     pub fn backtrace_limit(&self) -> usize {
         self.backtrace_limit
+    }
+
+    /// Sets whether the VM inlines calls of small leaf callees at their
+    /// call sites (spec/oven.md "Inlining"; default on). Nothing an
+    /// evaluation computes or reports depends on it (the differential
+    /// tests compare both); turning it off keeps the sites already
+    /// inlined.
+    pub fn set_inlining(&mut self, on: bool) {
+        self.inlining = on;
+    }
+
+    /// The call sites inlined so far (spec/oven.md "Inlining").
+    pub fn inlined_sites(&self) -> usize {
+        self.inl.len()
     }
 
     /// Whether the running evaluation is plainly constant-evaluated
@@ -1584,6 +1606,7 @@ impl Oven {
             + cap(&self.step_locs)
             + cap(&self.origins)
             + cap(&self.traps)
+            + cap(&self.inl)
             + cap(&self.funcs)
             + map(&self.func_map)
             + map(&self.base_funcs)
@@ -1652,8 +1675,16 @@ impl Oven {
         r.push(MemRow::new(
             "oven.sites",
             self.sites.len() as u64,
-            len(&self.sites) + len(&self.step_locs) + len(&self.origins) + len(&self.traps),
-            cap(&self.sites) + cap(&self.step_locs) + cap(&self.origins) + cap(&self.traps),
+            len(&self.sites)
+                + len(&self.step_locs)
+                + len(&self.origins)
+                + len(&self.traps)
+                + len(&self.inl),
+            cap(&self.sites)
+                + cap(&self.step_locs)
+                + cap(&self.origins)
+                + cap(&self.traps)
+                + cap(&self.inl),
         ));
         r.push(MemRow::new(
             "oven.funcs",

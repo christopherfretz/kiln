@@ -32,7 +32,9 @@ use crate::{Oven, SemaBridge};
 mod bitcast;
 mod builtins;
 pub(crate) mod exc;
+pub(crate) use inline::InlSite;
 mod fast;
+mod inline;
 mod life;
 mod meta;
 #[cfg(feature = "op-stats")]
@@ -575,6 +577,8 @@ fn op_phase(op: Op) -> Phase {
         Op::Call
         | Op::CallInd
         | Op::VCall
+        | Op::Inl
+        | Op::InlRet
         | Op::Ret
         | Op::PushCleanup
         | Op::TryEnter
@@ -966,9 +970,18 @@ impl Oven {
             let old = sp.get();
             let r = self.run_loop(b, func, pc0, fb0);
             sp.set(old);
+            if let Err((_, pc)) = &r {
+                self.inline_frame(*pc);
+            }
             return r;
         }
-        self.run_loop(b, func, pc0, fb0)
+        let r = self.run_loop(b, func, pc0, fb0);
+        // A fault in an inlined copy: the call's frame, for the notes
+        // (spec/oven.md "Inlining").
+        if let Err((_, pc)) = &r {
+            self.inline_frame(*pc);
+        }
+        r
     }
 
     fn run_loop(&mut self, b: &mut dyn SemaBridge, func: u32, pc0: usize, fb0: u32) -> Exit {
@@ -1410,9 +1423,26 @@ impl Oven {
                         Err(f) => fail!(f),
                     }
                 }
-                Op::Call | Op::CallInd => {
+                Op::Call | Op::CallInd | Op::Inl => {
                     let callee = if op == Op::Call {
                         arg!(0) as u32
+                    } else if op == Op::Inl {
+                        // An inlined call (spec/oven.md "Inlining"): the
+                        // copy runs in this frame unless the call must be
+                        // a real one, as the call is counted.
+                        let s = self.inl[arg!(0)];
+                        let active = self.active_calls();
+                        if active < self.budget.depth
+                            && self.run.potential.is_none()
+                            && !self.hooks.calls
+                        {
+                            self.run.counters.calls += 1;
+                            self.run.maxd = self.run.maxd.max(active + 1);
+                            self.grow_regs(fb + s.need as usize);
+                            pc = s.entry as usize;
+                            continue;
+                        }
+                        s.callee
                     } else {
                         let v = reg!(0) as u64;
                         let p = Ptr::decode(v);
@@ -1432,14 +1462,23 @@ impl Oven {
                         }
                         p.off
                     };
-                    match self.enter(b, callee, pc, pc + 3, fb, arg!(1), spl) {
+                    let base = arg!(1);
+                    match self.enter(b, callee, pc, pc + 3, fb, base, spl) {
                         Ok(Some((npc, nfb))) => {
+                            if op == Op::Call && self.funcs[callee as usize].inline {
+                                self.inline_call(pc, callee, base);
+                            }
                             pc = npc;
                             fb = nfb;
                         }
                         Ok(None) => pc += 3,
                         Err(f) => fail!(f),
                     }
+                }
+                Op::InlRet => {
+                    let r = frame!();
+                    r[arg!(0)] = r[arg!(1)];
+                    pc = arg!(2);
                 }
                 Op::Ret => {
                     if self.cleanups.last().is_some_and(|c| c.depth as usize == self.stack.len()) {

@@ -420,3 +420,131 @@ What is left, from these counts:
   five `Mov`s, and dispatch is the largest single share of a call.
 - **Scalar replacement of small class parameters** (WP-1916) can now
   build on light frames.
+
+## After WP-1924 (inlining of small leaf callees)
+
+**What was built.** The VM inlines a direct call of a short leaf function
+at its call site (spec/oven.md "Inlining"). At the site's first
+execution it appends a copy of the callee's body with the registers
+renumbered into the caller's frame, and patches the call to `Inl`. A
+fault inside a copy rebuilds the frame the call would have had, so the
+notes are unchanged. The depth limit, potential-constant checks and the
+per-call hooks fall back to a real call. Memoized callees are not
+inlined, so the memo is unchanged. Bodies are capped at 24
+instructions: the qualifying library bodies measured in Step 0 are 2 to
+16.
+
+**Step 0 (base 8af3bbf6a, temporary counters, not committed).** Dynamic
+direct calls whose callee qualifies:
+
+- `string-view-find-if`: 1,791,420 of 4,995,912 calls (36%). Mostly
+  `size()` (6 instructions), iterator `operator*` (8) and `operator++` (13).
+- `string-view-pairs`: 2,052,860 of 3,097,519 (66%). `size()` and
+  `vector::operator[]` (11).
+- `sort`: 315,291 of 386,865 (82%). `array::operator[]` (9) and
+  `__less` (6).
+- `virtual-dispatch`: none. Its 100,000 qualifying calls are virtual.
+
+**What it saves.** Callgrind on a loop of 20,000 calls of a one-field
+member function (`s.size()`): an iteration costs 1,258 instructions
+before and 1,177 after, so about 80 fewer per call. The loop without the
+call costs about 690 per iteration. The call itself (`Call`, `enter`,
+the `Ret` arm, the frame push and pop) was about 107 instructions after
+light frames. `Inl` (about 18) and `InlRet` (about 8) replace it. The
+rest of an inlined call is its body: here a checked read of `this->n`
+from abstract memory, which inlining does not remove. The Step 0
+estimate (about 10% on the WP-1864 entries) priced a whole light call at
+about 30 ns. Only its frame mechanics go, so the gain is smaller.
+
+Bench: `bench/oven`, kiln before (8af3bbf6a) and after on the same host,
+7 interleaved runs each (the order flips every run), median process
+times. Steps, calls and bytes (`-fconstexpr-stats`) are identical on
+every entry.
+
+| entry | before ms | after ms | time | steps | calls | bytes |
+|---|---|---|---|---|---|---|
+| builtins-memcpy | 22.3 | 22.2 | -0.7% | 10,215 | 2 | 65,536 |
+| builtins-popcount | 71.3 | 70.3 | -1.4% | 1,600,010 | 2 | 0 |
+| builtins-strlen | 22.8 | 23.1 | +1.4% | 14,115 | 2 | 4,096 |
+| churn-list | 31.4 | 31.4 | -0.1% | 610,005 | 1,001 | 1,600,000 |
+| churn-mixed | 20.4 | 20.8 | +1.6% | 100,102 | 1 | 425,248 |
+| churn-string | 430.5 | 430.3 | -0.1% | 6,002,085 | 65,553 | 3,399,552 |
+| churn-tree | 39.4 | 38.7 | -1.6% | 1,179,557 | 393,169 | 1,572,480 |
+| churn-vector | 505.8 | 507.1 | +0.3% | 8,398,277 | 65 | 33,554,432 |
+| class-churn | 155.8 | 163.7 | +5.1% | 2,960,095 | 800,002 | 10,240,016 |
+| fib | 18.1 | 16.4 | -9.0% | 786,024 | 393,012 | 0 |
+| inplace-alloc | 166.4 | 163.0 | -2.0% | 2,500,536 | 800,123 | 1,608,688 |
+| inplace-union | 174.6 | 176.7 | +1.2% | 2,500,518 | 800,116 | 1,608,672 |
+| sieve-nohdr | 22.1 | 23.9 | +8.3% | 253,992 | 2 | 100,000 |
+| sieve | 83.5 | 84.2 | +0.8% | 684,419 | 143,485 | 50,448 |
+| soa | 64.7 | 67.3 | +3.9% | 1,745,460 | 540,048 | 73,736 |
+| sort-nohdr | 35.1 | 33.3 | -5.2% | 727,499 | 93,897 | 25,600 |
+| sort | 184.1 | 195.1 | +6.0% | 1,659,900 | 386,719 | 293,888 |
+| string-view-find-if | 529.1 | 527.4 | -0.3% | 13,197,908 | 4,995,837 | 31,768,984 |
+| string-view-pairs | 499.4 | 506.2 | +1.4% | 12,458,145 | 3,108,522 | 22,804,208 |
+| string | 195.9 | 195.1 | -0.4% | 1,790,230 | 720,222 | 556,312 |
+| switch-dense | 240.8 | 232.2 | -3.6% | 34,951,678 | 2 | 0 |
+| table-nohdr | 56.2 | 54.0 | -3.8% | 854,380 | 582 | 330,240 |
+| table | 114.9 | 119.0 | +3.6% | 1,248,889 | 389,727 | 200,560 |
+| time-trace | 417.0 | 417.7 | +0.2% | 9,000,005 | 3,000,001 | 8 |
+| trial-rollback | 53.5 | 48.6 | -9.1% | 460,007 | 20,001 | 1,280,256 |
+| vector-alloc | 421.5 | 399.0 | -5.3% | 9,587,028 | 3,518,820 | 3,460,800 |
+| virtual-dispatch | 30.5 | 36.4 | +19.5% | 375,540 | 112,901 | 2,176 |
+| wide-struct-read | 305.2 | 305.8 | +0.2% | 4,199,431 | 1 | 32,768 |
+| wide-struct-store | 145.1 | 145.4 | +0.2% | 69,647 | 1 | 16,384 |
+
+The flagged differences are noise. On 15 interleaved runs:
+
+- `class-churn` -2.5%, `sieve-nohdr` -2.0%, `soa` -3.0%, `sort` -0.4%,
+  `table` -2.1%, `virtual-dispatch` +0.2%.
+- `string-view-find-if` -0.7%, `string-view-pairs` -0.1%.
+
+Callgrind counts fewer instructions on each of them:
+
+- `virtual-dispatch` -0.72%.
+- `sieve-nohdr` -0.61%.
+- `class-churn`, cut to `churn(8, 2000)`: -0.20%.
+- `sort` -1.24%.
+- `table` -3.07%.
+- `soa`, cut to `N = 1024`: -2.83%.
+
+Evaluation time alone (`-fconstexpr-stats` `wall-us`, 9 interleaved
+runs, medians):
+
+| entry | before ms | after ms | change |
+|---|---|---|---|
+| string-view-find-if | 304.9 | 300.0 | -1.6% |
+| string-view-pairs | 310.3 | 312.2 | +0.6% |
+| sort | 29.2 | 28.2 | -3.4% |
+| table | 24.8 | 22.9 | -7.5% |
+| soa | 46.4 | 44.7 | -3.7% |
+
+Per round (callgrind, 40 rounds against 1 for `string-view-find-if`, 50
+against 1 for `string-view-pairs`), the evaluation runs about 1.8% and
+1.6% fewer instructions.
+
+`-fconstexpr-profile-split` (`split` feature builds, 5 interleaved runs
+each, medians):
+
+- `string-view-find-if`: VM time 349.4 to 330.6 ms (-5.4%). Frames go
+  from 17.3% to 12.5%, dispatch from 20.3% to 23.5%, memory from 56.1%
+  to 59.1%.
+- `string-view-pairs`: VM time 341.5 to 330.4 ms (-3.3%). Frames go from
+  10.3% to 7.9%; dispatch stays at 18.6%.
+
+The split's per-phase stores make each call more expensive, so these
+builds show more of the gain than the stock builds do.
+
+What is left, from these counts:
+
+- **Memory reads of small class objects.** In an inlined `size()` most
+  of the cost is the checked load through `this`. Scalar replacement
+  (WP-1916) would remove it, and inlining now puts the callee's loads
+  in the caller's code.
+- **Non-leaf callees.** Bodies that call (`substr`, `__sv_check`), name a
+  global or end a lifetime (`operator==`) are the largest refusals in
+  Step 0. Inlining them needs nested pseudo-frames.
+- **The memo on trivial functions.** A memoized one-return `id(i)` call
+  costs about 100 ns, against about 35 ns for a light call: for a
+  function this small the memo lookup costs more than the evaluation
+  it saves.

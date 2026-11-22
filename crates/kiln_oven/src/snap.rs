@@ -16,7 +16,7 @@
 //! | field | class | how |
 //! |---|---|---|
 //! | `types` | state | as data, its subobject path cache refilled on demand |
-//! | `code`, `padded`, `sites`, `step_locs`, `origins`, `traps` | state | the bytecode and its side tables, as data |
+//! | `code`, `padded`, `sites`, `step_locs`, `origins`, `traps`, `inl` | state | the bytecode and its side tables (the inlined call sites, spec/oven.md "Inlining"), as data |
 //! | `funcs`, `func_map`, `base_funcs`, `ctor_steps` | state | as data: a function compiled before the snapshot is not compiled again |
 //! | `volatile_decls`, `volatile_exprs` | state | as data |
 //! | `thunks`, `thunks_at`, `last_thunk` | state | as data |
@@ -32,6 +32,7 @@
 //! | `refl_seen` | state | as data (reflection bytes already charged) |
 //! | `dms` | state + transient | the data member descriptions, annotation lists and the reader's plan and layouts as data; reused buffers reset |
 //! | `budget`, `backtrace_limit` | configuration | `-fconstexpr-steps`, `-fconstexpr-depth`, `-fconstexpr-memory`, the memo size, `-fconstexpr-backtrace-limit` |
+//! | `inlining` | configuration | [`Oven::set_inlining`] (tests only; the sites the snapshot inlined stay inlined) |
 //! | `clang_compat`, `cxx_year` | configuration | `-fclang-compat=`, `-std=` (sema also sets both before every evaluation) |
 //! | `hooks` | configuration + transient | the trace and profile switches and sink (`-ftime-trace`, `-fconstexpr-stats`, `-fconstexpr-profile`); no call mark open |
 //! | `cev_warn_next`, `ub_check_next`, `contracts_off_next`, `potential_next`, `plain_next`, `void_next`, `addr_next`, `unchecked_next` | transient, at rest | set by a caller just before one evaluation: false / `None` |
@@ -76,8 +77,8 @@ use crate::meta::intern::ReflSeen;
 use crate::meta::materialize::{MetaState, Recipe};
 use crate::reclaim::LastThunk;
 use crate::ty::{OTy, Types};
-use crate::vm::Virt;
 use crate::vm::exc::Excs;
+use crate::vm::{InlSite, Virt};
 use crate::{CtorStep, Oven};
 
 /// The decoded state fields, validated together before any is assigned.
@@ -89,6 +90,7 @@ struct Parts {
     step_locs: Vec<Loc>,
     origins: Vec<mem::Origin>,
     traps: Vec<TrapInfo>,
+    inl: Vec<InlSite>,
     funcs: Vec<Func>,
     func_map: FxHashMap<DeclId, u32>,
     base_funcs: FxHashMap<DeclId, u32>,
@@ -214,6 +216,7 @@ impl Oven {
         let Oven {
             budget: _,
             backtrace_limit: _,
+            inlining: _,
             clang_compat: _,
             cxx_year: _,
             cev_warn_next: _,
@@ -234,6 +237,7 @@ impl Oven {
             step_locs,
             origins,
             traps,
+            inl,
             funcs,
             func_map,
             base_funcs,
@@ -300,6 +304,7 @@ impl Oven {
             step_locs,
             origins,
             traps,
+            inl,
             funcs,
             func_map,
             base_funcs,
@@ -366,6 +371,7 @@ impl Oven {
             step_locs: at("Oven.step_locs", r.get())?,
             origins: at("Oven.origins", r.get())?,
             traps: at("Oven.traps", r.get())?,
+            inl: at("Oven.inl", r.get())?,
             funcs: at("Oven.funcs", r.get())?,
             func_map: at("Oven.func_map", r.get())?,
             base_funcs: at("Oven.base_funcs", r.get())?,
@@ -420,6 +426,7 @@ impl Oven {
             step_locs,
             origins,
             traps,
+            inl,
             funcs,
             func_map,
             base_funcs,
@@ -458,6 +465,7 @@ impl Oven {
         self.step_locs = step_locs;
         self.origins = origins;
         self.traps = traps;
+        self.inl = inl;
         self.funcs = funcs;
         self.func_map = func_map;
         self.base_funcs = base_funcs;
@@ -502,6 +510,7 @@ impl Oven {
         .field::<Vec<Loc>>("step_locs")
         .field::<Vec<mem::Origin>>("origins")
         .field::<Vec<TrapInfo>>("traps")
+        .field::<Vec<InlSite>>("inl")
         .field::<Vec<Func>>("funcs")
         .field::<FxHashMap<DeclId, u32>>("func_map")
         .field::<FxHashMap<DeclId, u32>>("base_funcs")
@@ -543,6 +552,7 @@ impl Oven {
             .field::<Vec<Loc>>("step_locs")
             .field::<Vec<mem::Origin>>("origins")
             .field::<Vec<TrapInfo>>("traps")
+            .field::<Vec<InlSite>>("inl")
             .field::<Vec<Func>>("funcs")
             .field::<FxHashMap<DeclId, u32>>("func_map")
             .field::<FxHashMap<DeclId, u32>>("base_funcs")
@@ -709,6 +719,7 @@ impl Parts {
             ntraps: self.traps.len(),
             nsteps: self.step_locs.len(),
             heap_origins: &heap,
+            inl: &self.inl,
         };
         crate::kbc::verify::verify(&self.code, &tables, self.sites.iter().map(|s| s.pc), unwind)
             .map_err(|f| f.to_string())
