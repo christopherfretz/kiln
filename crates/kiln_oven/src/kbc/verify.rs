@@ -351,6 +351,7 @@ mod tests {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         }
     }
 

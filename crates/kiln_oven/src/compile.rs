@@ -111,6 +111,11 @@ pub(crate) struct Func {
     /// not volatile while it runs ([class.ctor.general]/5,
     /// [class.dtor]/5; `Oven::volatile_path`).
     pub structor: bool,
+    /// A light frame (spec/oven.md "Light frames"): the code makes no
+    /// frame object (no `Alloc`) and the function is no constructor or
+    /// destructor, so a call of it takes no memory mark and no frame
+    /// serial, and its return scans and releases nothing.
+    pub light: bool,
 }
 
 /// The source of a faulting instruction.
@@ -400,6 +405,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         self.func_map.insert(d, i);
         i
@@ -427,6 +433,7 @@ impl Oven {
             this_ty: None,
             base_obj: true,
             structor: false,
+            light: false,
         });
         self.base_funcs.insert(d, i);
         i
@@ -528,6 +535,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         let glvalue = b.ast().exprs.get(e).value_category().is_glvalue();
         let ref_ty = match object.filter(|&d| is_reference_var(b.ast(), d)) {
@@ -643,6 +651,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -694,6 +703,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         let size_t = QualType::unqual(b.ast().types.target().size_t);
         let mut c = Compiler::new(self, b);
@@ -739,6 +749,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -806,6 +817,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -894,6 +906,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         Some(idx)
     }
@@ -930,6 +943,7 @@ impl Oven {
             this_ty: None,
             base_obj: false,
             structor: false,
+            light: false,
         });
         Some(idx)
     }
@@ -1154,6 +1168,7 @@ impl Oven {
             let loc = ast.stmts.rbrace(end);
             c.trap_loc(loc, "control reached end of constexpr function".into());
         }
+        let end = c.o.code.len();
         let nregs = c.end_unit();
         let this_reg = c.this_reg;
         let memo = c.o.budget.memo_entries > 0
@@ -1178,6 +1193,7 @@ impl Oven {
             b.ast().decls.get(def).kind(),
             DeclKind::CXXConstructor | DeclKind::CXXDestructor
         );
+        let light = !structor && !crate::kbc::makes_frame_object(&self.code, entry as usize, end);
         let f = &mut self.funcs[idx as usize];
         f.entry = entry;
         f.state = FState::Ready;
@@ -1188,6 +1204,7 @@ impl Oven {
         f.this_reg = this_reg;
         f.this_ty = this_ty;
         f.structor = structor;
+        f.light = light;
     }
 }
 
@@ -1281,6 +1298,11 @@ pub(crate) struct Compiler<'a> {
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
     ext_temps: FxHashMap<ExprId, u32>,
+    /// The arguments of the `std::min`/`max` call being compiled after
+    /// its `bi::MINMAX` declined, already evaluated: each with the
+    /// register holding the address its reference parameter binds to
+    /// (`Compiler::minmax_value`, `bind_ref`).
+    bound_args: Vec<(ExprId, u32)>,
     /// The decomposition being initialized by [`Compiler::decl_held`].
     held: Option<class::Held>,
     /// Flags of the `ext_temps` in a conditional operator's arm.
@@ -1378,6 +1400,7 @@ impl<'a> Compiler<'a> {
             closure_reg: None,
             unrep_var: None,
             ext_temps: FxHashMap::default(),
+            bound_args: Vec::new(),
             held: None,
             ext_flags: FxHashMap::default(),
             late_const: FxHashSet::default(),
@@ -1937,7 +1960,19 @@ impl Scan<'_> {
             k if k.is_cast() => {
                 let op = ast.exprs.operand(e);
                 match ast.exprs.cast_kind(e) {
-                    CastKind::LValueToRValue => self.expr(op, true),
+                    // The arguments of `std::min`/`max` read for its value
+                    // are read, not bound (`Compiler::minmax_value`).
+                    CastKind::LValueToRValue => match fast::minmax_args(ast, op) {
+                        Some(args) => {
+                            for c in ast.exprs.children(skip_parens(ast, op), &ast.lists) {
+                                let read = args.contains(&c)
+                                    && ast.exprs.get(fast::bare_lvalue(ast, c)).kind()
+                                        == ExprKind::DeclRefExpr;
+                                self.expr(c, read);
+                            }
+                        }
+                        None => self.expr(op, true),
+                    },
                     // A glvalue cast that drops `const` (`const_cast<int&>(c)
                     // = 2`) may write the variable: it lives in memory, whose
                     // const flag faults that write ([dcl.type.cv]/4; WP-465).
@@ -5128,11 +5163,23 @@ impl Compiler<'_> {
                     self.trap_loc(loc, msg);
                     return;
                 }
-                let p = self.lv(op, Access::Read);
+                // `std::min`/`max` of two scalars read for its value
+                // (spec/oven.md "Library fast paths").
+                let fast = fast::minmax_args(self.ast(), op).and_then(|a| self.minmax_value(op, a));
+                let p = match fast {
+                    Some((p, ..)) => p,
+                    None => self.lv(op, Access::Read),
+                };
                 let at = self.sites_len();
                 self.load(p, ty, ak::READ, op, dst);
                 let begin = self.begin(op);
                 self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
+                if let Some((_, done, v)) = fast {
+                    let end = self.jmp();
+                    self.patch_here(done);
+                    self.emit(Op::Mov, 0, &[dst, v]);
+                    self.patch_here(end);
+                }
             }
             // An address space is not modelled by the evaluator: a pointer
             // converted to another space designates the same object (clang
@@ -7516,8 +7563,31 @@ impl Compiler<'_> {
     fn bind_ref(&mut self, init: ExprId, dst: u32) {
         let m = self.next.max(dst + 1);
         self.next = m;
-        if self.node(init).value_category().is_glvalue() {
-            let p = self.lv_mem(init, Access::Addr);
+        if let Some(&(_, p)) = self.bound_args.iter().find(|&&(a, _)| a == init) {
+            self.emit(Op::Mov, 0, &[dst, p]);
+        } else if self.node(init).value_category().is_glvalue() {
+            let p = match self.lv(init, Access::Addr) {
+                Place::Mem(p) => p,
+                // A register local an argument of `std::min`/`max` names
+                // under an lvalue-to-rvalue conversion (the scan's
+                // `fast::minmax_args`): the call only reads it, so its
+                // parameter binds to a copy (named by the variable).
+                Place::Reg(r)
+                    if self.node(fast::bare_lvalue(self.ast(), init)).kind()
+                        == ExprKind::DeclRefExpr =>
+                {
+                    let x = fast::bare_lvalue(self.ast(), init);
+                    let ty = self.ety(init);
+                    let t = self.reg();
+                    self.alloc(t, ty, Origin::Var(self.ast().exprs.decl(x)), false, init);
+                    self.emit(Op::InitStore, 0, &[t, r, ty.0]);
+                    t
+                }
+                _ => {
+                    self.trap(init, "kiln: internal: the address of a register value was taken");
+                    self.reg()
+                }
+            };
             if p != dst {
                 self.emit(Op::Mov, 0, &[dst, p]);
             }

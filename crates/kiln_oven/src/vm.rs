@@ -754,6 +754,9 @@ impl Oven {
             let nb = fb + arg(1);
             return Ok(u128::from(self.traits_fast(nb, aux >> 8, OTy(t1), OTy(t2))));
         }
+        if aux & 0xff == crate::kbc::bi::MINMAX {
+            return Ok(u128::from(self.minmax_fast(fb + arg(1), aux >> 8, OTy(t1))));
+        }
         let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {
             let cur = self.stack[self.stack.len() - 1].func;
@@ -1468,6 +1471,9 @@ impl Oven {
                     if self.hooks.calls {
                         self.hook_call_ret(b);
                     }
+                    // A light frame or the entry frame (`BOTTOM`) made
+                    // no frame object and kept the caller's serial (the
+                    // entry frame's return leaves the loop below).
                     if fr.mark != BOTTOM {
                         // The caller destroys the parameters ([expr.call]/6).
                         if self.mem.life_above(fr.mark)
@@ -1476,8 +1482,8 @@ impl Oven {
                             return Err((f, fr.ret_pc as usize));
                         }
                         self.mem.release(fr.mark, &self.types);
+                        self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
                     }
-                    self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
                     if fr.memo {
                         phase!(Memo);
                         self.finish_memo(v);
@@ -2545,13 +2551,15 @@ impl Oven {
         base: usize,
         sp: Option<&split::Shared>,
     ) -> Result<Option<(usize, usize)>, Fault> {
-        if matches!(self.funcs[callee as usize].state, FState::Stub | FState::Undefined) {
-            self.hook_compile(b, callee);
+        if self.funcs[callee as usize].state != FState::Ready {
+            if matches!(self.funcs[callee as usize].state, FState::Stub | FState::Undefined) {
+                self.hook_compile(b, callee);
+            }
+            if self.funcs[callee as usize].state != FState::Ready {
+                return Err(Fault::Callee(callee));
+            }
         }
         let f = &self.funcs[callee as usize];
-        if f.state != FState::Ready {
-            return Err(Fault::Callee(callee));
-        }
         let active = self.active_calls();
         if self.run.potential.is_some_and(|n| active >= n) {
             return Err(Fault::Quiet);
@@ -2561,7 +2569,8 @@ impl Oven {
         }
         let nb = fb + base;
         let memo = f.memo && self.memo.enabled();
-        let (entry, nregs) = (f.entry as usize, f.nregs as usize);
+        let (entry, nregs, light, structor) =
+            (f.entry as usize, f.nregs as usize, f.light, f.structor);
         if memo {
             if let Some(s) = sp {
                 s.set(Phase::Memo);
@@ -2620,8 +2629,14 @@ impl Oven {
         self.run.counters.calls += 1;
         self.run.maxd = self.run.maxd.max(active + 1);
         self.grow_regs(nb + nregs + 1);
-        let mark = self.mem.mark();
-        let serial = self.mem.next_frame();
+        // A light frame (spec/oven.md "Light frames") makes no frame
+        // object: no mark to release to, and the caller's serial (no
+        // object can carry its own).
+        let (mark, serial) = if light {
+            (BOTTOM, self.mem.cur_frame)
+        } else {
+            (self.mem.mark(), self.mem.next_frame())
+        };
         self.stack.push(Frame {
             func: callee,
             ret_pc: ret_pc as u32,
@@ -2631,7 +2646,7 @@ impl Oven {
             memo,
             serial,
         });
-        if self.funcs[callee as usize].structor {
+        if structor {
             self.cdtor_enter(serial);
         }
         if self.hooks.calls {

@@ -1154,11 +1154,18 @@ impl Memory {
         (self.live.len() as u64) << 32 | self.frame.top
     }
 
+    // The test inline: most returns and scope ends release nothing, and
+    // an outlined call costs its prologue on every one of them.
+    #[inline]
     pub fn release(&mut self, mark: u64, types: &Types) {
-        let n = (mark >> 32) as usize;
-        if n >= self.live.len() {
-            return;
+        if ((mark >> 32) as usize) < self.live.len() {
+            self.release_from(mark, types);
         }
+    }
+
+    #[inline(never)]
+    fn release_from(&mut self, mark: u64, types: &Types) {
+        let n = (mark >> 32) as usize;
         for i in n..self.live.len() {
             let s = self.live[i];
             let a = &mut self.slots[s as usize];

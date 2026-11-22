@@ -668,10 +668,33 @@ pub(crate) mod bi {
     /// sub of `TRAITS`: `find(s, n, a)`, the first of `n` elements at `s`
     /// equal to `a`, or null.
     pub const TR_FIND: u32 = 2;
+    /// sub of `TRAITS`: `assign(c1, c2)` (WP-1918), `c1 = c2`; the result
+    /// register is unchanged.
+    pub const TR_ASSIGN: u32 = 3;
     /// sub flag of `TRAITS`: elements compare as unsigned
     /// (`char_traits<char>::lt` compares `unsigned char`s,
     /// [char.traits.specializations.char]/1).
     pub const TR_UNSIGNED: u32 = 1 << 4;
+    /// `std::min`/`std::max` of two scalars (WP-1917, `compile/fast.rs`,
+    /// `vm/fast.rs`; spec/oven.md "Library fast paths") before the `Call`
+    /// it precedes, as `TRAITS` (operands `[ok, base, _, _, t1, _]`, `t1`
+    /// the scalar type; sub `MM_*`): when it evaluates the call, the
+    /// address of the argument the call returns is in `[base]`.
+    pub const MINMAX: u32 = 47;
+    /// sub flag of `MINMAX`: `max` (else `min`).
+    pub const MM_MAX: u32 = 1;
+    /// sub flag of `MINMAX`: the comparator is `std::greater` (else
+    /// `std::less` or none).
+    pub const MM_GREATER: u32 = 2;
+    /// sub flag of `MINMAX`: the call is read for its value
+    /// (`Compiler::minmax_value`): `[base]` receives the chosen
+    /// argument's value, not its address.
+    pub const MM_VALUE: u32 = 4;
+    /// sub flags of `MINMAX` with `MM_VALUE`: `[base]` (`MM_VAL_A`) or
+    /// `[base + 1]` (`MM_VAL_B`) holds the argument's value, not its
+    /// address.
+    pub const MM_VAL_A: u32 = 8;
+    pub const MM_VAL_B: u32 = 16;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
@@ -1069,6 +1092,22 @@ pub(crate) fn int_aux(width: u8, signed: bool) -> u32 {
 }
 
 /// Disassembles `code` (debugging aid).
+/// Whether the instructions in `code[from..to]` make a frame object
+/// (`Op::Alloc`, the only instruction that allocates in the frame
+/// space): a function whose code makes none has a light frame
+/// (spec/oven.md "Light frames").
+pub(crate) fn makes_frame_object(code: &[u32], from: usize, to: usize) -> bool {
+    let mut pc = from;
+    while pc < to.min(code.len()) {
+        let op = Op::from_u8(code[pc] as u8);
+        if op == Op::Alloc {
+            return true;
+        }
+        pc += 1 + op.operands();
+    }
+    false
+}
+
 pub(crate) fn disassemble(code: &[u32], from: usize, to: usize) -> String {
     use std::fmt::Write;
     let mut s = String::new();
@@ -1162,6 +1201,22 @@ mod tests {
                 assert!(w[n..].iter().all(|&x| x == 0), "pc {pc}");
             }
         }
+    }
+
+    /// spec/oven.md "Light frames": only an `Alloc` instruction makes a
+    /// frame object; an operand word with `Alloc`'s value is no
+    /// instruction, and the range ends where the function does.
+    #[test]
+    fn makes_frame_object_reads_instructions_only() {
+        let mut code = vec![Op::Const as u32, 1, Op::Alloc as u32, 0];
+        code.extend_from_slice(&unit());
+        assert!(!makes_frame_object(&code, 0, code.len()));
+        let end = code.len();
+        code.extend_from_slice(&[Op::Alloc as u32, 1, 2, 3]);
+        assert_eq!(Op::Alloc.operands(), 3);
+        assert!(!makes_frame_object(&code, 0, end));
+        assert!(makes_frame_object(&code, 0, code.len()));
+        assert!(makes_frame_object(&code, end, code.len()));
     }
 
     #[test]
