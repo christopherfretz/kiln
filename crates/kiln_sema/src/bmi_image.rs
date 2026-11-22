@@ -102,7 +102,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 78;
+pub(crate) const IMAGE_VERSION: u32 = 79;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -5815,6 +5815,7 @@ impl Sema<'_, '_> {
         // An image without a module name (once a precompiled header's,
         // WP-1036, retired by WP-1397) is built in the global module.
         if img.preamble == NONE && !img.module.is_empty() {
+            self.image_module_extent(img, |o| main.get(o));
             self.act_on_module_directive(
                 kw,
                 true,
@@ -6369,7 +6370,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
-        self.image_extents(img, &ids, |o| main.get(o));
+        self.image_extents(img, &ids, None, |o| main.get(o));
         self.image_local_externs(img, &ids);
         // The requires-expression parameters, which the types of their
         // requirements may name (WP-1343); then every type before the
@@ -6377,6 +6378,8 @@ impl Sema<'_, '_> {
         // (WP-1300) that would interleave with theirs, whose ids are
         // consecutive.
         let reqs = self.image_requires(img, &mut tys, &ids, main);
+        // Their declaration extents, now that they are built (WP-2091).
+        self.image_extents(img, &ids, Some(&reqs.params), |o| main.get(o));
         self.image_texprs.req_params.clone_from(&reqs.params);
         if let Some(n) = img.types.len().checked_sub(1) {
             let last = QRef { ty: BUILTINS + 1 + n as u32, quals: 0 };

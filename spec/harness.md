@@ -100,7 +100,7 @@ directives are also ERRORs.
 | `oven: [<line>[:<col>]] <counter><=N\|<counter>>=N ...` | kiln-specific constexpr budget (`<=` an upper bound, `>=` a floor); `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes`, `evaluations`, `memo_hits` or `refl_bytes` (`memo_hits` and `refl_bytes` are budget-only counters the bench does not record; 0 in a report that lacks them). Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `written-refs: <golden>` | kiln-specific: the compile's written-reference dump (`-fkiln-dump-written-refs`, spec/ast.md §18.6) must equal the golden. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
-| `decl-extents: <golden>` | kiln-specific: the compile's declaration-extent dump (`-fkiln-dump-decl-extents`, spec/ast.md §19.7) must equal the golden. Only `compile-ok`/`compile-fail`, and not with `written-refs:` (both dumps are the standard output). See "kiln-specific tests". |
+| `decl-extents: <golden> [unordered]` | kiln-specific: the compile's declaration-extent dump (`-fkiln-dump-decl-extents`, spec/ast.md §19.7) must equal the golden; with `unordered`, as sorted lines (an importer built from a module image numbers its declarations in the image's order, WP-2091). Only `compile-ok`/`compile-fail`, and not with `written-refs:` (both dumps are the standard output). See "kiln-specific tests". |
 | `pp-record: <golden>` | kiln-specific: the test's `-E -fkiln-dump-pp-record` output (spec/pp.md "Preprocessing record") must equal the golden. Only `compile-ok`, `compile-fail` and `pp`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
@@ -944,7 +944,11 @@ checks pass. The PCH differential (`--pch-diff`) checks no dump.
 
 A `decl-extents:` test is checked the same way with
 `-fkiln-dump-decl-extents`, which prints the declaration-extent table
-(spec/ast.md §19.7); the SKIP reason names `decl-extents:`. A test takes
+(spec/ast.md §19.7); the SKIP reason names `decl-extents:`. With
+`unordered` after the golden's path, the dump and the golden are compared
+as their sorted lines, and `--update` leaves a golden whose sorted lines
+match alone (so it can share the golden of a test that compares in
+order) and otherwise writes the dump sorted. A test takes
 one of the two dump directives, not both. The PCH differential checks no
 dump here either (the dump flag is single-pass, spec/ast.md §19.6; the
 extents' own PCH and module-image round trips are Rust tests).

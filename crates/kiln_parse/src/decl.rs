@@ -162,6 +162,9 @@ impl Parser<'_, '_> {
         // constructor cycles), after the pending instantiations as there.
         self.s.act_on_end_of_translation_unit();
         drop(phase);
+        // No row comes after the parse: the declaration-extent table
+        // gives back its spare capacity (spec/ast.md §19.8, WP-2092).
+        self.s.ast.decl_extents.shrink_to_fit();
     }
 
     /// C17 6.9p1: a C translation unit holds at least one external

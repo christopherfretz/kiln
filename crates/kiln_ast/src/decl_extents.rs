@@ -7,6 +7,9 @@
 //! nothing is allocated. On, the parser records one [`DeclExtent`] per
 //! declaration it parsed, keyed by the declaration; a template shares its
 //! pattern's row. Implicit declarations and instantiations have none.
+//! Module and import declarations, which are preprocessing directives
+//! with no declaration node, have rows of their own kind
+//! ([`ModuleDeclExtent`], spec/ast.md §19.9).
 
 use std::fmt::Write as _;
 
@@ -102,6 +105,66 @@ impl DeclExtent {
     }
 }
 
+/// What a [`ModuleDeclExtent`] is (spec/ast.md §19.9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
+#[repr(u8)]
+pub enum ModuleDeclKind {
+    /// A module-declaration ([module.unit]/1): `export module M:P;`.
+    #[default]
+    Module,
+    /// A module-import-declaration of a named module or a partition
+    /// ([module.import]/1): `import M;`, `import :P;`.
+    Import,
+    /// A module-import-declaration of a header unit: `import <h>;`,
+    /// `import "h";`.
+    HeaderImport,
+}
+
+impl ModuleDeclKind {
+    /// The dump's spelling.
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            ModuleDeclKind::Module => "ModuleDecl",
+            ModuleDeclKind::Import => "ImportDecl",
+            ModuleDeclKind::HeaderImport => "HeaderImportDecl",
+        }
+    }
+}
+
+/// The extents of a module-declaration or a module-import-declaration
+/// as written (spec/ast.md §19.9; 64 bytes). They are preprocessing
+/// directives ([cpp.module], [cpp.import]) that declare no declaration
+/// node, so the row is keyed by its position in the unit, not by a
+/// [`DeclId`], and it names the parts a [`DeclExtent`] has no field for:
+/// the keyword, the partition and the attributes. Every [`Span`] is a
+/// token range as in a [`DeclExtent`]; an absent part is
+/// [`Span::INVALID`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
+pub struct ModuleDeclExtent {
+    /// The declaration: from `export` (or the keyword) to the `;`.
+    pub full: Span,
+    /// `export`.
+    pub export: Span,
+    /// `module` or `import`.
+    pub keyword: Span,
+    /// The module-name, every dotted component (`a.b`), or the
+    /// header-name of a header unit (`<h>`, `"h"`); invalid for
+    /// `import :P;`.
+    pub name: Span,
+    /// The module-partition, from its `:` to its last component.
+    pub partition: Span,
+    /// The attribute-specifier-seq before the `;`.
+    pub attrs: Span,
+    /// The `;`; invalid when it is missing (an error).
+    pub semi: Span,
+    /// The index of the first declaration made after it (the arena's
+    /// next id when it was recorded): the dump prints it before that
+    /// declaration's row.
+    pub before: u32,
+    /// What it is.
+    pub kind: ModuleDeclKind,
+}
+
 /// A position in the table, for rollback ([`DeclExtents::truncate`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtentMark(u32);
@@ -116,6 +179,9 @@ pub struct DeclExtents {
     /// By declaration index: the row + 1, or 0 for none. Grown on demand,
     /// so it ends at the last declaration with a row.
     index: Vec<u32>,
+    /// The module and import declarations, in the order the parser saw
+    /// them (WP-2091).
+    modules: Vec<ModuleDeclExtent>,
 }
 
 impl DeclExtents {
@@ -175,6 +241,26 @@ impl DeclExtents {
         }
         self.rows.push(e);
         self.index[i] = u32::try_from(self.rows.len()).expect("extent table exhausted");
+    }
+
+    /// The module and import declarations' rows, in source order.
+    pub fn module_decls(&self) -> &[ModuleDeclExtent] {
+        &self.modules
+    }
+
+    /// Records a module or import declaration's row; nothing when off.
+    pub fn push_module_decl(&mut self, e: ModuleDeclExtent) {
+        if self.on {
+            self.modules.push(e);
+        }
+    }
+
+    /// Gives the table's spare capacity back (WP-2092): the parser calls
+    /// it once the translation unit is parsed, when no more rows come.
+    pub fn shrink_to_fit(&mut self) {
+        self.rows.shrink_to_fit();
+        self.index.shrink_to_fit();
+        self.modules.shrink_to_fit();
     }
 
     /// `d`'s row, created empty when it has none; `None` when off.
@@ -253,6 +339,9 @@ impl DeclExtents {
         if self.index.iter().any(|&r| r as usize > self.rows.len()) {
             return Err("declaration extent index past its rows");
         }
+        if self.modules.iter().any(|m| m.before as usize > decls + 1) {
+            return Err("module declaration extent past the decl arena");
+        }
         Ok(())
     }
 
@@ -262,16 +351,22 @@ impl DeclExtents {
             return None;
         }
         let sz = size_of::<DeclExtent>() as u64;
+        let msz = size_of::<ModuleDeclExtent>() as u64;
         Some(MemRow::new(
             "decl_extents",
-            self.rows.len() as u64,
-            self.rows.len() as u64 * sz + self.index.len() as u64 * 4,
-            self.rows.capacity() as u64 * sz + self.index.capacity() as u64 * 4,
+            (self.rows.len() + self.modules.len()) as u64,
+            self.rows.len() as u64 * sz
+                + self.index.len() as u64 * 4
+                + self.modules.len() as u64 * msz,
+            self.rows.capacity() as u64 * sz
+                + self.index.capacity() as u64 * 4
+                + self.modules.capacity() as u64 * msz,
         ))
     }
 
     /// The dump (spec/ast.md §19.7): one line per declaration with
-    /// extents, in declaration-id order.
+    /// extents, in declaration-id order; a module or import declaration's
+    /// line comes before the row of the first declaration made after it.
     pub fn dump(&self, ast: &crate::Ast, sm: &SourceManager, main: Option<FileId>) -> String {
         let names = crate::diag_names::DiagNames::new(ast, Some(sm), 22).closures_as_lambda();
         let pos = |loc: Loc| -> String {
@@ -287,7 +382,39 @@ impl DeclExtents {
         };
         let range = |s: Span| -> String { format!("{}-{}", pos(s.lo), pos(s.hi)) };
         let mut out = String::new();
+        let mut mods = self.modules.iter().peekable();
+        let module_line = |out: &mut String, m: &ModuleDeclExtent| {
+            let text = |s: Span| sm.span_text(s).unwrap_or("?");
+            let spelled = match (m.name.lo.is_valid(), m.partition.lo.is_valid()) {
+                (true, true) => Span::new(m.name.lo, m.partition.hi),
+                (true, false) => m.name,
+                (false, _) => m.partition,
+            };
+            let end = if m.semi.lo.is_valid() { ";" } else { "-" };
+            let _ = write!(
+                out,
+                "{} '{}'  full={} {end}",
+                m.kind.spelling(),
+                if spelled.lo.is_valid() { text(spelled) } else { "" },
+                range(m.full)
+            );
+            for (label, s) in [
+                ("export", m.export),
+                ("keyword", m.keyword),
+                ("name", m.name),
+                ("partition", m.partition),
+                ("attrs", m.attrs),
+            ] {
+                if s.lo.is_valid() {
+                    let _ = write!(out, " {label}={} '{}'", range(s), text(s));
+                }
+            }
+            out.push('\n');
+        };
         for (d, e) in self.iter() {
+            while let Some(m) = mods.next_if(|m| m.before <= d.index()) {
+                module_line(&mut out, m);
+            }
             let n = ast.decls.get(d);
             let mut name = String::new();
             let scoped = n.kind() != crate::decl::DeclKind::ParmVar;
@@ -322,6 +449,9 @@ impl DeclExtents {
                 let _ = write!(out, " exp={}", pos(sm.expansion_loc(e.full.lo)));
             }
             out.push('\n');
+        }
+        for m in mods {
+            module_line(&mut out, m);
         }
         out
     }
@@ -360,6 +490,29 @@ mod tests {
     #[test]
     fn row_is_44_bytes() {
         assert_eq!(size_of::<DeclExtent>(), 44);
+        assert_eq!(size_of::<ModuleDeclExtent>(), 64);
+    }
+
+    #[test]
+    fn module_rows_only_when_on_and_shrink() {
+        let mut t = DeclExtents::default();
+        t.push_module_decl(ModuleDeclExtent::default());
+        assert!(t.module_decls().is_empty());
+        t.set_on(true);
+        for i in 1..=5 {
+            t.set(row_id(i), row(i, i + 1));
+        }
+        t.push_module_decl(ModuleDeclExtent { before: 9, ..ModuleDeclExtent::default() });
+        assert_eq!(t.module_decls().len(), 1);
+        assert!(t.rows.capacity() > t.rows.len());
+        t.shrink_to_fit();
+        assert_eq!(t.rows.capacity(), t.rows.len());
+        assert_eq!(t.index.capacity(), t.index.len());
+        let m = t.mem_row().map(|r| (r.live_bytes, r.reserved_bytes));
+        assert!(m.is_some_and(|(b, r)| b == r), "{m:?}");
+        // A module row's position must be inside the arena.
+        assert_eq!(t.check_restored(8), Ok(()));
+        assert!(t.check_restored(7).is_err());
     }
 
     #[test]

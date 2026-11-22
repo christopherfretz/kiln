@@ -135,6 +135,26 @@ pub struct ModuleDirective {
     /// §11.11 "Imports, partitions and using-declarations"); `None`
     /// otherwise.
     pub end: Option<u32>,
+    /// The token ranges of its parts, for the declaration-extent table
+    /// (spec/ast.md §19.9).
+    pub parts: DirectiveParts,
+}
+
+/// The parts of a [`ModuleDirective`] as written: each a range from its
+/// first token's start to its last token's end, [`Span::INVALID`] when
+/// absent (spec/ast.md §19.9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct DirectiveParts {
+    /// The module-name (every dotted component) or the header-name;
+    /// invalid for `import :P;`.
+    pub name: Span,
+    /// The module-partition, from its `:` to its last component.
+    pub partition: Span,
+    /// What lies between the name and the `;`: the
+    /// attribute-specifier-seq.
+    pub attrs: Span,
+    /// The `;`; invalid when it is missing.
+    pub semi: Span,
 }
 
 /// The kinds of [`ModuleDirective`].
@@ -423,10 +443,18 @@ impl Preprocessor<'_, '_> {
         }
         let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
-        let kind = self.read_directive_body(import, kw);
+        let mut parts = DirectiveParts::default();
+        let kind = self.read_directive_body(import, kw, &mut parts);
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
-        let mut d =
-            ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive, end: None };
+        let mut d = ModuleDirective {
+            span: t.span,
+            export,
+            kw: kw_span,
+            kind,
+            after_directive,
+            end: None,
+            parts,
+        };
         // clang `err_module_decl_in_header_unit`: a header unit has no
         // module declaration (its own, at include depth 0 or not).
         if !import
@@ -571,19 +599,34 @@ impl Preprocessor<'_, '_> {
         }
     }
 
-    /// The directive after `module` / `import`, through the `;`.
-    fn read_directive_body(&mut self, import: bool, kw: &str) -> DirectiveKind {
+    /// The directive after `module` / `import`, through the `;`; notes
+    /// the ranges of its parts in `parts`.
+    fn read_directive_body(
+        &mut self,
+        import: bool,
+        kw: &str,
+        parts: &mut DirectiveParts,
+    ) -> DirectiveKind {
         let mut t = self.lex_unexpanded().tok;
         let kind = match t.kind {
-            TokKind::Punct(Punct::Semi) if !import => return DirectiveKind::GlobalFragment,
+            TokKind::Punct(Punct::Semi) if !import => {
+                parts.semi = t.span;
+                return DirectiveKind::GlobalFragment;
+            }
             TokKind::Punct(Punct::Less) | TokKind::StringLit(_) | TokKind::HeaderName if import => {
                 self.unlex_file_tok(t);
                 match self.read_header_import() {
-                    Some(k) => k,
+                    Some(k) => {
+                        if let DirectiveKind::Import { name_span, .. } = &k {
+                            parts.name = *name_span;
+                        }
+                        k
+                    }
                     None => return DirectiveKind::Invalid,
                 }
             }
             TokKind::Punct(Punct::Colon) => {
+                let colon = t.span;
                 let c = self.lex_unexpanded().tok;
                 if !import
                     && let TokKind::Identifier(s) = c.kind
@@ -592,9 +635,10 @@ impl Preprocessor<'_, '_> {
                     DirectiveKind::Private { span: c.span }
                 } else {
                     t = c;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
+                    let Some((p, ps)) = self.read_module_name(&mut t, kw) else {
                         return DirectiveKind::Invalid;
                     };
+                    parts.partition = Span::new(colon.lo, ps.hi);
                     self.unlex_file_tok(t);
                     match self.modules.as_ref().and_then(|m| m.module.clone()) {
                         Some(m) if import => DirectiveKind::Import {
@@ -618,15 +662,18 @@ impl Preprocessor<'_, '_> {
             }
             _ => {
                 let at = t.span;
-                let Some((name, _)) = self.read_module_name(&mut t, kw) else {
+                let Some((name, ns)) = self.read_module_name(&mut t, kw) else {
                     return DirectiveKind::Invalid;
                 };
+                parts.name = ns;
                 let mut partition = None;
                 if t.kind == TokKind::Punct(Punct::Colon) {
+                    let colon = t.span;
                     t = self.lex_unexpanded().tok;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
+                    let Some((p, ps)) = self.read_module_name(&mut t, kw) else {
                         return DirectiveKind::Invalid;
                     };
+                    parts.partition = Span::new(colon.lo, ps.hi);
                     partition = Some(p);
                 }
                 self.unlex_file_tok(t);
@@ -646,21 +693,23 @@ impl Preprocessor<'_, '_> {
                 }
             }
         };
-        self.skip_to_semi();
+        (parts.attrs, parts.semi) = self.skip_to_semi();
         kind
     }
 
-    /// `M.N` starting at `t`; leaves the token after it in `t`. The
+    /// `M.N` starting at `t`, and its range; leaves the token after it in
+    /// `t`. The
     /// components are no tokens the parser sees: the image gate does not
     /// count them as seen (spec/modules.md §11.11, "ODR merging").
     fn read_module_name(&mut self, t: &mut Token, kw: &str) -> Option<(String, Span)> {
         let start = t.span;
         let mut name = String::new();
         loop {
+            let last = t.span;
             let TokKind::Identifier(s) = t.kind else {
                 self.emit(Diag::new(DiagId::pp_module_expected_name, t.span).arg(kw));
                 self.unlex_file_tok(*t);
-                self.skip_to_semi();
+                let _ = self.skip_to_semi();
                 return None;
             };
             if self.macros.get(s).is_some_and(|d| !d.function_like) {
@@ -670,28 +719,32 @@ impl Preprocessor<'_, '_> {
             name.push_str(self.interner.as_str(s));
             *t = self.lex_unexpanded().tok;
             if t.kind != TokKind::Punct(Punct::Period) {
-                return Some((name, start));
+                return Some((name, Span::new(start.lo, last.hi)));
             }
             name.push('.');
             *t = self.lex_unexpanded().tok;
         }
     }
 
-    /// Skips attributes to the `;` (diagnosing a missing one).
-    fn skip_to_semi(&mut self) {
+    /// Skips attributes to the `;` (diagnosing a missing one): the range
+    /// of the tokens skipped and the `;` ([`Span::INVALID`] for none).
+    fn skip_to_semi(&mut self) -> (Span, Span) {
         let mut depth = 0u32;
+        let mut skipped = Span::INVALID;
         loop {
             let t = self.lex_unexpanded().tok;
             match t.kind {
-                TokKind::Punct(Punct::Semi) if depth == 0 => return,
-                TokKind::Punct(Punct::LSquare | Punct::LParen) => depth += 1,
-                TokKind::Punct(Punct::RSquare | Punct::RParen) => depth = depth.saturating_sub(1),
+                TokKind::Punct(Punct::Semi) if depth == 0 => return (skipped, t.span),
                 TokKind::Eod | TokKind::Eof => {
                     self.emit(Diag::new(DiagId::pp_module_expected_semi, t.span));
-                    return;
+                    return (skipped, Span::INVALID);
                 }
+                TokKind::Punct(Punct::LSquare | Punct::LParen) => depth += 1,
+                TokKind::Punct(Punct::RSquare | Punct::RParen) => depth = depth.saturating_sub(1),
                 _ => {}
             }
+            let lo = if skipped.lo.is_valid() { skipped.lo } else { t.span.lo };
+            skipped = Span::new(lo, t.span.hi);
         }
     }
 

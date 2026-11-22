@@ -320,6 +320,10 @@ pub struct TestSpec {
     /// (`-fkiln-dump-decl-extents`, spec/ast.md §19.7), relative to the
     /// test's directory; compared with the compile's standard output.
     pub decl_extents: Option<PathBuf>,
+    /// `decl-extents: <golden> unordered`: compared as sorted lines (an
+    /// importer built from a module image numbers its declarations in
+    /// another order than a parse; WP-2091).
+    pub decl_extents_unordered: bool,
     /// `pp-record:`: the golden preprocessing-record dump
     /// (`-E -fkiln-dump-pp-record`, spec/pp.md "Preprocessing record"),
     /// relative to the test's directory.
@@ -601,6 +605,7 @@ struct Parser {
     written_refs: Option<PathBuf>,
     written_refs_line: usize,
     decl_extents: Option<PathBuf>,
+    decl_extents_unordered: bool,
     decl_extents_line: usize,
     pp_record: Option<PathBuf>,
     pp_record_line: usize,
@@ -690,6 +695,7 @@ impl Parser {
             written_refs: None,
             written_refs_line: 0,
             decl_extents: None,
+            decl_extents_unordered: false,
             decl_extents_line: 0,
             pp_record: None,
             pp_record_line: 0,
@@ -854,7 +860,12 @@ impl Parser {
                     self.err(line, "`decl-extents` requires a path");
                 } else {
                     self.decl_extents_line = line;
-                    self.decl_extents = Some(PathBuf::from(value));
+                    let (path, unordered) = match value.strip_suffix(" unordered") {
+                        Some(p) => (p.trim_end(), true),
+                        None => (value, false),
+                    };
+                    self.decl_extents_unordered = unordered;
+                    self.decl_extents = Some(PathBuf::from(path));
                 }
             }
             "pp-record" => {
@@ -1616,6 +1627,7 @@ impl Parser {
             inst_report: self.inst_report,
             written_refs: self.written_refs,
             decl_extents: self.decl_extents,
+            decl_extents_unordered: self.decl_extents_unordered,
             pp_record: self.pp_record,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
@@ -1792,6 +1804,20 @@ mod tests {
 
     fn ok(src: &str) -> TestSpec {
         parse(src, Lang::Cxx).unwrap_or_else(|e| panic!("unexpected errors: {e:?}"))
+    }
+
+    #[test]
+    fn decl_extents_unordered_suffix() {
+        let s = ok("//@ decl-extents: a.extents\n");
+        assert_eq!(
+            (s.decl_extents.as_deref(), s.decl_extents_unordered),
+            (Some(Path::new("a.extents")), false)
+        );
+        let s = ok("//@ decl-extents: a.extents unordered\n");
+        assert_eq!(
+            (s.decl_extents.as_deref(), s.decl_extents_unordered),
+            (Some(Path::new("a.extents")), true)
+        );
     }
 
     fn errs(src: &str) -> Vec<String> {

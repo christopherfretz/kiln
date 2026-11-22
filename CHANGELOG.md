@@ -23,6 +23,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   arguments (`guarded_by(mu)`, `requires_capability(m)`) are looked up for
   the table, as clang parses them, without analysis. PCH FORMAT_VERSION
   145, IMAGE_VERSION 78.
+- Declaration extents for module and import declarations, and for the
+  declarations inside imported bodies (WP-2091, WP-2092; spec/ast.md
+  §19.6, §19.9): every module-declaration and module-import-declaration
+  has a row of its own kind (`ModuleDeclExtent`: `export`, the keyword,
+  the module or header-unit name, the partition, the attributes and the
+  `;`); an importer built from a module image has the rows a parse of the
+  unit gives for the locals, lambdas, block-scope classes, structured
+  bindings, init-statements and requires-expression parameters of the
+  inline functions, inline variable initializers and template patterns
+  it imports. The table gives back its spare capacity at the end of the
+  parse. Off, nothing changes (PCH `FORMAT_VERSION` 146, `IMAGE_VERSION`
+  79).
 - The written-reference table is carried in PCH snapshots and module
   images (stage 5, WP-1934; spec/ast.md §18.10): a TU restored from a
   snapshot made with the table continues its table (the dump equals the

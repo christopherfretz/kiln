@@ -1,0 +1,54 @@
+ImportDecl 'extents_body'  full=23:1-23:26 ; keyword=23:1-23:7 'import' name=23:8-23:20 'extents_body' attrs=23:21-23:25 '[[]]'
+ModuleDecl 'extents_body'  full=extents_body.cppm:5:1-extents_body.cppm:5:33 ; export=extents_body.cppm:5:1-extents_body.cppm:5:7 'export' keyword=extents_body.cppm:5:8-extents_body.cppm:5:14 'module' name=extents_body.cppm:5:15-extents_body.cppm:5:27 'extents_body' attrs=extents_body.cppm:5:28-extents_body.cppm:5:32 '[[]]'
+ImportDecl ':part'  full=extents_body.cppm:6:1-extents_body.cppm:6:21 ; export=extents_body.cppm:6:1-extents_body.cppm:6:7 'export' keyword=extents_body.cppm:6:8-extents_body.cppm:6:14 'import' partition=extents_body.cppm:6:15-extents_body.cppm:6:20 ':part'
+ModuleDecl 'extents_body:part'  full=extents_body_part.cppm:4:1-extents_body_part.cppm:4:33 ; export=extents_body_part.cppm:4:1-extents_body_part.cppm:4:7 'export' keyword=extents_body_part.cppm:4:8-extents_body_part.cppm:4:14 'module' name=extents_body_part.cppm:4:15-extents_body_part.cppm:4:27 'extents_body' partition=extents_body_part.cppm:4:27-extents_body_part.cppm:4:32 ':part'
+Export '(anonymous)'  full=extents_body_part.cppm:5:1-extents_body_part.cppm:5:34 ;
+CXXRecord 'Pair'  full=extents_body_part.cppm:5:1-extents_body_part.cppm:5:34 ; own=extents_body_part.cppm:5:8-extents_body_part.cppm:5:33 name=extents_body_part.cppm:5:15-extents_body_part.cppm:5:19 'Pair' body=extents_body_part.cppm:5:20-extents_body_part.cppm:5:33
+Field 'Pair::a'  full=extents_body_part.cppm:5:22-extents_body_part.cppm:5:31 ; own=extents_body_part.cppm:5:26-extents_body_part.cppm:5:27 name=extents_body_part.cppm:5:26-extents_body_part.cppm:5:27 'a' specs-end=extents_body_part.cppm:5:25
+Field 'Pair::b'  full=extents_body_part.cppm:5:22-extents_body_part.cppm:5:31 ; own=extents_body_part.cppm:5:29-extents_body_part.cppm:5:30 name=extents_body_part.cppm:5:29-extents_body_part.cppm:5:30 'b' specs-end=extents_body_part.cppm:5:25
+Export '(anonymous)'  full=extents_body_part.cppm:6:1-extents_body_part.cppm:6:81 ;
+TemplateTypeParm 'T'  full=extents_body_part.cppm:6:18-extents_body_part.cppm:6:25 - name=extents_body_part.cppm:6:24-extents_body_part.cppm:6:25 'T'
+ParmVar 't'  full=extents_body_part.cppm:6:55-extents_body_part.cppm:6:58 - name=extents_body_part.cppm:6:57-extents_body_part.cppm:6:58 't' specs-end=extents_body_part.cppm:6:56
+ParmVar 'n'  full=extents_body_part.cppm:6:60-extents_body_part.cppm:6:65 - name=extents_body_part.cppm:6:64-extents_body_part.cppm:6:65 'n' specs-end=extents_body_part.cppm:6:63
+Concept 'Gettable'  full=extents_body_part.cppm:6:1-extents_body_part.cppm:6:81 ; name=extents_body_part.cppm:6:35-extents_body_part.cppm:6:43 'Gettable'
+Export '(anonymous)'  full=extents_body_part.cppm:7:1-extents_body_part.cppm:10:2 }
+ParmVar 'a'  full=extents_body_part.cppm:7:25-extents_body_part.cppm:7:30 - own=extents_body_part.cppm:7:29-extents_body_part.cppm:7:30 name=extents_body_part.cppm:7:29-extents_body_part.cppm:7:30 'a' specs-end=extents_body_part.cppm:7:28
+Function 'split'  full=extents_body_part.cppm:7:1-extents_body_part.cppm:10:2 } own=extents_body_part.cppm:7:19-extents_body_part.cppm:10:2 name=extents_body_part.cppm:7:19-extents_body_part.cppm:7:24 'split' body=extents_body_part.cppm:7:32-extents_body_part.cppm:10:2 specs-end=extents_body_part.cppm:7:18
+Binding 'x'  full=extents_body_part.cppm:8:3-extents_body_part.cppm:8:28 ; own=extents_body_part.cppm:8:9-extents_body_part.cppm:8:10 name=extents_body_part.cppm:8:9-extents_body_part.cppm:8:10 'x'
+Binding 'y'  full=extents_body_part.cppm:8:3-extents_body_part.cppm:8:28 ; own=extents_body_part.cppm:8:12-extents_body_part.cppm:8:13 name=extents_body_part.cppm:8:12-extents_body_part.cppm:8:13 'y'
+Var '(anonymous)'  full=extents_body_part.cppm:8:3-extents_body_part.cppm:8:28 ; own=extents_body_part.cppm:8:8-extents_body_part.cppm:8:27 specs-end=extents_body_part.cppm:8:7
+Export '(anonymous)'  full=extents_body.cppm:7:1-extents_body.cppm:22:2 }
+ParmVar 'a'  full=extents_body.cppm:7:24-extents_body.cppm:7:29 - own=extents_body.cppm:7:28-extents_body.cppm:7:29 name=extents_body.cppm:7:28-extents_body.cppm:7:29 'a' specs-end=extents_body.cppm:7:27
+Function 'body'  full=extents_body.cppm:7:1-extents_body.cppm:22:2 } own=extents_body.cppm:7:19-extents_body.cppm:22:2 name=extents_body.cppm:7:19-extents_body.cppm:7:23 'body' body=extents_body.cppm:7:31-extents_body.cppm:22:2 specs-end=extents_body.cppm:7:18
+Var 'x'  full=extents_body.cppm:8:3-extents_body.cppm:8:22 ; own=extents_body.cppm:8:7-extents_body.cppm:8:12 name=extents_body.cppm:8:7-extents_body.cppm:8:8 'x' specs-end=extents_body.cppm:8:6
+Var 'p'  full=extents_body.cppm:8:3-extents_body.cppm:8:22 ; own=extents_body.cppm:8:14-extents_body.cppm:8:21 name=extents_body.cppm:8:15-extents_body.cppm:8:16 'p' specs-end=extents_body.cppm:8:6
+Var 'twice'  full=extents_body.cppm:9:3-extents_body.cppm:9:56 ; own=extents_body.cppm:9:8-extents_body.cppm:9:55 name=extents_body.cppm:9:8-extents_body.cppm:9:13 'twice' specs-end=extents_body.cppm:9:7
+ParmVar 'q'  full=extents_body.cppm:9:20-extents_body.cppm:9:25 - own=extents_body.cppm:9:24-extents_body.cppm:9:25 name=extents_body.cppm:9:24-extents_body.cppm:9:25 'q' specs-end=extents_body.cppm:9:23
+Var '(lambda at extents_body.cppm:9:16)::z'  full=extents_body.cppm:9:29-extents_body.cppm:9:39 ; own=extents_body.cppm:9:33-extents_body.cppm:9:38 name=extents_body.cppm:9:33-extents_body.cppm:9:34 'z' specs-end=extents_body.cppm:9:32
+CXXRecord 'Local'  full=extents_body.cppm:10:3-extents_body.cppm:13:5 ; own=extents_body.cppm:10:3-extents_body.cppm:13:4 name=extents_body.cppm:10:10-extents_body.cppm:10:15 'Local' body=extents_body.cppm:10:16-extents_body.cppm:13:4
+Field 'Local::v'  full=extents_body.cppm:11:5-extents_body.cppm:11:11 ; own=extents_body.cppm:11:9-extents_body.cppm:11:10 name=extents_body.cppm:11:9-extents_body.cppm:11:10 'v' specs-end=extents_body.cppm:11:8
+CXXMethod 'body(int)::Local::get'  full=extents_body.cppm:12:5-extents_body.cppm:12:34 } own=extents_body.cppm:12:9-extents_body.cppm:12:34 name=extents_body.cppm:12:9-extents_body.cppm:12:12 'get' body=extents_body.cppm:12:21-extents_body.cppm:12:34 specs-end=extents_body.cppm:12:8
+Enum 'Kind'  full=extents_body.cppm:14:3-extents_body.cppm:14:26 ; own=extents_body.cppm:14:3-extents_body.cppm:14:25 name=extents_body.cppm:14:8-extents_body.cppm:14:12 'Kind' body=extents_body.cppm:14:13-extents_body.cppm:14:25
+EnumConstant 'one'  full=extents_body.cppm:14:15-extents_body.cppm:14:18 - name=extents_body.cppm:14:15-extents_body.cppm:14:18 'one'
+EnumConstant 'two'  full=extents_body.cppm:14:20-extents_body.cppm:14:23 - name=extents_body.cppm:14:20-extents_body.cppm:14:23 'two'
+Var 'c'  full=extents_body.cppm:15:7-extents_body.cppm:15:17 ; own=extents_body.cppm:15:11-extents_body.cppm:15:16 name=extents_body.cppm:15:11-extents_body.cppm:15:12 'c' specs-end=extents_body.cppm:15:10
+Var 'k'  full=extents_body.cppm:17:11-extents_body.cppm:17:24 - own=extents_body.cppm:17:15-extents_body.cppm:17:24 name=extents_body.cppm:17:15-extents_body.cppm:17:16 'k' specs-end=extents_body.cppm:17:14
+Export '(anonymous)'  full=extents_body.cppm:23:1-extents_body.cppm:30:2 }
+TemplateTypeParm 'T'  full=extents_body.cppm:23:18-extents_body.cppm:23:25 - name=extents_body.cppm:23:24-extents_body.cppm:23:25 'T'
+ParmVar 'v'  full=extents_body.cppm:23:37-extents_body.cppm:23:40 - own=extents_body.cppm:23:39-extents_body.cppm:23:40 name=extents_body.cppm:23:39-extents_body.cppm:23:40 'v' specs-end=extents_body.cppm:23:38
+Function 'pattern'  full=extents_body.cppm:23:1-extents_body.cppm:30:2 } own=extents_body.cppm:23:29-extents_body.cppm:30:2 name=extents_body.cppm:23:29-extents_body.cppm:23:36 'pattern' body=extents_body.cppm:23:42-extents_body.cppm:30:2 specs-end=extents_body.cppm:23:28
+FunctionTemplate 'pattern'  full=extents_body.cppm:23:1-extents_body.cppm:30:2 } own=extents_body.cppm:23:29-extents_body.cppm:30:2 name=extents_body.cppm:23:29-extents_body.cppm:23:36 'pattern' body=extents_body.cppm:23:42-extents_body.cppm:30:2 specs-end=extents_body.cppm:23:28
+Var 'copy'  full=extents_body.cppm:24:3-extents_body.cppm:24:14 ; own=extents_body.cppm:24:5-extents_body.cppm:24:13 name=extents_body.cppm:24:5-extents_body.cppm:24:9 'copy' specs-end=extents_body.cppm:24:4
+CXXRecord 'Holder'  full=extents_body.cppm:25:3-extents_body.cppm:27:13 ; own=extents_body.cppm:25:3-extents_body.cppm:27:4 name=extents_body.cppm:25:10-extents_body.cppm:25:16 'Holder' body=extents_body.cppm:25:17-extents_body.cppm:27:4
+Field 'Holder::held'  full=extents_body.cppm:26:5-extents_body.cppm:26:12 ; own=extents_body.cppm:26:7-extents_body.cppm:26:11 name=extents_body.cppm:26:7-extents_body.cppm:26:11 'held' specs-end=extents_body.cppm:26:6
+Var 'h'  full=extents_body.cppm:25:3-extents_body.cppm:27:13 ; own=extents_body.cppm:27:5-extents_body.cppm:27:12 name=extents_body.cppm:27:5-extents_body.cppm:27:6 'h' specs-end=extents_body.cppm:27:4
+Var 'get'  full=extents_body.cppm:28:3-extents_body.cppm:28:43 ; own=extents_body.cppm:28:8-extents_body.cppm:28:42 name=extents_body.cppm:28:8-extents_body.cppm:28:11 'get' specs-end=extents_body.cppm:28:7
+ParmVar '(anonymous)'  full=extents_body.cppm:28:19-extents_body.cppm:28:22 - own=extents_body.cppm:28:22-extents_body.cppm:28:22 specs-end=extents_body.cppm:28:22
+Export '(anonymous)'  full=extents_body.cppm:31:1-extents_body.cppm:34:5 ;
+Var 'initialized'  full=extents_body.cppm:31:1-extents_body.cppm:34:5 ; own=extents_body.cppm:31:19-extents_body.cppm:34:4 name=extents_body.cppm:31:19-extents_body.cppm:31:30 'initialized' specs-end=extents_body.cppm:31:18
+Var '(lambda at extents_body.cppm:31:33)::seed'  full=extents_body.cppm:32:3-extents_body.cppm:32:16 ; own=extents_body.cppm:32:7-extents_body.cppm:32:15 name=extents_body.cppm:32:7-extents_body.cppm:32:11 'seed' specs-end=extents_body.cppm:32:6
+HeaderImportDecl '"Inputs/extents_hu.h"'  full=24:1-24:30 ; keyword=24:1-24:7 'import' name=24:8-24:29 '"Inputs/extents_hu.h"'
+ParmVar 'q'  full=extents_hu.h:2:24-extents_hu.h:2:29 - own=extents_hu.h:2:28-extents_hu.h:2:29 name=extents_hu.h:2:28-extents_hu.h:2:29 'q' specs-end=extents_hu.h:2:27
+Function 'from_header'  full=extents_hu.h:2:1-extents_hu.h:5:2 } own=extents_hu.h:2:12-extents_hu.h:5:2 name=extents_hu.h:2:12-extents_hu.h:2:23 'from_header' body=extents_hu.h:2:31-extents_hu.h:5:2 specs-end=extents_hu.h:2:11
+Var 'local'  full=extents_hu.h:3:3-extents_hu.h:3:17 ; own=extents_hu.h:3:7-extents_hu.h:3:16 name=extents_hu.h:3:7-extents_hu.h:3:12 'local' specs-end=extents_hu.h:3:6
+Function 'use'  full=25:1-25:85 } own=25:5-25:85 name=25:5-25:8 'use' body=25:11-25:85 specs-end=25:4

@@ -1747,23 +1747,42 @@ impl Test<'_> {
     /// `written-refs:` or `decl-extents:` (`--update` rewrites it).
     fn check_written_refs(&mut self, spec: &TestSpec) -> Check {
         if let Some(rel) = &spec.written_refs {
-            return self.check_dump(rel, "written-refs", "written-reference");
+            return self.check_dump(rel, "written-refs", "written-reference", false);
         }
         if let Some(rel) = &spec.decl_extents {
-            return self.check_dump(rel, "decl-extents", "declaration-extent");
+            let unordered = spec.decl_extents_unordered;
+            return self.check_dump(rel, "decl-extents", "declaration-extent", unordered);
         }
         Ok(())
     }
 
     /// Compares the compile's `what` dump with golden `rel` of directive
-    /// `directive`.
-    fn check_dump(&mut self, rel: &Path, directive: &str, what: &str) -> Check {
+    /// `directive`; `unordered`: as sorted lines (`--update` then keeps a
+    /// golden whose lines match, and writes the dump sorted otherwise).
+    fn check_dump(&mut self, rel: &Path, directive: &str, what: &str, unordered: bool) -> Check {
         if self.cfg.pch_diff.is_some() {
             return Ok(());
         }
         let path = self.case.path.parent().unwrap_or(Path::new(".")).join(rel);
-        let got = self.written_refs.take().unwrap_or_default();
+        let mut got = self.written_refs.take().unwrap_or_default();
+        let sorted = |t: &str| {
+            let mut l: Vec<&str> = t.lines().collect();
+            l.sort_unstable();
+            let mut s = String::with_capacity(t.len() + 1);
+            for x in l {
+                s.push_str(x);
+                s.push('\n');
+            }
+            s
+        };
+        if unordered {
+            got = sorted(&got);
+        }
+        let want_of = |t: String| if unordered { sorted(&t) } else { t };
         if self.cfg.update {
+            if unordered && fs::read_to_string(&path).is_ok_and(|w| want_of(w) == got) {
+                return Ok(());
+            }
             fs::write(&path, &got).map_err(|e| {
                 Problem::Broken(format!("cannot write {directive} {}: {e}", path.display()))
             })?;
@@ -1773,6 +1792,7 @@ impl Test<'_> {
         let want = fs::read_to_string(&path).map_err(|e| {
             Problem::Broken(format!("cannot read {directive} {}: {e}", path.display()))
         })?;
+        let want = want_of(want);
         if want == got {
             Ok(())
         } else {

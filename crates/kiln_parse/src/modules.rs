@@ -4,11 +4,12 @@
 //! (spec/modules.md §6).
 
 use kiln_ast::DeclId;
+use kiln_ast::decl_extents::{ModuleDeclExtent, ModuleDeclKind};
 use kiln_lex::{Punct, TokKind};
 use kiln_pp::DirectiveKind;
 use kiln_sema::modules::Directive;
 use kiln_source::fx::FxHashMap;
-use kiln_source::{FileId, Loc};
+use kiln_source::{FileId, Loc, Span};
 
 use crate::parser::Parser;
 use crate::tokens::Event;
@@ -152,6 +153,7 @@ impl Parser<'_, '_> {
                     {
                         self.s.module_note_pp_directive(at);
                     }
+                    self.ext_module_decl(&d);
                     let dir = match &d.kind {
                         DirectiveKind::Invalid => continue,
                         DirectiveKind::GlobalFragment => Directive::GlobalFragment,
@@ -186,6 +188,37 @@ impl Parser<'_, '_> {
                 other => self.on_event(other),
             }
         }
+    }
+
+    /// The declaration-extent row of a module or import declaration
+    /// (spec/ast.md §19.9); nothing when the table is off.
+    fn ext_module_decl(&mut self, d: &kiln_pp::ModuleDirective) {
+        if !self.ext_on() {
+            return;
+        }
+        let kind = match &d.kind {
+            DirectiveKind::Module { .. } => ModuleDeclKind::Module,
+            DirectiveKind::Import { header: false, .. } => ModuleDeclKind::Import,
+            DirectiveKind::Import { header: true, .. } => ModuleDeclKind::HeaderImport,
+            _ => return,
+        };
+        let p = d.parts;
+        let last = [p.semi, p.attrs, p.partition, p.name, d.kw]
+            .into_iter()
+            .find(|s| s.hi.is_valid())
+            .unwrap_or(d.kw);
+        let e = ModuleDeclExtent {
+            full: Span::new(d.span.lo, last.hi),
+            export: if d.export { d.span } else { Span::INVALID },
+            keyword: d.kw,
+            name: p.name,
+            partition: p.partition,
+            attrs: p.attrs,
+            semi: p.semi,
+            before: self.s.ast.decls.next_id().index(),
+            kind,
+        };
+        self.s.ast.decl_extents.push_module_decl(e);
     }
 
     fn module_key(&self, loc: Loc) -> Option<Key> {
