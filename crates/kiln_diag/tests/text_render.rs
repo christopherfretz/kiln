@@ -94,6 +94,42 @@ fn tabs_multiline_and_line_directives() {
     assert_text(&render_r("r.cpp", R_CPP), R_CPP_OUT);
 }
 
+// spec: diag.md §9.1 (the location `file:line:col: ` the text sink
+// prints, presumed through `#line`, the column in bytes with tabs
+// unexpanded): `text_position` gives the same three values, and `None`
+// for a diagnostic without a location.
+#[test]
+fn text_position_is_the_printed_location() {
+    let (sm, f) = source("r.cpp", R_CPP);
+    let line_start = |l: u32| common::offset(&sm, f, l, 1);
+    sm.add_line_directive(f, line_start(8), 100, Some("foo.h"));
+    sm.add_line_directive(f, line_start(11), 9998, None);
+    let sink = kiln_diag::MemorySink::new();
+    let engine = kiln_diag::DiagEngine::new(&sm, &kiln_diag::DiagOptions::default(), sink.clone());
+    for (l, c) in [(2, 15), (4, 10), (8, 13), (13, 2)] {
+        err(INVALID_OPERANDS, sp(&sm, f, l, c, 1)).emit(&engine);
+    }
+    err("no location", Span::INVALID).emit(&engine);
+    let got: Vec<_> = sink.take().iter().map(|d| kiln_diag::text_position(&sm, d)).collect();
+    assert_eq!(
+        got,
+        [
+            Some(("r.cpp", 2, 15)),
+            Some(("r.cpp", 4, 10)),
+            Some(("foo.h", 100, 13)),
+            Some(("foo.h", 10000, 2)),
+            None
+        ]
+    );
+    // The same as printed (R_CPP_OUT).
+    for (file, line, col) in got.into_iter().flatten() {
+        assert!(
+            R_CPP_OUT.contains(&format!("{file}:{line}:{col}: error: ")),
+            "{file}:{line}:{col}"
+        );
+    }
+}
+
 // spec: diag.md §9.3 (CRLF and lone-CR line terminators render as LF)
 #[test]
 fn crlf_and_cr() {

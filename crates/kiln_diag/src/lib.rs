@@ -40,4 +40,4 @@ pub use layout::SCRATCH_BUFFER_NAME;
 pub use options::{DEFAULT_TABSTOP, DiagOptions, Format, OptionDiag};
 pub use policy::Severity;
 pub use pragma::PragmaSnapshot;
-pub use text::TextSink;
+pub use text::{TextSink, text_position};
