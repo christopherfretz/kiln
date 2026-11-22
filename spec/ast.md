@@ -779,6 +779,27 @@ flags bit 1 = inherited from the previous declaration.
 `AttrKind::FALLTHROUGH`: flags bit 2 (`FALLTHROUGH_SCOPED`) = written
 with an attribute scope (`clang::`, `gnu::`; WP-203).
 
+**Checked marker** (WP-2022, for tooling clients that read the AST after
+the translation unit): flags bit 6 (`AttrNode::CHECKED`, any kind) = the
+checks of the declaration or statement the attribute appertains to have
+run on it (spec/sema.md §4.5 "Checked attributes"), so its argument words
+have their checked meaning, not the as-written one. Several kinds are
+rewritten by the check: `CLEANUP`'s `a` is the `ExprId` of the argument
+as written before and the cleanup function's `DeclId` after;
+`VISIBILITY`, `TLS_MODEL`, `CONSTRUCTOR`/`DESTRUCTOR`, `NONNULL` and
+`CALLBACK` resolve their arguments likewise. Queries:
+`AttrNode::is_checked()`, `AttrArena::is_checked(AttrId)`; sema sets it
+with `AttrArena::mark_checked(&[AttrId])`, and `AttrArena::push` sets it
+on an implicit node (bit 0), which sema builds in checked form. After the
+translation unit every attribute in a declaration's list or an
+`AttributedStmt`'s is checked (`kiln_parse/tests/attrs_checked.rs`); a
+node no list reaches (one a check replaced or dropped) may not be. An
+argument that depends on a template parameter keeps its deferred form
+under its per-kind flag (`PRIORITY_DEPENDENT`, `MODE_DEFERRED`,
+`SPACE_DEPENDENT`) until instantiation. The bit lives in the existing
+flags byte: the node stays 16 B, and the PCH snapshot and the module
+image carry it with the flags unchanged in layout.
+
 ## 8. Templates (M3; representation fixed now)
 ### 8.1 Parameters
 `TemplateParamList { depth: u16, params: ListId, requires: Option<ExprId> }`

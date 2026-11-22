@@ -343,7 +343,7 @@ const STMT_ATTRS: [AttrKind; 3] = [AttrKind::FALLTHROUGH, AttrKind::LIKELY, Attr
 /// An attribute's kind, syntax and flags in one word (`kind | syntax <<
 /// 16 | flags << 24`), if the image carries it.
 fn attr_word(a: &AttrNode) -> Option<u32> {
-    let flags = AttrNode::FALLTHROUGH_SCOPED | AttrNode::GNU_SCOPED;
+    let flags = AttrNode::FALLTHROUGH_SCOPED | AttrNode::GNU_SCOPED | AttrNode::CHECKED;
     let syntax = match a.syntax {
         AttrSyntax::Cxx11 => 0u32,
         AttrSyntax::Gnu => 1,

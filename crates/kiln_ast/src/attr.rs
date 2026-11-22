@@ -819,7 +819,7 @@ pub struct AttrNode {
     /// The syntax.
     pub syntax: AttrSyntax,
     /// Per-kind flags (bit 0: implicit; bit 1: inherited from a previous
-    /// declaration).
+    /// declaration; bit 6: checked, [`AttrNode::CHECKED`]).
     pub flags: u8,
     /// The attribute-token location.
     pub loc: Loc,
@@ -884,6 +884,30 @@ impl AttrNode {
     /// Implicit flag (bit 0): added by sema, not written.
     pub const IMPLICIT: u8 = 1;
 
+    /// Checked flag (bit 6, any kind; bits 2-5 are per-kind, `diagnose_if`
+    /// uses bit 5): the checks of the declaration the
+    /// attribute appertains to have run on it ([dcl.attr.grammar]/5;
+    /// spec/sema.md §4.5), so its argument words are in their checked
+    /// form, not as written. Several kinds are rewritten in place by the
+    /// check: `CLEANUP`'s `a` is the `ExprId` of the argument as written
+    /// before and the `DeclId` of the cleanup function after, and
+    /// `VISIBILITY`, `TLS_MODEL`, `CONSTRUCTOR` / `DESTRUCTOR`,
+    /// `NONNULL` and `CALLBACK` resolve their arguments the same way.
+    /// Every attribute attached to a declaration has it once the
+    /// translation unit is done (an implicit one is built checked); an
+    /// argument that depends on a template parameter keeps its deferred
+    /// form under its own per-kind flag (`PRIORITY_DEPENDENT`,
+    /// `MODE_DEFERRED`, `SPACE_DEPENDENT`) until instantiation. Read it
+    /// with [`AttrNode::is_checked`] or [`AttrArena::is_checked`].
+    pub const CHECKED: u8 = 64;
+
+    /// True once the declaration checks ran on this attribute
+    /// ([`AttrNode::CHECKED`]): its argument words have their checked
+    /// meaning (for `CLEANUP`, `a` is a `DeclId`).
+    pub const fn is_checked(&self) -> bool {
+        self.flags & Self::CHECKED != 0
+    }
+
     /// The visibility of a `VISIBILITY` / `TYPE_VISIBILITY` node: 0
     /// default, 1 hidden, 2 protected.
     pub const fn visibility(&self) -> u32 {
@@ -942,8 +966,13 @@ impl AttrArena {
         Self::default()
     }
 
-    /// Appends an attribute.
-    pub fn push(&mut self, a: AttrNode) -> AttrId {
+    /// Appends an attribute. An implicit one ([`AttrNode::IMPLICIT`]) is
+    /// built by sema in its checked form, so it is marked
+    /// [`AttrNode::CHECKED`] here.
+    pub fn push(&mut self, mut a: AttrNode) -> AttrId {
+        if a.flags & AttrNode::IMPLICIT != 0 {
+            a.flags |= AttrNode::CHECKED;
+        }
         let id = AttrId::new(self.nodes.len() as u32);
         let (word, bit) = (usize::from(a.kind.0 / 64), a.kind.0 % 64);
         if self.kinds.len() <= word {
@@ -963,6 +992,24 @@ impl AttrArena {
     /// built, before it is attached).
     pub fn set_flags(&mut self, a: AttrId, flags: u8) {
         self.nodes[a.index() as usize].flags |= flags;
+    }
+
+    /// Marks the attributes `attrs` checked ([`AttrNode::CHECKED`]): the
+    /// declaration checks have run on them. Sema calls it once per
+    /// declaration, after the checks and before the attributes are
+    /// attached.
+    pub fn mark_checked(&mut self, attrs: &[AttrId]) {
+        for &a in attrs {
+            self.nodes[a.index() as usize].flags |= AttrNode::CHECKED;
+        }
+    }
+
+    /// Whether attribute `a` was checked against its declaration
+    /// ([`AttrNode::CHECKED`]): a tooling client reading the AST after
+    /// the translation unit uses it to tell a checked node from one that
+    /// is still as written.
+    pub fn is_checked(&self, a: AttrId) -> bool {
+        self.get(a).is_checked()
     }
 
     /// Replaces the argument words of attribute `a` (while it is being

@@ -25,6 +25,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   the parameter, the variable or field), an instantiated closure's being
   the instantiated declaration. Kept only where it differs from the
   closure's context, and carried by PCH snapshots and module images.
+- A checked marker on attribute nodes for tooling clients (WP-2022):
+  `AttrNode::CHECKED` (flags bit 6) says the checks of the declaration
+  or statement the attribute appertains to have run on it, so its
+  argument words have their checked meaning (a `cleanup`'s `a` is the
+  function's `DeclId`, not the argument's `ExprId`). Query it with
+  `AttrNode::is_checked` / `AttrArena::is_checked`. After the
+  translation unit every attribute a declaration or an attributed
+  statement holds is checked; implicit attributes are built checked,
+  and PCH snapshots and module images carry the bit in the existing
+  flags byte (no format change).
 - A written-reference table for tooling clients (WP-1930, stage 1):
   `-fkiln-dump-written-refs` records, for each expression name, member
   name and nested-name-specifier component written in the source, the
@@ -550,6 +560,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   operators declared after the definition (choosing a later, better
   `operator-`, or accepting an operator the definition could not see).
   The image now carries the set (`IMAGE_VERSION` 56).
+- The attributes of an enumerator and of a lambda's call operator are
+  now checked against them as any declaration's (WP-2022): kiln attached
+  them as written, so an attribute that does not apply there was kept
+  without a diagnostic (`nodiscard`, `alignas`, `enable_if` or
+  `noreturn` on an enumerator; `nonnull` naming the implicit object
+  parameter or out of bounds, `alloc_size` on a deduced return type,
+  `tls_model`, an unknown `visibility` on a call operator), as clang
+  reports them. A deduction guide's pushed `#pragma clang attribute`
+  attributes are checked too.
 
 - An ordinary unqualified call whose function only argument-dependent
   lookup found (a hidden friend, a function or function template of an

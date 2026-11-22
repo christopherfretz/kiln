@@ -346,9 +346,6 @@ Both checks are reported together with the base and the result.
 Gaps:
 
 - A call through a member pointer passes no callee to the check.
-- A lambda's trailing `returns_nonnull` lands on the wrong
-  declaration in sema (`ubsan-lambda-returns-nonnull-ir.cpp`, an
-  xfail).
 - Under ASan clang keeps value names, and clang 22 annotates the
   allocas ASan instruments (`!annotation alloca_name_altered`); kiln
   does neither, so `ubsan-noreturn-asan-ir.cpp` is an xfail although

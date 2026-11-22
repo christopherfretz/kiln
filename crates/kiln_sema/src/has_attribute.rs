@@ -340,8 +340,10 @@ impl Sema<'_, '_> {
             }
             AttrKind::FORMAT => {
                 // The archetype, then as many indices as the probe gives
-                // (`flags`: 1 or 2 given; 0: all three).
-                let n = if p.flags == 0 { 3 } else { p.flags };
+                // (`flags` bits 0-1: 1 or 2 given; 0: all three; a probe
+                // of 1 also reads as implicit, so it is built checked).
+                let given = p.flags & 3;
+                let n = if given == 0 { 3 } else { given };
                 s.a == p.a
                     && (n < 2 || s.b & 0xffff == p.b & 0xffff)
                     && (n < 3 || s.b >> 16 == p.b >> 16)

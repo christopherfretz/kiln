@@ -459,8 +459,6 @@ Code generation, ABI and sanitizers:
 
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
-- `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's
-  trailing `returns_nonnull` lands on `operator()`. WP-871.
 - `driver.sanitize/ubsan-noreturn-asan-ir.cpp`: value names and clang
   22's `alloca_name_altered` annotation under ASan. WP-871.
 
