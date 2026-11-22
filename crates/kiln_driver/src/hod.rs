@@ -60,7 +60,7 @@ pub fn selected(args: &Args) -> Result<Backend, (String, String)> {
     if let Some(b) = args.backend {
         return Ok(b);
     }
-    let Some(v) = std::env::var_os(ENV_BACKEND).filter(|v| !v.is_empty()) else {
+    let Some(v) = args.env.var_os(ENV_BACKEND).filter(|v| !v.is_empty()) else {
         return Ok(Backend::Llvm);
     };
     let v = v.to_string_lossy().into_owned();
@@ -81,10 +81,11 @@ pub fn strict() -> bool {
 ///
 /// None found: what was searched, in order, as the diagnostic shows it.
 pub fn find(args: &Args, tc: &Toolchain) -> Result<PathBuf, String> {
-    let named =
-        args.hod.as_ref().map(|p| (p.clone(), "--hod=")).or_else(|| {
-            std::env::var(ENV_HOD).ok().filter(|p| !p.is_empty()).map(|p| (p, ENV_HOD))
-        });
+    let named = args
+        .hod
+        .as_ref()
+        .map(|p| (p.clone(), "--hod="))
+        .or_else(|| args.env.var(ENV_HOD).filter(|p| !p.is_empty()).map(|p| (p, ENV_HOD)));
     if let Some((p, from)) = named {
         let path = PathBuf::from(&p);
         return if path.is_file() { Ok(path) } else { Err(format!("'{p}' (from {from})")) };
@@ -101,7 +102,9 @@ pub fn find(args: &Args, tc: &Toolchain) -> Result<PathBuf, String> {
         }
         searched.push(format!("'{}' (next to llc)", p.display()));
     }
-    if let Some(p) = std::env::var_os("PATH")
+    if let Some(p) = args
+        .env
+        .var_os("PATH")
         .and_then(|path| std::env::split_paths(&path).map(|d| d.join("hod")).find(|p| p.is_file()))
     {
         return Ok(p);

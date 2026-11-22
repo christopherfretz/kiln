@@ -426,7 +426,12 @@ pub fn install_resource_dir(exe: &Path) -> Option<PathBuf> {
 ///    the build host's checkout, the installed path of 2 even though it is
 ///    missing, so the error names where the files belong.
 pub fn default_resource_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("KILN_RESOURCE_DIR").filter(|d| !d.is_empty()) {
+    default_resource_dir_in(&crate::env::Environment::process())
+}
+
+/// [`default_resource_dir`] with `KILN_RESOURCE_DIR` read from `env`.
+pub fn default_resource_dir_in(env: &crate::env::Environment) -> PathBuf {
+    if let Some(d) = env.var_os("KILN_RESOURCE_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
     let exe = std::env::current_exe().ok().map(|e| std::fs::canonicalize(&e).unwrap_or(e));
@@ -478,7 +483,26 @@ impl Toolchain {
         resource_dir: Option<&str>,
         llvm_dir: Option<&str>,
     ) -> Toolchain {
-        let default_res = default_resource_dir();
+        Toolchain::new_in(
+            target,
+            sysroot,
+            resource_dir,
+            llvm_dir,
+            &crate::env::Environment::process(),
+        )
+    }
+
+    /// [`Toolchain::new`] with the environment variables read from `env`
+    /// (`KILN_RESOURCE_DIR`, `KILN_LLVM_DIR`, `PATH`), which is also the
+    /// environment of the GCC driver it runs.
+    pub fn new_in(
+        target: Target,
+        sysroot: Option<&str>,
+        resource_dir: Option<&str>,
+        llvm_dir: Option<&str>,
+        env: &crate::env::Environment,
+    ) -> Toolchain {
+        let default_res = default_resource_dir_in(env);
         let resource_dir =
             resource_dir.map_or_else(|| default_res.to_string_lossy().into_owned(), str::to_owned);
         let data_dir = if Path::new(&resource_dir).join("predefines").is_dir() {
@@ -487,10 +511,10 @@ impl Toolchain {
             default_res
         };
         let sysroot = sysroot.unwrap_or("").to_owned();
-        let llvm = Search::from_env(llvm_dir).run();
+        let llvm = Search::from_environment(llvm_dir, env).run();
         let driver_gcc = DEFAULT_GCC
             .filter(|_| sysroot.is_empty())
-            .and_then(driver_gcc_install)
+            .and_then(|g| driver_gcc_install(g, env))
             .filter(|g| target.gcc_triples.contains(&g.triple.as_str()));
         let gcc_from_driver = driver_gcc.is_some();
         let (gcc, gcc_candidates) = match driver_gcc {
@@ -846,8 +870,9 @@ fn detect_gcc(prefix: &str, target: &Target) -> (Option<GccInstall>, Vec<String>
 /// The installation the GCC driver `gcc` reports: the `install:` line of
 /// `gcc -print-search-dirs`, if it names an installation (see
 /// [`gcc_install_dir`]). `None` when the driver is missing or fails.
-fn driver_gcc_install(gcc: &str) -> Option<GccInstall> {
-    let out = std::process::Command::new(gcc)
+fn driver_gcc_install(gcc: &str, env: &crate::env::Environment) -> Option<GccInstall> {
+    let out = env
+        .command(gcc)
         .arg("-print-search-dirs")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -873,8 +898,13 @@ pub fn gcc_major(v: &str) -> u32 {
 /// `<prefix>/lib/gcc/<triple>/<version>`, canonicalized) and the executable's name. Run
 /// only on that error path.
 pub fn gcc16_on_path() -> Option<(String, String)> {
+    gcc16_on_path_in(&crate::env::Environment::process())
+}
+
+/// [`gcc16_on_path`] in the environment `env` (its `PATH`).
+pub fn gcc16_on_path_in(env: &crate::env::Environment) -> Option<(String, String)> {
     ["g++-16", "g++"].into_iter().find_map(|exe| {
-        let g = driver_gcc_install(exe).filter(|g| gcc_major(&g.version) == 16)?;
+        let g = driver_gcc_install(exe, env).filter(|g| gcc_major(&g.version) == 16)?;
         let prefix = Path::new(&g.path).ancestors().nth(4)?;
         // `install:` is often `<prefix>/bin/../lib/gcc/...`.
         let prefix = std::fs::canonicalize(prefix).unwrap_or_else(|_| prefix.to_path_buf());

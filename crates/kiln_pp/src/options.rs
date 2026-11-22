@@ -73,7 +73,18 @@ pub struct MetaHint {
     /// Looks for a GCC 16 installation on `PATH`: its `--gcc-toolchain`
     /// prefix and the executable that reported it (`g++-16`). Called
     /// only when the note is emitted, never on a successful compile.
-    pub probe: fn() -> Option<(String, String)>,
+    pub probe: MetaProbe,
+}
+
+/// [`MetaHint::probe`]: a function the driver gives (it knows the
+/// environment the search runs in).
+#[derive(Clone)]
+pub struct MetaProbe(pub std::sync::Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>);
+
+impl std::fmt::Debug for MetaProbe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MetaProbe(..)")
+    }
 }
 
 /// Options of one preprocessor run.

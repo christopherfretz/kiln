@@ -61,8 +61,12 @@ impl StringEncoding {
     }
 }
 
+/// One interned literal: its code units' start and length, and its
+/// encoding. Public for tooling clients that name every type an AST
+/// holds (WP-2120); the fields are private.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-struct Entry {
+pub struct Entry {
     start: u32,
     len: u32,
     enc: StringEncoding,

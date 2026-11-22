@@ -62,9 +62,12 @@ use kiln_source::fx::FxHasher;
 use crate::ids::{ConstValueId, DeclId, QualType, ReflectionId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 
-/// A stored value's fixed-size header.
+/// A stored value's fixed-size header. (Like [`AggRec`] and [`Pools`],
+/// public for tooling clients that name every type an AST holds,
+/// WP-2120; the fields are private.)
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-struct Node {
+pub struct Node {
     ty: QualType,
     /// Bits 0..4: kind; 4..8: flags; 8..32: `extra` (24 bits).
     tag: u32,
@@ -121,8 +124,9 @@ impl Node {
 
 /// Per-aggregate pool starts. `aggs[i + 1]` (always present: the vector
 /// ends with a sentinel) gives the ends.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
-struct AggRec {
+pub struct AggRec {
     bytes: u32,
     relocs: u32,
     padding: u32,
@@ -132,8 +136,9 @@ struct AggRec {
 
 /// The pools (everything but the intern table, so the table's rehash
 /// closure can borrow them while the table is borrowed mutably).
+#[doc(hidden)]
 #[derive(Debug, kiln_snap::Snap)]
-struct Pools {
+pub struct Pools {
     pointer_bytes: u8,
     nodes: Vec<Node>,
     words: Vec<u64>,

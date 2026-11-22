@@ -204,8 +204,10 @@ needs but the `FileChange` callbacks do not see:
 
 - `SearchEvent::HasInclude { file, path, characteristic }` for each successful
   `__has_include` / `__has_include_next`;
-- `SearchEvent::Embed { path }` for each `#embed` / `__has_embed` that
-  finds a resource.
+- `SearchEvent::Embed { path, query_only, bytes }` for each `#embed` /
+  `__has_embed` that finds a resource: `query_only` for `__has_embed`,
+  `bytes` the whole resource as read, before `offset` / `limit` (WP-2120,
+  the front-end library entry's content of a consulted path).
 
 **Lookup log (WP-1403).** `HeaderSearch::record_lookups()` makes header
 search record what the PCH snapshot's lookup-tolerant search path needs
@@ -925,8 +927,9 @@ spec/modules.md §11.13.
   installation and its version), `note_pp_meta_libcxx`
   (`-stdlib=libc++`) or `note_pp_meta_no_gcc` (no GCC installation),
   each ending with `; a GCC 16 installation was found at '<prefix>' (from
-  <exe> on PATH)` when `MetaHint::probe` (the driver's `g++-16`, then
-  `g++`, `-print-search-dirs` probe) finds one. The probe runs only on
+  <exe> on PATH)` when `MetaHint::probe` (a `MetaProbe` closure: the
+  driver's `g++-16`, then `g++`, `-print-search-dirs` probe in its
+  environment, WP-2120) finds one. The probe runs only on
   this error path. The library selection itself does not change.
 - **`#embed`.** The core produces `prefix`, then the byte tokens
   (`is_embed_byte`: a pp-number per byte and the commas between them,

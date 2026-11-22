@@ -122,6 +122,15 @@ pattern creates fresh decls/exprs/stmts (with `instantiated_from` links,
 §8.3) appended to the arenas. Consequently instantiated bodies are retained
 for the TU's life (§13 Q6).
 
+**Every type an AST holds has a path** (WP-2120). The tables behind the
+public fields are `#[doc(hidden)] pub`, their fields private, so that a
+tooling client can name each type (a snapshot or a size account over an
+`Ast`): `ast::InstantiationMeter`, `consts::{Node, AggRec, Pools}`,
+`strings::Entry`, `types::args::{ArgTable, ListEntry}`,
+`types::intern::{KeyedEntry, KeyedTable}`, `types::node::Store`,
+`types::profile::{ProfileEntry, ProfileTable}`. They are not a stable
+interface: they change with the representation.
+
 ## 3. Names
 `DeclName(u32)`: a 3-bit tag in bits 29..=31 and a 29-bit payload.
 

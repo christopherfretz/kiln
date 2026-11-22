@@ -137,8 +137,12 @@ impl TemplateArg {
     }
 }
 
+/// One interned argument list. (Like [`ArgTable`], public for tooling
+/// clients that name every type an AST holds, WP-2120; the fields are
+/// private.)
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-pub(super) struct ListEntry {
+pub struct ListEntry {
     pub(super) start: u32,
     pub(super) len: u32,
     pub(super) canon: u32,
@@ -146,8 +150,9 @@ pub(super) struct ListEntry {
 }
 
 /// The argument arena and the list intern table.
+#[doc(hidden)]
 #[derive(Debug)]
-pub(crate) struct ArgTable {
+pub struct ArgTable {
     pub(super) args: Vec<TemplateArg>,
     pub(super) lists: Vec<ListEntry>,
     pub(super) intern: InternTable,

@@ -329,6 +329,15 @@ pub struct ParsedTu {
     /// The fallback census, when [`ParseOptions::image_census`] and the
     /// main unit is a module unit.
     pub image_census: Option<kiln_sema::ImageCensus>,
+    /// The tokens the preprocessor delivered to the parser, the end of
+    /// file not counted ([`TokenSource::token_count`]): the same number
+    /// on every run of the same input. After a fatal error the stream
+    /// ends at the parser's next read: this counts the tokens delivered
+    /// before the fatal diagnostic and the one the preprocessor returned
+    /// with it (a fatal `#include` is followed by the next token after
+    /// the directive), none after. For
+    /// [`continue_preprocessed`], the tokens after the prefix.
+    pub tokens: u64,
 }
 
 impl ParsedTu {
@@ -616,6 +625,7 @@ fn finish_tu<'a, 'sm>(
     let image_census = if opts.image_census { s.image_census() } else { None };
     let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
+    let tokens = src.token_count();
     let tu = ParsedTu {
         ast,
         oven,
@@ -626,6 +636,7 @@ fn finish_tu<'a, 'sm>(
         carried_hits,
         image,
         image_census,
+        tokens,
     };
     (tu, src.into_preprocessor())
 }

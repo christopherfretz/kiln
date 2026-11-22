@@ -313,6 +313,15 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
         &mut self.pp
     }
 
+    /// The number of tokens the preprocessor has delivered so far, the
+    /// `Eof` token not counted: once `Eof` is read (at the end of the
+    /// input, or pushed after a fatal error), the tokens before it.
+    /// Deterministic for a given input and options.
+    pub fn token_count(&self) -> u64 {
+        let n = self.eof.unwrap_or(self.base + self.toks.len());
+        u64::try_from(n).unwrap_or(u64::MAX)
+    }
+
     /// Returns the preprocessor.
     pub fn into_preprocessor(self) -> Preprocessor<'sm, 'a> {
         self.pp

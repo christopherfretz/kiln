@@ -114,7 +114,7 @@ const PRUNING: &str = ".pruning";
 /// `-fmodules-cache-path=`, or no usable home directory).
 pub fn cache_root(args: &Args) -> Option<PathBuf> {
     // Made absolute, as clang does, so `-v` and the stamps name one place.
-    root_from(args, |v| std::env::var_os(v)).map(|p| std::path::absolute(&p).unwrap_or(p))
+    root_from(args, |v| args.env.var_os(v)).map(|p| std::path::absolute(&p).unwrap_or(p))
 }
 
 fn root_from(args: &Args, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
@@ -149,6 +149,10 @@ struct StdCache {
     /// Whether this compile has checked the cache for unused entries
     /// (once per compile, after its first lookup).
     pruned: AtomicBool,
+    /// A library entry's compile ([`Args::no_side_outputs`]): a valid
+    /// entry is used, and nothing is written (no use noted, no build, no
+    /// pruning, no stale lock removed).
+    read_only: bool,
 }
 
 /// `-fmodules-prune-interval=` and `-fmodules-prune-after=`, both
@@ -226,6 +230,7 @@ pub(crate) fn for_job(
         verbose: a.verbose.then(|| job.stderr.clone()),
         prune: Prune::from_args(a),
         pruned: AtomicBool::new(false),
+        read_only: a.no_side_outputs,
     };
     let cache = Rc::new(cache);
     Some(kiln_pp::StdModuleCache(Rc::new(move |name: &str, source: &Path| {
@@ -267,6 +272,18 @@ impl StdCache {
     /// checked for unused entries ([`maybe_prune`]).
     fn lookup(&self, name: &str, source: &Path) -> Option<(PathBuf, Vec<String>)> {
         let dir = self.entry_dir(source);
+        if self.read_only {
+            let pcm = dir.join(format!("{name}.pcm"));
+            let inputs = entry_valid(&dir.join(format!("{name}.stamp")), &pcm);
+            match &inputs {
+                Some(_) => self.remark(&format!("using '{}' for '{name}'", pcm.display())),
+                None => self.remark(&format!(
+                    "no entry in '{}' for '{name}'; building it from its source",
+                    dir.display()
+                )),
+            }
+            return inputs.map(|i| (pcm, i));
+        }
         let found = self.lookup_in(&dir, name, source);
         if !self.pruned.swap(true, Ordering::Relaxed)
             && let Some(p) = self.prune
@@ -308,7 +325,7 @@ impl StdCache {
                 ));
                 return None;
             }
-            acquired = EntryLock::acquire(&lock_path, wait_limit(), || {
+            acquired = EntryLock::acquire(&lock_path, wait_limit(&self.args.env), || {
                 self.remark(&format!("waiting for another compile building '{name}'"));
             });
             if !matches!(&acquired, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
@@ -585,9 +602,8 @@ fn entry_valid(stamp: &Path, pcm: &Path) -> Option<Vec<String>> {
 
 /// How long a miss waits for the entry's lock: `KILN_MODULE_CACHE_WAIT_MS`
 /// when it is a number, else [`DEFAULT_WAIT`].
-fn wait_limit() -> Duration {
-    std::env::var(WAIT_ENV)
-        .ok()
+fn wait_limit(env: &crate::env::Environment) -> Duration {
+    env.var(WAIT_ENV)
         .and_then(|v| v.trim().parse().ok())
         .map_or(DEFAULT_WAIT, Duration::from_millis)
 }

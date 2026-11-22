@@ -228,6 +228,20 @@ pub enum LazyOutcome {
     Unavailable,
 }
 
+/// Where a buffer's text comes from ([`SourceManager::file_origin`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileOrigin {
+    /// Read from disk when it was created ([`SourceManager::load_file`]
+    /// and its variants).
+    Disk,
+    /// In memory ([`SourceManager::add_virtual`]): the predefines, the
+    /// command line's macros, standard input, token-paste results.
+    Virtual,
+    /// A file a module file or a snapshot recorded, read on first use
+    /// ([`SourceManager::add_lazy_file`]).
+    Lazy,
+}
+
 /// Where a buffer's text comes from.
 enum Origin {
     /// Read from disk ([`SourceManager::load_file`]).
@@ -1134,6 +1148,52 @@ impl SourceManager {
     /// Decoding report for the buffer (empty for virtual buffers).
     pub fn load_report(&self, file: FileId) -> &LoadReport {
         &self.file(file).body().report
+    }
+
+    /// Every buffer created so far, in [`FileId`] order (creation order).
+    /// Buffers created while the iterator runs may or may not be included.
+    pub fn file_ids(&self) -> impl Iterator<Item = FileId> + '_ {
+        (0..self.files.len()).map(FileId)
+    }
+
+    /// Where the buffer's text comes from. Does not read a lazy buffer.
+    pub fn file_origin(&self, file: FileId) -> FileOrigin {
+        match self.file(file).origin {
+            Origin::Disk => FileOrigin::Disk,
+            Origin::Virtual => FileOrigin::Virtual,
+            Origin::Lazy { .. } => FileOrigin::Lazy,
+        }
+    }
+
+    /// The bytes the buffer's text was decoded from: for a file read from
+    /// disk, the file's bytes as read, rebuilt from the decoded
+    /// [`text`](Self::text) and the [`load_report`](Self::load_report)'s
+    /// replacements (borrowed from the text when the file was valid UTF-8;
+    /// a byte-order mark is part of the text, so it is there too). For a
+    /// virtual buffer, its text. `None` for a lazy buffer that was never
+    /// read, or whose file no longer held the recorded text (its text is a
+    /// recorded copy or blank, not bytes read from disk). Does not read a
+    /// lazy buffer.
+    pub fn original_bytes(&self, file: FileId) -> Option<std::borrow::Cow<'_, [u8]>> {
+        let f = self.file(file);
+        let body = match f.origin {
+            Origin::Lazy { .. } => f.body.get().filter(|b| b.outcome == LazyOutcome::Disk)?,
+            Origin::Disk | Origin::Virtual => f.body(),
+        };
+        let text = body.text.as_bytes();
+        if body.report.is_clean() {
+            return Some(std::borrow::Cow::Borrowed(text));
+        }
+        let mut out = Vec::with_capacity(text.len());
+        let mut at = 0;
+        for r in &body.report.replacements {
+            let off = r.offset as usize;
+            out.extend_from_slice(&text[at..off]);
+            out.extend_from_slice(&r.bytes);
+            at = off + char::REPLACEMENT_CHARACTER.len_utf8();
+        }
+        out.extend_from_slice(&text[at..]);
+        Some(std::borrow::Cow::Owned(out))
     }
 
     /// The location of byte `offset` of `file`. `offset == text.len()` is

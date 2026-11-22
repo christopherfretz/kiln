@@ -733,6 +733,15 @@ pub struct Args {
     /// an evaluation session's translation unit (`session.rs`,
     /// spec/eval-session.md §2). Not a command-line option.
     pub host_calls_visible: bool,
+    /// Where the driver reads its environment variables: the process's
+    /// (the default), or a library entry's own set (spec/driver.md
+    /// "Front-end library entry"). Not a command-line option.
+    pub env: crate::env::Environment,
+    /// A library entry's job (spec/driver.md "Front-end library entry",
+    /// spec/eval-session.md §2): nothing is written outside the call, and
+    /// the `std` module cache is only read (a valid entry is used, no
+    /// use noted, nothing built or pruned). Not a command-line option.
+    pub no_side_outputs: bool,
     /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
@@ -2450,6 +2459,14 @@ impl Args {
     #[must_use]
     pub fn complex_range(&self) -> ComplexRange {
         self.fp_model().complex_range
+    }
+
+    /// Whether complex multiplication and division are computed in a
+    /// wider type (`-fcomplex-arithmetic=promoted`, clang 22's
+    /// `-ffp-model=fast`): [`kiln_parse::ParseOptions::complex_promoted`].
+    #[must_use]
+    pub fn complex_promoted(&self) -> bool {
+        self.complex_range() == ComplexRange::Promoted
     }
 
     /// `-fno-builtin` or `-ffreestanding` is in effect: no library

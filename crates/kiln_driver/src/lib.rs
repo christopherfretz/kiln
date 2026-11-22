@@ -22,8 +22,10 @@ pub mod crash;
 pub mod debug_flags;
 pub mod deps;
 pub mod entry;
+pub mod env;
 pub mod features;
 pub mod fp_flags;
+pub mod front_end;
 mod help;
 pub mod hod;
 mod host_test;
@@ -134,6 +136,36 @@ pub fn make_engine<'sm>(
         (Format::Text, Some(p)) => {
             DiagEngine::new(sm, opts, TextSink::new(stderr, opts).with_prefix(p))
         }
+    }
+}
+
+/// Makes the engines of the driver's own reports that are not the
+/// driver's main engine or a job's (the driver's warnings, the PCH
+/// probe's). The `kiln` executable's are [`make_engine`] over standard
+/// error ([`SharedWriter`]); the library entry ([`front_end`]) counts
+/// what each reported.
+pub(crate) trait Engines {
+    /// An engine over `sm` with `opts`, `prefix: ` before each text
+    /// diagnostic.
+    fn make<'s>(
+        &self,
+        sm: &'s SourceManager,
+        opts: &DiagOptions,
+        prefix: Option<&str>,
+    ) -> DiagEngine<'s>;
+
+    /// `e`, made by [`Engines::make`], reports nothing more.
+    fn done(&self, _e: &DiagEngine<'_>) {}
+}
+
+impl Engines for SharedWriter {
+    fn make<'s>(
+        &self,
+        sm: &'s SourceManager,
+        opts: &DiagOptions,
+        prefix: Option<&str>,
+    ) -> DiagEngine<'s> {
+        make_engine(sm, opts, self.clone(), prefix)
     }
 }
 
@@ -611,12 +643,12 @@ fn fp_warning_diags(args: &Args, inputs: &[&args::Input]) -> Vec<Diag> {
     (0..jobs).flat_map(|_| one.iter().cloned()).collect()
 }
 
-fn driver_warnings(
+pub(crate) fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
     inputs: &[&args::Input],
     diag_opts: &DiagOptions,
-    stderr: &SharedWriter,
+    engines: &dyn Engines,
 ) -> bool {
     let promoted = args.promoted_inputs(inputs);
     let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
@@ -679,12 +711,7 @@ fn driver_warnings(
         return false;
     }
     let sm = SourceManager::new();
-    let e = make_engine(
-        &sm,
-        &codegen_cmd::driver_diag_options(diag_opts),
-        stderr.clone(),
-        Some(&args.program),
-    );
+    let e = engines.make(&sm, &codegen_cmd::driver_diag_options(diag_opts), Some(&args.program));
     for (_, (from, to)) in promoted {
         Diag::new(DiagId::drv_treating_input_as_cxx, Span::INVALID).arg(from).arg(to).emit(&e);
     }
@@ -731,6 +758,7 @@ fn driver_warnings(
         }
     }
     e.flush();
+    engines.done(&e);
     e.error_count() > 0
 }
 
@@ -770,7 +798,7 @@ fn unused_phase_args(args: &Args, inputs: &[&args::Input]) -> Vec<String> {
 
 /// clang's x86-64 warning for `-mlarge-data-threshold=` without
 /// `-mcmodel=medium` / `large`, once per compile job (WP-1419).
-fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
+pub(crate) fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
     for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
         Diag::new(DiagId::drv_large_data_threshold_invalid_code_model, Span::INVALID)
             .arg("mlarge-data-threshold=")
@@ -779,7 +807,7 @@ fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.
-fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
+pub(crate) fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
     args.inputs
         .iter()
         .filter(|i| {
@@ -809,11 +837,12 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
             Target::host()
         }),
     };
-    let mut tc = Toolchain::new(
+    let mut tc = Toolchain::new_in(
         target,
         args.sysroot.as_deref(),
         args.resource_dir.as_deref(),
         args.llvm_dir.as_deref(),
+        &args.env,
     );
     if let Err(e) = &tc.llvm
         && e.is_explicit()
@@ -831,6 +860,134 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
         Diag::new(DiagId::drv_invalid_gcc_install_dir, Span::INVALID).arg(dir).emit(drv);
     }
     tc
+}
+
+/// The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
+/// compiler errors"); per thread, so set (or cleared) on every run.
+pub(crate) fn crash_for_testing(args: &Args) {
+    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
+    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
+        // Entering the requested phase panics: a crash outside any input.
+        drop(kiln_source::activity::enter(
+            kiln_source::activity::Phase::Driver,
+            kiln_source::Loc::INVALID,
+        ));
+    }
+}
+
+/// The diagnostic options of the command line's jobs.
+pub(crate) fn diag_options(args: &Args) -> DiagOptions {
+    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
+    diag_opts.clang_compat = args.predef.clang_compat.major();
+    diag_opts
+}
+
+/// The options of the driver's main engine: the jobs' without `-W` and
+/// `-R`.
+pub(crate) fn driver_options(diag_opts: &DiagOptions) -> DiagOptions {
+    let mut drv_opts = diag_opts.clone();
+    drv_opts.warnings.clear();
+    drv_opts.remarks.clear();
+    drv_opts
+}
+
+/// The driver's checks of the command line before the toolchain is
+/// built, reported to `drv`.
+pub(crate) fn command_line_checks(args: &Args, drv: &DiagEngine<'_>) {
+    for e in &args.errors {
+        emit_arg_error(e, drv);
+    }
+    // spec/driver.md "Back-end selection": a bad `KILN_BACKEND` is a
+    // usage error, as a bad `-fkiln-backend=` is.
+    if let Err((arg, v)) = hod::selected(args) {
+        Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(arg).arg(v).emit(drv);
+    }
+    for f in &args.frameworks {
+        Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(drv);
+    }
+    // spec/driver.md "Time trace": clang checks the granularity only when
+    // a compiler job writes the trace.
+    if let Err((flag, value)) = time_trace::settings(args) {
+        Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(drv);
+    }
+}
+
+/// The driver's checks of the command line against the toolchain `tc`
+/// (target features, sanitizers), reported to `drv`.
+pub(crate) fn toolchain_checks(args: &Args, tc: &Toolchain, drv: &DiagEngine<'_>) {
+    let (target_features, feature_errors) = features::resolve(args, &tc.target);
+    for e in &feature_errors {
+        emit_arg_error(e, drv);
+    }
+    // spec/driver.md "Sanitizers".
+    let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
+    // WP-1151: clang's `hasTargetFeatureMTE`, by `-fclang-compat=`.
+    let mte = target_features.memtag_hw;
+    for e in &sanitize_errors {
+        emit_arg_error(e, drv);
+    }
+    for f in &args.sanitize.ignorelists {
+        if !std::path::Path::new(f).exists() {
+            emit_arg_error(&ArgError::NoSuchFile(f.clone()), drv);
+        }
+    }
+    // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
+    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
+    {
+        emit_arg_error(e, drv);
+    }
+    // WP-1863: `-fsanitize-coverage=` and its lists come next in clang.
+    for e in &args.sanitize.coverage_errors(sanitize.opts.kinds, args.clang22()) {
+        emit_arg_error(e, drv);
+    }
+    // WP-1138: clang checks the target feature after the option errors.
+    for e in &sanitize.hardware_errors(tc.target.is_aarch64(), mte) {
+        emit_arg_error(e, drv);
+    }
+}
+
+/// Whether the command line has no input to run (`inputs` are those that
+/// exist): clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`,
+/// `-rpath`, `-z`, `-r`) as inputs, so `clang++ -Wl,--version` runs the
+/// linker alone (Meson's linker probe, WP-920).
+fn no_inputs(args: &Args, inputs: &[&args::Input]) -> bool {
+    let linker_inputs = args.link.iter().any(|l| l.kind.is_input());
+    inputs.is_empty() && !(linker_inputs && args.inputs.is_empty())
+}
+
+/// The driver's checks of the inputs and the action, reported to `drv`
+/// (`inputs` are those that exist).
+pub(crate) fn input_checks(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&args::Input],
+    drv: &DiagEngine<'_>,
+) {
+    if no_inputs(args, inputs) {
+        Diag::new(DiagId::drv_no_input_files, Span::INVALID).emit(drv);
+    }
+    // WP-1419: clang 19 reports an unclaimed target-specific option (the
+    // x86-only `-mlarge-data-threshold=` on `AArch64`) after building the
+    // jobs, and only when the driver saw no error (clang 22 reports it
+    // with the target's other errors, `features::resolve`).
+    if args.codegen.large_data_threshold.is_some()
+        && tc.target.is_aarch64()
+        && args.predef.clang_compat != kiln_pp::ClangCompat::Clang22
+        && drv.error_count() == 0
+    {
+        let t = args.target.as_deref().unwrap_or(tc.target.triple);
+        emit_arg_error(
+            &ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()),
+            drv,
+        );
+    }
+    if drv.error_count() == 0 {
+        check_action(args, drv);
+    }
+    if drv.error_count() == 0 && args.deps.missing_generated && args.deps.only.is_none() {
+        // clang `Clang::ConstructJob`: `-MG` only lists headers for `-M`/`-MM`.
+        Diag::new(DiagId::drv_mg_requires_m_or_mm, Span::INVALID).emit(drv);
+    }
 }
 
 /// Runs the driver on `argv` (without the program name) as `kiln++`: every
@@ -854,70 +1011,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     let args = Args::parse_as(argv0, &command_line);
     pch_snapshot::phase("arguments");
-    // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
-    // compiler errors"); per thread, so set (or cleared) on every run.
-    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
-    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
-        // Entering the requested phase panics: a crash outside any input.
-        drop(kiln_source::activity::enter(
-            kiln_source::activity::Phase::Driver,
-            kiln_source::Loc::INVALID,
-        ));
-    }
-    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
-    diag_opts.clang_compat = args.predef.clang_compat.major();
+    crash_for_testing(&args);
+    let diag_opts = diag_options(&args);
     let dsm = SourceManager::new();
-    let mut drv_opts = diag_opts.clone();
-    drv_opts.warnings.clear();
-    drv_opts.remarks.clear();
-    let drv = make_engine(&dsm, &drv_opts, io.stderr.clone(), Some(&args.program));
-    for e in &args.errors {
-        emit_arg_error(e, &drv);
-    }
-    // spec/driver.md "Back-end selection": a bad `KILN_BACKEND` is a
-    // usage error, as a bad `-fkiln-backend=` is.
-    if let Err((arg, v)) = hod::selected(&args) {
-        Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(arg).arg(v).emit(&drv);
-    }
-    for f in &args.frameworks {
-        Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);
-    }
-    // spec/driver.md "Time trace": clang checks the granularity only when
-    // a compiler job writes the trace.
-    if let Err((flag, value)) = time_trace::settings(&args) {
-        Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(&drv);
-    }
+    let drv =
+        make_engine(&dsm, &driver_options(&diag_opts), io.stderr.clone(), Some(&args.program));
+    command_line_checks(&args, &drv);
     let tc = toolchain_of(&args, &drv);
     pch_snapshot::phase("toolchain");
-    let (target_features, feature_errors) = features::resolve(&args, &tc.target);
-    for e in &feature_errors {
-        emit_arg_error(e, &drv);
-    }
-    // spec/driver.md "Sanitizers".
-    let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
-    // WP-1151: clang's `hasTargetFeatureMTE`, by `-fclang-compat=`.
-    let mte = target_features.memtag_hw;
-    for e in &sanitize_errors {
-        emit_arg_error(e, &drv);
-    }
-    for f in &args.sanitize.ignorelists {
-        if !std::path::Path::new(f).exists() {
-            emit_arg_error(&ArgError::NoSuchFile(f.clone()), &drv);
-        }
-    }
-    // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
-    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
-    {
-        emit_arg_error(e, &drv);
-    }
-    // WP-1863: `-fsanitize-coverage=` and its lists come next in clang.
-    for e in &args.sanitize.coverage_errors(sanitize.opts.kinds, args.clang22()) {
-        emit_arg_error(e, &drv);
-    }
-    // WP-1138: clang checks the target feature after the option errors.
-    for e in &sanitize.hardware_errors(tc.target.is_aarch64(), mte) {
-        emit_arg_error(e, &drv);
-    }
+    toolchain_checks(&args, &tc, &drv);
     if args.help {
         let _ = io.stdout.write_all(help::HELP.as_bytes());
         return 0;
@@ -939,58 +1041,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         print_version(&mut io.stderr, &tc, true);
     }
     let inputs = existing_inputs(&args, &drv);
-    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`, `-rpath`, `-z`,
-    // `-r`) as inputs: `clang++ -Wl,--version` runs the linker alone
-    // (Meson's linker probe, WP-920).
-    let linker_inputs = args.link.iter().any(|l| l.kind.is_input());
-    if inputs.is_empty() && !(linker_inputs && args.inputs.is_empty()) {
-        if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
-            return 0;
-        }
-        Diag::new(DiagId::drv_no_input_files, Span::INVALID).emit(&drv);
-    }
-    // WP-1419: clang 19 reports an unclaimed target-specific option (the
-    // x86-only `-mlarge-data-threshold=` on `AArch64`) after building the
-    // jobs, and only when the driver saw no error (clang 22 reports it
-    // with the target's other errors, `features::resolve`).
-    if args.codegen.large_data_threshold.is_some()
-        && tc.target.is_aarch64()
-        && args.predef.clang_compat != kiln_pp::ClangCompat::Clang22
+    if no_inputs(&args, &inputs)
+        && (args.version || args.verbose)
+        && args.inputs.is_empty()
         && drv.error_count() == 0
     {
-        let t = args.target.as_deref().unwrap_or(tc.target.triple);
-        emit_arg_error(
-            &ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()),
-            &drv,
-        );
+        return 0;
     }
-    if drv.error_count() == 0 {
-        check_action(&args, &drv);
-    }
-    if drv.error_count() == 0 && args.deps.missing_generated && args.deps.only.is_none() {
-        // clang `Clang::ConstructJob`: `-MG` only lists headers for `-M`/`-MM`.
-        Diag::new(DiagId::drv_mg_requires_m_or_mm, Span::INVALID).emit(&drv);
-    }
-    drv.flush();
-    if drv.error_count() > 0 {
-        // WP-1419: clang's compile jobs warn about an unused x86-64
-        // `-mlarge-data-threshold=` after a driver error too (an
-        // unsupported `-mcmodel=`).
-        if args.codegen.large_data_threshold_ignored(!tc.target.is_aarch64()) {
-            let sm = SourceManager::new();
-            let e = make_engine(
-                &sm,
-                &codegen_cmd::driver_diag_options(&diag_opts),
-                io.stderr.clone(),
-                Some(&args.program),
-            );
-            large_data_threshold_warnings(&inputs, &e);
-            e.flush();
-        }
-        return 1;
-    }
-    drop(drv);
-    if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
+    if !input_stage(&args, &tc, &inputs, &diag_opts, drv, &io.stderr, &|_| {}) {
         return 1;
     }
     match module_header_jobs(&args, &inputs, &diag_opts, &io.stderr) {
@@ -1080,6 +1138,157 @@ fn module_header_jobs<'a>(
     Ok(Some(groups))
 }
 
+/// The jobs that preprocess, of which clang's driver probes the first
+/// `-include <h>` for a PCH (WP-1037): not `.i`/`.ii`, objects, module
+/// files.
+pub(crate) fn probe_jobs(args: &Args, inputs: &[&args::Input]) -> usize {
+    inputs
+        .iter()
+        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
+        .filter(|i| {
+            i.lang.is_some()
+                || !matches!(
+                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
+                    Some("i" | "ii")
+                )
+        })
+        .count()
+}
+
+/// What a library entry ([`front_end`], [`session`]) changes in the
+/// stages it shares with [`run_as`] ([`input_stage`], [`jobs_stage`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EntryRules {
+    /// Whether clang's PCH probe of the first `-include` runs.
+    pub(crate) pch_probe: bool,
+}
+
+/// The end of the driver's checks (`run_as`, shared with the library
+/// entries): the inputs and the action, then `refuse` (the entry's own
+/// refusals, reported to `drv`), then the driver's warnings. `inputs`
+/// are those that exist. `false` once an error was reported.
+pub(crate) fn input_stage(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&args::Input],
+    diag_opts: &DiagOptions,
+    drv: DiagEngine<'_>,
+    engines: &dyn Engines,
+    refuse: &dyn Fn(&DiagEngine<'_>),
+) -> bool {
+    input_checks(args, tc, inputs, &drv);
+    refuse(&drv);
+    drv.flush();
+    let failed = drv.error_count() > 0;
+    engines.done(&drv);
+    drop(drv);
+    if failed {
+        // WP-1419: clang's compile jobs warn about an unused x86-64
+        // `-mlarge-data-threshold=` after a driver error too (an
+        // unsupported `-mcmodel=`).
+        if args.codegen.large_data_threshold_ignored(!tc.target.is_aarch64()) {
+            let sm = SourceManager::new();
+            let e = engines.make(
+                &sm,
+                &codegen_cmd::driver_diag_options(diag_opts),
+                Some(&args.program),
+            );
+            large_data_threshold_warnings(inputs, &e);
+            e.flush();
+            engines.done(&e);
+        }
+        return false;
+    }
+    !driver_warnings(args, tc, inputs, diag_opts, engines)
+}
+
+/// The steps of [`run_jobs`] before its jobs, shared with the library
+/// entries (`entry`): clang's PCH probe, the `-include-pch` consumer and
+/// the host-call artifact check. The arguments the jobs run under when
+/// they change (`Ok(None)`: `args`); `Err` once an error was reported.
+/// The consumer's job reports go to `stderr`. A library entry refuses an `-include-pch`, written or made by the
+/// probe, with `drv_front_end_unsupported` (before the consumer, so its
+/// reports never reach `stderr`).
+pub(crate) fn jobs_stage(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&args::Input],
+    diag_opts: &DiagOptions,
+    engines: &dyn Engines,
+    stderr: &SharedWriter,
+    entry: Option<EntryRules>,
+) -> Result<Option<Args>, ()> {
+    // WP-1037: clang's driver turns the first `-include <h>` into
+    // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
+    // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
+    let jobs = if entry.is_some_and(|e| !e.pch_probe) { 0 } else { probe_jobs(args, inputs) };
+    let probed = pch::probe(args, jobs, diag_opts, engines)?;
+    let args1: &Args = probed.as_ref().unwrap_or(args);
+    let report = |id: DiagId, what: &str| {
+        let sm = SourceManager::new();
+        let e =
+            engines.make(&sm, &codegen_cmd::driver_diag_options(diag_opts), Some(&args.program));
+        Diag::new(id, Span::INVALID).arg(what).emit(&e);
+        e.flush();
+        engines.done(&e);
+    };
+    if entry.is_some() && args1.pch.include.is_some() {
+        report(DiagId::drv_front_end_unsupported, "-include-pch");
+        return Err(());
+    }
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    if entry.is_none() {
+        pch_snapshot::phase("driver checks");
+    }
+    let consumed = pch::consumer(args1, tc, inputs, diag_opts, stderr)?;
+    if entry.is_none() {
+        pch_snapshot::phase("pch record and snapshot validation");
+    }
+    let args2: &Args = consumed.as_ref().unwrap_or(args1);
+    if args2.host_call_test_handler
+        && let Some(what) = host_test::artifact(args2, inputs)
+    {
+        // spec/host-calls.md §6: what a host call produced belongs to
+        // this compilation.
+        report(DiagId::drv_host_calls_artifact, what);
+        return Err(());
+    }
+    Ok(consumed.or(probed))
+}
+
+/// The language standard of `input`'s job under `args`, or `None` once
+/// its error is reported (an engine of its own, as each job's).
+pub(crate) fn job_std(
+    args: &Args,
+    input: &args::Input,
+    diag_opts: &DiagOptions,
+    engines: &dyn Engines,
+) -> Option<LangStd> {
+    match input_std(args, args.input_lang(input)) {
+        Ok(s) => Some(s),
+        Err(d) => {
+            let sm = SourceManager::new();
+            let e = engines.make(&sm, diag_opts, None);
+            (*d).emit(&e);
+            e.flush();
+            engines.done(&e);
+            None
+        }
+    }
+}
+
+/// The arguments of a `-fsyntax-only` / `--precompile` job on a header
+/// unit `input`: a header unit's job knows its lookup (spec/modules.md
+/// §11.6). `None` for any other input.
+pub(crate) fn header_unit_args(args: &Args, input: &args::Input) -> Option<Args> {
+    args.header_unit_of(input).map(|k| {
+        let mut a = args.clone();
+        a.header_unit_main = Some(k);
+        a
+    })
+}
+
 /// The jobs of `inputs` under `args` (the action's in-process steps, or
 /// the code generation of `codegen_cmd`); returns the exit status.
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
@@ -1090,48 +1299,11 @@ fn run_jobs(
     diag_opts: &DiagOptions,
     io: &mut Io,
 ) -> i32 {
-    // WP-1037: clang's driver turns the first `-include <h>` into
-    // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
-    // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
-    let jobs = inputs
-        .iter()
-        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
-        .filter(|i| {
-            i.lang.is_some()
-                || !matches!(
-                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
-                    Some("i" | "ii")
-                )
-        })
-        .count();
-    let Ok(probed) = pch::probe(args, jobs, diag_opts, &io.stderr) else {
+    let Ok(job_args) = jobs_stage(args, tc, &inputs, diag_opts, &io.stderr, &io.stderr, None)
+    else {
         return 1;
     };
-    let args: &Args = probed.as_ref().unwrap_or(args);
-    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
-    // checked PCH replays as `-include`s.
-    pch_snapshot::phase("driver checks");
-    let Ok(pch_args) = pch::consumer(args, tc, &inputs, diag_opts, &io.stderr) else {
-        return 1;
-    };
-    pch_snapshot::phase("pch record and snapshot validation");
-    let args: &Args = pch_args.as_ref().unwrap_or(args);
-    if args.host_call_test_handler
-        && let Some(what) = host_test::artifact(args, &inputs)
-    {
-        // spec/host-calls.md §6: what a host call produced belongs to
-        // this compilation.
-        let sm = SourceManager::new();
-        let e = make_engine(
-            &sm,
-            &codegen_cmd::driver_diag_options(diag_opts),
-            io.stderr.clone(),
-            Some(&args.program),
-        );
-        Diag::new(DiagId::drv_host_calls_artifact, Span::INVALID).arg(what).emit(&e);
-        e.flush();
-        return 1;
-    }
+    let args: &Args = job_args.as_ref().unwrap_or(args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();
@@ -1271,17 +1443,9 @@ fn run_jobs(
             }
             continue;
         }
-        let lang = args.input_lang(input);
-        let std = match input_std(args, lang) {
-            Ok(s) => s,
-            Err(d) => {
-                let sm = SourceManager::new();
-                let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
-                (*d).emit(&e);
-                e.flush();
-                errors += 1;
-                continue;
-            }
+        let Some(std) = job_std(args, input, diag_opts, &io.stderr) else {
+            errors += 1;
+            continue;
         };
         // A `.S` under `-fsyntax-only` is only preprocessed, and the text
         // written (to `-o`, else standard output), as clang's phases stop
@@ -1297,12 +1461,7 @@ fn run_jobs(
             });
             // spec/driver.md "Compile statistics log": the job's record.
             let stats = stats_log.as_ref().map(|_| stats::Job::start(Some(&input.path)));
-            // A header unit's job knows its lookup (spec/modules.md §11.6).
-            let unit_args = args.header_unit_of(input).map(|k| {
-                let mut a = args.clone();
-                a.header_unit_main = Some(k);
-                a
-            });
+            let unit_args = header_unit_args(args, input);
             let r = {
                 let _frontend = kiln_source::trace::Phase::new("Frontend");
                 let a = unit_args.as_ref().unwrap_or(args);

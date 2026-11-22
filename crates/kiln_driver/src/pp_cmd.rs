@@ -306,12 +306,35 @@ impl Job<'_> {
         o.main_is_header = a.pch.header_main || a.header_unit_main.is_some();
         o.meta_hint = self.meta_hint();
         o.predefines = predefines;
-        if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
+        if let Some(epoch) = time::reproducible_epoch(a.reproducible_time, &a.env) {
             let (date, t, stamp) = time::spellings(epoch);
             o.reproducible_time = Some((date, t));
             o.timestamp = Some(stamp);
         }
         o
+    }
+
+    /// [`Self::pp_options`] for a preprocessor that runs sema (`staged`,
+    /// see [`Self::build_preprocessor`]) or that writes `-E` text.
+    pub(crate) fn pp_options_for(&self, predefines: String, staged: bool) -> PpOptions {
+        let mut o = self.pp_options(predefines);
+        o.parser_pragmas = staged;
+        o.preprocessed_output = !staged;
+        o
+    }
+
+    /// The `#if` evaluator of this job: the target's encodings, with
+    /// `-f[no-]signed-char`.
+    pub(crate) fn if_evaluator(&self) -> IfEval {
+        let ifeval = IfEval::for_triple(self.toolchain.target.triple);
+        match self.args.predef.char_signed {
+            Some(signed) => {
+                let mut params = ifeval.params();
+                params.char_signed = signed;
+                IfEval::new(params)
+            }
+            None => ifeval,
+        }
     }
 
     /// The note after a missing `#include <meta>` (WP-1210): only at
@@ -337,7 +360,11 @@ impl Job<'_> {
                 None => kiln_pp::MetaHintLib::NoGcc,
             }
         };
-        Some(kiln_pp::MetaHint { lib, probe: crate::toolchain::gcc16_on_path })
+        let env = a.env.clone();
+        let probe = kiln_pp::MetaProbe(std::sync::Arc::new(move || {
+            crate::toolchain::gcc16_on_path_in(&env)
+        }));
+        Some(kiln_pp::MetaHint { lib, probe })
     }
 
     fn load_main(&self, sm: &SourceManager, engine: &DiagEngine<'_>) -> Option<MainInput> {
@@ -583,8 +610,23 @@ impl Job<'_> {
         inputs: PpInputs,
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
+        self.build_preprocessor_with(sm, engine, interner, inputs, staged, None)
+    }
+
+    /// [`Self::build_preprocessor`] with the library entry's `hooks`
+    /// ([`crate::front_end`]): the lookup log recorded when it asks, and
+    /// the header search's events kept.
+    pub(crate) fn build_preprocessor_with<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        staged: bool,
+        hooks: Option<&crate::front_end::PpHooks>,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let (mut pp, deps, main) =
-            self.configure_preprocessor(sm, engine, interner, inputs, staged)?;
+            self.configure_preprocessor_with(sm, engine, interner, inputs, staged, hooks)?;
         match main {
             MainInput::File(f) => pp.enter_main_file(f),
             MainInput::Capsule(bytes) => {
@@ -677,23 +719,48 @@ impl Job<'_> {
         inputs: PpInputs,
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>, MainInput)> {
+        self.configure_preprocessor_with(sm, engine, interner, inputs, staged, None)
+    }
+
+    /// [`Self::configure_preprocessor`] with the library entry's `hooks`
+    /// ([`Self::build_preprocessor_with`]).
+    pub(crate) fn configure_preprocessor_with<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        staged: bool,
+        hooks: Option<&crate::front_end::PpHooks>,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>, MainInput)> {
         let a = self.args;
         let PpInputs { skipped, list, main, predefines } = inputs;
         // The module cache's key takes the predefines and the search list
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
-        if a.pch.record_lookups {
+        if a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups) {
             search.record_lookups();
         }
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
-        if let Some(d) = &deps {
-            let d2 = Rc::clone(d);
-            search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
+        let events = hooks.map(|h| Rc::clone(&h.events));
+        match (&deps, events) {
+            (Some(d), None) => {
+                let d2 = Rc::clone(d);
+                search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
+            }
+            (d, Some(events)) => {
+                let d2 = d.as_ref().map(Rc::clone);
+                search.set_observer(Box::new(move |_, e| {
+                    if let Some(d2) = &d2 {
+                        on_search_event(d2, e);
+                    }
+                    crate::front_end::on_search_event(&events, e);
+                }));
+            }
+            (None, None) => {}
         }
-        let mut opts = self.pp_options(predefines);
-        opts.parser_pragmas = staged;
-        opts.preprocessed_output = !staged;
+        let mut opts = self.pp_options_for(predefines, staged);
         if !staged {
             // `-E -dD`/`-dI` print the directives in place (`-dM` and
             // `-M` print no text); `-M -MG` lists a missing header
@@ -737,13 +804,7 @@ impl Job<'_> {
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
         pp.set_include_resolver(Box::new(search));
         let triple = self.toolchain.target.triple;
-        let mut ifeval = IfEval::for_triple(triple);
-        if let Some(signed) = a.predef.char_signed {
-            let mut params = ifeval.params();
-            params.char_signed = signed;
-            ifeval = IfEval::new(params);
-        }
-        pp.set_if_evaluator(Box::new(ifeval));
+        pp.set_if_evaluator(Box::new(self.if_evaluator()));
         let features = self.clang_features();
         let Some(features) = features else {
             // No silent fallback to `NoFeatures` (unreachable today:
@@ -752,8 +813,7 @@ impl Job<'_> {
             return None;
         };
         if staged {
-            let clang19 = features.clone().with_compat(kiln_pp::ClangCompat::Clang19);
-            pp.set_feature_queries(Box::new(StagedFeatures(features, clang19)));
+            pp.set_feature_queries(Box::new(StagedFeatures::new(features)));
         } else {
             pp.set_feature_queries(Box::new(features));
         }
@@ -1210,9 +1270,19 @@ pub const UNPARSED_KEYWORD_BUILTINS: &[&str] = &[
 /// accepts is implemented or safely ignored, and the class-A rows of
 /// [`kiln_sema::attr_triage`] are ones clang rejects too, with the same
 /// error. `-E` keeps clang's raw answers.
-struct StagedFeatures(ClangFeatures, ClangFeatures);
+///
+/// Public for library clients that configure a preprocessor of their own
+/// as the driver does ([`crate::front_end::JobConfig`]).
+#[derive(Clone, Debug)]
+pub struct StagedFeatures(ClangFeatures, ClangFeatures);
 
 impl StagedFeatures {
+    /// The staged answers over `features` (a job's clang answers).
+    pub fn new(features: ClangFeatures) -> StagedFeatures {
+        let clang19 = features.clone().with_compat(kiln_pp::ClangCompat::Clang19);
+        StagedFeatures(features, clang19)
+    }
+
     /// Whether `name` is a `__builtin_*` function clang 19 lacks that kiln
     /// neither declares nor lists in its staging table.
     fn undeclared_clang22(&self, name: &str) -> bool {

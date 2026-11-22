@@ -69,7 +69,7 @@ pub use modules::{
     DirectiveKind, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache, StdModuleFile,
     has_module_lines, header_unit_key,
 };
-pub use options::{ClangCompat, MetaHint, MetaHintLib, PpOptions};
+pub use options::{ClangCompat, MetaHint, MetaHintLib, MetaProbe, PpOptions};
 pub use predef::{
     ArmTarget, CmdMacro, OptLevel, PCH_LINE, PicModel, PredefConfig, build_predefines,
 };

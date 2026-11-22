@@ -13,8 +13,12 @@ use super::kinds::TypeFlags;
 use crate::ids::{ExprId, ProfileId};
 use crate::mem::{MemReport, MemRow};
 
+/// One interned profile. (Like [`ProfileTable`], public for tooling
+/// clients that name every type an AST holds, WP-2120; the fields are
+/// private.)
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-pub(super) struct ProfileEntry {
+pub struct ProfileEntry {
     pub(super) start: u32,
     pub(super) len: u32,
     pub(super) first_expr: Option<ExprId>,
@@ -22,8 +26,9 @@ pub(super) struct ProfileEntry {
 }
 
 /// The profile arena and its intern table.
+#[doc(hidden)]
 #[derive(Debug)]
-pub(crate) struct ProfileTable {
+pub struct ProfileTable {
     pub(super) words: Vec<u32>,
     pub(super) entries: Vec<ProfileEntry>,
     pub(super) intern: InternTable,

@@ -45,6 +45,11 @@ pub enum SearchEvent<'s> {
     Embed {
         /// The resource's name as found.
         path: &'s str,
+        /// `__has_embed`: only the resource's existence and emptiness
+        /// were asked ([`EmbedRequest::query_only`]).
+        query_only: bool,
+        /// The whole resource as read (before `offset` / `limit`).
+        bytes: &'s [u8],
     },
 }
 
@@ -427,7 +432,7 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
         self.record_embed(sm, req, found.as_ref().map(|f| f.0.as_str()));
         let (path, all) = found?;
         if let Some(o) = self.observer.as_mut() {
-            o(sm, SearchEvent::Embed { path: &path });
+            o(sm, SearchEvent::Embed { path: &path, query_only: req.query_only, bytes: &all });
         }
         let start = usize::try_from(req.offset.unwrap_or(0)).unwrap_or(usize::MAX).min(all.len());
         let rest = &all[start..];

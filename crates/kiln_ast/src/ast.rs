@@ -107,8 +107,12 @@ pub struct Ast {
 
 /// Bytes appended to the AST node arenas while instantiating (spec/ast.md
 /// §13 Q6, §15): reported as the `instantiation.retained` row.
+///
+/// Public for tooling clients that name every type an [`Ast`] holds
+/// (spec/ast.md §1, WP-2120); its fields are private.
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
-struct InstantiationMeter {
+pub struct InstantiationMeter {
     depth: u32,
     start: u64,
     retained: u64,

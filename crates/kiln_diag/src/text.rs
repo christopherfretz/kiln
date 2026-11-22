@@ -48,6 +48,26 @@ struct TextOptions {
     clang_compat: u32,
 }
 
+/// Where [`TextSink`] prints `d`'s location (clang's
+/// `emitDiagnosticLoc` with `-fshow-column`): the presumed file name and
+/// line of its primary location (a macro location mapped to the file as
+/// the sink maps it) and the 1-based column in bytes of the line as read
+/// from disk. `None` when the sink prints no location: the diagnostic
+/// has none, or it is in a buffer without lines.
+pub fn text_position<'a>(sm: &'a SourceManager, d: &Diagnostic) -> Option<(&'a str, u32, u32)> {
+    let loc = d.span.lo;
+    if !loc.is_valid() {
+        return None;
+    }
+    let floc = layout::file_loc(sm, loc);
+    if !floc.is_valid() {
+        return None;
+    }
+    let p = sm.presumed_line_col(floc)?;
+    let col = raw_line_col(sm, floc).map_or(p.col, |(_, _, c)| c);
+    Some((p.file_name, p.line, col))
+}
+
 /// Renders diagnostics as clang does, to any [`Write`]r. Output errors are
 /// ignored.
 #[derive(Debug)]

@@ -1094,6 +1094,8 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-2072 | evaluation sessions: `constexpr` (not only `consteval`) entries | WP-1995 | open |
 | WP-2073 | evaluation sessions: nested evaluations inside a run (instantiation-time constant evaluation) tracked per run for replay and run under the run's handler and limits, not the translation unit's | WP-1995 | open |
 | WP-2074 | evaluation sessions: reflection queries that take addresses keyed by content, not by address, so a run's results do not depend on allocation | WP-1995 | open |
+| WP-2120 | the front end as a library call for tooling clients (KF1): `kiln_driver::front_end::run_front_end` | WP-1995 | done: run_front_end + std_config share the driver stages with run_as (front_end::prepare, also the eval session); fixed Environment, pch_probe, consulted content digests, read-only module cache, hidden AST table paths, FORMAT_VERSION 133; working dir deferred to WP-2121 |
+| WP-2121 | front-end library entry: a working directory as a `FrontEndOptions` parameter (relative paths of the command line, header search, `#embed`, the source manager, module files, the PCH probe and `-fprofile-list=`-style lists resolved against it; no `current_dir` read on the entry's path: kiln_pp resolver and modules, driver pch, cdb, codegen paths) | WP-2120 | open |
 | WP-2000 | host calls: audit lazily evaluated constexpr variable templates (`eval_var_init`) for a missing or duplicated speculative-call error | WP-1990 | open |
 | WP-2001 | host calls: restore the host mode after a contained panic inside an evaluation | WP-1990 | open |
 | WP-2002 | host calls: an integer-only fast builtin, only if a tooling client needs more than ~7M calls/s | WP-1990 | open |

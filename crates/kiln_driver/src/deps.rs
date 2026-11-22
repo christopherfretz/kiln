@@ -274,7 +274,7 @@ pub fn on_search_event(list: &RefCell<DepList>, e: SearchEvent<'_>) {
         SearchEvent::HasInclude { path, characteristic, .. } => {
             list.borrow_mut().add(path, characteristic.is_system());
         }
-        SearchEvent::Embed { path } => list.borrow_mut().add(path, false),
+        SearchEvent::Embed { path, .. } => list.borrow_mut().add(path, false),
     }
 }
 

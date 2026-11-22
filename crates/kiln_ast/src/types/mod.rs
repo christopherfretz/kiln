@@ -14,18 +14,24 @@
 
 #![allow(clippy::many_single_char_names, reason = "payload slots a/b/c, ids t/q/d/n")]
 
-mod args;
+// `args`, `intern`, `node` and `profile` are public, hidden, for the
+// paths of the tables an AST holds (tooling clients, WP-2120).
+#[doc(hidden)]
+pub mod args;
 mod canon;
 mod context;
 mod func;
-pub(crate) mod intern;
+#[doc(hidden)]
+pub mod intern;
 mod kinds;
 mod layout;
 mod names;
 mod nns;
-mod node;
+#[doc(hidden)]
+pub mod node;
 mod print;
-mod profile;
+#[doc(hidden)]
+pub mod profile;
 mod profile_expr;
 #[cfg(test)]
 mod query_tests;

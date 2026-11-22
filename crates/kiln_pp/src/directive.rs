@@ -1352,7 +1352,7 @@ impl Preprocessor<'_, '_> {
         else {
             return d;
         };
-        let found = (hint.probe)().map_or_else(String::new, |(prefix, exe)| {
+        let found = (hint.probe.0)().map_or_else(String::new, |(prefix, exe)| {
             format!("; a GCC 16 installation was found at '{prefix}' (from {exe} on PATH)")
         });
         let note = match &hint.lib {
