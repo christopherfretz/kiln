@@ -1,0 +1,16 @@
+17:38-17:39  type  'T' -> T@17:17 in=t@17:41
+18:12-18:13  nns  'T' -> T@17:17 in=k@18:20
+18:15-18:19  type  'kind' -> (dependent) q=18:12 in=k@18:20
+18:15-18:19  type  'kind' -> Alpha::kind@10:9 spec=measure<Alpha>@17:24
+18:15-18:19  type  'kind' -> Beta::kind@14:9 spec=measure<Beta>@17:24
+19:10-19:11  expr  't' -> t@17:41 in=measure@17:24
+19:12-19:16  member  'size' -> (dependent) in=measure@17:24
+19:12-19:16  member  'size' -> Alpha::size@9:7 spec=measure<Alpha>@17:24
+19:12-19:16  member  'size' -> Beta::size@13:7 spec=measure<Beta>@17:24
+19:38-19:39  expr  'k' -> k@18:20 in=measure@17:24
+23:11-23:18  expr  'measure' -> measure<Alpha>@17:24 found=measure@17:24 in=a@23:7 how=both adl-ns=:: adl-cls=Alpha@8:8
+23:19-23:24  type  'Alpha' -> Alpha@8:8 in=a@23:7
+24:11-24:18  expr  'measure' -> measure<Beta>@17:24 found=measure@17:24 in=b@24:7 how=both adl-ns=:: adl-cls=Beta@12:8
+24:19-24:23  type  'Beta' -> Beta@12:8 in=b@24:7
+25:10-25:11  expr  'a' -> a@23:7 in=run@22:5
+25:14-25:15  expr  'b' -> b@24:7 in=run@22:5

@@ -1,0 +1,29 @@
+18:37-18:38  nns  'T' -> T@18:17 in=n@18:33
+18:40-18:45  expr  'start' -> (dependent) q=18:37 in=n@18:33
+18:40-18:45  expr  'start' -> P::start@12:14 spec=from<P>@18:24
+18:40-18:45  expr  'start' -> Q::start@15:14 spec=from<Q>@18:24
+18:58-18:59  expr  'n' -> n@18:33 in=from@18:24
+22:20-22:21  nns  'T' -> T@20:17 in=n@22:16
+22:23-22:28  expr  'start' -> (dependent) q=22:20 in=n@22:16
+22:23-22:28  expr  'start' -> P::start@12:14 spec=Holder<P>::pick@22:7
+22:23-22:28  expr  'start' -> Q::start@15:14 spec=Holder<Q>::pick@22:7
+21:15-21:16  nns  'T' -> T@20:17 in=Holder::first@21:7
+21:18-21:23  expr  'start' -> (dependent) q=21:15 in=Holder::first@21:7
+21:18-21:23  expr  'start' -> P::start@12:14 spec=Holder<P>::first@21:7
+21:18-21:23  expr  'start' -> Q::start@15:14 spec=Holder<Q>::first@21:7
+22:47-22:48  expr  'n' -> n@22:16 in=Holder::pick@22:7
+22:51-22:56  expr  'first' -> Holder::first@21:7 in=Holder::pick@22:7
+26:10-26:11  type  'P' -> P@11:8 in=h@26:13
+26:3-26:9  template  'Holder' -> Holder@20:27 in=h@26:13
+27:10-27:11  type  'Q' -> Q@14:8 in=k@27:13
+27:3-27:9  template  'Holder' -> Holder@20:27 in=k@27:13
+28:15-28:16  type  'P' -> P@11:8 in=run@25:5
+28:10-28:14  expr  'from' -> from<P>@18:24 found=from@18:24 in=run@25:5 adl-ns=
+28:27-28:28  type  'P' -> P@11:8 in=run@25:5
+28:22-28:26  expr  'from' -> from<P>@18:24 found=from@18:24 in=run@25:5 adl-ns=
+28:39-28:40  type  'Q' -> Q@14:8 in=run@25:5
+28:34-28:38  expr  'from' -> from<Q>@18:24 found=from@18:24 in=run@25:5 adl-ns=
+28:46-28:47  expr  'h' -> h@26:13 in=run@25:5
+28:48-28:52  member  'pick' -> Holder<P>::pick@22:7 in=run@25:5
+28:57-28:58  expr  'k' -> k@27:13 in=run@25:5
+28:59-28:63  member  'pick' -> Holder<Q>::pick@22:7 in=run@25:5

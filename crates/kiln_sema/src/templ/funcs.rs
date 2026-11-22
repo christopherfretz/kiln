@@ -117,6 +117,12 @@ impl Sema<'_, '_> {
         let own = self.templated_function(tmpl).unwrap_or(pattern);
         let site = self.begin_signature_mangling(tmpl, own);
         let after = self.decl_count();
+        // The names its signature resolves are the specialization's
+        // (spec/ast.md §18.9.2), though the frames say the template.
+        let depth = self.inst.stack.len() as u32;
+        let wkey = self
+            .records_written_refs()
+            .then(|| self.ast.written_refs.set_spec_key(Some((depth, spec))));
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = Some(access);
             let saved = if guide { s.requires_access_replay.replace(false) } else { None };
@@ -129,6 +135,9 @@ impl Sema<'_, '_> {
             }
             r
         });
+        if let Some(prev) = wkey {
+            self.ast.written_refs.set_spec_key(prev);
+        }
         self.end_signature_mangling(site);
         // The specialization owns the closures of its substituted
         // signature (spec/sema-lambda.md §3.6).

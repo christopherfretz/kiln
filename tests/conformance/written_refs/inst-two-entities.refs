@@ -1,0 +1,9 @@
+15:40-15:45  type  'Shape' -> Shape@15:17 in=s@15:47
+15:59-15:60  expr  's' -> s@15:47 in=total@15:28
+15:61-15:65  member  'area' -> (dependent) in=total@15:28
+15:61-15:65  member  'area' -> Circle::area@12:7 spec=total<Circle>@15:28
+15:61-15:65  member  'area' -> Square::area@9:7 spec=total<Square>@15:28
+17:20-17:25  expr  'total' -> total<Square>@15:28 found=total@15:28 in=run@17:5 how=both adl-ns=:: adl-cls=Square@8:8
+17:26-17:32  type  'Square' -> Square@8:8 in=run@17:5
+17:38-17:43  expr  'total' -> total<Circle>@15:28 found=total@15:28 in=run@17:5 how=both adl-ns=:: adl-cls=Circle@11:8
+17:44-17:50  type  'Circle' -> Circle@11:8 in=run@17:5

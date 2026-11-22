@@ -1,0 +1,16 @@
+17:45-17:46  nns  'T' -> T@17:17 in=scale_of@17:34
+17:48-17:53  expr  'scale' -> (dependent) q=17:45 in=scale_of@17:34
+17:48-17:53  expr  'scale' -> Feet::scale@13:24 spec=scale_of<Feet>@17:34
+17:48-17:53  expr  'scale' -> Meters::scale@9:24 spec=scale_of<Meters>@17:34
+18:45-18:46  nns  'T' -> T@18:17 in=(tu)
+18:48-18:52  type  'unit' -> (dependent) q=18:45 in=(tu)
+18:48-18:52  type  'unit' -> Feet::unit@14:9 spec=unit_of@18:26
+18:48-18:52  type  'unit' -> Meters::unit@10:9 spec=unit_of@18:26
+20:24-20:30  type  'Meters' -> Meters@8:8 in=(tu)
+20:15-20:23  expr  'scale_of' -> scale_of@17:34 found=scale_of@17:34 in=(tu)
+21:24-21:28  type  'Feet' -> Feet@12:8 in=(tu)
+21:15-21:23  expr  'scale_of' -> scale_of@17:34 found=scale_of@17:34 in=(tu)
+22:9-22:15  type  'Meters' -> Meters@8:8 in=m@22:17
+22:1-22:8  template  'unit_of' -> unit_of@18:26 in=m@22:17
+23:9-23:13  type  'Feet' -> Feet@12:8 in=f@23:15
+23:1-23:8  template  'unit_of' -> unit_of@18:26 in=f@23:15

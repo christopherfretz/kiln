@@ -1670,7 +1670,7 @@ field `Ast::written_refs`. Built in five stages:
 | 1 | the table, its iterators and dump; expression names, member names, nested-name-specifier components before them, with the `qualifier` chain | WP-1930 |
 | 2 | type names in every type-specifier context, template names, base specifiers, member-initializer ids | WP-1931 |
 | 3 | declarative contexts: using-declarations and -directives, namespace alias targets, declarator-id qualifiers and the names they redeclare, elaborated and friend references, specialization targets, concept names, designators, deduction-guide names; their lookup provenance; the identifier-accounting test (§18.8) | WP-1932, WP-2100, WP-2131 |
-| 4 | per-specialization entries for dependent names | WP-1933 |
+| 4 | per-specialization entries for dependent names, in a separate table keyed by (pattern entry, specialization) (§18.9) | WP-1933 |
 | 5 | carriage in PCH snapshots and module images | WP-1934 |
 
 ### 18.1 Contract
@@ -2028,11 +2028,12 @@ stage 1.
   as resolved at definition; a dependent name (`DependentScopeDeclRefExpr`,
   dependent members, a dependent call's callee, a dependent
   nested-name-specifier component, a dependent type name) has `entity: None` and
-  `DEPENDENT`. Instantiation records nothing. Stage 4 adds a separate
-  table keyed by (pattern entry, specialization) — reserved, not
-  allocated: the main table's entry shape does not change. Default
-  arguments and default member initializers are entries once, at the
-  written site.
+  `DEPENDENT`. Instantiation adds no main-table entry: what a
+  dependent name resolves to in each specialization goes to the
+  separate per-specialization table (stage 4, §18.9), so the main
+  table's entry shape and its one-entry-per-written-name rule do not
+  change. Default arguments and default member initializers are
+  entries once, at the written site.
 - **PCH and modules.** Not carried in stage 1: the field is transient
   in the snapshot (§17), so a TU restored from a snapshot or importing a
   module has entries for the names it parsed itself only. Stage 5 writes
@@ -2068,7 +2069,8 @@ the worked example, macros, tentative parses, overload patching,
 dependent names, error recovery; stage 3: `using-decls`,
 `using-directives`, `redecls`, `elaborated`, `spec-targets`,
 `concepts-decl`, `designators`, `guides`, `decl-macros`,
-`decl-dependent`, `decl-tentative`, `decl-errors`).
+`decl-dependent`, `decl-tentative`, `decl-errors`; stage 4: the
+`inst-*` tests, §18.9.7).
 
 ### 18.7 Lookup provenance (WP-2130)
 
@@ -2274,7 +2276,9 @@ chosen:
   `Expr` entry like any call.
 
 A dependent call in a template pattern performs its argument-dependent
-lookup at instantiation (stage 4): `None`, no set.
+lookup at instantiation: its main-table entry has `None` and no set;
+each specialization's resolution, with its `how` and its set, is a
+per-specialization entry (§18.9.4).
 
 #### 18.7.5 The dump
 
@@ -2393,6 +2397,250 @@ of their own:
 - two diagnosed files on which the test's in-process front end panics
   in the Oven's `convert` (WP-2141's ICE), reported as `panic` lines,
   not identifiers.
+
+### 18.9 Stage 4: per-specialization entries (WP-1933)
+
+In a template pattern a dependent name has one main-table entry with no
+entity (§18.5). What it names is decided per specialization, at
+instantiation ([temp.res.general]/1, [temp.dep.candidate]), and a
+tooling client renaming `Vec::size` must also edit the `t.size()` of a
+template instantiated with `Vec`. Stage 4 records, for each
+specialization, what each dependent name of the pattern resolved to, in
+a separate table: the main table keeps one entry per written name.
+
+#### 18.9.1 Contract
+
+- **The table.** `WrittenRefs::specs()` yields the rows (`SpecRef`, 24
+  bytes, a `size_of` unit test), keyed by (pattern entry,
+  specialization):
+
+  | field | type | meaning |
+  |---|---|---|
+  | `entry` | `WrittenRefId` (4) | the pattern's main-table entry: `DEPENDENT`, no entity |
+  | `spec` | `DeclId` (4) | the specialization whose instantiation resolved the name (§18.9.2) |
+  | `entity` | `Option<DeclId>` (4) | what the name denotes there, as §18.2's `entity` (a function template's specialization, a class's first declaration, ...); `None`: unresolved (§18.9.3) |
+  | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
+  | `adl` | `Option<AdlSetId>` (4) | a dependent unqualified call's associated set in this specialization (§18.7.4), interned with the main table's sets |
+  | `flags` | `u8` | `MEMBER` (the entry's), `UNRESOLVED` without an entity |
+  | `how` | `RefLookup` | §18.7.2's `how` of the instantiation's lookup: `Member`, `Qualified`, `Unqualified`, `Adl`, `Both`, `Builtin`, or `None` without an entity |
+
+  Not recorded per specialization: the using-directive a lookup went
+  through (§18.7.3) and `Injected` (an injected-class-name names the
+  pattern's class, which is not dependent).
+- **Kept once.** A row with the same content as a live row is not added
+  again (a name rebuilt by two paths for one specialization, an alias
+  template substituted twice with the same result). One entry can have
+  several rows for one key where the key is a template (§18.9.2: an
+  alias template, a default template argument), one per distinct
+  resolution.
+- **Order independence.** The set of rows does not depend on the order
+  in which the specializations are instantiated; only the order of
+  `specs()` (recording order) does. Clients and tests compare the rows
+  sorted: the dump prints each entry's rows sorted (§18.9.5), and the
+  API test compares sorted (pattern position, entity position,
+  specialization position) triples. The dump prints a specialization's
+  and an entity's name as diagnostics do, with the template arguments
+  as first written, so two orders compare equal when both write the
+  arguments the same way.
+- **Off.** Recording sites test one map, empty when off
+  (`has_pattern_nodes`, §18.9.4): nothing is allocated and nothing is
+  recorded; §18.9.6 measures it.
+- **Read access**: `specs()` (live rows with their `SpecRefId`),
+  `spec(id)`, `spec_len()`, `specs_of(entry)` (an entry's rows),
+  `specs_for(spec)` (a specialization's rows), `specs_naming(d)` (rows
+  whose `entity` or `found` is `d`), `specs_by_entry()` (one pass, for
+  clients that query many entries), `spec_adl_set(&row)`. A rename of
+  `d` edits the ranges of the main-table entries naming `d` and of the
+  pattern entries of `specs_naming(d)`'s rows.
+- **Snapshots.** Transient, as the main table (§18.5; stage 5).
+
+#### 18.9.2 The specialization
+
+The key is the innermost instantiation the lookup runs for, read off the
+instantiation stack (§8.4) from the innermost frame:
+
+- a function template specialization's definition, implicit or by an
+  explicit instantiation ([temp.explicit]/10): the specialization
+  (`measure<Vec>`);
+- a member of a class template specialization instantiated on use or by
+  an explicit instantiation (a member function's definition, a static
+  data member's initializer, a member class or enumeration,
+  [temp.inst]/3-5, [temp.explicit]/11): that member of the
+  specialization (`Table<Cfg>::lookup`); the members' declarations,
+  instantiated with the class (a return type, a member typedef), and
+  the class's other names: the class template specialization
+  (`Table<Cfg>`);
+- a function template's signature substituted with deduced or explicit
+  arguments ([temp.deduct.general]/5): the specialization it forms
+  (`len<Sized>`), which `get_function_spec_signature` sets as the key
+  of the substitution it runs;
+- a variable template specialization's initializer ([temp.inst]/7): the
+  variable template specialization (`scale_of<Feet>`);
+- an alias template's aliased type: an alias template specialization is
+  not a declaration ([temp.alias]/2), so the key is the alias template,
+  one row per distinct resolution;
+- a default template argument: the template whose parameter it is; a
+  default function argument used by a call ([temp.inst]/12): the called
+  function (`from<P>`, `Holder<P>::pick`); a default member initializer
+  ([temp.inst]/4): the field of the specialization;
+- a generic lambda's call operator, a member function template of the
+  closure type ([expr.prim.lambda.closure]/3): its specialization
+  (`outer(const One &)::(lambda)::operator()<Two>`). The enclosing
+  template's instantiation rebuilds the lambda's body with the name
+  still dependent; the rebuilt node then stands for the same entry
+  (§18.9.4) and each call operator specialization resolves it;
+- a member template of a class template ([temp.mem]/1): its
+  specialization, the innermost (`Box<Small>::convert<Wide>`), for every
+  name of its body, dependent on the inner parameters or only on the
+  outer ones. The client reaches the outer specialization as the key's
+  enclosing class (`Ast` decl context: `Box<Small>`). A name in the
+  member template's declaration gets a row for the class specialization
+  (the class's instantiation substitutes the member template's
+  declaration) and one for each member template specialization (its
+  signature's substitution).
+
+Frames inside an instantiation that are not one themselves (a lambda's
+body substitution, a structured binding's initializer) are transparent.
+A frame that is a check, not an instantiation, stops the walk with no
+key, so nothing is recorded: constraint satisfaction, concept checks
+and requirements of a requires-expression ([temp.constr.sat]), partial
+specialization matching, default-argument checking, template template
+argument matching, building deduction guides, `std::meta::substitute`.
+
+#### 18.9.3 Failures
+
+- **Substitution failure** ([temp.deduct.general]/8) is not an
+  instantiation and records nothing. When the SFINAE frame of a function
+  template `ft`'s deduction ends (`in_sfinae_held`), the rows it
+  recorded keyed by `ft` itself are dropped, and when it failed also
+  those keyed by the specializations of `ft` it formed; a lookup that
+  fails inside a SFINAE context records no unresolved row. What the
+  real instantiations nested in the deduction recorded stays (a class
+  template specialization instantiated while the signature was
+  substituted is instantiated, [temp.inst]/2), as do an alias
+  template's rows (§18.9.2).
+- **An error** ([temp.res.general]/6: the program is ill-formed) keeps
+  what the instantiation resolved: with kiln's error recovery, every
+  name its rebuild reached, before the error and after it. The name
+  whose rebuild failed, with an error diagnosed since that rebuild
+  started and outside a SFINAE context, gets a row with no entity
+  (`UNRESOLVED`). A rebuild given up without a diagnostic (a trial
+  substitution) records nothing.
+- **A name that stays unresolved** at instantiation gets a row with no
+  entity: a dependent call no viable function matched (with the
+  argument-dependent set its lookup computed, §18.7.4), a member the
+  class does not declare, a dependent type that names nothing.
+
+#### 18.9.4 Recording sites
+
+- **Pattern nodes.** While recording is on, the parse-time sites
+  remember the pattern node each `DEPENDENT` entry was made from (the
+  map `spec_nodes`, empty when off): `PatternNode::Expr(e)` for a
+  dependent expression name (a `DependentScopeDeclRefExpr`, a
+  `CXXDependentScopeMemberExpr`, the callee of a dependent call, an
+  overloaded member access with dependent arguments) and
+  `PatternNode::Type(q, loc)` for a dependent type name (the interned
+  dependent type without qualifiers, and the §5.8 written location of
+  its name).
+- **Expressions.** `Substituter::expr` and `Substituter::callee` look
+  the pattern node up after each rebuild. The rebuilt node's target
+  (`written_target`, §18.4) gives the row: a declaration, a concept or a
+  type at once; an overload set when overload resolution picks (the
+  stage-1 funnels `resolve_written_ref`/`retarget_written_ref`, and
+  for an overloaded member call's failure the member call's own); a
+  node still dependent (a generic lambda's body, a member template
+  substituted with the outer arguments only) becomes a further pattern
+  node of the same entry. A rebuild that fails reports per §18.9.3.
+- **Qualifiers.** After a qualified name's row, the dependent
+  components of the entry's qualifier chain are paired from the right
+  with the substituted nested-name-specifier's components, and each
+  gets a row naming its class or namespace (`T::inner::value`: `inner`
+  names `A::inner`). A component still dependent is left to a later
+  instantiation.
+- **Types.** `Substituter::ty_node`'s `DependentName` branch (a
+  `typename T::x`, a dependent class template name used as a
+  placeholder) and its `DependentTemplateSpecialization` branch
+  (`T::template rebind<U>`: the member template) record what the name
+  found, with `found` for a specialization of a found template. An
+  alias template's aliased type is substituted without §5.8 locations
+  (diagnostics point at the alias's `using`); its pattern node is found
+  at the written occurrence of the type nearest to that point.
+- **Argument-dependent lookup.** A dependent unqualified call's row gets
+  §18.7.4's `how` and set from the facts `resolve_unresolved_call`
+  reports, as the main table's call entries do.
+- **Not yet recorded** (follow-ups): the using-directive of a
+  per-specialization lookup; a dependent type rebuilt still dependent
+  and resolved by a later instantiation (inside a generic lambda, in a
+  member template's signature substituted with the outer arguments);
+  a using-declaration with a dependent qualifier in a class template;
+  names in constraint satisfaction.
+
+#### 18.9.5 The dump
+
+After each entry's line (§18.6), its rows, sorted and without
+duplicates (so the order of instantiation does not show):
+
+```
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity>|(unresolved) [found=<decl>] spec=<specialization> [how=<how>] [adl-ns=...] [adl-cls=...] [adl-enum=...]
+```
+
+The positions, role and spelling are the entry's. `<entity>`, `found=`
+and the `adl-` lists print as in §18.6 and §18.7.5; `spec=` prints the
+specialization's qualified name with its template arguments (a class or
+variable template specialization's too: `Table<Cfg>`,
+`scale_of<Feet>`) and `@<line>:<col>` of its location (the pattern's
+declaration). `how=` appears when it differs from the default §18.7.5
+derives from the row (no entity, its `MEMBER` flag, the entry's
+qualifier). The lines are path-free as §18.6's are.
+
+#### 18.9.6 Cost
+
+Off, every recording site is one test of the empty pattern-node map
+(an expression rebuild also skips reading the error count) and nothing
+is allocated. On, the cost is the pattern-node map (one slot per
+dependent entry), the rows and the de-duplication index. Measured on
+aarch64 with the harness profile, interleaved rounds (base = WP-1932):
+
+- `<bits/stdc++.h>` `-fsyntax-only`: off, the tracked memory totals are
+  byte-identical to the base (42 945 192 bytes live) and peak RSS is
+  91.8 MB for both; time, seven rounds, minimum 0.71 s for both, median
+  0.83 s against 0.76 s on a loaded host (an earlier quiet run: 0.75 s
+  against 0.78 s): within noise. On: 11 000 rows; the table grows from
+  6 038 096 to 7 679 544 bytes live (+1 641 448, 149 bytes per row with
+  the pattern-node map and the index), peak RSS from 153 MB to 160 MB.
+- The same with a few instantiations of `vector`, `map`, `string`,
+  `sort`, `unique_ptr`, `function`, `optional`, `variant` and a
+  `views::filter` pipeline: 12 723 rows, +1 793 840 bytes live (141
+  bytes per row), peak RSS 156 MB to 164 MB.
+
+On, the main table's dump is identical to the base's once the `spec=`
+lines are removed: stage 4 adds no main-table entry and changes none.
+
+#### 18.9.7 Tests
+
+`crates/kiln_ast/src/written_refs.rs` (the row is 24 bytes, off records
+no pattern node, a row is kept once and an update that duplicates
+another merges into it, a SFINAE drop removes one specialization's rows
+only, truncation drops the rows and pattern nodes of the entries it
+drops), `crates/kiln_parse/tests/written_refs.rs` (rename by table:
+`specs_naming` finds both instantiated uses of a member `size` and not
+the other class's; the rows with the uses swapped, compared sorted),
+and `tests/conformance/written_refs/inst-*.cpp`, one per family: a
+member call on a dependent object (`inst-member-call`), dependent
+qualified names and their qualifier components (`inst-qualified`),
+`typename`/`template` names (`inst-typename`), an unqualified dependent
+call with argument-dependent lookup and its set (`inst-adl`), `this->`
+and a dependent base's members (`inst-this-base`), one name resolved to
+two entities (`inst-two-entities`), default arguments and a default
+member initializer in two specializations (`inst-default-arg`), a
+generic lambda (`inst-generic-lambda`), variable and alias templates
+(`inst-var-template`), explicit instantiation (`inst-explicit`), a
+member template of a class template (`inst-nested`), a substitution
+failure (`inst-sfinae`), an instantiation error (`inst-error`), and the
+order of instantiation swapped (`inst-order-a`, `inst-order-b`, whose
+goldens differ only in the lines of `run`). The stage-1 to stage-3
+goldens with instantiated templates (`dependent`, `example`,
+`qualifiers`, `type-combined`) gain their rows.
 
 ## 19. The declaration-extent table (WP-2090)
 

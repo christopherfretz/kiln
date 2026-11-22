@@ -293,6 +293,33 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// (types are substituted in written order: a leading return type,
     /// then the parameters). Only types advance: a nested-name-specifier
     /// is looked up more than once per occurrence.
+    /// The written occurrence of the dependent type `q` that `loc` (its
+    /// §5.8 location, or the anchor where those are off: an alias
+    /// template's aliased type) stands for: the key of its pattern node
+    /// in the written-reference table (spec/ast.md §18.9.4).
+    fn pattern_loc(&self, q: QualType, loc: Loc) -> Loc {
+        if self.written_locs { loc } else { self.sema.written_loc(WrittenKey::Type(q), loc) }
+    }
+
+    /// The dependent type `q`, written at `loc`, named `entity` (found
+    /// as `found`) after the substituted qualifier `nns`: its
+    /// per-specialization entry (spec/ast.md §18.9.4; one branch while
+    /// nothing is recorded).
+    #[inline]
+    pub(crate) fn note_spec_type(
+        &mut self,
+        q: QualType,
+        loc: Loc,
+        entity: Option<DeclId>,
+        found: Option<DeclId>,
+        nns: Option<NnsId>,
+    ) {
+        if self.sema.ast.written_refs.has_pattern_nodes() {
+            let at = self.pattern_loc(q, loc);
+            self.sema.note_written_spec_type(q, at, entity, found, nns);
+        }
+    }
+
     pub(crate) fn written(&self, key: WrittenKey, loc: Loc) -> Loc {
         use crate::templ::written::WrittenSide;
         if !self.written_locs {

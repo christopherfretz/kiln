@@ -214,6 +214,7 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mark = self.ast.exprs.len();
+        let wmark = self.written_spec_mark();
         let r = f(self);
         // A non-static member named without an object in the substituted
         // signature (`decltype(sizeof(C::f))`) is a substitution failure
@@ -226,6 +227,9 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
         held.append(&mut st.warnings);
         let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };
+        if let Some(m) = wmark {
+            self.end_written_spec_sfinae(m, ft, failed.is_err());
+        }
         Some((r, failed))
     }
 

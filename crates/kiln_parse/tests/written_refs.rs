@@ -2,7 +2,8 @@
 //! records nothing and reports no memory; on, it records each written
 //! name once and dumps it, and `enclosed_by` finds a declaration's type,
 //! template, base and mem-init names (stage 2); the lookup provenance
-//! reads through the API (§18.7).
+//! reads through the API (§18.7); the per-specialization entries find a
+//! member's every instantiated use, in any order (§18.9).
 
 use std::sync::Arc;
 
@@ -215,4 +216,112 @@ fn stage3_names_through_the_api() {
         assert_eq!(des.flags & REF_MEMBER, REF_MEMBER);
         assert_eq!(des.how, RefLookup::Member);
     });
+}
+
+/// Parses `src` with recording on and hands the AST and the source
+/// manager to `check`.
+fn with_ast(src: &str, check: impl FnOnce(&kiln_ast::Ast, &SourceManager)) {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions { written_refs: true, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    assert_eq!(engine.error_count(), 0, "the source compiles");
+    check(&tu.ast, &sm);
+}
+
+/// `line:col` of `loc`.
+fn line_col(sm: &SourceManager, loc: kiln_source::Loc) -> (u32, u32) {
+    let lc = sm.line_col(sm.spelling_loc(loc)).expect("a file location");
+    (lc.line, lc.col)
+}
+
+const SPECS: &str = "struct Vec { int size() const { return 1; } };\n\
+                     struct List { int size() const { return 2; } };\n\
+                     template <class T> int measure(const T &t) { return t.size(); }\n\
+                     template <class T> struct Wrap { T t; int n() const { return t.size(); } };\n\
+                     int direct(const Vec &v) { return v.size(); }\n\
+                     int run() {\n\
+                     \x20 int a = measure(Vec{}) + Wrap<Vec>{}.n();\n\
+                     \x20 int b = measure(List{}) + Wrap<List>{}.n();\n\
+                     \x20 return a + b + direct(Vec{});\n\
+                     }\n";
+
+/// Rename by table (spec/ast.md §18.9.1): the written occurrences of
+/// `Vec::size` are the main table's entries naming it (the
+/// non-dependent call in `direct`) and the pattern entries of the
+/// per-specialization entries naming it (the dependent calls, as
+/// `measure<Vec>` and `Wrap<Vec>::n` resolve them); `List::size`'s
+/// specializations are not among them.
+#[test]
+fn rename_by_table_finds_every_specialization() {
+    with_ast(SPECS, |ast, sm| {
+        let t = &ast.written_refs;
+        // `Vec::size` from the non-dependent call `v.size()` in `direct`.
+        let (_, direct) = t
+            .iter()
+            .find(|(_, r)| r.role == RefRole::Member && line_col(sm, r.range.lo).0 == 5)
+            .expect("v.size()");
+        let size = direct.entity.expect("Vec::size");
+        let mut at: Vec<(u32, u32)> = t
+            .iter()
+            .filter(|(_, r)| r.entity == Some(size))
+            .map(|(_, r)| line_col(sm, r.range.lo))
+            .collect();
+        let specs: Vec<_> = t.specs_naming(size).collect();
+        assert_eq!(specs.len(), 2, "measure<Vec> and Wrap<Vec>::n");
+        for (_, r) in &specs {
+            assert_eq!(r.entity, Some(size));
+            let p = t.get(r.entry);
+            assert!(p.entity.is_none(), "the pattern entry is dependent");
+            at.push(line_col(sm, p.range.lo));
+        }
+        at.sort_unstable();
+        assert_eq!(at, [(3, 55), (4, 64), (5, 37)]);
+        // The two specializations of `measure` resolve its one entry to
+        // two entities.
+        let (entry, _) = t
+            .iter()
+            .find(|(_, r)| r.role == RefRole::Member && line_col(sm, r.range.lo) == (3, 55))
+            .expect("t.size() in measure");
+        let mut named: Vec<_> = t.specs_of(entry).map(|(_, r)| r.entity).collect();
+        named.dedup();
+        assert_eq!(named.len(), 2);
+        assert!(named.contains(&Some(size)));
+        assert_eq!(t.spec_len(), 4);
+        assert!(t.spec_mem().0 > 0);
+    });
+}
+
+/// The per-specialization table does not depend on the order of
+/// instantiation (spec/ast.md §18.9.1): with the two uses swapped, the
+/// rows, compared as sorted (pattern position, entity position,
+/// specialization position) triples, are the same.
+#[test]
+fn specs_are_order_independent() {
+    let swapped = SPECS.replace(
+        "  int a = measure(Vec{}) + Wrap<Vec>{}.n();\n  int b = measure(List{}) + Wrap<List>{}.n();\n",
+        "  int b = measure(List{}) + Wrap<List>{}.n();\n  int a = measure(Vec{}) + Wrap<Vec>{}.n();\n",
+    );
+    assert_ne!(swapped, SPECS);
+    let rows = |src: &str| {
+        let mut v = Vec::new();
+        with_ast(src, |ast, sm| {
+            let t = &ast.written_refs;
+            let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+            v = t
+                .specs()
+                .map(|(_, r)| {
+                    (line_col(sm, t.get(r.entry).range.lo), r.entity.map(pos), pos(r.spec))
+                })
+                .collect();
+        });
+        v.sort_unstable();
+        v
+    };
+    let a = rows(SPECS);
+    assert_eq!(a.len(), 4);
+    assert_eq!(a, rows(&swapped));
 }

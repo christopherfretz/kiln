@@ -8,8 +8,8 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{ArgView, Nns, TemplateName, TypeView};
 use kiln_ast::written_refs::{
-    AdlSet, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, RefMark, RefQualifier,
-    RefRole, WrittenRef, WrittenRefId,
+    AdlSet, PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, RefMark,
+    RefQualifier, RefRole, WrittenRef, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Span;
@@ -17,7 +17,8 @@ use kiln_source::Span;
 use crate::Sema;
 
 /// What a built name expression resolved to.
-enum Target {
+#[derive(Clone, Copy)]
+pub(crate) enum Target {
     /// The entity, and what lookup found when it differs.
     Decl(DeclId, Option<DeclId>),
     /// An overload set, resolved later.
@@ -26,8 +27,8 @@ enum Target {
     Concept(DeclId),
     /// A pseudo-destructor's destroyed scalar type (its type-name).
     Type(QualType),
-    /// A dependent name.
-    Dependent,
+    /// A dependent name (its node).
+    Dependent(ExprId),
     /// Nothing (an error).
     Unresolved,
 }
@@ -82,8 +83,15 @@ impl Sema<'_, '_> {
                 let flags = if self.in_template() { REF_DEPENDENT } else { REF_UNRESOLVED };
                 (None, None, flags, Some(x))
             }
-            Target::Dependent => (None, None, REF_DEPENDENT, None),
+            Target::Dependent(_) => (None, None, REF_DEPENDENT, None),
             Target::Unresolved => (None, None, REF_UNRESOLVED, None),
+        };
+        // The pattern node a dependent name is rebuilt from, for its
+        // per-specialization entries (stage 4, spec/ast.md §18.9.4).
+        let node = match target {
+            Target::Dependent(x) => Some(x),
+            Target::Overloaded(x) if flags & REF_DEPENDENT != 0 => Some(x),
+            _ => None,
         };
         // A member (or member template) name after `.`/`->` is found by
         // class member lookup (spec/ast.md §18.7.2); a pseudo-destructor's
@@ -96,6 +104,9 @@ impl Sema<'_, '_> {
         let id = self.push_written_ref(range, entity, found, role, q, flags)?;
         if let Some(x) = pending {
             self.ast.written_refs.defer(id, x);
+        }
+        if let Some(x) = node {
+            self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), id);
         }
         Some(id)
     }
@@ -188,7 +199,18 @@ impl Sema<'_, '_> {
             }
             None => (None, None, REF_UNRESOLVED),
         };
-        self.push_written_ref(range, entity, found, role, q, flags)
+        let id = self.push_written_ref(range, entity, found, role, q, flags)?;
+        // A dependent typename-specifier or template-id is rebuilt from
+        // its interned type, found again by where its name is written
+        // (stage 4, spec/ast.md §18.9.4).
+        if flags == REF_DEPENDENT
+            && let Some(t) = ty
+        {
+            self.ast
+                .written_refs
+                .note_pattern_node(PatternNode::Type(t.without_quals(), range.lo), id);
+        }
+        Some(id)
     }
 
     /// The mem-initializer-id recorded as `w` resolved as `id`
@@ -462,6 +484,8 @@ impl Sema<'_, '_> {
             && let Some(id) = self.ast.written_refs.resolve(x, d, found)
         {
             self.fill_written_provenance(id);
+        } else if self.ast.written_refs.has_spec_pending() {
+            self.resolve_written_spec(x, Some(d), found);
         }
     }
 
@@ -471,6 +495,18 @@ impl Sema<'_, '_> {
     pub(crate) fn pending_written_ref(&self, x: ExprId) -> Option<WrittenRefId> {
         if self.ast.written_refs.has_pending() && self.inst.stack.is_empty() {
             self.ast.written_refs.pending_for(x)
+        } else {
+            None
+        }
+    }
+
+    /// The pattern entry and specialization of the rebuilt overload set
+    /// `x` while it awaits resolution in an instantiation (stage 4; one
+    /// branch when nothing is pending).
+    #[inline]
+    pub(crate) fn pending_written_spec(&self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
+        if self.ast.written_refs.has_spec_pending() {
+            self.ast.written_refs.spec_pending_for(x)
         } else {
             None
         }
@@ -487,11 +523,31 @@ impl Sema<'_, '_> {
     ) {
         let Some(f) = facts else { return };
         let r = *self.ast.written_refs.get(w);
+        let Some((how, set)) = self.written_call_lookup(r.entity, r.found, &f) else { return };
+        if let Some(how) = how {
+            self.ast.written_refs.set_how(w, how);
+            if how == RefLookup::Adl {
+                self.ast.written_refs.set_using_directive(w, None);
+            }
+        }
+        self.ast.written_refs.set_adl(w, set);
+    }
+
+    /// What argument-dependent lookup's `f` says about a call that
+    /// selected `entity` (found as `found`): the refined `how` (`Adl`,
+    /// `Both`, or none to keep) and the associated set; `None` when a
+    /// class member was selected (spec/ast.md §18.7.4).
+    pub(crate) fn written_call_lookup(
+        &self,
+        entity: Option<DeclId>,
+        found: Option<DeclId>,
+        f: &crate::overload::adl::AdlFacts,
+    ) -> Option<(Option<RefLookup>, AdlSet)> {
         // A class member was selected (a template-id that named member
         // function templates, called on the implicit object): ordinary
         // lookup found a class member, which suppresses argument-dependent
         // lookup ([basic.lookup.argdep]/1), so no set is kept.
-        if let Some(e) = r.entity
+        if let Some(e) = entity
             && self
                 .ast
                 .decls
@@ -499,26 +555,20 @@ impl Sema<'_, '_> {
                 .ctx()
                 .is_some_and(|c| crate::overload::adl::is_class_kind(self.kind_of(c)))
         {
-            return;
+            return None;
         }
-        if let Some(e) = r.entity {
-            let key = self.ast.first(self.ast.strip_shadow(r.found.unwrap_or(e)));
-            let how = if f.only.contains(&key) {
+        let how = entity.and_then(|e| {
+            let key = self.ast.first(self.ast.strip_shadow(found.unwrap_or(e)));
+            if f.only.contains(&key) {
                 Some(RefLookup::Adl)
             } else if f.also.contains(&key) {
                 Some(RefLookup::Both)
             } else {
                 None
-            };
-            if let Some(how) = how {
-                self.ast.written_refs.set_how(w, how);
-                if how == RefLookup::Adl {
-                    self.ast.written_refs.set_using_directive(w, None);
-                }
             }
-        }
+        });
         let a = &f.assoc;
-        self.ast.written_refs.set_adl(w, AdlSet::new(&a.namespaces, &a.classes, &a.enums));
+        Some((how, AdlSet::new(&a.namespaces, &a.classes, &a.enums)))
     }
 
     /// Sets `how` and the using-directive of entry `id`, which just got
@@ -743,6 +793,8 @@ impl Sema<'_, '_> {
     pub(crate) fn retarget_written_ref(&mut self, from: ExprId, to: ExprId) {
         if self.ast.written_refs.has_pending() && self.inst.stack.is_empty() {
             self.ast.written_refs.retarget(from, to);
+        } else if self.ast.written_refs.has_spec_pending() {
+            self.ast.written_refs.retarget_spec(from, to);
         }
     }
 
@@ -834,7 +886,7 @@ impl Sema<'_, '_> {
 
     /// What the name expression `e` (implicit conversions peeled)
     /// resolved to.
-    fn written_target(&self, mut e: ExprId) -> Target {
+    pub(crate) fn written_target(&self, mut e: ExprId) -> Target {
         let exprs = &self.ast.exprs;
         loop {
             let n = exprs.get(e);
@@ -863,9 +915,11 @@ impl Sema<'_, '_> {
                     return DeclId::try_new(n.a()).map_or(Target::Unresolved, Target::Concept);
                 }
                 ExprKind::DependentScopeDeclRefExpr | ExprKind::CXXDependentScopeMemberExpr => {
-                    return Target::Dependent;
+                    return Target::Dependent(e);
                 }
-                _ if n.is_type_dependent() || n.is_value_dependent() => return Target::Dependent,
+                _ if n.is_type_dependent() || n.is_value_dependent() => {
+                    return Target::Dependent(e);
+                }
                 _ => return Target::Unresolved,
             }
         }
@@ -887,7 +941,11 @@ impl Sema<'_, '_> {
 
     /// The declaration a type named in a nested-name-specifier denotes
     /// (and the using-shadow it was found through).
-    fn written_type_entity(&self, ty: QualType, depth: u32) -> Option<(DeclId, Option<DeclId>)> {
+    pub(crate) fn written_type_entity(
+        &self,
+        ty: QualType,
+        depth: u32,
+    ) -> Option<(DeclId, Option<DeclId>)> {
         if depth > 8 {
             return None;
         }

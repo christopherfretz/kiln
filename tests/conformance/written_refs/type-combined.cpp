@@ -5,7 +5,7 @@
 // expression, `sizeof`) is recorded once, by the parse that is kept; a
 // default argument, a default template argument and a default member
 // initializer are recorded once, at their written site, however often
-// they are used; a template instantiated twice adds no entries; lambda
+// they are used; a template instantiated twice adds no entries (§18.9 lines only); lambda
 // and requires-expression parameters are recorded like any other.
 //@ written-refs: type-combined.refs
 namespace lib {

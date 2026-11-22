@@ -75,11 +75,20 @@ impl Substituter<'_, '_, '_> {
         if scoped {
             exprs.round_scope = exprs.fp_round(e);
         }
+        // A dependent name's resolution in this specialization (spec/ast.md
+        // §18.9): one test of the switch while nothing is recorded.
+        let written = self.sema.written_spec_errors();
         let r = self.expr_node(e);
         if scoped {
             self.sema.ast.exprs.round_scope = round;
         }
         self.sema.subst_expr_depth -= 1;
+        if let Some(errors) = written {
+            match r {
+                Ok(r) => self.sema.note_written_spec_expr(e, r),
+                Err(_) => self.sema.note_written_spec_failed(e, errors),
+            }
+        }
         let r = r?;
         self.sema.note_inst_consteval_only(e, r);
         if self.sema.is_err_expr(r) {
@@ -2296,6 +2305,20 @@ impl Substituter<'_, '_, '_> {
     /// argument-dependent lookup at the point of instantiation
     /// ([temp.dep.candidate]; spec §5.4 gap: one lookup, not two).
     fn callee(&mut self, c: ExprId) -> SubstResult<ExprId> {
+        // An unqualified dependent call's name (spec/ast.md §18.9).
+        let written = self.sema.written_spec_errors();
+        let r = self.callee_node(c);
+        if let Some(errors) = written {
+            match r {
+                Ok(r) => self.sema.note_written_spec_expr(c, r),
+                Err(_) => self.sema.note_written_spec_failed(c, errors),
+            }
+        }
+        r
+    }
+
+    /// [`Self::callee`]'s rebuild.
+    fn callee_node(&mut self, c: ExprId) -> SubstResult<ExprId> {
         let n = *self.sema.ast.exprs.get(c);
         // `(f)(x)` ([over.call.func]/3: no argument-dependent lookup, which
         // the name already records): the parenthesized name is a callee
