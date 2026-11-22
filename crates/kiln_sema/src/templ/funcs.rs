@@ -116,6 +116,7 @@ impl Sema<'_, '_> {
         // in its own templated function (`S<int>::f`), not the pattern's.
         let own = self.templated_function(tmpl).unwrap_or(pattern);
         let site = self.begin_signature_mangling(tmpl, own);
+        let after = self.decl_count();
         let r = self.in_inst_context(ctx, |s| {
             s.access_ctx = Some(access);
             let saved = if guide { s.requires_access_replay.replace(false) } else { None };
@@ -129,6 +130,9 @@ impl Sema<'_, '_> {
             r
         });
         self.end_signature_mangling(site);
+        // The specialization owns the closures of its substituted
+        // signature (spec/sema-lambda.md §3.6).
+        self.claim_substituted_closures(after, spec, pattern);
         let captured = self.sfinae_errors() > trapped;
         let warnings = self.take_sfinae_warnings(held);
         if !warnings.is_empty() && r.is_ok() && !captured {

@@ -26,6 +26,7 @@ use crate::scope::{Scope, ScopeKind};
 
 mod capture;
 mod generic;
+mod owner;
 
 /// One *capture* of a *lambda-capture* as written ([expr.prim.lambda.capture]/1).
 #[derive(Clone, Debug)]
@@ -339,6 +340,7 @@ impl Sema<'_, '_> {
         data.rbracket = intro.rbracket;
         let id = self.ast.exprs.lambdas.push(data);
         self.ast.decls.set_closure(closure, id);
+        self.note_closure_owner(closure);
         // clang describes every closure type in full under limited `-g`
         // (even one only named by `decltype`): the lambda-expression
         // creates its object.

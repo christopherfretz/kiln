@@ -10,6 +10,7 @@
 use kiln_ast::ExprId;
 use kiln_ast::decl::{ConstexprKind, DeclKind, FnStorage, InitStyle};
 use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::LambdaId;
 use kiln_ast::lambda::LambdaCapture;
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::{ArgView, Quals, RefQual, TemplateArg, TypeView};
@@ -23,6 +24,18 @@ use crate::templ::pack::{Expansion, PackOperand};
 use crate::templ::stack::FrameKind;
 
 impl Substituter<'_, '_, '_> {
+    /// The owner of the closure of `lambda`, rebuilt from the pattern
+    /// closure `pattern`: the instantiation of the pattern's
+    /// (spec/sema-lambda.md §3.6).
+    fn inherit_closure_owner(&mut self, lambda: LambdaId, pattern: kiln_ast::DeclId) {
+        let closure = self.sema.ast.exprs.lambdas.get(lambda).closure;
+        let locals = &self.locals;
+        self.sema.inherit_closure_owner(closure, pattern, |o| match locals.get(&o) {
+            Some(&DeclOrPack::Decl(x)) => Some(x),
+            _ => None,
+        });
+    }
+
     /// The lambda-expression `e` of the pattern.
     pub(crate) fn lambda_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
         let id = self.sema.ast.exprs.lambda_id(e);
@@ -49,6 +62,7 @@ impl Substituter<'_, '_, '_> {
         let init_vars = self.lambda_captures(&data.captures, &mut intro)?;
         let never_dependent = self.sema.substituted_lambda_never_dependent();
         let lambda = self.sema.act_on_lambda_start_in(&intro, never_dependent);
+        self.inherit_closure_owner(lambda, data.closure);
         // The init-capture variables, in order (several pattern
         // variables share a name after an earlier expansion of an
         // init-capture pack); an expanded pack maps to all its elements.

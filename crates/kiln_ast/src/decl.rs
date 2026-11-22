@@ -1780,6 +1780,11 @@ pub struct ColdDeclData {
     /// it, not under the enclosing scope. Only a state other than the
     /// command line's ([`crate::fp::FpOverride::NONE`]); WP-1904.
     pub init_fp: ColdMap<DeclId, crate::fp::FpOverride>,
+    /// Closure type → the declaration whose source text holds its
+    /// lambda-expression, when that is not the closure's own context
+    /// (`Ast::closure_owner`, spec/ast.md §5.9; WP-2023). Independent of
+    /// the mangling context (`LambdaMangling`).
+    pub closure_owner: ColdMap<DeclId, DeclId>,
 }
 
 impl Default for ColdDeclData {
@@ -1818,12 +1823,13 @@ impl Default for ColdDeclData {
             conversion_spec_target: ColdMap::new("conversion_spec_target"),
             compound_literal: ColdMap::new("compound_literal"),
             init_fp: ColdMap::new("init_fp"),
+            closure_owner: ColdMap::new("closure_owner"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 33] {
+    fn rows(&self) -> [MemRow; 34] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1858,6 +1864,7 @@ impl ColdDeclData {
             self.conversion_spec_target.mem_row(),
             self.compound_literal.mem_row(),
             self.init_fp.mem_row(),
+            self.closure_owner.mem_row(),
         ]
     }
 }

@@ -649,6 +649,43 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   codegen synthesize).
 - **Captured names**: a `DeclRefExpr` to a captured entity carries
   `ExprFlags::REFERS_TO_ENCLOSING` (clang `refersToEnclosingVariableOrCapture`).
+- **Closure owners** (WP-2023): `Ast::closure_owner(record) ->
+  Option<DeclId>` is the innermost declaration whose source text holds
+  the closure's lambda-expression, for tooling clients that key a
+  closure as a local type of a declaration; `None` for a record that is
+  not a closure. Independent of `LambdaMangling` (that follows the
+  Itanium numbering rules; this is set for every closure). The owner is:
+  the template parameter, for one in a template parameter's default
+  argument or type; the template's templated declaration (the function,
+  class, variable or alias), for one in a template head's
+  requires-clause; the function, for one in its signature, trailing
+  requires-clause or body (a closure in a function body is owned by the
+  innermost function whose body holds it, a nested lambda's call
+  operator or a local class's member function included, never by a
+  block-scope variable; a local class's default member initializer
+  belongs to its field); the parameter, for one in its default argument
+  or type; the alias (`using A = ...` / an alias template); the variable
+  or field, for one in its initializer or type (a default member
+  initializer included); the concept, for one in its
+  constraint-expression; else the lexical context (a class, a namespace
+  or the translation unit, e.g. for a `static_assert`). A
+  requires-expression's parameter scope is skipped. An instantiated
+  closure has the instantiated owner (spec/sema-lambda.md §3.6).
+  Stored in the cold map `ColdDeclData::closure_owner` (own `MemRow`
+  "closure_owner"), keyed by the closure record, only where the owner
+  differs from the closure's semantic context (`closure_owner_default`,
+  the context past a requires-expression body): a closure in a
+  function body costs nothing. Decided as §18.3's `enclosing` is: at
+  creation from sema's numbering state (`Sema::closure_site_owner`),
+  then narrowed by the same marks and claims; a claim narrows only a
+  closure whose owner existed at the mark and is not a function whose
+  body holds it, and the parser's claims skip the closures substitution
+  created meanwhile (an instantiation the declaration's text triggered).
+  Template parameters, template heads and alias declarations claim
+  closures only (not written references). Carried by PCH snapshots
+  (the cold maps are snapshot state; FORMAT_VERSION 124) and module
+  images (a lambda record's `owner` word, spec/modules.md; IMAGE_VERSION
+  58). Tests: `crates/kiln_parse/tests/closure_owner.rs`.
 - Memory: `exprs.lambdas` has its own `MemRow` ("lambdas", captures
   included).
 
@@ -1555,6 +1592,10 @@ around it. Other declarations (template parameters and a template
 head's requires-clause, enumerators, alias and `static_assert`
 declarations, structured bindings, condition variables) leave their
 names enclosed by the lexical context; WP-1980 adds them.
+The same marks and claims decide closure owners (§5.9, WP-2023): every
+claim also claims the closures created since its mark, and template
+parameters, template heads and alias declarations claim closures (not
+yet names).
 
 ### 18.4 Roles
 

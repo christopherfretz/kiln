@@ -140,6 +140,7 @@ impl Parser<'_, '_> {
             self.parse_external_declaration();
             let tu = self.s.ast.tu;
             self.s.ast.decls.end_top_level_decl(tu);
+            self.s.end_top_level_closures();
         }
     }
 
@@ -632,6 +633,7 @@ impl Parser<'_, '_> {
                 return Vec::new();
             }
             let tl = self.loc();
+            let wmark = self.s.written_ref_mark();
             self.typename_pack_index = None;
             self.type_id_spec_loc = Loc::INVALID;
             let own = attrs.len();
@@ -651,6 +653,9 @@ impl Parser<'_, '_> {
                 _ => tl,
             };
             let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc);
+            // Closures in the type-id belong to the alias (spec/ast.md
+            // §5.9); its names are not claimed yet (§18.3).
+            self.s.claim_alias_closures(wmark, d);
             self.s.note_alias_decl_loc(d, loc);
             // clang reports a `typename T...[i]` type-id as unterminated
             // (spec/parse.md, typename-specifiers).

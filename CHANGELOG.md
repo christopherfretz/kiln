@@ -18,6 +18,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   definition-context lookup set (`Ast::dependent_oper_candidates`, sets
   interned by content), which sema now reads from there at
   instantiation (spec/ast.md §5.10, §8.5). PCH snapshot format 122.
+- A closure owner query for tooling clients (WP-2023):
+  `Ast::closure_owner(record)` names the innermost declaration whose
+  source text holds a lambda-expression (the template parameter, the
+  templated declaration of a requires-clause, the alias, the function,
+  the parameter, the variable or field), an instantiated closure's being
+  the instantiated declaration. Kept only where it differs from the
+  closure's context, and carried by PCH snapshots and module images.
 - A written-reference table for tooling clients (WP-1930, stage 1):
   `-fkiln-dump-written-refs` records, for each expression name, member
   name and nested-name-specifier component written in the source, the

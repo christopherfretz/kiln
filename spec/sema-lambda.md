@@ -432,6 +432,61 @@ the templates whose kind of member the target can point to
 `tests/mangle/lambda_in_signature_explicit_args.cpp` covers every shape
 checked.
 
+### 3.6 Closure owners (WP-2023)
+
+`Ast::closure_owner` (spec/ast.md §5.9 gives the query and the rule) is
+separate from §3.5: the mangling context stays as it is, and the owner
+is set for every closure. `kiln_sema::lambda::owner`:
+
+- **Creation.** `act_on_lambda_start_in` records
+  `Sema::closure_site_owner`: the parameter whose default argument is
+  open (`ManglingState::default_arg`, in the context or in a class), the
+  field whose default member initializer is (`nsdmi_this`), the function
+  whose body is the context, the variable whose initializer is
+  (`ManglingState::var`, declared in the context), else the context
+  (past a requires-expression body).
+- **Claims.** The written-reference claims (spec/ast.md §18.3) claim
+  closures too: a declaration whose text was parsed before its `DeclId`
+  existed takes each closure created since the mark whose owner existed
+  at the mark (`claimable`), unless that owner is a function whose body
+  holds the closure. Template parameters (`claim_template_param`), a
+  template head (`claim_template_head`, its requires-clause: the
+  templated declaration whose template has the head's parameter list)
+  and alias declarations (`claim_alias_closures`) claim closures only. A
+  claim by a template is a claim by its templated declaration.
+  Closures created by substitution while a declaration is parsed (an
+  instantiation its text triggers, `Sema::subst_closures`, emptied at
+  each top-level declaration's end) are skipped by the parser's claims.
+- **Instantiation** ([temp.inst]). A closure substitution rebuilds
+  (`subst/lambda.rs`) gets, in order: the substituter's local for the
+  pattern's owner (an instantiated parameter or variable, an enclosing
+  lambda's instantiated call operator); else the owner
+  `closure_site_owner` gives now when it is the same kind of declaration
+  as the pattern's owner (the instantiated function whose body, the
+  parameter whose default argument, the field whose default member
+  initializer, the variable whose initializer, the class whose member
+  is instantiated); else the pattern's owner. Then a substituted class
+  member (`templ/class.rs`) and a function template specialization's
+  signature (`templ/funcs.rs`) claim the closures substitution created
+  whose owner is the pattern or inside it
+  (`claim_substituted_closures`). So a closure in a function template
+  specialization's signature or body, a class template specialization's
+  member, a variable template specialization's initializer is owned by
+  the specialization's declaration; a closure substituted while
+  deducing or checking constraints, in a default template argument at a
+  use, or in an alias template's type keeps the pattern's owner (the
+  template parameter, the templated declaration, the alias template's
+  pattern), since no specialization of that declaration exists.
+- **PCH and modules.** The cold map is snapshot state; module images
+  carry it in the lambda record's `owner` word (spec/modules.md), so an
+  importer sees the exporter's owners; a closure whose owner the image
+  does not carry is a census miss (the import falls back to replay), not
+  a silent loss.
+
+Tests: `crates/kiln_parse/tests/closure_owner.rs` (one closure per
+case, set and default, with their instantiations, and a module image
+round trip).
+
 ## 4. Captures
 
 ### 4.1 Explicit captures ([expr.prim.lambda.capture]/1-8)
