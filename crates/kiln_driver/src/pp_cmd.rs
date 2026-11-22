@@ -339,8 +339,9 @@ impl Job<'_> {
             // A module file, by its magic (or a `.pcm` that is not one).
             let path = Path::new(self.path);
             let pcm = path.extension().is_some_and(|e| e == "pcm");
-            match bmi::sniff(path) {
-                bmi::Sniffed::Kiln => match std::fs::read(path) {
+            let disk = self.args.fs_path(self.path);
+            match bmi::sniff(&disk) {
+                bmi::Sniffed::Kiln => match std::fs::read(&disk) {
                     Ok(b) => return Some(MainInput::Capsule(b)),
                     Err(e) => {
                         Diag::new(DiagId::drv_cannot_read_input, Span::INVALID)
@@ -398,7 +399,8 @@ impl Job<'_> {
         engine: &DiagEngine<'_>,
         angled: bool,
     ) -> Option<FileId> {
-        let mut search = HeaderSearch::new(RealFs, self.search_list());
+        let mut search =
+            HeaderSearch::new(RealFs::in_dir(self.args.work_dir.clone()), self.search_list());
         let req = IncludeRequest {
             kind: IncludeKind::Include,
             name: self.path.to_owned(),
@@ -488,7 +490,7 @@ impl Job<'_> {
         let header_sysroot =
             self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
         let specs = Self::search_specs(self.args, self.toolchain, header_sysroot, cplusplus);
-        SearchList::build(&specs, cplusplus, &mut RealFs)
+        SearchList::build(&specs, cplusplus, &mut RealFs::in_dir(self.args.work_dir.clone()))
     }
 
     /// The search list (printed for `-v`), the main file and the
@@ -513,6 +515,7 @@ impl Job<'_> {
         }
         sm.set_macro_prefix_map(&self.args.macro_prefix_map);
         sm.set_source_path_style(self.args.source_path_style);
+        sm.set_work_dir(self.args.work_dir.clone());
         let main = self.load_main(sm, engine);
         let predefines = self.predefines(engine);
         Some(PpInputs { skipped: None, list, main: main?, predefines: predefines? })
@@ -533,7 +536,7 @@ impl Job<'_> {
             a.module_files.iter().map(|(n, p)| (n.clone(), std::path::PathBuf::from(p))).collect();
         // A scan reads no module file (they may not exist yet).
         for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
-            module_files.push((nameless_module_name(path, engine)?, path.into()));
+            module_files.push((nameless_module_name(path, &a.fs_path(path), engine)?, path.into()));
         }
         let header_unit = a.header_unit_main.is_some();
         let fingerprint = self.fingerprint();
@@ -705,7 +708,9 @@ impl Job<'_> {
         // The module cache's key takes the predefines and the search list
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
-        let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
+        sm.set_work_dir(a.work_dir.clone());
+        let mut search = HeaderSearch::new(RealFs::in_dir(a.work_dir.clone()), list)
+            .with_embed_dirs(a.embed_dirs.clone());
         if a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups) {
             search.record_lookups();
         }
@@ -752,7 +757,7 @@ impl Job<'_> {
             if a.header_unit_main.is_some()
                 && let Some(f) = main.file()
             {
-                mo.header_unit = Some(kiln_pp::header_unit_key(sm.file_name(f)));
+                mo.header_unit = Some(kiln_pp::header_unit_key_in(sm.file_name(f), &a.work_dir));
             }
             opts.modules = Some(mo);
         } else if cxx20 && !capsule {
@@ -1068,7 +1073,7 @@ impl Job<'_> {
         let _write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.clone());
         let bytes = bmi::write(&capsule);
         drop(capsule);
-        if let Err(e) = bmi::write_file(Path::new(&out), &bytes) {
+        if let Err(e) = bmi::write_file(&a.fs_path(&out), &bytes) {
             let why = if e.kind() == std::io::ErrorKind::NotFound {
                 "No such file or directory".to_owned()
             } else {
@@ -1152,8 +1157,8 @@ pub(crate) fn precompile_output(args: &Args, path: &str) -> String {
 /// The module a nameless `-fmodule-file=<path>` holds, read from its
 /// header, with clang's deprecation warning (spec/modules.md §11.6);
 /// `None` after diagnosing a file that is not a kiln module file.
-fn nameless_module_name(path: &str, engine: &DiagEngine<'_>) -> Option<String> {
-    let Ok(bytes) = std::fs::read(path) else {
+fn nameless_module_name(path: &str, disk: &Path, engine: &DiagEngine<'_>) -> Option<String> {
+    let Ok(bytes) = std::fs::read(disk) else {
         Diag::new(DiagId::pp_module_file_not_found, Span::INVALID).arg(path).emit(engine);
         return None;
     };

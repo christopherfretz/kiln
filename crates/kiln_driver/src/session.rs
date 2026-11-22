@@ -79,8 +79,12 @@ pub fn with_eval_session<R>(
 ) -> R {
     let stderr = io.stderr;
     let command_line = rsp::expand(command_line);
-    let mut args =
-        crate::front_end::entry_args(argv0, &command_line, &crate::env::Environment::process());
+    let mut args = crate::front_end::entry_args(
+        argv0,
+        &command_line,
+        &crate::env::Environment::process(),
+        &kiln_source::WorkDir::process(),
+    );
     args.action = Action::SyntaxOnly;
     args.host_call_test_handler = false;
     args.host_calls_visible = true;

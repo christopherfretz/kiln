@@ -43,6 +43,10 @@ pub struct SanitizeFlags {
     /// `-fsanitize-ignorelist=` / `-fsanitize-blacklist=` files since the
     /// last `-fno-sanitize-ignorelist`.
     pub ignorelists: Vec<String>,
+    /// The working directory the lists' relative paths open against
+    /// ([`crate::args::Args::work_dir`]; spec/driver.md "Working
+    /// directory"). Not a command-line option.
+    pub work_dir: kiln_source::WorkDir,
     /// Some `-fno-sanitize-ignorelist` was given: no default ignorelist
     /// from the resource directory (clang's `hasArgNoClaim`, wherever it
     /// stands).
@@ -697,7 +701,7 @@ impl SanitizeFlags {
         for allow in [true, false] {
             let mut existing = Vec::new();
             for (_, p) in self.coverage_lists.iter().filter(|l| l.0 == allow) {
-                if Path::new(p).exists() {
+                if self.work_dir.join_str(p).exists() {
                     existing.push(p.clone());
                 } else {
                     errors.push(ArgError::NoSuchFile(p.clone()));
@@ -706,7 +710,8 @@ impl SanitizeFlags {
             if existing.is_empty() {
                 continue;
             }
-            let parsed = read_ignorelists(&existing).and_then(|t| parse_ignorelists(&t, clang22));
+            let parsed = read_ignorelists(&existing, &self.work_dir)
+                .and_then(|t| parse_ignorelists(&t, clang22));
             if let Err(ArgError::MalformedIgnorelist(m)) = parsed {
                 errors.push(ArgError::MalformedCoverageList(allow, m));
             }
@@ -726,13 +731,16 @@ impl SanitizeFlags {
             let existing: Vec<String> = self
                 .coverage_lists
                 .iter()
-                .filter(|(a, p)| *a == allow && Path::new(p).exists())
+                .filter(|(a, p)| *a == allow && self.work_dir.join_str(p).exists())
                 .map(|l| l.1.clone())
                 .collect();
             if existing.is_empty() {
                 return Some(None);
             }
-            read_ignorelists(&existing).and_then(|t| parse_ignorelists(&t, clang22)).ok().map(Some)
+            read_ignorelists(&existing, &self.work_dir)
+                .and_then(|t| parse_ignorelists(&t, clang22))
+                .ok()
+                .map(Some)
         };
         let allow = read(true)?;
         let ignore = read(false)?;
@@ -838,7 +846,12 @@ impl SanitizeFlags {
     /// lists of the enabled `kinds` under `resource_dir`.
     #[must_use]
     pub fn ignorelist_paths(&self, kinds: S, resource_dir: &str) -> (Vec<String>, Vec<String>) {
-        let user = self.ignorelists.iter().filter(|f| Path::new(f).exists()).cloned().collect();
+        let user = self
+            .ignorelists
+            .iter()
+            .filter(|f| self.work_dir.join_str(f).exists())
+            .cloned()
+            .collect();
         let mut system = Vec::new();
         if !self.no_default_ignorelists {
             for &(file, mask) in DEFAULT_IGNORELISTS {
@@ -860,7 +873,11 @@ impl SanitizeFlags {
         [system, user]
             .iter()
             .filter(|l| !l.is_empty())
-            .filter_map(|l| read_ignorelists(l).and_then(|t| parse_ignorelists(&t, clang22)).err())
+            .filter_map(|l| {
+                read_ignorelists(l, &self.work_dir)
+                    .and_then(|t| parse_ignorelists(&t, clang22))
+                    .err()
+            })
             .collect()
     }
 
@@ -878,16 +895,21 @@ impl SanitizeFlags {
         if paths.is_empty() {
             return None;
         }
-        let l = read_ignorelists(&paths).and_then(|t| parse_ignorelists(&t, clang22)).ok()?;
+        let l = read_ignorelists(&paths, &self.work_dir)
+            .and_then(|t| parse_ignorelists(&t, clang22))
+            .ok()?;
         (!l.is_empty()).then(|| Arc::new(l))
     }
 }
 
 /// The lists' text, or LLVM's `can't open file` message.
-fn read_ignorelists(paths: &[String]) -> Result<Vec<(String, String)>, ArgError> {
+fn read_ignorelists(
+    paths: &[String],
+    work_dir: &kiln_source::WorkDir,
+) -> Result<Vec<(String, String)>, ArgError> {
     paths
         .iter()
-        .map(|p| match std::fs::read(p) {
+        .map(|p| match std::fs::read(work_dir.join_str(p)) {
             Ok(b) => Ok((p.clone(), String::from_utf8_lossy(&b).into_owned())),
             Err(e) => {
                 let msg = e.to_string();

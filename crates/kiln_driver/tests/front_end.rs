@@ -635,3 +635,227 @@ fn preprocessing_record() {
     assert_eq!(r.errors, 0);
     assert_eq!(r.value.unwrap(), ["SQ", "SQ", "TWO", "TWO"]);
 }
+
+/// The process's current directory, which no test of this file changes.
+fn process_cwd() -> PathBuf {
+    std::env::current_dir().unwrap()
+}
+
+/// `FrontEndOptions::working_directory` (WP-2121, spec/driver.md "Working
+/// directory"): the options of a run in `dir`.
+fn in_dir(dir: &std::path::Path) -> FrontEndOptions {
+    let mut o = quiet();
+    o.working_directory = Some(dir.to_owned());
+    o
+}
+
+/// WP-2121: two runs of the same relative command line (`-I inc a.cpp`)
+/// in two working directories, inside the front end at the same time,
+/// each see their own files; the process's current directory is neither
+/// used nor changed ([lex.header]: a quoted name searches the includer's
+/// directory, then `-I`).
+#[test]
+fn working_directories_run_at_the_same_time() {
+    let before = process_cwd();
+    let dirs: Vec<Scratch> = ["one", "two"]
+        .iter()
+        .map(|n| {
+            let s = Scratch::new(&format!("cwd-{n}"));
+            std::fs::create_dir_all(s.0.join("inc")).unwrap();
+            s.write("inc/h.h", format!("int from_{n};\n").as_bytes());
+            s.write("a.cpp", format!("#include \"h.h\"\nint main_{n} = 1;\n").as_bytes());
+            s
+        })
+        .collect();
+    assert!(!std::path::Path::new("a.cpp").exists(), "no a.cpp in the process's directory");
+    let cl = argv(&["-fsyntax-only", "-I", "inc", "a.cpp"]);
+    let inside = AtomicU32::new(0);
+    let run = |s: &Scratch| {
+        run_front_end("kiln++", &cl, in_dir(&s.0), |fe| {
+            // Wait (bounded) until the other run is inside its closure
+            // too: both parses have happened, neither has returned.
+            inside.fetch_add(1, Ordering::SeqCst);
+            let start = std::time::Instant::now();
+            while inside.load(Ordering::SeqCst) < 2 && start.elapsed().as_secs() < 60 {
+                std::thread::yield_now();
+            }
+            let files: Vec<String> =
+                fe.sm.file_ids().map(|f| fe.sm.file_name(f).to_owned()).collect();
+            (inside.load(Ordering::SeqCst), seen(fe).decls, files)
+        })
+        .unwrap()
+    };
+    let reports: Vec<_> = std::thread::scope(|sc| {
+        let hs: Vec<_> = dirs.iter().map(|s| sc.spawn(|| run(s))).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for (r, n) in reports.into_iter().zip(["one", "two"]) {
+        assert_eq!((r.errors, r.driver_errors), (0, 0), "{n}: {:?}", r.first_error);
+        let (together, decls, files) = r.value.unwrap();
+        assert_eq!(together, 2, "{n}: both runs were inside the front end at once");
+        assert!(decls.contains(&format!("from_{n}")) && decls.contains(&format!("main_{n}")));
+        let other = if n == "one" { "from_two" } else { "from_one" };
+        assert!(!decls.iter().any(|d| d == other), "{n}: {decls:?}");
+        // The buffers keep the names as written.
+        assert!(files.iter().any(|f| f == "a.cpp"), "{files:?}");
+        assert!(files.iter().any(|f| f == "inc/h.h"), "{files:?}");
+    }
+    assert_eq!(process_cwd(), before, "the process's directory is unchanged");
+}
+
+/// WP-2121: `__FILE__` and a diagnostic's path stay as written, relative
+/// ([cpp.predefined]: `__FILE__` is the presumed name of the source
+/// file; [cpp.line] names keep their spelling), while the files open in
+/// the working directory.
+#[test]
+fn file_macro_and_diagnostics_stay_relative() {
+    let s = Scratch::new("cwd-names");
+    std::fs::create_dir_all(s.0.join("inc")).unwrap();
+    s.write("inc/h.h", b"#define HF __FILE__\nint bad = nope;\n");
+    s.write(
+        "a.cpp",
+        b"#include \"h.h\"\n\
+          static_assert(__builtin_strcmp(__FILE__, \"a.cpp\") == 0);\n\
+          static_assert(__builtin_strcmp(HF, \"a.cpp\") == 0);\n\
+          #line 7 \"rel/x.cpp\"\n\
+          static_assert(__builtin_strcmp(__FILE__, \"rel/x.cpp\") == 0);\n\
+          int also = bad2;\n",
+    );
+    let cl = argv(&["-fsyntax-only", "-I", "inc", "a.cpp"]);
+    let (mut o, buf) = captured();
+    o.working_directory = Some(s.0.clone());
+    let r = run_front_end("kiln++", &cl, o, |_| ()).unwrap();
+    assert_eq!(r.errors, 2, "only the two undeclared names: {}", buf.contents());
+    let at = r.first_error.unwrap().at.unwrap();
+    assert_eq!((at.file.as_str(), at.line), ("inc/h.h", 2));
+    let text = buf.contents();
+    assert!(text.contains("inc/h.h:2:11: error: use of undeclared identifier 'nope'"), "{text}");
+    assert!(text.contains("rel/x.cpp:8:12: error: use of undeclared identifier 'bad2'"), "{text}");
+    assert!(!text.contains(s.0.to_str().unwrap()), "no absolute path: {text}");
+}
+
+/// WP-2121: a relative `-include`, `#embed` / `__has_embed` and
+/// `--embed-dir=` ([cpp.embed]), and a module file named by a relative
+/// `-fmodule-file=` ([module.import]) under the working directory.
+#[test]
+fn include_embed_and_module_file_in_the_working_directory() {
+    let s = Scratch::new("cwd-more");
+    std::fs::create_dir_all(s.0.join("res")).unwrap();
+    s.write("pre.h", b"#define PRE 3\n");
+    s.write("data.bin", b"AB");
+    s.write("res/r.bin", b"xyz");
+    s.write("m.cppm", b"export module m;\nexport constexpr int twice(int x) { return 2 * x; }\n");
+    s.write(
+        "a.cpp",
+        b"import m;\n\
+          constexpr unsigned char d[] = {\n#embed \"data.bin\"\n};\n\
+          static_assert(sizeof d == 2 && d[0] == 'A');\n\
+          #if __has_embed(<r.bin>) != __STDC_EMBED_FOUND__\n#error r.bin\n#endif\n\
+          static_assert(twice(PRE) == 6);\n",
+    );
+    let kilnpp = std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let o = Command::new(&kilnpp)
+        .args(["-std=c++26", "--precompile", "m.cppm", "-o", "m.pcm"])
+        .current_dir(&s.0)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let cl = argv(&[
+        "-fsyntax-only",
+        "-std=c++26",
+        "-Wno-c23-extensions",
+        "-include",
+        "pre.h",
+        "--embed-dir=res",
+        "-fmodule-file=m=m.pcm",
+        "a.cpp",
+    ]);
+    let (mut o, buf) = captured();
+    o.working_directory = Some(s.0.clone());
+    let r = run_front_end("kiln++", &cl, o, |fe| fe.consulted.to_vec()).unwrap();
+    assert_eq!(r.errors, 0, "{}", buf.contents());
+    let consulted = r.value.unwrap();
+    let kinds: Vec<(ConsultedKind, &str)> =
+        consulted.iter().map(|c| (c.kind, c.path.as_str())).collect();
+    // The names as found: the includer's directory (`.`) and `--embed-dir=`.
+    assert_eq!(kinds, [(ConsultedKind::Embed, "./data.bin"), (ConsultedKind::Probe, "res/r.bin")]);
+    assert_eq!(consulted[0].content, Some(Content::of(b"AB")));
+}
+
+/// WP-2121: the environment and the working directory are options of
+/// the same run: `SOURCE_DATE_EPOCH` from the fixed set, the files from
+/// the directory ([cpp.predefined] `__DATE__`).
+#[test]
+fn environment_and_working_directory_together() {
+    let s = Scratch::new("cwd-env");
+    std::fs::create_dir_all(s.0.join("inc")).unwrap();
+    s.write("inc/d.h", b"constexpr char d[] = __DATE__;\n");
+    s.write("a.cpp", b"#include <d.h>\nstatic_assert(d[0] == 'J' && d[10] == '0');\n");
+    let cl = argv(&["-fsyntax-only", "-Iinc", "a.cpp"]);
+    let mut o = in_dir(&s.0);
+    o.environment = Environment::fixed([("SOURCE_DATE_EPOCH", "0")]);
+    let r = run_front_end("kiln++", &cl, o, |_| ()).unwrap();
+    assert_eq!(r.errors, 0, "Jan  1 1970: {:?}", r.first_error);
+    // Without the directory, `a.cpp` is the process's: not there.
+    let mut o = quiet();
+    o.environment = Environment::fixed([("SOURCE_DATE_EPOCH", "0")]);
+    let r = run_front_end("kiln++", &cl, o, |_| ()).unwrap();
+    assert_eq!(r.value, None);
+    assert_eq!(r.first_error.unwrap().id, Some(DiagId::drv_no_such_file));
+}
+
+/// WP-2121: the command line's `-working-directory` wins over the
+/// option, a relative one relative to it (clang's rule: the command line
+/// names the compile's directory); `@file`s are read from the option's.
+#[test]
+fn command_line_working_directory_wins() {
+    let s = Scratch::new("cwd-cl");
+    std::fs::create_dir_all(s.0.join("sub/inc")).unwrap();
+    s.write("sub/inc/h.h", b"int in_sub;\n");
+    s.write("sub/a.cpp", b"#include \"h.h\"\n");
+    s.write("flags.rsp", b"-I inc a.cpp\n");
+    for wd in ["-working-directory=sub", "-working-directory"] {
+        let mut cl = argv(&["-fsyntax-only", wd]);
+        if wd == "-working-directory" {
+            cl.push(s.path("sub"));
+        }
+        cl.push("@flags.rsp".to_owned());
+        let r = run_front_end("kiln++", &cl, in_dir(&s.0), |fe| has_decl(fe.ast, "in_sub"));
+        let r = r.unwrap();
+        assert_eq!(r.errors, 0, "{wd}: {:?}", r.first_error);
+        assert_eq!(r.value, Some(true));
+    }
+}
+
+/// WP-2121: the executable's `-working-directory`: inputs, `-I`, `-o`
+/// and `-MF` resolve against it, the dependency file and the line
+/// markers keep the names as written, and nothing appears in the
+/// process's directory.
+#[test]
+fn executable_working_directory() {
+    let s = Scratch::new("cwd-exe");
+    let elsewhere = Scratch::new("cwd-exe-elsewhere");
+    std::fs::create_dir_all(s.0.join("inc")).unwrap();
+    std::fs::create_dir_all(s.0.join("out")).unwrap();
+    s.write("inc/h.h", b"int h;\n");
+    s.write("a.cpp", b"#include \"h.h\"\nconst char *f = __FILE__;\n");
+    let kilnpp = std::path::Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let wd = format!("-working-directory={}", s.0.display());
+    let run = |args: &[&str]| {
+        let o = Command::new(&kilnpp).arg(&wd).args(args).current_dir(&elsewhere.0).output();
+        let o = o.unwrap();
+        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let e = run(&["-E", "-P", "-I", "inc", "a.cpp"]);
+    assert!(e.contains("const char *f = \"a.cpp\";"), "{e}");
+    let e = run(&["-E", "-I", "inc", "a.cpp"]);
+    assert!(e.contains("# 1 \"inc/h.h\" 1"), "{e}");
+    run(&["-fsyntax-only", "-I", "inc", "-MD", "-MF", "out/a.d", "-MT", "a.o", "a.cpp"]);
+    let d = std::fs::read_to_string(s.0.join("out/a.d")).unwrap();
+    assert_eq!(d, "a.o: a.cpp inc/h.h\n");
+    run(&["-E", "-I", "inc", "a.cpp", "-o", "out/a.ii"]);
+    assert!(s.0.join("out/a.ii").is_file());
+    let left: Vec<_> = std::fs::read_dir(&elsewhere.0).unwrap().collect();
+    assert!(left.is_empty(), "nothing in the process's directory: {left:?}");
+}

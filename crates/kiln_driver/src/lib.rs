@@ -459,8 +459,10 @@ pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
     Ok(std)
 }
 
-/// Writes `text` to `path` (`-` is standard output).
+/// Writes `text` to `path` (`-` is standard output), a relative path
+/// in `work_dir`.
 pub(crate) fn write_output(
+    work_dir: &kiln_source::WorkDir,
     path: Option<&str>,
     text: &str,
     stdout: &mut dyn Write,
@@ -470,7 +472,7 @@ pub(crate) fn write_output(
             .write_all(text.as_bytes())
             .and_then(|()| stdout.flush())
             .map_err(|e| e.to_string()),
-        Some(p) => std::fs::write(p, text).map_err(|e| {
+        Some(p) => std::fs::write(work_dir.join_str(p), text).map_err(|e| {
             if e.kind() == io::ErrorKind::NotFound {
                 "No such file or directory".to_owned()
             } else {
@@ -513,14 +515,14 @@ fn write_results(
     };
     let to_file = out_path.is_some_and(|p| p != "-");
     if !(errors > 0 && to_file)
-        && let Err(e) = write_output(out_path, output, &mut io.stdout)
+        && let Err(e) = write_output(&args.work_dir, out_path, output, &mut io.stdout)
     {
         report_output_error(diag_opts, &io.stderr, out_path.unwrap_or("-"), &e);
         status = 1;
     }
     if errors == 0 {
         for (f, text) in side_deps {
-            if let Err(e) = write_output(Some(&f), &text, &mut io.stdout) {
+            if let Err(e) = write_output(&args.work_dir, Some(&f), &text, &mut io.stdout) {
                 report_output_error(diag_opts, &io.stderr, &f, &e);
                 status = 1;
             }
@@ -832,7 +834,7 @@ pub(crate) fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&
                 args.header_unit_of(i),
                 Some(args::HeaderUnitLookup::User | args::HeaderUnitLookup::System)
             );
-            let ok = i.path == "-" || looked_up || std::path::Path::new(&i.path).exists();
+            let ok = i.path == "-" || looked_up || args.fs_path(&i.path).exists();
             if !ok {
                 Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(&i.path).emit(drv);
             }
@@ -852,19 +854,25 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
             Target::host()
         }),
     };
+    // The toolchain's directories of the command line are found from the
+    // working directory (spec/driver.md "Working directory").
+    let dir =
+        |d: &Option<String>| d.as_deref().map(|d| args.fs_path(d).to_string_lossy().into_owned());
     let mut tc = Toolchain::new_in(
         target,
-        args.sysroot.as_deref(),
-        args.resource_dir.as_deref(),
-        args.llvm_dir.as_deref(),
+        dir(&args.sysroot).as_deref(),
+        dir(&args.resource_dir).as_deref(),
+        dir(&args.llvm_dir).as_deref(),
         &args.env,
     );
+    tc.work_dir = args.work_dir.clone();
     if let Err(e) = &tc.llvm
         && e.is_explicit()
     {
         e.emit(drv);
     }
-    let gcc_search = match (&args.gcc_install_dir, &args.gcc_toolchain) {
+    let (install_dir, gcc_toolchain) = (dir(&args.gcc_install_dir), dir(&args.gcc_toolchain));
+    let gcc_search = match (&install_dir, &gcc_toolchain) {
         (Some(d), _) => GccSearch::InstallDir(d),
         (None, Some(d)) => GccSearch::Toolchain(d),
         (None, None) => GccSearch::Default,
@@ -942,7 +950,7 @@ pub(crate) fn toolchain_checks(args: &Args, tc: &Toolchain, drv: &DiagEngine<'_>
         emit_arg_error(e, drv);
     }
     for f in &args.sanitize.ignorelists {
-        if !std::path::Path::new(f).exists() {
+        if !args.fs_path(f).exists() {
             emit_arg_error(&ArgError::NoSuchFile(f.clone()), drv);
         }
     }
@@ -1441,7 +1449,7 @@ fn run_jobs(
         // `-E` and `-M` leave it alone, with clang's warning.
         if !matches!(args.action, Action::SyntaxOnly | Action::Precompile)
             && input.path != "-"
-            && is_module_file_input(input)
+            && is_module_file_input(args, input)
         {
             if !args.quiet_unused_arguments && !args.no_unused.quiet(&input.path) {
                 let sm = SourceManager::new();
@@ -1546,10 +1554,10 @@ fn run_jobs(
 /// A module file input (spec/modules.md §11.6): a `.pcm` with no `-x`
 /// (clang's input type), or a file starting with kiln's module-file magic
 /// (what the job's `load_main` reads as one).
-fn is_module_file_input(input: &args::Input) -> bool {
+fn is_module_file_input(args: &Args, input: &args::Input) -> bool {
     let path = std::path::Path::new(&input.path);
     (input.lang.is_none() && input.asm.is_none() && path.extension().is_some_and(|e| e == "pcm"))
-        || kiln_pp::bmi::sniff(path) == kiln_pp::bmi::Sniffed::Kiln
+        || kiln_pp::bmi::sniff(&args.fs_path(&input.path)) == kiln_pp::bmi::Sniffed::Kiln
 }
 
 pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {

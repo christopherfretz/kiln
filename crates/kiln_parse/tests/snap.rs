@@ -169,7 +169,7 @@ impl Config {
         header: bool,
     ) -> Preprocessor<'a, 'd> {
         let mut pp = Preprocessor::new(sm, engine, interner, self.pp_options(header));
-        let mut fs = RealFs;
+        let mut fs = RealFs::new();
         let list = SearchList::build(&self.dirs, true, &mut fs);
         let r: Box<dyn IncludeResolver> = Box::new(HeaderSearch::new(fs, list));
         pp.set_include_resolver(r);

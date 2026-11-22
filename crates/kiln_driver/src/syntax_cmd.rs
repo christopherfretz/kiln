@@ -832,7 +832,7 @@ fn quoted_lookup<'a>(dirs: Vec<String>) -> FileLookup<'a> {
         here.into_iter()
             .chain(dirs.iter().map(|d| Path::new(d).to_owned()))
             .map(|d| d.join(path))
-            .find(|p| p.is_file())
+            .find(|p| sm.work_dir().join(p).is_file())
             .and_then(|p| sm.load_file(&p).ok())
     })
 }

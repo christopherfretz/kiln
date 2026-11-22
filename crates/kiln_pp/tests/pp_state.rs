@@ -40,7 +40,7 @@ impl Files<'_> {
             Files::Memory(h) => Box::new(MemoryResolver::new().with_header("h.h", h)),
             Files::Disk(p) => {
                 let dir = p.parent().unwrap().display().to_string();
-                let mut fs = RealFs;
+                let mut fs = RealFs::new();
                 let list =
                     SearchList::build(&[SearchDirSpec::new(&dir, DirGroup::Angled)], true, &mut fs);
                 Box::new(HeaderSearch::new(fs, list).with_embed_dirs(vec![dir]))

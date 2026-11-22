@@ -452,7 +452,7 @@ pub(crate) fn write_side_file(
         DepDest::Main => "-".to_owned(),
         DepDest::File(f) => f,
     };
-    match write_output(Some(&path), &text, &mut io.stdout) {
+    match write_output(&args.work_dir, Some(&path), &text, &mut io.stdout) {
         Ok(()) => true,
         Err(e) => {
             report_output_error(diag_opts, &io.stderr, &path, &e);

@@ -174,7 +174,7 @@ impl ConstexprOpts {
             let text = rows.render(name, RenderOptions { json, limit }, &loc);
             match out {
                 ProfileOut::File(path) => {
-                    if let Err(e) = std::fs::write(path, text) {
+                    if let Err(e) = std::fs::write(sm.work_dir().join_str(path), text) {
                         Diag::new(DiagId::drv_cannot_open_output, Span::INVALID)
                             .arg(path)
                             .arg(e.to_string())
@@ -209,7 +209,8 @@ impl ConstexprOpts {
             let p = sm.presumed_line_col(l)?;
             Some(format!("{}:{}:{}", p.file_name, p.line, p.col))
         };
-        if let Err(e) = kiln_oven::report::write(oven.stats(), &loc, std::path::Path::new(path)) {
+        if let Err(e) = kiln_oven::report::write(oven.stats(), &loc, &sm.work_dir().join_str(path))
+        {
             Diag::new(DiagId::drv_cannot_open_output, Span::INVALID)
                 .arg(path)
                 .arg(e.to_string())

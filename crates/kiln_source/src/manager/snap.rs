@@ -23,6 +23,7 @@
 //! | `guarded` | state | as data |
 //! | `macro_prefix_map` | configuration | not stored: the consumer sets it from its own command line (validated by the snapshot's configuration fingerprint) |
 //! | `source_path_style` | configuration | not stored, as `macro_prefix_map` |
+//! | `work_dir` | configuration | not stored, as `macro_prefix_map` (a lazy buffer's path is stored joined) |
 //! | `gcc_names` | state | as data |
 //!
 //! `FileEntry`:
@@ -194,6 +195,7 @@ impl Snap for SourceManager {
             guarded,
             macro_prefix_map: _,
             source_path_style: _,
+            work_dir: _,
             gcc_names,
         } = self;
         presumed_names.put(w);
@@ -233,6 +235,7 @@ impl Snap for SourceManager {
             guarded,
             macro_prefix_map: OnceLock::new(),
             source_path_style: OnceLock::new(),
+            work_dir: OnceLock::new(),
             gcc_names,
         };
         if let Err(why) =

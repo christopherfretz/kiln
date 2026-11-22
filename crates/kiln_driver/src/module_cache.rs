@@ -114,7 +114,9 @@ const PRUNING: &str = ".pruning";
 /// `-fmodules-cache-path=`, or no usable home directory).
 pub fn cache_root(args: &Args) -> Option<PathBuf> {
     // Made absolute, as clang does, so `-v` and the stamps name one place.
-    root_from(args, |v| args.env.var_os(v)).map(|p| std::path::absolute(&p).unwrap_or(p))
+    // A relative one is the working directory's (spec/driver.md "Working
+    // directory").
+    root_from(args, |v| args.env.var_os(v)).map(|p| args.work_dir.absolute(&p).unwrap_or(p))
 }
 
 fn root_from(args: &Args, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {

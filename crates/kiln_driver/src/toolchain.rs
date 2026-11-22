@@ -369,6 +369,10 @@ pub struct Toolchain {
     /// `gcc` is the installation [`DEFAULT_GCC`] reported, so the link
     /// step names it to `clang++` (`--gcc-install-dir`) too.
     pub gcc_from_driver: bool,
+    /// The working directory the tools run in ([`crate::link::Command`];
+    /// spec/driver.md "Working directory"): the process's unless the
+    /// command line or the library entry names one.
+    pub work_dir: kiln_source::WorkDir,
 }
 
 /// Where the GCC installation search looks (clang 19/22
@@ -530,6 +534,7 @@ impl Toolchain {
             gcc,
             gcc_candidates,
             gcc_from_driver,
+            work_dir: kiln_source::WorkDir::process(),
         }
     }
 

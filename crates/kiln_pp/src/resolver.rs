@@ -452,7 +452,7 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
         file: FileId,
         main_dir: Option<&str>,
     ) -> Option<String> {
-        let cwd = std::env::current_dir().ok()?;
+        let cwd = sm.work_dir().current().ok()?;
         // The suggestion names a header of an imported unit, which clang 22
         // and 19 read back from the BMI as an absolute path and compare
         // with the search directories as written: a relative directory

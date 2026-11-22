@@ -22,6 +22,8 @@
 //!   hasher used by every compiler-internal hash table.
 //! - [`activity`]: the per-thread "current activity" breadcrumb that
 //!   internal-compiler-error reports read.
+//! - [`WorkDir`]: the working directory relative paths open against
+//!   ([`SourceManager::set_work_dir`]; clang's `-working-directory`).
 //! - [`trace`]: the per-thread `-ftime-trace` recorder (Chrome trace
 //!   events in clang's format).
 #![forbid(unsafe_code)]
@@ -36,6 +38,7 @@ mod loc;
 mod manager;
 pub mod symbol;
 pub mod trace;
+mod workdir;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{
@@ -43,3 +46,4 @@ pub use manager::{
     LazyFile, LazyOutcome, LineCol, LoadError, LoadReport, LocSpaceExhausted, PresumedLoc,
     Replacement, SourceManager, SourcePathStyle, read_open_file,
 };
+pub use workdir::WorkDir;

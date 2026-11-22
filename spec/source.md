@@ -54,6 +54,16 @@ chunked append-only arena (`OnceLock` slots, doubling chunk sizes).
 ## SourceManager API
 Buffers:
 - `new()` / `Default`.
+- `set_work_dir(WorkDir)` / `work_dir()` (WP-2121; spec/driver.md
+  "Working directory"): every relative path the manager opens (`load_*`,
+  `add_lazy_file`, `loaded_file`, the GCC spelling's `realpath`) is
+  joined onto a fixed `WorkDir` first; the buffer's `file_name` stays the
+  path as given. Only the first call has an effect; the default,
+  `WorkDir::process()`, joins nothing (the operating system resolves
+  against the process's current directory). A lazy buffer records the
+  joined path. `WorkDir` (`at`, `of_process`, `resolve`, `join`,
+  `current`, `absolute`, `canonicalize`) is the value the driver and the
+  preprocessor share; nothing changes the process's directory.
 - `load_file(&Path) -> Result<FileId, LoadError>`: identity by device and
   inode (`MetadataExt::dev`/`ino` of the opened file; canonical path on
   non-Unix hosts), so `..`, `.`, symlinked and hard-linked paths are one

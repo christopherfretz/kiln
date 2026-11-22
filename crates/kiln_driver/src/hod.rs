@@ -119,7 +119,13 @@ pub fn command(hod: &std::path::Path, llc: &Command) -> Command {
     let mut args = Vec::with_capacity(llc.args.len() + 1);
     args.push("--strict".to_owned());
     args.extend(llc.args.iter().cloned());
-    Command { tool: Tool::Hod, program: Some(hod.to_path_buf()), args, missing_llvm: None }
+    Command {
+        tool: Tool::Hod,
+        program: Some(hod.to_path_buf()),
+        args,
+        missing_llvm: None,
+        dir: llc.dir.clone(),
+    }
 }
 
 /// The `-o` file of a command made by [`command`].
@@ -176,10 +182,11 @@ pub fn run(cmd: &Command, ir: &[u8]) -> (Outcome, Vec<u8>) {
     let Some(program) = &cmd.program else {
         return (not_started(String::new()), Vec::new());
     };
-    let (status, out, err) = match crate::link::spawn_and_wait(program, &cmd.args, Some(ir)) {
-        Ok(r) => r,
-        Err(e) => return (not_started(e.to_string()), Vec::new()),
-    };
+    let (status, out, err) =
+        match crate::link::spawn_and_wait(program, &cmd.args, Some(ir), cmd.dir.as_deref()) {
+            Ok(r) => r,
+            Err(e) => return (not_started(e.to_string()), Vec::new()),
+        };
     let err = String::from_utf8_lossy(&err);
     let line = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
     let outcome = match status.code() {
@@ -287,6 +294,7 @@ mod tests {
             program: Some(PathBuf::from("/x/llc")),
             args: ["-O0", "-filetype=obj", "-o", "a.o", "-"].map(str::to_owned).to_vec(),
             missing_llvm: None,
+            dir: None,
         };
         let h = command(std::path::Path::new("/y/hod"), &llc);
         assert_eq!(h.args, ["--strict", "-O0", "-filetype=obj", "-o", "a.o", "-"]);

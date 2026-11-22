@@ -12,6 +12,7 @@ use crate::arena::AppendVec;
 use crate::fx::FxHashMap;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
+use crate::workdir::WorkDir;
 
 mod snap;
 
@@ -569,6 +570,9 @@ pub struct SourceManager {
     /// preprocessor under [`SourcePathStyle::Gcc`]
     /// ([`Self::set_gcc_file_name`]).
     gcc_names: Mutex<FxHashMap<FileId, Box<str>>>,
+    /// The working directory relative paths open against
+    /// ([`Self::set_work_dir`]).
+    work_dir: OnceLock<WorkDir>,
 }
 
 /// How the source-location builtins (`__builtin_FILE()`,
@@ -680,7 +684,21 @@ impl SourceManager {
             macro_prefix_map: OnceLock::new(),
             source_path_style: OnceLock::new(),
             gcc_names: Mutex::new(FxHashMap::default()),
+            work_dir: OnceLock::new(),
         }
+    }
+
+    /// Sets the working directory every relative path this manager opens
+    /// resolves against (default [`WorkDir::process`]); only the first
+    /// call has an effect. A buffer is still named by the path as given.
+    pub fn set_work_dir(&self, dir: WorkDir) {
+        let _ = self.work_dir.set(dir);
+    }
+
+    /// The working directory in effect ([`Self::set_work_dir`]).
+    pub fn work_dir(&self) -> &WorkDir {
+        static PROCESS: WorkDir = WorkDir::process();
+        self.work_dir.get().unwrap_or(&PROCESS)
     }
 
     /// Sets the `-fmacro-prefix-map=` (and `-ffile-prefix-map=`) entries
@@ -738,7 +756,7 @@ impl SourceManager {
             return;
         }
         let real = system_dir
-            .then(|| fs::canonicalize(path).ok())
+            .then(|| self.work_dir().canonicalize(Path::new(path)).ok())
             .flatten()
             .and_then(|p| p.to_str().map(str::to_owned))
             .filter(|p| p.len() < path.len());
@@ -813,7 +831,8 @@ impl SourceManager {
         path: &Path,
         text: String,
     ) -> Result<(FileId, Option<String>), (LoadError, String)> {
-        let opened = fs::File::open(path).and_then(|f| f.metadata().map(|m| (f, m)));
+        let disk = self.work_dir().join(path);
+        let opened = fs::File::open(&disk).and_then(|f| f.metadata().map(|m| (f, m)));
         let (file, meta) = match opened {
             Ok(fm) => fm,
             Err(e) => return Err((e.into(), text)),
@@ -825,7 +844,7 @@ impl SourceManager {
                 Err(e) => Err((e, text)),
             };
         }
-        let key = match file_key(path, &meta) {
+        let key = match file_key(&disk, &meta) {
             Ok(k) => k,
             Err(e) => return Err((e.into(), text)),
         };
@@ -851,7 +870,8 @@ impl SourceManager {
     }
 
     fn load(&self, path: &Path, regular_only: bool) -> Result<FileId, LoadError> {
-        let mut file = fs::File::open(path)?;
+        let disk = self.work_dir().join(path);
+        let mut file = fs::File::open(&disk)?;
         let meta = file.metadata()?;
         if meta.is_dir() {
             return Err(io::Error::new(io::ErrorKind::IsADirectory, "is a directory").into());
@@ -859,7 +879,7 @@ impl SourceManager {
         if regular_only && !meta.is_file() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file").into());
         }
-        let key = file_key(path, &meta)?;
+        let key = file_key(&disk, &meta)?;
         let mut by_path = lock(&self.by_path);
         if let Some(&id) = by_path.get(&key)
             && self.file(id).available_as_disk()
@@ -906,6 +926,7 @@ impl SourceManager {
         hash: u64,
         copy: Option<LazyCopy>,
     ) -> LazyFile {
+        let path = &*self.work_dir().join(path);
         let Ok(meta) = fs::metadata(path) else { return LazyFile::Missing };
         if !meta.is_file() {
             return LazyFile::Missing;
@@ -971,8 +992,9 @@ impl SourceManager {
     /// The buffer of the file at `path`, if it is loaded (identified as
     /// [`load_file`](Self::load_file) identifies it), without reading it.
     pub fn loaded_file(&self, path: &Path) -> Option<FileId> {
-        let meta = fs::metadata(path).ok()?;
-        let key = file_key(path, &meta).ok()?;
+        let disk = self.work_dir().join(path);
+        let meta = fs::metadata(&disk).ok()?;
+        let key = file_key(&disk, &meta).ok()?;
         lock(&self.by_path).get(&key).copied()
     }
 

@@ -596,8 +596,10 @@ pub(crate) fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
         .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
-fn cwd() -> PathBuf {
-    std::env::current_dir().unwrap_or_default()
+/// The working directory of `args` (spec/driver.md "Working
+/// directory"): the record's `cwd`, and what relative names are joined to.
+fn cwd(args: &Args) -> PathBuf {
+    args.work_dir.current().unwrap_or_default()
 }
 
 /// What `-include-pch` changes in a compile: the arguments with the
@@ -627,6 +629,8 @@ pub(crate) fn consumer(
             let _ = std::io::Write::write_fmt(&mut err, format_args!("{s}\n"));
         }
     };
+    // A relative `-include-pch` opens in the working directory (WP-2121).
+    let pch: &str = &args.fs_path(pch).display().to_string();
     // WP-1037: `-include-pch <dir>` uses the first acceptable PCH in it
     // (clang `FrontendAction::BeginSourceFile`).
     let picked;
@@ -658,7 +662,7 @@ pub(crate) fn consumer(
         }
     };
     crate::pch_snapshot::phase("pch record read");
-    let here = cwd();
+    let here = cwd(args);
     let resolve = |spelled: &str| {
         if Path::new(spelled).is_absolute() || here == Path::new(&rec.cwd) {
             spelled.to_owned()
@@ -741,7 +745,8 @@ pub(crate) fn consumer(
 ///   directives count; a restore does not.
 fn snapshot_refused(args: &Args, rec: &Record, inputs: &[&Input]) -> Option<String> {
     if let Some(i) = inputs.iter().find(|i| {
-        std::fs::read(&i.path).is_ok_and(|t| starts_as_module_unit(&String::from_utf8_lossy(&t)))
+        std::fs::read(args.fs_path(&i.path))
+            .is_ok_and(|t| starts_as_module_unit(&String::from_utf8_lossy(&t)))
     }) {
         return Some(format!(
             "'{}' is a module unit, which a replay compiles with the header before its module declaration",
@@ -868,10 +873,10 @@ enum ProbeWarning {
 
 /// clang's `gchProbe`: whether `gch` is a PCH (a file with a PCH's magic,
 /// or a directory holding one), else the warning when it exists.
-fn gch_probe(gch: &str, warnings: &mut Vec<ProbeWarning>) -> bool {
-    let Ok(md) = std::fs::metadata(gch) else { return false };
+fn gch_probe(gch: &str, disk: &Path, warnings: &mut Vec<ProbeWarning>) -> bool {
+    let Ok(md) = std::fs::metadata(disk) else { return false };
     if md.is_dir() {
-        let any = std::fs::read_dir(gch)
+        let any = std::fs::read_dir(disk)
             .into_iter()
             .flatten()
             .flatten()
@@ -881,7 +886,7 @@ fn gch_probe(gch: &str, warnings: &mut Vec<ProbeWarning>) -> bool {
         }
         return any;
     }
-    if has_pch_magic(Path::new(gch)) {
+    if has_pch_magic(disk) {
         return true;
     }
     warnings.push(ProbeWarning::GchFile(gch.to_owned()));
@@ -914,11 +919,11 @@ pub(crate) fn probe(
     for (k, &(idx, spelling)) in args.pch.probed.iter().enumerate() {
         let h = &args.includes[idx];
         let pch = format!("{h}.pch");
-        let found = if Path::new(&pch).exists() {
+        let found = if args.fs_path(&pch).exists() {
             Some(pch)
         } else {
             let gch = format!("{h}.gch");
-            gch_probe(&gch, &mut warnings).then_some(gch)
+            gch_probe(&gch, &args.fs_path(&gch), &mut warnings).then_some(gch)
         };
         match found {
             Some(p) if k == 0 => first = Some((idx, p)),
@@ -1321,7 +1326,7 @@ fn write_pch(
     }
     let Some(list) = r.dep_list else { return 0 };
     let list = list.borrow();
-    let here = cwd();
+    let here = cwd(args);
     let files = list
         .files()
         .iter()
@@ -1354,7 +1359,7 @@ fn write_pch(
         image_at: None,
     };
     let write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
-    if let Err(err) = bmi::write_file(Path::new(out), &rec.write()) {
+    if let Err(err) = bmi::write_file(&args.fs_path(out), &rec.write()) {
         let why = if err.kind() == std::io::ErrorKind::NotFound {
             "No such file or directory".to_owned()
         } else {

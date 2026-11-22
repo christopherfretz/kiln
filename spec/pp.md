@@ -119,6 +119,13 @@ the redefinition checks in a system header, as clang does; under
 `HeaderSearch::LookupFile` implementation. It runs over a `SearchList`
 and a file system seam: `RealFs` is the disk, and `MemoryFs` is a virtual
 tree for tests. The driver builds the list (`spec/driver.md` "Toolchain").
+`RealFs::in_dir(work_dir)` (WP-2121) opens relative paths against a
+working directory (spec/driver.md "Working directory"; `RealFs::new()`,
+the process's), and only the paths it opens: every name header search
+builds (`inc/x.h`) stays as written; its `open` loads through the source
+manager, which has the same directory. Module files (`-fmodule-file=`,
+`-fprebuilt-module-path=`, libc++'s `std` sources), their lazy buffers
+and `header_unit_key_in` resolve against the source manager's.
 
 **Realizing the list.** `SearchList::build(specs, cplusplus, fs)`
 implements clang `InitHeaderSearch::AddPath`, `Realize` and

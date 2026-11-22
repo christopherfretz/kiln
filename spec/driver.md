@@ -1733,9 +1733,14 @@ driver run to locate libstdc++ gets exactly that environment.
 Developer switches that change no result (`KILN_BACKTRACE` /
 `RUST_BACKTRACE` of the panic hook, `KILN_PP_PROFILE` of the
 `pp-profile` build, `KILN_WREF_RAW` of the written-references dump)
-still read the process. The working directory is the process's
-(relative paths on the command line resolve against it; the entry never
-calls `set_current_dir`).
+still read the process. `working_directory` (WP-2121, an
+`Option<PathBuf>`, default `None`) is the run's working directory
+("Working directory" below): `None` is the process's current directory,
+read once when the run starts; a relative one is relative to the
+process's. The entry never calls `set_current_dir`, so two runs in two
+directories run at the same time, and a `-working-directory` of the
+command line wins (a relative one relative to `working_directory`).
+`@file`s are read from `working_directory`.
 
 `front_end::std_config(std, options)` is the configuration the driver
 builds for `kiln++ -fsyntax-only -std=<std>` with no other flag
@@ -1745,6 +1750,59 @@ the staged feature queries (`pp_cmd::StagedFeatures`) and the header
 search list, for a caller that runs an in-memory front end exactly as
 configured. `Args::complex_promoted()` is `-fcomplex-arithmetic=promoted`
 as the parser options take it.
+
+### Working directory (WP-2121)
+
+`-working-directory <dir>` and `-working-directory=<dir>` (clang's; the
+last one wins) name the directory relative paths open against, without
+changing the process's current directory: kiln passes a `WorkDir` value
+(`kiln_source::WorkDir`, `Args::work_dir`) along, as clang's
+`FileSystemOptions::WorkingDir`. A relative `<dir>` is made absolute
+(not canonicalized) against the process's current directory, once
+(clang 19 and 22 join it a second time, so a relative one finds nothing
+there: a deviation). The library entry's `FrontEndOptions::working_directory`
+is the base the option resolves against ("Front-end library entry";
+the command line wins). Without either, nothing is joined and the
+executable behaves exactly as before: the operating system resolves
+every relative path against the process's directory (byte-identical
+output, diagnostics, dependency files, `-E` line markers, PCH records).
+
+Opened against it (a relative path joined, the path as written kept for
+every name): the main input and its existence check, a module-file
+input's magic; `-I`, `-iquote`, `-isystem`, `-idirafter`, `-I=` under a
+sysroot, `--embed-dir=` and every header-search query (`RealFs::in_dir`);
+`-include` (header search from `<built-in>`; kiln has no `-imacros`); `#include
+"..."` relative to the includer; `#embed` and `__has_embed`;
+`-fmodule-file=` (named and nameless), `-fprebuilt-module-path=`, a
+header unit's key, the module cache path (`-fmodules-cache-path=`, made
+absolute against it); `-include-pch` and the PCH probe of `-include`
+(`<h>.pch`, `<h>.gch`); `-fsanitize-ignorelist=` and the coverage lists;
+`-verify`'s `@file:line`; `@file` response files (library entry); the
+source manager's loads (`SourceManager::set_work_dir`). Written in it:
+`-o`, `-MF`, `-MJ`, `-ftime-trace=`, `-fconstexpr-report=`,
+`-fconstexpr-profile=`, `--precompile` and the PCH's output,
+`-fcrash-diagnostics-dir=`. `--sysroot`, `-isysroot` (header search
+only), `-resource-dir`, `--llvm-dir=`, `--gcc-toolchain=` and
+`--gcc-install-dir=` are joined before the toolchain is located, so the
+toolchain's directories (and the system header names under them) are
+absolute under the option. The external tools (assembler, `opt`, `llc`,
+hod, the linker) run in it (`Command::dir`), so their relative arguments
+resolve there too.
+
+Kept as written: a buffer's name, `__FILE__`, `__builtin_FILE()`,
+`std::source_location`, `#line` names, diagnostics' paths, `-E` line
+markers, dependency-file entries (`#embed` resources as clang names
+them), `-v`'s search list. The directory itself, wherever kiln records
+the current directory: a PCH record's `cwd` and the snapshot identity's
+`working directory` (spec/pch.md), the `-MJ` entry's `directory`,
+`DW_AT_comp_dir` and the gcov files' directory, a prebuilt module's
+dependency-file path, the include suggestion's base. Not joined: paths
+taken from environment variables (`KILN_STATS_LOG`, `KILN_HOD`), and the
+crash reproducer's script, which runs the command line (its
+`-working-directory` included) from the process's directory.
+
+`kiln-scan-deps` still changes the process's directory per database
+entry (it is a process of its own).
 
 ## `-verify`
 

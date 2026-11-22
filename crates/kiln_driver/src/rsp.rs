@@ -13,15 +13,27 @@ const MAX_DEPTH: usize = 32;
 /// relative to the current directory.
 #[must_use]
 pub fn expand(argv: &[String]) -> Vec<String> {
+    expand_in(argv, &kiln_source::WorkDir::process())
+}
+
+/// [`expand`] with every relative `@file` read from `work_dir` (a library
+/// entry's working directory, spec/driver.md "Working directory").
+#[must_use]
+pub fn expand_in(argv: &[String], work_dir: &kiln_source::WorkDir) -> Vec<String> {
     if !argv.iter().any(|a| a.len() > 1 && a.starts_with('@')) {
         return argv.to_vec();
     }
     let mut out = Vec::with_capacity(argv.len());
-    expand_into(argv, 0, &mut out);
+    expand_into(argv, 0, work_dir, &mut out);
     out
 }
 
-fn expand_into(argv: &[String], depth: usize, out: &mut Vec<String>) {
+fn expand_into(
+    argv: &[String],
+    depth: usize,
+    work_dir: &kiln_source::WorkDir,
+    out: &mut Vec<String>,
+) {
     for a in argv {
         let Some(path) = a.strip_prefix('@').filter(|p| !p.is_empty()) else {
             out.push(a.clone());
@@ -31,10 +43,10 @@ fn expand_into(argv: &[String], depth: usize, out: &mut Vec<String>) {
             out.push(a.clone());
             continue;
         }
-        match std::fs::read(Path::new(path)) {
+        match std::fs::read(work_dir.join(Path::new(path))) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                expand_into(&tokenize_gnu(&text), depth + 1, out);
+                expand_into(&tokenize_gnu(&text), depth + 1, work_dir, out);
             }
             Err(_) => out.push(a.clone()),
         }
