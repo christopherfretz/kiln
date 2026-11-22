@@ -767,13 +767,14 @@ impl Substituter<'_, '_, '_> {
                 if name.is_empty() && self.sema.kind_of(m) == DeclKind::Field {
                     // The unnamed object of an anonymous struct or union
                     // (`x.u` through an injected `IndirectField`): it has
-                    // no name to look up.
+                    // no name to look up. The object's conversions, which
+                    // the substitution dropped with the other implicit
+                    // nodes, are formed again (WP-2060: a pointer
+                    // parameter's lvalue-to-rvalue conversion, a
+                    // derived-to-base cast).
                     let f = self.find_instantiated_decl(m, loc)?;
-                    let bt = self.sema.ety(base);
-                    let ot = if arrow { self.sema.pointee_sugared(bt).unwrap_or(bt) } else { bt };
-                    let q = self.sema.ast.types.effective_quals(ot);
                     self.note_deferred_this(None, this_at);
-                    return Ok(self.sema.field_access(base, f, q, arrow, loc));
+                    return Ok(self.sema.anonymous_object_access(base, f, arrow, loc));
                 }
                 if self.sema.kind_of(m) == DeclKind::CXXDestructor {
                     // `p->~C()` / `p->B::~B()` resolved in the pattern

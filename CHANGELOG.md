@@ -569,6 +569,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `tls_model`, an unknown `visibility` on a call operator), as clang
   reports them. A deduction guide's pushed `#pragma clang attribute`
   attributes are checked too.
+- An array new-expression with a bound known only at run time as the
+  operand of an assignment, a conditional or a comma (`p = new S[n];`
+  with `S` a class with a `constexpr` constructor) no longer crashes the
+  -Winteger-overflow check, which evaluated the element constructor as
+  an expression of its own; the check now stops at such a new as clang
+  does, so overflows in its initializer no longer warn (reduced from
+  LLVM 19, WP-2060).
+- An instantiated access to a member of an anonymous union or struct
+  (`ct->a` in a function template, `ct` a pointer parameter) now keeps
+  the lvalue-to-rvalue conversion of the pointer and the derived-to-base
+  cast of the object, as clang's AST does; kiln dropped them, which
+  tooling clients read and the constant evaluator crashed on (a
+  bit-field assignment `t->a = ct->a`; reduced from LLVM 19, WP-2060).
 
 - An ordinary unqualified call whose function only argument-dependent
   lookup found (a hidden friend, a function or function template of an

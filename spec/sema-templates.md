@@ -1830,6 +1830,22 @@ and read once by `member_object`): libstdc++ 16 `__normal_iterator`'s
 `friend auto operator-(...) -> decltype(l.base() - r.base())` (WP-525,
 `temp.inst/friend-trailing-decltype-current-instantiation.cpp`).
 
+The unnamed object of an anonymous struct or union in a member access
+the pattern resolved (`ct->a` is `ct->(anonymous union).a`, the first
+link through an injected `IndirectField`) has no name to look up: it is
+rebuilt from the substituted object by `Sema::anonymous_object_access`,
+which forms the object's conversions again, as the substitution drops
+every implicit node: the lvalue-to-rvalue conversion of a pointer
+operand of `->`, the materialization of a prvalue object, and the
+derived-to-base cast to the class that declares the unnamed member
+([expr.ref]/2, /7; clang `TreeTransform::RebuildMemberExpr`:
+`PerformObjectMemberConversion`, `TemporaryMaterializationConversion`).
+Without them the instantiated AST differed from clang's, and the
+constant evaluator crashed on the unconverted pointer (WP-2060,
+`class.union.anon/instantiated-member-access-object-conversions-ast.cpp`,
+`class.union.anon/instantiated-member-access-forms.cpp`,
+`class.union.anon/instantiated-member-access-run.cpp`).
+
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
 When a dependent unqualified call or operator is substituted:

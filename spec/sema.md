@@ -10416,6 +10416,16 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   an initializer list as written (not `int{x}`), the arguments of a call
   or a construction, an array index, a compound literal's initializer
   and an array `new`'s size, in turn. A top-level conditional is not.
+- **Array new-expressions (WP-2060).** The search stops at an array
+  new-expression whose bound does not fold (with wrapping,
+  `fold_for_overflow`), as clang's `VisitCXXNewExpr` returns at the
+  failed bound: its placement arguments and its bound are searched, its
+  initializer is not (`p = new C[n]{C(INT_MAX + 1)}` does not warn,
+  `new C[2]{...}` does). The initializer of such a new is not an
+  expression of its own either: the element constructor of `new S[n]`
+  is typed `S[]` and only the new-expression evaluates it, per element.
+  Tests: `expr.new/array-new-nonconstant-bound-overflow-check.cpp`,
+  `expr.new/array-new-nonconstant-bound-assigned-run.cpp`.
 - **Evaluation.** A signed integer `+`, `-`, `*` or unary `-` (at most
   128 bits) whose operands have values (an integer literal, or a lax fold,
   `fold_rvalue_int`, so a `const` or `constexpr` variable reads as its

@@ -1,0 +1,117 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct T definition
+| `-CXXRecordDecl union definition
+|   |-FieldDecl referenced a 'unsigned int'
+|   | `-ConstantExpr 'int' value=2
+|   |   `-IntegerLiteral 'int' 2
+|   `-FieldDecl other 'int'
+|-CXXRecordDecl referenced struct D definition
+| `-public 'T'
+|-FunctionDecl used make 'T ()'
+|-ClassTemplateDecl H
+| |-TemplateTypeParmDecl class depth 0 index 0 P
+| |-CXXRecordDecl struct H definition
+| | |-CXXMethodDecl ptr 'void (T *, T *)' static implicit-inline
+| | | |-ParmVarDecl referenced t 'T *'
+| | | |-ParmVarDecl referenced ct 'T *'
+| | | `-CompoundStmt
+| | |   `-BinaryOperator 'unsigned int' lvalue bitfield '='
+| | |     |-MemberExpr 'unsigned int' lvalue bitfield .a
+| | |     | `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+| | |     |   `-ImplicitCastExpr 'T *' <LValueToRValue>
+| | |     |     `-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
+| | |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+| | |       `-MemberExpr 'unsigned int' lvalue bitfield .a
+| | |         `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+| | |           `-ImplicitCastExpr 'T *' <LValueToRValue>
+| | |             `-DeclRefExpr 'T *' lvalue ParmVar 'ct' 'T *'
+| | |-CXXMethodDecl base 'void (D *, D &)' static implicit-inline
+| | | |-ParmVarDecl referenced t 'D *'
+| | | |-ParmVarDecl referenced ct 'D &'
+| | | `-CompoundStmt
+| | |   `-BinaryOperator 'unsigned int' lvalue bitfield '='
+| | |     |-MemberExpr 'unsigned int' lvalue bitfield .a
+| | |     | `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+| | |     |   `-ImplicitCastExpr 'T *' <UncheckedDerivedToBase (T)>
+| | |     |     `-ImplicitCastExpr 'D *' <LValueToRValue>
+| | |     |       `-DeclRefExpr 'D *' lvalue ParmVar 't' 'D *'
+| | |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+| | |       `-MemberExpr 'unsigned int' lvalue bitfield .a
+| | |         `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue .
+| | |           `-ImplicitCastExpr 'T' lvalue <UncheckedDerivedToBase (T)>
+| | |             `-DeclRefExpr 'D' lvalue ParmVar 'ct' 'D &'
+| | `-CXXMethodDecl prv 'unsigned int ()' static implicit-inline
+| |   `-CompoundStmt
+| |     `-ReturnStmt
+| |       `-ExprWithCleanups 'unsigned int'
+| |         `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+| |           `-MemberExpr 'unsigned int' xvalue bitfield .a
+| |             `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' xvalue .
+| |               `-MaterializeTemporaryExpr 'T' xvalue
+| |                 `-CallExpr 'T'
+| |                   `-ImplicitCastExpr 'T (*)()' <FunctionToPointerDecay>
+| |                     `-DeclRefExpr 'T ()' lvalue Function 'make' 'T ()'
+| `-ClassTemplateSpecializationDecl struct H definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-CXXMethodDecl used ptr 'void (T *, T *)' static implicit-inline
+|   | |-ParmVarDecl used t 'T *'
+|   | |-ParmVarDecl used ct 'T *'
+|   | `-CompoundStmt
+|   |   `-BinaryOperator 'unsigned int' lvalue bitfield '='
+|   |     |-MemberExpr 'unsigned int' lvalue bitfield .a
+|   |     | `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+|   |     |   `-ImplicitCastExpr 'T *' <LValueToRValue>
+|   |     |     `-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
+|   |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+|   |       `-MemberExpr 'unsigned int' lvalue bitfield .a
+|   |         `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+|   |           `-ImplicitCastExpr 'T *' <LValueToRValue>
+|   |             `-DeclRefExpr 'T *' lvalue ParmVar 'ct' 'T *'
+|   |-CXXMethodDecl used base 'void (D *, D &)' static implicit-inline
+|   | |-ParmVarDecl used t 'D *'
+|   | |-ParmVarDecl used ct 'D &'
+|   | `-CompoundStmt
+|   |   `-BinaryOperator 'unsigned int' lvalue bitfield '='
+|   |     |-MemberExpr 'unsigned int' lvalue bitfield .a
+|   |     | `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue ->
+|   |     |   `-ImplicitCastExpr 'T *' <UncheckedDerivedToBase (T)>
+|   |     |     `-ImplicitCastExpr 'D *' <LValueToRValue>
+|   |     |       `-DeclRefExpr 'D *' lvalue ParmVar 't' 'D *'
+|   |     `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+|   |       `-MemberExpr 'unsigned int' lvalue bitfield .a
+|   |         `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' lvalue .
+|   |           `-ImplicitCastExpr 'T' lvalue <UncheckedDerivedToBase (T)>
+|   |             `-DeclRefExpr 'D' lvalue ParmVar 'ct' 'D &'
+|   `-CXXMethodDecl used prv 'unsigned int ()' static implicit-inline
+|     `-CompoundStmt
+|       `-ReturnStmt
+|         `-ExprWithCleanups 'unsigned int'
+|           `-ImplicitCastExpr 'unsigned int' <LValueToRValue>
+|             `-MemberExpr 'unsigned int' xvalue bitfield .a
+|               `-MemberExpr 'T::(anonymous union at tests/conformance/class.union.anon/instantiated-member-access-object-conversions-ast.cpp:12:12)' xvalue .
+|                 `-MaterializeTemporaryExpr 'T' xvalue
+|                   `-CallExpr 'T'
+|                     `-ImplicitCastExpr 'T (*)()' <FunctionToPointerDecay>
+|                       `-DeclRefExpr 'T ()' lvalue Function 'make' 'T ()'
+`-FunctionDecl use 'void (T *, D *)'
+  |-ParmVarDecl used t 'T *'
+  |-ParmVarDecl used d 'D *'
+  `-CompoundStmt
+    |-CallExpr 'void'
+    | |-ImplicitCastExpr 'void (*)(T *, T *)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'void (T *, T *)' lvalue CXXMethod 'ptr' 'void (T *, T *)'
+    | |-ImplicitCastExpr 'T *' <LValueToRValue>
+    | | `-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
+    | `-ImplicitCastExpr 'T *' <LValueToRValue>
+    |   `-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
+    |-CallExpr 'void'
+    | |-ImplicitCastExpr 'void (*)(D *, D &)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 'void (D *, D &)' lvalue CXXMethod 'base' 'void (D *, D &)'
+    | |-ImplicitCastExpr 'D *' <LValueToRValue>
+    | | `-DeclRefExpr 'D *' lvalue ParmVar 'd' 'D *'
+    | `-UnaryOperator 'D' lvalue prefix '*' cannot overflow
+    |   `-ImplicitCastExpr 'D *' <LValueToRValue>
+    |     `-DeclRefExpr 'D *' lvalue ParmVar 'd' 'D *'
+    `-CallExpr 'unsigned int'
+      `-ImplicitCastExpr 'unsigned int (*)()' <FunctionToPointerDecay>
+        `-DeclRefExpr 'unsigned int ()' lvalue CXXMethod 'prv' 'unsigned int ()'
