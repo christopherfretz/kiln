@@ -1,0 +1,4 @@
+def macro-name.cpp:280 H file dir macro-name.cpp:272..macro-name.cpp:294 = "Inputs/x.h"
+exp macro-name.cpp:304 H def macro-name.cpp:280 end macro-name.cpp:304 in-directive
+inc macro-name.cpp:295 include "Inputs/x.h" macro macro-name.cpp:304 name macro-name.cpp:304..macro-name.cpp:305 entered file x.h ctx i1
+record complete

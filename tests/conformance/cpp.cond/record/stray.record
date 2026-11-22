@@ -1,0 +1,4 @@
+cond stray.cpp:397 elif not-evaluated stray cond stray.cpp:402..stray.cpp:404
+cond stray.cpp:405 else not-taken stray cond stray.cpp:410..stray.cpp:410
+cond stray.cpp:411 endif closes stray cond stray.cpp:417..stray.cpp:417
+record complete

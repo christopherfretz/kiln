@@ -2894,3 +2894,34 @@ fn module_header_source_inputs() {
     assert_eq!(o.stderr, unused("-c"));
     assert!(!d.join("src.o").exists());
 }
+
+/// WP-2111 (spec/pp.md "Preprocessing record", inclusions): a header-unit
+/// import read from its module file is an `imported` inclusion row with
+/// the file found, and flags the record incomplete; the module file's
+/// copy of the header that kiln replays is that row's instance. Built from
+/// its source the import is an `entered` row.
+#[test]
+fn pp_record_header_unit_import() {
+    let d = scratch("pp-record-hu");
+    std::fs::write(d.join("h.h"), "#ifndef H_H\n#define H_H\n#define HV 7\n#endif\n").unwrap();
+    std::fs::write(d.join("u.cpp"), "import \"h.h\";\nint v = HV;\n").unwrap();
+    ok(&d, &["-fmodule-header", "h.h"]);
+    let dump = |args: &[&str]| {
+        let (code, out, err) = kiln_stdout(&d, args);
+        assert_eq!((code, err.as_str()), (0, ""), "{out}");
+        out
+    };
+    let out = dump(&["-fsyntax-only", "-fkiln-dump-pp-record", "-fmodule-file=h.pcm", "u.cpp"]);
+    let inc: Vec<_> = out.lines().filter(|l| l.starts_with("inc ")).collect();
+    let row = "inc u.cpp:0 header-import \"h.h\" name u.cpp:7..u.cpp:12";
+    assert_eq!(inc, [format!("{row} imported file h.h ctx i1")], "{out}");
+    assert!(
+        out.contains(
+            "\ncond h.h:0 ifndef taken guard cond h.h:7..h.h:11 group h.h:11..h.h:37 in i1\n"
+        ),
+        "{out}"
+    );
+    assert!(out.ends_with("record incomplete: restored imported\n"), "{out}");
+    let out = dump(&["-fsyntax-only", "-fkiln-dump-pp-record", "u.cpp"]);
+    assert!(out.contains(&format!("{row} entered file h.h ctx i1\n")), "{out}");
+}

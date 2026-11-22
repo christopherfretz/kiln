@@ -2,7 +2,7 @@
 // included twice under two definitions of `K`. Each inclusion expands
 // `K(Add)` and `K(Sub)` at the same offsets, naming a different
 // definition, and each `#undef` ends its own (spec/pp.md "Preprocessing
-// record"; the conditionals and inclusions are not yet recorded).
+// record"; each inclusion is its own instance, `in i1` and `in i2`).
 //@ expect: compile-ok
 //@ strict-diags
 //@ pp-record: x-macro.record

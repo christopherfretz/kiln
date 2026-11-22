@@ -1,6 +1,6 @@
 //! WP-015: the `#if` conformance and torture cases run through `kiln_pp`
 //! with [`IfEval`] and [`ClangFeatures`] installed ([cpp.cond]):
-//! `tests/conformance/cpp.cond/**` and the `cpp.cond-*`,
+//! the files of `tests/conformance/cpp.cond` and the `cpp.cond-*`,
 //! `cpp.has-feature-macros` and `cpp.defined-in-macro` torture cases of
 //! `tests/differential/pp/torture/`. Output is compared token-wise with the
 //! checked-in expectation (line markers and blank lines ignored).
@@ -158,7 +158,7 @@ fn torture_cases() {
     }
 }
 
-/// `tests/conformance/cpp.cond/**` (oracle: clang). Each case's expected
+/// The files of `tests/conformance/cpp.cond` (oracle: clang). Each case's expected
 /// output is clang's `-E -P` output for it as C++26 (kiln is a C++ front
 /// end; C-mode cases use only `#if` semantics shared with C++). Without
 /// clang, the surviving lines are checked against the case's markers: the
@@ -168,6 +168,11 @@ fn conformance_cases() {
     let dir = root().join("tests/conformance/cpp.cond");
     let mut n = 0;
     for e in std::fs::read_dir(&dir).unwrap().flatten() {
+        // Subdirectories (`record/`, the preprocessing-record goldens) are
+        // the corpus runner's.
+        if !e.path().is_file() {
+            continue;
+        }
         let src = read(&e.path());
         if has_other_args(&src) {
             continue;

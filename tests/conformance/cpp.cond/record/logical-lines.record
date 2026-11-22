@@ -1,0 +1,10 @@
+cond logical-lines.cpp:391 if not-taken cond logical-lines.cpp:394..logical-lines.cpp:436 group logical-lines.cpp:436..logical-lines.cpp:501
+cond logical-lines.cpp:450 if dead cond logical-lines.cpp:453..logical-lines.cpp:483 group logical-lines.cpp:483..logical-lines.cpp:484
+cond logical-lines.cpp:484 elif dead open logical-lines.cpp:450 cond logical-lines.cpp:491..logical-lines.cpp:493 group logical-lines.cpp:493..logical-lines.cpp:494
+cond logical-lines.cpp:494 endif dead open logical-lines.cpp:450 cond logical-lines.cpp:500..logical-lines.cpp:500
+cond logical-lines.cpp:501 elif taken open logical-lines.cpp:391 cond logical-lines.cpp:508..logical-lines.cpp:518 group logical-lines.cpp:518..logical-lines.cpp:529
+cond logical-lines.cpp:529 endif closes open logical-lines.cpp:391 cond logical-lines.cpp:535..logical-lines.cpp:535
+cond logical-lines.cpp:536 if taken cond logical-lines.cpp:539..logical-lines.cpp:567 group logical-lines.cpp:567..logical-lines.cpp:578
+cond logical-lines.cpp:578 elif not-evaluated open logical-lines.cpp:536 cond logical-lines.cpp:585..logical-lines.cpp:587 group logical-lines.cpp:587..logical-lines.cpp:588
+cond logical-lines.cpp:588 endif closes open logical-lines.cpp:536 cond logical-lines.cpp:594..logical-lines.cpp:594
+record complete

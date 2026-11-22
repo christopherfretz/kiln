@@ -155,6 +155,9 @@ pub(crate) struct Cond {
     pub(crate) found_else: bool,
     /// The whole conditional is inside a skipped group.
     pub(crate) was_skipping: bool,
+    /// While recording: the conditional's latest row in the preprocessing
+    /// record (`u32::MAX`: none).
+    pub(crate) rec: u32,
 }
 
 /// The include-guard detector of one file (clang `MultipleIncludeOpt`):
@@ -167,6 +170,9 @@ pub(crate) struct MiOpt {
     pub(crate) read_any: bool,
     /// The candidate controlling macro.
     pub(crate) the_macro: Option<Symbol>,
+    /// While recording: the preprocessing record's row of the candidate's
+    /// opener (meaningful while `the_macro` is set).
+    pub(crate) the_cond: u32,
 }
 
 impl MiOpt {
@@ -181,13 +187,15 @@ impl MiOpt {
         self.the_macro = None;
     }
 
-    /// A top-level `#ifndef m` with nothing before it.
-    pub(crate) fn enter_ifndef(&mut self, m: Symbol) {
+    /// A top-level `#ifndef m` with nothing before it; `rec` its row in
+    /// the preprocessing record.
+    pub(crate) fn enter_ifndef(&mut self, m: Symbol, rec: u32) {
         self.read_any = true;
         if self.the_macro.is_some() {
             self.invalidate();
         } else {
             self.the_macro = Some(m);
+            self.the_cond = rec;
         }
     }
 
@@ -241,6 +249,9 @@ pub(crate) struct FileFrame<'a> {
     pub(crate) image_stop: Option<Box<crate::modules::ImageStop>>,
     /// The image the unit ends with, once the preamble's end accepted it.
     pub(crate) image_done: Option<(Rc<crate::bmi::ImageSection>, Span)>,
+    /// While recording: this inclusion's row in the preprocessing record
+    /// (`u32::MAX`: the main file, the predefines, not recording).
+    pub(crate) rec_inc: u32,
 }
 
 /// A macro expansion or a token stream being read.
@@ -409,6 +420,16 @@ pub struct Preprocessor<'a, 'd> {
     /// While recording: a builtin being expanded and its parent, entered
     /// when it produces its result.
     pub(crate) rec_builtin: Option<(Rc<MacroDef>, u32)>,
+    /// The `Eod` location of the directive finished last (its logical
+    /// line's newline, or the end of the file).
+    pub(crate) dir_end: Loc,
+    /// While recording: the inclusion row of the directive being read,
+    /// whose end is set when it finishes (`u32::MAX`: none).
+    pub(crate) rec_inc: u32,
+    /// While recording: the first token of the module or import directive
+    /// being read, and the header-unit import row it made (`u32::MAX`).
+    pub(crate) rec_import_at: Loc,
+    pub(crate) rec_hu: u32,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -499,6 +520,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             record: None,
             rec_cur: u32::MAX,
             rec_builtin: None,
+            dir_end: Loc::INVALID,
+            rec_inc: u32::MAX,
+            rec_import_at: Loc::INVALID,
+            rec_hu: u32::MAX,
         };
         if pp.opts.pp_record {
             pp.record = Some(Box::new(crate::record::PpRecord::new(pp.syms.va_opt)));
@@ -646,6 +671,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn enter_main_file(&mut self, file: FileId) {
         use std::fmt::Write as _;
         self.main_file = Some(file);
+        if let Some(r) = self.record.as_deref_mut() {
+            r.main_file = Some(file);
+        }
         self.push_file(file, None, None, None, false, false);
         let mut text = self.opts.predefines.clone();
         if !text.is_empty() && !text.ends_with('\n') {
@@ -750,6 +778,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             traced,
             image_stop: None,
             image_done: None,
+            rec_inc: u32::MAX,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
@@ -950,6 +979,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         self.in_directive = false;
         self.dir_eod = None;
+        self.dir_end = eod.span.lo;
         let keep = self.lex_opts.keep_comments;
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.lx.set_in_directive(false);
@@ -1217,6 +1247,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         for c in conds.iter().rev() {
             self.emit(Diag::new(DiagId::pp_unterminated_conditional, c.span));
         }
+        if let Some(r) = self.record.as_deref_mut() {
+            for c in &conds {
+                r.set_unterminated(c.rec);
+            }
+        }
         if self.frames.len() <= 1 {
             let _ = t;
             return true;
@@ -1242,6 +1277,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 self.sm.mark_include_guarded(exited, h.into());
             }
             self.guards.insert(exited, m);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.set_guard(f.mi.the_cond);
+            }
         }
         self.include_depth = self.include_depth.saturating_sub(1);
         if let Some(Frame::File(below)) = self.frames.last() {

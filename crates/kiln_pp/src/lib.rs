@@ -77,8 +77,9 @@ pub use predef::{
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
 pub use record::{
-    Arg, DefEnd, DefIx, DefSource, Definition, ExpFlags, ExpIx, Expansion, MadeKind, Origin,
-    ParamUse, PpRecord, RecordFlags, Undef, Use,
+    Arg, CondIx, CondKind, CondOutcome, Conditional, DefEnd, DefIx, DefSource, Definition,
+    ExpFlags, ExpIx, Expansion, IncContext, IncIx, IncKind, IncOutcome, Inclusion, MadeKind,
+    Origin, ParamUse, PpRecord, RecordFlags, Undef, Use,
 };
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
 pub use search::{

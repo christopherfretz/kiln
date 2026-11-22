@@ -21,6 +21,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   without the dump (for a PCH or module build). Off, a snapshot grows by
   one byte and an image by four, and neither is read (PCH
   `FORMAT_VERSION` 144, `IMAGE_VERSION` 77).
+- The preprocessing record's conditionals and inclusions (WP-2111,
+  stage 2 of 4): one row per conditional directive, live or in a
+  skipped group, with its outcome (taken, not taken, not evaluated,
+  dead, closes), its condition and group ranges, its links to the rest
+  of its conditional and its guard and unterminated flags; the
+  `#pragma once` that took effect; one row per `#include`,
+  `#include_next`, `#import`, header-unit `import`, `#embed` and
+  `-include` with its outcome (entered, skipped by once or guard, not
+  found, depth limit, ...), the file found and its search index; and
+  `PpRecord::inclusion_of`, the include context of any location.
+  `-fkiln-dump-pp-record` prints them as `cond`, `inc` and `once` lines,
+  and every line in a header names its instance (`in i<n>`). No change
+  with recording off (spec/pp.md "Preprocessing record").
 - The written-reference table records what each dependent name of a
   template resolves to in every specialization (stage 4, WP-1933;
   spec/ast.md §18.9), in a separate table keyed by (pattern entry,

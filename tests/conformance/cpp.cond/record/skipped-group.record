@@ -1,0 +1,5 @@
+cond skipped-group.cpp:372 if not-taken cond skipped-group.cpp:375..skipped-group.cpp:377 group skipped-group.cpp:377..skipped-group.cpp:416
+cond skipped-group.cpp:400 ifdef dead cond skipped-group.cpp:406..skipped-group.cpp:408 group skipped-group.cpp:408..skipped-group.cpp:409
+cond skipped-group.cpp:409 endif dead open skipped-group.cpp:400 cond skipped-group.cpp:415..skipped-group.cpp:415
+cond skipped-group.cpp:416 endif closes open skipped-group.cpp:372 cond skipped-group.cpp:422..skipped-group.cpp:422
+record complete
