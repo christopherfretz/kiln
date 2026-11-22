@@ -312,6 +312,10 @@ pub struct TestSpec {
     /// (`-fkiln-instantiation-report=json`), relative to the test's
     /// directory; compared with the `*_us` timings masked.
     pub inst_report: Option<PathBuf>,
+    /// `written-refs:`: the golden written-reference dump
+    /// (`-fkiln-dump-written-refs`, spec/ast.md §18.6), relative to the
+    /// test's directory; compared with the compile's standard output.
+    pub written_refs: Option<PathBuf>,
     /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
     /// `xtask clang-ast --implicit`).
     pub ast_implicit: bool,
@@ -530,7 +534,7 @@ impl TestSpec {
 
     /// Does this test use directives only kiln can check?
     pub fn is_kiln_specific(&self) -> bool {
-        !self.oven.is_empty() || self.inst_report.is_some()
+        !self.oven.is_empty() || self.inst_report.is_some() || self.written_refs.is_some()
     }
 }
 
@@ -582,6 +586,8 @@ struct Parser {
     cfg_lines: Vec<usize>,
     inst_report: Option<PathBuf>,
     inst_report_line: usize,
+    written_refs: Option<PathBuf>,
+    written_refs_line: usize,
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
@@ -665,6 +671,8 @@ impl Parser {
             meta_header_skip: None,
             inst_report: None,
             inst_report_line: 0,
+            written_refs: None,
+            written_refs_line: 0,
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
@@ -807,6 +815,16 @@ impl Parser {
                 } else {
                     self.inst_report_line = line;
                     self.inst_report = Some(PathBuf::from(value));
+                }
+            }
+            "written-refs" => {
+                if self.written_refs.is_some() {
+                    self.err(line, "duplicate `written-refs`");
+                } else if value.is_empty() {
+                    self.err(line, "`written-refs` requires a path");
+                } else {
+                    self.written_refs_line = line;
+                    self.written_refs = Some(PathBuf::from(value));
                 }
             }
             "exit" => {
@@ -1422,6 +1440,11 @@ impl Parser {
             let line = self.inst_report_line;
             self.err(line, "`inst-report` only applies to `compile-ok` and `compile-fail` tests");
         }
+        if self.written_refs.is_some() && !matches!(expect, Expect::CompileOk | Expect::CompileFail)
+        {
+            let line = self.written_refs_line;
+            self.err(line, "`written-refs` only applies to `compile-ok` and `compile-fail` tests");
+        }
         if self.module_line != 0
             && (verify
                 || !matches!(
@@ -1530,6 +1553,7 @@ impl Parser {
             ast_filter: self.ast_filter,
             cfg_diverges: self.cfg_diverges,
             inst_report: self.inst_report,
+            written_refs: self.written_refs,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,

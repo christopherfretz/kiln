@@ -1,0 +1,16 @@
+9:26-9:27  expr  'v' -> v@9:14 in=cfg::bump@9:5
+11:15-11:18  nns  'cfg' -> cfg@7:11 in=n@19:7 exp=19:11
+11:20-11:25  expr  'level' -> cfg::level@8:5 q=11:15 in=n@19:7 exp=19:11
+20:3-20:4  expr  'n' -> n@19:7 in=macros@18:5
+12:17-12:20  nns  'cfg' -> cfg@7:11 in=macros@18:5 exp=20:8
+12:22-12:26  expr  'bump' -> cfg::bump@9:5 q=12:17 in=macros@18:5 exp=20:8
+20:13-20:14  expr  'n' -> n@19:7 in=macros@18:5 exp=20:8
+20:24-20:35  expr  'local_value' -> local_value@16:5 in=macros@18:5 exp=20:18
+20:24-20:35  expr  'local_value' -> local_value@16:5 in=macros@18:5 exp=20:18
+21:3-21:4  expr  'n' -> n@19:7 in=macros@18:5
+12:17-12:20  nns  'cfg' -> cfg@7:11 in=macros@18:5 exp=21:8
+12:22-12:26  expr  'bump' -> cfg::bump@9:5 q=12:17 in=macros@18:5 exp=21:8
+11:15-11:18  nns  'cfg' -> cfg@7:11 in=macros@18:5 exp=21:8
+11:20-11:25  expr  'level' -> cfg::level@8:5 q=11:15 in=macros@18:5 exp=21:8
+22:10-22:11  expr  'n' -> n@19:7 in=macros@18:5
+<scratch space>:1:1-1:12  expr  'local_value' -> local_value@16:5 in=macros@18:5 exp=22:14

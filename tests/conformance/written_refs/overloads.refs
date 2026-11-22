@@ -1,0 +1,30 @@
+28:26-28:29  nns  'lib' -> lib@9:11 in=g@28:35
+29:24-29:25  expr  'f' -> f@17:5 in=fp@29:9
+30:8-30:11  nns  'Obj' -> Obj@20:8 in=mp@30:14
+30:27-30:30  nns  'Obj' -> Obj@20:8 in=mp@30:14
+30:32-30:33  expr  'm' -> Obj::m@22:7 q=30:27 in=mp@30:14
+31:11-31:12  expr  'f' -> f@16:5 in=r@31:7
+31:18-31:19  expr  'f' -> f@17:5 in=r@31:7
+31:27-31:28  expr  'f' -> f<int>@18:24 found=f@18:24 in=r@31:7
+31:30-31:31  expr  'r' -> r@31:7 in=r@31:7
+31:35-31:37  expr  'fp' -> fp@29:9 in=r@31:7
+32:3-32:4  expr  'r' -> r@31:7 in=calls@28:5
+32:8-32:9  expr  'o' -> o@28:15 in=calls@28:5
+32:10-32:11  member  'm' -> Obj::m@21:7 in=calls@28:5
+32:17-32:18  expr  'p' -> p@28:23 in=calls@28:5
+32:20-32:21  member  'm' -> Obj::m@22:7 in=calls@28:5
+32:29-32:30  expr  'o' -> o@28:15 in=calls@28:5
+32:31-32:32  member  's' -> Obj::s@24:14 in=calls@28:5
+32:39-32:42  nns  'Obj' -> Obj@20:8 in=calls@28:5
+32:44-32:45  expr  's' -> Obj::s@23:14 q=32:39 in=calls@28:5
+32:51-32:52  expr  'o' -> o@28:15 in=calls@28:5
+32:53-32:54  member  't' -> Obj::t<double>@25:26 found=Obj::t@25:26 in=calls@28:5
+32:63-32:64  expr  'o' -> o@28:15 in=calls@28:5
+32:66-32:68  expr  'mp' -> mp@30:14 in=calls@28:5
+33:10-33:11  expr  'r' -> r@31:7 in=calls@28:5
+33:14-33:17  expr  'act' -> lib::act@11:5 in=calls@28:5
+33:18-33:19  expr  'g' -> g@28:35 in=calls@28:5
+33:23-33:26  expr  'act' -> lib::act@12:5 in=calls@28:5
+33:27-33:28  expr  'g' -> g@28:35 in=calls@28:5
+33:31-33:32  expr  'g' -> g@28:35 in=calls@28:5
+33:34-33:35  expr  'r' -> r@31:7 in=calls@28:5

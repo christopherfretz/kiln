@@ -333,6 +333,9 @@ KILN DEVELOPMENT:
   -fdump-record-layouts   With -fsyntax-only: dump the record layouts
   -fkiln-dump-cfg         [kiln] With -fsyntax-only: dump each control-flow
                           graph
+  -fkiln-dump-written-refs
+                          [kiln] Dump each written name and the declaration
+                          it denotes
   -fkiln-cfg-stats        [kiln] With -fsyntax-only: control-flow graph sizes
   -fkiln-cfg-max-elems=<n>
                           [kiln] Control-flow graph element limit per body

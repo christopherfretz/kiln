@@ -473,6 +473,7 @@ impl Sema<'_, '_> {
         });
         self.end_set(set);
         let (d, f) = won?;
+        self.resolve_written_ref(x, d, Some(f));
         let e = self.finish_member_winner(&m, d, f, loc);
         self.ovl.resolved_member = Some(e);
         Some(e)

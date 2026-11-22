@@ -10,6 +10,7 @@ use kiln_ast::expr::{
     TypeTrait, UnaryOp,
 };
 use kiln_ast::names::DeclName;
+use kiln_ast::written_refs::{RefQualifier, RefRole};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
@@ -1621,6 +1622,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let nl = self.bump().span.lo;
+        self.note_wname(nl, RefQualifier::NONE);
         if self.at(Punct::Less) {
             // `p->~X<T>()`: the simple-template-id names the destroyed
             // class type.
@@ -1655,8 +1657,17 @@ impl Parser<'_, '_> {
     /// The member designator after `.`/`->` (the operator token at `loc`
     /// already consumed): `[template] id-expression` or a
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
-    #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
+        if !self.s.records_written_refs() {
+            return self.parse_member_access_suffix_inner(e, loc, arrow);
+        }
+        self.with_written_name(RefRole::Member, |p| {
+            p.parse_member_access_suffix_inner(e, loc, arrow)
+        })
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one path per member designator form")]
+    fn parse_member_access_suffix_inner(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         // `e.[: r :]`, `p->[: r :]` ([expr.ref]/1 with a splice-expression).
         if self.at_splice() && self.decltype_scope_end(self.pos()).is_none() {
             let open = self.loc();
@@ -1692,11 +1703,15 @@ impl Parser<'_, '_> {
         // `e.N::m`, `p->B::f`, `e.::N::m` ([expr.ref]/1 with a
         // qualified-id; [basic.lookup.qual.general]/2 looks the first
         // component up in the object's class, then here).
+        let mut link = RefQualifier::NONE;
         let qual = if self.at_member_qualifier() {
             self.s.begin_member_qualifier(e, arrow);
             let q = self.parse_nested_name_nns();
             self.s.end_member_qualifier();
             let Ok(q) = q else { return None };
+            if q.is_some() {
+                link = self.nns_link;
+            }
             // A leading `template` belonged to the qualifier's first
             // component (`e.template B<T>::m`, CWG1835); only one after
             // the qualifier applies to the member's name.
@@ -1718,6 +1733,7 @@ impl Parser<'_, '_> {
                 return None;
             };
             let nl = self.bump().span.lo;
+            self.note_wname(nl, link);
             if self.at(Punct::Less)
                 && let Some(sf) = self.s.dependent_destructor_prefix(e, arrow, q)
             {
@@ -1784,6 +1800,7 @@ impl Parser<'_, '_> {
             self.bump();
             DeclName::ident(name)
         };
+        self.note_wname(nl, link);
         if template_kw {
             // `e.template f<args>` ([temp.names]/5).
             let targs = if self.at(Punct::Less) {
@@ -2030,7 +2047,15 @@ impl Parser<'_, '_> {
     /// expression ([expr.prim.id.unqual]/1): `operator()(x)` in a member
     /// function is `this->operator()(x)`.
     fn parse_operator_id_expression(&mut self, loc: Loc) -> PExpr {
+        if !self.s.records_written_refs() {
+            return self.parse_operator_id_expression_inner(loc);
+        }
+        self.with_written_name(RefRole::Expr, |p| p.parse_operator_id_expression_inner(loc))
+    }
+
+    fn parse_operator_id_expression_inner(&mut self, loc: Loc) -> PExpr {
         let name = self.parse_operator_function_name()?;
+        self.note_wname(loc, RefQualifier::NONE);
         if self.at_operator_template_args(name, None, None) {
             return self.parse_operator_template_id(name, loc, None, None);
         }
@@ -2477,9 +2502,18 @@ impl Parser<'_, '_> {
     /// ([temp.dep.general]/2).
     #[allow(clippy::too_many_lines, reason = "the id-expression forms in one place")]
     fn parse_id_expression_rest(&mut self) -> PExpr {
+        if !self.s.records_written_refs() {
+            return self.parse_id_expression_rest_inner();
+        }
+        self.with_written_name(RefRole::Expr, Self::parse_id_expression_rest_inner)
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one path per id-expression form")]
+    fn parse_id_expression_rest_inner(&mut self) -> PExpr {
         let start = self.pos();
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         let template_loc = if qual.is_some() { self.eat_kw(Kw::Template) } else { None };
         let template_kw = template_loc.is_some();
         if let Some(q) = qual
@@ -2499,6 +2533,7 @@ impl Parser<'_, '_> {
             let tl = self.bump().span.lo;
             let name = self.ident()?;
             let nl = self.bump().span.lo;
+            self.note_wname(nl, link);
             let this = self.s.act_on_this(begin);
             return Some(self.s.act_on_member_destructor_q(
                 this,
@@ -2516,6 +2551,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let nl = self.bump().span.lo;
+        self.note_wname(nl, link);
         if let Some(q) = qual
             && let Some(nns) = self.s.dep_member_nns(q, name, template_kw && self.at(Punct::Less))
         {
@@ -2699,8 +2735,10 @@ impl Parser<'_, '_> {
         begin: Loc,
         template_kw: Option<Loc>,
     ) -> PExpr {
+        let link = self.nns_link;
         let nl = self.loc();
         let name = self.parse_operator_function_name()?;
+        self.note_wname(nl, link);
         if self.at_operator_template_args(name, Some(q), template_kw) {
             return self.parse_operator_template_id(name, nl, Some((q, begin)), template_kw);
         }

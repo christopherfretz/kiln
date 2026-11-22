@@ -693,6 +693,9 @@ pub struct Args {
     /// every analysed function body, in clang's `debug.DumpCFG` layout
     /// (spec/sema.md §7.5.1).
     pub dump_cfg: bool,
+    /// `-fkiln-dump-written-refs` (`-fsyntax-only` and codegen): record the
+    /// written-reference table and print it (spec/ast.md §18.6).
+    pub dump_written_refs: bool,
     /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
@@ -2018,6 +2021,7 @@ impl Args {
             }
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
+            "-fkiln-dump-written-refs" => self.dump_written_refs = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
             "-fkiln-bmi-image" => self.bmi_image = true,

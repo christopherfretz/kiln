@@ -695,6 +695,7 @@ impl Parser<'_, '_> {
             return;
         }
         self.s.act_on_concept_head();
+        let wmark = self.s.written_ref_mark();
         // The constraint-expression is an unevaluated operand (clang's
         // `ParseConceptDefinition`; [expr.prim.id.general]/4 lets it name
         // a non-static data member, `V || A::y`). It is also treated as
@@ -712,7 +713,8 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return;
         };
-        self.s.act_concept(head, name, name_loc, e);
+        let c = self.s.act_concept(head, name, name_loc, e);
+        self.s.claim_written_refs(wmark, Some(c));
         self.expect_semi_after("concept definition");
     }
 

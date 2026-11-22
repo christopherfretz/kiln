@@ -1,0 +1,32 @@
+20:19-20:24  nns  'outer' -> outer@8:11 in=(tu)
+21:12-21:17  nns  'outer' -> outer@8:11 in=(tu)
+21:19-21:24  nns  'inner' -> outer::inner@9:11 q=21:12 in=(tu)
+24:45-24:46  nns  'T' -> T@24:17 in=via_param@24:24
+24:48-24:53  expr  'count' -> (dependent) q=24:45 in=via_param@24:24
+27:10-27:15  nns  'outer' -> outer@8:11 in=qualified@26:5
+27:17-27:22  nns  'inner' -> outer::inner@9:11 q=27:10 in=qualified@26:5
+27:24-27:25  expr  'f' -> outer::inner::f@10:5 q=27:17 in=qualified@26:5
+27:32-27:37  nns  'outer' -> outer@8:11 q=:: in=qualified@26:5
+27:39-27:44  nns  'inner' -> outer::inner@9:11 q=27:32 in=qualified@26:5
+27:46-27:47  expr  'f' -> outer::inner::f@10:5 q=27:39 in=qualified@26:5
+27:52-27:57  nns  'alias' -> alias@20:11 in=qualified@26:5
+27:59-27:60  expr  'f' -> outer::inner::f@10:5 q=27:52 in=qualified@26:5
+27:67-27:73  expr  'global' -> global@22:5 q=:: in=qualified@26:5
+28:10-28:15  nns  'outer' -> outer@8:11 in=qualified@26:5
+28:17-28:22  nns  'inner' -> outer::inner@9:11 q=28:10 in=qualified@26:5
+28:24-28:25  nns  'S' -> outer::inner::S@11:8 q=28:17 in=qualified@26:5
+28:27-28:32  expr  'count' -> outer::inner::S::count@12:14 q=28:24 in=qualified@26:5
+28:35-28:37  nns  'SS' -> SS@21:7 in=qualified@26:5
+28:39-28:44  expr  'count' -> outer::inner::S::count@12:14 q=28:35 in=qualified@26:5
+28:47-28:52  nns  'alias' -> alias@20:11 in=qualified@26:5
+28:54-28:55  nns  'S' -> outer::inner::S@11:8 q=28:47 in=qualified@26:5
+28:57-28:59  expr  'k1' -> outer::inner::S::k1@13:19 q=28:54 in=qualified@26:5
+28:62-28:67  nns  'alias' -> alias@20:11 in=qualified@26:5
+28:69-28:70  nns  'S' -> outer::inner::S@11:8 q=28:62 in=qualified@26:5
+28:72-28:76  nns  'Kind' -> outer::inner::S::Kind@13:8 q=28:69 in=qualified@26:5
+28:78-28:80  expr  'k0' -> outer::inner::S::k0@13:15 q=28:72 in=qualified@26:5
+29:10-29:15  nns  'outer' -> outer@8:11 in=qualified@26:5
+29:17-29:22  nns  'inner' -> outer::inner@9:11 q=29:10 in=qualified@26:5
+29:24-29:27  nns  'Box' -> outer::inner::Box@15:27 q=29:17 in=qualified@26:5
+29:34-29:38  expr  'size' -> outer::inner::Box<int>::size@16:24 q=29:24 in=qualified@26:5
+29:41-29:50  expr  'via_param' -> via_param<SS>@24:24 found=via_param@24:24 in=qualified@26:5

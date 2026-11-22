@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::types::UnaryTransformKind;
+use kiln_ast::written_refs::RefQualifier;
 use kiln_ast::{AttrId, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::LiteralOptions;
@@ -134,6 +135,17 @@ pub struct Parser<'a, 'sm> {
     /// `LHS = ExprError()`). An expression statement then skips to its
     /// `;` with no "expected ';'" (`parse_expression_statement`).
     pub(crate) expr_invalid: bool,
+    /// The written-reference table (spec/ast.md §18): the expression or
+    /// member name the innermost id-expression or member access being
+    /// parsed consumed, with its qualifier link, recorded once the
+    /// expression is built ([`crate::written_refs`]).
+    pub(crate) wname: Option<(Span, RefQualifier)>,
+    /// The qualifier link the last nested-name-specifier parsed leaves
+    /// for the name after it (its last component's entry).
+    pub(crate) nns_link: RefQualifier,
+    /// The written-reference mark of the member declaration being
+    /// parsed, claimed by its declarators (spec/ast.md §18.3).
+    pub(crate) member_ref_mark: Option<kiln_ast::written_refs::RefMark>,
     /// The `(` of a C-style cast's parenthesized operand, `(T)(a, b)`:
     /// clang parses it as a `ParenListExpr` whose commas are built at
     /// the `(` (`MaybeConvertParenListExprToParenExpr`).
@@ -407,6 +419,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             expr_invalid: false,
+            wname: None,
+            nns_link: RefQualifier::NONE,
+            member_ref_mark: None,
             cast_paren_list: None,
             paren_callee: None,
             comma_loc: None,
@@ -480,7 +495,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
     /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
     /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
-    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `type_id_spec_loc`, `stmt_attrs_loc`, `fp_intrin` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `member_ds_range`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `type_id_attrs`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `type_id_spec_loc`, `stmt_attrs_loc`, `fp_intrin`, `wname`, `nns_link`, `member_ref_mark` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
     /// | `trace` | transient | test-only parse trace |
     ///
     /// No field is state: the late-parse lists end with their class, and
@@ -515,6 +530,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 trace: _,
             in_stmt_expr,
             expr_invalid: _,
+            wname: _,
+            nns_link: _,
+            member_ref_mark: _,
             cast_paren_list: _,
             paren_callee: _,
             comma_loc: _,
@@ -2124,12 +2142,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// [`Parser::parse_nested_name_nns`], stopping before the `::` at
     /// token index `limit` (left unconsumed) when there is one.
+    #[allow(clippy::too_many_lines, reason = "one loop over the specifier's components")]
     pub(crate) fn parse_nested_name_upto(
         &mut self,
         limit: Option<usize>,
     ) -> Result<Option<Qualifier>, ()> {
         let mut start = self.loc();
         let mut qual: Option<(DeclId, NnsId)> = None;
+        // The written-reference qualifier link (spec/ast.md §18.4).
+        let mut link = RefQualifier::NONE;
         if self.decltype_scope_end(self.pos).is_some() {
             self.annotate_decltype_scope();
         }
@@ -2140,6 +2161,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         } else if self.at(Punct::ColonColon) {
             self.bump();
             qual = Some((self.s.ast.tu, self.s.nns_global()));
+            link = RefQualifier::GLOBAL;
         }
         loop {
             // `nns template name<args>::` ([temp.names]/5).
@@ -2151,7 +2173,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             let next = self.tok_at(self.pos + k + 1).kind;
             if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
                 let stop = limit == Some(self.pos + 1);
-                let loc = self.bump().span.lo;
+                let name_span = self.bump().span;
+                let loc = name_span.lo;
                 let cc = self.tok().span.lo;
                 if !stop {
                     self.bump();
@@ -2160,6 +2183,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 let q = self.s.act_on_nested_name_component(qual, name, loc);
                 self.s.nns_start = None;
                 let q = q.ok_or(())?;
+                if self.s.records_written_refs() {
+                    link = self.s.note_written_nns(name_span, q.1, None, link);
+                }
                 // The next name is looked up in `q`, which must be
                 // complete; a pointer-to-member's class need not be
                 // ([dcl.mptr]/1, clang checks only at lookup).
@@ -2223,7 +2249,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 self.emit(d);
             }
             let kw = if template_kw { Some(self.bump().span.lo) } else { None };
-            let loc = self.bump().span.lo;
+            let name_span = self.bump().span;
+            let loc = name_span.lo;
             let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
             let stop = limit == Some(self.pos);
             if !stop {
@@ -2232,11 +2259,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.s.nns_start = Some(start);
             let q = self.nested_name_template_id(class, qual, name, &args, kw, loc);
             self.s.nns_start = None;
-            qual = Some(q?);
+            let q = q?;
+            if self.s.records_written_refs() {
+                let tmpl = match class {
+                    NameClass::TypeTemplate(d) => Some(d),
+                    _ => None,
+                };
+                link = self.s.note_written_nns(name_span, q.1, tmpl, link);
+            }
+            qual = Some(q);
             if stop {
                 break;
             }
         }
+        self.nns_link = link;
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
     }
 

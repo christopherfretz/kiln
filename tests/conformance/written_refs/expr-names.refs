@@ -1,0 +1,32 @@
+11:36-11:37  expr  'a' -> a@11:19 in=operator==@11:6
+11:38-11:39  member  'x' -> V::x@10:16 in=operator==@11:6
+11:43-11:44  expr  'b' -> b@11:24 in=operator==@11:6
+11:45-11:46  member  'x' -> V::x@10:16 in=operator==@11:6
+12:64-12:65  expr  'n' -> n@12:52 in=operator""_k@12:20
+13:42-13:43  expr  't' -> t@13:30 in=twice@13:22
+13:46-13:47  expr  't' -> t@13:30 in=twice@13:22
+19:11-19:12  expr  'm' -> m@18:15 in=pick@18:5
+20:8-20:12  nns  'Mode' -> Mode@9:12 in=pick@18:5
+20:14-20:16  expr  'on' -> Mode::on@9:19 q=20:8 in=pick@18:5
+21:12-21:13  expr  'c' -> c@18:24 in=pick@18:5
+21:17-21:20  expr  'red' -> red@8:14 in=pick@18:5
+22:8-22:12  nns  'Mode' -> Mode@9:12 in=pick@18:5
+22:14-22:17  expr  'off' -> Mode::off@9:23 q=22:8 in=pick@18:5
+25:21-25:24  expr  'use' -> use@16:5 in=fp@25:9
+26:11-26:18  expr  'counter' -> counter@15:5 in=n@26:7
+26:21-26:23  expr  'fp' -> fp@25:9 in=n@26:7
+26:24-26:29  expr  'green' -> green@8:19 in=n@26:7
+27:15-27:16  expr  'n' -> n@26:7 in=add@27:8
+27:19-27:20  expr  'c' -> c@18:24 in=add@27:8
+27:38-27:39  expr  'n' -> n@26:7 in=pick(Mode, Color)::(lambda)::operator()@27:14
+27:42-27:43  expr  'k' -> k@27:26 in=pick(Mode, Color)::(lambda)::operator()@27:14
+27:46-27:47  expr  'c' -> c@18:24 in=pick(Mode, Color)::(lambda)::operator()@27:14
+29:15-29:25  expr  'operator==' -> operator==@11:6 in=same@29:8
+29:26-29:27  expr  'a' -> a@28:5 in=same@29:8
+29:29-29:30  expr  'b' -> b@28:11 in=same@29:8
+30:10-30:13  expr  'add' -> add@27:8 in=pick@18:5
+30:14-30:19  expr  'twice' -> twice<int>@13:22 found=twice@13:22 in=pick@18:5
+30:25-30:26  expr  'n' -> n@26:7 in=pick@18:5
+30:31-30:35  expr  'zero' -> zero@14:32 found=zero@14:32 in=pick@18:5
+30:43-30:47  expr  'same' -> same@29:8 in=pick@18:5
+30:54-30:66  expr  'operator""_k' -> operator""_k@12:20 in=pick@18:5

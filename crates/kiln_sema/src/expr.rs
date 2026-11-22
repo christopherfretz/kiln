@@ -3737,6 +3737,7 @@ impl Sema<'_, '_> {
                 && let Some(m) = self.ovl.members.remove(&x)
             {
                 let at = self.ast.exprs.get(x).loc();
+                self.resolve_written_ref(x, d, Some(f));
                 let r = self.finish_member_winner(&m, d, f, at);
                 let r = self.rebuild_parens(e, r);
                 return self.address_of(r, loc);

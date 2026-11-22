@@ -438,10 +438,11 @@ impl Sema<'_, '_> {
             && let Some(e) =
                 self.implicit_member_template_id(name, cands, naming, nns, explicit, loc)
         {
-            if self.member_overload(e).is_none() {
+            let Some(x) = self.member_overload(e) else {
                 // `this` is type-dependent: resolved at instantiation.
                 return ControlFlow::Break(Some(e));
-            }
+            };
+            self.retarget_written_ref(ule, x);
             return ControlFlow::Break(self.resolve_member_call(e, args, braced));
         }
         if self.lacks_implicit_object(cands) {
@@ -824,6 +825,7 @@ impl Sema<'_, '_> {
         ule: ExprId,
         single: bool,
     ) -> ExprId {
+        self.resolve_written_ref(ule, d, Some(found));
         let instance = self.is_class_member_ref(d);
         if let Some(naming) = naming {
             // [class.access.base]/5: the object is `*this` for an

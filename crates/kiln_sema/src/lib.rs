@@ -163,6 +163,7 @@ mod vexing;
 mod visibility;
 mod vla;
 mod weak_import;
+mod written_refs;
 mod x86_interrupt;
 
 use kiln_abi::Target;

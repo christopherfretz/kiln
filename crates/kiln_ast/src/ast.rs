@@ -95,6 +95,9 @@ pub struct Ast {
     /// assertion sema built outside a template pattern (spec/contracts.md
     /// §6.3): recorded by sema, read by codegen.
     pub contract_sites: crate::slot::ColdMap<crate::ids::StmtId, crate::stmt::ContractSite>,
+    /// The written-reference table (§18): opt-in, off by default;
+    /// transient in snapshots.
+    pub written_refs: crate::written_refs::WrittenRefs,
     symbols: Arc<Interner>,
     inst: InstantiationMeter,
 }
@@ -321,6 +324,7 @@ impl Ast {
             lang_c: false,
             freestanding: false,
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
+            written_refs: crate::written_refs::WrittenRefs::default(),
             symbols,
             inst: InstantiationMeter::default(),
         }
@@ -1417,6 +1421,12 @@ impl Ast {
         &self.symbols
     }
 
+    /// The written-reference table's position now, for a declaration's
+    /// claim on the names parsed after it (§18.3).
+    pub fn written_ref_mark(&self) -> crate::written_refs::RefMark {
+        self.written_refs.mark(self.decls.len())
+    }
+
     /// The memory report of every arena (spec/ast.md §2.3), the
     /// redeclaration index's change journals (`journal.*`), plus the
     /// derived `instantiation.retained` row (count = instantiations, bytes
@@ -1447,6 +1457,9 @@ impl Ast {
         r.push(self.lookup.journal.mem_row("journal.lookup"));
         r.push(self.decls.ty_journal.mem_row("journal.decl_types"));
         r.push(self.redecls.journal.mem_row("journal.redecls"));
+        if let Some(row) = self.written_refs.mem_row() {
+            r.push(row);
+        }
         r.push(MemRow::new(
             "instantiation.retained",
             self.inst.count,
