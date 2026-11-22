@@ -730,6 +730,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Evaluation sessions record a class template specialization's
+  instantiation (with its member classes and enumerations), an exception
+  specification instantiated or computed outside the Oven's `noexcept`
+  query, a cached constraint satisfaction and atomic constraint, and a
+  default member initializer as units of their own (WP-2075,
+  spec/eval-session.md §5.1): a run that reaches such work done by an
+  earlier unit, through a different instantiation, a `noexcept`
+  operator, another constrained template or constructor, or a
+  reflection query, is charged its `nested_steps`/`nested_calls` and
+  shown its diagnostics, as a fresh session's run is.
 - Evaluation sessions: a member function of a class template
   specialization instantiated by another function's instantiation and
   compiled later in the same run is now recorded with that

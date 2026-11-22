@@ -763,6 +763,63 @@ impl Sema<'_, '_> {
         self.ast.definition(r).is_none().then_some(r)
     }
 
+    /// [`Sema::undefined_spec`] for a request that instantiates the class
+    /// when it is undefined: in an evaluation session's run, a class found
+    /// defined reaches its kept instantiation (spec/eval-session.md §5.1
+    /// `Class`).
+    pub(crate) fn undefined_spec_at(&mut self, q: QualType, loc: Loc) -> Option<DeclId> {
+        let r = self.undefined_spec(q);
+        if r.is_none() && self.eval_replay.is_some() {
+            self.sess_reach_class(q, loc);
+        }
+        r
+    }
+
+    /// In a session's run: the class or enumeration `q` names (through
+    /// arrays), if it was instantiated in a run, is reached at `loc`.
+    pub(crate) fn sess_reach_class(&mut self, q: QualType, loc: Loc) {
+        let mut t = q;
+        while self.ast.types.is_array(t)
+            && let Some(e) = self.ast.types.element(t)
+        {
+            t = e;
+        }
+        if let Some(r) = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t)) {
+            self.sess_reach_class_decl(r, loc);
+        }
+    }
+
+    /// [`Sema::undefined_spec`] for a reflection query that completes `t`
+    /// when it is undefined (`oven` the evaluation's; `gate`: the query's
+    /// context when it instantiates only outside a trial evaluation): in a
+    /// session's run, a class found defined where the query would have
+    /// instantiated it reaches its kept instantiation, as
+    /// [`Sema::undefined_spec_at`].
+    pub(crate) fn meta_undefined_spec(
+        &mut self,
+        t: QualType,
+        gate: Option<&kiln_oven::MetaCtx>,
+        loc: Loc,
+        oven: &mut kiln_oven::Oven,
+    ) -> bool {
+        if self.undefined_spec(t).is_some() {
+            return true;
+        }
+        if self.eval_replay.is_some()
+            && gate.is_none_or(|c| !c.trial && self.inst.eval_loc.is_some())
+        {
+            self.lend_oven(oven, |s| s.sess_reach_class(t, loc));
+        }
+        false
+    }
+
+    /// In a session's run: class or enumeration `r`, when defined by an
+    /// instantiation recorded in a run, is reached at `loc`.
+    pub(crate) fn sess_reach_class_decl(&mut self, r: DeclId, loc: Loc) {
+        let key = crate::session::Key::Class(self.ast.first(r));
+        self.sess_reach_at(&key, loc);
+    }
+
     /// The member enumeration of a class template specialization that `q`
     /// names, if not yet defined: a scoped one is defined only when
     /// required ([temp.inst]/3, `Substituter::enum_decl`).
@@ -780,6 +837,8 @@ impl Sema<'_, '_> {
             && self.ast.instantiated_from(e).is_some()
         {
             let _ = self.instantiate_class(e, loc, false);
+        } else if self.eval_replay.is_some() {
+            self.sess_reach_class_decl(e, loc);
         }
     }
 
@@ -798,7 +857,7 @@ impl Sema<'_, '_> {
     /// (`lookupStdTypeTraitMember`, the `std::tuple_size` and
     /// `std::tuple_element` of a structured binding).
     pub(crate) fn require_complete_unnoted(&mut self, q: QualType, loc: Loc) -> bool {
-        if let Some(r) = self.undefined_spec(q) {
+        if let Some(r) = self.undefined_spec_at(q, loc) {
             let _ = self.instantiate_class(r, loc, true);
         }
         self.is_complete(q)
@@ -841,7 +900,7 @@ impl Sema<'_, '_> {
     /// definition, a construction), so a class found complete is noted
     /// as required ([`Sema::note_complete_required`]).
     pub(crate) fn instantiation_fails(&mut self, q: QualType, loc: Loc) -> bool {
-        if let Some(r) = self.undefined_spec(q)
+        if let Some(r) = self.undefined_spec_at(q, loc)
             && !self.instantiate_class(r, loc, true)
             && self.ast.decls.get(r).has(DeclFlags::INVALID)
             && self.ast.definition(r).is_some()
@@ -856,7 +915,7 @@ impl Sema<'_, '_> {
     /// As [`Sema::require_complete`], but an undefined template is not
     /// diagnosed (the caller reports the incomplete type).
     pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool {
-        if let Some(r) = self.undefined_spec(q) {
+        if let Some(r) = self.undefined_spec_at(q, loc) {
             let _ = self.instantiate_class(r, loc, false);
         }
         self.is_complete(q)
@@ -883,6 +942,8 @@ impl Sema<'_, '_> {
             && self.ast.definition(d).is_none()
         {
             let _ = self.instantiate_class(d, loc, false);
+        } else if self.eval_replay.is_some() {
+            self.sess_reach_class_decl(d, loc);
         }
     }
 
@@ -895,9 +956,17 @@ impl Sema<'_, '_> {
         if self.clang_compat >= 22 { start.unwrap_or(loc) } else { loc }
     }
 
+    /// [`Sema::nns_poi`] without consuming [`Sema::nns_start`].
+    pub(crate) fn nns_poi_peek(&self, loc: Loc) -> Loc {
+        if self.clang_compat >= 22 { self.nns_start.unwrap_or(loc) } else { loc }
+    }
+
     /// A class named in a nested-name-specifier must be complete
     /// ([expr.prim.id.qual]/1); false after a diagnostic.
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
+        if self.eval_replay.is_some() && self.undefined_spec(q).is_none() {
+            self.sess_reach_class(q, self.nns_poi_peek(loc));
+        }
         if let Some(r) = self.undefined_spec(q) {
             let poi = self.nns_poi(loc);
             if self.instantiate_class(r, poi, true) {
@@ -1192,6 +1261,45 @@ impl Sema<'_, '_> {
         matched
     }
 
+    /// [`Sema::instantiate_class_as`] whose pattern has no definition: the
+    /// [temp.inst]/2 diagnostic (when `diagnose`), else the caller's
+    /// incomplete-type report.
+    fn pattern_undefined(
+        &mut self,
+        spec: DeclId,
+        matched: Option<super::order::PartialMatch>,
+        pattern: DeclId,
+        poi: Loc,
+        diagnose: bool,
+    ) {
+        if let Some(m) = matched
+            && let Some((i, _)) = self.ast.spec_info(spec)
+        {
+            // Remembered for the explicit-instantiation diagnostic.
+            self.ast.templates.update_spec(i, |s| {
+                s.from = m.partial;
+                s.from_args = Some(m.args);
+            });
+        }
+        if diagnose {
+            let t = self.tag_type(spec);
+            // clang notes the latest declaration (one after
+            // `template<> template<...>` is a new decl,
+            // [temp.expl.spec]/16; kiln adds none for a plain
+            // redeclaration).
+            let at = if matched.is_some() { pattern } else { self.ast.latest(pattern) };
+            let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
+            let d = self
+                .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
+                .arg(self.decl_ty_str(t))
+                .with_note(note);
+            self.emit(d);
+            self.inst.undefined_diagnosed.set(Some(spec));
+        } else {
+            self.inst.undefined_diagnosed.set(None);
+        }
+    }
+
     /// [`Sema::instantiate_class`]; `implicit` relocates an implicit
     /// instantiation at its pattern's definition (false for an explicit
     /// instantiation, already located at its template-name).
@@ -1203,6 +1311,11 @@ impl Sema<'_, '_> {
         implicit: bool,
     ) -> bool {
         if self.ast.definition(spec).is_some() {
+            // Instantiated by an earlier unit of an evaluation session's
+            // run: this request reaches it (spec/eval-session.md §5.1).
+            if self.eval_replay.is_some() {
+                self.sess_reach_class_decl(spec, poi);
+            }
             return true;
         }
         if self.defining.contains(&spec) || self.inst.selecting.contains(&spec) || self.inst.fatal {
@@ -1244,32 +1357,7 @@ impl Sema<'_, '_> {
             return false;
         };
         let Some(def) = self.ast.definition(pattern) else {
-            if let Some(m) = matched
-                && let Some((i, _)) = self.ast.spec_info(spec)
-            {
-                // Remembered for the explicit-instantiation diagnostic.
-                self.ast.templates.update_spec(i, |s| {
-                    s.from = m.partial;
-                    s.from_args = Some(m.args);
-                });
-            }
-            if diagnose {
-                let t = self.tag_type(spec);
-                // clang notes the latest declaration (one after
-                // `template<> template<...>` is a new decl,
-                // [temp.expl.spec]/16; kiln adds none for a plain
-                // redeclaration).
-                let at = if matched.is_some() { pattern } else { self.ast.latest(pattern) };
-                let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
-                let d = self
-                    .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
-                    .arg(self.decl_ty_str(t))
-                    .with_note(note);
-                self.emit(d);
-                self.inst.undefined_diagnosed.set(Some(spec));
-            } else {
-                self.inst.undefined_diagnosed.set(None);
-            }
+            self.pattern_undefined(spec, matched, pattern, poi, diagnose);
             return false;
         };
         // The pattern is still being defined (`basic<long>::m` inside
@@ -1317,11 +1405,17 @@ impl Sema<'_, '_> {
         if matched.is_none() && self.ast.has_preferred_name_attr(tmpl) {
             self.ast.templates.mark_preferred_named(self.ast.first(spec));
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one unit may need the class (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
         self.replay_dependent_access(def, spec);
         self.note_used_attr_members(spec, poi);
+        if unit.is_some() {
+            self.sess_window_end(crate::session::Key::Class(self.ast.first(spec)), unit);
+        }
         self.pop_inst_frame();
         // clang `InstantiateClass` returns the specialization's
         // invalidity: the use that instantiated it fails quietly (`A<int>
@@ -1408,9 +1502,11 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::MemberClass, r, pattern, poi) {
             return false;
         }
+        let unit = self.sess_unit_begin();
         let parent = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
         self.replay_dependent_access(def, r);
+        self.sess_window_end(crate::session::Key::Class(first), unit);
         self.pop_inst_frame();
         // As for a specialization: an instantiation that failed leaves
         // the class complete but invalid ([`Sema::instantiation_fails`]).
@@ -1442,6 +1538,7 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::Enum, e, def, poi) {
             return false;
         }
+        let unit = self.sess_unit_begin();
         let parent = self.ast.decls.get(e).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| {
             let mut sub = Substituter::new(s, args);
@@ -1449,6 +1546,9 @@ impl Sema<'_, '_> {
             sub.map_contexts(outer);
             let _ = sub.enum_definition(e, def);
         });
+        if unit.is_some() {
+            self.sess_window_end(crate::session::Key::Class(self.ast.first(e)), unit);
+        }
         self.pop_inst_frame();
         self.ast.definition(e).is_some()
     }
@@ -2152,10 +2252,14 @@ impl Sema<'_, '_> {
     /// `poi` ([temp.inst]/3; clang `InstantiateInClassInitializer`).
     /// Nothing happens for a field without one.
     pub(crate) fn instantiate_nsdmi(&mut self, f: DeclId, poi: Loc) {
-        if self.inst.deferred_nsdmis.is_empty() {
+        let Some(&(spec, init)) = self.inst.deferred_nsdmis.get(&f) else {
+            // Instantiated by an earlier unit of an evaluation session's
+            // run: this use reaches it (spec/eval-session.md §5.1).
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Nsdmi(f), poi);
+            }
             return;
-        }
-        let Some(&(spec, init)) = self.inst.deferred_nsdmis.get(&f) else { return };
+        };
         let pattern = self.ast.instantiated_from(f).unwrap_or(f);
         // Still unparsed: the caller diagnoses the use; the entry stays
         // so that a SFINAE use does not lose it.
@@ -2172,6 +2276,9 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one constructor may use it (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| {
             s.act_on_start_delayed_class(spec);
@@ -2181,6 +2288,7 @@ impl Sema<'_, '_> {
             sub.nsdmi(f, init);
             s.act_on_finish_delayed_class(spec);
         });
+        self.sess_window_end(crate::session::Key::Nsdmi(f), unit);
         self.pop_inst_frame();
     }
 

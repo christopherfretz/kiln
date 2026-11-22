@@ -2057,6 +2057,8 @@ impl Sema<'_, '_> {
             && (self.ast.spec_info(r).is_some() || self.ast.instantiated_from(r).is_some())
         {
             let _ = self.instantiate_class(r, d.loc, false);
+        } else if self.eval_replay.is_some() {
+            self.sess_reach_class_decl(r, d.loc);
         }
         let mut seen = vec![self.ast.first(r)];
         let mut work = vec![r];

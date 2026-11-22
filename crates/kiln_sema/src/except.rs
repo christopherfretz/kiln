@@ -858,7 +858,14 @@ impl Sema<'_, '_> {
     /// potentially throwing, as clang (`EST_None`). A pattern still
     /// awaiting its complete-class context leaves `f` waiting.
     pub(crate) fn instantiate_exception_spec(&mut self, f: DeclId, poi: Loc) {
-        let Some(&pattern) = self.uninstantiated_exc.get(&f) else { return };
+        let Some(&pattern) = self.uninstantiated_exc.get(&f) else {
+            // Instantiated by an earlier unit of an evaluation session's
+            // run: this request reaches it (spec/eval-session.md §5.1).
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Exc(self.ast.first(f)), poi);
+            }
+            return;
+        };
         if self.exc_unparsed(pattern) {
             return;
         }
@@ -929,6 +936,9 @@ impl Sema<'_, '_> {
         if let Some(l) = frame_args {
             self.set_frame_args(l);
         }
+        // In an evaluation session's run: a unit of its own, as more than
+        // one unit may need the specification (spec/eval-session.md §5.1).
+        let unit = self.sess_unit_begin();
         let params = |s: &Self, d: DeclId| -> Vec<DeclId> {
             s.ast
                 .decls
@@ -1004,6 +1014,9 @@ impl Sema<'_, '_> {
             s.act_on_end_this_scope(this);
             r
         });
+        if unit.is_some() {
+            self.sess_window_end(crate::session::Key::Exc(self.ast.first(f)), unit);
+        }
         self.pop_inst_frame();
         r
     }

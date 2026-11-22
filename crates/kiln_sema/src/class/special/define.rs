@@ -252,8 +252,15 @@ impl Sema<'_, '_> {
         if !self.diags.is_enabled_at(id, d.loc()) {
             return Vec::new();
         }
-        let notes: Vec<Diag> = self
-            .synth
+        let notes = self.synth_context_notes();
+        self.synth_noted.set(n);
+        notes
+    }
+
+    /// Every note of the implicit definitions in progress, innermost
+    /// first ([`Self::synth_notes`] without its once-per-depth rule).
+    pub(crate) fn synth_context_notes(&self) -> Vec<Diag> {
+        self.synth
             .iter()
             .rev()
             .filter(|c| c.kind != SynthKind::Inheriting)
@@ -296,9 +303,7 @@ impl Sema<'_, '_> {
                         .arg(self.ty_arg(self.tag_type(class)))
                 }
             })
-            .collect();
-        self.synth_noted.set(n);
-        notes
+            .collect()
     }
 
     pub(crate) fn push_synth(&mut self, member: DeclId, kind: SynthKind, loc: Loc) -> Saved {

@@ -154,7 +154,7 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         let Reflectee::Type(t) = self.ast.reflections.get(r) else { return Ok(None) };
         let Some(d) = self.ast.types.as_record(t) else { return Ok(None) };
-        if self.undefined_spec(t).is_some() {
+        if self.meta_undefined_spec(t, Some(ctx), loc, oven) {
             if !self.meta_may_instantiate(ctx) {
                 return Err(MetaError::silent());
             }
@@ -649,7 +649,9 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         let def = match self.ast.reflections.get(r) {
             Reflectee::Type(t) => {
-                if self.undefined_spec(t).is_some() && self.meta_may_instantiate(ctx) {
+                if self.meta_undefined_spec(t, Some(ctx), loc, oven)
+                    && self.meta_may_instantiate(ctx)
+                {
                     self.lend_oven(oven, |s| s.require_complete(t, loc));
                 }
                 self.ast.types.as_enum(t).and_then(|d| self.enum_definition(d))
@@ -828,7 +830,7 @@ impl Sema<'_, '_> {
             }
             _ => return bad(),
         };
-        if self.undefined_spec(t).is_some() && self.meta_may_instantiate(ctx) {
+        if self.meta_undefined_spec(t, Some(ctx), loc, oven) && self.meta_may_instantiate(ctx) {
             self.lend_oven(oven, |s| s.require_complete(t, loc));
         }
         if self.meta_hidden_completion(t, oven) {

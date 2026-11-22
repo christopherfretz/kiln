@@ -123,7 +123,7 @@ impl Sema<'_, '_> {
         let Reflectee::Type(t) = self.ast.reflections.get(ty) else {
             return fail(loc, format!("'{}' does not reflect a type", self.reflection_str(ty)));
         };
-        if self.undefined_spec(t).is_some() {
+        if self.meta_undefined_spec(t, None, loc, oven) {
             self.lend_oven(oven, |s| s.require_complete(t, loc));
         }
         if self.ast.types.is_function(t)

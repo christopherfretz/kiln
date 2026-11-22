@@ -440,7 +440,7 @@ impl Sema<'_, '_> {
         if self.ast.types.is_dependent(t) {
             return Ok(false);
         }
-        if self.undefined_spec(t).is_some() {
+        if self.meta_undefined_spec(t, Some(ctx), ctx.loc, oven) {
             if !self.may_instantiate(ctx) {
                 return Err(MetaError::silent());
             }

@@ -86,6 +86,11 @@ impl Sema<'_, '_> {
         let key = (c, self.ast.types.canonical_args(args));
         if let Some(&id) = self.inst.concepts.sat_cache.get(&key) {
             self.inst.concepts.counters.cache_hits += 1;
+            // Checked by an earlier unit of an evaluation session's run:
+            // this check reaches it (spec/eval-session.md §5.1 `Sat`).
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Sat(key.0, key.1), loc);
+            }
             return id;
         }
         if self.inst.concepts.checking.contains(&key) {
@@ -105,7 +110,7 @@ impl Sema<'_, '_> {
         let a: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         let levels = self.prior_levels(c, depth, &a);
         self.inst.concepts.checking.push(key);
-        let s = self.satisfy(c, &[e], &levels, args, loc);
+        let s = self.satisfy(c, &[e], &levels, args, loc, Some(key));
         self.inst.concepts.checking.pop();
         let id = self.inst.concepts.push(s);
         self.inst.concepts.sat_cache.insert(key, id);
@@ -146,6 +151,9 @@ impl Sema<'_, '_> {
         let cacheable = levels.levels.len() == 1;
         if cacheable && let Some(&id) = self.inst.concepts.sat_cache.get(&key) {
             self.inst.concepts.counters.cache_hits += 1;
+            if self.eval_replay.is_some() {
+                self.sess_reach_at(&crate::session::Key::Sat(key.0, key.1), loc);
+            }
             return id;
         }
         // A constraint whose satisfaction needs itself (a constructor
@@ -163,7 +171,7 @@ impl Sema<'_, '_> {
         if cacheable {
             self.inst.concepts.checking.push(key);
         }
-        let s = self.satisfy(tmpl, exprs, levels, shown, loc);
+        let s = self.satisfy(tmpl, exprs, levels, shown, loc, cacheable.then_some(key));
         if cacheable {
             self.inst.concepts.checking.pop();
         }
@@ -371,7 +379,9 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Checks `exprs` in order under a `ConstraintsCheck` frame.
+    /// Checks `exprs` in order under a `ConstraintsCheck` frame; `unit`:
+    /// the satisfaction cache's key of a cached check, which is a unit in
+    /// an evaluation session's run (spec/eval-session.md §5.1 `Sat`).
     fn satisfy(
         &mut self,
         entity: DeclId,
@@ -379,6 +389,7 @@ impl Sema<'_, '_> {
         levels: &MultiLevelArgs,
         shown: ArgListId,
         loc: Loc,
+        unit: Option<(DeclId, ArgListId)>,
     ) -> Satisfaction {
         let kind = if self.ast.decls.get(entity).kind() == kiln_ast::decl::DeclKind::Concept {
             FrameKind::ConceptCheck
@@ -389,6 +400,7 @@ impl Sema<'_, '_> {
             return Satisfaction { ok: false, records: Vec::new() };
         }
         self.set_frame_args(shown);
+        let window = unit.and_then(|_| self.sess_unit_begin());
         // Names in the constraints are looked up from the entity's
         // definition context, not from where satisfaction is checked
         // ([temp.constr.atomic]/3 substitutes into the template's
@@ -420,6 +432,9 @@ impl Sema<'_, '_> {
         });
         self.inst.suppress_access.set(suppress);
         self.srcloc.satisfying = srcloc;
+        if let Some((d, a)) = unit {
+            self.sess_window_end(crate::session::Key::Sat(d, a), window);
+        }
         self.pop_inst_frame();
         if ok {
             records.clear();
@@ -525,12 +540,28 @@ impl Sema<'_, '_> {
         {
             self.inst.concepts.counters.atom_hits += 1;
             recs.extend(r.iter().cloned());
-            return *ok;
+            let ok = *ok;
+            // Satisfied or not by an earlier unit of an evaluation
+            // session's run: this check reaches it (spec/eval-session.md
+            // §5.1 `Atom`).
+            if self.eval_replay.is_some() {
+                let unit = crate::session::Key::Atom(k.0, k.1.clone().into_boxed_slice());
+                let loc = self.begin_loc(e);
+                self.sess_reach_at(&unit, loc);
+            }
+            return ok;
         }
         self.inst.concepts.counters.atoms += 1;
         let errors = self.errors_so_far();
         let mut mine = Vec::new();
+        let window = key.as_ref().and_then(|_| self.sess_unit_begin_frameless());
         let ok = self.sat_atom_uncached(entity, e, levels, &mut mine);
+        if window.is_some()
+            && let Some(k) = &key
+        {
+            let unit = crate::session::Key::Atom(k.0, k.1.clone().into_boxed_slice());
+            self.sess_window_end(unit, window);
+        }
         if let Some(k) = key
             && self.errors_so_far() == errors
         {
@@ -853,7 +884,7 @@ impl Sema<'_, '_> {
         let c_levels = self.prior_levels(c, depth, &args);
         let shown = self.ast.types.arg_list(&args);
         self.inst.concepts.poisoned.push((c, mask));
-        let s = self.satisfy(c, &[ce], &c_levels, shown, at);
+        let s = self.satisfy(c, &[ce], &c_levels, shown, at, None);
         self.inst.concepts.poisoned.pop();
         if s.ok {
             return Some(true);

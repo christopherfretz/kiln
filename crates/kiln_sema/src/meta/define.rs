@@ -508,7 +508,7 @@ impl Sema<'_, '_> {
         };
         let d = *oven.dms(id).ok_or_else(MetaError::invalid)?;
         if !self.ast.types.is_reference(d.ty) {
-            if self.undefined_spec(d.ty).is_some() {
+            if self.meta_undefined_spec(d.ty, None, loc, oven) {
                 self.lend_oven(oven, |s| s.require_complete(d.ty, loc));
             }
             if !self.is_complete(d.ty)

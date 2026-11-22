@@ -45,7 +45,9 @@ impl Sema<'_, '_> {
                 let t = info_arg(args, 1)?;
                 let ty = match self.ast.reflections.get(t) {
                     Reflectee::Type(q) => {
-                        if self.undefined_spec(q).is_some() && self.meta_may_instantiate(ctx) {
+                        if self.meta_undefined_spec(q, Some(ctx), loc, oven)
+                            && self.meta_may_instantiate(ctx)
+                        {
                             self.lend_oven(oven, |s| s.require_complete(q, loc));
                         }
                         Some(q).filter(|&q| self.is_complete(q))
@@ -123,7 +125,7 @@ impl Sema<'_, '_> {
         // A class template specialization's annotations are its
         // instantiation's ([dcl.attr.annotation]/3).
         if let Reflectee::Type(t) = self.ast.reflections.get(r)
-            && self.undefined_spec(t).is_some()
+            && self.meta_undefined_spec(t, Some(ctx), loc, oven)
         {
             if !self.meta_may_instantiate(ctx) {
                 return Err(MetaError::silent());
