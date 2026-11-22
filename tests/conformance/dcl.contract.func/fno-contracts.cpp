@@ -6,7 +6,7 @@
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
 //@ oracle: gcc
-//@ diag: 14:13 error "expected ';' after top level declarator"
+//@ diag: 14:14 error "expected function body after function declarator"
 //@ diag: 15:17 error "use of undeclared identifier 'contract_assert'"
 #ifdef __cpp_contracts
 #error "__cpp_contracts defined with -fno-contracts"

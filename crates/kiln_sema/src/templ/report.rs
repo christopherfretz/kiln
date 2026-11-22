@@ -68,6 +68,7 @@ impl RowKind {
             | FrameKind::ConstraintsCheck
             | FrameKind::ConceptCheck
             | FrameKind::ConstraintSubstitution
+            | FrameKind::RequirementInstantiation
             | FrameKind::BindingInit
             | FrameKind::PriorArgSubstitution
             | FrameKind::BuildingDeductionGuides

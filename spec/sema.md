@@ -3841,8 +3841,14 @@ instantiation unless stated.
   "'noreturn' attribute does not appear on the first declaration" is
   checked against it too. A function declared `static` after a
   non-static one is rejected before clang merges attributes: neither is
-  given there. Tests
-  `tests/conformance/dcl.attr/attribute-after-definition*.{cpp,c}`.
+  given there. The redeclaration's errors are held until its attributes
+  are checked (`Sema::hold_after_def` / `release_after_def_held`,
+  WP-1848), so the warning (and the `noreturn` error) come first, as in
+  clang. A friend redeclaration in a class template is checked at the
+  template's definition (WP-1850). Tests
+  `tests/conformance/dcl.attr/attribute-after-definition*.{cpp,c}`; the
+  order: `crates/kiln_driver/tests/driver.rs`
+  `precede_definition_warning_before_redeclaration_errors`.
 - **Attribute namespaces** ([dcl.attr.grammar]/6, WP-373; clang
   `normalizeAttrScopeName`): the reserved spellings `__gnu__` and
   `_Clang` name the `gnu` and `clang` namespaces (`norm_attr_scope` in

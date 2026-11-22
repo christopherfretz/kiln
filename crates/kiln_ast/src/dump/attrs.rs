@@ -15,6 +15,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::UNINITIALIZED => "Uninitialized",
         AttrKind::LIKELY => "Likely",
         AttrKind::UNLIKELY => "Unlikely",
+        AttrKind::MUSTTAIL => "MustTail",
+        AttrKind::NOMERGE => "NoMerge",
         AttrKind::MAYBE_UNUSED | AttrKind::UNUSED => "Unused",
         AttrKind::NODISCARD => "WarnUnusedResult",
         AttrKind::NORETURN if a.syntax == AttrSyntax::Cxx11 => "CXX11NoReturn",

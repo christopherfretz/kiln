@@ -32,7 +32,18 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<(R, Result<(), Option<Diag>>)> {
-        if !self.sema.push_inst_frame(FrameKind::ConstraintSubstitution, entity, entity, loc) {
+        self.sfinae_as(FrameKind::ConstraintSubstitution, entity, loc, f)
+    }
+
+    /// [`Self::sfinae`] under a frame of `kind`.
+    fn sfinae_as<R>(
+        &mut self,
+        kind: FrameKind,
+        entity: DeclId,
+        loc: Loc,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<(R, Result<(), Option<Diag>>)> {
+        if !self.sema.push_inst_frame(kind, entity, entity, loc) {
             return None;
         }
         if let Some(fr) = self.sema.inst.stack.frames.last_mut() {
@@ -407,7 +418,8 @@ impl Substituter<'_, '_, '_> {
             }
             Requirement::Type(t, loc) => {
                 let _ = at;
-                match self.sfinae(body, loc, |s| s.ty(t, loc).ok()) {
+                let kind = FrameKind::RequirementInstantiation;
+                match self.sfinae_as(kind, body, loc, |s| s.ty(t, loc).ok()) {
                     Some((Some(x), Ok(()))) => {
                         *dependent |= self.sema.ast.types.qflags(x).intersects(
                             TypeFlags::DEPENDENT_INSTANTIATION.union(TypeFlags::UNEXPANDED_PACK),
@@ -530,7 +542,7 @@ impl Substituter<'_, '_, '_> {
             }
             (!s.sema.check_overload_use(x)).then_some(x)
         };
-        match self.sfinae(body, loc, checked) {
+        match self.sfinae_as(FrameKind::RequirementInstantiation, body, loc, checked) {
             Some((Some(x), Ok(()))) => Some(x),
             Some((_, st)) => {
                 let first = st.err().flatten();
@@ -601,14 +613,23 @@ impl Substituter<'_, '_, '_> {
 
 /// The "'X' would be invalid: msg" note for a failed substitution.
 fn invalid_record(s: &Sema<'_, '_>, first: Option<&Diag>, loc: Loc, text: String) -> SatRecord {
-    let at = first.map_or(loc, Diag::loc);
-    let msg = first.map(Diag::message).unwrap_or_default();
     let _ = s;
+    // clang's `*_unknown_substitution_error` when no diagnostic was
+    // captured (a hard error inside the substitution).
+    let Some(first) = first else {
+        return SatRecord {
+            id: DiagId::note_requirement_would_be_invalid_unknown,
+            loc,
+            select: true,
+            args: vec![text],
+            nested: None,
+        };
+    };
     SatRecord {
         id: DiagId::note_requirement_would_be_invalid,
-        loc: at,
+        loc: first.loc(),
         select: true,
-        args: vec![text, msg],
+        args: vec![text, first.message()],
         nested: None,
     }
 }

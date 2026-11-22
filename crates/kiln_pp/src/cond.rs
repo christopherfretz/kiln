@@ -44,6 +44,10 @@ pub trait IfContext {
     fn c(&self) -> Option<kiln_lex::CStd> {
         None
     }
+    /// The `-Wundef-prefix=` prefixes.
+    fn undef_prefixes(&self) -> &[String] {
+        &[]
+    }
     /// Whether literals decode with clang 19's escape rules
     /// ([`crate::PpOptions::clang19_escapes`]).
     fn clang19_escapes(&self) -> bool {

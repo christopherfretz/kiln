@@ -36,6 +36,9 @@ pub struct DiagOptions {
     pub warnings: Vec<String>,
     /// `-R` options in order, without the `-R`.
     pub remarks: Vec<String>,
+    /// The prefixes of every `-Wundef-prefix=<p>,...` in order (clang
+    /// `DiagnosticOptions::UndefPrefixes`; empty items dropped).
+    pub undef_prefixes: Vec<String>,
     /// `-w`: ignore all warnings (not positional).
     pub ignore_warnings: bool,
     /// `-pedantic`: extension diagnostics become warnings.
@@ -83,6 +86,7 @@ impl Default for DiagOptions {
         DiagOptions {
             warnings: Vec::new(),
             remarks: Vec::new(),
+            undef_prefixes: Vec::new(),
             ignore_warnings: false,
             pedantic: false,
             pedantic_errors: false,
@@ -184,6 +188,14 @@ impl DiagOptions {
                 return true;
             }
             if w.starts_with("larger-than=") || w.starts_with("larger-than-") {
+                return true;
+            }
+            // `-Wundef-prefix=<p>,...` adds prefixes and enables
+            // `-Wundef-prefix` at its position, as clang.
+            if let Some(v) = w.strip_prefix("undef-prefix=") {
+                let ps = v.split(',').filter(|p| !p.is_empty()).map(str::to_owned);
+                self.undef_prefixes.extend(ps);
+                self.warnings.push("undef-prefix".to_owned());
                 return true;
             }
             self.warnings.push(w.to_string());

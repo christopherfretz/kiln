@@ -468,6 +468,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Diagnostic wording, order and dumps (WP-1906: WP-1809, WP-1816, WP-1822,
+  WP-1844, WP-1848, WP-1849, WP-1850, WP-1851, WP-1854, WP-1860), now as
+  clang 22: `-Woverriding-option` warnings for the FP flags; the
+  `-Wundef-prefix=` warning; typed value arguments in instantiation notes
+  (`dep<2UL>`); the "attribute declaration must precede definition"
+  warning before redefinition errors; "expected function body after
+  function declarator" at `-std=c++98`; unknown-attribute warnings after
+  the attribute list's syntax errors, and clang's wording for a missing
+  attribute token; "in instantiation of requirement here" notes; the
+  narrowing note for a deduced array bound; vtable-dump method names of
+  class template specializations (`void A<int>::f(T) [T = int]`); and
+  `MustTailAttr`, `NoMergeAttr` and written explicit-specialization
+  arguments in the AST dump.
 - Builtin required-feature expressions (WP-1841): the NEON, ACLE and x86
   builtin checks now use clang's evaluator (`|` loosest, then `,`,
   parentheses group), shared with SVE and SME, so

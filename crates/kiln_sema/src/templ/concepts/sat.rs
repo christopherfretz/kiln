@@ -188,7 +188,7 @@ impl Sema<'_, '_> {
                 .frames
                 .iter()
                 .rev()
-                .find(|f| f.kind != FrameKind::ConstraintSubstitution)
+                .find(|f| !f.kind.is_constraint_substitution())
                 .is_some_and(|f| {
                     matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck)
                 })

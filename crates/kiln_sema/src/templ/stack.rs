@@ -73,6 +73,11 @@ pub enum FrameKind {
     /// Substituting into an atomic constraint or a requirement
     /// ([temp.constr.atomic]/3, [expr.prim.req]; a SFINAE context).
     ConstraintSubstitution,
+    /// Substituting into a simple, compound or type requirement of a
+    /// requires-expression ([expr.prim.req]; a SFINAE context; clang
+    /// `RequirementInstantiation`, "in instantiation of requirement
+    /// here" at the requirement). Otherwise as `ConstraintSubstitution`.
+    RequirementInstantiation,
     /// Building a tuple-like structured binding's initializer
     /// ([dcl.struct.bind]/4; clang `InitializingStructuredBinding`). Not
     /// an instantiation; the entity is the binding.
@@ -116,6 +121,7 @@ impl FrameKind {
                 | FrameKind::ConstraintsCheck
                 | FrameKind::ConceptCheck
                 | FrameKind::ConstraintSubstitution
+                | FrameKind::RequirementInstantiation
                 | FrameKind::BindingInit
                 | FrameKind::PriorArgSubstitution
                 | FrameKind::BuildingDeductionGuides
@@ -123,6 +129,12 @@ impl FrameKind {
                 | FrameKind::LambdaSubstitution
                 | FrameKind::MetaSubstitution
         )
+    }
+
+    /// Substitution into a constraint or a requirement, inside a
+    /// satisfaction check.
+    pub const fn is_constraint_substitution(self) -> bool {
+        matches!(self, FrameKind::ConstraintSubstitution | FrameKind::RequirementInstantiation)
     }
 
     /// A constraint-satisfaction check of a template or concept-id
@@ -161,6 +173,9 @@ impl FrameKind {
             FrameKind::ConstraintsCheck => DiagId::note_checking_constraints_here,
             FrameKind::ConceptCheck => DiagId::note_checking_concept_here,
             FrameKind::ConstraintSubstitution => DiagId::note_constraint_substitution_here,
+            FrameKind::RequirementInstantiation => {
+                DiagId::note_template_requirement_instantiation_here
+            }
             FrameKind::BindingInit => DiagId::note_in_binding_decl_init,
             FrameKind::BuildingDeductionGuides => DiagId::note_building_deduction_guide_here,
             FrameKind::PartialOrderingTtp => DiagId::note_template_arg_template_params_mismatch,
@@ -194,6 +209,7 @@ impl FrameKind {
             FrameKind::ConstraintsCheck => "constraints",
             FrameKind::ConceptCheck => "concept",
             FrameKind::ConstraintSubstitution => "constraint-subst",
+            FrameKind::RequirementInstantiation => "requirement",
             FrameKind::BindingInit => "binding-init",
             FrameKind::BuildingDeductionGuides => "deduction-guides",
             FrameKind::PartialOrderingTtp => "ttp-matching",

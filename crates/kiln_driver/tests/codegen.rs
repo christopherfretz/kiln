@@ -2276,7 +2276,7 @@ fn fp_environment_flags() {
         &["-ffp-eval-method=double"],
         &["-ffp-eval-method=extended"],
         &["-frounding-math", "-fno-rounding-math"],
-        &["-ffp-model=strict", "-fno-rounding-math", "-ffp-exception-behavior=ignore"],
+        &["-ffp-model=strict", "-fno-rounding-math", "-ffp-exception-behavior=ignore", "-w"],
         &["-ffp-model=fast"],
         &["-fclang-compat=19", "-ffp-model=fast"],
         &["-ffp-model=aggressive"],
@@ -2286,6 +2286,28 @@ fn fp_environment_flags() {
         let o = kiln_in(&d, &args);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
     }
+    // clang's overriding warnings for the strict model's parts (WP-1809).
+    let o = kiln_in(
+        &d,
+        &[
+            "-ffp-model=strict",
+            "-fno-rounding-math",
+            "-ffp-exception-behavior=ignore",
+            "-c",
+            "m.cpp",
+            "-o",
+            "a.o",
+        ],
+    );
+    assert_eq!(
+        (o.status.code(), text(&o.stderr).as_str()),
+        (
+            Some(0),
+            "kiln++: warning: overriding '-ffp-model=strict' option with '-fno-rounding-math' \
+             [-Woverriding-option]\nkiln++: warning: overriding '-ffp-exception-behavior=strict' \
+             option with '-ffp-exception-behavior=ignore' [-Woverriding-option]\n"
+        )
+    );
 }
 
 /// `-ffp-contract=fast` fuses across statements with either backend, but

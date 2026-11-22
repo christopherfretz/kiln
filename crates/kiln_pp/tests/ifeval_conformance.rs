@@ -31,6 +31,16 @@ fn pinned_target(src: &str) -> Option<String> {
         .find_map(|a| a.strip_prefix("--target=").map(str::to_owned))
 }
 
+/// Whether a case's `//@ args:` hold anything but `--target=`: such a
+/// case (`-Wundef-prefix=`) is left to the corpus runner, which passes
+/// its arguments.
+fn has_other_args(src: &str) -> bool {
+    src.lines()
+        .filter_map(|l| l.strip_prefix("//@ args:"))
+        .flat_map(str::split_whitespace)
+        .any(|a| !a.starts_with("--target="))
+}
+
 /// A resolver serving every file of `dir` both as `name` and as
 /// `<dir name>/name` (the case's `-I<dir>` plus quoted lookup relative to
 /// the case).
@@ -159,6 +169,9 @@ fn conformance_cases() {
     let mut n = 0;
     for e in std::fs::read_dir(&dir).unwrap().flatten() {
         let src = read(&e.path());
+        if has_other_args(&src) {
+            continue;
+        }
         let markers: Vec<&str> = src
             .lines()
             .map(str::trim)

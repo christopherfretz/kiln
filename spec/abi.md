@@ -792,14 +792,20 @@ points, thunks and method indices are clang's.
     construction vtables.
   - `dump_all_vtable_layouts` (driver `-fdump-vtable-layouts`,
     spec/driver.md) prints every group in `record_definitions` order.
+  - Names: classes and scopes print as clang's `printQualifiedName`
+    (a class template specialization in a scope with its canonical,
+    scoped arguments: `O<n::X>::I`); methods as clang's
+    `PredefinedExpr::ComputeName(PrettyFunctionNoVirtual)`, the
+    function `kiln_ast::dump::pretty_function` that also spells
+    `__PRETTY_FUNCTION__`: the pattern's parameter and return types as
+    written and the `[T = int, N = 3]` list (`void A<int, 3>::f(T) [T =
+    int, N = 3]`; conformance `class.virtual/vtable-template-member-names.cpp`,
+    WP-1816).
   - Deviations from clang:
     - clang's `Original map` sections are not printed. They are
       debugging state that clang accumulates across classes.
     - Order and repetition: clang dumps in emission order and may repeat
       a construction vtable; kiln dumps each group once.
-    - Method names of class template specializations: clang prints
-      `A<int>::f(T) [T = int]`, kiln `A<int>::f(int)` (`print.rs`
-      `pretty_function`); no differential generates templates.
 - **Coverage.** Implicit virtual destructors and implicitly declared
   members appear in the slots as sema declares them (WP-067a); explicit
   constructors and destructors work (conformance

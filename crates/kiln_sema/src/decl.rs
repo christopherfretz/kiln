@@ -3797,6 +3797,7 @@ impl Sema<'_, '_> {
             || !self.templ.spec_headers.is_empty();
         let r = self.act_on_declarator_impl(ds, base, d);
         self.after_def_prev = None;
+        self.release_after_def_held();
         // [basic.link]/15: its declared type may make it an exposure.
         if let Some(x) = r {
             self.module_check_decl_exposure(x, ds.friend.is_some());
@@ -4217,6 +4218,8 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        // The redeclaration errors held for the attributes (WP-1848).
+        self.release_after_def_held();
         if self.kind_of(decl).is_function() {
             self.check_carries_dependency_redecl(decl, &attrs);
         }
@@ -4316,6 +4319,8 @@ impl Sema<'_, '_> {
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
+        // The redeclaration errors held for the attributes (WP-1848).
+        self.release_after_def_held();
         self.check_carries_dependency_redecl(decl, &attrs);
         self.check_optnone_conflicts(decl, &mut attrs);
         self.check_naked_conflicts(decl, &mut attrs);
@@ -5474,13 +5479,18 @@ impl Sema<'_, '_> {
                 if !invalid_redecl {
                     pattern_prev = self.pattern_friend_prev(ctx, dname, new_fn);
                 }
-                // [dcl.inline]/6 holds now too (clang `MergeFunctionDecl`).
-                if let Some(p) = pattern_prev
-                    && ds.inline.is_some()
-                    && self.inline_after_definition(p, &fname, d.name_loc())
-                {
-                    invalid_redecl = true;
-                    pattern_prev = None;
+                // [dcl.inline]/6 holds now too (clang `MergeFunctionDecl`),
+                // after the attributes are merged (WP-1850).
+                if let Some(p) = pattern_prev {
+                    let (after_def, stash) = self.capturing(|s| {
+                        ds.inline.is_some() && s.inline_after_definition(p, &fname, d.name_loc())
+                    });
+                    self.hold_after_def(stash, after_def);
+                    if after_def {
+                        invalid_redecl = true;
+                        pattern_prev = None;
+                        attr_prev = Some(Some(p));
+                    }
                 }
             }
             None
@@ -6013,12 +6023,16 @@ impl Sema<'_, '_> {
                     // (clang `err_constexpr_redecl_mismatch`).
                     // An invalid previous declaration is not checked.
                     let (ok, nk) = (pspec.constexpr_kind(), spec.constexpr_kind());
-                    if ds.inline.is_some() && self.inline_after_definition(p, &fname, d.name_loc())
-                    {
+                    let (after_def, stash) = self.capturing(|s| {
+                        ds.inline.is_some() && s.inline_after_definition(p, &fname, d.name_loc())
+                    });
+                    if after_def {
                         prev_ok = None;
                         invalid_redecl = true;
-                        // clang merges the attributes first (WP-1840).
+                        // clang merges the attributes first (WP-1840), so
+                        // the error follows their warnings (WP-1848).
                         attr_prev = Some(Some(p));
+                        self.hold_after_def(stash, true);
                     } else if ok != nk
                         && !self.ast.decls.get(p).flags().contains(DeclFlags::INVALID)
                     {
@@ -6028,7 +6042,7 @@ impl Sema<'_, '_> {
                             .arg(fname.clone())
                             .arg(ok as u8);
                         let msg = self.note_prev(msg, p, false);
-                        self.emit(msg);
+                        self.hold_after_def(vec![msg], true);
                         prev_ok = None;
                         invalid_redecl = true;
                         attr_prev = Some(Some(p));
@@ -7939,17 +7953,20 @@ impl Sema<'_, '_> {
                     // declaration is tentative; a redefinition is found
                     // when one is added (`c_init_redefines`).
                     let tentative = self.is_c() && !self.in_local_scope();
-                    let conflict =
-                        self.diagnose_var_storage_redecl(p, spec.storage(), &n, d.name_loc()) || {
-                            self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
-                            self.diagnose_var_redecl_conflict(
+                    let (conflict, stash) = self.capturing(|s| {
+                        s.diagnose_var_storage_redecl(p, spec.storage(), &n, d.name_loc()) || {
+                            s.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
+                            s.diagnose_var_redecl_conflict(
                                 p,
                                 &n,
                                 d.name_loc(),
                                 ext || tentative,
                                 prev_def,
                             )
-                        };
+                        }
+                    });
+                    // After the attributes' warnings (WP-1848).
+                    self.hold_after_def(stash, conflict);
                     if conflict {
                         redefined = true;
                         attr_prev = Some(p);
@@ -7971,7 +7988,7 @@ impl Sema<'_, '_> {
                         .arg(sym_str(self, name))
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
-                    self.emit(msg);
+                    self.hold_after_def(vec![msg], true);
                     redefined = true;
                     attr_prev = Some(p);
                 }
@@ -14064,6 +14081,30 @@ impl Sema<'_, '_> {
         Some(a)
     }
 
+    /// Starts holding the "unknown attribute ignored" warnings of an
+    /// attribute-specifier-seq (WP-1854): clang issues them when the
+    /// declaration's attributes are processed, so after the syntax errors
+    /// later in the list. False when one is already being held (a nested
+    /// specifier); the parser passes the result to
+    /// [`Sema::release_unknown_attrs`] at the end of the sequence.
+    pub fn hold_unknown_attrs(&mut self) -> bool {
+        if self.unknown_attr_held.is_some() {
+            return false;
+        }
+        self.unknown_attr_held = Some(Vec::new());
+        true
+    }
+
+    /// Emits the warnings [`Sema::hold_unknown_attrs`] held when `started`.
+    pub fn release_unknown_attrs(&mut self, started: bool) {
+        if !started {
+            return;
+        }
+        if let Some(held) = self.unknown_attr_held.take() {
+            self.release(held, Vec::new());
+        }
+    }
+
     /// True when clang does not know attribute `scope::name` written with
     /// `syntax` (WP-1836): clang `hasAttribute` is 0 for a `[[...]]`
     /// attribute, whose argument clause the parser then skips as balanced
@@ -14245,7 +14286,10 @@ impl Sema<'_, '_> {
                     DiagId::parse_unknown_attribute
                 };
                 let msg = self.diag(id, loc).arg(shown);
-                self.emit(msg);
+                match &mut self.unknown_attr_held {
+                    Some(held) => held.push(msg),
+                    None => self.emit(msg),
+                }
                 return None;
             }
         };

@@ -2324,7 +2324,17 @@ for `^^`, §5 for splices).
 - **Sema's role:** Sema (`act_on_attribute`) decides what is known,
   checks the argument count and kinds, and encodes the arguments
   (spec/sema.md §4.5).
-  - Unknown attributes warn `unknown attribute 'x' ignored`.
+  - Unknown attributes warn `unknown attribute 'x' ignored`. The
+    warnings of an attribute-specifier-seq are held until it ends
+    (`Sema::hold_unknown_attrs` / `release_unknown_attrs`, WP-1854), as
+    clang issues them when the declaration's attributes are processed:
+    after the syntax errors later in the sequence.
+  - In `[[...]]`, a list element that is not an attribute-token ends the
+    list at `expected ']'` (after the previous token), each of the two
+    `]` then expected and skipped to; no name after `scope::` is
+    `expected identifier` at the token (clang
+    `ParseCXX11AttributeSpecifierInternal`; WP-1854,
+    `tests/conformance/dcl.attr.grammar/attribute-list-missing-token.cpp`).
   - Known but unimplemented GNU attributes warn `'x' attribute ignored`.
   - A scoped attribute is printed by name only, as clang 19 does.
 - **Placement:** the parser attaches attributes where the grammar puts
@@ -2364,7 +2374,14 @@ for `^^`, §5 for splices).
     declaration is skipped through its `;`, and any other declarator
     `expected ';' after top level declarator` (`expected ';' at end of
     declaration` at block scope)
-    (`tests/conformance/dcl.attr.grammar/attribute-list-after-gnu-attributes.cpp`)
+    (`tests/conformance/dcl.attr.grammar/attribute-list-after-gnu-attributes.cpp`).
+    The same error ends any first function declarator at namespace
+    scope followed by a token that neither continues the declaration
+    (`=`, `,`, `;`, `asm`, `__attribute__`, in C++ `(`) nor starts a
+    function body, a declaration specifier or `namespace` (clang
+    `ParseDeclGroup`, so also at the end of the file); the skip through
+    the `;` consumes a `}` it starts at (WP-1849,
+    `tests/conformance/dcl.fct.def.general/missing-function-body-cxx98.cpp`)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
     ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after

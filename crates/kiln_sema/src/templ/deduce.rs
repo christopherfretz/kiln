@@ -189,6 +189,13 @@ pub struct DeducedArgs {
     pub nttp_types: bool,
     /// See `nttp_types`.
     pub nttp_mismatch: Option<(QualType, QualType)>,
+    /// Deducing a function template: the first array bound deduced for a
+    /// non-type parameter whose type cannot represent it (`template
+    /// <unsigned char N> void f(int (&)[N])` from `int[300]`), with that
+    /// type. The bound is a `std::size_t` value converted to the
+    /// parameter's type when the deduction is finished, a narrowing
+    /// error (clang `ConvertDeducedTemplateArgument`; WP-1822).
+    pub nttp_narrowed: Option<(u64, QualType)>,
     /// Deducing the aggregate deduction candidate ([over.match.class.
     /// deduct]/1.8): the trailing pack may correspond to fewer clauses
     /// than an earlier deduction of its pack has elements, so a shorter
@@ -230,6 +237,7 @@ impl DeducedArgs {
             aggregate: false,
             class_params: 0,
             nttp_mismatch: None,
+            nttp_narrowed: None,
             loc: Loc::INVALID,
             call_seed: None,
         }
@@ -1734,6 +1742,13 @@ impl Sema<'_, '_> {
                 let ty = self
                     .nttp_param_type(e)
                     .unwrap_or_else(|| if int_bound { QualType::INT } else { self.size_type() });
+                if d.nttp_types
+                    && d.nttp_narrowed.is_none()
+                    && self.ast.types.is_integral(ty)
+                    && !self.int_fits(ty, i128::from(n))
+                {
+                    d.nttp_narrowed = Some((n, ty));
+                }
                 let v = self.int_const(ty, i128::from(n));
                 TemplateArg::value(self.ast.types.canonical(ty), v)
             }

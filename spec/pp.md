@@ -313,7 +313,13 @@ following respects ([cpp.cond]/13):
   unsigned" (or the error "integer literal is too large to be represented
   in any integer type" past 64 bits). `true` is 1, `false` 0, and every
   other identifier (keywords included) 0, with `-Wundef` ("'X' is not
-  defined, evaluates to 0"). Floating literals, string literals and
+  defined, evaluates to 0"). While `-Wundef` is off, `-Wundef-prefix=<p>,...`
+  (every such flag's prefixes, empty ones dropped; it also enables the
+  `undef-prefix` group at its position) gives the same warning for a live
+  identifier with one of the prefixes, its option shown with the joined
+  value, `[-Wundef-prefix=FOO_,BA]` (clang `warn_pp_undef_prefix`,
+  `AddFlagValue`; WP-1816, `tests/conformance/cpp.cond/undef-prefix.cpp`).
+  Floating literals, string literals and
   user-defined literals are errors with clang's wording.
 - **Conversions.** The usual arithmetic conversions apply to every binary
   operator except `<<`, `>>`, `,`, `&&` and `||`, and to the second and
@@ -1138,7 +1144,6 @@ spec/modules.md §11.13.
 
 17. **`#if` evaluation (WP-015 `IfEval`) differs from clang 19 in
     these minor respects, none of which change a group selection:**
-    `-Wundef-prefix` is a missing warning (an unknown warning option);
     `defined X` in an
     unevaluated operand still marks `X` used (for `-Wunused-macros`);
     the C++98 and C++20 compatibility warnings (`-Wc++98-compat*`) are

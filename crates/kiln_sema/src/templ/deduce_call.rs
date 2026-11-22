@@ -1172,6 +1172,16 @@ impl Sema<'_, '_> {
             f.diag = Some(diag);
             return Err(f);
         }
+        if let Some((n, ty)) = d.nttp_narrowed {
+            let diag = self
+                .diag(DiagId::sema_cce_narrowing_value, loc)
+                .arg("non-type template argument")
+                .arg(n.to_string())
+                .arg(self.ty_arg(ty));
+            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+            f.diag = Some(diag);
+            return Err(f);
+        }
         stat_step!("defaults");
         // §6.1 step 3: defaults, then completeness.
         let mut defaulted = false;

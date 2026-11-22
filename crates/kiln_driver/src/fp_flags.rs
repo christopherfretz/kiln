@@ -230,6 +230,16 @@ struct State {
     warnings: Vec<FpWarning>,
     /// `-ffp-model=aggressive` under clang 19 (an unsupported value).
     aggressive19: bool,
+    /// clang `StrictFPModel`: `-ffp-model=strict` took effect and no
+    /// later flag has left its settings yet (the first that does warns).
+    strict_model: bool,
+    /// clang `TrappingMathPresent`: a `-f[no-]trapping-math` or
+    /// `-ffp-exception-behavior=strict` since the last
+    /// `-ffp-exception-behavior=` (no overriding warning then).
+    trapping_present: bool,
+    /// clang 22 `LastFpContractOverrideOption`: the flag that set the
+    /// contraction since the last `-ffp-contract=` (empty: none).
+    contract_override: String,
 }
 
 impl State {
@@ -259,6 +269,9 @@ impl State {
             ofast,
             warnings: Vec::new(),
             aggressive19: false,
+            strict_model: false,
+            trapping_present: false,
+            contract_override: String::new(),
         }
     }
 
@@ -396,6 +409,7 @@ impl State {
     /// `-fno-fast-math` / `-fno-unsafe-math-optimizations` restore the
     /// last `-ffp-contract=`, else `on` after a fast-math flag.
     fn restore_contract(&mut self) {
+        self.contract_override.clear();
         if let Some(c) = self.last_seen_contract {
             self.contract = c;
         } else if self.seen_unsafe {
@@ -403,11 +417,64 @@ impl State {
         }
     }
 
+    /// clang's `-ffp-exception-behavior=` value (empty: not set).
+    fn except_name(&self) -> &'static str {
+        match self.except {
+            None => "",
+            Some(FpExcept::Strict) => "strict",
+            Some(FpExcept::MayTrap) => "maytrap",
+            Some(FpExcept::Ignore) => "ignore",
+        }
+    }
+
+    /// clang's `-Woverriding-option` for a flag that sets the exception
+    /// behavior to `new` (`-f[no-]trapping-math`,
+    /// `-ffp-exception-behavior=`): a different behavior set by an
+    /// earlier `-ffp-exception-behavior=` (or `-ffp-model=strict`) is
+    /// overridden.
+    fn except_override(&mut self, new: &str, flag: &str) {
+        let old = self.except_name();
+        if !self.trapping_present && !old.is_empty() && old != new {
+            self.warnings
+                .push(FpWarning::Option(format!("-ffp-exception-behavior={old}"), flag.to_owned()));
+        }
+    }
+
     fn apply(&mut self, a: &str) {
+        // clang skips `-Ofast` that is not the optimization level.
+        if a == "-Ofast" && !self.ofast {
+            return;
+        }
+        self.apply_flag(a);
+        // clang `StrictFPModel`: the first flag after `-ffp-model=strict`
+        // that leaves its settings is reported (clang 22 reports an
+        // `-ffp-contract=` with the contraction's own warning instead).
+        if self.strict_model
+            && !(self.honor_infs
+                && self.honor_nans
+                && !self.assoc
+                && !self.recip
+                && self.signed_zeros
+                && self.except == Some(FpExcept::Strict)
+                && self.rounding
+                && !self.approx_func
+                && self.contract == "off")
+        {
+            self.strict_model = false;
+            self.fp_model = None;
+            let contract = self.clang22 && a.starts_with("-ffp-contract=");
+            if !contract && a != "-ffp-model=strict" {
+                self.warnings.push(FpWarning::Option("-ffp-model=strict".to_owned(), a.to_owned()));
+            }
+        }
+    }
+
+    fn apply_flag(&mut self, a: &str) {
         match a {
-            "-Ofast" if self.ofast => self.fast_math(true, a),
-            "-Ofast" => {}
-            "-ffast-math" => self.fast_math(true, a),
+            "-Ofast" | "-ffast-math" => {
+                self.fast_math(true, a);
+                a.clone_into(&mut self.contract_override);
+            }
             "-fno-fast-math" => {
                 // clang 22 drops the complex range too (a warning unless
                 // it was full); clang 19 keeps it.
@@ -435,6 +502,7 @@ impl State {
                 self.approx_func = true;
                 self.except = None;
                 self.contract = "fast";
+                a.clone_into(&mut self.contract_override);
                 self.seen_unsafe = true;
             }
             "-fno-unsafe-math-optimizations" => {
@@ -460,8 +528,16 @@ impl State {
             "-fno-reciprocal-math" => self.recip = false,
             "-fsigned-zeros" => self.signed_zeros = true,
             "-fno-signed-zeros" => self.signed_zeros = false,
-            "-ftrapping-math" => self.except = Some(FpExcept::Strict),
-            "-fno-trapping-math" => self.except = Some(FpExcept::Ignore),
+            "-ftrapping-math" => {
+                self.except_override("strict", a);
+                self.trapping_present = true;
+                self.except = Some(FpExcept::Strict);
+            }
+            "-fno-trapping-math" => {
+                self.except_override("ignore", a);
+                self.trapping_present = true;
+                self.except = Some(FpExcept::Ignore);
+            }
             "-frounding-math" => self.rounding = true,
             "-fno-rounding-math" => self.rounding = false,
             "-fcx-limited-range"
@@ -485,6 +561,12 @@ impl State {
         let owned = || Some(a.to_owned());
         if let Some(v) = a.strip_prefix("-ffp-contract=") {
             let c = VALUED[0].1.iter().find(|&&x| x == v).copied().unwrap_or("on");
+            // clang 22: a contraction an umbrella flag or model set.
+            if self.clang22 && c != self.contract && !self.contract_override.is_empty() {
+                let old = std::mem::take(&mut self.contract_override);
+                self.warnings.push(FpWarning::Option(old, a.to_owned()));
+            }
+            self.contract_override.clear();
             self.contract = c;
             self.last_seen_contract = Some(c);
         } else if let Some(v) = a.strip_prefix("-ffp-model=") {
@@ -506,6 +588,7 @@ impl State {
                 self.warnings.push(FpWarning::Option(a.to_owned(), "-Ofast".to_owned()));
                 return;
             }
+            self.strict_model = false;
             if let Some(m) = self.fp_model.as_deref()
                 && m != v
             {
@@ -520,17 +603,21 @@ impl State {
                     return;
                 }
                 "strict" => {
+                    self.strict_model = true;
                     self.except = Some(FpExcept::Strict);
                     self.rounding = true;
                     self.contract = "off";
                 }
                 _ => self.contract = "on",
             }
+            self.contract_override = format!("-ffp-model={v}");
             self.fp_model = Some(v.to_owned());
             if self.clang22 && matches!(v, "precise" | "strict") {
                 self.set_range(Some(ComplexRange::Full), a);
             }
         } else if let Some(v) = a.strip_prefix("-ffp-exception-behavior=") {
+            self.except_override(v, a);
+            self.trapping_present = v == "strict";
             self.except = Some(match v {
                 "maytrap" => FpExcept::MayTrap,
                 "strict" => FpExcept::Strict,
@@ -556,7 +643,25 @@ impl State {
         }
     }
 
-    fn finish(self, errors: &mut Vec<ArgError>) -> FpModel {
+    fn finish(mut self, errors: &mut Vec<ArgError>) -> FpModel {
+        // clang 19: `-ffp-model=fast` with all of fast math in effect and
+        // a contraction other than `fast` after it.
+        if !self.clang22
+            && self.fp_model.as_deref() == Some("fast")
+            && self.contract != "fast"
+            && !self.honor_infs
+            && !self.honor_nans
+            && !self.math_errno
+            && self.assoc
+            && self.approx_func
+            && self.recip
+            && !self.signed_zeros
+            && self.except != Some(FpExcept::Strict)
+            && !self.rounding
+        {
+            let c = format!("-ffp-contract={}", self.contract);
+            self.warnings.push(FpWarning::Option("-ffp-model=fast".to_owned(), c));
+        }
         if let Some(f) = &self.excess {
             errors.push(ArgError::UnsupportedByKiln(f.clone()));
         }
@@ -915,6 +1020,77 @@ mod tests {
             e(&["-fdenormal-fp-math=ieee,x"]),
             [ArgError::InvalidFlagValue("-fdenormal-fp-math=ieee,x".into(), "ieee,x".into())]
         );
+    }
+
+    #[test]
+    fn overriding_option_warnings() {
+        // clang 22 and 19 `RenderFloatingPointOptions` (WP-1809), checked
+        // against both on every ordered pair of the FP flags, alone and
+        // after `-ffp-model=strict`.
+        let w = |c22: bool, a: &[&str]| model_at(c22, a).0.warnings;
+        let opt = |a: &str, b: &str| FpWarning::Option(a.into(), b.into());
+        for c22 in [true, false] {
+            // The first flag that leaves `-ffp-model=strict`'s settings.
+            assert_eq!(
+                w(c22, &["-ffp-model=strict", "-fno-rounding-math", "-fno-signed-zeros"]),
+                [opt("-ffp-model=strict", "-fno-rounding-math")]
+            );
+            assert_eq!(
+                w(c22, &["-ffp-model=strict", "-ffast-math"]),
+                [opt("-ffp-model=strict", "-ffast-math")]
+            );
+            // A flag that keeps them is silent.
+            assert!(
+                w(c22, &["-frounding-math", "-ffp-model=strict", "-ftrapping-math"]).is_empty()
+            );
+            // The exception behavior an earlier flag set.
+            assert_eq!(
+                w(c22, &["-ffp-model=strict", "-fno-trapping-math"]),
+                [
+                    opt("-ffp-exception-behavior=strict", "-fno-trapping-math"),
+                    opt("-ffp-model=strict", "-fno-trapping-math"),
+                ]
+            );
+            assert_eq!(
+                w(c22, &["-ffp-exception-behavior=maytrap", "-ffp-exception-behavior=ignore"]),
+                [opt("-ffp-exception-behavior=maytrap", "-ffp-exception-behavior=ignore")]
+            );
+            assert_eq!(
+                w(c22, &["-ffp-exception-behavior=ignore", "-ftrapping-math"]),
+                [opt("-ffp-exception-behavior=ignore", "-ftrapping-math")]
+            );
+            // Not after `-f[no-]trapping-math`, which set it.
+            assert!(w(c22, &["-ftrapping-math", "-ffp-exception-behavior=ignore"]).is_empty());
+            assert!(w(c22, &["-fno-trapping-math", "-ftrapping-math"]).is_empty());
+        }
+        // clang 22 reports a contraction an umbrella flag or model set,
+        // and not `-ffp-contract=` against `-ffp-model=strict`.
+        assert_eq!(
+            w(true, &["-ffp-model=strict", "-ffp-contract=on"]),
+            [opt("-ffp-model=strict", "-ffp-contract=on")]
+        );
+        assert_eq!(
+            w(true, &["-funsafe-math-optimizations", "-ffp-contract=off"]),
+            [opt("-funsafe-math-optimizations", "-ffp-contract=off")]
+        );
+        assert_eq!(
+            w(true, &["-ffp-model=fast", "-ffp-contract=on"]),
+            [opt("-ffp-model=fast", "-ffp-contract=on")]
+        );
+        assert!(w(true, &["-ffast-math", "-ffp-contract=fast"]).is_empty());
+        assert!(w(true, &["-ffast-math", "-fno-fast-math", "-ffp-contract=off"]).is_empty());
+        // clang 19 reports it against `-ffp-model=strict`, and a
+        // `-ffp-model=fast` whose fast math stays with another contraction.
+        assert_eq!(
+            w(false, &["-ffp-model=strict", "-ffp-contract=on"]),
+            [opt("-ffp-model=strict", "-ffp-contract=on")]
+        );
+        assert!(w(false, &["-funsafe-math-optimizations", "-ffp-contract=off"]).is_empty());
+        assert_eq!(
+            w(false, &["-ffp-model=fast", "-ffp-contract=on"]),
+            [opt("-ffp-model=fast", "-ffp-contract=on")]
+        );
+        assert!(w(false, &["-ffp-model=fast", "-ffp-contract=on", "-fmath-errno"]).is_empty());
     }
 
     #[test]

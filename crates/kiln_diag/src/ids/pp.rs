@@ -135,6 +135,7 @@ pp_pragma_push_pop_malformed = Error (1) "pragma {0} requires a parenthesized st
 pp_pragma_system_header_in_main = Warning [PragmaSystemHeaderOutsideHeader] (0) "#pragma system_header ignored in main file";
 pp_string_udl = Error (0) "string literal with user-defined suffix cannot be used here";
 pp_undef_identifier = WarningOff [Undef] (1) "'{0}' is not defined, evaluates to 0";
+pp_undef_prefix = WarningOff [UndefPrefix] (1) "'{0}' is not defined, evaluates to 0";
 pp_unknown_pragma = WarningOff [UnknownPragmas] (0) "unknown pragma ignored";
 pp_unterminated_conditional = Error (0) "unterminated conditional directive";
 pp_unterminated_macro_args = Error (0) "unterminated function-like macro invocation";

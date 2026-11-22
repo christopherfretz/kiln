@@ -867,6 +867,10 @@ impl IfContext for IfCx<'_, '_, '_> {
     fn c(&self) -> Option<kiln_lex::CStd> {
         self.pp.opts.c
     }
+
+    fn undef_prefixes(&self) -> &[String] {
+        self.pp.diags.undef_prefixes()
+    }
 }
 
 impl Preprocessor<'_, '_> {

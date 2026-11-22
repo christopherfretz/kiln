@@ -279,10 +279,20 @@ impl Sema<'_, '_> {
                         && self.has_explicit_spec_head()
                         && self.ast.member_spec_info(self.ast.first(p)).is_some();
                     let prev_def = prev_def.filter(|_| !redundant);
+                    // The errors follow the attributes' warnings when the
+                    // attributes are still checked (WP-1848).
+                    let mut tls = Vec::new();
                     if compatible {
                         // [dcl.stc]/4: one thread storage kind.
                         let n = sym_str(self, name);
-                        self.check_tls_redecl(p, spec.tls(), prev_def.is_some(), loc, &n);
+                        tls = self
+                            .capturing(|s| {
+                                s.check_tls_redecl(p, spec.tls(), prev_def.is_some(), loc, &n);
+                            })
+                            .1;
+                        if prev_def.is_none() || spec_decl {
+                            self.hold_after_def(std::mem::take(&mut tls), false);
+                        }
                     }
                     if !compatible {
                         let msg = self
@@ -291,7 +301,7 @@ impl Sema<'_, '_> {
                             .arg(self.ty_arg(ty))
                             .arg(self.ty_arg(pty));
                         let msg = self.note_prev(msg, p, prev_def.is_some());
-                        self.emit(msg);
+                        self.hold_after_def(vec![msg], true);
                         invalid = true;
                         // Its attributes are still checked after the
                         // definition (WP-1840).
@@ -300,7 +310,8 @@ impl Sema<'_, '_> {
                         let msg =
                             self.diag(DiagId::sema_redefinition, loc).arg(sym_str(self, name));
                         let msg = self.note_prev(msg, def, true);
-                        self.emit(msg);
+                        tls.push(msg);
+                        self.hold_after_def(std::mem::take(&mut tls), true);
                         invalid = true;
                         attr_prev = Some(p);
                     } else if self.has_explicit_spec_head()

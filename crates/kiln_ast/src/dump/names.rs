@@ -1673,6 +1673,17 @@ impl TypeNames for AstNames<'_> {
         self.ast.spec_print_args(decl)
     }
 
+    /// An explicit specialization or instantiation prints the arguments
+    /// written on it (clang `TypePrinter::printTag`), as in diagnostics:
+    /// `'A<N::X>':'A<X>'` after `template<> struct A<X>` (WP-1816). Not
+    /// in debug information, whose names print the converted arguments.
+    fn args_as_written(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
+        if self.debug_info || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        self.ast.templates.args_as_written(decl)
+    }
+
     fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
         if self.debug_info {
             return None;

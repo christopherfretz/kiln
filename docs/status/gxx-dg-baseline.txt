@@ -11101,7 +11101,7 @@ hidden-temp-class7.C	hpp jpp kpp
 hidden-temp-class8.C	hii jii kii
 hidden-temp-class9.C	hpp jpp kpp
 hidden-var1.C	hpp jpp kpp
-koenig1.C	hpp jpp kpp
+koenig1.C	hll jll kll
 koenig10.C	hpp jpp kpp
 koenig11.C	hpp jpp kpp
 koenig12.C	hpp jpp kpp

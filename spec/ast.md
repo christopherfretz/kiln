@@ -1090,7 +1090,12 @@ whether it is exact: false when some part printed as a placeholder (an
   own arguments typed: clang's `FunctionDecl::getNameForDiagnostic` passes
   no parameter list, so `shouldIncludeTypeForArgument` is true
   (`SemaNames::typed_args_of`; a nested template-id keeps the rule above;
-  test `temp.param/function-spec-name-typed-args.cpp`, WP-366).
+  test `temp.param/function-spec-name-typed-args.cpp`, WP-366). The same
+  holds for the "in instantiation of function template specialization"
+  note and the explicit-instantiation diagnostics (`'f<2UL>'`,
+  `'C<4>::m<5U>'`; `Sema::fn_spec_decl_name`); a variable template
+  specialization prints them bare (`'v<2>'`; test
+  `temp.param/instantiation-note-typed-args.cpp`, WP-1844).
 
 **String escapes** (`StringPool::write_literal`):
 - `\\ \" \n \t \r \0 \a \b \f \v` print as escapes.
