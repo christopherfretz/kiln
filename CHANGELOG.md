@@ -436,6 +436,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- Peak memory since 1.1.0 measured and explained (WP-1891,
+  docs/status/perf.md "Peak RSS since 1.1.0 (WP-1891)"): kiln's peak RSS
+  is 1.4-5.1 MiB higher than 1.1.0's. Nearly all of the rise is kiln's own
+  code pages mapped into the process (`.text` grew from 12.0 to 16.2 MB),
+  and the heap of a small compile grew by at most 0.6 MiB. No table,
+  cache or buffer is allocated earlier or larger than in 1.1.0. spec/bench.md
+  now says that the bench's peak RSS includes those code pages.
+
 - Faster constant evaluation of standard-library string plumbing
   (WP-1864): `std::string_view` comparisons over many `std::string`s
   run 4-5x faster on libstdc++ (an N=4300 all-pairs comparison: 32 s

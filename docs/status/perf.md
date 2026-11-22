@@ -142,6 +142,96 @@ hand before 1.0 (WP-313 to WP-1171) are in
 [perf-history.md](perf-history.md); see perf-history.md for any section
 named "WP-NNN" that used to be on this page.
 
+## Peak RSS since 1.1.0 (WP-1891)
+
+The question: the small `oven` entries measured 5-14% above their peak-RSS
+baselines in the WP-1886 recording, and downstream code reported a
+container `memory.peak` 16-20 MiB higher on 1.3.0 than on 1.1.0 for every
+compile-only TU, whatever its size. Answer: kiln's peak RSS rose by
+1.4-5.1 MiB, nearly all of it kiln's own code pages; the heap rose by
+0.1-0.6 MiB on the small entries. No eager table, cache, arena or buffer
+grew. The 16-20 MiB does not show up as process memory on this host.
+
+- **Binaries.** `cargo build -p kiln_driver --release` of v1.1.0, v1.3.0
+  and 9f128ebc0 (the base of this work), rustc 1.95, built one after the
+  other into one target directory. Host: the development container,
+  aarch64, 12 CPUs (moved from the 24-CPU host on 2026-11-22), THP
+  `madvise`, load 3-12.
+- **Measures.** Max RSS is `/usr/bin/time -f %M`, the median of 7 runs
+  interleaved across the binaries. The split is `RssAnon` (heap, stacks,
+  relocated data) against `RssFile` (mapped files, almost all of it kiln's
+  own executable). Each is summed over the process tree and sampled from
+  `/proc/<pid>/status` every 0.5 ms; the figure is the median of 3 to 5
+  runs. clang++-19 (19.1.7) ran with the same flags.
+- **Max RSS, `-std=c++26 -fsyntax-only`, KiB (1.1.0 / 1.3.0 / base /
+  clang 19):**
+  - an empty file: 9088 / 10368 / 10496 / 80768;
+  - `#include <vector>` plus a `main` that sizes a vector: 22656 / 25600 /
+    26240 / 105216 (wall 0.07 s for kiln 1.1.0, 0.08 s for base, 0.07 s
+    for clang);
+  - `bench/oven/fib.cpp`: 12672 / - / 15104 / 85504;
+  - `#include <meta>` plus one consteval
+    `nonstatic_data_members_of(...).size()`, with
+    `--gcc-toolchain=<GCC 16.1>`: 31616 / 34936 / 35536.
+
+  At `-c` the largest process is `llc` (63 MiB with every kiln). The
+  process tree's peak (kiln plus `opt` and `llc`) is 3.9-4.4 MiB higher on
+  base than on 1.1.0: `<vector>` 84564 against 88608 KiB, the `<meta>` TU
+  at `-O0`, `-O2`, `-g` and `-O1 -g` 87424-89716 against 91616-94148. Of
+  that, 3.5-3.7 MiB is file-backed.
+- **Split.** On `<vector>`, the heap grew 0.5 MiB (10176 to 10668 KiB) and
+  the mapped code 2.9 MiB (12632 to 15644). On `<bits/stdc++.h>` plus
+  map, regex and iostream, the heap grew 2.1 MiB (84004 to 86148 KiB) and
+  the code 3.0 MiB; this part grows with the TU. On all 29 `oven` entries, with the bench's flags, the
+  total grew 2.4-3.8 MiB: code +2.2-3.2 MiB, heap -0.03 to +0.6 MiB.
+  kiln's accounted total (`-fkiln-memory-report`, the 2% gate) moved by
+  at most 4.1 KiB. Against v1.3.0 (which equals the baselines'
+  41099 bytes on `churn-list`), base predeclares 5 more builtin typedefs
+  and 10 more types. `decls.nodes` doubles its capacity (3584 to 7168
+  bytes), so `churn-list` shows +10.0% of 0.04 MiB and `churn-tree`
+  +2.9%; the other 27 entries are within 2%. The steps are unchanged
+  except on `string-view-*`, where they fell.
+- **Why the code pages grew.** `.text` grew from 12.0 MB (1.1.0) to 15.5 MB
+  (1.3.0) and 16.2 MB (base); `.rodata` from 1.6 to 1.9 and 2.8 MB. A
+  `-fsyntax-only` run executes about 0.7 MB of distinct functions (callgrind,
+  empty TU), spread over the whole `.text`. The kernel maps file pages
+  around each fault (fault-around), so the resident share grows with the
+  code size. On an empty TU that is 6.2 MiB of kiln's `r-xp` mapping on
+  1.1.0 and 7.3 MiB on base; on `<vector>`, 11.2 and 14.2 MiB. These pages
+  are page cache shared by every kiln process on the machine. They are
+  not allocations, and only a compile that finds the binary out of cache
+  pays for them.
+- **No step above 2 MiB** (first-parent points, `<vector>` total, KiB):
+  v1.1.0 22808, v1.2.0 24384 (+1.5, all of it file-backed; the snapshot
+  PCH's `kiln_snap` added 0.95 MB of code), 9caadc20f (#743) 24648,
+  v1.3.0 25572, base 26300. The steps follow the code size (16.4, 19.5,
+  19.9, 20.9, 22.6 MB of `size` text). The largest addition pays for
+  itself: on `bench/pch/gnu.h` (`<bits/stdc++.h>`) a snapshot consumer
+  takes 0.33 s and 86.6 MiB, against 0.86 s and 91.9 MiB for
+  `-include gnu.h` (median of 7).
+- **Ruled out** (1.1.0 against base, `<vector>` at `-c`, under `strace
+  -f`): the same threads (12 clones) and the same processes (`kiln`, `opt
+  -O0`, `llc`, on every TU tried). The same files are read (1.40 MB) and
+  the same written (the object only; IR goes through pipes). The
+  compile thread's stack peaks at 420 and 504 KiB. A PCH consumer's heap
+  is below the plain compile's: `bench/pch/meta.h`, 24480 against 25580
+  KiB. The heap after start-up, before input is read, is 0.8 and 0.9 MiB.
+- **Not reproduced: the 16-20 MiB.** No measure here shows a fixed cost
+  of that size. A cgroup's `memory.peak` also counts page cache (files
+  read or written in the cgroup) and kernel memory, which a process's RSS
+  does not. The candidates are an out-of-cache binary (the loaded part
+  grew from 17.0 to 23.2 MB, 1.1.0 to base) and a PCH file. A snapshot
+  PCH is 11.4 MB for `bench/pch/meta.h` and 38.6 MB for `gnu.h`. 1.1.0
+  wrote 51-84 KB replay records for the same headers, and its consumers
+  replayed. Telling them apart needs the downstream `memory.stat` (anon,
+  file, kernel) at the peak, with the kiln binary and the flags used.
+- **Baselines** were not re-recorded. The bench host changed (24 to 12
+  CPUs) after the WP-1886 recording, so every `oven` baseline is advisory
+  on the new host, and on this host the header-free entries are 19-28%
+  above them. That figure would also include whatever the host contributes, so
+  re-recording only memory would mix two hosts in one record. A re-record
+  of every group on the new host absorbs the code-size rise above.
+
 ## The 2026-11-21 recording (WP-1886)
 
 The table at the top of this page, and [perf-gcc.md](perf-gcc.md), the
