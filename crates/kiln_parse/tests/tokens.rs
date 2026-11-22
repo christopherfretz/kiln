@@ -156,7 +156,7 @@ fn lex_pptoken_count_after_expansion() {
             file,
             &engine,
             target,
-            &common::opts19(),
+            &opts19(),
             kiln_parse::ConstexprLimits::default(),
         );
         (tu.tokens, engine.error_count())
