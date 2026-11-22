@@ -1052,6 +1052,32 @@ before. Tested by
   type (docs/status/deviations.md). Tests:
   `meta.reflection.substitute/substitute-placeholder-return{,-lambda,-neg}.cpp`,
   `is-substitute-fn2.cpp`.
+
+  *Not lazy* (WP-1929, re-checked after kiln 1.1.0's answer, false
+  without instantiating, was reported as a regression). The deduction
+  cannot wait until something needs the type: `can_substitute`'s answer
+  is defined by whether the named specialization's type still contains
+  an undeduced placeholder ([meta.reflection.substitute] Returns), the
+  type is deduced only by instantiating the definition
+  ([dcl.spec.auto.general]: "any use of a specialization of the function
+  template will cause an implicit instantiation", errors from it "are not
+  in the immediate context"), and the definition's existence then affects
+  the semantics ([temp.inst]: implicitly instantiated). The example says
+  so for `can_substitute(^^fn2, {^^int})`. A default template argument
+  with an empty argument list changes nothing (`box::put<>` names
+  `box::put<void>`), nor does a member template. Only a check in the
+  declaration (a SFINAE default template argument, a trailing return
+  type, a constraint) fails in the immediate context and answers false
+  without instantiating the body ([temp.deduct.general]). On the deduced
+  result: `is_function` is true, `type_of` and `return_type_of` are the
+  deduced types, a splice call, `extract` and `reflect_constant` of the
+  pointer to member work, `has_identifier` is false (a function template
+  specialization, [meta.reflection.names]), `display_string_of` is
+  implementation-defined. clang-p2996 instantiates the definition the
+  same way (its "only instantiate the body if the signature has an
+  undeduced type"); GCC 16.1 answers true for a member template without
+  instantiating. Tests: `substitute-member-default-placeholder{,-neg}.cpp`,
+  `substitute-emplace-back-neg.cpp`.
 - **A fold does not substitute.** `substitute`/`can_substitute` with no
   cached result fail silently in a trial (`MetaCtx::trial`) or outside a
   manifestly constant-evaluated evaluation, like every query that would
