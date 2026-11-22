@@ -116,6 +116,13 @@ pub(crate) struct Func {
     /// destructor, so a call of it takes no memory mark and no frame
     /// serial, and its return scans and releases nothing.
     pub light: bool,
+    /// The end of the function's code (`entry..code_end`).
+    pub code_end: u32,
+    /// The VM inlines a direct call of it at the call site (spec/oven.md
+    /// "Inlining", `vm/inline.rs`): a light leaf body of a few
+    /// instructions that are the same in the caller's frame
+    /// (`kbc::inline::inlinable`), not memoized.
+    pub inline: bool,
 }
 
 /// The source of a faulting instruction.
@@ -406,6 +413,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         self.func_map.insert(d, i);
         i
@@ -434,6 +443,8 @@ impl Oven {
             base_obj: true,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         self.base_funcs.insert(d, i);
         i
@@ -536,6 +547,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         let glvalue = b.ast().exprs.get(e).value_category().is_glvalue();
         let ref_ty = match object.filter(|&d| is_reference_var(b.ast(), d)) {
@@ -652,6 +665,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -704,6 +719,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         let size_t = QualType::unqual(b.ast().types.target().size_t);
         let mut c = Compiler::new(self, b);
@@ -750,6 +767,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -818,6 +837,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         let mut c = Compiler::new(self, b);
         let entry = c.here();
@@ -907,6 +928,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         Some(idx)
     }
@@ -944,6 +967,8 @@ impl Oven {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         });
         Some(idx)
     }
@@ -1205,6 +1230,11 @@ impl Oven {
         f.this_ty = this_ty;
         f.structor = structor;
         f.light = light;
+        f.code_end = end as u32;
+        f.inline = light
+            && !memo
+            && f.decl.is_some()
+            && crate::kbc::inline::inlinable(&self.code, entry as usize, end).is_ok();
     }
 }
 

@@ -8,6 +8,7 @@
 //! (integers canonical: sign- or zero-extended from their width; floats
 //! as their IEEE bit pattern; pointers as an encoded `mem::Ptr`).
 
+pub(crate) mod inline;
 pub(crate) mod verify;
 
 macro_rules! ops {
@@ -399,6 +400,14 @@ ops! {
     // address of the object of unknown value it designates (P2280R4,
     // [expr.const]/10.1; `Oven::unknown_this`).
     UnknownThis = 2,
+    // [site, arg base]: a direct call whose callee the VM inlined at this
+    // site (spec/oven.md "Inlining", `crate::vm::inline`): it runs the
+    // copy of the callee's body at `Oven::inl[site].entry` in this frame,
+    // or, when the call must be a real one, calls the callee as `Call`.
+    Inl = 2,
+    // [dst, src, target]: the return of an inlined body: `dst` (the
+    // call's arg base) = `src`, then the call's successor `target`.
+    InlRet = 3,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`

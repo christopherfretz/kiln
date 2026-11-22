@@ -33,6 +33,7 @@
 
 use super::{Op, bi};
 use crate::compile::{Func, UNCOMPILED};
+use crate::vm::InlSite;
 use crate::vm::exc;
 
 /// A broken invariant: what, and the instruction (its pc, and its opcode
@@ -55,7 +56,7 @@ impl std::fmt::Display for Fail {
 
 /// What an operand word is.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum K {
+pub(crate) enum K {
     /// Not an index (an immediate, or unused).
     I,
     /// A register.
@@ -91,12 +92,17 @@ enum K {
     E,
     /// A `QualType`'s raw encoding.
     Q,
+    /// An inlined call site (`Op::Inl`): an index of the site table.
+    N,
+    /// The return point of an inlined body (`Op::InlRet`): an
+    /// instruction boundary of the caller.
+    X,
 }
 
-use K::{D, E, F, Fc, Fo, G, I, J, O, Oh, Q, R, Ro, S, T, To, Tr};
+use K::{D, E, F, Fc, Fo, G, I, J, N, O, Oh, Q, R, Ro, S, T, To, Tr, X};
 
 /// The operand kinds of `op` with auxiliary bits `aux`.
-fn kinds(op: Op, aux: u32) -> &'static [K] {
+pub(crate) fn kinds(op: Op, aux: u32) -> &'static [K] {
     match op {
         Op::Nop | Op::Halt | Op::Unwind | Op::CatchBegin => &[],
         Op::Step => &[S],
@@ -182,6 +188,8 @@ fn kinds(op: Op, aux: u32) -> &'static [K] {
         Op::AddrInt => &[R, R, R, I],
         Op::LabelAddr => &[R, E],
         Op::ContractTrial => &[R, J, Tr],
+        Op::Inl => &[N, R],
+        Op::InlRet => &[R, R, X],
     }
 }
 
@@ -194,6 +202,8 @@ pub(crate) struct Tables<'a> {
     pub nsteps: usize,
     /// For each origin, whether it is a heap origin.
     pub heap_origins: &'a [bool],
+    /// The inlined call sites (`Oven::inl`).
+    pub inl: &'a [InlSite],
 }
 
 /// The largest AST ids the code holds (0: none), for the AST's range
@@ -225,6 +235,14 @@ pub(crate) fn verify(
         .filter(|f| f.entry != UNCOMPILED && (f.entry as usize) < n)
         .map(|f| (f.entry, f.nregs))
         .collect();
+    // An inlined body's copy is its own unit: its registers are the
+    // caller's from the call's arg base, `need` past the frame base.
+    for s in t.inl {
+        if s.entry >= s.end || s.end as usize > n || s.need == 0 || s.need <= s.base {
+            return Err(Fail { why: "inlined copy outside the code", at: None });
+        }
+        entries.push((s.entry, s.need - 1));
+    }
     entries.sort_unstable();
     // One owner per entry: functions sharing an entry share the code; the
     // largest register count is the bound the VM grows to for any of them.
@@ -251,6 +269,17 @@ pub(crate) fn verify(
     starts[n] = true;
     if entries.iter().any(|&(e, _)| !starts[e as usize]) {
         return Err(Fail { why: "function entry inside an instruction", at: None });
+    }
+    for (i, s) in t.inl.iter().enumerate() {
+        let at = s.call_pc as usize;
+        let site = starts.get(at).copied().unwrap_or(false)
+            && code.get(at..at + 3) == Some(&[Op::Inl as u32, i as u32, s.base][..]);
+        // The copy's registers are the callee's from the arg base on.
+        let need =
+            t.funcs.get(s.callee as usize).map(|f| u64::from(s.base) + u64::from(f.nregs) + 1);
+        if !site || !starts[s.end as usize] || need != Some(u64::from(s.need)) {
+            return Err(Fail { why: "inlined call site does not match its copy", at: None });
+        }
     }
     let mut sites = sites;
     if sites.any(|pc| !starts.get(pc as usize).copied().unwrap_or(false)) {
@@ -310,6 +339,8 @@ pub(crate) fn verify(
                     ids.ty = ids.ty.max(v >> 3);
                     v >> 3 != 0
                 }
+                N => i < t.inl.len(),
+                X => i < n && starts[i],
             };
             if !ok {
                 let why = match k {
@@ -322,6 +353,8 @@ pub(crate) fn verify(
                     S => "step locations out of range",
                     O | Oh => "instruction names an unknown origin",
                     D | Q => "instruction holds a zero AST id",
+                    N => "instruction names an unknown inlined call site",
+                    X => "inlined return to no instruction",
                     I | E => "invariant: never rejected",
                 };
                 return Err(Fail { why, at: Some((pc, Some(op))) });
@@ -352,6 +385,8 @@ mod tests {
             base_obj: false,
             structor: false,
             light: false,
+            code_end: 0,
+            inline: false,
         }
     }
 
@@ -374,6 +409,7 @@ mod tests {
             ntraps: 1,
             nsteps: 4,
             heap_origins: &heap,
+            inl: &[],
         };
         verify(code, &t, [0, 6, 9].into_iter(), unwind).map(|_| ()).map_err(|f| f.why)
     }
@@ -422,6 +458,7 @@ mod tests {
             ntraps: 1,
             nsteps: 4,
             heap_origins: &[],
+            inl: &[],
         };
         assert_eq!(
             verify(&call, &t, std::iter::empty(), None).map(|_| ()).map_err(|f| f.why),
@@ -460,6 +497,7 @@ mod tests {
             ntraps: 1,
             nsteps: 4,
             heap_origins: &[],
+            inl: &[],
         };
         assert_eq!(
             verify(&ok, &t, [2].into_iter(), None).map(|_| ()).map_err(|f| f.why),
@@ -473,10 +511,60 @@ mod tests {
             ntraps: 1,
             nsteps: 4,
             heap_origins: &[],
+            inl: &[],
         };
         assert_eq!(
             verify(&ok, &t, std::iter::empty(), None).map(|_| ()).map_err(|f| f.why),
             Err("function entry inside an instruction")
         );
+    }
+
+    /// An inlined call site (spec/oven.md "Inlining"): function 0 (4
+    /// registers) calls function 1 (1 register) at pc 0 with arg base 2;
+    /// the copy of 1's body at pc 6 runs in 0's frame from register 2.
+    #[test]
+    fn verifier_checks_inlined_sites() {
+        use crate::vm::InlSite;
+        let code = vec![w(Op::Inl), 0, 2, w(Op::Halt), w(Op::Ret), 1, w(Op::InlRet), 2, 3, 3];
+        let site = InlSite { callee: 1, call_pc: 0, base: 2, entry: 6, end: 10, need: 4 };
+        let funcs = [func(0, 4), func(4, 1)];
+        let check = |code: &[u32], s: InlSite| {
+            let inl = [s];
+            let t = Tables {
+                funcs: &funcs,
+                nglobals: 0,
+                ntypes: 0,
+                ntraps: 0,
+                nsteps: 0,
+                heap_origins: &[],
+                inl: &inl,
+            };
+            verify(code, &t, std::iter::empty(), None).map(|_| ()).map_err(|f| f.why)
+        };
+        let with = |at: usize, v: u32| {
+            let mut c = code.clone();
+            c[at] = v;
+            c
+        };
+        assert_eq!(check(&code, site), Ok(()));
+        let bad = Err("inlined call site does not match its copy");
+        assert_eq!(check(&with(2, 1), site), bad);
+        assert_eq!(check(&code, InlSite { need: 5, ..site }), bad);
+        assert_eq!(check(&code, InlSite { callee: 2, ..site }), bad);
+        assert_eq!(check(&code, InlSite { end: 9, ..site }), bad);
+        assert_eq!(check(&code, InlSite { call_pc: 3, ..site }), bad);
+        assert_eq!(
+            check(&code, InlSite { entry: 10, ..site }),
+            Err("inlined copy outside the code")
+        );
+        // The copy's registers end at the callee's last one past the base.
+        assert_eq!(
+            check(&with(8, 4), site),
+            Err("instruction register out of its function's frame")
+        );
+        assert_eq!(check(&with(9, 7), site), Err("inlined return to no instruction"));
+        let mut extra = code.clone();
+        extra.extend_from_slice(&[w(Op::Inl), 1, 0]);
+        assert_eq!(check(&extra, site), Err("instruction names an unknown inlined call site"));
     }
 }

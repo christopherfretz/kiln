@@ -1523,10 +1523,92 @@ its steps are charged, memoization and `consteval` checks run as
 before. `Memory::release` itself tests inline whether anything was
 allocated since the mark and calls out only when something was.
 
-Inlining small callees into the caller's code was measured and not
-taken here (WP-1907 notes in `docs/status/oven-profile.md`): it would
-remove most of a call's ~250 instructions, but needs pseudo-frames for
-notes and the depth limit and a register remap at every call site.
+Inlining small leaf callees into their callers' code was measured here
+and built by WP-1924 ("Inlining").
+
+### Inlining — Landed (WP-1924)
+The VM inlines a direct call of a small leaf function at its call site
+(`kbc/inline.rs`, `vm/inline.rs`). The copy runs in the caller's frame;
+nothing an evaluation computes or reports differs.
+
+**Which callees.** `Func::inline`, decided once when the function is
+compiled (`compile_func`): the function is light ("Light frames"), not
+memoized (`Func::memo`: the memo answers its repeated calls, and a
+memoized call's charge stays the memo's; a scalar one-return function
+is memoized unless the memo is off), has a declaration (no thunk), and
+every instruction of its body is in the whitelist of
+`kbc::inline::inlinable`: registers, constants, integer, floating and
+pointer arithmetic and comparisons, conversions, jumps, `Step`,
+`Field`, `Load`/`Store`/`InitStore` and their bit-field forms,
+`ActiveCheck`, `Trap`, `Ret` and `IsConstEval` in its `if consteval`
+form (aux 16, the run's context, which a call does not change). No
+call of any kind (the body is a leaf, so no recursion), no virtual or
+indirect call, no instruction that reads or changes the call stack,
+registers a cleanup, opens a scope, allocates, throws, names a global,
+or reads the call's own context (`std::is_constant_evaluated`'s
+warning names the enclosing call). At most `kbc::inline::MAX_INSNS`
+(24) instructions: the one-return library functions the call-heavy
+benchmarks spend their calls in (`size()`, `operator[]`, iterator
+`operator*`/`++`, comparators) are 2 to 16 (WP-1924 notes in
+`docs/status/oven-profile.md`). Constructors and destructors are never
+light, so never inlined.
+
+**When.** Only direct calls (`Call`) are inlined, at their first
+execution: after `enter` pushed the callee's frame, `Oven::inline_call`
+appends a copy of the callee's body to the code, its registers
+renumbered by the call's arg base (the callee's window starts there, so
+its register `r` is the caller's `base + r`), its jumps and sites moved
+with it and each `Ret` turned into `InlRet` (the result to the call's
+result register, then a jump to the call's successor), and patches the
+call to `Inl` naming the copy (`InlSite`: callee, call pc, arg base,
+copy range, registers needed). That first call itself runs as a real
+call. Nothing is inlined while a unit is being compiled (the unit owns
+the end of the code) or when `Oven::set_inlining(false)`. Inlined
+sites stay for the rest of the translation unit and are in snapshots
+(`Oven.inl`; the verifier checks each site's instruction, copy range
+and register count against its callee).
+
+**What an inlined call does.** `Inl` charges what `enter` charges a
+light, non-memoized call: `calls` + 1, the depth high-water mark
+(`maxd`) to the active calls + 1, the register file grown to the
+callee's window; the steps are the body's own `Step` instructions,
+copied with it, so `-fconstexpr-steps` counts and the statement a step
+limit stops at are unchanged. It pushes no frame and pops none; a light
+call's frame takes no memory mark and keeps the caller's serial, so
+lifetimes and the dangling-local and own-initializer checks see what
+they saw. `Inl` makes the call a real one (`enter`, then the callee's
+own code) when:
+
+- the active calls are at the depth limit: `enter` diagnoses
+  `-fconstexpr-depth` at the call as before, with the same backtrace;
+- a potential-constant-expression check runs (`run.potential`), whose
+  depth cut-off `enter` applies;
+- per-call hooks are on (`-fconstexpr-profile`, `-ftime-trace-verbose`):
+  the profile and the trace see every call.
+
+**Faults.** A fault in a copy returns its pc as any fault does; before
+the stack is read (the notes, the frame-unknown check, the runner's
+truncation) `Oven::inline_frame` pushes the frame the call would have
+had: the callee, the caller's frame base + the arg base, the call's pc,
+mark `BOTTOM`, the caller's serial. The "in call to" note of the call
+and the parameters' current values (the copy's registers are the
+callee's) are those of the real call, and `-fconstexpr-backtrace-limit`
+counts it. The copy's sites are the body's, moved, so every location
+(the fault's note, a step limit, a `-Winteger-overflow` fold's
+overflow) is the callee's.
+
+**consteval.** An immediate function is inlined like any other: the
+immediate-invocation checks are sema's, at the call's expression;
+`if consteval` in the copy reads the run's context, the callee's.
+
+Tests: `expr.const/inlining/` (values of inlined and not inlined calls,
+faults with their notes against clang 19 and 22),
+`expr.const/budget/inlining*.cpp` (steps and depth exact against both
+clangs, a step limit inside inlined bodies),
+`crates/kiln_oven/tests/inlining.rs` (inlining on and off agree on
+results, notes and every record; which callees inline),
+`kbc/verify.rs` `verifier_checks_inlined_sites`. Measurements:
+`docs/status/oven-profile.md` "After WP-1924".
 
 ### Register locals — Landed (M2; widened by WP-1908)
 A local variable or parameter lives in a VM register (no allocation, no
@@ -1604,8 +1686,9 @@ rule; `crates/kiln_oven/tests/register_locals.rs`).
 Not covered: a class object whose address is never taken (a by-value
 `std::string_view` parameter, an iterator) is memory, since every member
 function call takes its address as `this`; that is scalar replacement,
-which needs the callee to be inlined or analysed (WP-1907's light
-frames). Measurements: docs/status/oven-profile.md "After WP-1908".
+which needs the callee analysed with its caller (inlining, WP-1924,
+copies a leaf's body into the caller but leaves the object in memory).
+Measurements: docs/status/oven-profile.md "After WP-1908".
 
 ### Builtins — normative (WP-088)
 The §9.5 builtin functions of spec/sema-templates.md, with clang 19's
@@ -5643,6 +5726,10 @@ their registers are kept to the end of the loop statement
   local declared without an initializer and assigned first, on both
   branches, on one branch only, in a loop, with a `case` in its scope,
   read in its own assignment) and steps independent of the place.
+- `inlining.rs` (WP-1924, "Inlining"): each program on two Ovens,
+  inlining on and off, with equal results, notes and records; which
+  callees are inlined; the step limit at every count around a
+  program's need, and the depth limit at and past it.
 - `new_delete.rs`: `new`/`delete` round trips, the leak, heap-result,
   delete and bound notes, the `allocs`/peak counters, and memo purity
   (an allocating call is evaluated every time: two leaking calls report
