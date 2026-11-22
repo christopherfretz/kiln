@@ -3137,7 +3137,17 @@ instantiation unless stated.
     whose type has a dependent space is rejected at the template's
     definition, a parameter is a substitution failure ("parameter may not
     be qualified with an address space"), an automatic variable is
-    rejected at instantiation. Deduction ([temp.deduct.type]) of a
+    rejected at instantiation. A type written in a space over a template
+    parameter or a `DependentAddrSpace` (`T AS(1)`, `AS(N) int AS(1)`)
+    whose substituted type is already in another space is clang's
+    `RebuildQualifiedType` error "conflicting address space qualifiers
+    are provided between types 'AS(1) T' and 'AS(2) int'" (the pattern
+    printed with its space alone; the same space is accepted), at the
+    type as written (the decl-specifiers' type; `Sema::note_space_type_loc`
+    records it for substitution, spec/sema-templates.md §5.8), an alias
+    template's at its `using`; in SFINAE a substitution failure (a
+    partial specialization, an overload, a requirement; WP-1914).
+    Deduction ([temp.deduct.type]) of a
     `DependentAddrSpace` P takes N from an argument in a target address
     space (`address_space(M)` deduces `M` as an `int`); an argument in
     the default or an OpenCL space is clang's "could not match"
@@ -6381,6 +6391,17 @@ the initializer, or after default initialization, and before the
   operand) names the constructors and is `qualified reference to 'C' is
   a constructor name rather than a type in this context`, the class type
   still used (not under GCC's `-fpermissive`, where GCC accepts it);
+  so does a template-id `C::C<A>` (`L::mapping<int>::mapping<long>`:
+  "... rather than a template name ...", the template used; clang
+  `ActOnTemplateIdType` compares the qualifier's and the template's
+  identifiers). With `typename` or `template` before the name (`typename
+  S::S`, `typename L::mapping<int>::template mapping<long>`, also
+  `L::mapping<int>::template mapping<long>` alone) it is clang's
+  -Winjected-class-name warning "ISO C++ specifies that ... despite
+  preceding 'typename'|'template' keyword" (`template` when both) and the
+  type or template is used, as for a dependent qualifier at substitution
+  (spec/sema-templates.md, WP-1889); a base-specifier, a mem-initializer
+  and a class-key name the class (WP-1903);
   `D::C` through a derived class, `struct C::C`, a
   mem-initializer and a nested-name-specifier `C::C::` are the class.
   `D::B` finding the injected-class-names of two specializations through

@@ -27,6 +27,7 @@ sema_address_of_reference_null_compare = Warning [TautologicalUndefinedCompare] 
 sema_address_space_automatic = Error (0) "automatic variable qualified with an address space";
 sema_address_space_field = Error (0) "field may not be qualified with an address space";
 sema_address_space_function_type = Error (0) "function type may not be qualified with an address space";
+sema_address_space_mismatch_templ_inst = Error (2) "conflicting address space qualifiers are provided between types {0} and {1}";
 sema_address_space_multiple = Error (0) "multiple address spaces specified for type";
 sema_address_space_multiple_identical = Warning [DuplicateDeclSpecifier] (0) "multiple identical address spaces specified for type";
 sema_address_space_negative = Error (0) "address space is negative";

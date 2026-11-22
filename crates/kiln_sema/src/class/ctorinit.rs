@@ -266,6 +266,7 @@ impl Sema<'_, '_> {
     /// parser calls it for every constructor definition, with the `:`
     /// location, or the body's `{` when there is no ctor-initializer.
     pub fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc) {
+        self.note_init_fp(ctor);
         for info in inits {
             self.act_on_mem_initializer(ctor, info);
         }

@@ -365,6 +365,18 @@ impl Sema<'_, '_> {
         self.fp_pragma.0
     }
 
+    /// Records the FP pragma state now in effect for the mem-initializers
+    /// of constructor `d` or the default member initializer of field `d`
+    /// (`ColdDeclData::init_fp`, WP-1904): codegen emits them under it,
+    /// as clang keeps it on each expression. Not while instantiating (an
+    /// instantiation's is its pattern's, `Ast::init_fp`).
+    pub(crate) fn note_init_fp(&mut self, d: DeclId) {
+        let fp = self.fp_pragma_state();
+        if fp != kiln_ast::fp::FpOverride::NONE && self.inst.stack.is_empty() {
+            let _ = self.ast.decls.cold.init_fp.insert(d, fp);
+        }
+    }
+
     /// Sets the FP pragma state (a pragma, or the end of a compound
     /// statement restoring its enclosing state).
     pub fn set_fp_pragma_state(&mut self, fp: kiln_ast::fp::FpOverride) {

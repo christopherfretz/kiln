@@ -478,6 +478,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An address space written over a template parameter or a dependent
+  `address_space(N)` type (`T __attribute__((address_space(1)))`) whose
+  substituted type is already in another space is now clang's
+  "conflicting address space qualifiers are provided between types"
+  error at the type as written (an alias template's at its `using`), and
+  a substitution failure in SFINAE; kiln silently replaced the space
+  (WP-1914).
+- Under a file-scope `#pragma STDC FENV_ROUND`, a constructor's member,
+  base and delegating initializers are now emitted under the FP state
+  they were written in, and a default member initializer under its own,
+  as clang does: kiln used the command line's rounding there, so their
+  constrained operations carried `round.tonearest` (WP-1904). PCH
+  snapshot format 114.
+- `C::C<args>` and `C::C` after a non-dependent qualifier naming the
+  class `C` (`L::mapping<int>::mapping<long> *p`) are now clang's
+  "qualified reference to 'mapping' is a constructor name rather than a
+  template name" error, and with a preceding `typename` or `template`
+  its -Winjected-class-name warning, as for a dependent qualifier; a
+  base-specifier, a mem-initializer and a class-key still name the class
+  (WP-1903).
 - Diagnostic wording, order and dumps (WP-1906: WP-1809, WP-1816, WP-1822,
   WP-1844, WP-1848, WP-1849, WP-1850, WP-1851, WP-1854, WP-1860), now as
   clang 22: `-Woverriding-option` warnings for the FP flags; the

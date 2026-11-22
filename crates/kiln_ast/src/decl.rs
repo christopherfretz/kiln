@@ -1772,6 +1772,12 @@ pub struct ColdDeclData {
     /// literal → that `CompoundLiteralExpr` (clang's `.compoundliteral`
     /// global; `AstBuilder::file_scope_compound_literal`, WP-466).
     pub compound_literal: ColdMap<DeclId, ExprId>,
+    /// Constructor → the FP pragma state its mem-initializers were
+    /// parsed in; field → its default member initializer's (clang keeps
+    /// an `FPOptionsOverride` on each expression; codegen emits them
+    /// under it, not under the body's scope). Only a state other than
+    /// the command line's ([`crate::fp::FpOverride::NONE`]); WP-1904.
+    pub init_fp: ColdMap<DeclId, crate::fp::FpOverride>,
 }
 
 impl Default for ColdDeclData {
@@ -1809,12 +1815,13 @@ impl Default for ColdDeclData {
             hidden_shadow: ColdMap::new("hidden_shadow"),
             conversion_spec_target: ColdMap::new("conversion_spec_target"),
             compound_literal: ColdMap::new("compound_literal"),
+            init_fp: ColdMap::new("init_fp"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 32] {
+    fn rows(&self) -> [MemRow; 33] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1848,6 +1855,7 @@ impl ColdDeclData {
             self.hidden_shadow.mem_row(),
             self.conversion_spec_target.mem_row(),
             self.compound_literal.mem_row(),
+            self.init_fp.mem_row(),
         ]
     }
 }

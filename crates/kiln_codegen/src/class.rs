@@ -1114,6 +1114,11 @@ impl Cg<'_> {
         // before the member initializers (not in delegating constructors).
         let delegating = inits.iter().any(|ci| ci.kind == CtorInitKind::Delegating);
         let mut vptrs_done = delegating;
+        // The mem-initializers are emitted under the FP state they were
+        // parsed in, not the body's (clang keeps it on each expression;
+        // a default member initializer has its own, WP-1904).
+        let used = inits.iter().any(kiln_ast::decl::CtorInit::is_written);
+        let init_fp = self.enter_fp_override(ast.init_fp(d), used);
         for ci in &inits {
             if !vptrs_done && matches!(ci.kind, CtorInitKind::Field | CtorInitKind::IndirectField) {
                 self.flush_memcpy_run(d, &mut run)?;
@@ -1231,6 +1236,7 @@ impl Cg<'_> {
             // `X<int>`; [temp.explicit]/10).
             self.record_ty(rd);
         }
+        self.leave_fp(init_fp);
         self.emit_stmt(if fn_try { ast.stmts.try_block(body) } else { body })?;
         self.end_scope(sc);
         if fn_try {
