@@ -4256,6 +4256,7 @@ impl Parser<'_, '_> {
             // declarator tentatively ([dcl.ambig.res]/1).
             let first = Some(needs_typename && params.is_empty());
             let saved_recovery = std::mem::replace(&mut self.param_recovery, first);
+            let wmark = self.s.written_ref_mark();
             let mut ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
             self.param_recovery = saved_recovery;
             if self.param_typename == ParamTypename::Missing {
@@ -4322,6 +4323,7 @@ impl Parser<'_, '_> {
                 }
             }
             p.range = (start, self.prev_end());
+            self.s.claim_written_refs(wmark, p.decl);
             let pack_like = pd.ellipsis.is_some() || self.s.has_unexpanded_pack(p.ty);
             params.push(p);
             if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
@@ -5152,6 +5154,9 @@ impl Parser<'_, '_> {
     ) -> Vec<DeclId> {
         let tmpl_kind = self.template_decl_kind.take();
         let start = self.pos();
+        // Each declarator claims the written names of the declaration
+        // (spec/ast.md §18.3).
+        let wmark = self.s.written_ref_mark();
         let mut ds = self.parse_decl_specifiers(ctx);
         let mut tmpl_group = self.template_group(tmpl_kind);
         let mut decls: Vec<DeclId> = ds.tag.filter(|_| ds.tag_declares).into_iter().collect();
@@ -5229,6 +5234,7 @@ impl Parser<'_, '_> {
                     self.parse_function_definition_after_declarator(
                         &ds, base, &mut d, &mut decls, level, contracts,
                     );
+                    self.s.claim_written_refs(wmark, decls.last().copied());
                     return decls;
                 }
                 if !allow_fn_def && self.at(Punct::LBrace) {
@@ -5263,6 +5269,7 @@ impl Parser<'_, '_> {
                 self.explicit_inst_with_definition(tmpl_kind, &d, false);
             }
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.s.claim_written_refs(wmark, v);
             self.end_declaration_with_contracts(v, &d, contracts);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
@@ -5277,7 +5284,9 @@ impl Parser<'_, '_> {
             {
                 first_decomp = Some((b.lbracket, v));
             }
-            if self.parse_declarator_initializer(&d, v).is_err() {
+            let init = self.parse_declarator_initializer(&d, v);
+            self.s.claim_written_refs(wmark, v);
+            if init.is_err() {
                 decls.extend(v);
                 self.skip_to_semi();
                 return decls;

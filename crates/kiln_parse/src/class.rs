@@ -783,6 +783,7 @@ impl Parser<'_, '_> {
             .unwrap_or_default();
         for (i, t) in parts.default_args {
             self.begin_replay(t.toks, t.end);
+            let wmark = self.s.written_ref_mark();
             let eq = self.bump().span.lo;
             if let Some(&p) = params.get(i) {
                 self.s.act_on_start_delayed_default_arg(p);
@@ -824,6 +825,7 @@ impl Parser<'_, '_> {
                 .and_then(|x| x.default_arg);
             self.s.end_default_arg_uses(mark, arg);
             self.s.act_on_end_delayed_default_arg();
+            self.s.claim_written_refs(wmark, params.get(i).copied());
             self.finish_replay();
         }
         if let Some(t) = parts.noexcept {
@@ -854,6 +856,7 @@ impl Parser<'_, '_> {
             return;
         }
         self.begin_replay(toks, end);
+        let wmark = self.s.written_ref_mark();
         self.trace(|p| format!("start_field_init({})", p.decl_name(field)));
         self.s.act_on_start_field_init(field);
         // clang 19's `ActOnFinishCXXInClassMemberInitializer` corrects the
@@ -868,6 +871,7 @@ impl Parser<'_, '_> {
                 self.s.error(DiagId::parse_expected_semi_decl_list, self.prev_end());
             }
         }
+        self.s.claim_written_refs(wmark, Some(field));
         self.finish_replay();
     }
 
@@ -1733,7 +1737,12 @@ impl Parser<'_, '_> {
         // wait for the member they declare (clang's `ParsingDeclRAIIObject`).
         let level = self.s.begin_delayed_deprecation();
         let saved = self.member_depr.replace(level);
+        // The member's declarators claim its written names (spec/ast.md
+        // §18.3).
+        let wmark = self.member_ref_mark;
+        self.member_ref_mark = self.s.written_ref_mark();
         self.parse_member_declaration_inner();
+        self.member_ref_mark = wmark;
         self.member_depr = saved;
         self.s.end_delayed_deprecation_to(level, None);
     }
@@ -1875,6 +1884,7 @@ impl Parser<'_, '_> {
                 self.save_member_nsdmi(d.is_array_of_unknown_bound(), decl);
             } else {
                 self.parse_member_init_in_place(&d, decl, init, is_static);
+                self.s.claim_written_refs(self.member_ref_mark, decl);
             }
             if !parts.is_empty()
                 && let Some(f) = target
@@ -2067,6 +2077,7 @@ impl Parser<'_, '_> {
                 decls.function(x).map(|_| x)
             }
         });
+        self.s.claim_written_refs(self.member_ref_mark, decl);
         (decl, target)
     }
 

@@ -208,6 +208,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         log: Vec::new(),
         updated: false,
         inst_report: None,
+        written_refs: None,
         mem_limit: cfg.mem_limit,
         advisory: None,
         gcc_compared: false,
@@ -241,6 +242,8 @@ struct Test<'a> {
     updated: bool,
     /// The last compile's masked instantiation report (`inst-report:`).
     inst_report: Option<String>,
+    /// The last compile's standard output (`written-refs:`).
+    written_refs: Option<String>,
     /// This test's cap: `--mem-limit` lowered by its `mem<=N`.
     mem_limit: Option<MemLimit>,
     /// Set when the GCC oracle's comparison was dropped ([`TestResult::advisory`]).
@@ -283,7 +286,13 @@ impl Test<'_> {
     /// without GCC, or one the header-differential mode leaves out.
     fn mode_skip(&self, spec: &TestSpec, source: &str) -> Option<String> {
         if spec.is_kiln_specific() && self.cfg.compiler_kind != CompilerKind::Kiln {
-            let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
+            let directive = if !spec.oven.is_empty() {
+                "oven:"
+            } else if spec.inst_report.is_some() {
+                "inst-report:"
+            } else {
+                "written-refs:"
+            };
             return Some(format!(
                 "not supported by this compiler (kiln-specific `{directive}` directive)"
             ));
@@ -1284,6 +1293,11 @@ impl Test<'_> {
         if spec.inst_report.is_some() && reports {
             cmd.arg("-fkiln-instantiation-report=json");
         }
+        // The table is not carried in PCH snapshots (spec/ast.md §18.5):
+        // the PCH differential checks no dump.
+        if spec.written_refs.is_some() && reports {
+            cmd.arg("-fkiln-dump-written-refs");
+        }
         if !spec.oven.is_empty() && reports {
             // Only kiln gets here (`evaluate` skips the rest). A stale report
             // must not pass for this compile's.
@@ -1301,6 +1315,9 @@ impl Test<'_> {
         let stderr = o.stderr_str();
         if spec.inst_report.is_some() && reports {
             self.inst_report = Some(inst_report::extract(&stderr));
+        }
+        if spec.written_refs.is_some() && reports {
+            self.written_refs = Some(o.stdout_str());
         }
         let crashed = o.code().is_none()
             || stderr.contains("panicked at")
@@ -1668,7 +1685,38 @@ impl Test<'_> {
             return Ok(());
         }
         self.check_oven(spec)?;
-        self.check_inst_report(spec)
+        self.check_inst_report(spec)?;
+        self.check_written_refs(spec)
+    }
+
+    /// Compares the compile's written-reference dump with the
+    /// `written-refs:` golden (`--update` rewrites it).
+    fn check_written_refs(&mut self, spec: &TestSpec) -> Check {
+        let Some(rel) = &spec.written_refs else { return Ok(()) };
+        if self.cfg.pch_diff.is_some() {
+            return Ok(());
+        }
+        let path = self.case.path.parent().unwrap_or(Path::new(".")).join(rel);
+        let got = self.written_refs.take().unwrap_or_default();
+        if self.cfg.update {
+            fs::write(&path, &got).map_err(|e| {
+                Problem::Broken(format!("cannot write written-refs {}: {e}", path.display()))
+            })?;
+            self.updated = true;
+            return Ok(());
+        }
+        let want = fs::read_to_string(&path).map_err(|e| {
+            Problem::Broken(format!("cannot read written-refs {}: {e}", path.display()))
+        })?;
+        if want == got {
+            Ok(())
+        } else {
+            Err(Problem::Fail(format!(
+                "written-refs: the written-reference dump differs from {} (-expected +actual):\n{}",
+                path.display(),
+                indent(&line_diff(&want, &got))
+            )))
+        }
     }
 
     fn check_oven(&mut self, spec: &TestSpec) -> Check {

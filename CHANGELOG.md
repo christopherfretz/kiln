@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A written-reference table for tooling clients (WP-1930, stage 1):
+  `-fkiln-dump-written-refs` records, for each expression name, member
+  name and nested-name-specifier component written in the source, the
+  declaration it denotes (the overload resolution winner for an
+  overloaded name, none for a dependent one), what lookup found, the
+  enclosing declaration and the qualifier to its left, and prints one
+  line per name. Off by default, with no cost beyond one branch per
+  name; not carried in PCH snapshots or module images yet
+  (spec/ast.md §18).
 - Header units' external definitions (WP-1800): while a header unit is
   built (by `-fmodule-header` or at an import), a definition of a
   non-inline function or variable with external linkage is now clang's

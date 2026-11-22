@@ -81,7 +81,8 @@ options:
                       sorted list (after --filter) runs iff i % N == K-1, so shards
                       1..N together are exactly the unsharded run (CI fan-out)
   --update            rewrite existing pp `.expected` files with the actual output
-                      (only those that differ under the comparison rule)
+                      (only those that differ under the comparison rule),
+                      and `inst-report:`/`written-refs:` goldens
   --pp-compare <how>  compare pp output as `tokens` or `text`, overriding every
                       test's `pp-compare:` directive
   --report-parity <file>

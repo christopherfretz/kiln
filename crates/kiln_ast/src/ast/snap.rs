@@ -20,6 +20,7 @@
 //! | `contract_sites` | state | as data |
 //! | `symbols` | state (shared) | the `Arc<Interner>`: written once per snapshot through sharing, so the restored AST shares the interner with whatever else in the same snapshot holds it |
 //! | `inst` | state | the instantiation meter, as data |
+//! | `written_refs` | transient | not written; read back empty and off (spec/ast.md §18.5: PCH carriage is stage 5) |
 
 use std::sync::Arc;
 
@@ -171,6 +172,7 @@ impl Snap for Ast {
             lang_c,
             freestanding,
             contract_sites,
+            written_refs: _,
             symbols,
             inst,
         } = self;
@@ -254,6 +256,7 @@ impl Snap for Ast {
             lang_c,
             freestanding,
             contract_sites,
+            written_refs: crate::written_refs::WrittenRefs::default(),
             symbols,
             inst,
         };

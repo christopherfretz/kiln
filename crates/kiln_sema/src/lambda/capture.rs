@@ -1345,6 +1345,10 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 continue;
             };
+            if c.var.is_none() {
+                // The written capture name (spec/ast.md §18.4).
+                self.note_written_capture(nloc, var);
+            }
             // The elements of a capture pack instantiated from
             // `ts...` share a name, not a variable (templ/subst/lambda.rs
             // names each one).

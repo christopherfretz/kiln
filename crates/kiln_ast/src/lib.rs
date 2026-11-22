@@ -45,6 +45,7 @@ mod sve_builtins;
 mod sve_checks;
 pub mod templates;
 pub mod types;
+pub mod written_refs;
 mod x86_builtins;
 
 pub use ast::Ast;

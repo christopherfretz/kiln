@@ -380,6 +380,7 @@ impl SyntaxJob<'_> {
             x86_features: if x86 { feats.extra.clone() } else { Vec::new() },
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
+            written_refs: a.dump_written_refs,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
@@ -595,6 +596,9 @@ impl SyntaxJob<'_> {
             crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
         }
         result.output.push_str(&tu.cfg_dump);
+        if a.dump_written_refs {
+            result.output.push_str(&tu.ast.written_refs.dump(&tu.ast, sm, main_id));
+        }
         let ast = tu.ast;
         #[cfg(test)]
         let ast = crate::snap_tests::observe(ast, sm, main_id);

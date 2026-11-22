@@ -57,6 +57,7 @@ pub struct Ast {
     pub consts: ConstStore,        // §9
     pub reflections: ReflectionTable, // §10 (M6)
     pub layouts: LayoutCache,      // spec/types.md §11
+    pub written_refs: WrittenRefs, // §18, opt-in (off by default)
     pub tu: DeclId,                // the TranslationUnitDecl
     symbols: Arc<kiln_lex::Interner>,
 }
@@ -112,6 +113,7 @@ After a node is created its header and side record are immutable, except:
 | `RedeclGroup.latest/definition` | on each redeclaration / definition | sema |
 | `DeclFlags::{USED, REFERENCED, INVALID}` | monotone set | sema |
 | lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
+| `WrittenRefs` entries (§18) | append-only; `entity`/`found` of an overloaded name patched once by overload resolution; `enclosing` narrowed by declaration claims | parser / sema |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
 pattern creates fresh decls/exprs/stmts (with `instantiated_from` links,
@@ -1355,7 +1357,10 @@ impls and their classification tables; every other table derives `Snap`.
   table; the string pool's table. A later intern of existing content
   returns the old id, and new content gets the id it would have got in
   the original.
-- **Transient**: `TypeContext.profile_scratch` (reset).
+- **Transient**: `TypeContext.profile_scratch` (reset); `written_refs`
+  (§18: not written, read back empty and off; the restoring compilation
+  turns recording on again from its own options, so a written-reference
+  dump covers the names after the snapshot only, until stage 5).
 - **Validated** on read (an `Invalid` error, never a panic): arena
   lengths agree (dummies present, `functions`/`min_args` paired), every
   node's payload or side index is inside the table it indexes, type
@@ -1383,3 +1388,209 @@ impls and their classification tables; every other table derives `Snap`.
 Tests: `crates/kiln_driver/src/snap_tests.rs` (round trips of the
 `bench/pch` prefixes and a GCC 16 `<meta>` prefix, corruption), and
 `largest_records_are_fixed_size` in `types/snap.rs`.
+
+## 18. The written-reference table (WP-1930)
+
+An opt-in side table of the names written in the source, each with the
+declaration it denotes. It serves tooling clients (cross-referencers,
+renamers, include checkers) that need "what does this spelling name" for
+every written name, without re-resolving. `kiln_ast::written_refs`; the
+field `Ast::written_refs`. Built in five stages:
+
+| stage | content | row |
+|---|---|---|
+| 1 | the table, its iterators and dump; expression names, member names, nested-name-specifier components before them, with the `qualifier` chain | WP-1930 |
+| 2 | type names in every type-specifier context, template names, base specifiers, member-initializer ids | WP-1931 |
+| 3 | declarative contexts: using-declarations and -directives, namespace alias targets, declarator-id qualifiers, elaborated and friend references, specialization targets, concept names, designators | WP-1932 |
+| 4 | per-specialization entries for dependent names | WP-1933 |
+| 5 | carriage in PCH snapshots and module images; the identifier-accounting completeness test | WP-1934 |
+
+### 18.1 Contract
+
+- **Opt-in.** `WrittenRefs::is_on()` is false unless the front end's
+  `ParseOptions::written_refs` is set (the driver's
+  `-fkiln-dump-written-refs` sets it). Off, every recording site costs
+  one predictable branch on that flag and allocates nothing; the table
+  is empty, `Ast::memory()` has no row for it and the snapshot and image
+  layouts are those of a compiler without it.
+- **One entry per written name.** A name is recorded once where the
+  parser consumed it, however many times lookup ran on it, when the
+  expression it names is built: after the names in its own template
+  argument list, before those of a following call's arguments; a
+  qualifier's components come before the name they qualify. Clients that need source order sort by `range`. Names are recorded from parser call sites, never from the
+  sema actions they call (those also run for implicit names and during
+  instantiation), except where noted in §18.4.
+- **Read access**: `iter()` (all entries, with their `WrittenRefId`),
+  `get(id)`, `len()`, `enclosed_by(d)` (the entries whose `enclosing` is
+  `d`), `dump(ast, sm, main)` (§18.6). Entries are never removed after
+  the parse except by `truncate` (§18.5).
+
+### 18.2 The entry (28 bytes, a `size_of` unit test)
+
+| field | type | meaning |
+|---|---|---|
+| `range` | `Span` (8) | the name as written: `lo` the start of its first token, `hi` the end of its last token, as kiln token locations (macro provenance intact, §18.5). The name only: `a::b::f` is three entries. An operator-function-id (`operator==`, `operator""_x`, `operator new[]`) is one entry over all its tokens; a destructor name `~T` has the range of `T` |
+| `entity` | `Option<DeclId>` (4) | the declaration the name denotes after resolution: for an overloaded name, the function overload resolution selected (a function template specialization when it selected one); through a using-shadow, the underlying declaration. `None` for a dependent name in a template pattern and for a name whose resolution failed (flags tell which) |
+| `found` | `Option<DeclId>` (4) | what lookup found when it differs from `entity`: the using-shadow (`found_decl` of the reference), or the function or variable template whose specialization `entity` is |
+| `enclosing` | `Option<DeclId>` (4) | the innermost declaration whose source extent contains the name's first token (§18.3); `None` only when the table was filled without a TU |
+| `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, or `GLOBAL` for a leading `::`; `NONE` for an unqualified name |
+| `role` | `RefRole` (1) | the syntactic role (§18.4) |
+| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed) |
+
+Two padding bytes remain. Deviation from a 4-byte `entity`-only design:
+`found` and `qualifier` are stored, not derived, because deriving `found`
+needs the expression (not kept for nested-name-specifier components) and
+deriving the chain needs range arithmetic over tokens.
+
+`RefQualifier` is a `u32`: 0 none, `u32::MAX` global, otherwise a
+`WrittenRefId` index + 1. A qualifier entry always precedes the entry it
+qualifies.
+
+### 18.3 `enclosing`
+
+Stored, not derived from ranges. The rule: the innermost declaration
+whose source extent contains the name's first token — the particular
+redeclaration (a reopened namespace, the definition of a function, the
+class being defined). For a name inside a declaration (its type, its
+initializer, its default argument, its declarator-id qualifier) that is
+the declaration being declared.
+
+Mechanism: an entry is recorded with sema's current lexical context
+(`Sema::ctx`: the namespace, class or function whose body is being
+parsed). A declaration whose names are parsed before its `DeclId`
+exists claims them: the parser takes `Ast::written_ref_mark()` (entry
+count, decl count) at the declaration's start and calls
+`claim_written_refs(mark, d)` once `d` exists (after the declarator,
+again after the initializer). A claim sets `enclosing = d` on entries
+after the mark whose current `enclosing` was created before the mark,
+so a declaration nested inside (a lambda, a local class, a parameter)
+keeps its own entries: the innermost claim wins. Claimers in stage 1:
+simple declarations (each declarator), function definitions, member
+declarators, function parameters (their default arguments included,
+also when late-parsed), late-parsed default member initializers and
+concept definitions (their constraint-expression). A requires-expression's
+parameter scope is skipped: its names are enclosed by the context
+around it. Other declarations (template parameters and a template
+head's requires-clause, enumerators, alias and `static_assert`
+declarations, structured bindings, condition variables) leave their
+names enclosed by the lexical context; WP-1980 adds them.
+
+### 18.4 Roles
+
+`RefRole` is `#[repr(u8)]` and covers the full set; stage 1 fills
+`Expr`, `Member` and `Nns`, and `Concept` for a concept-id parsed as an
+id-expression.
+
+| role | dump | example (bracketed) | stage |
+|---|---|---|---|
+| `Expr` | `expr` | `x = [f](y);` `&[g]` `[Enumerator]` `case [E]:` capture `[[x]]{}` `[operator==](a, b)` | 1 |
+| `Member` | `member` | `a.[m]` `p->[m]()` `p->~[T]()` `a.[operator+](b)` | 1 |
+| `Type` | `type` | `[T] x;` `new [T]` `sizeof([T])` `typename A::[type]` | 2 |
+| `Template` | `template` | `[vector]<int>` CTAD `[pair] p{1,2};` `X<[vector]>` `a.template [f]<int>()` | 2 |
+| `Nns` | `nns` | `[a]::[b]::f()` `[T]::x` `[Enum]::e` `[alias]::f()`; declarator-ids in stage 3 | 1 |
+| `Base` | `base` | `struct D : [B]` | 2 |
+| `MemInit` | `mem-init` | `D() : [B](1), [m](2) {}` | 2 |
+| `UsingDecl` | `using-decl` | `using a::[f];` `using enum [E];` | 3 |
+| `UsingDirective` | `using-directive` | `using namespace [n];` | 3 |
+| `NamespaceAlias` | `ns-alias` | `namespace x = a::[b];` | 3 |
+| `Elaborated` | `elaborated` | `class [X]* p;` `friend class [Y];` `friend void [f](int);` naming an existing entity | 3 |
+| `SpecTarget` | `spec-target` | `template <> struct [hash]<T> {};` `template class [vector]<int>;` | 3 |
+| `Concept` | `concept` | `template <[C] T>` `requires [C]<T>` `[C] auto x`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
+| `Designator` | `designator` | `{ .[field] = 1 }` | 3 |
+
+Not in the table: a declaration's own name at its declaration,
+keywords, labels, attribute names, and implicit references with no
+written name (implicit conversions and constructor calls, operator
+uses such as `a == b`, coroutine and structured-binding helpers).
+
+Stage-1 recording sites (all in `kiln_parse` unless noted):
+
+- id-expressions (`parse_id_expression_rest`, `parse_operator_id_expression`):
+  plain and qualified names, enumerators, `&f`, `case E:`, template-ids
+  (the template name; its arguments are their own entries), operator-
+  and literal-operator-ids, `X::~X()` in a member function;
+- member access (`parse_member_access_suffix`): `.`/`->` names,
+  qualified members, `template` members, operator-function-ids,
+  `p->~T()` (pseudo-destructors of scalar types have no entity and are
+  stage 2);
+- nested-name-specifier components preceding them
+  (`parse_nested_name_upto`): namespace, namespace-alias, class, enum,
+  typedef, template-id and dependent components, each with its own
+  entry and `qualifier` link; a `decltype(...)::` component has no
+  entry (its operand's names have their own) and the component after it
+  has no `qualifier` link;
+- lambda captures (`kiln_sema::lambda::capture`, parse path only):
+  `[x]`, `[&x]`, `[x...]`, enclosed by the declaration containing the
+  lambda-expression (the closure type is not a written declaration); an
+  init-capture declares a name and is not an entry.
+
+The entity of an id-expression or member name comes from the built
+expression (`DeclRefExpr`, `MemberExpr`; implicit casts and
+`ConstantExpr` peeled). When the expression is an overload set
+(`UnresolvedLookupExpr`, `UnresolvedMemberExpr`) the entry is made at
+the name with no entity and remembered against the set's `ExprId`; the
+overload-resolution funnels (`finish_overload_ref`,
+`resolve_member_call`, address-of-overload resolution) patch
+`entity`/`found` once with the winner. An unqualified template-id
+that names member function templates (`s<char>()` inside a member) is
+rebuilt as an implicit member access: the remembered set moves to the
+rebuilt `UnresolvedMemberExpr` (`WrittenRefs::retarget`) before
+`resolve_member_call` patches it. A concept-id parsed as an
+id-expression (`ConceptSpecializationExpr`) records role `concept` with
+the concept as entity. A set that is never resolved
+(a dependent call in a pattern, a call that failed) stays without an
+entity. Patching runs only outside instantiation (instantiation builds
+new expressions; their entries are stage 4).
+
+### 18.5 Speculation, macros, templates, PCH
+
+- **Speculation.** kiln's parser never re-parses consumed tokens:
+  disambiguation (`kiln_parse::tentative`) is a side-effect-free token
+  scan that classifies names without building or recording anything, and
+  late-parsed regions (default arguments, default member initializers,
+  member function bodies) are replayed exactly once. So a name has one
+  entry however often it was classified, and an abandoned scan leaves
+  none. `mark()`/`truncate(mark)` exist for any future rollback (they
+  also drop pending overload patches); none is needed in stage 1.
+- **Macros.** `range` holds the token locations the lexer gives, so an
+  entry for a name from a macro body or argument has a macro-expansion
+  location and the source manager maps it to its spelling and expansion
+  points as for diagnostics.
+- **Templates.** Inside a pattern, a non-dependent name has its entity
+  as resolved at definition; a dependent name (`DependentScopeDeclRefExpr`,
+  dependent members, a dependent call's callee, a dependent
+  nested-name-specifier component) has `entity: None` and
+  `DEPENDENT`. Instantiation records nothing. Stage 4 adds a separate
+  table keyed by (pattern entry, specialization) — reserved, not
+  allocated: the main table's entry shape does not change. Default
+  arguments and default member initializers are entries once, at the
+  written site.
+- **PCH and modules.** Not carried in stage 1: the field is transient
+  in the snapshot (§17), so a TU restored from a snapshot or importing a
+  module has entries for the names it parsed itself only. Stage 5 writes
+  the table into snapshots and images.
+
+### 18.6 The dump
+
+`-fkiln-dump-written-refs` (with `-fsyntax-only` or any compiling mode)
+prints, after diagnostics' end of the TU, one line per entry:
+
+```
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::] [in=<enclosing>] [dep] [exp=<line>:<col>]
+```
+
+Positions are the spelling locations of `lo` and `hi` (the end column
+is one past the name's last character), prefixed with the file's base
+name and `:` when not in the main file. `<spelling>` is the source text
+of the range. `<entity>`, `found=` and `in=` print the declaration's
+qualified name (lambdas as `(lambda)`) and `@<line>:<col>` of its
+location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
+for the translation unit. `q=` names the qualifier entry by its start
+position. `exp=` is the outermost expansion point of a name written in
+a macro. The harness directive `written-refs: <golden>`
+(spec/harness.md) compares this dump with a golden file.
+
+Tests: `crates/kiln_ast/src/written_refs.rs` (entry size, off records
+nothing, claims, truncation), `tests/conformance/written_refs/` (one per
+stage-1 role, the worked example, macros, tentative parses, overload
+patching, dependent names).

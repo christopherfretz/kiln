@@ -390,6 +390,7 @@ impl StdCache {
         a.dump_record_layouts = false;
         a.dump_vtable_layouts = false;
         a.dump_cfg = false;
+        a.dump_written_refs = false;
         a.cfg_stats = false;
         a.memory_report = false;
         // The importer's profile and report cover its own translation
