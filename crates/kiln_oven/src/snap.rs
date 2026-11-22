@@ -33,6 +33,7 @@
 //! | `dms` | state + transient | the data member descriptions, annotation lists and the reader's plan and layouts as data; reused buffers reset |
 //! | `budget`, `backtrace_limit` | configuration | `-fconstexpr-steps`, `-fconstexpr-depth`, `-fconstexpr-memory`, the memo size, `-fconstexpr-backtrace-limit` |
 //! | `inlining` | configuration | [`Oven::set_inlining`] (tests only; the sites the snapshot inlined stay inlined) |
+//! | `host` | configuration | the host-call handler, which the consumer registers itself; none may be registered while a snapshot is written (spec/host-calls.md §6) |
 //! | `clang_compat`, `cxx_year` | configuration | `-fclang-compat=`, `-std=` (sema also sets both before every evaluation) |
 //! | `hooks` | configuration + transient | the trace and profile switches and sink (`-ftime-trace`, `-fconstexpr-stats`, `-fconstexpr-profile`); no call mark open |
 //! | `cev_warn_next`, `ub_check_next`, `contracts_off_next`, `potential_next`, `plain_next`, `void_next`, `addr_next`, `unchecked_next` | transient, at rest | set by a caller just before one evaluation: false / `None` |
@@ -142,6 +143,11 @@ impl Oven {
         if self.ctx_depth != 0 {
             return busy(&format!("ctx_depth: {} evaluations are running", self.ctx_depth));
         }
+        if self.host.handler.is_some() {
+            // What a host call produced belongs to this compilation
+            // (spec/host-calls.md §6).
+            return busy("host: a host-call handler is registered");
+        }
         if !self.stack.is_empty() || !self.cleanups.is_empty() {
             return busy("stack: call frames are live");
         }
@@ -218,6 +224,7 @@ impl Oven {
             backtrace_limit: _,
             inlining: _,
             clang_compat: _,
+            host: _,
             cxx_year: _,
             cev_warn_next: _,
             ub_check_next: _,

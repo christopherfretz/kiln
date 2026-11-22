@@ -2158,7 +2158,12 @@ impl Oven {
         // Its own initialization: its contract assertions are evaluated
         // ([expr.const.init]/4.1 ignores only the variable's own).
         self.run.contracts_off = false;
+        // Computing a variable's value for a read is a hidden, second
+        // evaluation of its initializer: a host call there is speculative
+        // (spec/host-calls.md §4).
+        let host = self.host_enter(crate::host::HostMode::Speculative);
         let r = self.unbound(|o| o.eval_at(b, init, Some(d), top));
+        self.host_leave(host);
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
         self.ctx_depth -= 1;

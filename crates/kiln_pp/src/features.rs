@@ -83,6 +83,10 @@ fn std_index(std: Std) -> u16 {
     }
 }
 
+/// The host-call builtin, a kiln extension clang does not have
+/// ([`ClangFeatures::with_kiln_host_calls`]).
+const KILN_HOST_CALL: &str = "__builtin_kiln_host_call";
+
 /// Unscoped standard attributes kiln implements beyond clang 22's tables:
 /// (minimum [`std_index`], name, `__has_cpp_attribute` value).
 const KILN_CPP_ATTRIBUTES: &[(u16, &str, u32)] = &[
@@ -206,6 +210,9 @@ pub struct ClangFeatures {
     /// `__FLT_EVAL_METHOD__` from `-ffp-eval-method=` (`None`: the
     /// target's).
     flt_eval_method: Option<i32>,
+    /// `__builtin_kiln_host_call` is declared: a host-call handler is
+    /// registered (spec/host-calls.md §1).
+    kiln_host_calls: bool,
 }
 
 /// Target builtins whose `__has_builtin` answer depends on the enabled
@@ -261,6 +268,7 @@ impl ClangFeatures {
             no_builtin_fns: Vec::new(),
             c_bit: 0,
             flt_eval_method: None,
+            kiln_host_calls: false,
         })
     }
 
@@ -277,6 +285,15 @@ impl ClangFeatures {
     #[must_use]
     pub fn with_flt_eval_method(mut self, v: i32) -> ClangFeatures {
         self.flt_eval_method = Some(v);
+        self
+    }
+
+    /// These answers with `__builtin_kiln_host_call` present (`on`) or
+    /// absent, as sema declares it exactly while a host-call handler is
+    /// registered (spec/host-calls.md §1, WP-1990).
+    #[must_use]
+    pub fn with_kiln_host_calls(mut self, on: bool) -> ClangFeatures {
+        self.kiln_host_calls = on;
         self
     }
 
@@ -556,6 +573,9 @@ impl FeatureQueries for ClangFeatures {
     }
 
     fn has_builtin(&self, name: &str) -> u32 {
+        if name == KILN_HOST_CALL {
+            return u32::from(self.kiln_host_calls);
+        }
         if let Some(v) = self.target_builtins.as_ref().and_then(|t| t.answer(name)) {
             // A target builtin clang 19 has and clang 22 dropped (the MMX
             // builtins clang 20 removed, `__builtin_ia32_maskmovq`) is
@@ -582,6 +602,9 @@ impl FeatureQueries for ClangFeatures {
     }
 
     fn has_constexpr_builtin(&self, name: &str) -> bool {
+        if name == KILN_HOST_CALL {
+            return self.kiln_host_calls;
+        }
         self.lookup(Kind::ConstexprBuiltin, table::CONSTEXPR_BUILTIN, name) != 0
     }
 

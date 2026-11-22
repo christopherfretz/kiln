@@ -17,6 +17,7 @@ say which in the PR. A spec change without tests is incomplete.
 | [lex.md](lex.md) | kiln_lex | draft |
 | [pp.md](pp.md) | kiln_pp | draft |
 | [oven.md](oven.md) | kiln_oven | design |
+| [host-calls.md](host-calls.md) | kiln_oven (`host`), kiln_sema, kiln_pp, kiln_codegen, kiln_driver (`host_test`) | implemented (WP-1990) |
 | [harness.md](harness.md) | xtask (`cargo xtask test`) | implemented |
 | [bench.md](bench.md) | xtask (`cargo xtask bench`) | implemented |
 | [clang-neg.md](clang-neg.md) | xtask (`cargo xtask clang-neg`) | implemented (WP-912) |

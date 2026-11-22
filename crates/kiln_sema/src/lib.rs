@@ -189,6 +189,7 @@ pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::profile::Level as ProfileLevel;
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
+pub use kiln_oven::{HostCalls, HostError, HostOut};
 pub use never_constant::BuiltinQuery;
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
@@ -719,6 +720,10 @@ pub struct Sema<'a, 'sm> {
     /// so taking it out and putting it back moves a pointer, not the
     /// evaluator (WP-645).
     pub(crate) oven: Option<Box<Oven>>,
+    /// A host-call handler is registered on the Oven, so
+    /// `__builtin_kiln_host_call` is declared ([`Sema::set_host_calls`],
+    /// spec/host-calls.md §1).
+    pub(crate) host_calls: bool,
     /// The implicitly declared global allocation functions.
     pub(crate) global_ops: new_delete::GlobalOps,
     /// Braced-init-list call arguments awaiting their parameter types
@@ -1696,6 +1701,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),
             oven: Some(Box::new(Oven::new(Budget::default()))),
+            host_calls: false,
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),

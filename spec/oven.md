@@ -2327,6 +2327,9 @@ take `_Float32x`/`_Float64x` operands directly. Test:
   call whose span contains it is cached (WP-1524 item 7). Only code that
   reflects a local pays the one instruction; every other call is cached
   as before (`meta.reflection.extract/local-escape-memo-neg.cpp`).
+- A call that ran a host call (`__builtin_kiln_host_call`, or a refused
+  one) is not cached, nor is any call pending around it: each bumps
+  `run.impure` (spec/host-calls.md §5, WP-1990).
 
 ### Performance — normative targets, recorded baselines
 No heap allocation per evaluation once warm (no boxing of values, no hash

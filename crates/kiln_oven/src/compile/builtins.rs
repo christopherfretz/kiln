@@ -1087,6 +1087,29 @@ impl Compiler<'_> {
                     op(self, bi::MEMBER_LAYOUT, 2 - n as u32, [a, b, b], [ta, tb], begin);
                 }
             }
+            // WP-1990: a host call (spec/host-calls.md; `vm/host.rs`): the
+            // nine arguments evaluated in order into consecutive
+            // registers, whose first index is the raw operand `a`.
+            id::KILN_HOST_CALL => {
+                if args.len() != 9 {
+                    return None;
+                }
+                let elem = |s: &mut Self, x: ExprId| {
+                    let t = s.ety(x);
+                    match s.kind(t) {
+                        TyKind::Ptr(t) => Some(t.0),
+                        _ => None,
+                    }
+                };
+                let (t1, t2) = (elem(self, args[1])?, elem(self, args[3])?);
+                let base = self.next;
+                self.next += 9;
+                self.max = self.max.max(self.next);
+                for (i, &x) in args.iter().enumerate() {
+                    self.rv_into(x, base + i as u32);
+                }
+                self.emit_site(Op::Builtin, bi::HOST_CALL, &[dst, base, 0, 0, t1, t2], e, begin);
+            }
             id::IS_STRING_LITERAL => {
                 let p = self.rv(arg(0)?);
                 op(self, bi::STRING_LIT, 0, [p, p, p], [0, 0], begin);

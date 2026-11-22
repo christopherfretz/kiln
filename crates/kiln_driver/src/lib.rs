@@ -26,6 +26,7 @@ pub mod features;
 pub mod fp_flags;
 mod help;
 pub mod hod;
+mod host_test;
 pub mod link;
 pub mod llvm;
 mod mason_meta;
@@ -1114,6 +1115,22 @@ fn run_jobs(
     };
     pch_snapshot::phase("pch record and snapshot validation");
     let args: &Args = pch_args.as_ref().unwrap_or(args);
+    if args.host_call_test_handler
+        && let Some(what) = host_test::artifact(args, &inputs)
+    {
+        // spec/host-calls.md §6: what a host call produced belongs to
+        // this compilation.
+        let sm = SourceManager::new();
+        let e = make_engine(
+            &sm,
+            &codegen_cmd::driver_diag_options(diag_opts),
+            io.stderr.clone(),
+            Some(&args.program),
+        );
+        Diag::new(DiagId::drv_host_calls_artifact, Span::INVALID).arg(what).emit(&e);
+        e.flush();
+        return 1;
+    }
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();

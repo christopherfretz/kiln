@@ -26,6 +26,9 @@ drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kil
 drv_hod_failed = WarningNoWerror [HodFallback] (2) "hod failed ({0}): {1}; falling back to llc";
 drv_hod_failed_strict = Error (2) "hod failed ({0}): {1} (KILN_HOD_STRICT=1: no fallback)";
 drv_hod_not_found = Error (1) "-fkiln-backend=hod: no hod executable found (searched {0})";
+// WP-1990: a host-call handler with an output that outlives the
+// compilation (spec/host-calls.md §6).
+drv_host_calls_artifact = Error (1) "-fkiln-host-call-test-handler cannot be used when writing {0}";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
 // WP-1798: clang `err_drv_incompatible_fp_eval_method_options`.
 drv_incompatible_fp_eval_method_options = Error (1) "option 'ffp-eval-method' cannot be used with option {0:'fapprox-func'|'mreassociate'|'freciprocal'}";

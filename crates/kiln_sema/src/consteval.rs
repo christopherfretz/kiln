@@ -149,6 +149,13 @@ pub(crate) struct ImmState {
     /// of its own, so it is reported there (clang
     /// `CXXDefaultArgExpr::getUsedLocation`).
     pub(crate) default_use_locs: FxHashMap<ExprId, Loc>,
+    /// The failed immediate invocations whose evaluation called the
+    /// host-call handler, with the failure: a later check of the same
+    /// invocation, or of the initializer of the variable it was deferred
+    /// for, reuses the failure instead of calling the handler again
+    /// (spec/host-calls.md §5). Empty without a handler.
+    #[snap(skip)]
+    host_failed: Vec<(ExprId, EvalFailure)>,
 }
 
 /// The results of the immediate invocations of a default argument or
@@ -489,6 +496,11 @@ impl Sema<'_, '_> {
         if mine.is_empty() {
             return;
         }
+        let host_failed = if self.imm.after_var.is_empty() {
+            std::mem::take(&mut self.imm.host_failed)
+        } else {
+            Vec::new()
+        };
         let has_value = self.ast.decls.var(v).is_some_and(|x| {
             x.spec.is_constexpr() && matches!(x.eval.state(), VarEvalState::Value(_))
         });
@@ -507,7 +519,11 @@ impl Sema<'_, '_> {
             return;
         }
         for (_, c, callee, again) in mine {
-            match self.eval_immediate(c) {
+            let r = match host_failed.iter().find(|&&(x, _)| x == c) {
+                Some((_, f)) => Err(f.clone()),
+                None => self.eval_immediate(c),
+            };
+            match r {
                 // A shared wrapper is the template definition's.
                 Ok(val) if !again => {
                     let _ = self.ast.exprs.set_constant_value(c, val);
@@ -967,6 +983,12 @@ impl Sema<'_, '_> {
     }
 
     fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        if self.host_calls
+            && let Some((_, f)) = self.imm.host_failed.iter().find(|&&(x, _)| x == c)
+        {
+            return Err(f.clone());
+        }
+        let calls = self.host_calls_made();
         let at = self.begin_loc(c);
         // A full-expression sema builds during the evaluation (a template
         // argument `substitute` converts) is finished on its own: it must
@@ -979,7 +1001,36 @@ impl Sema<'_, '_> {
         if self.impure_evals() != before && self.in_template() {
             self.imm.point_dependent.push(c);
         }
+        // A template's invocation is evaluated again by each
+        // instantiation, which calls the handler for its own.
+        if let Err(f) = &r
+            && self.host_calls_made() != calls
+            && !self.in_template()
+        {
+            self.imm.host_failed.push((c, f.clone()));
+        }
         r
+    }
+
+    /// The calls the host-call handler received so far (0 without one).
+    fn host_calls_made(&self) -> u64 {
+        if !self.host_calls {
+            return 0;
+        }
+        self.oven.as_ref().map_or(0, |o| o.host_call_count())
+    }
+
+    /// The failure of an immediate invocation of `v`'s initializer that
+    /// called the host-call handler and was deferred until `v` is checked
+    /// ([`ImmState::host_failed`]): checking the initializer reports it
+    /// rather than evaluating the invocation again.
+    pub(crate) fn host_failed_init(&self, v: DeclId) -> Option<EvalFailure> {
+        if !self.host_calls {
+            return None;
+        }
+        self.imm.after_var.iter().filter(|&&(w, ..)| w == v).find_map(|&(_, c, ..)| {
+            self.imm.host_failed.iter().find(|&&(x, _)| x == c).map(|(_, f)| f.clone())
+        })
     }
 
     /// The result of immediate invocation `c` of the full-expression being

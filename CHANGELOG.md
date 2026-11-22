@@ -19,6 +19,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   line per name. Off by default, with no cost beyond one branch per
   name; not carried in PCH snapshots or module images yet
   (spec/ast.md §18).
+- Host calls for tooling clients (WP-1990, spec/host-calls.md): a
+  program embedding kiln can register a Rust handler (`HostCalls`, with
+  `HostOut` and `HostError`, through `parse_preprocessed_with_host`)
+  that constant evaluation calls through
+  `__builtin_kiln_host_call(op, in, n_in, bin, n_bin, out, cap_out,
+  bout, cap_bout)`. The builtin exists only with a handler registered.
+  Its ranges are checked before the handler runs, it is never memoized,
+  a handler error ends the evaluation with its message, and a call in a
+  speculative evaluation or at run time is an error. No precompiled
+  header or module file is written with a handler. PCH snapshot format
+  120.
 - Header units' external definitions (WP-1800): while a header unit is
   built (by `-fmodule-header` or at an import), a definition of a
   non-inline function or variable with external linkage is now clang's

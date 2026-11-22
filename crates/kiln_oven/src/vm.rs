@@ -34,6 +34,7 @@ mod builtins;
 pub(crate) mod exc;
 pub(crate) use inline::InlSite;
 mod fast;
+mod host;
 mod inline;
 mod life;
 mod meta;
@@ -341,6 +342,10 @@ pub(crate) enum Fault {
     /// error lands at the declaration (clang 22's `__builtin_abs` of the
     /// most negative value).
     Quiet,
+    /// A host call that failed: a range check, a handler's `Err` or a
+    /// handler bug (spec/host-calls.md §2), with the note's text. It
+    /// cannot be caught.
+    Host(Box<str>),
     PtrCmp {
         p: u64,
         q: u64,
@@ -760,6 +765,9 @@ impl Oven {
         }
         if aux & 0xff == crate::kbc::bi::MINMAX {
             return Ok(u128::from(self.minmax_fast(fb + arg(1), aux >> 8, OTy(t1))));
+        }
+        if aux & 0xff == crate::kbc::bi::HOST_CALL {
+            return self.exec_host_call(b, pc, fb + arg(1), (OTy(t1), OTy(t2)));
         }
         let (a, bb, c) = (reg(1), reg(2), reg(3));
         if aux & 0xff == crate::kbc::bi::THAW_PTR {

@@ -495,6 +495,7 @@ impl Oven {
                 )
             }
             Fault::Quiet => (site.loc, String::new()),
+            Fault::Host(msg) => (site.loc, msg.into_string()),
             // clang 22 note_constexpr_pointer_arith_unspecified; clang 19's
             // generic note.
             Fault::PtrArith { p, q, pointee } if self.clang_compat >= 22 => (

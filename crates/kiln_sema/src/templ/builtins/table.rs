@@ -468,6 +468,10 @@ pub static TABLE: &[Row] = &[
     f("__builtin_is_within_lifetime", DONE, Oven::Yes),
     // WP-473: kiln extension, the Oven's `Op::IsConstEval` (aux 2).
     f("__kiln_plainly_constant_evaluated", DONE, Oven::Yes),
+    // WP-1990: kiln extension, the Oven's `bi::HOST_CALL`; declared and
+    // reported by `__has_builtin` only while a host-call handler is
+    // registered (spec/host-calls.md §1).
+    f("__builtin_kiln_host_call", DONE, Oven::Yes),
     // WP-484: GCC's (libstdc++ `<meta>` declares `std::is_string_literal`
     // over it); sema `builtin_is_string_literal`, the Oven `bi::STRING_LIT`.
     f("__builtin_is_string_literal", DONE, Oven::Yes),

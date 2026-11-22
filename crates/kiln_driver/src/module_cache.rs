@@ -400,6 +400,7 @@ impl StdCache {
         a.constexpr.profile = None;
         a.constexpr.report = None;
         a.crash_for_testing = None;
+        a.host_call_test_handler = false;
         a.verbose = false;
         let source_text = source.display().to_string();
         let log = Log::default();

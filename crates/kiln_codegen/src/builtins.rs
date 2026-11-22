@@ -76,6 +76,8 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId, compat: u32) -> bool {
         || builtin_callee(ast, e).is_some_and(|(_, b)| {
             b != id::IS_CONSTANT_EVALUATED
             && b != id::KILN_PLAINLY_CONSTANT_EVALUATED
+            // A host call runs in constant evaluation only (WP-1990).
+            && b != id::KILN_HOST_CALL
             && id::checked_op(b).is_none()
             && id::carry_op(b).is_none()
             // WP-630: nor an x86 builtin with a pointer operand
@@ -604,6 +606,11 @@ impl Cg<'_> {
         let v = match b {
             id::IS_CONSTANT_EVALUATED | id::KILN_PLAINLY_CONSTANT_EVALUATED => {
                 V::C(self.m.const_bool(false))
+            }
+            // A host call is never code (spec/host-calls.md §4, WP-1990).
+            // At the callee's name, as the Oven's notes are.
+            id::KILN_HOST_CALL => {
+                return err(self.loc_of(self.sub(e)), "host call outside constant evaluation");
             }
             // clang `Builtin::BI__builtin_complex`: the two parts.
             id::COMPLEX => {
