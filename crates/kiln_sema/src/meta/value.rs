@@ -511,6 +511,14 @@ impl Sema<'_, '_> {
     /// given the reflection as an argument is memoized (the memo key
     /// holds the reflection's bits only).
     pub(super) fn note_frame_read(&self, d: DeclId, oven: &mut Oven) {
+        // A structured binding reads its decomposition (WP-2161).
+        let d = match self.kind_of(d) {
+            DeclKind::Binding => match self.ast.decls.binding_decomp(d) {
+                Some(e) => e,
+                None => return,
+            },
+            _ => d,
+        };
         let local = self.kind_of(d) == DeclKind::ParmVar
             || (self.ast.decls.var(d).is_some() && !self.has_static_storage(d));
         if local {
@@ -628,6 +636,19 @@ impl Sema<'_, '_> {
                 // `extract-value<U>(constant_of(r))`
                 // ([meta.reflection.extract]/12; GCC 16.1 rejects it).
                 DeclKind::Binding if !self.ast.types.is_reference(tc) => {
+                    // One of a decomposition of a live frame of this
+                    // evaluation is read there, as an automatic variable
+                    // is (`extract_local`), when `T` is its type; else
+                    // through `constant_of`, which reads it there too
+                    // (WP-2161).
+                    if let Some(addr) = oven.meta_ref_local(d) {
+                        let bt = self.ast.decls.get(d).ty().map(|q| self.ast.types.canonical(q));
+                        if bt.is_some_and(|u| {
+                            tc.without_quals() == u.without_quals() && !self.ast.types.is_array(u)
+                        }) {
+                            return Ok(MetaOut::Live { addr, by_ref: false });
+                        }
+                    }
                     let c = self.reflect_constant_of(r, ctx, oven)?;
                     self.extract_constant(r, c, t, ctx, oven)
                 }

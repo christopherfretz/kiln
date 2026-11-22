@@ -700,6 +700,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   reflection's bits (WP-2074): a second call after `x` changed returned
   the first call's value, in any constant evaluation and across the runs
   of an evaluation session.
+- `std::meta::extract` and `constant_of` of a structured binding
+  introduced in the running constant evaluation (`auto [a, b] = P{1, 2};
+  extract<int>(^^a)`, a reference or tuple-like decomposition too), and
+  `constant_of` of a local variable or parameter of a live frame, are
+  constants, read as the frame holds them, also in a function the
+  reflection was passed to (WP-2161, [meta.reflection.extract]): they
+  failed with "the value of 'a' is not usable in a constant expression".
 - A parenthesised call of `std::min` or `std::max` read for its value,
   `1ull << (std::min((size_t)31, n))`, no longer stops the Oven with an
   internal error ("expected a call, found ParenExpr") (WP-2061): the

@@ -392,6 +392,31 @@ pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     }
 }
 
+/// Whether structured binding `b` names a subobject of (or, tuple-like,
+/// the referent of a holding variable of) an automatic decomposition:
+/// what a reflection of it read by `extract`/`constant_of` finds in a
+/// live frame (spec/oven.md "Reflected locals", WP-2161). A bit-field
+/// binding has no address, and one of a vector or complex value names
+/// no addressable member: neither is.
+pub(crate) fn is_local_binding(ast: &kiln_ast::Ast, b: DeclId) -> bool {
+    if ast.decls.get(b).kind() != DeclKind::Binding {
+        return false;
+    }
+    let (Some(e), Some(x)) = (ast.decls.binding_decomp(b), ast.decls.binding_expr(b)) else {
+        return false;
+    };
+    if !is_local_var(ast, e) || ast.exprs.get(x).object_kind() == ObjectKind::BitField {
+        return false;
+    }
+    if ast.decls.binding_var(b).is_some() {
+        return true;
+    }
+    let Some(t) = ast.decls.get(e).ty() else { return false };
+    let t = ast.types.canonical(t);
+    let t = if ast.types.is_reference(t) { ast.types.pointee(t).unwrap_or(t) } else { t };
+    ast.types.is_array(t) || matches!(ast.types.canonical_view(t), TypeView::Record(_))
+}
+
 impl Oven {
     /// The function index of `d` (a stub until first called).
     pub(crate) fn func_index(&mut self, ast: &kiln_ast::Ast, d: DeclId) -> u32 {
@@ -2070,6 +2095,15 @@ impl Scan<'_> {
                         self.refl.insert(d, u32::MAX);
                     }
                 }
+                // A reflected structured binding of an automatic
+                // decomposition gets, like a reflected reference, an
+                // object holding the address of what it names
+                // (`Compiler::bind_reflected`; WP-2161).
+                if let kiln_ast::reflect::Reflectee::Decl(b) = ast.exprs.reflect_operand(e)
+                    && is_local_binding(ast, b)
+                {
+                    self.refl.insert(b, u32::MAX);
+                }
             }
             ExprKind::CompoundAssignOperator => {
                 self.expr(ExprId::new(n.a()), ok);
@@ -2519,7 +2553,8 @@ impl Compiler<'_> {
                 mem.push((d, ty, is_const));
             }
         }
-        if mem.is_empty() && !force {
+        let bound = self.reflected_bindings(&decls);
+        if mem.is_empty() && bound.is_empty() && !force {
             self.scopes.push(None);
             return;
         }
@@ -2533,7 +2568,76 @@ impl Compiler<'_> {
                 *slot = p;
             }
         }
+        // A reflected binding's object, made with its block and ended
+        // with it (`Self::bind_reflected` stores the address).
+        for (b, ty) in bound {
+            let p = self.reg();
+            self.alloc_var(p, ty, b, false);
+            if let Some(slot) = self.refl_refs.get_mut(&b) {
+                *slot = p;
+            }
+        }
         self.scopes.push(Some(mark));
+    }
+
+    /// The reflected structured bindings ([`Self::refl_refs`]) of the
+    /// decompositions among `decls`, each with the type of the object
+    /// holding the address of what it names (a reference to its type).
+    fn reflected_bindings(&mut self, decls: &[DeclId]) -> Vec<(DeclId, OTy)> {
+        if self.refl_refs.is_empty() {
+            return Vec::new();
+        }
+        let ast = self.b.ast();
+        let bs: Vec<DeclId> = decls
+            .iter()
+            .filter_map(|&d| ast.decls.decomp_bindings(d))
+            .flat_map(|l| ast.lists.iter::<DeclId>(l))
+            .filter(|b| self.refl_refs.contains_key(b))
+            .collect();
+        bs.into_iter().filter_map(|b| Some((b, self.binding_slot_ty(b)?))).collect()
+    }
+
+    /// The type of the object holding the address of what reflected
+    /// binding `b` names: a reference to the binding's type.
+    fn binding_slot_ty(&mut self, b: DeclId) -> Option<OTy> {
+        let t = self.b.ast().decls.get(b).ty().filter(|&t| t != QualType::ERROR)?;
+        let r = self.b.lvalue_ref_to(t)?;
+        Some(self.ty(r))
+    }
+
+    /// Stores, for each reflected binding of decomposition `d` (just
+    /// initialized, its holding variables too), the address of the
+    /// object it names into the object `open_scope` made for it (or one
+    /// made here), so that `extract`/`constant_of` of its reflection
+    /// read it while its block lasts ([`Oven::meta_ref_local`];
+    /// [meta.reflection.extract]: the decomposition's lifetime began
+    /// within the evaluation; WP-2161). Nothing for a body that reflects
+    /// no binding of `d`.
+    fn bind_reflected(&mut self, d: DeclId) {
+        if self.refl_refs.is_empty() {
+            return;
+        }
+        let ast = self.b.ast();
+        let Some(l) = ast.decls.decomp_bindings(d) else { return };
+        let bs: Vec<DeclId> =
+            ast.lists.iter::<DeclId>(l).filter(|b| self.refl_refs.contains_key(b)).collect();
+        for b in bs {
+            let Some(x) = self.b.ast().decls.binding_expr(b) else { continue };
+            let Some(ty) = self.binding_slot_ty(b) else { continue };
+            let m = self.next;
+            if let Place::Mem(p) = self.lv(x, Access::Addr) {
+                let slot = match self.refl_refs.get(&b) {
+                    Some(&s) if s != u32::MAX => s,
+                    _ => {
+                        let s = self.reg();
+                        self.alloc_var(s, ty, b, false);
+                        s
+                    }
+                };
+                self.emit(Op::InitStore, 0, &[slot, p, ty.0]);
+            }
+            self.next = m;
+        }
     }
 
     /// Opens the scope of the full-expression `e` (an
@@ -3542,12 +3646,14 @@ impl Compiler<'_> {
     fn decl(&mut self, d: DeclId) {
         let hs = holding_vars(self.b.ast(), d);
         if let Some(init) = self.held_decomp_init(d, &hs) {
-            return self.decl_held(d, init, &hs);
+            self.decl_held(d, init, &hs);
+        } else {
+            self.decl_one(d);
+            for h in hs {
+                self.decl_one(h);
+            }
         }
-        self.decl_one(d);
-        for h in hs {
-            self.decl_one(h);
-        }
+        self.bind_reflected(d);
     }
 
     /// The initializer of block-scope automatic decomposition `d` with
@@ -3604,6 +3710,9 @@ impl Compiler<'_> {
         let hs = v.map(|v| holding_vars(self.b.ast(), v)).unwrap_or_default();
         for &h in &hs {
             self.decl_one(h);
+        }
+        if let Some(v) = v {
+            self.bind_reflected(v);
         }
         !hs.is_empty()
     }
@@ -4128,7 +4237,7 @@ impl Compiler<'_> {
                     self.konst(dst, u128::from(id.bits()));
                     let ast = self.ast();
                     if let kiln_ast::reflect::Reflectee::Decl(d) = ast.exprs.reflect_operand(e)
-                        && is_local_var(ast, d)
+                        && (is_local_var(ast, d) || is_local_binding(ast, d))
                     {
                         self.emit(Op::IsConstEval, 32, &[dst]);
                     }

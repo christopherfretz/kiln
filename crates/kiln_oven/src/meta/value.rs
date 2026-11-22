@@ -271,6 +271,35 @@ impl Oven {
         r.map(Some).map_err(freeze_err)
     }
 
+    /// The value of the object of type `q` at frame address `addr` (one
+    /// [`Oven::meta_local`] or [`Oven::meta_ref_local`] found), frozen as
+    /// [`Oven::meta_freeze`] freezes it: `constant_of` of an automatic
+    /// variable, parameter or structured binding whose lifetime began
+    /// within the running evaluation ([meta.reflection.queries]: the
+    /// splice `[: r :]` reads it there; WP-2161).
+    ///
+    /// # Errors
+    /// The notes of a value that is no constant; the evaluator's fault
+    /// reading it.
+    pub fn meta_freeze_live(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        addr: u64,
+        q: QualType,
+        loc: Loc,
+    ) -> Result<ConstValueId, MetaError> {
+        let o = self.types.intern(b, q);
+        let r = if self.types.wide(o).is_some() {
+            self.freeze_wide(b, addr, o, loc)
+        } else if self.types.is_aggregate(o) {
+            self.freeze_aggregate(b, o, addr, loc)
+        } else {
+            let v = self.load(addr, o, ak::READ).map_err(fault)?;
+            self.freeze_scalar(b, o, v, loc)
+        };
+        r.map_err(freeze_err)
+    }
+
     /// The number of elements [`Oven::meta_freeze_elems`] takes from
     /// range argument `r` (data | length << 64): its length, less the
     /// terminator when `string` and the range is a whole string literal
