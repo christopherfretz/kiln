@@ -1,0 +1,33 @@
+18:9-18:14  type  'Mutex' -> Mutex@13:32 in=Mutex::operator!@18:16 how=injected
+20:1-20:6  type  'Mutex' -> Mutex@13:32 in=global_mu@20:7
+21:1-21:6  type  'Mutex' -> Mutex@13:32 in=other_mu@21:7
+21:34-21:43  expr  'global_mu' -> global_mu@20:7 in=other_mu@21:7 exp=21:16
+22:27-22:36  expr  'global_mu' -> global_mu@20:7 in=counter@22:5 exp=22:13
+23:27-23:36  expr  'global_mu' -> global_mu@20:7 in=ptr@23:6 exp=23:10
+24:43-24:52  expr  'global_mu' -> global_mu@20:7 in=with_global@24:6 exp=24:20
+25:17-25:22  type  'Mutex' -> Mutex@13:32 in=m@25:24
+25:50-25:51  expr  'm' -> m@25:24 in=with_param@25:6 exp=25:27
+26:36-26:45  expr  'global_mu' -> global_mu@20:7 in=negative@26:6 exp=26:17
+27:1-27:6  type  'Mutex' -> Mutex@13:32 in=get_mu@27:8
+27:34-27:43  expr  'global_mu' -> global_mu@20:7 in=get_mu@27:8 exp=27:17
+31:17-31:24  type  'Account' -> Account@28:8 in=to@31:26 how=injected
+34:3-34:8  type  'Mutex' -> Mutex@13:32 in=Account::mu_@34:9
+35:10-35:15  type  'Mutex' -> Mutex@13:32 in=Account::shared_mu@35:16
+39:5-39:10  type  'Mutex' -> Mutex@13:32 in=Account::Inner::inner_mu@39:11
+29:29-29:32  expr  'mu_' -> Account::mu_@34:9 in=Account::balance@29:7 exp=29:15
+30:46-30:49  expr  'mu_' -> Account::mu_@34:9 in=Account::Deposit@30:8 exp=30:23
+31:53-31:56  expr  'mu_' -> Account::mu_@34:9 in=Account::Transfer@31:8 exp=31:30
+31:58-31:60  expr  'to' -> to@31:26 in=Account::Transfer@31:8 exp=31:30
+31:61-31:64  member  'mu_' -> Account::mu_@34:9 in=Account::Transfer@31:8 exp=31:30
+32:50-32:53  expr  'mu_' -> Account::mu_@34:9 in=Account::Try@32:8 exp=32:14
+33:51-33:54  member  'mu_' -> Account::mu_@34:9 in=Account::Both@33:8 exp=33:15
+33:56-33:63  nns  'Account' -> Account@28:8 in=Account::Both@33:8 exp=33:15 how=injected
+33:65-33:68  expr  'mu_' -> Account::mu_@34:9 q=33:56 in=Account::Both@33:8 exp=33:15
+36:40-36:49  expr  'shared_mu' -> Account::shared_mu@35:16 in=Account::Static@36:8 exp=36:17
+38:25-38:33  expr  'inner_mu' -> Account::Inner::inner_mu@39:11 in=Account::Inner::x@38:9 exp=38:11
+30:54-30:61  expr  'balance' -> Account::balance@29:7 in=Account::Deposit@30:8
+30:65-30:66  expr  'n' -> n@30:20 in=Account::Deposit@30:8
+43:3-43:4  type  'T' -> T@42:17 in=Guarded::value@43:5
+44:3-44:8  type  'Mutex' -> Mutex@13:32 in=Guarded::mu@44:9
+43:25-43:27  expr  'mu' -> Guarded::mu@44:9 in=Guarded::value@43:5 exp=43:11
+46:1-46:8  template  'Guarded' -> Guarded@42:27 in=g@46:14

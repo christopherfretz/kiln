@@ -10,6 +10,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
+  WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
+  using-directive their lookup went through (`SpecRef::udir`), re-find
+  dependent types rebuilt still dependent (generic lambdas, member
+  templates), cover using-declarations with a dependent qualifier in class
+  templates and the names they introduce, and record names in constraint
+  satisfaction and requires-expressions keyed by the concept or the
+  constrained template (cache hits keep the rows); `spec=` dump lines print
+  canonical template arguments, so dumps agree whatever the order and
+  spelling of instantiations; and the names in GNU thread-safety attribute
+  arguments (`guarded_by(mu)`, `requires_capability(m)`) are looked up for
+  the table, as clang parses them, without analysis. PCH FORMAT_VERSION
+  145, IMAGE_VERSION 78.
 - The written-reference table is carried in PCH snapshots and module
   images (stage 5, WP-1934; spec/ast.md §18.10): a TU restored from a
   snapshot made with the table continues its table (the dump equals the

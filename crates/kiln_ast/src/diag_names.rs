@@ -29,6 +29,9 @@ pub struct DiagNames<'s> {
     typed_args: Option<DeclId>,
     /// [`TypeNames::c_lang`]: `Some(c23)` for a C translation unit.
     c_lang: Option<bool>,
+    /// A specialization prints its canonical template arguments, not
+    /// the ones it was first named with ([`Self::canonical_args`]).
+    canonical_args: bool,
 }
 
 impl<'s> DiagNames<'s> {
@@ -46,6 +49,7 @@ impl<'s> DiagNames<'s> {
             clang_compat,
             typed_args: None,
             c_lang: None,
+            canonical_args: false,
         }
     }
 
@@ -84,6 +88,7 @@ impl<'s> DiagNames<'s> {
             clang_compat: 22,
             typed_args: None,
             c_lang: None,
+            canonical_args: false,
         }
     }
 
@@ -96,6 +101,39 @@ impl<'s> DiagNames<'s> {
     #[must_use]
     pub fn typed_args_of(self, f: DeclId) -> Self {
         DiagNames { typed_args: Some(f), ..self }
+    }
+
+    /// These names, printing every specialization with its canonical
+    /// template arguments (`measure<Vec>` however the first use spelled
+    /// them: `measure<VecAlias>`), so a name does not depend on which
+    /// use instantiated it first (kiln's own dumps: spec/ast.md §18.9.5).
+    #[must_use]
+    pub fn canonical_args(self) -> Self {
+        DiagNames { canonical_args: true, ..self }
+    }
+
+    /// `l`, canonical under [`Self::canonical_args`].
+    fn args(&self, l: crate::ids::ArgListId) -> crate::ids::ArgListId {
+        if self.canonical_args { self.ast.types.canonical_args(l) } else { l }
+    }
+
+    /// Writes the arguments `l` of specialization `d` with `names` (these
+    /// names, or a copy of them): as first named, or under
+    /// [`Self::canonical_args`] canonical and scoped (a canonical type has
+    /// no qualifier as written to print: `measure<lib::Item>`).
+    pub fn write_spec_args(
+        &self,
+        names: &DiagNames<'_>,
+        d: DeclId,
+        l: crate::ids::ArgListId,
+        out: &mut String,
+    ) {
+        if self.canonical_args {
+            let l = self.ast.types.canonical_args(l);
+            crate::types::write_arg_list_scoped_of(&self.ast.types, names, d, l, out);
+        } else {
+            crate::types::write_arg_list_of(&self.ast.types, names, d, l, out);
+        }
     }
 
     /// These names, printing a C translation unit (`Some(c23)`) as
@@ -219,7 +257,7 @@ impl<'s> DiagNames<'s> {
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);
-                    if let Some(args) = self.ast.spec_print_args(c) {
+                    if let Some(args) = self.ast.spec_print_args(c).map(|l| self.args(l)) {
                         // clang `AppendScope` / `printNestedNameSpecifier`
                         // print a specialization's canonical arguments,
                         // which carry no sugar to suppress their scope
@@ -345,7 +383,7 @@ impl DiagNames<'_> {
         }
         self.write_unscoped(c, s);
         if let Some(args) = self.ast.spec_print_args(c) {
-            crate::types::write_arg_list_of(&self.ast.types, self, c, args, s);
+            self.write_spec_args(self, c, args, s);
         }
     }
 }
@@ -360,7 +398,7 @@ impl TypeNames for DiagNames<'_> {
     }
 
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
-        self.ast.spec_print_args(decl)
+        self.ast.spec_print_args(decl).map(|l| self.args(l))
     }
 
     fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
@@ -368,7 +406,7 @@ impl TypeNames for DiagNames<'_> {
     }
 
     fn args_as_written(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
-        if self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
+        if self.canonical_args || self.ast.decls.get(decl).kind() != DeclKind::CXXRecord {
             return None;
         }
         self.ast.templates.args_as_written(decl)
@@ -400,7 +438,7 @@ impl TypeNames for DiagNames<'_> {
             && let Some((_, info)) = self.ast.spec_info(decl)
         {
             let typed = DiagNames { typed_args: Some(decl), ..*self };
-            crate::types::write_arg_list_of(&self.ast.types, &typed, decl, info.print_args, out);
+            self.write_spec_args(&typed, decl, info.print_args, out);
         }
     }
 

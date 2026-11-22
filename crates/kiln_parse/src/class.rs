@@ -71,8 +71,12 @@ impl LateFnParts {
 /// A class being defined and its saved complete-class contexts (clang's
 /// `ParsingClass`).
 pub(crate) struct LateClass {
-    record: DeclId,
+    pub(crate) record: DeclId,
     items: Vec<LateItem>,
+    /// Thread-safety attribute arguments saved while the table records
+    /// (spec/ast.md §18.8), waiting for the member declarator they
+    /// belong to.
+    pub(crate) attrs: Vec<LateToks>,
 }
 
 /// One saved complete-class context, in declaration order.
@@ -87,6 +91,11 @@ enum LateItem {
     /// with a deduced return type, replayed after its body
     /// ([dcl.contract.res]/2).
     Contracts { f: DeclId, toks: LateToks },
+    /// The arguments of a thread-safety attribute of member `decl`
+    /// (`None`: of no member declarator), from their `(`, parsed after
+    /// the class for the written-reference table only (spec/ast.md
+    /// §18.8; clang's `LateParsedAttribute`).
+    Attr { decl: Option<DeclId>, toks: LateToks },
     /// A nested class with saved contexts of its own.
     Nested(LateClass),
 }
@@ -103,7 +112,7 @@ impl LateClass {
     /// True if this class or a nested one has items of phase `ph`.
     fn has(&self, ph: Phase) -> bool {
         self.items.iter().any(|i| match i {
-            LateItem::Method { .. } => ph == Phase::Method,
+            LateItem::Method { .. } | LateItem::Attr { .. } => ph == Phase::Method,
             LateItem::Nsdmi { .. } => ph == Phase::Nsdmi,
             LateItem::Body { .. } | LateItem::Contracts { .. } => ph == Phase::Body,
             LateItem::Nested(c) => c.has(ph),
@@ -616,7 +625,7 @@ impl Parser<'_, '_> {
         let _trace = trace::Scope::with_detail("ParseClass", || self.decl_name(r));
         let saved = mem::take(&mut self.late_fn);
         let nested = !self.late.is_empty();
-        self.late.push(LateClass { record: r, items: Vec::new() });
+        self.late.push(LateClass { record: r, items: Vec::new(), attrs: Vec::new() });
         self.trace(|p| format!("start_record_definition({})", p.decl_name(r)));
         self.s.act_on_start_record_definition(r);
         if let Some(l) = final_loc {
@@ -663,6 +672,9 @@ impl Parser<'_, '_> {
         self.s.act_on_finish_record_definition(r, then_semi);
         let class = self.late.pop();
         if let Some(mut class) = class {
+            // Saved attribute arguments no member declarator took.
+            let attrs = mem::take(&mut class.attrs);
+            class.items.extend(attrs.into_iter().map(|toks| LateItem::Attr { decl: None, toks }));
             if nested {
                 if !class.items.is_empty()
                     && let Some(parent) = self.late.last_mut()
@@ -722,6 +734,10 @@ impl Parser<'_, '_> {
                     self.replay_member_contract_specs(*f, toks, ContractDeclKind::Definition);
                     self.s.act_on_finish_delayed_method(*f);
                     self.s.act_on_exit_reentered_template_scopes(n);
+                }
+                LateItem::Attr { decl, toks } if ph == Phase::Method => {
+                    let toks = LateToks { toks: mem::take(&mut toks.toks), end: toks.end };
+                    self.replay_member_tsa_args(*decl, toks);
                 }
                 LateItem::Nested(c) => self.replay_phase(c, ph),
                 _ => {}
@@ -2147,7 +2163,35 @@ impl Parser<'_, '_> {
         });
         self.note_declarator_ref(decl, d);
         self.s.claim_written_refs(self.member_ref_mark, decl);
+        // Thread-safety attribute arguments saved for this declarator.
+        if let Some(c) = self.late.last_mut()
+            && !c.attrs.is_empty()
+        {
+            let d = target.or(decl);
+            let attrs = mem::take(&mut c.attrs);
+            c.items.extend(attrs.into_iter().map(|toks| LateItem::Attr { decl: d, toks }));
+        }
         (decl, target)
+    }
+
+    /// The saved thread-safety attribute arguments of member `decl`, in
+    /// the completed class (spec/ast.md §18.8): a member function's see
+    /// its parameters and `this`. Their names are claimed by `decl`.
+    fn replay_member_tsa_args(&mut self, decl: Option<DeclId>, toks: LateToks) {
+        let mark = self.s.written_ref_mark();
+        match decl.filter(|&f| self.s.ast.decls.function(f).is_some()) {
+            Some(f) => {
+                let n = self.s.act_on_reenter_template_scopes(f);
+                self.s.act_on_start_delayed_method(f);
+                let this = self.s.act_on_start_delayed_exception_spec(f);
+                self.replay_tsa_args(toks);
+                self.s.act_on_end_this_scope(this);
+                self.s.act_on_finish_delayed_method(f);
+                self.s.act_on_exit_reentered_template_scopes(n);
+            }
+            None => self.replay_tsa_args(toks),
+        }
+        self.s.claim_written_refs(mark, decl);
     }
 
     /// The declarator's name, for traces.

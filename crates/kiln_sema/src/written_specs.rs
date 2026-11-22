@@ -25,9 +25,9 @@ impl Sema<'_, '_> {
     /// (spec/ast.md §18.9.2): the innermost instantiation frame's entity
     /// (an alias template's or a default template argument's frame: the
     /// template), the specialization a function template's signature is
-    /// substituted for, or `None` outside an instantiation and inside a
-    /// check that is not one (constraint satisfaction, default-argument
-    /// checking).
+    /// substituted for, the declaration whose constraints are being
+    /// satisfied, or `None` outside an instantiation and inside a check
+    /// that is not one (default-argument checking).
     pub(crate) fn written_spec_key(&self) -> Option<DeclId> {
         let over = self.ast.written_refs.spec_key();
         for (i, f) in self.inst.stack.frames.iter().enumerate().rev() {
@@ -37,16 +37,43 @@ impl Sema<'_, '_> {
                 return Some(s);
             }
             match f.kind {
-                // Parts of the instantiation around them.
-                FrameKind::LambdaSubstitution | FrameKind::BindingInit => {}
+                // Parts of the instantiation around them; a
+                // requires-expression's requirements are part of what
+                // contains the requires-expression (§18.9.2).
+                FrameKind::LambdaSubstitution
+                | FrameKind::BindingInit
+                | FrameKind::RequirementInstantiation => {}
                 FrameKind::AliasTemplate | FrameKind::DefaultTemplateArg => {
                     return Some(f.template);
+                }
+                k if k.is_constraint_substitution() || k.is_satisfaction_check() => {
+                    match self.kind_of(f.entity) {
+                        DeclKind::RequiresExprBody => {}
+                        // A builtin trait's own check (`__is_invocable`).
+                        DeclKind::TranslationUnit => return None,
+                        _ => return Some(self.constraint_spec_key(f.entity)),
+                    }
                 }
                 k if k.is_instantiation() => return Some(f.entity),
                 _ => return None,
             }
         }
         over.map(|(_, s)| s)
+    }
+
+    /// The key of a name in the constraints of `entity` being satisfied
+    /// (§18.9.2): the declaration they belong to, a concept, a
+    /// constrained declaration or a member of a class template
+    /// specialization; a function or class template's templated
+    /// declaration, so the template's deduction frame does not drop the
+    /// rows as its own (§18.9.3).
+    fn constraint_spec_key(&self, entity: DeclId) -> DeclId {
+        match self.kind_of(entity) {
+            DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {
+                self.pattern_of(entity).unwrap_or(entity)
+            }
+            _ => entity,
+        }
     }
 
     /// The substituter rebuilt the pattern expression `pattern` as
@@ -160,6 +187,48 @@ impl Sema<'_, '_> {
         self.note_written_spec_qualifiers(w, spec, nns);
     }
 
+    /// The class template specialization's instantiation redid the
+    /// pattern's dependent using-declarator `pattern` (§18.9.4) with the
+    /// substituted qualifier `nns` (naming the class `ctx`) and the name
+    /// `name`: `inst` is the using-declaration it made (`None`: it failed
+    /// with an error since `errors`), an `UnresolvedUsing*` member while
+    /// the qualifier is still dependent. The row's entity is the
+    /// declaration the main table would record for the declarator written
+    /// with that qualifier (§18.4): the first it introduced, else the
+    /// first qualified lookup finds.
+    pub(crate) fn note_written_spec_using(
+        &mut self,
+        pattern: DeclId,
+        inst: Option<DeclId>,
+        scope: Option<(NnsId, DeclId, kiln_ast::names::DeclName)>,
+        errors: u32,
+    ) {
+        let Some(w) = self.ast.written_refs.pattern_entry(PatternNode::Decl(pattern)) else {
+            return;
+        };
+        let entity = match inst.map(|i| (i, self.kind_of(i))) {
+            Some((i, DeclKind::UnresolvedUsingValue | DeclKind::UnresolvedUsingTypename)) => {
+                if i != pattern {
+                    self.ast.written_refs.note_pattern_node(PatternNode::Decl(i), w);
+                }
+                return;
+            }
+            Some((i, _)) => {
+                let first = self.ast.using_shadows(i).next().map(|s| self.ast.strip_shadow(s));
+                first.or_else(|| {
+                    let (_, ctx, name) = scope?;
+                    let f = self.lookup_qualified_dn(ctx, name, crate::lookup::LookupKind::All);
+                    f.decls.first().map(|&x| self.ast.strip_shadow(x))
+                })
+            }
+            None if self.inst.stack.is_sfinae() || self.diags.error_count() <= errors => return,
+            None => None,
+        };
+        let Some(spec) = self.written_spec_key() else { return };
+        self.push_written_spec(w, spec, entity, None);
+        self.note_written_spec_qualifiers(w, spec, scope.map(|s| s.0));
+    }
+
     /// Overload resolution chose `d` (found as `found`; `None`: it failed)
     /// for the rebuilt overload set `x` of an instantiation: its
     /// per-specialization entry (§18.9.4).
@@ -207,6 +276,11 @@ impl Sema<'_, '_> {
         self.ast.written_refs.update_spec(id, |r| {
             if let Some(h) = how {
                 r.how = h;
+                // Found only by argument-dependent lookup, which ignores
+                // using-directives ([basic.lookup.argdep]/4).
+                if h == RefLookup::Adl {
+                    r.udir = None;
+                }
             }
             r.adl = Some(set);
         });
@@ -243,6 +317,7 @@ impl Sema<'_, '_> {
             entity,
             found: found.filter(|&f| Some(f) != entity),
             adl: None,
+            udir: None,
             flags,
             how: RefLookup::None,
         };
@@ -252,6 +327,14 @@ impl Sema<'_, '_> {
             && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)
         {
             row.how = RefLookup::Builtin;
+        }
+        // The using-directive ordinary lookup at the definition found the
+        // selected declaration through (§18.9.1).
+        if let Some(e) = entity
+            && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)
+        {
+            let key = self.ast.first(self.ast.strip_shadow(row.found.unwrap_or(e)));
+            row.udir = self.ast.written_refs.pattern_udir(w, key);
         }
         self.ast.written_refs.push_spec(row)
     }

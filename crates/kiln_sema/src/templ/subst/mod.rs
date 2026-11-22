@@ -25,6 +25,7 @@ use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind, EnumData};
 use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
+use kiln_ast::written_refs::PatternNode;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
 use kiln_source::symbol::Symbol;
@@ -320,7 +321,37 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
     }
 
+    /// The dependent type `q`, substituted at anchor `loc`, was rebuilt
+    /// as `r`, still dependent (a generic lambda's body rebuilt by the
+    /// enclosing template's instantiation): `r`'s node stands for `q`'s
+    /// entry in the instantiation that resolves it, which substitutes `r`
+    /// at the same anchor (spec/ast.md §18.9.4; one branch while nothing
+    /// is recorded).
+    #[inline]
+    pub(crate) fn note_spec_still_dependent(&mut self, q: QualType, loc: Loc, r: QualType) {
+        if !self.sema.ast.written_refs.has_pattern_nodes() {
+            return;
+        }
+        let at = self.pattern_loc(q, self.written_peek(WrittenKey::Type(q), loc));
+        let Some(w) =
+            self.sema.ast.written_refs.pattern_entry(PatternNode::Type(q.without_quals(), at))
+        else {
+            return;
+        };
+        let at = self.pattern_loc(r, self.written_peek(WrittenKey::Type(r), loc));
+        self.sema.ast.written_refs.note_pattern_node(PatternNode::Type(r.without_quals(), at), w);
+    }
+
+    /// [`Self::written`] without remembering the occurrence it returns.
+    fn written_peek(&self, key: WrittenKey, loc: Loc) -> Loc {
+        self.written_at(key, loc, false)
+    }
+
     pub(crate) fn written(&self, key: WrittenKey, loc: Loc) -> Loc {
+        self.written_at(key, loc, true)
+    }
+
+    fn written_at(&self, key: WrittenKey, loc: Loc, remember: bool) -> Loc {
         use crate::templ::written::WrittenSide;
         if !self.written_locs {
             return loc;
@@ -340,7 +371,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             None => self.sema.written_loc_in(key, loc, Some(sc)),
         };
-        let _ = self.written_used.borrow_mut().insert(key, found);
+        if remember {
+            let _ = self.written_used.borrow_mut().insert(key, found);
+        }
         found
     }
 

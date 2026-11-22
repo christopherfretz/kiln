@@ -6,7 +6,7 @@
 21:26-21:27  type  'S' -> outer::inner::S@11:8 q=21:19 in=(tu)
 24:45-24:46  nns  'T' -> T@24:17 in=via_param@24:24
 24:48-24:53  expr  'count' -> (dependent) q=24:45 in=via_param@24:24
-24:48-24:53  expr  'count' -> outer::inner::S::count@12:14 spec=via_param<SS>@24:24
+24:48-24:53  expr  'count' -> outer::inner::S::count@12:14 spec=via_param<outer::inner::S>@24:24
 27:10-27:15  nns  'outer' -> outer@8:11 in=qualified@26:5
 27:17-27:22  nns  'inner' -> outer::inner@9:11 q=27:10 in=qualified@26:5
 27:24-27:25  expr  'f' -> outer::inner::f@10:5 q=27:17 in=qualified@26:5

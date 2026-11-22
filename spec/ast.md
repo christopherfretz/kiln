@@ -2481,10 +2481,21 @@ an ICE of their own:
 - names in the arguments of thread-safety attributes
   (`guarded_by(mu)`, `requires_capability(mu)`, `acquire_capability(...)`:
   30), which kiln knows and skips unanalysed (WP-606), so their
-  names are never looked up (WP-2170);
+  names were never looked up; recorded since WP-2170 (below);
 - two diagnosed files on which the test's in-process front end panics
   in the Oven's `convert` (an integer to an `Opaque` type: WP-2141's
   ICE), reported as `panic` lines, not identifiers.
+
+Run again after WP-2170 (WP-2220: 3412 files, 312994 identifiers), 8
+are left: the two panics, and 6 identifiers in the arguments of
+attributes clang does not know (`frobnicate_lock(mu)`,
+`[[guarded_by(mu)]]`, `[[clang::guarded_by(mu)]]` in
+`dcl.attr.grammar/thread-safety-attributes-unknown.cpp`). Those are
+not names: clang takes a lone identifier argument of an unknown GNU
+attribute as an identifier argument and skips an unknown `[[...]]`
+attribute's tokens, looking nothing up, so the table rightly has no
+entry; the test does not yet list them as non-names (WP-2290). The
+pinned set is unchanged (733 files, 58989 identifiers, nothing left).
 
 Over the host's libstdc++ (WP-1934: GCC 14's headers on aarch64 Linux
 through `<bits/stdc++.h>`, 387763 identifiers) nothing is left. The
@@ -2492,6 +2503,36 @@ first run left 13, all non-names, now in the documented set above:
 GCC's `__attribute((...))` spelling (`__abi_tag__`, `__unused__`: 8)
 and the access mode of GCC's `access` attribute (`__read_only__`,
 `__none__`: 5).
+
+**Thread-safety attribute arguments (WP-2170).** While the table
+records, the arguments of the GNU thread-safety attributes (clang's
+`LateParsed` set: `guarded_by`, `pt_guarded_by`, `acquired_after`,
+`acquired_before`, `lock_returned`, `locks_excluded`, the
+`*_capability` and `*_lock_function` / `*_trylock_function` /
+`*_locks_required` / `assert_*_lock` families, 26 names) are captured
+at their `(` up to the matching `)` (the tokens the off path skips)
+and parsed for their names alone: a comma-separated list of string
+literals and assignment-expressions, unevaluated, with every
+diagnostic they produce dropped, and the attribute keeps no argument
+either way, so nothing is analysed and nothing else changes. When
+they are parsed is clang's: an attribute in a class's
+member-specification once the class is complete (after the member
+function bodies of the outermost class, its entries claimed by the
+member it belongs to, a member function's in its scope with `this`),
+so it names members declared after it; one on a function declarator
+elsewhere with its parameters in scope; any other where it is
+written. The `[[clang::x(...)]]` spellings are parsed where they are
+written already (clang does the same) and are unchanged. A name the
+arguments' lookup does not find is the entry an undeclared name gets
+anywhere else: no entity (the recovery's flags, printed `(dependent)`),
+and no diagnostic. No pattern node is remembered for them (§18.9.4):
+no instantiation rebuilds an attribute's arguments, so a dependent one
+has no rows, and a module image carries the entries without one.
+Off, the arguments are skipped as before: the test is one branch at
+the attribute's `(`.
+`tests/conformance/written_refs/attr-thread-safety.cpp`, the API
+test `thread_safety_arguments_are_entries` and the carry test
+`thread_safety_arguments_keep_the_image`.
 
 ### 18.9 Stage 4: per-specialization entries (WP-1933)
 
@@ -2505,7 +2546,7 @@ a separate table: the main table keeps one entry per written name.
 
 #### 18.9.1 Contract
 
-- **The table.** `WrittenRefs::specs()` yields the rows (`SpecRef`, 24
+- **The table.** `WrittenRefs::specs()` yields the rows (`SpecRef`, 28
   bytes, a `size_of` unit test), keyed by (pattern entry,
   specialization):
 
@@ -2516,12 +2557,25 @@ a separate table: the main table keeps one entry per written name.
   | `entity` | `Option<DeclId>` (4) | what the name denotes there, as §18.2's `entity` (a function template's specialization, a class's first declaration, ...); `None`: unresolved (§18.9.3) |
   | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
   | `adl` | `Option<AdlSetId>` (4) | a dependent unqualified call's associated set in this specialization (§18.7.4), interned with the main table's sets |
+  | `udir` | `Option<DeclId>` (4) | the using-directive ordinary lookup found `entity` (or `found`) through, as §18.7.3's: `None` when lookup found it directly, by argument-dependent lookup only (`how` `Adl`), or by qualified or member lookup |
   | `flags` | `u8` | `MEMBER` (the entry's), `UNRESOLVED` without an entity |
   | `how` | `RefLookup` | §18.7.2's `how` of the instantiation's lookup: `Member`, `Qualified`, `Unqualified`, `Adl`, `Both`, `Builtin`, or `None` without an entity |
 
-  Not recorded per specialization: the using-directive a lookup went
-  through (§18.7.3) and `Injected` (an injected-class-name names the
-  pattern's class, which is not dependent).
+  Not recorded per specialization: `Injected` (an injected-class-name
+  names the pattern's class, which is not dependent).
+- **The using-directive.** Ordinary unqualified lookup of a dependent
+  name runs at the pattern's definition ([temp.dep.candidate]/1,
+  [temp.res.general]/1); only argument-dependent lookup runs at the
+  point of instantiation. So the using-directive a row's declaration was
+  found through is decided at the definition: when the pattern's entry
+  is made, each namespace-scope candidate of the lookup is walked once
+  (§18.7.3's walk, the scopes of the definition) and the directive it
+  was found through, if any, is remembered per (entry, candidate); a
+  row whose `entity` (or `found`, for a specialization of a found
+  template) is one of them gets that directive. A dependent qualified
+  or member name looks its name up in a class at instantiation (a
+  namespace is never dependent) and gets none. A row whose `how` is
+  `Both` keeps the directive of its ordinary half.
 - **Kept once.** A row with the same content as a live row is not added
   again (a name rebuilt by two paths for one specialization, an alias
   template substituted twice with the same result). One entry can have
@@ -2533,10 +2587,12 @@ a separate table: the main table keeps one entry per written name.
   `specs()` (recording order) does. Clients and tests compare the rows
   sorted: the dump prints each entry's rows sorted (§18.9.5), and the
   API test compares sorted (pattern position, entity position,
-  specialization position) triples. The dump prints a specialization's
-  and an entity's name as diagnostics do, with the template arguments
-  as first written, so two orders compare equal when both write the
-  arguments the same way.
+  specialization position) triples. The dump prints a row's
+  specializations (its key, its entity and `found`) with their
+  canonical template arguments, scoped (§18.9.5), so two orders compare
+  equal however each spelled the arguments (an alias, a
+  using-declaration, a qualified name: [temp.type]/1 makes them one
+  specialization).
 - **Off.** Recording sites test one map, empty when off
   (`has_pattern_nodes`, §18.9.4): nothing is allocated and nothing is
   recorded; §18.9.6 measures it.
@@ -2594,13 +2650,37 @@ instantiation stack (§8.4) from the innermost frame:
   declaration) and one for each member template specialization (its
   signature's substitution).
 
+- a name in a constraint, resolved by satisfaction
+  ([temp.constr.atomic]/3: the atomic constraint's expression
+  substituted with the satisfying arguments; [temp.constr.sat]): the
+  declaration the constraint belongs to, the innermost constraint frame
+  (`ConstraintSubstitution`, `ConstraintsCheck`, `ConceptCheck`)'s
+  entity. That is the concept for the atoms of its
+  constraint-expression, also when they are checked for a constrained
+  declaration's `requires Sized<T>` (`Sized`); the constrained
+  declaration for the atoms of its own requires-clause or
+  type-constraint, a function or class template's templated declaration
+  (`len2`), a member of a class template specialization as itself
+  (`Box<V>::get`). The satisfying arguments are not in the key:
+  satisfaction is a check, not a specialization ([temp.constr.decl]),
+  and the rows are one per distinct resolution, as an alias template's.
+  The key does not depend on which check reached the atom, so a hit of
+  the satisfaction cache or the atomic-constraint cache, which skips
+  the substitution, loses nothing: the rows the first check recorded
+  have the same key, and "kept once" (§18.9.1) keeps the second
+  check's from duplicating them. A requires-expression's requirements
+  (`RequirementInstantiation`, and the `ConstraintSubstitution` frame of
+  its body) are part of what contains it: of the constraint, or of the
+  instantiation of a template whose definition has it (`if constexpr
+  (requires { t.size(); })` in `body<V>`). A builtin trait's own check
+  (its frame's entity is the translation unit) records nothing.
+
 Frames inside an instantiation that are not one themselves (a lambda's
 body substitution, a structured binding's initializer) are transparent.
 A frame that is a check, not an instantiation, stops the walk with no
-key, so nothing is recorded: constraint satisfaction, concept checks
-and requirements of a requires-expression ([temp.constr.sat]), partial
-specialization matching, default-argument checking, template template
-argument matching, building deduction guides, `std::meta::substitute`.
+key, so nothing is recorded: partial specialization matching,
+default-argument checking, template template argument matching,
+building deduction guides, `std::meta::substitute`.
 
 #### 18.9.3 Failures
 
@@ -2613,7 +2693,14 @@ argument matching, building deduction guides, `std::meta::substitute`.
   real instantiations nested in the deduction recorded stays (a class
   template specialization instantiated while the signature was
   substituted is instantiated, [temp.inst]/2), as do an alias
-  template's rows (§18.9.2).
+  template's rows (§18.9.2). A constraint's substitution
+  (`ConstraintSubstitution`, `RequirementInstantiation`) is a SFINAE
+  context too, but its frame drops nothing: what the satisfaction check
+  resolved is recorded for the constraint's declaration whether or not
+  the constraint is satisfied and whether or not the deduction around
+  it succeeds (a function template's constraints are keyed by its
+  templated declaration, not by the template the deduction frame
+  drops). A name that fails there records no row.
 - **An error** ([temp.res.general]/6: the program is ill-formed) keeps
   what the instantiation resolved: with kiln's error recovery, every
   name its rebuild reached, before the error and after it. The name
@@ -2636,7 +2723,10 @@ argument matching, building deduction guides, `std::meta::substitute`.
   overloaded member access with dependent arguments) and
   `PatternNode::Type(q, loc)` for a dependent type name (the interned
   dependent type without qualifiers, and the §5.8 written location of
-  its name).
+  its name), and `PatternNode::Decl(d)` for a using-declarator with a
+  dependent qualifier in a class template (`using T::size;`, `using
+  typename T::type;`: `d` is its `UnresolvedUsingValue` or
+  `UnresolvedUsingTypename` member).
 - **Expressions.** `Substituter::expr` and `Substituter::callee` look
   the pattern node up after each rebuild. The rebuilt node's target
   (`written_target`, §18.4) gives the row: a declaration, a concept or a
@@ -2659,16 +2749,57 @@ argument matching, building deduction guides, `std::meta::substitute`.
   found, with `found` for a specialization of a found template. An
   alias template's aliased type is substituted without §5.8 locations
   (diagnostics point at the alias's `using`); its pattern node is found
-  at the written occurrence of the type nearest to that point.
+  at the written occurrence of the type nearest to that point. A type
+  whose qualifier is still dependent after the substitution (a generic
+  lambda's body rebuilt by the enclosing template's instantiation:
+  `typename U::type`, `typename Pair<T, U>::type`,
+  `U::template rebind<T>`) is rebuilt as a new dependent type; that
+  type, at the substitution's anchor location, becomes a further pattern
+  node of the same entry (`note_spec_still_dependent`), and the call
+  operator specialization's instantiation, which substitutes the rebuilt
+  type at the same anchor (a rebuilt type has no §5.8 locations of its
+  own), resolves it and records the row keyed as §18.9.2 says for a
+  generic lambda. A member template's signature and body need no
+  further node: the class's instantiation substitutes its declaration
+  with the outer arguments (still dependent, no row), but the member
+  template specialization substitutes the pattern's (§18.9.2,
+  `Box<A>::conv<B>`).
 - **Argument-dependent lookup.** A dependent unqualified call's row gets
   §18.7.4's `how` and set from the facts `resolve_unresolved_call`
   reports, as the main table's call entries do.
-- **Not yet recorded** (follow-ups): the using-directive of a
-  per-specialization lookup; a dependent type rebuilt still dependent
-  and resolved by a later instantiation (inside a generic lambda, in a
-  member template's signature substituted with the outer arguments);
-  a using-declaration with a dependent qualifier in a class template;
-  names in constraint satisfaction.
+- **Using-declarations.** The class template specialization's
+  instantiation redoes each dependent using-declarator
+  (`member_using`, `member_using_typename`) and records its row keyed
+  by the class template specialization (§18.9.2: a member's
+  declaration): the entity is the one §18.4 gives the declarator
+  written with the substituted qualifier, the first declaration it
+  introduced (an inherited constructor for `using T::T;`), else the
+  first qualified lookup finds; `found` is empty (the using-declaration
+  is the declaration). A pack of declarators (`using Ts::operator()...;`)
+  gets one row per element. The qualifier's dependent components get
+  rows as for any qualified name. A declarator that fails with an error
+  gets a row with no entity (§18.9.3); one whose substituted qualifier
+  is still dependent (a local class of a generic lambda) makes its new
+  `UnresolvedUsing*` member a further pattern node of the entry. The
+  names the using-declaration introduces, used in the class's members:
+  an expression already finds the instantiated using-declaration's
+  shadow (`size()` → `V::size`, `found` the shadow `D<V>::size`); a
+  type (`t x;` after `using typename T::t;`) is an `UnresolvedUsing`
+  type the substituter replaces by the instantiated declaration's
+  type, which records the row the same way (entity the shadow's target,
+  `found` the shadow). Such a type has no §5.8 location (no diagnostic
+  needs one), so the recording site notes the location of each
+  occurrence while recording is on, and the substituter finds the
+  occurrence by it as for a dependent name.
+- **Using-directives.** The parse-time site of an unresolved
+  unqualified name (`UnresolvedLookupExpr`) that remembers its pattern
+  node also remembers its candidates' directives (§18.9.1, the map
+  `spec_udirs`, empty when off and when no using-directive is in
+  scope); `push_written_spec` reads it for an `Unqualified` or `Both`
+  row.
+- **Constraints.** No site of its own: an atom's substitution and a
+  requirement's rebuild are `Substituter::expr` and `ty_node` as
+  anywhere, and `written_spec_key` gives them §18.9.2's constraint key.
 
 #### 18.9.5 The dump
 
@@ -2676,15 +2807,23 @@ After each entry's line (§18.6), its rows, sorted and without
 duplicates (so the order of instantiation does not show):
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity>|(unresolved) [found=<decl>] spec=<specialization> [how=<how>] [adl-ns=...] [adl-cls=...] [adl-enum=...]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity>|(unresolved) [found=<decl>] spec=<specialization> [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=...] [adl-cls=...] [adl-enum=...]
 ```
 
 The positions, role and spelling are the entry's. `<entity>`, `found=`
-and the `adl-` lists print as in §18.6 and §18.7.5; `spec=` prints the
+and the `adl-` lists print as in §18.6 and §18.7.5, `udir=` as
+§18.7.5's; `spec=` prints the
 specialization's qualified name with its template arguments (a class or
 variable template specialization's too: `Table<Cfg>`,
 `scale_of<Feet>`) and `@<line>:<col>` of its location (the pattern's
-declaration). `how=` appears when it differs from the default §18.7.5
+declaration). On these lines every specialization, in `<entity>`,
+`found=` and `spec=` and in their scopes, prints its canonical template
+arguments, each type scoped as a canonical type prints
+(`measure<lib::Item>`, not `measure<Alias>` or `measure<Item>` as some
+use first wrote it; `DiagNames::canonical_args`): a specialization's
+own arguments as first written are the first use's, which the order of
+instantiation decides. The main table's lines keep the arguments as
+written. `how=` appears when it differs from the default §18.7.5
 derives from the row (no entity, its `MEMBER` flag, the entry's
 qualifier). The lines are path-free as §18.6's are.
 
@@ -2711,9 +2850,23 @@ aarch64 with the harness profile, interleaved rounds (base = WP-1932):
 On, the main table's dump is identical to the base's once the `spec=`
 lines are removed: stage 4 adds no main-table entry and changes none.
 
+WP-2220 (base = WP-1934; the same TU, debug builds, seven interleaved
+rounds on a host loaded by other builds, load average about 9): off,
+the tracked memory totals are byte-identical to the base (42 945 192
+bytes live) and peak RSS is 107 MB for both; time, minimum 9.44 s
+against 10.97 s, median 12.0 s against 16.7 s: within the host's
+noise. On: 11 829 rows against 11 000 (+829: the using-declarations,
+constraints and still-dependent types now recorded), the table from
+7 679 544 to 8 356 484 bytes live (+676 940, of which the 4-byte
+`udir` is 47 316; the rest the new rows, their pattern nodes and the
+using-directive map), peak RSS 115 MB to 116 MB. The main table's dump
+(209 861 lines without the `spec=` lines) is identical to the base's.
+The 29 `bench/oven` entries' `-fconstexpr-report` counters (all but
+`wall_us`) are identical.
+
 #### 18.9.7 Tests
 
-`crates/kiln_ast/src/written_refs.rs` (the row is 24 bytes, off records
+`crates/kiln_ast/src/written_refs.rs` (the row is 28 bytes, off records
 no pattern node, a row is kept once and an update that duplicates
 another merges into it, a SFINAE drop removes one specialization's rows
 only, truncation drops the rows and pattern nodes of the entries it
@@ -2731,9 +2884,17 @@ member initializer in two specializations (`inst-default-arg`), a
 generic lambda (`inst-generic-lambda`), variable and alias templates
 (`inst-var-template`), explicit instantiation (`inst-explicit`), a
 member template of a class template (`inst-nested`), a substitution
-failure (`inst-sfinae`), an instantiation error (`inst-error`), and the
+failure (`inst-sfinae`), an instantiation error (`inst-error`),
+using-directives at file, namespace and block scope, with
+argument-dependent lookup and both (`inst-udir`), dependent types a
+generic lambda's body rebuilds still dependent (`inst-rebuilt`),
+using-declarations with a dependent qualifier and the names they
+introduce (`inst-using`), names in constraints and requires-expressions,
+with a satisfaction-cache hit (`inst-constraint`), and the
 order of instantiation swapped (`inst-order-a`, `inst-order-b`, whose
-goldens differ only in the lines of `run`). The stage-1 to stage-3
+goldens differ only in the lines of `run`), also with the
+specializations first named through an alias in one and through the
+class in the other (`inst-spelling-a`, `inst-spelling-b`). The stage-1 to stage-3
 goldens with instantiated templates (`dependent`, `example`,
 `qualifiers`, `type-combined`) gain their rows.
 
@@ -2756,7 +2917,7 @@ names to be carried.
   side rows (using-directive, argument-dependent set); the interned sets;
   the directive cache; the deferred designators; the per-specialization
   rows, dropped rows included so every `SpecRefId` stays; the pattern
-  nodes; the unrecorded rows (§18.10.3). Maps are written as their
+  nodes and their candidates' using-directives (§18.9.1); the unrecorded rows (§18.10.3). Maps are written as their
   entries sorted by key, so the bytes do not depend on hashing.
   **Rebuilt** on read: the set index and the row de-duplication index,
   from the sets and the live rows. **Transient**: the scratch of one
@@ -2852,7 +3013,8 @@ LEB128 length, 0), and the image is that plus one `u32` 0 (a PCH file
 also stores its options as text, which gained the line of the new
 `written_refs` option). Their
 format versions are bumped (PCH `FORMAT_VERSION` 144, image
-`IMAGE_VERSION` 77). A restore or import that does not record reads
+`IMAGE_VERSION` 77; 145 and 78 for WP-2220's per-specialization
+using-directives). A restore or import that does not record reads
 the length and skips the section. Measured in §18.10.6.
 
 #### 18.10.5 Tests

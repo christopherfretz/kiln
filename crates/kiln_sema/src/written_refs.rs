@@ -107,8 +107,48 @@ impl Sema<'_, '_> {
         }
         if let Some(x) = node {
             self.ast.written_refs.note_pattern_node(PatternNode::Expr(x), id);
+            if pending.is_some() {
+                self.note_pattern_udirs(id, x);
+            }
         }
         Some(id)
+    }
+
+    /// The dependent overloaded name `x` of entry `id` (a dependent call's
+    /// callee, a template-id with dependent arguments): for each
+    /// namespace-scope declaration its ordinary lookup found through a
+    /// using-directive, that directive, which the rows of the
+    /// specializations that select the declaration name (spec/ast.md
+    /// §18.9.1). Ordinary lookup of such a name runs here, at the
+    /// definition ([temp.dep.candidate]), so the walk is the stage-3 one
+    /// over the scopes of the definition.
+    fn note_pattern_udirs(&mut self, id: WrittenRefId, x: ExprId) {
+        if self.ast.exprs.get(x).kind() != ExprKind::UnresolvedLookupExpr
+            || !self.any_using_directive()
+        {
+            return;
+        }
+        let decls = self.ast.unresolved_decls(x);
+        let name = self.ast.unresolved_name(x);
+        if name == kiln_ast::names::DeclName::EMPTY
+            || !decls.iter().any(|&d| self.in_namespace_scope(self.ast.strip_shadow(d)))
+        {
+            return;
+        }
+        let r = *self.ast.written_refs.get(id);
+        let Some((found, p)) = self.written_walk(&r, name, crate::lookup::LookupKind::Ordinary)
+        else {
+            return;
+        };
+        for d in decls {
+            let key = self.ast.first(self.ast.strip_shadow(d));
+            if !found.decls.iter().any(|&f| self.ast.first(self.ast.strip_shadow(f)) == key) {
+                continue;
+            }
+            if let Some(u) = self.written_udir_of(key, name, &p) {
+                self.ast.written_refs.note_pattern_udir(id, key, u);
+            }
+        }
     }
 
     /// Records the nested-name-specifier component written at `range`
@@ -206,9 +246,24 @@ impl Sema<'_, '_> {
         if flags == REF_DEPENDENT
             && let Some(t) = ty
         {
-            self.ast
-                .written_refs
-                .note_pattern_node(PatternNode::Type(t.without_quals(), range.lo), id);
+            let mut t = t.without_quals();
+            // A name a dependent `using typename T::x;` declared (an
+            // `UnresolvedUsing` type, elaborated without a keyword) has no
+            // §5.8 location of its own (no diagnostic needs it): the
+            // substituter finds its occurrence by this one.
+            if let TypeView::Elaborated {
+                keyword: kiln_ast::types::TagKeyword::None,
+                nns: None,
+                named,
+            } = self.ast.types.view(t.ty())
+                && matches!(self.ast.types.view(named.ty()), TypeView::UnresolvedUsing(_))
+            {
+                t = named.without_quals();
+            }
+            if matches!(self.ast.types.view(t.ty()), TypeView::UnresolvedUsing(_)) {
+                self.note_written_loc(crate::templ::written::WrittenKey::Type(t), range.lo);
+            }
+            self.ast.written_refs.note_pattern_node(PatternNode::Type(t, range.lo), id);
         }
         Some(id)
     }
@@ -389,7 +444,12 @@ impl Sema<'_, '_> {
             }
             None => (None, qual.is_some_and(|c| self.is_dependent_ctx(c))),
         };
-        self.note_written_decl_name(range, entity, RefRole::UsingDecl, q, dependent);
+        let id = self.note_written_decl_name(range, entity, RefRole::UsingDecl, q, dependent);
+        // The class template's instantiation redoes the declarator
+        // (stage 4, spec/ast.md §18.9.4).
+        if let (true, Some(id), Some(d)) = (dependent, id, d) {
+            self.ast.written_refs.note_pattern_node(PatternNode::Decl(d), id);
+        }
     }
 
     /// Records the field designator `.name` whose name is at `range`
@@ -632,14 +692,7 @@ impl Sema<'_, '_> {
             }
             _ => crate::lookup::LookupKind::Ordinary,
         };
-        let (found, p) = match r.qualifier.link() {
-            QualLink::None => self.lookup_name_provenance(name, kind),
-            QualLink::Global => self.lookup_qualified_walk(self.ast.tu, name, kind, true),
-            QualLink::Entry(q) => {
-                let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;
-                self.lookup_qualified_walk(ctx, name, kind, true)
-            }
-        };
+        let (found, p) = self.written_walk(r, name, kind)?;
         // A class template's injected-class-name is found as its pattern
         // ([temp.local]/1).
         let class_key = class.map(|c| self.ast.first(c));
@@ -659,23 +712,53 @@ impl Sema<'_, '_> {
                 }
                 _ => false,
             };
+        Some((injected, self.written_udir_of(key, name, &p)))
+    }
+
+    /// The lookup of entry `r`'s name `name` re-run in its provenance
+    /// form (§18.7.1): the scope walk, or the qualified walk in the scope
+    /// its qualifier names.
+    fn written_walk(
+        &self,
+        r: &WrittenRef,
+        name: kiln_ast::names::DeclName,
+        kind: crate::lookup::LookupKind,
+    ) -> Option<(crate::lookup::Found, crate::lookup::WalkProvenance)> {
+        Some(match r.qualifier.link() {
+            QualLink::None => self.lookup_name_provenance(name, kind),
+            QualLink::Global => self.lookup_qualified_walk(self.ast.tu, name, kind, true),
+            QualLink::Entry(q) => {
+                let ctx = self.written_qualifier_scope(self.ast.written_refs.get(q).entity?)?;
+                self.lookup_qualified_walk(ctx, name, kind, true)
+            }
+        })
+    }
+
+    /// The using-directive the walk `p` for `name` found `key` (a first
+    /// declaration) through (§18.7.3): none when it stopped in a class or
+    /// the scope it stopped in declares `key` itself.
+    fn written_udir_of(
+        &mut self,
+        key: DeclId,
+        name: kiln_ast::names::DeclName,
+        p: &crate::lookup::WalkProvenance,
+    ) -> Option<DeclId> {
         if p.in_class || p.udirs.is_empty() {
-            return Some((injected, None));
+            return None;
         }
         let key_of = |s: &Self, d: DeclId| s.ast.first(s.ast.strip_shadow(d));
         if let Some(ns) = p.scope
             && self.ast.lookup_local(ns, name).iter_ordinary().any(|d| key_of(self, d) == key)
         {
             // The scope's own declaration: no directive (§18.7.3).
-            return Some((injected, None));
+            return None;
         }
         let hit = p.udirs.iter().find(|&&(d, _, _)| key_of(self, d) == key).copied();
-        let udir = match hit {
+        match hit {
             Some((_, _, crate::lookup::UdirVia::Directive(d))) => Some(d),
             Some((_, n, crate::lookup::UdirVia::Namespace(h))) => self.find_using_directive(h, n),
             None => None,
-        };
-        Some((injected, udir))
+        }
     }
 
     /// The class a class, class template or specialization `d` names.

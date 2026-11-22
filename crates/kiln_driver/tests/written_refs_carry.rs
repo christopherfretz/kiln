@@ -298,3 +298,50 @@ fn a_module_compiled_without_the_table_is_unrecorded() {
         assert_eq!((quiet.code, quiet.stdout.as_str()), (0, ""), "{}", quiet.stderr);
     }
 }
+
+/// §18.8 (WP-2170): the names of a thread-safety attribute's arguments
+/// are entries but not pattern nodes (no instantiation rebuilds them), so
+/// a dependent or undeclared one in a module unit compiled with the
+/// table on does not cost the unit its image.
+#[test]
+fn thread_safety_arguments_keep_the_image() {
+    let dir = scratch("module-tsa");
+    let module = "export module tm;\n\
+                  export struct M { int mu; };\n\
+                  export template <class T> struct G {\n\
+                  \x20 int x __attribute__((guarded_by(T::mu)));\n\
+                  \x20 int y __attribute__((guarded_by(no_such_mutex)));\n\
+                  };\n";
+    std::fs::write(dir.join("tm.cppm"), module).unwrap();
+    std::fs::write(dir.join("use.cpp"), "import tm;\nG<M> g;\n").unwrap();
+    let made = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fkiln-bmi-image",
+            "-fkiln-written-refs",
+            "--precompile",
+            "-x",
+            "c++-module",
+            "tm.cppm",
+            "-o",
+            "tm.pcm",
+        ],
+    );
+    assert_eq!(made.code, 0, "{}", made.stderr);
+    let used = kiln(
+        &dir,
+        &[
+            "-std=c++20",
+            "-fsyntax-only",
+            "-v",
+            "-fkiln-bmi-image",
+            "-fkiln-dump-written-refs",
+            "-fmodule-file=tm=tm.pcm",
+            "use.cpp",
+        ],
+    );
+    assert_eq!(used.code, 0, "{}", used.stderr);
+    assert!(used.stderr.contains("imported 'tm' from its declaration image"), "{}", used.stderr);
+    assert!(used.stdout.contains("tm.cppm:4:35-4:36  nns  'T'"), "{}", used.stdout);
+}

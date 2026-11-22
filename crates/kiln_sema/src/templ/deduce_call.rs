@@ -227,7 +227,11 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
         held.append(&mut st.warnings);
         let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };
-        if let Some(m) = wmark {
+        // A constraint's names are recorded for the declaration whose
+        // constraints they are, satisfied or not (spec/ast.md §18.9.3).
+        if let Some(m) = wmark
+            && !kind.is_constraint_substitution()
+        {
             self.end_written_spec_sfinae(m, ft, failed.is_err());
         }
         Some((r, failed))

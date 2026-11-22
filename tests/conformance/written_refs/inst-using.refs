@@ -1,0 +1,65 @@
+25:31-25:32  base  'T' -> T@25:17 in=D@25:27
+25:34-25:35  nns  'T' -> T@25:17 in=D@25:27
+25:37-25:42  base  'inner' -> (dependent) q=25:34 in=D@25:27
+25:37-25:42  base  'inner' -> V::inner@16:10 spec=D<V>@25:27
+25:37-25:42  base  'inner' -> W::inner@23:10 spec=D<W>@25:27
+26:9-26:10  nns  'T' -> T@25:17 in=D::type-parameter-0-0@26:12
+26:12-26:13  using-decl  'T' -> (dependent) q=26:9 in=D::type-parameter-0-0@26:12
+26:12-26:13  using-decl  'T' -> V::V@12:3 spec=D<V>@25:27
+26:12-26:13  using-decl  'T' -> W::W@19:3 spec=D<W>@25:27
+27:9-27:10  nns  'T' -> T@25:17 in=D::size@27:12
+27:12-27:16  using-decl  'size' -> (dependent) q=27:9 in=D::size@27:12
+27:12-27:16  using-decl  'size' -> V::size@14:7 spec=D<V>@25:27
+27:12-27:16  using-decl  'size' -> W::size@21:7 spec=D<W>@25:27
+28:18-28:19  nns  'T' -> T@25:17 in=D::t@28:21
+28:21-28:22  using-decl  't' -> (dependent) q=28:18 in=D::t@28:21
+28:21-28:22  using-decl  't' -> V::t@15:9 spec=D<V>@25:27
+28:21-28:22  using-decl  't' -> W::t@22:9 spec=D<W>@25:27
+29:18-29:19  nns  'T' -> T@25:17 in=D::u@29:28
+29:21-29:26  nns  'inner' -> (dependent) q=29:18 in=D::u@29:28
+29:21-29:26  nns  'inner' -> V::inner@16:10 spec=D<V>@25:27
+29:21-29:26  nns  'inner' -> W::inner@23:10 spec=D<W>@25:27
+29:28-29:29  using-decl  'u' -> (dependent) q=29:21 in=D::u@29:28
+29:28-29:29  using-decl  'u' -> V::inner::u@16:24 spec=D<V>@25:27
+29:28-29:29  using-decl  'u' -> W::inner::u@23:24 spec=D<W>@25:27
+30:3-30:4  type  't' -> (dependent) in=D::get@30:5
+30:3-30:4  type  't' -> V::t@15:9 found=D<V>::t@28:21 spec=D<V>@25:27
+30:3-30:4  type  't' -> W::t@22:9 found=D<W>::t@28:21 spec=D<W>@25:27
+31:3-31:4  type  't' -> (dependent) in=D::field@31:5
+31:3-31:4  type  't' -> V::t@15:9 found=D<V>::t@28:21 spec=D<V>@25:27
+31:3-31:4  type  't' -> W::t@22:9 found=D<W>::t@28:21 spec=D<W>@25:27
+32:3-32:4  type  'u' -> (dependent) in=D::small@32:5
+32:3-32:4  type  'u' -> V::inner::u@16:24 found=D<V>::u@29:28 spec=D<V>@25:27
+32:3-32:4  type  'u' -> W::inner::u@23:24 found=D<W>::u@29:28 spec=D<W>@25:27
+30:26-30:30  expr  'size' -> (dependent) in=D::get@30:5
+30:26-30:30  expr  'size' -> V::size@14:7 found=D<V>::size@27:12 spec=D<V>::get@30:5
+30:26-30:30  expr  'size' -> W::size@21:7 found=D<W>::size@27:12 spec=D<W>::get@30:5
+34:33-34:34  type  'T' -> T@34:17 in=E@34:27
+34:31-34:32  base  'D' -> D@25:27 in=E@34:27
+35:11-35:12  type  'T' -> T@34:17 in=E::size@35:15
+35:9-35:10  nns  'D' -> D@25:27 in=E::size@35:15
+35:15-35:19  using-decl  'size' -> (dependent) q=35:9 in=E::size@35:15
+35:15-35:19  using-decl  'size' -> V::size@14:7 spec=E<V>@34:27
+36:29-36:33  expr  'size' -> (dependent) in=E::more@36:7
+36:29-36:33  expr  'size' -> V::size@14:7 found=E<V>::size@35:15 spec=E<V>::more@36:7
+40:38-40:40  base  'Ts' -> Ts@40:20 in=Over@40:31
+41:9-41:11  nns  'Ts' -> Ts@40:20 in=Over::operator()@41:13
+41:13-41:23  using-decl  'operator()' -> (dependent) q=41:9 in=Over::operator()@41:13
+41:13-41:23  using-decl  'operator()' -> F1::operator()@38:18 spec=Over<F1, F2>@40:31
+41:13-41:23  using-decl  'operator()' -> F2::operator()@39:18 spec=Over<F1, F2>@40:31
+44:5-44:6  type  'V' -> V@11:8 in=a@44:8
+44:3-44:4  template  'D' -> D@25:27 in=a@44:8
+45:5-45:6  type  'W' -> W@18:8 in=b@45:8
+45:3-45:4  template  'D' -> D@25:27 in=b@45:8
+46:8-46:10  type  'F1' -> F1@38:8 in=use@43:5
+46:12-46:14  type  'F2' -> F2@39:8 in=use@43:5
+46:3-46:7  template  'Over' -> Over@40:31 in=use@43:5
+47:10-47:11  expr  'a' -> a@44:8 in=use@43:5
+47:12-47:15  member  'get' -> D<V>::get@30:5 in=use@43:5
+47:20-47:21  expr  'b' -> b@45:8 in=use@43:5
+47:22-47:25  member  'get' -> D<W>::get@30:5 in=use@43:5
+47:30-47:31  expr  'a' -> a@44:8 in=use@43:5
+47:32-47:37  member  'small' -> D<V>::small@32:5 in=use@43:5
+47:42-47:43  type  'V' -> V@11:8 in=use@43:5
+47:40-47:41  template  'E' -> E@34:27 in=use@43:5
+47:47-47:51  member  'more' -> E<V>::more@36:7 in=use@43:5

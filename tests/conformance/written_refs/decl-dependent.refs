@@ -2,8 +2,10 @@
 13:37-13:42  base  'Plain' -> Plain@9:8 in=Uses@13:27
 14:9-14:10  nns  'T' -> T@13:17 in=Uses::get@14:12
 14:12-14:15  using-decl  'get' -> (dependent) q=14:9 in=Uses::get@14:12
+14:12-14:15  using-decl  'get' -> Base::get@28:14 spec=Uses<Base>@13:27
 15:18-15:19  nns  'T' -> T@13:17 in=Uses::value_type@15:21
 15:21-15:31  using-decl  'value_type' -> (dependent) q=15:18 in=Uses::value_type@15:21
+15:21-15:31  using-decl  'value_type' -> Base::value_type@26:9 spec=Uses<Base>@13:27
 16:9-16:14  nns  'Plain' -> Plain@9:8 in=Uses::size@16:16 how=injected
 16:16-16:20  using-decl  'size' -> Plain::size@10:7 q=16:9 in=Uses::size@16:16
 17:16-17:17  nns  'T' -> T@13:17 in=Uses@13:27
