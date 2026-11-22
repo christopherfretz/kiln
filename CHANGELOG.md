@@ -53,6 +53,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   token), the library entry keeps it with `FrontEndOptions::pp_record`,
   and the test directive `pp-record:` checks it (spec/pp.md
   "Preprocessing record").
+- Public tables for tooling clients that read the AST's untyped words
+  (WP-2024, spec/ast.md §20): `kiln_ast::roles`, an operand-role row for
+  every type, expression, statement and attribute kind and every cold
+  side map (which the module image's attribute checks now derive from,
+  with the image format unchanged); `kiln_snap::Describe` descriptors
+  for the borrowed views (`TypeView`, `ArgView`, `ConstValue`, ...);
+  and stable names for the `FuncInfo` layout and SME bits, the
+  floating-point option bits, the address spaces and the atomic
+  builtin ids.
 - Two facts overload resolution and instantiation read now stay in the
   `Ast` after the translation unit, for tooling clients (WP-2020,
   WP-2021): an overloaded member access's qualifier, explicit template

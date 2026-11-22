@@ -185,7 +185,8 @@ impl Default for FpOptions {
     }
 }
 
-/// [`FpOverride::mask`] bits: which [`FpOptions`] fields an override sets.
+/// [`FpOverride::mask`] bits: which [`FpOptions`] fields an override sets
+/// (values stable within a PCH `FORMAT_VERSION`, spec/ast.md §20).
 pub mod fp_bit {
     /// `contract`.
     pub const CONTRACT: u16 = 1;
@@ -211,6 +212,21 @@ pub mod fp_bit {
     pub const FENV: u16 = 1024;
     /// `eval`.
     pub const EVAL: u16 = 2048;
+    /// Every bit, named after its [`super::FpOptions`] field.
+    pub const ALL: [(&str, u16); 12] = [
+        ("contract", CONTRACT),
+        ("reassoc", REASSOC),
+        ("arcp", ARCP),
+        ("nnan", NNAN),
+        ("ninf", NINF),
+        ("nsz", NSZ),
+        ("afn", AFN),
+        ("math_errno", ERRNO),
+        ("round", ROUND),
+        ("except", EXCEPT),
+        ("fenv_access", FENV),
+        ("eval", EVAL),
+    ];
 }
 
 /// Some [`FpOptions`] fields set by pragmas (clang `FPOptionsOverride`):

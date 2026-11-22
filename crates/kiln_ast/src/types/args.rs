@@ -50,7 +50,7 @@ pub struct TemplateArg {
 }
 
 /// A decoded template argument.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Describe)]
 #[allow(missing_docs)]
 pub enum ArgView {
     Null,

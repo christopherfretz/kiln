@@ -275,6 +275,19 @@ variant, `bound` on a field), `skip` together with `with`; a field type
 without `Snap` is the ordinary trait error at the field. The cases are
 doc tests in `kiln_snap` (`derive_errors`).
 
+### Descriptors of borrowed views
+
+`#[derive(Describe)]` implements `kiln_snap::Describe` (`fn descriptor()
+-> Desc`): the descriptor alone, with the text `#[derive(Snap)]` writes
+(the kind, then `| Variant=disc` and ` field:type` items in declaration
+order), and no encoder, no hash and no `Snap` bound. Unlike `Snap` it
+accepts lifetime parameters, so a borrowed, decoded view of the AST
+(`ConstValue<'a>`, `TypeView`) describes itself. `#[snap(...)]`
+attributes are ignored: every field is described. A tooling client
+compares `Desc::text()` with a pinned copy, so a new variant or field
+fails its table test, not only its build (spec/ast.md §20). Deriving it
+changes no snapshot: it adds no schema item.
+
 ## Hand-written roots
 
 A type is a root when restoring it is more than reading its fields back:

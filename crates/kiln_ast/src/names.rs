@@ -144,7 +144,7 @@ impl fmt::Debug for DeclName {
 }
 
 /// A decoded [`DeclName`] (see [`NameTable::view`]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Describe)]
 pub enum DeclNameView {
     /// The empty name.
     Empty,

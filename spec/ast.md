@@ -2130,3 +2130,82 @@ nothing, set and share, `semi`/`prefix`, truncation, lambda names),
 `crates/kiln_driver/src/snap_tests.rs` (`snapshot_round_trip_decl_extents`)
 and `tests/conformance/decl_extents/` (one per case of §19.2-§19.6,
 macros, templates, a PCH and a module-image round trip).
+
+## 20. Public tables for tooling clients (WP-2024)
+
+Tooling clients that read the `Ast` directly (indexers, refactoring
+tools, digesters) meet nodes whose words are untyped `u32`s. This
+section lists the tables that say what each word holds, and the
+promise that comes with them.
+
+### 20.1 The operand-role table (`kiln_ast::roles`)
+
+- `Role` names what a word holds: `Zero` (always 0), an id of an arena
+  (`Expr`, `Stmt`, `Decl`, `Attr`, `TypeId`, `Profile`, `Nns`,
+  `ArgList`, `TemplateName`, `Symbol`, `DeclName`, `StringLit`,
+  `ConstValue`, `Reflection`, `Lambda`, `Annotation`), a `QualType`
+  (`Type`), a raw `Loc`, a builtin id, `Opt(r)` (0 or an `r`),
+  `List(r)` (a `ListId` of `r`s), a side-table index (`Side`) or record
+  (`Record`), an enum value at most `max` (`Enum`), a `Bool`, a plain
+  number (`Value`), `Bits(fields)` (named bit fields, each with its own
+  role) and `Cond { when, then, otherwise }`, a role that depends on a
+  flag bit, on `aux` (a bit or a value) or on the value of the node's
+  `a` or `b` word (a marker such as an unchecked `visibility`'s
+  `u32::MAX`). `Role::resolve(Words)` picks the branch for a node from
+  its flags, `aux`, `a` and `b`; `Words::CHECKED_ATTR` is an
+  attribute's final form, the one the module image carries.
+- One row per kind: `TYPE_ROLES` (a `TypeNode`'s `aux` and `data`, and
+  the words of its pair or triple payload, which
+  `TypeContext::payload_words` returns), `EXPR_ROLES` (`a`, `b`, `aux`
+  and the per-kind flag bits 4..8 of `ExprNode::raw_bits`),
+  `STMT_ROLES` (`a`, `b`, `aux`), `ATTR_ROLES` (`a`, `b` and the
+  per-kind flags, sorted by `AttrKind`; `ATTR_FLAGS` are the flags every
+  attribute shares) and `COLD_MAPS` (every side map keyed by a node id:
+  its owner, name, key and value). The lookups are `type_roles`,
+  `expr_roles`, `stmt_roles` and `attr_roles`.
+- The module-image writer and reader derive their per-attribute word
+  checks from `ATTR_ROLES` (`bmi_image::attrs::op_of`), so the image and
+  the table cannot drift; a golden copy of the earlier hand-written
+  table pins the image format.
+- Tests: `kiln_ast::roles` (a row for every kind, every cold map, enum
+  maxima equal to the enums, non-overlapping fields),
+  `kiln_sema::bmi_image` (the image accepts no word outside its role)
+  and `crates/kiln_parse/tests/operand_roles.rs` (every word of a real
+  AST fits its row; `KILN_ROLES_DIR` runs it over a directory).
+
+### 20.2 Descriptors of the borrowed views
+
+`TypeView`, `ArgView`, `ParamAbi`, `AddrSpace`, `ConstValue`, `Scalar`,
+`ByteImage` and `DeclNameView` derive `kiln_snap::Describe`: a
+descriptor text (variants with their discriminants, fields with their
+types, as `Snap` writes it, spec/snap.md) that a client checks to know
+it reads the same layout. The derive adds nothing to the snapshot
+schema. `crates/kiln_ast/src/view_descriptors.txt` is the golden of the
+eight descriptors (test `roles::tests::view_descriptors_are_pinned`).
+
+### 20.3 Stable names
+
+- `FuncInfo`'s layout constants (`VARIADIC`, `REF_SHIFT`,
+  `QUALS_SHIFT`, `CC_SHIFT`, `NORETURN`, `TRAILING`, `NO_CSR`,
+  `REGPARM_SHIFT`, `SME_SHIFT`), with `sme::FLAGS` and `sme::STATES`
+  naming the SME bits.
+- `fp_bit::ALL`: the floating-point option bits by name.
+- `AddrSpace::NAMED`: the address-space words by name.
+- `decl::atomic::ALL`: every atomic builtin id, sorted (ids 1..=38 are
+  the operations).
+
+### 20.4 Expression profiles
+
+A `DependentDecltype`, a dependent array bound and a dependent
+`noexcept` compare by the canonical profile of their expression
+(spec/types.md §7.2). `Ast::expr_profile_words(e)` returns its word
+sequence, the one `TypeContext::profile` interns. A typed walk of
+those words (which of them are canonical type, nested-name-specifier,
+argument-list, template-name and declaration ids) is not public yet.
+
+### 20.5 Stability
+
+Every value in these tables (a row's roles, an enum maximum, a field's
+bits, a named constant, a descriptor) is stable within a snapshot
+`FORMAT_VERSION`: a change to any of them is a format bump, and the
+tests above fail on one that is not.

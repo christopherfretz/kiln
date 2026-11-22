@@ -39,6 +39,7 @@ mod neon_builtins;
 pub mod oper_lookup;
 pub mod redecl;
 pub mod reflect;
+pub mod roles;
 pub mod sanitize;
 pub mod slot;
 pub mod stmt;

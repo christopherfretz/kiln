@@ -916,7 +916,7 @@ impl TagKeyword {
 /// own stable numbering. `0` is the default space; `1..=7` are the `opencl_*`
 /// spaces clang accepts in C++ (`opencl_global` ... `opencl_global_host`);
 /// `address_space(N)` is `TARGET_BASE + N`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Describe)]
 pub struct AddrSpace(pub u32);
 
 impl AddrSpace {
@@ -938,6 +938,19 @@ impl AddrSpace {
     pub const OPENCL_GLOBAL_HOST: AddrSpace = AddrSpace(7);
     /// The word of `address_space(0)`.
     pub const TARGET_BASE: u32 = 0x20;
+    /// The named spaces with their attribute names (`TARGET_BASE + N`
+    /// is `address_space(N)`); values stable within a PCH
+    /// `FORMAT_VERSION` (spec/ast.md §20).
+    pub const NAMED: [(&str, AddrSpace); 8] = [
+        ("default", Self::DEFAULT),
+        ("opencl_global", Self::OPENCL_GLOBAL),
+        ("opencl_local", Self::OPENCL_LOCAL),
+        ("opencl_constant", Self::OPENCL_CONSTANT),
+        ("opencl_private", Self::OPENCL_PRIVATE),
+        ("opencl_generic", Self::OPENCL_GENERIC),
+        ("opencl_global_device", Self::OPENCL_GLOBAL_DEVICE),
+        ("opencl_global_host", Self::OPENCL_GLOBAL_HOST),
+    ];
 
     /// `address_space(n)`.
     pub const fn target(n: u32) -> AddrSpace {

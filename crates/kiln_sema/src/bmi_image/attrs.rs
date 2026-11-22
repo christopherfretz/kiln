@@ -3,9 +3,10 @@
 //!
 //! Every attribute node on a carried declaration is one [`AttrRec`]: the
 //! node's kind, syntax, flags and location, and its two argument words
-//! written as [`TABLE`] says for the kind. The table is the whole format:
-//! a kind it does not list, or a node whose words fall outside what its
-//! row allows, makes the declaration fall back
+//! written as the kind's checked operand roles say
+//! (`kiln_ast::roles::attr_roles`, [`op_of`]). The roles are the whole
+//! format: a kind they give no [`Op`], or a node whose words fall outside
+//! what its roles allow, makes the declaration fall back
 //! ([`UNCARRIED`]). An expression argument is an expression record of the
 //! bodies section ([`super::body`], `Root::Attr`), a `Symbol` argument a
 //! string of the section, a builtin id the builtin's spelling as well as
@@ -23,6 +24,7 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::builtin;
 use kiln_ast::expr::{ExprKind, Radix};
 use kiln_ast::ids::RawId;
+use kiln_ast::roles::{self, Role};
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{AttrId, DeclId, ExprId, ListId, StringLitId};
 use kiln_source::symbol::Symbol;
@@ -99,178 +101,11 @@ fn inst_word(kind: AttrKind, a: u32, b: u32) -> bool {
 }
 
 const ANY: u32 = u32::MAX;
-const FLAG: Op = Op::Words(0, 0);
 
-/// The kinds the image carries. Flag-only kinds hold no argument words;
-/// the rest name what their words are (see `kiln_ast::attr`).
-const TABLE: &[(AttrKind, Op)] = &[
-    (AttrKind::CARRIES_DEPENDENCY, FLAG),
-    (AttrKind::DEPRECATED, Op::Exprs),
-    (AttrKind::MAYBE_UNUSED, FLAG),
-    (AttrKind::NODISCARD, Op::Exprs),
-    (AttrKind::NORETURN, FLAG),
-    (AttrKind::NO_UNIQUE_ADDRESS, FLAG),
-    (AttrKind::ALWAYS_INLINE, FLAG),
-    (AttrKind::NOINLINE, FLAG),
-    (AttrKind::PACKED, FLAG),
-    (AttrKind::USED, FLAG),
-    (AttrKind::UNUSED, FLAG),
-    (AttrKind::WEAK, FLAG),
-    // 0 default, 1 hidden, 2 protected; `b` 1 for hidden written as
-    // `internal` (an unchecked one, in a template, holds its argument
-    // expression: not carried).
-    (AttrKind::VISIBILITY, Op::Words(2, 1)),
-    // The archetype, and the format and first data argument indices.
-    (AttrKind::FORMAT, Op::Words(ANY, ANY)),
-    (AttrKind::CONST, FLAG),
-    (AttrKind::PURE, FLAG),
-    (AttrKind::COLD, FLAG),
-    (AttrKind::NOTHROW, FLAG),
-    (AttrKind::TRIVIAL_ABI, FLAG),
-    (AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION, FLAG),
-    (AttrKind::ABI_TAG, Op::Sym(0)),
-    (AttrKind::INTERNAL_LINKAGE, FLAG),
-    // 1 for the implicit object parameter.
-    (AttrKind::LIFETIMEBOUND, Op::Words(1, 0)),
-    // The excluded sanitizer set and the spelling.
-    (AttrKind::NO_SANITIZE, Op::Words(ANY, ANY)),
-    (AttrKind::BUILTIN, Op::Builtin),
-    (AttrKind::MALLOC, FLAG),
-    // The one-based parameter indices, as integer literals.
-    (AttrKind::ALLOC_SIZE, Op::Exprs),
-    (AttrKind::ALLOC_ALIGN, Op::Exprs),
-    (AttrKind::HOT, FLAG),
-    (AttrKind::FLAG_ENUM, FLAG),
-    (AttrKind::ENUM_EXTENSIBILITY, Op::Words(1, 0)),
-    (AttrKind::OPTNONE, FLAG),
-    (AttrKind::MINSIZE, FLAG),
-    (AttrKind::NAKED, FLAG),
-    (AttrKind::MAY_ALIAS, FLAG),
-    (AttrKind::RETURNS_NONNULL, FLAG),
-    (AttrKind::TYPE_VISIBILITY, Op::Words(2, 0)),
-    (AttrKind::GNU_INLINE, FLAG),
-    (AttrKind::NODEBUG, FLAG),
-    (AttrKind::ANALYZER_NORETURN, FLAG),
-    (AttrKind::DISABLE_TAIL_CALLS, FLAG),
-    (AttrKind::ARTIFICIAL, FLAG),
-    (AttrKind::RETURNS_TWICE, FLAG),
-    (AttrKind::RETAIN, FLAG),
-    (AttrKind::NO_DESTROY, FLAG),
-    (AttrKind::ALWAYS_DESTROY, FLAG),
-    (AttrKind::NO_STACK_PROTECTOR, FLAG),
-    (AttrKind::NO_SPLIT_STACK, FLAG),
-    (AttrKind::NO_INSTRUMENT_FUNCTION, FLAG),
-    (AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION, FLAG),
-    (AttrKind::DISABLE_SANITIZER_INSTRUMENTATION, FLAG),
-    (AttrKind::FLATTEN, FLAG),
-    (AttrKind::LEAF, FLAG),
-    (AttrKind::NOMERGE, FLAG),
-    (AttrKind::NOT_TAIL_CALLED, FLAG),
-    (AttrKind::NODUPLICATE, FLAG),
-    (AttrKind::CONVERGENT, FLAG),
-    (AttrKind::NOUWTABLE, FLAG),
-    (AttrKind::NOESCAPE, FLAG),
-    (AttrKind::LTO_VISIBILITY_PUBLIC, FLAG),
-    (AttrKind::STANDALONE_DEBUG, FLAG),
-    // Without a type argument (`b`, with `GSL_HAS_TYPE`): not carried.
-    (AttrKind::GSL_OWNER, FLAG),
-    (AttrKind::GSL_POINTER, FLAG),
-    (AttrKind::UNAVAILABLE, Op::Exprs),
-    (AttrKind::REQUIRE_CONSTANT_INIT, FLAG),
-    (AttrKind::NONNULL, Op::Ints),
-    // WP-1675: kept only for `__builtin_has_attribute`.
-    (AttrKind::NONSTRING, FLAG),
-    (AttrKind::NOCOMMON, FLAG),
-    // WP-1310: the alignment expression (`__attribute__((aligned(E)))`,
-    // `alignas(E)`), checked when it was written.
-    (AttrKind::ALIGNED, Op::ExprA),
-    (AttrKind::ASM_LABEL, Op::Label),
-    // WP-1345: the typedef naming a specialization of the class template.
-    (AttrKind::PREFERRED_NAME, Op::Type),
-    // WP-1345: the condition and the message (string literal), both
-    // expressions; the flags hold the diagnostic type, the group and
-    // whether the condition names a parameter.
-    (AttrKind::DIAGNOSE_IF, Op::Exprs),
-    (AttrKind::ENABLE_IF, Op::Exprs),
-    // WP-1806: the rest of the declaration attributes, so that no kind
-    // is left out (`every_kind_is_carried_or_exempt`).
-    (AttrKind::INDETERMINATE, FLAG),
-    (AttrKind::SECTION, Op::Lit(0)),
-    (AttrKind::USING_IF_EXISTS, FLAG),
-    (AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE, FLAG),
-    // The checked priority (101 to 65535).
-    (AttrKind::INIT_PRIORITY, Op::Words(ANY, 0)),
-    (AttrKind::UNINITIALIZED, FLAG),
-    (AttrKind::TYPE_NULLABLE, FLAG),
-    (AttrKind::TARGET, Op::Lit(0)),
-    (AttrKind::MIN_VECTOR_WIDTH, Op::Words(ANY, 0)),
-    // `a` zero once `weakref("target")` is split into an `alias`.
-    (AttrKind::WEAKREF, Op::Lit(0)),
-    (AttrKind::ALIAS, Op::LitLoc),
-    (AttrKind::IFUNC, Op::LitLoc),
-    // The checked priority; a dependent one (`PRIORITY_DEPENDENT`, its
-    // expression in `a`) is not carried.
-    (AttrKind::CONSTRUCTOR, Op::Words(ANY, 0)),
-    (AttrKind::DESTRUCTOR, Op::Words(ANY, 0)),
-    (AttrKind::CLEANUP, Op::DeclLoc),
-    // The checked model, 1 to 4.
-    (AttrKind::TLS_MODEL, Op::Words(4, 0)),
-    // The object-size type and 1 for the dynamic spelling.
-    (AttrKind::PASS_OBJECT_SIZE, Op::Words(3, 1)),
-    (AttrKind::OVERLOADABLE, FLAG),
-    (AttrKind::TRANSPARENT_UNION, FLAG),
-    (AttrKind::SELECTANY, FLAG),
-    (AttrKind::MS_STRUCT, FLAG),
-    (AttrKind::GCC_STRUCT, FLAG),
-    (AttrKind::NO_BUILTIN, Op::Sym(0)),
-    // 1 for the `__clang_arm_builtin_alias` spelling.
-    (AttrKind::BUILTIN_ALIAS, Op::Sym(1)),
-    (AttrKind::TARGET_VERSION, Op::LitLoc),
-    (AttrKind::TARGET_CLONES, Op::Sym(1)),
-    (AttrKind::PATCHABLE_FUNCTION_ENTRY, Op::Words(ANY, ANY)),
-    (AttrKind::ZERO_CALL_USED_REGS, Op::Words(ZERO_CALL_KINDS, 0)),
-    (AttrKind::SPECULATIVE_LOAD_HARDENING, FLAG),
-    (AttrKind::NO_SPECULATIVE_LOAD_HARDENING, FLAG),
-    (AttrKind::XRAY_INSTRUMENT, Op::Words(1, 0)),
-    (AttrKind::XRAY_LOG_ARGS, Op::Words(ANY, 0)),
-    (AttrKind::NOCF_CHECK, FLAG),
-    (AttrKind::FUNCTION_RETURN, Op::Words(1, 0)),
-    (AttrKind::CFI_CANONICAL_JUMP_TABLE, FLAG),
-    (AttrKind::FORCE_ALIGN_ARG_POINTER, FLAG),
-    (AttrKind::ASSUME_ALIGNED, Op::Words(ANY, ANY)),
-    (AttrKind::ALIGN_VALUE, Op::Words(ANY, 0)),
-    (AttrKind::CALLBACK, Op::RawList),
-    (AttrKind::MAYBE_UNDEF, FLAG),
-    (AttrKind::LOADER_UNINITIALIZED, FLAG),
-    (AttrKind::OMP_ASSUME, Op::Lit(0)),
-    (AttrKind::CORO_AWAIT_ELIDABLE, FLAG),
-    (AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT, FLAG),
-    (AttrKind::ANNOTATE, Op::ExprList),
-    // `b` the keyword's index and its state strings' offsets from `loc`
-    // (`SME_KEYWORDS`), which the locations keep.
-    (AttrKind::ARM_LOCALLY_STREAMING, Op::Words(0, ANY)),
-    // Bit 0 ZA, bit 1 ZT0; `b` as above.
-    (AttrKind::ARM_NEW, Op::Words(3, ANY)),
-    (AttrKind::PRAGMA_CLANG_SECTION, Op::Lit(CLANG_SECTIONS)),
-    // 1 `small`, 2 `large`.
-    (AttrKind::CODE_MODEL, Op::Words(2, 0)),
-    // `a` 1 (a failed signature check) is dropped before it is kept.
-    (AttrKind::X86_INTERRUPT, FLAG),
-    (AttrKind::WEAK_IMPORT, FLAG),
-    // The `ParamAbi` (1 to 4) of a parameter.
-    (AttrKind::SWIFT_PARAM_ABI, Op::Words(4, 0)),
-];
-
-/// The largest `zero_call_used_regs` kind index.
-const ZERO_CALL_KINDS: u32 = kiln_ast::attr::ZERO_CALL_USED_REGS_KINDS.len() as u32 - 1;
-/// The largest `#pragma clang section` kind index.
-const CLANG_SECTIONS: u32 = kiln_ast::attr::CLANG_SECTION_KINDS.len() as u32 - 1;
-
-/// The kinds the table leaves out, each with the reason: none of them is
-/// ever an attribute node of a declaration the image writes
-/// (`every_kind_is_carried_or_exempt` checks that each `AttrKind` is in
-/// exactly one of the two lists).
-#[cfg(test)]
+/// The declaration-attribute kinds the image leaves out, each with the
+/// reason: none of them is ever an attribute node of a declaration the
+/// image writes. Every other kind but the type attributes is carried as
+/// its roles say ([`op_of`]; `every_kind_is_carried_or_exempt`).
 const NOT_CARRIED: &[(AttrKind, &str)] = &[
     (AttrKind::ANNOTATION, "moved into `Ast::annots` by sema (the image's annotations)"),
     (AttrKind::COMMON, "rejected in C++, never attached"),
@@ -288,8 +123,49 @@ const NOT_CARRIED: &[(AttrKind, &str)] = &[
     ),
 ];
 
+/// How kind `k`'s words are carried: derived from its checked roles
+/// (`kiln_ast::roles::attr_roles`, the operand-role table tooling clients
+/// read), so the image and the table cannot drift. `None` for a type
+/// attribute, a [`NOT_CARRIED`] kind, or roles no [`Op`] writes.
 fn op_of(k: AttrKind) -> Option<Op> {
-    TABLE.iter().find(|&&(t, _)| t == k).map(|&(_, op)| op)
+    if k.is_vector_type() || k.is_fn_type_attr() || NOT_CARRIED.iter().any(|&(t, _)| t == k) {
+        return None;
+    }
+    let r = roles::attr_roles(k)?;
+    op_from(r.a.resolve(roles::Words::CHECKED_ATTR), r.b.resolve(roles::Words::CHECKED_ATTR))
+}
+
+/// The [`Op`] of the checked roles `a`, `b`.
+fn op_from(a: &Role, b: &Role) -> Option<Op> {
+    use Role as R;
+    let expr = |r: Role| matches!(r, R::Expr | R::Opt(&R::Expr));
+    Some(match (*a, *b) {
+        (R::Zero, R::Type) => Op::Type,
+        (R::Builtin, R::Zero) => Op::Builtin,
+        (R::List(&R::Expr), R::Zero) => Op::Ints,
+        (R::List(&R::Value(_)), R::Zero) => Op::RawList,
+        (R::StringLit, R::Zero) => Op::Label,
+        (R::StringLit, R::Loc) => Op::LitLoc,
+        (R::Opt(&R::StringLit), b) => Op::Lit(word_max(&b)?),
+        (R::Decl, R::Loc) => Op::DeclLoc,
+        (R::Symbol, b) => Op::Sym(word_max(&b)?),
+        (R::Opt(&R::Expr), R::Opt(&R::List(&R::Expr))) => Op::ExprList,
+        (R::Opt(&R::Expr), R::Opt(&R::Type)) => Op::ExprA,
+        (a, b) if expr(a) && (expr(b) || b == R::Zero) => Op::Exprs,
+        (a, b) => Op::Words(word_max(&a)?, word_max(&b)?),
+    })
+}
+
+/// The largest value a plain word of role `r` holds ([`ANY`] for any).
+fn word_max(r: &Role) -> Option<u32> {
+    match *r {
+        Role::Zero => Some(0),
+        Role::Bool => Some(1),
+        Role::Enum { max, .. } => Some(max),
+        Role::Value(_) => Some(ANY),
+        Role::Bits(fs) => fs.iter().try_fold(0, |m, f| word_max(f.role).map(|_| m | f.mask())),
+        _ => None,
+    }
 }
 
 /// Whether the image carries `node` (its kind and argument words).
@@ -1105,7 +981,175 @@ impl Sema<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttrKind, NOT_CARRIED, TABLE};
+    use super::{ANY, AttrKind, NOT_CARRIED, Op, op_of};
+
+    const FLAG: Op = Op::Words(0, 0);
+    /// The largest `zero_call_used_regs` kind index.
+    const ZERO_CALL_KINDS: u32 = kiln_ast::attr::ZERO_CALL_USED_REGS_KINDS.len() as u32 - 1;
+    /// The largest `#pragma clang section` kind index.
+    const CLANG_SECTIONS: u32 = kiln_ast::attr::CLANG_SECTION_KINDS.len() as u32 - 1;
+
+    /// The format before WP-2024 moved it into `kiln_ast::roles`: the
+    /// kinds the image carries and how (`op_of` must derive exactly
+    /// these, so the move changed no image). Flag-only kinds hold no
+    /// argument words.
+    const GOLDEN: &[(AttrKind, Op)] = &[
+        (AttrKind::CARRIES_DEPENDENCY, FLAG),
+        (AttrKind::DEPRECATED, Op::Exprs),
+        (AttrKind::MAYBE_UNUSED, FLAG),
+        (AttrKind::NODISCARD, Op::Exprs),
+        (AttrKind::NORETURN, FLAG),
+        (AttrKind::NO_UNIQUE_ADDRESS, FLAG),
+        (AttrKind::ALWAYS_INLINE, FLAG),
+        (AttrKind::NOINLINE, FLAG),
+        (AttrKind::PACKED, FLAG),
+        (AttrKind::USED, FLAG),
+        (AttrKind::UNUSED, FLAG),
+        (AttrKind::WEAK, FLAG),
+        // 0 default, 1 hidden, 2 protected; `b` 1 for hidden written as
+        // `internal` (an unchecked one, in a template, holds its argument
+        // expression: not carried).
+        (AttrKind::VISIBILITY, Op::Words(2, 1)),
+        // The archetype, and the format and first data argument indices.
+        (AttrKind::FORMAT, Op::Words(ANY, ANY)),
+        (AttrKind::CONST, FLAG),
+        (AttrKind::PURE, FLAG),
+        (AttrKind::COLD, FLAG),
+        (AttrKind::NOTHROW, FLAG),
+        (AttrKind::TRIVIAL_ABI, FLAG),
+        (AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION, FLAG),
+        (AttrKind::ABI_TAG, Op::Sym(0)),
+        (AttrKind::INTERNAL_LINKAGE, FLAG),
+        // 1 for the implicit object parameter.
+        (AttrKind::LIFETIMEBOUND, Op::Words(1, 0)),
+        // The excluded sanitizer set and the spelling.
+        (AttrKind::NO_SANITIZE, Op::Words(ANY, ANY)),
+        (AttrKind::BUILTIN, Op::Builtin),
+        (AttrKind::MALLOC, FLAG),
+        // The one-based parameter indices, as integer literals.
+        (AttrKind::ALLOC_SIZE, Op::Exprs),
+        (AttrKind::ALLOC_ALIGN, Op::Exprs),
+        (AttrKind::HOT, FLAG),
+        (AttrKind::FLAG_ENUM, FLAG),
+        (AttrKind::ENUM_EXTENSIBILITY, Op::Words(1, 0)),
+        (AttrKind::OPTNONE, FLAG),
+        (AttrKind::MINSIZE, FLAG),
+        (AttrKind::NAKED, FLAG),
+        (AttrKind::MAY_ALIAS, FLAG),
+        (AttrKind::RETURNS_NONNULL, FLAG),
+        (AttrKind::TYPE_VISIBILITY, Op::Words(2, 0)),
+        (AttrKind::GNU_INLINE, FLAG),
+        (AttrKind::NODEBUG, FLAG),
+        (AttrKind::ANALYZER_NORETURN, FLAG),
+        (AttrKind::DISABLE_TAIL_CALLS, FLAG),
+        (AttrKind::ARTIFICIAL, FLAG),
+        (AttrKind::RETURNS_TWICE, FLAG),
+        (AttrKind::RETAIN, FLAG),
+        (AttrKind::NO_DESTROY, FLAG),
+        (AttrKind::ALWAYS_DESTROY, FLAG),
+        (AttrKind::NO_STACK_PROTECTOR, FLAG),
+        (AttrKind::NO_SPLIT_STACK, FLAG),
+        (AttrKind::NO_INSTRUMENT_FUNCTION, FLAG),
+        (AttrKind::NO_PROFILE_INSTRUMENT_FUNCTION, FLAG),
+        (AttrKind::DISABLE_SANITIZER_INSTRUMENTATION, FLAG),
+        (AttrKind::FLATTEN, FLAG),
+        (AttrKind::LEAF, FLAG),
+        (AttrKind::NOMERGE, FLAG),
+        (AttrKind::NOT_TAIL_CALLED, FLAG),
+        (AttrKind::NODUPLICATE, FLAG),
+        (AttrKind::CONVERGENT, FLAG),
+        (AttrKind::NOUWTABLE, FLAG),
+        (AttrKind::NOESCAPE, FLAG),
+        (AttrKind::LTO_VISIBILITY_PUBLIC, FLAG),
+        (AttrKind::STANDALONE_DEBUG, FLAG),
+        // Without a type argument (`b`, with `GSL_HAS_TYPE`): not carried.
+        (AttrKind::GSL_OWNER, FLAG),
+        (AttrKind::GSL_POINTER, FLAG),
+        (AttrKind::UNAVAILABLE, Op::Exprs),
+        (AttrKind::REQUIRE_CONSTANT_INIT, FLAG),
+        (AttrKind::NONNULL, Op::Ints),
+        // WP-1675: kept only for `__builtin_has_attribute`.
+        (AttrKind::NONSTRING, FLAG),
+        (AttrKind::NOCOMMON, FLAG),
+        // WP-1310: the alignment expression (`__attribute__((aligned(E)))`,
+        // `alignas(E)`), checked when it was written.
+        (AttrKind::ALIGNED, Op::ExprA),
+        (AttrKind::ASM_LABEL, Op::Label),
+        // WP-1345: the typedef naming a specialization of the class template.
+        (AttrKind::PREFERRED_NAME, Op::Type),
+        // WP-1345: the condition and the message (string literal), both
+        // expressions; the flags hold the diagnostic type, the group and
+        // whether the condition names a parameter.
+        (AttrKind::DIAGNOSE_IF, Op::Exprs),
+        (AttrKind::ENABLE_IF, Op::Exprs),
+        // WP-1806: the rest of the declaration attributes, so that no kind
+        // is left out (`every_kind_is_carried_or_exempt`).
+        (AttrKind::INDETERMINATE, FLAG),
+        (AttrKind::SECTION, Op::Lit(0)),
+        (AttrKind::USING_IF_EXISTS, FLAG),
+        (AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE, FLAG),
+        // The checked priority (101 to 65535).
+        (AttrKind::INIT_PRIORITY, Op::Words(ANY, 0)),
+        (AttrKind::UNINITIALIZED, FLAG),
+        (AttrKind::TYPE_NULLABLE, FLAG),
+        (AttrKind::TARGET, Op::Lit(0)),
+        (AttrKind::MIN_VECTOR_WIDTH, Op::Words(ANY, 0)),
+        // `a` zero once `weakref("target")` is split into an `alias`.
+        (AttrKind::WEAKREF, Op::Lit(0)),
+        (AttrKind::ALIAS, Op::LitLoc),
+        (AttrKind::IFUNC, Op::LitLoc),
+        // The checked priority; a dependent one (`PRIORITY_DEPENDENT`, its
+        // expression in `a`) is not carried.
+        (AttrKind::CONSTRUCTOR, Op::Words(ANY, 0)),
+        (AttrKind::DESTRUCTOR, Op::Words(ANY, 0)),
+        (AttrKind::CLEANUP, Op::DeclLoc),
+        // The checked model, 1 to 4.
+        (AttrKind::TLS_MODEL, Op::Words(4, 0)),
+        // The object-size type and 1 for the dynamic spelling.
+        (AttrKind::PASS_OBJECT_SIZE, Op::Words(3, 1)),
+        (AttrKind::OVERLOADABLE, FLAG),
+        (AttrKind::TRANSPARENT_UNION, FLAG),
+        (AttrKind::SELECTANY, FLAG),
+        (AttrKind::MS_STRUCT, FLAG),
+        (AttrKind::GCC_STRUCT, FLAG),
+        (AttrKind::NO_BUILTIN, Op::Sym(0)),
+        // 1 for the `__clang_arm_builtin_alias` spelling.
+        (AttrKind::BUILTIN_ALIAS, Op::Sym(1)),
+        (AttrKind::TARGET_VERSION, Op::LitLoc),
+        (AttrKind::TARGET_CLONES, Op::Sym(1)),
+        (AttrKind::PATCHABLE_FUNCTION_ENTRY, Op::Words(ANY, ANY)),
+        (AttrKind::ZERO_CALL_USED_REGS, Op::Words(ZERO_CALL_KINDS, 0)),
+        (AttrKind::SPECULATIVE_LOAD_HARDENING, FLAG),
+        (AttrKind::NO_SPECULATIVE_LOAD_HARDENING, FLAG),
+        (AttrKind::XRAY_INSTRUMENT, Op::Words(1, 0)),
+        (AttrKind::XRAY_LOG_ARGS, Op::Words(ANY, 0)),
+        (AttrKind::NOCF_CHECK, FLAG),
+        (AttrKind::FUNCTION_RETURN, Op::Words(1, 0)),
+        (AttrKind::CFI_CANONICAL_JUMP_TABLE, FLAG),
+        (AttrKind::FORCE_ALIGN_ARG_POINTER, FLAG),
+        (AttrKind::ASSUME_ALIGNED, Op::Words(ANY, ANY)),
+        (AttrKind::ALIGN_VALUE, Op::Words(ANY, 0)),
+        (AttrKind::CALLBACK, Op::RawList),
+        (AttrKind::MAYBE_UNDEF, FLAG),
+        (AttrKind::LOADER_UNINITIALIZED, FLAG),
+        (AttrKind::OMP_ASSUME, Op::Lit(0)),
+        (AttrKind::CORO_AWAIT_ELIDABLE, FLAG),
+        (AttrKind::CORO_AWAIT_ELIDABLE_ARGUMENT, FLAG),
+        (AttrKind::ANNOTATE, Op::ExprList),
+        // `b` the keyword's index and its state strings' offsets from `loc`
+        // (`SME_KEYWORDS`), which the locations keep.
+        (AttrKind::ARM_LOCALLY_STREAMING, Op::Words(0, ANY)),
+        // Bit 0 ZA, bit 1 ZT0; `b` as above.
+        (AttrKind::ARM_NEW, Op::Words(3, ANY)),
+        (AttrKind::PRAGMA_CLANG_SECTION, Op::Lit(CLANG_SECTIONS)),
+        // 1 `small`, 2 `large`.
+        (AttrKind::CODE_MODEL, Op::Words(2, 0)),
+        // `a` 1 (a failed signature check) is dropped before it is kept.
+        (AttrKind::X86_INTERRUPT, FLAG),
+        (AttrKind::WEAK_IMPORT, FLAG),
+        // The `ParamAbi` (1 to 4) of a parameter.
+        (AttrKind::SWIFT_PARAM_ABI, Op::Words(4, 0)),
+    ];
 
     /// Every `AttrKind` constant of `kiln_ast::attr` (its name and
     /// number), read from the source so that a new kind is seen without
@@ -1134,25 +1178,42 @@ mod tests {
         let mut missing = Vec::new();
         for (name, n) in &kinds {
             let k = AttrKind(*n);
-            let carried = TABLE.iter().filter(|(t, _)| *t == k).count();
+            let carried = usize::from(op_of(k).is_some());
             let exempt = NOT_CARRIED.iter().filter(|(t, _)| *t == k).count();
             let ty = usize::from(k.is_vector_type() || k.is_fn_type_attr());
             match carried + exempt + ty {
                 1 => {}
                 0 => missing.push(name.clone()),
                 _ => panic!(
-                    "AttrKind::{name} is in more than one of TABLE, NOT_CARRIED and the type attributes"
+                    "AttrKind::{name} is in more than one of the carried kinds, NOT_CARRIED and \
+                     the type attributes"
                 ),
             }
         }
         assert!(
             missing.is_empty(),
-            "AttrKind constants with no row in bmi_image/attrs.rs TABLE (or a NOT_CARRIED \
-             reason): {missing:?}"
+            "AttrKind constants whose kiln_ast::roles row gives no image Op (or with no \
+             NOT_CARRIED reason): {missing:?}"
         );
-        let rows = TABLE.iter().map(|(k, _)| *k).chain(NOT_CARRIED.iter().map(|(k, _)| *k));
-        for k in rows {
+        for (k, _) in NOT_CARRIED {
             assert!(kinds.iter().any(|(_, n)| *n == k.0), "a row for unknown kind {}", k.0);
         }
+    }
+
+    /// WP-2024: the ops derived from `kiln_ast::roles` are the format the
+    /// image had when it kept its own table: the same kinds, each written
+    /// the same way.
+    #[test]
+    fn derived_ops_are_the_golden_table() {
+        let mut diff = Vec::new();
+        for (name, n) in all_kinds() {
+            let k = AttrKind(n);
+            let want = GOLDEN.iter().find(|&&(t, _)| t == k).map(|&(_, op)| op);
+            if op_of(k) != want {
+                diff.push(format!("{name}: derived {:?}, golden {want:?}", op_of(k)));
+            }
+        }
+        assert!(diff.is_empty(), "{diff:#?}");
+        assert!(GOLDEN.iter().any(|&(_, op)| op == Op::Words(ANY, ANY)));
     }
 }
