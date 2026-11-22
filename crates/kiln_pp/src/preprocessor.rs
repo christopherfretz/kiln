@@ -261,6 +261,9 @@ pub(crate) struct MacroFrame {
     pub(crate) name_span: Span,
     /// Identifiers from this stream are never macro-expanded.
     pub(crate) no_expand: bool,
+    /// The preprocessing record's expansion this frame holds the result
+    /// (or a pre-expanded argument) of (`u32::MAX`: none or not recording).
+    pub(crate) rec: u32,
 }
 
 pub(crate) enum Frame<'a> {
@@ -392,6 +395,15 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) predef_file: Option<FileId>,
     /// The preprocessor-state record's hooks (spec/pp.md §13).
     pub(crate) state_hooks: Option<Box<crate::state::StateHooks>>,
+    /// The preprocessing record ([`PpOptions::pp_record`], spec/pp.md
+    /// "Preprocessing record").
+    pub(crate) record: Option<Box<crate::record::PpRecord>>,
+    /// While recording: the expansion whose tokens are being made (pasted,
+    /// stringized, a builtin's result), `u32::MAX` for none.
+    pub(crate) rec_cur: u32,
+    /// While recording: a builtin being expanded and its parent, entered
+    /// when it produces its result.
+    pub(crate) rec_builtin: Option<(Rc<MacroDef>, u32)>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -478,7 +490,13 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             name_gate: None,
             predef_file: None,
             state_hooks: None,
+            record: None,
+            rec_cur: u32::MAX,
+            rec_builtin: None,
         };
+        if pp.opts.pp_record {
+            pp.record = Some(Box::new(crate::record::PpRecord::new(pp.syms.va_opt)));
+        }
         pp.modules = pp.opts.modules.clone().map(|o| Box::new(crate::modules::ModState::new(o)));
         if pp.modules.as_ref().is_some_and(|m| m.opts.image) {
             pp.name_gate = Some(Box::new(crate::name_gate::NameGate::new(pp.interner)));
@@ -594,6 +612,12 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         self.main_file
     }
 
+    /// The preprocessing record, if [`PpOptions::pp_record`] is set
+    /// (spec/pp.md "Preprocessing record").
+    pub fn record(&self) -> Option<&crate::record::PpRecord> {
+        self.record.as_deref()
+    }
+
     /// Enters `file` as the main source file: pushes it, then the
     /// predefines buffer (`<built-in>`: [`PpOptions::predefines`], then
     /// `-D` / `-U`) on top of it, so that the predefines are read first.
@@ -605,6 +629,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
+        let tail = u32::try_from(text.len()).unwrap_or(u32::MAX);
         for (name, value) in &self.opts.defines {
             let _ = writeln!(text, "#define {name} {}", value.as_deref().unwrap_or("1"));
         }
@@ -614,6 +639,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
             self.push_file(b, None, None, None, false, false);
             self.predef_file = Some(b);
+            if let Some(r) = self.record.as_deref_mut() {
+                r.predef_tail = Some((b, tail));
+            }
             if let Some(m) = &mut self.modules {
                 m.builtin_file = Some(b);
             }
@@ -657,7 +685,14 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         // its diagnostics) rather than failing.
         let base = inc
             .and_then(|at| self.sm.add_inclusion(file, self.sm.expansion_loc(at)).ok())
-            .unwrap_or_else(|| self.sm.loc(file, 0));
+            .unwrap_or_else(|| {
+                if inc.is_some()
+                    && let Some(r) = &self.record
+                {
+                    r.set_flag(crate::record::RecordFlags::LOC_SPACE_EXHAUSTED);
+                }
+                self.sm.loc(file, 0)
+            });
         if system {
             self.sm.set_file_kind(base, file_kind(system, extern_c));
         }
@@ -1241,6 +1276,11 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             exp: Span::INVALID,
             name_span: Span::INVALID,
             no_expand,
+            // Pushed-back and re-read tokens belong to what they came from.
+            rec: match self.frames.last() {
+                Some(Frame::Macro(m)) => m.rec,
+                _ => u32::MAX,
+            },
         }));
     }
 

@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use kiln_diag::{Diag, DiagId, SCRATCH_BUFFER_NAME};
 use kiln_lex::{Encoding, Interner, LexMode, Punct, Std, Symbol, TokFlags, TokKind, Token};
-use kiln_source::{FileId, SourceManager, Span};
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::builtin::OPERATOR_NAMES;
 use crate::callbacks::FileChange;
@@ -342,7 +342,12 @@ impl<'a> Preprocessor<'a, '_> {
         let old_scope = self.va_scope;
         let def = self.read_definition(name, &ntok);
         self.va_scope = old_scope;
-        let Some(def) = def else { return };
+        let Some(def) = def else {
+            if let Some(r) = self.record.as_deref_mut() {
+                r.pending_params.clear();
+            }
+            return;
+        };
         // clang skips the redefinition checks in a system header when its
         // warnings are suppressed anyway (`-Wsystem-headers` keeps them).
         let in_system = self.cur_file_ref().is_some_and(|f| f.system);
@@ -365,7 +370,39 @@ impl<'a> Preprocessor<'a, '_> {
             self.queue(Marker::Define { def: Rc::clone(&def) });
         }
         self.note_macro_change(name, Some(&def), def.name_span.lo);
+        if self.record.is_some() {
+            self.rec_define(&def);
+        }
         self.macros.map.insert(name, def);
+    }
+
+    /// Where the definition or `#undef` at `loc` came from (spec/pp.md
+    /// "Preprocessing record").
+    fn rec_source(&self, loc: Loc) -> crate::record::DefSource {
+        use crate::record::DefSource;
+        let Some((f, off)) = self.sm.offset_of(loc) else { return DefSource::File };
+        if self.sm.file_name(f) != "<built-in>" || !self.sm.is_virtual(f) {
+            return DefSource::File;
+        }
+        let tail = self.record.as_deref().and_then(|r| r.predef_tail);
+        if tail.is_some_and(|(b, t)| b == f && off >= t)
+            || self.sm.presumed_line_col(loc).is_some_and(|p| p.file_name == "<command line>")
+        {
+            DefSource::CommandLine
+        } else {
+            DefSource::Predefined
+        }
+    }
+
+    /// Records the definition `def` that the `#define` being read makes.
+    fn rec_define(&mut self, def: &Rc<MacroDef>) {
+        let source = self.rec_source(def.name_span.lo);
+        let hash = self.dir_hash;
+        let old = self.macros.get_rc(def.name).cloned();
+        if let Some(r) = self.record.as_deref_mut() {
+            let end = std::mem::take(&mut r.pending_end);
+            r.define(def, old.as_ref(), source, hash, end);
+        }
     }
 
     /// clang `isLanguageDefinedBuiltin`.
@@ -419,6 +456,13 @@ impl<'a> Preprocessor<'a, '_> {
         let Some((name, ntok)) = self.read_macro_name(true) else { return };
         self.check_eod("undef", false);
         let old = self.macros.get_rc(name).cloned();
+        if self.record.is_some() {
+            let source = self.rec_source(ntok.tok.span.lo);
+            let hash = self.dir_hash;
+            if let Some(r) = self.record.as_deref_mut() {
+                r.undef(name, hash, ntok.tok.span.lo, source, old.as_ref());
+            }
+        }
         self.callbacks.macro_undefined(name, ntok.tok.span, old.as_deref());
         if self.opts.dump_defines {
             self.queue(Marker::Undef { span: ntok.tok.span, name });
@@ -459,15 +503,17 @@ impl<'a> Preprocessor<'a, '_> {
         // growth of the buffer is paid once, not per `#define`.
         let mut body = self.take_buf();
         let mut has_comma_paste = false;
-        if function_like {
-            if !self.read_fn_body(tok, &params, &mut body, &mut has_comma_paste) {
-                return None;
-            }
+        let eol = if function_like {
+            self.read_fn_body(tok, &params, &mut body, &mut has_comma_paste)?
         } else {
             while tok.kind() != TokKind::Eod {
                 body.push(tok);
                 tok = self.lex_unexpanded();
             }
+            tok.tok.span.lo
+        };
+        if let Some(r) = self.record.as_deref_mut() {
+            r.pending_end = eol;
         }
         if let Some(first) = body.first()
             && first.is_punct(Punct::HashHash)
@@ -540,6 +586,9 @@ impl<'a> Preprocessor<'a, '_> {
                         return false;
                     }
                     params.push(self.syms.va_args);
+                    if let Some(r) = self.record.as_deref_mut() {
+                        r.pending_params.push(t.tok.span.lo);
+                    }
                     *variadic = true;
                     return true;
                 }
@@ -556,6 +605,9 @@ impl<'a> Preprocessor<'a, '_> {
                         return false;
                     }
                     params.push(s);
+                    if let Some(r) = self.record.as_deref_mut() {
+                        r.pending_params.push(t.tok.span.lo);
+                    }
                     let n = self.lex_unexpanded();
                     match n.kind() {
                         TokKind::Punct(Punct::RParen) => return true,
@@ -590,14 +642,14 @@ impl<'a> Preprocessor<'a, '_> {
 
     /// The replacement list of a function-like macro: `#` operands,
     /// `__VA_OPT__` structure, GNU comma pasting ([cpp.replace.general],
-    /// [cpp.stringize], [cpp.subst]/3).
+    /// [cpp.stringize], [cpp.subst]/3). Returns the end of the line.
     fn read_fn_body(
         &mut self,
         mut tok: PpTok,
         params: &[Symbol],
         body: &mut Vec<PpTok>,
         comma_paste: &mut bool,
-    ) -> bool {
+    ) -> Option<Loc> {
         // Unmatched `(` of an open `__VA_OPT__` (innermost last).
         let mut va: Vec<Span> = Vec::new();
         let mut last = tok;
@@ -636,7 +688,7 @@ impl<'a> Preprocessor<'a, '_> {
                         continue;
                     }
                     self.emit(Diag::new(DiagId::pp_hash_not_followed_by_param, next.tok.span));
-                    return false;
+                    return None;
                 }
                 body.push(tok);
                 if is_va_opt {
@@ -651,19 +703,19 @@ impl<'a> Preprocessor<'a, '_> {
             if tok.ident() == Some(self.syms.va_opt) {
                 if !va.is_empty() {
                     self.emit(Diag::new(DiagId::pp_va_opt_nested, tok.tok.span));
-                    return false;
+                    return None;
                 }
                 let lp = self.lex_unexpanded();
                 if !lp.is_punct(Punct::LParen) {
                     self.emit(Diag::new(DiagId::pp_va_opt_missing_lparen, lp.tok.span));
-                    return false;
+                    return None;
                 }
                 body.push(lp);
                 va.push(lp.tok.span);
                 tok = self.lex_unexpanded();
                 if tok.is_punct(Punct::HashHash) {
                     self.emit(Diag::new(DiagId::pp_paste_at_va_opt_edge, tok.tok.span).arg(0));
-                    return false;
+                    return None;
                 }
                 continue;
             }
@@ -675,7 +727,7 @@ impl<'a> Preprocessor<'a, '_> {
                         && body[body.len() - 2].is_punct(Punct::HashHash)
                     {
                         self.emit(Diag::new(DiagId::pp_paste_at_va_opt_edge, tok.tok.span).arg(1));
-                        return false;
+                        return None;
                     }
                 } else if tok.is_punct(Punct::LParen) {
                     va.push(tok.tok.span);
@@ -690,9 +742,9 @@ impl<'a> Preprocessor<'a, '_> {
                     .arg("')'")
                     .with_note(Diag::new(DiagId::note_matching, open).arg("'('")),
             );
-            return false;
+            return None;
         }
-        true
+        Some(tok.tok.span.lo)
     }
 }
 
@@ -1249,6 +1301,7 @@ impl Preprocessor<'_, '_> {
                 TokKind::HeaderName,
                 Span::new(start.lo, end.hi),
                 start,
+                crate::record::EntryKind::HeaderName,
             ));
             h.set_flag(TokFlags::START_OF_LINE, t.has(TokFlags::START_OF_LINE));
             h.set_flag(TokFlags::LEADING_SPACE, t.has(TokFlags::LEADING_SPACE));

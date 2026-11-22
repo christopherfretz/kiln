@@ -1,0 +1,12 @@
+tok namespace declare.cpp:318:b0
+tok L declare.cpp:318:a0@b1[0]<declare.cpp:326
+tok { declare.cpp:318:b2
+tok struct declare.cpp:318:b3
+tok Buf declare.cpp:318:a1@b4[0]<declare.cpp:329
+tok ; declare.cpp:318:b5
+tok } declare.cpp:318:b6
+def declare.cpp:276 DECLARE(ns, T) file dir declare.cpp:268..declare.cpp:317 = namespace ns { struct T ; }
+param declare.cpp:276 0 ns declare.cpp:284 uses b1:plain
+param declare.cpp:276 1 T declare.cpp:288 uses b4:plain
+exp declare.cpp:318 DECLARE def declare.cpp:276 end declare.cpp:332 args a0=declare.cpp:326..declare.cpp:327/1 a1=declare.cpp:329..declare.cpp:332/1
+record complete

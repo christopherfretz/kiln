@@ -1,0 +1,5 @@
+#ifndef K
+#define K(n)
+#endif
+K(Add) K(Sub)
+#undef K

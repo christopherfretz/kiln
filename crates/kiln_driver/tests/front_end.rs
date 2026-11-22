@@ -602,3 +602,36 @@ fn module_cache_is_read_only() {
     assert_eq!(remarks(&buf), [format!("using '{}' for 'std'", ours.join("std.pcm").display())]);
     assert_eq!(tree(&cache), stored, "a hit changes nothing");
 }
+
+/// `FrontEndOptions::pp_record` (WP-2110, spec/pp.md "Preprocessing
+/// record"): off, the preprocessor keeps no record; on, the closure reads
+/// it, with one expansion per macro use, each naming its definition.
+#[test]
+fn preprocessing_record() {
+    let s = Scratch::new("pp-record");
+    let main = s.write(
+        "main.cpp",
+        b"#define SQ(x) ((x) * (x))\n#define TWO 2\nint a = SQ(TWO);\nint b = SQ(3) + TWO;\n",
+    );
+    let cl = argv(&["-fsyntax-only", &main]);
+    let off = run_front_end("kiln++", &cl, quiet(), |fe| fe.pp.record().is_none()).unwrap();
+    assert_eq!(off.errors, 0);
+    assert_eq!(off.value, Some(true));
+    let mut on = quiet();
+    on.pp_record = true;
+    let r = run_front_end("kiln++", &cl, on, |fe| {
+        let rec = fe.pp.record().expect("a record with pp_record on");
+        assert!(rec.is_complete());
+        let interner = fe.pp.interner();
+        let mut names: Vec<String> = rec
+            .exps()
+            .iter()
+            .map(|e| interner.as_str(rec.def(e.def).def.name()).to_owned())
+            .collect();
+        names.sort();
+        names
+    })
+    .unwrap();
+    assert_eq!(r.errors, 0);
+    assert_eq!(r.value.unwrap(), ["SQ", "SQ", "TWO", "TWO"]);
+}

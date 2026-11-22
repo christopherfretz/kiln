@@ -1,0 +1,20 @@
+tok ( shared.h:52:b0
+tok ( shared.h:52:a0@b1<shared.h:59:b0
+tok 2 shared.h:52:a0@b1<shared.h:59:a0@b1[0]<shared.h:66
+tok + shared.h:52:a0@b1<shared.h:59:b2
+tok 1 shared.h:52:a0@b1<shared.h:59:b3
+tok ) shared.h:52:a0@b1<shared.h:59:b4
+tok + shared.h:52:b2
+tok 1 shared.h:52:b3
+tok ) shared.h:52:b4
+tok ( header-a.cpp:327:b0
+tok 0 header-a.cpp:327:a0@b1[0]<header-a.cpp:334
+tok + header-a.cpp:327:b2
+tok 1 header-a.cpp:327:b3
+tok ) header-a.cpp:327:b4
+def shared.h:8 SHARED(x) file dir shared.h:0..shared.h:25 = ( x + 1 )
+param shared.h:8 0 x shared.h:15 uses b1:plain
+exp shared.h:52 SHARED def shared.h:8 end shared.h:68 args a0=shared.h:59..shared.h:68/4
+exp shared.h:59 SHARED def shared.h:8 parent shared.h:52 end shared.h:67 args a0=shared.h:66..shared.h:67/1
+exp header-a.cpp:327 SHARED def shared.h:8 end header-a.cpp:335 args a0=header-a.cpp:334..header-a.cpp:335/1
+record complete

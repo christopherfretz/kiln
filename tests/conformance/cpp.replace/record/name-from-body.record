@@ -1,0 +1,9 @@
+tok L name-from-body.cpp:375/1:a0@b0[0]<name-from-body.cpp:381
+tok :: name-from-body.cpp:375/1:a0@b0[1]<name-from-body.cpp:382
+tok v name-from-body.cpp:375/1:a0@b0[2]<name-from-body.cpp:384
+def name-from-body.cpp:344 F(x) file dir name-from-body.cpp:336..name-from-body.cpp:350 = x
+param name-from-body.cpp:344 0 x name-from-body.cpp:346 uses b0:plain
+def name-from-body.cpp:359 APPLY file dir name-from-body.cpp:351..name-from-body.cpp:366 = F
+exp name-from-body.cpp:375 APPLY def name-from-body.cpp:359 end name-from-body.cpp:375
+exp name-from-body.cpp:375/1 F def name-from-body.cpp:344 name name-from-body.cpp:375:b0 parent name-from-body.cpp:375 end name-from-body.cpp:385 args a0=name-from-body.cpp:381..name-from-body.cpp:385/3
+record complete

@@ -293,8 +293,10 @@ impl Test<'_> {
                 "inst-report:"
             } else if spec.written_refs.is_some() {
                 "written-refs:"
-            } else {
+            } else if spec.decl_extents.is_some() {
                 "decl-extents:"
+            } else {
+                "pp-record:"
             };
             return Some(format!(
                 "not supported by this compiler (kiln-specific `{directive}` directive)"
@@ -1695,7 +1697,49 @@ impl Test<'_> {
         }
         self.check_oven(spec)?;
         self.check_inst_report(spec)?;
-        self.check_written_refs(spec)
+        self.check_written_refs(spec)?;
+        self.check_pp_record(spec)
+    }
+
+    /// Runs `-E -fkiln-dump-pp-record` on the test and compares its output
+    /// with the `pp-record:` golden (`--update` rewrites it).
+    fn check_pp_record(&mut self, spec: &TestSpec) -> Check {
+        let Some(rel) = &spec.pp_record else { return Ok(()) };
+        if self.cfg.pch_diff.is_some() {
+            return Ok(());
+        }
+        let mut cmd = self.command(&self.cfg.compiler, spec, &["-E"], None);
+        cmd.arg("-fkiln-dump-pp-record");
+        let o = self.exec("the compiler", &cmd, self.cfg.compile_timeout)?;
+        let stderr = o.stderr_str();
+        if o.code().is_none() || stderr.contains("panicked at") {
+            return Err(Problem::Fail(format!(
+                "pp-record: the compiler crashed ({})\n{}",
+                o.describe_end(),
+                indent(&tail(&stderr, 20))
+            )));
+        }
+        let got = o.stdout_str();
+        let path = self.case.path.parent().unwrap_or(Path::new(".")).join(rel);
+        if self.cfg.update {
+            fs::write(&path, &got).map_err(|e| {
+                Problem::Broken(format!("cannot write pp-record {}: {e}", path.display()))
+            })?;
+            self.updated = true;
+            return Ok(());
+        }
+        let want = fs::read_to_string(&path).map_err(|e| {
+            Problem::Broken(format!("cannot read pp-record {}: {e}", path.display()))
+        })?;
+        if want == got {
+            Ok(())
+        } else {
+            Err(Problem::Fail(format!(
+                "pp-record: the preprocessing-record dump differs from {} (-expected +actual):\n{}",
+                path.display(),
+                indent(&line_diff(&want, &got))
+            )))
+        }
     }
 
     /// Compares the compile's standard output with the dump golden of

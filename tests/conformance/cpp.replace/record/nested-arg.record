@@ -1,0 +1,8 @@
+tok L nested-arg.cpp:372:a0@b0<nested-arg.cpp:375:a0@b0[0]<nested-arg.cpp:378
+tok :: nested-arg.cpp:372:a0@b0<nested-arg.cpp:375:a0@b0[1]<nested-arg.cpp:379
+tok v nested-arg.cpp:372:a0@b0<nested-arg.cpp:375:a0@b0[2]<nested-arg.cpp:381
+def nested-arg.cpp:356 ID(x) file dir nested-arg.cpp:348..nested-arg.cpp:363 = x
+param nested-arg.cpp:356 0 x nested-arg.cpp:359 uses b0:plain
+exp nested-arg.cpp:372 ID def nested-arg.cpp:356 end nested-arg.cpp:383 args a0=nested-arg.cpp:375..nested-arg.cpp:383/6
+exp nested-arg.cpp:375 ID def nested-arg.cpp:356 parent nested-arg.cpp:372 end nested-arg.cpp:382 args a0=nested-arg.cpp:378..nested-arg.cpp:382/3
+record complete

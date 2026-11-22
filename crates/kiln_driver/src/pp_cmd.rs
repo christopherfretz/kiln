@@ -306,6 +306,7 @@ impl Job<'_> {
         o.main_is_header = a.pch.header_main || a.header_unit_main.is_some();
         o.meta_hint = self.meta_hint();
         o.predefines = predefines;
+        o.pp_record = a.pp_record || a.dump_pp_record;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time, &a.env) {
             let (date, t, stamp) = time::spellings(epoch);
             o.reproducible_time = Some((date, t));
@@ -761,6 +762,7 @@ impl Job<'_> {
             (None, None) => {}
         }
         let mut opts = self.pp_options_for(predefines, staged);
+        opts.pp_record |= hooks.is_some_and(|h| h.pp_record);
         if !staged {
             // `-E -dD`/`-dI` print the directives in place (`-dM` and
             // `-M` print no text); `-M -MG` lists a missing header
@@ -1139,6 +1141,23 @@ impl Job<'_> {
             while pp.next().kind != TokKind::Eof {}
         } else if a.print.macros_only {
             print_macros(&mut pp, &mut result.output);
+        } else if a.dump_pp_record {
+            // The origins of the output's macro-expanded tokens, then the
+            // record (spec/pp.md "Preprocessing record").
+            let mut toks = Vec::new();
+            loop {
+                let t = pp.next();
+                if t.kind == TokKind::Eof {
+                    break;
+                }
+                if sm.is_macro_loc(t.span.lo) {
+                    let sp = kiln_lex::spelling(sm, &t, pp.lex_options()).into_owned();
+                    toks.push((t.span.lo, sp));
+                }
+            }
+            if let Some(r) = pp.record() {
+                result.output.push_str(&r.dump(sm, interner, &toks));
+            }
         } else {
             let opts = PrintOptions {
                 line_markers: !a.print.no_line_markers,

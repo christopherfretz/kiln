@@ -1,0 +1,12 @@
+tok a redefine.cpp:326:b0
+tok b redefine.cpp:358:b0
+tok a redefine.cpp:393:b0
+def redefine.cpp:314 V file dir redefine.cpp:306..redefine.cpp:317 = a ended undef redefine.cpp:329
+def redefine.cpp:346 V file dir redefine.cpp:338..redefine.cpp:349 = b
+def redefine.cpp:369 W file dir redefine.cpp:361..redefine.cpp:372 = a ended replaced redefine.cpp:381
+def redefine.cpp:381 W file dir redefine.cpp:373..redefine.cpp:384 = a
+undef redefine.cpp:329 V ends redefine.cpp:314
+exp redefine.cpp:326 V def redefine.cpp:314 end redefine.cpp:326
+exp redefine.cpp:358 V def redefine.cpp:346 end redefine.cpp:358
+exp redefine.cpp:393 W def redefine.cpp:381 end redefine.cpp:393
+record complete

@@ -1,0 +1,15 @@
+tok ( nested-call.cpp:297/1:b0
+tok 1 nested-call.cpp:297/1:a0@b1[0]<nested-call.cpp:297:b2
+tok ) nested-call.cpp:297/1:b2
+tok + nested-call.cpp:297:b4
+tok ( nested-call.cpp:297/2:b0
+tok 2 nested-call.cpp:297/2:a0@b1[0]<nested-call.cpp:297:b7
+tok ) nested-call.cpp:297/2:b2
+def nested-call.cpp:252 G(n) file dir nested-call.cpp:244..nested-call.cpp:260 = ( n )
+param nested-call.cpp:252 0 n nested-call.cpp:254 uses b1:plain
+def nested-call.cpp:269 CALL(f) file dir nested-call.cpp:261..nested-call.cpp:288 = f ( 1 ) + f ( 2 )
+param nested-call.cpp:269 0 f nested-call.cpp:274 uses b0:plain b5:plain
+exp nested-call.cpp:297 CALL def nested-call.cpp:269 end nested-call.cpp:303 args a0=nested-call.cpp:302..nested-call.cpp:303/1
+exp nested-call.cpp:297/1 G def nested-call.cpp:252 name nested-call.cpp:297:a0@b0[0]<nested-call.cpp:302 parent nested-call.cpp:297 end nested-call.cpp:297:b3 args a0=nested-call.cpp:297:b2..nested-call.cpp:297:b3/1
+exp nested-call.cpp:297/2 G def nested-call.cpp:252 name nested-call.cpp:297:a0@b5[0]<nested-call.cpp:302 parent nested-call.cpp:297 end nested-call.cpp:297:b8 args a0=nested-call.cpp:297:b7..nested-call.cpp:297:b8/1
+record complete

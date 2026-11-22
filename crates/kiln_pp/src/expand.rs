@@ -14,6 +14,7 @@ use kiln_source::{ExpansionKind, Loc, Span};
 use crate::builtin::{Builtin, TargetQuery};
 use crate::macros::MacroDef;
 use crate::preprocessor::{Def, Frame, MacroFrame, Preprocessor, eof_tok};
+use crate::record::{EntryKind, ExpFlags, RecordFlags};
 use crate::tok::{PpFlags, PpTok};
 
 /// Spare `bounds` and `pre` vectors of an [`Args`], kept for reuse.
@@ -32,6 +33,11 @@ pub(crate) struct Args {
     pub(crate) elided: bool,
     /// Cached `invokedWithVariadicArgument`.
     pub(crate) va_nonempty: Option<bool>,
+    /// Error recovery regrouped the arguments ([`Preprocessor::regroup_too_many`]).
+    pub(crate) regrouped: bool,
+    /// The preprocessing record's index of this invocation (`u32::MAX`:
+    /// not recording).
+    pub(crate) rec: u32,
 }
 
 impl Args {
@@ -115,7 +121,81 @@ impl Preprocessor<'_, '_> {
             ExpansionKind::Macro { name } if !name.is_valid() => ExpansionKind::Macro { name: exp },
             k => k,
         };
-        self.sm.add_expansion(spelling, len, exp, kind).unwrap_or(spelling)
+        self.sm.add_expansion(spelling, len, exp, kind).unwrap_or_else(|_| {
+            if let Some(r) = &self.record {
+                r.set_flag(RecordFlags::LOC_SPACE_EXHAUSTED);
+            }
+            spelling
+        })
+    }
+
+    /// While recording: the Macro entry `base` (made from `spelling` by
+    /// [`Self::add_exp`]) is a `kind` row of expansion `e`.
+    pub(crate) fn rec_entry(&mut self, base: Loc, spelling: Loc, kind: EntryKind, e: u32) {
+        if let Some(r) = self.record.as_deref_mut()
+            && base != spelling
+        {
+            r.entry(base, kind, e);
+        }
+    }
+
+    /// While recording: enters a builtin's expansion (when it makes its
+    /// result).
+    pub(crate) fn rec_builtin_expansion(
+        &mut self,
+        def: &Def,
+        name: Loc,
+        end: Loc,
+        parent: u32,
+    ) -> u32 {
+        self.rec_expansion(def, name, end, parent, None)
+    }
+
+    /// While recording: the expansion the next name token belongs to (the
+    /// top frame's).
+    fn rec_parent(&self) -> u32 {
+        match self.frames.last() {
+            Some(Frame::Macro(m)) => m.rec,
+            _ => u32::MAX,
+        }
+    }
+
+    /// While recording: enters the expansion of `def` named by `name`, with
+    /// its arguments (spec/pp.md "Preprocessing record").
+    fn rec_expansion(
+        &mut self,
+        def: &Def,
+        name: Loc,
+        end: Loc,
+        parent: u32,
+        args: Option<&mut Args>,
+    ) -> u32 {
+        let mut flags = 0u8;
+        if self.in_directive {
+            flags |= ExpFlags::IN_DIRECTIVE.bits();
+        }
+        if let Some(a) = &args {
+            if a.elided {
+                flags |= ExpFlags::VA_ELIDED.bits();
+            }
+            if a.regrouped {
+                flags |= ExpFlags::REGROUPED.bits();
+            }
+        }
+        let Some(r) = self.record.as_deref_mut() else { return u32::MAX };
+        let e = r.expansion(def, name, end, parent, ExpFlags::from_bits(flags));
+        if let Some(a) = args {
+            a.rec = e;
+            if e != u32::MAX {
+                let n = a.bounds.len().saturating_sub(1).saturating_sub(usize::from(a.elided));
+                for i in 0..n {
+                    let raw = a.raw(i);
+                    let hi = raw.last().map_or(a.eof(i).tok.span.lo, |t| t.tok.span.hi);
+                    r.arg(raw.iter().map(|t| t.tok.span.lo), hi);
+                }
+            }
+        }
+        e
     }
 
     /// The length of a token in bytes.
@@ -198,13 +278,19 @@ impl Preprocessor<'_, '_> {
 
     /// Expands an enabled macro invocation whose name is `t` (clang
     /// `HandleMacroExpandedIdentifier`).
+    #[allow(clippy::too_many_lines)]
     fn expand_macro(&mut self, t: PpTok, def: &Def) -> Option<PpTok> {
+        let parent = if self.record.is_some() { self.rec_parent() } else { u32::MAX };
         if let Some(b) = def.builtin {
             self.callbacks.macro_expands(&t.tok, def, t.tok.span);
+            if self.record.is_some() {
+                self.rec_builtin = Some((Rc::clone(def), parent));
+            }
             return self.expand_builtin(t, b);
         }
         let mut args = None;
         let mut end = t.tok.span.hi;
+        let mut end_tok = t.tok.span.lo;
         if def.function_like {
             let old = self.in_args.replace((def.name, t.tok.span));
             let r = self.read_args(&t, def);
@@ -213,12 +299,18 @@ impl Preprocessor<'_, '_> {
                 Ok((a, rparen)) => {
                     args = Some(a);
                     end = rparen.hi;
+                    end_tok = rparen.lo;
                 }
                 Err(None) => return Some(t),
                 Err(Some(eof)) => return Some(eof),
             }
         }
         def.used.set(true);
+        let rec = if self.record.is_some() {
+            self.rec_expansion(def, t.tok.span.lo, end_tok, parent, args.as_mut())
+        } else {
+            u32::MAX
+        };
         let range = Span::new(t.tok.span.lo, end);
         self.callbacks.macro_expands(&t.tok, def, range);
         let sol = t.has(TokFlags::START_OF_LINE);
@@ -238,6 +330,7 @@ impl Preprocessor<'_, '_> {
                 range,
                 ExpansionKind::Macro { name: t.tok.span },
             );
+            self.rec_entry(loc, r.tok.span.lo, EntryKind::Single, rec);
             r.tok.span = Span::new(loc, loc.with_offset(hi - lo));
             r.set_flag(TokFlags::START_OF_LINE, sol);
             r.set_flag(TokFlags::LEADING_SPACE, ls);
@@ -258,6 +351,7 @@ impl Preprocessor<'_, '_> {
             range,
             ExpansionKind::Macro { name: t.tok.span },
         );
+        self.rec_entry(base, def.def_start, EntryKind::Body, rec);
         let exp_base = (base.is_valid() && base != def.def_start).then_some(base);
         let mut toks = self.take_buf();
         toks.extend(def.body.iter().zip(def.rel.iter()).map(|(b, &(lo, hi))| {
@@ -272,7 +366,9 @@ impl Preprocessor<'_, '_> {
             if !def.params.is_empty() {
                 let cx = PasteCx { exp_base, exp: range, name_span: t.tok.span };
                 let mut out = self.take_buf();
+                let old = std::mem::replace(&mut self.rec_cur, rec);
                 next_gets_space = self.expand_args(&toks, &mut out, def, &mut a, &cx);
+                self.rec_cur = old;
                 self.give_buf(std::mem::replace(&mut toks, out));
             }
             self.free_args(Some(a));
@@ -289,6 +385,7 @@ impl Preprocessor<'_, '_> {
             exp: range,
             name_span: t.tok.span,
             no_expand: false,
+            rec,
         }));
         None
     }
@@ -368,6 +465,7 @@ impl Preprocessor<'_, '_> {
     /// token is the `(` (clang `ReadMacroCallArgumentList`). Returns the
     /// arguments and the `)`, or the token to return instead (`None`: the
     /// macro name).
+    #[allow(clippy::too_many_lines)]
     fn read_args(&mut self, name: &PpTok, def: &MacroDef) -> Result<(Args, Span), Option<PpTok>> {
         let nparams = def.params.len();
         let mut left = nparams;
@@ -380,6 +478,7 @@ impl Preprocessor<'_, '_> {
         let mut found_elided_comma = false;
         let mut too_many_at: Option<Span> = None;
         let mut actuals = 0usize;
+        let mut regrouped = false;
         while !tok.is_punct(Punct::RParen) {
             let arg_start = toks.len();
             let arg_start_span = tok.tok.span;
@@ -442,6 +541,7 @@ impl Preprocessor<'_, '_> {
                 self.give_buf(toks);
                 return Err(None);
             }
+            regrouped = true;
         }
         let mut elided = false;
         if actuals < nparams {
@@ -466,7 +566,10 @@ impl Preprocessor<'_, '_> {
         }
         bounds.push(toks.len());
         pre.resize_with(nparams, || None);
-        Ok((Args { toks, bounds, pre, elided, va_nonempty: None }, tok.tok.span))
+        Ok((
+            Args { toks, bounds, pre, elided, va_nonempty: None, regrouped, rec: u32::MAX },
+            tok.tok.span,
+        ))
     }
 
     /// Does the argument contain an identifier naming a macro (clang
@@ -486,6 +589,10 @@ impl Preprocessor<'_, '_> {
         buf.push(a.eof(i));
         let depth = self.frames.len();
         self.push_stream(buf, false);
+        if let Some(Frame::Macro(m)) = self.frames.last_mut() {
+            // Expansions in the argument are its invocation's children.
+            m.rec = a.rec;
+        }
         self.arg_preexpand += 1;
         let mut out = self.take_buf();
         loop {
@@ -896,6 +1003,7 @@ impl Preprocessor<'_, '_> {
             }
             let Some(t) = res else {
                 let l = self.add_exp(op.lo, 2, cx.exp, ExpansionKind::Macro { name: cx.name_span });
+                self.rec_entry(l, op.lo, EntryKind::InvalidPaste, self.rec_cur);
                 self.emit(
                     Diag::new(DiagId::pp_paste_invalid_token, Span::new(l, l.with_offset(2)))
                         .arg(&buf),
@@ -927,6 +1035,7 @@ impl Preprocessor<'_, '_> {
             Span::new(lo, hi),
             ExpansionKind::Macro { name: cx.name_span },
         );
+        self.rec_entry(l, lhs.tok.span.lo, EntryKind::Paste, self.rec_cur);
         lhs.tok.span = Span::new(l, l.with_offset(len));
         lhs
     }
@@ -938,7 +1047,9 @@ impl Preprocessor<'_, '_> {
         let toks = std::mem::take(&mut m.toks);
         let mut idx = m.idx;
         let cx = PasteCx { exp_base: m.exp_base, exp: m.exp, name_span: m.name_span };
+        let old = std::mem::replace(&mut self.rec_cur, m.rec);
         let r = self.paste(&toks, &mut idx, t, &cx);
+        self.rec_cur = old;
         if let Some(Frame::Macro(m)) = self.frames.last_mut() {
             m.toks = toks;
             m.idx = idx;
@@ -990,21 +1101,25 @@ impl Preprocessor<'_, '_> {
         } else {
             TokKind::StringLit(Encoding::Ordinary)
         };
-        PpTok::new(self.scratch_tok(&s, kind, span, name))
+        PpTok::new(self.scratch_tok(&s, kind, span, name, EntryKind::Stringize))
     }
 
-    /// A token spelled `text` in a scratch buffer, expanded at `exp`.
+    /// A token spelled `text` in a scratch buffer, expanded at `exp`; `rec`
+    /// is what made it, for the preprocessing record.
     pub(crate) fn scratch_tok(
         &mut self,
         text: &str,
         kind: TokKind,
         exp: Span,
         name: Span,
+        rec: EntryKind,
     ) -> Token {
         let len = u32::try_from(text.len()).unwrap_or(u32::MAX);
         let span = match self.scratch_loc(text) {
-            Some((_, l)) => {
-                let l = self.add_exp(l, len, exp, ExpansionKind::Macro { name });
+            Some((_, s)) => {
+                let l = self.add_exp(s, len, exp, ExpansionKind::Macro { name });
+                let e = if rec == EntryKind::HeaderName { u32::MAX } else { self.rec_cur };
+                self.rec_entry(l, s, rec, e);
                 Span::new(l, l.with_offset(len))
             }
             None => exp,
@@ -1027,6 +1142,82 @@ impl Preprocessor<'_, '_> {
         }
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
+}
+
+/// The uses of the parameters in `def`'s replacement list, as
+/// `(parameter, use)` in body order (spec/pp.md "Preprocessing record").
+/// The rules are [`Preprocessor::expand_args`]'s: an operand of `#` is
+/// stringized, and so is everything inside `#__VA_OPT__( )`; a parameter
+/// next to a `##` paste operator is substituted unexpanded; any other is
+/// substituted pre-expanded, inside `__VA_OPT__( )` too.
+pub(crate) fn param_uses(def: &MacroDef, va_opt: Symbol) -> Vec<(u32, crate::record::Use)> {
+    use crate::record::{ParamUse, Use};
+    let body = &def.body;
+    let e = body.len();
+    let mut out = Vec::new();
+    // Unmatched `(` of the open `__VA_OPT__` (0: none), and whether it is
+    // stringized.
+    let mut va_parens = 0u32;
+    let mut va_str = false;
+    let mut pending_str = false;
+    let mut i = 0;
+    while i < e {
+        let cur = &body[i];
+        if def.variadic
+            && va_parens == 0
+            && is_va_opt(cur, va_opt)
+            && body.get(i + 1).is_some_and(|t| t.is_punct(Punct::LParen))
+        {
+            va_parens = 1;
+            va_str = std::mem::take(&mut pending_str);
+            i += 2;
+            continue;
+        }
+        pending_str = false;
+        if va_parens > 0 {
+            if cur.is_punct(Punct::LParen) {
+                va_parens += 1;
+            } else if cur.is_punct(Punct::RParen) {
+                va_parens -= 1;
+                if va_parens == 0 {
+                    va_str = false;
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        let in_va_opt = va_parens > 0;
+        if cur.is_punct(Punct::Hash) && i + 1 < e {
+            let next = &body[i + 1];
+            if let Some(p) = next.ident().and_then(|s| def.param_index(s)) {
+                let tok = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                let p = u32::try_from(p).unwrap_or(u32::MAX);
+                out.push((p, Use { tok, kind: ParamUse::Stringized, in_va_opt }));
+                i += 2;
+                continue;
+            }
+            if def.variadic && is_va_opt(next, va_opt) {
+                pending_str = true;
+                i += 1;
+                continue;
+            }
+        }
+        if let Some(p) = cur.ident().and_then(|s| def.param_index(s)) {
+            let paste = (i != 0 && body[i - 1].is_paste_op())
+                || body.get(i + 1).is_some_and(PpTok::is_paste_op);
+            let kind = if va_str {
+                ParamUse::Stringized
+            } else if paste {
+                ParamUse::PasteOperand
+            } else {
+                ParamUse::Plain
+            };
+            let tok = u32::try_from(i).unwrap_or(u32::MAX);
+            out.push((u32::try_from(p).unwrap_or(u32::MAX), Use { tok, kind, in_va_opt }));
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Appends `s` with `\` and `"` escaped and newlines turned into `\n`
@@ -1090,15 +1281,19 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Expands builtin macro `b` named by `t` (clang `ExpandBuiltinMacro`).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn expand_builtin(&mut self, t: PpTok, b: Builtin) -> Option<PpTok> {
         use std::fmt::Write as _;
+        // Recording: entered when the result is made (operands may expand
+        // other macros first).
+        let pending = self.rec_builtin.take();
         let name_span = t.tok.span;
         let mut text = String::new();
         let mut kind = TokKind::PpNumber;
         // The token whose location the result takes (clang reuses `Tok`).
         let mut at = t.tok.span;
         match b {
-            Builtin::Pragma => return self.handle_pragma_op(t),
+            Builtin::Pragma => return self.handle_pragma_op(t, pending),
             Builtin::Line => {
                 let _ = write!(text, "{}", self.line_of(t.tok.span.lo));
             }
@@ -1190,7 +1385,12 @@ impl Preprocessor<'_, '_> {
                 }
             }
         }
-        let mut r = PpTok::new(self.scratch_tok(&text, kind, at, name_span));
+        let old = self.rec_cur;
+        if let Some((def, parent)) = pending {
+            self.rec_cur = self.rec_builtin_expansion(&def, t.tok.span.lo, at.lo, parent);
+        }
+        let mut r = PpTok::new(self.scratch_tok(&text, kind, at, name_span, EntryKind::Builtin));
+        self.rec_cur = old;
         r.set_flag(TokFlags::START_OF_LINE, t.has(TokFlags::START_OF_LINE));
         r.set_flag(TokFlags::LEADING_SPACE, t.has(TokFlags::LEADING_SPACE));
         Some(r)

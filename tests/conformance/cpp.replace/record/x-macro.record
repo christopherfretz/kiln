@@ -1,0 +1,21 @@
+tok Add k.def:30:a0@b0[0]<k.def:32
+tok , k.def:30:b1
+tok Sub k.def:37:a0@b0[0]<k.def:39
+tok , k.def:37:b1
+tok case k.def:30:b0
+tok Add k.def:30:a0@b1[0]<k.def:32
+tok : k.def:30:b2
+tok case k.def:37:b0
+tok Sub k.def:37:a0@b1[0]<k.def:39
+tok : k.def:37:b2
+def x-macro.cpp:435 K(n) file dir x-macro.cpp:427..x-macro.cpp:442 = n , ended undef k.def:44
+param x-macro.cpp:435 0 n x-macro.cpp:437 uses b0:plain
+def x-macro.cpp:507 K(n) file dir x-macro.cpp:499..x-macro.cpp:519 = case n : ended undef k.def:44
+param x-macro.cpp:507 0 n x-macro.cpp:509 uses b1:plain
+undef k.def:44 K ends x-macro.cpp:435
+undef k.def:44 K ends x-macro.cpp:507
+exp k.def:30 K def x-macro.cpp:435 end k.def:35 args a0=k.def:32..k.def:35/1
+exp k.def:37 K def x-macro.cpp:435 end k.def:42 args a0=k.def:39..k.def:42/1
+exp k.def:30 K def x-macro.cpp:507 end k.def:35 args a0=k.def:32..k.def:35/1
+exp k.def:37 K def x-macro.cpp:507 end k.def:42 args a0=k.def:39..k.def:42/1
+record complete

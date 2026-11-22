@@ -1,0 +1,8 @@
+tok 2 push-pop.cpp:329:b0
+tok 1 push-pop.cpp:363:b0
+def push-pop.cpp:272 M file dir push-pop.cpp:264..push-pop.cpp:275 = 1
+def push-pop.cpp:317 M file dir push-pop.cpp:309..push-pop.cpp:320 = 2 ended popped push-pop.cpp:340
+undef push-pop.cpp:300 M ends push-pop.cpp:272
+exp push-pop.cpp:329 M def push-pop.cpp:317 end push-pop.cpp:329
+exp push-pop.cpp:363 M def push-pop.cpp:272 end push-pop.cpp:363
+record complete

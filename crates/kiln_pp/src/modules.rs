@@ -1618,6 +1618,12 @@ impl Preprocessor<'_, '_> {
 
     /// [cpp.import]/5: the macros of a header unit become visible.
     fn apply_header_macros(&mut self, defs: &[Rc<MacroDef>]) {
+        // Macros read from a module file or an image were not seen made.
+        if let Some(r) = &self.record
+            && defs.iter().any(|d| !r.knows(d))
+        {
+            r.set_flag(crate::record::RecordFlags::IMPORTED);
+        }
         for d in defs {
             self.macros.map.insert(d.name, d.clone());
         }

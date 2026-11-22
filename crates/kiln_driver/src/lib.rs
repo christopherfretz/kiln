@@ -174,6 +174,21 @@ impl Engines for SharedWriter {
 /// live=N reserved=N` ([`MemReport::live_bytes`], which leaves out the
 /// derived `instantiation.*` rows). A measurement aid, not a stable
 /// format.
+/// The `-fkiln-memory-report` row of the preprocessing record, when one
+/// is kept (`pp.record`: count the expansions, bytes `PpRecord::bytes`;
+/// WP-2110). Taken before the preprocessor is dropped.
+pub(crate) fn pp_record_row(pp: &kiln_pp::Preprocessor<'_, '_>) -> Option<kiln_ast::mem::MemRow> {
+    pp.record().map(|r| {
+        let bytes = r.bytes() as u64;
+        kiln_ast::mem::MemRow {
+            name: "pp.record".to_owned(),
+            count: r.exps().len() as u64,
+            live_bytes: bytes,
+            reserved_bytes: bytes,
+        }
+    })
+}
+
 pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl Write) {
     use std::fmt::Write as _;
     let mut s = String::new();

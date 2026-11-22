@@ -340,6 +340,9 @@ KILN DEVELOPMENT:
                           declaration as written (for tooling clients)
   -fkiln-dump-decl-extents
                           [kiln] Record and dump the declaration extents
+  -fkiln-dump-pp-record   [kiln] Dump the preprocessing record (with -E: the
+                          origin of each token from a macro)
+  -fkiln-pp-record        [kiln] Keep the preprocessing record (for measuring)
   -fkiln-cfg-stats        [kiln] With -fsyntax-only: control-flow graph sizes
   -fkiln-cfg-max-elems=<n>
                           [kiln] Control-flow graph element limit per body

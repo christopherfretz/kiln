@@ -556,6 +556,12 @@ impl CodegenJob<'_> {
         }
         // WP-1557: read from the macro table at the end of the TU.
         let mason_meta = crate::mason_meta::options(a, &job.std, &pp);
+        let pp_record = if a.dump_pp_record {
+            pp.record().map(|r| r.dump(sm, pp.interner(), &[]))
+        } else {
+            None
+        };
+        let pp_record_row = crate::pp_record_row(&pp);
         out.deps = crate::pp_cmd::finish_deps(pp, deps);
         // WP-1745: the dumps `-fsyntax-only` writes, in its order; clang
         // prints the layouts as Sema completes each class, before the
@@ -566,6 +572,9 @@ impl CodegenJob<'_> {
         }
         if a.dump_decl_extents {
             out.dumps.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
+        }
+        if let Some(d) = pp_record {
+            out.dumps.push_str(&d);
         }
         if a.dump_record_layouts {
             out.dumps.push_str(&kiln_abi::dump_all_record_layouts(&tu.ast, &target, Some(sm)));
@@ -729,7 +738,9 @@ impl CodegenJob<'_> {
         }
         if a.memory_report {
             engine.flush();
-            crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
+            let mut m = tu.memory();
+            m.rows.extend(pp_record_row);
+            crate::write_memory_report(&m, &mut job.stderr.clone());
         }
         // The AST, the Oven and the module are each about as large as the
         // IR text for a big unit: the module leaves `lower` only once the

@@ -36,6 +36,7 @@
 //! | `frames`, `markers`, `pending`, `include_depth` | transient, at rest | no file open, nothing queued |
 //! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
+//! | `record`, `rec_cur`, `rec_builtin` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
 
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
@@ -302,6 +303,9 @@ impl Preprocessor<'_, '_> {
             name_gate: _,
             predef_file,
             state_hooks: _,
+            record: _,
+            rec_cur: _,
+            rec_builtin: _,
         } = self;
         macros.put(w);
         pushed.put(w);
@@ -410,6 +414,9 @@ impl Preprocessor<'_, '_> {
         self.attr_macro_gen = attr_macro_gen;
         if let Some(m) = &mut self.modules {
             m.builtin_file = builtin_file;
+        }
+        if let Some(r) = &self.record {
+            r.set_flag(crate::record::RecordFlags::RESTORED);
         }
         Ok(())
     }

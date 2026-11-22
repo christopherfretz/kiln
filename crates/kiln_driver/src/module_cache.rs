@@ -416,6 +416,8 @@ impl StdCache {
         // `decl_extents` stays: the module file carries the extents its
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;
+        a.pp_record = false;
+        a.dump_pp_record = false;
         a.cfg_stats = false;
         a.memory_report = false;
         // The importer's profile and report cover its own translation

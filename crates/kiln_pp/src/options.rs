@@ -178,6 +178,10 @@ pub struct PpOptions {
     /// Digraphs are tokens ([`LexOptions::digraphs`]). Default: `true`;
     /// off only for strict C89 (WP-1331).
     pub digraphs: bool,
+    /// Keep the preprocessing record ([`crate::Preprocessor::record`],
+    /// spec/pp.md "Preprocessing record"). Default: off. Changes no token,
+    /// diagnostic or location.
+    pub pp_record: bool,
 }
 
 impl PpOptions {
@@ -210,6 +214,7 @@ impl PpOptions {
             clang19_escapes: false,
             asm: false,
             digraphs: true,
+            pp_record: false,
         }
     }
 
