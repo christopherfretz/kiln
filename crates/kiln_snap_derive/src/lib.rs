@@ -41,7 +41,23 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenSt
 ///   automatic `T: Snap` bound on every type parameter.
 #[proc_macro_derive(Snap, attributes(snap))]
 pub fn derive_snap(input: TokenStream) -> TokenStream {
-    match parse(input).map(|i| expand(&i)) {
+    match parse(input, false).map(|i| expand(&i)) {
+        Ok(ts) => ts,
+        Err(e) => e.into_tokens(),
+    }
+}
+
+/// Derives `kiln_snap::Describe` (spec/snap.md "Descriptors of borrowed
+/// views"): the type's schema descriptor alone, as `#[derive(Snap)]`
+/// writes it (its kind, its variants with their discriminants, and each
+/// field's name and type), with no encoder. It accepts lifetime
+/// parameters, so a borrowed view of the AST (a decoded constant value)
+/// describes itself too: a test that compares the descriptor fails when
+/// a variant or a field is added, removed or retyped. `#[snap(...)]`
+/// attributes are read and ignored (every field is described).
+#[proc_macro_derive(Describe, attributes(snap))]
+pub fn derive_describe(input: TokenStream) -> TokenStream {
+    match parse(input, true).map(|i| expand_describe(&i)) {
         Ok(ts) => ts,
         Err(e) => e.into_tokens(),
     }
@@ -99,8 +115,20 @@ struct Input {
 }
 
 enum Param {
-    Type { name: Ident, bounds: TokenStream },
-    Const { name: Ident, ty: TokenStream },
+    Type {
+        name: Ident,
+        bounds: TokenStream,
+    },
+    Const {
+        name: Ident,
+        ty: TokenStream,
+    },
+    /// A lifetime parameter (`Describe` only): its tokens as written,
+    /// and the lifetime itself (`'a`).
+    Lifetime {
+        decl: TokenStream,
+        name: TokenStream,
+    },
 }
 
 enum Data {
@@ -384,13 +412,15 @@ fn skip_vis(c: &mut Cursor) {
     }
 }
 
-fn parse(input: TokenStream) -> Result<Input, Error> {
+/// `lifetimes`: accept lifetime parameters (`Describe`; `Snap` refuses
+/// them).
+fn parse(input: TokenStream, lifetimes: bool) -> Result<Input, Error> {
     let mut c = Cursor::new(input, Span::call_site());
     let container = attrs(&mut c, Site::Container)?;
     skip_vis(&mut c);
     let kw = c.ident("`struct` or `enum`")?;
     let name = c.ident("the type name")?;
-    let params = if c.is_punct('<') { generics(&mut c)? } else { Vec::new() };
+    let params = if c.is_punct('<') { generics(&mut c, lifetimes)? } else { Vec::new() };
     let mut preds = TokenStream::new();
     if c.is_ident("where") {
         preds = where_preds(&mut c);
@@ -423,7 +453,7 @@ fn parse(input: TokenStream) -> Result<Input, Error> {
 }
 
 /// Parses `<...>` after the type name.
-fn generics(c: &mut Cursor) -> Result<Vec<Param>, Error> {
+fn generics(c: &mut Cursor, lifetimes: bool) -> Result<Vec<Param>, Error> {
     let open = c.span();
     c.pos += 1;
     let mut toks = Vec::new();
@@ -452,6 +482,13 @@ fn generics(c: &mut Cursor) -> Result<Vec<Param>, Error> {
     for p in split(toks, ',', true) {
         let mut pc = Cursor::of(p, open);
         attrs(&mut pc, Site::Field)?;
+        if pc.is_punct('\'') && lifetimes {
+            let decl: TokenStream = pc.toks[pc.pos..].iter().cloned().collect();
+            let name: TokenStream =
+                pc.toks[pc.pos..(pc.pos + 2).min(pc.toks.len())].iter().cloned().collect();
+            out.push(Param::Lifetime { decl, name });
+            continue;
+        }
         if pc.is_punct('\'') {
             return fail(
                 pc.span(),
@@ -675,10 +712,9 @@ fn expand(inp: &Input) -> TokenStream {
             }
         }
         Param::Const { name, ty } => q("const $n: $t", &[("n", &ts(name.clone())), ("t", ty)]),
+        Param::Lifetime { decl, .. } => decl.clone(),
     }));
-    let ty_args = comma(inp.params.iter().map(|p| match p {
-        Param::Type { name, .. } | Param::Const { name, .. } => ts(name.clone()),
-    }));
+    let ty_args = type_args(inp);
     let (impl_generics, ty_generics) = if inp.params.is_empty() {
         (TokenStream::new(), TokenStream::new())
     } else {
@@ -706,6 +742,69 @@ fn expand(inp: &Input) -> TokenStream {
             ("name", &name),
             ("tg", &ty_generics),
             ("wc", &where_clause),
+            ("items", &items),
+        ],
+    )
+}
+
+/// The type's arguments in the order of its parameters (`'a, T, N`).
+fn type_args(inp: &Input) -> TokenStream {
+    comma(inp.params.iter().map(|p| match p {
+        Param::Type { name, .. } | Param::Const { name, .. } => ts(name.clone()),
+        Param::Lifetime { name, .. } => name.clone(),
+    }))
+}
+
+/// `impl ::kiln_snap::Describe`: [`Desc::new`] and one item per variant
+/// and field, every field described as a `.field::<T>("name")`
+/// (`kiln_snap::Desc`), whatever its `#[snap]` attributes.
+fn expand_describe(inp: &Input) -> TokenStream {
+    let name = ts(inp.name.clone());
+    let params = comma(inp.params.iter().map(|p| match p {
+        Param::Type { name, bounds } if bounds.is_empty() => ts(name.clone()),
+        Param::Type { name, bounds } => q("$n: $b", &[("n", &ts(name.clone())), ("b", bounds)]),
+        Param::Const { name, ty } => q("const $n: $t", &[("n", &ts(name.clone())), ("t", ty)]),
+        Param::Lifetime { decl, .. } => decl.clone(),
+    }));
+    let (impl_generics, ty_generics) = if inp.params.is_empty() {
+        (TokenStream::new(), TokenStream::new())
+    } else {
+        (q("<$p>", &[("p", &params)]), q("<$a>", &[("a", &type_args(inp))]))
+    };
+    let where_clause =
+        if inp.preds.is_empty() { TokenStream::new() } else { q("where $p", &[("p", &inp.preds)]) };
+    let fields_desc = |fields: &Fields| {
+        cat(fields.list().iter().enumerate().map(|(i, f)| {
+            q(".field::<$t>($l)", &[("t", &f.ty), ("l", &lit_str(&field_label(f, i)))])
+        }))
+    };
+    let (kind, items) = match &inp.data {
+        Data::Struct(fields) => ("struct", fields_desc(fields)),
+        Data::Enum(vs) => (
+            "enum",
+            cat(vs.iter().map(|v| {
+                let mut t = q(
+                    ".variant($n, $d)",
+                    &[("n", &lit_str(&v.name.to_string())), ("d", &lit_str(&v.disc))],
+                );
+                t.extend(fields_desc(&v.fields));
+                t
+            })),
+        ),
+    };
+    q(
+        "#[automatically_derived]
+         impl $ig ::kiln_snap::Describe for $name $tg $wc {
+             fn descriptor() -> ::kiln_snap::Desc {
+                 ::kiln_snap::Desc::new($kind) $items
+             }
+         }",
+        &[
+            ("ig", &impl_generics),
+            ("name", &name),
+            ("tg", &ty_generics),
+            ("wc", &where_clause),
+            ("kind", &lit_str(kind)),
             ("items", &items),
         ],
     )

@@ -4921,8 +4921,63 @@ pub mod builtin {
     /// classification of the `AtomicExpr` operations (clang's
     /// `AtomicExpr::AtomicOp` and `Sema::BuildAtomicExpr`). Every
     /// operation id is below 256: an `AtomicExpr` stores it in `aux`.
+    /// Each constant is named after its builtin (`FETCH_ADD` is
+    /// `__atomic_fetch_add`, `C11_FETCH_ADD` `__c11_atomic_fetch_add`;
+    /// [`name`] spells it); the ids are stable within a PCH
+    /// `FORMAT_VERSION` (spec/ast.md §20), and [`ALL`] lists them.
     #[allow(missing_docs, reason = "the ids are named after the builtins")]
     pub mod atomic {
+        /// Every atomic builtin id, ascending: the operations
+        /// ([`is_op`], `1..=38`) then the other atomic builtins.
+        pub const ALL: [u32; 47] = [
+            ADD_FETCH,
+            AND_FETCH,
+            CMPXCHG,
+            CMPXCHG_N,
+            EXCHANGE,
+            EXCHANGE_N,
+            FETCH_ADD,
+            FETCH_AND,
+            FETCH_MAX,
+            FETCH_MIN,
+            FETCH_NAND,
+            FETCH_OR,
+            FETCH_SUB,
+            FETCH_XOR,
+            LOAD,
+            LOAD_N,
+            MAX_FETCH,
+            MIN_FETCH,
+            NAND_FETCH,
+            OR_FETCH,
+            STORE,
+            STORE_N,
+            SUB_FETCH,
+            XOR_FETCH,
+            C11_CMPXCHG_STRONG,
+            C11_CMPXCHG_WEAK,
+            C11_EXCHANGE,
+            C11_FETCH_ADD,
+            C11_FETCH_AND,
+            C11_FETCH_MAX,
+            C11_FETCH_MIN,
+            C11_FETCH_NAND,
+            C11_FETCH_OR,
+            C11_FETCH_SUB,
+            C11_FETCH_XOR,
+            C11_INIT,
+            C11_LOAD,
+            C11_STORE,
+            ALWAYS_LOCK_FREE,
+            CLEAR,
+            IS_LOCK_FREE,
+            SIGNAL_FENCE,
+            TEST_AND_SET,
+            THREAD_FENCE,
+            C11_IS_LOCK_FREE,
+            C11_SIGNAL_FENCE,
+            C11_THREAD_FENCE,
+        ];
         pub const ADD_FETCH: u32 = 1;
         pub const AND_FETCH: u32 = 2;
         pub const CMPXCHG: u32 = 3;

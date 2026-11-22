@@ -6,7 +6,8 @@ use super::kinds::{CallConv, Quals, RefQual};
 use crate::ids::{DeclId, ExprId, ProfileId, QualType};
 
 /// The `AArch64` SME function type attributes (ACLE; clang
-/// `FunctionType::AArch64SMETypeAttributes`), packed as clang's Itanium
+/// `FunctionType::AArch64SMETypeAttributes`; values stable within a PCH
+/// `FORMAT_VERSION`, spec/ast.md §20), packed as clang's Itanium
 /// mangling spells them (`AAPCSBitmaskSME`): [`sme::STREAMING`],
 /// [`sme::STREAMING_COMPATIBLE`], [`sme::AGNOSTIC_ZA`], then the ZA and ZT0
 /// states (3 bits each: [`sme::IN`], [`sme::OUT`], [`sme::INOUT`],
@@ -32,6 +33,19 @@ pub mod sme {
     pub const PRESERVES: u16 = 4;
     /// Every bit in use.
     pub const MASK: u16 = 0x1ff;
+    /// The names of the attribute bits, as written.
+    pub const FLAGS: [(&str, u16); 3] = [
+        ("__arm_streaming", STREAMING),
+        ("__arm_streaming_compatible", STREAMING_COMPATIBLE),
+        ("__arm_agnostic", AGNOSTIC_ZA),
+    ];
+    /// The names of the ZA and ZT0 state values ([`za`], [`zt0`]).
+    pub const STATES: [(&str, u16); 4] = [
+        ("__arm_in", IN),
+        ("__arm_out", OUT),
+        ("__arm_inout", INOUT),
+        ("__arm_preserves", PRESERVES),
+    ];
 
     /// The ZA state of `bits` (0: none).
     pub const fn za(bits: u16) -> u16 {
@@ -52,16 +66,29 @@ pub mod sme {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct FuncInfo(u32, u16);
 
+/// The layout of [`FuncInfo::bits`], stable within a PCH `FORMAT_VERSION`
+/// (spec/ast.md §20): a tooling client that reads the raw bits names
+/// them with these.
 impl FuncInfo {
-    const VARIADIC: u32 = 1;
-    const REF_SHIFT: u32 = 1;
-    const QUALS_SHIFT: u32 = 3;
-    const CC_SHIFT: u32 = 6;
-    const NORETURN: u32 = 1 << 10;
-    const TRAILING: u32 = 1 << 11;
-    const NO_CSR: u32 = 1 << 12;
-    const REGPARM_SHIFT: u32 = 13;
-    const SME_SHIFT: u32 = 16;
+    /// Bit 0: `...` (variadic).
+    pub const VARIADIC: u32 = 1;
+    /// Bits 1-2: the [`RefQual`] (0 none, 1 `&`, 2 `&&`; 3 a C function
+    /// without a prototype, [`FuncInfo::no_proto`]).
+    pub const REF_SHIFT: u32 = 1;
+    /// Bits 3-5: the [`Quals`] of the implicit object parameter.
+    pub const QUALS_SHIFT: u32 = 3;
+    /// Bits 6-9: the [`CallConv`] discriminant.
+    pub const CC_SHIFT: u32 = 6;
+    /// Bit 10: `noreturn` in the type.
+    pub const NORETURN: u32 = 1 << 10;
+    /// Bit 11: a trailing return type was written.
+    pub const TRAILING: u32 = 1 << 11;
+    /// Bit 12: x86-64 `no_caller_saved_registers`.
+    pub const NO_CSR: u32 = 1 << 12;
+    /// Bits 13-15: x86-64 `regparm(N)` as `N + 1` (0: none).
+    pub const REGPARM_SHIFT: u32 = 13;
+    /// Bits 16-24: the `AArch64` SME attributes ([`sme`]; [`sme::MASK`]).
+    pub const SME_SHIFT: u32 = 16;
 
     /// No bits set: a non-variadic, non-member function with the default
     /// calling convention.
@@ -381,7 +408,7 @@ pub struct FuncProto {
 /// A parameter's ABI (clang `ParameterABI`, the Swift parameter
 /// attributes; spec/types.md §5.4, WP-1745): part of the function type,
 /// as clang's `ExtParameterInfo`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Describe)]
 #[repr(u8)]
 pub enum ParamAbi {
     /// An ordinary parameter.

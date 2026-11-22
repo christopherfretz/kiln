@@ -391,7 +391,7 @@ impl PtrBase {
 /// Every scalar carries its type, which must be the **canonical,
 /// cv-unqualified** type (the store does not canonicalize; equal values of
 /// different types are different values, as [temp.type] requires).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Describe)]
 pub enum Scalar<'a> {
     /// An integer, enumeration or character value (not `bool`).
     Int {
@@ -551,7 +551,7 @@ pub struct UnionMember {
 ///
 /// Every other byte holds an initialized scalar (the result of a constant
 /// expression is fully initialized, [expr.const]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Describe)]
 pub struct ByteImage<'a> {
     /// The aggregate's canonical, cv-unqualified type.
     pub ty: QualType,
@@ -566,7 +566,7 @@ pub struct ByteImage<'a> {
 }
 
 /// A constant value as stored: a scalar or an aggregate image.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Describe)]
 pub enum ConstValue<'a> {
     /// A scalar.
     Scalar(Scalar<'a>),

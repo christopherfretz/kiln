@@ -98,6 +98,13 @@ impl Desc {
         let _ = write!(self.0, " #{text}");
         self
     }
+
+    /// The descriptor's text: its kind, then its variants
+    /// (`| Name=disc`) and fields (` name:type`) in declaration order.
+    /// [`crate::Describe`] clients compare it against a pinned copy.
+    pub fn text(&self) -> &str {
+        &self.0
+    }
 }
 
 /// The set of type descriptors reachable from a root.

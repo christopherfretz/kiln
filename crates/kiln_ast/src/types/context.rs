@@ -55,7 +55,7 @@ pub enum TypeOfOperand {
 /// A type node decoded into its operands (spec/types.md §15 R1). Obtained
 /// with [`TypeContext::view`] (the node itself) or
 /// [`TypeContext::canonical_view`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Describe)]
 #[allow(missing_docs)] // field names are the spec's operand names (§5)
 pub enum TypeView {
     /// The dummy node 0 and the reserved builtin ids 48..=63.
@@ -523,6 +523,19 @@ impl TypeContext {
     #[inline]
     pub fn node(&self, t: TypeId) -> TypeNode {
         self.store.node(t)
+    }
+
+    /// The pair or triple words of `t`'s node, in order (empty for an
+    /// inline kind, `ConstantArray` and `Function`): the words
+    /// [`crate::roles::TypeRoles::words`] describes, for a tooling client
+    /// that reads the raw nodes rather than [`Self::view`].
+    pub fn payload_words(&self, t: TypeId) -> Vec<u32> {
+        let n = self.node(t);
+        match super::node::shape(n.kind()) {
+            super::node::Shape::Pair => self.store.pair(n.data).to_vec(),
+            super::node::Shape::Triple => self.store.triple(n.data).to_vec(),
+            _ => Vec::new(),
+        }
     }
 
     /// The node's own kind (sugar kinds included).

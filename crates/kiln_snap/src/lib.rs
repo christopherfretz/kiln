@@ -28,9 +28,20 @@ mod wire;
 
 pub use error::{ErrorKind, SnapError};
 pub use impls::FixedHasher;
-pub use kiln_snap_derive::Snap;
+pub use kiln_snap_derive::{Describe, Snap};
 pub use schema::{Desc, Schema, SchemaHash, schema_hash};
 pub use wire::{ID_SPACES, Reader, WINDOW, Writer};
+
+/// A type that describes its own shape (spec/snap.md "Descriptors of
+/// borrowed views"): the [`Desc`] that `#[derive(Snap)]` would write
+/// for it, for a type that is not a snapshot (a borrowed, decoded view
+/// of the AST may hold a lifetime). Derived by `#[derive(Describe)]`;
+/// a client pins [`Desc::text`] in a test so a new variant or field
+/// fails that test, not only its build.
+pub trait Describe {
+    /// The type's descriptor.
+    fn descriptor() -> Desc;
+}
 
 /// A type that can be written to a snapshot and read back.
 ///

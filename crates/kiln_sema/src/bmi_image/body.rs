@@ -4073,4 +4073,99 @@ mod tests {
         super::body_locs(&expr_form(vec![0, 114], 2, [NONE, 0], 2), &mut offs);
         assert!([111, 112, 113, 114].iter().all(|o| offs.contains(o)), "{offs:?}");
     }
+
+    /// Whether the image token `f` writes a word of role `r`
+    /// (`kiln_ast::roles`).
+    fn agrees(f: super::F, r: kiln_ast::roles::Role) -> bool {
+        use super::F;
+        use kiln_ast::roles::Role as R;
+        matches!(
+            (f, r),
+            (F::Raw, R::Value(_))
+                | (F::Bool, R::Bool | R::Value(_))
+                | (F::E, R::Expr)
+                | (F::OE, R::Opt(&R::Expr))
+                | (F::S, R::Stmt)
+                | (F::OS, R::Opt(&R::Stmt))
+                | (F::D(_) | F::RB, R::Decl)
+                | (F::OD(_), R::Opt(&R::Decl))
+                | (F::Cv, R::ConstValue)
+                | (F::OCv, R::Opt(&R::ConstValue))
+                | (F::Str, R::StringLit)
+                | (F::Loc, R::Loc)
+                | (F::Qt, R::Type)
+                | (F::EL, R::List(&R::Expr))
+                | (F::SL, R::List(&R::Stmt))
+                | (F::DL(_), R::List(&R::Decl))
+                | (F::QL, R::List(&R::Type))
+                | (F::Path, R::Opt(&R::List(&R::Value(_))))
+                | (F::Nns, R::Nns)
+                | (F::Name, R::DeclName)
+                | (F::TA, R::ArgList)
+                | (F::AL, R::List(&R::Attr))
+                | (F::Gen | F::GenT, R::List(&R::Value(_)))
+                | (F::Reqs, R::Side(_))
+                | (F::LB, R::Lambda)
+        )
+    }
+
+    fn slot_agrees(s: super::Slot, r: kiln_ast::roles::Role) -> bool {
+        use kiln_ast::roles::Role as R;
+        match s {
+            super::Slot::Zero => r == R::Zero,
+            super::Slot::F(f) => agrees(f, r),
+            super::Slot::Side(_) => matches!(r, R::Side(_) | R::Opt(&R::Side(_))),
+        }
+    }
+
+    /// Whether the `aux` check accepts no value outside role `r` (when
+    /// `r` is a plain code; it may accept fewer, and fall back on the
+    /// rest).
+    fn aux_agrees(ok: impl Fn(u16) -> bool, r: kiln_ast::roles::Role) -> bool {
+        use kiln_ast::roles::Role as R;
+        match r {
+            R::Zero => !ok(1),
+            R::Bool => !ok(2),
+            R::Enum { max, .. } => !ok(max as u16 + 1),
+            _ => true,
+        }
+    }
+
+    /// WP-2024: the body section writes every word of a kind it carries
+    /// as the kind's operand roles (`kiln_ast::roles`, the table tooling
+    /// clients read) say: an expression slot where the role is an
+    /// `ExprId`, a zero slot where it is always 0, and an `aux` check
+    /// that accepts the role's values.
+    #[test]
+    fn shapes_agree_with_the_operand_roles() {
+        use kiln_ast::roles::{expr_roles, stmt_roles};
+        let mut bad = Vec::new();
+        for &k in &super::EXPR_KINDS {
+            let r = expr_roles(k);
+            for bits in [0, super::FLAG4] {
+                let shape = super::expr_shape(k, bits);
+                for (i, (s, role)) in shape.into_iter().zip([r.a, r.b]).enumerate() {
+                    let role = *role.resolve(kiln_ast::roles::Words::flags(bits));
+                    if !slot_agrees(s, role) {
+                        bad.push(format!("{k:?} word {i} (bits {bits:#x}): {s:?} vs {role:?}"));
+                    }
+                }
+            }
+            if !aux_agrees(|v| u8::try_from(v).is_ok_and(|a| super::expr_aux_ok(k, a)), r.aux) {
+                bad.push(format!("{k:?} aux: {:?}", r.aux));
+            }
+        }
+        for &k in &super::STMT_KINDS {
+            let r = stmt_roles(k);
+            for (i, (s, role)) in super::stmt_shape(k).into_iter().zip([r.a, r.b]).enumerate() {
+                if !slot_agrees(s, role) {
+                    bad.push(format!("{k:?} word {i}: {s:?} vs {role:?}"));
+                }
+            }
+            if !aux_agrees(|v| super::stmt_aux_ok(k, v, 0), r.aux) {
+                bad.push(format!("{k:?} aux: {:?}", r.aux));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
 }
