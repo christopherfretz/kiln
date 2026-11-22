@@ -298,15 +298,19 @@ fn fixtures_produce_expected_statuses() {
     if !have_clang() {
         return;
     }
+    // No fixture here hangs, so the run timeout only bounds a broken run:
+    // it is the default, not a short one, so that a crash on a loaded host
+    // is still reported as its signal (WP-1888). The hanging fixtures are
+    // `fixtures_that_hang_time_out`'s.
     let dir = repo_root().join("xtask/fixtures/basic");
-    let mut o = clang_opts(&[dir]);
-    o.run_timeout = Duration::from_secs(1);
+    let o = clang_opts(&[dir]);
+    assert!(o.run_timeout >= Duration::from_secs(10), "{:?}", o.run_timeout);
     let results = execute(&o).unwrap();
-    // 43 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 43);
+    // 41 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 41);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
-    assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
-    assert!(by_name("fail-crash.cpp").details.contains("signal"));
+    let crash = &by_name("fail-crash.cpp").details;
+    assert!(crash.contains("killed by signal"), "{crash}");
     assert!(by_name("fail-no-crash-crash.cpp").details.contains("compiler crashed"));
     assert!(by_name("fail-wrong-stdout.cpp").details.contains("-no\n    +yes"));
     assert!(
@@ -343,10 +347,27 @@ fn fixtures_produce_expected_statuses() {
     );
     assert!(by_name("error-bad-directive.cpp").details.contains("unknown directive `frobnicate`"));
     assert!(by_name("error-missing-stdin-file.cpp").details.contains("cannot read run-stdin-file"));
-    let hang = by_name("error-oracle-binary-hangs.cpp");
-    assert!(hang.details.contains("the oracle's binary") && hang.details.contains("timed out"));
-    let crash = by_name("error-oracle-binary-crashes.cpp");
-    assert!(crash.details.contains("the oracle's binary") && crash.details.contains("signal"));
+    let crash = &by_name("error-oracle-binary-crashes.cpp").details;
+    assert!(crash.contains("the oracle's binary") && crash.contains("killed by signal"), "{crash}");
+}
+
+/// The fixtures whose binary never ends (the test's, the oracle's), under
+/// a short run timeout: a hang is a timeout whatever the host's load, so
+/// only these may use one (WP-1888).
+#[test]
+fn fixtures_that_hang_time_out() {
+    if !have_clang() {
+        return;
+    }
+    let mut o = clang_opts(&[repo_root().join("xtask/fixtures/hang")]);
+    o.run_timeout = Duration::from_secs(1);
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 2);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let hang = &by_name("fail-timeout.cpp").details;
+    assert!(hang.contains("test binary timed out"), "{hang}");
+    let hang = &by_name("error-oracle-binary-hangs.cpp").details;
+    assert!(hang.contains("the oracle's binary") && hang.contains("timed out"), "{hang}");
 }
 
 /// `oven:` budgets against a stand-in kiln that compiles with clang and

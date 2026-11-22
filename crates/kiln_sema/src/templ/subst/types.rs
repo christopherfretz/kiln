@@ -847,6 +847,11 @@ impl Substituter<'_, '_, '_> {
                 // [class.access]/4, [temp.deduct.general]/8: checked now,
                 // a substitution failure in a SFINAE context.
                 self.sema.check_found_access(&found, loc);
+                if keyword == kiln_ast::types::TagKeyword::Typename
+                    && self.sema.kind_of(d) == DeclKind::CXXRecord
+                {
+                    self.ctor_name_despite_keyword(n, name, false, loc);
+                }
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))
@@ -1034,6 +1039,7 @@ impl Substituter<'_, '_, '_> {
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 // Not for a template-id among the arguments (WP-1192).
                 let no_kw = std::mem::take(&mut self.dtor_template_name);
+                let as_nns = std::mem::take(&mut self.nns_template_id);
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;
                 if self.nns_still_dependent(n) {
@@ -1050,6 +1056,9 @@ impl Substituter<'_, '_, '_> {
                 let loc = self.written(WrittenKey::Type(q), loc);
                 self.dtor_template_name = no_kw;
                 let d = self.member_template_named(n, name, loc)?;
+                if !as_nns {
+                    self.ctor_name_despite_keyword(n, name, true, loc);
+                }
                 let underlying = self.sema.template_name_for(d);
                 let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
                     nns: n,
@@ -1265,6 +1274,39 @@ impl Substituter<'_, '_, '_> {
         let d = self.sema.diag(id, loc).arg(self.sema.decl_name_str(name)).with_note(note);
         self.sema.emit(d);
         Err(SubstFail)
+    }
+
+    /// [class.qual]/2: in `typename C::C` and `typename C::template
+    /// C<args>` (not followed by `::`) the name `C`, looked up in the
+    /// class `C` that `n` names, is its injected-class-name and so names
+    /// the constructor, not the type or the template. clang's
+    /// `ext_out_of_line_qualified_id_type_names_constructor`: a warning
+    /// that takes the type or the template, and a substitution failure in
+    /// a SFINAE context (`typename L::template mapping<E>` in a
+    /// requires-expression is not satisfied for `L = mapping<E>`).
+    fn ctor_name_despite_keyword(
+        &mut self,
+        n: kiln_ast::ids::NnsId,
+        name: kiln_source::symbol::Symbol,
+        template: bool,
+        loc: Loc,
+    ) {
+        let Ok(ctx) = self.nns_context(n, loc) else { return };
+        if self.sema.kind_of(ctx) != DeclKind::CXXRecord {
+            return;
+        }
+        let spelled = crate::decl::sym_str(self.sema, name);
+        if self.sema.decl_name(ctx) != spelled {
+            return;
+        }
+        let which = u8::from(!template);
+        let d = self
+            .sema
+            .diag(DiagId::sema_qualified_ctor_name_despite_keyword, loc)
+            .arg(spelled)
+            .arg(which)
+            .arg(u8::from(template));
+        self.sema.emit(d);
     }
 
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.

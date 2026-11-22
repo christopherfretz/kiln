@@ -159,6 +159,25 @@ fn clone_command(from: &Command, mut to: Command) -> Command {
     to
 }
 
+/// `cmd` with core dumps off (`ulimit -c 0` in a `sh` wrapper that then
+/// `exec`s the program, so a signal still ends the process as it would
+/// have; off Unix a copy). A test binary that crashes is reported by its
+/// signal at once: a core dump, or a core-dump helper such as apport or
+/// systemd-coredump on a loaded host, took long enough to hit the
+/// harness's run timeout (WP-1888). The program, arguments, working
+/// directory and explicit environment are kept.
+pub fn without_core_dumps(cmd: &Command) -> Command {
+    if !cfg!(unix) {
+        return clone_command(cmd, Command::new(cmd.get_program()));
+    }
+    let mut c = Command::new("sh");
+    c.arg("-c")
+        .arg("ulimit -c 0 2>/dev/null; exec \"$@\"")
+        .arg("kiln-no-core")
+        .arg(cmd.get_program());
+    clone_command(cmd, c)
+}
+
 /// `cmd` under `limit`, or a copy of it when there is none.
 pub fn limited(cmd: &Command, limit: Option<MemLimit>) -> Command {
     match limit {
@@ -965,6 +984,29 @@ mod tests {
         assert!(m.wall < Duration::from_secs(10), "{m:?}");
         assert_eq!(m.max_rss_kb, None);
         assert!(m.as_output().describe_end().starts_with("timed out"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Core dumps are off under the wrapper, a crash still ends the
+    /// process with its own signal, and the program's arguments, working
+    /// directory and environment are kept (WP-1888).
+    #[cfg(unix)]
+    #[test]
+    fn without_core_dumps_keeps_the_signal() {
+        use std::os::unix::process::ExitStatusExt as _;
+        let dir = scratch("no-core");
+        let mut c = Command::new("sh");
+        c.args(["-c", "printf '%s|%s|' \"$1\" \"$KILN_NC\"; pwd; ulimit -c", "x", "a b"])
+            .current_dir(&dir)
+            .env("KILN_NC", "v");
+        let o = run(&mut without_core_dumps(&c), Duration::from_secs(30)).unwrap();
+        let cwd = dir.canonicalize().unwrap();
+        assert_eq!(o.stdout_str(), format!("a b|v|{}\n0\n", cwd.display()));
+        let mut c = Command::new("sh");
+        c.args(["-c", "kill -SEGV $$"]);
+        let o = run(&mut without_core_dumps(&c), Duration::from_secs(30)).unwrap();
+        assert_eq!(o.status.and_then(|s| s.signal()), Some(11), "{}", o.describe_end());
+        assert_eq!(o.describe_end(), "killed by signal 11");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -118,6 +118,7 @@ IncrementBool = "increment-bool" [];
 InfiniteRecursion = "infinite-recursion" [];
 InitPriorityReserved = "init-priority-reserved" [];
 InitializerOverrides = "initializer-overrides" [];
+InjectedClassName = "injected-class-name" [];
 InlineNamespaceReopenedNoninline = "inline-namespace-reopened-noninline" [];
 InstantiationAfterSpecialization = "instantiation-after-specialization" [];
 IntConversion = "int-conversion" [];

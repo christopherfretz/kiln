@@ -1609,6 +1609,15 @@ has an **address-space cap** (`RLIMIT_AS`), on by default:
     memory`.
   The decision is `util::process::out_of_memory`. A process that fails
   otherwise under the cap is judged as usual (crash, wrong output, ...).
+- **No core dumps for test binaries** (WP-1888). The `run` test's
+  binaries (the compiler's and the oracle's) run under `sh -c 'ulimit -c
+  0 2>/dev/null; exec "$@"' kiln-no-core <program> <args...>`
+  (`util::process::without_core_dumps`, inside the cap's wrapper), so a
+  binary that crashes is reported by its signal ("killed by signal N") at
+  once. Writing a core, or a core-dump helper such as apport or
+  systemd-coredump on a loaded hosted runner, had taken past the
+  timeout, and the crash read as "timed out". The compiler and oracle
+  compiles keep the host's core-dump setting.
 - The outcome is **KILLED**, with the reason `memory limit <N> MiB` (the
   budget, without the stack allowance). The details name the process (the
   compiler, the oracle, the test binary, the oracle's binary), the cap and
@@ -2889,12 +2898,16 @@ or infrastructure error. Parse errors name their line.
     `tests/stress`) passes with
     clang, and every directive kind appears in it;
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
-    as the file-name prefix), including program arguments, stdin and
-    environment, the oracle's binary hanging or crashing, token-wise and text
+    as the file-name prefix) under the default `--timeout`, including program
+    arguments, stdin and environment, a crash reported as its signal, the
+    oracle's binary crashing, token-wise and text
     pp comparison, `pp-linemarkers` goldens, placeholders, `requires`
     (a pinned `--target` meeting and missing `target-x86_64`, and an unmet
     `clang>=999` under the clang compiler) and `verify` (`pass-verify.cpp`,
     and `fail-verify.cpp` with its report);
+  - `xtask/fixtures/hang/`: the test's binary and the oracle's binary
+    never ending, under a 1 s `--timeout` (the only fixtures with a short
+    one: a hang times out whatever the host's load; WP-1888);
   - `xtask/fixtures/oven/`: `oven:` budgets, run against
     `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
     compiles with clang and writes the canned report `<test>.oven.jsonl`
