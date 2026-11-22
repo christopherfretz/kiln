@@ -2314,7 +2314,85 @@ for `^^`, §5 for splices).
     them (`takes_expr_args`): `deprecated`, `nodiscard`, `aligned`,
     `warn_unused_result`, with or without `__` around the name.
     `alignas` has its own parser.
-  - Other arguments are skipped as balanced tokens.
+  - **Argument table** (WP-1879): the argument clause of any other GNU,
+    `[[gnu::x]]` or `[[clang::x]]` attribute clang knows is parsed and
+    counted as clang does, from a table generated from clang itself
+    (`scripts/gen-attr-args.py`, which probes clang++-19 and clang++-22
+    on aarch64 and x86-64 with every attribute name of
+    `kiln_pp::features_table` at 35 subject positions; output
+    `crates/kiln_sema/src/attr_args_table.rs`, readable as
+    `docs/status/attr-args.tsv`). One row per name and set of
+    configurations (spelling × clang release × target, a 12-bit mask):
+    the fewest and most arguments, whether a leading identifier is an
+    identifier argument (`attributeHasIdentifierArg`), which positions
+    must be string literals (`attributeStringLiteralListArg`), whether
+    an argument may be a pack expansion (`attributeAcceptsExprPack`),
+    and whether clang parses the clause its own way (`availability`,
+    `type_tag_for_datatype`, ...) or late (the thread-safety
+    attributes), which kiln still skips as balanced tokens. The
+    generator checks the derived rule against every probe and fails on
+    a mismatch; `cargo test -p kiln_driver --test attr_args_table`
+    checks the table against kiln's triage.
+    - The clause is clang's `ParseAttributeArgumentList`: an
+      identifier argument first when the rule says so, then
+      assignment-expressions or braced lists, as an unevaluated operand
+      (the arguments are not kept). A non-string at a string position is
+      `expected string literal as argument of 'x' attribute` (positions
+      counted from the first argument at clang 22, from the first after
+      an identifier at clang 19); a pack expansion where none is allowed
+      is `attribute 'x' does not support argument pack expansion` at the
+      `)`; a missing `)` is `expected ')'` after the previous token. Any
+      of these, or an invalid argument, drops the attribute, with no
+      further diagnostic about it.
+    - Then the count, as clang's `handleCommonAttributeFeatures`: `'x'
+      attribute takes no arguments`, `takes one argument`, `requires
+      exactly N arguments`, `takes at least N argument(s)` or `takes no
+      more than N argument(s)`, at the attribute (a scoped one's scope),
+      named as written (clang 22: `scope::name` for `[[...]]`), held
+      with the unknown-attribute warnings to the end of the
+      attribute-specifier-seq; the attribute is dropped. Deviation:
+      clang checks the subject and placement first, so a wrong-subject
+      attribute (`__attribute__((cold(1))) int v;`) is only its
+      subject warning there; kiln checks the count at parse time.
+    - Otherwise the attribute takes no arguments as far as sema is
+      concerned, as before.
+    - An attribute kiln interprets (its arguments parsed as expressions
+      for a handler) is counted by its handler, after the subject
+      checks, as clang; the table's count is checked at parse only for
+      the handlers that would accept a wrong count or word it otherwise
+      (`counted_at_parse` in `crates/kiln_parse/src/attr.rs`: `abi_tag`,
+      `aligned`, `alloc_size`, `format`, `mode`, `section`, ...).
+  - A known attribute's invalid argument drops it (clang
+    `ParseAttributeArgsCommon` returns on an `ExprError`), so nothing
+    more is said about it (WP-1880): `aligned(undeclared)` and
+    `leaf(undeclared + 1)` are the undeclared identifier alone. An
+    argument that recovered, a `RecoveryExpr` over error-free operands
+    (`leaf(f())` with `f` undeclared, a call with no viable function, a
+    missing member), is valid there: clang keeps the attribute and
+    checks it further, so `leaf(S().zz)` is also `'leaf' attribute takes
+    no arguments` (`Sema::is_invalid_attr_arg`, the rule of
+    `ExprArena::is_erroneous_operand`).
+  - `visibility`, `type_visibility` and `pcs` take a leading identifier
+    argument (WP-1881): `visibility(hidden)` is `'visibility' attribute
+    requires a string` at the identifier, after the subject check
+    (`type_visibility` on a function is its subject error alone);
+    `pcs(aapcs)` is that error and then the unsupported calling
+    convention warning. Their string position is checked as for the
+    table's.
+  - A decl-specifier-seq that declares a class or enumeration alone
+    (`__attribute__((x)) struct S { };`) does not process its GNU
+    attributes: an unknown one, or one with a wrong argument count, is
+    `attribute 'x' is ignored, place it after "struct" to apply
+    attribute to type declaration` like the known ones (WP-1882:
+    `gcc_struct` at clang 19), not its own diagnostic; the diagnostics
+    are held on the `DeclSpec` (`held_attr_diags`) to the end of the
+    decl-specifier-seq. Tests:
+    `tests/conformance/dcl.attr.grammar/attribute-argument-table*.cpp`,
+    `attribute-invalid-argument-dropped*.cpp`,
+    `attribute-identifier-string-argument*.cpp`,
+    `attribute-free-standing-tag-unknown*.cpp`,
+    `attribute-nvptx-kernel-argument*.cpp` (WP-1883: clang 22's
+    `nvptx_kernel` argument is parsed as an expression and counted).
   - `alignas(type-id)` is recognised by the tentative type-id test
     `sizeof(...)` uses (clang `isTypeIdInParens`), so a class template's
     injected-class-name in its own scope is a type-id there (WP-691,

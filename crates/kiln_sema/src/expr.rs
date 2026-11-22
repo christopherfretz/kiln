@@ -275,6 +275,15 @@ impl Sema<'_, '_> {
         self.is_err_expr(e)
     }
 
+    /// Whether `e`, an attribute argument, is invalid in clang's sense
+    /// (its `ExprResult` an `ExprError`, so clang drops the attribute,
+    /// WP-1880): erroneous in itself, as opposed to a `RecoveryExpr` over
+    /// error-free operands (a failed call, a missing member), which clang
+    /// keeps.
+    pub fn is_invalid_attr_arg(&self, e: ExprId) -> bool {
+        self.ast.exprs.is_erroneous_operand(e, &self.ast.lists)
+    }
+
     /// clang's `Expr::containsErrors`: `e` or an expression under it is
     /// erroneous (a `RecoveryExpr` or of the error type). The walk is
     /// bounded: it serves parser recovery only (WP-391).

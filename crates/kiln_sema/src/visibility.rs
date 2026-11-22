@@ -31,6 +31,10 @@ use crate::decl::AttrArg;
 /// (`b` holds the argument expression).
 pub(crate) const UNCHECKED: u32 = u32::MAX;
 
+/// The per-kind flag of an unchecked visibility node whose argument is
+/// an identifier (`visibility(hidden)`; WP-1881): `b` holds its location.
+const IDENT_ARG: u8 = 4;
+
 impl Sema<'_, '_> {
     /// `visibility(S)` / `type_visibility(S)` as written: exactly one
     /// argument (clang's generic argument-count check), an expression
@@ -46,10 +50,13 @@ impl Sema<'_, '_> {
         let name = if kind == AttrKind::TYPE_VISIBILITY { "type_visibility" } else { "visibility" };
         let arg = match args {
             [AttrArg::Expr(e)] => *e,
+            // clang `checkStringLiteralArgumentAttr` (WP-1881): the
+            // parser keeps a leading identifier as one, rejected after the
+            // subject is checked ([`Sema::visibility_value`]).
             [AttrArg::Ident(_, l)] => {
-                let msg = self.diag(DiagId::parse_attribute_requires_string, *l).arg(name);
-                self.emit(msg);
-                return None;
+                let node =
+                    AttrNode { kind, syntax, flags: IDENT_ARG, loc, a: UNCHECKED, b: l.to_raw() };
+                return Some(self.ast.attrs.push(node));
             }
             [AttrArg::Type(_)] => {
                 let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(name);
@@ -115,6 +122,9 @@ impl Sema<'_, '_> {
 
     /// Whether unchecked visibility attribute `node` names `"internal"`.
     pub(crate) fn visibility_is_internal(&self, node: AttrNode) -> bool {
+        if node.flags & IDENT_ARG != 0 {
+            return false;
+        }
         ExprId::from_raw(node.b).and_then(|e| self.string_lit_of(e)).is_some_and(|lit| {
             self.ast.strings.bytes(self.ast.exprs.string_lit(lit)) == b"internal"
         })
@@ -135,6 +145,13 @@ impl Sema<'_, '_> {
                 .diag(DiagId::sema_attribute_wrong_decl_type_error, node.loc)
                 .arg(format!("'{shown}'"))
                 .arg("types and namespaces");
+            self.emit(msg);
+            return None;
+        }
+        if node.flags & IDENT_ARG != 0 {
+            let msg = self
+                .diag(DiagId::sema_attribute_requires_string, Loc::from_raw(node.b))
+                .arg(format!("'{shown}'"));
             self.emit(msg);
             return None;
         }

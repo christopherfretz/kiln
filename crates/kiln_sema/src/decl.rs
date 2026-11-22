@@ -12512,6 +12512,18 @@ impl Sema<'_, '_> {
     /// a class, else a `Var`) is returned so that a block's `DeclStmt`
     /// can own it.
     pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
+        self.unknown_attrs_reported = false;
+        let d = self.decl_spec_only(ds);
+        // Not a declaration of the tag alone after all (an anonymous
+        // class): clang processes them, and so does not know them.
+        if !std::mem::take(&mut self.unknown_attrs_reported) {
+            self.release_held_attr_diags(ds.held_attr_diags.clone());
+        }
+        d
+    }
+
+    /// [`Sema::act_on_decl_spec_only`].
+    fn decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
         if self.c_decl_spec_only(ds) {
             return None;
         }
@@ -12540,7 +12552,8 @@ impl Sema<'_, '_> {
             if !self.is_c() {
                 self.standalone_specifiers(ds);
             }
-            self.warn_free_standing_tag_attrs(ds, t, &ds.attrs);
+            self.warn_free_standing_tag_attrs(ds, t, &ds.attrs, &ds.held_attr_diags);
+            self.unknown_attrs_reported = true;
             return None;
         }
         if ds.is_empty() && !ds.attrs.is_empty() && self.member_spec_class().is_none() {
@@ -14119,7 +14132,32 @@ impl Sema<'_, '_> {
             return;
         }
         if let Some(held) = self.unknown_attr_held.take() {
-            self.release(held, Vec::new());
+            self.release(held.into_iter().map(|h| h.diag).collect(), Vec::new());
+        }
+    }
+
+    /// The warnings [`Sema::hold_unknown_attrs`] held when `started`, for
+    /// [`DeclSpec::held_attr_diags`], instead of emitting them.
+    pub fn take_held_attr_diags(&mut self, started: bool) -> Vec<crate::declspec::HeldAttrDiag> {
+        if !started {
+            return Vec::new();
+        }
+        self.unknown_attr_held.take().unwrap_or_default()
+    }
+
+    /// Emits diagnostic `d` of the attribute at `loc` shown as `shown`
+    /// (quoted), or holds it while [`Sema::hold_unknown_attrs`] does.
+    pub(crate) fn emit_attr_diag(&mut self, d: kiln_diag::Diag, loc: Loc, shown: String) {
+        match &mut self.unknown_attr_held {
+            Some(held) => held.push(crate::declspec::HeldAttrDiag { diag: d, loc, shown }),
+            None => self.emit(d),
+        }
+    }
+
+    /// Emits held attribute diagnostics (WP-1882).
+    pub fn release_held_attr_diags(&self, held: Vec<crate::declspec::HeldAttrDiag>) {
+        for h in held {
+            self.emit(h.diag);
         }
     }
 
@@ -14303,11 +14341,9 @@ impl Sema<'_, '_> {
                 } else {
                     DiagId::parse_unknown_attribute
                 };
+                let quoted = format!("'{shown}'");
                 let msg = self.diag(id, loc).arg(shown);
-                match &mut self.unknown_attr_held {
-                    Some(held) => held.push(msg),
-                    None => self.emit(msg),
-                }
+                self.emit_attr_diag(msg, loc, quoted);
                 return None;
             }
         };
@@ -14451,11 +14487,15 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return None;
             }
+            let quoted = format!("'{name}'");
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                 .arg(name)
                 .arg(if takes == 0 { "0" } else { "1" });
-            self.emit(msg);
+            // Held with the attribute-specifier-seq's other attribute
+            // diagnostics: a free-standing tag declaration ignores the
+            // attribute instead (WP-1882).
+            self.emit_attr_diag(msg, loc, quoted);
             return None;
         }
         let (mut a, mut b) = (0u32, 0u32);

@@ -117,6 +117,39 @@ fn takes_expr_args(name: &str) -> bool {
         || class_b_takes_expr_args(n)
 }
 
+/// The attributes of [`takes_expr_args`] whose argument count is checked
+/// at parse time from the argument table (spec/parse.md §6.2 "Argument
+/// table", WP-1879): kiln's handlers of these accept a wrong count
+/// (`abi_tag`) or report it in other words (`aligned(1, 2)` is "takes no
+/// more than 1 argument", a `[[clang::x]]` one at clang 22 is named
+/// `clang::x`). The other handlers count as clang does, after their
+/// subject checks, so they keep clang's order.
+fn counted_at_parse(name: &str) -> bool {
+    matches!(
+        kiln_ast::attr::normalize_attr_name(name),
+        "abi_tag"
+            | "alias"
+            | "aligned"
+            | "alloc_align"
+            | "alloc_size"
+            | "enum_extensibility"
+            | "format"
+            | "ifunc"
+            | "min_vector_width"
+            | "mode"
+            | "neon_polyvector_type"
+            | "neon_vector_type"
+            | "no_caller_saved_registers"
+            | "pass_dynamic_object_size"
+            | "pass_object_size"
+            | "regparm"
+            | "section"
+            | "target"
+            | "target_version"
+            | "vector_size"
+    )
+}
+
 /// WP-813: the class B attributes, whose arguments are expressions.
 fn class_b_takes_expr_args(n: &str) -> bool {
     matches!(
@@ -188,8 +221,30 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
         // target and release. WP-1853: clang's table is keyed by the name
         // alone, so it holds for an `__attribute__((nodiscard(...)))`
         // clang does not know.
-        "target" | "target_version" | "unavailable" | "annotate" | "model" | "nodiscard"
-        | "warn_unused_result" | "section" | "tls_model" => i == 0,
+        // WP-1881: and the string `EnumArgument`s that take a leading
+        // identifier ([`takes_ident_arg`]), and the names of `alias`,
+        // `ifunc` and `weakref` (the table of spec/parse.md §6.2).
+        "target"
+        | "target_version"
+        | "unavailable"
+        | "annotate"
+        | "model"
+        | "nodiscard"
+        | "warn_unused_result"
+        | "section"
+        | "tls_model"
+        | "visibility"
+        | "type_visibility"
+        | "pcs"
+        | "zero_call_used_regs"
+        | "function_return"
+        | "alias"
+        | "ifunc"
+        | "weakref" => i == 0,
+        // The messages of `enable_if` and `diagnose_if` (and the
+        // latter's kind).
+        "enable_if" => i == 1,
+        "diagnose_if" => i == 1 || i == 2,
         "deprecated" => i <= 1,
         "target_clones" | "no_sanitize" | "abi_tag" | "no_builtin" => true,
         _ => false,
@@ -197,15 +252,9 @@ fn string_literal_arg(name: &str, i: usize) -> bool {
 }
 
 /// True for the attributes whose arguments may be identifiers (clang
-/// `attributeHasVariadicIdentifierArg`: `callback`; and
-/// `attributeHasIdentifierArg`: the string `EnumArgument`s of
-/// `zero_call_used_regs` and `function_return`, which sema rejects as
-/// "requires a string").
+/// `attributeHasVariadicIdentifierArg`: `callback`).
 fn takes_ident_args(name: &str) -> bool {
-    matches!(
-        kiln_ast::attr::normalize_attr_name(name),
-        "callback" | "zero_call_used_regs" | "function_return"
-    )
+    kiln_ast::attr::normalize_attr_name(name) == "callback"
 }
 
 /// True for the attributes whose argument is a type-id (clang
@@ -215,19 +264,22 @@ fn takes_type_arg(name: &str) -> bool {
 }
 
 /// True for the attributes whose first argument is an identifier when
-/// one is written (clang `attributeHasIdentifierArg`).
+/// one is written (clang `attributeHasIdentifierArg`; WP-1881: the string
+/// `EnumArgument`s of `visibility`, `type_visibility`, `pcs`,
+/// `zero_call_used_regs` and `function_return`, whose sema then rejects
+/// an identifier: "'visibility' attribute requires a string").
 fn takes_ident_arg(name: &str) -> bool {
     let n = kiln_ast::attr::normalize_attr_name(name);
-    // `weakref` / `alias` / `ifunc` take a string literal; clang parses
-    // an identifier there as one (and then rejects it).
     matches!(
         n,
         "enum_extensibility"
             | "format"
             | "mode"
-            | "weakref"
-            | "alias"
-            | "ifunc"
+            | "visibility"
+            | "type_visibility"
+            | "pcs"
+            | "zero_call_used_regs"
+            | "function_return"
             | "__clang_arm_builtin_alias"
             | "clang_builtin_alias"
             | "builtin_alias"
@@ -988,8 +1040,10 @@ impl Parser<'_, '_> {
                 self.bump();
                 self.skip_until(&[Punct::RParen], false, true);
                 Some(Vec::new())
+            } else if let Some(rule) = self.table_rule(AttrSyntax::Cxx11, scope, name) {
+                self.parse_table_attr_args(AttrSyntax::Cxx11, scope, name, rule, loc)
             } else {
-                self.parse_attr_args(name)
+                self.parse_counted_attr_args(AttrSyntax::Cxx11, scope, name, loc)
             };
             // [dcl.attr.grammar]/4: an attribute pack expansion needs an
             // attribute that allows one, and none does (clang reports it
@@ -1111,7 +1165,12 @@ impl Parser<'_, '_> {
                 {
                     self.parse_common_attr_args(name, false)
                 }
-                _ => self.parse_attr_args(name),
+                _ => match self.table_rule(AttrSyntax::Gnu, None, name) {
+                    Some(rule) => {
+                        self.parse_table_attr_args(AttrSyntax::Gnu, None, name, rule, loc)
+                    }
+                    None => self.parse_counted_attr_args(AttrSyntax::Gnu, None, name, loc),
+                },
             };
             if let Some(args) = args
                 && let Some(a) = self.s.act_on_attribute(AttrSyntax::Gnu, None, name, &args, loc)
@@ -1188,11 +1247,28 @@ impl Parser<'_, '_> {
         let ident_first = takes_ident_arg(&text)
             || (self.s.clang_compat < 22
                 && kiln_ast::attr::normalize_attr_name(&text) == "interrupt");
+        // clang 19 counts the string-literal positions from the first
+        // argument after an identifier one, clang 22 from the first.
+        let mut skipped = 0;
         if ident_first && let Some(id) = self.ident() {
             let at = self.bump().span.lo;
             args.push(AttrArg::Ident(id, at));
+            if self.s.clang_compat < 22 {
+                skipped = 1;
+            }
             if self.eat(Punct::Comma).is_none() {
-                self.expect_closing(Punct::RParen, Punct::LParen, open);
+                // clang `ExpectAndConsume(tok::r_paren)`: "expected ')'"
+                // after the identifier, nothing skipped, the attribute
+                // dropped.
+                if self.eat(Punct::RParen).is_none() {
+                    let d = self
+                        .s
+                        .diag(DiagId::parse_expected, self.expected_loc())
+                        .arg(crate::parser::quote(Punct::RParen))
+                        .allow_duplicate();
+                    self.emit(d);
+                    return None;
+                }
                 return Some(args);
             }
         }
@@ -1210,7 +1286,7 @@ impl Parser<'_, '_> {
                 }
                 continue;
             }
-            if !self.at_string() && string_literal_arg(&text, args.len()) {
+            if !self.at_string() && string_literal_arg(&text, args.len() - skipped) {
                 let at = self.tok().span.lo;
                 let d = self.s.diag(DiagId::parse_attribute_requires_string, at).arg(text);
                 self.emit(d);
@@ -1239,10 +1315,10 @@ impl Parser<'_, '_> {
             {
                 e = self.s.act_pack_expansion(e, l);
             }
-            // clang drops an attribute whose argument is invalid; kiln
-            // does so for the string-literal attributes above, and for an
-            // argument naming an unexpanded pack.
-            if string_literal_arg(&text, 0) && self.s.contains_errors(e) {
+            // clang drops an attribute whose argument is invalid, and so
+            // reports nothing more about it (WP-1880); and one whose
+            // argument names an unexpanded pack.
+            if self.s.is_invalid_attr_arg(e) {
                 ok = false;
             }
             if !self.s.check_attribute_arg_packs(e) {
@@ -1269,13 +1345,29 @@ impl Parser<'_, '_> {
     /// one is invalid: clang then drops the attribute without its
     /// `unknown attribute` warning.
     fn parse_common_attr_args(&mut self, name: Symbol, lone_ident: bool) -> Option<Vec<AttrArg>> {
+        self.parse_common_attr_args_as(name, lone_ident, None)
+    }
+
+    /// [`Parser::parse_common_attr_args`], or with `rule` the clause of an
+    /// attribute of the argument table (spec/parse.md §6.2 "Argument
+    /// table"): a leading identifier is an identifier argument when the
+    /// rule says so, its string-literal positions and whether it takes a
+    /// pack expansion are the rule's.
+    fn parse_common_attr_args_as(
+        &mut self,
+        name: Symbol,
+        lone_ident: bool,
+        rule: Option<kiln_sema::attr_args::AttrArgRule>,
+    ) -> Option<Vec<AttrArg>> {
         self.bump();
         let text = self.s.ast.symbols().as_str(name).to_owned();
+        let string_at =
+            |i: usize| rule.map_or_else(|| string_literal_arg(&text, i), |r| r.string_at(i));
         let mut args = Vec::new();
         let mut more = !self.at(Punct::RParen);
-        if lone_ident
-            && let Some(id) = self.ident()
-            && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen))
+        if let Some(id) = self.ident()
+            && (rule.is_some_and(|r| r.ident)
+                || lone_ident && (self.peek_is(1, Punct::Comma) || self.peek_is(1, Punct::RParen)))
         {
             let at = self.bump().span.lo;
             args.push(AttrArg::Ident(id, at));
@@ -1286,13 +1378,16 @@ impl Parser<'_, '_> {
         let skipped = if self.s.clang_compat >= 22 { 0 } else { args.len() };
         let mut pack = false;
         while more {
-            if !self.at_string() && string_literal_arg(&text, args.len() - skipped) {
-                let d = self.s.diag(DiagId::parse_attribute_requires_string, self.loc()).arg(text);
+            if !self.at_string() && string_at(args.len() - skipped) {
+                let d = self
+                    .s
+                    .diag(DiagId::parse_attribute_requires_string, self.loc())
+                    .arg(text.as_str());
                 self.emit(d);
                 self.skip_until(&[Punct::RParen], true, true);
                 return None;
             }
-            let e = if self.at_string() && string_literal_arg(&text, args.len() - skipped) {
+            let e = if self.at_string() && string_at(args.len() - skipped) {
                 self.parse_string_literal(true)
             } else if self.at(Punct::LBrace) {
                 self.parse_init_list().ok().map(|l| self.s.act_on_braced_arg(l))
@@ -1300,9 +1395,9 @@ impl Parser<'_, '_> {
                 self.parse_assignment_expr()
             };
             let expansion = self.eat(Punct::Ellipsis).is_some();
-            pack |= expansion;
+            pack |= expansion && !rule.is_some_and(|r| r.pack);
             let Some(e) = e.filter(|&e| {
-                !self.s.contains_errors(e) && (expansion || self.s.check_attribute_arg_packs(e))
+                !self.s.is_invalid_attr_arg(e) && (expansion || self.s.check_attribute_arg_packs(e))
             }) else {
                 self.skip_until(&[Punct::RParen], true, true);
                 return None;
@@ -1313,7 +1408,10 @@ impl Parser<'_, '_> {
         // No such attribute takes a pack expansion (clang
         // `attributeAcceptsExprPack`), reported at the `)`.
         if pack {
-            let d = self.s.diag(DiagId::parse_attribute_pack_not_supported, self.loc()).arg(text);
+            let d = self
+                .s
+                .diag(DiagId::parse_attribute_pack_not_supported, self.loc())
+                .arg(text.as_str());
             self.emit(d);
             self.skip_until(&[Punct::RParen], true, true);
             return None;
@@ -1333,6 +1431,66 @@ impl Parser<'_, '_> {
         Some(args)
     }
 
+    /// The arguments of an attribute of the argument table (spec/parse.md
+    /// §6.2 "Argument table", WP-1879) whose arguments kiln does not
+    /// interpret: the clause, if any, is parsed as clang's
+    /// `ParseAttributeArgsCommon` does (an unevaluated operand here: the
+    /// arguments are not kept), then the count is checked. `None`, the
+    /// attribute dropped, after an error in either; otherwise no
+    /// arguments, as before.
+    fn parse_table_attr_args(
+        &mut self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+        rule: kiln_sema::attr_args::AttrArgRule,
+        loc: Loc,
+    ) -> Option<Vec<AttrArg>> {
+        let count = if self.at(Punct::LParen) {
+            self.s.enter_unevaluated();
+            let args = self.parse_common_attr_args_as(name, false, Some(rule));
+            self.s.exit_unevaluated();
+            args?.len()
+        } else {
+            0
+        };
+        self.s.check_attr_arg_count(syntax, scope, name, rule, count, loc).then(Vec::new)
+    }
+
+    /// [`Parser::parse_attr_args`], then, for an attribute whose handler
+    /// does not count its arguments as clang does ([`counted_at_parse`]),
+    /// the argument count of the table's rule (WP-1879).
+    fn parse_counted_attr_args(
+        &mut self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<Vec<AttrArg>> {
+        let args = self.parse_attr_args(name)?;
+        if counted_at_parse(self.s.ast.symbols().as_str(name))
+            && let Some(rule) = self.s.attr_arg_rule(syntax, scope, name)
+            && !self.s.check_attr_arg_count(syntax, scope, name, rule, args.len(), loc)
+        {
+            return None;
+        }
+        Some(args)
+    }
+
+    /// The [`kiln_sema::attr_args::AttrArgRule`] of `scope::name` when the
+    /// parser would otherwise skip its arguments ([`takes_expr_args`]).
+    fn table_rule(
+        &self,
+        syntax: AttrSyntax,
+        scope: Option<Symbol>,
+        name: Symbol,
+    ) -> Option<kiln_sema::attr_args::AttrArgRule> {
+        if takes_expr_args(self.s.ast.symbols().as_str(name)) {
+            return None;
+        }
+        self.s.attr_arg_rule(syntax, scope, name)
+    }
+
     /// The argument of `[[assume(conditional-expression)]]`
     /// ([dcl.attr.assume]/1; clang's `ParseCXXAssumeAttributeArg`). An
     /// expression that is not a conditional-expression (a comma or an
@@ -1347,7 +1505,10 @@ impl Parser<'_, '_> {
             return None;
         };
         if !self.at(Punct::RParen) && !self.at(Punct::RSquare) {
-            if let Some(full) = self.parse_rhs_from(c, prec::COMMA) {
+            // An invalid expression is its own error alone (WP-1880).
+            if let Some(full) = self.parse_rhs_from(c, prec::COMMA)
+                && !self.s.contains_errors(full)
+            {
                 let loc = self.s.expr_loc(full);
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self.s.diag(DiagId::parse_assume_attr_expects_cond_expr, loc).arg(text);

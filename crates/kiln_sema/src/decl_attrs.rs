@@ -12,6 +12,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, FuncInfo, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -140,7 +141,7 @@ impl Sema<'_, '_> {
     pub(crate) fn check_param_pass_object_size(
         &mut self,
         ty: QualType,
-        begin: kiln_source::Loc,
+        begin: Loc,
         attrs: &mut Vec<AttrId>,
     ) {
         let t = &self.ast.types;
@@ -432,9 +433,18 @@ impl Sema<'_, '_> {
     /// [dcl.spec.general]/1, [dcl.pre]/5) for each of `attrs`: the
     /// trailing ones (`struct S { } [[x]];`, reported by the parser) and
     /// then the leading ones (`ds.attrs`, by
-    /// [`Sema::act_on_decl_spec_only`]).
-    pub fn warn_free_standing_tag_attrs(&mut self, ds: &DeclSpec, tag: DeclId, attrs: &[AttrId]) {
-        if attrs.is_empty() {
+    /// [`Sema::act_on_decl_spec_only`]), with those clang does not know
+    /// (`unknown`, held back; WP-1882) in source order: clang never
+    /// processes these attributes, so it does not say it does not know
+    /// them.
+    pub fn warn_free_standing_tag_attrs(
+        &mut self,
+        ds: &DeclSpec,
+        tag: DeclId,
+        attrs: &[AttrId],
+        unknown: &[crate::declspec::HeldAttrDiag],
+    ) {
+        if attrs.is_empty() && unknown.is_empty() {
             return;
         }
         // They would appertain to the absent declarators ([dcl.pre]/5).
@@ -450,13 +460,20 @@ impl Sema<'_, '_> {
             },
             _ => return,
         };
-        for &a in attrs {
-            let node = *self.ast.attrs.get(a);
-            let Some(name) = attr_name(&node) else { continue };
-            let msg = self
-                .diag(DiagId::sema_declspec_attribute_ignored, node.loc)
-                .arg(format!("'{}'", self.attr_shown(&node, name)))
-                .arg(key);
+        let mut shown: Vec<(Loc, String)> = attrs
+            .iter()
+            .filter_map(|&a| {
+                let node = *self.ast.attrs.get(a);
+                let name = attr_name(&node)?;
+                Some((node.loc, format!("'{}'", self.attr_shown(&node, name))))
+            })
+            .collect();
+        if !unknown.is_empty() {
+            shown.extend(unknown.iter().map(|h| (h.loc, h.shown.clone())));
+            shown.sort_by_key(|&(l, _)| l);
+        }
+        for (loc, name) in shown {
+            let msg = self.diag(DiagId::sema_declspec_attribute_ignored, loc).arg(name).arg(key);
             self.emit(msg);
         }
     }
@@ -1563,12 +1580,7 @@ impl Sema<'_, '_> {
     /// `ty` (a function type, or a pointer, reference or member pointer
     /// to one when `outer`) with GNU `nothrow` applied; None when it is
     /// no such type.
-    fn with_nothrow(
-        &mut self,
-        ty: QualType,
-        loc: kiln_source::Loc,
-        outer: bool,
-    ) -> Option<QualType> {
+    fn with_nothrow(&mut self, ty: QualType, loc: Loc, outer: bool) -> Option<QualType> {
         if self.is_error_type(ty) {
             return None;
         }
