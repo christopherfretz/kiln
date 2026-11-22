@@ -13051,17 +13051,22 @@ after an error (`uncompilable_error_count`, spec/diag.md §7.5).
 The silencing note and the `-Wconstant-logical-operand` notes (§5.25)
 build their fix-its as clang does, as edits of the file:
 - The end of a token (`Sema::file_token_end`, clang
-  `Lexer::getLocForEndOfToken`) at a macro location exists only when the
+  `Lexer::getLocForEndOfToken`; `SourceManager::file_loc_at_macro_end`
+  of `Sema::token_end`) at a macro location exists only when the
   token ends every expansion it is in (a macro argument ends its
   expansion unless the argument continues in the next entry); it is then
   the end of the outermost invocation. Without it the silencing note is
   not emitted and the removal fix-it is not attached.
 - `Sema::file_fixits` maps a note's fix-its (clang `edit::Commit`,
-  `Lexer::makeFileCharRange`): an insertion at the start of every
+  `Lexer::makeFileCharRange`) with the source manager's editable-range
+  query (`SourceManager::editable_range`, spec/source.md "Editable file
+  ranges", WP-2150; the same function tooling clients call): an
+  insertion at the start of every
   expansion it is in moves to the invocation, and a macro-argument
   location to where the argument is written; a range keeps a file end,
   maps a macro begin by the start rule and a macro end by the end rule,
-  and a range lying in one macro argument maps to its spelling. When any
+  and a range lying in one macro argument maps to its spelling; the
+  result must lie in one buffer range, in order. When any
   fix-it of the note does not map, the note keeps its message and loses
   all of its fix-its (clang `mergeFixits`): `if (X 1)` with
   `#define X h() && !` gets the note without `/* DISABLES CODE */ (`.

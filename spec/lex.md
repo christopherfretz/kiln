@@ -68,9 +68,39 @@ pub enum NameMatch { Exact(char), Loose(char) }        // + .char()
 pub fn lookup_char_name(name: &str) -> Option<NameMatch>; // \N{} names; never allocates
 pub mod literal;                                         // see "Literals" below
 pub fn dump(sm, &LexOptions, &[Token]) -> String; pub fn dump_source(text, LexOptions) -> String;
+pub fn token_end(sm, &Interner, loc: Loc, LexOptions) -> Option<Loc>;  // see "End of a token"
 ```
 `Punct` covers every [lex.operators] token plus `^^`, `[:`, `:]` (C++26
 with `LexOptions::reflection`, P2996). `Punct::as_str()` is the primary spelling, `name()` clang's kind name.
+
+### End of a token (`token_end.rs`, WP-2150)
+`token_end(sm, interner, loc, opts)` is the end (exclusive) of the
+preprocessing token that starts at `loc`, for tooling clients that hold
+a token's start and need its range. It lexes exactly one token
+([lex.pptoken]/3, the longest one; phases 1 and 2 applied, so a token
+continued over a `\`-newline ends after its last spliced character):
+- **File location**: a lexer over the rest of the buffer, in
+  `LexMode::Normal` (never a header-name) with comments skipped; the end
+  is the token's end, in the same buffer range as `loc` (an inclusion
+  range stays one). `None` when `loc` is the end of the buffer, is not
+  on a character boundary, or the first token lexed from it starts later
+  (whitespace or a comment is at `loc`). A `loc` inside a token gives the
+  end of the token lexed from there.
+- **Macro location**: the token is measured at `spelling_loc(loc)` (a
+  file location: the `#define`, the argument as written, or a scratch
+  buffer for a `#`, `##` or `_Pragma` result) and the end is that many
+  bytes past `loc` in `loc`'s own expansion entry, so `spelling_loc` of
+  the end is the end of the spelled token; `None` when the end would
+  leave the entry. This is not clang's `Lexer::getLocForEndOfToken`,
+  which gives a macro location an end only when its token ends every
+  expansion it is in: that is
+  `SourceManager::file_loc_at_macro_end(token_end(..))`.
+- Invalid and unknown locations: `None`. Identifiers are interned into
+  `interner`; lexer diagnostics are dropped.
+Sema's own `token_end` (spec/sema.md §7.10.1) is a cheaper measure of the
+tokens it holds and stays separate. Tests: `tests/token_end.rs`, and
+`kiln_pp` `tests/editable_range.rs` (every token of preprocessed
+sources, macro locations included).
 
 ### Allocation
 `next()` does not allocate except: interning a new identifier spelling;

@@ -16,7 +16,7 @@
 //! |---|---|---|
 //! | `sm`, `interner`, `diags` | configuration | the consumer's, restored before the preprocessor is built |
 //! | `opts`, `lex_opts` | configuration | from the consumer's command line (the snapshot's configuration fingerprint covers them) |
-//! | `resolver`, `evaluator`, `nested_eval`, `features`, `callbacks`, `comment_handler` | configuration | trait objects the consumer installs (the resolver's lookup caches refill: the restored source manager gives the same `FileId` for the same path) |
+//! | `resolver`, `evaluator`, `nested_eval`, `features`, `callbacks`, `observers`, `comment_handler` | configuration | trait objects the consumer installs (the resolver's lookup caches refill: the restored source manager gives the same `FileId` for the same path) |
 //! | `state_hooks` | configuration | the replay record's hooks (spec/pp.md §13); not carried |
 //! | `macros` | state | every definition (builtins included); `Rc` sharing with `pushed` is kept |
 //! | `pushed`, `poisoned`, `once_files`, `guards`, `entered` | state | as data |
@@ -260,6 +260,7 @@ impl Preprocessor<'_, '_> {
             nested_eval: _,
             features: _,
             callbacks: _,
+            observers: _,
             markers: _,
             pending: _,
             scratch,

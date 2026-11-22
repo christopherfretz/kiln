@@ -21,6 +21,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `front_end::std_config(std, options)` gives the configuration of
   `-std=<std>` with no other flag; the tables an `Ast` holds have
   (hidden) public paths.
+- Location utilities for tooling clients that rewrite source text
+  (WP-2150): `SourceManager::editable_range` / `editable_file_range` give
+  the file characters a range written through macros stands for when
+  they can be edited as one file range (clang's `makeFileCharRange`
+  rules; fix-its now call the same function), `kiln_lex::token_end`
+  lexes exactly one token to find its end, `SourceManager::expansion_entries`
+  lists the macro-expansion entries with their parents, and
+  `Preprocessor::add_callbacks` installs several preprocessor observers,
+  called in registration order (spec/source.md, spec/lex.md, spec/pp.md).
 - Two queries for tooling clients that read the `Ast` after the
   translation unit (WP-2025): `Ast::using_shadows(u)` gives the shadows a
   using-declaration introduced, in introduction order (namespace-, block-

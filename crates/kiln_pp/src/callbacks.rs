@@ -1,8 +1,10 @@
 //! Observer hooks ([`PpCallbacks`]): clang's `PPCallbacks`.
 //!
-//! Every method has a no-op default. Install with
-//! [`crate::Preprocessor::set_callbacks`]. Callbacks must not assume they
-//! can re-enter the preprocessor.
+//! Every method has a no-op default. Install one observer with
+//! [`crate::Preprocessor::set_callbacks`], or add any number with
+//! [`crate::Preprocessor::add_callbacks`]: every observer sees every
+//! event, in registration order. Callbacks must not assume they can
+//! re-enter the preprocessor.
 
 use kiln_lex::{Symbol, Token};
 use kiln_source::{FileId, Loc, Span};
@@ -174,7 +176,9 @@ pub trait PpCallbacks {
     /// [`pragma_message`](Self::pragma_message)); `GCC`/`clang`
     /// `diagnostic` is validated, then handed here like any other pragma.
     /// Return `true` to consume it; otherwise it is passed through to the
-    /// token stream (see [`crate::Marker::Pragma`]).
+    /// token stream (see [`crate::Marker::Pragma`]). With several
+    /// observers, each one is offered the pragma, and it is consumed when
+    /// any of them returns `true`.
     fn pragma(&mut self, info: &PragmaInfo<'_>) -> bool {
         let _ = info;
         false
@@ -213,3 +217,79 @@ pub trait PpCallbacks {
 pub struct NoCallbacks;
 
 impl PpCallbacks for NoCallbacks {}
+
+/// Two observers called in order: how
+/// [`crate::Preprocessor::add_callbacks`] chains a second and later
+/// observer onto those installed (a third makes `Chain(Chain(a, b), c)`),
+/// so that with none or one observer the preprocessor makes exactly the
+/// calls it made before there could be several.
+pub(crate) struct Chain<'d>(pub Box<dyn PpCallbacks + 'd>, pub Box<dyn PpCallbacks + 'd>);
+
+impl PpCallbacks for Chain<'_> {
+    fn file_changed(&mut self, change: FileChange) {
+        self.0.file_changed(change);
+        self.1.file_changed(change);
+    }
+
+    fn inclusion_directive(&mut self, req: &IncludeRequest, result: Option<&ResolvedInclude>) {
+        self.0.inclusion_directive(req, result);
+        self.1.inclusion_directive(req, result);
+    }
+
+    fn file_skipped(&mut self, result: &ResolvedInclude, system: bool) {
+        self.0.file_skipped(result, system);
+        self.1.file_skipped(result, system);
+    }
+
+    fn module_file_read(&mut self, read: &ModuleFileRead<'_>) {
+        self.0.module_file_read(read);
+        self.1.module_file_read(read);
+    }
+
+    fn module_unit(&mut self, begin: bool, from_module_file: bool) {
+        self.0.module_unit(begin, from_module_file);
+        self.1.module_unit(begin, from_module_file);
+    }
+
+    fn macro_defined(&mut self, name: Symbol, def: &MacroDef) {
+        self.0.macro_defined(name, def);
+        self.1.macro_defined(name, def);
+    }
+
+    fn macro_undefined(&mut self, name: Symbol, span: Span, def: Option<&MacroDef>) {
+        self.0.macro_undefined(name, span, def);
+        self.1.macro_undefined(name, span, def);
+    }
+
+    fn macro_expands(&mut self, name: &Token, def: &MacroDef, range: Span) {
+        self.0.macro_expands(name, def, range);
+        self.1.macro_expands(name, def, range);
+    }
+
+    fn pragma(&mut self, info: &PragmaInfo<'_>) -> bool {
+        // Both see it, whatever the first one answers.
+        let first = self.0.pragma(info);
+        self.1.pragma(info) | first
+    }
+
+    fn pragma_message(
+        &mut self,
+        span: Span,
+        namespace: Option<&str>,
+        kind: PragmaMessageKind,
+        text: &str,
+    ) {
+        self.0.pragma_message(span, namespace, kind, text);
+        self.1.pragma_message(span, namespace, kind, text);
+    }
+
+    fn ident(&mut self, span: Span, text: &str) {
+        self.0.ident(span, text);
+        self.1.ident(span, text);
+    }
+
+    fn source_range_skipped(&mut self, range: Span) {
+        self.0.source_range_skipped(range);
+        self.1.source_range_skipped(range);
+    }
+}

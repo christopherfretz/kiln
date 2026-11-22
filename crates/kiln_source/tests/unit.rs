@@ -964,3 +964,97 @@ fn file_queries_for_the_image_file_table() {
     assert_eq!(sm.file_kind_marks(at), vec![(2, FileKind::System)]);
     assert!(sm.file_kind_marks(sm.loc(v, 0)).is_empty());
 }
+
+/// `#define ID(x) x` / `#define F(x) (x)` invoked as `ID(a b)` and
+/// `F(a b)` with each argument written as two entries (as the
+/// preprocessor splits a run it cannot cover with one): returns the
+/// manager, the file and the entries `[id_body, id_a, id_b, f_body, f_a,
+/// f_b]`.
+fn split_arguments() -> (SourceManager, FileId, [Loc; 6]) {
+    let src = "#define ID(x) x\n#define F(x) (x)\nID(a b) F(a b)\n";
+    let sm = SourceManager::new();
+    let f = sm.add_virtual("t.cpp", src.to_owned()).unwrap();
+    let at = |off: u32| sm.loc(f, off);
+    let span = |s: &str, n: usize, len: u32| {
+        let o = nth(src, s, n);
+        Span::new(at(o), at(o + len))
+    };
+    let mut out = Vec::new();
+    // (macro, replacement list offset and length, parameter offset in it,
+    // invocation number)
+    let bodies = [("ID", nth(src, "x\n", 0), 1, 0, 0), ("F", nth(src, " (x)", 0) + 1, 3, 1, 1)];
+    for (name, body, len, param_off, n) in bodies {
+        let inv = span(&format!("{name}(a b)"), 0, name.len() as u32 + 5);
+        let name = span(&format!("{name}(a b)"), 0, name.len() as u32);
+        let body = sm.add_expansion(at(body), len, inv, ExpansionKind::Macro { name }).unwrap();
+        let param = Span::new(body.with_offset(param_off), body.with_offset(param_off + 1));
+        let a =
+            sm.add_expansion(at(nth(src, "a b", n)), 1, param, ExpansionKind::MacroArg).unwrap();
+        let b = sm
+            .add_expansion(at(nth(src, "a b", n) + 2), 1, param, ExpansionKind::MacroArg)
+            .unwrap();
+        out.extend([body, a, b]);
+    }
+    (sm, f, out.try_into().unwrap())
+}
+
+/// spec/source.md "Editable file ranges": an argument that continues in
+/// the next entry (or from the previous one) neither begins nor ends
+/// its parameter's expansion; a range in one use of it maps to its
+/// spelling ([cpp.subst]).
+#[test]
+fn cpp_subst_editable_ranges_of_split_arguments() {
+    let (sm, f, [_, id_a, id_b, _, f_a, f_b]) = split_arguments();
+    let text = |lo: Loc, hi: Loc| {
+        let (file, b, e) = sm.editable_file_range(Span::new(lo, hi))?;
+        assert_eq!(file, f);
+        Some(sm.text(f)[b as usize..e as usize].to_owned())
+    };
+    let end = |l: Loc| l.with_offset(1);
+    // `ID(a b)`: the whole argument is the whole expansion.
+    assert_eq!(text(id_a, end(id_b)).as_deref(), Some("ID(a b)"));
+    assert_eq!(text(id_a, end(id_a)).as_deref(), Some("a"));
+    assert_eq!(text(id_b, end(id_b)).as_deref(), Some("b"));
+    // `F(a b)`: inside the parentheses.
+    assert_eq!(text(f_a, end(f_b)).as_deref(), Some("a b"));
+    assert_eq!(text(f_b, end(f_b)).as_deref(), Some("b"));
+    // From one invocation to the other: two expansions.
+    assert_eq!(text(id_a, end(f_b)), None);
+    assert_eq!(sm.file_loc_at_macro_start(id_b), None, "b continues the argument");
+    assert_eq!(sm.file_loc_at_macro_end(end(id_a)), None, "a is continued");
+    assert_eq!(sm.file_loc_at_macro_start(id_a), Some(sm.loc(f, nth(sm.text(f), "ID(a b)", 0))));
+    // Insertions: before `a` moves to the invocation, before `b` stays.
+    let ins = |l: Loc| sm.editable_file_range(Span::empty(l)).map(|(_, b, _)| b);
+    assert_eq!(ins(id_a), Some(nth(sm.text(f), "ID(a b)", 0)));
+    assert_eq!(ins(id_b), Some(nth(sm.text(f), "a b", 0) + 2));
+}
+
+/// spec/source.md "Expansion entries": creation order, indices, the
+/// parent of each entry, a start in the middle and past the end.
+#[test]
+fn cpp_rescan_expansion_entries_list_the_table() {
+    let (sm, _, [e_b, e_a, arg]) = {
+        let (sm, f, _, bases) = nested_expansion();
+        (sm, f, bases)
+    };
+    let all: Vec<_> = sm.expansion_entries(0).collect();
+    assert_eq!(sm.expansion_count(), 3);
+    assert_eq!(all.iter().map(|e| e.info.base).collect::<Vec<_>>(), [e_b, e_a, arg]);
+    assert_eq!(all.iter().map(|e| e.index).collect::<Vec<_>>(), [0, 1, 2]);
+    // B's invocation is in the file; A's is in B's body; the argument
+    // replaces a parameter of A's body.
+    assert_eq!(all.iter().map(|e| e.parent).collect::<Vec<_>>(), [None, Some(0), Some(1)]);
+    for e in &all {
+        assert_eq!(sm.expansion_info(e.info.base), Some(e.info));
+    }
+    assert_eq!(all[2].info.spelling_range(), Span::new(e_b.with_offset(2), e_b.with_offset(3)));
+    assert_eq!(sm.expansion_entries(1).collect::<Vec<_>>(), all[1..]);
+    assert_eq!(sm.expansion_entries(1).len(), 2);
+    assert_eq!(sm.expansion_entries(3).count(), 0);
+    assert_eq!(sm.expansion_entries(u32::MAX).count(), 0);
+    // Entries added later are listed from the old count.
+    let more = sm.add_expansion(e_b, 1, Span::new(e_b, e_b), ExpansionKind::MacroArg).unwrap();
+    let new: Vec<_> = sm.expansion_entries(3).collect();
+    assert_eq!(new.len(), 1);
+    assert_eq!((new[0].index, new[0].info.base, new[0].parent), (3, more, Some(0)));
+}

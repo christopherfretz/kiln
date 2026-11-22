@@ -10,7 +10,11 @@
 //!   is partitioned into per-buffer ranges and per-expansion ranges, as in
 //!   clang's `SourceLocation`. [`Span`] (8 bytes) is a half-open range.
 //! - Macro-expansion locations map to (spelling, expansion) pairs through
-//!   [`SourceManager::add_expansion`] entries.
+//!   [`SourceManager::add_expansion`] entries;
+//!   [`SourceManager::expansion_entries`] lists them.
+//! - Tooling-client queries: [`SourceManager::editable_range`] (the file
+//!   characters a range written through macros stands for, when they can
+//!   be edited as one file range).
 //! - `#line` presumed locations: [`SourceManager::add_line_directive`] and
 //!   [`SourceManager::presumed_line_col`].
 //! - [`symbol`]: the shared identifier [`Interner`](symbol::Interner) and
@@ -24,6 +28,7 @@
 
 pub mod activity;
 mod arena;
+mod editable;
 pub mod fx;
 pub mod hash;
 pub mod image_locs;
@@ -34,7 +39,7 @@ pub mod trace;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{
-    ExpansionInfo, ExpansionKind, FileKind, FileOrigin, LazyCopy, LazyFile, LazyOutcome, LineCol,
-    LoadError, LoadReport, LocSpaceExhausted, PresumedLoc, Replacement, SourceManager,
-    SourcePathStyle, read_open_file,
+    ExpansionEntries, ExpansionEntry, ExpansionInfo, ExpansionKind, FileKind, FileOrigin, LazyCopy,
+    LazyFile, LazyOutcome, LineCol, LoadError, LoadReport, LocSpaceExhausted, PresumedLoc,
+    Replacement, SourceManager, SourcePathStyle, read_open_file,
 };

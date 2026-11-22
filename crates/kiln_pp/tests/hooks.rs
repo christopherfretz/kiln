@@ -417,3 +417,99 @@ fn cpp_scope_attr_macro_history_churn() {
     // One generation step per definition and per end.
     assert_eq!(generation, 4000 + 3999);
 }
+
+/// Tags every event it sees with its name; consumes `#pragma <name>`.
+struct Tagged<'i> {
+    tag: &'static str,
+    log: Log,
+    interner: &'i Interner,
+}
+
+impl Tagged<'_> {
+    fn push(&self, s: &str) {
+        self.log.borrow_mut().push(format!("{}: {s}", self.tag));
+    }
+}
+
+impl PpCallbacks for Tagged<'_> {
+    fn macro_defined(&mut self, name: Symbol, _def: &MacroDef) {
+        let n = self.interner.as_str(name);
+        if !n.starts_with("__") {
+            self.push(&format!("define {n}"));
+        }
+    }
+    fn macro_expands(&mut self, name: &kiln_lex::Token, _def: &MacroDef, _range: Span) {
+        if let TokKind::Identifier(s) = name.kind {
+            self.push(&format!("expand {}", self.interner.as_str(s)));
+        }
+    }
+    fn inclusion_directive(&mut self, req: &IncludeRequest, _result: Option<&ResolvedInclude>) {
+        self.push(&format!("include {}", req.name));
+    }
+    fn pragma(&mut self, info: &PragmaInfo<'_>) -> bool {
+        let first = match info.tokens.first().map(|t| t.kind) {
+            Some(TokKind::Identifier(s)) => self.interner.as_str(s),
+            _ => "",
+        };
+        let consume = first == self.tag;
+        self.push(&format!("pragma {first} consumed={consume}"));
+        consume
+    }
+    fn source_range_skipped(&mut self, _range: Span) {
+        self.push("skipped");
+    }
+}
+
+/// Several observers (spec/pp.md "`PpCallbacks`"): each sees every
+/// event, in registration order; a pragma is offered to all of them and
+/// consumed when any one consumes it; `set_callbacks` replaces them all.
+#[test]
+fn several_observers_in_registration_order() {
+    let log = Log::default();
+    let src = "#define M 1\nM\n#include \"h.h\"\n#if 0\n#endif\n#pragma one\n#pragma two\n\
+               #pragma three\n";
+    let (out, _) = run(src, |pp, interner| {
+        pp.set_include_resolver(Box::new(MemoryResolver::new().with_header("h.h", "")));
+        for tag in ["one", "two"] {
+            pp.add_callbacks(Box::new(Tagged { tag, log: log.clone(), interner }));
+        }
+    });
+    assert_eq!(out, "\n1\n#pragma three\n");
+    assert_eq!(
+        *log.borrow(),
+        [
+            "one: define M",
+            "two: define M",
+            "one: expand M",
+            "two: expand M",
+            "one: include h.h",
+            "two: include h.h",
+            "one: skipped",
+            "two: skipped",
+            "one: pragma one consumed=true",
+            "two: pragma one consumed=false",
+            "one: pragma two consumed=false",
+            "two: pragma two consumed=true",
+            "one: pragma three consumed=false",
+            "two: pragma three consumed=false",
+        ]
+    );
+
+    // A third observer, then `set_callbacks`: only the last one is left.
+    let log = Log::default();
+    let (_, _) = run("#define N\n", |pp, interner| {
+        for tag in ["a", "b", "c"] {
+            pp.add_callbacks(Box::new(Tagged { tag, log: log.clone(), interner }));
+        }
+        pp.set_callbacks(Box::new(Tagged { tag: "only", log: log.clone(), interner }));
+    });
+    assert_eq!(*log.borrow(), ["only: define N"]);
+    let log = Log::default();
+    let (_, _) = run("#define N\n", |pp, interner| {
+        pp.set_callbacks(Box::new(Tagged { tag: "first", log: log.clone(), interner }));
+        for tag in ["a", "b"] {
+            pp.add_callbacks(Box::new(Tagged { tag, log: log.clone(), interner }));
+        }
+    });
+    assert_eq!(*log.borrow(), ["first: define N", "a: define N", "b: define N"]);
+}
