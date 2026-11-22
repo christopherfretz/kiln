@@ -1801,6 +1801,7 @@ impl Parser<'_, '_> {
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             if let NameClass::TypeTemplate(d) = class {
                 self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
+                self.ctor_template_name(q, name, kw, template_kw, name_loc);
             }
             return match self.parse_template_id_rest(class, name, name_loc) {
                 // The qualifier as written is sugar: `'O::I<int>'`.
@@ -1909,6 +1910,17 @@ impl Parser<'_, '_> {
             let text = format!("'{}'", self.s.ast.symbols().as_str(name));
             let m = self.s.diag(DiagId::sema_qualified_ctor_name_as_type, name_loc).arg(text);
             self.emit(m);
+        } else if kw == TagKeyword::Typename && self.s.names_own_class(q.ctx, name, d) {
+            // `typename C::C`: clang's -Winjected-class-name extension
+            // warning, the type is used (WP-1903).
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let m = self
+                .s
+                .diag(DiagId::sema_qualified_ctor_name_despite_keyword, name_loc)
+                .arg(text)
+                .arg(1u8)
+                .arg(0u8);
+            self.emit(m);
         }
         self.s.mark_type_referenced(d);
         self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
@@ -1916,6 +1928,48 @@ impl Parser<'_, '_> {
         let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
         // The qualifier as written is sugar: `'S::P':'int *'`.
         Some(self.s.ast.types.elaborated(kw, Some(q.nns), named))
+    }
+
+    /// [class.qual]/2: `C::C<args>` in a type with `q` naming the class
+    /// `C` names its constructors: clang's error "qualified reference to
+    /// 'C' is a constructor name rather than a template name", and with a
+    /// preceding `typename` or `template` keyword (`kw`, `template_kw`) its
+    /// -Winjected-class-name extension warning naming the keyword
+    /// (`template` when both). Not after a class-key, nor in a
+    /// base-specifier or mem-initializer, where the name is a class-name
+    /// (clang's `IsClassName`). The template is used either way (WP-1903).
+    fn ctor_template_name(
+        &mut self,
+        q: Qualifier,
+        name: Symbol,
+        kw: TagKeyword,
+        template_kw: bool,
+        name_loc: Loc,
+    ) {
+        // A base-specifier's or mem-initializer's class-name names the
+        // class (clang's `IsClassName`).
+        if self.base_type_name
+            || !matches!(kw, TagKeyword::None | TagKeyword::Typename)
+            || !self.s.qualifier_names_template(q.ctx, name)
+        {
+            return;
+        }
+        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let d = if kw == TagKeyword::None && !template_kw {
+            if self.s.permissive {
+                return;
+            }
+            self.s
+                .diag(DiagId::sema_qualified_ctor_name_as_template, name_loc)
+                .arg(format!("'{text}'"))
+        } else {
+            self.s
+                .diag(DiagId::sema_qualified_ctor_name_despite_keyword, name_loc)
+                .arg(text)
+                .arg(0u8)
+                .arg(u8::from(template_kw))
+        };
+        self.emit(d);
     }
 
     /// The specialization `t` named as `nns::template J<...>`: its

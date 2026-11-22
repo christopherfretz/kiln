@@ -4376,6 +4376,9 @@ impl Writer<'_, '_, '_> {
             || c.instantiated_from.contains(d)
             || c.injection_point.contains(d)
             || c.conversion_spec_target.contains(d)
+            // The FP state of mem-initializers / a default member
+            // initializer under a pragma (WP-1904).
+            || c.init_fp.contains(d)
         {
             return Err("a declaration with side data the image does not carry");
         }

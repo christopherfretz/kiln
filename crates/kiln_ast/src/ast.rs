@@ -481,6 +481,30 @@ impl Ast {
         self.decls.field(f)?.init
     }
 
+    /// The FP pragma state constructor `d`'s mem-initializers or field
+    /// `d`'s default member initializer were parsed in
+    /// ([`crate::decl::ColdDeclData::init_fp`]): an instantiation's is
+    /// its pattern's (on the declaration of the chain that has it, the
+    /// definition), as clang's instantiated expressions keep the
+    /// pattern's `FPOptionsOverride` (WP-1904).
+    pub fn init_fp(&self, d: DeclId) -> crate::fp::FpOverride {
+        let m = &self.decls.cold.init_fp;
+        if m.is_empty() {
+            return crate::fp::FpOverride::NONE;
+        }
+        let mut cur = d;
+        for _ in 0..64 {
+            if let Some(&o) = self.redecls_of(cur).find_map(|r| m.get(r)) {
+                return o;
+            }
+            match self.instantiated_from(cur) {
+                Some(p) if p != cur => cur = p,
+                _ => break,
+            }
+        }
+        crate::fp::FpOverride::NONE
+    }
+
     /// CWG 3135 ([dcl.struct.bind]/7, C++26): the holding variable `r`
     /// of a tuple-like structured binding whose initializer (`get<i>`)
     /// is a prvalue is declared `S T_i r = initializer;`, an object of

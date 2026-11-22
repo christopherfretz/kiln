@@ -674,6 +674,7 @@ impl Sema<'_, '_> {
     /// parsed (spec/sema-class.md §2.7): `this` has type `C*`
     /// ([expr.prim.this]/2).
     pub fn act_on_start_field_init(&mut self, field: DeclId) {
+        self.note_init_fp(field);
         let class = self.ast.decls.get(field).ctx().unwrap_or(self.ctx);
         let t = self.this_class_type(class);
         let p = self.ast.types.pointer_to(t);

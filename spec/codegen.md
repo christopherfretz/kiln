@@ -1248,6 +1248,16 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   the intrinsic declarations carry `strictfp` and
   `memory(inaccessiblemem: readwrite)`. `fneg`, `fabs` and `copysign`
   stay plain, as in clang.
+- A constructor's mem-initializers (member, base, delegating) are
+  emitted under the FP state they were parsed in, not under the body's
+  scope (a pragma at the start of the body does not reach them; an
+  out-of-class definition takes its own file-scope state), and a default
+  member initializer (`CXXDefaultInitExpr`, in a constructor or an
+  aggregate initialization) under the state at its field: sema records
+  each state other than the command line's (`ColdDeclData::init_fp`,
+  `Ast::init_fp`, an instantiation's being its pattern's), as clang keeps
+  `FPOptionsOverride` on each expression (`Cg::enter_fp_override`,
+  WP-1904).
 - Folding under a constrained scope: a constant initializer
   (static storage, `constexpr`, a `const` integral) is evaluated in a
   constant context, in the default environment ([expr.const]: clang's

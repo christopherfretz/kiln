@@ -84,7 +84,17 @@ impl Cg<'_> {
     /// body merges its `*-fp-math` attributes into the function's.
     pub(crate) fn enter_fp(&mut self, s: StmtId) -> SavedFp {
         let ast = self.ast;
-        let ovr = ast.stmts.compound_fp(s);
+        let used = ast.lists.iter::<StmtId>(ast.stmts.compound_body(s)).next().is_some();
+        self.enter_fp_override(ast.stmts.compound_fp(s), used)
+    }
+
+    /// Enters the FP state of pragma override `ovr` (applied to the
+    /// command line), as [`Self::enter_fp`]; `used`: code is emitted
+    /// under it, so its `*-fp-math` attributes are merged. Also the state
+    /// a constructor's mem-initializers or a default member initializer
+    /// were parsed in ([`kiln_ast::Ast::init_fp`], WP-1904: clang's
+    /// per-expression `CGFPOptionsRAII`).
+    pub(crate) fn enter_fp_override(&mut self, ovr: FpOverride, used: bool) -> SavedFp {
         if ovr == self.f.fp_ovr {
             return None;
         }
@@ -93,7 +103,7 @@ impl Cg<'_> {
         self.f.fp = o;
         self.f.fp_ovr = ovr;
         self.f.fir.set_fmf(fmf_of(o));
-        if ast.lists.iter::<StmtId>(ast.stmts.compound_body(s)).next().is_some() {
+        if used {
             for (i, (_, v)) in merged_attrs(o).into_iter().enumerate() {
                 if !v {
                     self.f.fp_attrs_off |= 1 << i;

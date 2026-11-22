@@ -163,6 +163,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "hidden_shadow",
     "inherited_ctor",
     "inheriting_ctor",
+    "init_fp",
     "injection_point",
     "instantiated_from",
     "key_function",

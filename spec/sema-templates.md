@@ -5050,6 +5050,12 @@ formed it:
   instantiation note, as clang's `TransformAtomicType` does, not at the
   declarator; an alias template reports at its `using` (`written_locs`
   off; WP-461, `ext.c11.atomic/atomic-specifier-subst-loc.cpp`).
+- `note_space_type_loc` records a dependent type in an address space
+  (`T AS(1)`, `AS(N) int AS(1)`: the `ExtQual` node) at its
+  decl-specifiers' type (`T`, `int`): the conflict substitution can find
+  there ("conflicting address space qualifiers", `templ/subst/types.rs`
+  `ExtQual`) is reported at it, as clang's `RebuildQualifiedType` at the
+  `TypeLoc`'s begin (WP-1914, spec/sema.md "Address spaces").
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest

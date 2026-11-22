@@ -139,6 +139,29 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// clang `RebuildQualifiedType`'s `err_address_space_mismatch_templ_inst`
+    /// (WP-1914): the pattern `q`, `base` in space `word`, substituted as
+    /// `b`, already in another space. The pattern is shown with its space
+    /// alone (clang keeps cv outside the attributed node), at the base as
+    /// written ([`crate::Sema::note_space_type_loc`]).
+    fn addr_space_mismatch(
+        &mut self,
+        q: QualType,
+        base: QualType,
+        word: u32,
+        b: QualType,
+        loc: Loc,
+    ) {
+        let at = self.written(WrittenKey::Type(q.without_quals()), loc);
+        let shown = self.sema.ast.types.ext_qual(base.without_quals(), word);
+        let d = self
+            .sema
+            .diag(DiagId::sema_address_space_mismatch_templ_inst, at)
+            .arg(self.sema.ty_arg(shown))
+            .arg(self.sema.ty_arg(b));
+        self.sema.emit(d);
+    }
+
     /// [depr.volatile.type]/2: each volatile-qualified parameter type
     /// `params` of the function type substitution rebuilds from the
     /// dependent `pattern`, at `loc` (clang's `BuildFunctionType` checks
@@ -1119,10 +1142,21 @@ impl Substituter<'_, '_, '_> {
             // dependent, and it is kept, as clang keeps `DependentTy`).
             TypeView::Builtin(_) | TypeView::BitInt { .. } => Ok(q),
             // clang `TransformQualifiedType`: the base is substituted and
-            // the extended qualifiers kept.
+            // the extended qualifiers kept. A base substituted into a
+            // different space is clang `RebuildQualifiedType`'s
+            // "conflicting address space qualifiers" at the base as
+            // written, a deduction failure in SFINAE (WP-1914).
             TypeView::ExtQual { base, word } => {
                 let b = self.ty(base, loc)?;
                 let space = kiln_ast::types::AddrSpace(word);
+                let old = self.sema.ast.types.addr_space(b);
+                if old != kiln_ast::types::AddrSpace::DEFAULT
+                    && old != space
+                    && !self.sema.is_error_type(b)
+                {
+                    self.addr_space_mismatch(q, base, word, b, loc);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.with_addr_space(b, space))
             }
             TypeView::Invalid => {

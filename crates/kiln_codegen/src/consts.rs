@@ -18,7 +18,8 @@ use crate::fold::{is_local, is_static_local};
 use crate::module::{Cg, R, err, gval};
 
 /// What [`Cg::enter_default_init`] replaced.
-pub(crate) type DefaultInitSave = (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>);
+pub(crate) type DefaultInitSave =
+    (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>, crate::fp::SavedFp);
 
 impl Cg<'_> {
     /// Lowers the folded constant `c` of type `ty` in its in-memory form
@@ -412,7 +413,9 @@ impl Cg<'_> {
 
     /// [`Self::enter_default_arg`] for a `CXXDefaultInitExpr`, whose
     /// `this` is the aggregate being initialized when one is
-    /// (`FuncState::default_init_this`; clang `CXXDefaultInitExprScope`).
+    /// (`FuncState::default_init_this`; clang `CXXDefaultInitExprScope`),
+    /// emitted under the FP state its field's initializer was parsed in
+    /// (WP-1904).
     pub(crate) fn enter_default_init(&mut self, e: ExprId) -> DefaultInitSave {
         let src = self.enter_default_arg(e);
         let this = self.f.default_init_this.map(|(v, rd)| {
@@ -421,11 +424,14 @@ impl Cg<'_> {
             self.f.this_class = Some(rd);
             old
         });
-        (src, this)
+        let field = self.ast.exprs.default_init_field(e);
+        let fp = self.enter_fp_override(self.ast.init_fp(field), true);
+        (src, this, fp)
     }
 
     /// Ends [`Self::enter_default_init`].
     pub(crate) fn exit_default_init(&mut self, s: DefaultInitSave) {
+        self.leave_fp(s.2);
         self.srcloc = s.0;
         if let Some((this, class)) = s.1 {
             self.f.this = this;

@@ -227,6 +227,18 @@ impl Sema<'_, '_> {
         Some(self.ast.types.with_addr_space(pointee, space))
     }
 
+    /// Records where the type an address space qualifies was written
+    /// (`loc`, the decl-specifiers' type: clang's `TypeLoc` begin) when
+    /// `ty` is a dependent spaced type, for the conflict substitution can
+    /// find ([`crate::templ::written`], WP-1914).
+    pub(crate) fn note_space_type_loc(&mut self, ty: QualType, loc: Loc) {
+        let t = &self.ast.types;
+        if t.kind(ty.ty()) == kiln_ast::types::TypeKind::ExtQual && t.is_dependent(ty) {
+            let key = crate::templ::written::WrittenKey::Type(ty.without_quals());
+            self.note_written_loc(key, loc);
+        }
+    }
+
     /// A variable `v` whose type is in an address space: an error when it
     /// has automatic storage duration (clang `CheckVariableDeclarationType`
     /// "automatic variable qualified with an address space"); `v` is then

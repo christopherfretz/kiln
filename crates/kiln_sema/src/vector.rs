@@ -659,6 +659,7 @@ impl Sema<'_, '_> {
         let elem = QualType::new(base.ty(), base.quals_bits() & !cv);
         let lead = ds.lead_cxx11.map(|_| ds.loc);
         let v = self.apply_vector_attrs(elem, &mut attrs, typedef, VectorAttrPos::Type(lead));
+        self.note_space_type_loc(v, ds.type_loc.unwrap_or(ds.loc));
         if v == elem {
             return base;
         }

@@ -2492,6 +2492,7 @@ impl Sema<'_, '_> {
             self.add_pragma_param_attrs(ty, &mut attrs);
         }
         ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
+        self.note_space_type_loc(ty, ds.type_loc.unwrap_or(ds.loc));
         // A `mode` left in `attrs` is on a dependent type: kept on the
         // parameter, applied when it is substituted (clang
         // `instantiateDependentModeAttr`; `Subst::param_infos`).
@@ -4144,6 +4145,7 @@ impl Sema<'_, '_> {
         }
         let pos = if ds.is_typedef() { VectorAttrPos::Typedef } else { VectorAttrPos::Decl };
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef(), pos);
+        self.note_space_type_loc(ty, ds.type_loc.unwrap_or(ds.loc));
         let ty = self.apply_nothrow_attrs(ty, &mut attrs);
         let ty = self.apply_noreturn_attrs(ty, &attrs);
         let ty = self.apply_cc_attrs(ty, &mut attrs, !ds.is_typedef());
@@ -13373,6 +13375,17 @@ impl Sema<'_, '_> {
             return NameClass::Dependent;
         }
         self.classify_found(&found)
+    }
+
+    /// [class.qual]/2 for a template-id `C::C<args>` (or `C::template
+    /// C<args>`) not followed by `::`: the qualifier `ctx` is a class
+    /// named `name`, so the name is its injected-class-name and names the
+    /// constructors, not the template (clang `ActOnTemplateIdType` /
+    /// `ActOnTypenameType` compare the identifiers; WP-1903).
+    pub fn qualifier_names_template(&self, ctx: DeclId, name: Symbol) -> bool {
+        let ctx = self.type_name_qualifier(ctx);
+        self.kind_of(ctx) == DeclKind::CXXRecord
+            && self.ast.decls.get(ctx).name().as_ident() == Some(name)
     }
 
     /// Whether `d`, found as `name` in qualifier context `ctx`, is the
