@@ -34,6 +34,7 @@ pub mod modules;
 pub mod multiversion;
 pub mod names;
 mod neon_builtins;
+pub mod oper_lookup;
 pub mod redecl;
 pub mod reflect;
 pub mod sanitize;

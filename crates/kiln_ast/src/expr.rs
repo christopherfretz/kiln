@@ -1173,6 +1173,38 @@ pub struct DeclRefExtra {
     pub found_decl: Option<DeclId>,
 }
 
+/// The name facts of an overloaded member access (a `MemberExpr` of type
+/// `QualType::OVERLOAD`, kiln's `UnresolvedMemberExpr`) that overload
+/// resolution reads and the expression's slots do not hold (spec/ast.md
+/// §5.10, WP-2020): kept for the life of the `Ast`, whether or not a call
+/// or a target type resolves the access later.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
+pub struct OverloadedMember {
+    /// The nested-name-specifier as written (`p->Base::f`: no virtual
+    /// dispatch, and the lookup is in `Base`).
+    pub qualifier: Option<NnsId>,
+    /// The explicit template arguments as written (`p->f<int>`), once the
+    /// parser has them; `None` for none or for dependent ones (the access
+    /// then becomes a `CXXDependentScopeMemberExpr` that holds them).
+    pub template_args: Option<ArgListId>,
+    /// The naming class ([class.access.base]/5): the class the access is
+    /// checked in, the qualifier's class for a qualified name.
+    pub naming_class: DeclId,
+}
+
+/// The written name of a member access, as [`crate::Ast::member_access_name`]
+/// returns it (spec/ast.md §5.10).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct MemberAccessName {
+    /// The nested-name-specifier as written.
+    pub qualifier: Option<NnsId>,
+    /// The explicit template arguments as written.
+    pub template_args: Option<ArgListId>,
+    /// The naming class of an overloaded access; `None` for a resolved
+    /// or a dependent one.
+    pub naming_class: Option<DeclId>,
+}
+
 /// Side record of a `CompoundAssignOperator` (spec/ast.md §5.3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CompoundAssignExtra {
@@ -1426,6 +1458,9 @@ pub struct ColdExprData {
     pub end_loc: ColdMap<ExprId, Loc>,
     /// `MemberExpr` qualifier / template args / found decl.
     pub member_extra: ColdMap<ExprId, DeclRefExtra>,
+    /// An overloaded `MemberExpr`'s qualifier, explicit template
+    /// arguments and naming class (§5.10, WP-2020).
+    pub member_overload: ColdMap<ExprId, OverloadedMember>,
     /// The designators of a `DesignatedInitExpr` (§5.6), outermost
     /// first.
     pub designators: ColdMap<ExprId, Box<[Designator]>>,
@@ -1614,6 +1649,7 @@ impl Default for ColdExprData {
         Self {
             end_loc: ColdMap::new("end_loc"),
             member_extra: ColdMap::new("member_extra"),
+            member_overload: ColdMap::new("member_overload"),
             designators: ColdMap::new("designators"),
             syntactic_list: ColdMap::new("syntactic_list"),
             array_trait: ColdMap::new("array_trait"),
@@ -2023,6 +2059,43 @@ impl ExprArena {
                 DeclRefExtra { qualifier: None, template_args: Some(targs), found_decl: None },
             ),
         }
+    }
+
+    /// Records the name facts `x` of the overloaded member access `e`
+    /// (§5.10, WP-2020), at its creation. Write-once.
+    ///
+    /// # Panics
+    /// If `e` is not a `MemberExpr`.
+    pub fn set_member_overload(
+        &mut self,
+        e: ExprId,
+        x: OverloadedMember,
+    ) -> Result<(), AlreadySet> {
+        let kind = self.nodes[e.index() as usize].kind;
+        assert!(kind == ExprKind::MemberExpr, "expected MemberExpr, found {kind:?}");
+        self.cold.member_overload.insert(e, x)
+    }
+
+    /// Records the explicit template arguments `targs` the parser found
+    /// after the overloaded member access `e` (`p->f<int>`, §5.10), known
+    /// only once the template-id is parsed. `false` (no write) when `e`
+    /// is not an overloaded member access.
+    pub fn set_member_overload_template_args(&mut self, e: ExprId, targs: ArgListId) -> bool {
+        match self.cold.member_overload.get(e).copied() {
+            Some(x) => self
+                .cold
+                .member_overload
+                .refine(e, OverloadedMember { template_args: Some(targs), ..x }),
+            None => false,
+        }
+    }
+
+    /// The name facts of the overloaded member access `e` (§5.10): its
+    /// qualifier, explicit template arguments and naming class. `None`
+    /// for any other expression. They stay after the access is resolved
+    /// (the resolved access is a new expression).
+    pub fn member_overload(&self, e: ExprId) -> Option<&OverloadedMember> {
+        self.cold.member_overload.get(e)
     }
 
     /// Records the nested-name-specifier `nns` written before the
@@ -2523,6 +2596,9 @@ impl ExprArena {
         }
         if let Some(&x) = cold.member_extra.get(e) {
             let _ = cold.member_extra.insert(id, x);
+        }
+        if let Some(&x) = cold.member_overload.get(e) {
+            let _ = cold.member_overload.insert(id, x);
         }
         if let Some(&x) = cold.source_loc.get(e) {
             let _ = cold.source_loc.insert(id, x);
@@ -3406,6 +3482,7 @@ impl HeapSize for ExprArena {
         r.push(self.lambdas.mem_row());
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
+        r.push(self.cold.member_overload.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
         r.push(self.cold.syntactic_list.mem_row().prefixed("cold"));
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));

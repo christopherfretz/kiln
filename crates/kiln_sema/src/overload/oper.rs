@@ -7,6 +7,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
 use kiln_ast::expr::{BinaryOp, DeclRefExtra, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator as OO};
+use kiln_ast::oper_lookup::{OperCandidate, OperSetId};
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -141,10 +142,34 @@ pub(crate) fn rewritten_of(op: OO) -> Option<OO> {
     }
 }
 
-/// The non-member candidates (declaration, found declaration) an
-/// instantiation rebuilding an operator expression uses, and whether
-/// argument-dependent lookup is added ([`Sema::oper_rebuild_set`]).
-pub(crate) type OperRebuild = (Box<[(DeclId, DeclId)]>, bool);
+/// The non-member candidates an instantiation rebuilding an operator
+/// expression uses, and whether argument-dependent lookup is added
+/// ([`Sema::oper_rebuild_set`]).
+pub(crate) type OperRebuild = (OperCands, bool);
+
+/// The non-member candidates of an operator expression being rebuilt.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OperCands {
+    /// The definition-context set of a dependent expression, in the
+    /// `Ast` (spec/ast.md §8.5).
+    Set(OperSetId),
+    /// The one function a resolved expression selected (its template
+    /// for a specialization), found as itself.
+    One(OperCandidate),
+    /// None (a resolved expression that selected a member function).
+    None,
+}
+
+impl OperCands {
+    /// The candidates (declaration, found declaration).
+    pub(crate) fn get<'a>(&'a self, ast: &'a kiln_ast::Ast) -> &'a [OperCandidate] {
+        match self {
+            OperCands::Set(id) => ast.templates.oper_lookups.candidates(*id),
+            OperCands::One(c) => std::slice::from_ref(c),
+            OperCands::None => &[],
+        }
+    }
+}
 
 /// Operators whose candidates include non-member functions found by
 /// unqualified lookup ([over.match.oper]/3.2: not `=`, `[]`, `()`, `->`).
@@ -255,27 +280,35 @@ impl Sema<'_, '_> {
     /// [temp.dep.candidate], [over.match.oper]/3.2: the dependent
     /// operator expression `e` (operator `op`) keeps the non-member
     /// operator functions unqualified lookup finds here, at the
-    /// definition; its instantiation adds argument-dependent lookup only
-    /// ([`Sema::oper_lookups`]). A dependent expression rebuilt by a
+    /// definition; its instantiation adds argument-dependent lookup only.
+    /// The set is the `Ast`'s (`templates.oper_lookups`, interned by
+    /// content; spec/ast.md §8.5, WP-2021), so it outlives sema and a
+    /// module image carries it. A dependent expression rebuilt by a
     /// substitution keeps the set of the one it was rebuilt from.
     pub(crate) fn note_dependent_oper(&mut self, e: ExprId, op: Option<OO>) {
         let rebuilt = self.oper_override.take();
         let Some(op) = op.filter(|&o| has_nonmember_candidates(o)) else { return };
-        if let Some((fns, _)) = rebuilt {
-            self.oper_lookups.insert(e, fns);
-            return;
-        }
-        let mut fns: Vec<(DeclId, DeclId)> = Vec::new();
-        for name in [Some(op), rewritten_of(op)].into_iter().flatten() {
-            let found = self.lookup_operator_name(DeclName::operator(name));
-            for (&d, &f) in found.decls.iter().zip(found.found.iter()) {
-                let first = self.ast.first(d);
-                if !fns.iter().any(|&(o, _)| self.ast.first(o) == first) {
-                    fns.push((d, f));
-                }
+        let set = match rebuilt {
+            Some((OperCands::Set(id), _)) => id,
+            Some((c, _)) => {
+                let fns = c.get(&self.ast).to_vec();
+                self.ast.templates.oper_lookups.intern(&fns)
             }
-        }
-        self.oper_lookups.insert(e, fns.into_boxed_slice());
+            None => {
+                let mut fns: Vec<OperCandidate> = Vec::new();
+                for name in [Some(op), rewritten_of(op)].into_iter().flatten() {
+                    let found = self.lookup_operator_name(DeclName::operator(name));
+                    for (&d, &f) in found.decls.iter().zip(found.found.iter()) {
+                        let first = self.ast.first(d);
+                        if !fns.iter().any(|o| self.ast.first(o.decl) == first) {
+                            fns.push(OperCandidate { decl: d, found: f });
+                        }
+                    }
+                }
+                self.ast.templates.oper_lookups.intern(&fns)
+            }
+        };
+        let _ = self.ast.templates.oper_lookups.set(e, set);
     }
 
     /// The non-member candidates a substitution rebuilding the operator
@@ -286,18 +319,18 @@ impl Sema<'_, '_> {
     /// declaration does not change it ([temp.res.general]/6, [temp.nondep]).
     /// `None`: nothing recorded (look up as before).
     pub(crate) fn oper_rebuild_set(&self, e: ExprId) -> Option<OperRebuild> {
-        if let Some(f) = self.oper_lookups.get(&e) {
-            return Some((f.clone(), true));
+        if let Some(id) = self.ast.templates.oper_lookups.set_of(e) {
+            return Some((OperCands::Set(id), true));
         }
         if self.ast.exprs.get(e).kind() != ExprKind::CXXOperatorCallExpr {
             return None;
         }
         let d = self.callee_decl(e)?;
         if self.kind_of(d) == DeclKind::CXXMethod {
-            return Some((Box::default(), false));
+            return Some((OperCands::None, false));
         }
         let d = self.ast.spec_info(d).map_or(d, |(_, s)| s.template);
-        Some((Box::new([(d, d)]), false))
+        Some((OperCands::One(OperCandidate { decl: d, found: d }), false))
     }
 
     /// Builds and resolves the candidate set of operator `op` (`form`)
@@ -354,7 +387,11 @@ impl Sema<'_, '_> {
                 let found: Vec<(DeclId, DeclId)> = if let Some(c) = &captured {
                     c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
                 } else if let Some((c, _)) = &rebuilt {
-                    c.iter().copied().filter(|&(d, _)| self.ast.decls.get(d).name() == dn).collect()
+                    c.get(&self.ast)
+                        .iter()
+                        .filter(|c| self.ast.decls.get(c.decl).name() == dn)
+                        .map(|c| (c.decl, c.found))
+                        .collect()
                 } else {
                     let found = self.lookup_operator_name(dn);
                     found.decls.iter().copied().zip(found.found.iter().copied()).collect()

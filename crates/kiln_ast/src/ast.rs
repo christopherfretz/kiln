@@ -391,6 +391,41 @@ impl Ast {
         }
     }
 
+    /// The written name of the member access `e` (spec/ast.md §5.10,
+    /// WP-2020): its nested-name-specifier, its explicit template
+    /// arguments and, for an overloaded access (a `MemberExpr` of
+    /// overloaded type, kiln's `UnresolvedMemberExpr`), the naming class
+    /// ([class.access.base]/5) overload resolution checks access in. A
+    /// resolved `MemberExpr` and a `CXXDependentScopeMemberExpr` have no
+    /// naming class. `None` when `e` is not a member access. Unlike the
+    /// candidate set, which sema consumes when the access is resolved,
+    /// these stay for the life of the `Ast`.
+    pub fn member_access_name(&self, e: ExprId) -> Option<crate::expr::MemberAccessName> {
+        use crate::expr::MemberAccessName;
+        match self.exprs.get(e).kind() {
+            ExprKind::MemberExpr => Some(match self.exprs.member_overload(e) {
+                Some(m) => MemberAccessName {
+                    qualifier: m.qualifier,
+                    template_args: m.template_args,
+                    naming_class: Some(m.naming_class),
+                },
+                None => self.exprs.decl_ref_extra(e).map_or_else(MemberAccessName::default, |x| {
+                    MemberAccessName {
+                        qualifier: x.qualifier,
+                        template_args: x.template_args,
+                        naming_class: None,
+                    }
+                }),
+            }),
+            ExprKind::CXXDependentScopeMemberExpr => Some(MemberAccessName {
+                qualifier: self.templates.expr_nns.get(e).copied(),
+                template_args: self.templates.expr_targs.get(e).copied(),
+                naming_class: None,
+            }),
+            _ => None,
+        }
+    }
+
     /// `d` with using-shadows looked through: the declaration a
     /// `UsingShadow` introduces (an `UnresolvedUsingIfExists` for an
     /// unresolved `using_if_exists` target), else `d`.

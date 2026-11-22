@@ -40,10 +40,29 @@ impl Sema<'_, '_> {
     /// The overloaded member access of `m` on the object `base` (a pointer
     /// for `m.arrow`) at `loc`: a `MemberExpr` of overloaded type naming
     /// the first member.
+    ///
+    /// The qualifier, explicit template arguments and naming class go to
+    /// the `Ast` (`member_overload`, spec/ast.md §5.10), where they stay
+    /// after the set is consumed; `ovl.members` holds the whole set for
+    /// overload resolution, with the same three values (written only
+    /// here, by [`Self::set_member_template_args`] and by the module-image
+    /// importer, each of which writes both).
     pub(crate) fn build_member_overload(&mut self, m: OvlMember, loc: Loc) -> ExprId {
         let e = self.builder().member(m.base, m.decls[0], QualType::OVERLOAD, m.arrow, loc, None);
-        self.ovl.members.insert(e, m);
+        self.record_member_overload(e, m);
         e
+    }
+
+    /// Records the set `m` of the overloaded member access `e`: in
+    /// `ovl.members` and, for its name, in the `Ast`.
+    pub(crate) fn record_member_overload(&mut self, e: ExprId, m: OvlMember) {
+        let x = kiln_ast::expr::OverloadedMember {
+            qualifier: m.nns,
+            template_args: m.targs,
+            naming_class: m.naming,
+        };
+        self.ast.exprs.set_member_overload(e, x).expect("a fresh member access");
+        self.ovl.members.insert(e, m);
     }
 
     /// [temp.dep.expr]/5: the overloaded member access `e` (a set with a
@@ -141,6 +160,7 @@ impl Sema<'_, '_> {
         match self.ovl.members.get_mut(&x) {
             Some(m) => {
                 m.targs = Some(targs);
+                let _ = self.ast.exprs.set_member_overload_template_args(x, targs);
                 true
             }
             None => false,
