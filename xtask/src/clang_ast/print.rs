@@ -1993,7 +1993,8 @@ impl<'a> Printer<'a, '_> {
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
             | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt"
             | "GCCAsmStmt" | "FileScopeAsmDecl" | "AttributedStmt" | "CXXAssumeAttr"
-            | "LikelyAttr" | "UnlikelyAttr" | "FallThroughAttr" => {
+            | "LikelyAttr" | "UnlikelyAttr" | "FallThroughAttr" | "MustTailAttr"
+            | "NoMergeAttr" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
             }

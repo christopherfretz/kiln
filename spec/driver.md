@@ -495,9 +495,26 @@ implemented or an error; none is accepted and ignored.
   `drv_overriding_option` (`overriding '-ffp-model=<v>' option with
   '-Ofast'`, `-Woverriding-option`); clang 19 also resets `contract` to
   `on` there. A model that replaces a different earlier one warns
-  `overriding '-ffp-model=<old>' option with '-ffp-model=<new>'`. clang's
-  other `-Woverriding-option` FP warnings (`-ffp-contract=`,
-  `-ffp-exception-behavior=`, after `-ffp-model=strict`) are not issued.
+  `overriding '-ffp-model=<old>' option with '-ffp-model=<new>'`.
+- **Other `-Woverriding-option` FP warnings (both levels, WP-1809).**
+  As clang's `RenderFloatingPointOptions`, in command-line order:
+  - After `-ffp-model=strict`, each later FP flag that leaves one of its
+    settings (rounding math, strict exceptions, no fast math part,
+    contraction off) warns `overriding '-ffp-model=strict' option with
+    '<flag>'`; clang 22 does not check `-ffp-contract=` here.
+  - `-ffp-exception-behavior=<v>`, `-ftrapping-math` and
+    `-fno-trapping-math` warn `overriding
+    '-ffp-exception-behavior=<old>' option with '<flag>'` over a
+    different behavior an earlier `-ffp-exception-behavior=` or
+    `-ffp-model=` set, unless `-f[no-]trapping-math` came first.
+  - clang 22: `-ffp-contract=<v>` warns `overriding '<flag>' option with
+    '-ffp-contract=<v>'` against a different contraction that
+    `-Ofast`, `-ffast-math`, `-funsafe-math-optimizations` or a
+    `-ffp-model=` set (`-fno-fast-math` restores it silently).
+  - clang 19: after the loop, a `-ffp-model=fast` whose full fast math
+    is in effect with a contraction other than `fast` warns
+    `overriding '-ffp-model=fast' option with '-ffp-contract=<c>'`.
+  clang's `-Wdeprecated-ofast` is not issued.
   The driver warnings are emitted once per compile job, as clang's
   `RenderFloatingPointOptions` runs per job (not for a `.s` input).
 - **The floating-point environment (WP-1798).** These flags set the
@@ -532,7 +549,7 @@ implemented or an error; none is accepted and ignored.
     clang 19 and 22, WP-1808); `__FLT_EVAL_METHOD__` is unchanged.
   - `-fexcess-precision=16` stays the error `'-fexcess-precision=16' is
     not supported by kiln`.
-  - clang's `overriding '<a>' option with '<b>'` warnings are not given.
+  - The `overriding '<a>' option with '<b>'` warnings are listed above.
   The command line's options reach sema (`ParseOptions::fp`) for the
   pragmas' precise checks: under `-ffast-math`, `#pragma STDC
   FENV_ACCESS ON` is an error, as in clang.

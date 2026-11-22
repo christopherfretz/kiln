@@ -179,13 +179,8 @@ impl Sema<'_, '_> {
     /// constant expression is in.
     fn constraint_scope(&self) -> DeclId {
         use crate::templ::stack::FrameKind;
-        let frame = self
-            .inst
-            .stack
-            .frames
-            .iter()
-            .rev()
-            .find(|f| !matches!(f.kind, FrameKind::ConstraintSubstitution));
+        let frame =
+            self.inst.stack.frames.iter().rev().find(|f| !f.kind.is_constraint_substitution());
         match frame {
             Some(f) if matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck) => {
                 self.ast.decls.get(f.entity).ctx().unwrap_or_else(|| self.access_start())

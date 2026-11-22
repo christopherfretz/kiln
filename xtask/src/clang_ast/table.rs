@@ -215,6 +215,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("LikelyAttr", Keep),
     ("UnlikelyAttr", Keep),
     ("FallThroughAttr", Keep),
+    // `[[clang::musttail]]` and `[[clang::nomerge]]` (WP-1816).
+    ("MustTailAttr", Keep),
+    ("NoMergeAttr", Keep),
     // Loop-hint pragmas (WP-449): the value, if any.
     ("LoopHintAttr", Keep),
     ("CXXTryStmt", Keep),
@@ -489,7 +492,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
         | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" | "LikelyAttr"
-        | "UnlikelyAttr" | "FallThroughAttr" => &[],
+        | "UnlikelyAttr" | "FallThroughAttr" | "MustTailAttr" | "NoMergeAttr" => &[],
         "LoopHintAttr" => &["implicit"],
         "LabelStmt" => &["name", "declId"],
         "GotoStmt" => &["targetLabelDeclId"],
@@ -639,6 +642,9 @@ pub const M2_KINDS: &[&str] = &[
     "LikelyAttr",
     "UnlikelyAttr",
     "FallThroughAttr",
+    // `[[clang::musttail]]`, `[[clang::nomerge]]` (WP-1816).
+    "MustTailAttr",
+    "NoMergeAttr",
     // Loop-hint pragmas (WP-449).
     "LoopHintAttr",
     // Predefined identifiers (WP-140).

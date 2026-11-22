@@ -541,6 +541,12 @@ impl Parser<'_, '_> {
     /// specifiers, no GNU attributes) into `out` (clang
     /// `MaybeParseCXX11Attributes`).
     pub(crate) fn parse_cxx11_attr_seq(&mut self, out: &mut Vec<AttrId>) {
+        let held = self.s.hold_unknown_attrs();
+        self.parse_cxx11_attr_seq_held(out);
+        self.s.release_unknown_attrs(held);
+    }
+
+    fn parse_cxx11_attr_seq_held(&mut self, out: &mut Vec<AttrId>) {
         while self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
             if self.at_kw(Kw::Alignas) {
                 self.parse_alignas(out);
@@ -604,6 +610,12 @@ impl Parser<'_, '_> {
     /// Parses a sequence of attribute-specifiers (`[[...]]`, `alignas(...)`,
     /// `__attribute__((...))`) into `out`.
     pub(crate) fn parse_attributes(&mut self, out: &mut Vec<AttrId>) {
+        let held = self.s.hold_unknown_attrs();
+        self.parse_attributes_held(out);
+        self.s.release_unknown_attrs(held);
+    }
+
+    fn parse_attributes_held(&mut self, out: &mut Vec<AttrId>) {
         loop {
             if self.at_cxx11_attr() {
                 self.parse_cxx11_attributes(out);
@@ -790,7 +802,9 @@ impl Parser<'_, '_> {
 
     /// `[[ attribute-list ]]` ([dcl.attr.grammar]).
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+        let held = self.s.hold_unknown_attrs();
         self.parse_cxx11_attributes_in(out, false);
+        self.s.release_unknown_attrs(held);
     }
 
     /// [`Self::parse_cxx11_attributes`]; `on_asm`: the specifier
@@ -846,6 +860,7 @@ impl Parser<'_, '_> {
         // An annotation-list ([dcl.attr.grammar]/1, P3394) takes neither
         // a using-prefix nor attributes: `[[=1, nodiscard]]` is ill-formed.
         let mut mix = AnnotMix { attr: default_scope.is_some(), ..AnnotMix::default() };
+        let mut no_name = false;
         loop {
             if self.at(Punct::RSquare) || self.at_eof() {
                 break;
@@ -869,9 +884,9 @@ impl Parser<'_, '_> {
                 mix.reported = true;
                 self.error_here(DiagId::parse_annotation_mixed);
             }
+            // clang: no attribute-token ends the list, at "expected ']'".
             let Some(mut name) = self.cxx11_attr_ident() else {
-                self.error_here(DiagId::parse_expected_unqualified_id);
-                self.skip_until(&[Punct::RSquare], false, false);
+                no_name = true;
                 break;
             };
             let mut loc = self.bump().span.lo;
@@ -880,8 +895,9 @@ impl Parser<'_, '_> {
             if self.at(Punct::ColonColon) {
                 self.bump();
                 let Some(n) = self.cxx11_attr_ident() else {
-                    self.error_here(DiagId::parse_expected_unqualified_id);
-                    self.skip_until(&[Punct::RSquare], false, false);
+                    let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+                    self.emit(d);
+                    self.skip_until(&[Punct::RSquare], true, false);
                     break;
                 };
                 scope = Some(name);
@@ -998,7 +1014,15 @@ impl Parser<'_, '_> {
                 break;
             }
         }
-        if self.eat(Punct::RSquare).is_some() {
+        if no_name {
+            // clang `ExpectAndConsume(r_square)` twice, each failure
+            // followed by `SkipUntil(r_square)` (balanced, consuming).
+            for _ in 0..2 {
+                if self.expect(Punct::RSquare).is_none() {
+                    self.skip_until(&[Punct::RSquare], false, true);
+                }
+            }
+        } else if self.eat(Punct::RSquare).is_some() {
             // clang: a second `]` that is missing is "expected ']'", then
             // `SkipUntil(r_square)` (balanced, consuming).
             if self.expect(Punct::RSquare).is_none() {

@@ -1515,7 +1515,7 @@ impl Sema<'_, '_> {
                 d.args[at] = TemplateArg::pack(self.ast.types.arg_list(&[]));
             }
         }
-        if d.nttp_mismatch.is_some() {
+        if d.nttp_mismatch.is_some() || d.nttp_narrowed.is_some() {
             ok = false;
         }
         if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {

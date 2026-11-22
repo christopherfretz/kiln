@@ -2723,3 +2723,121 @@ fn march_modifiers_match_clang() {
         );
     }
 }
+
+/// The primary diagnostics of `src` (compiled from stdin with `args`), in
+/// emission order, as `line:col: severity`: the harness's `//@ diag:`
+/// matching is order-insensitive, so the order tests live here.
+fn primary_order(args: &[&str], src: &str) -> Vec<String> {
+    let mut all = vec!["-fsyntax-only", "-x", "c++"];
+    all.extend_from_slice(args);
+    all.push("-");
+    let o = kiln(&all, src);
+    o.stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("<stdin>:"))
+        .filter_map(|l| {
+            let mut it = l.splitn(4, ':');
+            let (line, col, sev) = (it.next()?, it.next()?, it.next()?.trim());
+            (sev == "error" || sev == "warning").then(|| format!("{line}:{col}: {sev}"))
+        })
+        .collect()
+}
+
+/// [dcl.fct.spec]/6 (now [dcl.inline]/6), [dcl.constexpr]/1,
+/// [basic.def.odr]/1, [basic.link]/11, [dcl.stc]/4: an invalid
+/// redeclaration after a definition gives the attribute merge's "attribute
+/// declaration must precede definition" warning before its own error, as
+/// clang merges the attributes first (functions, a friend in a class
+/// template, variables, static data members). Checked against clang 22
+/// and clang 19 (WP-1848, WP-1850).
+#[test]
+fn precede_definition_warning_before_redeclaration_errors() {
+    let src = "void f1() {}\n\
+               __attribute__((cold)) inline void f1();\n\
+               void f2() {}\n\
+               __attribute__((cold)) constexpr void f2();\n\
+               int v1 = 1;\n\
+               __attribute__((used)) int v1 = 2;\n\
+               int v2 = 1;\n\
+               __attribute__((used)) long v2;\n\
+               int v3 = 1;\n\
+               __attribute__((used)) thread_local int v3;\n\
+               struct C { static int s; static int t; };\n\
+               int C::s = 1;\n\
+               __attribute__((used)) int C::s = 2;\n\
+               int C::t = 1;\n\
+               __attribute__((used)) long C::t;\n\
+               void g() {}\n\
+               template <class T> struct S { friend __attribute__((cold)) inline void g(); };\n";
+    let want = [
+        "2:16: warning",
+        "2:35: error",
+        "4:16: warning",
+        "4:38: error",
+        "6:16: warning",
+        "6:27: error",
+        "8:16: warning",
+        "8:28: error",
+        "10:16: warning",
+        "10:40: error",
+        "10:40: error",
+        "13:16: warning",
+        "13:30: error",
+        "15:16: warning",
+        "15:31: error",
+        "17:53: warning",
+        "17:72: error",
+    ];
+    for compat in ["-fclang-compat=22", "-fclang-compat=19"] {
+        assert_eq!(primary_order(&[compat], src), want, "{compat}");
+    }
+}
+
+/// [dcl.attr.grammar]/5: "unknown attribute ignored" is issued when the
+/// declaration's attributes are processed, so after the syntax errors
+/// later in its attribute-specifier-seq, as clang 22 and clang 19 order
+/// them (WP-1854; the wording is pinned by
+/// tests/conformance/dcl.attr.grammar/attribute-list-missing-token.cpp).
+#[test]
+fn unknown_attribute_after_attribute_list_errors() {
+    let src = "[[qux(1, ][)]] int x;\n\
+               [[qux2]] [[quux(1, ][)]] int y;\n\
+               [[foo, 3 4]] int d;\n\
+               [[bar]] int e;\n";
+    let want = [
+        "1:11: error",
+        "1:3: warning",
+        "2:21: error",
+        "2:3: warning",
+        "2:12: warning",
+        "3:7: error",
+        "3:3: warning",
+        "4:3: warning",
+    ];
+    for compat in ["-fclang-compat=22", "-fclang-compat=19"] {
+        assert_eq!(primary_order(&[compat], src), want, "{compat}");
+    }
+}
+
+/// `-Wundef-prefix=<p>,...` shows its value as the warning's option, the
+/// prefixes of every such flag joined, as clang 22 and 19 do (WP-1816).
+#[test]
+fn undef_prefix_option_shows_its_value() {
+    let src = "#if FOO_X || BAR\n#endif\n";
+    let o = kiln(
+        &["-fsyntax-only", "-x", "c++", "-Wundef-prefix=FOO_,,BA", "-Wundef-prefix=Q", "-"],
+        src,
+    );
+    assert!(
+        o.stderr.contains(
+            "<stdin>:1:5: warning: 'FOO_X' is not defined, evaluates to 0 [-Wundef-prefix=FOO_,BA,Q]"
+        ),
+        "{}",
+        o.stderr
+    );
+    let o = kiln(
+        &["-fsyntax-only", "-x", "c++", "-Wundef-prefix=FOO_", "-Werror=undef-prefix", "-"],
+        src,
+    );
+    assert!(o.stderr.contains("[-Werror,-Wundef-prefix=FOO_]"), "{}", o.stderr);
+}

@@ -329,6 +329,14 @@ impl<'c> Ev<'c> {
         if live && self.cx.is_enabled(DiagId::pp_undef_identifier) {
             let name = self.cx.interner().as_str(s).to_owned();
             self.cx.emit(Diag::new(DiagId::pp_undef_identifier, span).arg(name));
+        } else if live && self.cx.is_enabled(DiagId::pp_undef_prefix) {
+            // clang: only while `-Wundef` is off, for a name with one of
+            // the `-Wundef-prefix=` prefixes (WP-1816).
+            let name = self.cx.interner().as_str(s);
+            if self.cx.undef_prefixes().iter().any(|p| name.starts_with(p.as_str())) {
+                let name = name.to_owned();
+                self.cx.emit(Diag::new(DiagId::pp_undef_prefix, span).arg(name));
+            }
         }
         Val { ident: Some(s), ..Val::signed(0).at(span) }
     }

@@ -1,0 +1,20 @@
+Dumping v1:
+VarDecl v1 'A<X>' callinit
+`-CXXConstructExpr 'A<X>' 'void () noexcept'
+
+Dumping v2:
+VarDecl v2 'A<N::X>':'A<X>' callinit
+`-CXXConstructExpr 'A<N::X>':'A<X>' 'void () noexcept'
+
+Dumping v3:
+VarDecl v3 'B<X>' callinit
+`-CXXConstructExpr 'B<X>' 'void () noexcept'
+
+Dumping v4:
+VarDecl v4 'B<N::X>':'B<X>' callinit
+`-CXXConstructExpr 'B<N::X>':'B<X>' 'void () noexcept'
+
+Dumping v5:
+VarDecl v5 'C<X>':'C<N::X>' callinit
+`-CXXConstructExpr 'C<X>':'C<N::X>' 'void () noexcept'
+

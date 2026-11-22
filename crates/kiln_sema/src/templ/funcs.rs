@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
     /// with `args`) prints in an instantiation note.
     pub(crate) fn function_spec_name(&self, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
         if self.kind_of(spec) != DeclKind::CXXConversion {
-            return self.spec_decl_name(tmpl, args);
+            return self.fn_spec_decl_name(tmpl, args);
         }
         // A conversion function template specialization is named by its
         // substituted target type, then its arguments (`operator int<int>`).
@@ -758,7 +758,7 @@ impl Sema<'_, '_> {
     /// specialization by its own name (`X::operator char *<char>`, clang),
     /// any other by its template and arguments.
     fn spec_name_noted(&self, conv: bool, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
-        if conv { self.qualified_decl_name(spec) } else { self.spec_decl_name(tmpl, args) }
+        if conv { self.qualified_decl_name(spec) } else { self.fn_spec_decl_name(tmpl, args) }
     }
 
     /// [`Self::match_function_spec_in`]; `notes` false lists no
@@ -1117,7 +1117,7 @@ impl Sema<'_, '_> {
     fn act_on_explicit_function_inst(&mut self, m: SpecMatch, declaration: bool, name_loc: Loc) {
         let s = m.spec;
         let Some((i, info)) = self.ast.spec_info(s).map(|(i, x)| (i, *x)) else { return };
-        let name = self.spec_decl_name(info.template, info.print_args);
+        let name = self.fn_spec_decl_name(info.template, info.print_args);
         match (info.kind, declaration) {
             (
                 SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,

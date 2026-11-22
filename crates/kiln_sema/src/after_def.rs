@@ -58,6 +58,25 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Holds the diagnostics `stash` of an invalid redeclaration whose
+    /// attributes are still checked after the definition (`held`): they
+    /// are emitted by [`Sema::release_after_def_held`], after the
+    /// attribute checks, as clang merges the attributes before it reports
+    /// them (WP-1848). Otherwise they are emitted now.
+    pub(crate) fn hold_after_def(&mut self, stash: Vec<kiln_diag::Diag>, held: bool) {
+        if held {
+            self.after_def_held.extend(stash);
+        } else {
+            self.release(stash, Vec::new());
+        }
+    }
+
+    /// Emits the diagnostics [`Sema::hold_after_def`] held, in order.
+    pub(crate) fn release_after_def_held(&mut self) {
+        let held = std::mem::take(&mut self.after_def_held);
+        self.release(held, Vec::new());
+    }
+
     /// The declaration whose attributes declaration `d`'s are merged with
     /// (clang's `Old` in `mergeDeclAttributes`): its previous declaration,
     /// or for a redeclaration an error left out of the chain, the one it

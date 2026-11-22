@@ -910,6 +910,17 @@ pub struct Sema<'a, 'sm> {
     /// merges (a `static` function after a non-static one). Set by the
     /// declaration action, cleared when the declarator is done.
     pub(crate) after_def_prev: Option<(DeclId, Option<DeclId>)>,
+    /// The errors of such a redeclaration (the inline-after-definition,
+    /// constexpr-mismatch, redefinition and type-conflict errors), held
+    /// until its attributes are checked: clang merges the attributes
+    /// first, so their "must precede definition" warning comes before
+    /// the errors (`Sema::release_after_def_held`, WP-1848).
+    pub(crate) after_def_held: Vec<Diag>,
+    /// The "unknown attribute ignored" warnings of the attribute-specifier
+    /// being parsed, while one is: clang issues them when the
+    /// declaration's attributes are processed, after the syntax errors
+    /// later in the list (`Sema::hold_unknown_attrs`, WP-1854).
+    pub(crate) unknown_attr_held: Option<Vec<Diag>>,
     /// Function types whose Swift parameter ABIs wait for the
     /// declaration's calling convention (`swift_abi.rs`, WP-1745).
     pub(crate) pending_param_abis: Vec<swift_abi::PendingParamAbis>,
@@ -1718,6 +1729,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_field: false,
             declarator_distant_exc: false,
             after_def_prev: None,
+            after_def_held: Vec::new(),
+            unknown_attr_held: None,
             pending_param_abis: Vec::new(),
             this_watch: class::ThisWatch::Off,
             pending_alias_vla: None,

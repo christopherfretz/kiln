@@ -320,6 +320,21 @@ impl Sema<'_, '_> {
         s
     }
 
+    /// [`Sema::spec_decl_name`] of a function template specialization:
+    /// clang's `FunctionDecl::getNameForDiagnostic` prints the list
+    /// without the template parameter list, so every value argument
+    /// carries its type (`'f<2UL>'`, `'g<(short)3>'`;
+    /// `shouldIncludeTypeForArgument` with no list, spec/ast.md §9.3). A
+    /// variable template specialization keeps [`Sema::spec_decl_name`]
+    /// (`'v<2>'`).
+    pub(crate) fn fn_spec_decl_name(&self, tmpl: DeclId, args: ArgListId) -> String {
+        let mut s = self.qualified_decl_name(tmpl);
+        let names = crate::names::sema_names(self).typed_args_of(tmpl);
+        let canon = self.ast.types.canonical_args(args);
+        kiln_ast::types::write_arg_list_scoped_of(&self.ast.types, &names, tmpl, canon, &mut s);
+        s
+    }
+
     /// [`kiln_ast::Ast::is_member_spec_declaration`] ([temp.expl.spec]/14).
     pub(crate) fn is_member_spec_declaration(&self, v: DeclId) -> bool {
         self.ast.is_member_spec_declaration(v)

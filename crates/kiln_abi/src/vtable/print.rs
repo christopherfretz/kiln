@@ -9,90 +9,30 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use kiln_ast::decl::DefinitionBits;
 use kiln_ast::dump::AstNames;
-use kiln_ast::types::{PrintOptions, RefQual, TypeView, write_declarator, write_type};
-use kiln_ast::{Ast, DeclId, QualType};
+use kiln_ast::{Ast, DeclId};
 
 use super::builder::Built;
-use super::classes::{Classes, is_deleted, is_dtor, is_pure, parent};
+use super::classes::{Classes, is_deleted, is_dtor, is_pure};
 use kiln_ast::class::{Thunk, VTableComponent};
 
 /// clang `NamedDecl::printQualifiedName`.
 pub(crate) fn qualified_name(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
-    AstNames::new(ast).write_qualified_name(d, &mut s);
+    names(ast).write_qualified_spec_name(d, &mut s);
     s
 }
 
-/// The function type of `m` with its sugar (the declared type, top-level
-/// sugar removed).
-fn sugared_proto(ast: &Ast, m: DeclId) -> Option<&kiln_ast::types::FuncProto> {
-    let q = ast.decls.get(m).ty()?;
-    let q = ast.types.desugar_top(q);
-    ast.types.proto_of(q.ty()).or_else(|| ast.types.proto(q))
+/// clang `PredefinedExpr::ComputeName(PrettyFunctionNoVirtual, m)`:
+/// `int A<int>::f(T) const [T = int]`.
+pub fn pretty_function(ast: &Ast, m: DeclId) -> String {
+    kiln_ast::dump::pretty_function(&names(ast), m, false)
 }
 
-/// clang `PredefinedExpr::ComputeName(PrettyFunctionNoVirtual, m)`:
-/// `int A::f(int) const`. Gap: the ` [T = int]` suffix of members of
-/// class template specializations is not printed.
-pub fn pretty_function(ast: &Ast, m: DeclId) -> String {
-    let mut proto = qualified_name(ast, m);
-    proto.push('(');
-    let fp = sugared_proto(ast, m);
-    let params: Vec<QualType> = match ast.decls.function(m) {
-        Some(f) if f.params != kiln_ast::ListId::EMPTY => {
-            ast.lists.iter::<DeclId>(f.params).filter_map(|p| ast.decls.get(p).ty()).collect()
-        }
-        _ => fp.map(|p| ast.types.params(p).to_vec()).unwrap_or_default(),
-    };
-    for (i, &q) in params.iter().enumerate() {
-        if i > 0 {
-            proto.push_str(", ");
-        }
-        write_type(&ast.types, ast, q, PrintOptions::SUGARED, &mut proto);
-    }
-    if fp.is_some_and(kiln_ast::types::FuncProto::variadic) {
-        if !params.is_empty() {
-            proto.push_str(", ");
-        }
-        proto.push_str("...");
-    }
-    proto.push(')');
-    if let Some(p) = fp {
-        let info = p.info();
-        if info.this_quals().is_const() {
-            proto.push_str(" const");
-        }
-        if info.this_quals().is_volatile() {
-            proto.push_str(" volatile");
-        }
-        match info.ref_qual() {
-            RefQual::LValue => proto.push_str(" &"),
-            RefQual::RValue => proto.push_str(" &&"),
-            RefQual::None => {}
-        }
-    }
-    let kind = ast.decls.get(m).kind();
-    let lambda =
-        ast.decls.record(parent(ast, m)).is_some_and(|r| r.defn.contains(DefinitionBits::LAMBDA));
-    if lambda {
-        return format!("auto {proto}");
-    }
-    if matches!(
-        kind,
-        kiln_ast::decl::DeclKind::CXXConstructor | kiln_ast::decl::DeclKind::CXXDestructor
-    ) {
-        return proto;
-    }
-    let Some(p) = fp else { return proto };
-    let mut ret = p.ret();
-    if let TypeView::Decltype { underlying, .. } = ast.types.view(ret.ty()) {
-        ret = underlying;
-    }
-    let mut out = String::new();
-    write_declarator(&ast.types, ast, ret, PrintOptions::SUGARED, &proto, &mut out);
-    out
+/// The names of the dump: class template specializations in a scope
+/// print their (canonical, scoped) arguments, `O<n::X>::I`.
+fn names(ast: &Ast) -> AstNames<'_> {
+    AstNames { scoped_spec_args: true, ..AstNames::new(ast) }
 }
 
 fn write_adjustment(out: &mut String, label: &str, adj: (i64, i64), virt: &str) {

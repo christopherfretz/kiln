@@ -1,0 +1,22 @@
+Dumping f:
+FunctionDecl f 'int (int)'
+|-ParmVarDecl used x 'int'
+`-CompoundStmt
+  |-AttributedStmt
+  | |-NoMergeAttr
+  | `-CallExpr 'int'
+  |   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  |   | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  `-AttributedStmt
+    |-MustTailAttr
+    `-ReturnStmt
+      `-CallExpr 'int'
+        |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+        `-BinaryOperator 'int' '+'
+          |-ImplicitCastExpr 'int' <LValueToRValue>
+          | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+          `-IntegerLiteral 'int' 1
+

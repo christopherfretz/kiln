@@ -45,6 +45,8 @@ pub struct DiagEngine<'sm> {
     /// `-fclang-compat=`: ids clang 22 reworded print clang 19's text
     /// below 22 ([`DiagId::for_compat`]).
     clang_compat: u32,
+    /// [`DiagOptions::undef_prefixes`].
+    undef_prefixes: Vec<String>,
     state: Mutex<State<'sm>>,
     /// `#pragma clang diagnostic` state ([`crate::pragma`]).
     pragmas: RwLock<Pragmas>,
@@ -103,6 +105,7 @@ impl<'sm> DiagEngine<'sm> {
             policy,
             error_limit: opts.error_limit,
             clang_compat: opts.clang_compat,
+            undef_prefixes: opts.undef_prefixes.clone(),
             state: Mutex::new(State { sink: Box::new(sink), seen: FxHashSet::default() }),
             pragmas: RwLock::new(Pragmas::new()),
             has_pragmas: AtomicBool::new(false),
@@ -223,6 +226,11 @@ impl<'sm> DiagEngine<'sm> {
     /// unless `-Wsystem-headers` (clang `getSuppressSystemWarnings`).
     pub fn suppress_system_warnings(&self) -> bool {
         self.policy.suppress_system
+    }
+
+    /// The `-Wundef-prefix=` prefixes ([`DiagOptions::undef_prefixes`]).
+    pub fn undef_prefixes(&self) -> &[String] {
+        &self.undef_prefixes
     }
 
     /// Whether `id` located at `loc` would be emitted: enabled
@@ -499,7 +507,7 @@ impl<'sm> DiagEngine<'sm> {
                 notes: d.notes.iter().map(Diagnostic::from_note).collect(),
                 labels: d.labels,
                 fixits: d.fixits,
-                option: option_suffix(id, level),
+                option: option_suffix(id, level, &self.undef_prefixes),
             }
         };
         match record.level {
@@ -536,12 +544,15 @@ impl<'sm> DiagEngine<'sm> {
 
 /// clang's `printDiagnosticOptions`: what goes between the brackets after
 /// the message.
-fn option_suffix(id: DiagId, level: Level) -> Option<String> {
+/// `-Wundef-prefix`'s shows the option's value (clang `AddFlagValue`).
+fn option_suffix(id: DiagId, level: Level, undef_prefixes: &[String]) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if level == Level::Error && id.is_warning_or_extension() && !id.is_default_error() {
         parts.push("-Werror".to_string());
     }
-    if let Some(g) = id.display_group() {
+    if id == DiagId::pp_undef_prefix {
+        parts.push(format!("-Wundef-prefix={}", undef_prefixes.join(",")));
+    } else if let Some(g) = id.display_group() {
         let flag = if level == Level::Remark { "-R" } else { "-W" };
         parts.push(format!("{flag}{}", g.name()));
     }

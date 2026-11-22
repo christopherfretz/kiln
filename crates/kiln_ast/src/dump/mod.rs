@@ -21,6 +21,7 @@
 
 mod attrs;
 mod names;
+mod pretty;
 
 use std::fmt::Write as _;
 use std::io;
@@ -28,6 +29,7 @@ use std::io;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use names::AstNames;
+pub use pretty::pretty_function;
 
 use crate::Ast;
 use crate::attr::AttrKind;

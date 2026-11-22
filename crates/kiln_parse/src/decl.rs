@@ -5216,7 +5216,7 @@ impl Parser<'_, '_> {
                     self.skip_unsupported_declaration();
                     return decls;
                 }
-                if self.missing_fn_body_before_cxx11_attrs(ctx) {
+                if self.missing_fn_body(ctx) {
                     return decls;
                 }
             }
@@ -5370,17 +5370,40 @@ impl Parser<'_, '_> {
     }
 
     /// clang `ParseDeclGroup`: at namespace scope, a first function
-    /// declarator followed by neither a declaration's continuation nor a
-    /// function body, here a C++11 attribute-specifier-seq after its GNU
-    /// attributes (`void f() __attribute__((cold)) [[nodiscard]];`), is
-    /// reported as a missing body; the declaration is skipped through its
-    /// `;` and declares nothing (true).
-    fn missing_fn_body_before_cxx11_attrs(&mut self, ctx: DeclaratorContext) -> bool {
-        if ctx != DeclaratorContext::File || !(self.at_cxx11_attr() || self.at_kw(Kw::Alignas)) {
+    /// declarator followed by neither a declaration's continuation
+    /// (`isDeclarationAfterDeclarator`: `=`, `,`, `;`, an asm label, GNU
+    /// attributes, `(` in C++) nor a function body nor a decl-specifier
+    /// (or `namespace`) that starts a declaration after a missing `;`, is
+    /// reported as a missing body: a C++11 attribute-specifier-seq after
+    /// its GNU attributes (`void f() __attribute__((cold)) [[nodiscard]];`)
+    /// or an identifier (`void C::f(int) noexcept;` before C++11, where
+    /// `noexcept` is one). The declaration is skipped through its `;` and
+    /// declares nothing (true).
+    fn missing_fn_body(&mut self, ctx: DeclaratorContext) -> bool {
+        if ctx != DeclaratorContext::File {
+            return false;
+        }
+        let continues = match Self::punct_of(self.tok()) {
+            Some(Punct::Equal | Punct::Comma | Punct::Semi) => true,
+            Some(Punct::LParen) => !self.s.is_c(),
+            _ => matches!(self.kw(), Some(Kw::Asm | Kw::Attribute)),
+        };
+        let missing = self.at_cxx11_attr()
+            || self.at_kw(Kw::Alignas)
+            || !(continues
+                || self.at_function_definition_start()
+                || self.is_decl_spec_start()
+                || self.at_kw(Kw::Namespace));
+        if !missing {
             return false;
         }
         self.error_here(DiagId::parse_expected_fn_body);
-        self.skip_to_semi();
+        // clang's `SkipUntil(tok::semi)` consumes a `}` it starts at.
+        if self.at(Punct::RBrace) {
+            self.bump();
+        } else {
+            self.skip_to_semi();
+        }
         true
     }
 

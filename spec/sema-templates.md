@@ -5600,7 +5600,12 @@ substituted, with clang's `ConvertDeducedTemplateArgument` note
 does not have the same type as the corresponding template parameter
 ('unsigned long' vs 'int')"): `template<int i> f(A<i>)` against `A<3ul>`,
 `template<int i> g(V<i>)` (`template<auto> struct V`) against `V<'c'>`. An
-array bound deduces a value already of the parameter's type. Function
+array bound deduces a value of the parameter's type; one that type cannot
+represent is recorded (`DeducedArgs::nttp_narrowed`) and fails the same
+way, as clang's conversion of the `std::size_t` bound narrows: "non-type
+template argument evaluates to 300, which cannot be narrowed to type
+'unsigned char'" (`sema_cce_narrowing_value`; WP-1822,
+tests/conformance/temp.deduct.type/array-bound-narrowing-note.cpp). Function
 template partial ordering (§8, `fn_at_least_as_specialized`) applies the
 same rule, a synthesized argument of a placeholder-typed parameter having
 a unique type (the reference to `auto E` is typed as `auto` deduced as
@@ -7874,6 +7879,7 @@ follow. For an atom:
 | an atom whose substitution failed | "because substituted constraint expression is ill-formed: <diag>" |
 | a `requires` simple or compound requirement failed | "because 'E' would be invalid: <diag>" |
 | a type requirement failed | "because 'typename T::x' would be invalid: <diag>" |
+| either, by a hard error (no diagnostic captured) | "because 'E' would be invalid", at the requirement (a type requirement's `typename`; clang `note_*_unknown_substitution_error`; WP-1860) |
 | a `noexcept` requirement was not met | "because 'E' may throw an exception" |
 | a return-type constraint failed | "because type constraint 'C<int>' was not satisfied:" followed by the nested chain |
 | a nested requirement failed | "because 'B' evaluated to false" (or the nested chain) |
@@ -8411,7 +8417,7 @@ pub struct InstFrame {          // 20 B
 | `ConstraintSubstitution` | SFINAE | while substituting template arguments into constraint expression here |
 | `ConstraintNormalization` | inherit | while calculating associated constraint of template '%0' here |
 | `ParameterMappingSubstitution` | inherit | while substituting into concept arguments here; substitution failures not allowed in concept arguments |
-| `RequirementInstantiation` | SFINAE | in instantiation of requirement here |
+| `RequirementInstantiation` | SFINAE | in instantiation of requirement here (kiln `FrameKind::RequirementInstantiation`, at a simple, compound or type requirement; WP-1860) |
 | `NestedRequirementConstraintsCheck` | SFINAE | while checking the satisfaction of nested requirement requested here |
 | `BuildingDeductionGuides` | inherit | while building implicit deduction guide first needed here |
 | `LambdaSubstitution` | hard | while substituting into a lambda expression here (WP-163; see below) |

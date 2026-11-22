@@ -2308,9 +2308,11 @@ impl Parser<'_, '_> {
             // type-requirement ([expr.prim.req.type]): `typename
             // nested-name-specifier? type-name ;`; an unqualified
             // type-name (`typename X<T>;`) is a plain type.
+            // The requirement is at its `typename` (clang
+            // `TypeRequirement`'s type location begins there).
+            let at = self.loc();
             if self.unqualified_type_requirement() {
                 self.bump();
-                let at = self.loc();
                 // clang keeps the keyword as `ElaboratedType 'typename X'`.
                 let t = self.parse_type_id()?;
                 let t = if self.s.is_error_type(t) {
@@ -2320,7 +2322,6 @@ impl Parser<'_, '_> {
                 };
                 Requirement::Type(t, at)
             } else {
-                let at = self.tok_at(self.pos() + 1).span.lo;
                 Requirement::Type(self.parse_typename_specifier()?, at)
             }
         } else if self.at_kw(Kw::Requires) {

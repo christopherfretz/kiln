@@ -1379,10 +1379,11 @@ Printing:
   `TypePrinter::printTag`): an explicit specialization or explicit
   instantiation of a class template prints the arguments written on it,
   unscoped as written, in place of `specialization_args` (not under
-  canonical arguments). The diagnostic names (`DiagNames`) supply them
-  (WP-1158; spec/codegen.md "Sanitizers"); the AST dump's desugared
-  string does not (a dump difference: `'A<X>':'A<N::X>'` where clang
-  prints `'A<X>'`).
+  canonical arguments). The diagnostic names (`DiagNames`, WP-1158;
+  spec/codegen.md "Sanitizers") and the AST names (`AstNames`, the
+  dump's desugared string: `'A<N::X>':'A<X>'`, WP-1816) supply them;
+  debug-information names do not (clang names the `DICompositeType`
+  with the converted arguments).
 - Nesting deeper than 400 prints `...` (balanced) instead of recursing.
 - `ExtQual` prints as clang's `Qualifiers::print` in C++: after the cv
   qualifiers, `__attribute__((address_space(N)))` for a target space and

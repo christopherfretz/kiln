@@ -158,6 +158,7 @@ note_requirement_may_throw = Note (2) "{0:and|because} '{1}' may throw an except
 note_requirement_type_constraint = Note (2) "{0:and|because} '{1}' evaluated to false";
 note_requirement_type_constraint_19 = Note (2) "{0:and|because} type constraint '{1}' was not satisfied:";
 note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be invalid: {2}";
+note_requirement_would_be_invalid_unknown = Note (2) "{0:and|because} '{1}' would be invalid";
 note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
 note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";
 note_sme_use_preserves_za = Note (0) "add '__arm_preserves(\"za\")' to the callee if it preserves ZA";
@@ -192,6 +193,7 @@ note_template_parameter_pack_here = Note (2) "previous {0:template type|non-type
 note_template_parameter_pack_non_pack = Note (2) "{0:template type|non-type template|template template} parameter{1:| pack} does not match {0:template type|non-type template|template template} parameter{1: pack|} in template argument";
 note_template_prev_declaration = Note (1) "previous template {0:declaration|template parameter} is here";
 note_template_recursion_depth = Note (0) "use -ftemplate-depth=N to increase recursive template instantiation depth";
+note_template_requirement_instantiation_here = Note (0) "in instantiation of requirement here";
 note_template_static_data_member_def_here = Note (1) "in instantiation of static data member '{0}' requested here";
 note_template_type_alias_instantiation_here = Note (1) "in instantiation of template type alias '{0}' requested here";
 note_template_unnamed_type_here = Note (0) "unnamed type used in template argument was declared here";
