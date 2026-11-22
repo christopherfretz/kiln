@@ -445,6 +445,7 @@ impl CodegenJob<'_> {
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
             written_refs: a.dump_written_refs,
+            decl_extents: a.decl_extents,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
@@ -562,6 +563,9 @@ impl CodegenJob<'_> {
         out.dumps.push_str(&tu.cfg_dump);
         if a.dump_written_refs {
             out.dumps.push_str(&tu.ast.written_refs.dump(&tu.ast, sm, main_id));
+        }
+        if a.dump_decl_extents {
+            out.dumps.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
         }
         if a.dump_record_layouts {
             out.dumps.push_str(&kiln_abi::dump_all_record_layouts(&tu.ast, &target, Some(sm)));

@@ -21,6 +21,7 @@
 //! | `symbols` | state (shared) | the `Arc<Interner>`: written once per snapshot through sharing, so the restored AST shares the interner with whatever else in the same snapshot holds it |
 //! | `inst` | state | the instantiation meter, as data |
 //! | `written_refs` | transient | not written; read back empty and off (spec/ast.md §18.5: PCH carriage is stage 5) |
+//! | `decl_extents` | state | as data, then checked against the decl arena (spec/ast.md §19.6); the consumer sets recording from its own options, which the PCH identity makes the producer's |
 
 use std::sync::Arc;
 
@@ -70,6 +71,7 @@ impl Ast {
         if self.tu.index() as usize > self.decls.len() {
             return Err("translation unit declaration out of range");
         }
+        self.decl_extents.check_restored(self.decls.len())?;
         Ok(())
     }
 
@@ -173,6 +175,7 @@ impl Snap for Ast {
             freestanding,
             contract_sites,
             written_refs: _,
+            decl_extents,
             symbols,
             inst,
         } = self;
@@ -201,6 +204,7 @@ impl Snap for Ast {
         lang_c.put(w);
         freestanding.put(w);
         contract_sites.put(w);
+        decl_extents.put(w);
         inst.put(w);
     }
 
@@ -230,6 +234,7 @@ impl Snap for Ast {
         let lang_c = timed(r, "Ast.lang_c")?;
         let freestanding = timed(r, "Ast.freestanding")?;
         let contract_sites = timed(r, "Ast.contract_sites")?;
+        let decl_extents: crate::decl_extents::DeclExtents = timed(r, "Ast.decl_extents")?;
         let inst = timed(r, "Ast.inst")?;
         let ast = Ast {
             types,
@@ -257,6 +262,7 @@ impl Snap for Ast {
             freestanding,
             contract_sites,
             written_refs: crate::written_refs::WrittenRefs::default(),
+            decl_extents,
             symbols,
             inst,
         };
@@ -292,6 +298,7 @@ impl Snap for Ast {
         .field::<bool>("lang_c")
         .field::<bool>("freestanding")
         .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
+        .field::<crate::decl_extents::DeclExtents>("decl_extents")
         .field::<InstantiationMeter>("inst")
         .finish();
     fn schema(s: &mut Schema) {
@@ -322,6 +329,7 @@ impl Snap for Ast {
             .field::<bool>("lang_c")
             .field::<bool>("freestanding")
             .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
+            .field::<crate::decl_extents::DeclExtents>("decl_extents")
             .field::<InstantiationMeter>("inst");
         if s.register::<Self>(d) {
             Arc::<Interner>::schema(s);
@@ -348,6 +356,7 @@ impl Snap for Ast {
             ContractSemantic::schema(s);
             bool::schema(s);
             ColdMap::<StmtId, ContractSite>::schema(s);
+            crate::decl_extents::DeclExtents::schema(s);
             InstantiationMeter::schema(s);
         }
     }

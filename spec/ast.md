@@ -1602,7 +1602,8 @@ impls and their classification tables; every other table derives `Snap`.
   argument lists and expression profiles; the constant pools; the string
   bytes and entries; names, lookup sets, redeclarations, templates,
   reflections, modules, contract sites, the instantiation meter, the
-  journals; the shared `Arc<Interner>`. Hash maps are written as entries.
+  journals; the declaration-extent table with its on bit (§19.6); the
+  shared `Arc<Interner>`. Hash maps are written as entries.
   **Every cache is state**: record layouts, class virtuals, vtable
   layouts and comparison categories are recomputable, but `-fdump-ast`
   prints cached layouts only and the categories record a check already
@@ -1917,3 +1918,206 @@ nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
 `tests/conformance/written_refs/` (one per stage-1 and stage-2 role
 family, the worked example, macros, tentative parses, overload
 patching, dependent names, stage-2 names under the stage-1 rules).
+
+## 19. The declaration-extent table (WP-2090)
+
+An opt-in side table of the source extents of every declaration as
+written. It serves tooling clients that rewrite source: remove, move,
+rename or wrap a declaration, insert before or after one, or replace a
+body, without re-lexing. `kiln_ast::decl_extents`; the field
+`Ast::decl_extents`, read through `Ast::decl_extent(d)`. Parser helpers:
+`kiln_parse::extents`.
+
+### 19.1 Contract
+
+- **Opt-in** (decided by measurement, §19.8: always on would cost a
+  tenth of the AST's memory on `<bits/stdc++.h>` and a third on a TU of
+  written declarations only, 48-51 bytes per row).
+  `DeclExtents::is_on()` is false unless `ParseOptions::decl_extents`
+  is set; the driver sets it for `-fkiln-decl-extents` and for
+  `-fkiln-dump-decl-extents` (spec/driver.md).
+  Off, every recording site costs one predictable branch and allocates
+  nothing; the table is empty and `Ast::memory()` has no row for it.
+  Producing the pending first token (§19.3) is a `Loc` move either way.
+- **One row per declaration the parser parsed**, keyed by its `DeclId`,
+  written where the parser consumed its tokens (never from a sema action,
+  which also runs for implicit declarations and instantiations). A
+  redeclaration is its own declaration and has its own row; so does each
+  reopening of a namespace. The rows of a template and of its pattern
+  (`FunctionTemplate`/`Function`, `ClassTemplate`/`CXXRecord`,
+  `VarTemplate`/`Var`, `TypeAliasTemplate`/`TypeAlias`) are one shared
+  row.
+- **No row**: implicit declarations (special members, implicit
+  deduction guides, builtins, injected class names, a lambda's closure
+  type and its members), instantiations and their members (a client
+  maps a specialization to its pattern with `template_info` and reads
+  the pattern's row), the parameter a `(void)` clause makes and drops,
+  and the declarations an error recovery skipped.
+  An explicit specialization and an explicit instantiation are written
+  declarations: the row is the specialization's, its range that of the
+  declaration that names it.
+- **Read access** (all on `DeclExtents`): `is_on()`, `get(d)`,
+  `iter()` (every declaration with a row in `DeclId` order, a shared row
+  once per declaration), `len()` (rows, a shared row once),
+  `dump(ast, sm, main)` (§19.7). Helpers on the row: `semi()` (the `;`
+  as a span), `qualified_name()` (`[qual, name.hi)`), `prefix()` (the
+  decl-specifier part shared by a declarator group).
+- **Writes** go through `set(d, e)`, `entry(d)`, `share(alias, d)` and
+  `get_mut(d)` (no-ops when off), `forget(d)` (a declaration the
+  parse made and dropped) and `mark()`/`truncate(mark)` (§19.6).
+
+### 19.2 The row (44 bytes, a `size_of` unit test)
+
+Every `Span` is `[start of its first token, end of its last token)` in
+kiln token locations (§19.6). An absent part is `Span::INVALID` /
+`Loc::INVALID`.
+
+| field | type | meaning |
+|---|---|---|
+| `full` | `Span` (8) | the whole declaration, from its first token (§19.3) to its last; shared by every entity one declaration declares |
+| `own` | `Span` (8) | the part that is this entity's alone: a declarator's init-declarator (declarator, initializer, bit-field width, pure-specifier, function body, `= default`/`= delete`); a tag's class-specifier, enum-specifier or elaborated-type-specifier when a decl-specifier-seq declares it; a using-declarator; a friend-type-specifier of a list; a parameter's declarator (empty, at its end, when abstract); `full` for everything else |
+| `name` | `Span` (8) | the unqualified-id of the declarator-id or the declared name: `f`, `operator+`, `operator()`, `operator new[]`, `~T`, `operator int*` (a conversion-function-id with its type), `operator""_x`, `S<int>` (a specialization's template-id with its arguments), a namespace's own identifier; a using-directive's nominated namespace and a using-declaration's member name; invalid for an unnamed declaration |
+| `qual` | `Loc` (4) | the start of the nested-name-specifier before `name` (a leading `::` included; for a nested namespace definition, §19.4); invalid when unqualified |
+| `body` | `Span` (8) | a function body with its ctor-initializer and a function-try-block's handlers; the braces of a class, enumeration, namespace, linkage specification, `export` block or consteval block; `= default`, `= delete` (with its reason) or `= 0` |
+| `specs_end` | `Loc` (4) | the end of the decl-specifier-seq (§19.5); invalid when there is none (a constructor, a namespace) |
+| `end` | `DeclEnd` (1) | the last token: `Semi` (`;`, `semi()` gives its span), `Brace` (the `}` that ends the body, `full.hi == body.hi`) or `Other` (§19.3) |
+
+Three padding bytes remain. 44 bytes for the row plus 4 bytes of index
+per declaration up to the last one with a row.
+
+### 19.3 First and last tokens
+
+The first token is that of the outermost construct the declaration
+begins with: an attribute-specifier-seq (including a block declaration's
+statement attributes), the `template` of the first template head
+(explicit specialization heads `template<>` and the requires-clause after
+a head included), `extern "C"` of a braceless linkage specification,
+`export` of a braceless export declaration, `__extension__`, or else the
+first decl-specifier or the declarator. The parser notes the pending
+first token where a declaration begins (`ext_lead`); a prefix construct
+keeps it; the construct that makes the declaration takes it
+(`ext_begin`); a class body, a compound statement and a template
+parameter list's nested declarations set it aside and restore it, so a
+lambda or a class in a template head's default argument never takes the
+outer one. A braceless `extern "C"` or `export` has its own row too, of
+the same `full` as the declaration it contains.
+
+The last token is the `;` of a simple declaration, member declaration,
+alias, using-, static_assert, concept, namespace alias or
+explicit-instantiation declaration, or the `}` of a function body (the
+last handler's, for a function-try-block), a namespace, a braced linkage
+specification, an `export` block or a consteval block. A class or
+enumeration definition ends at the `;` of its declaration; its `own`
+ends at its `}`. `Other`: parameters and template parameters (before the
+`,`, `)` or `>`), enumerators (before the `,` or `}`), condition
+declarations, access specifiers (`public:`), and a declaration an error
+cut short. The optional `;` after an in-class member function definition
+is not part of it.
+
+### 19.4 Namespaces
+
+Each `namespace N { ... }` is one row of the namespace declaration it
+opens (a reopening is a new declaration): `full` from `namespace` (or
+`inline`, or an attribute) to the `}`, `body` the braces, `name` the
+identifier. An anonymous namespace has no `name`. `namespace a::b::c {`
+opens three namespaces with one brace pair: each gets a row with the same
+`full` and `body`; its `name` is its own identifier, and `qual` of `b`
+and `c` is the start of `a` (so `qualified_name()` of `c` is `a::b::c`).
+An inline component (`a::inline b`) is the same. A namespace alias is
+one row from `namespace` to `;` with `name` the alias.
+
+### 19.5 Declarator groups
+
+`int a, *b = 0;` declares two variables that share `full` (`int a, *b =
+0;`) and `specs_end` (after `int`; `prefix()` is `int`). Each `own` is its
+init-declarator (`a`, `*b = 0`) and each `name` its identifier. A
+class or enum defined in the group's decl-specifier-seq (`struct S {}
+s, *p;`) has its own row first: `full` the declaration, `own` the
+class-specifier. A structured binding declaration has the group row and
+each binding a row whose `own` and `name` are its identifier. Fields,
+bit-fields and member declarator lists are the same; a friend function
+declaration gives the same row to the `Friend` and to the function it
+declares.
+
+### 19.6 Locations, speculation, PCH, modules
+
+- **Raw `Loc`s.** Every bound is the location the lexer gave the token,
+  so either end may lie in a macro expansion (`DECL(x)` gives a `full`
+  starting in the macro body) and the two ends may be in different
+  expansions; nothing is mapped to file ranges. A client maps them with
+  the source manager (`spelling_loc`, `expansion_loc`) as diagnostics
+  do. A `hi` is `lo + length` of the last token in its own location
+  space.
+- **Speculation.** The parser never re-parses consumed tokens (§18.5):
+  a tentative scan records nothing, and late-parsed member bodies,
+  default arguments and member initializers are captured tokens whose
+  span is recorded when they are captured. `mark()`/`truncate(mark)`
+  (dropping the later rows and their aliases) are there for any rollback
+  and unit-tested.
+- **PCH.** The table is written into snapshots (§17; FORMAT_VERSION
+  129), with its on bit; the consumer then sets that bit from its own
+  options. `-fkiln-decl-extents` is part of the PCH identity (a producer
+  and a consumer must agree); `-fkiln-dump-decl-extents` is not, and
+  makes the producer take two passes.
+- **Module images** (spec/modules.md §11.11; IMAGE_VERSION 62). A
+  module unit parsed with the table on carries a row per record that
+  has one and per parameter of a function record, located in the
+  image's location space; an importer whose table is on gives the
+  declarations it builds the same rows (a template sharing its
+  pattern's again). Declarations inside bodies are not carried; an
+  extent location the image cannot carry fails the record as any other
+  location does. A unit replayed from source records its rows by
+  parsing. The module cache key includes `decl-extents`.
+
+### 19.7 The dump
+
+`-fkiln-dump-decl-extents` prints, at the end of the TU, one line per
+declaration with a row in `DeclId` order:
+
+```
+<Kind> '<name>'  full=<L:C>-<L:C> <;|}|-> [own=..] [name=<L:C>-<L:C> '<text>'] [qual=<L:C>] [body=..] [specs-end=<L:C>] [exp=<L:C>]
+```
+
+Positions are spelling locations, prefixed with the file's base name and
+`:` outside the main file. `own=` is printed when it differs from
+`full`; `<text>` is the name's source text; `exp=` the expansion point of
+a `full` that starts in a macro. A lambda in a qualified name prints as
+`(lambda at <file>:L:C)` without directories. The harness directive
+`decl-extents: <golden>` (spec/harness.md) compares the dump with a
+golden file.
+
+### 19.8 Cost
+
+Measured with a release build on aarch64, `-fsyntax-only -std=c++26`
+(WP-2090; `-fkiln-memory-report` for the table and AST totals, peak RSS
+from the OS):
+
+- *`<bits/stdc++.h>`* (libstdc++ 14): 168,688 declarations in the arena,
+  89,071 with a row (the rest are implicit or instantiated). The table
+  holds 4,547,312 bytes live: 51 bytes per row (44 for the row, the
+  index's 4 per arena declaration spread over the rows), 27 per arena
+  declaration. Accounted memory grows from 42.9 MB to 47.4 MB (+10.6%),
+  peak RSS from about 91.6 MB to 96.0 MB (+4.7%); compile time is
+  within noise (0.9-1.3 s either way).
+- *A synthetic TU of 320,000 written declarations* (20,000 namespaces,
+  each with a class of three fields and a method, a function of two
+  parameters, a variable group, a typedef and an enumeration): 320,000
+  rows, 15,360,300 bytes live (48 bytes per row) and 25.6 MB reserved
+  (vector doubling). Accounted memory grows from 47.0 MB to 62.4 MB
+  (+33%: every declaration is written and there are no instantiations
+  to dilute it), peak RSS from 90.9 MB to 107.2 MB (+18%); compile time
+  is within noise (0.7-0.9 s).
+- *Off* (the default): accounted memory is byte-identical to the build
+  before the table, peak RSS and compile time are within noise, and the
+  bench/oven counters are identical.
+
+So the table stays opt-in: a tenth of the AST on a header-heavy TU and a
+third on one made only of written declarations is too much to charge
+every compilation.
+
+Tests: `crates/kiln_ast/src/decl_extents.rs` (row size, off records
+nothing, set and share, `semi`/`prefix`, truncation, lambda names),
+`crates/kiln_parse/tests/decl_extents.rs` (the API on parsed source),
+`crates/kiln_driver/src/snap_tests.rs` (`snapshot_round_trip_decl_extents`)
+and `tests/conformance/decl_extents/` (one per case of §19.2-§19.6,
+macros, templates, a PCH and a module-image round trip).

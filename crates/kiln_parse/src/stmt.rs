@@ -32,6 +32,9 @@ impl Parser<'_, '_> {
     /// body, whose statements are parsed in the `InStmtExpr` context.
     pub(crate) fn parse_compound_in(&mut self, new_scope: bool, stmt_expr: bool) -> (StmtId, Loc) {
         let lbrace = self.bump().span.lo;
+        // A lead pending outside (a lambda in a template head's default
+        // argument) waits for the block's end (spec/ast.md §19.3).
+        let outer_lead = self.ext_lead.take();
         if new_scope {
             self.s.push_scope(ScopeKind::Block);
         }
@@ -66,6 +69,7 @@ impl Parser<'_, '_> {
         self.set_fp_eval_pragma(eval_outer);
         let block = self.s.act_on_compound_fp(&stmts, lbrace, rbrace, fp);
         self.s.check_empty_loop_bodies(&stmts);
+        self.ext_lead = outer_lead;
         (block, rbrace)
     }
 
@@ -235,8 +239,11 @@ impl Parser<'_, '_> {
         self.bump();
         let name = self.ident()?;
         let nl = self.bump().span.lo;
+        let name_span = kiln_source::Span::new(nl, self.prev_end());
         self.bump();
         let d = self.parse_namespace_alias(name, nl)?;
+        self.ext_name_span(d, Loc::INVALID, name_span);
+        self.ext_finish(&[d], lead_loc.unwrap_or(loc));
         Some(self.s.act_on_decl_stmt(&[d], loc))
     }
 
@@ -448,11 +455,31 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// A using-declaration, using-directive or alias declaration at block
+    /// scope, its first token `ext_lead` (spec/ast.md §19.3).
+    fn parse_block_using(
+        &mut self,
+        attrs: &[kiln_ast::AttrId],
+        lead_loc: Option<Loc>,
+        ext_lead: Loc,
+        loc: Loc,
+    ) -> Option<StmtId> {
+        self.ext_lead = Some(ext_lead);
+        let ds = self.parse_using_leading(attrs, lead_loc);
+        if ds.is_empty() {
+            return None;
+        }
+        Some(self.s.act_on_decl_stmt(&ds, loc))
+    }
+
     fn parse_statement_after_attrs_inner(&mut self) -> Option<StmtId> {
         let lead_attrs = std::mem::take(&mut self.stmt_attrs);
         let lead_loc = self.stmt_attrs_loc.take().filter(|_| !lead_attrs.is_empty());
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         let loc = self.loc();
+        // A block declaration starts at its attributes (spec/ast.md
+        // §19.3); the lead is only set where one is parsed.
+        let ext_lead = lead_loc.unwrap_or(loc);
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),
             Some(Punct::Semi) => {
@@ -487,19 +514,15 @@ impl Parser<'_, '_> {
                 // alias or a namespace alias definition takes no attributes.
                 Kw::StaticAssert => {
                     self.prohibit_attrs_at(lead_loc);
+                    self.ext_lead = Some(ext_lead);
                     let d = self.parse_static_assert()?;
                     return Some(self.s.act_on_decl_stmt(&[d], loc));
                 }
                 Kw::Consteval if self.at_consteval_block() => {
+                    self.ext_lead = Some(ext_lead);
                     return Some(self.parse_consteval_block_stmt(lead_loc, loc));
                 }
-                Kw::Using => {
-                    let ds = self.parse_using_leading(&lead_attrs, lead_loc);
-                    if ds.is_empty() {
-                        return None;
-                    }
-                    return Some(self.s.act_on_decl_stmt(&ds, loc));
-                }
+                Kw::Using => return self.parse_block_using(&lead_attrs, lead_loc, ext_lead, loc),
                 Kw::Namespace
                     if self.ident_of(self.peek(1)).is_some() && self.peek_is(2, Punct::Equal) =>
                 {
@@ -552,7 +575,9 @@ impl Parser<'_, '_> {
         if self.is_cxx_declaration_statement(false) {
             self.lead_decl_attrs = lead_attrs;
             self.stmt_attrs_loc = lead_loc;
+            self.ext_lead = Some(ext_lead);
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
+            self.ext_drop_lead();
             if decls.is_empty() {
                 return None;
             }
@@ -835,7 +860,10 @@ impl Parser<'_, '_> {
     /// A condition that declares a variable ([stmt.pre]/1).
     fn parse_condition_decl(&mut self) -> Option<Cond> {
         let ctx = DeclaratorContext::Condition;
+        // Its own first token, never a pending lead (spec/ast.md §19.3).
+        let (begin, specs_pos) = (self.loc(), self.pos());
         let mut ds = self.parse_decl_specifiers(ctx);
+        let specs_end = self.ext_specs_end(specs_pos);
         // [stmt.pre]: only type-specifiers and `constexpr`.
         self.reject_type_name_specifiers(&mut ds, true);
         if ds.is_empty() {
@@ -875,7 +903,12 @@ impl Parser<'_, '_> {
         // as for any other initializer (WP-408).
         // An undeduced variable is corrected unfiltered before deduction.
         let typos = (self.s.clang_compat < 22).then(|| self.s.begin_delayed_typos());
-        self.finish_condition_decl(v, d.init_style, name_loc, typos)
+        let c = self.finish_condition_decl(v, d.init_style, name_loc, typos);
+        if let Some(v) = v {
+            self.ext_declarator(Some(v), &d, specs_end);
+            self.ext_finish_inner(Some(v), begin);
+        }
+        c
     }
 
     /// The initializer of condition variable `v` and the reference to it;

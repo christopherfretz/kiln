@@ -19,6 +19,7 @@ pub mod class;
 pub mod consteval_only;
 pub mod consts;
 pub mod decl;
+pub mod decl_extents;
 pub mod diag_names;
 pub mod dump;
 pub mod expr;

@@ -1,0 +1,15 @@
+Namespace 'a'  full=8:1-10:2 } name=8:11-8:12 'a' body=8:13-10:2
+Var 'a::x'  full=9:1-9:7 ; own=9:5-9:6 name=9:5-9:6 'x' specs-end=9:4
+Namespace 'a'  full=11:1-13:2 } name=11:11-11:12 'a' body=11:13-13:2
+Var 'a::y'  full=12:1-12:7 ; own=12:5-12:6 name=12:5-12:6 'y' specs-end=12:4
+Namespace 'a'  full=14:1-16:2 } name=14:11-14:12 'a' body=14:19-16:2
+Namespace 'a::b'  full=14:1-16:2 } name=14:14-14:15 'b' qual=14:11 body=14:19-16:2
+Namespace 'a::b::c'  full=14:1-16:2 } name=14:17-14:18 'c' qual=14:11 body=14:19-16:2
+Var 'a::b::c::z'  full=15:1-15:7 ; own=15:5-15:6 name=15:5-15:6 'z' specs-end=15:4
+Namespace 'a'  full=17:1-17:26 } name=17:11-17:12 'a' body=17:24-17:26
+Namespace 'a::v2'  full=17:1-17:26 } name=17:21-17:23 'v2' qual=17:11 body=17:24-17:26
+Namespace 'v1'  full=18:1-22:2 } name=18:18-18:20 'v1' body=18:21-22:2
+Namespace 'v1::(anonymous namespace)'  full=19:1-21:2 } body=19:11-21:2
+Var 'v1::(anonymous namespace)::hidden'  full=20:1-20:12 ; own=20:5-20:11 name=20:5-20:11 'hidden' specs-end=20:4
+Namespace 'old'  full=23:1-23:32 } name=23:26-23:29 'old' body=23:30-23:32
+NamespaceAlias 'al'  full=24:1-24:24 ; name=24:11-24:13 'al'

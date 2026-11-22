@@ -242,7 +242,8 @@ struct Test<'a> {
     updated: bool,
     /// The last compile's masked instantiation report (`inst-report:`).
     inst_report: Option<String>,
-    /// The last compile's standard output (`written-refs:`).
+    /// The last compile's standard output (`written-refs:`,
+    /// `decl-extents:`).
     written_refs: Option<String>,
     /// This test's cap: `--mem-limit` lowered by its `mem<=N`.
     mem_limit: Option<MemLimit>,
@@ -290,8 +291,10 @@ impl Test<'_> {
                 "oven:"
             } else if spec.inst_report.is_some() {
                 "inst-report:"
-            } else {
+            } else if spec.written_refs.is_some() {
                 "written-refs:"
+            } else {
+                "decl-extents:"
             };
             return Some(format!(
                 "not supported by this compiler (kiln-specific `{directive}` directive)"
@@ -1298,6 +1301,12 @@ impl Test<'_> {
         if spec.written_refs.is_some() && reports {
             cmd.arg("-fkiln-dump-written-refs");
         }
+        // The extents are carried in PCH snapshots, but the dump is a
+        // single-pass flag (spec/ast.md §19.6): the PCH differential
+        // checks none either.
+        if spec.decl_extents.is_some() && reports {
+            cmd.arg("-fkiln-dump-decl-extents");
+        }
         if !spec.oven.is_empty() && reports {
             // Only kiln gets here (`evaluate` skips the rest). A stale report
             // must not pass for this compile's.
@@ -1316,7 +1325,7 @@ impl Test<'_> {
         if spec.inst_report.is_some() && reports {
             self.inst_report = Some(inst_report::extract(&stderr));
         }
-        if spec.written_refs.is_some() && reports {
+        if (spec.written_refs.is_some() || spec.decl_extents.is_some()) && reports {
             self.written_refs = Some(o.stdout_str());
         }
         let crashed = o.code().is_none()
@@ -1689,10 +1698,21 @@ impl Test<'_> {
         self.check_written_refs(spec)
     }
 
-    /// Compares the compile's written-reference dump with the
-    /// `written-refs:` golden (`--update` rewrites it).
+    /// Compares the compile's standard output with the dump golden of
+    /// `written-refs:` or `decl-extents:` (`--update` rewrites it).
     fn check_written_refs(&mut self, spec: &TestSpec) -> Check {
-        let Some(rel) = &spec.written_refs else { return Ok(()) };
+        if let Some(rel) = &spec.written_refs {
+            return self.check_dump(rel, "written-refs", "written-reference");
+        }
+        if let Some(rel) = &spec.decl_extents {
+            return self.check_dump(rel, "decl-extents", "declaration-extent");
+        }
+        Ok(())
+    }
+
+    /// Compares the compile's `what` dump with golden `rel` of directive
+    /// `directive`.
+    fn check_dump(&mut self, rel: &Path, directive: &str, what: &str) -> Check {
         if self.cfg.pch_diff.is_some() {
             return Ok(());
         }
@@ -1700,19 +1720,19 @@ impl Test<'_> {
         let got = self.written_refs.take().unwrap_or_default();
         if self.cfg.update {
             fs::write(&path, &got).map_err(|e| {
-                Problem::Broken(format!("cannot write written-refs {}: {e}", path.display()))
+                Problem::Broken(format!("cannot write {directive} {}: {e}", path.display()))
             })?;
             self.updated = true;
             return Ok(());
         }
         let want = fs::read_to_string(&path).map_err(|e| {
-            Problem::Broken(format!("cannot read written-refs {}: {e}", path.display()))
+            Problem::Broken(format!("cannot read {directive} {}: {e}", path.display()))
         })?;
         if want == got {
             Ok(())
         } else {
             Err(Problem::Fail(format!(
-                "written-refs: the written-reference dump differs from {} (-expected +actual):\n{}",
+                "{directive}: the {what} dump differs from {} (-expected +actual):\n{}",
                 path.display(),
                 indent(&line_diff(&want, &got))
             )))

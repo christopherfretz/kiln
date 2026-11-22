@@ -272,18 +272,24 @@ impl Parser<'_, '_> {
     /// `export declaration`.
     pub(crate) fn parse_export_declaration(&mut self) {
         self.module_activate();
+        // A braceless `export` leaves the lead to the declaration it
+        // contains (spec/ast.md §19.3).
+        let begin = self.ext_lead.unwrap_or_else(|| self.loc());
         let loc = self.bump().span.lo;
         let e = self.s.act_on_start_export(loc);
         let block = if let Some(open) = self.eat(Punct::LBrace) {
+            self.ext_drop_lead();
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_external_declaration();
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+            self.ext_body(Some(e), open);
             true
         } else {
             self.parse_external_declaration();
             false
         };
+        self.ext_finish_one(Some(e), begin);
         self.s.act_on_finish_export(e, block);
     }
 }

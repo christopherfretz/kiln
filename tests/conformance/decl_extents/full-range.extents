@@ -1,0 +1,21 @@
+ParmVar '(anonymous)'  full=8:21-8:24 - own=8:24-8:24 specs-end=8:24
+Function 'f'  full=8:1-8:26 ; own=8:19-8:25 name=8:19-8:20 'f' specs-end=8:18
+ParmVar '(anonymous)'  full=9:7-9:10 - own=9:10-9:10 specs-end=9:10
+Function 'f'  full=9:1-9:12 ; own=9:5-9:11 name=9:5-9:6 'f' specs-end=9:4
+ParmVar 'x'  full=10:14-10:19 - own=10:18-10:19 name=10:18-10:19 'x' specs-end=10:17
+Function 'f'  full=10:1-10:34 } own=10:12-10:34 name=10:12-10:13 'f' body=10:21-10:34 specs-end=10:11
+TemplateTypeParm 'T'  full=11:11-11:18 - name=11:17-11:18 'T'
+ParmVar 'v'  full=13:5-13:8 - own=13:7-13:8 name=13:7-13:8 'v' specs-end=13:6
+Function 'g'  full=11:1-13:10 ; own=13:3-13:9 name=13:3-13:4 'g' specs-end=13:2
+FunctionTemplate 'g'  full=11:1-13:10 ; own=13:3-13:9 name=13:3-13:4 'g' specs-end=13:2
+LinkageSpec '(anonymous)'  full=14:1-14:28 ;
+Function 'c_fn'  full=14:1-14:28 ; own=14:17-14:27 name=14:17-14:21 'c_fn' specs-end=14:16
+LinkageSpec '(anonymous)'  full=15:1-15:30 }
+Function 'c_fn'  full=15:1-15:30 } own=15:17-15:30 name=15:17-15:21 'c_fn' body=15:28-15:30 specs-end=15:16
+LinkageSpec '(anonymous)'  full=16:1-18:2 } body=16:12-18:2
+Var 'c_var'  full=17:1-17:11 ; own=17:5-17:10 name=17:5-17:10 'c_var' specs-end=17:4
+Var 'ext_ll'  full=19:1-19:32 ; own=19:25-19:31 name=19:25-19:31 'ext_ll' specs-end=19:24
+CXXRecord 'Tag'  full=20:1-20:29 ; own=20:1-20:28 name=20:25-20:28 'Tag'
+CXXRecord 'Tag'  full=21:1-23:3 ; own=21:1-23:2 name=21:8-21:11 'Tag' body=21:12-23:2
+Field 'Tag::m'  full=22:3-22:9 ; own=22:7-22:8 name=22:7-22:8 'm' specs-end=22:6
+Var 'cv'  full=24:1-24:32 ; own=24:25-24:31 name=24:25-24:27 'cv' specs-end=24:24

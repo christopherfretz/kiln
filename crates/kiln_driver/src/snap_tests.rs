@@ -136,6 +136,7 @@ fn table_sizes(ast: &Ast) -> Vec<(&'static str, usize)> {
         ("vtables", b(&ast.vtables).len()),
         ("modules", b(&ast.modules).len()),
         ("contract_sites", b(&ast.contract_sites).len()),
+        ("decl_extents", b(&ast.decl_extents).len()),
     ];
     v.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
     v
@@ -173,6 +174,19 @@ fn check_round_trip(case: &str, orig: &mut Ast, sm: &SourceManager, main: Option
     }
     // (a) The dump.
     assert_eq!(dump_digest(orig, sm, main), dump_digest(&restored, sm, main), "{case}: dump");
+    // The declaration extents (spec/ast.md §19.6): every row, and the
+    // sharing of a template's with its pattern's.
+    assert_eq!(orig.decl_extents.is_on(), restored.decl_extents.is_on(), "{case}: extents on");
+    if case.starts_with("extents") {
+        assert!(orig.decl_extents.len() > 10, "{case}: the table recorded nothing");
+    }
+    assert_eq!(orig.decl_extents.len(), restored.decl_extents.len(), "{case}: extent rows");
+    assert!(orig.decl_extents.iter().eq(restored.decl_extents.iter()), "{case}: extents");
+    assert_eq!(
+        orig.decl_extents.dump(orig, sm, main),
+        restored.decl_extents.dump(&restored, sm, main),
+        "{case}: extent dump"
+    );
     // (b) The canonical encoding.
     let canon = kiln_snap::to_bytes_canonical(&*orig);
     assert!(canon == kiln_snap::to_bytes_canonical(&restored), "{case}: canonical bytes");
@@ -268,6 +282,23 @@ fn header_set(case: &str) -> String {
 #[test]
 fn snapshot_round_trip_mid() {
     run_case("mid", &["-std=c++26"], &header_set("mid"));
+}
+
+/// The declaration extents (spec/ast.md §19, WP-2090) survive the
+/// snapshot: a prefix of macros, templates, namespaces and declarator
+/// groups, parsed with the table on, and `mid`'s headers.
+#[test]
+fn snapshot_round_trip_decl_extents() {
+    let text = "#define DECL(t, n) t n = 0;\n\
+                namespace a::b { DECL(int, x) inline namespace v { int y, *z; } }\n\
+                template<class T> requires (sizeof(T) > 1) struct S { T m; void f() = delete; };\n\
+                template<> struct S<long> { };\n\
+                extern \"C\" int c_fn(int);\n\
+                namespace q = a::b;\n\
+                int g(int p = 1) try { return p; } catch (...) { return 0; }\n";
+    let flags = ["-std=c++26", "-fkiln-decl-extents"];
+    run_case("extents", &flags, text);
+    run_case("extents-mid", &flags, &header_set("mid"));
 }
 
 /// GCC 16.1 libstdc++'s `<meta>` with nine common headers, the way the

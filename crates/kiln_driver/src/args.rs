@@ -696,6 +696,14 @@ pub struct Args {
     /// `-fkiln-dump-written-refs` (`-fsyntax-only` and codegen): record the
     /// written-reference table and print it (spec/ast.md §18.6).
     pub dump_written_refs: bool,
+    /// `-fkiln-decl-extents`: record the declaration-extent table
+    /// (spec/ast.md §19) for a tooling client; `-fkiln-dump-decl-extents`
+    /// sets it too. Part of a precompiled header's identity (a snapshot
+    /// carries the table its producer recorded).
+    pub decl_extents: bool,
+    /// `-fkiln-dump-decl-extents` (`-fsyntax-only` and codegen): print the
+    /// declaration-extent table (spec/ast.md §19.6).
+    pub dump_decl_extents: bool,
     /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
@@ -2030,6 +2038,11 @@ impl Args {
             "-fdump-vtable-layouts" => self.dump_vtable_layouts = true,
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-dump-written-refs" => self.dump_written_refs = true,
+            "-fkiln-decl-extents" => self.decl_extents = true,
+            "-fkiln-dump-decl-extents" => {
+                self.decl_extents = true;
+                self.dump_decl_extents = true;
+            }
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
             "-fkiln-bmi-image" => self.bmi_image = true,

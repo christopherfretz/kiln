@@ -211,6 +211,11 @@ pub(crate) fn for_job(
         let _ = writeln!(config, "fingerprint {k} {v}");
     }
     let _ = write!(config, "predefines {}\n{predefines}\nsearch\n{search}\n", predefines.len());
+    // A module file built with the declaration-extent table carries it
+    // (spec/ast.md §19.6): its own entry.
+    if a.decl_extents {
+        config.push_str("decl-extents\n");
+    }
     let cache = StdCache {
         root,
         config,
@@ -391,6 +396,9 @@ impl StdCache {
         a.dump_vtable_layouts = false;
         a.dump_cfg = false;
         a.dump_written_refs = false;
+        // `decl_extents` stays: the module file carries the extents its
+        // build records (spec/ast.md §19.6), keyed apart below.
+        a.dump_decl_extents = false;
         a.cfg_stats = false;
         a.memory_report = false;
         // The importer's profile and report cover its own translation

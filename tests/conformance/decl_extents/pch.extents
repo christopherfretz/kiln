@@ -1,0 +1,13 @@
+Namespace 'pch_ns'  full=extents_pch.h:3:1-extents_pch.h:9:2 } name=extents_pch.h:3:11-extents_pch.h:3:17 'pch_ns' body=extents_pch.h:3:18-extents_pch.h:9:2
+Var 'pch_ns::from_pch'  full=extents_pch.h:2:21-extents_pch.h:2:31 ; own=extents_pch.h:4:10-extents_pch.h:2:30 name=extents_pch.h:4:10-extents_pch.h:4:18 'from_pch' specs-end=extents_pch.h:2:24 exp=extents_pch.h:4:1
+TemplateTypeParm 'pch_ns::T'  full=extents_pch.h:5:11-extents_pch.h:5:18 - name=extents_pch.h:5:17-extents_pch.h:5:18 'T'
+CXXRecord 'pch_ns::Box'  full=extents_pch.h:5:1-extents_pch.h:8:3 ; own=extents_pch.h:5:20-extents_pch.h:8:2 name=extents_pch.h:5:27-extents_pch.h:5:30 'Box' body=extents_pch.h:5:31-extents_pch.h:8:2
+ClassTemplate 'pch_ns::Box'  full=extents_pch.h:5:1-extents_pch.h:8:3 ; own=extents_pch.h:5:20-extents_pch.h:8:2 name=extents_pch.h:5:27-extents_pch.h:5:30 'Box' body=extents_pch.h:5:31-extents_pch.h:8:2
+Field 'pch_ns::Box::value'  full=extents_pch.h:6:3-extents_pch.h:6:11 ; own=extents_pch.h:6:5-extents_pch.h:6:10 name=extents_pch.h:6:5-extents_pch.h:6:10 'value' specs-end=extents_pch.h:6:4
+CXXMethod 'pch_ns::Box::get'  full=extents_pch.h:7:3-extents_pch.h:7:34 } own=extents_pch.h:7:5-extents_pch.h:7:34 name=extents_pch.h:7:5-extents_pch.h:7:8 'get' body=extents_pch.h:7:17-extents_pch.h:7:34 specs-end=extents_pch.h:7:4
+LinkageSpec '(anonymous)'  full=extents_pch.h:10:1-extents_pch.h:10:27 ;
+ParmVar '(anonymous)'  full=extents_pch.h:10:22-extents_pch.h:10:25 - own=extents_pch.h:10:25-extents_pch.h:10:25 specs-end=extents_pch.h:10:25
+Function 'pch_c'  full=extents_pch.h:10:1-extents_pch.h:10:27 ; own=extents_pch.h:10:16-extents_pch.h:10:26 name=extents_pch.h:10:16-extents_pch.h:10:21 'pch_c' specs-end=extents_pch.h:10:15
+Var 'boxed'  full=8:1-8:27 ; own=8:18-8:26 name=8:18-8:23 'boxed' specs-end=8:17
+ParmVar 'v'  full=9:15-9:20 - own=9:19-9:20 name=9:19-9:20 'v' specs-end=9:18
+Function 'after_pch'  full=9:1-9:54 } own=9:5-9:54 name=9:5-9:14 'after_pch' body=9:22-9:54 specs-end=9:4

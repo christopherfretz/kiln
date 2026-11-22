@@ -220,6 +220,7 @@ fn seed_corpus_exercises_every_directive() {
         flag(s.ast_implicit, "ast-implicit");
         flag(s.inst_report.is_some(), "inst-report");
         flag(s.written_refs.is_some(), "written-refs");
+        flag(s.decl_extents.is_some(), "decl-extents");
         flag(s.requires_target.is_some(), "requires");
         let clang_req = s.requires_clang.is_some() || s.requires_clang_below.is_some();
         flag(clang_req, "requires-clang");
@@ -233,6 +234,7 @@ fn seed_corpus_exercises_every_directive() {
         "c-test",
         "compile-fail",
         "compile-ok",
+        "decl-extents",
         "diag",
         "diag-dup",
         "diag-note",

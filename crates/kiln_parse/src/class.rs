@@ -629,6 +629,9 @@ impl Parser<'_, '_> {
         }
         self.trace(|_| format!("base_specifiers({})", bases.len()));
         self.s.act_on_base_specifiers(r, &bases);
+        // A lead pending outside (a class defined in a template head's
+        // default argument) waits for the class's end (spec/ast.md §19.3).
+        let outer_lead = self.ext_lead.take();
         if self.at(Punct::LBrace) {
             let open = self.bump().span.lo;
             while !self.at(Punct::RBrace) && !self.at_eof() {
@@ -637,6 +640,7 @@ impl Parser<'_, '_> {
             }
             self.take_fp_pragmas(FpAt::Class(self.class_key_name()));
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
+            self.ext_body(Some(r), open);
             // clang `ParseCXXMemberSpecification`: GNU attributes after
             // the `}` appertain to the class.
             if self.at_kw(Kw::Attribute) {
@@ -674,6 +678,7 @@ impl Parser<'_, '_> {
             }
         }
         self.late_fn = saved;
+        self.ext_lead = outer_lead;
     }
 
     /// Replays the items of phase `ph` of `class` and its nested classes,
@@ -1191,7 +1196,7 @@ impl Parser<'_, '_> {
         if let Some(f) = f {
             self.s.act_on_function_definition_declarator(f);
         }
-        self.bump();
+        let eq = self.bump().span.lo;
         let kw = self.bump();
         let is_delete = self.kw_of(kw) == Some(Kw::Delete);
         let what = if is_delete { "delete" } else { "default" };
@@ -1210,6 +1215,8 @@ impl Parser<'_, '_> {
             }
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         }
+        // `= default`, `= delete ("why")`: the body's extent (spec/ast.md §19).
+        self.ext_body(f, eq);
         if let Some(f) = f {
             if is_delete {
                 self.trace(|_| "deleted".to_owned());
@@ -1306,7 +1313,9 @@ impl Parser<'_, '_> {
                     }
                 }
                 self.trace(|_| "access_spec".to_owned());
-                let _ = self.s.act_on_access_spec(access, loc);
+                let a = self.s.act_on_access_spec(access, loc);
+                let begin = self.ext_begin();
+                self.ext_finish_one(a, begin);
                 true
             }
             (_, Some(Kw::StaticAssert)) => {
@@ -1616,14 +1625,14 @@ impl Parser<'_, '_> {
 
     /// `decl-specifier-seq ;` in a class: a friend class declaration or a
     /// declaration with no declarator ([class.mem.general]/3).
-    fn act_on_member_decl_spec_only(&mut self, ds: &DeclSpec) {
+    fn act_on_member_decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
         if let Some(fl) = ds.friend {
             self.trace(|_| "friend".to_owned());
             let base = self.s.type_from_declspec(ds);
-            let _ = self.s.act_on_friend(ds, base, None, fl);
+            self.s.act_on_friend(ds, base, None, fl)
         } else {
             self.trace(|_| "decl_spec_only".to_owned());
-            let _ = self.s.act_on_decl_spec_only(ds);
+            self.s.act_on_decl_spec_only(ds)
         }
     }
 
@@ -1633,12 +1642,14 @@ impl Parser<'_, '_> {
     /// friend declaration per friend-type-specifier, each optionally a
     /// pack expansion. `ds` holds the first specifier; the `friend` at
     /// `fl` applies to all of them.
-    fn parse_friend_type_list(&mut self, mut ds: DeclSpec, fl: Loc) {
+    fn parse_friend_type_list(&mut self, mut ds: DeclSpec, fl: Loc, begin: Loc) {
         if self.std < kiln_lex::Std::Cxx26 {
             let d = self.s.diag(DiagId::parse_ext_variadic_friend, self.loc());
             self.emit(d);
         }
+        let mut friends = Vec::new();
         loop {
+            let lo = ds.loc;
             if !ds.has_type_specifier() {
                 // `friend A, f;`: not a type (clang: the free-standing
                 // decl-specifier-seq is invalid; the rest is skipped).
@@ -1648,7 +1659,15 @@ impl Parser<'_, '_> {
             }
             let ellipsis = self.eat(Punct::Ellipsis);
             let base = self.s.type_from_declspec(&ds);
-            let _ = self.s.act_on_friend_type(&ds, base, ellipsis, fl);
+            let f = self.s.act_on_friend_type(&ds, base, ellipsis, fl);
+            // Each friend-type-specifier's own range (spec/ast.md §19.5).
+            if let Some(f) = f {
+                let own = Span::new(lo, self.prev_end());
+                if let Some(e) = self.ext_row(f) {
+                    e.own = own;
+                }
+                friends.push(f);
+            }
             if self.eat(Punct::Comma).is_none() {
                 break;
             }
@@ -1661,6 +1680,7 @@ impl Parser<'_, '_> {
                 self.s.diag(DiagId::parse_expected_semi_after_stmt, at).arg("friend declaration");
             self.emit(d);
         }
+        self.ext_finish(&friends, begin);
     }
 
     /// A member declaration with no decl-specifiers that is neither a
@@ -1759,7 +1779,10 @@ impl Parser<'_, '_> {
         // §18.3).
         let wmark = self.member_ref_mark;
         self.member_ref_mark = self.s.written_ref_mark();
+        // The member's first token (spec/ast.md §19.3).
+        self.ext_lead();
         self.parse_member_declaration_inner();
+        self.ext_drop_lead();
         self.member_ref_mark = wmark;
         self.member_depr = saved;
         self.s.end_delayed_deprecation_to(level, None);
@@ -1790,7 +1813,10 @@ impl Parser<'_, '_> {
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
+        let begin = self.ext_begin();
+        let specs_pos = self.pos();
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        let specs_end = self.ext_specs_end(specs_pos);
         // C23 6.7.2.1p1: a member takes a specifier-qualifier-list, no
         // storage class (clang `ParseStructDeclaration`).
         if self.s.is_c() {
@@ -1800,14 +1826,16 @@ impl Parser<'_, '_> {
             && (self.at(Punct::Ellipsis) || self.at(Punct::Comma))
         {
             self.prohibit_friend_lead_attrs(&mut ds);
-            self.parse_friend_type_list(ds, fl);
+            self.parse_friend_type_list(ds, fl, begin);
             return;
         }
         let mut tmpl_group = self.template_group(tmpl_kind);
         if self.at(Punct::Semi) {
             self.prohibit_friend_lead_attrs(&mut ds);
             self.bump();
-            self.act_on_member_decl_spec_only(&ds);
+            let d = self.act_on_member_decl_spec_only(&ds);
+            let group = Self::ext_group(&ds, d.as_slice());
+            self.ext_finish(&group, begin);
             return;
         }
         if ds.is_empty() && self.at_member_without_type() {
@@ -1821,6 +1849,7 @@ impl Parser<'_, '_> {
         let mut restrict_error = None;
         let mut first = true;
         let mut group = AutoGroup::default();
+        let mut ext_decls = Vec::new();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
             d.friend = ds.friend.is_some();
@@ -1878,7 +1907,7 @@ impl Parser<'_, '_> {
             }
             if first && is_fn && self.at_function_definition() {
                 d.defaulted = self.at_eq_default();
-                self.parse_member_function_definition(&ds, base, &d, parts);
+                self.parse_member_function_definition(&ds, base, &d, parts, (begin, specs_end));
                 return;
             }
             if first {
@@ -1887,7 +1916,10 @@ impl Parser<'_, '_> {
             // A member variable template specialization is static ([temp.expl.spec]/3).
             let is_static = is_static || d.spec_id.is_some();
             let data_member = !is_static && !is_typedef && ds.friend.is_none();
+            let eq = self.loc();
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
+            // A pure-specifier `= 0` is the body (spec/ast.md §19.2).
+            let pure = d.pure.map(|_| Span::new(eq, self.prev_end()));
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
             self.record_declarator_end(target, &d);
@@ -1904,6 +1936,12 @@ impl Parser<'_, '_> {
                 self.parse_member_init_in_place(&d, decl, init, is_static);
                 self.s.claim_written_refs(self.member_ref_mark, decl);
             }
+            if self.ext_on() {
+                if let Some(pure) = pure {
+                    self.ext_set_body(target, pure);
+                }
+                self.ext_member(decl, target, &d, specs_end, &mut ext_decls);
+            }
             if !parts.is_empty()
                 && let Some(f) = target
             {
@@ -1919,6 +1957,10 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_semi_decl_list, self.expected_loc());
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
+        }
+        if self.ext_on() {
+            let group = Self::ext_group(&ds, &ext_decls);
+            self.ext_finish(&group, begin);
         }
     }
 
@@ -1977,6 +2019,7 @@ impl Parser<'_, '_> {
         base: QualType,
         d: &Declarator,
         parts: LateFnParts,
+        (begin, specs_end): (Loc, Loc),
     ) {
         // A friend definition: sema checks where it may be defined
         // ([class.friend]/6).
@@ -1984,7 +2027,7 @@ impl Parser<'_, '_> {
         if friend {
             self.s.act_function_def_next(true);
         }
-        let (_, target) = self.act_on_member(ds, base, d);
+        let (decl, target) = self.act_on_member(ds, base, d);
         if friend {
             self.s.act_function_def_next(false);
             self.check_friend_without_contracts(true, ds, &parts, target, d);
@@ -2021,6 +2064,7 @@ impl Parser<'_, '_> {
             };
             self.record_fn_end(target, end);
             self.parse_defaulted_or_deleted(target);
+            self.ext_member_finish(decl, target, d, (begin, specs_end));
             return;
         }
         // Before the body's tokens are read: a pragma after the body
@@ -2042,6 +2086,12 @@ impl Parser<'_, '_> {
                 self.capture_until(&[Punct::RBrace], &mut toks, false, true);
             }
         }
+        if self.ext_on()
+            && let (Some(first), Some(last)) = (toks.first(), toks.last())
+        {
+            self.ext_set_body(target, Span::new(first.span.lo, last.span.hi));
+        }
+        self.ext_member_finish(decl, target, d, (begin, specs_end));
         if let Some(f) = target {
             let end = toks.last().map_or(self.loc(), |t| t.span.hi);
             self.s.act_on_delayed_body(f);

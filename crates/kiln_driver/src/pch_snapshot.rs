@@ -131,7 +131,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// driver warning id; version 7 (WP-1433) a new AST cold map
 /// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
 /// attribute kinds and the 32-bit `FuncInfo`.
-pub(crate) const FORMAT_VERSION: u32 = 128;
+pub(crate) const FORMAT_VERSION: u32 = 129;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -168,6 +168,7 @@ fn excluded(args: &Args) -> Args {
         dump_vtable_layouts: d.dump_vtable_layouts,
         dump_cfg: d.dump_cfg,
         dump_written_refs: d.dump_written_refs,
+        dump_decl_extents: d.dump_decl_extents,
         cfg_stats: d.cfg_stats,
         memory_report: d.memory_report,
         time_trace: d.time_trace,
@@ -1174,6 +1175,7 @@ pub(crate) fn single_pass_blocker(
         (args.dump_vtable_layouts, "-fdump-vtable-layouts"),
         (args.dump_cfg, "-fkiln-dump-cfg"),
         (args.dump_written_refs, "-fkiln-dump-written-refs"),
+        (args.dump_decl_extents, "-fkiln-dump-decl-extents"),
         (args.cfg_stats, "-fkiln-cfg-stats"),
         (args.bmi_image_census || args.bmi_image_census_all, "-fkiln-bmi-image-census"),
         (args.constexpr.report.is_some(), "-fconstexpr-report"),

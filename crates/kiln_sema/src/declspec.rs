@@ -291,6 +291,10 @@ pub struct DeclSpec {
     /// Whether `tag` is a declaration of its own (`struct S;`,
     /// `struct S { }`) rather than a reference (`struct S *p;`).
     pub tag_declares: bool,
+    /// `tag` was declared by this decl-specifier-seq's own specifier and
+    /// has a declaration-extent row the declaration completes
+    /// (spec/ast.md §19; set by the parser only while recording).
+    pub tag_extent: bool,
     /// Where this decl-specifier-seq appears, for the checks on a class
     /// or enumeration it defines ([`TagSite`]).
     pub tag_site: TagSite,
@@ -819,6 +823,14 @@ pub struct Declarator {
     pub attrs: Vec<AttrId>,
     /// Where the declarator starts.
     pub loc: Loc,
+    /// The declarator-id's unqualified-id as written, `[first token,
+    /// end of last token)` (`f`, `operator+`, `~T`, `S<int>`), and where
+    /// its nested-name-specifier starts (invalid when unqualified): the
+    /// declaration-extent table's name range (spec/ast.md §19). Set by
+    /// the parser; invalid until then.
+    pub id_span: kiln_source::Span,
+    /// See `id_span`.
+    pub id_qual: Loc,
     /// The start of its last token, counting a trailing requires-clause,
     /// an asm label, GNU attributes and the last virt-specifier but not
     /// trailing C++11 attributes (clang's `getEndLoc`); invalid unless
@@ -1091,6 +1103,8 @@ impl Declarator {
             bit_width: None,
             attrs: Vec::new(),
             loc,
+            id_span: kiln_source::Span::INVALID,
+            id_qual: Loc::INVALID,
             end: Loc::INVALID,
             invalid: false,
             missing_typename: false,

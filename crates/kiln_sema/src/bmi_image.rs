@@ -61,6 +61,7 @@ mod depusing;
 mod diagif;
 mod explinst;
 mod exprs;
+mod extents;
 mod fnspec;
 mod fnsugar;
 mod fpstate;
@@ -100,7 +101,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 61;
+pub(crate) const IMAGE_VERSION: u32 = 62;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -744,6 +745,8 @@ struct Image {
     cspecs: classtempl::ClassSpecs,
     /// WP-1283: declarator locations of dependent declarations.
     declocs: declocs::DeclLocs,
+    /// WP-2090: the records' declaration extents (spec/ast.md §19.6).
+    extents: extents::Extents,
     /// WP-1284: constraints and concepts' constraint-expressions.
     cons: constraints::Constraints,
     /// WP-1284: requires-expression bodies.
@@ -1576,6 +1579,7 @@ fn encode(img: &Image) -> Vec<u8> {
     fnsugar::encode_fn_sugars(&mut w, &img.fsugar);
     specbase::encode_member_classes(&mut w, &img.mclasses);
     fpstate::encode_fp_inits(&mut w, &img.fp_inits);
+    extents::encode_extents(&mut w, &img.extents);
     w.0
 }
 
@@ -2302,6 +2306,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.fsugar = fnsugar::decode_fn_sugars(&mut r)?;
     img.mclasses = specbase::decode_member_classes(&mut r)?;
     img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
+    img.extents = extents::decode_extents(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2590,6 +2595,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let pats = membertempl::template_patterns(img);
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
+    extents::validate_extents(img)?;
     localexterns::validate_local_externs(img)?;
     explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
     patinit::validate_pattern_inits(img, &|q| qref_at(q, nd))?;
@@ -4998,6 +5004,7 @@ impl Writer<'_, '_, '_> {
         self.lambda_contexts()?;
         self.written_section();
         self.fp_inits();
+        self.extents_section()?;
         Ok(())
     }
 
@@ -5752,6 +5759,7 @@ impl Sema<'_, '_> {
             exprs::texpr_locs(&img, &mut offs);
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
+            extents::extent_offsets(&img, &mut offs);
             explinst::explicit_inst_locs(&img, &mut offs);
             patinit::pattern_init_locs(&img, &mut offs);
             defcmp::defaulted_cmp_locs(&img, &mut offs);
@@ -6346,6 +6354,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
+        self.image_extents(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
         // The requires-expression parameters, which the types of their
         // requirements may name (WP-1343); then every type before the
@@ -7111,6 +7120,7 @@ mod tests {
             scopes: scope::Scopes::default(),
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
+            extents: extents::Extents::default(),
             explinsts: explinst::ExplInsts::default(),
             patinits: patinit::PatInits::default(),
             defcmps: defcmp::DefCmps::default(),

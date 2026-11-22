@@ -1,0 +1,32 @@
+Namespace 'n'  full=7:1-15:2 } name=7:11-7:12 'n' body=7:13-15:2
+CXXRecord 'n::S'  full=8:1-14:3 ; own=8:1-14:2 name=8:8-8:9 'S' body=8:10-14:2
+ParmVar '(anonymous)'  full=9:15-9:24 - own=9:23-9:24 specs-end=9:22
+CXXMethod 'n::S::operator+'  full=9:3-9:32 ; own=9:5-9:31 name=9:5-9:14 'operator+' specs-end=9:4
+ParmVar '(anonymous)'  full=10:18-10:21 - own=10:21-10:21 specs-end=10:21
+CXXMethod 'n::S::operator()'  full=10:3-10:29 ; own=10:7-10:28 name=10:7-10:17 'operator()' specs-end=10:6
+CXXDestructor 'n::S::~S'  full=11:3-11:8 ; own=11:3-11:7 name=11:3-11:5 '~S'
+CXXConversion 'n::S::operator int *'  full=12:3-12:26 ; own=12:3-12:25 name=12:3-12:17 'operator int *'
+ParmVar '(anonymous)'  full=13:31-13:44 - own=13:44-13:44 specs-end=13:44
+CXXMethod 'n::S::operator new[]'  full=13:3-13:46 ; own=13:15-13:45 name=13:16-13:30 'operator new[]' specs-end=13:14
+ParmVar '(anonymous)'  full=16:22-16:34 - own=16:33-16:34 specs-end=16:32
+CXXMethod 'n::S::operator+'  full=16:1-16:59 } own=16:6-16:59 name=16:12-16:21 'operator+' qual=16:6 body=16:42-16:59 specs-end=16:5
+ParmVar '(anonymous)'  full=17:22-17:25 - own=17:25-17:25 specs-end=17:25
+CXXMethod 'n::S::operator()'  full=17:1-17:46 } own=17:5-17:46 name=17:11-17:21 'operator()' qual=17:5 body=17:33-17:46 specs-end=17:4
+CXXDestructor 'n::S::~S'  full=18:1-18:14 } name=18:7-18:9 '~S' qual=18:1 body=18:12-18:14
+CXXConversion 'n::S::operator int *'  full=19:1-19:49 } name=19:7-19:21 'operator int *' qual=19:1 body=19:30-19:49
+ParmVar '(anonymous)'  full=20:18-20:36 - own=20:36-20:36 specs-end=20:36
+Function 'operator""_k'  full=20:1-20:38 ; own=20:5-20:37 name=20:5-20:17 'operator""_k' specs-end=20:4
+TemplateTypeParm 'T'  full=21:11-21:18 - name=21:17-21:18 'T'
+CXXRecord 'V'  full=21:1-21:32 ; own=21:20-21:31 name=21:27-21:28 'V' body=21:29-21:31
+ClassTemplate 'V'  full=21:1-21:32 ; own=21:20-21:31 name=21:27-21:28 'V' body=21:29-21:31
+CXXRecord 'V'  full=22:1-22:30 ; own=22:13-22:29 name=22:20-22:26 'V<int>' body=22:27-22:29
+TemplateTypeParm 'T'  full=23:11-23:18 - name=23:17-23:18 'T'
+CXXRecord 'V'  full=23:1-23:37 ; own=23:20-23:36 name=23:27-23:33 'V<T *>' body=23:34-23:36
+TemplateTypeParm 'T'  full=24:11-24:18 - name=24:17-24:18 'T'
+ParmVar '(anonymous)'  full=24:27-24:28 - own=24:28-24:28 specs-end=24:28
+Function 'h'  full=24:1-24:32 } own=24:25-24:32 name=24:25-24:26 'h' body=24:30-24:32 specs-end=24:24
+FunctionTemplate 'h'  full=24:1-24:32 } own=24:25-24:32 name=24:25-24:26 'h' body=24:30-24:32 specs-end=24:24
+ParmVar '(anonymous)'  full=25:26-25:30 - own=25:30-25:30 specs-end=25:30
+Function 'h<char>'  full=25:1-25:34 } own=25:18-25:34 name=25:18-25:25 'h<char>' body=25:32-25:34 specs-end=25:17
+Var 'gq'  full=26:1-26:15 ; own=26:12-26:14 name=26:12-26:14 'gq' specs-end=26:11
+Var 'gq'  full=27:1-27:14 ; own=27:5-27:13 name=27:7-27:9 'gq' qual=27:5 specs-end=27:4
