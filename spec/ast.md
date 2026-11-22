@@ -1703,9 +1703,10 @@ field `Ast::written_refs`. Built in five stages:
 | `enclosing` | `Option<DeclId>` (4) | the innermost declaration whose source extent contains the name's first token (§18.3); `None` only when the table was filled without a TU |
 | `qualifier` | `RefQualifier` (4) | for a name written after `::`: the entry of the component immediately to its left, or `GLOBAL` for a leading `::`; `NONE` for an unqualified name |
 | `role` | `RefRole` (1) | the syntactic role (§18.4) |
-| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed) |
+| `flags` | `u8` (1) | `DEPENDENT` (a dependent name in a template pattern: no entity until instantiation), `UNRESOLVED` (lookup or overload resolution failed), `MEMBER` (a member or member template name written after `.` or `->`, §18.7) |
+| `how` | `RefLookup` (1) | how lookup found the name (§18.7, WP-2130) |
 
-Two padding bytes remain. Deviation from a 4-byte `entity`-only design:
+One padding byte remains. Deviation from a 4-byte `entity`-only design:
 `found` and `qualifier` are stored, not derived, because deriving `found`
 needs the expression (not kept for nested-name-specifier components) and
 deriving the chain needs range arithmetic over tokens.
@@ -1907,13 +1908,14 @@ at their written site.
 prints, after diagnostics' end of the TU, one line per entry:
 
 ```
-<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::] [in=<enclosing>] [dep] [exp=<line>:<col>]
+<line>:<col>-<line>:<col>  <role>  '<spelling>' -> <entity> [found=<decl>] [q=<line>:<col>|q=::] [in=<enclosing>] [dep] [exp=<line>:<col>] [how=<how>] [udir=<ns>@<line>:<col>] [adl-ns=<ns>,...] [adl-cls=<class>,...] [adl-enum=<enum>,...]
 ```
 
 Positions are the spelling locations of `lo` and `hi` (the end column
 is one past the name's last character), prefixed with the file's base
 name and `:` when not in the main file. `<spelling>` is the source text
-of the range. `<entity>`, `found=` and `in=` print the declaration's
+of the range. The fields after `exp=` are the lookup provenance
+(§18.7.5). `<entity>`, `found=` and `in=` print the declaration's
 qualified name (lambdas as `(lambda)`; a function or template
 parameter unqualified) and `@<line>:<col>` of its location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
 for the translation unit. `q=` names the qualifier entry by its start
@@ -1927,6 +1929,241 @@ nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
 `tests/conformance/written_refs/` (one per stage-1 and stage-2 role
 family, the worked example, macros, tentative parses, overload
 patching, dependent names, stage-2 names under the stage-1 rules).
+
+### 18.7 Lookup provenance (WP-2130)
+
+How each written name was found: the lookup kind, the using-directive
+an unqualified or qualified lookup went through, and the associated
+namespaces and entities of an argument-dependent lookup. Tooling clients
+read it to make a first edit right (a rename across a using-directive,
+or an unqualified call that argument-dependent lookup resolves, is
+edited differently); it is an observation of lookup and never changes a
+lookup result.
+
+#### 18.7.1 Contract
+
+- **Same switch as the table.** Recorded only when
+  `ParseOptions::written_refs` is on. Off, §18.1 holds unchanged: one
+  branch per recording site, nothing allocated (the provenance walk is
+  never called, argument-dependent lookup collects nothing extra), and
+  the snapshot and image layouts are those of a compiler without it.
+- **The entry stays 28 bytes**: `how` is one byte in the entry's former
+  padding (§18.2). The using-directive and the argument-dependent set
+  live in a sparse side table keyed by `WrittenRefId`, with the sets
+  interned (one copy per distinct set), so an entry with neither costs
+  nothing extra. Transient like the entries (§18.5): not in snapshots
+  or images until stage 5 (WP-1934); `truncate` drops the side rows of
+  the entries it drops.
+- **Read access**: `WrittenRef::how`, `WrittenRefs::using_directive(id)`
+  (the directive's `DeclId`), `WrittenRefs::adl_set(id)` (an `AdlSet`:
+  `namespaces()`, `classes()`, `enums()`), `WrittenRefs::adl_set_id(id)`
+  (equal ids are equal sets).
+- **Where the facts come from.** Never from Sema state set by one
+  function and read by another. The scope walk and the qualified
+  namespace search return their provenance as a value beside their
+  result (`Sema::lookup_name_provenance` and `lookup_qualified_walk`: the
+  walks of `lookup_name` and the qualified search, with the
+  directive each nominated declaration came through and the class scope
+  the walk stopped in); argument-dependent lookup returns its
+  associated set and the functions it found that ordinary lookup had
+  already found (`AdlFacts`) to `resolve_unresolved_call`, which applies
+  them to the call's entry once overload resolution has chosen. The
+  facts are taken at the parser sites §18.1 and §18.4 already use, when
+  the entry gets its entity (when it is made, when overload resolution
+  patches it, when a mem-initializer-id is filled), so they never come
+  from instantiation or from implicit names. The walk is re-run at the
+  recording site with the found declaration's name, because the sema
+  actions that build a name expression return the expression, not their
+  lookup result: it is the same pure (`&self`) function over the same
+  scopes, and its answer is used only when it found the same entity (by
+  first declaration), so a disagreement leaves the default `how` and no
+  directive rather than a wrong answer.
+
+#### 18.7.2 `how`
+
+`RefLookup` (`#[repr(u8)]`; dump spelling in parentheses):
+
+| value | meaning |
+|---|---|
+| `None` (`none`) | no entity: a dependent name or a failed resolution (`flags` tell which) |
+| `Unqualified` (`unqualified`) | the scope walk ([basic.lookup.unqual]) |
+| `Qualified` (`qualified`) | lookup in the scope a nested-name-specifier names, a leading `::` included ([basic.lookup.qual]) |
+| `Member` (`member`) | class member access, `.` or `->` (an `operator->` chain included), with or without a nested-name-specifier of its own ([basic.lookup.qual.general]/2, [class.member.lookup]) |
+| `Adl` (`adl`) | the selected function was found only by argument-dependent lookup ([basic.lookup.argdep]) |
+| `Both` (`both`) | ordinary lookup and argument-dependent lookup both found the selected function |
+| `Builtin` (`builtin`) | the entity is an implicit builtin function declaration (`__builtin_*`, a library builtin used before its declaration) |
+| `Injected` (`injected`) | lookup found an injected-class-name ([class.pre]/2, [temp.local]/1): a class's own name inside it or a class derived from it |
+
+The rule, per role that stages 1 and 2 fill:
+
+- **`Expr`, `Concept`**: `Unqualified` or `Qualified` by the qualifier
+  link; a call's name is refined to `Adl` or `Both` (§18.7.4); an
+  implicit builtin is `Builtin`. A lambda capture is `Unqualified`.
+- **`Member`** and a member template's **`Template`** entry (`a.template
+  f<int>()`): `Member` (the `MEMBER` flag). The components of a
+  nested-name-specifier written inside the member access (`a.B::m`)
+  are `nns` entries with their own rule.
+- **`Type`, `Template`, `Nns`**: the scope walk or the qualified lookup
+  ([basic.lookup.general]/4 type-only for a type-specifier,
+  [basic.lookup.qual.general]/1 for a component before `::`):
+  `Unqualified` or `Qualified`, `Injected` when what was found is the
+  injected-class-name of the class whose scope the walk stopped in or of
+  one of its bases (`S` inside `S`'s members, `S<T>` inside the class
+  template `S`, `B` inside a class derived from `B`), or, after a
+  qualifier naming class `C`, `C` itself or a base of `C`. A
+  pseudo-destructor's type name (`p->~T()`) is looked up as a type
+  ([expr.prim.id.dtor]): `Unqualified` or `Qualified`.
+- **`Base`**: the type-only lookup of [class.derived.general]/2 from the
+  class-head: `Unqualified`, `Qualified` or `Injected` by the same rule.
+- **`MemInit`**: [class.base.init]/2 looks an unqualified identifier up
+  in the scope of the constructor's class first: a member is
+  `Unqualified`; a base or, for a delegating constructor, the class
+  itself is found as its injected-class-name, so `Injected`; a qualified
+  one is `Qualified` (or `Injected` by the qualified rule).
+
+Every entry without an entity is `None`. Stage 3's declarative contexts
+(WP-1932) get their `how` when stage 3 adds them (WP-2131).
+
+#### 18.7.3 The using-directive
+
+`using_directive(id)` is set when the unqualified walk or a qualified
+namespace lookup found the entry's declaration only because a
+using-directive nominated the namespace it is a member of
+([namespace.udir]/2, [namespace.qual]/2), and names that directive:
+
+- the scope where the walk stopped (or the qualifier's namespace) gives
+  the declaration from its own members first: then there is no
+  directive, even when a directive also nominates a namespace with the
+  same declaration;
+- a **block-scope** directive, one in a **namespace** and one at **file
+  scope** are recorded the same way; the walk reaches each one where
+  [namespace.udir]/2 makes its namespace's members visible;
+- a **transitive chain** (`using namespace b;` where `b` contains `using
+  namespace a;`, [namespace.udir]/4): the innermost link, the directive
+  that nominates the namespace the declaration is a member of (`using
+  namespace a;` in `b`). When two chains reach the namespace, the one
+  the walk reached it through first (kiln's visible-directive order:
+  innermost scope first, each scope's directives in declaration order,
+  a nominated namespace's own directives right after it);
+- an **inline namespace** is not a directive: a member of an inline
+  namespace of `N` is found as a member of `N` ([namespace.def.general]/7),
+  so `using namespace N;` reaching `N::v1::x` names that directive, and
+  `x` written inside `N` names none. A directive written in an inline
+  namespace of `N` counts as `N`'s;
+- a **using-declaration** is not a directive: `using a::f; f();` has the
+  using-shadow in `found` (§18.2) and no directive. A using-declaration
+  in a nominated namespace (`namespace b { using a::f; } using namespace
+  b; f();`) has both: `found` the shadow, the directive the one naming
+  `b`;
+- a member found in a class scope, a local name, a template parameter
+  and an injected-class-name never have one.
+
+The directive is found from the namespace whose directives nominated the
+declaration's namespace: the namespace-scope ones by its member lists
+(every reopening, through linkage specifications and inline namespaces,
+also when restored from a snapshot), the block-scope ones by the
+block's scope; looked up once per (namespace, nominated) pair and
+cached in the side table.
+
+#### 18.7.4 Argument-dependent lookup
+
+A call whose callee is an unqualified name that argument-dependent
+lookup applies to ([basic.lookup.argdep]/1: not suppressed by a class
+member, a block-scope function declaration or a non-function found by
+ordinary lookup, nor by parentheses) gets, once overload resolution has
+chosen:
+
+- `how`: `Adl` when the winner (its template for a specialization) is
+  one only argument-dependent lookup found; `Both` when ordinary lookup
+  found it and argument-dependent lookup found it again (kiln compares
+  by first declaration, as the candidate set does); else it keeps the
+  ordinary `Unqualified`. For `Both`, `found` and the using-directive
+  describe ordinary lookup's finding, because ordinary lookup alone
+  already makes the call valid: an edit that keeps that path keeps the
+  call, while the argument-dependent path depends on the arguments'
+  types;
+- `adl_set(id)`, whatever `how` is (also `none`, when overload
+  resolution failed after the lookup ran): the associated set
+  ([basic.lookup.argdep]/3) after the associated class template
+  specializations were instantiated. Namespaces are primary contexts
+  (the translation unit for the global namespace), classes and
+  enumerations first declarations. The order is discovery order: the
+  arguments left to right; within an argument's type, an entity before
+  what it brings in (a class, then the class it is a member of, then
+  the entities of its template arguments, then its bases, depth first
+  in base-specifier order; an enumeration, then the class it is a
+  member of); each class's and enumeration's innermost enclosing
+  namespace when the class or enumeration is added; an inline namespace
+  followed by its enclosing namespace, a namespace by its inline
+  namespaces (/3, last sentences); every entity once. A pointer to
+  function adds its parameter and return types' entities, a template
+  specialization its own template arguments' (not a base's), an
+  overload-set argument every candidate's;
+- a **hidden friend** adds nothing to the set: it is found because its
+  class is an associated class (/4.2) and is invisible to ordinary
+  lookup, so a call that selects it is always `Adl`;
+- an operator expression (`a + b`) has no written name and no entry
+  (§18.4), so its argument-dependent lookup is not recorded; the
+  operator-function-id written as a call (`operator+(a, b)`) is an
+  `Expr` entry like any call.
+
+A dependent call in a template pattern performs its argument-dependent
+lookup at instantiation (stage 4): `None`, no set.
+
+#### 18.7.5 The dump
+
+After `exp=` (§18.6), in this order and each only when present:
+
+- `how=<how>` when `how` differs from the default the line already
+  shows: `none` for no entity, `member` with the `MEMBER` flag,
+  `qualified` with a `q=`, else `unqualified`. So the dump prints `adl`,
+  `both`, `builtin` and `injected`, and any disagreement with the
+  default;
+- `udir=<ns>@<line>:<col>`: the nominated namespace's qualified name at
+  the directive's location;
+- `adl-ns=`, `adl-cls=`, `adl-enum=`: the set's namespaces (`::` for the
+  global namespace), classes and enumerations, comma-separated, each
+  printed as `<entity>` is, except that an unnamed class or enumeration
+  prints as `(anonymous)@<line>:<col>` (its location names it); a list
+  that is empty is not printed, and an empty set prints `adl-ns=` alone
+  with nothing after it.
+
+#### 18.7.6 Cost
+
+Off, the recording sites test one `Option` and nothing is allocated;
+on, provenance costs one re-run of the pure lookup walk (§18.7.1) per
+resolved name that names a class (as a type, template, base, nested
+name or mem-initializer) or a namespace member while a using-directive
+exists, plus the side rows. Measured on aarch64 with the harness
+profile, five interleaved rounds, medians (base = WP-2120):
+
+- `<bits/stdc++.h>` `-fsyntax-only`: off 1.14 s / 91.8 MB against base
+  1.16 s / 91.7 MB; on 1.38 s / 151.5 MB against base-on 1.30 s /
+  151.0 MB. 204 820 entries; the table grows from 5 879 696 to
+  5 898 456 bytes (+18 760, 0.09 bytes per entry; 6 422 lines print a
+  `how=`, 103 a `udir=`, 505 an ADL set).
+- `SemaExpr.cpp` (LLVM) `-fsyntax-only`: off 5.77 s / 311.5 MB against
+  base 5.85 s / 311.1 MB; on 6.38 s / 425.3 MB against base-on 6.27 s /
+  422.8 MB. 345 918 entries; the table grows from 9 768 200 to
+  10 015 680 bytes (+247 480, 0.72 bytes per entry; 19 539 lines print a
+  `how=` (15 883 `injected`, 3 074 `both`, 529 `builtin`, 53 `adl`),
+  4 116 a `udir=`, 4 452 an ADL set).
+
+Off, the tracked memory totals are byte-identical to the base and the
+time and peak RSS are within noise. Both dumps are identical to the
+base's once the provenance fields are removed: provenance does not
+change what lookup finds.
+
+Tests: `crates/kiln_ast/src/written_refs.rs` (the entry is still 28
+bytes, sets are interned, truncation drops side rows, off records
+nothing), `tests/conformance/written_refs/provenance-*.cpp` (each `how`
+value; using-directives in a block, a namespace and at file scope, a
+transitive chain, an inline namespace, a using-declaration; ADL through
+a class-type argument, an enumeration, a pointer to function, a template
+specialization's arguments and a hidden friend, with each set derived
+from [basic.lookup.argdep]/3 in a comment; a call both lookups find;
+an operator-function-id call; a qualified name through a namespace
+alias; a member found in a base; unresolved and dependent names).
 
 ## 19. The declaration-extent table (WP-2090)
 

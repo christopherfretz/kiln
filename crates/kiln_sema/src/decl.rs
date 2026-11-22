@@ -12135,7 +12135,7 @@ impl Sema<'_, '_> {
             self.ast.decls.append_member(self.ctx, d);
         }
         if let Some(s) = self.scopes.iter_mut().rev().find(|s| !s.is_transparent()) {
-            s.using_dirs.push(nominated);
+            s.using_dirs.push(d);
             // A namespace-scope directive outlives the scope instance: it
             // is seen from every later reopening of the namespace, from
             // instantiations, and through qualified lookup and other

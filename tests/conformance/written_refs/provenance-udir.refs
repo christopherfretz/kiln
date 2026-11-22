@@ -1,0 +1,20 @@
+39:27-39:29  expr  'dv' -> d::dv@33:5 in=file_scope@39:5 udir=d@37:1
+43:10-43:11  expr  'x' -> a::x@16:5 in=in_block@41:5 udir=a@42:3
+43:14-43:15  expr  'z' -> a::z@22:5 in=in_block@41:5 udir=a@42:3
+47:29-47:30  expr  'w' -> b::w@27:5 in=c::in_namespace@47:5 udir=b@30:1
+47:33-47:34  expr  'y' -> a::y@17:5 in=c::in_namespace@47:5 udir=a@26:1
+50:26-50:27  nns  'b' -> b@25:11 in=qualified@50:5
+50:29-50:30  expr  'x' -> a::x@16:5 q=50:26 in=qualified@50:5 udir=a@26:1
+50:33-50:35  nns  'al' -> al@35:11 in=qualified@50:5
+50:37-50:38  expr  'y' -> a::y@17:5 q=50:33 in=qualified@50:5
+50:41-50:42  nns  'a' -> a@15:11 in=qualified@50:5
+50:44-50:45  expr  'z' -> a::z@22:5 q=50:41 in=qualified@50:5
+50:48-50:49  nns  'a' -> a@15:11 in=qualified@50:5
+50:51-50:56  nns  'inner' -> a::inner@18:11 q=50:48 in=qualified@50:5
+50:58-50:62  expr  'deep' -> a::inner::deep@19:5 q=50:51 in=qualified@50:5
+50:67-50:69  expr  'dv' -> d::dv@33:5 q=:: in=qualified@50:5 udir=d@37:1
+53:7-53:8  nns  'a' -> a@15:11 in=e@52:11
+54:18-54:19  expr  'y' -> a::y@17:5 found=e::y@53:10 in=e::f@54:5
+58:18-58:19  expr  'y' -> a::y@17:5 found=e::y@53:10 in=g::h@58:5 udir=e@57:1
+68:18-68:20  expr  'dk' -> dd::dk@62:5 in=k::m@68:5 udir=dd@66:1
+73:18-73:20  expr  'dv' -> own::dv@72:5 in=own::n@73:5

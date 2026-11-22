@@ -138,6 +138,105 @@ impl RefQualifier {
 pub const REF_DEPENDENT: u8 = 1;
 /// [`WrittenRef::flags`]: lookup or overload resolution failed.
 pub const REF_UNRESOLVED: u8 = 2;
+/// [`WrittenRef::flags`]: a member or member template name written after
+/// `.` or `->` (spec/ast.md §18.7.2).
+pub const REF_MEMBER: u8 = 4;
+
+/// How lookup found a written name (spec/ast.md §18.7.2, WP-2130).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
+pub enum RefLookup {
+    /// No entity: a dependent name or a failed resolution.
+    #[default]
+    None,
+    /// The scope walk ([basic.lookup.unqual]).
+    Unqualified,
+    /// Lookup in the scope a nested-name-specifier names.
+    Qualified,
+    /// Class member access (`.`, `->`).
+    Member,
+    /// The selected function was found only by argument-dependent lookup.
+    Adl,
+    /// Ordinary and argument-dependent lookup both found it.
+    Both,
+    /// An implicit builtin function declaration.
+    Builtin,
+    /// An injected-class-name ([class.pre]/2, [temp.local]/1).
+    Injected,
+}
+
+impl RefLookup {
+    /// The kind as the dump spells it.
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            RefLookup::None => "none",
+            RefLookup::Unqualified => "unqualified",
+            RefLookup::Qualified => "qualified",
+            RefLookup::Member => "member",
+            RefLookup::Adl => "adl",
+            RefLookup::Both => "both",
+            RefLookup::Builtin => "builtin",
+            RefLookup::Injected => "injected",
+        }
+    }
+}
+
+/// The id of an interned argument-dependent set (index + 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AdlSetId(NonZeroU32);
+
+/// The associated namespaces, classes and enumerations of an
+/// argument-dependent lookup ([basic.lookup.argdep]/3) in discovery order
+/// (spec/ast.md §18.7.4), interned as one list.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AdlSet {
+    list: Box<[DeclId]>,
+    namespaces: u32,
+    classes: u32,
+}
+
+impl AdlSet {
+    /// The set of `namespaces` (primary contexts), `classes` and `enums`
+    /// (first declarations).
+    pub fn new(namespaces: &[DeclId], classes: &[DeclId], enums: &[DeclId]) -> AdlSet {
+        let list: Vec<DeclId> = namespaces.iter().chain(classes).chain(enums).copied().collect();
+        AdlSet {
+            list: list.into_boxed_slice(),
+            namespaces: namespaces.len() as u32,
+            classes: classes.len() as u32,
+        }
+    }
+
+    /// The associated namespaces (the translation unit for the global
+    /// namespace).
+    pub fn namespaces(&self) -> &[DeclId] {
+        &self.list[..self.namespaces as usize]
+    }
+
+    /// The associated classes.
+    pub fn classes(&self) -> &[DeclId] {
+        let n = self.namespaces as usize;
+        &self.list[n..n + self.classes as usize]
+    }
+
+    /// The associated enumerations.
+    pub fn enums(&self) -> &[DeclId] {
+        &self.list[(self.namespaces + self.classes) as usize..]
+    }
+
+    /// True when nothing is associated.
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+}
+
+/// The side row of an entry with more provenance than its `how`
+/// (spec/ast.md §18.7.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RefExtra {
+    udir: Option<DeclId>,
+    adl: Option<AdlSetId>,
+}
 
 /// One written name (spec/ast.md §18.2; 28 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,8 +254,27 @@ pub struct WrittenRef {
     pub qualifier: RefQualifier,
     /// The syntactic role.
     pub role: RefRole,
-    /// [`REF_DEPENDENT`], [`REF_UNRESOLVED`].
+    /// [`REF_DEPENDENT`], [`REF_UNRESOLVED`], [`REF_MEMBER`].
     pub flags: u8,
+    /// How lookup found the name (§18.7.2).
+    pub how: RefLookup,
+}
+
+impl WrittenRef {
+    /// The `how` the entry's other fields imply (spec/ast.md §18.7.5):
+    /// `None` without an entity, `Member` after `.`/`->`, `Qualified`
+    /// after a qualifier, else `Unqualified`.
+    pub fn default_how(&self) -> RefLookup {
+        if self.entity.is_none() {
+            RefLookup::None
+        } else if self.flags & REF_MEMBER != 0 {
+            RefLookup::Member
+        } else if self.qualifier != RefQualifier::NONE {
+            RefLookup::Qualified
+        } else {
+            RefLookup::Unqualified
+        }
+    }
 }
 
 /// A position in the table and the decl arena, for claims and rollback.
@@ -177,6 +295,15 @@ pub struct WrittenRefs {
     /// Entries of overloaded names awaiting overload resolution, by the
     /// overload set's expression.
     pending: HashMap<ExprId, WrittenRefId>,
+    /// The side rows (§18.7.1): the using-directive and the
+    /// argument-dependent set of the entries that have one.
+    extra: HashMap<WrittenRefId, RefExtra>,
+    /// The interned argument-dependent sets, by `AdlSetId` index.
+    adl_sets: Vec<AdlSet>,
+    adl_index: HashMap<AdlSet, AdlSetId>,
+    /// The using-directive in namespace `.0` that nominates `.1`, once
+    /// looked up (§18.7.3).
+    udir_cache: HashMap<(DeclId, DeclId), Option<DeclId>>,
 }
 
 impl WrittenRefs {
@@ -267,14 +394,92 @@ impl WrittenRefs {
     }
 
     /// Overload resolution selected `entity` (found as `found`) for the
-    /// overload set `e`: patches the entry naming `e`, once.
-    pub fn resolve(&mut self, e: ExprId, entity: DeclId, found: Option<DeclId>) {
-        if let Some(id) = self.pending.remove(&e) {
-            let r = &mut self.entries[id.index()];
-            r.entity = Some(entity);
-            r.found = found.filter(|&f| f != entity);
-            r.flags &= !(REF_DEPENDENT | REF_UNRESOLVED);
+    /// overload set `e`: patches the entry naming `e`, once, and returns
+    /// it.
+    pub fn resolve(
+        &mut self,
+        e: ExprId,
+        entity: DeclId,
+        found: Option<DeclId>,
+    ) -> Option<WrittenRefId> {
+        let id = self.pending.remove(&e)?;
+        let r = &mut self.entries[id.index()];
+        r.entity = Some(entity);
+        r.found = found.filter(|&f| f != entity);
+        r.flags &= !(REF_DEPENDENT | REF_UNRESOLVED);
+        Some(id)
+    }
+
+    /// The entry naming the overload set `e`, while it awaits resolution.
+    pub fn pending_for(&self, e: ExprId) -> Option<WrittenRefId> {
+        self.pending.get(&e).copied()
+    }
+
+    /// Sets how entry `id` was found (§18.7.2).
+    pub fn set_how(&mut self, id: WrittenRefId, how: RefLookup) {
+        self.entries[id.index()].how = how;
+    }
+
+    /// Sets (or clears) the using-directive entry `id` was found through
+    /// (§18.7.3).
+    pub fn set_using_directive(&mut self, id: WrittenRefId, udir: Option<DeclId>) {
+        match udir {
+            Some(d) => self.extra.entry(id).or_default().udir = Some(d),
+            None => {
+                if let Some(x) = self.extra.get_mut(&id) {
+                    x.udir = None;
+                    if x.adl.is_none() {
+                        self.extra.remove(&id);
+                    }
+                }
+            }
         }
+    }
+
+    /// Sets the argument-dependent set of entry `id` (§18.7.4), interned.
+    pub fn set_adl(&mut self, id: WrittenRefId, set: AdlSet) {
+        let sid = if let Some(&s) = self.adl_index.get(&set) {
+            s
+        } else {
+            let n = u32::try_from(self.adl_sets.len() + 1).expect("ADL sets exhausted");
+            let s = AdlSetId(NonZeroU32::new(n).expect("index + 1 is never 0"));
+            self.adl_sets.push(set.clone());
+            self.adl_index.insert(set, s);
+            s
+        };
+        self.extra.entry(id).or_default().adl = Some(sid);
+    }
+
+    /// The using-directive entry `id` was found through (§18.7.3).
+    pub fn using_directive(&self, id: WrittenRefId) -> Option<DeclId> {
+        self.extra.get(&id).and_then(|x| x.udir)
+    }
+
+    /// The interned id of entry `id`'s argument-dependent set: equal ids
+    /// are equal sets.
+    pub fn adl_set_id(&self, id: WrittenRefId) -> Option<AdlSetId> {
+        self.extra.get(&id).and_then(|x| x.adl)
+    }
+
+    /// Entry `id`'s argument-dependent set (§18.7.4).
+    pub fn adl_set(&self, id: WrittenRefId) -> Option<&AdlSet> {
+        self.adl_set_id(id).map(|s| &self.adl_sets[(s.0.get() - 1) as usize])
+    }
+
+    /// The number of distinct argument-dependent sets.
+    pub fn adl_set_count(&self) -> usize {
+        self.adl_sets.len()
+    }
+
+    /// The cached using-directive of namespace `holder` nominating
+    /// `nominated` (§18.7.3): `None` when not looked up yet.
+    pub fn cached_directive(&self, holder: DeclId, nominated: DeclId) -> Option<Option<DeclId>> {
+        self.udir_cache.get(&(holder, nominated)).copied()
+    }
+
+    /// Caches the answer of [`cached_directive`](Self::cached_directive).
+    pub fn cache_directive(&mut self, holder: DeclId, nominated: DeclId, d: Option<DeclId>) {
+        self.udir_cache.insert((holder, nominated), d);
     }
 
     /// The table position, with `decls` the decl arena's length now.
@@ -290,6 +495,7 @@ impl WrittenRefs {
         }
         self.entries.truncate(n);
         self.pending.retain(|_, id| id.index() < n);
+        self.extra.retain(|id, _| id.index() < n);
     }
 
     /// Declaration `d`, whose names were parsed after `m`, claims them:
@@ -312,12 +518,37 @@ impl WrittenRefs {
         }
         let sz = size_of::<WrittenRef>() as u64;
         let pend = (size_of::<(ExprId, WrittenRefId)>() as u64) * 2;
+        let (prov_live, prov_reserved) = self.provenance_mem();
         Some(MemRow::new(
             "written_refs",
             self.entries.len() as u64,
-            self.entries.len() as u64 * sz + self.pending.len() as u64 * pend,
-            self.entries.capacity() as u64 * sz + self.pending.capacity() as u64 * pend,
+            self.entries.len() as u64 * sz + self.pending.len() as u64 * pend + prov_live,
+            self.entries.capacity() as u64 * sz
+                + self.pending.capacity() as u64 * pend
+                + prov_reserved,
         ))
+    }
+
+    /// The bytes (live, reserved) of the provenance side tables
+    /// (§18.7.6): side rows, interned sets (each list kept in the set
+    /// vector and as the interning key), the directive cache. A hash map
+    /// slot counts twice its pair (control bytes and load factor).
+    pub fn provenance_mem(&self) -> (u64, u64) {
+        let ext = (size_of::<(WrittenRefId, RefExtra)>() as u64) * 2;
+        let cache = (size_of::<((DeclId, DeclId), Option<DeclId>)>() as u64) * 2;
+        let set = size_of::<AdlSet>() as u64;
+        let key = (size_of::<(AdlSet, AdlSetId)>() as u64) * 2;
+        let lists: u64 = self.adl_sets.iter().map(|s| 2 * 4 * s.list.len() as u64).sum();
+        let live = self.extra.len() as u64 * ext
+            + self.udir_cache.len() as u64 * cache
+            + self.adl_sets.len() as u64 * (set + key)
+            + lists;
+        let reserved = self.extra.capacity() as u64 * ext
+            + self.udir_cache.capacity() as u64 * cache
+            + self.adl_sets.capacity() as u64 * set
+            + self.adl_index.capacity() as u64 * key
+            + lists;
+        (live, reserved)
     }
 
     /// The dump (spec/ast.md §18.6): one line per entry.
@@ -361,7 +592,8 @@ impl WrittenRefs {
             out.push_str(&pos(ast.decls.get(d).loc()));
         };
         let mut out = String::new();
-        for r in &self.entries {
+        for (i, r) in self.entries.iter().enumerate() {
+            let id = WrittenRefId::from_index(i);
             let (lf, lo) = pos2(r.range.lo);
             let (hf, hi) = pos2(r.range.hi);
             let hi = if hf == lf { hi } else { hf + &hi };
@@ -403,9 +635,65 @@ impl WrittenRefs {
                 out.push_str(" exp=");
                 out.push_str(&pos(sm.expansion_loc(r.range.lo)));
             }
+            // The lookup provenance (§18.7.5).
+            self.dump_provenance(id, ast, &names, &pos, &decl, &mut out);
             out.push('\n');
         }
         out
+    }
+
+    /// The lookup-provenance fields of entry `id`'s dump line (§18.7.5).
+    fn dump_provenance(
+        &self,
+        id: WrittenRefId,
+        ast: &crate::Ast,
+        names: &crate::diag_names::DiagNames<'_>,
+        pos: &dyn Fn(Loc) -> String,
+        decl: &dyn Fn(DeclId, &mut String),
+        out: &mut String,
+    ) {
+        let r = self.get(id);
+        if r.how != r.default_how() {
+            out.push_str(" how=");
+            out.push_str(r.how.spelling());
+        }
+        if let Some(u) = self.using_directive(id) {
+            out.push_str(" udir=");
+            let mut s = String::new();
+            if let Some(n) = ast.using_target(u) {
+                names.write_decl_name(n, true, &mut s);
+            }
+            out.push_str(&s);
+            out.push('@');
+            out.push_str(&pos(ast.decls.get(u).loc()));
+        }
+        if let Some(set) = self.adl_set(id) {
+            let list = |label: &str, v: &[DeclId], always: bool, out: &mut String| {
+                if v.is_empty() && !always {
+                    return;
+                }
+                out.push(' ');
+                out.push_str(label);
+                for (k, &d) in v.iter().enumerate() {
+                    if k > 0 {
+                        out.push(',');
+                    }
+                    if d == ast.tu {
+                        out.push_str("::");
+                    } else if ast.decls.get(d).name() == crate::names::DeclName::EMPTY {
+                        // An unnamed class or enumeration: its location
+                        // names it, without a path-bearing spelling.
+                        out.push_str("(anonymous)@");
+                        out.push_str(&pos(ast.decls.get(d).loc()));
+                    } else {
+                        decl(d, out);
+                    }
+                }
+            };
+            list("adl-ns=", set.namespaces(), set.is_empty(), out);
+            list("adl-cls=", set.classes(), false, out);
+            list("adl-enum=", set.enums(), false, out);
+        }
     }
 }
 
@@ -422,6 +710,7 @@ mod tests {
             qualifier: RefQualifier::NONE,
             role: RefRole::Expr,
             flags: 0,
+            how: RefLookup::None,
         }
     }
 
@@ -477,10 +766,12 @@ mod tests {
         let e = ExprId::new(7);
         t.defer(id, e);
         let f = DeclId::new(5);
-        t.resolve(e, f, Some(f));
+        assert_eq!(t.pending_for(e), Some(id));
+        assert_eq!(t.resolve(e, f, Some(f)), Some(id));
+        assert_eq!(t.pending_for(e), None);
         assert_eq!(t.get(id).entity, Some(f));
         assert_eq!(t.get(id).found, None);
-        t.resolve(e, DeclId::new(6), None);
+        assert_eq!(t.resolve(e, DeclId::new(6), None), None);
         assert_eq!(t.get(id).entity, Some(f));
         let m = t.mark(0);
         let id2 = t.push(entry(None)).unwrap();
@@ -488,5 +779,55 @@ mod tests {
         t.truncate(m);
         assert_eq!(t.len(), 1);
         assert!(!t.has_pending());
+    }
+
+    #[test]
+    fn default_how_follows_the_syntax() {
+        let mut r = entry(None);
+        assert_eq!(r.default_how(), RefLookup::None);
+        r.entity = Some(DeclId::new(3));
+        assert_eq!(r.default_how(), RefLookup::Unqualified);
+        r.qualifier = RefQualifier::GLOBAL;
+        assert_eq!(r.default_how(), RefLookup::Qualified);
+        r.flags |= REF_MEMBER;
+        assert_eq!(r.default_how(), RefLookup::Member);
+    }
+
+    #[test]
+    fn adl_sets_are_interned_and_truncate_drops_side_rows() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let (ns, cls, en) = (DeclId::new(2), DeclId::new(3), DeclId::new(4));
+        let first = t.push(entry(None)).unwrap();
+        let second = t.push(entry(None)).unwrap();
+        t.set_adl(first, AdlSet::new(&[ns], &[cls], &[en]));
+        t.set_adl(second, AdlSet::new(&[ns], &[cls], &[en]));
+        assert_eq!(t.adl_set_count(), 1);
+        assert_eq!(t.adl_set_id(first), t.adl_set_id(second));
+        let set = t.adl_set(first).unwrap();
+        assert_eq!(
+            (set.namespaces(), set.classes(), set.enums()),
+            (&[ns][..], &[cls][..], &[en][..])
+        );
+        // A set differing only in where the lists split is another set.
+        t.set_adl(second, AdlSet::new(&[ns, cls], &[], &[en]));
+        assert_eq!(t.adl_set_count(), 2);
+        assert_ne!(t.adl_set_id(first), t.adl_set_id(second));
+        t.set_using_directive(second, Some(DeclId::new(9)));
+        assert_eq!(t.using_directive(second), Some(DeclId::new(9)));
+        assert_eq!(t.using_directive(first), None);
+        t.set_how(second, RefLookup::Adl);
+        assert_eq!(t.get(second).how, RefLookup::Adl);
+        t.truncate(RefMark { entries: 1, decls: 0 });
+        assert_eq!(t.using_directive(second), None);
+        assert!(t.adl_set(first).is_some());
+        assert!(t.provenance_mem().0 > 0);
+    }
+
+    #[test]
+    fn off_has_no_provenance() {
+        let t = WrittenRefs::default();
+        assert_eq!(t.provenance_mem(), (0, 0));
+        assert_eq!(t.adl_set_count(), 0);
     }
 }

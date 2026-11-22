@@ -30,12 +30,12 @@
 27:42-27:43  expr  'k' -> k@27:26 in=pick(Mode, Color)::(lambda)::operator()@27:14
 27:46-27:47  expr  'c' -> c@18:24 in=pick(Mode, Color)::(lambda)::operator()@27:14
 28:3-28:4  type  'V' -> V@10:8 in=a@28:5
-29:15-29:25  expr  'operator==' -> operator==@11:6 in=same@29:8
+29:15-29:25  expr  'operator==' -> operator==@11:6 in=same@29:8 how=both adl-ns=:: adl-cls=V@10:8
 29:26-29:27  expr  'a' -> a@28:5 in=same@29:8
 29:29-29:30  expr  'b' -> b@28:11 in=same@29:8
 30:10-30:13  expr  'add' -> add@27:8 in=pick@18:5
-30:14-30:19  expr  'twice' -> twice<int>@13:22 found=twice@13:22 in=pick@18:5
+30:14-30:19  expr  'twice' -> twice<int>@13:22 found=twice@13:22 in=pick@18:5 adl-ns=
 30:25-30:26  expr  'n' -> n@26:7 in=pick@18:5
 30:31-30:35  expr  'zero' -> zero@14:32 found=zero@14:32 in=pick@18:5
 30:43-30:47  expr  'same' -> same@29:8 in=pick@18:5
-30:54-30:66  expr  'operator""_k' -> operator""_k@12:20 in=pick@18:5
+30:54-30:66  expr  'operator""_k' -> operator""_k@12:20 in=pick@18:5 adl-ns=

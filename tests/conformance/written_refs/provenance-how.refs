@@ -1,0 +1,41 @@
+13:18-13:20  nns  'ns' -> ns@7:11 in=Derived@13:8
+13:22-13:26  base  'Base' -> ns::Base@8:8 q=13:18 in=Derived@13:8
+17:3-17:10  type  'Derived' -> Derived@13:8 in=Derived::self@17:12 how=injected
+14:15-14:19  mem-init  'Base' -> ns::Base@8:8 in=Derived::Derived@14:3 how=injected
+14:24-14:27  mem-init  'own' -> Derived::own@16:7 in=Derived::Derived@14:3
+15:18-15:25  mem-init  'Derived' -> Derived@13:8 in=Derived::Derived@15:3 how=injected
+18:22-18:24  expr  'bm' -> ns::Base::bm@10:7 in=Derived::get@18:7
+18:27-18:31  nns  'Base' -> ns::Base@8:8 in=Derived::get@18:7 how=injected
+18:33-18:35  expr  'bm' -> ns::Base::bm@10:7 q=18:27 in=Derived::get@18:7
+18:38-18:45  nns  'Derived' -> Derived@13:8 in=Derived::get@18:7 how=injected
+18:47-18:50  expr  'own' -> Derived::own@16:7 q=18:38 in=Derived::get@18:7
+21:8-21:9  type  'T' -> T@20:17 in=Tmpl::next@21:12
+21:3-21:7  template  'Tmpl' -> Tmpl@20:27 in=Tmpl::next@21:12 how=injected
+22:3-22:7  type  'Tmpl' -> Tmpl@20:27 in=Tmpl::plain@22:9 how=injected
+23:3-23:4  type  'T' -> T@20:17 in=Tmpl::t@23:5
+26:3-26:10  type  'Derived' -> Derived@13:8 in=Arrow::operator->@26:12
+29:3-29:8  type  'Arrow' -> Arrow@25:8 in=Chain::operator->@29:9
+34:9-34:16  type  'Derived' -> Derived@13:8 in=d@34:17
+34:20-34:27  type  'Derived' -> Derived@13:8 in=p@34:29
+34:32-34:37  type  'Chain' -> Chain@28:8 in=c@34:38
+35:11-35:12  expr  'd' -> d@34:17 in=r@35:7
+35:13-35:16  member  'own' -> Derived::own@16:7 in=r@35:7
+35:19-35:20  expr  'p' -> p@34:29 in=r@35:7
+35:22-35:25  member  'own' -> Derived::own@16:7 in=r@35:7
+35:28-35:29  expr  'c' -> c@34:38 in=r@35:7
+35:31-35:34  member  'own' -> Derived::own@16:7 in=r@35:7
+35:37-35:38  expr  'd' -> d@34:17 in=r@35:7
+35:39-35:41  member  'bm' -> ns::Base::bm@10:7 in=r@35:7
+35:44-35:45  expr  'd' -> d@34:17 in=r@35:7
+35:46-35:48  nns  'ns' -> ns@7:11 in=r@35:7
+35:50-35:54  nns  'Base' -> ns::Base@8:8 q=35:46 in=r@35:7
+35:56-35:58  member  'bm' -> ns::Base::bm@10:7 q=35:50 in=r@35:7
+35:63-35:65  nns  'ns' -> ns@7:11 q=:: in=r@35:7
+35:67-35:71  type  'Base' -> ns::Base@8:8 q=35:63 in=r@35:7
+35:75-35:77  member  'bm' -> ns::Base::bm@10:7 in=r@35:7
+36:3-36:6  type  'Gen' -> Gen@31:8 in=gen@36:7
+37:10-37:11  expr  'r' -> r@35:7 in=use@34:5
+37:14-37:27  expr  '__builtin_abs' -> __builtin_abs@37:14 in=use@34:5 how=builtin
+37:28-37:29  expr  'r' -> r@35:7 in=use@34:5
+37:33-37:36  expr  'gen' -> gen@36:7 in=use@34:5
+37:46-37:48  template  'mt' -> Gen::mt<int>@32:26 found=Gen::mt@32:26 in=use@34:5

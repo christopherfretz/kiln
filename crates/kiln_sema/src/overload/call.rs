@@ -241,15 +241,37 @@ impl Sema<'_, '_> {
     /// best viable function and whether only argument-dependent lookup
     /// found it (clang's `IsADLCandidate`, the call's `adl` flag; §2.2),
     /// or `None` after diagnosing.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "lookup, ADL, the one-candidate path and the candidate set meet here"
-    )]
     pub(crate) fn resolve_unresolved_call(
         &mut self,
         callee: ExprId,
         args: &[ExprId],
         braced: &[Option<InitList>],
+    ) -> Option<(ExprId, bool)> {
+        // The callee's written name, when recorded (spec/ast.md §18.7.4):
+        // its argument-dependent lookup is described once resolved.
+        let wref = self.pending_written_ref(self.ignore_parens(callee));
+        let mut facts = None;
+        let r =
+            self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, wref.is_some());
+        if let Some(w) = wref {
+            self.note_written_call_lookup(w, facts);
+        }
+        r
+    }
+
+    /// [`Sema::resolve_unresolved_call`]; `facts` receives what
+    /// argument-dependent lookup saw when `explain`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "lookup, ADL, the one-candidate path and the candidate set meet here"
+    )]
+    fn resolve_unresolved_call_inner(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        braced: &[Option<InitList>],
+        facts: &mut Option<super::adl::AdlFacts>,
+        explain: bool,
     ) -> Option<(ExprId, bool)> {
         let ule = self.ignore_parens(callee);
         let n = *self.ast.exprs.get(ule);
@@ -266,7 +288,7 @@ impl Sema<'_, '_> {
             .collect();
         if adl {
             let at = self.begin_loc(callee);
-            self.adl_lookup_dn(name, args, at, &mut cands);
+            *facts = self.adl_lookup_explained(name, args, at, &mut cands, explain);
             // The set the callee refers to includes what
             // argument-dependent lookup adds ([basic.link]/14, WP-1819).
             if self.ast.modules.active && cands.len() > decls.len() {

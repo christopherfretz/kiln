@@ -32,9 +32,10 @@ impl Parser<'_, '_> {
         let outer = self.wname.take();
         let outer_role = self.wname_role.take();
         let r = f(self);
+        let member = role == RefRole::Member;
         let role = self.wname_role.take().unwrap_or(role);
         if let Some((range, q)) = self.wname.take() {
-            self.s.note_written_name(r, range, role, q);
+            self.s.note_written_name(r, range, role, q, member);
         }
         self.wname = outer;
         self.wname_role = outer_role;

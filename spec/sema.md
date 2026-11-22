@@ -780,7 +780,9 @@ translation unit that fails costs about what it costs clang:
   lookup into it; a directive inside an inline namespace is also
   recorded on each enclosing namespace up to the first non-inline one
   ([namespace.def.general]/7). A block-scope directive stays on its
-  scope. Unqualified lookup (`visible_using_directives`) collects the
+  scope (`Scope::using_dirs`, the directive declarations themselves, so
+  lookup provenance can name the one a name came through, spec/ast.md
+  §18.7.3). Unqualified lookup (`visible_using_directives`) collects the
   directives of the scopes on the stack, then closes them transitively
   over the nominated namespaces' own directives; each nominated
   namespace `N` is searched at the nearest enclosing namespace that
