@@ -135,6 +135,36 @@ pub fn make_engine<'sm>(
     }
 }
 
+/// Makes the engines of the driver's own reports that are not the
+/// driver's main engine or a job's (the driver's warnings, the PCH
+/// probe's). The `kiln` executable's are [`make_engine`] over standard
+/// error ([`SharedWriter`]); the library entry ([`front_end`]) counts
+/// what each reported.
+pub(crate) trait Engines {
+    /// An engine over `sm` with `opts`, `prefix: ` before each text
+    /// diagnostic.
+    fn make<'s>(
+        &self,
+        sm: &'s SourceManager,
+        opts: &DiagOptions,
+        prefix: Option<&str>,
+    ) -> DiagEngine<'s>;
+
+    /// `e`, made by [`Engines::make`], reports nothing more.
+    fn done(&self, _e: &DiagEngine<'_>) {}
+}
+
+impl Engines for SharedWriter {
+    fn make<'s>(
+        &self,
+        sm: &'s SourceManager,
+        opts: &DiagOptions,
+        prefix: Option<&str>,
+    ) -> DiagEngine<'s> {
+        make_engine(sm, opts, self.clone(), prefix)
+    }
+}
+
 /// `-fkiln-memory-report` (spec/driver.md): one line per row of `r`,
 /// `memory: <name> count=N live=N reserved=N`, then `memory: total
 /// live=N reserved=N` ([`MemReport::live_bytes`], which leaves out the
@@ -609,12 +639,12 @@ fn fp_warning_diags(args: &Args, inputs: &[&args::Input]) -> Vec<Diag> {
     (0..jobs).flat_map(|_| one.iter().cloned()).collect()
 }
 
-fn driver_warnings(
+pub(crate) fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
     inputs: &[&args::Input],
     diag_opts: &DiagOptions,
-    stderr: &SharedWriter,
+    engines: &dyn Engines,
 ) -> bool {
     let promoted = args.promoted_inputs(inputs);
     let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
@@ -677,12 +707,7 @@ fn driver_warnings(
         return false;
     }
     let sm = SourceManager::new();
-    let e = make_engine(
-        &sm,
-        &codegen_cmd::driver_diag_options(diag_opts),
-        stderr.clone(),
-        Some(&args.program),
-    );
+    let e = engines.make(&sm, &codegen_cmd::driver_diag_options(diag_opts), Some(&args.program));
     for (_, (from, to)) in promoted {
         Diag::new(DiagId::drv_treating_input_as_cxx, Span::INVALID).arg(from).arg(to).emit(&e);
     }
@@ -729,6 +754,7 @@ fn driver_warnings(
         }
     }
     e.flush();
+    engines.done(&e);
     e.error_count() > 0
 }
 
@@ -768,7 +794,7 @@ fn unused_phase_args(args: &Args, inputs: &[&args::Input]) -> Vec<String> {
 
 /// clang's x86-64 warning for `-mlarge-data-threshold=` without
 /// `-mcmodel=medium` / `large`, once per compile job (WP-1419).
-fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
+pub(crate) fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
     for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
         Diag::new(DiagId::drv_large_data_threshold_invalid_code_model, Span::INVALID)
             .arg("mlarge-data-threshold=")
@@ -777,7 +803,7 @@ fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.
-fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
+pub(crate) fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
     args.inputs
         .iter()
         .filter(|i| {
@@ -831,6 +857,134 @@ pub(crate) fn toolchain_of(args: &Args, drv: &DiagEngine<'_>) -> Toolchain {
     tc
 }
 
+/// The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
+/// compiler errors"); per thread, so set (or cleared) on every run.
+pub(crate) fn crash_for_testing(args: &Args) {
+    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
+    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
+        // Entering the requested phase panics: a crash outside any input.
+        drop(kiln_source::activity::enter(
+            kiln_source::activity::Phase::Driver,
+            kiln_source::Loc::INVALID,
+        ));
+    }
+}
+
+/// The diagnostic options of the command line's jobs.
+pub(crate) fn diag_options(args: &Args) -> DiagOptions {
+    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
+    diag_opts.clang_compat = args.predef.clang_compat.major();
+    diag_opts
+}
+
+/// The options of the driver's main engine: the jobs' without `-W` and
+/// `-R`.
+pub(crate) fn driver_options(diag_opts: &DiagOptions) -> DiagOptions {
+    let mut drv_opts = diag_opts.clone();
+    drv_opts.warnings.clear();
+    drv_opts.remarks.clear();
+    drv_opts
+}
+
+/// The driver's checks of the command line before the toolchain is
+/// built, reported to `drv`.
+pub(crate) fn command_line_checks(args: &Args, drv: &DiagEngine<'_>) {
+    for e in &args.errors {
+        emit_arg_error(e, drv);
+    }
+    // spec/driver.md "Back-end selection": a bad `KILN_BACKEND` is a
+    // usage error, as a bad `-fkiln-backend=` is.
+    if let Err((arg, v)) = hod::selected(args) {
+        Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(arg).arg(v).emit(drv);
+    }
+    for f in &args.frameworks {
+        Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(drv);
+    }
+    // spec/driver.md "Time trace": clang checks the granularity only when
+    // a compiler job writes the trace.
+    if let Err((flag, value)) = time_trace::settings(args) {
+        Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(drv);
+    }
+}
+
+/// The driver's checks of the command line against the toolchain `tc`
+/// (target features, sanitizers), reported to `drv`.
+pub(crate) fn toolchain_checks(args: &Args, tc: &Toolchain, drv: &DiagEngine<'_>) {
+    let (target_features, feature_errors) = features::resolve(args, &tc.target);
+    for e in &feature_errors {
+        emit_arg_error(e, drv);
+    }
+    // spec/driver.md "Sanitizers".
+    let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
+    // WP-1151: clang's `hasTargetFeatureMTE`, by `-fclang-compat=`.
+    let mte = target_features.memtag_hw;
+    for e in &sanitize_errors {
+        emit_arg_error(e, drv);
+    }
+    for f in &args.sanitize.ignorelists {
+        if !std::path::Path::new(f).exists() {
+            emit_arg_error(&ArgError::NoSuchFile(f.clone()), drv);
+        }
+    }
+    // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
+    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
+    {
+        emit_arg_error(e, drv);
+    }
+    // WP-1863: `-fsanitize-coverage=` and its lists come next in clang.
+    for e in &args.sanitize.coverage_errors(sanitize.opts.kinds, args.clang22()) {
+        emit_arg_error(e, drv);
+    }
+    // WP-1138: clang checks the target feature after the option errors.
+    for e in &sanitize.hardware_errors(tc.target.is_aarch64(), mte) {
+        emit_arg_error(e, drv);
+    }
+}
+
+/// Whether the command line has no input to run (`inputs` are those that
+/// exist): clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`,
+/// `-rpath`, `-z`, `-r`) as inputs, so `clang++ -Wl,--version` runs the
+/// linker alone (Meson's linker probe, WP-920).
+fn no_inputs(args: &Args, inputs: &[&args::Input]) -> bool {
+    let linker_inputs = args.link.iter().any(|l| l.kind.is_input());
+    inputs.is_empty() && !(linker_inputs && args.inputs.is_empty())
+}
+
+/// The driver's checks of the inputs and the action, reported to `drv`
+/// (`inputs` are those that exist).
+pub(crate) fn input_checks(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&args::Input],
+    drv: &DiagEngine<'_>,
+) {
+    if no_inputs(args, inputs) {
+        Diag::new(DiagId::drv_no_input_files, Span::INVALID).emit(drv);
+    }
+    // WP-1419: clang 19 reports an unclaimed target-specific option (the
+    // x86-only `-mlarge-data-threshold=` on `AArch64`) after building the
+    // jobs, and only when the driver saw no error (clang 22 reports it
+    // with the target's other errors, `features::resolve`).
+    if args.codegen.large_data_threshold.is_some()
+        && tc.target.is_aarch64()
+        && args.predef.clang_compat != kiln_pp::ClangCompat::Clang22
+        && drv.error_count() == 0
+    {
+        let t = args.target.as_deref().unwrap_or(tc.target.triple);
+        emit_arg_error(
+            &ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()),
+            drv,
+        );
+    }
+    if drv.error_count() == 0 {
+        check_action(args, drv);
+    }
+    if drv.error_count() == 0 && args.deps.missing_generated && args.deps.only.is_none() {
+        // clang `Clang::ConstructJob`: `-MG` only lists headers for `-M`/`-MM`.
+        Diag::new(DiagId::drv_mg_requires_m_or_mm, Span::INVALID).emit(drv);
+    }
+}
+
 /// Runs the driver on `argv` (without the program name) as `kiln++`: every
 /// input is C++ unless `-x` or `--driver-mode=gcc` says otherwise. Returns
 /// the exit code: 0 on success, 1 on any error (clang's convention).
@@ -852,70 +1006,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     let args = Args::parse_as(argv0, &command_line);
     pch_snapshot::phase("arguments");
-    // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
-    // compiler errors"); per thread, so set (or cleared) on every run.
-    kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
-    if args.crash_for_testing == Some(kiln_source::activity::Phase::Driver) {
-        // Entering the requested phase panics: a crash outside any input.
-        drop(kiln_source::activity::enter(
-            kiln_source::activity::Phase::Driver,
-            kiln_source::Loc::INVALID,
-        ));
-    }
-    let mut diag_opts = DiagOptions::from_args(&args.diag_args);
-    diag_opts.clang_compat = args.predef.clang_compat.major();
+    crash_for_testing(&args);
+    let diag_opts = diag_options(&args);
     let dsm = SourceManager::new();
-    let mut drv_opts = diag_opts.clone();
-    drv_opts.warnings.clear();
-    drv_opts.remarks.clear();
-    let drv = make_engine(&dsm, &drv_opts, io.stderr.clone(), Some(&args.program));
-    for e in &args.errors {
-        emit_arg_error(e, &drv);
-    }
-    // spec/driver.md "Back-end selection": a bad `KILN_BACKEND` is a
-    // usage error, as a bad `-fkiln-backend=` is.
-    if let Err((arg, v)) = hod::selected(&args) {
-        Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(arg).arg(v).emit(&drv);
-    }
-    for f in &args.frameworks {
-        Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);
-    }
-    // spec/driver.md "Time trace": clang checks the granularity only when
-    // a compiler job writes the trace.
-    if let Err((flag, value)) = time_trace::settings(&args) {
-        Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(&drv);
-    }
+    let drv =
+        make_engine(&dsm, &driver_options(&diag_opts), io.stderr.clone(), Some(&args.program));
+    command_line_checks(&args, &drv);
     let tc = toolchain_of(&args, &drv);
     pch_snapshot::phase("toolchain");
-    let (target_features, feature_errors) = features::resolve(&args, &tc.target);
-    for e in &feature_errors {
-        emit_arg_error(e, &drv);
-    }
-    // spec/driver.md "Sanitizers".
-    let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
-    // WP-1151: clang's `hasTargetFeatureMTE`, by `-fclang-compat=`.
-    let mte = target_features.memtag_hw;
-    for e in &sanitize_errors {
-        emit_arg_error(e, &drv);
-    }
-    for f in &args.sanitize.ignorelists {
-        if !std::path::Path::new(f).exists() {
-            emit_arg_error(&ArgError::NoSuchFile(f.clone()), &drv);
-        }
-    }
-    // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
-    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
-    {
-        emit_arg_error(e, &drv);
-    }
-    // WP-1863: `-fsanitize-coverage=` and its lists come next in clang.
-    for e in &args.sanitize.coverage_errors(sanitize.opts.kinds, args.clang22()) {
-        emit_arg_error(e, &drv);
-    }
-    // WP-1138: clang checks the target feature after the option errors.
-    for e in &sanitize.hardware_errors(tc.target.is_aarch64(), mte) {
-        emit_arg_error(e, &drv);
-    }
+    toolchain_checks(&args, &tc, &drv);
     if args.help {
         let _ = io.stdout.write_all(help::HELP.as_bytes());
         return 0;
@@ -937,38 +1036,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         print_version(&mut io.stderr, &tc, true);
     }
     let inputs = existing_inputs(&args, &drv);
-    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`, `-rpath`, `-z`,
-    // `-r`) as inputs: `clang++ -Wl,--version` runs the linker alone
-    // (Meson's linker probe, WP-920).
-    let linker_inputs = args.link.iter().any(|l| l.kind.is_input());
-    if inputs.is_empty() && !(linker_inputs && args.inputs.is_empty()) {
-        if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
-            return 0;
-        }
-        Diag::new(DiagId::drv_no_input_files, Span::INVALID).emit(&drv);
-    }
-    // WP-1419: clang 19 reports an unclaimed target-specific option (the
-    // x86-only `-mlarge-data-threshold=` on `AArch64`) after building the
-    // jobs, and only when the driver saw no error (clang 22 reports it
-    // with the target's other errors, `features::resolve`).
-    if args.codegen.large_data_threshold.is_some()
-        && tc.target.is_aarch64()
-        && args.predef.clang_compat != kiln_pp::ClangCompat::Clang22
+    if no_inputs(&args, &inputs)
+        && (args.version || args.verbose)
+        && args.inputs.is_empty()
         && drv.error_count() == 0
     {
-        let t = args.target.as_deref().unwrap_or(tc.target.triple);
-        emit_arg_error(
-            &ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()),
-            &drv,
-        );
+        return 0;
     }
-    if drv.error_count() == 0 {
-        check_action(&args, &drv);
-    }
-    if drv.error_count() == 0 && args.deps.missing_generated && args.deps.only.is_none() {
-        // clang `Clang::ConstructJob`: `-MG` only lists headers for `-M`/`-MM`.
-        Diag::new(DiagId::drv_mg_requires_m_or_mm, Span::INVALID).emit(&drv);
-    }
+    input_checks(&args, &tc, &inputs, &drv);
     drv.flush();
     if drv.error_count() > 0 {
         // WP-1419: clang's compile jobs warn about an unused x86-64
@@ -1078,6 +1153,23 @@ fn module_header_jobs<'a>(
     Ok(Some(groups))
 }
 
+/// The jobs that preprocess, of which clang's driver probes the first
+/// `-include <h>` for a PCH (WP-1037): not `.i`/`.ii`, objects, module
+/// files.
+pub(crate) fn probe_jobs(args: &Args, inputs: &[&args::Input]) -> usize {
+    inputs
+        .iter()
+        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
+        .filter(|i| {
+            i.lang.is_some()
+                || !matches!(
+                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
+                    Some("i" | "ii")
+                )
+        })
+        .count()
+}
+
 /// The jobs of `inputs` under `args` (the action's in-process steps, or
 /// the code generation of `codegen_cmd`); returns the exit status.
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
@@ -1091,17 +1183,7 @@ fn run_jobs(
     // WP-1037: clang's driver turns the first `-include <h>` into
     // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
     // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
-    let jobs = inputs
-        .iter()
-        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
-        .filter(|i| {
-            i.lang.is_some()
-                || !matches!(
-                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
-                    Some("i" | "ii")
-                )
-        })
-        .count();
+    let jobs = probe_jobs(args, &inputs);
     let Ok(probed) = pch::probe(args, jobs, diag_opts, &io.stderr) else {
         return 1;
     };

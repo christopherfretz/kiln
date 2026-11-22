@@ -904,7 +904,7 @@ pub(crate) fn probe(
     args: &Args,
     jobs: usize,
     diag_opts: &DiagOptions,
-    stderr: &SharedWriter,
+    engines: &dyn crate::Engines,
 ) -> Result<Option<Args>, ()> {
     if jobs == 0 || args.pch.probed.is_empty() {
         return Ok(None);
@@ -928,12 +928,8 @@ pub(crate) fn probe(
     }
     if !warnings.is_empty() {
         let sm = SourceManager::new();
-        let e = make_engine(
-            &sm,
-            &codegen_cmd::driver_diag_options(diag_opts),
-            stderr.clone(),
-            Some(&args.program),
-        );
+        let e =
+            engines.make(&sm, &codegen_cmd::driver_diag_options(diag_opts), Some(&args.program));
         for _ in 0..jobs {
             for w in &warnings {
                 let d = match w {
@@ -951,6 +947,7 @@ pub(crate) fn probe(
             }
         }
         e.flush();
+        engines.done(&e);
         if e.error_count() > 0 {
             return Err(());
         }
