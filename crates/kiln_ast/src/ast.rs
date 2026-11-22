@@ -198,6 +198,28 @@ impl Ast {
         }
     }
 
+    /// clang's `CXXOperatorCallExpr::getExprLoc` of overloaded operator
+    /// call `e`: the first token for `new`/`delete`, `->`, `()`, `[]`,
+    /// `co_await` and `++`/`--`, else the operator token (kiln's node
+    /// location).
+    pub fn operator_call_loc(&self, e: ExprId) -> kiln_source::Loc {
+        use crate::names::OverloadedOperator as O;
+        let begin = matches!(
+            self.exprs.operator_call_op(e),
+            O::New
+                | O::Delete
+                | O::ArrayNew
+                | O::ArrayDelete
+                | O::Arrow
+                | O::Call
+                | O::Subscript
+                | O::Coawait
+                | O::PlusPlus
+                | O::MinusMinus
+        );
+        if begin { self.begin_loc(e) } else { self.exprs.get(e).loc() }
+    }
+
     /// The location of the first token of `e` (clang's `getBeginLoc`):
     /// a node whose own location is an operator or a name after its first
     /// operand begins where that operand does.

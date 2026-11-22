@@ -325,19 +325,13 @@ impl Oven {
             // clang's contains-errors RecoveryExpr): no notes at all.
             return Vec::new();
         }
-        if (matches!(fault, Fault::Callee(_))
-            || self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall))
+        let callee = matches!(fault, Fault::Callee(_))
+            || self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall);
+        if (callee || matches!(fault, Fault::Depth))
             && let Some(e) = site.e
-            && matches!(
-                ast.exprs.get(e).kind(),
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
-            )
-            && let m = skip_parens(ast, ast.exprs.callee(e))
-            && ast.exprs.get(m).kind() == ExprKind::MemberExpr
+            && let Some(at) = call_expr_loc(ast, e, callee)
         {
-            // clang diagnoses a dispatch, and a call of an unusable member
-            // function, at the member name.
-            site.loc = ast.exprs.get(m).loc();
+            site.loc = at;
         }
         if let Fault::Uncaught { obj, ty, what } = &fault {
             // At the exception's throw, without a call stack (clang's
@@ -2212,4 +2206,26 @@ fn called_builtin(ast: &Ast, e: ExprId) -> Option<u32> {
     (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr)
         .then(|| ast.decls.builtin_id(ast.exprs.decl(c)))
         .flatten()
+}
+
+/// Where clang diagnoses a call `e` it cannot make (a dispatch, an
+/// unusable callee: `callee`) or one that exceeds `-fconstexpr-depth`
+/// (clang `CheckConstexprFunction` and `CheckCallLimit` at the call's
+/// `getExprLoc`), where that differs from its first token, the "in call
+/// to" note's place: the member name of a member call (`r.get()`,
+/// `p->get()`), the operator of an overloaded operator call (`a + b`, not
+/// `a[i]`: [`Ast::operator_call_loc`]). A `CallExpr` whose callee is a
+/// member is at its member name for `callee` only (WP-1942).
+fn call_expr_loc(ast: &Ast, e: ExprId, callee: bool) -> Option<Loc> {
+    let k = ast.exprs.get(e).kind();
+    if k == ExprKind::CXXOperatorCallExpr {
+        return Some(ast.operator_call_loc(e));
+    }
+    if k == ExprKind::CXXMemberCallExpr || (callee && k == ExprKind::CallExpr) {
+        let m = skip_parens(ast, ast.exprs.callee(e));
+        if ast.exprs.get(m).kind() == ExprKind::MemberExpr {
+            return Some(ast.exprs.get(m).loc());
+        }
+    }
+    None
 }

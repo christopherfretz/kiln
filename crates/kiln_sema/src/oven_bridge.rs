@@ -409,6 +409,27 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// The value of `e` if it is a constant expression evaluated in a
+    /// manifestly constant-evaluated context ([`Oven::fold_manifest`]):
+    /// for a note that shows the value of a subexpression of a constant
+    /// expression evaluated so (WP-1943). Silent, not recorded.
+    pub(crate) fn fold_manifest(&mut self, e: ExprId) -> Option<ConstValueId> {
+        if let Some(v) = self.early_immediate_value(e) {
+            return Some(v);
+        }
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
+        self.with_oven(None, |oven, b| oven.fold_manifest(b, e))
+    }
+
+    /// [`Sema::fold_manifest`] of integral `e`, as an integer (clang
+    /// `EvaluateAsInt(InConstantContext=true)`, `EvaluateKnownConstInt`).
+    pub(crate) fn fold_int_manifest(&mut self, e: ExprId) -> Option<i128> {
+        let v = self.fold_manifest(e)?;
+        self.const_int(v)
+    }
+
     /// The value of the initializer `e` of variable `var` as a constant
     /// initializer ([basic.start.static]/2; [`Oven::fold_constant_init`]):
     /// for a reference, the pointer to the object it binds. Silent.

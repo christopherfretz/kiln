@@ -197,7 +197,16 @@ fault counts and trap ids unchanged.
   Everything else runs `ptr_add`, which tries the same two steps with
   the size read from the type table and otherwise steps within the
   extent of the subobject the pointer lies in, as before; every result
-  and every fault is the one that general path gives.
+  and every fault is the one that general path gives. A step to an
+  index outside `0..=n` is undefined behavior ([expr.add]/4), so the
+  evaluation is not a core constant expression there ([expr.const]/10.8):
+  the fault "cannot refer to element I of array of N elements" is raised
+  at once, the first operation that is not constant. clang 19 and 22
+  record it as a "not a core constant expression" note that a later
+  failure of the same evaluation replaces, so `for (p = a; p != a + 4;
+  ++p) s += *p;` over `int a[3]` is reported by kiln at `a + 4` and by
+  clang at the later one-past-the-end read (docs/status/deviations.md,
+  WP-1944; `expr.add/pointer-past-end-first-not-constant.cpp`).
 
 ### Abstract memory — normative for M2
 - **Pointers** are one `u64`: offset (32 bits) | past-the-end (1) | slot
@@ -1053,7 +1062,14 @@ asks whether the evaluation is manifestly constant-evaluated.
 - **Depth** counts active calls as clang's `-fconstexpr-depth` does ("constexpr
   evaluation exceeded maximum depth of N calls"); a nested evaluation counts
   from the depth of the call that started it, plus one (see "Nested
-  evaluation").
+  evaluation"). The note is at the call's `getExprLoc`, as clang's
+  `CheckCallLimit` puts it, while its "in call to" notes are at the call's
+  first token: the member name of a member call (`r.get()`, `p->get()`)
+  and the operator of an overloaded operator call other than `()`, `[]`,
+  `->`, `++`, `--`, `new`, `delete` and `co_await` (`a + b`, `a == b`;
+  `Ast::operator_call_loc`). A call of an unusable function and a failed
+  dispatch are placed the same way (`notes.rs` `call_expr_loc`, WP-1942;
+  `expr.const/budget/depth-limit-member-call-loc.cpp`).
 - **Bytes** bounds the abstract-memory address space held,
   `frame.top + heap.top` ("constexpr evaluation exceeded the memory limit
   of N bytes", at the object's declaration); nested evaluations share it.

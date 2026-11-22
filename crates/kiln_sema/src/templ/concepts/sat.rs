@@ -1088,7 +1088,9 @@ impl Sema<'_, '_> {
         }
         let mut recs = Vec::new();
         for e in leaves {
-            if op == BinaryOp::LOr || self.fold_int(e).is_none_or(|v| v == 0) {
+            // clang `EvaluateKnownConstInt`: manifestly
+            // constant-evaluated, as the constraint was (WP-1943).
+            if op == BinaryOp::LOr || self.fold_int_manifest(e).is_none_or(|v| v == 0) {
                 recs.extend(self.false_atom_records(e));
             }
         }
@@ -1178,7 +1180,10 @@ impl Sema<'_, '_> {
                     && matches!(op, "<" | ">" | "<=" | ">=" | "==" | "!=")
                     && self.ast.types.is_integral(self.ety(l))
                     && self.ast.types.is_integral(self.ety(r))
-                    && let (Some(lv), Some(rv)) = (self.fold_int(l), self.fold_int(r))
+                    // clang `EvaluateAsInt(InConstantContext=true)`, as
+                    // the constraint was evaluated (WP-1943).
+                    && let (Some(lv), Some(rv)) =
+                        (self.fold_int_manifest(l), self.fold_int_manifest(r))
                 {
                     return vec![SatRecord {
                         id: DiagId::note_atomic_constraint_false_elaborated,
