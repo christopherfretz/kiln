@@ -197,6 +197,9 @@ impl Compiler<'_> {
         args: [ExprId; 2],
     ) -> Option<(Place, usize, u32)> {
         let ast = self.ast();
+        // [`minmax_args`] looks through parentheses, `(std::min(a, b))`
+        // (WP-2061): the call is the expression inside them.
+        let call = skip_parens(ast, call);
         let d = regs::direct_callee(ast, call)?;
         let value = |c: &Self, a: ExprId| {
             let x = bare_lvalue(ast, a);
