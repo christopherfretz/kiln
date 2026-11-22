@@ -58,7 +58,7 @@ the evaluator's flattened type table.
   designated type + 1, in bits 64..96, kept through memory by the pointer
   mark, "Abstract memory" and "Construction"). Locals whose
   address is never taken and that are not aggregates live in registers;
-  the others live in abstract memory.
+  the others live in abstract memory ("Register locals").
 - Typed, checked arithmetic per width (1..128 bits, `_BitInt`-ready): signed
   overflow, division by zero, `INT_MIN / -1`, out-of-range shifts, negative
   shifts and float results that are NaN fault; unsigned arithmetic wraps.
@@ -289,7 +289,7 @@ fault counts and trap ids unchanged.
   ([dcl.init.aggr]/7, `int a[3] = {a[1], 2};`) reads an object whose
   lifetime has not begun, as clang reports it.
   A local is kept in a register only when the compile-time pre-scan
-  (`Scan`) sees no address of it; a glvalue cast that drops `const`
+  (`Scan`) sees no address of it ("Register locals"); a glvalue cast that drops `const`
   (`const_cast<int&>(c) = 2`, `(int&)c`) counts as one, so the write
   reaches the const allocation and faults (WP-465;
   `expr.const/5.8/modify-const-cast-away.cpp`). Const is a flag of the
@@ -1306,7 +1306,7 @@ evaluation (`kiln_parse::ConstexprLimits::profile`):
 | `calls` | `count` | their calls, a memo hit counting the calls it stands for (`-fconstexpr-report`'s `calls`) |
 | | `memo-hits`, `memo-misses`, `memo-hit-rate` | the memo table's lookups in the TU, trials included (`Memo::hits` / `misses`; the rate to one decimal, `-` with no lookup) |
 | `memory` | `allocs` | constexpr `new` / `std::allocator` allocations (recorded evaluations) |
-| | `bytes` | abstract-memory bytes allocated, cumulative and granule-rounded: every frame object (locals, parameter objects, temporaries) and every heap object (`Memory::allocated`, the report's `bytes`). A loop passing a class by value (a `std::string_view` argument) allocates a parameter object per call, so `bytes` grows with the calls while `peak-live` stays flat: churn the frame reclaims at each return, not heap growth (WP-1864) |
+| | `bytes` | abstract-memory bytes allocated, cumulative and granule-rounded: every frame object (locals, parameter objects, temporaries) and every heap object (`Memory::allocated`, the report's `bytes`). A loop passing a class by value (a `std::string_view` argument) allocates a parameter object per call, so `bytes` grows with the calls while `peak-live` stays flat: churn the frame reclaims at each return, not heap growth (WP-1864). Register locals allocate nothing ("Register locals") |
 | | `peak-live` | the most bytes live at once in one evaluation (`Memory::peak`: frames, heap, reflection) |
 | | `reclaimed` | bytes allocated and freed before the evaluation ended: `allocated` minus the frame and heap bytes still held (WP-060) |
 | | `peak-arena` | the largest arena high-water mark |
@@ -1456,6 +1456,85 @@ by the rule below, and the call's absence from the profile.
   operation is the declined call's. `-fconstexpr-profile` attributes a
   fast path's steps to the caller (it is no call: not in the functions
   table, not counted in `calls`), as `std::move`'s.
+
+### Register locals — Landed (M2; widened by WP-1908)
+A local variable or parameter lives in a VM register (no allocation, no
+checked load or store) when the KBC compiler's per-function pre-scan
+(`Scan`, `compile.rs`; `compile/regs.rs`) proves that its address can
+never be observed; otherwise it is an allocation in the frame space
+("Abstract memory"). The test runs once per function, at KBC compile
+time, before the body is compiled; any doubt means memory.
+
+A local or parameter is a register when **all** of these hold:
+
+- its type is a scalar the VM holds in one register (`ty.rs`
+  `TyKind::Bool`, `Int` (enumerations and character types included,
+  `_BitInt` up to 128 bits), `Float`, `Ptr`, `NullPtr`, `MemPtr`; a
+  reference variable is a register holding its referent's address);
+  arrays, classes, vectors, complex values and `_BitInt` wider than 128
+  bits (`Types::is_aggregate`) are memory;
+- it is not volatile (its reads are diagnosed by its allocation,
+  [expr.const]/10.8);
+- the scan sees no glvalue use of it other than a read, a discarded
+  value, the left operand of an assignment or compound assignment, or
+  the operand of `++`/`--`: it is never the operand of unary `&`
+  ([expr.unary.op]/3), never bound to a reference (a reference
+  variable, a reference parameter of any call, a forwarding reference
+  of `std::construct_at`; [dcl.init.ref]/5), never the object of a
+  pseudo-destructor call ([expr.prim.id.dtor]/2: it ends the object's
+  lifetime), never captured by reference ([expr.prim.lambda.capture]/12;
+  a by-copy capture reads it), never the operand of `std::addressof`,
+  `__builtin_addressof` or a reflection (`^^x`, spec/reflection-values.md
+  §2), never the operand of a glvalue cast that drops `const` (WP-465),
+  never named in its own initializer, and not initialized by
+  `__builtin_bit_cast` (the result may be indeterminate, [bit.cast]/2);
+  unevaluated operands (`sizeof`, `decltype((x))`, `noexcept`) are no
+  use; any other construct naming it is treated as an address;
+- **`std::move` and its kin are transparent** (WP-1908): the operand of
+  a call of `std::move`, `forward`, `forward_like`, `move_if_noexcept`
+  or `as_const` that clang evaluates as no call ("Limits and metrics",
+  `is_std_builtin`) is scanned in the call's own context, as a
+  parenthesized operand is, and the call compiles to the operand's
+  register (`Compiler::reg_through`): `b = std::move(t)` reads `t`;
+  `int &&r = std::move(t)` binds `r` to it (memory);
+- **declared without an initializer** (WP-1908): a block-scope variable
+  declared by a declaration statement directly in a compound statement
+  with no initializer (`size_type n;`) is a register only when
+  `regs::assigned_first` proves it is assigned before any other use on
+  every path: in the statements after the declaration, in order, the
+  first one naming it is an expression statement `x = e` whose `e`
+  does not name it, or an `if` without init-statement whose condition
+  does not name it and whose two branches each assign it first;
+  another statement naming it (a loop, a `switch`, a `try`, a lambda,
+  an assumption) refuses; and no label, `case` or `default` follows the
+  declaration in its scope, since a jump to one would enter the scope
+  past the declaration ([stmt.dcl]/3). Otherwise it is memory, whose
+  initialized bitmap and scope release diagnose a read before the
+  assignment, in a later iteration of a loop (each iteration's object
+  is a new one) or after a jump past it ([expr.const]/5.11), as before.
+
+What does not change. A register local has no address, so no read of
+it can be of uninitialized bytes or outside its lifetime: every read
+that can fail is of a local in memory, diagnosed as before with the
+same text and location (`expr.const/register-locals/diagnostics.cpp`,
+clang 19 and 22's wording). Steps are statements ("Limits and
+metrics"), not loads or stores, so `-fconstexpr-steps` counts,
+`-fconstexpr-depth`, values (a pointer held in a register is the same
+`Ptr` it would be in memory), consteval, the memo and the backtrace
+notes (a parameter's current value, as clang prints it) are unchanged
+(`expr.const/budget/register-locals*.cpp`: 3145 steps, clang's minimum,
+in both places). Only the abstract-memory counters move: `bytes`,
+`peak_bytes`, `peak_arena` and `reclaimed_bytes` (`-fconstexpr-stats`'s
+`bytes`, `peak-live`, `peak-arena`, `reclaimed`; `-fconstexpr-report`;
+`oven:` budgets) drop by the frame objects no longer made (`allocs`
+counts dynamic allocations only and is unchanged) (`expr.const/register-locals/cases-oven.cpp` pins each
+rule; `crates/kiln_oven/tests/register_locals.rs`).
+
+Not covered: a class object whose address is never taken (a by-value
+`std::string_view` parameter, an iterator) is memory, since every member
+function call takes its address as `this`; that is scalar replacement,
+which needs the callee to be inlined or analysed (WP-1907's light
+frames). Measurements: docs/status/oven-profile.md "After WP-1908".
 
 ### Builtins — normative (WP-088)
 The §9.5 builtin functions of spec/sema-templates.md, with clang 19's
@@ -5488,6 +5567,11 @@ their registers are kept to the end of the loop statement
 - `limits.rs`: step and depth counts equal to clang's, limit notes, the
   memory budget, memo transparency and purity, the report golden, and the
   memory-reset test (flat footprint over 10k evaluations).
+- `register_locals.rs` (WP-1908, "Register locals"): the escape test
+  seen through `EvalRecord::bytes` (an initialized scalar, `&x`, a
+  local declared without an initializer and assigned first, on both
+  branches, on one branch only, in a loop, with a `case` in its scope,
+  read in its own assignment) and steps independent of the place.
 - `new_delete.rs`: `new`/`delete` round trips, the leak, heap-result,
   delete and bound notes, the `allocs`/peak counters, and memo purity
   (an allocating call is evaluated every time: two leaking calls report

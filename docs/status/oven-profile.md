@@ -179,3 +179,122 @@ compile-time recognition of the fast paths at each call site).
 ## Downstream re-measurement
 
 pending
+
+## After WP-1908 (register locals)
+
+**The premise was half wrong.** The first bullet of "What is left" says
+the machine keeps every named local in abstract memory. It does not: since
+M2 the KBC pre-scan has kept every initialized scalar local and every scalar
+parameter whose address it never sees in a VM register (spec/oven.md
+"Register locals"). A temporary count of `Op::Alloc` per origin (not
+committed) showed where the memory share of the two WP-1864 entries
+comes from:
+
+- `string-view-pairs`: by-value `basic_string_view` parameters (`__x` and
+  `__y` of `operator==`, `__str` of `compare`, 280-370 thousand each).
+  These are class objects. The only scalar locals in memory are bound to a
+  reference parameter (`char_traits::assign`'s `const&`,
+  `__iterator_category`'s `const&`, `_M_create`'s `size_type&`), 1-3
+  thousand each.
+- `string-view-find-if`: `substr`'s `__n` and a `size_t` temporary, about
+  340 thousand each, both bound to the `const&` parameters of
+  `std::min<size_t>`. The rest are class objects: `string_view` and
+  `__normal_iterator` parameters, closures, and `equal_to<>` temporaries.
+
+None of these are in scope, so both entries are unchanged: steps, bytes
+and calls are identical. Two things were in scope and are fixed:
+
+- **`std::move` and its kind no longer count as an escape.** This covers
+  `std::forward`, `forward_like`, `move_if_noexcept` and `as_const`. The
+  Oven already ran these without a call, but the scan treated their
+  argument as bound to a reference, so the local went to memory. This
+  happened to `std::swap`'s `__t` (`b = std::move(__t)`) in libc++ `sort`
+  and in `vector-alloc`.
+- **A scalar declared without an initializer is a register when it is
+  assigned before any other use.** This is libc++ `string`'s `__p`, `__sz`
+  and `__cap`, assigned on both branches of an `if`. The analysis is
+  deliberately narrow: it walks only straight-line code and `if`
+  branches, it gives up at any label in scope, and the assignment must
+  not read the variable. The uninitialized-read diagnostics are
+  unchanged, because a variable that might be read before it is
+  assigned stays in memory.
+
+Bench: `bench/oven`, kiln before (599269140) and after on the same
+host, 7 interleaved runs each (before and after alternate; the order
+flips every run), median times. The steps are identical in every run
+of every entry. `bytes` is the `-fconstexpr-stats` memory counter.
+
+| entry | before ms | after ms | time | before MB | after MB | steps | before bytes | after bytes |
+|---|---|---|---|---|---|---|---|---|
+| builtins-memcpy | 22.4 | 23.0 | +2.3% | 14.9 | 15.0 | 10,215 | 65,536 | 65,536 |
+| builtins-popcount | 68.4 | 69.5 | +1.7% | 14.8 | 14.9 | 1,600,010 | 0 | 0 |
+| builtins-strlen | 22.6 | 21.8 | -3.5% | 15.1 | 15.0 | 14,115 | 4,096 | 4,096 |
+| churn-list | 33.0 | 34.4 | +4.1% | 15.1 | 14.9 | 610,005 | 1,600,000 | 1,600,000 |
+| churn-mixed | 22.0 | 22.3 | +1.3% | 15.2 | 14.8 | 100,102 | 425,248 | 425,248 |
+| churn-string | 429.1 | 436.4 | +1.7% | 15.7 | 15.4 | 6,002,085 | 3,399,552 | 3,399,552 |
+| churn-tree | 37.3 | 37.6 | +0.9% | 15.6 | 15.4 | 1,179,557 | 1,572,480 | 1,572,480 |
+| churn-vector | 499.4 | 502.5 | +0.6% | 15.7 | 15.5 | 8,398,277 | 33,554,432 | 33,554,432 |
+| class-churn | 170.6 | 171.1 | +0.3% | 17.6 | 17.3 | 2,960,095 | 10,240,016 | 10,240,016 |
+| fib | 18.7 | 19.2 | +2.6% | 14.8 | 14.7 | 786,024 | 0 | 0 |
+| inplace-alloc | 180.9 | 181.2 | +0.1% | 26.4 | 26.2 | 2,500,536 | 1,608,688 | 1,608,688 |
+| inplace-union | 189.0 | 188.3 | -0.4% | 26.4 | 26.2 | 2,500,518 | 1,608,672 | 1,608,672 |
+| sieve | 92.4 | 94.9 | +2.7% | 22.4 | 22.2 | 684,419 | 50,448 | 50,448 |
+| sieve-nohdr | 24.4 | 23.9 | -1.8% | 15.0 | 14.8 | 253,992 | 100,000 | 100,000 |
+| soa | 72.6 | 71.8 | -1.2% | 15.5 | 15.4 | 1,745,460 | 73,736 | 73,736 |
+| sort | 213.7 | 208.5 | -2.4% | 30.1 | 30.0 | 1,659,900 | 648,080 | 293,888 |
+| sort-nohdr | 36.2 | 35.7 | -1.4% | 15.0 | 14.9 | 727,499 | 25,600 | 25,600 |
+| string | 222.9 | 221.1 | -0.8% | 30.1 | 30.3 | 1,796,322 | 626,512 | 557,008 |
+| string-view-find-if | 637.7 | 630.4 | -1.1% | 32.8 | 32.7 | 14,479,696 | 40,767,320 | 40,767,320 |
+| string-view-pairs | 567.3 | 570.3 | +0.5% | 31.0 | 31.1 | 13,275,413 | 22,804,752 | 22,804,752 |
+| switch-dense | 235.8 | 243.8 | +3.4% | 14.9 | 14.7 | 34,951,678 | 0 | 0 |
+| table | 140.5 | 147.1 | +4.6% | 24.4 | 24.0 | 1,248,889 | 200,560 | 200,560 |
+| table-nohdr | 55.2 | 55.5 | +0.7% | 15.4 | 15.1 | 854,380 | 330,240 | 330,240 |
+| time-trace | 424.7 | 436.7 | +2.8% | 16.2 | 15.6 | 9,000,005 | 8 | 8 |
+| trial-rollback | 47.3 | 47.8 | +1.3% | 15.2 | 15.0 | 460,007 | 1,280,256 | 1,280,256 |
+| vector-alloc | 412.2 | 421.9 | +2.3% | 41.6 | 41.5 | 9,587,208 | 3,462,096 | 3,461,664 |
+| virtual-dispatch | 30.2 | 30.7 | +1.7% | 15.5 | 15.5 | 375,540 | 2,176 | 2,176 |
+| wide-struct-read | 307.7 | 298.1 | -3.1% | 31.1 | 31.0 | 4,199,431 | 32,768 | 32,768 |
+| wide-struct-store | 142.0 | 143.2 | +0.9% | 34.9 | 34.8 | 69,647 | 16,384 | 16,384 |
+
+`sort` allocates 55% fewer bytes, `string` 11% fewer. Callgrind counts
+the instructions of a whole compile; nothing above +0.1% is real:
+
+- `table`: +0.02% (1,179,767,834 to 1,180,037,925). On a second set of
+  15 interleaved runs its time is +2.1%.
+- `switch-dense`, cut to `run(200000)` because the full entry runs out
+  of address space under valgrind's 3 GB cap: +0.0001% (405,908,685 to
+  405,909,099). On 15 runs its time is +3.6%. Its bytes are 0 in both
+  builds, so the change does not reach this entry; the time difference
+  is code layout.
+- `sort`: -2.0% (1,860,751,610 to 1,823,082,991).
+
+`-fconstexpr-profile-split` (`split` feature builds, 3 runs each, medians):
+
+- `string-view-pairs`: VM time 381.4 to 365.6 ms. The memory share goes
+  from 64.8% to 62.2%, frames from 11.5% to 12.3%, dispatch from 18.0%
+  to 19.3%.
+- `string-view-find-if`: VM time 425.3 to 410.3 ms. The memory share
+  goes from 57.1% to 53.5%, frames from 16.9% to 16.8%, dispatch from
+  18.5% to 18.6%.
+
+Neither entry allocates differently, so these shifts are sampling and
+layout noise in the `split` builds. The stock builds above put these two
+entries at +0.5% and -1.1%.
+
+The budget test `tests/conformance/expr.const/budget/register-locals.cpp`
+is a selection sort whose swap uses `std::move`, with locals assigned
+before use. It spends the same 3145 steps before and after, and 128
+bytes after instead of 4864.
+
+What is left, from these counts:
+
+- **Scalar replacement of small trivially copyable class parameters**,
+  such as `string_view` by value. This is the bulk of the memory share
+  of both WP-1864 entries. Member calls take `this`, so it needs the
+  light frames and inlining of WP-1907 first.
+- **`std::min` and `std::max` of two scalars** as a library fast path,
+  or a callee analysis of `const T&` parameters. In
+  `string-view-find-if`, `substr` allocates `__n` and a temporary on
+  every call, 2 x 338 thousand allocations.
+- **`char_traits<C>::assign(c1, c2)`** as a fast path, for libstdc++
+  `push_back`'s `__c`.

@@ -36,6 +36,7 @@ mod fast;
 mod lambda;
 mod mptr;
 mod new_delete;
+mod regs;
 mod rtti;
 mod udesig;
 mod vector;
@@ -1197,6 +1198,9 @@ pub(crate) struct Compiler<'a> {
     pub max: u32,
     locals: FxHashMap<DeclId, Local>,
     mem_vars: FxHashSet<DeclId>,
+    /// The locals declared without an initializer that the pre-scan
+    /// proved assigned before any other use ([`regs::assigned_first`]).
+    assigned_vars: FxHashSet<DeclId>,
     /// The block-scope reference variables whose reflection the body
     /// takes (`^^r`): each also gets a frame object holding its
     /// referent's address, made with its block and ended with it, so
@@ -1348,6 +1352,7 @@ impl<'a> Compiler<'a> {
             max: 0,
             locals: FxHashMap::default(),
             mem_vars: FxHashSet::default(),
+            assigned_vars: FxHashSet::default(),
             refl_refs: FxHashMap::default(),
             contract_aliases: Vec::new(),
             pending: Vec::new(),
@@ -1747,6 +1752,9 @@ const STMT_EXPR_UNSUPPORTED: &str =
 struct Scan<'x> {
     ast: &'x kiln_ast::Ast,
     mem: &'x mut FxHashSet<DeclId>,
+    /// The locals declared without an initializer that are assigned
+    /// before any other use ([`regs::assigned_first`]).
+    assigned: &'x mut FxHashSet<DeclId>,
     /// The reflected block-scope references ([`Compiler::refl_refs`]).
     refl: &'x mut FxHashMap<DeclId, u32>,
     cur: Option<DeclId>,
@@ -1759,8 +1767,13 @@ impl Scan<'_> {
         let n = *ast.stmts.get(s);
         match n.kind() {
             StmtKind::CompoundStmt => {
-                for &c in ast.lists.get(ast.stmts.compound_body(s)) {
-                    self.stmt(StmtId::new(c));
+                let body: Vec<StmtId> =
+                    ast.lists.iter::<StmtId>(ast.stmts.compound_body(s)).collect();
+                for (i, &c) in body.iter().enumerate() {
+                    if ast.stmts.get(c).kind() == StmtKind::DeclStmt {
+                        self.uninit_decls(c, &body[i + 1..]);
+                    }
+                    self.stmt(c);
                 }
             }
             StmtKind::DeclStmt => {
@@ -1837,6 +1850,24 @@ impl Scan<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Records in `assigned` the locals of declaration statement `s`
+    /// (directly in a compound statement, before the statements `rest`)
+    /// declared without an initializer and assigned before any other use.
+    fn uninit_decls(&mut self, s: StmtId, rest: &[StmtId]) {
+        let ast = self.ast;
+        let decls: Vec<DeclId> = ast.lists.iter::<DeclId>(ast.stmts.decl_stmt_decls(s)).collect();
+        for (i, &d) in decls.iter().enumerate() {
+            if ast.decls.get(d).kind() == DeclKind::Var
+                && is_local_var(ast, d)
+                && !ast.decls.is_decomposition(d)
+                && ast.decls.var(d).is_some_and(|v| v.init.is_none())
+                && regs::assigned_first(ast, d, &decls[i + 1..], rest)
+            {
+                self.assigned.insert(d);
+            }
         }
     }
 
@@ -1988,6 +2019,18 @@ impl Scan<'_> {
                     TypeView::Record(_) | TypeView::ConstantArray(_)
                 ) {
                     self.temps = true;
+                }
+                // `std::move(t)` and its kin are their operand's lvalue
+                // (no call): transparent, as parentheses are.
+                if let Some(x) = regs::std_cast_arg(ast, e) {
+                    if matches!(
+                        ast.types.canonical_view(ast.exprs.get(x).ty()),
+                        TypeView::Record(_)
+                    ) {
+                        self.temps = true;
+                    }
+                    self.expr(x, ok);
+                    return;
                 }
                 for c in ast.exprs.children(e, &ast.lists) {
                     let cty = ast.exprs.get(c).ty();
@@ -2205,6 +2248,7 @@ impl Compiler<'_> {
         let mut s = Scan {
             ast,
             mem: &mut self.mem_vars,
+            assigned: &mut self.assigned_vars,
             refl: &mut self.refl_refs,
             cur: None,
             temps: false,
@@ -2235,6 +2279,7 @@ impl Compiler<'_> {
         let mut s = Scan {
             ast,
             mem: &mut self.mem_vars,
+            assigned: &mut self.assigned_vars,
             refl: &mut self.refl_refs,
             cur: None,
             temps: false,
@@ -2353,7 +2398,20 @@ impl Compiler<'_> {
         if ast.decls.get(d).ty().is_some_and(|q| ast.types.effective_quals(q).is_volatile()) {
             return true;
         }
+        // A scalar declared without an initializer is in a register only
+        // when it is assigned before any other use (spec/oven.md
+        // "Register locals"); otherwise its memory diagnoses the read.
         self.b.ast().decls.var(d).is_some_and(|v| v.init.is_none())
+            && !(self.assigned_vars.contains(&d)
+                && matches!(
+                    self.kind(ty),
+                    TyKind::Bool
+                        | TyKind::Int { .. }
+                        | TyKind::Float(_)
+                        | TyKind::Ptr(_)
+                        | TyKind::NullPtr
+                        | TyKind::MemPtr { .. }
+                ))
     }
 
     /// Opens a scope allocating the memory locals among `decls`.
@@ -5650,6 +5708,34 @@ impl Compiler<'_> {
         }
     }
 
+    /// Whether glvalue `e` names a register local, through parentheses,
+    /// no-op glvalue casts and `std::move`-like calls
+    /// ([`regs::std_cast_arg`]).
+    fn reg_through(&self, e: ExprId) -> bool {
+        let ast = self.b.ast();
+        let mut e = e;
+        loop {
+            let n = ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::ParenExpr => e = ast.exprs.operand(e),
+                k if k.is_cast()
+                    && n.value_category().is_glvalue()
+                    && ast.exprs.cast_kind(e) == CastKind::NoOp =>
+                {
+                    e = ast.exprs.operand(e);
+                }
+                ExprKind::CallExpr => match regs::std_cast_arg(ast, e) {
+                    Some(x) => e = x,
+                    None => return false,
+                },
+                ExprKind::DeclRefExpr => {
+                    return matches!(self.locals.get(&ast.exprs.decl(e)), Some(Local::Reg(_)));
+                }
+                _ => return false,
+            }
+        }
+    }
+
     fn lv_mem(&mut self, e: ExprId, acc: Access) -> u32 {
         match self.lv(e, acc) {
             Place::Mem(p) => p,
@@ -6096,6 +6182,14 @@ impl Compiler<'_> {
                     return Place::Mem(self.tag_union_chain(e, r));
                 }
                 Place::Mem(r)
+            }
+            // `std::move(t)` of a register local: the local itself (the
+            // pre-scan saw no address of it, `regs::std_cast_arg`).
+            ExprKind::CallExpr
+                if regs::std_cast_arg(self.ast(), e).is_some_and(|x| self.reg_through(x)) =>
+            {
+                let x = regs::std_cast_arg(self.ast(), e).expect("guarded");
+                self.lv(x, acc)
             }
             // A call returning a reference: the referent's address.
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
