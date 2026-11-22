@@ -7,7 +7,7 @@
 //! (an instantiated definition can use further vtables); a local class's
 //! at once.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DefinitionBits};
@@ -139,15 +139,15 @@ impl Sema<'_, '_> {
     /// The final overriders in `class`'s vtable in clang's
     /// `CXXFinalOverriderMap` order (by method), each once (cached per
     /// class once it is complete).
-    fn vtable_finals(&mut self, class: DeclId) -> Rc<[DeclId]> {
+    fn vtable_finals(&mut self, class: DeclId) -> Arc<[DeclId]> {
         let first = self.ast.first(class);
         if let Some(f) = self.vtable_finals.get(&first) {
             return f.clone();
         }
         if graph::ensure_virtuals(&mut self.ast, class).is_none() {
-            return Rc::from([]);
+            return Arc::from([]);
         }
-        let Some(v) = self.ast.virtuals.get(self.ast.first(class)) else { return Rc::from([]) };
+        let Some(v) = self.ast.virtuals.get(self.ast.first(class)) else { return Arc::from([]) };
         let mut by_method: FxHashMap<DeclId, Vec<DeclId>> = FxHashMap::default();
         for e in &v.overriders {
             by_method.entry(self.ast.first(e.1)).or_default().push(e.2);
@@ -161,7 +161,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let finals: Rc<[DeclId]> = finals.into();
+        let finals: Arc<[DeclId]> = finals.into();
         self.vtable_finals.insert(first, finals.clone());
         finals
     }

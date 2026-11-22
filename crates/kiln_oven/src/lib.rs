@@ -51,6 +51,7 @@ mod notes;
 pub mod profile;
 mod reclaim;
 pub mod report;
+mod session;
 mod snap;
 mod softfloat;
 mod split;
@@ -85,6 +86,9 @@ pub use meta::{
     TraitOp, ValueOp, info_arg,
 };
 pub use notes::FrameMark;
+pub use session::{
+    CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, RunOutcome, RunValue,
+};
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
 /// Whether this build checks every trial-fold walk against the full path
@@ -497,6 +501,34 @@ pub trait SemaBridge {
         let _ = (op, callee, what, loc);
         None
     }
+
+    /// The host-call handler of the running evaluation when the Oven has
+    /// none registered: an evaluation session's run's
+    /// (spec/eval-session.md §6).
+    fn host_calls(&mut self) -> Option<&mut dyn HostCalls> {
+        None
+    }
+
+    /// A session's run starts compiling a function: a mark for
+    /// [`SemaBridge::session_window_end`] (spec/eval-session.md §7).
+    fn session_window_begin(&mut self) -> usize {
+        0
+    }
+
+    /// The compilation of function `func` that
+    /// [`SemaBridge::session_window_begin`] (returning `mark`) began has
+    /// ended: whether it reported diagnostics (they are recorded for
+    /// replay).
+    fn session_window_end(&mut self, func: u32, mark: usize) -> bool {
+        let _ = (func, mark);
+        false
+    }
+
+    /// A session's run reaches function `func`, whose compilation in an
+    /// earlier run reported diagnostics: report them again.
+    fn session_replay(&mut self, func: u32) {
+        let _ = func;
+    }
 }
 
 /// What one evaluation context runs.
@@ -769,6 +801,12 @@ pub struct Oven {
     /// The instrumentation hooks' switches (`hooks.rs`, spec/oven.md
     /// "Trace hook").
     pub(crate) hooks: hooks::Hooks,
+    /// The step count the dispatch's step check compares against: the
+    /// step budget, but in a session's run the next cancellation check
+    /// (spec/eval-session.md §8, `Oven::step_over`).
+    pub(crate) step_stop: u64,
+    /// The open evaluation session, if any (spec/eval-session.md).
+    pub(crate) sess: Option<Box<session::SessionState>>,
 }
 
 /// The inclusive cost of the nested evaluations run so far by the running
@@ -861,6 +899,8 @@ impl Oven {
             refl_seen: meta::intern::ReflSeen::default(),
             dms: meta::define::DmsTable::default(),
             hooks: hooks::Hooks::default(),
+            step_stop: budget.steps,
+            sess: None,
         }
     }
 
@@ -1958,6 +1998,7 @@ impl Oven {
         self.run.overflows.clear();
         self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.counters = vm::Counters::default();
+        self.step_stop = self.budget.steps;
         self.run.nesting = 0;
         self.run.depth_base = 0;
         if !self.run.injected.is_empty() {
@@ -2011,7 +2052,10 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
         // The enclosing calls ran an evaluation a cached result would skip.
         self.run.impure += 1;
-        let depth_base = self.active_calls() + 1;
+        // Inside a session's run: the translation unit's limits, from
+        // zero (spec/eval-session.md §5).
+        let sess = if self.sess.is_some() { self.session_nested_begin() } else { None };
+        let depth_base = if sess.is_some() { 0 } else { self.active_calls() + 1 };
         if depth_base >= self.budget.depth {
             let notes = if silent {
                 Vec::new()
@@ -2026,6 +2070,9 @@ impl Oven {
                 )]
             };
             let f = EvalFailure { kind: FailKind::DepthLimit, notes };
+            if let Some(s) = sess {
+                self.session_nested_end(s);
+            }
             return (Err(f), vm::Counters::default());
         }
         let run = (
@@ -2070,7 +2117,8 @@ impl Oven {
         self.run.cev_warn = std::mem::take(&mut self.cev_warn_next);
         self.run.plain = std::mem::take(&mut self.plain_next);
         self.run.ub_check = false;
-        self.run.counters = vm::Counters { steps: steps0, ..vm::Counters::default() };
+        let start = if sess.is_some() { 0 } else { steps0 };
+        self.run.counters = vm::Counters { steps: start, ..vm::Counters::default() };
         self.run.maxd = 0;
         self.run.depth_base = depth_base;
         // An instantiation the enclosing evaluation needs sees what that
@@ -2086,7 +2134,7 @@ impl Oven {
         let r = self.run_job(bridge, e, object, fb);
         let steps1 = self.run.counters.steps;
         let c = vm::Counters {
-            steps: steps1 - steps0,
+            steps: steps1 - start,
             bytes: self.mem.allocated,
             peak: self.mem.peak.saturating_sub(live0),
             calls: self.run.counters.calls,
@@ -2117,7 +2165,9 @@ impl Oven {
             self.run.ub_check,
             self.run.inj_anchor,
         ) = run;
-        self.run.counters = vm::Counters { steps: steps1, ..counters };
+        // A run is not charged for the nested evaluation (§5).
+        let steps = if sess.is_some() { steps0 } else { steps1 };
+        self.run.counters = vm::Counters { steps, ..counters };
         (
             self.mem.allocated,
             self.mem.peak,
@@ -2126,6 +2176,9 @@ impl Oven {
             self.mem.ctx,
             self.mem.cur_frame,
         ) = mem;
+        if let Some(s) = sess {
+            self.session_nested_end(s);
+        }
         (r, c)
     }
 }

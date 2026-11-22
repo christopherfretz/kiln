@@ -594,6 +594,25 @@ fn copy_bits_within(v: &mut [u8], dst: u64, src: u64, len: u64) {
 }
 
 impl Space {
+    /// Shrinks the buffers of an empty space to about `floor` bytes.
+    fn release(&mut self, floor: usize) {
+        if self.top != 0 || self.bytes.len() <= floor {
+            return;
+        }
+        let n = floor.next_multiple_of(GRAN as usize);
+        let g = n / GRAN as usize;
+        self.bytes.truncate(n);
+        self.bytes.shrink_to_fit();
+        self.init.truncate(g);
+        self.init.shrink_to_fit();
+        self.ptr.truncate(g);
+        self.ptr.shrink_to_fit();
+        if !self.life.is_empty() {
+            self.life.truncate(g.max(1));
+            self.life.shrink_to_fit();
+        }
+    }
+
     fn grow(&mut self, end: u64) {
         let need = end as usize;
         if self.bytes.len() < need {
@@ -1103,6 +1122,23 @@ impl Memory {
         self.arena_peak = 0;
         self.refl = 0;
         self.trial.clear();
+    }
+
+    /// After an evaluation session's run (spec/eval-session.md §10): the
+    /// frame and heap spaces, reset, keep at most about `floor` bytes of
+    /// buffer each, and the slot tables about as much.
+    pub fn release_buffers(&mut self, floor: usize) {
+        self.frame.release(floor);
+        self.heap.release(floor);
+        crate::session::trim(&mut self.slots, floor);
+        crate::session::trim(&mut self.live, floor);
+        crate::session::trim(&mut self.hslots, floor);
+        let cap = floor / size_of::<u32>();
+        for q in [&mut self.free, &mut self.hfree] {
+            if q.capacity() > cap {
+                q.shrink_to(cap.max(q.len()));
+            }
+        }
     }
 
     /// Frame and heap bytes live now: what of [`Memory::allocated`] is

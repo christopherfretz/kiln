@@ -44,6 +44,10 @@ use kiln_source::activity::{self, Phase};
 use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
 
+pub use kiln_sema::session::{
+    CancelToken, Entry, EntryError, EvalSession, KeptMemory, OpenError, RunBudget, RunError,
+    RunReport, RunValue,
+};
 pub use kiln_sema::{HostCalls, HostError, HostOut};
 pub use parser::{PExpr, Parser};
 pub use tentative::TypeIdContext;
@@ -515,6 +519,44 @@ pub fn parse_preprocessed_with_host<'a, 'sm>(
     limits: ConstexprLimits,
     host: Option<Box<dyn HostCalls>>,
 ) -> (ParsedTu, Preprocessor<'sm, 'a>) {
+    let (p, main) = parse_to_end(pp, interner, diags, target, opts, limits, host);
+    kiln_snap::timing::timed_part("finish unit", || finish_tu(p, &main, opts))
+}
+
+/// [`parse_preprocessed_with_host`] returning the finished [`Sema`] (the
+/// end-of-translation-unit work done) instead of a [`ParsedTu`]: the
+/// state an evaluation session keeps ([`EvalSession::open`],
+/// spec/eval-session.md §2).
+///
+/// # Panics
+///
+/// If `interner` is not `pp`'s interner.
+#[must_use]
+pub fn parse_preprocessed_retained<'a, 'sm>(
+    pp: Preprocessor<'sm, 'a>,
+    interner: Arc<Interner>,
+    diags: &'a DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+    host: Option<Box<dyn HostCalls>>,
+) -> (Sema<'a, 'sm>, Preprocessor<'sm, 'a>) {
+    let (p, _) = parse_to_end(pp, interner, diags, target, opts, limits, host);
+    let (s, src) = kiln_snap::timing::timed_part("finish unit", || p.finish());
+    (s, src.into_preprocessor())
+}
+
+/// The parse of [`parse_preprocessed_with_host`] up to the parser's last
+/// events, with the main file's name.
+fn parse_to_end<'a, 'sm>(
+    pp: Preprocessor<'sm, 'a>,
+    interner: Arc<Interner>,
+    diags: &'a DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+    host: Option<Box<dyn HostCalls>>,
+) -> (Parser<'a, 'sm>, String) {
     assert!(
         std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),
         "the AST and the preprocessor share an interner"
@@ -547,7 +589,7 @@ pub fn parse_preprocessed_with_host<'a, 'sm>(
     p.warn_if_empty_c_translation_unit();
     p.parse_translation_unit();
     drop(phase);
-    kiln_snap::timing::timed_part("finish unit", || finish_tu(p, &main, opts))
+    (p, main)
 }
 
 /// The end of [`parse_preprocessed`] and [`continue_preprocessed`]: the

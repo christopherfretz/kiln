@@ -423,6 +423,8 @@ pub(crate) enum Fault {
     NullCallee,
     Callee(u32),
     Steps(Loc),
+    /// A session's run was cancelled (spec/eval-session.md §8).
+    Cancelled,
     Depth,
     Memory,
     /// An array `new` whose bound fails a check of [expr.new]/8 (`v` the
@@ -690,6 +692,9 @@ impl Oven {
         let out = match r {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
+                if self.sess.is_some() {
+                    self.session_note_fault(&*b, &fault);
+                }
                 let kind = fault.kind();
                 let f = if self.run.silent || self.frame_unknown_read(&*b, &fault) {
                     EvalFailure::silent(kind)
@@ -1072,9 +1077,21 @@ impl Oven {
                 ($w:expr, $idx:expr, $at:expr) => {
                     let n = u64::from($w >> 8);
                     let before = self.run.counters.steps;
-                    if before + n > self.budget.steps {
-                        let i = $idx as usize + (self.budget.steps - before) as usize;
-                        return Err((Fault::Steps(self.step_locs[i]), $at));
+                    if before + n > self.step_stop {
+                        // A session's cancellation check, or the limit
+                        // (spec/eval-session.md §8).
+                        if let Err(cancelled) = crate::session::step_over(
+                            &mut self.step_stop,
+                            self.budget.steps,
+                            self.sess.as_deref(),
+                            before + n,
+                        ) {
+                            if cancelled {
+                                return Err((Fault::Cancelled, $at));
+                            }
+                            let i = $idx as usize + (self.budget.steps - before) as usize;
+                            return Err((Fault::Steps(self.step_locs[i]), $at));
+                        }
                     }
                     self.run.counters.steps = before + n;
                 };

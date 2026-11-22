@@ -36,6 +36,7 @@
 //! | `host` | configuration | the host-call handler, which the consumer registers itself; none may be registered while a snapshot is written (spec/host-calls.md §6) |
 //! | `clang_compat`, `cxx_year` | configuration | `-fclang-compat=`, `-std=` (sema also sets both before every evaluation) |
 //! | `hooks` | configuration + transient | the trace and profile switches and sink (`-ftime-trace`, `-fconstexpr-stats`, `-fconstexpr-profile`); no call mark open |
+//! | `step_stop`, `sess` | transient, at rest | the step budget; no evaluation session open (spec/eval-session.md §11) |
 //! | `cev_warn_next`, `ub_check_next`, `contracts_off_next`, `potential_next`, `plain_next`, `void_next`, `addr_next`, `unchecked_next` | transient, at rest | set by a caller just before one evaluation: false / `None` |
 //! | `fold_float_ub`, `addr_int`, `fold_leaks`, `fold_c_static` | transient, at rest | set by codegen around its folds: false |
 //! | `srcloc_root`, `bound_obj`, `let_pending` | transient, at rest | `None`, empty |
@@ -147,6 +148,10 @@ impl Oven {
             // What a host call produced belongs to this compilation
             // (spec/host-calls.md §6).
             return busy("host: a host-call handler is registered");
+        }
+        if self.sess.is_some() {
+            // spec/eval-session.md §11.
+            return busy("sess: an evaluation session is open");
         }
         if !self.stack.is_empty() || !self.cleanups.is_empty() {
             return busy("stack: call frames are live");
@@ -296,6 +301,8 @@ impl Oven {
             refl_seen,
             dms,
             hooks: _,
+            step_stop: _,
+            sess: _,
         } = self;
         macro_rules! put {
             ($($f:ident),*) => {$(

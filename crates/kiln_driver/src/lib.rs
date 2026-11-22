@@ -42,6 +42,7 @@ pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
 pub mod scan_deps;
+pub mod session;
 #[cfg(test)]
 mod snap_tests;
 pub mod stats;

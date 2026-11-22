@@ -1088,7 +1088,12 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1910 | oven: hardware-counter profile of the Oven once perf is available on the host | WP-1864 | open |
 | WP-1911 | CI: clippy and tests with `--features kiln_oven/split` (the split is built only with that feature) | WP-1864 | open |
 | WP-1990 | host-call builtin for tooling clients: `__builtin_kiln_host_call` forwards constant evaluation to a host-registered handler; never memoized, an error under speculation | - | done: spec/host-calls.md; `HostCalls` handler via `parse_preprocessed_with_host`, range checks before the call, no memo, uncatchable errors, speculative/run-time errors, PCH/module refused |
-| WP-1995 | retained evaluation session for tooling clients: after a TU, evaluate a named consteval function many times, each run isolated, with per-run step and memory budgets and cancellation | WP-1990 | open |
+| WP-1995 | retained evaluation session for tooling clients: after a TU, evaluate a named consteval function many times, each run isolated, with per-run step and memory budgets and cancellation | WP-1990 | done: EvalSession (spec/eval-session.md): isolated runs from the finished TU, per-run handler, step/memory/depth budgets, cancellation, history-independent steps and diagnostics, flat kept memory |
+| WP-2070 | evaluation sessions: entries with parameters (arguments supplied per run) | WP-1995 | open |
+| WP-2071 | evaluation sessions: entries returning class types | WP-1995 | open |
+| WP-2072 | evaluation sessions: `constexpr` (not only `consteval`) entries | WP-1995 | open |
+| WP-2073 | evaluation sessions: nested evaluations inside a run (instantiation-time constant evaluation) tracked per run for replay and run under the run's handler and limits, not the translation unit's | WP-1995 | open |
+| WP-2074 | evaluation sessions: reflection queries that take addresses keyed by content, not by address, so a run's results do not depend on allocation | WP-1995 | open |
 | WP-2000 | host calls: audit lazily evaluated constexpr variable templates (`eval_var_init`) for a missing or duplicated speculative-call error | WP-1990 | open |
 | WP-2001 | host calls: restore the host mode after a contained panic inside an evaluation | WP-1990 | open |
 | WP-2002 | host calls: an integer-only fast builtin, only if a tooling client needs more than ~7M calls/s | WP-1990 | open |

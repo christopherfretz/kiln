@@ -32,7 +32,7 @@ pub mod verify;
 
 pub use columns::escape_diag_text;
 pub use diag::{Diag, Diagnostic, FixIt, Label, Level, NoteMsg};
-pub use engine::{DiagEngine, DiagSink, MemorySink, SharedBuffer};
+pub use engine::{CaptureMark, DiagEngine, DiagSink, MemorySink, SharedBuffer};
 pub use groups::Group;
 pub use ids::{DiagClass, DiagId, DiagKind};
 pub use json::{JsonSink, escape_json};

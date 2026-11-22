@@ -69,7 +69,10 @@ impl Oven {
             b.diag(d);
             return Err(Fault::Quiet);
         }
-        if self.host.handler.is_none() {
+        if self.host_cancelled() {
+            return Err(Fault::Cancelled);
+        }
+        if self.host.handler.is_none() && b.host_calls().is_none() {
             return Err(Fault::Host("no host-call handler is registered".into()));
         }
         let mut a = [0u128; 9];
@@ -86,15 +89,17 @@ impl Oven {
             std::mem::take(&mut self.host.ints_out),
             std::mem::take(&mut self.host.bytes_out),
         );
-        let r = self.host_call_with(pc, op, ins, outs, (ti, tb), &mut bufs);
+        let r = self.host_call_with(b, pc, op, ins, outs, (ti, tb), &mut bufs);
         (self.host.ints_in, self.host.bytes_in, self.host.ints_out, self.host.bytes_out) = bufs;
         r
     }
 
     /// [`Oven::exec_host_call`] past the mode check, in `bufs` (the inputs
     /// read, the results written).
+    #[allow(clippy::too_many_arguments)]
     fn host_call_with(
         &mut self,
+        b: &mut dyn SemaBridge,
         pc: usize,
         op: u32,
         (pin, n_in, pbin, n_bin): (u64, u32, u64, u32),
@@ -118,8 +123,14 @@ impl Oven {
         // 3. The handler.
         let mut out = HostOut::new(ints_out, bytes_out, cap_out as usize, cap_bout as usize);
         self.host.calls += 1;
-        let Some(h) = self.host.handler.as_mut() else { return Err(Fault::Invalid) };
-        let r = h.call(op, ints, bytes, &mut out);
+        // The registered handler, else a session run's (spec/eval-session.md §6).
+        let r = match self.host.handler.as_mut() {
+            Some(h) => h.call(op, ints, bytes, &mut out),
+            None => match b.host_calls() {
+                Some(h) => h.call(op, ints, bytes, &mut out),
+                None => return Err(Fault::Invalid),
+            },
+        };
         let v = match r {
             Ok(v) => v,
             Err(e) => {
@@ -151,8 +162,13 @@ impl Oven {
     /// Charges `n` steps to the call at `pc`.
     fn host_charge(&mut self, pc: usize, n: u64) -> Result<(), Fault> {
         let before = self.run.counters.steps;
-        if before.saturating_add(n) > self.budget.steps {
-            return Err(Fault::Steps(self.site(pc).loc));
+        let need = before.saturating_add(n);
+        if need > self.step_stop {
+            match self.step_over(need) {
+                Ok(()) => {}
+                Err(true) => return Err(Fault::Cancelled),
+                Err(false) => return Err(Fault::Steps(self.site(pc).loc)),
+            }
         }
         self.run.counters.steps = before + n;
         Ok(())
