@@ -1,18 +1,23 @@
 # Evaluation sessions (WP-1995)
 
-Status: implemented (WP-1995; nested work, §5.1, WP-2073). Code: `crates/kiln_sema/src/session.rs`
+Status: implemented (WP-1995; nested work, §5.1, WP-2073; `constexpr`
+entries, §3/§4, WP-2072). Code: `crates/kiln_sema/src/session.rs`
 (the session, entries, runs, reports, diagnostic replay),
 `crates/kiln_oven/src/session.rs` (budgets, cancellation, the Oven side
 of a run), `crates/kiln_diag/src/engine.rs` (`DiagEngine::capture_begin`,
 the per-run capture), `crates/kiln_parse/src/lib.rs`
 (`parse_preprocessed_retained`), `crates/kiln_driver/src/session.rs`
 (`with_eval_session`, from a command line). Standard: [expr.const]
-(the run is an immediate invocation, [expr.const]/16, evaluated at the
-end of the translation unit), [temp.point]/8 (the instantiations a run
-needs), [except.terminate] (an exception leaving the entry).
+(the run of an immediate entry is an immediate invocation,
+[expr.const.imm]/1; of a `constexpr` entry, the initialization of a
+notional `constexpr` variable, [dcl.constexpr]/6, [expr.const.init]/4;
+both manifestly constant-evaluated, [expr.const.defns]/1, at the end of
+the translation unit), [temp.point]/8 (the instantiations a run needs),
+[except.terminate] (an exception leaving the entry).
 
 A tooling client compiles one translation unit (a *transform*), then
-evaluates a `consteval` *entry* function of it many times, once per
+evaluates a `constexpr` or `consteval` *entry* function of it many
+times, once per
 input. Each evaluation is a *run*. A run talks to the client through
 host calls (spec/host-calls.md) and leaves nothing behind that a later
 run can observe. Nothing here changes what kiln does for a translation
@@ -23,8 +28,8 @@ unit that opens no session.
 The session keeps the finished front end of the translation unit: the
 `Sema` after the end-of-translation-unit work (pending instantiations
 done, end-of-unit checks run), which owns the AST and the Oven. A run
-is an immediate invocation evaluated against that state, as one at the
-end of the translation unit would be.
+is a constant evaluation of the entry against that state (§4), as one
+at the end of the translation unit would be.
 
 The alternative, re-entering from a parsed prefix (`parse_prefix`,
 `continue_preprocessed`) per run, was rejected: every run would repeat
@@ -102,11 +107,17 @@ drop(session); session.into_sema() -> Sema;
 
 An entry is a function the session may run:
 
-- a **`consteval` function** (an immediate function by its declaration;
-  a `constexpr` function, even one escalated to immediate, is
-  `EntryError::NotConsteval`); a function template is not a function
-  (`NotAFunction`), but a `consteval` specialization of one is accepted
-  by `DeclId`;
+- a **`constexpr` or `consteval` function** ([dcl.constexpr]/1; a
+  function escalated to immediate, [expr.const.imm]/4.2, was declared
+  `constexpr` and counts as one); a function that is neither is
+  `EntryError::NotConstexpr` (WP-2072; `NotConsteval` before). A
+  function template is not a function (`NotAFunction`), but a
+  `constexpr` or `consteval` specialization of one is accepted by
+  `DeclId`. An entry is *immediate* when the function is an immediate
+  function ([expr.const.imm]/4: `consteval`, or escalated), read when
+  the run reports a failure (a specialization a run instantiates
+  escalates in that run, and stays so for the session); §4 gives each
+  kind's run;
 - with **no parameters** (a C-style `(void)` included; not variadic):
   else `HasParameters`;
 - returning **`void` or an integral type** ([basic.fundamental]/11:
@@ -126,21 +137,113 @@ the one function is then checked as above. An `Entry` is a small
 run, in any order.
 
 Deferred (follow-up rows): parameters (`std::meta::info` or integers
-given per run), class-typed results, `constexpr` entries.
+given per run, WP-2070), class-typed results (WP-2071).
 
 ## 4. A run
 
-`run(entry, host, budget, cancel)` evaluates a call of the entry
-without arguments as a manifestly constant-evaluated immediate
-invocation ([expr.const]/16) at the end of the translation unit. It is
-not plainly constant-evaluated ([expr.const.core]/2.32): it cannot
-inject declarations (`std::meta::define_aggregate` fails), as for any
-immediate invocation outside a consteval block. The result is checked
-as any immediate invocation's: an allocation not deallocated by the end
-of the run makes it fail. An error reported by semantic work the run
-needed (an instantiation it caused, or one replayed, §7) fails the run
-with `RunError::Failed` even when the evaluation completed: that error
-is the run's diagnostic.
+`run(entry, host, budget, cancel)` evaluates a call `f()` of the entry
+without arguments, at the end of the translation unit (after its last
+declaration, at namespace scope), as one of these:
+
+- **An immediate entry**: the call is an immediate invocation
+  ([expr.const.imm]/1: an invocation of an immediate function not in an
+  immediate function context, as namespace scope is not), manifestly
+  constant-evaluated ([expr.const.defns]/1.4).
+- **A `constexpr` entry returning `R`** (not immediate): the
+  initialization of a notional variable `constexpr R v = f();` declared
+  there. A `constexpr` variable shall be constant-initializable
+  ([dcl.constexpr]/6): the full-expression of its initialization is a
+  constant expression ([expr.const.init]/4.1), and as the initializer of
+  a variable usable in constant expressions it is manifestly
+  constant-evaluated ([expr.const.defns]/1.6). For an integral `R` the
+  other conditions hold of any value: the result is no invalid pointer
+  ([expr.const.const]/4; an indeterminate result fails the run by
+  [expr.const.core]/2.12 first), it is constexpr-representable
+  ([expr.const.init]/4.2, 4.3) and has constant destruction
+  ([expr.const.defns]/3.1).
+- **A `void` `constexpr` entry** (no variable has type `void`): the
+  evaluation of `f()` as the left operand of the comma in
+  `static_assert((f(), true));` there, a constant-expression
+  ([dcl.pre]/12, contextually converted to `bool`), manifestly
+  constant-evaluated by [expr.const.defns]/1.1. The comma's right
+  operand adds no step: kiln evaluates `f()` alone.
+
+What follows holds of every kind (a sentence that names one kind is the
+only difference):
+
+- **`if consteval` and `std::is_constant_evaluated()`** are true in a
+  run, the function the run calls included: the run is manifestly
+  constant-evaluated, so a consteval if statement executes its first
+  substatement ([stmt.if]/5) and `std::is_constant_evaluated()` returns
+  `true` ([meta.const.eval]/1; [expr.const.init] Note 1 says the same of
+  the determination of constant-initializability). The Oven's
+  `begin_outermost(false, true, true)`: no trial fold, a constant
+  context.
+- **No injection.** A run is not the evaluation of a
+  consteval-block-declaration's expression, so an expression that would
+  produce an injected declaration makes it not a constant expression
+  ([expr.const.core]/2.32): `std::meta::define_aggregate` fails, and
+  `__kiln_plainly_constant_evaluated()` (spec/consteval-blocks.md §3) is
+  `false`. For a `constexpr` entry this follows from its form, not from
+  a rule on immediate invocations: the notional variable's initializer
+  is not a consteval-block-declaration's expression either.
+- **The evaluation `E`** of every [expr.const.core]/2 rule is the whole
+  run, the same boundary for every kind: a call of a non-`constexpr`
+  function (2.3), of an undefined one (2.4), undefined behaviour (2.8),
+  a read of an object whose lifetime began outside the run that is not
+  usable in constant expressions (2.10), a modification of one (2.18,
+  §5), an allocation not deallocated by the end of the run (2.20, 2.22),
+  an exception object not destroyed in it (2.24, `RunError::Uncaught`),
+  each fails the run with `RunError::Failed`. kiln diagnoses
+  runtime-undefined behaviour ([expr.const.core]/3) and library
+  undefined behaviour it detects ([expr.const.core]/4) as it does in
+  every constant evaluation.
+- **A `constexpr` body is checked by the run.** A `constexpr` function
+  is checked for constant-expression-ness only where its definition is
+  (a function that can never be constant is valid since C++23,
+  [dcl.constexpr] Note 4); the run is what decides that this call is a
+  constant expression. Nothing is checked or cached before the run.
+- **Immediate invocations in the entry's body.** In a `constexpr`
+  entry (not immediate) a call of a `consteval` function with constant
+  arguments is an immediate invocation ([expr.const.imm]/1) evaluated
+  when the body was defined, by the translation unit for a function
+  defined in it (never charged to a run, §5.1 "Unchanged"), or, for a
+  specialization the run instantiates, as a nested evaluation of the
+  `Func`/`Inst` unit that instantiates it (charged to `nested_steps` by
+  §5.1, alike on every run); the run reads its value and spends no step
+  on it. In an immediate entry the same call is in an immediate
+  function context ([expr.const.imm]/1.1), not an immediate invocation,
+  and its execution is part of the run's own `steps`. A `consteval`
+  call that is not a constant expression in an immediate-escalating
+  function makes it immediate ([expr.const.imm]/2.2, 4.2): its run is
+  then an immediate invocation.
+- **Contract assertions** are evaluated with the translation unit's
+  evaluation semantic, as in kiln's evaluation of a `constexpr`
+  variable's initializer ([expr.const.init] Note 2): no
+  ignore-semantic trial is made first, for any kind.
+- **The point of evaluation** ([expr.const.reflect]/5) is the end of
+  the translation unit; reflection queries see it, for every kind.
+
+An error reported by semantic work the run needed (an instantiation it
+caused, or one replayed, §7) fails the run with `RunError::Failed` even
+when the evaluation completed: that error is the run's diagnostic.
+
+**The entry stub.** The Oven compiles one call stub per entry
+(`compile_call`: a call of the entry and a return of its value) the
+first time the entry runs; it is the same for every kind, does no
+semantic work (§7) and is kept (§5). The entry itself is compiled by
+the stub's call, as any callee is (§5.1 `Func`).
+
+**A consteval wrapper.** The run of a `constexpr` entry `f` and the
+run of `consteval R w() { return f(); }` give the same `result`,
+`nested_steps` and `nested_calls`; `w`'s `calls` is one more and its
+`steps` exceed `f`'s by the steps of `w`'s own `return` (a constant,
+the same for every `f` and every run). A failure has the same notes
+but for the headline (§7: `w`'s is an immediate invocation's) and one
+more `in call to 'w()'` frame. The call of `f` inside `w` is not an
+immediate invocation (`f` is not immediate, and `w`'s body is an
+immediate function context anyway), and `f` is the same compiled
+function either way.
 
 `RunReport`:
 
@@ -164,7 +267,7 @@ heap spaces and every object in them (transient allocations, the
 flight or caught, the run's counters and impurity marks, the host-call
 buffers, the diagnostics deduplication set and counts (§7) and the
 state of any union or `mutable` member of a run's object. A run can
-modify no object whose lifetime began outside it ([expr.const]/5.16),
+modify no object whose lifetime began outside it ([expr.const.core]/2.18),
 so the static objects of the translation unit (the values of
 `constexpr` variables) are never changed by a run.
 
@@ -214,7 +317,7 @@ units at landing (`Key` in `kiln_sema/src/session.rs`):
 | `Func(f)` | the Oven's compilation of function `f`, with the semantic work it needs: an instantiation, an implicit or defaulted member, a metafunction thunk (`SemaBridge::ensure_body`) | every call of `f` in a run (`Oven::session_compile`) |
 | `Var(g)` | the Oven's evaluation of global `g`'s initializer for a read (`eval_var_init`) | every first read of `g` in a run (`Oven::session_kept_var`) |
 | `Init(v)` | a variable's initializer instantiated and checked (`instantiate_var_spec_init`, `subst_static_member_init`) | each reference to `v` that may need its value (`note_var_reference`) |
-| `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`) |
+| `Inst(f)` | a function template specialization's definition instantiated (`instantiate_function_definition`) | each request to instantiate it, done or not (its early return, `note_used_for_instantiation`), and each compilation of it that finds its body instantiated (`SemaBridge::ensure_body`, WP-2072) |
 | `Meta(op, operands)` | a reflection query (`SemaBridge::meta`) | each query with the same op and operands |
 | `Nothrow(f)` | whether `f` is non-throwing, which may instantiate an exception specification (`SemaBridge::is_nothrow`) | each query, the early `known_nothrow` answer included |
 
@@ -383,12 +486,25 @@ restored at the end of the run, and the run deduplicates only within
 itself, so a run never sees the error limit, the counts or the
 duplicates of another run or of the translation unit.
 
-- **A failed run** reports `sema_immediate_call_non_constant` ("call
-  to consteval function 'f' is not a constant expression") at the
-  entry's declaration, with the evaluation's notes: the reason, then
-  the call stack (`in call to 'g()'`, innermost first, under
-  `-fconstexpr-backtrace-limit=`), as for any failed immediate
-  invocation.
+- **A failed run** reports, at the entry's declaration, the
+  evaluation's notes: the reason, then the call stack (`in call to
+  'g()'`, innermost first, under `-fconstexpr-backtrace-limit=`; the
+  outermost frame, the entry's, is at its declaration, as a run has no
+  call expression). The headline is by kind:
+  - an immediate entry's, as for any failed immediate invocation:
+    `sema_immediate_call_non_constant` ("call to consteval function 'f'
+    is not a constant expression"; "call to immediate function 'f<int>'"
+    for an escalated one, followed by the note saying why it is
+    immediate, as clang's `EvaluateAndDiagnoseImmediateInvocation`);
+  - a `constexpr` entry's (WP-2072): `sema_session_entry_non_constant`
+    ("call to constexpr function 'f' is not a constant expression"),
+    the run's wording for any entry, with the notes clang 22 and 19
+    give under "constexpr variable 'v' must be initialized by a constant
+    expression" for `constexpr int v = f();` (the reason, the call
+    stack, `declared here` for a non-`constexpr` callee, `allocation
+    performed here was not deallocated` for a leak). The notional
+    variable has no name a client could use, so the headline names the
+    entry.
 - **Replay.** Semantic work is kept (§5), but a fresh session would
   report its diagnostics in the first run that needs it. The session
   records the diagnostics emitted during each unit's work (§5.1), in
@@ -464,6 +580,15 @@ duplicates of another run or of the translation unit.
   seen, and the early answer now reaches a recorded `Nothrow` unit.
   The entry stub compiled before the run is armed does no semantic
   work (`compile_call` only resolves the callee's index): not a bug.
+- **Found and fixed by WP-2072** (test
+  `a_function_instantiated_by_other_work_is_reached_by_its_compile`):
+  a member function whose definition another unit's work instantiated
+  (`c`'s instantiation instantiates `a`, which `c` calls) was compiled
+  later in the same run without a reach of its `Inst` unit, so it was
+  not recorded and a later run calling it first was charged nothing and
+  replayed nothing. The Oven's request for a body that exists
+  (`SemaBridge::ensure_body`) now reaches the specialization's recorded
+  `Inst` unit, as a request to instantiate it does.
 
 **Keys and caches a run reads or fills** (WP-2074). "Address" is a
 frame or heap encoding (slot | generation | offset), which `reset`
@@ -617,6 +742,18 @@ session's translation unit is parsed without recording either.
   thread, every failure kind followed by a clean run, host calls in
   runs, diagnostics and their replay, kept memory flat, every entry
   error, a refused translation unit.
+- `crates/kiln_parse/tests/eval_session_constexpr.rs`: `constexpr`
+  entries (WP-2072): `int`, `bool`, `unsigned long long` and `void`
+  entries, a static member, specializations by `DeclId`, `NotConstexpr`;
+  `if consteval`, `std::is_constant_evaluated()` and
+  `__builtin_is_constant_evaluated()` true and the plain bit false;
+  a `consteval` call in a `constexpr` entry (read from the translation
+  unit, or charged as the instantiation's nested work) against the same
+  in a `consteval` entry; an escalated entry and its diagnostic; the
+  failures (undefined behaviour, a non-`constexpr` call, a leak, a
+  `void` entry, an exception, a host-call-dependent one) with clang's
+  notes; a `consteval` wrapper; run 1 and run N, fresh and used, three
+  orders.
 - `crates/kiln_parse/tests/eval_session_nested.rs`: §5.1 (WP-2073):
   each fixed bug of §7, the determinism criterion (run 1 and run N,
   fresh and used, both orders, nested inside nested work, the memo),
@@ -630,6 +767,8 @@ session's translation unit is parsed without recording either.
   `members_of`) replays its warning in a later run that builds them at
   another address and not in one that builds other content at the same
   address, a run after others reports what a fresh session's would, and
-  the memoization cache skips pointer and reference arguments.
+  the memoization cache skips pointer and reference arguments. A `constexpr` entry over `<vector>`
+  and `<string>` (WP-2072) with `std::is_constant_evaluated()` true and
+  a leak reported with the `constexpr` headline.
 - `crates/kiln_sema/src/meta/key.rs` (unit tests): every operand of
   every reflection op has a key row.

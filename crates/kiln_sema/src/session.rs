@@ -1,10 +1,13 @@
 //! Evaluation sessions (spec/eval-session.md): a finished translation
-//! unit kept to evaluate `consteval` entry functions of it many times,
-//! each run isolated from every other, for tooling clients.
+//! unit kept to evaluate `constexpr` and `consteval` entry functions of
+//! it many times, each run isolated from every other, for tooling
+//! clients.
 //!
 //! The session owns the finished [`Sema`] (§1). A run
-//! ([`EvalSession::run`]) is an immediate invocation of the entry at the
-//! end of the translation unit, evaluated by the Oven
+//! ([`EvalSession::run`]) is a manifestly constant-evaluated call of the
+//! entry at the end of the translation unit (§4: an immediate invocation
+//! of an immediate entry, the initializer of a notional `constexpr`
+//! variable for a `constexpr` one), evaluated by the Oven
 //! ([`Oven::session_run`]) through a bridge that carries the run's
 //! host-call handler and the diagnostic replay of §7.
 
@@ -107,8 +110,9 @@ pub enum EntryError {
     /// The declaration is not a function (a function template, a
     /// variable, a type, ...).
     NotAFunction,
-    /// The function is not declared `consteval`.
-    NotConsteval,
+    /// The function is neither `constexpr` nor `consteval` (nor an
+    /// escalated immediate function).
+    NotConstexpr,
     /// The function has parameters (an implicit object parameter
     /// included) or is variadic.
     HasParameters,
@@ -126,7 +130,9 @@ impl fmt::Display for EntryError {
                 write!(f, "'{name}' names {count} overloaded functions")
             }
             EntryError::NotAFunction => f.write_str("the entry is not a function"),
-            EntryError::NotConsteval => f.write_str("the entry is not a consteval function"),
+            EntryError::NotConstexpr => {
+                f.write_str("the entry is neither a constexpr nor a consteval function")
+            }
             EntryError::HasParameters => f.write_str("the entry has parameters"),
             EntryError::WrongReturnType => {
                 f.write_str("the entry returns neither void nor an integral type")
@@ -755,8 +761,10 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let Some(fd) = ast.decls.function(ast.latest(f)) else {
             return Err(EntryError::NotAFunction);
         };
-        if fd.spec.constexpr_kind() != ConstexprKind::Consteval {
-            return Err(EntryError::NotConsteval);
+        // A `constexpr` or `consteval` function (§3); one escalated to
+        // immediate was declared `constexpr`.
+        if fd.spec.constexpr_kind() == ConstexprKind::None && !s.is_immediate_fn(f) {
+            return Err(EntryError::NotConstexpr);
         }
         let Some(fty) = ast.decls.get(f).ty() else { return Err(EntryError::NotAFunction) };
         let TypeView::Function(p) = ast.types.canonical_view(fty) else {
@@ -893,14 +901,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             Ok(_) if diags.error_count() > errors => Err(RunError::Failed),
             Ok(v) => Ok(v),
             Err((kind, fail)) => {
-                let consteval = u8::from(true);
-                let msg = self
-                    .sema
-                    .diag(DiagId::sema_immediate_call_non_constant, at)
-                    .arg(consteval)
-                    .arg(self.sema.qualified_decl_name(f))
-                    .allow_duplicate();
-                self.sema.emit(Sema::with_failure_notes(msg, fail));
+                self.report_failed_run(f, at, fail);
                 Err(kind)
             }
         };
@@ -915,6 +916,32 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
             nested_calls: out.nested_calls,
             diagnostics,
         }
+    }
+
+    /// The diagnostic of a run of `f` that failed (spec/eval-session.md
+    /// §7): an immediate entry's run is an immediate invocation, reported
+    /// as one (with why an escalated function is immediate); a
+    /// `constexpr` entry's names the entry, with the notes clang gives for
+    /// `constexpr R v = f();`. Whether `f` is immediate is read now: a
+    /// specialization the run instantiated may have escalated in it.
+    fn report_failed_run(&mut self, f: DeclId, at: Loc, fail: kiln_oven::EvalFailure) {
+        let s = &mut self.sema;
+        let name = s.qualified_decl_name(f);
+        let msg = if s.is_immediate_fn(f) {
+            let consteval = s.is_consteval_kind(f);
+            let mut msg = s
+                .diag(DiagId::sema_immediate_call_non_constant, at)
+                .arg(u8::from(consteval))
+                .arg(name)
+                .allow_duplicate();
+            if !consteval && let Some(note) = s.escalation_reason_note(f) {
+                msg = msg.with_note(note);
+            }
+            msg
+        } else {
+            s.diag(DiagId::sema_session_entry_non_constant, at).arg(name).allow_duplicate()
+        };
+        s.emit(Sema::with_failure_notes(msg, fail));
     }
 
     /// What the session holds now (spec/eval-session.md §10).

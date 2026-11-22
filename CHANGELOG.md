@@ -26,6 +26,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   variables, condition and for-range bindings, exception declarations,
   requires-expression parameters and init-captures, with friend
   declarations no longer overwriting the row of what they name.
+- `constexpr` entries for evaluation sessions (WP-2072,
+  spec/eval-session.md §3-§4): a session runs a parameterless
+  `constexpr` function returning `void` or an integral type, not only a
+  `consteval` one, by name or by `DeclId` (a function template
+  specialization included). Its run is the manifestly
+  constant-evaluated initialization of a notional `constexpr` variable
+  at the end of the translation unit, so `if consteval` and
+  `std::is_constant_evaluated()` are true and no declaration can be
+  injected; a failure reports "call to constexpr function 'f' is not a
+  constant expression" with the notes clang gives for
+  `constexpr int v = f();`. A function escalated to immediate runs as an
+  immediate invocation and is reported as one ("call to immediate
+  function"). Budgets, isolation, determinism and replay are those of
+  `consteval` entries. PCH snapshot format 139 (a new diagnostic id).
 - The front end as a library call for tooling clients (WP-2120):
   `kiln_driver::front_end::run_front_end(argv0, command_line, options, f)`
   runs one `-fsyntax-only` job through the same driver stages as `kiln`
@@ -589,6 +603,9 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Changed
 
+- `EntryError::NotConsteval` is renamed `EntryError::NotConstexpr`
+  (WP-2072): it is now returned only for a function that is neither
+  `constexpr` nor `consteval`.
 - Evaluation sessions charge nested work to the run (WP-2073,
   spec/eval-session.md §5.1): constant evaluations that semantic work
   needs during a run (an instantiation's `static_assert`, a static
@@ -686,6 +703,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Evaluation sessions: a member function of a class template
+  specialization instantiated by another function's instantiation and
+  compiled later in the same run is now recorded with that
+  instantiation (WP-2072, spec/eval-session.md §7), so a later run that
+  calls it first is charged its nested work and replays its diagnostics,
+  as a fresh session's run is.
 - Evaluation sessions key the diagnostics a reflection query records by
   the content of its operands, not by their addresses (WP-2074,
   spec/eval-session.md §7): a `substitute` over a vector a run built, a
