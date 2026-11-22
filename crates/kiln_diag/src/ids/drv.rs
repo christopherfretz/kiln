@@ -20,6 +20,9 @@ drv_compilation_database = Error (2) "compilation database '{0}' could not be op
 drv_deprecated_arg = Warning [Deprecated] (2) "argument '{0}' is deprecated, use '{1}' instead";
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+// WP-020 (Slip): `kiln_driver::front_end` refuses `-verify` and
+// `-include-pch` (and the PCH snapshot modes), which it does not run.
+drv_front_end_unsupported = Error (1) "'{0}' is not supported by the front-end library entry";
 // WP-1371: `-fkiln-backend=hod` (spec/driver.md "Back-end selection").
 // WP-1477: the fallback succeeds, so a blanket `-Werror` does not
 // promote it; `-Werror=hod-fallback` does.
