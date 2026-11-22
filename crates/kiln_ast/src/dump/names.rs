@@ -1805,11 +1805,18 @@ impl PrintEnv for AstNames<'_> {
     }
 
     fn decl_name(&self, decl: DeclId, out: &mut String) {
+        // The object of a CWG 3135 holding variable is named as its
+        // binding (`b`, `n::b.y`).
+        let decl = self.ast.holding_object_binding(decl).unwrap_or(decl);
         self.write_qualified_spec_name(decl, out);
     }
 
     fn decl_type(&self, decl: DeclId) -> Option<QualType> {
         self.ast.decls.get(decl).ty()
+    }
+
+    fn names_temporary(&self, decl: DeclId) -> bool {
+        self.ast.holding_object_binding(decl).is_some()
     }
 
     fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
@@ -1973,11 +1980,15 @@ impl PrintEnv for Ast {
     }
 
     fn decl_name(&self, decl: DeclId, out: &mut String) {
-        AstNames::new(self).write_qualified_spec_name(decl, out);
+        AstNames::new(self).decl_name(decl, out);
     }
 
     fn decl_type(&self, decl: DeclId) -> Option<QualType> {
         self.decls.get(decl).ty()
+    }
+
+    fn names_temporary(&self, decl: DeclId) -> bool {
+        self.holding_object_binding(decl).is_some()
     }
 
     fn same_unqualified(&self, a: QualType, b: QualType) -> bool {

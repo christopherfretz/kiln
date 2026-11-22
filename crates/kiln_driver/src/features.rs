@@ -285,6 +285,16 @@ impl ExtensionSet {
         Some(())
     }
 
+    /// clang `getAArch64TargetFeatures`: `-mgeneral-regs-only` disables
+    /// `fp-armv8` after the `-march=` / `-mcpu=` extensions, and with it
+    /// every feature that needs it (`neon`, `fullfp16`, `sve`, `aes`,
+    /// `rdm`, …; WP-1804).
+    fn general_regs_only(&mut self, args: &Args) {
+        if args.general_regs_only {
+            self.disable("fp-armv8");
+        }
+    }
+
     /// The touched features as `+name` / `-name`, minus the base set.
     fn into_features(self, f: &mut TargetFeatures) {
         f.arch = self.arch;
@@ -443,21 +453,16 @@ fn code_model_and_tls_errors(args: &Args, target: &Target, errors: &mut Vec<ArgE
     }
 }
 
-/// Resolves the target features of `args` for `target`. Off `AArch64`,
-/// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
-/// unsupported option and `-target-feature` is ignored. Every error is
-/// returned; the features are those of the valid options.
-pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) {
-    let mut f = TargetFeatures { arch: (8, 0), ..TargetFeatures::default() };
-    let mut errors = Vec::new();
+/// `resolve`'s `AArch64` base: the `-march=` or `-mcpu=` extension set (and
+/// `"target-cpu"`), then `-mgeneral-regs-only` (WP-1804).
+fn resolve_aarch64_base(
+    args: &Args,
+    v22: bool,
+    f: &mut TargetFeatures,
+    errors: &mut Vec<ArgError>,
+) {
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
-    code_model_and_tls_errors(args, target, &mut errors);
-    if !target.is_aarch64() {
-        resolve_x86(args, target, &mut f, &mut errors);
-        return (f, errors);
-    }
-    let v22 = args.predef.clang_compat == ClangCompat::Clang22;
     if native(&args.march) || (args.march.is_none() && native(&args.mcpu)) {
         f.cpu = Some("native".to_owned());
     } else if let Some(v) = &args.march {
@@ -474,7 +479,7 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             s.extensions(exts).map(|()| s)
         });
         match set {
-            Some(s) => {
+            Some(mut s) => {
                 if let Some((_, Some((row, _)))) = &cpu {
                     // clang 19's `+zcm,+zcz` of an Apple CPU stay.
                     for k in list(row.keep) {
@@ -482,7 +487,8 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
                     }
                     f.cpu = Some(row.canonical.to_owned()).filter(|c| c != "generic");
                 }
-                s.into_features(&mut f);
+                s.general_regs_only(args);
+                s.into_features(f);
             }
             None => errors.push(unsupported("-march=", v)),
         }
@@ -492,16 +498,44 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
         // function's `target-features` are its architecture feature's
         // closure overridden by the driver's list.
         match cpu_set(v, v22) {
-            Some((row, s)) => {
+            Some((row, mut s)) => {
                 for c in list(row.closure) {
                     f.set(c, true);
                 }
                 f.cpu = Some(row.canonical.to_owned()).filter(|c| c != "generic");
-                s.into_features(&mut f);
+                s.general_regs_only(args);
+                s.into_features(f);
             }
             None => errors.push(unsupported("-mcpu=", v)),
         }
     }
+    // WP-1804: `-mgeneral-regs-only` with neither a `-march=` nor a
+    // `-mcpu=` CPU (or `native`, which kiln does not detect) applies to
+    // the default `armv8-a` set.
+    let has_set =
+        f.cpu.as_deref() != Some("native") && (args.march.is_some() || args.mcpu.is_some());
+    if args.general_regs_only && !has_set {
+        let mut s = ExtensionSet::new((8, 0), v22);
+        s.general_regs_only(args);
+        s.into_features(f);
+    }
+}
+
+/// Resolves the target features of `args` for `target`. Off `AArch64`,
+/// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
+/// unsupported option and `-target-feature` is ignored. Every error is
+/// returned; the features are those of the valid options.
+pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) {
+    let mut f = TargetFeatures { arch: (8, 0), ..TargetFeatures::default() };
+    let mut errors = Vec::new();
+    let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
+    code_model_and_tls_errors(args, target, &mut errors);
+    if !target.is_aarch64() {
+        resolve_x86(args, target, &mut f, &mut errors);
+        return (f, errors);
+    }
+    let v22 = args.predef.clang_compat == ClangCompat::Clang22;
+    resolve_aarch64_base(args, v22, &mut f, &mut errors);
     // WP-1151: clang's `hasTargetFeatureMTE` (the memtag sanitizers'
     // hardware check) sees the driver's own `-target-feature` list, and at
     // `-fclang-compat=22` also the `-Xclang -target-feature` items (any
@@ -561,7 +595,7 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     // (named as clang's driver spells them), unknown when this clang
     // lacks them; `-msse4`, `-msse4.2` and `-m[no-]3dnow[a]` are only
     // unused ([`x86_features::non_x86_spelling`]; the driver warns).
-    for a in &args.x86_feature_flags {
+    for a in args.x86_feature_flags.iter().filter(|a| *a != x86_features::GENERAL_REGS_ONLY) {
         if x86_features::unknown_at(a, v22) {
             errors.push(ArgError::Unknown(a.clone()));
         } else if let Some(o) = x86_features::non_x86_spelling(a, v22) {
@@ -1248,6 +1282,27 @@ mod tests {
     /// WP-630: an x86-64 `-march=<cpu>` has clang's features and
     /// predefined macros; the default keeps `x86-64`'s, as `native` does
     /// off an x86-64 host.
+    /// WP-1804: `-mgeneral-regs-only` (clang's `getAArch64TargetFeatures`
+    /// / `getX86TargetFeatures`): `fp-armv8` off with every feature that
+    /// needs it on `AArch64`, after the `-march=` / `-mcpu=` extensions; on
+    /// x86 `-x87,-mmx,-sse` where it stands among the feature flags.
+    #[test]
+    fn general_regs_only() {
+        assert_eq!(feats("-mgeneral-regs-only a.cpp"), "false -fp-armv8,-neon");
+        assert_eq!(
+            feats("-march=armv8.2-a+sve+crypto -mgeneral-regs-only a.cpp"),
+            "false -aes,+crc,-crypto,-fp-armv8,-fullfp16,+lse,-neon,+ras,-rdm,-sha2,-sve,+v8.1a,+v8.2a"
+        );
+        let (f, e) = res("-mgeneral-regs-only a.cpp", true);
+        assert_eq!(e, []);
+        assert!(!f.enabled().iter().any(|n| n == "neon" || n == "fp-armv8"));
+        let x = |s: &str| res(s, false).0.x86_enabled().join(",");
+        assert_eq!(x("-mgeneral-regs-only a.cpp"), "cmov,cx8,fxsr");
+        assert_eq!(x("-mavx2 -mgeneral-regs-only a.cpp"), "cmov,cx8,fxsr");
+        assert_eq!(x("-mgeneral-regs-only -msse2 a.cpp"), "cmov,cx8,fxsr,sse,sse2");
+        assert_eq!(res("-mgeneral-regs-only a.cpp", false).0.x86_written, ["-x87", "-mmx", "-sse"]);
+    }
+
     #[test]
     fn x86_cpu_features() {
         let f = res("-march=westmere a.cpp", false).0;

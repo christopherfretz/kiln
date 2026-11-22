@@ -4540,6 +4540,9 @@ impl Cg<'_> {
         if let Some(d) = direct {
             self.psabi_call_check(e, d, &args, false);
             self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
+        } else {
+            // clang `checkFunctionCallABI` with no callee (WP-1804).
+            self.soft_float_call_check(e, None, fty, &args);
         }
         // WP-803: a hidden `size_t` argument after each `pass_object_size`
         // argument (clang `EmitCallArgs`).

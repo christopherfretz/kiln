@@ -273,6 +273,7 @@ impl Sema<'_, '_> {
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             self.diagnose_deprecated(d, loc);
             self.check_sve_use(d, loc);
+            let _ = self.check_long_double_use(d, loc);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
                 self.member_refs
@@ -664,6 +665,7 @@ impl Sema<'_, '_> {
         // clang `DiagnoseUseOfDecl` in `BuildMemberReferenceExpr`.
         self.diagnose_deprecated(m, loc);
         self.check_sve_use(m, loc);
+        let _ = self.check_long_double_use(m, loc);
         if self.kind_of(m) == DeclKind::VarTemplate {
             let at = (b, obj_ty, def, arrow, nns);
             return self.member_var_template_set(name, m, via, naming, at, loc);

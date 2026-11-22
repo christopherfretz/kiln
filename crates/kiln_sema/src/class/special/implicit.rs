@@ -1537,6 +1537,10 @@ impl Sema<'_, '_> {
         let saved = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = if dep { saved.max(1) } else { 0 };
         let f = self.builder().append_implicit_member(h, kind, fty, spec);
+        if !dep {
+            let fp = self.fp_pragma_state();
+            let _ = self.special.fp_at_decl.insert(f, fp);
+        }
         let ps: Vec<DeclId> = params
             .iter()
             .enumerate()

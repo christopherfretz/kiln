@@ -62,3 +62,7 @@ cg_store_value_to_reg = Error (0) "impossible constraint in asm: cannot store va
 // clang 19's text of `cg_store_value_to_reg`, kept for -fclang-compat=19.
 cg_store_value_to_reg_19 = Error (0) "impossible constraint in asm: can't store value into a register";
 cg_sync_op_misaligned = Warning [SyncAlignment] (0) "__sync builtin operation must have natural alignment (consider using __atomic)";
+// clang `err_target_unsupported_type_for_abi` (`AArch64TargetCodeGenInfo`
+// `checkFunctionABI` / `checkFunctionCallABISoftFloat`; WP-1804): {0} the
+// declaration (`'f'`), {1} the type, {2} the ABI (`aapcs`).
+cg_target_unsupported_type_for_abi = Error (3) "{0} requires {1} type support, but ABI '{2}' does not support it";

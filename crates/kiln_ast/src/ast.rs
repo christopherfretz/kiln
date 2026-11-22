@@ -481,6 +481,31 @@ impl Ast {
         self.decls.field(f)?.init
     }
 
+    /// CWG 3135 ([dcl.struct.bind]/7, C++26): the holding variable `r`
+    /// of a tuple-like structured binding whose initializer (`get<i>`)
+    /// is a prvalue is declared `S T_i r = initializer;`, an object of
+    /// type `T_i`, not a reference. Kiln, as clang, keeps the reference
+    /// and the lifetime-extended temporary `t` it binds (the same
+    /// storage, address and lifetime), so `t` *is* `r`'s object: not a
+    /// temporary object for [expr.const.init] or [temp.arg.nontype]/6,
+    /// and a template argument naming it mangles as `r`. Returns `r`.
+    pub fn holding_object(&self, t: DeclId) -> Option<DeclId> {
+        let r = self.decls.lifetime_extended(t)?.extending;
+        // Holding variables are implicit; the binding scan only for those.
+        if !self.decls.get(r).has(DeclFlags::IMPLICIT) {
+            return None;
+        }
+        let ti = self.decls.get(self.decls.holding_binding(r)?).ty()?;
+        let tt = self.decls.get(t).ty()?;
+        (!self.types.is_reference(ti) && self.types.same_unqualified(ti, tt)).then_some(r)
+    }
+
+    /// The structured binding whose CWG 3135 holding variable's object is
+    /// temporary `t` ([`Self::holding_object`]): the name that denotes it.
+    pub fn holding_object_binding(&self, t: DeclId) -> Option<DeclId> {
+        self.decls.holding_binding(self.holding_object(t)?)
+    }
+
     // -- redeclarations (§4.4) ------------------------------------------
 
     /// The first declaration of `d`'s entity (`d` itself if not

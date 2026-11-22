@@ -3145,6 +3145,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let pointee = designated.or_else(|| ast.types.pointee(ty));
         let d = match base {
             PtrBase::Decl(d) | PtrBase::Function(d) => d,
+            // The object of a CWG 3135 holding variable `r` (a tuple-like
+            // binding whose `get` returns a prvalue) is `r` itself, a
+            // variable named as its binding: `L_Z1bE`, as GCC 16.1
+            // mangles it (clang 22 rejects the argument; WP-1829).
+            PtrBase::Temporary(t) if ast.holding_object(t).is_some() => {
+                ast.holding_object(t).unwrap_or(t)
+            }
             PtrBase::TypeInfo(t) => {
                 self.out.push_str(if top { "X" } else { "" });
                 self.out.push_str(if is_ref { "ti" } else { "adti" });
@@ -3159,8 +3166,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 return;
             }
         };
+        // The holding variable `r` is a reference to its object: the path
+        // starts at the object's type, `T_i`.
+        let obj_ty = match base {
+            PtrBase::Temporary(t) => ast.decls.get(t).ty(),
+            _ => ast.decls.get(d).ty(),
+        };
         let path = match base {
-            PtrBase::Decl(_) => self.lvalue_path(ast.decls.get(d).ty(), offset, pointee),
+            PtrBase::Decl(_) | PtrBase::Temporary(_) => self.lvalue_path(obj_ty, offset, pointee),
             _ => LvaluePath::default(),
         };
         // A whole object whose type is not the parameter's pointee (a
@@ -3172,7 +3185,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let whole = !path.nonempty && !path.past_end;
         let converted = whole
             && designated.is_none()
-            && match (ast.decls.get(d).ty(), ast.types.pointee(ty)) {
+            && match (obj_ty, ast.types.pointee(ty)) {
                 (Some(dt), Some(pt)) => !ast.types.same_type(dt, pt),
                 _ => false,
             };

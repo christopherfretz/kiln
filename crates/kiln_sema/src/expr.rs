@@ -2774,6 +2774,11 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         self.check_sve_use(d, loc);
+        // clang `DiagnoseUseOfDecl` -> `checkTypeSupport`, then "Only
+        // create DeclRefExpr's for valid Decl's" (WP-1804).
+        if self.check_long_double_use(d, loc) {
+            return self.recover_err(&[], loc);
+        }
         self.c_check_static_in_inline(d, loc);
         // [dcl.spec.auto.general]/11: a placeholder variable's type is
         // not known inside its own initializer.
@@ -4189,7 +4194,7 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
-        self.check_sve_operands([l, r], loc);
+        self.check_type_support_operands([l, r], loc);
         // [expr.ref]/7.3.2: a bound member function operand can only be
         // called; clang's `CheckPlaceholderExpr` rejects the operator.
         if !matches!(op, BinaryOp::PtrMemD | BinaryOp::PtrMemI)

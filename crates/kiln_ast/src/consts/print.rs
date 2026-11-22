@@ -201,6 +201,13 @@ pub trait PrintEnv {
         let _ = decl;
         None
     }
+    /// Whether [`Self::decl_name`] names temporary `decl` exactly: the
+    /// object of a CWG 3135 holding variable, named as its structured
+    /// binding ([`crate::Ast::holding_object`]).
+    fn names_temporary(&self, decl: DeclId) -> bool {
+        let _ = decl;
+        false
+    }
     /// Whether `a` and `b` are the same type, ignoring top-level
     /// qualifiers, including those of array elements.
     fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
@@ -574,7 +581,7 @@ impl Printer<'_> {
                 }
             }
             PtrBase::Decl(d) | PtrBase::Temporary(d) => {
-                if matches!(base, PtrBase::Temporary(_)) {
+                if matches!(base, PtrBase::Temporary(_)) && !self.env.names_temporary(d) {
                     self.lost();
                 }
                 if amp {

@@ -186,6 +186,10 @@ sema_target_clone_doesnt_match = Error (0) "'target_clones' attribute does not m
 sema_target_clone_duplicate_options = Warning [FunctionMultiversion] (0) "version list contains duplicate entries";
 sema_target_clone_mixed_values = Warning [TargetClonesMixedSpecifiers] (0) "mixing 'target_clones' specifier mechanisms is permitted for GCC compatibility; use a comma separated sequence of string literals, or a string literal containing a comma-separated list of versions";
 sema_target_clone_must_have_default = Error (0) "'target_clones' multiversioning requires a default target";
+// clang `err_target_unsupported_type` (`checkTypeSupport`; WP-1804): {0}
+// the declaration (`'x'`) or `expression`, {1} the type, {2} the target
+// triple. The double space is clang's (the empty bit-size select).
+sema_target_unsupported_type = Error (3) "{0} requires  {1} type support, but target '{2}' does not support it";
 sema_temp_copy_no_viable = Error (2) "no viable constructor {0:copying variable|copying parameter|initializing template parameter|returning object|initializing statement expression result|throwing object|copying member subobject|copying array element|allocating object|copying temporary|initializing base subobject|initializing vector element|capturing value} of type {1}";
 sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
 sema_temp_member_ref = Error (3) "{2:reference|backing array for 'std::initializer_list'} {1:|subobject of }member {0} {2:binds to|is} a temporary object whose lifetime would be shorter than the lifetime of the constructed object";

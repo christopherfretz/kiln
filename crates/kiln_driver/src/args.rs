@@ -973,6 +973,10 @@ pub struct Args {
     pub mcpu: Option<String>,
     /// `-ffixed-x18`: `AArch64` reserves x18 (`+reserve-x18`; WP-1151).
     pub fixed_x18: bool,
+    /// `-mgeneral-regs-only` (WP-1804): `AArch64` turns `fp-armv8` off
+    /// (and every feature that needs it); on x86 it stays in
+    /// [`Args::x86_feature_flags`], where it is `-x87,-mmx,-sse`.
+    pub general_regs_only: bool,
     /// `-msve-vector-bits=<bits|scalable>` as written (the last wins).
     pub sve_vector_bits: Option<String>,
     /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
@@ -1854,7 +1858,10 @@ impl Args {
     /// [`crate::features::resolve`]) and the x86 feature flags. Returns
     /// false if `arg` is none of them.
     fn target_flag(&mut self, arg: &str) -> bool {
-        if crate::x86_features::is_flag(arg) {
+        if arg == crate::x86_features::GENERAL_REGS_ONLY {
+            self.general_regs_only = true;
+            self.x86_feature_flags.push(arg.to_owned());
+        } else if crate::x86_features::is_flag(arg) {
             self.x86_feature_flags.push(arg.to_owned());
         } else if let Some(v) = arg.strip_prefix("-march=") {
             self.march = Some(v.to_owned());

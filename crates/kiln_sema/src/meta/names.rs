@@ -575,6 +575,10 @@ impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
         self.names.decl_type(decl)
     }
 
+    fn names_temporary(&self, decl: DeclId) -> bool {
+        self.names.names_temporary(decl)
+    }
+
     fn same_unqualified(&self, a: kiln_ast::QualType, b: kiln_ast::QualType) -> bool {
         self.names.same_unqualified(a, b)
     }

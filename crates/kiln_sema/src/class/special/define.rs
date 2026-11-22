@@ -401,12 +401,35 @@ impl Sema<'_, '_> {
         };
         if ok {
             let at = self.ast.decls.get(f).loc();
-            let body = self.builder().compound(&[], at, at);
+            let body = self.implicit_body(f, &[], at);
             let _ = self.builder().set_body(f, body);
         } else {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
         }
         self.pop_synth(saved);
+    }
+
+    /// The body `{ stmts }` of the implicit definition of `f` (a special
+    /// member, a defaulted comparison, an inheriting constructor), under
+    /// the FP pragma state at `f`'s declaration
+    /// ([`crate::class::special::SpecialState::fp_at_decl`]; an
+    /// instantiated member's pattern's; else the state now in effect,
+    /// where clang declares it lazily): `strictfp` when that state is
+    /// constrained (clang `FunctionDecl::usesFPIntrin`), and not when a
+    /// pragma there undoes constrained command-line options (`FENV_ROUND
+    /// FE_TONEAREST` under `-frounding-math`; WP-1808).
+    pub(crate) fn implicit_body(&mut self, f: DeclId, stmts: &[StmtId], at: Loc) -> StmtId {
+        let first = self.ast.first(f);
+        let fp = self.special.fp_at_decl.get(&first).copied().or_else(|| {
+            let p = self.ast.instantiated_from(first)?;
+            self.special.fp_at_decl.get(&self.ast.first(p)).copied()
+        });
+        let fp = fp.unwrap_or_else(|| self.fp_pragma_state());
+        let body = self.builder().compound_fp(stmts, at, at, fp);
+        if fp.apply(self.fp).constrained() {
+            self.ast.stmts.mark_strict_fn(body);
+        }
+        body
     }
 
     /// [depr.impldec]/1: the definition of an implicitly declared copy

@@ -85,6 +85,66 @@ fn codegen_error_writes_no_output() {
     }
 }
 
+/// `AArch64` `-mgeneral-regs-only` (WP-1804): a function that returns or
+/// takes a floating-point, vector or homogeneous floating-point aggregate
+/// type, and each call passing or returning one, is clang's codegen error
+/// `err_target_unsupported_type_for_abi` (the definition's errors at its
+/// name, the call's at the call naming the callee, an indirect call naming
+/// the caller, an unnamed parameter `''`); a struct that is not an HFA and
+/// an integer-only function are fine. The text is clang 22's, and is
+/// compared with `clang++-22` when it is installed (spec/codegen.md
+/// "Calls").
+#[test]
+fn general_regs_only_abi_errors() {
+    let d = scratch("general-regs-only");
+    std::fs::write(
+        d.join("t.cpp"),
+        "struct H { double a, b; };\nstruct N { int a; double b; };\nvoid g(double);\n\
+         H hf(H h) { return h; }\nint nf(N n) { return n.a; }\nvoid use() { g(1.0); }\n\
+         void p(double) {}\nvoid (*fp)(double) = g;\nvoid callfp() { fp(2.0); }\n\
+         int ok(int x) { return x; }\n",
+    )
+    .unwrap();
+    let args = [
+        "--target=aarch64-unknown-linux-gnu",
+        "-mgeneral-regs-only",
+        "-S",
+        "-emit-llvm",
+        "t.cpp",
+        "-o",
+        "t.ll",
+    ];
+    let o = kiln_in(&d, &args);
+    let err = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    let lines: Vec<&str> = err.lines().filter(|l| l.starts_with("t.cpp:")).collect();
+    let req = |w: &str, t: &str| {
+        format!("error: '{w}' requires '{t}' type support, but ABI 'aapcs' does not support it")
+    };
+    assert_eq!(
+        lines,
+        [
+            format!("t.cpp:4:3: {}", req("hf", "H")),
+            format!("t.cpp:4:3: {}", req("h", "H")),
+            format!("t.cpp:6:14: {}", req("g", "double")),
+            format!("t.cpp:7:6: {}", req("", "double")),
+            format!("t.cpp:9:17: {}", req("callfp", "double")),
+        ],
+        "{err}"
+    );
+    assert!(err.ends_with("5 errors generated.\n"), "{err}");
+    assert!(!d.join("t.ll").exists());
+    if have("clang++-22") {
+        let c = Command::new("clang++-22").args(args).current_dir(&d).output().unwrap();
+        assert_eq!(text(&c.stderr), err);
+    }
+    let o = kiln_in(
+        &d,
+        &["--target=aarch64-unknown-linux-gnu", "-S", "-emit-llvm", "t.cpp", "-o", "t.ll"],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+}
+
 #[test]
 fn emit_llvm_text() {
     let d = setup("ll");

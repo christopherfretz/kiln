@@ -123,6 +123,8 @@ pub struct ParseOptions {
     pub aarch64_cpu_valid: fn(&str, bool) -> bool,
     /// The `AArch64` module features ([`kiln_sema::Sema::target_features`]).
     pub target_features: Vec<String>,
+    /// The x86-64 module features ([`kiln_sema::Sema::x86_features`]).
+    pub x86_features: Vec<String>,
     /// The `target("...")` parser ([`kiln_sema::Sema::target_attr_features`]).
     pub target_attr_features: fn(&str, &[String], bool) -> Vec<String>,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
@@ -210,6 +212,7 @@ impl Default for ParseOptions {
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
             target_features: Vec::new(),
+            x86_features: Vec::new(),
             target_attr_features: |_, _, _| Vec::new(),
             cfg_dump: false,
             cfg_stats: false,
@@ -405,6 +408,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.sve_vector_bits = opts.sve_vector_bits;
     s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
     s.target_features.clone_from(&opts.target_features);
+    s.x86_features.clone_from(&opts.x86_features);
     s.target_attr_features = opts.target_attr_features;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;

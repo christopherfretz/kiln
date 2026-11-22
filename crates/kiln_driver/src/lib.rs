@@ -647,7 +647,10 @@ fn driver_warnings(
     // warning for the dropped `-m3dnow` / `-m3dnowa`.
     let v22 = args.predef.clang_compat == kiln_pp::ClangCompat::Clang22;
     let mut no_3dnow: Vec<&String> = Vec::new();
-    for a in args.x86_feature_flags.iter().filter(|a| !x86_features::unknown_at(a, v22)) {
+    let general = |a: &&String| *a == x86_features::GENERAL_REGS_ONLY;
+    for a in
+        args.x86_feature_flags.iter().filter(|a| !x86_features::unknown_at(a, v22) && !general(a))
+    {
         if tc.target.is_aarch64() {
             if !args.quiet_unused_arguments && x86_features::non_x86_spelling(a, v22).is_none() {
                 unused_xray.push(a.clone());

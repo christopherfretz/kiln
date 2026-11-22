@@ -181,6 +181,13 @@ const APX_VALUES: &[&str] = &["egpr", "push2pop2", "ppx", "ndd", "ccmp", "nf", "
 /// `inline-asm-use-gpr32` feature.
 const GPR32: &str = "-mapx-inline-asm-use-gpr32";
 
+/// clang's `-mgeneral-regs-only` (both targets; no `-mno-` form). It is
+/// kept with the x86 feature flags, in order: on x86 it is the items
+/// `-x87`, `-mmx`, `-sse` where it stands (clang `getX86TargetFeatures`,
+/// WP-1804); on `AArch64` [`crate::features::resolve`] turns `fp-armv8`
+/// off instead.
+pub const GENERAL_REGS_ONLY: &str = "-mgeneral-regs-only";
+
 /// Whether `arg` is an x86 feature flag clang 19 or clang 22 knows,
 /// `-m[no-]apx-features=<list>` and `-mapx-inline-asm-use-gpr32` included.
 pub fn is_flag(arg: &str) -> bool {
@@ -224,6 +231,9 @@ pub fn is_3dnow(arg: &str) -> bool {
 fn flag_items(arg: &str, v22: bool) -> Vec<String> {
     if arg == GPR32 {
         return vec!["+inline-asm-use-gpr32".to_owned()];
+    }
+    if arg == GENERAL_REGS_ONLY {
+        return ["-x87", "-mmx", "-sse"].map(str::to_owned).to_vec();
     }
     let Some((on, name)) = split(arg) else { return Vec::new() };
     let sign = if on { '+' } else { '-' };

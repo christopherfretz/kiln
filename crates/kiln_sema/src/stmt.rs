@@ -393,10 +393,18 @@ impl Sema<'_, '_> {
     }
 
     /// `#pragma float_control(pop)`: restores the last saved state; false
-    /// if none.
+    /// if none. clang applies the popped override to `FPOptions(LangOpts)`,
+    /// which leaves out `-ffp-eval-method=` (the preprocessor holds it), so
+    /// a state without a pragma's evaluation method evaluates as `source`
+    /// from here on, even an empty one (clang 19 and 22; WP-1808).
     pub fn fp_pragma_pop(&mut self) -> bool {
         match self.fp_pragma.1.pop() {
-            Some(s) => {
+            Some(mut s) => {
+                if s.mask & kiln_ast::fp::fp_bit::EVAL == 0
+                    && self.fp.eval != kiln_ast::fp::FpEval::Source
+                {
+                    s.set_eval(kiln_ast::fp::FpEval::Source);
+                }
                 self.set_fp_pragma_state(s);
                 true
             }

@@ -128,9 +128,10 @@ impl Sema<'_, '_> {
     }
 
     /// An lvalue designating the object of type `target` at byte `offset`
-    /// of `base`: the variable or template parameter object, then each
-    /// step to the subobject. `None` when `base` is not a declared object
-    /// or no subobject of that type lies at `offset`.
+    /// of `base`: the variable or template parameter object (the binding,
+    /// for a CWG 3135 holding variable's object), then each step to the
+    /// subobject. `None` when `base` is not a declared object or no
+    /// subobject of that type lies at `offset`.
     pub(crate) fn object_lvalue(
         &mut self,
         base: PtrBase,
@@ -138,8 +139,19 @@ impl Sema<'_, '_> {
         target: QualType,
         loc: Loc,
     ) -> Option<ExprId> {
-        let PtrBase::Decl(d) = base else { return None };
-        let mut cur = self.object_decl_ref(d, loc)?;
+        let mut cur = match base {
+            PtrBase::Decl(d) => self.object_decl_ref(d, loc)?,
+            // The object of a CWG 3135 holding variable: its binding.
+            PtrBase::Temporary(t) => {
+                let b = self.ast.holding_object_binding(t)?;
+                let r = self.build_decl_ref(b, loc);
+                if self.is_err_expr(r) {
+                    return None;
+                }
+                r
+            }
+            _ => return None,
+        };
         let root = self.ety(cur);
         let mut path = Vec::new();
         if !self.subobject_path(root, offset, target, true, &mut path, 0) {
@@ -212,7 +224,11 @@ impl Sema<'_, '_> {
     /// subobject of a declared object rather than the object itself (or
     /// its first array element, which an array argument decays to).
     pub(crate) fn is_subobject_ptr(&self, pty: QualType, base: PtrBase, offset: u64) -> bool {
-        let PtrBase::Decl(d) = base else { return false };
+        let d = match base {
+            PtrBase::Decl(d) => d,
+            PtrBase::Temporary(t) if self.ast.holding_object(t).is_some() => t,
+            _ => return false,
+        };
         if offset != 0 {
             return true;
         }

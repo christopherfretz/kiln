@@ -515,6 +515,8 @@ impl Cg<'_> {
             return Ok(());
         }
         if thunk.is_none() {
+            // clang `GenerateCode` -> `checkFunctionABI` (WP-1804).
+            self.soft_float_fn_check(d);
             self.pragma_text_section(d, f);
         }
         // clang `FunctionDecl::isMain`: never under `-ffreestanding`.
@@ -536,12 +538,21 @@ impl Cg<'_> {
         // without a declaration), and so is a body whose own state does
         // not undo them: an implicit member's, but not one a pragma makes
         // unconstrained (`FENV_ROUND FE_TONEAREST` under `-frounding-math`,
-        // WP-1798).
-        self.f.strict_calls = body.is_some_and(|b| ast.stmts.is_strict_fn(b));
+        // WP-1798). A defaulted function or inheriting constructor (its
+        // body is built, not parsed: no clang `StrictFPAttr`) is `strictfp`
+        // when the state at its declaration is constrained, but its calls
+        // are not (WP-1808).
+        let built = ast
+            .decls
+            .function(first)
+            .is_some_and(|x| x.spec.defaulted() != kiln_ast::decl::Defaulted::No)
+            || ast.decls.inheriting_ctor_shadow(first).is_some();
+        let strict_fn = body.is_some_and(|b| ast.stmts.is_strict_fn(b));
+        self.f.strict_calls = strict_fn && !built;
         let own = body.and_then(|b| ast.stmts.fn_body_fp(b));
         let cmd = self.opts.fp.constrained()
             && (thunk.is_some() || own.is_none_or(|o| o.apply(self.opts.fp).constrained()));
-        self.f.strict = cmd || (thunk.is_none() && self.f.strict_calls);
+        self.f.strict = cmd || (thunk.is_none() && strict_fn);
         self.f.decl = Some(d);
         self.f.func = Some(f);
         self.f.is_main = is_main;

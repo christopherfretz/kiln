@@ -52,7 +52,7 @@
 //! | `cf_protection_branch` | configuration | `-fcf-protection=` |
 //! | `sve`, `sve_vector_bits` | configuration | `-march=...+sve`, `-msve-vector-bits=` |
 //! | `aarch64_cpu_valid` | configuration | the driver's CPU table (a `fn`) |
-//! | `target_features`, `target_attr_features` | configuration | `-march`/`-mcpu`/`-target-feature`, the driver's `target("...")` parser (a `fn`) |
+//! | `target_features`, `x86_features`, `target_attr_features` | configuration | `-march`/`-mcpu`/`-target-feature`, the x86 `-march=`/`-m<feature>`/`-mgeneral-regs-only` map, the driver's `target("...")` parser (a `fn`) |
 //! | `gnu_lib_builtins` | configuration | `-stdlib=libstdc++` |
 //! | `no_builtin`, `no_builtin_fns`, `freestanding` | configuration | `-fno-builtin[-name]`, `-ffreestanding` |
 //! | `contracts` | configuration | `-f[no-]contracts` |
@@ -154,13 +154,13 @@ macro_rules! sema_fields {
                 declspec_restrict_error, friend_specs, special_friends, member_friends, inherited_defaults,
                 inherited_aligned, inh_ctors, inh_ctor_base, anon_namespaces, has_contracts,
                 post_param_diagnosed, post_param_pattern_locs, friend_pattern_prev, templ, inst,
-                abstract_noted, srcloc, meta_names, meta_members, meta_packed_elems, lambda_packs,
+                abstract_noted, long_double_reported, srcloc, meta_names, meta_members, meta_packed_elems, lambda_packs,
                 lambda_mangle,
                 size_t_sugar, signed_size_t_sugar, ptrdiff_t_sugar, modules],
             configuration: [target, abi, exceptions, rtti, access_control, reflection, coro_aligned_allocation,
                 lax_vector_conversions, range_lifetime_extension, gnu, gnu89_inline, c,
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
-                target_features, target_attr_features,
+                target_features, x86_features, target_attr_features,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, contracts, sized_deallocation,
                 aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, fp_eval_on_command_line, complex_promoted, cfg_dump,
                 cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],

@@ -362,6 +362,9 @@ impl Sema<'_, '_> {
     /// the `default` keyword.
     pub fn act_on_defaulted(&mut self, f: DeclId, loc: Loc) {
         self.no_builtin_defined(f, true);
+        let first = self.ast.first(f);
+        let fp = self.fp_pragma_state();
+        let _ = self.special.fp_at_decl.insert(first, fp);
         self.defaulted_impl(f, loc);
     }
 
