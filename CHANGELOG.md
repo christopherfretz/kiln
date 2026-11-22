@@ -500,6 +500,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The arguments of an attribute clang knows but kiln does not interpret
+  are now parsed and counted as clang does, from a table generated from
+  clang 19 and 22 (`scripts/gen-attr-args.py`,
+  `docs/status/attr-args.tsv`): `__attribute__((cold(1)))`,
+  `[[gnu::used(1)]]`, `alloc_size(1, 2, 3)` and about 200 others are now
+  clang's "'x' attribute takes no arguments" (or "takes one argument",
+  "requires exactly N arguments", "takes at least / no more than N")
+  error, a non-string at a string position, a pack expansion and a
+  missing `)` are clang's errors, and the attribute is dropped; kiln
+  skipped these clauses as balanced tokens and accepted them (WP-1879).
+- An attribute whose argument is invalid (`cold(undeclared)`) is now
+  dropped with that error alone, while one whose argument recovered
+  (`leaf(f())`, `f` undeclared) is still checked; `visibility`,
+  `type_visibility` and `pcs` take a leading identifier and say
+  "attribute requires a string" as clang does; every GNU attribute before
+  a free-standing `struct` (unknown ones, clang 19's `gcc_struct`, a
+  wrong count) is the "place it after struct" warning; clang 22's
+  `nvptx_kernel` argument is parsed as an expression (WP-1880..1883). PCH
+  snapshot format 117.
+
 - An address space written over a template parameter or a dependent
   `address_space(N)` type (`T __attribute__((address_space(1)))`) whose
   substituted type is already in another space is now clang's

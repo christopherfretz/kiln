@@ -197,6 +197,18 @@ impl SpecError {
     }
 }
 
+/// A diagnostic clang issues when it processes an attribute, held back
+/// to the end of its attribute-specifier-seq (WP-1854) or of its
+/// decl-specifier-seq (WP-1882): "unknown attribute 'x' ignored", or an
+/// argument count error (WP-1879). With where the attribute is and its
+/// name as clang shows it (quoted).
+#[derive(Clone, Debug)]
+pub struct HeldAttrDiag {
+    pub(crate) diag: kiln_diag::Diag,
+    pub(crate) loc: Loc,
+    pub(crate) shown: String,
+}
+
 /// The decl-specifier-seq of one declaration.
 #[derive(Clone, Debug, Default)]
 #[allow(clippy::struct_excessive_bools, reason = "independent facts of one decl-specifier-seq")]
@@ -298,6 +310,13 @@ pub struct DeclSpec {
     pub scoped_key_end: Option<Loc>,
     /// Attributes appertaining to the declared entities.
     pub attrs: Vec<AttrId>,
+    /// The diagnostics of its GNU attributes clang issues only when it
+    /// processes them ([`HeldAttrDiag`]), held to the end of the
+    /// decl-specifier-seq: a declaration of a class or enumeration alone
+    /// does not process them, and reports each as it does the others
+    /// (`attribute 'x' is ignored, place it after "struct"`, WP-1882;
+    /// [`Sema::release_held_attr_diags`]).
+    pub held_attr_diags: Vec<HeldAttrDiag>,
     /// Where a leading C++11 attribute-specifier-seq (`[[...]]`,
     /// `alignas`) starts, when one was written ([dcl.pre]/5).
     pub lead_cxx11: Option<Loc>,

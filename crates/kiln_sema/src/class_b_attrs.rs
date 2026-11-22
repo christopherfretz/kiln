@@ -627,9 +627,10 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::LIFETIMEBOUND if node.flags & AttrNode::LIFETIMEBOUND_ARGS != 0 => {
+                let shown = self.attr_shown(&node, "lifetimebound");
                 let msg = self
                     .diag(DiagId::parse_attribute_wrong_arg_count, node.loc)
-                    .arg("lifetimebound")
+                    .arg(shown)
                     .arg("0");
                 self.emit(msg);
                 false

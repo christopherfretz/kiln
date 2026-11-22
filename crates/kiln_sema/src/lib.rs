@@ -24,6 +24,7 @@ mod annotate_attr;
 mod arm_builtins;
 mod array_align;
 mod asm;
+pub mod attr_args;
 mod attr_cond;
 pub mod attr_triage;
 mod bit_int;
@@ -177,7 +178,8 @@ pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagDefinedIn, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind, Width,
+    HeldAttrDiag, NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind,
+    Width,
 };
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit, ExpansionInitMark};
@@ -920,7 +922,10 @@ pub struct Sema<'a, 'sm> {
     /// being parsed, while one is: clang issues them when the
     /// declaration's attributes are processed, after the syntax errors
     /// later in the list (`Sema::hold_unknown_attrs`, WP-1854).
-    pub(crate) unknown_attr_held: Option<Vec<Diag>>,
+    pub(crate) unknown_attr_held: Option<Vec<HeldAttrDiag>>,
+    /// Set when [`Sema::act_on_decl_spec_only`] reported the held unknown
+    /// attributes of its decl-specifier-seq (WP-1882).
+    pub(crate) unknown_attrs_reported: bool,
     /// Function types whose Swift parameter ABIs wait for the
     /// declaration's calling convention (`swift_abi.rs`, WP-1745).
     pub(crate) pending_param_abis: Vec<swift_abi::PendingParamAbis>,
@@ -1731,6 +1736,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             after_def_prev: None,
             after_def_held: Vec::new(),
             unknown_attr_held: None,
+            unknown_attrs_reported: false,
             pending_param_abis: Vec::new(),
             this_watch: class::ThisWatch::Off,
             pending_alias_vla: None,

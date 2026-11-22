@@ -147,7 +147,23 @@ impl Sema<'_, '_> {
                 AttrArg::Expr(e) => self.string_lit_of(*e).map(|l| self.ast.exprs.string_lit(l)),
                 AttrArg::Type(_) | AttrArg::Ident(..) => None,
             };
-            let Some(lit) = lit else {
+            if let AttrArg::Ident(_, l) = arg {
+                // clang `checkStringLiteralArgumentAttr` (WP-1881): the
+                // parser keeps a leading identifier as one; the attribute
+                // is still the calling convention no target here has.
+                let shown = match self.attr_spellings.get(&loc) {
+                    Some(&(sc, nm)) => self.attr_shown_parts(syntax, sc, nm),
+                    None => n.to_owned(),
+                };
+                let msg =
+                    self.diag(DiagId::sema_attribute_requires_string, *l).arg(format!("'{shown}'"));
+                self.emit(msg);
+            } else if let Some(lit) = lit {
+                if !matches!(self.ast.strings.bytes(lit), b"aapcs" | b"aapcs-vfp") {
+                    self.error(DiagId::sema_invalid_pcs, loc);
+                    return Some(None);
+                }
+            } else {
                 let at = match arg {
                     AttrArg::Expr(e) => self.ast.exprs.get(*e).loc(),
                     AttrArg::Ident(_, l) => *l,
@@ -155,10 +171,6 @@ impl Sema<'_, '_> {
                 };
                 let msg = self.diag(DiagId::parse_attribute_requires_string, at).arg("pcs");
                 self.emit(msg);
-                return Some(None);
-            };
-            if !matches!(self.ast.strings.bytes(lit), b"aapcs" | b"aapcs-vfp") {
-                self.error(DiagId::sema_invalid_pcs, loc);
                 return Some(None);
             }
             cc = UNSUPPORTED;
@@ -377,7 +389,10 @@ impl Sema<'_, '_> {
             // clang `CheckCallingConvAttr`: one the target ignores warns
             // and is the default convention, still written.
             let new = if n.a == UNSUPPORTED {
-                let msg = self.diag(DiagId::sema_cconv_unsupported, n.loc).arg(name(n));
+                // As written: `__pcs__`, clang 22's `gnu::pcs` (WP-1881).
+                let msg = self
+                    .diag(DiagId::sema_cconv_unsupported, n.loc)
+                    .arg(self.attr_shown(n, name(n)));
                 self.emit(msg);
                 CallConv::Default
             } else {

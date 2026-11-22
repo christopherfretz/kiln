@@ -943,7 +943,12 @@ impl Parser<'_, '_> {
                         || self.s.c_at_least(kiln_lex::CStd::C23));
                 let cxx11 = !spec_alignas && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas));
                 let mut attrs = Vec::new();
+                // A GNU attribute clang does not know is reported only if
+                // the decl-specifier-seq is not a declaration of a class
+                // alone (WP-1882): the warning waits.
+                let held = !cxx11 && self.s.hold_unknown_attrs();
                 self.parse_attributes(&mut attrs);
+                ds.held_attr_diags.extend(self.s.take_held_attr_diags(held));
                 if lead {
                     if cxx11 && ds.lead_cxx11.is_none() {
                         ds.lead_cxx11 = Some(loc);
@@ -1294,12 +1299,27 @@ impl Parser<'_, '_> {
                 {
                     // A declaration of the tag alone: no declarator's
                     // type takes them (spec/sema.md §4.5).
-                    self.s.warn_free_standing_tag_attrs(&ds, t, &all);
+                    self.s.warn_free_standing_tag_attrs(&ds, t, &all, &[]);
                 }
                 ds.attrs.extend(attrs);
             } else {
                 self.s.error(DiagId::parse_attributes_not_allowed, at);
             }
+        }
+        // `Sema::act_on_decl_spec_only` reports the unknown attributes
+        // of a declaration of a class or enumeration alone; the others
+        // are reported now, before the declarators (clang processes them
+        // with the first one's).
+        if !(self.at(Punct::Semi)
+            && ds.tag.is_some()
+            && ds.friend.is_none()
+            && matches!(
+                ctx,
+                DeclaratorContext::File | DeclaratorContext::Member | DeclaratorContext::Block
+            ))
+        {
+            let held = std::mem::take(&mut ds.held_attr_diags);
+            self.s.release_held_attr_diags(held);
         }
         self.reject_friend_storage(&mut ds, thread_spelling.as_deref().unwrap_or("thread_local"));
         if ctx == DeclaratorContext::TypeName {
