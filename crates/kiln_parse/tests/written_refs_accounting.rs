@@ -19,16 +19,29 @@
 //! the token before them; `KILN_REFS_STRICT=1` makes any leftover fail.
 //! A file with an error (an include the test cannot resolve, a
 //! diagnosed construct) is skipped: its recovery records what it can.
+//!
+//! `cargo test -p kiln_parse --test written_refs_accounting --
+//! --ignored standard_library --nocapture` (WP-1934) accounts the host's
+//! libstdc++ instead: a TU that includes `<bits/stdc++.h>`, configured as
+//! the driver configures `-std=c++26`, every identifier of every header
+//! the parser sees counted (`KILN_REFS_TU=<source text>` replaces the
+//! TU). The default test also runs strictly over a pinned list of
+//! `tests/conformance` directories (§18.8).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use kiln_diag::{DiagEngine, DiagOptions, MemorySink};
+use kiln_lex::Std;
 use kiln_lex::{Punct, TokKind};
 use kiln_parse::keywords::Keywords;
+use kiln_parse::parse_preprocessed;
 use kiln_parse::{ConstexprLimits, ParseOptions, parse_tu};
-use kiln_pp::{PpOptions, Preprocessor};
+use kiln_pp::{
+    ClangFeatures, DirGroup, HeaderSearch, IncludeResolver, PpOptions, PredefConfig, Preprocessor,
+    RealFs, SearchDirSpec, SearchList, build_predefines,
+};
 use kiln_sema::target::{Arch, Target};
 use kiln_source::symbol::{Interner, Symbol};
 use kiln_source::{FileId, Loc, SourceManager};
@@ -54,10 +67,13 @@ enum Place {
     LocalLabels,
 }
 
-/// One identifier token the parser saw, spelled in the main file.
+/// Where a token is spelled: its file and offset.
+type At = (FileId, u32);
+
+/// One identifier token the parser saw, spelled in a counted file.
 #[derive(Clone, Copy)]
 struct Ident {
-    off: u32,
+    at: At,
     sym: Symbol,
     /// The tokens just before and after it (by stream order).
     prev: Option<TokKind>,
@@ -75,22 +91,39 @@ struct Report {
     skipped: bool,
 }
 
-fn line_col(text: &str, off: u32) -> String {
+/// Which files' identifiers are counted.
+#[derive(Clone, Copy)]
+enum Scope {
+    /// The main file.
+    Main(FileId),
+    /// Every file read from disk: the headers of a TU whose main file
+    /// is in memory (the predefines are in memory too).
+    Headers,
+}
+
+/// `at` as `line:col`, after the file's name for [`Scope::Headers`].
+fn line_col(sm: &SourceManager, scope: Scope, (file, off): At) -> String {
+    let text = sm.text(file);
     let before = &text[..off as usize];
     let line = before.bytes().filter(|&b| b == b'\n').count() + 1;
     let col = off as usize - before.rfind('\n').map_or(0, |i| i + 1) + 1;
-    format!("{line}:{col}")
+    match scope {
+        Scope::Main(_) => format!("{line}:{col}"),
+        Scope::Headers => format!("{}:{line}:{col}", sm.file_name(file)),
+    }
 }
 
-/// The main-file offset `l` is spelled at.
-fn main_off(sm: &SourceManager, main: FileId, l: Loc) -> Option<u32> {
+/// Where `l` is spelled, when that is in a counted file.
+fn spelled(sm: &SourceManager, scope: Scope, l: Loc) -> Option<At> {
     if !l.is_valid() {
         return None;
     }
-    match sm.offset_of(sm.spelling_loc(l)) {
-        Some((f, o)) if f == main => Some(o),
-        _ => None,
-    }
+    let (f, o) = sm.offset_of(sm.spelling_loc(l))?;
+    let counted = match scope {
+        Scope::Main(main) => f == main,
+        Scope::Headers => !sm.is_virtual(f),
+    };
+    counted.then_some((f, o))
 }
 
 /// An attribute name without its `__x__` spelling's underscores.
@@ -99,14 +132,105 @@ fn normalized(interner: &Interner, s: Symbol) -> String {
     t.strip_prefix("__").and_then(|t| t.strip_suffix("__")).unwrap_or(t).to_owned()
 }
 
-fn pp_options() -> PpOptions {
-    let opts = ParseOptions::default();
+/// The host's search list and predefines for `-std=c++26` with
+/// libstdc++, as the driver builds them (`kiln_parse/tests/snap.rs`).
+struct Host {
+    triple: &'static str,
+    dirs: Vec<SearchDirSpec>,
+    predefines: String,
+}
+
+impl Host {
+    /// `None` (the test prints why) on a host without the resource
+    /// files or the headers.
+    fn new() -> Option<Host> {
+        let triple = match std::env::consts::ARCH {
+            "aarch64" => "aarch64-unknown-linux-gnu",
+            "x86_64" => "x86_64-unknown-linux-gnu",
+            _ => return None,
+        };
+        let resource = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resource");
+        let list =
+            std::fs::read_to_string(resource.join(format!("include-paths/{triple}.txt"))).ok()?;
+        let res_inc = resource.join("include").display().to_string();
+        let mut dirs = Vec::new();
+        for line in list.lines() {
+            let (group, p) = if let Some(p) = line.strip_prefix("#   -internal-isystem ") {
+                (DirGroup::System, p)
+            } else if let Some(p) = line.strip_prefix("#   -internal-externc-isystem ") {
+                (DirGroup::ExternCSystem, p)
+            } else {
+                continue;
+            };
+            let p =
+                if p.ends_with("/lib/clang/19/include") { res_inc.clone() } else { p.to_owned() };
+            dirs.push(SearchDirSpec::new(p, group));
+        }
+        if !dirs.iter().any(|d| Path::new(&d.path).join("bits/stdc++.h").is_file()) {
+            eprintln!("skipped: no libstdc++ headers on this host");
+            return None;
+        }
+        let base = std::fs::read_to_string(resource.join(format!("predefines/{triple}.c++26.txt")))
+            .ok()?;
+        let mut cfg = PredefConfig::new(true);
+        cfg.gnu = false;
+        cfg.aarch64 = triple.starts_with("aarch64");
+        cfg.reflection = true;
+        cfg.std_float_aliases = true;
+        let predefines = build_predefines(&base, &cfg, &[]);
+        Some(Host { triple, dirs, predefines })
+    }
+
+    fn target(&self) -> Target {
+        Target::for_arch(if self.triple.starts_with("x86_64") {
+            Arch::X86_64
+        } else {
+            Arch::AArch64
+        })
+    }
+}
+
+/// The parser options: the default ones, and for `host` the driver's
+/// `-std=c++26` with libstdc++.
+fn parse_options(host: Option<&Host>) -> ParseOptions {
+    let opts = ParseOptions { written_refs: true, decl_extents: true, ..ParseOptions::default() };
+    match host {
+        None => opts,
+        Some(_) => {
+            ParseOptions { std: Std::Cxx26, reflection: true, gnu_lib_builtins: true, ..opts }
+        }
+    }
+}
+
+/// A preprocessor as `parse_tu` configures one, with `host`'s search
+/// list, predefines and feature queries; its main file entered.
+fn preprocessor<'a, 'd>(
+    sm: &'a SourceManager,
+    engine: &'d DiagEngine<'a>,
+    interner: &'a Interner,
+    main: FileId,
+    host: Option<&Host>,
+) -> Preprocessor<'a, 'd> {
+    let opts = parse_options(host);
     let mut ppo = PpOptions::new(opts.std);
     ppo.char8 = opts.char8;
     ppo.reflection = opts.reflection;
     ppo.parser_pragmas = true;
     ppo.modules = Some(kiln_pp::ModuleOptions::default());
-    ppo
+    if let Some(h) = host {
+        ppo.predefines.clone_from(&h.predefines);
+    }
+    let mut pp = Preprocessor::new(sm, engine, interner, ppo);
+    if let Some(h) = host {
+        let mut fs = RealFs::new();
+        let list = SearchList::build(&h.dirs, true, &mut fs);
+        let r: Box<dyn IncludeResolver> = Box::new(HeaderSearch::new(fs, list));
+        pp.set_include_resolver(r);
+        let features = ClangFeatures::new(h.triple, Std::Cxx26, &[]).expect("a known triple");
+        pp.set_feature_queries(Box::new(features));
+    }
+    pp.enter_main_file(main);
+    pp
 }
 
 /// What the `(` after a keyword opens.
@@ -208,13 +332,19 @@ impl Scan {
     }
 }
 
-/// The identifier tokens of the main file the parser sees: the
-/// preprocessed stream, as `parse_tu` builds it.
-fn idents(sm: &SourceManager, interner: &Interner, main: FileId) -> Vec<Ident> {
+/// The identifier tokens of the counted files the parser sees: the
+/// preprocessed stream, as the parse builds it.
+fn idents(
+    sm: &SourceManager,
+    interner: &Interner,
+    main: FileId,
+    scope: Scope,
+    host: Option<&Host>,
+) -> Vec<Ident> {
     let engine = DiagEngine::new(sm, &DiagOptions::default(), MemorySink::new());
-    let mut pp = Preprocessor::new(sm, &engine, interner, pp_options());
-    pp.enter_main_file(main);
-    let attribute = interner.intern("__attribute__");
+    let mut pp = preprocessor(sm, &engine, interner, main, host);
+    // `__attribute` is GCC's other spelling of `__attribute__`.
+    let attributes = [interner.intern("__attribute__"), interner.intern("__attribute")];
     let declspec = interner.intern("__declspec");
     let has_attribute = interner.intern("__builtin_has_attribute");
     let local_label = interner.intern("__label__");
@@ -243,8 +373,8 @@ fn idents(sm: &SourceManager, interner: &Interner, main: FileId) -> Vec<Ident> {
             TokKind::Identifier(s) => s,
             _ => continue,
         };
-        if scan.attr.is_none() && (s == attribute || s == declspec) {
-            scan.opening = Some(Opening::Attr(if s == attribute { 2 } else { 1 }));
+        if scan.attr.is_none() && (attributes.contains(&s) || s == declspec) {
+            scan.opening = Some(Opening::Attr(if s == declspec { 1 } else { 2 }));
             continue;
         }
         if scan.attr.is_none() && scan.has_attr.is_none() && s == has_attribute {
@@ -265,9 +395,9 @@ fn idents(sm: &SourceManager, interner: &Interner, main: FileId) -> Vec<Ident> {
                 matches!(p, TokKind::Punct(Punct::Semi | Punct::RBrace | Punct::LBrace))
                     || matches!(p, TokKind::Identifier(_))
             });
-        let Some(off) = main_off(sm, main, t.span.lo) else { continue };
+        let Some(at) = spelled(sm, scope, t.span.lo) else { continue };
         let place = scan.place(s);
-        out.push(Ident { off, sym: s, prev, next, place });
+        out.push(Ident { at, sym: s, prev, next, place });
         scan.module |= starts_directive;
     }
     out
@@ -276,17 +406,18 @@ fn idents(sm: &SourceManager, interner: &Interner, main: FileId) -> Vec<Ident> {
 /// The identifier offsets covered by entries and declaration names.
 fn covered(
     sm: &SourceManager,
-    main: FileId,
+    scope: Scope,
     tu: &kiln_parse::ParsedTu,
     ids: &[Ident],
-) -> HashSet<u32> {
-    let mut sorted: Vec<u32> = ids.iter().map(|i| i.off).collect();
+) -> HashSet<At> {
+    let mut sorted: Vec<At> = ids.iter().map(|i| i.at).collect();
     sorted.sort_unstable();
     sorted.dedup();
     let mut cov = HashSet::new();
     let mut span = |lo: Loc, hi: Loc, first_only: bool| {
-        let Some(a) = main_off(sm, main, lo) else { return };
-        let b = main_off(sm, main, hi).filter(|&b| b > a).unwrap_or(a + 1);
+        let Some(a) = spelled(sm, scope, lo) else { return };
+        let b =
+            spelled(sm, scope, hi).filter(|&b| b.0 == a.0 && b.1 > a.1).unwrap_or((a.0, a.1 + 1));
         let start = sorted.partition_point(|&o| o < a);
         for &o in &sorted[start..] {
             if o >= b {
@@ -310,18 +441,41 @@ fn covered(
 }
 
 fn account(name: &str, src: &str) -> Report {
+    account_tu(name, src, None)
+}
+
+/// Accounts the TU of main file `src` (named `name`): its main file,
+/// or with `host` the headers it includes.
+fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
     let sm = SourceManager::new();
     let main = sm.add_virtual(name, src.to_owned()).expect("location space");
+    let scope = if host.is_some() { Scope::Headers } else { Scope::Main(main) };
     let interner = Arc::new(Interner::new());
-    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    let opts = ParseOptions { written_refs: true, decl_extents: true, ..ParseOptions::default() };
-    let target = Target::for_arch(Arch::X86_64);
-    let tu = parse_tu(&sm, &interner, main, &engine, target, &opts, ConstexprLimits::default());
+    let sink = MemorySink::new();
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
+    let opts = parse_options(host);
+    let tu = match host {
+        None => {
+            let target = Target::for_arch(Arch::X86_64);
+            parse_tu(&sm, &interner, main, &engine, target, &opts, ConstexprLimits::default())
+        }
+        Some(h) => {
+            let pp = preprocessor(&sm, &engine, &interner, main, host);
+            let limits = ConstexprLimits::default();
+            parse_preprocessed(pp, Arc::clone(&interner), &engine, h.target(), &opts, limits).0
+        }
+    };
     if engine.error_count() > 0 {
+        if host.is_some() {
+            for d in sink.diagnostics().iter().filter(|d| d.level >= kiln_diag::Level::Error) {
+                let at = sm.offset_of(d.span.lo).map(|a| line_col(&sm, scope, a));
+                eprintln!("{}: {}", at.unwrap_or_default(), d.message);
+            }
+        }
         return Report { seen: 0, left: Vec::new(), skipped: true };
     }
-    let ids = idents(&sm, &interner, main);
-    let cov = covered(&sm, main, &tu, &ids);
+    let ids = idents(&sm, &interner, main, scope, host);
+    let cov = covered(&sm, scope, &tu, &ids);
     let kw = Keywords::with_std(&interner, opts.gnu, true, true, opts.clang_compat);
     // The contextual keywords, and the alternative tokens ([lex.digraph]),
     // which the parser reads as operators.
@@ -343,17 +497,18 @@ fn account(name: &str, src: &str) -> Report {
         "function_return",
         "cpu_dispatch",
         "cpu_specific",
+        // `access(read_only, 1)`: the access mode (GCC).
+        "access",
         // A builtin's name: a builtin alias names no declaration.
         "__clang_arm_builtin_alias",
         "clang_builtin_alias",
         "builtin_alias",
     ];
     let goto_sym = interner.intern("goto");
-    let text = sm.text(main);
     let mut left = Vec::new();
     let mut seen_offs = HashSet::new();
     for i in &ids {
-        if !seen_offs.insert(i.off) || cov.contains(&i.off) {
+        if !seen_offs.insert(i.at) || cov.contains(&i.at) {
             continue;
         }
         if kw.get(i.sym).is_some() || kw.builtin(i.sym).is_some() || contextual.contains(&i.sym) {
@@ -398,7 +553,7 @@ fn account(name: &str, src: &str) -> Report {
         };
         let before =
             if attr.is_some() { format!("attribute argument after {before}") } else { before };
-        left.push((line_col(text, i.off), spelling, before));
+        left.push((line_col(&sm, scope, i.at), spelling, before));
     }
     Report { seen: seen_offs.len(), left, skipped: false }
 }
@@ -455,13 +610,71 @@ fn run(dir: &Path) -> (usize, usize, usize, Vec<Leftover>) {
     worker.expect("a thread").join().expect("no panic")
 }
 
-/// Every identifier of the written-reference corpus is accounted for.
+/// Prints `left` grouped by the token before each leftover, the largest
+/// group first (all of a group with `KILN_REFS_ALL`, else 8).
+fn print_groups(left: &[Leftover]) {
+    let mut by_before: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (f, at, s, b) in left {
+        let f = if f.is_empty() { String::new() } else { format!("{f}:") };
+        by_before.entry(b.as_str()).or_default().push(format!("{f}{at}: '{s}'"));
+    }
+    let mut groups: Vec<_> = by_before.into_iter().collect();
+    groups.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
+    let all = std::env::var_os("KILN_REFS_ALL").is_some();
+    for (b, v) in &groups {
+        eprintln!("== after {b}: {}", v.len());
+        for x in v.iter().take(if all { usize::MAX } else { 8 }) {
+            eprintln!("  {x}");
+        }
+    }
+}
+
+fn conformance() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance")
+}
+
+/// The `tests/conformance` directories the default test also accounts
+/// strictly (§18.8): declarations, classes, templates, overloading,
+/// lookup and expressions, every identifier accounted for over all of
+/// their files without errors, in a few seconds.
+const PINNED: &[&str] = &[
+    "basic.lookup.argdep",
+    "class.derived",
+    "class.friend",
+    "class.mem",
+    "class.virtual",
+    "dcl.init.list",
+    "expr.prim.lambda.capture",
+    "namespace.udecl",
+    "over.match.class.deduct",
+    "temp.dep.type",
+    "temp.expl.spec",
+    "temp.friend",
+    "temp.inst",
+    "temp.names",
+    "temp.variadic",
+    "templates",
+];
+
+/// Every identifier of the written-reference corpus, and of the pinned
+/// conformance directories, is accounted for.
 #[test]
 fn every_identifier_is_accounted_for() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance/written_refs");
-    let (counted, _skipped, seen, left) = run(&dir);
+    let dir = conformance().join("written_refs");
+    let (counted, _skipped, seen, mut left) = run(&dir);
     assert!(counted >= 20, "the corpus parses ({counted} files)");
     assert!(seen > 1000, "the corpus has identifiers ({seen})");
+    let (mut pinned_counted, mut pinned_seen) = (0, 0);
+    for d in PINNED {
+        let (c, _, s, l) = run(&conformance().join(d));
+        assert!(c > 0, "{d}: no file without errors");
+        pinned_counted += c;
+        pinned_seen += s;
+        left.extend(l.into_iter().map(|(f, at, s, b)| (format!("{d}/{f}"), at, s, b)));
+    }
+    eprintln!("pinned: {pinned_counted} files, {pinned_seen} identifiers");
+    assert!(pinned_counted >= 500, "the pinned directories parse ({pinned_counted} files)");
+    assert!(pinned_seen > 40_000, "the pinned directories have identifiers ({pinned_seen})");
     let lines: Vec<String> =
         left.iter().map(|(f, at, s, b)| format!("{f}:{at}: '{s}' (after {b})")).collect();
     assert!(lines.is_empty(), "{} identifiers left over:\n{}", lines.len(), lines.join("\n"));
@@ -473,24 +686,32 @@ fn every_identifier_is_accounted_for() {
 fn every_identifier_is_accounted_for_in_a_directory() {
     let Ok(dir) = std::env::var("KILN_REFS_DIR") else { return };
     let (counted, skipped, seen, left) = run(Path::new(&dir));
-    let mut by_before: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for (f, at, s, b) in &left {
-        by_before.entry(b.as_str()).or_default().push(format!("{f}:{at}: '{s}'"));
-    }
-    let mut groups: Vec<_> = by_before.into_iter().collect();
-    groups.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     eprintln!(
         "{counted} files accounted ({skipped} skipped with errors), {seen} identifiers, {} left over",
         left.len()
     );
-    for (b, v) in &groups {
-        eprintln!("== after {b}: {}", v.len());
-        for x in
-            v.iter().take(if std::env::var_os("KILN_REFS_ALL").is_some() { usize::MAX } else { 8 })
-        {
-            eprintln!("  {x}");
-        }
+    print_groups(&left);
+    if std::env::var_os("KILN_REFS_STRICT").is_some() {
+        assert!(left.is_empty(), "{} identifiers left over", left.len());
     }
+}
+
+/// The same accounting over the host's libstdc++: every identifier of
+/// every header a TU that includes `<bits/stdc++.h>` reads (WP-1934).
+#[test]
+#[ignore = "parses <bits/stdc++.h> in-process (about a minute in a debug build)"]
+fn every_identifier_is_accounted_for_in_the_standard_library() {
+    let Some(host) = Host::new() else { return };
+    let src = std::env::var("KILN_REFS_TU").unwrap_or_else(|_| "#include <bits/stdc++.h>\n".into());
+    let worker = std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || account_tu("stdcxx.cpp", &src, Some(&host)));
+    let r = worker.expect("a thread").join().expect("no panic");
+    assert!(!r.skipped, "the TU has errors");
+    let left: Vec<Leftover> =
+        r.left.into_iter().map(|(at, s, b)| (String::new(), at, s, b)).collect();
+    eprintln!("{} identifiers, {} left over", r.seen, left.len());
+    print_groups(&left);
     if std::env::var_os("KILN_REFS_STRICT").is_some() {
         assert!(left.is_empty(), "{} identifiers left over", left.len());
     }

@@ -127,7 +127,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 142)
+u32 FORMAT_VERSION                      little-endian (now 144)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -283,6 +283,7 @@ change the state at the end of the prefix:
 | `-g*` and the debug prefix maps | read only by code generation |
 | `-v`, `--version`, `--help`, `-print-*`, `-###` | reports |
 | `-fdump-*`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-memory-report`, `-ftime-trace*`, `-fkiln-bmi-image-census*` | reports about the main file's compile |
+| `-fkiln-written-refs` (and the recording part of `-fkiln-dump-written-refs`) | the snapshot carries the written-reference table when the producer recorded it and the consumer reads it when it records; a consumer that records and restores a snapshot without the table lists the prefix as unrecorded (spec/ast.md §18.10.1) |
 | `-verify`, `-verify=`, `-verify-ignore-unexpected` | they check the diagnostics the job emits; when a `-verify` consumer restores is in "Consumer" |
 | how diagnostics are shown: colour, `-fdiagnostics-*`, `-ferror-limit=`, `-fmacro-backtrace-limit=`, `-ftabstop=`, carets, columns | a prefix with errors gets no snapshot, so the limit cannot have stopped it, and the rest only formats text |
 | crash reporting (`-f[no-]crash-diagnostics*`, `-fkiln-crash-for-testing=`) | only after an internal error |

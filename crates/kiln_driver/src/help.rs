@@ -336,6 +336,8 @@ KILN DEVELOPMENT:
   -fkiln-dump-written-refs
                           [kiln] Dump each written name and the declaration
                           it denotes
+  -fkiln-written-refs     [kiln] Record the written names (for tooling
+                          clients; carried in PCHs and module files)
   -fkiln-decl-extents     [kiln] Record the source extents of every
                           declaration as written (for tooling clients)
   -fkiln-dump-decl-extents

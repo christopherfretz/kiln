@@ -1899,9 +1899,13 @@ impl Parser<'_, '_> {
         cc: usize,
         first_at: usize,
     ) -> PExpr {
+        // The written-reference qualifier of `F` and `Q` (spec/ast.md
+        // §18.4): `S`'s last component, or the global scope.
+        let mut link = RefQualifier::NONE;
         let qual = if self.pos() + 1 == first_at {
             // `::F::~Q`.
             let start = self.bump().span.lo;
+            link = RefQualifier::GLOBAL;
             Some(kiln_sema::using::Qualifier {
                 ctx: self.s.ast.tu,
                 nns: self.s.nns_global(),
@@ -1916,6 +1920,9 @@ impl Parser<'_, '_> {
                 return None;
             }
             self.bump();
+            if q.is_some() {
+                link = self.nns_link;
+            }
             q
         } else {
             None
@@ -1941,6 +1948,15 @@ impl Parser<'_, '_> {
         } else {
             None
         };
+        if self.s.records_written_refs() {
+            // `F`, a type-name (not a nested-name-specifier).
+            let ty = match first_ty {
+                Some(t) => Some(t),
+                None => self.s.pseudo_destructor_first_type(qual, first),
+            };
+            let span = self.token_span_at(fl);
+            self.note_type_name(span, link, ty, None, RefRole::Type);
+        }
         self.bump();
         let tl = self.bump().span.lo;
         if self.at_kw(Kw::Decltype) {
@@ -1960,6 +1976,8 @@ impl Parser<'_, '_> {
             return None;
         };
         let nl = self.bump().span.lo;
+        // `Q`, recorded with the expression: the destroyed type.
+        self.note_wname(nl, link);
         let destroyed = if self.at(Punct::Less) {
             Some(self.parse_pseudo_dtor_template_id(qual, name, nl)?)
         } else {

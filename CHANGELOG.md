@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The written-reference table is carried in PCH snapshots and module
+  images (stage 5, WP-1934; spec/ast.md §18.10): a TU restored from a
+  snapshot made with the table continues its table (the dump equals the
+  one with the header included as text), and an importer that records
+  merges a module unit's entries from its image (the dump equals the one
+  a replay of the unit gives). A prefix or module built without the
+  table is listed as unrecorded (`WrittenRefs::unrecorded()`, the dump's
+  first lines), never a silent gap. `-fkiln-written-refs` records
+  without the dump (for a PCH or module build). Off, a snapshot grows by
+  one byte and an image by four, and neither is read (PCH
+  `FORMAT_VERSION` 144, `IMAGE_VERSION` 77).
 - The written-reference table records what each dependent name of a
   template resolves to in every specialization (stage 4, WP-1933;
   spec/ast.md §18.9), in a separate table keyed by (pattern entry,

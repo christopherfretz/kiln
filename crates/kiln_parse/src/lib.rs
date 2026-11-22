@@ -744,7 +744,8 @@ pub fn continue_preprocessed<'a, 'sm>(
     let mut p = Parser::new(sema, src, lit_opts);
     // A restored snapshot's unit is its consumer's, not the producer's.
     p.s.tu_prefix = opts.prefix;
-    // The table is transient in snapshots (spec/ast.md §18.5).
+    // The consumer records from its own options; a restored table
+    // continues the prefix's (spec/ast.md §18.10.1).
     p.s.ast.written_refs.set_on(opts.written_refs);
     // The consumer records from its own options (spec/ast.md §19.6).
     p.s.ast.decl_extents.set_on(opts.decl_extents);

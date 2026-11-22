@@ -4580,6 +4580,44 @@ Tests: `tests/conformance/decl_extents/module-image.cpp` (an importer
 built from the image) has the golden of `module-replay.cpp` (built by
 replay).
 
+**Written references (WP-1934).** When the module unit is compiled
+with the written-reference table on (`-fkiln-written-refs` or
+`-fkiln-dump-written-refs`, spec/ast.md §18.10.2), the last section,
+`refs`, carries the entries of the names written in the unit's own
+sources after its preamble (the importer records the preamble's names
+replaying it), their provenance, the per-specialization rows whose
+specialization and declarations are records, and the pattern nodes of
+the dependent entries. A declaration is a word as in a body: a record,
+`LEX_TU` or `PARAM | g` (a parameter of a function record by its
+global index). Entries are in the unit's recording order; a qualifier
+names an earlier entry (`NONE - 1`: `::`); a set lists its namespaces,
+classes and enumerations. A name whose declaration, location, qualifier
+or pattern node the image cannot carry fails the image ("a written name
+of a declaration the image does not carry", "a written name the image
+cannot locate", "a dependent written name outside the image's
+bodies"), as does a unit table with unrecorded rows. The validator
+checks every word, order, role and lookup kind; the section's
+locations join the offset check. An importer that records appends the
+entries to its own table after the records, bodies and types are built
+(merged, as a replay records them; spec/ast.md §18.10.2 says why), and
+notes the unit as unrecorded when the section is empty; one that does
+not record skips the section by its length without decoding it. With
+the table off the section is `len = 0`.
+
+```
+refs := len:u32 payload?                                  after extents; len 0: the table was off
+payload := sets:n (ns:u32 cls:u32 m:u32 decl:u32*m)*
+           entries:n (lo hi entity found enclosing qual udir adl: u32*8, role:u8 flags:u8 how:u8)*
+           specs:n (entry spec entity found adl: u32*5, flags:u8 how:u8)*
+           nodes:n (0 entry:u32 expr:u32 | 1 entry:u32 ty:qref loc:u32)*
+```
+
+Tests: `tests/conformance/written_refs/module-image.cpp` (an importer
+built from the image) has the golden of `module-replay.cpp` (built by
+replay); `bmi_image/refs.rs` (round trip, the off section, skipping,
+validation); `crates/kiln_driver/tests/written_refs_carry.rs` (a unit
+compiled without the table is unrecorded in a recording importer).
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -5351,7 +5389,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 74` since WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 77` since WP-1934, which adds the `refs` section of written references; 74 for WP-2200, whose pointer constants (`ConstRec::Ptr`) end with their union path: a count and the field records of the union members it enters, outermost first (spec/ast.md §9.1 "Union paths"); 62 for WP-2090, which adds the `extents` section of declaration extents; 61 for WP-2025, whose shadow records carry the record of the using-declaration that introduced them (the `using` word, `NONE` for none; `Ast::using_shadows`); 58 for WP-2023, whose lambda records carry the closure's owner (an eighth word, `NONE` when it is the closure's context); 56 for WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

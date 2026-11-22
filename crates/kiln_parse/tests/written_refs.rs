@@ -325,3 +325,102 @@ fn specs_are_order_independent() {
     assert_eq!(a.len(), 4);
     assert_eq!(a, rows(&swapped));
 }
+
+/// Stage 5 (spec/ast.md §18.10.1): a prefix parsed with the table on,
+/// written to a snapshot with its source manager and interner, restored
+/// into a fresh `Sema` that records and continued with a main file. A
+/// rename of `Vec::size` by the table then finds its uses in both
+/// files: the prefix's own call, the prefix's dependent call through
+/// the row of the main file's instantiation, and the main file's call;
+/// not `List::size`'s.
+#[test]
+fn rename_by_table_across_a_restored_prefix() {
+    use kiln_lex::Std;
+    use kiln_parse::{continue_preprocessed, new_sema, parse_prefix};
+    use kiln_pp::{PpOptions, Preprocessor};
+    use kiln_snap::{Reader, Writer};
+
+    const PREFIX: &str = "namespace lib {\n\
+                          struct Vec { int size() const { return 0; } };\n\
+                          struct List { int size() const { return 1; } };\n\
+                          template <class T> int count(const T &t) { return t.size(); }\n\
+                          inline int direct(const Vec &v) { return v.size(); }\n\
+                          }\n";
+    const MAIN: &str = "int use(const lib::Vec &v, const lib::List &l) {\n\
+                        \x20 return lib::count(v) + lib::count(l) + v.size();\n\
+                        }\n";
+    let target = Target::for_arch(Arch::X86_64);
+    let opts = ParseOptions { written_refs: true, ..ParseOptions::default() };
+    let pp_opts = |header: bool| {
+        let mut o = PpOptions::new(Std::Cxx26);
+        o.parser_pragmas = true;
+        o.main_is_header = header;
+        o
+    };
+    // The producer: the prefix to its end, then the snapshot.
+    let bytes = {
+        let sm = SourceManager::new();
+        let interner = Arc::new(Interner::new());
+        let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+        let file = sm.add_virtual("prefix.h", PREFIX.to_owned()).expect("location space");
+        let mut pp = Preprocessor::new(&sm, &engine, &interner, pp_opts(true));
+        pp.enter_main_file(file);
+        let p = parse_prefix(
+            pp,
+            Arc::clone(&interner),
+            &engine,
+            target.clone(),
+            &opts,
+            ConstexprLimits::default(),
+        );
+        p.ready.expect("the prefix is at rest");
+        assert_eq!(engine.error_count(), 0);
+        assert!(p.sema.ast.written_refs.len() >= 3, "the prefix's names are recorded");
+        let mut w = Writer::new();
+        w.put(&sm);
+        w.put(&interner);
+        p.sema.snap_put(&mut w).expect("the prefix is at rest");
+        w.into_bytes()
+    };
+    // The consumer: restore, then the main file.
+    let mut r = Reader::new(&bytes);
+    let sm: SourceManager = r.get().expect("source manager");
+    let interner: Arc<Interner> = r.get().expect("interner");
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let mut s =
+        new_sema(Arc::clone(&interner), &engine, target.clone(), &opts, ConstexprLimits::default());
+    s.snap_restore(&mut r).expect("restored");
+    r.finish().expect("the whole snapshot is read");
+    let prefix_entries = s.ast.written_refs.len();
+    assert!(prefix_entries >= 3 && s.ast.written_refs.unrecorded().is_empty());
+    let file = sm.add_virtual("main.cpp", MAIN.to_owned()).expect("location space");
+    let mut pp = Preprocessor::new(&sm, &engine, &interner, pp_opts(false));
+    pp.enter_main_file(file);
+    let (tu, _pp) = continue_preprocessed(s, pp, &target, &opts);
+    assert_eq!(engine.error_count(), 0, "the main file compiles");
+    let t = &tu.ast.written_refs;
+    assert!(t.len() > prefix_entries, "the main file's entries follow the prefix's");
+    let at = |l: kiln_source::Loc| {
+        let lc = sm.line_col(sm.spelling_loc(l)).expect("a file location");
+        (sm.file_name(lc.file).to_owned(), lc.line, lc.col)
+    };
+    // `Vec::size` from `v.size()` in `direct` (a prefix entry).
+    let (_, direct) = t
+        .iter()
+        .find(|(_, r)| r.role == RefRole::Member && at(r.range.lo).1 == 5)
+        .expect("v.size() in direct");
+    let size = direct.entity.expect("Vec::size");
+    let mut found: Vec<_> = t
+        .iter()
+        .filter(|(_, r)| r.entity == Some(size))
+        .map(|(_, r)| at(r.range.lo))
+        .chain(t.specs_naming(size).map(|(_, r)| at(t.get(r.entry).range.lo)))
+        .collect();
+    found.sort();
+    let want = [
+        ("main.cpp".to_owned(), 2, 44),
+        ("prefix.h".to_owned(), 4, 53),
+        ("prefix.h".to_owned(), 5, 44),
+    ];
+    assert_eq!(found, want);
+}

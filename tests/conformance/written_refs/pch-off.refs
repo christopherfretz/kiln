@@ -1,0 +1,11 @@
+unrecorded  precompiled prefix (4 files)
+8:1-8:7  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=boxed@8:18
+8:9-8:12  template  'Box' -> pch_ns::Box@refs_pch.h:12:27 q=8:1 in=boxed@8:18
+9:31-9:32  expr  'v' -> v@9:19 in=after_pch@9:5
+9:35-9:41  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=after_pch@9:5
+9:43-9:50  expr  'measure' -> pch_ns::measure<pch_ns::Pt>@refs_pch.h:11:24 found=pch_ns::measure@refs_pch.h:11:24 q=9:35 in=after_pch@9:5
+9:51-9:57  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=after_pch@9:5
+9:59-9:61  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 q=9:51 in=after_pch@9:5
+9:62-9:63  expr  'v' -> v@9:19 in=after_pch@9:5
+9:68-9:73  expr  'boxed' -> boxed@8:18 in=after_pch@9:5
+9:74-9:77  member  'get' -> pch_ns::Box<int>::get@refs_pch.h:14:5 in=after_pch@9:5

@@ -1686,9 +1686,14 @@ impls and their classification tables; every other table derives `Snap`.
   returns the old id, and new content gets the id it would have got in
   the original.
 - **Transient**: `TypeContext.profile_scratch` (reset); `written_refs`
-  (§18: not written, read back empty and off; the restoring compilation
-  turns recording on again from its own options, so a written-reference
-  dump covers the names after the snapshot only, until stage 5).
+  is not part of the `Ast` encoding: since stage 5 (WP-1934) `Sema`'s
+  root writes it as a section of its own right after the AST, and the
+  restoring compilation's own option decides whether that section is
+  read or skipped (§18.10.1). Within the table, the scratch of one
+  declaration or instantiation (`inst_target`, `spec_pending`,
+  `spec_last`, `spec_key`, empty at rest) is transient, its two
+  indexes (`adl_index`, `spec_seen`) are rebuilt, and its `on` bit is
+  the restoring compilation's.
 - **Validated** on read (an `Invalid` error, never a panic): arena
   lengths agree (dummies present, `functions`/`min_args` paired), every
   node's payload or side index is inside the table it indexes, type
@@ -1737,10 +1742,11 @@ field `Ast::written_refs`. Built in five stages:
 
 - **Opt-in.** `WrittenRefs::is_on()` is false unless the front end's
   `ParseOptions::written_refs` is set (the driver's
-  `-fkiln-dump-written-refs` sets it). Off, every recording site costs
-  one predictable branch on that flag and allocates nothing; the table
-  is empty, `Ast::memory()` has no row for it and the snapshot and image
-  layouts are those of a compiler without it.
+  `-fkiln-written-refs` and `-fkiln-dump-written-refs` set it). Off,
+  every recording site costs one predictable branch on that flag and
+  allocates nothing; the table is empty, `Ast::memory()` has no row for
+  it, and a snapshot or image differs from a compiler without the table
+  in its format version and one empty-section marker only (§18.10.4).
 - **One entry per written name.** A name is recorded once where the
   parser consumed it, however many times lookup ran on it, when the
   expression it names is built: after the names in its own template
@@ -1921,7 +1927,15 @@ Stage-2 recording sites (WP-1931; all in `kiln_parse`, entries made by
 - the operand of `using enum` (`parse_using_enum`), role `type`;
 - a pseudo-destructor's type name (`p->~T()` with `T` a scalar typedef
   or a template parameter; from the built `CXXPseudoDestructorExpr`),
-  role `type`, entity the typedef or template parameter;
+  role `type`, entity the typedef or template parameter; in a qualified
+  pseudo-destructor-name `p->[S::]F::~Q()` (WP-1934) both `F` (a
+  type-name, not a nested-name-specifier: looked up as the access looks
+  it up, `Sema::pseudo_destructor_first_type`) and `Q` are role `type`,
+  qualified by `S`'s last component (or `::`), a simple-template-id's
+  template name as the entity, both dependent under a dependent `S`;
+- a pack-index-specifier that begins a nested-name-specifier
+  (`typename Ts...[0]::type`, WP-1934): the pack's name, role `nns`,
+  entity the pack, qualifying the next component;
 - base-specifiers (`parse_base_specifier`): role `base` on the class
   name, on the template name of a template-id base (its arguments are
   their own entries) and on the last component of a qualified or
@@ -2094,10 +2108,13 @@ stage 1.
   table's entry shape and its one-entry-per-written-name rule do not
   change. Default arguments and default member initializers are
   entries once, at the written site.
-- **PCH and modules.** Not carried in stage 1: the field is transient
-  in the snapshot (§17), so a TU restored from a snapshot or importing a
-  module has entries for the names it parsed itself only. Stage 5 writes
-  the table into snapshots and images.
+- **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
+  snapshots and module images: a TU restored from a snapshot continues
+  the prefix's table, and an importer built from an image merges the
+  module unit's entries, as a replay of the unit records them. A
+  source whose names could not be carried (recording was off when its
+  snapshot or image was made) is listed by `unrecorded()`, never a
+  silent gap.
 
 ### 18.6 The dump
 
@@ -2148,14 +2165,13 @@ lookup result.
   `ParseOptions::written_refs` is on. Off, §18.1 holds unchanged: one
   branch per recording site, nothing allocated (the provenance walk is
   never called, argument-dependent lookup collects nothing extra), and
-  the snapshot and image layouts are those of a compiler without it.
+  snapshots and images are as §18.1 says.
 - **The entry stays 28 bytes**: `how` is one byte in the entry's former
   padding (§18.2). The using-directive and the argument-dependent set
   live in a sparse side table keyed by `WrittenRefId`, with the sets
   interned (one copy per distinct set), so an entry with neither costs
-  nothing extra. Transient like the entries (§18.5): not in snapshots
-  or images until stage 5 (WP-1934); `truncate` drops the side rows of
-  the entries it drops.
+  nothing extra. Carried with the entries in snapshots and images
+  (§18.10); `truncate` drops the side rows of the entries it drops.
 - **Read access**: `WrittenRef::how`, `WrittenRefs::using_directive(id)`
   (the directive's `DeclId`), `WrittenRefs::adl_set(id)` (an `AdlSet`:
   `namespaces()`, `classes()`, `enums()`), `WrittenRefs::adl_set_id(id)`
@@ -2413,14 +2429,16 @@ one of:
   `override`, `pre`, `post`, `import`, `module`), an alternative token
   ([lex.digraph]: `and`, `bitor`, ...), an attribute name (an
   identifier at an attribute list's own level in `[[...]]`,
-  `__attribute__((...))`, `__declspec(...)` or the attribute operand of
+  `__attribute__((...))` (or GCC's `__attribute((...))`),
+  `__declspec(...)` or the attribute operand of
   `__builtin_has_attribute(e, ...)`, or before `::` in one), an
   attribute's keyword argument (a lone identifier argument of an
   attribute that reads it as one of its own words, clang
   `attributeHasIdentifierArg` / `VariadicIdentifierArgument`:
   `mode(byte)`, `format(printf, 1, 2)`, `cpu_dispatch(atom)`,
   `enum_extensibility(open)`, `visibility`, `pcs`,
-  `zero_call_used_regs`, `function_return`; and the builtin a builtin
+  `zero_call_used_regs`, `function_return`, GCC's
+  `access(read_only, 1)`; and the builtin a builtin
   alias names, `__clang_arm_builtin_alias(__builtin_x)`),
   a label (`l:`, `goto l`, `&&l`, the names of a `__label__`
   declaration, an `asm goto` label),
@@ -2430,33 +2448,50 @@ one of:
 Macro names, directive text, `#pragma` text and the text of skipped
 conditional blocks never reach the parser and are not counted. A file
 with an error is skipped (its recovery records what it can, §18.4).
-The default test runs over `tests/conformance/written_refs/` and wants
-nothing left over; `KILN_REFS_DIR=<dir>` (an ignored test) runs it over
-a directory tree and prints what is left grouped by the token before
-it, `KILN_REFS_STRICT=1` making any leftover fail.
+The default test runs over `tests/conformance/written_refs/` and a
+pinned list of `tests/conformance` directories (`PINNED`: lookup,
+classes, friends, virtual functions, list-initialization, lambda
+captures, using-declarations, deduction guides, dependent types,
+explicit specializations, instantiation, template names, variadics and
+`templates/`: 733 files without errors, 58989 identifiers, about 5
+seconds in a debug build) and wants nothing
+left over; `KILN_REFS_DIR=<dir>` (an ignored test) runs it over a
+directory tree and prints what is left grouped by the token before it,
+`KILN_REFS_STRICT=1` making any leftover fail. A second ignored test
+(WP-1934) accounts the host's libstdc++: a TU that includes
+`<bits/stdc++.h>`, with the driver's `-std=c++26` search list,
+predefines and feature queries, every identifier of every header the
+parser sees counted (`KILN_REFS_TU=<source>` replaces the TU).
 
 Over `tests/conformance` (WP-1932: 3388 files without errors, 311138
 identifiers) the run found 2381 identifiers left over. The table gaps
-it found were fixed here: the names of `sizeof...(pack)` (stage 1),
+it found were fixed there: the names of `sizeof...(pack)` (stage 1),
 offsetof member-designators, and §19 rows for for-range-declarations
 and expansion-statement variables and their bindings, a condition's
 bindings, exception declarations, requires-expression parameters and
 init-captures, and friend declarations that overwrote the row of the
-class or member they name. The classes left (82 identifiers) are rows
-of their own:
+class or member they name. WP-1934 fixed two of the three classes left
+(82 identifiers): the type-names of a qualified pseudo-destructor-name
+(`p->I::~I()`, `p->::N::I::~I()`, `t->T::~T()`,
+`p->A<int>::~A<int>()`: 40) and the pack of a pack-indexing
+nested-name-specifier (`typename Ts...[0]::type`: 10), §18.4. Run
+again (WP-1934: 3404 files, 311991 identifiers), 32 are left, a row and
+an ICE of their own:
 
 - names in the arguments of thread-safety attributes
   (`guarded_by(mu)`, `requires_capability(mu)`, `acquire_capability(...)`:
   30), which kiln knows and skips unanalysed (WP-606), so their
   names are never looked up (WP-2170);
-- the type-names of a qualified pseudo-destructor-name (`p->I::~I()`,
-  `p->::N::I::~I()`, `t->T::~T()`, `p->A<int>::~A<int>()`: 40, both the
-  name before `::~` and the destroyed name; WP-2171);
-- the pack of a pack-indexing nested-name-specifier
-  (`typename Ts...[0]::type`: 10; WP-2172);
 - two diagnosed files on which the test's in-process front end panics
-  in the Oven's `convert` (WP-2141's ICE), reported as `panic` lines,
-  not identifiers.
+  in the Oven's `convert` (an integer to an `Opaque` type: WP-2141's
+  ICE), reported as `panic` lines, not identifiers.
+
+Over the host's libstdc++ (WP-1934: GCC 14's headers on aarch64 Linux
+through `<bits/stdc++.h>`, 387763 identifiers) nothing is left. The
+first run left 13, all non-names, now in the documented set above:
+GCC's `__attribute((...))` spelling (`__abi_tag__`, `__unused__`: 8)
+and the access mode of GCC's `access` attribute (`__read_only__`,
+`__none__`: 5).
 
 ### 18.9 Stage 4: per-specialization entries (WP-1933)
 
@@ -2512,7 +2547,7 @@ a separate table: the main table keeps one entry per written name.
   clients that query many entries), `spec_adl_set(&row)`. A rename of
   `d` edits the ranges of the main-table entries naming `d` and of the
   pattern entries of `specs_naming(d)`'s rows.
-- **Snapshots.** Transient, as the main table (§18.5; stage 5).
+- **Snapshots and images.** Carried with the main table (§18.10).
 
 #### 18.9.2 The specialization
 
@@ -2701,6 +2736,168 @@ order of instantiation swapped (`inst-order-a`, `inst-order-b`, whose
 goldens differ only in the lines of `run`). The stage-1 to stage-3
 goldens with instantiated templates (`dependent`, `example`,
 `qualifiers`, `type-combined`) gain their rows.
+
+### 18.10 Stage 5: carriage in PCH snapshots and module images (WP-1934)
+
+A tooling client indexes a translation unit as it is built: with a
+precompiled header, or importing modules. Stage 5 makes the table the
+same in those builds as in the one that reads every source as text.
+The driver's `-fkiln-written-refs` turns recording on without the dump
+(spec/driver.md); a PCH or a module file must be built with it for its
+names to be carried.
+
+#### 18.10.1 PCH snapshots
+
+- **Written.** `Sema`'s snapshot root (`kiln_sema::snap`) writes, right
+  after the AST, one length-prefixed section (`Ast::put_written_refs`):
+  with recording on, the table's state as a `WrittenRefsSection`
+  (`kiln_ast::written_refs`, its own `Snap` schema folded into
+  `Sema`'s): the entries; the pending overload patches; the provenance
+  side rows (using-directive, argument-dependent set); the interned sets;
+  the directive cache; the deferred designators; the per-specialization
+  rows, dropped rows included so every `SpecRefId` stays; the pattern
+  nodes; the unrecorded rows (§18.10.3). Maps are written as their
+  entries sorted by key, so the bytes do not depend on hashing.
+  **Rebuilt** on read: the set index and the row de-duplication index,
+  from the sets and the live rows. **Transient**: the scratch of one
+  declaration or one instantiation (`inst_target`, `spec_pending`,
+  `spec_last`, `spec_key`), empty at the end of a prefix.
+- **Validated** on read (an `Invalid` error, never a panic): every
+  entry, row and set id in range, every qualifier before the entry it
+  qualifies, no set interned twice, no live row kept twice, and the
+  section's typed ids within the restored AST's arenas
+  (`Ast::check_ids`).
+- **Restored, recording on.** The restored table continues the
+  prefix's: the prefix's entries keep their ids and the main file's
+  are appended after them; a pattern of the prefix instantiated by the
+  main file gives its per-specialization rows through the carried
+  pattern nodes, as without the PCH. The dump equals the dump of the
+  same main file compiled with the header as an `-include` (positions
+  in the header print with its base name either way). What may differ
+  is not printed: `DeclId`s, `SpecRefId`s and the order of
+  per-specialization rows (the dump sorts them, §18.9.5). Clients
+  that keep ids across builds must key by position, as for any two
+  builds.
+- **Restored, recording off.** The section is skipped by its length,
+  undecoded and unallocated; the table is off and empty.
+- **Identity.** `-fkiln-written-refs` and `-fkiln-dump-written-refs`
+  are outside the PCH identity (spec/pch.md): a PCH made either way
+  serves a compile made either way, and what the consumer sees follows
+  §18.10.3.
+
+#### 18.10.2 Module images
+
+- **Written.** When the module unit is compiled with the table on, the
+  image's last section, `refs` (spec/modules.md §11.11 "Written
+  references"), carries the entries of the names written in the unit's
+  own sources after its preamble, their provenance, the
+  per-specialization rows of its carried specializations and the
+  pattern nodes of its dependent entries. The preamble's names (the
+  module declaration, the imports, and with them the names the imported
+  units' replays recorded) are not carried: the importer replays the
+  preamble (spec/modules.md §11.11 "Imports and re-exports") and
+  records them by parsing, as it does for any source it reads. A name
+  whose declaration (entity, found, enclosing, using-directive, a set's
+  member), location, qualifier or pattern node the image cannot carry
+  fails the image, and the importer replays the unit: correctness
+  first. A per-specialization row whose specialization or entity is
+  not a record is left out (the importer makes the row again when it
+  instantiates that specialization). A unit whose own table has
+  unrecorded rows (§18.10.3) fails the image too.
+- **Imported, recording on: merged.** The importer appends the unit's
+  entries to its own main table when it builds the unit's records, in
+  the unit's recording order, mapped to the importer's declarations and
+  locations (the module's files are in the importer's source manager,
+  spec/modules.md "File table"). The table is merged, not kept per
+  module, because a replay of the unit already records its names in the
+  importer's table by parsing them (stages 1 to 4): merging makes the
+  table, and the dump, the same whichever way the unit is imported
+  (`module-image.cpp` and `module-replay.cpp` share one golden), and
+  the importer's per-specialization rows for the unit's templates key
+  to the merged pattern entries. A client reaches the unit's names by
+  their files: an entry whose `range` is in one of the module's files.
+  Rows the importer makes when it instantiates the unit's templates are
+  the importer's (they are its instantiations), recorded as after a
+  replay.
+- **Imported, recording off.** The section is skipped by its length,
+  undecoded (`decode_with(.., false)`).
+- **Module cache.** The driver's implicit module builds
+  (`module_cache.rs`) record when the compile that needs them does, and
+  their cache key names `written-refs`, so a cached build without the
+  table is not used by one that records.
+
+#### 18.10.3 What was not recorded
+
+A source whose names could have been carried but were not is listed by
+`WrittenRefs::unrecorded()`, never left as a silent gap:
+
+- `Unrecorded::Prefix { files }`: the snapshot was made with recording
+  off and the consumer records; `files` is the number of files the
+  restored source manager holds (the prefix's files, ids `0..files`).
+  The restored table starts empty.
+- `Unrecorded::Module { module, files }`: the unit `module` (its key)
+  was built from an image made with recording off; `files` are its
+  files in the importer's source manager.
+
+The dump prints each row first, `unrecorded  precompiled prefix (<n>
+files)` and `unrecorded  module <key> (<main file's base name>, <n>
+files)`. A table with an unrecorded row is still carried by a later
+snapshot (the rows with it); a module unit with one fails its image.
+
+#### 18.10.4 Cost
+
+Off, nothing is recorded and nothing new runs: the snapshot is the
+one a compiler without the table writes plus one byte (the section's
+LEB128 length, 0), and the image is that plus one `u32` 0 (a PCH file
+also stores its options as text, which gained the line of the new
+`written_refs` option). Their
+format versions are bumped (PCH `FORMAT_VERSION` 144, image
+`IMAGE_VERSION` 77). A restore or import that does not record reads
+the length and skips the section. Measured in §18.10.6.
+
+#### 18.10.5 Tests
+
+`crates/kiln_ast/src/written_refs_carry.rs` (off writes one byte and a
+reader that does not record skips the section; an empty section read
+with recording on is a prefix gap; a qualifier after its entry is
+rejected), `crates/kiln_sema/src/snap.rs` (the table off adds one byte
+after the AST's own encoding, on leaves that encoding unchanged),
+`crates/kiln_sema/src/bmi_image/refs.rs` (the section round trips; off
+it is one empty word after the image without it; skipped undecoded;
+every validation), `crates/kiln_driver/tests/written_refs_carry.rs`
+(every compiling file of `tests/conformance/written_refs/` split at a
+top-level boundary, its first part precompiled: the dump through the
+restored snapshot equals the dump with the part as an `-include`; a
+recorded snapshot used by a compile that does not record; a module
+compiled without the table is unrecorded, with it merged, and skipped by
+an importer that does not record), `crates/kiln_parse/tests/written_refs.rs`
+(rename by table across a restored prefix and the main file), and
+`tests/conformance/written_refs/`: `pch.cpp` (through a PCH) and
+`pch-include.cpp` (the header as text) share `pch.refs`; `pch-off.cpp`
+(a PCH made without the table: the gap line); `module-image.cpp` and
+`module-replay.cpp` share `module.refs`.
+
+#### 18.10.6 Measurements (WP-1934)
+
+Debug builds of the base (WP-1933) and of this stage, on an aarch64
+Linux host, GCC 14's libstdc++, `-std=c++26 -fsyntax-only`, five runs
+each interleaved (minimum / median seconds, peak RSS):
+
+| compile | base | stage 5, off | stage 5, on |
+|---|---|---|---|
+| `#include <bits/stdc++.h>` and `main` | 9.96 / 10.75 s, 105 MiB | 9.67 / 10.81 s, 102 MiB | 9.93 / 11.56 s, 113 MiB |
+| the same `main` with `-include-pch` of the header | 1.99 / 2.32 s, 99 MiB | 1.82 / 2.22 s, 99 MiB | 1.97 / 2.35 s, 107 MiB |
+
+Off is within noise of the base, with and without the PCH. The PCH of
+`<bits/stdc++.h>` is 37,579,848 bytes at the base and 37,579,874 off
+(the section's byte and the 25-byte option line); with the table on it
+is 43,840,681 (+16.7%), and restoring it with recording on costs about
+8 MiB of peak RSS. The dump of the TU (220,970 lines: entries and
+per-specialization rows) is the same through the PCH as with the header
+included as text. The image of `Inputs/refs_mod.cppm` is 25,711 bytes
+at the base, 25,715 off and 26,484 on. The 29 `bench/oven` entries'
+`-fconstexpr-report` counters (all but `wall_us`) are identical between
+the base and this stage.
 
 ## 19. The declaration-extent table (WP-2090)
 

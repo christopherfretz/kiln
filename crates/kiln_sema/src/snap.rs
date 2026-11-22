@@ -353,6 +353,9 @@ fn recurse<T: Snap>(s: &mut Schema, _field: for<'x> fn(&'x Sema<'static, 'static
 /// "Snapshots"), its interner included as a shared `Arc`.
 fn put_ast(ast: &Ast, w: &mut Writer) {
     w.put(ast);
+    // The written-reference section (spec/ast.md §18.10.1): the table
+    // when recording is on, else one byte.
+    ast.put_written_refs(w);
 }
 
 /// Reads the AST [`put_ast`] wrote into `into`. The decoded AST must share
@@ -360,13 +363,20 @@ fn put_ast(ast: &Ast, w: &mut Writer) {
 /// stream (the preprocessor's root) and builds its fresh `Sema` over it,
 /// so the AST's `Arc` is a back-reference to that allocation; a fresh
 /// interner here would not be the preprocessor's.
-fn get_ast(r: &mut Reader<'_>, into: &mut Ast) -> Result<(), SnapError> {
-    let ast: Ast = r.get()?;
+///
+/// The written-reference section after it is decoded only when `into`
+/// records (the consumer's option, set before the restore); otherwise it
+/// is skipped. `files` is the number of files the restored source manager
+/// holds, for the gap row of a section written with recording off
+/// (spec/ast.md §18.10.1).
+fn get_ast(r: &mut Reader<'_>, into: &mut Ast, files: u32) -> Result<(), SnapError> {
+    let mut ast: Ast = r.get()?;
     if !std::ptr::eq(ast.symbols(), into.symbols()) {
         return Err(r.invalid::<Ast>(
             "the AST's interner is not the consumer's (read the interner first, in the same stream)",
         ));
     }
+    ast.get_written_refs(r, into.written_refs.is_on(), files)?;
     *into = ast;
     Ok(())
 }
@@ -472,7 +482,8 @@ macro_rules! root_impl {
                 if self.snapshot_ready().is_err() || !self.is_fresh() {
                     return Err(r.invalid::<Self>("restore into a used Sema"));
                 }
-                at("Sema.ast", get_ast(r, &mut self.ast))?;
+                let files = u32::try_from(self.diags.sm().file_count()).unwrap_or(u32::MAX);
+                at("Sema.ast", get_ast(r, &mut self.ast, files))?;
                 mark("ast");
                 if let Some(o) = &mut self.oven {
                     at("Sema.oven", get_oven(r, o))?;
@@ -526,6 +537,7 @@ macro_rules! root_impl {
             pub const SNAP_SCHEMA_HASH: u64 = {
                 let mut h = SchemaHash::new("configured root", "Sema")
                     .field::<Ast>("ast")
+                    .root_field("written refs", kiln_ast::written_refs::CARRY_SCHEMA_HASH)
                     .root_field("oven", kiln_oven::Oven::SNAP_SCHEMA_HASH);
                 $( h = reg_hash(h, stringify!($s), |x| &x.$s); )*
                 $( h = h.skip(stringify!($c), "()"); )*
@@ -542,6 +554,7 @@ macro_rules! root_impl {
                 let mut d = Desc::new("configured root")
                     .hash(Self::SNAP_SCHEMA_HASH)
                     .field::<Ast>("ast")
+                    .field::<kiln_ast::written_refs::WrittenRefsSection>("written refs")
                     .field::<kiln_oven::Oven>("oven");
                 $( d = reg(d, stringify!($s), |x| &x.$s); )*
                 $( d = d.skip::<()>(stringify!($c)); )*
@@ -550,6 +563,7 @@ macro_rules! root_impl {
                 $( d = d.skip::<()>(stringify!($b)); )*
                 if s.register::<Sema<'static, 'static>>(d) {
                     Ast::schema(s);
+                    <kiln_ast::written_refs::WrittenRefsSection as kiln_snap::Snap>::schema(s);
                     kiln_oven::Oven::snap_schema(s);
                     $( recurse(s, |x| &x.$s); )*
                 }
@@ -609,5 +623,54 @@ impl Sema<'_, '_> {
         }
         self.ctx = tu;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::put_ast;
+    use kiln_ast::Ast;
+    use kiln_ast::written_refs::{RefLookup, RefQualifier, RefRole, WrittenRef};
+    use kiln_snap::Writer;
+    use kiln_source::{Loc, Span};
+    use std::sync::Arc;
+
+    fn ast(interner: &Arc<kiln_source::symbol::Interner>) -> Ast {
+        Ast::new(Arc::clone(interner), kiln_ast::types::TypeContext::default())
+    }
+
+    fn bytes(f: impl FnOnce(&mut Writer)) -> Vec<u8> {
+        let mut w = Writer::canonical();
+        f(&mut w);
+        w.into_bytes()
+    }
+
+    /// WP-1934 (spec/ast.md §18.10.4): with recording off, the snapshot
+    /// is the AST's own encoding and one empty-section byte; with it on,
+    /// the AST's encoding is unchanged and the table follows it.
+    #[test]
+    fn the_table_off_adds_one_byte_to_the_ast() {
+        let interner = Arc::new(kiln_source::symbol::Interner::new());
+        let off = ast(&interner);
+        let plain = bytes(|w| w.put(&off));
+        let mut want = plain.clone();
+        want.push(0);
+        assert_eq!(bytes(|w| put_ast(&off, w)), want);
+        let mut on = ast(&interner);
+        on.written_refs.set_on(true);
+        let _ = on.written_refs.push(WrittenRef {
+            range: Span::new(Loc::from_raw(3), Loc::from_raw(4)),
+            entity: None,
+            found: None,
+            enclosing: None,
+            qualifier: RefQualifier::NONE,
+            role: RefRole::Expr,
+            flags: 0,
+            how: RefLookup::None,
+        });
+        let with = bytes(|w| put_ast(&on, w));
+        assert!(with.len() > want.len() && with.starts_with(&plain));
+        // The reading side (skipped off, a gap row for an empty section)
+        // is `kiln_ast`'s `off_writes_one_byte_and_reads_nothing`.
     }
 }

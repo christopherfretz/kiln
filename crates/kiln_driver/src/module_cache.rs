@@ -222,6 +222,11 @@ pub(crate) fn for_job(
     if a.decl_extents {
         config.push_str("decl-extents\n");
     }
+    // And one built with the written-reference table carries that
+    // (spec/ast.md §18.10.2).
+    if a.written_refs {
+        config.push_str("written-refs\n");
+    }
     let cache = StdCache {
         root,
         config,
@@ -415,6 +420,8 @@ impl StdCache {
         a.dump_vtable_layouts = false;
         a.dump_cfg = false;
         a.dump_written_refs = false;
+        // `written_refs` stays: the module file carries the table its
+        // build records (spec/ast.md §18.10.2), keyed apart below.
         // `decl_extents` stays: the module file carries the extents its
         // build records (spec/ast.md §19.6), keyed apart below.
         a.dump_decl_extents = false;

@@ -390,7 +390,7 @@ impl SyntaxJob<'_> {
             x86_features: if x86 { feats.extra.clone() } else { Vec::new() },
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_dump: a.dump_cfg,
-            written_refs: a.dump_written_refs,
+            written_refs: a.written_refs,
             decl_extents: a.decl_extents,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),

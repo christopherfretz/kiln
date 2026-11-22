@@ -82,6 +82,7 @@ mod patinit;
 mod predef;
 mod protoparams;
 mod psel;
+mod refs;
 pub(crate) use psel::PartialChoice;
 mod requires;
 mod scope;
@@ -101,7 +102,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 74;
+pub(crate) const IMAGE_VERSION: u32 = 77;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -747,6 +748,9 @@ struct Image {
     declocs: declocs::DeclLocs,
     /// WP-2090: the records' declaration extents (spec/ast.md §19.6).
     extents: extents::Extents,
+    /// WP-1934: the written-reference table (spec/ast.md §18.10.2), the
+    /// last section.
+    refs: refs::Refs,
     /// WP-1284: constraints and concepts' constraint-expressions.
     cons: constraints::Constraints,
     /// WP-1284: requires-expression bodies.
@@ -1580,6 +1584,7 @@ fn encode(img: &Image) -> Vec<u8> {
     specbase::encode_member_classes(&mut w, &img.mclasses);
     fpstate::encode_fp_inits(&mut w, &img.fp_inits);
     extents::encode_extents(&mut w, &img.extents);
+    refs::encode_refs(&mut w, &img.refs);
     w.0
 }
 
@@ -2106,8 +2111,14 @@ fn decode_locs(r: &mut Rd<'_>, img: &mut Image) -> Res<()> {
 /// Decodes and validates an image. Total: any malformed input is an
 /// [`ImageError`]; an `Ok` image can be built without further checks
 /// other than its offsets against the main file's length.
-#[allow(clippy::too_many_lines)] // the sections in format order, kept together with the format
 fn decode(bytes: &[u8]) -> Res<Image> {
+    decode_with(bytes, true)
+}
+
+/// [`decode`]; `want_refs`: the importer records written references
+/// (otherwise their section is skipped undecoded, WP-1934).
+#[allow(clippy::too_many_lines)] // the sections in format order, kept together with the format
+fn decode_with(bytes: &[u8], want_refs: bool) -> Res<Image> {
     let mut r = Rd(bytes);
     if r.u32()? != IMAGE_VERSION {
         return bad("unsupported version");
@@ -2307,6 +2318,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.mclasses = specbase::decode_member_classes(&mut r)?;
     img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
     img.extents = extents::decode_extents(&mut r)?;
+    img.refs = refs::decode_refs(&mut r, want_refs)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2596,6 +2608,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
     extents::validate_extents(img)?;
+    refs::validate_refs(img, &|q| qref_ok(q, nt))?;
     localexterns::validate_local_externs(img)?;
     explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
     patinit::validate_pattern_inits(img, &|q| qref_at(q, nd))?;
@@ -5005,6 +5018,7 @@ impl Writer<'_, '_, '_> {
         self.written_section();
         self.fp_inits();
         self.extents_section()?;
+        self.refs_section()?;
         Ok(())
     }
 
@@ -5713,7 +5727,7 @@ impl Sema<'_, '_> {
         let Some(&main) = files.first() else { return };
         let len = self.diags.sm().text(main).len();
         let key = self.module_current_key().to_owned();
-        let checked = decode(bytes).and_then(|img| {
+        let checked = decode_with(bytes, self.ast.written_refs.is_on()).and_then(|img| {
             // S6: an image with a preamble is built at its end, in the
             // unit the replayed preamble entered, which must be the
             // image's; one without is built in place of the unit.
@@ -5760,6 +5774,7 @@ impl Sema<'_, '_> {
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
             extents::extent_offsets(&img, &mut offs);
+            refs::refs_offsets(&img, &mut offs);
             explinst::explicit_inst_locs(&img, &mut offs);
             patinit::pattern_init_locs(&img, &mut offs);
             defcmp::defaulted_cmp_locs(&img, &mut offs);
@@ -5774,7 +5789,7 @@ impl Sema<'_, '_> {
             }
         });
         match checked {
-            Ok((img, m)) => self.build_image(&img, &m),
+            Ok((img, m)) => self.build_image(&img, &m, files),
             Err(ImageError(why)) => {
                 kiln_diag::Diag::new(
                     kiln_diag::DiagId::pp_module_file_corrupt,
@@ -5787,14 +5802,14 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn build_image(&mut self, img: &Image, main: &Locs) {
+    fn build_image(&mut self, img: &Image, main: &Locs, files: &[FileId]) {
         let saved = self.image_texprs_enter(img, main);
-        self.build_image_records(img, main);
+        self.build_image_records(img, main, files);
         self.image_texprs = saved;
     }
 
     #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
-    fn build_image_records(&mut self, img: &Image, main: &Locs) {
+    fn build_image_records(&mut self, img: &Image, main: &Locs, files: &[FileId]) {
         let lo = |_: &Self, o: u32| main.get(o);
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
         // An image without a module name (once a precompiled header's,
@@ -6506,6 +6521,8 @@ impl Sema<'_, '_> {
             self.image_source_loc_use(e, at, ctx, location);
         }
         self.image_diagnose_if_rechecks(&built, img.bodies.exprs.len() as u32);
+        let cx = refs::RefsCtx { ids: &ids, params: &params_all, built: &built, main, files };
+        self.image_refs(img, &mut tys, &cx);
         self.module_owner_changed();
     }
 
@@ -7121,6 +7138,7 @@ mod tests {
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
             extents: extents::Extents::default(),
+            refs: refs::Refs::default(),
             explinsts: explinst::ExplInsts::default(),
             patinits: patinit::PatInits::default(),
             defcmps: defcmp::DefCmps::default(),
