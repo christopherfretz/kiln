@@ -308,6 +308,7 @@ impl Sema<'_, '_> {
             kept.push(a);
         }
         if !kept.is_empty() {
+            self.ast.attrs.mark_checked(&kept);
             let _ = self.builder().attach_attrs(ns, &kept);
         }
     }

@@ -4411,10 +4411,11 @@ impl Sema<'_, '_> {
         if kind == DeclKind::Var && matches!(ds.storage, Some((StorageSpec::Register, _))) {
             self.check_register_variable(ds, decl, lit, loc);
         }
+        // Checked above (the label's own checks).
         let node = AttrNode {
             kind: AttrKind::ASM_LABEL,
             syntax: AttrSyntax::Keyword,
-            flags: 0,
+            flags: AttrNode::CHECKED,
             loc,
             a: lit.raw(),
             b: 0,
@@ -6681,6 +6682,7 @@ impl Sema<'_, '_> {
                 self.check_code_model_attrs(pd, &mut attrs);
                 attrs.retain(|&a| self.keep_param_attr(pd, a));
                 self.check_param_pass_object_size(p.ty, p.range.0, &mut attrs);
+                self.ast.attrs.mark_checked(&attrs);
                 let _ = self.builder().attach_attrs(pd, &attrs);
             }
             match p.default_arg {
@@ -11689,12 +11691,7 @@ impl Sema<'_, '_> {
             if access != Access::None {
                 self.ast.decls.set_access(d, access);
             }
-            let mut attrs = attrs.to_vec();
-            self.add_pragma_attrs(d, &mut attrs);
-            if !attrs.is_empty() {
-                self.take_annotations(d, &mut attrs);
-                let _ = self.builder().attach_attrs(d, &attrs);
-            }
+            self.act_on_enumerator_attrs(d, attrs);
             if !scoped && self.enumerator_is_local(e) {
                 self.push_local(name, d);
             }
@@ -11752,12 +11749,7 @@ impl Sema<'_, '_> {
                 _ => Some(vty),
             }
         };
-        let mut attrs = attrs.to_vec();
-        self.add_pragma_attrs(d, &mut attrs);
-        if !attrs.is_empty() {
-            self.take_annotations(d, &mut attrs);
-            let _ = self.builder().attach_attrs(d, &attrs);
-        }
+        self.act_on_enumerator_attrs(d, attrs);
         let proto = self.c_declare_proto_enumerator(e, name, d);
         if !proto && !scoped && self.enumerator_is_local(e) {
             self.push_local(name, d);
@@ -11872,6 +11864,22 @@ impl Sema<'_, '_> {
     fn fits(&self, ty: QualType, v: i128) -> bool {
         constfold::int_info(&self.ast, ty)
             .is_none_or(|(bits, signed)| constfold::fits(v, bits, signed))
+    }
+
+    /// The attributes of enumerator `d` ([dcl.enum]/2: its
+    /// attribute-specifier-seq appertains to it) and the pushed
+    /// `#pragma clang attribute` ones: checked against it as any other
+    /// declaration's ([`Sema::check_decl_attrs`]; clang `ActOnEnumConstant`
+    /// -> `ProcessDeclAttributeList`), then attached.
+    fn act_on_enumerator_attrs(&mut self, d: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.add_pragma_attrs(d, &mut attrs);
+        if !attrs.is_empty() {
+            self.check_decl_attrs(d, &mut attrs);
+        }
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(d, &attrs);
+        }
     }
 
     fn check_enumerator_range(&self, v: i128, fixed: Option<QualType>, e: ExprId) -> i128 {

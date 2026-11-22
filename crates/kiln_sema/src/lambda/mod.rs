@@ -646,24 +646,8 @@ impl Sema<'_, '_> {
         }
         let defaults = self.lambda_default_args(&params);
         self.create_params(f, &params, &defaults);
-        let mut attrs: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
-        // clang `ActOnStartOfLambdaDefinition` -> `ProcessDeclAttributes`:
-        // the call operator takes the pushed `#pragma clang attribute`
-        // attributes (a pushed `target` applies to it, not inherited from
-        // the enclosing function).
-        self.add_pragma_attrs(f, &mut attrs);
-        if !attrs.is_empty() {
-            // [expr.prim.lambda.closure]/7: the attribute-specifier-seq
-            // before the lambda-declarator appertains to the call operator
-            // (or operator template), a function whose host and target
-            // scope are the closure class: its annotations are the call
-            // operator's ([dcl.attr.annotation]/1; WP-1660). The seq after
-            // the declarator's noexcept-specifier appertains to its type
-            // and lost its annotations in `act_on_type_position_attrs`.
-            self.take_annotations(f, &mut attrs);
-            self.check_alignas_subject(f, &mut attrs);
-            let _ = self.builder().attach_attrs(f, &attrs);
-        }
+        let attrs: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
+        self.act_on_call_operator_attrs(f, attrs);
         if let Some(r) = d.trailing_requires {
             self.act_on_trailing_requires(f, r);
         }
@@ -688,6 +672,37 @@ impl Sema<'_, '_> {
         }
         self.number_lambda(id, closure, f);
         self.begin_lambda_body(f, specs.constexpr.is_some() || specs.consteval.is_some());
+    }
+
+    /// The attributes of call operator `f` (its lambda's specifier seq
+    /// and declarator attributes, `attrs`), checked and attached.
+    fn act_on_call_operator_attrs(&mut self, f: DeclId, mut attrs: Vec<AttrId>) {
+        // The function type attributes (calling conventions, the SME
+        // keywords) went into the call operator's type.
+        attrs.retain(|&a| !self.ast.attrs.get(a).kind.is_fn_type_attr());
+        // clang `ActOnStartOfLambdaDefinition` -> `ProcessDeclAttributes`:
+        // the call operator takes the pushed `#pragma clang attribute`
+        // attributes (a pushed `target` applies to it, not inherited from
+        // the enclosing function).
+        self.add_pragma_attrs(f, &mut attrs);
+        if !attrs.is_empty() {
+            // [expr.prim.lambda.closure]/7: the attribute-specifier-seq
+            // before the lambda-declarator appertains to the call operator
+            // (or operator template), a function whose host and target
+            // scope are the closure class: its annotations are the call
+            // operator's ([dcl.attr.annotation]/1; WP-1660). The seq after
+            // the declarator's noexcept-specifier appertains to its type
+            // and lost its annotations in `act_on_type_position_attrs`.
+            // The rest are checked against the call operator as any
+            // member function's (`check_decl_attrs`, which also takes
+            // the annotations).
+            self.check_decl_attrs(f, &mut attrs);
+            self.check_optnone_conflicts(f, &mut attrs);
+            self.check_naked_conflicts(f, &mut attrs);
+        }
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(f, &attrs);
+        }
     }
 
     /// Whether the call operator of a lambda with parameters `params` and

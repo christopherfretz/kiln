@@ -341,6 +341,9 @@ impl Sema<'_, '_> {
         let mut pushed = Vec::new();
         self.add_pragma_attrs(f, &mut pushed);
         if !pushed.is_empty() {
+            self.check_decl_attrs(f, &mut pushed);
+        }
+        if !pushed.is_empty() {
             let _ = self.builder().attach_attrs(f, &pushed);
         }
         if let Some(r) = d.trailing_requires {

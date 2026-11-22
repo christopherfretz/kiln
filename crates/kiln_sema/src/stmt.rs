@@ -765,6 +765,7 @@ impl Sema<'_, '_> {
                 f.has_musttail = true;
             }
         }
+        self.ast.attrs.mark_checked(&kept);
         self.builder().attributed_stmt(&kept, sub, loc)
     }
 

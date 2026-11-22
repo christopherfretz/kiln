@@ -4193,6 +4193,25 @@ instantiation unless stated.
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **Checked attributes** (WP-2022; spec/ast.md §7 "Checked marker").
+    Every site that checks a declaration's attributes marks the ones it
+    keeps `AttrNode::CHECKED` (`AttrArena::mark_checked`) before they are
+    attached: the end of `check_decl_attrs` (declarators, alias and
+    tag heads, enumerators, lambda call operators, structured bindings,
+    exception declarations, friends, function and variable template
+    specializations, deduction guides), the parameter checks of
+    `create_params`, `act_on_namespace_attrs`, the class-head
+    `transparent_union` check (and a typedef's, moved to its union), the
+    explicit-instantiation `visibility` check, and `act_on_attributed_stmt`
+    and its instantiation. An implicit attribute sema adds (a known
+    library function's, `#pragma weak`/`GCC visibility`/`clang section`,
+    `ms_struct`, ...) is built checked (`AttrArena::push`). An inherited
+    or instantiated copy keeps its source's flags, as do the PCH snapshot
+    and the module image (`bmi_image/attrs.rs` copies the flags byte), so
+    an importer sees the marker the exporter set. Invariant, tested by
+    `kiln_parse/tests/attrs_checked.rs`: after the translation unit, every
+    attribute a declaration's or an attributed statement's list holds is
+    checked.
   - **`init_priority(N)`** (GNU, [dcl.attr.grammar]/5;
     `init_priority.rs`, clang `handleInitPriorityAttr`, WP-189). Parsed
     with an expression argument (`__attribute__` or `[[gnu::]]`); exactly
@@ -4221,7 +4240,19 @@ instantiation unless stated.
     handlers; WP-324). One table, applied to the attributes of every
     declarator (variables, functions, data members, typedefs), every
     alias-declaration (`using X [[a]] = T;` appertains to the
-    typedef-name, [dcl.typedef]/2) and every class-head and enum-head.
+    typedef-name, [dcl.typedef]/2), every class-head and enum-head,
+    every enumerator ([dcl.enum]/2, clang `ActOnEnumConstant`; one of
+    a dependent enumeration too, at the template definition), every
+    lambda call operator ([expr.prim.lambda.closure]/7, clang
+    `ActOnStartOfLambdaDefinition` -> `ProcessDeclAttributes`: `nonnull`
+    and `alloc_size` indices count the implicit object parameter, a
+    deduced return type is not yet a pointer; the declarator-only linkage
+    checks of `weak`/`weakref`, clang `checkAttributesAfterMerging`, do
+    not run; then `check_optnone_conflicts`/`check_naked_conflicts`) and
+    every deduction guide's pushed `#pragma clang attribute` ones (WP-2022:
+    the enumerator and call-operator sites attached theirs unchecked).
+    Tests: `dcl.enum/enumerator-attribute-checks.cpp`,
+    `expr.prim.lambda.closure/call-operator-attribute-checks.cpp`.
     An attribute the subject rejects is diagnosed at its token and
     dropped:
     - `nodiscard`/`warn_unused_result` ([dcl.attr.nodiscard]/1): the

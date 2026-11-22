@@ -77,6 +77,7 @@ impl Sema<'_, '_> {
                 kept.push(a);
             }
         }
+        self.ast.attrs.mark_checked(&kept);
         kept
     }
 
@@ -144,6 +145,7 @@ impl Sema<'_, '_> {
             return false;
         };
         if self.transparent_union_fields_ok(def, a) {
+            self.ast.attrs.mark_checked(&[a]);
             self.builder().append_attrs(def, &[a]);
         }
         false

@@ -502,6 +502,7 @@ impl Substituter<'_, '_, '_> {
                         f.has_musttail = true;
                     }
                 }
+                self.sema.ast.attrs.mark_checked(&kept);
                 Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
             }
             StmtKind::CXXTryStmt => self.try_stmt(s),

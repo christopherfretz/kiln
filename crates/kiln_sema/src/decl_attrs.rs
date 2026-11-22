@@ -540,6 +540,7 @@ impl Sema<'_, '_> {
         self.unify_fn_section(d, attrs);
         self.check_no_builtin_attrs(d, attrs);
         self.check_pure_const(d, attrs);
+        self.ast.attrs.mark_checked(attrs);
     }
 
     /// GNU `const` / `pure` on function declaration `d` (WP-1838), as
@@ -1160,10 +1161,14 @@ impl Sema<'_, '_> {
             self.emit(msg);
             out.retain(|&a| self.ast.attrs.get(a).kind != AttrKind::WEAKREF);
         }
+        // clang `checkAttributesAfterMerging` runs from the function and
+        // variable declarators, not for a lambda's call operator.
+        let lambda = self.is_lambda_call_op(d);
         let internal = kiln_abi::mangle::has_internal_linkage(&self.ast, d)
             || has(self, &out, AttrKind::INTERNAL_LINKAGE);
         if let Some(w) = out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAK)
             && internal
+            && !lambda
         {
             let msg = self.diag(DiagId::sema_attribute_weak_static, self.ast.attrs.get(w).loc);
             self.emit(msg);
@@ -1172,6 +1177,7 @@ impl Sema<'_, '_> {
         if let Some(w) =
             out.iter().copied().find(|&a| self.ast.attrs.get(a).kind == AttrKind::WEAKREF)
             && !internal
+            && !lambda
         {
             let msg =
                 self.diag(DiagId::sema_attribute_weakref_not_static, self.ast.attrs.get(w).loc);

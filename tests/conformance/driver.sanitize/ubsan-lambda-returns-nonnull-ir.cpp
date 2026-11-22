@@ -6,7 +6,6 @@
 //@ expect: ir
 //@ std: c++20
 //@ args: -fsanitize=returns-nonnull-attribute -Xclang -disable-llvm-passes
-//@ xfail(kiln): WP-871 follow-up, sema puts a lambda's trailing returns_nonnull on operator()
 int g;
 auto l = [](int *p) __attribute__((returns_nonnull)) { return p; };
 int *u() { return l(&g); }

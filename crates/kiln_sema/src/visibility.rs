@@ -272,6 +272,7 @@ impl Sema<'_, '_> {
         if vis.is_empty() {
             return;
         }
+        self.ast.attrs.mark_checked(&vis);
         let old: Vec<AttrId> = self.ast.lists.iter(self.ast.attrs.of_decl(spec)).collect();
         if old.is_empty() {
             self.builder().append_attrs(spec, &vis);
