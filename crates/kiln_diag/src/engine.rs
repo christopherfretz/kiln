@@ -34,6 +34,19 @@ pub trait DiagSink {
 struct State<'sm> {
     sink: Box<dyn DiagSink + Send + 'sm>,
     seen: FxHashSet<(DiagId, Span, u64)>,
+    /// The records of a capture ([`DiagEngine::capture_begin`]), in place
+    /// of the sink while one is open.
+    capture: Option<Vec<Diagnostic>>,
+}
+
+/// What [`DiagEngine::capture_begin`] saved and [`DiagEngine::capture_end`]
+/// restores (spec/eval-session.md §7): the counts, the fatal flag and the
+/// deduplication set of the engine before the capture.
+#[derive(Debug)]
+pub struct CaptureMark {
+    counts: [u32; 4],
+    fatal: bool,
+    seen: FxHashSet<(DiagId, Span, u64)>,
 }
 
 /// The diagnostics engine. Shared by reference (`&DiagEngine` is
@@ -106,7 +119,11 @@ impl<'sm> DiagEngine<'sm> {
             error_limit: opts.error_limit,
             clang_compat: opts.clang_compat,
             undef_prefixes: opts.undef_prefixes.clone(),
-            state: Mutex::new(State { sink: Box::new(sink), seen: FxHashSet::default() }),
+            state: Mutex::new(State {
+                sink: Box::new(sink),
+                seen: FxHashSet::default(),
+                capture: None,
+            }),
             pragmas: RwLock::new(Pragmas::new()),
             has_pragmas: AtomicBool::new(false),
             errors: AtomicU32::new(0),
@@ -510,7 +527,16 @@ impl<'sm> DiagEngine<'sm> {
                 option: option_suffix(id, level, &self.undef_prefixes),
             }
         };
-        match record.level {
+        self.count_record(id, &record);
+        match &mut st.capture {
+            Some(c) => c.push(record),
+            None => st.sink.emit(self.sm, &record),
+        }
+    }
+
+    /// Counts emitted record `r` of id `id`.
+    fn count_record(&self, id: DiagId, r: &Diagnostic) {
+        match r.level {
             Level::Error => {
                 self.errors.fetch_add(1, Ordering::AcqRel);
                 if id.is_default_error() {
@@ -531,14 +557,78 @@ impl<'sm> DiagEngine<'sm> {
             }
             Level::Remark | Level::Note => {}
         }
-        let error_notes = record.notes.iter().filter(|n| n.level == Level::Error).count();
+        let error_notes = r.notes.iter().filter(|n| n.level == Level::Error).count();
         let error_notes = u32::try_from(error_notes).unwrap_or(u32::MAX);
         if error_notes != 0 {
             self.errors.fetch_add(error_notes, Ordering::AcqRel);
             self.uncompilable.fetch_add(error_notes, Ordering::AcqRel);
             self.unrecoverable.fetch_add(error_notes, Ordering::AcqRel);
         }
-        st.sink.emit(self.sm, &record);
+    }
+
+    /// Starts capturing (spec/eval-session.md §7): until the matching
+    /// [`Self::capture_end`], every diagnostic emitted is kept in memory
+    /// instead of reaching the sink, and is deduplicated only against the
+    /// others captured. Counts and the fatal flag change as usual while
+    /// the capture is open (sema reads them), and `capture_end` restores
+    /// them. Captures do not nest.
+    pub fn capture_begin(&self) -> CaptureMark {
+        let mut st = self.lock();
+        debug_assert!(st.capture.is_none(), "captures do not nest");
+        st.capture = Some(Vec::new());
+        let seen = std::mem::take(&mut st.seen);
+        let load = |a: &AtomicU32| a.load(Ordering::Acquire);
+        CaptureMark {
+            counts: [
+                load(&self.errors),
+                load(&self.uncompilable),
+                load(&self.unrecoverable),
+                load(&self.warnings),
+            ],
+            fatal: self.fatal.load(Ordering::Acquire),
+            seen,
+        }
+    }
+
+    /// How many records the open capture holds (0 without one).
+    pub fn captured_len(&self) -> usize {
+        self.lock().capture.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Copies of the open capture's records from index `from` on.
+    pub fn captured_from(&self, from: usize) -> Vec<Diagnostic> {
+        let st = self.lock();
+        st.capture.as_ref().and_then(|c| c.get(from..)).map(<[_]>::to_vec).unwrap_or_default()
+    }
+
+    /// Adds `records` to the open capture as if emitted now (counted; not
+    /// deduplicated): a replay of what earlier work reported (spec/eval-session.md
+    /// §7). Without an open capture, nothing.
+    pub fn capture_replay(&self, records: &[Diagnostic]) {
+        let mut st = self.lock();
+        let Some(c) = &mut st.capture else { return };
+        for r in records {
+            if let Some(id) = r.id {
+                self.count_record(id, r);
+            }
+            c.push(r.clone());
+        }
+    }
+
+    /// Ends the capture `mark` began: its records, in order. The counts,
+    /// the fatal flag and the deduplication set are those before the
+    /// capture again.
+    pub fn capture_end(&self, mark: CaptureMark) -> Vec<Diagnostic> {
+        let mut st = self.lock();
+        let out = st.capture.take().unwrap_or_default();
+        st.seen = mark.seen;
+        let [e, u, r, w] = mark.counts;
+        self.errors.store(e, Ordering::Release);
+        self.uncompilable.store(u, Ordering::Release);
+        self.unrecoverable.store(r, Ordering::Release);
+        self.warnings.store(w, Ordering::Release);
+        self.fatal.store(mark.fatal, Ordering::Release);
+        out
     }
 }
 

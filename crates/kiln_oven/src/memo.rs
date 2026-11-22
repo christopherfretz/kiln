@@ -87,6 +87,22 @@ impl Memo {
         self.map.len()
     }
 
+    /// How many results are cached.
+    pub fn entries(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Drops every cached result and the buffers holding them; how many
+    /// were dropped (spec/eval-session.md §5).
+    pub fn clear(&mut self) -> usize {
+        let n = self.map.len();
+        self.map = FxHashMap::default();
+        self.entries = Vec::new();
+        self.head = NONE;
+        self.tail = NONE;
+        n
+    }
+
     fn unlink(&mut self, i: u32) {
         let Entry { prev, next, .. } = self.entries[i as usize];
         if prev == NONE {

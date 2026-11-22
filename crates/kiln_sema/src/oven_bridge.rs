@@ -23,9 +23,11 @@ use kiln_source::{Loc, Span};
 use crate::Sema;
 
 /// The bridge over a `Sema` (its `Oven` taken out) for the duration of
-/// one evaluation.
-struct Bridge<'s, 'a, 'sm> {
-    sema: &'s mut Sema<'a, 'sm>,
+/// one evaluation, with an evaluation session's run state during a run
+/// (spec/eval-session.md).
+pub(crate) struct Bridge<'s, 'a, 'sm> {
+    pub(crate) sema: &'s mut Sema<'a, 'sm>,
+    pub(crate) run: Option<&'s mut crate::session::RunCtx<'s>>,
 }
 
 impl SemaBridge for Bridge<'_, '_, '_> {
@@ -113,7 +115,9 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             return n;
         }
         let at = self.sema.inst.eval_loc.unwrap_or_else(|| self.sema.ast.decls.get(f).loc());
-        self.sema.lend_oven(oven, |s| s.resolve_nothrow(f, at))
+        self.tracked(crate::session::Key::Nothrow(f), oven, |b, oven| {
+            b.sema.lend_oven(oven, |s| s.resolve_nothrow(f, at))
+        })
     }
 
     fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout> {
@@ -200,7 +204,12 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         // frames (`Sema::meta_call_notes`).
         let depth = self.sema.inst.stack.len();
         self.sema.inst.meta_calls.push((depth, oven.frame_mark()));
-        let r = self.sema.meta(op, args, out, ctx, oven);
+        let key = || crate::session::Key::Meta(op, args.into());
+        let r = if self.run.is_some() {
+            self.tracked(key(), oven, |b, oven| b.sema.meta(op, args, out, ctx, oven))
+        } else {
+            self.sema.meta(op, args, out, ctx, oven)
+        };
         self.sema.inst.meta_calls.pop();
         r
     }
@@ -240,13 +249,30 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     ) -> Option<kiln_oven::MetaThrow> {
         self.sema.meta_throw(op, callee, what, loc)
     }
+
+    fn host_calls(&mut self) -> Option<&mut dyn kiln_oven::HostCalls> {
+        let run = self.run.as_mut()?;
+        Some(&mut *run.host)
+    }
+
+    fn session_window_begin(&mut self) -> usize {
+        self.window_begin()
+    }
+
+    fn session_window_end(&mut self, func: u32, mark: usize) -> bool {
+        self.window_end(crate::session::Key::Func(func), mark)
+    }
+
+    fn session_replay(&mut self, func: u32) {
+        self.replay(&crate::session::Key::Func(func));
+    }
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
     /// Runs `f` with a bridge over `self`, for an Oven call a reflection
     /// intrinsic makes on the running Oven (WP-479's freezes).
     pub(crate) fn bridge<R>(&mut self, f: impl FnOnce(&mut dyn SemaBridge) -> R) -> R {
-        f(&mut Bridge { sema: self })
+        f(&mut Bridge { sema: self, run: None })
     }
 
     /// Runs `f` with the running Oven (`oven`, from a bridge callback)
@@ -281,10 +307,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         // set after the Oven is built).
         oven.set_clang_compat(self.clang_compat);
         // As is the language mode, for codegen's folds (WP-407).
-        let year = Bridge { sema: self }.cxx_year();
+        let year = Bridge { sema: self, run: None }.cxx_year();
         oven.set_cxx_year(year);
         let saved = std::mem::replace(&mut self.inst.eval_loc, eval_loc);
-        let r = f(&mut oven, &mut Bridge { sema: self });
+        let r = f(&mut oven, &mut Bridge { sema: self, run: None });
         self.inst.eval_loc = saved;
         self.oven = Some(oven);
         r

@@ -365,6 +365,7 @@ impl Oven {
             Fault::Steps(loc) => {
                 (loc, "constexpr evaluation hit maximum step limit; possible infinite loop?".into())
             }
+            Fault::Cancelled => (site.loc, "evaluation was cancelled".into()),
             Fault::Depth => (
                 site.loc,
                 format!(

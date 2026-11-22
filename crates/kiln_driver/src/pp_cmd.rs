@@ -627,8 +627,9 @@ impl Job<'_> {
         if let Some(c) = self.std.c {
             features = features.map(|f| f.with_c(c, self.std.gnu));
         }
-        if a.host_call_test_handler {
-            // WP-1990: the test handler makes the host-call builtin visible.
+        if a.host_call_test_handler || a.host_calls_visible {
+            // WP-1990: the test handler makes the host-call builtin
+            // visible, as does an evaluation session (WP-1995).
             features = features.map(|f| f.with_kiln_host_calls(true));
         }
         let fp = a.fp_model();

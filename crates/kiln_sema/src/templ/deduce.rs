@@ -215,7 +215,7 @@ pub struct DeducedArgs {
     /// arguments, the state each (P, A) pair starts from when the bases
     /// of `A` are searched ([temp.deduct.call]/5, `deduce_from_bases`);
     /// `None` when nothing was given explicitly.
-    pub call_seed: Option<std::rc::Rc<[TemplateArg]>>,
+    pub call_seed: Option<std::sync::Arc<[TemplateArg]>>,
 }
 
 impl DeducedArgs {

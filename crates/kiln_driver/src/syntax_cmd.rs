@@ -561,6 +561,43 @@ impl SyntaxJob<'_> {
         self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
     }
 
+    /// The parse of [`Self::parse`] for an evaluation session
+    /// (spec/eval-session.md §2): the finished `Sema`, with `host` the
+    /// translation unit's handler, and the main file; nothing written
+    /// (no module, PCH or carried-constant recording). `None` when the
+    /// input could not be read or the target is unsupported (reported).
+    pub(crate) fn parse_retained<'a, 'sm>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &'a DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        host: Box<dyn kiln_parse::HostCalls>,
+    ) -> Option<(kiln_sema::Sema<'a, 'sm>, Option<FileId>)> {
+        let job = &self.0;
+        let inputs = job.pp_inputs(sm, engine)?;
+        let target = self.target(engine)?;
+        let (pp, _) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let popts = ParseOptions {
+            record_carried: false,
+            record_image: false,
+            image_census: false,
+            prefix: false,
+            ..self.parse_options()
+        };
+        let main = pp.main_file();
+        let limits = job.args.constexpr.limits();
+        let (sema, _) = kiln_parse::parse_preprocessed_retained(
+            pp,
+            Arc::clone(interner),
+            engine,
+            target,
+            &popts,
+            limits,
+            Some(host),
+        );
+        Some((sema, main))
+    }
+
     /// The end of [`Self::parse`]: module and PCH output, reports and
     /// dumps of the parsed unit `tu`.
     #[allow(clippy::too_many_arguments)]

@@ -1014,8 +1014,18 @@ impl Oven {
         f.this_ty = this_ty;
     }
 
-    /// Compiles function `idx` if it can be: sets its state.
+    /// Compiles function `idx` if it can be: sets its state. In an
+    /// evaluation session, through `Oven::session_compile`.
     pub(crate) fn compile_func(&mut self, b: &mut dyn SemaBridge, idx: u32) {
+        if self.sess.is_some() {
+            self.session_compile(b, idx);
+            return;
+        }
+        self.compile_func_body(b, idx);
+    }
+
+    /// [`Oven::compile_func`] itself.
+    pub(crate) fn compile_func_body(&mut self, b: &mut dyn SemaBridge, idx: u32) {
         #[cfg(feature = "op-stats")]
         crate::trial_stats::note_func();
         let Some(d) = self.funcs[idx as usize].decl else { return };

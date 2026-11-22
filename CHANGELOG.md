@@ -72,6 +72,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   speculative evaluation or at run time is an error. No precompiled
   header or module file is written with a handler. PCH snapshot format
   120.
+- Retained evaluation sessions for tooling clients (WP-1995,
+  spec/eval-session.md): after a translation unit, `EvalSession` (opened
+  from a parsed `Sema`, or from a driver command line with
+  `kiln_driver::session::with_eval_session`) runs a named parameterless
+  `consteval` entry any number of times. Each run starts from the
+  finished translation unit's state and nothing it does reaches the
+  next; it has its own host-call handler, step, memory and depth budget
+  (a program profile by default) and a cancellation token checked from
+  any thread, and returns its value, cost counters and diagnostics
+  (with call-stack notes, not printed). Steps and diagnostics do not
+  depend on what earlier runs memoized or instantiated, every failure
+  leaves the session usable, and the memory it keeps stays flat over
+  runs. A translation unit with errors is refused. PCH snapshot format
+  128 (a new driver diagnostic id).
 - Header units' external definitions (WP-1800): while a header unit is
   built (by `-fmodule-header` or at an import), a definition of a
   non-inline function or variable with external linkage is now clang's

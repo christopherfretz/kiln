@@ -721,6 +721,10 @@ pub struct Args {
     /// host-call handler (`host_test.rs`; spec/host-calls.md §7). For
     /// kiln's own tests only.
     pub host_call_test_handler: bool,
+    /// `__builtin_kiln_host_call` is visible without the test handler:
+    /// an evaluation session's translation unit (`session.rs`,
+    /// spec/eval-session.md §2). Not a command-line option.
+    pub host_calls_visible: bool,
     /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).

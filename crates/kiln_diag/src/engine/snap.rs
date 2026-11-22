@@ -103,6 +103,9 @@ impl DiagEngine<'_> {
         if self.has_fatal() {
             return Err("DiagEngine.fatal: a fatal error was emitted".to_owned());
         }
+        if self.state.lock().unwrap_or_else(PoisonError::into_inner).capture.is_some() {
+            return Err("DiagEngine.capture: a capture is open".to_owned());
+        }
         Ok(())
     }
 
@@ -133,7 +136,7 @@ impl DiagEngine<'_> {
             prefix_reported,
         } = self;
         let st = state.lock().unwrap_or_else(PoisonError::into_inner);
-        let State { sink: _, seen } = &*st;
+        let State { sink: _, seen, capture: _ } = &*st;
         seen.put(w);
         drop(st);
         pragmas.read().unwrap_or_else(PoisonError::into_inner).put(w);

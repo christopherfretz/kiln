@@ -127,6 +127,7 @@ pub mod scope;
 pub mod section;
 mod selectany;
 mod self_ref;
+pub mod session;
 mod shadow;
 mod side_effects;
 mod sme;
@@ -1149,7 +1150,7 @@ pub struct Sema<'a, 'sm> {
     /// declaration; `class/virtual/used.rs`, WP-414): each use of a
     /// vtable re-marks its bases' overriders, so a lattice computed them
     /// once per use and class.
-    pub(crate) vtable_finals: kiln_source::fx::FxHashMap<DeclId, std::rc::Rc<[DeclId]>>,
+    pub(crate) vtable_finals: kiln_source::fx::FxHashMap<DeclId, std::sync::Arc<[DeclId]>>,
     /// Module classes whose vtables are defined here even when their key
     /// function is defined in another unit (clang `DefinitionRequired`;
     /// spec/modules.md §7).

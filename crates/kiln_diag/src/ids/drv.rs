@@ -19,6 +19,8 @@ drv_compilation_database = Error (2) "compilation database '{0}' could not be op
 // WP-1863: the legacy `-fsanitize-coverage=` values.
 drv_deprecated_arg = Warning [Deprecated] (2) "argument '{0}' is deprecated, use '{1}' instead";
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
+// WP-1995: an evaluation session refuses a translation unit with errors.
+drv_eval_session_tu_errors = Error (1) "cannot open an evaluation session: the translation unit has {0} error(s)";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 // WP-1371: `-fkiln-backend=hod` (spec/driver.md "Back-end selection").
 // WP-1477: the fallback succeeds, so a blanket `-Werror` does not
