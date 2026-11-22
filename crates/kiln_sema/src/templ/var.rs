@@ -939,6 +939,7 @@ impl Sema<'_, '_> {
             return;
         };
         let m = self.ast.first(m);
+        self.note_written_inst_target(name_loc, m);
         let pattern = self.ast.instantiated_from(m).unwrap_or(m);
         let n = self.decl_name(m);
         self.check_explicit_inst_scope(pattern, n, true, name_loc);

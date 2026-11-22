@@ -16,8 +16,10 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::decl_extents::{DeclEnd, DeclExtent};
+use kiln_ast::ids::LambdaId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::{DeclSpec, Declarator};
+use kiln_sema::lambda::LambdaIntroducer;
 use kiln_source::{Loc, Span};
 
 use crate::parser::Parser;
@@ -138,6 +140,66 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The for-range-declaration ([stmt.ranged]) of loop variable `v`
+    /// (and its bindings): it began at `begin`, and its declarator ended
+    /// at `end`, before the `:` and the range parsed ahead of the
+    /// variable's declaration.
+    pub(crate) fn ext_for_range_var(
+        &mut self,
+        v: Option<DeclId>,
+        decl: &Declarator,
+        (begin, specs_end, end): (Loc, Loc, Loc),
+    ) {
+        let Some(v) = v else { return };
+        if !self.ext_on() {
+            return;
+        }
+        if let Some(e) = self.ext_row(v) {
+            e.full = Span::new(begin, end);
+            e.own = Span::new(decl.loc, end);
+            e.name = decl.id_span;
+            e.qual = decl.id_qual;
+            e.specs_end = specs_end;
+            e.end = DeclEnd::Other;
+        }
+        self.ext_bindings_inner(v);
+    }
+
+    /// The init-captures of lambda `id` ([expr.prim.lambda.capture]/6),
+    /// as written in `intro`: each declares a variable as if by `auto
+    /// name initializer`, so its row has its name, and its own and full
+    /// range from its first token (`&`, `...` or the name) to its
+    /// initializer's last.
+    pub(crate) fn ext_init_captures(&mut self, id: LambdaId, intro: &LambdaIntroducer) {
+        if !self.ext_on() {
+            return;
+        }
+        let vars: Vec<(Loc, DeclId)> = self
+            .s
+            .ast
+            .exprs
+            .lambdas
+            .get(id)
+            .captures
+            .iter()
+            .filter(|c| c.init)
+            .filter_map(|c| Some((c.loc, c.var?)))
+            .collect();
+        for cap in &intro.captures {
+            let (Some((sym, nloc)), Some(_)) = (cap.name, &cap.init) else { continue };
+            let Some(&(_, v)) = vars.iter().find(|&&(l, _)| l == nloc) else { continue };
+            let len = u32::try_from(self.s.ast.symbols().as_str(sym).len()).unwrap_or(0);
+            let name = Span::new(nloc, nloc.with_offset(len));
+            let full = Span::new(cap.loc, self.token_span_at(cap.end).hi);
+            if let Some(e) = self.ext_row(v) {
+                e.full = full;
+                e.own = full;
+                e.name = name;
+                e.end = DeclEnd::Other;
+            }
+        }
+    }
+
     /// The declarator part of member declarator `decl` and of the
     /// function `target` it declares or befriends (when another decl),
     /// each pushed to `out`.
@@ -149,7 +211,15 @@ impl Parser<'_, '_> {
         specs_end: Loc,
         out: &mut Vec<DeclId>,
     ) {
-        for x in [decl, target.filter(|t| Some(*t) != decl)].into_iter().flatten() {
+        // A friend naming a function declared before it (`friend B::~B();`
+        // naming B's destructor) made no declaration of its own: the
+        // earlier declaration keeps its row.
+        let earlier = |t: DeclId| {
+            self.s.ast.decl_extents.get(t).is_some()
+                && self.s.ast.decls.get(t).loc().to_raw() < d.loc.to_raw()
+        };
+        let target = target.filter(|&t| Some(t) != decl && !earlier(t));
+        for x in [decl, target].into_iter().flatten() {
             if let Some(b) = target.and_then(|t| self.s.ast.decl_extents.get(t)).map(|e| e.body)
                 && b.lo.is_valid()
                 && let Some(e) = self.ext_row(x)
@@ -226,6 +296,24 @@ impl Parser<'_, '_> {
         }
         if let Some(e) = self.ext_row(d) {
             e.name = Span::new(loc, loc.with_offset(len));
+        }
+    }
+
+    /// [`Self::ext_bindings`] for a structured binding declaration whose
+    /// row is complete (a condition, a for-range-declaration): each
+    /// binding's `full` and `end` are the declaration's.
+    pub(crate) fn ext_bindings_inner(&mut self, v: DeclId) {
+        self.ext_bindings(v);
+        let Some((full, end)) = self.s.ast.decl_extents.get(v).map(|e| (e.full, e.end)) else {
+            return;
+        };
+        let Some(list) = self.s.ast.decls.decomp_bindings(v) else { return };
+        let bindings: Vec<DeclId> = self.s.ast.lists.iter::<DeclId>(list).collect();
+        for b in bindings {
+            if let Some(e) = self.ext_row(b) {
+                e.full = full;
+                e.end = end;
+            }
         }
     }
 

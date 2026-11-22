@@ -1,6 +1,8 @@
 // The written-reference table (spec/ast.md §18), role `expr`: plain
 // names, enumerators, `&f`, `case E:`, lambda captures, operator- and
-// literal-operator-ids, template-ids, variable templates. A name has
+// literal-operator-ids, template-ids, variable templates, the pack of
+// `sizeof...(pack)` ([expr.sizeof]/5), a template or function parameter
+// pack. A name has
 // one entry where it is written; `enclosing` is the declaration being
 // declared for a name in its initializer, and the lambda's call
 // operator inside its body.
@@ -29,3 +31,5 @@ int pick(Mode m, Color c) {
   bool same = operator==(a, b);
   return add(twice<int>(n)) + zero<int> + same + int(operator""_k(2));
 }
+
+template <class... Ts> constexpr unsigned long count(Ts... ts) { return sizeof...(Ts) + sizeof...(ts); }

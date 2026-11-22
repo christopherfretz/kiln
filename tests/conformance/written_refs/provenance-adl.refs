@@ -13,8 +13,10 @@
 29:34-29:37  template  'Box' -> n3::Box@25:27 q=29:30 in=(anonymous)@29:40
 33:20-33:21  type  'H' -> n5::H@32:8 in=(anonymous)@33:21 how=injected
 38:11-38:12  type  'T' -> n6::T@37:8 in=(anonymous)@38:12
-40:7-40:9  nns  'n6' -> n6@36:11 in=(tu)
+40:7-40:9  nns  'n6' -> n6@36:11 in=both@40:11
+40:11-40:15  using-decl  'both' -> n6::both@38:6 q=40:7 in=both@40:11
 43:13-43:14  type  'U' -> n7::U@42:8 in=(anonymous)@43:14
+45:17-45:19  using-directive  'n7' -> n7@41:11 in=(tu)
 50:9-50:10  type  'I' -> n8::I@48:8 in=(anonymous)@50:10
 55:13-55:15  nns  'n1' -> n1@8:11 in=(anonymous)@55:18
 55:17-55:18  type  'S' -> n1::S@9:8 q=55:13 in=(anonymous)@55:18

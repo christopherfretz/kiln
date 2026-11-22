@@ -801,6 +801,7 @@ impl Parser<'_, '_> {
                 .fixit(kiln_diag::FixIt::insert(lparen, "("))
                 .fixit(kiln_diag::FixIt::insert(rparen, ")"));
             self.emit(d);
+            self.s.note_written_pack_name(self.token_span_at(name_loc), name);
             return Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen));
         }
         let open = self.bump().span.lo;
@@ -811,6 +812,7 @@ impl Parser<'_, '_> {
         };
         let name_loc = self.bump().span.lo;
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        self.s.note_written_pack_name(self.token_span_at(name_loc), name);
         Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen))
     }
 

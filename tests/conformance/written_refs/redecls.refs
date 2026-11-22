@@ -1,0 +1,53 @@
+20:3-20:9  type  'Engine' -> app::core::Engine@15:8 in=app::core::Engine::operator+=@20:11 how=injected
+22:22-22:23  type  'T' -> T@22:19 in=app::core::Engine::convert@22:24
+27:6-27:9  nns  'app' -> app@10:11 in=app::core::run@27:17
+27:11-27:15  nns  'core' -> app::core@11:11 q=27:6 in=app::core::run@27:17
+27:17-27:20  redecl  'run' -> app::core::run@13:6 q=27:11 in=app::core::run@27:17
+28:5-28:8  nns  'app' -> app@10:11 in=app::core::level@28:16
+28:10-28:14  nns  'core' -> app::core@11:11 q=28:5 in=app::core::level@28:16
+28:16-28:21  redecl  'level' -> app::core::level@14:12 q=28:10 in=app::core::level@28:16
+29:5-29:8  nns  'app' -> app@10:11 in=app::core::Engine::instances@29:24
+29:10-29:14  nns  'core' -> app::core@11:11 q=29:5 in=app::core::Engine::instances@29:24
+29:16-29:22  nns  'Engine' -> app::core::Engine@15:8 q=29:10 in=app::core::Engine::instances@29:24
+29:24-29:33  redecl  'instances' -> app::core::Engine::instances@18:14 q=29:16 in=app::core::Engine::instances@29:24
+30:1-30:4  nns  'app' -> app@10:11 in=app::core::Engine::Engine@30:20
+30:6-30:10  nns  'core' -> app::core@11:11 q=30:1 in=app::core::Engine::Engine@30:20
+30:12-30:18  nns  'Engine' -> app::core::Engine@15:8 q=30:6 in=app::core::Engine::Engine@30:20
+30:20-30:26  redecl  'Engine' -> app::core::Engine::Engine@16:3 q=30:12 in=app::core::Engine::Engine@30:20
+31:1-31:4  nns  'app' -> app@10:11 in=app::core::Engine::~Engine@31:20
+31:6-31:10  nns  'core' -> app::core@11:11 q=31:1 in=app::core::Engine::~Engine@31:20
+31:12-31:18  nns  'Engine' -> app::core::Engine@15:8 q=31:6 in=app::core::Engine::~Engine@31:20
+31:21-31:27  redecl  'Engine' -> app::core::Engine::~Engine@17:3 q=31:12 in=app::core::Engine::~Engine@31:20
+32:5-32:8  nns  'app' -> app@10:11 in=app::core::Engine::speed@32:24
+32:10-32:14  nns  'core' -> app::core@11:11 q=32:5 in=app::core::Engine::speed@32:24
+32:16-32:22  nns  'Engine' -> app::core::Engine@15:8 q=32:10 in=app::core::Engine::speed@32:24
+32:47-32:56  expr  'instances' -> app::core::Engine::instances@29:24 in=app::core::Engine::speed@32:24
+32:24-32:29  redecl  'speed' -> app::core::Engine::speed@19:7 q=32:16 in=app::core::Engine::speed@32:24
+33:1-33:4  nns  'app' -> app@10:11 in=app::core::Engine::operator+=@33:39
+33:6-33:10  nns  'core' -> app::core@11:11 q=33:1 in=app::core::Engine::operator+=@33:39
+33:12-33:18  type  'Engine' -> app::core::Engine@15:8 q=33:6 in=app::core::Engine::operator+=@33:39
+33:20-33:23  nns  'app' -> app@10:11 in=app::core::Engine::operator+=@33:39
+33:25-33:29  nns  'core' -> app::core@11:11 q=33:20 in=app::core::Engine::operator+=@33:39
+33:31-33:37  nns  'Engine' -> app::core::Engine@15:8 q=33:25 in=app::core::Engine::operator+=@33:39
+33:39-33:49  redecl  'operator+=' -> app::core::Engine::operator+=@20:11 q=33:31 in=app::core::Engine::operator+=@33:39
+34:8-34:11  nns  'app' -> app@10:11 in=app::core::Engine::Part@34:27
+34:13-34:17  nns  'core' -> app::core@11:11 q=34:8 in=app::core::Engine::Part@34:27
+34:19-34:25  nns  'Engine' -> app::core::Engine@15:8 q=34:13 in=app::core::Engine::Part@34:27
+34:27-34:31  redecl  'Part' -> app::core::Engine::Part@21:10 q=34:19 in=app::core::Engine::Part@34:27
+35:20-35:21  type  'T' -> T@35:17 in=app::core::Engine::convert@35:41
+35:22-35:25  nns  'app' -> app@10:11 in=app::core::Engine::convert@35:41
+35:27-35:31  nns  'core' -> app::core@11:11 q=35:22 in=app::core::Engine::convert@35:41
+35:33-35:39  nns  'Engine' -> app::core::Engine@15:8 q=35:27 in=app::core::Engine::convert@35:41
+35:66-35:67  type  'T' -> T@35:17 in=app::core::Engine::convert@35:41
+35:41-35:48  redecl  'convert' -> app::core::Engine::convert@22:24 q=35:33 in=app::core::Engine::convert@35:41
+38:12-38:13  type  'T' -> T@37:17 in=(anonymous)@38:13
+39:10-39:11  type  'T' -> T@37:17 in=Box::empty@39:12
+41:29-41:30  type  'T' -> T@41:17 in=Box::put@41:33
+41:25-41:28  nns  'Box' -> Box@37:27 in=Box::put@41:33
+41:37-41:38  type  'T' -> T@41:17 in=(anonymous)@41:38
+41:33-41:36  redecl  'put' -> Box::put@38:8 q=41:25 in=Box::put@41:33
+42:20-42:21  type  'T' -> T@42:17 in=Box::empty@42:30
+42:26-42:27  type  'T' -> T@42:17 in=Box::empty@42:30
+42:22-42:25  nns  'Box' -> Box@37:27 in=Box::empty@42:30
+42:30-42:35  redecl  'empty' -> Box::empty@39:12 q=42:22 in=Box::empty@42:30
+42:38-42:39  type  'T' -> T@42:17 in=Box::empty@42:30

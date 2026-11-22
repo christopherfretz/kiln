@@ -159,6 +159,10 @@ pub struct Parser<'a, 'sm> {
     /// The qualifier start of the class-head-name being parsed, for the
     /// template-id tag it continues into ([`crate::extents`]).
     pub(crate) ext_tag_qual: Loc,
+    /// The written-reference link of that qualifier (spec/ast.md §18.4).
+    pub(crate) tag_link: RefQualifier,
+    /// The written-reference mark taken before that qualifier.
+    pub(crate) tag_mark: Option<kiln_ast::written_refs::RefMark>,
     /// The template parameter the last template-parameter parsed
     /// declared (spec/ast.md §19).
     pub(crate) ext_tparam: Option<DeclId>,
@@ -447,6 +451,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             last_tname: None,
             ext_lead: None,
             ext_tag_qual: Loc::INVALID,
+            tag_link: RefQualifier::NONE,
+            tag_mark: None,
             ext_tparam: None,
             cast_paren_list: None,
             paren_callee: None,
@@ -563,6 +569,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             last_tname: _,
             ext_lead: _,
             ext_tag_qual: _,
+            tag_link: _,
+            tag_mark: _,
             ext_tparam: _,
             cast_paren_list: _,
             paren_callee: _,

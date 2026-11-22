@@ -1,0 +1,26 @@
+8:43-8:44  type  'T' -> T@8:17 in=traits::Small@8:28
+9:54-9:55  type  'T' -> T@9:17 in=traits::Same@9:37
+9:57-9:58  type  'U' -> U@9:26 in=traits::Same@9:37
+13:11-13:17  nns  'traits' -> traits@7:11 in=(tu)
+13:19-13:24  concept  'Small' -> traits::Small@8:28 q=13:11 in=(tu)
+13:38-13:39  type  'T' -> T@13:25 in=(anonymous)@13:39
+14:11-14:17  nns  'traits' -> traits@7:11 in=(tu)
+14:19-14:23  concept  'Same' -> traits::Same@9:37 q=14:11 in=(tu)
+14:43-14:44  type  'T' -> T@14:29 in=(anonymous)@14:44
+15:11-15:14  concept  'Any' -> Any@11:28 in=(tu)
+15:32-15:34  type  'Ts' -> Ts@15:18 in=(anonymous)@15:37
+16:11-16:14  concept  'Any' -> Any@11:28 in=x@16:20
+18:12-18:18  nns  'traits' -> traits@7:11 in=(tu)
+18:26-18:27  type  'T' -> T@17:17 in=(tu)
+18:20-18:25  concept  'Small' -> traits::Small@8:28 q=18:12 in=(tu)
+19:12-19:13  type  'T' -> T@17:17 in=(anonymous)@19:13
+20:47-20:48  type  'T' -> T@20:17 in=Addable@20:28
+21:5-21:6  expr  'a' -> a@20:49 in=Addable@20:28
+21:9-21:10  expr  'a' -> a@20:49 in=Addable@20:28
+21:16-21:22  nns  'traits' -> traits@7:11 in=Addable@20:28
+21:29-21:30  type  'T' -> T@20:17 in=Addable@20:28
+21:24-21:28  concept  'Same' -> traits::Same@9:37 q=21:16 in=Addable@20:28
+23:17-23:23  nns  'traits' -> traits@7:11 in=v@23:36
+23:25-23:30  concept  'Small' -> traits::Small@8:28 q=23:17 in=v@23:36
+23:48-23:49  expr  'v' -> v@23:36 in=(lambda)::operator()@23:14
+24:1-24:4  concept  'Any' -> Any@11:28 in=deduced@24:10

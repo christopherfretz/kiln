@@ -941,16 +941,20 @@ impl Parser<'_, '_> {
     /// reporting `not_concept` at a name that is not a concept.
     fn parse_concept_name_or(&mut self, not_concept: DiagId) -> Option<(DeclId, Vec<TemplateArg>)> {
         let qual = self.parse_nested_name().ok()?;
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         let name = self.ident()?;
         let NameClass::Concept(c) = self.s.classify_name(name, qual) else {
             self.error_here(not_concept);
             return None;
         };
-        self.bump();
+        let name_span = self.bump().span;
         let mut args = Vec::new();
         if self.at(Punct::Less) {
             args = self.parse_template_arg_list()?.0;
         }
+        // A type-constraint's concept name (spec/ast.md §18.4), after its
+        // arguments' names.
+        self.s.note_written_decl_name(name_span, Some(c), RefRole::Concept, link, false);
         Some((c, args))
     }
 
@@ -2458,7 +2462,9 @@ impl Parser<'_, '_> {
             self.s.act_on_start_requires_params();
             while !self.at(Punct::RParen) && !self.at_eof() {
                 let start = self.loc();
+                let specs_pos = self.pos();
                 let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+                let specs_end = self.ext_specs_end(specs_pos);
                 if ds.is_empty() {
                     let e =
                         self.s.diag(DiagId::parse_expected, self.loc()).arg("parameter declarator");
@@ -2471,7 +2477,14 @@ impl Parser<'_, '_> {
                 self.parse_declarator(&mut d);
                 let p = self.s.act_on_param_declarator(&ds, &d);
                 let idx = u16::try_from(params.len()).unwrap_or(u16::MAX);
-                params.push(self.s.act_on_requires_param(body, &p, idx));
+                let pid = self.s.act_on_requires_param(body, &p, idx);
+                // A parameter's row, as a function parameter's (spec/ast.md
+                // §19.1).
+                if self.ext_on() {
+                    self.ext_declarator(Some(pid), &d, specs_end);
+                    self.ext_finish_inner(Some(pid), start);
+                }
+                params.push(pid);
                 if self.eat(Punct::Comma).is_none() {
                     break;
                 }

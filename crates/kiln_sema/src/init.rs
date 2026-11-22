@@ -2787,6 +2787,9 @@ impl Sema<'_, '_> {
                     *pos += 1;
                     continue;
                 };
+                if self.records_written_refs() {
+                    self.resolve_written_designator(dloc, fields[idx]);
+                }
                 // A member of an anonymous struct or union is designated
                 // through it (clang's implicit designator for an
                 // `IndirectFieldDecl`).

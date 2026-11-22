@@ -592,17 +592,27 @@ impl Parser<'_, '_> {
             self.expect_semi_after("namespace name");
             return d;
         }
+        let wmark = self.s.written_ref_mark();
         let Ok(qual) = self.parse_nested_name_nns() else {
             self.skip_to_semi();
             return None;
         };
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         let Some(target) = self.ident() else {
             self.error_here(DiagId::parse_expected_namespace_name);
             self.skip_to_semi();
             return None;
         };
         let tl = self.bump().span.lo;
+        if self.s.records_written_refs() {
+            // The target as written (an alias names the alias; spec/ast.md
+            // §18.4); the alias's own name is a declaration.
+            let ns = self.s.lookup_namespace_name(qual.map(|q| q.ctx), target);
+            let range = Span::new(tl, self.prev_end());
+            self.s.note_written_decl_name(range, ns, RefRole::NamespaceAlias, link, false);
+        }
         let d = self.s.act_on_namespace_alias(name, name_loc, qual, target, tl);
+        self.s.claim_written_refs(wmark, d);
         self.expect_semi_after("namespace name");
         d
     }
@@ -623,6 +633,7 @@ impl Parser<'_, '_> {
         ds
     }
 
+    #[allow(clippy::too_many_lines, reason = "one path per using form, each recording its names")]
     fn parse_using_attrs_inner(&mut self, leading: &[AttrId]) -> Vec<DeclId> {
         let loc = self.bump().span.lo;
         if self.eat_kw(Kw::Namespace).is_some() {
@@ -646,6 +657,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             };
+            let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
             let q_lo = if self.pos() > q_pos { q_lo } else { Loc::INVALID };
             let Some(n) = self.ident() else {
                 self.error_here(DiagId::parse_expected_namespace_name);
@@ -654,6 +666,18 @@ impl Parser<'_, '_> {
             };
             let nl = self.bump().span.lo;
             let n_hi = self.prev_end();
+            if self.s.records_written_refs() {
+                // The nominated namespace as written: a namespace alias
+                // names the alias (spec/ast.md §18.4).
+                let ns = self.s.lookup_namespace_name(qual, n);
+                self.s.note_written_decl_name(
+                    Span::new(nl, n_hi),
+                    ns,
+                    RefRole::UsingDirective,
+                    link,
+                    false,
+                );
+            }
             // [namespace.udir]/1: only namespace names are considered, so
             // a function of the same name does not hide the namespace.
             let ns = match self.s.classify_name(n, qual) {
@@ -801,12 +825,14 @@ impl Parser<'_, '_> {
         let mut out = Vec::new();
         loop {
             let dl = self.loc();
+            let wmark = self.s.written_ref_mark();
             let typename = self.eat_kw(Kw::Typename).is_some();
             let (q_lo, q_pos) = (self.loc(), self.pos());
             let Ok(qual) = self.parse_nested_name_nns() else {
                 self.skip_to_semi();
                 return out;
             };
+            let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
             let q_lo = if self.pos() > q_pos { q_lo } else { Loc::INVALID };
             // [namespace.udecl]/1: any unqualified-id but a template-id;
             // an operator- or conversion-function-id names the base's
@@ -849,6 +875,11 @@ impl Parser<'_, '_> {
             } else {
                 self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
             };
+            if self.s.records_written_refs() {
+                let range = Span::new(nl, n_hi);
+                self.s.note_written_using_declarator(range, d, qual.map(|q| q.ctx), name, link);
+                self.s.claim_written_refs(wmark, d);
+            }
             if let Some(d) = d {
                 // Each using-declarator's own range (§19.5).
                 self.ext_name_span(d, q_lo, Span::new(nl, n_hi));
@@ -2738,6 +2769,9 @@ impl Parser<'_, '_> {
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
         let splice_qual = self.at_splice().then_some(qual_loc);
         let qual_pos = self.pos();
+        // The tag's qualifier and name are claimed by the tag it declares
+        // (spec/ast.md §18.3).
+        let qmark = self.s.records_written_refs().then(|| self.s.ast.written_ref_mark());
         let (qual, mut qual_failed) = self.parse_tag_qualifier_checked(ds);
         let ext_qual = if self.pos() == qual_pos { Loc::INVALID } else { qual_loc };
         let qualifier = qual.map(|q| q.ctx);
@@ -2782,6 +2816,8 @@ impl Parser<'_, '_> {
             && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::ClassTemplate
         {
             self.ext_tag_qual = ext_qual;
+            self.tag_link = link;
+            self.tag_mark = qmark;
             self.parse_class_template_id_tag(ds, keyword, t, qualifier, nloc, kw_loc, &attrs, ctx);
             return;
         }
@@ -2833,6 +2869,9 @@ impl Parser<'_, '_> {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             if use_ == TagUse::Reference && self.s.records_written_refs() {
                 self.note_type_name(name_span, link, ds.named, None, RefRole::Type);
+            } else if self.s.records_written_refs() {
+                // `friend class T::X;`: found at instantiation.
+                self.s.note_written_decl_name(name_span, None, RefRole::Elaborated, link, true);
             }
             return;
         }
@@ -2865,9 +2904,41 @@ impl Parser<'_, '_> {
         {
             let ty = self.s.elaborated_tag_type(d, keyword);
             self.note_type_name(name_span, link, Some(ty), None, RefRole::Type);
+        } else if let Some(m) = wmark
+            && use_ != TagUse::Reference
+            && name.is_some()
+        {
+            // One that declares names what it redeclares: `struct S;`,
+            // `friend class F;` (`elaborated`) or a qualified
+            // class-head-name (`struct C::In {}`, `redecl`); a first
+            // declaration's own name is not recorded (spec/ast.md §18.4).
+            let first = self.s.ast.first(d);
+            let existed = (first.index() <= m.decls).then_some(first);
+            let has_qual = link != RefQualifier::NONE;
+            let role = match use_ {
+                TagUse::Definition if has_qual => Some(RefRole::Redecl),
+                TagUse::Definition => None,
+                _ if has_qual || existed.is_some() => Some(RefRole::Elaborated),
+                _ => None,
+            };
+            if let Some(role) = role {
+                self.s.note_written_decl_name(name_span, existed, role, link, false);
+            }
+            if let Some(q) = qmark
+                && use_ != TagUse::Friend
+            {
+                self.s.ast.written_refs.claim(q, d);
+            }
         }
-        let ext =
-            self.ext_on() && (use_ != TagUse::Reference || d.index() as usize >= decls_before);
+        // A friend or redeclaring elaborated-type-specifier that made no
+        // declaration of its own (`friend struct S;` naming an existing
+        // class) leaves the existing declaration's row alone.
+        let reused = d.index() as usize <= decls_before
+            && use_ != TagUse::Definition
+            && self.s.ast.decl_extents.get(d).is_some();
+        let ext = self.ext_on()
+            && !reused
+            && (use_ != TagUse::Reference || d.index() as usize >= decls_before);
         if ext {
             let name = name.map_or(Span::INVALID, |(_, l)| Span::new(l, name_end));
             self.ext_tag_head(d, kw_loc, ext_qual, name);
@@ -3057,6 +3128,8 @@ impl Parser<'_, '_> {
         self.s.begin_delayed_access();
         let mut attrs = attrs.to_vec();
         let ext_qual = std::mem::replace(&mut self.ext_tag_qual, Loc::INVALID);
+        let link = std::mem::replace(&mut self.tag_link, RefQualifier::NONE);
+        let qmark = self.tag_mark.take();
         let mut name_end = Loc::INVALID;
         let parsed = self.parse_template_arg_list().map(|a| {
             name_end = self.prev_end();
@@ -3090,6 +3163,22 @@ impl Parser<'_, '_> {
             (l_angle, r_angle),
             kw_loc,
         );
+        if self.s.records_written_refs() {
+            // The template name: an explicit or partial specialization's
+            // or an explicit instantiation's target (`spec-target`), else
+            // a template-id naming a specialization (spec/ast.md §18.4).
+            let role = match use_ {
+                TagUse::Definition | TagUse::Declaration => RefRole::SpecTarget,
+                _ => RefRole::Template,
+            };
+            let lookup = Some((self.s.ast.decls.get(tmpl).name().as_ident(), qualifier));
+            let lookup = lookup.and_then(|(n, q)| n.map(|n| (n, q)));
+            let range = self.token_span_at(name_loc);
+            self.s.note_written_type_found(range, None, Some(tmpl), role, link, lookup);
+            if let (Some(q), Ok((Some(d), _)), RefRole::SpecTarget) = (qmark, &r, role) {
+                self.s.ast.written_refs.claim(q, *d);
+            }
+        }
         let ty = if let Ok((rec, ty)) = r {
             // A partial or explicit specialization's own attributes
             // ([class.pre]/1); a reference's appertain to nothing.
@@ -3714,6 +3803,9 @@ impl Parser<'_, '_> {
             self.s.set_entering_context(saved);
             let id_lo = self.loc();
             d.id_qual = if self.pos() == q_pos { Loc::INVALID } else { q_lo };
+            if matches!(qual, Ok(Some(_))) {
+                d.id_link = self.nns_link;
+            }
             let qual = qual.unwrap_or_else(|()| {
                 // An invalid qualifier declares nothing (clang's
                 // `HandleDeclarator` returns no declaration).
@@ -4065,6 +4157,15 @@ impl Parser<'_, '_> {
             d.invalid = true;
             return;
         };
+        if self.s.records_written_refs() {
+            // The template an explicit specialization or instantiation
+            // names, after its arguments' names; a friend's befriends one
+            // of its specializations (spec/ast.md §18.4).
+            let role = if d.friend { RefRole::Elaborated } else { RefRole::SpecTarget };
+            let range = self.token_span_at(loc);
+            self.s.note_written_decl_name(range, Some(t), role, d.id_link, false);
+            d.id_recorded = true;
+        }
         // A template-id declarator-id takes no direct-initializer (clang
         // `Declarator::mayBeFollowedByCXXDirectInit` is false for a
         // non-identifier name): `template int v<char>(1);` is a function
@@ -5458,6 +5559,7 @@ impl Parser<'_, '_> {
                     self.parse_function_definition_after_declarator(
                         &ds, base, &mut d, &mut decls, level, contracts,
                     );
+                    self.note_declarator_ref(decls.last().copied(), &d);
                     self.s.claim_written_refs(wmark, decls.last().copied());
                     if decls.len() > n {
                         self.ext_declarator(decls.last().copied(), &d, specs_end);
@@ -5498,7 +5600,20 @@ impl Parser<'_, '_> {
                 self.explicit_inst_with_definition(tmpl_kind, &d, false);
             }
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.note_declarator_ref(v, &d);
             self.s.claim_written_refs(wmark, v);
+            if v.is_none()
+                && tmpl_kind == Some(TemplateDeclKind::ExplicitInstantiation)
+                && let Some(m) = wmark
+                && self.s.records_written_refs()
+            {
+                // An explicit instantiation of a function or variable
+                // declares nothing: its names are enclosed by the context
+                // around it, whose scope the declarator-id's qualifier
+                // entered (spec/ast.md §18.3).
+                let ctx = self.s.context();
+                self.s.ast.written_refs.claim(m, ctx);
+            }
             self.end_declaration_with_contracts(v, &d, contracts);
             // A declarator without a type is invalid too (`static y, z;`).
             type_invalid |= self.s.take_declarator_type_invalid()
@@ -6057,8 +6172,11 @@ impl Parser<'_, '_> {
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };
-                let l = self.bump().span.lo;
-                designator.push(Designator::Field(n, l));
+                let sp = self.bump().span;
+                // Found in the aggregate when the initialization is
+                // checked (spec/ast.md §18.4).
+                self.s.note_written_designator(sp);
+                designator.push(Designator::Field(n, sp.lo));
             } else if self.at(Punct::LSquare)
                 && (!designator.is_empty() || self.array_designator_start())
             {
@@ -6126,6 +6244,7 @@ impl Parser<'_, '_> {
                     .range(Span::new(name.lo, colon.hi))
                     .fixit(FixIt::replace(Span::new(name.lo, colon.hi), fix));
                 self.emit(d);
+                self.s.note_written_designator(name);
                 designator.push(Designator::Field(n, name.lo));
             }
             if !old_style {

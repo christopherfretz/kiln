@@ -1,7 +1,8 @@
 14:11-14:15  type  'Page' -> store::disk::Page@11:8 in=(anonymous)@14:16
 16:3-16:4  type  'T' -> T@15:17 in=store::disk::Slot::item@16:5
-22:7-22:12  nns  'store' -> store@9:11 in=app@21:11
-22:14-22:18  nns  'disk' -> store::disk@10:11 q=22:7 in=app@21:11
+22:7-22:12  nns  'store' -> store@9:11 in=app::Page@22:20
+22:14-22:18  nns  'disk' -> store::disk@10:11 q=22:7 in=app::Page@22:20
+22:20-22:24  using-decl  'Page' -> store::disk::Page@11:8 q=22:14 in=app::Page@22:20
 23:16-23:21  nns  'store' -> store@9:11 in=app::Cache@23:8
 23:23-23:27  nns  'disk' -> store::disk@10:11 q=23:16 in=app::Cache@23:8
 23:34-23:38  type  'Page' -> store::disk::Page@11:8 found=app::Page@22:20 in=app::Cache@23:8
@@ -22,3 +23,4 @@
 33:6-33:11  nns  'store' -> store@9:11 in=store::disk::sync@33:19
 33:13-33:17  nns  'disk' -> store::disk@10:11 q=33:6 in=store::disk::sync@33:19
 33:24-33:28  type  'Page' -> store::disk::Page@11:8 in=(anonymous)@33:29
+33:19-33:23  redecl  'sync' -> store::disk::sync@14:6 q=33:13 in=store::disk::sync@33:19

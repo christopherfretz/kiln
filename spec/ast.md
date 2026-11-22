@@ -1669,9 +1669,9 @@ field `Ast::written_refs`. Built in five stages:
 |---|---|---|
 | 1 | the table, its iterators and dump; expression names, member names, nested-name-specifier components before them, with the `qualifier` chain | WP-1930 |
 | 2 | type names in every type-specifier context, template names, base specifiers, member-initializer ids | WP-1931 |
-| 3 | declarative contexts: using-declarations and -directives, namespace alias targets, declarator-id qualifiers, elaborated and friend references, specialization targets, concept names, designators | WP-1932 |
+| 3 | declarative contexts: using-declarations and -directives, namespace alias targets, declarator-id qualifiers and the names they redeclare, elaborated and friend references, specialization targets, concept names, designators, deduction-guide names; their lookup provenance; the identifier-accounting test (§18.8) | WP-1932, WP-2100, WP-2131 |
 | 4 | per-specialization entries for dependent names | WP-1933 |
-| 5 | carriage in PCH snapshots and module images; the identifier-accounting completeness test | WP-1934 |
+| 5 | carriage in PCH snapshots and module images | WP-1934 |
 
 ### 18.1 Contract
 
@@ -1742,7 +1742,16 @@ parameter scope is skipped: its names are enclosed by the context
 around it. Other declarations (template parameters and a template
 head's requires-clause, enumerators, alias and `static_assert`
 declarations, structured bindings, condition variables) leave their
-names enclosed by the lexical context; WP-1980 adds them.
+names enclosed by the lexical context; WP-1980 adds them. Claimers
+added in stage 3: using-declarations (each using-declarator claims its
+qualifier and name), namespace alias definitions (the target and its
+qualifier), a tag that a class-specifier, enum-specifier or
+elaborated-type-specifier declares (its class-head-name and qualifier;
+an explicit or partial class specialization's template name), and the
+declarators of stage 1 also claim their `redecl`, `spec-target` and
+`elaborated` entries. A friend's tag names are not claimed: they stay
+enclosed by the class granting friendship. A using-directive declares
+no named entity, so its names stay enclosed by the context around it.
 The same marks and claims decide closure owners (§5.9, WP-2023): every
 claim also claims the closures created since its mark, and template
 parameters, template heads and alias declarations claim closures (not
@@ -1753,27 +1762,32 @@ yet names).
 `RefRole` is `#[repr(u8)]` and covers the full set; stage 1 fills
 `Expr`, `Member` and `Nns`, and `Concept` for a concept-id parsed as an
 id-expression; stage 2 (WP-1931) fills `Type`, `Template`, `Base` and
-`MemInit`.
+`MemInit`; stage 3 (WP-1932) fills `UsingDecl`, `UsingDirective`,
+`NamespaceAlias`, `Elaborated`, `SpecTarget`, `Designator` and
+`Redecl` (added by stage 3), `Concept` for a type-constraint, and
+`Template` for a deduction guide's name.
 
 | role | dump | example (bracketed) | stage |
 |---|---|---|---|
 | `Expr` | `expr` | `x = [f](y);` `&[g]` `[Enumerator]` `case [E]:` capture `[[x]]{}` `[operator==](a, b)` | 1 |
 | `Member` | `member` | `a.[m]` `p->[m]()` `p->~[X]()` (a class's destructor) `a.[operator+](b)` | 1 |
 | `Type` | `type` | `[T] x;` `new [T]` `static_cast<[T]>(e)` `sizeof([T])` `catch ([E]&)` `typename A::[type]` `struct [S]* p;` (an existing class) `using enum [E];` `p->~[T]()` (a pseudo-destructor) | 2 |
-| `Template` | `template` | `[vector]<int>` CTAD `[pair] p{1,2};` `X<[vector]>` `a.template [f]<int>()` | 2 |
+| `Template` | `template` | `[vector]<int>` CTAD `[pair] p{1,2};` `X<[vector]>` `a.template [f]<int>()`; a deduction guide's name `[Pair](T, T) -> Pair<T>;` (stage 3) | 2, 3 |
 | `Nns` | `nns` | `[a]::[b]::f()` `[T]::x` `[Enum]::e` `[alias]::f()`; declarator-ids in stage 3 | 1 |
 | `Base` | `base` | `struct D : [B]` | 2 |
 | `MemInit` | `mem-init` | `D() : [B](1), [m](2) {}` | 2 |
-| `UsingDecl` | `using-decl` | `using a::[f];` | 3 |
+| `UsingDecl` | `using-decl` | `using a::[f];` `using typename T::[X];` `using B::[B];` `using Ts::[f]...;` | 3 |
 | `UsingDirective` | `using-directive` | `using namespace [n];` | 3 |
 | `NamespaceAlias` | `ns-alias` | `namespace x = a::[b];` | 3 |
-| `Elaborated` | `elaborated` | `friend class [Y];` `friend void [f](int);` `class [X];` naming an existing entity (a declaration; `class [X]* p;` is `type`, stage 2) | 3 |
-| `SpecTarget` | `spec-target` | `template <> struct [hash]<T> {};` `template class [vector]<int>;` | 3 |
-| `Concept` | `concept` | `template <[C] T>` `requires [C]<T>` `[C] auto x`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
-| `Designator` | `designator` | `{ .[field] = 1 }` | 3 |
+| `Elaborated` | `elaborated` | `friend class [Y];` `friend void [f](int);` `class [X];` `enum class [E] : int;` naming an existing entity, `friend struct N::[G];` (a declaration; `class [X]* p;` is `type`, stage 2) | 3 |
+| `SpecTarget` | `spec-target` | `template <> struct [hash]<T> {};` `template class [vector]<int>;` `template void [f](int);` `template void S<int>::[g]();` | 3 |
+| `Concept` | `concept` | `template <[C] T>` `[C] auto x` `{ e } -> [C]`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
+| `Designator` | `designator` | `{ .[field] = 1 }` `{ .[a].[b] = 1 }` `{ [field]: 1 }` `__builtin_offsetof(S, [a].[b])` | 3 |
+| `Redecl` | `redecl` | `void A::[f]() {}` `int C::[x] = 0;` `struct C::[In] {};` `A::[A]() {}` `A::~[A]() {}` | 3 |
 
-Not in the table: a declaration's own name at its declaration,
-keywords, labels, attribute names, and implicit references with no
+Not in the table: a declaration's own name at its declaration (an
+unqualified first declaration, including a first `friend class Y;`),
+keywords, labels, attribute names, module names, and implicit references with no
 written name (implicit conversions and constructor calls, operator
 uses such as `a == b`, coroutine and structured-binding helpers).
 
@@ -1782,7 +1796,9 @@ Stage-1 recording sites (all in `kiln_parse` unless noted):
 - id-expressions (`parse_id_expression_rest`, `parse_operator_id_expression`):
   plain and qualified names, enumerators, `&f`, `case E:`, template-ids
   (the template name; its arguments are their own entries), operator-
-  and literal-operator-ids, `X::~X()` in a member function;
+  and literal-operator-ids, `X::~X()` in a member function; the pack
+  named by `sizeof...(pack)` (`parse_sizeof_pack`, WP-1932: found by
+  the identifier accounting of §18.8);
 - member access (`parse_member_access_suffix`): `.`/`->` names,
   qualified members, `template` members (role `template` since stage 2),
   operator-function-ids, `p->~X()` naming a class's destructor (a
@@ -1874,6 +1890,123 @@ applies unchanged: `enclosing` comes from the same claims, macro names
 carry `exp=`, pattern names are recorded once, default arguments once
 at their written site.
 
+Stage-3 recording sites (WP-1932; all in `kiln_parse`, entries made by
+`Sema::note_written_decl_name`, `note_written_using_declarator`,
+`note_written_designator` and `note_written_type_found`):
+
+- using-declarations (`parse_using_declaration`), role `using-decl`:
+  one entry per using-declarator, over its unqualified-id (an
+  operator-function-id is one entry; `using B::B` names the inherited
+  constructor), after the qualifier's `nns` entries, made once the
+  declarator's declaration exists ([namespace.udecl]/1). The entity is
+  the first declaration the using-declarator introduced (the target of
+  its first using-shadow; with no shadow, the first declaration a
+  qualified lookup of the name finds): `using N::f;` with two
+  overloads names the first declared. `found` is none. `typename`, a
+  pack (`using Ts::f...;`) and a dependent qualifier give no entity and
+  `DEPENDENT` (an unresolved using-declaration); a name the qualifier's
+  scope does not declare gives `UNRESOLVED`. `using enum E;` stays a
+  stage-2 `type` entry;
+- using-directives (`parse_using_directive`), role `using-directive`:
+  the nominated namespace name, after its qualifier's entries
+  (`using namespace ::A::B;`). The entity is what a namespace-only
+  lookup of the name finds ([namespace.udir]/1: only namespace names are
+  considered, so a function of the same name does not hide it); a
+  namespace alias names the alias. None found: `UNRESOLVED`;
+- namespace alias definitions (`parse_namespace_alias`), role
+  `ns-alias`: the target's last component, after its qualifier's
+  entries, by the same namespace-only lookup ([namespace.alias]/1); the
+  alias's own name is a declaration and has no entry;
+- qualified declarator-ids (`note_declarator_ref` after
+  `act_on_declarator`, `act_on_member` and function definitions), role
+  `redecl`: the declared name of a declaration whose declarator-id is
+  qualified ([dcl.meaning.general]/2: `void A::B::f() {}`, `int C::x =
+  0;`, `A::A() {}`, `A::~[A]() {}` over the class name after `~`,
+  `A::operator int()` over the whole conversion-function-id) names the
+  first declaration of the entity it redeclares, after the qualifier's
+  `nns` entries (`Declarator::id_link`); so does a qualified
+  class-head-name of a class or enumeration definition (`struct
+  C::In {};`, `template <> struct S<int>::In {};` naming the member of
+  the specialization, [class.pre]/3). A qualified declarator-id that
+  matches no declaration (diagnosed) has no entity and `UNRESOLVED`
+  (`DEPENDENT` when the qualifier is dependent). A function
+  definition's entry is made after its body, so it follows the body's
+  entries (sort by `range` for source order);
+- elaborated-type-specifiers and friend declarations, role
+  `elaborated`: a declaring elaborated-type-specifier
+  (`parse_tag_specifier`, [dcl.type.elab]/2) or opaque enum
+  declaration that names an entity declared before it (`struct S;`
+  after `S`, `enum class E : int;` after `E`), a friend class or
+  function declaration that redeclares an earlier one (`friend class
+  F;`, `friend void g(int);`), and every qualified friend (`friend
+  struct N::G;`, `friend void N::h();`, [class.friend]) name its
+  first declaration. A first declaration's name (`struct Fresh;`, an
+  unqualified `friend class Unseen;` that declares the class) is the
+  entity's own and has no entry. A friend through a dependent
+  qualifier (`friend class T::X;`) has no entity and `DEPENDENT`. A
+  friend function template specialization (`friend void f<>(int);`)
+  is `elaborated` too, its entity the template;
+- specialization targets, role `spec-target`: the template name of an
+  explicit specialization ([temp.expl.spec]/1), a partial
+  specialization ([temp.spec.partial.general]/1) and an explicit
+  instantiation definition or declaration ([temp.explicit]/2, `extern
+  template` included), after the names in its template argument list:
+  a class template's in `parse_class_template_id_tag`, a function or
+  variable template's in `parse_specialization_declarator_id`. Its
+  entity is the primary template. An explicit instantiation or
+  specialization of a function template written without a template
+  argument list (`template int f(int *);`) is matched by deduction, so
+  sema says what it named: the function template, or, for an explicit
+  instantiation of a member of a class template specialization
+  (`template void S<int>::g();`, `template S<int>::S();`, `template
+  int S<int>::n;`), that member (`Sema::note_written_inst_target`, a
+  sema exception to §18.1: the target is known only after matching;
+  the parser records the entry once the declaration is done). An
+  explicit instantiation of a function or variable declares nothing:
+  its names are enclosed by the context around it;
+- type-constraints (`parse_concept_name_or`), role `concept`: the
+  concept name of a type-constraint in a template parameter list
+  ([temp.param]/2), of a constrained placeholder (`C auto x`,
+  [dcl.spec.auto.general]/1) and of a compound requirement's
+  return-type-requirement (`{ e } -> C`, [expr.prim.req.compound]/1),
+  qualified or not, after the names in its template argument list;
+- designators (`parse_designators`, the GNU `field:` form), role
+  `designator`: each field designator's identifier ([dcl.init.aggr]/3.1;
+  `.a.b` and `.a[0].b`, a C99 extension, one entry per member). The
+  entry is made at the designator with `MEMBER` and no entity
+  (`DEPENDENT` inside a template, else `UNRESOLVED`) and remembered by
+  its location (`WrittenRefs::defer_designator`); the initialization
+  check (`Sema::designated_field`'s caller in `kiln_sema::init`) patches
+  it once it finds the member in the aggregate's class
+  (`resolve_written_designator`, the second sema exception: the
+  aggregate is known only there). The last patch wins: a member of an
+  anonymous union or struct is the member named
+  ([class.union.anon]/1), not the anonymous member that contains it,
+  and in overload resolution the chosen candidate's check runs last. A
+  designator of a dependent aggregate in a pattern stays `DEPENDENT`;
+  one naming no member stays `UNRESOLVED`;
+- offsetof member-designators (`Sema::act_on_builtin_offsetof`, a
+  sema site: only member lookup knows the member), role `designator`:
+  each member name of `__builtin_offsetof(T, a.b[i].c)`
+  ([support.types.layout]/1), with `MEMBER` and the member lookup found
+  (the member written, past the anonymous members on its way), `DEPENDENT`
+  for each name of a designator deferred to instantiation, `UNRESOLVED`
+  for a name lookup did not find;
+- deduction guides (WP-2100; `note_declarator_ref` on a
+  `SpecialName::DeductionGuide` declarator), role `template`: the
+  guide's own name names the class template ([temp.deduct.guide]/1),
+  as the template-id after `->` does (stage 2).
+
+Stage-3 rules. Every stage-1 rule applies: one entry per written name,
+`qualifier` links to the qualifier's last component, macro names carry
+`exp=`, a pattern's names are recorded once with dependent ones
+`DEPENDENT`, and instantiation records nothing. The entity of a
+declarative name is the first declaration of what it names (a
+using-declaration's, a redeclaration's, a friend's), so all the names
+of one entity have one entity id however many redeclarations there are.
+`Redecl` is new in stage 3; `RefRole`'s other values were reserved by
+stage 1.
+
 ### 18.5 Speculation, macros, templates, PCH
 
 - **Speculation.** kiln's parser never re-parses consumed tokens:
@@ -1883,7 +2016,10 @@ at their written site.
   member function bodies) are replayed exactly once. So a name has one
   entry however often it was classified, and an abandoned scan leaves
   none. `mark()`/`truncate(mark)` exist for any future rollback (they
-  also drop pending overload patches); none is needed in stages 1 and 2.
+  also drop pending overload patches and deferred designators); none is
+  needed in stages 1 to 3 (a parenthesized qualified declarator-id
+  `int (C::x) = 0;` and a declaration statement `C::T(u);` are
+  classified by the scan and recorded once by the kept parse).
 - **Macros.** `range` holds the token locations the lexer gives, so an
   entry for a name from a macro body or argument has a macro-expansion
   location and the source manager maps it to its spelling and expansion
@@ -1925,10 +2061,14 @@ a macro. The harness directive `written-refs: <golden>`
 
 Tests: `crates/kiln_ast/src/written_refs.rs` (entry size, off records
 nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
-(off and on, `enclosed_by` on stage-2 entries),
-`tests/conformance/written_refs/` (one per stage-1 and stage-2 role
-family, the worked example, macros, tentative parses, overload
-patching, dependent names, stage-2 names under the stage-1 rules).
+(off and on, `enclosed_by` on stage-2 and stage-3 entries),
+`crates/kiln_parse/tests/written_refs_accounting.rs` (§18.8),
+`tests/conformance/written_refs/` (one per role family of every stage,
+the worked example, macros, tentative parses, overload patching,
+dependent names, error recovery; stage 3: `using-decls`,
+`using-directives`, `redecls`, `elaborated`, `spec-targets`,
+`concepts-decl`, `designators`, `guides`, `decl-macros`,
+`decl-dependent`, `decl-tentative`, `decl-errors`).
 
 ### 18.7 Lookup provenance (WP-2130)
 
@@ -2021,8 +2161,34 @@ The rule, per role that stages 1 and 2 fill:
   itself is found as its injected-class-name, so `Injected`; a qualified
   one is `Qualified` (or `Injected` by the qualified rule).
 
-Every entry without an entity is `None`. Stage 3's declarative contexts
-(WP-1932) get their `how` when stage 3 adds them (WP-2131).
+The rule per role that stage 3 fills (WP-2131), by the same mechanism
+(the walk re-run at the recording site with the lookup kind the
+construct uses):
+
+- **`UsingDecl`**: `Qualified` (a using-declarator always has a
+  nested-name-specifier, [namespace.udecl]/1); the walk is the ordinary
+  qualified lookup ([basic.lookup.qual]), so a namespace member found
+  through a using-directive of the nominated namespace names the
+  directive ([namespace.qual]/2).
+- **`UsingDirective`**, **`NamespaceAlias`**: `Unqualified` or
+  `Qualified` by the qualifier link, the walk considering namespace
+  names only ([namespace.udir]/1, [namespace.alias]/1), and a directive
+  when a namespace was found only through another using-directive.
+- **`Redecl`**, **`SpecTarget`**: `Unqualified` or `Qualified` by the
+  qualifier link; an unqualified explicit specialization or
+  instantiation inside a namespace finds its template by the scope
+  walk, so a directive is named when one brought the template in.
+- **`Elaborated`**: `Unqualified` or `Qualified` by the link, the walk
+  considering tag names for a class or enumeration ([dcl.type.elab]/2,
+  [basic.lookup.elab]) and ordinary names for a friend function.
+- **`Concept`** (a type-constraint): as stage 1's: `Unqualified` or
+  `Qualified`, with the directive rule.
+- **`Designator`**: `Member` (the `MEMBER` flag): the member is found
+  in the aggregate's class, as a member access's.
+- **`Template`** of a deduction guide: `Unqualified` (the guide is
+  declared in the class template's scope, [temp.deduct.guide]/3).
+
+Every entry without an entity is `None`.
 
 #### 18.7.3 The using-directive
 
@@ -2165,6 +2331,69 @@ from [basic.lookup.argdep]/3 in a comment; a call both lookups find;
 an operator-function-id call; a qualified name through a namespace
 alias; a member found in a base; unresolved and dependent names).
 
+### 18.8 Identifier accounting (WP-1932)
+
+A completeness check over whole translation units, the basis of stage
+5's completeness test (WP-1934): `crates/kiln_parse/tests/written_refs_accounting.rs`
+parses a file with the table and the declaration-extent table (§19) on,
+preprocesses it again on its own, and takes every identifier token of
+the preprocessed stream whose spelling is in the main file. Each must be
+one of:
+
+- **an entry's range**: covered by the range of some entry (its
+  spelling location);
+- **a declaration's own name**: the first identifier of a §19 row's
+  `name` span (the declared name, not its template arguments);
+- **a documented non-name**: a keyword or builtin trait keyword
+  (`kiln_parse::keywords::Keywords`), a contextual keyword (`final`,
+  `override`, `pre`, `post`, `import`, `module`), an alternative token
+  ([lex.digraph]: `and`, `bitor`, ...), an attribute name (an
+  identifier at an attribute list's own level in `[[...]]`,
+  `__attribute__((...))`, `__declspec(...)` or the attribute operand of
+  `__builtin_has_attribute(e, ...)`, or before `::` in one), an
+  attribute's keyword argument (a lone identifier argument of an
+  attribute that reads it as one of its own words, clang
+  `attributeHasIdentifierArg` / `VariadicIdentifierArgument`:
+  `mode(byte)`, `format(printf, 1, 2)`, `cpu_dispatch(atom)`,
+  `enum_extensibility(open)`, `visibility`, `pcs`,
+  `zero_call_used_regs`, `function_return`; and the builtin a builtin
+  alias names, `__clang_arm_builtin_alias(__builtin_x)`),
+  a label (`l:`, `goto l`, `&&l`, the names of a `__label__`
+  declaration, an `asm goto` label),
+  an `asm` symbolic operand name, or a module name (after `module` /
+  `import` up to `;`).
+
+Macro names, directive text, `#pragma` text and the text of skipped
+conditional blocks never reach the parser and are not counted. A file
+with an error is skipped (its recovery records what it can, §18.4).
+The default test runs over `tests/conformance/written_refs/` and wants
+nothing left over; `KILN_REFS_DIR=<dir>` (an ignored test) runs it over
+a directory tree and prints what is left grouped by the token before
+it, `KILN_REFS_STRICT=1` making any leftover fail.
+
+Over `tests/conformance` (WP-1932: 3388 files without errors, 311138
+identifiers) the run found 2381 identifiers left over. The table gaps
+it found were fixed here: the names of `sizeof...(pack)` (stage 1),
+offsetof member-designators, and §19 rows for for-range-declarations
+and expansion-statement variables and their bindings, a condition's
+bindings, exception declarations, requires-expression parameters and
+init-captures, and friend declarations that overwrote the row of the
+class or member they name. The classes left (82 identifiers) are rows
+of their own:
+
+- names in the arguments of thread-safety attributes
+  (`guarded_by(mu)`, `requires_capability(mu)`, `acquire_capability(...)`:
+  30), which kiln knows and skips unanalysed (WP-606), so their
+  names are never looked up (WP-2170);
+- the type-names of a qualified pseudo-destructor-name (`p->I::~I()`,
+  `p->::N::I::~I()`, `t->T::~T()`, `p->A<int>::~A<int>()`: 40, both the
+  name before `::~` and the destroyed name; WP-2171);
+- the pack of a pack-indexing nested-name-specifier
+  (`typename Ts...[0]::type`: 10; WP-2172);
+- two diagnosed files on which the test's in-process front end panics
+  in the Oven's `convert` (WP-2141's ICE), reported as `panic` lines,
+  not identifiers.
+
 ## 19. The declaration-extent table (WP-2090)
 
 An opt-in side table of the source extents of every declaration as
@@ -2256,8 +2485,13 @@ specification, an `export` block or a consteval block. A class or
 enumeration definition ends at the `;` of its declaration; its `own`
 ends at its `}`. `Other`: parameters and template parameters (before the
 `,`, `)` or `>`), enumerators (before the `,` or `}`), condition
-declarations, access specifiers (`public:`), and a declaration an error
-cut short. The optional `;` after an in-class member function definition
+declarations, exception declarations, for-range-declarations (the loop
+variable of a range-based for or expansion statement ([stmt.ranged],
+[stmt.expand]), up to its declarator: the range after `:` is not
+part of it), init-captures (from their first token, `&`, `...` or the
+name, to the initializer's last; the variable [expr.prim.lambda.capture]/6
+declares), a requires-expression's parameters, access specifiers
+(`public:`), and a declaration an error cut short. The optional `;` after an in-class member function definition
 is not part of it.
 
 ### 19.4 Namespaces
@@ -2280,10 +2514,15 @@ init-declarator (`a`, `*b = 0`) and each `name` its identifier. A
 class or enum defined in the group's decl-specifier-seq (`struct S {}
 s, *p;`) has its own row first: `full` the declaration, `own` the
 class-specifier. A structured binding declaration has the group row and
-each binding a row whose `own` and `name` are its identifier. Fields,
+each binding a row whose `own` and `name` are its identifier (in a
+condition or a for-range-declaration too). Fields,
 bit-fields and member declarator lists are the same; a friend function
 declaration gives the same row to the `Friend` and to the function it
-declares.
+declares. A friend declaration that names a class declared before it
+(`friend struct P;`) or a member of another class (`friend void
+H::h(G&);`, `friend B::~B();`) declares nothing new: the earlier
+declaration keeps its row (WP-1932; the identifier-accounting test of
+§18.8 found the overwrite).
 
 ### 19.6 Locations, speculation, PCH, modules
 

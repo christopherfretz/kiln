@@ -1,0 +1,20 @@
+12:3-12:7  type  'Node' -> Node@10:8 in=Node::next@12:9 how=injected
+14:8-14:12  elaborated  'Node' -> Node@10:8 in=Node@14:8
+16:8-16:12  type  'Node' -> Node@10:8 in=head@16:14
+19:12-19:16  elaborated  'Mode' -> Mode@17:12 in=Mode@18:12
+23:12-23:18  type  'Socket' -> net::Socket@22:8 in=(anonymous)@23:20
+28:14-28:18  type  'Peer' -> Peer@27:7 in=(anonymous)@28:20
+30:16-30:20  elaborated  'Peer' -> Peer@27:7 in=Registry@29:7
+32:23-32:27  type  'Peer' -> Peer@27:7 in=(anonymous)@32:29
+32:15-32:22  elaborated  'connect' -> connect@28:6 in=Registry::@32:15
+33:17-33:20  nns  'net' -> net@21:11 in=Registry@29:7
+33:22-33:28  elaborated  'Socket' -> net::Socket@22:8 q=33:17 in=Registry@29:7
+34:15-34:18  nns  'net' -> net@21:11 in=Registry::@34:20
+34:26-34:29  nns  'net' -> net@21:11 in=(anonymous)@34:39
+34:31-34:37  type  'Socket' -> net::Socket@22:8 q=34:26 in=(anonymous)@34:39
+34:20-34:25  elaborated  'close' -> net::close@23:6 q=34:15 in=Registry::@34:20
+35:14-35:17  nns  'net' -> net@21:11 in=Registry::@35:19
+35:19-35:23  elaborated  'open' -> net::open@24:5 q=35:14 in=Registry::@35:19
+39:16-39:17  nns  'T' -> T@38:17 in=Holder@38:26
+39:19-39:22  elaborated  'Key' -> (dependent) q=39:16 in=Holder@38:26
+40:10-40:11  type  'T' -> T@38:17 in=Holder@38:26

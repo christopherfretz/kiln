@@ -39,6 +39,16 @@ impl Sema<'_, '_> {
         self.ast.written_refs.is_on()
     }
 
+    /// The explicit instantiation whose declarator-id is at `loc` names
+    /// `target` (a function template, or a member of a class template
+    /// specialization): the parser records the name with it after the
+    /// declaration (stage 3, spec/ast.md §18.4).
+    pub(crate) fn note_written_inst_target(&mut self, loc: kiln_source::Loc, target: DeclId) {
+        if self.records_written_refs() {
+            self.ast.written_refs.set_inst_target(loc, target);
+        }
+    }
+
     /// Records the expression or member name written at `range`, which
     /// built `e` (`None`: nothing was built), with qualifier `q`; `member`
     /// when it was written after `.` or `->`.
@@ -291,6 +301,136 @@ impl Sema<'_, '_> {
         self.push_written_ref(range, entity, found, role, q, flags)
     }
 
+    /// Records the pack named by `sizeof...(name)` at `range` (role
+    /// `expr`, spec/ast.md §18.4): the pack lookup finds
+    /// (`act_on_sizeof_pack_name`'s), `UNRESOLVED` when none.
+    pub fn note_written_pack_name(&mut self, range: Span, name: kiln_source::symbol::Symbol) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let found = self.lookup_name(name, crate::lookup::LookupKind::Ordinary);
+        let pack = found.decls.first().copied().filter(|&d| self.is_pack_decl(d));
+        self.note_written_decl_name(range, pack, RefRole::Expr, RefQualifier::NONE, false);
+    }
+
+    /// Records a declarative name (stage 3, spec/ast.md §18.4) written at
+    /// `range` with qualifier `q`, naming `entity`: `None` is a dependent
+    /// name when `dependent`, else an unresolved one.
+    pub fn note_written_decl_name(
+        &mut self,
+        range: Span,
+        entity: Option<DeclId>,
+        role: RefRole,
+        q: RefQualifier,
+        dependent: bool,
+    ) -> Option<WrittenRefId> {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return None;
+        }
+        let flags = match entity {
+            Some(_) => 0,
+            None if dependent => REF_DEPENDENT,
+            None => REF_UNRESOLVED,
+        };
+        self.push_written_ref(range, entity, None, role, q, flags)
+    }
+
+    /// Records the name of the using-declarator at `range` that declared
+    /// `d` (spec/ast.md §18.4): one entry whose entity is the first
+    /// declaration it introduced (an inherited constructor for `using
+    /// B::B;`), or, when it introduced none (all were introduced before),
+    /// the first that qualified lookup of `name` in `qual` finds; a
+    /// dependent using-declarator has none. `found` stays empty: the
+    /// using-declaration is the declaration.
+    pub fn note_written_using_declarator(
+        &mut self,
+        range: Span,
+        d: Option<DeclId>,
+        qual: Option<DeclId>,
+        name: kiln_ast::names::DeclName,
+        q: RefQualifier,
+    ) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let (entity, dependent) = match d.map(|d| (d, self.kind_of(d))) {
+            Some((_, DeclKind::UnresolvedUsingValue | DeclKind::UnresolvedUsingTypename)) => {
+                (None, true)
+            }
+            Some((d, _)) => {
+                let first = self.ast.using_shadows(d).next().map(|s| self.ast.strip_shadow(s));
+                let e = first.or_else(|| {
+                    let f = self.lookup_qualified_dn(qual?, name, crate::lookup::LookupKind::All);
+                    f.decls.first().map(|&x| self.ast.strip_shadow(x))
+                });
+                (e, false)
+            }
+            None => (None, qual.is_some_and(|c| self.is_dependent_ctx(c))),
+        };
+        self.note_written_decl_name(range, entity, RefRole::UsingDecl, q, dependent);
+    }
+
+    /// Records the field designator `.name` whose name is at `range`
+    /// (spec/ast.md §18.4): unresolved (dependent in a template) until the
+    /// initialization finds the member
+    /// ([`resolve_written_designator`](Self::resolve_written_designator)).
+    pub fn note_written_designator(&mut self, range: Span) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let flags = REF_MEMBER | if self.in_template() { REF_DEPENDENT } else { REF_UNRESOLVED };
+        if let Some(id) =
+            self.push_written_ref(range, None, None, RefRole::Designator, RefQualifier::NONE, flags)
+        {
+            self.ast.written_refs.defer_designator(range.lo, id);
+        }
+    }
+
+    /// Records the name at `loc` of an offsetof member-designator
+    /// component ([support.types.layout]/1, role `designator`, spec/ast.md
+    /// §18.4): the member `field` lookup found (the member written, not
+    /// the anonymous members on its way), dependent when the designator
+    /// waits for instantiation, else unresolved when lookup found none.
+    pub(crate) fn note_written_offsetof_member(
+        &mut self,
+        loc: kiln_source::Loc,
+        field: Option<DeclId>,
+        dependent: bool,
+    ) {
+        if !self.records_written_refs() || !self.inst.stack.is_empty() {
+            return;
+        }
+        let hi = self.token_end(loc).unwrap_or(loc);
+        let flags = REF_MEMBER
+            | match field {
+                Some(_) => 0,
+                None if dependent => REF_DEPENDENT,
+                None => REF_UNRESOLVED,
+            };
+        let range = Span::new(loc, hi);
+        let _ = self.push_written_ref(
+            range,
+            field,
+            None,
+            RefRole::Designator,
+            RefQualifier::NONE,
+            flags,
+        );
+    }
+
+    /// The field designator whose name is at `loc` designates `field` (a
+    /// member of an anonymous member is designated after the anonymous
+    /// member itself, so the last call names the member written).
+    #[inline]
+    pub(crate) fn resolve_written_designator(&mut self, loc: kiln_source::Loc, field: DeclId) {
+        if self.inst.stack.is_empty()
+            && let Some(id) = self.ast.written_refs.designator_at(loc)
+        {
+            self.ast.written_refs.set_target(id, Some(field), None, REF_MEMBER);
+            self.fill_written_provenance(id);
+        }
+    }
+
     /// The end of the token starting at `at` (for a name whose token
     /// the parser no longer holds).
     pub fn token_end_of(&self, at: kiln_source::Loc) -> Option<kiln_source::Loc> {
@@ -433,6 +573,13 @@ impl Sema<'_, '_> {
         let kind = match r.role {
             RefRole::Nns => crate::lookup::LookupKind::Nested,
             RefRole::Type | RefRole::Base => crate::lookup::LookupKind::Type,
+            RefRole::UsingDirective | RefRole::NamespaceAlias => {
+                crate::lookup::LookupKind::Namespace
+            }
+            RefRole::UsingDecl => crate::lookup::LookupKind::All,
+            RefRole::Elaborated if crate::lookup::is_tag_kind(self.kind_of(key)) => {
+                crate::lookup::LookupKind::Tag
+            }
             _ => crate::lookup::LookupKind::Ordinary,
         };
         let (found, p) = match r.qualifier.link() {

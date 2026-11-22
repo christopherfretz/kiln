@@ -1,41 +1,44 @@
-11:17-11:18  type  'V' -> V@10:8 in=a@11:19
-11:22-11:23  type  'V' -> V@10:8 in=b@11:24
-11:36-11:37  expr  'a' -> a@11:19 in=operator==@11:6
-11:38-11:39  member  'x' -> V::x@10:16 in=operator==@11:6
-11:43-11:44  expr  'b' -> b@11:24 in=operator==@11:6
-11:45-11:46  member  'x' -> V::x@10:16 in=operator==@11:6
-12:64-12:65  expr  'n' -> n@12:52 in=operator""_k@12:20
-13:20-13:21  type  'T' -> T@13:17 in=twice@13:22
-13:28-13:29  type  'T' -> T@13:17 in=t@13:30
-13:42-13:43  expr  't' -> t@13:30 in=twice@13:22
-13:46-13:47  expr  't' -> t@13:30 in=twice@13:22
-14:30-14:31  type  'T' -> T@14:17 in=zero@14:32
-14:39-14:40  type  'T' -> T@14:17 in=zero@14:32
-18:10-18:14  type  'Mode' -> Mode@9:12 in=m@18:15
-18:18-18:23  type  'Color' -> Color@8:6 in=c@18:24
-19:11-19:12  expr  'm' -> m@18:15 in=pick@18:5
-20:8-20:12  nns  'Mode' -> Mode@9:12 in=pick@18:5
-20:14-20:16  expr  'on' -> Mode::on@9:19 q=20:8 in=pick@18:5
-21:12-21:13  expr  'c' -> c@18:24 in=pick@18:5
-21:17-21:20  expr  'red' -> red@8:14 in=pick@18:5
-22:8-22:12  nns  'Mode' -> Mode@9:12 in=pick@18:5
-22:14-22:17  expr  'off' -> Mode::off@9:23 q=22:8 in=pick@18:5
-25:21-25:24  expr  'use' -> use@16:5 in=fp@25:9
-26:11-26:18  expr  'counter' -> counter@15:5 in=n@26:7
-26:21-26:23  expr  'fp' -> fp@25:9 in=n@26:7
-26:24-26:29  expr  'green' -> green@8:19 in=n@26:7
-27:15-27:16  expr  'n' -> n@26:7 in=add@27:8
-27:19-27:20  expr  'c' -> c@18:24 in=add@27:8
-27:38-27:39  expr  'n' -> n@26:7 in=pick(Mode, Color)::(lambda)::operator()@27:14
-27:42-27:43  expr  'k' -> k@27:26 in=pick(Mode, Color)::(lambda)::operator()@27:14
-27:46-27:47  expr  'c' -> c@18:24 in=pick(Mode, Color)::(lambda)::operator()@27:14
-28:3-28:4  type  'V' -> V@10:8 in=a@28:5
-29:15-29:25  expr  'operator==' -> operator==@11:6 in=same@29:8 how=both adl-ns=:: adl-cls=V@10:8
-29:26-29:27  expr  'a' -> a@28:5 in=same@29:8
-29:29-29:30  expr  'b' -> b@28:11 in=same@29:8
-30:10-30:13  expr  'add' -> add@27:8 in=pick@18:5
-30:14-30:19  expr  'twice' -> twice<int>@13:22 found=twice@13:22 in=pick@18:5 adl-ns=
-30:25-30:26  expr  'n' -> n@26:7 in=pick@18:5
-30:31-30:35  expr  'zero' -> zero@14:32 found=zero@14:32 in=pick@18:5
-30:43-30:47  expr  'same' -> same@29:8 in=pick@18:5
-30:54-30:66  expr  'operator""_k' -> operator""_k@12:20 in=pick@18:5 adl-ns=
+13:17-13:18  type  'V' -> V@12:8 in=a@13:19
+13:22-13:23  type  'V' -> V@12:8 in=b@13:24
+13:36-13:37  expr  'a' -> a@13:19 in=operator==@13:6
+13:38-13:39  member  'x' -> V::x@12:16 in=operator==@13:6
+13:43-13:44  expr  'b' -> b@13:24 in=operator==@13:6
+13:45-13:46  member  'x' -> V::x@12:16 in=operator==@13:6
+14:64-14:65  expr  'n' -> n@14:52 in=operator""_k@14:20
+15:20-15:21  type  'T' -> T@15:17 in=twice@15:22
+15:28-15:29  type  'T' -> T@15:17 in=t@15:30
+15:42-15:43  expr  't' -> t@15:30 in=twice@15:22
+15:46-15:47  expr  't' -> t@15:30 in=twice@15:22
+16:30-16:31  type  'T' -> T@16:17 in=zero@16:32
+16:39-16:40  type  'T' -> T@16:17 in=zero@16:32
+20:10-20:14  type  'Mode' -> Mode@11:12 in=m@20:15
+20:18-20:23  type  'Color' -> Color@10:6 in=c@20:24
+21:11-21:12  expr  'm' -> m@20:15 in=pick@20:5
+22:8-22:12  nns  'Mode' -> Mode@11:12 in=pick@20:5
+22:14-22:16  expr  'on' -> Mode::on@11:19 q=22:8 in=pick@20:5
+23:12-23:13  expr  'c' -> c@20:24 in=pick@20:5
+23:17-23:20  expr  'red' -> red@10:14 in=pick@20:5
+24:8-24:12  nns  'Mode' -> Mode@11:12 in=pick@20:5
+24:14-24:17  expr  'off' -> Mode::off@11:23 q=24:8 in=pick@20:5
+27:21-27:24  expr  'use' -> use@18:5 in=fp@27:9
+28:11-28:18  expr  'counter' -> counter@17:5 in=n@28:7
+28:21-28:23  expr  'fp' -> fp@27:9 in=n@28:7
+28:24-28:29  expr  'green' -> green@10:19 in=n@28:7
+29:15-29:16  expr  'n' -> n@28:7 in=add@29:8
+29:19-29:20  expr  'c' -> c@20:24 in=add@29:8
+29:38-29:39  expr  'n' -> n@28:7 in=pick(Mode, Color)::(lambda)::operator()@29:14
+29:42-29:43  expr  'k' -> k@29:26 in=pick(Mode, Color)::(lambda)::operator()@29:14
+29:46-29:47  expr  'c' -> c@20:24 in=pick(Mode, Color)::(lambda)::operator()@29:14
+30:3-30:4  type  'V' -> V@12:8 in=a@30:5
+31:15-31:25  expr  'operator==' -> operator==@13:6 in=same@31:8 how=both adl-ns=:: adl-cls=V@12:8
+31:26-31:27  expr  'a' -> a@30:5 in=same@31:8
+31:29-31:30  expr  'b' -> b@30:11 in=same@31:8
+32:10-32:13  expr  'add' -> add@29:8 in=pick@20:5
+32:14-32:19  expr  'twice' -> twice<int>@15:22 found=twice@15:22 in=pick@20:5 adl-ns=
+32:25-32:26  expr  'n' -> n@28:7 in=pick@20:5
+32:31-32:35  expr  'zero' -> zero@16:32 found=zero@16:32 in=pick@20:5
+32:43-32:47  expr  'same' -> same@31:8 in=pick@20:5
+32:54-32:66  expr  'operator""_k' -> operator""_k@14:20 in=pick@20:5 adl-ns=
+35:54-35:56  type  'Ts' -> Ts@35:20 in=ts@35:60
+35:83-35:85  expr  'Ts' -> Ts@35:20 in=count@35:48
+35:99-35:101  expr  'ts' -> ts@35:60 in=count@35:48

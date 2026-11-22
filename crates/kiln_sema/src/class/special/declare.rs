@@ -627,6 +627,7 @@ impl Sema<'_, '_> {
         {
             self.templ.explicit_inst = None;
             self.templ.cur = None;
+            self.note_written_inst_target(sloc, self.ast.first(p));
             self.act_on_explicit_member_inst(self.ast.first(p), ext.is_some(), sloc);
             return None;
         }
