@@ -11,13 +11,15 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kiln_ast::DeclId;
+use kiln_ast::{ConstValueId, DeclId};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::compile::{FState, RetKind};
+use crate::failure::Note;
 use crate::host::HostMode;
 use crate::ty::TyKind;
+use crate::value::Freeze;
 use crate::vm::Fault;
 use crate::{Budget, EvalFailure, FailKind, Oven, SemaBridge};
 
@@ -34,7 +36,8 @@ pub const RELEASE_FLOOR: usize = 1 << 20;
 pub(crate) const NESTED_HOST_NOTE: &str =
     "host call in semantic work a run triggered (its result is kept across runs)";
 
-/// The limits of one run (spec/eval-session.md §8).
+/// The limits of one run (spec/eval-session.md §8). A client that builds
+/// it literally writes `..RunBudget::PROGRAM` for the fields it leaves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunBudget {
     /// Steps the run may execute (spec/oven.md "Limits").
@@ -43,11 +46,15 @@ pub struct RunBudget {
     pub bytes: u64,
     /// Nested calls the run may make.
     pub depth: u32,
+    /// Host bytes the result's tree may take (spec/eval-session.md §4.1).
+    pub result_bytes: u64,
 }
 
 impl RunBudget {
-    /// The program profile: 2^34 steps, 1 GiB, 16384 nested calls.
-    pub const PROGRAM: RunBudget = RunBudget { steps: 1 << 34, bytes: 1 << 30, depth: 16_384 };
+    /// The program profile: 2^34 steps, 1 GiB, 16384 nested calls, a
+    /// 64 MiB result.
+    pub const PROGRAM: RunBudget =
+        RunBudget { steps: 1 << 34, bytes: 1 << 30, depth: 16_384, result_bytes: 64 << 20 };
 
     /// This budget with `steps` steps.
     #[must_use]
@@ -65,6 +72,12 @@ impl RunBudget {
     #[must_use]
     pub fn with_depth(self, depth: u32) -> Self {
         RunBudget { depth, ..self }
+    }
+
+    /// This budget with a result of at most `result_bytes` host bytes.
+    #[must_use]
+    pub fn with_result_bytes(self, result_bytes: u64) -> Self {
+        RunBudget { result_bytes, ..self }
     }
 }
 
@@ -104,9 +117,11 @@ impl CancelToken {
     }
 }
 
-/// The value of a successful run: the entry's result.
+/// What a successful run gives the session (spec/eval-session.md §4.1):
+/// a `void` or integral result read from the stub's register, or a value
+/// the session read through [`SemaBridge::session_result`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunValue {
+pub enum RunRaw {
     /// A `void` entry.
     Void,
     /// A `bool` result.
@@ -116,6 +131,19 @@ pub enum RunValue {
     /// A result of an unsigned integral type (the character types by
     /// their signedness).
     Unsigned(u128),
+    /// Any other result: frozen and read by the session.
+    Read,
+}
+
+/// Why a frozen result cannot cross to a session's client
+/// ([`SemaBridge::session_result`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResultReadError {
+    /// The tree would exceed the budget's `result_bytes` (the cap).
+    TooLarge(u64),
+    /// The value has no form for the client (an internal limit; the
+    /// note's text).
+    Unreadable(String),
 }
 
 /// How a run failed (spec/eval-session.md §8). Every kind comes with its
@@ -146,6 +174,9 @@ pub enum RunError {
         /// Its `what()`, when it derives from `std::exception`.
         what: Option<String>,
     },
+    /// The result's tree would exceed the budget's `result_bytes`
+    /// (spec/eval-session.md §4.1).
+    ResultTooLarge,
 }
 
 /// What a unit of nested work cost (spec/eval-session.md §5.1): its
@@ -198,7 +229,7 @@ pub enum SessUnit {
 #[derive(Debug)]
 pub struct RunOutcome {
     /// The value, or the kind of failure with its notes.
-    pub result: Result<RunValue, (RunError, EvalFailure)>,
+    pub result: Result<RunRaw, (RunError, EvalFailure)>,
     /// Steps the run executed itself.
     pub steps: u64,
     /// Steps of the nested work the run was charged (§5.1).
@@ -364,7 +395,9 @@ impl Oven {
         let stub = match self.sess.as_ref().and_then(|s| s.stubs.get(&f)) {
             Some(&s) => s,
             None => {
-                let Some(s) = self.compile_call(b, f, at) else { return fail(RunError::Failed) };
+                let Some(s) = self.compile_call(b, f, at, true) else {
+                    return fail(RunError::Failed);
+                };
                 if let Some(st) = self.sess.as_mut() {
                     st.stubs.insert(f, s);
                 }
@@ -409,26 +442,7 @@ impl Oven {
             {
                 return Err(self.session_over_failure(b, stop, at));
             }
-            let v = match self.funcs[stub as usize].ret {
-                RetKind::Scalar(ty) => {
-                    let raw = self.regs[0];
-                    match self.types.kind(ty) {
-                        TyKind::Bool => RunValue::Bool(raw & 1 != 0),
-                        TyKind::Int { width, signed: true } => RunValue::Signed(
-                            crate::arith::canon(raw, u32::from(width), true) as i128,
-                        ),
-                        TyKind::Int { width, signed: false } => {
-                            RunValue::Unsigned(crate::arith::canon(raw, u32::from(width), false))
-                        }
-                        _ => return Err(EvalFailure::silent(FailKind::NotConstant)),
-                    }
-                }
-                _ => RunValue::Void,
-            };
-            match self.leak_notes(b) {
-                None => Ok(v),
-                Some(notes) => Err(EvalFailure { kind: FailKind::NotConstant, notes }),
-            }
+            self.session_result(b, f, stub, at)
         });
         let c = self.end_outermost();
         self.host_leave(mode);
@@ -453,6 +467,103 @@ impl Oven {
             host_calls: self.host.calls - calls0,
             peak_heap: c.peak.max(peak),
             calls: c.calls,
+        }
+    }
+
+    /// The value of the run of entry `f` whose stub `stub` returned
+    /// (spec/eval-session.md §4.1): a `void` or integral result from the
+    /// register; any other frozen (the checks of `constexpr R v = f();`)
+    /// and read by the session; then the leak check and, for a class
+    /// result of a `constexpr` entry, its constant destruction (as
+    /// [`Oven::eval_at`] for the variable).
+    fn session_result(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        f: DeclId,
+        stub: u32,
+        at: Loc,
+    ) -> Result<RunRaw, EvalFailure> {
+        let integral = {
+            let ast = b.ast();
+            ast.decls.get(f).ty().and_then(|t| match ast.types.canonical_view(t) {
+                kiln_ast::types::TypeView::Function(p) => Some(ast.types.is_integral(p.ret())),
+                _ => None,
+            })
+        } == Some(true);
+        let ret = self.funcs[stub as usize].ret;
+        let raw = self.regs[0];
+        let notes = |f: Freeze| match f {
+            Freeze::Fault(k) => EvalFailure::silent(k),
+            Freeze::Notes(notes) => EvalFailure { kind: FailKind::NotConstant, notes },
+        };
+        let v = match ret {
+            RetKind::Scalar(ty) if integral => match self.types.kind(ty) {
+                TyKind::Bool => RunRaw::Bool(raw & 1 != 0),
+                TyKind::Int { width, signed: true } => {
+                    RunRaw::Signed(crate::arith::canon(raw, u32::from(width), true) as i128)
+                }
+                TyKind::Int { width, signed: false } => {
+                    RunRaw::Unsigned(crate::arith::canon(raw, u32::from(width), false))
+                }
+                _ => return Err(EvalFailure::silent(FailKind::NotConstant)),
+            },
+            RetKind::Scalar(_) | RetKind::Sret(_) => {
+                let mark = b.consts().mark();
+                let cv = match ret {
+                    RetKind::Scalar(ty) => self.freeze_scalar(b, ty, raw, at),
+                    _ => self.freeze_object(b, raw as u64, at),
+                };
+                match cv {
+                    Ok(cv) => self.session_read(b, cv, mark, at)?,
+                    Err(e) => {
+                        // What a refused freeze interned is dropped too.
+                        b.consts().truncate(mark);
+                        return Err(notes(e));
+                    }
+                }
+            }
+            RetKind::Void => RunRaw::Void,
+        };
+        if let Some(notes) = self.leak_notes(b) {
+            return Err(EvalFailure { kind: FailKind::NotConstant, notes });
+        }
+        // [dcl.constexpr]/6: the notional variable has constant
+        // destruction ([expr.const.defns]/3.1).
+        if let RetKind::Sret(ty) = ret
+            && b.session_destroys_result(f)
+            && let Some(df) = self.compile_destroy(b, f, ty)
+        {
+            self.regs[0] = raw;
+            self.exec(b, df, 0)
+                .map_err(|e| EvalFailure { kind: FailKind::Destruction, notes: e.notes })?;
+        }
+        Ok(v)
+    }
+
+    /// Hands frozen result `cv` (above `mark`) to the session to read.
+    fn session_read(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        cv: ConstValueId,
+        mark: kiln_ast::consts::ConstMark,
+        at: Loc,
+    ) -> Result<RunRaw, EvalFailure> {
+        match b.session_result(cv, mark) {
+            Ok(()) => Ok(RunRaw::Read),
+            Err(e) => {
+                let msg = match e {
+                    ResultReadError::TooLarge(cap) => {
+                        if let Some(a) = self.sess.as_mut().and_then(|s| s.arm.as_mut()) {
+                            a.fault = Some(RunError::ResultTooLarge);
+                        }
+                        format!(
+                            "the result needs more than {cap} bytes on the host (the run's result budget)"
+                        )
+                    }
+                    ResultReadError::Unreadable(m) => m,
+                };
+                Err(EvalFailure { kind: FailKind::NotConstant, notes: vec![Note::new(at, msg)] })
+            }
         }
     }
 
@@ -602,7 +713,7 @@ impl Oven {
                 "constexpr evaluation hit maximum step limit; possible infinite loop?".to_owned()
             }
         };
-        EvalFailure { kind, notes: vec![crate::Note::new(at, msg)] }
+        EvalFailure { kind, notes: vec![Note::new(at, msg)] }
     }
 
     /// [`Oven::session_note_fault`] at the run's own level.

@@ -87,8 +87,8 @@ pub use meta::{
 };
 pub use notes::FrameMark;
 pub use session::{
-    CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, RunBudget, RunError, RunOutcome,
-    RunValue, SessUnit,
+    CANCEL_INTERVAL, CancelToken, NestedCost, RELEASE_FLOOR, ResultReadError, RunBudget, RunError,
+    RunOutcome, RunRaw, SessUnit,
 };
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
@@ -545,6 +545,31 @@ pub trait SemaBridge {
     /// them, to charge the run now.
     fn session_settle(&mut self) -> NestedCost {
         NestedCost::ZERO
+    }
+
+    /// A session's run froze its result as `v`, above `mark` of the
+    /// constant store (spec/eval-session.md §4.1): the session reads it
+    /// now and truncates the store back to `mark`, whatever the outcome.
+    ///
+    /// # Errors
+    /// Why the value cannot cross to the client.
+    fn session_result(
+        &mut self,
+        v: ConstValueId,
+        mark: kiln_ast::consts::ConstMark,
+    ) -> Result<(), ResultReadError> {
+        self.consts().truncate(mark);
+        let _ = v;
+        Ok(())
+    }
+
+    /// Whether a session's run of entry `f` destroys its class result
+    /// (a `constexpr` entry's notional variable has constant destruction;
+    /// an immediate invocation's result is not destroyed in it,
+    /// spec/eval-session.md §4).
+    fn session_destroys_result(&mut self, f: DeclId) -> bool {
+        let _ = f;
+        false
     }
 }
 

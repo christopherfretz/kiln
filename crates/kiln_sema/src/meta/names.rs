@@ -329,7 +329,7 @@ impl Sema<'_, '_> {
     /// `D: B`, a value or object as its source spelling
     /// ([`Self::value_spelling`], [`Self::object_spelling`]); anything
     /// else as the reflection as a note prints it.
-    fn display_string(&self, r: ReflectionId) -> String {
+    pub(crate) fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
             Reflectee::Null => "<null reflection>".to_owned(),
             // A class or array value prints as it does inside a

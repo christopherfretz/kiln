@@ -711,7 +711,7 @@ impl Sema<'_, '_> {
     /// `constexpr`, or `const` non-volatile of integral or enumeration
     /// type, with a constant initializer (evaluated now if it was not
     /// yet); a reference's is the pointer to the object it binds.
-    pub(in crate::meta) fn var_constant_value(
+    pub(crate) fn var_constant_value(
         &mut self,
         d: DeclId,
         ty: QualType,

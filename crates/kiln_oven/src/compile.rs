@@ -913,12 +913,14 @@ impl Oven {
 
     /// A function calling function `f` without arguments at `at`
     /// ([`crate::Oven::evaluate_call`]), returning what it returns: `None`
-    /// if `f` has parameters or returns a reference or an aggregate.
+    /// if `f` has parameters or returns a reference, or an aggregate
+    /// unless `aggregate` (an evaluation session's stub).
     pub(crate) fn compile_call(
         &mut self,
         b: &mut dyn SemaBridge,
         f: DeclId,
         at: Loc,
+        aggregate: bool,
     ) -> Option<u32> {
         let ast = b.ast();
         let fty = ast.decls.get(f).ty()?;
@@ -932,7 +934,40 @@ impl Oven {
         let rty = c.ty(ret_q);
         let void = c.o.types.kind(rty) == TyKind::Void;
         if c.o.types.is_aggregate(rty) {
-            return None;
+            if !aggregate {
+                return None;
+            }
+            // A class result (an evaluation session's entry,
+            // spec/eval-session.md §4.1): the stub's frame holds the
+            // result object (the entry frame keeps its objects after
+            // returning), whose address the stub returns.
+            let entry = c.here();
+            let r = c.reg();
+            let base = c.reg();
+            let oi = c.o.push_origin(Origin::None);
+            c.emit_loc(Op::Alloc, 0, &[r, rty.0, oi], at);
+            c.emit(Op::Mov, 0, &[base, r]);
+            c.emit_loc(Op::Call, 0, &[fi, base], at);
+            c.emit(Op::Ret, 0, &[r]);
+            let nregs = c.end_unit();
+            let idx = self.funcs.len() as u32;
+            self.funcs.push(Func {
+                decl: None,
+                entry,
+                state: FState::Ready,
+                nregs,
+                ret: RetKind::Sret(rty),
+                params: Vec::new(),
+                memo: false,
+                this_reg: None,
+                this_ty: None,
+                base_obj: false,
+                structor: false,
+                light: false,
+                code_end: 0,
+                inline: false,
+            });
+            return Some(idx);
         }
         let entry = c.here();
         let n = c.reg();

@@ -1,7 +1,8 @@
 # Evaluation sessions (WP-1995)
 
 Status: implemented (WP-1995; nested work, §5.1, WP-2073; `constexpr`
-entries, §3/§4, WP-2072). Code: `crates/kiln_sema/src/session.rs`
+entries, §3/§4, WP-2072; results of class and other types, §3/§4.1,
+WP-2071). Code: `crates/kiln_sema/src/session.rs`
 (the session, entries, runs, reports, diagnostic replay),
 `crates/kiln_oven/src/session.rs` (budgets, cancellation, the Oven side
 of a run), `crates/kiln_diag/src/engine.rs` (`DiagEngine::capture_begin`,
@@ -120,10 +121,26 @@ An entry is a function the session may run:
   kind's run;
 - with **no parameters** (a C-style `(void)` included; not variadic):
   else `HasParameters`;
-- returning **`void` or an integral type** ([basic.fundamental]/11:
-  `bool`, the character types, the signed and unsigned integer types,
-  `__int128`; cv-qualifiers ignored): else `WrongReturnType`. An
-  enumeration is not integral, and `_BitInt(N)` is not accepted;
+- returning **`void` or a result type** (cv-qualifiers ignored): else
+  `WrongReturnType`. A result type (WP-2071; before it, only the
+  integral types) is a type whose value can be the
+  value of a `constexpr` variable after the run and be read without
+  the translation unit, §4.1. That is a literal type
+  ([basic.types.general]/10; a `constexpr` variable has one,
+  [dcl.constexpr]/6) built only from: the integral types, `_BitInt(N)`
+  with N <= 128, enumerations, the floating-point types, `std::nullptr_t`,
+  `std::meta::info`, pointers to objects and functions, pointers to
+  members, arrays of known bound of result types, `_Complex` of a
+  floating-point type, and classes (unions included) whose bases and
+  non-static data members all have result types (a reference member's
+  value is what it binds, read as a pointer). Refused at resolve
+  with `WrongReturnType`, each a type no run could return to the host:
+  a reference (already refused: a reference return is no object), a
+  non-literal type (a class with a non-`constexpr` destructor, or with
+  no `constexpr` constructor that is not an aggregate or closure type),
+  `_BitInt(N)` with N > 128, a vector type, and a class with a virtual
+  base anywhere in it (refused by decision; row WP-2210). The
+  check walks the return type once, at resolve; it keeps nothing;
 - **defined** in the translation unit: else `Undefined`.
 
 `entry_named` looks up a qualified name (`f`, `ns::f`, `::ns::f`,
@@ -137,7 +154,7 @@ the one function is then checked as above. An `Entry` is a small
 run, in any order.
 
 Deferred (follow-up rows): parameters (`std::meta::info` or integers
-given per run, WP-2070), class-typed results (WP-2071).
+given per run, WP-2070).
 
 ## 4. A run
 
@@ -160,7 +177,13 @@ declaration, at namespace scope), as one of these:
   ([expr.const.const]/4; an indeterminate result fails the run by
   [expr.const.core]/2.12 first), it is constexpr-representable
   ([expr.const.init]/4.2, 4.3) and has constant destruction
-  ([expr.const.defns]/3.1).
+  ([expr.const.defns]/3.1). For any other `R` (§4.1) the run
+  checks them as the translation unit checks `v`'s: the value is frozen
+  by the same Oven code (every subobject initialized, no pointer to an
+  object of the run, no immediate function), and the result object of a
+  class with a non-trivial destructor is then destroyed by the run (its
+  constant destruction, [expr.const.defns]/3.1), whose steps are the
+  run's own.
 - **A `void` `constexpr` entry** (no variable has type `void`): the
   evaluation of `f()` as the left operand of the comma in
   `static_assert((f(), true));` there, a constant-expression
@@ -243,13 +266,20 @@ but for the headline (§7: `w`'s is an immediate invocation's) and one
 more `in call to 'w()'` frame. The call of `f` inside `w` is not an
 immediate invocation (`f` is not immediate, and `w`'s body is an
 immediate function context anyway), and `f` is the same compiled
-function either way.
+function either way. For a class `R` with a non-trivial destructor
+(§4.1) `f`'s `steps` also hold the destructor's: `f`'s run
+destroys its result (the notional variable's constant destruction),
+`w`'s does not (the temporary an immediate invocation returns is
+destroyed by the enclosing full-expression's execution, which is no
+part of the invocation, [expr.const.imm]/1, and which a run does not
+have).
 
 `RunReport`:
 
 | field | meaning |
 |---|---|
-| `result` | `Ok(RunValue)`: `Void`, `Bool(b)`, `Signed(i128)`, `Unsigned(u128)` (by the return type's signedness); `Err(RunError)`, §8 |
+| `result` | `Ok(RunValue)`: `Void`, `Bool(b)`, `Signed(i128)`, `Unsigned(u128)` (by the return type's signedness), any other value of §4.1; `Err(RunError)`, §8 |
+| `constants` | the constants table of a successful run's value (§4.1); empty otherwise |
 | `steps` | steps the run's own execution took (spec/oven.md "Limits"), §5 |
 | `nested_steps` | steps of nested evaluations charged to the run, fresh and replayed (§5.1; WP-2073) |
 | `host_calls` | handler calls the run made |
@@ -257,6 +287,222 @@ function either way.
 | `calls` | function calls the run's own execution made |
 | `nested_calls` | function calls of nested evaluations charged to the run (§5.1) |
 | `diagnostics` | the run's diagnostics, §7, in order |
+
+### 4.1 Results (WP-2071)
+
+A run's value crosses to the client as a `RunValue` tree **owned by
+the report** (`kiln_sema::session`, re-exported by `kiln_parse`): it
+outlives the session, and equal values of two sessions compare equal.
+Names are strings (`Arc<str>`): each entity, type and base is spelled
+as `std::meta::display_string_of` spells it (spec/reflection.md §3.9,
+GCC 16.1's form: a type as `%T`, a declaration as `%D`), a member by
+its identifier. A spelling is not an identity: two distinct entities
+can print alike (two static locals named `x` in sibling blocks, two
+specializations a run instantiated with arguments that print alike).
+For identity a node carries **`decl: Option<DeclId>`** (the first
+declaration), with one rule: `decl` is `Some` if and only if the
+entity existed when the session was opened (its first declaration's id
+is below the declaration count `open` recorded), never for an entity
+an earlier run or this run created (a specialization instantiated in a
+run, a template parameter object made in one), so no result depends on
+what earlier runs did; such ids are numbered by history (§7 "Keys and
+caches"), so a fresh and a used session would number them apart. No
+other id (`QualType`, `ReflectionId`, `ConstValueId`, `Symbol`) is in
+the tree.
+
+**The types are a closed set.** No enum of the tree is
+`#[non_exhaustive]`: a client matches them exhaustively, so a new
+variant is a breaking change by design (the client's build fails and
+it decides how to read it). The structs are plain (public fields).
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunValue {                           // 32 bytes (asserted)
+    Void,
+    Bool(bool),
+    Signed(i128),                             // signed integral, `_BitInt(N <= 128)`
+    Unsigned(u128),                           // unsigned integral; character types by signedness
+    Float { kind: FloatKind, bits: u128 },    // kiln_ast's FloatKind, exact encoding
+    Enum(Box<EnumValue>),
+    Null,                                     // null pointer, null pointer to member, `nullptr`
+    Pointer(Box<PointerValue>),
+    MemberPointer(Box<Entity>),               // the member designated
+    Info(Box<InfoValue>),
+    Text { unit: CharUnit, data: Box<[u8]> }, // an array of a character type
+    Array(Box<[RunValue]>),
+    Record(Box<RecordValue>),
+}
+pub struct Entity { pub display: Arc<str>, pub decl: Option<DeclId> }
+pub enum IntValue { Signed(i128), Unsigned(u128) }
+pub struct EnumValue { pub ty: Entity, pub value: IntValue, pub enumerator: Option<Arc<str>> }
+pub struct RecordValue { pub ty: Entity, pub union: bool, pub fields: Box<[Field]> }
+pub struct Field { pub kind: FieldKind, pub name: Arc<str>, pub value: RunValue }
+pub enum FieldKind { Base, Member, Anonymous }
+pub struct PointerValue { pub base: PointerBase, pub path: Box<[PathStep]>, pub past_end: bool }
+pub enum PointerBase {
+    Variable(Entity), Function(Entity), Temporary(Entity), TypeInfo(Arc<str>),
+    Constant(u32),                            // index into the constants table
+}
+pub enum PathStep { Base(Arc<str>), Member(Arc<str>), Anonymous(u32), Index(u64) }
+pub struct InfoValue { pub kind: InfoKind, pub display: Arc<str>, pub decl: Option<DeclId>, pub value: Option<RunValue> }
+pub enum InfoKind { Null, Type, Declaration, Namespace, NamespaceAlias, Template, Value, Object,
+                    BaseSpecifier, DataMemberSpec, Annotation, Parameter }
+pub enum CharUnit { Char, SignedChar, UnsignedChar, Char8, Char16, Char32, WChar }
+pub struct ValueTree { pub root: RunValue, pub constants: Vec<RunValue> }
+```
+
+`RunReport::result` is `Ok(root)`; `RunReport::constants` is the
+constants table (empty when no pointer reaches an unnamed object).
+
+| type | value |
+|---|---|
+| `bool`, integral, `_BitInt(N <= 128)` | `Bool`, `Signed`, `Unsigned` by signedness (a bit-field by its declared type) |
+| enumeration | `Enum`: the type, the value by the underlying type's signedness (`bool` underlying: `Unsigned`), and the first enumerator in declaration order with that value; `None` when no enumerator has it |
+| floating-point | `Float`: the format and its exact bits, so `-0.0` and a NaN's sign and payload survive |
+| `std::nullptr_t`, a null pointer or pointer to member | `Null` (the client knows the type it declared) |
+| pointer, reference member, `cv void *` | `Pointer` (below) |
+| pointer to member | `MemberPointer`: the member designated (`%D`); the conversion path is not given |
+| `std::meta::info` | `Info`: its kind (the `Reflectee` kinds), its `display_string_of` text, `decl` for a declaration, namespace, namespace alias, template, or a type that is a class or enumeration (by the rule above), and `value` for a value (`reflect_constant`: its value) or an object (`reflect_object`: a `Pointer` to it) |
+| array of a character type | `Text`: every element as a code unit, little-endian at the unit's width (1, 2 or 4 bytes; `wchar_t` the target's); every NUL is kept, nothing is trimmed |
+| other array, `_Complex T` | `Array`: the elements in order (`_Complex` as `[real, imag]`) |
+| class, union | `Record`: the type; the direct non-virtual bases in declaration order (`FieldKind::Base`, named by type), then the non-static data members in declaration order (`Member`; an anonymous union or struct member is `Anonymous`, its name empty); unnamed bit-fields omitted; empty bases and empty members (`[[no_unique_address]]` or not) present, as `Record`s without fields; so positions map onto the class and never depend on the layout. A union gives its active member only (no field when none is active), `union: true`. A closure type's captures are its unnamed members (`Anonymous`) |
+
+**Pointers.** A `Pointer` gives the complete object it points into and
+the designator from it. `Variable` is a variable with static storage
+duration, `Function` a function (overloads tell apart by `%D`'s
+signature), `Temporary` a lifetime-extended temporary (named by the
+variable that extends it), `TypeInfo` a `std::type_info` object (by
+its type's spelling). The path's steps are a base (by type), a member
+(by name), an unnamed member (`Anonymous(i)`: `i` is the member's
+position among its record's bases and members, unnamed bit-fields
+omitted: its index in a class's `fields`; a union's `fields` holds
+only the active member, so there it counts every member) and an array
+element (by index); an
+`Index` equal to the array's length is one past its last element
+(`&a[N]`). `past_end` is a pointer one past the end of the object the
+path designates that is no array element (`&x + 1` for a scalar `x`:
+an empty path; `&s.a + 1`: `[Member("a")]`). The designator comes from
+the frozen pointer by the designator recovery the constant printer
+uses (the base's type and the offset): a pointer into a union whose
+members share an offset and a type reads as the first such member
+until WP-2200 gives `Scalar::Pointer` its union-member selections,
+which the path then follows. A pointer to the run's result object
+itself has no object a host could name: like a pointer to any object
+of the run, the freezer refuses it.
+
+**The constants table.** An object that has no name (a string literal
+object, a template parameter object, a `define_static_string`,
+`define_static_array` or `reflect_constant` object) is `Constant(i)`:
+an index into `constants`, whose entry is the object's value (a
+string literal's is its `Text`, terminating NUL included). Indices are
+given in first-reached order: the root is decoded depth-first, in the
+order of its fields and elements; the first pointer to an object gives
+it the next index; then the constants are decoded in index order, and
+a pointer reached inside constant `i` that names a new object gives it
+the next index. The same object reached twice has one index, so two
+pointers into one object (a span, a `[begin, end)` pair) show their
+identity, not equal content, and a constant shared by others is
+decoded once. Objects are told apart as the constant model tells them
+(spec/ast.md §9; `PtrBase`): a string literal object is identified by
+its contents and the `StringLiteral` expression whose evaluation
+created it ([lex.string]/9), so two evaluations of one literal
+expression are one object and two equal literals written apart are two
+objects (two indices, equal values); a `define_static_*` or
+`reflect_constant` object is interned by content (spec/reflection.md),
+so equal content is one object and one index; a template parameter
+object is one per value and type ([temp.param]/8).
+
+**How a result is read.** A `void` or integral result is read from the
+stub's result register (no other work). Any other result object is
+frozen by the Oven's freezer (`freeze_object` / `freeze_scalar`: the
+code that gives `constexpr R v = f();` its value, so every check of §4
+is that code's) into the AST's constant store above a mark
+(`ConstStore::mark`); the frozen value is decoded into the tree through
+the record layouts (the constant printer's `Shape`) and the store's
+images; then the store is truncated back to the mark
+(`ConstStore::truncate`: drops the values pushed since the mark and
+their index entries; only the freezer runs between the two, so no id
+above the mark escapes). Objects the frozen value points to that are
+kept (§5) were interned by the run's evaluation, below the mark, and
+stay. Then, for a `constexpr` entry, the leak check and the constant
+destruction run, as for `constexpr R v = f();` in the translation unit
+(`eval_at`). The alternative, a walker that builds the tree from the
+Oven's memory directly, was rejected: it would duplicate every check
+of the freezer (initialized subobjects, pointer validity, immediate
+functions, union members, past-the-end bits) and its notes, and could
+drift from what a `constexpr` variable gets.
+
+**Not representable, by design.** A reflection gives only its kind,
+its text, its `decl` and a value or object, not its structure; a
+pointer to member does not give its conversion path. A client that
+needs more computes it in the transform and returns that.
+
+**What cannot cross is a run error.** A value that is not a constant
+expression's (a pointer to an object of the run, heap or frame; an
+uninitialized subobject; a pointer or reference to an immediate
+function, [expr.const.const]/4 before P4101R1) fails the run with
+`RunError::Failed` and the freezer's notes, the notes kiln gives
+under `constexpr variable 'v' must be initialized by a constant
+expression` (headline by kind, §7). A constant destruction that is not
+a constant expression fails it the same way, with the destructor's
+notes and call stack.
+
+**Size and its cap.** A tree's size is a function of the tree alone,
+never of allocation history: `size_of::<RunValue>()` (32) for the root,
+every array element and every constant; `size_of::<Field>()` (64,
+its value included) for every field; the `size_of` of every boxed
+payload (`Entity`, `EnumValue`, `RecordValue`, `PointerValue`,
+`InfoValue`) and of every path step; each `Text`'s bytes; and each
+distinct string once, at its length. The cap is the budget's
+**`result_bytes`** (`RunBudget::PROGRAM`: 64 MiB;
+`RunBudget::with_result_bytes`), the constants table included: a tree
+whose size would exceed it fails the run with
+**`RunError::ResultTooLarge`** (note `the result needs more than N
+bytes on the host (the run's result budget)`). The read counts as it
+builds and checks before each array's allocation (`len` elements are
+reserved only when their 32 `len` bytes fit), so the decision is made
+on the size and no allocation is ever larger than the cap: an error,
+never an allocation failure. The frozen image is transient (its
+`sizeof(R)` bytes and relocations, truncated with the store).
+
+**Determinism.** A result is a function of the run (§5): run 1 and run
+N, a fresh session and a used one, and every order of entries give
+equal trees (`==`, the constants table included), since equal values
+freeze to equal images, the decode reads only the image and the
+declarations, and `decl` is given only for what existed at open.
+
+**A variable's value.** `EvalSession::variable_value(var: DeclId,
+result_bytes) -> Result<ValueTree, ValueError>` (and
+`variable_value_named("ns::v", result_bytes)`, looked up as
+`entry_named` looks up a function) decodes the constant value of a
+variable of the translation unit usable in constant expressions
+([expr.const.init]: `constexpr`, a reference, or `const` non-volatile
+integral or enumeration with a constant initializer; a reference's
+value is a `Pointer` to what it binds) through the same decoder, under
+the same rules. `ValueError`: `NotFound`, `NotAVariable`,
+`NotAConstant` (not usable in constant expressions, or no constant
+initializer), `WrongType` (not a result type, §3), `TooLarge`,
+`Unreadable` (a value no tree can give: an address that designates no
+object, as a GNU label address). It is
+named apart from `std::meta::constant_of`, which it is not. **On
+demand:** a variable whose initializer has not been evaluated (a
+static data member of a specialization whose initializer was never
+used) has it instantiated and evaluated now, as the translation unit
+would, under its limits and without a handler. That work is the
+translation unit's (§5.1 "Unchanged"), kept, and so not read-only on
+the AST: a later run that reaches it is not charged it, as for work
+before the first run. Its answer is the same before and after any
+runs: the value of an initializer is a function of the translation
+unit (§5.1 rule 1). The tests declare `constexpr R v = f();` beside
+an entry and check `run(f)` against `variable_value(v)`, on run 1
+and run N, fresh and used, and `variable_value(v)` before and after
+runs; each kind also has a hand-written expected tree (both sides
+share the decoder).
+
+**Kept state.** Reading interns nothing and keeps nothing: the frozen
+values are truncated, the name table is local to the read, and
+spelling a name creates no type and interns no symbol. `kept()` after
+run 1000 of a class-returning entry equals `kept()` after run 2.
 
 ## 5. Isolation and what a session keeps
 
@@ -288,6 +534,10 @@ answer whether an earlier run or this one filled them):
   it changes no counter and no budget decision (a hit is not taken
   where it would cross a pending step check, §5.1). `clear_memo()` drops
   every entry and returns how many it dropped;
+- not the result: a run's result is frozen above a mark and the store
+  truncated back after the read (§4.1), so reading it keeps nothing
+  (`variable_value`'s on-demand evaluation is the translation unit's
+  work, §4.1);
 - values interned in the AST by content (`std::meta::reflect_constant`
   template parameter objects, `define_static_string`/`define_static_array`
   objects, reflection handles): equal content gives the same entity in
@@ -626,7 +876,11 @@ they key exactly.
 (`RunBudget::PROGRAM`) is the *program profile*: 2^34 steps, 1 GiB of
 abstract memory, 16384 nested calls, against the constant-expression
 defaults of 2^20 steps, 256 MiB and 512 calls. `RunBudget::with_steps`
-etc. adjust one limit.
+etc. adjust one limit. A fourth field (WP-2071), `result_bytes`, is
+the host bytes a result's tree may take (§4.1; `PROGRAM`: 64 MiB); a
+client that builds the struct literally writes `..RunBudget::PROGRAM`
+for the fields it does not set, so later fields are added the same
+way.
 
 `CancelToken` (`Clone + Send + Sync`, an `Arc<AtomicBool>`): `cancel()`
 from any thread stops a run that is given the token; `is_cancelled()`;
@@ -666,6 +920,7 @@ rule.
 | `Cancelled` | the token was cancelled; note `evaluation was cancelled` |
 | `Host { message }` | the handler returned `Err` (`message` is its message; note `host call failed: <message>`), or the call's checks failed (spec/host-calls.md §2; `message` is the note) |
 | `Uncaught { type_name, what }` | an exception left the entry: its type, and its `what()` when it derives from `std::exception` |
+| `ResultTooLarge` | (WP-2071) the result's tree would exceed `budget.result_bytes` (§4.1); note `the result needs more than N bytes on the host (the run's result budget)` |
 
 Every kind comes with its diagnostic (§7). After any of them the
 session is usable and the next run behaves as on a fresh session.
@@ -754,6 +1009,27 @@ session's translation unit is parsed without recording either.
   `void` entry, an exception, a host-call-dependent one) with clang's
   notes; a `consteval` wrapper; run 1 and run N, fresh and used, three
   orders.
+- `crates/kiln_parse/tests/eval_session_results.rs` (WP-2071): §4.1, each kind of value (an integer, `bool`, `_BitInt`, an
+  enum with and without an enumerator, a float NaN payload and `-0.0`,
+  `nullptr`, a pointer to a static object, to a member subobject, to
+  an array element and one past the end, to a function, into a string
+  literal and a `define_static_string`, through a union, a pointer to
+  member, an `info` of a type, a declaration and a value), nested
+  classes and arrays, a class with bases, an empty member, a union and
+  an anonymous one, a bit-field, a large array just under and just over
+  `result_bytes`, each refused type (`WrongReturnType`) and each
+  refused value (a pointer to a run's object, an uninitialized member,
+  a constant destruction that fails), the constants table (a span-like
+  pair into one string literal: one index; two equal literals written
+  apart: two indices; one literal expression evaluated twice: one;
+  equal `define_static_string`s: one; a template parameter object
+  reached 64 times: one, decoded once; pointers inside a constant: the
+  next indices, in order), `decl` for an
+  entity of the translation unit and `None` for a specialization a run
+  instantiated, `run(f) == variable_value(v)` on run 1 and run N, fresh
+  and used, `variable_value` before and after runs and on demand, and
+  `kept()` flat over 1000 runs. `crates/kiln_ast/tests/consts.rs`
+  `truncate_to_a_mark`: `ConstStore::mark` / `truncate`.
 - `crates/kiln_parse/tests/eval_session_nested.rs`: §5.1 (WP-2073):
   each fixed bug of §7, the determinism criterion (run 1 and run N,
   fresh and used, both orders, nested inside nested work, the memo),

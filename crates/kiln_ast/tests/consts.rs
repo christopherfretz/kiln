@@ -1331,3 +1331,67 @@ fn to_f64_rounds_and_saturates() {
         (-1.0f64).to_bits()
     );
 }
+
+/// `ConstStore::mark` / `truncate` (WP-2071, spec/eval-session.md §4.1):
+/// values pushed after the mark are dropped with their intern entries;
+/// the ones below stay found; the store interns again as before.
+#[test]
+fn truncate_to_a_mark() {
+    let mut st = ConstStore::default();
+    let int = |v: i128| Scalar::Int { ty: ty(INT), signed: true, bits: IntBits::from_i128(32, v) };
+    let pair = |st: &mut ConstStore, a: u8, p: ConstValueId| {
+        let bytes = le(&[u32::from(a), 0, 0, 0]);
+        let relocs = [Reloc { at: 8, value: p }];
+        let padding = [ByteRange { start: 4, len: 4 }];
+        st.push_aggregate(ByteImage {
+            ty: ty(PAIR),
+            bytes: &bytes,
+            relocs: &relocs,
+            padding: &padding,
+            unions: &[],
+        })
+        .unwrap()
+    };
+    let ptr = |st: &mut ConstStore, d: u32| {
+        st.push_scalar(Scalar::Pointer {
+            ty: ty(INT_PTR),
+            base: PtrBase::Decl(DeclId::new(d)),
+            offset: 0,
+            designated: None,
+            past: false,
+        })
+        .unwrap()
+    };
+    let one = st.push_scalar(int(1)).unwrap();
+    let p1 = ptr(&mut st, 1);
+    let below = pair(&mut st, 7, p1);
+    let (len, bytes) = (st.len(), st.content_bytes());
+    let mark = st.mark();
+    let two = st.push_scalar(int(2)).unwrap();
+    let p2 = ptr(&mut st, 2);
+    let above = pair(&mut st, 9, p2);
+    // An equal value interned above the mark is the one below.
+    assert_eq!(pair(&mut st, 7, p1), below);
+    assert!(st.len() > len);
+    st.truncate(mark);
+    assert_eq!((st.len(), st.content_bytes()), (len, bytes));
+    assert_eq!(st.mark(), mark);
+    assert_eq!(st.lookup(&ConstValue::Scalar(int(1))), Some(one));
+    assert_eq!(st.lookup(&ConstValue::Scalar(int(2))), None);
+    assert_eq!(st.push_scalar(int(1)).unwrap(), one);
+    assert_eq!(pair(&mut st, 7, p1), below);
+    // Pushing again reuses the dropped ids, and finds what it pushes.
+    assert_eq!(st.push_scalar(int(2)).unwrap(), two);
+    assert_eq!(ptr(&mut st, 2), p2);
+    assert_eq!(pair(&mut st, 9, p2), above);
+    assert_eq!(st.lookup(&ConstValue::Scalar(int(2))), Some(two));
+    let b = st.aggregate(above).unwrap();
+    assert_eq!((b.bytes[0], b.relocs, b.padding.len()), (9, &[Reloc { at: 8, value: p2 }][..], 1));
+    // A mark at the end, or above it, changes nothing.
+    let end = st.mark();
+    st.truncate(end);
+    assert_eq!(st.aggregate(above).unwrap().bytes[0], 9);
+    st.truncate(mark);
+    st.truncate(end);
+    assert_eq!(st.len(), len);
+}

@@ -46,8 +46,9 @@ use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use kiln_sema::session::{
-    CancelToken, Entry, EntryError, EvalSession, KeptMemory, OpenError, RunBudget, RunError,
-    RunReport, RunValue,
+    CancelToken, CharUnit, Entity, Entry, EntryError, EnumValue, EvalSession, Field, FieldKind,
+    FloatKind, InfoKind, InfoValue, IntValue, KeptMemory, OpenError, PathStep, PointerBase,
+    PointerValue, RecordValue, RunBudget, RunError, RunReport, RunValue, ValueError, ValueTree,
 };
 pub use kiln_sema::{HostCalls, HostError, HostOut};
 pub use parser::{PExpr, Parser};

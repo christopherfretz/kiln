@@ -13,11 +13,12 @@
 
 use std::fmt;
 
+use kiln_ast::DeclId;
 use kiln_ast::decl::{ConstexprKind, DeclKind};
 use kiln_ast::types::TypeView;
-use kiln_ast::{DeclId, QualType};
 use kiln_diag::{DiagEngine, DiagId, Diagnostic};
-pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError, RunValue};
+use kiln_oven::RunRaw;
+pub use kiln_oven::{CANCEL_INTERVAL, CancelToken, RELEASE_FLOOR, RunBudget, RunError};
 use kiln_oven::{HostCalls, MetaOp, NestedCost, Oven, SemaBridge, SessUnit};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -26,6 +27,10 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::lookup::LookupKind;
 use crate::oven_bridge::Bridge;
+pub use crate::session_value::{
+    CharUnit, Entity, EnumValue, Field, FieldKind, FloatKind, InfoKind, InfoValue, IntValue,
+    PathStep, PointerBase, PointerValue, RecordValue, RunValue, ValueTree,
+};
 use crate::templ::stack::{FrameKind, InstFrame};
 
 /// A finished translation unit kept to run entries (spec/eval-session.md
@@ -35,6 +40,9 @@ pub struct EvalSession<'a, 'sm> {
     /// The records of §5.1 and §7 (in `sema` while a run is running).
     replay: Box<Replay>,
     tu_host: Option<Box<dyn HostCalls>>,
+    /// The declaration count at open: `decl` of a result is given only
+    /// for what existed then (§4.1).
+    open_decls: usize,
 }
 
 impl fmt::Debug for EvalSession<'_, '_> {
@@ -116,7 +124,9 @@ pub enum EntryError {
     /// The function has parameters (an implicit object parameter
     /// included) or is variadic.
     HasParameters,
-    /// The function returns neither `void` nor an integral type.
+    /// The function returns no result type (spec/eval-session.md §3): a
+    /// reference, a non-literal type, a `_BitInt(N)` with N > 128, a
+    /// vector, a class with a virtual base, or a type containing one.
     WrongReturnType,
     /// The function is not defined.
     Undefined,
@@ -135,7 +145,7 @@ impl fmt::Display for EntryError {
             }
             EntryError::HasParameters => f.write_str("the entry has parameters"),
             EntryError::WrongReturnType => {
-                f.write_str("the entry returns neither void nor an integral type")
+                f.write_str("the entry's return type is not a result type")
             }
             EntryError::Undefined => f.write_str("the entry is not defined"),
         }
@@ -144,11 +154,59 @@ impl fmt::Display for EntryError {
 
 impl std::error::Error for EntryError {}
 
+/// Why [`EvalSession::variable_value`] gives no value
+/// (spec/eval-session.md §4.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ValueError {
+    /// No declaration has the name.
+    NotFound {
+        /// The name looked up.
+        name: String,
+    },
+    /// The declaration is not a variable (or the name is an overload
+    /// set).
+    NotAVariable,
+    /// The variable is not usable in constant expressions or has no
+    /// constant initializer.
+    NotAConstant,
+    /// The variable's type is not a result type (§3).
+    WrongType,
+    /// The tree would need more than `cap` bytes.
+    TooLarge {
+        /// The cap given.
+        cap: u64,
+    },
+    /// The value holds what no tree can give (an address that designates
+    /// no object).
+    Unreadable(String),
+}
+
+impl fmt::Display for ValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueError::NotFound { name } => write!(f, "no declaration named '{name}'"),
+            ValueError::NotAVariable => f.write_str("the declaration is not a variable"),
+            ValueError::NotAConstant => {
+                f.write_str("the variable's value is not usable in constant expressions")
+            }
+            ValueError::WrongType => f.write_str("the variable's type is not a result type"),
+            ValueError::TooLarge { cap } => write!(f, "the value needs more than {cap} bytes"),
+            ValueError::Unreadable(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for ValueError {}
+
 /// What a run produced (spec/eval-session.md §4).
 #[derive(Clone, Debug)]
 pub struct RunReport {
-    /// The entry's value, or how the run failed.
+    /// The entry's value, or how the run failed (§4.1).
     pub result: Result<RunValue, RunError>,
+    /// The objects without a name the value's pointers reach, by
+    /// [`PointerBase::Constant`] index (§4.1); empty for a failed run.
+    pub constants: Vec<RunValue>,
     /// Steps the run executed itself (§4).
     pub steps: u64,
     /// Steps of the nested work the run was charged (§5.1): with
@@ -292,6 +350,12 @@ pub(crate) struct Replay {
 /// A run's state on the bridge.
 pub(crate) struct RunCtx<'r> {
     pub(crate) host: &'r mut (dyn HostCalls + 'r),
+    /// The declaration count at open (§4.1).
+    pub(crate) open_decls: usize,
+    /// The tree's size cap (`RunBudget::result_bytes`).
+    pub(crate) result_bytes: u64,
+    /// The decoded result, when it was not read from a register.
+    pub(crate) out: &'r mut Option<ValueTree>,
 }
 
 /// `notes` with the last run of `from` in them replaced by `to` (nothing
@@ -714,7 +778,8 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let oven = oven_mut(&mut sema);
         let tu_host = oven.take_host_calls();
         oven.session_begin();
-        Ok(EvalSession { sema, replay: Box::default(), tu_host })
+        let open_decls = sema.ast.decls.len();
+        Ok(EvalSession { sema, replay: Box::default(), tu_host, open_decls })
     }
 
     /// The translation unit's state (read only).
@@ -773,23 +838,13 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         if p.num_params() != 0 || p.variadic() {
             return Err(EntryError::HasParameters);
         }
-        if !self.entry_return_ok(p.ret()) {
+        if !crate::session_value::result_type_ok(s, p.ret(), true) {
             return Err(EntryError::WrongReturnType);
         }
         if s.defined_body(f).is_none() && ast.instantiated_from(f).is_none() {
             return Err(EntryError::Undefined);
         }
         Ok(Entry { decl: f })
-    }
-
-    /// `void`, `bool`, a character or integer type (`__int128` included;
-    /// no enumeration, no `_BitInt`).
-    fn entry_return_ok(&self, q: QualType) -> bool {
-        let types = &self.sema.ast.types;
-        if types.is_void(q) {
-            return true;
-        }
-        types.is_integral(q) && !matches!(types.canonical_view(q), TypeView::BitInt { .. })
     }
 
     /// The function named by qualified name `name` (`f`, `ns::f`,
@@ -800,36 +855,8 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
     pub fn entry_named(&self, name: &str) -> Result<Entry, EntryError> {
         let s = &self.sema;
         let not_found = || EntryError::NotFound { name: name.to_owned() };
-        let path = name.trim().strip_prefix("::").unwrap_or(name.trim());
-        let parts: Vec<&str> = path.split("::").map(str::trim).collect();
-        if parts.iter().any(|p| p.is_empty()) {
-            return Err(not_found());
-        }
-        let Some((last, scopes)) = parts.split_last() else { return Err(not_found()) };
-        let sym = |p: &str| -> Symbol { s.ast.symbols().intern(p) };
-        let mut ctx = s.ast.tu;
-        for p in scopes {
-            let found = s.lookup_qualified(ctx, sym(p), LookupKind::Nested);
-            let [d] = found.decls.as_slice() else { return Err(not_found()) };
-            ctx = match s.kind_of(*d) {
-                DeclKind::Namespace => s.ast.first(*d),
-                DeclKind::NamespaceAlias => s.ast.resolve_alias(*d),
-                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    s.ast.definition(*d).unwrap_or(*d)
-                }
-                // A type alias of a class (`using C = T<int>;`).
-                DeclKind::Typedef | DeclKind::TypeAlias => {
-                    let Some(r) = s.ast.decls.get(*d).ty().and_then(|q| s.ast.types.as_record(q))
-                    else {
-                        return Err(not_found());
-                    };
-                    s.ast.definition(r).unwrap_or(r)
-                }
-                _ => return Err(not_found()),
-            };
-        }
-        let found = s.lookup_qualified(ctx, sym(last), LookupKind::Ordinary);
-        match found.decls.as_slice() {
+        let Some(found) = self.lookup_named(name) else { return Err(not_found()) };
+        match found.as_slice() {
             [] => Err(not_found()),
             [d] => self.entry(*d),
             ds => {
@@ -851,6 +878,103 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
                     Err(EntryError::NotAFunction)
                 }
             }
+        }
+    }
+
+    /// What qualified name `name` (`v`, `ns::v`, `::ns::C::v`) names, by
+    /// ordinary lookup in the scope its qualifiers name; `None` when a
+    /// qualifier names no scope.
+    fn lookup_named(&self, name: &str) -> Option<Vec<DeclId>> {
+        let s = &self.sema;
+        let path = name.trim().strip_prefix("::").unwrap_or(name.trim());
+        let parts: Vec<&str> = path.split("::").map(str::trim).collect();
+        if parts.iter().any(|p| p.is_empty()) {
+            return None;
+        }
+        let (last, scopes) = parts.split_last()?;
+        let sym = |p: &str| -> Symbol { s.ast.symbols().intern(p) };
+        let mut ctx = s.ast.tu;
+        for p in scopes {
+            let found = s.lookup_qualified(ctx, sym(p), LookupKind::Nested);
+            let [d] = found.decls.as_slice() else { return None };
+            ctx = match s.kind_of(*d) {
+                DeclKind::Namespace => s.ast.first(*d),
+                DeclKind::NamespaceAlias => s.ast.resolve_alias(*d),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    s.ast.definition(*d).unwrap_or(*d)
+                }
+                // A type alias of a class (`using C = T<int>;`).
+                DeclKind::Typedef | DeclKind::TypeAlias => {
+                    let r = s.ast.decls.get(*d).ty().and_then(|q| s.ast.types.as_record(q))?;
+                    s.ast.definition(r).unwrap_or(r)
+                }
+                _ => return None,
+            };
+        }
+        Some(s.lookup_qualified(ctx, sym(last), LookupKind::Ordinary).decls)
+    }
+
+    /// The constant value of variable `var` (spec/eval-session.md §4.1,
+    /// "A variable's value"), as a tree of at most `result_bytes` bytes.
+    /// A variable whose initializer was never evaluated has it
+    /// instantiated and evaluated now, as the translation unit would (on
+    /// demand: that work is kept). The answer is the same before and
+    /// after any runs.
+    ///
+    /// # Errors
+    /// Why there is no value to give.
+    pub fn variable_value(
+        &mut self,
+        var: DeclId,
+        result_bytes: u64,
+    ) -> Result<ValueTree, ValueError> {
+        let s = &mut self.sema;
+        if !matches!(s.kind_of(var), DeclKind::Var | DeclKind::VarTemplateSpecialization)
+            || s.ast.decls.var(var).is_none()
+        {
+            return Err(ValueError::NotAVariable);
+        }
+        let Some(ty) = s.ast.decls.get(var).ty() else { return Err(ValueError::NotAVariable) };
+        let ty = s.ast.types.canonical(ty);
+        if !s.ast.types.is_reference(ty) && !crate::session_value::result_type_ok(s, ty, true) {
+            return Err(ValueError::WrongType);
+        }
+        let diags = s.diags;
+        let mark = diags.capture_begin();
+        let errors = diags.error_count();
+        let mut oven = s
+            .oven
+            .take()
+            .unwrap_or_else(|| unreachable!("an evaluation session's Oven is out between runs"));
+        let cv = s.var_constant_value(var, ty, &mut oven);
+        s.oven = Some(oven);
+        let _ = diags.capture_end(mark);
+        let cv = match cv {
+            Some(cv) if diags.error_count() == errors => cv,
+            _ => return Err(ValueError::NotAConstant),
+        };
+        crate::session_value::decode(s, cv, self.open_decls, result_bytes).map_err(|e| match e {
+            kiln_oven::ResultReadError::TooLarge(cap) => ValueError::TooLarge { cap },
+            kiln_oven::ResultReadError::Unreadable(why) => ValueError::Unreadable(why),
+        })
+    }
+
+    /// [`EvalSession::variable_value`] of the variable named by qualified
+    /// name `name` (looked up as [`EvalSession::entry_named`] looks up a
+    /// function).
+    ///
+    /// # Errors
+    /// Why there is no value to give.
+    pub fn variable_value_named(
+        &mut self,
+        name: &str,
+        result_bytes: u64,
+    ) -> Result<ValueTree, ValueError> {
+        let not_found = || ValueError::NotFound { name: name.to_owned() };
+        match self.lookup_named(name).as_deref() {
+            None | Some([]) => Err(not_found()),
+            Some(&[d]) => self.variable_value(d, result_bytes),
+            Some(_) => Err(ValueError::NotAVariable),
         }
     }
 
@@ -883,8 +1007,14 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         oven.set_clang_compat(self.sema.clang_compat);
         let year = Bridge { sema: &mut self.sema, run: None }.cxx_year();
         oven.set_cxx_year(year);
+        let mut tree = None;
         let out = {
-            let mut ctx = RunCtx { host };
+            let mut ctx = RunCtx {
+                host,
+                open_decls: self.open_decls,
+                result_bytes: budget.result_bytes,
+                out: &mut tree,
+            };
             let mut b = Bridge { sema: &mut self.sema, run: Some(&mut ctx) };
             oven.session_run(&mut b, f, at, budget, cancel)
         };
@@ -895,11 +1025,22 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         self.sema.inst.eval_loc = saved_loc;
         self.sema.inst.fatal = fatal;
         self.sema.inst.meta_calls.clear();
+        let mut constants = Vec::new();
         let result = match out.result {
             // An error reported by semantic work the run needed (an
             // instantiation's) fails the run: it is its diagnostic (§4).
             Ok(_) if diags.error_count() > errors => Err(RunError::Failed),
-            Ok(v) => Ok(v),
+            Ok(RunRaw::Void) => Ok(RunValue::Void),
+            Ok(RunRaw::Bool(b)) => Ok(RunValue::Bool(b)),
+            Ok(RunRaw::Signed(v)) => Ok(RunValue::Signed(v)),
+            Ok(RunRaw::Unsigned(v)) => Ok(RunValue::Unsigned(v)),
+            Ok(RunRaw::Read) => match tree {
+                Some(t) => {
+                    constants = t.constants;
+                    Ok(t.root)
+                }
+                None => unreachable!("a read result is decoded by the bridge"),
+            },
             Err((kind, fail)) => {
                 self.report_failed_run(f, at, fail);
                 Err(kind)
@@ -908,6 +1049,7 @@ impl<'a, 'sm> EvalSession<'a, 'sm> {
         let diagnostics = diags.capture_end(mark);
         RunReport {
             result,
+            constants,
             steps: out.steps,
             nested_steps: out.nested_steps,
             host_calls: out.host_calls,
