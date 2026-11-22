@@ -1,0 +1,68 @@
+14:20-14:21  mem-init  'n' -> lib::Rec::n@13:7 in=lib::Rec::Rec@14:3
+14:22-14:23  expr  'v' -> v@14:11 in=lib::Rec::Rec@14:3
+16:21-16:24  type  'Rec' -> lib::Rec@12:8 in=lib@11:11
+17:3-17:4  type  'T' -> T@16:17 in=lib::Box::v@17:5
+17:9-17:10  type  'T' -> T@16:17 in=lib::Box::v@17:5
+24:7-24:10  nns  'lib' -> lib@11:11 in=(tu)
+21:13-21:16  nns  'lib' -> lib@11:11 in=made@26:5 exp=26:1
+21:18-21:21  type  'Rec' -> lib::Rec@12:8 q=21:13 in=made@26:5 exp=26:1
+27:5-27:8  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=pointer@27:10 exp=27:1
+27:21-27:25  expr  'made' -> made@26:5 in=pointer@27:10
+29:29-29:32  nns  'lib' -> lib@11:11 in=k@29:18
+29:34-29:37  type  'Rec' -> lib::Rec@12:8 q=29:29 in=k@29:18
+29:49-29:50  expr  'k' -> k@29:18 in=defaults@29:5
+32:3-32:6  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=Holder::r@32:7
+33:3-33:6  nns  'lib' -> lib@11:11 in=Holder::b@33:14
+33:8-33:11  template  'Box' -> lib::Box@16:33 q=33:3 in=Holder::b@33:14
+32:11-32:14  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=Holder::r@32:7
+37:3-37:6  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=y@37:7
+38:11-38:14  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=a@38:7
+38:15-38:16  expr  'x' -> x@36:19 in=a@38:7
+38:18-38:19  member  'n' -> lib::Rec::n@13:7 in=a@38:7
+39:18-39:21  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=c@39:7
+39:32-39:33  expr  'x' -> x@36:19 in=c@39:7
+40:13-40:16  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=d@40:7
+40:17-40:18  expr  'x' -> x@36:19 in=d@40:7
+40:20-40:21  member  'n' -> lib::Rec::n@13:7 in=d@40:7
+40:25-40:26  expr  'x' -> x@36:19 in=d@40:7
+41:10-41:11  expr  'a' -> a@38:7 in=tentative@36:5
+41:14-41:15  expr  'c' -> c@39:7 in=tentative@36:5
+41:18-41:19  expr  'd' -> d@40:7 in=tentative@36:5
+41:22-41:23  expr  'y' -> y@37:7 in=tentative@36:5
+41:24-41:25  member  'n' -> lib::Rec::n@13:7 in=tentative@36:5
+41:28-41:36  expr  'defaults' -> defaults@29:5 in=tentative@36:5
+41:41-41:49  expr  'defaults' -> defaults@29:5 in=tentative@36:5
+44:20-44:21  type  'T' -> T@44:17 in=twice@44:22
+44:28-44:29  type  'T' -> T@44:17 in=t@44:30
+44:42-44:43  type  'T' -> T@44:17 in=twice@44:22
+44:44-44:45  expr  't' -> t@44:30 in=twice@44:22
+44:46-44:47  member  'n' -> (dependent) in=twice@44:22
+45:20-45:25  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5
+45:26-45:29  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=instantiated@45:5
+45:34-45:35  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5
+45:38-45:43  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5
+45:44-45:47  nns  'lib' -> lib@11:11 in=instantiated@45:5
+45:49-45:52  type  'Rec' -> lib::Rec@12:8 q=45:44 in=instantiated@45:5
+45:57-45:58  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5
+47:18-47:21  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=r@47:22
+47:25-47:28  nns  'lib' -> lib@11:11 in=b@47:46
+47:34-47:37  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=b@47:46
+47:30-47:33  template  'Box' -> lib::Box@16:33 q=47:25 in=b@47:46
+47:52-47:55  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=lambda@47:6
+47:65-47:68  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=(lambda)::operator()@47:15
+47:69-47:70  expr  'r' -> r@47:22 in=(lambda)::operator()@47:15
+47:71-47:72  member  'n' -> lib::Rec::n@13:7 in=(lambda)::operator()@47:15
+47:75-47:76  expr  'b' -> b@47:46 in=(lambda)::operator()@47:15
+47:77-47:78  member  'v' -> lib::Box<>::v@17:5 in=(lambda)::operator()@47:15
+47:79-47:80  member  'n' -> lib::Rec::n@13:7 in=(lambda)::operator()@47:15
+50:25-50:26  type  'T' -> T@49:17 in=HasN@50:9
+50:30-50:33  nns  'lib' -> lib@11:11 in=HasN@50:9
+50:39-50:40  type  'T' -> T@49:17 in=HasN@50:9
+50:35-50:38  template  'Box' -> lib::Box@16:33 q=50:30 in=HasN@50:9
+50:47-50:48  expr  't' -> t@50:27 in=HasN@50:9
+50:49-50:50  member  'n' -> (dependent) in=HasN@50:9
+50:53-50:54  expr  'b' -> b@50:42 in=HasN@50:9
+50:55-50:56  member  'v' -> (dependent) in=HasN@50:9
+50:57-50:58  member  'n' -> (dependent) in=HasN@50:9
+51:20-51:23  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=(tu)
+51:15-51:19  concept  'HasN' -> HasN@50:9 in=(tu)

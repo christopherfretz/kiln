@@ -14,6 +14,7 @@ use std::mem;
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, FriendTarget, InitStyle};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TagKeyword;
+use kiln_ast::written_refs::{RefQualifier, RefRole};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokFlags, TokKind, Token};
@@ -1017,22 +1018,28 @@ impl Parser<'_, '_> {
 
     /// mem-initializer ([class.base.init]): the initializer (when sema can
     /// take it) and whether it parsed.
+    /// A mem-initializer whose id is a simple-template-id class-name,
+    /// possibly qualified (`Leaf<I, T>(u)...`, [class.base.init]/2): it
+    /// names the base as a base-specifier would.
+    fn parse_template_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
+        let loc = self.loc();
+        let wmark = self.s.written_ref_mark();
+        let ty = self.parse_base_type_name();
+        // The class name is the mem-initializer-id (spec/ast.md §18.4).
+        self.rerole_type_name(wmark, RefRole::MemInit);
+        let Some(ty) = ty else {
+            return (None, false);
+        };
+        let Some(init) = self.parse_mem_init_args() else {
+            return (None, false);
+        };
+        let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        (Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }), true)
+    }
+
     fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
-        // A simple-template-id class-name, possibly qualified (`Leaf<I, T>(u)...`,
-        // [class.base.init]/2), names the base as a base-specifier would.
         if self.at_template_type_name(DeclaratorContext::TypeName) {
-            let loc = self.loc();
-            let Some(ty) = self.parse_base_type_name() else {
-                return (None, false);
-            };
-            let Some(init) = self.parse_mem_init_args() else {
-                return (None, false);
-            };
-            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
-            return (
-                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
-                true,
-            );
+            return self.parse_template_mem_initializer();
         }
         // `[typename] [: r :] (args)`: a splice-type-specifier names the
         // base as in a base-specifier (P2996 [class.base.init]/1).
@@ -1076,7 +1083,15 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_member_or_base_name);
             return (None, false);
         };
-        self.bump();
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
+        let id_span = self.bump().span;
+        // The id's entry is made before its arguments' (they may be
+        // dropped below); its entity once the id is resolved.
+        let wid = if self.s.records_written_refs() {
+            self.s.note_written_type(id_span, None, None, RefRole::MemInit, link)
+        } else {
+            None
+        };
         let Some(init) = self.parse_mem_init_args() else {
             return (None, false);
         };
@@ -1137,6 +1152,9 @@ impl Parser<'_, '_> {
                 }
             }
         };
+        if let Some(w) = wid {
+            self.s.resolve_written_mem_init(w, &id);
+        }
         // A qualified base is written from its nested-name-specifier
         // (clang: the `ElaboratedTypeLoc`'s begin, where the initializer
         // and its construction start).
@@ -2918,7 +2936,11 @@ impl Parser<'_, '_> {
         if self.at_template_type_name(DeclaratorContext::TypeName) {
             let scanned =
                 self.scan_name_at(self.pos()).and_then(|(end, split, ..)| (!split).then_some(end));
-            let Some(ty) = self.parse_base_type_name() else {
+            let wmark = self.s.written_ref_mark();
+            let ty = self.parse_base_type_name();
+            // The class name is the base's (spec/ast.md §18.4).
+            self.rerole_type_name(wmark, RefRole::Base);
+            let Some(ty) = ty else {
                 // A qualifier that fails (`X<A>::B` where `X<A>` fails
                 // to instantiate here): clang goes on to the name after
                 // it, "expected class name".
@@ -2941,17 +2963,34 @@ impl Parser<'_, '_> {
             return None;
         };
         let q = qual.map(|q| q.ctx);
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_class_name);
             return None;
         };
-        let id_loc = self.bump().span.lo;
+        let id_span = self.bump().span;
+        let id_loc = id_span.lo;
+        let note = |p: &mut Self, ty: Option<QualType>| {
+            if p.s.records_written_refs()
+                && let Some(id) = p.s.note_written_type_found(
+                    id_span,
+                    ty,
+                    None,
+                    RefRole::Base,
+                    link,
+                    Some((name, q)),
+                )
+            {
+                p.last_tname = Some(id);
+            }
+        };
         // The class-name of a base-specifier is a type-only lookup
         // ([class.derived.general]/2): a function of the same scope does
         // not hide the class (clang's `getTypeName` with `isClassName`
         // looks it up as a nested-name-specifier name).
         let class = self.s.classify_base_class_name(name, q);
         if let Some(ty) = self.injected_class_base(class, name, q) {
+            note(self, Some(ty));
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }
@@ -2964,9 +3003,11 @@ impl Parser<'_, '_> {
             if let Some(ty) = qual.and_then(|qual| {
                 self.s.act_unknown_specialization_type(qual, name, TagKeyword::None, id_loc)
             }) {
+                note(self, Some(ty));
                 let pack_expansion = self.eat(Punct::Ellipsis).is_some();
                 return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
             }
+            note(self, None);
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };
@@ -2979,8 +3020,12 @@ impl Parser<'_, '_> {
                 self.s.act_pack_indexing_type_named(ty, name, id_loc, ellipsis, index)
             }
             Ok(None) => ty,
-            Err(()) => return None,
+            Err(()) => {
+                note(self, None);
+                return None;
+            }
         };
+        note(self, Some(ty));
         if self.s.is_error_type(ty) {
             return None;
         }

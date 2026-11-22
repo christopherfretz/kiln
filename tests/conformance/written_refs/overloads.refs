@@ -1,4 +1,14 @@
+11:9-11:12  type  'Tag' -> lib::Tag@10:8 in=(anonymous)@11:12
+12:9-12:12  type  'Tag' -> lib::Tag@10:8 in=(anonymous)@12:12
+13:1-13:4  type  'Tag' -> lib::Tag@10:8 in=lib::operator+@13:5
+13:15-13:18  type  'Tag' -> lib::Tag@10:8 in=(anonymous)@13:18
+13:20-13:23  type  'Tag' -> lib::Tag@10:8 in=(anonymous)@13:23
+18:26-18:27  type  'T' -> T@18:17 in=(anonymous)@18:28
+25:28-25:29  type  'T' -> T@25:19 in=(anonymous)@25:29
+28:11-28:14  type  'Obj' -> Obj@20:8 in=o@28:15
+28:18-28:21  type  'Obj' -> Obj@20:8 in=p@28:23
 28:26-28:29  nns  'lib' -> lib@9:11 in=g@28:35
+28:31-28:34  type  'Tag' -> lib::Tag@10:8 q=28:26 in=g@28:35
 29:24-29:25  expr  'f' -> f@17:5 in=fp@29:9
 30:8-30:11  nns  'Obj' -> Obj@20:8 in=mp@30:14
 30:27-30:30  nns  'Obj' -> Obj@20:8 in=mp@30:14

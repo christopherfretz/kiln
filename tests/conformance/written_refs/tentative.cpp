@@ -16,9 +16,9 @@ template <int N> int tv(int);
 int a = 4, b = 5;
 
 void tentative() {
-  T(q);                // a declaration of `q` ([stmt.ambig]/1): no entry
+  T(q);                // a declaration of `q` ([stmt.ambig]/1): `T` only
   T(r)(y);             // a declaration of `r` initialized by `y`
-  T(y + 1)(y);         // an expression: two entries
+  T(y + 1)(y);         // an expression: `T` and two `y`
   int z(y);            // a variable initialized by `y`
   int w(int(y));       // a function declaration ([dcl.ambig.res]/1)
   int s = sizeof(y) + (fn)(y) + tv<3>(y) + (a < b) + (b > y);

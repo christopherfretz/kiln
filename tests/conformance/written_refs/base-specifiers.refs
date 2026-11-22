@@ -1,0 +1,30 @@
+11:34-11:35  type  'T' -> T@11:17 in=lib::Wrap::w@11:36
+12:9-12:14  type  'Mixin' -> lib::Mixin@10:8 in=lib::MixinAlias@12:15
+15:7-15:10  nns  'lib' -> lib@8:11 in=(tu)
+16:7-16:10  nns  'lib' -> lib@8:11 in=(tu)
+18:16-18:20  base  'Root' -> lib::Root@9:8 found=Root@15:12 in=Plain@18:8
+19:20-19:23  nns  'lib' -> lib@8:11 in=Qualified@19:8
+19:25-19:29  base  'Root' -> lib::Root@9:8 q=19:20 in=Qualified@19:8
+19:46-19:49  nns  'lib' -> lib@8:11 in=Qualified@19:8
+19:51-19:56  base  'Mixin' -> lib::Mixin@10:8 q=19:46 in=Qualified@19:8
+20:23-20:26  nns  'lib' -> lib@8:11 in=FromTemplate@20:8
+20:33-20:36  nns  'lib' -> lib@8:11 in=FromTemplate@20:8
+20:38-20:42  type  'Root' -> lib::Root@9:8 q=20:33 in=FromTemplate@20:8
+20:28-20:32  base  'Wrap' -> lib::Wrap@11:27 q=20:23 in=FromTemplate@20:8
+21:30-21:33  nns  'lib' -> lib@8:11 in=FromTypedef@21:8
+21:35-21:45  base  'MixinAlias' -> lib::MixinAlias@12:15 q=21:30 in=FromTypedef@21:8
+22:28-22:32  base  'Wrap' -> lib::Wrap@11:27 found=Wrap@16:12 in=FromUsingTemplate@22:8
+24:39-24:40  base  'T' -> T@24:17 in=FromParam@24:27
+25:43-25:44  nns  'T' -> T@25:17 in=FromDependent@25:27
+25:46-25:55  base  'base_type' -> (dependent) q=25:43 in=FromDependent@25:27
+25:57-25:60  nns  'lib' -> lib@8:11 in=FromDependent@25:27
+25:67-25:68  type  'T' -> T@25:17 in=FromDependent@25:27
+25:62-25:66  base  'Wrap' -> lib::Wrap@11:27 q=25:57 in=FromDependent@25:27
+26:42-26:44  base  'Ts' -> Ts@26:20 in=FromPack@26:31
+28:11-28:15  type  'Root' -> lib::Root@9:8 found=Root@15:12 in=fp@28:17
+28:1-28:10  template  'FromParam' -> FromParam@24:27 in=fp@28:17
+29:10-29:13  nns  'lib' -> lib@8:11 in=pk@29:33
+29:15-29:19  type  'Root' -> lib::Root@9:8 q=29:10 in=pk@29:33
+29:21-29:24  nns  'lib' -> lib@8:11 in=pk@29:33
+29:26-29:31  type  'Mixin' -> lib::Mixin@10:8 q=29:21 in=pk@29:33
+29:1-29:9  template  'FromPack' -> FromPack@26:31 in=pk@29:33

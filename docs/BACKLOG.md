@@ -1093,7 +1093,9 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-2001 | host calls: restore the host mode after a contained panic inside an evaluation | WP-1990 | open |
 | WP-2002 | host calls: an integer-only fast builtin, only if a tooling client needs more than ~7M calls/s | WP-1990 | open |
 | WP-1930 | written-reference table stage 1 (tooling clients): opt-in AST side table of written names, dump, expression/member names and qualifier components | - | done: `kiln_ast::written_refs` (28-byte entries, transient in snapshots), `-fkiln-dump-written-refs`, harness `written-refs:`, spec/ast.md §18 |
-| WP-1931 | written-reference table stage 2: type names in every type-specifier context, template names, base specifiers, member-initializer ids (pseudo-destructor type names included) | WP-1930 | open |
+| WP-1931 | written-reference table stage 2: type names in every type-specifier context, template names, base specifiers, member-initializer ids (pseudo-destructor type names included) | WP-1930 | done: type, template, base and mem-init names recorded with entity, found and qualifier (spec/ast.md §18.4) |
+| WP-2100 | written-reference table: a deduction guide's own name (`Pair(T, T) -> Pair<T>`) names the class template but is not recorded; declarative, with stage 3 (WP-1932) | WP-1931 | open |
+| WP-2101 | written-reference table: a lambda's trailing return type is enclosed by the variable holding the lambda, not by its `operator()` (stage-1 claim rule, WP-2023): decide whether the lambda declarator claims it | WP-1931 | open |
 | WP-1932 | written-reference table stage 3: declarative contexts (using-declarations and -directives, namespace alias targets, declarator-id qualifiers, elaborated and friend references, specialization targets, concept names, designators) | WP-1930 | open |
 | WP-1933 | written-reference table stage 4: per-specialization entries for dependent names, in a table keyed by (pattern entry, specialization) | WP-1930 | open |
 | WP-1934 | written-reference table stage 5: carriage in PCH snapshots and module images, plus the identifier-accounting completeness test on the corpora | WP-1930 | open |

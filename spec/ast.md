@@ -1741,21 +1741,22 @@ yet names).
 
 `RefRole` is `#[repr(u8)]` and covers the full set; stage 1 fills
 `Expr`, `Member` and `Nns`, and `Concept` for a concept-id parsed as an
-id-expression.
+id-expression; stage 2 (WP-1931) fills `Type`, `Template`, `Base` and
+`MemInit`.
 
 | role | dump | example (bracketed) | stage |
 |---|---|---|---|
 | `Expr` | `expr` | `x = [f](y);` `&[g]` `[Enumerator]` `case [E]:` capture `[[x]]{}` `[operator==](a, b)` | 1 |
-| `Member` | `member` | `a.[m]` `p->[m]()` `p->~[T]()` `a.[operator+](b)` | 1 |
-| `Type` | `type` | `[T] x;` `new [T]` `sizeof([T])` `typename A::[type]` | 2 |
+| `Member` | `member` | `a.[m]` `p->[m]()` `p->~[X]()` (a class's destructor) `a.[operator+](b)` | 1 |
+| `Type` | `type` | `[T] x;` `new [T]` `static_cast<[T]>(e)` `sizeof([T])` `catch ([E]&)` `typename A::[type]` `struct [S]* p;` (an existing class) `using enum [E];` `p->~[T]()` (a pseudo-destructor) | 2 |
 | `Template` | `template` | `[vector]<int>` CTAD `[pair] p{1,2};` `X<[vector]>` `a.template [f]<int>()` | 2 |
 | `Nns` | `nns` | `[a]::[b]::f()` `[T]::x` `[Enum]::e` `[alias]::f()`; declarator-ids in stage 3 | 1 |
 | `Base` | `base` | `struct D : [B]` | 2 |
 | `MemInit` | `mem-init` | `D() : [B](1), [m](2) {}` | 2 |
-| `UsingDecl` | `using-decl` | `using a::[f];` `using enum [E];` | 3 |
+| `UsingDecl` | `using-decl` | `using a::[f];` | 3 |
 | `UsingDirective` | `using-directive` | `using namespace [n];` | 3 |
 | `NamespaceAlias` | `ns-alias` | `namespace x = a::[b];` | 3 |
-| `Elaborated` | `elaborated` | `class [X]* p;` `friend class [Y];` `friend void [f](int);` naming an existing entity | 3 |
+| `Elaborated` | `elaborated` | `friend class [Y];` `friend void [f](int);` `class [X];` naming an existing entity (a declaration; `class [X]* p;` is `type`, stage 2) | 3 |
 | `SpecTarget` | `spec-target` | `template <> struct [hash]<T> {};` `template class [vector]<int>;` | 3 |
 | `Concept` | `concept` | `template <[C] T>` `requires [C]<T>` `[C] auto x`; a concept-id as an expression (`static_assert([C]<int>)`, `requires [C]<T>`) from stage 1 | 1, 3 |
 | `Designator` | `designator` | `{ .[field] = 1 }` | 3 |
@@ -1772,9 +1773,9 @@ Stage-1 recording sites (all in `kiln_parse` unless noted):
   (the template name; its arguments are their own entries), operator-
   and literal-operator-ids, `X::~X()` in a member function;
 - member access (`parse_member_access_suffix`): `.`/`->` names,
-  qualified members, `template` members, operator-function-ids,
-  `p->~T()` (pseudo-destructors of scalar types have no entity and are
-  stage 2);
+  qualified members, `template` members (role `template` since stage 2),
+  operator-function-ids, `p->~X()` naming a class's destructor (a
+  pseudo-destructor is a stage-2 `type` entry);
 - nested-name-specifier components preceding them
   (`parse_nested_name_upto`): namespace, namespace-alias, class, enum,
   typedef, template-id and dependent components, each with its own
@@ -1804,6 +1805,64 @@ the concept as entity. A set that is never resolved
 entity. Patching runs only outside instantiation (instantiation builds
 new expressions; their entries are stage 4).
 
+Stage-2 recording sites (WP-1931; all in `kiln_parse`, entries made by
+`Sema::note_written_type_found`):
+
+- type-names in a decl-specifier-seq or type-specifier-seq
+  (`simple_type_name_spec`, the injected-class-name arms of
+  `parse_type_name_spec`), so every context that parses one: simple
+  declarations and members, parameters, return types (also trailing),
+  conversion-function-ids, every cast (`static_cast<T>`, `(T)e`,
+  `T(e)`, `T{e}`), new-expressions, `sizeof`/`alignof`/`noexcept`/
+  `decltype` operands, template arguments,
+  exception handlers, typedef and alias-declaration targets, default
+  template arguments;
+- template-ids in type contexts and CTAD placeholders
+  (`parse_template_type_name`, `parse_qualified_type_rest`,
+  `parse_ctad_placeholder`): the template name, role `template`, entity
+  the class or alias template; template template arguments and
+  parameter defaults (`at_template_name_arg`,
+  `parse_template_template_param_default`): role `template`, the
+  qualifier's components recorded as `nns` when the argument scan did
+  not record them;
+- the last component of a typename-specifier (`typename A::B::[type]`;
+  the earlier components are `nns`);
+- an elaborated-type-specifier that refers to an existing type
+  (`parse_tag_specifier` with `TagUse::Reference`, a class or enum
+  that existed before the specifier), role `type`; one that declares
+  (`struct S;`, `friend class Y;`) is stage 3;
+- the operand of `using enum` (`parse_using_enum`), role `type`;
+- a pseudo-destructor's type name (`p->~T()` with `T` a scalar typedef
+  or a template parameter; from the built `CXXPseudoDestructorExpr`),
+  role `type`, entity the typedef or template parameter;
+- base-specifiers (`parse_base_specifier`): role `base` on the class
+  name, on the template name of a template-id base (its arguments are
+  their own entries) and on the last component of a qualified or
+  dependent base;
+- mem-initializer-ids (`parse_mem_initializer`): role `mem-init` on a
+  member, a base, a delegating constructor's class name, and the
+  template name of a template-id base. An identifier's entry is made
+  before its arguments are parsed and filled once the initializer's
+  target is known (`Sema::resolve_written_mem_init`).
+
+Stage-2 rules. The entity of a type name comes from the type's sugar
+(`written_type_entity`): the typedef, alias, template parameter,
+injected class, class or enum; a template-id's or CTAD placeholder's
+template; a pack-indexing type's pack. `found` is the using-shadow
+lookup found when a using-declaration brought the type or template in
+(a simple type name keeps no using sugar, so the site re-runs the
+name's lookup only while recording). A dependent type name
+(`typename T::type`, `T::base_type` as a base, a member of an unknown
+specialization) has no entity and `DEPENDENT`; a name that names no
+type (an error) has none and `UNRESOLVED`. A base or mem-initializer
+written as a template-id is first recorded as a type name and its
+outermost name re-roled (`WrittenRefs::set_role`). A type-name's entry
+follows the entries of its template arguments and follows its
+qualifier's entries, as an id-expression's does. Every stage-1 rule
+applies unchanged: `enclosing` comes from the same claims, macro names
+carry `exp=`, pattern names are recorded once, default arguments once
+at their written site.
+
 ### 18.5 Speculation, macros, templates, PCH
 
 - **Speculation.** kiln's parser never re-parses consumed tokens:
@@ -1813,7 +1872,7 @@ new expressions; their entries are stage 4).
   member function bodies) are replayed exactly once. So a name has one
   entry however often it was classified, and an abandoned scan leaves
   none. `mark()`/`truncate(mark)` exist for any future rollback (they
-  also drop pending overload patches); none is needed in stage 1.
+  also drop pending overload patches); none is needed in stages 1 and 2.
 - **Macros.** `range` holds the token locations the lexer gives, so an
   entry for a name from a macro body or argument has a macro-expansion
   location and the source manager maps it to its spelling and expansion
@@ -1821,7 +1880,7 @@ new expressions; their entries are stage 4).
 - **Templates.** Inside a pattern, a non-dependent name has its entity
   as resolved at definition; a dependent name (`DependentScopeDeclRefExpr`,
   dependent members, a dependent call's callee, a dependent
-  nested-name-specifier component) has `entity: None` and
+  nested-name-specifier component, a dependent type name) has `entity: None` and
   `DEPENDENT`. Instantiation records nothing. Stage 4 adds a separate
   table keyed by (pattern entry, specialization) — reserved, not
   allocated: the main table's entry shape does not change. Default
@@ -1845,14 +1904,16 @@ Positions are the spelling locations of `lo` and `hi` (the end column
 is one past the name's last character), prefixed with the file's base
 name and `:` when not in the main file. `<spelling>` is the source text
 of the range. `<entity>`, `found=` and `in=` print the declaration's
-qualified name (lambdas as `(lambda)`) and `@<line>:<col>` of its
-location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
+qualified name (lambdas as `(lambda)`; a function or template
+parameter unqualified) and `@<line>:<col>` of its location; no entity prints `(dependent)` or `(unresolved)`; `in=(tu)`
 for the translation unit. `q=` names the qualifier entry by its start
 position. `exp=` is the outermost expansion point of a name written in
 a macro. The harness directive `written-refs: <golden>`
 (spec/harness.md) compares this dump with a golden file.
 
 Tests: `crates/kiln_ast/src/written_refs.rs` (entry size, off records
-nothing, claims, truncation), `tests/conformance/written_refs/` (one per
-stage-1 role, the worked example, macros, tentative parses, overload
-patching, dependent names).
+nothing, claims, truncation), `crates/kiln_parse/tests/written_refs.rs`
+(off and on, `enclosed_by` on stage-2 entries),
+`tests/conformance/written_refs/` (one per stage-1 and stage-2 role
+family, the worked example, macros, tentative parses, overload
+patching, dependent names, stage-2 names under the stage-1 rules).

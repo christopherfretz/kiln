@@ -37,7 +37,8 @@ impl WrittenRefId {
 }
 
 /// The syntactic role of a written name (spec/ast.md §18.4). The full
-/// set; stage 1 fills `Expr`, `Member` and `Nns`.
+/// set; stage 1 fills `Expr`, `Member` and `Nns`, stage 2 `Type`,
+/// `Template`, `Base` and `MemInit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum RefRole {
@@ -47,13 +48,16 @@ pub enum RefRole {
     Member,
     /// A type name in a type-specifier context (stage 2).
     Type,
-    /// A template name (stage 2).
+    /// The template name of a template-id in a type context, a class
+    /// template named for argument deduction, a template template
+    /// argument (stage 2).
     Template,
     /// A nested-name-specifier component.
     Nns,
-    /// A base specifier (stage 2).
+    /// The class name of a base-specifier (stage 2).
     Base,
-    /// A member-initializer id (stage 2).
+    /// A mem-initializer-id, naming a base, a member or (delegating) the
+    /// class itself (stage 2).
     MemInit,
     /// The name of a using-declaration (stage 3).
     UsingDecl,
@@ -241,6 +245,27 @@ impl WrittenRefs {
         }
     }
 
+    /// Changes the role of entry `id` (a type name that turned out to be
+    /// a base-specifier's or mem-initializer's class name, §18.4).
+    pub fn set_role(&mut self, id: WrittenRefId, role: RefRole) {
+        self.entries[id.index()].role = role;
+    }
+
+    /// Sets what entry `id` names (a name recorded before it was
+    /// resolved: a mem-initializer-id).
+    pub fn set_target(
+        &mut self,
+        id: WrittenRefId,
+        entity: Option<DeclId>,
+        found: Option<DeclId>,
+        flags: u8,
+    ) {
+        let r = &mut self.entries[id.index()];
+        r.entity = entity;
+        r.found = found;
+        r.flags = flags;
+    }
+
     /// Overload resolution selected `entity` (found as `found`) for the
     /// overload set `e`: patches the entry naming `e`, once.
     pub fn resolve(&mut self, e: ExprId, entity: DeclId, found: Option<DeclId>) {
@@ -318,8 +343,15 @@ impl WrittenRefs {
         };
         let decl = |d: DeclId, out: &mut String| {
             let mut s = String::new();
-            // A parameter prints unqualified, as a local variable does.
-            let scoped = ast.decls.get(d).kind() != crate::decl::DeclKind::ParmVar;
+            // A function or template parameter prints unqualified, as a
+            // local variable does.
+            let scoped = !matches!(
+                ast.decls.get(d).kind(),
+                crate::decl::DeclKind::ParmVar
+                    | crate::decl::DeclKind::TemplateTypeParm
+                    | crate::decl::DeclKind::NonTypeTemplateParm
+                    | crate::decl::DeclKind::TemplateTemplateParm
+            );
             names.write_decl_name(d, scoped, &mut s);
             if s.is_empty() {
                 s.push_str("(anonymous)");
@@ -335,6 +367,9 @@ impl WrittenRefs {
             let hi = if hf == lf { hi } else { hf + &hi };
             let lo = lf + &lo;
             let text = sm.span_text(r.range).unwrap_or("?");
+            if std::env::var_os("KILN_WREF_RAW").is_some() {
+                let _ = write!(out, "#{} ", r.range.lo.to_raw());
+            }
             let _ = write!(out, "{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());
             match r.entity {
                 Some(d) => decl(d, &mut out),
