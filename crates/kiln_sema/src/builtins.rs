@@ -3243,11 +3243,16 @@ impl Sema<'_, '_> {
     /// Whether the target declares builtin `id`: the NEON builtins are
     /// `AArch64` target builtins (WP-558), the x86 ones x86-64 target
     /// builtins (WP-610, WP-630), and `__builtin_sponentry` is an `AArch64`
-    /// target builtin (clang `BuiltinsAArch64.def`; WP-1428); every other
-    /// builtin is target-independent.
+    /// target builtin (clang `BuiltinsAArch64.def`; WP-1428), and
+    /// `__builtin_kiln_host_call` exists only while a host-call handler
+    /// is registered (WP-1990); every other builtin is target-independent.
     pub(crate) fn target_has_builtin(&self, id: u32) -> bool {
         use kiln_abi::target::Arch;
         let arch = self.abi.triple.arch;
+        if id == builtin::KILN_HOST_CALL {
+            // Only while a handler is registered (spec/host-calls.md §1).
+            return self.host_calls;
+        }
         if builtin::neon::is_neon(id) || builtin::arm::is_arm(id) || id == builtin::SPONENTRY {
             return arch == Arch::AArch64;
         }

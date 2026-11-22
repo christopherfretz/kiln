@@ -717,6 +717,10 @@ pub struct Args {
     /// that phase ([`kiln_source::activity`]), to test the internal
     /// compiler error report.
     pub crash_for_testing: Option<kiln_source::activity::Phase>,
+    /// The hidden `-fkiln-host-call-test-handler`: register kiln's test
+    /// host-call handler (`host_test.rs`; spec/host-calls.md §7). For
+    /// kiln's own tests only.
+    pub host_call_test_handler: bool,
     /// GCC's `-fpermissive`: the C++26 enumeration arithmetic error
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
@@ -2052,6 +2056,7 @@ impl Args {
                 self.no_crash_diagnostics = true;
             }
             "-fpermissive" => self.permissive = true,
+            "-fkiln-host-call-test-handler" => self.host_call_test_handler = true,
             "-frange-for-ext-temps" => self.range_for_ext_temps = Some(true),
             "-fno-range-for-ext-temps" => self.range_for_ext_temps = Some(false),
             _ => {

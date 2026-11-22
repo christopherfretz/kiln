@@ -15,7 +15,7 @@ use kiln_ast::dump::{DumpOptions, Filter, dump};
 use kiln_diag::verify::{FileLookup, Verifier, VerifyOptions};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink};
 use kiln_lex::Interner;
-use kiln_parse::{ParseOptions, parse_preprocessed};
+use kiln_parse::{ParseOptions, parse_preprocessed_with_host};
 use kiln_sema::target::Target;
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
@@ -527,6 +527,10 @@ impl SyntaxJob<'_> {
                 pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
             }
             let main_id = pp.main_file();
+            let mut sema = sema;
+            if let Some(h) = crate::host_test::handler(a) {
+                let _ = sema.set_host_calls(Some(h));
+            }
             let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
             restore.timer.mark("continue");
             restore.timer.report();
@@ -545,8 +549,15 @@ impl SyntaxJob<'_> {
         let popts = self.parse_options();
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();
-        let (tu, pp) =
-            parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        let (tu, pp) = parse_preprocessed_with_host(
+            pp,
+            Arc::clone(interner),
+            engine,
+            target.clone(),
+            &popts,
+            limits,
+            crate::host_test::handler(a),
+        );
         self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
     }
 

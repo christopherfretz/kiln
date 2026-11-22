@@ -40,6 +40,7 @@ mod complex;
 mod failure;
 mod frame;
 mod hooks;
+mod host;
 mod kbc;
 mod leaf;
 mod mem;
@@ -72,6 +73,8 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use frame::{FrameEval, FrameObject};
+use host::HostMode;
+pub use host::{HostCalls, HostError, HostOut};
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::member_cache::{
     CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,
@@ -568,6 +571,9 @@ pub struct Oven {
     /// The clang release whose note wording failures follow
     /// (`-fclang-compat=`; [`Oven::set_clang_compat`]).
     pub(crate) clang_compat: u32,
+    /// The host-call handler and the running evaluation's host mode
+    /// (spec/host-calls.md; [`Oven::set_host_calls`]).
+    pub(crate) host: host::Host,
     /// The translation unit's language standard as its year
     /// ([`Oven::set_cxx_year`]).
     cxx_year: u32,
@@ -783,6 +789,7 @@ impl Oven {
             backtrace_limit: notes::BACKTRACE_LIMIT,
             inlining: true,
             clang_compat: 22,
+            host: host::Host::default(),
             cxx_year: 2026,
             cev_warn_next: false,
             ub_check_next: false,
@@ -1107,7 +1114,9 @@ impl Oven {
         // designated object's value (which need not be readable: a
         // non-const variable's; WP-640).
         self.addr_next = self.void_next && is_glvalue(bridge.ast(), e);
+        let host = self.host_enter(HostMode::Allowed);
         let (r, c) = self.eval_ctx(bridge, e, ctx.object, false, ctx.enum_range_check, true);
+        self.host_leave(host);
         self.plain_next = false;
         self.void_next = false;
         self.addr_next = false;
@@ -1154,7 +1163,9 @@ impl Oven {
     ) -> (Vec<u8>, Result<(), EvalFailure>) {
         let hook = self.hook_eval_begin(&ctx);
         let job = Job::Chars { size, data };
+        let host = self.host_enter(HostMode::Allowed);
         let (r, c) = self.eval_job(bridge, job, None, false, false, true);
+        self.host_leave(host);
         if let Some(m) = hook {
             self.hook_eval_end(bridge, m, None, &ctx, &c, r.is_ok());
         }
@@ -1197,7 +1208,9 @@ impl Oven {
     ) -> Option<ConstValueId> {
         let saved = std::mem::replace(&mut self.subst_binds, binds.to_vec());
         let job = Job::Subst { cond, at };
+        let host = self.host_enter(HostMode::Speculative);
         let r = self.eval_job(bridge, job, None, true, false, true).0.ok();
+        self.host_leave(host);
         self.subst_binds = saved;
         r
     }
@@ -1221,7 +1234,9 @@ impl Oven {
             return Ok(());
         }
         self.potential_next = Some(1);
+        let host = self.host_enter(HostMode::Silent);
         let r = self.eval_job(bridge, Job::Call { f, at }, None, false, false, true).0;
+        self.host_leave(host);
         self.potential_next = None;
         match r {
             Err(e) if e.notes.is_empty() => Ok(()),
@@ -1247,7 +1262,9 @@ impl Oven {
         self.potential_next = Some(0);
         self.void_next = true;
         self.unchecked_next = true;
+        let host = self.host_enter(HostMode::Silent);
         let r = self.eval_ctx(bridge, e, None, false, false, true).0;
+        self.host_leave(host);
         self.potential_next = None;
         self.void_next = false;
         self.unchecked_next = false;
@@ -1261,10 +1278,12 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let host = self.host_enter(HostMode::Silent);
         let r = match self.leaf_first(bridge, e) {
             Some(r) => r,
             None => self.trial_eval(bridge, e),
         };
+        self.host_leave(host);
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "try_fold", r.is_some(), self.memo.hits);
         r
@@ -1283,7 +1302,9 @@ impl Oven {
         e: ExprId,
     ) -> Option<ConstValueId> {
         let mark = self.trial_mark();
+        let host = self.host_enter(HostMode::Silent);
         let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        self.host_leave(host);
         if r.is_none() {
             self.reclaim_failed(mark);
         }
@@ -1304,10 +1325,12 @@ impl Oven {
         self.mem.lax = true;
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let host = self.host_enter(HostMode::Silent);
         let r = match self.leaf_first(bridge, e) {
             Some(r) => r,
             None => self.trial_eval(bridge, e),
         };
+        self.host_leave(host);
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_rvalue", r.is_some(), self.memo.hits);
         self.run.lax = false;
@@ -1335,7 +1358,9 @@ impl Oven {
         }
         let mark = self.trial_mark();
         let job = Job::ObjectSize { p, ty };
+        let host = self.host_enter(HostMode::Silent);
         let r = self.eval_job(bridge, job, None, true, false, false).0.ok();
+        self.host_leave(host);
         if outer {
             self.run.lax = false;
             self.mem.lax = false;
@@ -1374,7 +1399,9 @@ impl Oven {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
         let mark = self.trial_mark();
+        let host = self.host_enter(HostMode::Silent);
         let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        self.host_leave(host);
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_for_overflow", r.is_some(), self.memo.hits);
         self.ub_check_next = false;
@@ -1408,7 +1435,9 @@ impl Oven {
     ) -> Option<ConstValueId> {
         let saved = std::mem::replace(&mut self.srcloc_root, at);
         self.addr_next = is_glvalue(bridge.ast(), e);
+        let host = self.host_enter(HostMode::Allowed);
         let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        self.host_leave(host);
         self.addr_next = false;
         self.srcloc_root = saved;
         r
@@ -1427,7 +1456,9 @@ impl Oven {
     ) -> Option<ConstValueId> {
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(bridge.ast(), Some(e), self.memo.hits);
+        let host = self.host_enter(HostMode::Speculative);
         let r = self.eval_ctx(bridge, e, Some(var), true, false, true).0.ok();
+        self.host_leave(host);
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "fold_constant_init", r.is_some(), self.memo.hits);
         r
@@ -1443,7 +1474,9 @@ impl Oven {
     /// the initialization then fails. Otherwise silent; not recorded.
     pub fn warn_constant_evaluated(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) {
         self.cev_warn_next = true;
+        let host = self.host_enter(HostMode::Silent);
         let _ = self.eval_ctx(bridge, e, Some(var), true, false, true);
+        self.host_leave(host);
         self.cev_warn_next = false;
     }
 
@@ -1462,6 +1495,13 @@ impl Oven {
         if self.ctx_depth != 0 {
             return;
         }
+        let host = self.host_enter(HostMode::Silent);
+        self.check_contract_init_in(bridge, e, var);
+        self.host_leave(host);
+    }
+
+    /// [`Oven::check_contract_init`] in its host mode.
+    fn check_contract_init_in(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) {
         let _ = self.eval_ctx(bridge, e, Some(var), true, false, true);
         if !std::mem::take(&mut self.contract_violated) {
             return;
@@ -1539,10 +1579,17 @@ impl Oven {
         let Some(init) = data.init else { return false };
         #[cfg(feature = "op-stats")]
         let trial = trial_stats::begin(ast, Some(init), self.memo.hits);
+        // A block-scope variable's question is asked when a use of it is
+        // classified, at parse time: refused silently, so the variable is
+        // read from its frame when the function runs (§4); a read that
+        // needs its value as a constant then evaluates it speculatively.
+        let local = self.host.handler.is_some() && compile::is_local_var(ast, var);
+        let host = self.host_enter(if local { HostMode::Silent } else { HostMode::Speculative });
         let r = match fast.then(|| self.leaf_init(bridge, var, init)).flatten() {
             Some(r) => r,
             None => self.eval_ctx(bridge, init, Some(var), true, false, true).0.is_ok(),
         };
+        self.host_leave(host);
         #[cfg(feature = "op-stats")]
         trial_stats::end(trial, "is_constant_initialized", r, self.memo.hits);
         r
@@ -1573,12 +1620,14 @@ impl Oven {
         }
         self.types.refresh(bridge);
         self.mp_refresh(bridge);
+        let host = self.host_enter(HostMode::Silent);
         self.begin_outermost(true, false, const_context);
         // clang requires no notes at all (`VarDecl::evaluateDestruction`).
         self.run.fold = false;
         self.run.fold_outer = false;
         let r = self.destroy_var(bridge, var, value);
         self.end_outermost();
+        self.host_leave(host);
         r
     }
 

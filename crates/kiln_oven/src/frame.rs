@@ -399,7 +399,9 @@ impl Oven {
         self.frame.how = Some(how);
         self.frame.target = target;
         self.potential_next = Some(0);
+        let host = self.host_enter(crate::host::HostMode::Silent);
         let r = self.eval_job(bridge, Job::Frame(e), None, false, false, true).0;
+        self.host_leave(host);
         // The outermost context's count, nested contexts' steps included
         // (they share its budget).
         let steps = self.run.counters.steps;

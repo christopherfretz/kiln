@@ -5649,6 +5649,14 @@ pub mod builtin {
     /// expression of a consteval block; spec/consteval-blocks.md §3);
     /// false at runtime.
     pub const KILN_PLAINLY_CONSTANT_EVALUATED: u32 = 2150;
+    // ---- WP-1990 (kiln extension; spec/host-calls.md).
+    /// `unsigned long long __builtin_kiln_host_call(unsigned op, const
+    /// unsigned long long *in, unsigned n_in, const char *bin, unsigned
+    /// n_bin, unsigned long long *out, unsigned cap_out, char *bout,
+    /// unsigned cap_bout)`: a call of the host-registered handler from
+    /// constant evaluation. Declared only while a handler is registered
+    /// (`Sema::target_has_builtin`).
+    pub const KILN_HOST_CALL: u32 = 2990;
     // ---- WP-484 (GCC builtins libstdc++'s `<meta>` tests for).
     /// `bool __builtin_is_string_literal(const CharT *p)` (GCC 16;
     /// `std::is_string_literal`, [meta.string.literal]): whether `p`
@@ -5812,6 +5820,8 @@ pub mod builtin {
         row(ELEMENTWISE_SUB_SAT, "__builtin_elementwise_sub_sat", "v.", N | C | T),
         // WP-473.
         row(KILN_PLAINLY_CONSTANT_EVALUATED, "__kiln_plainly_constant_evaluated", "b", N),
+        // WP-1990.
+        row(KILN_HOST_CALL, "__builtin_kiln_host_call", "ULLiUiULLiC*UicC*UiULLi*Uic*Ui", N),
         // WP-484.
         row(IS_STRING_LITERAL, "__builtin_is_string_literal", "b.", N | T | I),
         // WP-610.

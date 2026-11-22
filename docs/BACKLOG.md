@@ -1087,6 +1087,11 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1909 | oven: a closure-compiled dispatch tier, after WP-1907 and WP-1908 | WP-1864 | open |
 | WP-1910 | oven: hardware-counter profile of the Oven once perf is available on the host | WP-1864 | open |
 | WP-1911 | CI: clippy and tests with `--features kiln_oven/split` (the split is built only with that feature) | WP-1864 | open |
+| WP-1990 | host-call builtin for tooling clients: `__builtin_kiln_host_call` forwards constant evaluation to a host-registered handler; never memoized, an error under speculation | - | done: spec/host-calls.md; `HostCalls` handler via `parse_preprocessed_with_host`, range checks before the call, no memo, uncatchable errors, speculative/run-time errors, PCH/module refused |
+| WP-1995 | retained evaluation session for tooling clients: after a TU, evaluate a named consteval function many times, each run isolated, with per-run step and memory budgets and cancellation | WP-1990 | open |
+| WP-2000 | host calls: audit lazily evaluated constexpr variable templates (`eval_var_init`) for a missing or duplicated speculative-call error | WP-1990 | open |
+| WP-2001 | host calls: restore the host mode after a contained panic inside an evaluation | WP-1990 | open |
+| WP-2002 | host calls: an integer-only fast builtin, only if a tooling client needs more than ~7M calls/s | WP-1990 | open |
 | WP-1930 | written-reference table stage 1 (tooling clients): opt-in AST side table of written names, dump, expression/member names and qualifier components | - | done: `kiln_ast::written_refs` (28-byte entries, transient in snapshots), `-fkiln-dump-written-refs`, harness `written-refs:`, spec/ast.md §18 |
 | WP-1931 | written-reference table stage 2: type names in every type-specifier context, template names, base specifiers, member-initializer ids (pseudo-destructor type names included) | WP-1930 | open |
 | WP-1932 | written-reference table stage 3: declarative contexts (using-declarations and -directives, namespace alias targets, declarator-id qualifiers, elaborated and friend references, specialization targets, concept names, designators) | WP-1930 | open |

@@ -8,3 +8,6 @@ oven_contract_condition_not_constant_observe = Warning (0) "contract condition i
 oven_contract_predicate_false = Error (0) "contract predicate is false in constant expression";
 oven_contract_predicate_false_observe = Warning (0) "contract predicate is false in constant expression";
 oven_enum_constexpr_conversion = WarningError [EnumConstexprConversion] (4) "integer value {0} is outside the valid range of values [{1}, {2}] for the enumeration type '{3}'";
+// WP-1990: a host call reached by an evaluation that only asks whether
+// something is constant (spec/host-calls.md §4).
+oven_host_call_speculative = Error (0) "host call during speculative evaluation";

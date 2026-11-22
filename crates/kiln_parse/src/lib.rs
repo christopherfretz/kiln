@@ -44,6 +44,7 @@ use kiln_source::activity::{self, Phase};
 use kiln_source::symbol::Interner;
 use kiln_source::{FileId, Loc, SourceManager};
 
+pub use kiln_sema::{HostCalls, HostError, HostOut};
 pub use parser::{PExpr, Parser};
 pub use tentative::TypeIdContext;
 pub use tokens::{Event, LoopHintInfo, TokenSource};
@@ -492,12 +493,37 @@ pub fn parse_preprocessed<'a, 'sm>(
     opts: &ParseOptions,
     limits: ConstexprLimits,
 ) -> (ParsedTu, Preprocessor<'sm, 'a>) {
+    parse_preprocessed_with_host(pp, interner, diags, target, opts, limits, None)
+}
+
+/// [`parse_preprocessed`] with host-call handler `host` registered for
+/// the translation unit (spec/host-calls.md §3): `__builtin_kiln_host_call`
+/// is declared and calls `host`, which [`ParsedTu::oven`] then holds
+/// (`Oven::take_host_calls`). The preprocessor's `__has_builtin` answer
+/// is the caller's (`ClangFeatures::with_kiln_host_calls`).
+///
+/// # Panics
+///
+/// If `interner` is not `pp`'s interner.
+#[must_use]
+pub fn parse_preprocessed_with_host<'a, 'sm>(
+    pp: Preprocessor<'sm, 'a>,
+    interner: Arc<Interner>,
+    diags: &'a DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+    host: Option<Box<dyn HostCalls>>,
+) -> (ParsedTu, Preprocessor<'sm, 'a>) {
     assert!(
         std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),
         "the AST and the preprocessor share an interner"
     );
     let lit_opts = literal_options(opts, &target);
     let mut s = new_sema(interner, diags, target, opts, limits);
+    if host.is_some() {
+        let _ = s.set_host_calls(host);
+    }
     if opts.record_image {
         s.record_module_image();
     }

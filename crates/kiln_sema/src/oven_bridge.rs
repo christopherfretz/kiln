@@ -367,6 +367,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if let Some(v) = self.carried_lookup(e, &ctx) {
             return Ok(v);
         }
+        if let Some(f) = ctx.object.and_then(|v| self.host_failed_init(v)) {
+            return Err(f);
+        }
         let probe = self.carried_probe(e, &ctx);
         let r = self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate(b, e, ctx));
         if let Some(p) = probe {
@@ -978,6 +981,19 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let mut oven = Box::new(Oven::new(budget));
         oven.set_backtrace_limit(backtrace_limit);
         self.oven = Some(oven);
+    }
+
+    /// Registers `handler` as the Oven's host-call handler (`None`:
+    /// removes it), returning the previous one, and declares
+    /// `__builtin_kiln_host_call` exactly while one is registered
+    /// (spec/host-calls.md §1, §3). Call before parsing.
+    pub fn set_host_calls(
+        &mut self,
+        handler: Option<Box<dyn kiln_oven::HostCalls>>,
+    ) -> Option<Box<dyn kiln_oven::HostCalls>> {
+        self.host_calls = handler.is_some();
+        let Some(o) = &mut self.oven else { unreachable!("the Oven is out during an evaluation") };
+        o.set_host_calls(handler)
     }
 
     /// Records the constant-evaluation profile at `level`

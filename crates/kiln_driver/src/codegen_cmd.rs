@@ -17,7 +17,7 @@ use kiln_codegen::{AutoVarInit, CodegenOptions, RelocModel, Visibility};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_llvm::Module;
-use kiln_parse::{ParseOptions, parse_preprocessed};
+use kiln_parse::{ParseOptions, parse_preprocessed_with_host};
 use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
 use kiln_source::{SourceManager, Span};
@@ -516,6 +516,10 @@ impl CodegenJob<'_> {
                     self.parse_options()
                 })?;
             let main_id = pp.main_file();
+            let mut sema = sema;
+            if let Some(h) = crate::host_test::handler(a) {
+                let _ = sema.set_host_calls(Some(h));
+            }
             let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
             restore.timer.mark("continue");
             restore.timer.report();
@@ -529,13 +533,14 @@ impl CodegenJob<'_> {
             let main_id = pp.main_file();
             let popts = self.parse_options();
             let limits = a.constexpr.limits();
-            let (tu, pp) = parse_preprocessed(
+            let (tu, pp) = parse_preprocessed_with_host(
                 pp,
                 Arc::clone(interner),
                 engine,
                 target.clone(),
                 &popts,
                 limits,
+                crate::host_test::handler(a),
             );
             (tu, pp, deps, main_id)
         };

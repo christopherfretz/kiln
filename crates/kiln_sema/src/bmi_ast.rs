@@ -564,6 +564,11 @@ impl Sema<'_, '_> {
     /// unit's evaluations are recorded and this one is eligible.
     pub(crate) fn carried_probe(&mut self, e: ExprId, ctx: &EvalContext) -> Option<Probe> {
         self.bmi.recorder.as_ref()?;
+        if self.host_calls {
+            // A host call's result belongs to this compilation only
+            // (spec/host-calls.md §6).
+            return None;
+        }
         if self.module_current_unit() != 0 {
             return None;
         }

@@ -704,6 +704,11 @@ pub(crate) mod bi {
     /// address.
     pub const MM_VAL_A: u32 = 8;
     pub const MM_VAL_B: u32 = 16;
+    /// `__builtin_kiln_host_call` (WP-1990, spec/host-calls.md,
+    /// `vm/host.rs`): `a` is the first of the nine consecutive registers
+    /// holding the call's arguments (raw, not a register read); `t1` and
+    /// `t2` the element types of `in` and `bin`.
+    pub const HOST_CALL: u32 = 48;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).

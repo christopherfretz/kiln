@@ -68,6 +68,7 @@
 //! | `full_deduction`, `full_redecl_scan` | configuration | test hooks of `ParseOptions` |
 //! | `tu_prefix` | configuration | `ParseOptions::prefix` (a header being precompiled) |
 //! | `permissive` | configuration | `-fpermissive` |
+//! | `host_calls` | configuration | a host-call handler is registered (spec/host-calls.md; a snapshot is never written with one) |
 //! | `std` | configuration | `-std=` (set by the parser) |
 //! | `inst.limits`, `inst.report.format` (inside the state `inst`) | configuration | `-ftemplate-depth=`, `-ftemplate-backtrace-limit=`, `-fkiln-instantiation-report=`: kept from the consumer's `Sema` |
 //! | `spare_oven` | rebuilt | the placeholder of an Oven loan, allocated on demand |
@@ -163,7 +164,8 @@ macro_rules! sema_fields {
                 target_features, x86_features, target_attr_features,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, contracts, sized_deallocation,
                 aligned_allocation, contract_checks, short_enums, char8, lib_builtin_name, clang_constexpr_builtin, fp, fp_eval_on_command_line, complex_promoted, cfg_dump,
-                cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],
+                cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std,
+                host_calls],
             // `ctx` first: the most telling refusal (a prefix ending inside
             // a namespace or `extern "C" {`); then the construct stacks.
             transient: [ctx, classes, func, lambdas, enums, defining, suspended_defining, synth, fn_saved,
