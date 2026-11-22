@@ -1,28 +1,37 @@
-8:28-8:29  expr  'b' -> Base::b@7:7 in=Base::get@8:7
-11:9-11:13  nns  'Base' -> Base@6:8 in=Num@10:8
-13:48-13:49  expr  'v' -> Num::v@12:7 in=Num::operator+@13:7
-13:52-13:53  expr  'o' -> o@13:21 in=Num::operator+@13:7
-13:54-13:55  member  'v' -> Num::v@12:7 in=Num::operator+@13:7
-14:46-14:47  expr  'v' -> Num::v@12:7 in=Num::as@14:24
-19:11-19:12  expr  'n' -> n@18:17 in=s@19:7
-19:13-19:14  member  'v' -> Num::v@12:7 in=s@19:7
-19:17-19:18  expr  'p' -> p@18:25 in=s@19:7
-19:20-19:21  member  'v' -> Num::v@12:7 in=s@19:7
-19:24-19:25  expr  'n' -> n@18:17 in=s@19:7
-19:26-19:30  nns  'Base' -> Base@6:8 in=s@19:7
-19:32-19:33  member  'b' -> Base::b@7:7 q=19:26 in=s@19:7
-19:36-19:37  expr  'p' -> p@18:25 in=s@19:7
-19:39-19:42  member  'get' -> Base::get@8:7 found=Num::get@11:15 in=s@19:7
-20:11-20:12  expr  'n' -> n@18:17 in=m@20:7
-20:13-20:22  member  'operator+' -> Num::operator+@13:7 in=m@20:7
-20:24-20:25  expr  'p' -> p@18:25 in=m@20:7
-21:3-21:4  expr  's' -> s@19:7 in=members@18:5
-21:8-21:9  expr  'm' -> m@20:7 in=members@18:5
-21:19-21:21  member  'as' -> Num::as<int>@14:24 found=Num::as@14:24 in=members@18:5
-21:31-21:32  expr  'p' -> p@18:25 in=members@18:5
-21:34-21:36  member  'as' -> Num::as<long>@14:24 found=Num::as@14:24 in=members@18:5
-22:3-22:4  expr  'p' -> p@18:25 in=members@18:5
-22:7-22:10  member  'Num' -> Num::~Num@15:3 in=members@18:5
-23:10-23:11  expr  's' -> s@19:7 in=members@18:5
-23:14-23:15  expr  'm' -> m@20:7 in=members@18:5
-23:16-23:19  member  'get' -> Base::get@8:7 found=Num::get@11:15 in=members@18:5
+9:28-9:29  expr  'b' -> Base::b@8:7 in=Base::get@9:7
+11:14-11:18  base  'Base' -> Base@7:8 in=Num@11:8
+12:9-12:13  nns  'Base' -> Base@7:8 in=Num@11:8
+14:3-14:6  type  'Num' -> Num@11:8 in=Num::operator+@14:7
+14:17-14:20  type  'Num' -> Num@11:8 in=o@14:21
+15:22-15:23  type  'T' -> T@15:19 in=Num::as@15:24
+14:39-14:42  type  'Num' -> Num@11:8 in=Num::operator+@14:7
+14:48-14:49  expr  'v' -> Num::v@13:7 in=Num::operator+@14:7
+14:52-14:53  expr  'o' -> o@14:21 in=Num::operator+@14:7
+14:54-14:55  member  'v' -> Num::v@13:7 in=Num::operator+@14:7
+15:44-15:45  type  'T' -> T@15:19 in=Num::as@15:24
+15:46-15:47  expr  'v' -> Num::v@13:7 in=Num::as@15:24
+19:13-19:16  type  'Num' -> Num@11:8 in=n@19:17
+19:20-19:23  type  'Num' -> Num@11:8 in=p@19:25
+20:11-20:12  expr  'n' -> n@19:17 in=s@20:7
+20:13-20:14  member  'v' -> Num::v@13:7 in=s@20:7
+20:17-20:18  expr  'p' -> p@19:25 in=s@20:7
+20:20-20:21  member  'v' -> Num::v@13:7 in=s@20:7
+20:24-20:25  expr  'n' -> n@19:17 in=s@20:7
+20:26-20:30  nns  'Base' -> Base@7:8 in=s@20:7
+20:32-20:33  member  'b' -> Base::b@8:7 q=20:26 in=s@20:7
+20:36-20:37  expr  'p' -> p@19:25 in=s@20:7
+20:39-20:42  member  'get' -> Base::get@9:7 found=Num::get@12:15 in=s@20:7
+21:3-21:6  type  'Num' -> Num@11:8 in=m@21:7
+21:11-21:12  expr  'n' -> n@19:17 in=m@21:7
+21:13-21:22  member  'operator+' -> Num::operator+@14:7 in=m@21:7
+21:24-21:25  expr  'p' -> p@19:25 in=m@21:7
+22:3-22:4  expr  's' -> s@20:7 in=members@19:5
+22:8-22:9  expr  'm' -> m@21:7 in=members@19:5
+22:19-22:21  template  'as' -> Num::as<int>@15:24 found=Num::as@15:24 in=members@19:5
+22:31-22:32  expr  'p' -> p@19:25 in=members@19:5
+22:34-22:36  member  'as' -> Num::as<long>@15:24 found=Num::as@15:24 in=members@19:5
+23:3-23:4  expr  'p' -> p@19:25 in=members@19:5
+23:7-23:10  member  'Num' -> Num::~Num@16:3 in=members@19:5
+24:10-24:11  expr  's' -> s@20:7 in=members@19:5
+24:14-24:15  expr  'm' -> m@21:7 in=members@19:5
+24:16-24:19  member  'get' -> Base::get@9:7 found=Num::get@12:15 in=members@19:5

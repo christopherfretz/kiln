@@ -52,9 +52,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   declaration it denotes (the overload resolution winner for an
   overloaded name, none for a dependent one), what lookup found, the
   enclosing declaration and the qualifier to its left, and prints one
-  line per name. Off by default, with no cost beyond one branch per
-  name; not carried in PCH snapshots or module images yet
-  (spec/ast.md §18).
+  line per name. Stage 2 (WP-1931) adds type names in every
+  type-specifier context (casts, `new`, `sizeof`, handlers, template
+  arguments, typename-specifiers, elaborated references, `using enum`,
+  pseudo-destructors), template names (template-ids, CTAD, template
+  template arguments, `.template` members), base-specifiers and
+  mem-initializer-ids, with the using-shadow as `found` when a
+  using-declaration brought the name in. Off by default, with no cost
+  beyond one branch per name; not carried in PCH snapshots or module
+  images yet (spec/ast.md §18).
 - Host calls for tooling clients (WP-1990, spec/host-calls.md): a
   program embedding kiln can register a Rust handler (`HostCalls`, with
   `HostOut` and `HostError`, through `parse_preprocessed_with_host`)

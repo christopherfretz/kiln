@@ -16,9 +16,10 @@ use kiln_ast::expr::BinaryOp;
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::{Requirement, TtpKind};
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TemplateName};
+use kiln_ast::written_refs::{RefQualifier, RefRole};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, Std, TokKind};
+use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
 use kiln_sema::using::Qualifier;
@@ -1069,6 +1070,7 @@ impl Parser<'_, '_> {
             Err(()) => (None, true),
         };
         // `nns template name` ([temp.names]/5).
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
         let dep = qual.as_ref().is_some_and(|q| self.s.is_dependent_ctx(q.ctx));
         // A template-id (`K<int>`) is one annotation token to clang, so the
@@ -1154,6 +1156,15 @@ impl Parser<'_, '_> {
             self.emit(d);
             return false;
         };
+        if self.s.records_written_refs()
+            && let Some((n, nl)) = name
+        {
+            // The default's template name (spec/ast.md §18.4).
+            let hi = self.s.token_end_of(nl).unwrap_or(nl);
+            let lookup = (n, qual.map(|q| q.ctx));
+            let span = kiln_source::Span::new(nl, hi);
+            self.s.note_written_template_arg(span, TemplateArg::template(tn), link, lookup);
+        }
         self.s.act_on_template_param_default(p, TemplateArg::template(tn), eq, at);
         true
     }
@@ -1454,6 +1465,73 @@ impl Parser<'_, '_> {
     /// alias template or a template template parameter
     /// ([temp.arg.template]/1): consumed, as a template name.
     fn at_template_name_arg(&mut self) -> Option<TemplateArg> {
+        if !self.s.records_written_refs() {
+            return self.at_template_name_arg_inner();
+        }
+        let start = self.pos();
+        // The name's tokens, read before the parse (the token window
+        // keeps only a few tokens behind).
+        let end = self.scan_name_qual_at(start).map_or(start, |x| x.0);
+        let toks: Vec<Token> = (start..end).map(|i| self.tok_at(i)).collect();
+        let m = self.s.written_ref_mark();
+        let a = self.at_template_name_arg_inner()?;
+        // The template name is the last token taken (spec/ast.md §18.4).
+        let taken = self.pos().saturating_sub(start);
+        if taken > 0
+            && taken <= toks.len()
+            && let Some(name) = self.ident_of(toks[taken - 1])
+        {
+            // A qualifier parsed as one left its link; one taken as
+            // tokens (the lookahead classified it) is recorded here.
+            let parsed = m.is_some_and(|m| self.s.ast.written_refs.len() > m.entries as usize);
+            let (link, qual) = if taken == 1 {
+                (RefQualifier::NONE, None)
+            } else if parsed {
+                (self.nns_link, None)
+            } else {
+                self.note_scanned_qualifier(&toks[..taken - 1])
+            };
+            self.s.note_written_template_arg(toks[taken - 1].span, a, link, (name, qual));
+        }
+        Some(a)
+    }
+
+    /// Records the components of the nested-name-specifier written as
+    /// `toks` that the lookahead classified and the parse took without
+    /// parsing (`N::M::` before a template template argument's name):
+    /// the qualifier link after it, and its scope. A template-id
+    /// component ends the walk (its arguments were not parsed).
+    fn note_scanned_qualifier(&mut self, toks: &[Token]) -> (RefQualifier, Option<DeclId>) {
+        let mut i = 0;
+        let mut link = RefQualifier::NONE;
+        let mut ctx = None;
+        if toks.first().is_some_and(|&t| Self::punct_of(t) == Some(Punct::ColonColon)) {
+            link = RefQualifier::GLOBAL;
+            ctx = Some(self.s.ast.tu);
+            i += 1;
+        }
+        while i + 1 < toks.len() {
+            if self.kw_of(toks[i]) == Some(Kw::Template) {
+                i += 1;
+                continue;
+            }
+            let Some(n) = self.ident_of(toks[i]) else { break };
+            if Self::punct_of(toks[i + 1]) != Some(Punct::ColonColon) {
+                break;
+            }
+            let d = match self.s.classify_nested_name(n, ctx) {
+                NameClass::Namespace(d) | NameClass::Type(_, d) => Some(d),
+                _ => None,
+            };
+            link = self.s.note_written_nns_decl(toks[i].span, d, link);
+            let Some(d) = d else { return (link, None) };
+            ctx = Some(d);
+            i += 2;
+        }
+        (link, ctx)
+    }
+
+    fn at_template_name_arg_inner(&mut self) -> Option<TemplateArg> {
         let (end, split, class, _, qual) = self.scan_name_qual_at(self.pos())?;
         // `nns template name` with a dependent `nns` ([temp.names]/5,
         // [temp.arg.template]/1). A member template of a dependent
@@ -1756,8 +1834,40 @@ impl Parser<'_, '_> {
     /// The `template? name (< args >)?` after qualifier `q` naming a type:
     /// a dependent name type (with keyword `kw`) when `q` is dependent,
     /// else the type found by qualified lookup.
-    #[allow(clippy::too_many_lines, reason = "the qualified type-name forms in one place")]
     pub(crate) fn parse_qualified_type_rest(
+        &mut self,
+        q: Qualifier,
+        kw: TagKeyword,
+    ) -> Option<QualType> {
+        if !self.s.records_written_refs() {
+            return self.parse_qualified_type_rest_inner(q, kw);
+        }
+        // The name after the qualifier, and its qualifier link (the
+        // qualifier was parsed just before; spec/ast.md §18.4).
+        let link = self.nns_link;
+        let at = self.pos() + usize::from(self.at_kw(Kw::Template));
+        // Read before the parse: the token window keeps only a few
+        // tokens behind.
+        let name = self.ident_of(self.tok_at(at));
+        let span = self.tok_at(at).span;
+        let less = self.next_is_less(at + 1);
+        let ty = self.parse_qualified_type_rest_inner(q, kw);
+        if self.pos() > at
+            && let Some(name) = name
+        {
+            let template_id = self.pos() > at + 1 && less;
+            let ctad = ty.is_some_and(|t| self.s.written_is_ctad(t));
+            let role = if template_id || ctad { RefRole::Template } else { RefRole::Type };
+            let lookup = Some((name, Some(q.ctx)));
+            if let Some(id) = self.s.note_written_type_found(span, ty, None, role, link, lookup) {
+                self.last_tname = Some(id);
+            }
+        }
+        ty
+    }
+
+    #[allow(clippy::too_many_lines, reason = "the qualified type-name forms in one place")]
+    fn parse_qualified_type_rest_inner(
         &mut self,
         q: Qualifier,
         kw: TagKeyword,
@@ -2101,12 +2211,30 @@ impl Parser<'_, '_> {
         match q {
             None => {
                 let name = self.ident()?;
-                let name_loc = self.bump().span.lo;
+                let name_span = self.bump().span;
+                let name_loc = name_span.lo;
                 let class = self.s.classify_name(name, None);
-                match self.parse_template_id_rest(class, name, name_loc) {
+                let ty = match self.parse_template_id_rest(class, name, name_loc) {
                     Ok(TemplateIdRef::Type(t)) => Some(t),
                     _ => None,
+                };
+                if self.s.records_written_refs() {
+                    let tmpl = match class {
+                        NameClass::TypeTemplate(d) => Some(d),
+                        _ => None,
+                    };
+                    if let Some(id) = self.s.note_written_type_found(
+                        name_span,
+                        ty,
+                        tmpl,
+                        RefRole::Template,
+                        RefQualifier::NONE,
+                        Some((name, None)),
+                    ) {
+                        self.last_tname = Some(id);
+                    }
                 }
+                ty
             }
             Some(q) => {
                 if self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_qualifier(q.ctx)

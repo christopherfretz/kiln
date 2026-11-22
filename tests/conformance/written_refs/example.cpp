@@ -2,9 +2,9 @@
 // reduced from real code: a call found by argument-dependent lookup, a
 // member of a parameter, a dependent call in a function template and the
 // call of its specialization, qualifiers before type names and before an
-// out-of-line definition's name. Stage 1 records expression, member and
-// qualifier names; the type, template, base and using-declaration names
-// here are later stages and have no entries yet.
+// out-of-line definition's name. Stages 1 and 2 record expression,
+// member, qualifier, type, template and base names; the using-declaration
+// name is a later stage and has no entry yet.
 //@ written-refs: example.refs
 namespace store {
 namespace disk {

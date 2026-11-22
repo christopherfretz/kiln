@@ -1,5 +1,6 @@
 // The written-reference table (spec/ast.md §18), role `member`: `a.m`,
-// `p->m()`, qualified members, `template` members, operator-function-ids
+// `p->m()`, qualified members (a member after `.template` has role
+// `template`, §18.4), operator-function-ids
 // after `.`, explicit destructor calls, and a member found through a
 // using-declaration (`found` is the using-shadow).
 //@ written-refs: member-names.refs

@@ -1,0 +1,87 @@
+15:33-15:34  expr  'n' -> lib::Rec::n@14:7 in=lib::Rec::operator int@15:3
+21:3-21:4  type  'T' -> T@20:17 in=lib::Box::v@21:5
+22:3-22:6  type  'Box' -> lib::Box@20:27 in=lib::Box::self@22:8
+27:7-27:10  nns  'lib' -> lib@12:11 in=app@26:11
+28:15-28:18  nns  'lib' -> lib@12:11 in=app@26:11
+28:20-28:23  type  'Rec' -> lib::Rec@13:8 q=28:15 in=app@26:11
+29:9-29:12  nns  'lib' -> lib@12:11 in=app::Total@29:20
+29:14-29:19  type  'Count' -> lib::Count@19:13 q=29:9 in=app::Total@29:20
+31:1-31:4  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::make@31:5
+31:10-31:13  nns  'lib' -> lib@12:11 in=c@31:21
+31:15-31:20  type  'Count' -> lib::Count@19:13 q=31:10 in=c@31:21
+32:12-32:15  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=r@32:16
+32:22-32:25  nns  'lib' -> lib@12:11 in=app::later@32:6
+32:27-32:32  type  'Count' -> lib::Count@19:13 q=32:22 in=app::later@32:6
+33:1-33:6  type  'Total' -> app::Total@29:20 in=app::sum@33:7
+33:11-33:16  type  'Alias' -> app::Alias@28:7 in=a@33:18
+34:10-34:13  nns  'lib' -> lib@12:11 in=app::e@34:20
+34:15-34:18  type  'Rec' -> lib::Rec@13:8 q=34:10 in=app::e@34:20
+34:24-34:25  expr  'a' -> a@33:18 in=app::e@34:20
+35:3-35:6  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
+35:16-35:19  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::p@35:8
+35:20-35:21  expr  'k' -> k@33:25 in=app::p@35:8
+36:9-36:12  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
+36:36-36:39  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::q@36:14
+36:43-36:44  expr  'p' -> app::p@35:8 in=app::q@36:14
+37:35-37:36  expr  'p' -> app::p@35:8 in=app::x@37:8
+37:57-37:60  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::x@37:8
+37:64-37:65  expr  'q' -> app::q@36:14 in=app::x@37:8
+37:68-37:69  member  'n' -> lib::Rec::n@14:7 in=app::x@37:8
+38:3-38:4  expr  'x' -> app::x@37:8 in=app::sum@33:7
+38:15-38:18  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::sum@33:7
+38:30-38:33  nns  'lib' -> lib@12:11 in=app::sum@33:7
+38:35-38:38  type  'Err' -> lib::Err@17:8 q=38:30 in=app::sum@33:7
+38:51-38:54  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::sum@33:7
+38:64-38:69  type  'Total' -> app::Total@29:20 in=app::sum@33:7
+39:12-39:15  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::y@39:21
+39:18-39:19  member  'n' -> lib::Rec::n@14:7 in=app::y@39:21
+39:25-39:26  expr  'q' -> app::q@36:14 in=app::y@39:21
+39:27-39:39  member  'operator int' -> lib::Rec::operator int@15:3 in=app::y@39:21
+40:3-40:6  nns  'lib' -> lib@12:11 in=app::b@40:17
+40:12-40:15  type  'Rec' -> lib::Rec@13:8 found=app::Rec@27:12 in=app::b@40:17
+40:8-40:11  template  'Box' -> lib::Box@20:27 q=40:3 in=app::b@40:17
+40:20-40:21  expr  'e' -> app::e@34:20 in=app::b@40:17
+41:10-41:11  expr  'p' -> app::p@35:8 in=app::sum@33:7
+43:11-43:14  nns  'lib' -> lib@12:11 in=app::sum@33:7
+43:16-43:19  type  'Err' -> lib::Err@17:8 q=43:11 in=app::sum@33:7
+44:18-44:21  nns  'lib' -> lib@12:11 in=app::sum@33:7
+44:23-44:26  type  'Err' -> lib::Err@17:8 q=44:18 in=app::sum@33:7
+45:5-45:6  expr  'y' -> app::y@39:21 in=app::sum@33:7
+47:22-47:27  type  'Total' -> app::Total@29:20 in=app::sum@33:7
+47:29-47:30  expr  'x' -> app::x@37:8 in=app::sum@33:7
+47:33-47:34  expr  'y' -> app::y@39:21 in=app::sum@33:7
+47:37-47:38  expr  'b' -> app::b@40:17 in=app::sum@33:7
+47:39-47:40  member  'v' -> lib::Box<lib::Rec>::v@21:5 in=app::sum@33:7
+47:41-47:42  member  'n' -> lib::Rec::n@14:7 in=app::sum@33:7
+51:14-51:17  nns  'lib' -> lib@12:11 in=app::Probe@50:8
+51:19-51:23  type  'Mode' -> lib::Mode@18:12 q=51:14 in=app::Probe@50:8
+52:3-52:6  nns  'lib' -> lib@12:11 in=app::Probe::m@52:13
+52:8-52:12  type  'Mode' -> lib::Mode@18:12 q=52:3 in=app::Probe::m@52:13
+52:17-52:19  expr  'on' -> lib::Mode::on@18:19 found=app::Probe::on@51:19 in=app::Probe::m@52:13
+55:29-55:30  nns  'T' -> T@55:17 in=app::first@55:43
+55:32-55:42  type  'value_type' -> (dependent) q=55:29 in=app::first@55:43
+55:55-55:56  type  'T' -> T@55:17 in=t@55:58
+56:12-56:13  nns  'T' -> T@55:17 in=app::v@56:26
+56:15-56:25  type  'value_type' -> (dependent) q=56:12 in=app::v@56:26
+56:30-56:31  expr  't' -> t@55:58 in=app::v@56:26
+56:32-56:37  member  'front' -> (dependent) in=app::v@56:26
+57:10-57:11  expr  'v' -> app::v@56:26 in=app::first@55:43
+61:14-61:17  type  'Int' -> app::Int@60:13 in=p@61:19
+61:24-61:25  expr  'p' -> p@61:19 in=app::destroy@61:6
+61:28-61:31  type  'Int' -> app::Int@60:13 in=app::destroy@61:6
+62:35-62:36  type  'T' -> T@62:17 in=p@62:38
+62:43-62:44  expr  'p' -> p@62:38 in=app::destroy_t@62:25
+62:47-62:48  type  'T' -> T@62:17 in=app::destroy_t@62:25
+66:12-66:15  nns  'lib' -> lib@12:11 in=app::Poly::operator Err@66:3
+66:17-66:20  type  'Err' -> lib::Err@17:8 q=66:12 in=app::Poly::operator Err@66:3
+68:15-68:19  base  'Poly' -> app::Poly@64:8 in=app::Leaf@68:8
+69:1-69:4  nns  'lib' -> lib@12:11 in=app::convert@69:10
+69:6-69:9  type  'Err' -> lib::Err@17:8 q=69:1 in=app::convert@69:10
+69:18-69:22  type  'Poly' -> app::Poly@64:8 in=p@69:24
+70:3-70:7  type  'Leaf' -> app::Leaf@68:8 in=app::l@70:9
+70:26-70:30  type  'Leaf' -> app::Leaf@68:8 in=app::l@70:9
+70:33-70:34  expr  'p' -> p@69:24 in=app::l@70:9
+71:10-71:11  expr  'l' -> app::l@70:9 in=app::convert@69:10
+71:22-71:25  nns  'lib' -> lib@12:11 in=app::convert@69:10
+71:27-71:30  type  'Err' -> lib::Err@17:8 q=71:22 in=app::convert@69:10
+71:13-71:30  member  'operator lib::Err' -> app::Poly::operator Err@66:3 in=app::convert@69:10

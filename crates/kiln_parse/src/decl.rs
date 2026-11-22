@@ -8,6 +8,7 @@ use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{
     AutoKeyword, ExcSpec, Quals, RefQual, TagKeyword, TypeAttrKind, UnaryTransformKind,
 };
+use kiln_ast::written_refs::{RefQualifier, RefRole};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
@@ -709,8 +710,20 @@ impl Parser<'_, '_> {
             self.skip_to_semi();
             return Vec::new();
         };
-        let nl = self.bump().span.lo;
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
+        let name_span = self.bump().span;
+        let nl = name_span.lo;
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        if self.s.records_written_refs() {
+            // The operand is a type name (spec/ast.md §18.4).
+            let ty = match class {
+                NameClass::Type(t, _) => Some(t),
+                NameClass::Dependent => Some(QualType::DEPENDENT),
+                _ => None,
+            };
+            let lookup = Some((name, qual.map(|q| q.ctx)));
+            self.s.note_written_type_found(name_span, ty, None, RefRole::Type, link, lookup);
+        }
         let d = self.s.act_on_using_enum(qual, class, name, nl);
         self.expect_semi_after("using-enum declaration");
         d.into_iter().collect()
@@ -1617,11 +1630,16 @@ impl Parser<'_, '_> {
     ) {
         let mut nns = None;
         let mut d = d;
-        let name_loc = self.tok_at(end - 1).span.lo;
+        let name_span = self.tok_at(end - 1).span;
+        let name_loc = name_span.lo;
+        let mut link = RefQualifier::NONE;
+        let name = self.ident_of(self.tok_at(end - 1));
+        let mut scope = None;
         if qualified {
-            let name = self.ident_of(self.tok_at(end - 1));
             if let Ok(Some(q)) = self.parse_nested_name_nns() {
                 nns = Some(q.nns);
+                link = self.nns_link;
+                scope = Some(q.ctx);
                 // `X<A>::M`: the lookahead found `M` in `X`'s primary
                 // pattern; the placeholder names the member template of
                 // the specialization the qualifier names (as `td::M`
@@ -1641,6 +1659,18 @@ impl Parser<'_, '_> {
             self.bump();
         }
         let ty = self.s.ctad_placeholder(d, nns, (loc, name_loc));
+        if self.s.records_written_refs()
+            && let Some(id) = self.s.note_written_type_found(
+                name_span,
+                Some(ty),
+                Some(d),
+                RefRole::Template,
+                link,
+                name.map(|n| (n, scope)),
+            )
+        {
+            self.last_tname = Some(id);
+        }
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
             ds.invalid = true;
             self.spec_error(&e, loc);
@@ -1698,6 +1728,27 @@ impl Parser<'_, '_> {
     /// A type-name decl-specifier at the current token: the name class
     /// picks the arm, and each arm is a named helper. False if the name
     /// is no type-name here (the caller tries the other specifiers).
+    /// The injected-class-name of a base class template specialization,
+    /// `B` or (`qualified`) `D::B` ([temp.local]/1-2), as a type-name.
+    fn base_injected_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        ctx: DeclaratorContext,
+        qualified: bool,
+        name: Symbol,
+        loc: Loc,
+    ) {
+        if qualified {
+            self.qualified_type_name_spec(ds, ctx, loc);
+        } else if let Some(d) = self.s.inherited_injected_class(name, None) {
+            let name_span = self.bump().span;
+            self.s.mark_type_referenced(d);
+            let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
+            self.note_unqualified_type_name(name_span, ty);
+            self.set_named_base(ds, Some(ty), loc);
+        }
+    }
+
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
@@ -1731,14 +1782,7 @@ impl Parser<'_, '_> {
             Some((end, NameClass::TypeTemplate(_), name))
                 if !self.next_is_less(end) && self.base_injected_at(start, end) =>
             {
-                if end > start + 1 {
-                    self.qualified_type_name_spec(ds, ctx, loc);
-                } else if let Some(d) = self.s.inherited_injected_class(name, None) {
-                    self.bump();
-                    self.s.mark_type_referenced(d);
-                    let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
-                    self.set_named_base(ds, Some(ty), loc);
-                }
+                self.base_injected_name_spec(ds, ctx, end > start + 1, name, loc);
                 true
             }
             // The injected-class-names of two specializations of one
@@ -1751,9 +1795,10 @@ impl Parser<'_, '_> {
                     && self.s.ambiguous_injected_class(name).is_some() =>
             {
                 if let Some(d) = self.s.ambiguous_injected_class(name) {
-                    self.bump();
+                    let name_span = self.bump().span;
                     self.s.diagnose_ambiguous_name(name, None, loc);
                     let ty = self.s.elaborated_tag_type(d, TagKeyword::None);
+                    self.note_unqualified_type_name(name_span, ty);
                     self.set_named_base(ds, Some(ty), loc);
                 }
                 true
@@ -1865,6 +1910,7 @@ impl Parser<'_, '_> {
         (ty, d, name): (QualType, DeclId, Symbol),
         loc: Loc,
     ) {
+        let name_span = self.tok().span;
         while self.pos() < end {
             self.bump();
         }
@@ -1884,11 +1930,23 @@ impl Parser<'_, '_> {
             Ok(None) => ty,
             Err(()) => QualType::ERROR,
         };
+        if self.s.records_written_refs()
+            && let Some(id) = self.s.note_written_type_found(
+                name_span,
+                Some(ty),
+                None,
+                RefRole::Type,
+                RefQualifier::NONE,
+                Some((name, None)),
+            )
+        {
+            self.last_tname = Some(id);
+        }
         self.set_named_base(ds, Some(ty), loc);
     }
 
     /// Whether token `i` is `<`.
-    fn next_is_less(&self, i: usize) -> bool {
+    pub(crate) fn next_is_less(&self, i: usize) -> bool {
         self.tok_at(i).kind == TokKind::Punct(Punct::Less)
     }
 
@@ -1920,8 +1978,11 @@ impl Parser<'_, '_> {
 
     /// The injected-class-name of the class template `d` ([temp.local]/1).
     fn injected_class_name_spec(&mut self, ds: &mut DeclSpec, d: DeclId, loc: Loc) {
-        self.bump();
+        let name_span = self.bump().span;
         let ty = self.s.injected_class_type(d);
+        if self.s.records_written_refs() {
+            self.note_type_name(name_span, RefQualifier::NONE, ty, None, RefRole::Type);
+        }
         self.set_named_base(ds, ty, loc);
     }
 
@@ -2022,7 +2083,11 @@ impl Parser<'_, '_> {
         let text = self.s.ast.symbols().as_str(name).to_owned();
         let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
         self.emit(d);
-        self.bump();
+        let name_span = self.bump().span;
+        if self.s.records_written_refs() {
+            // A type name lookup did not find (spec/ast.md §18.4).
+            self.note_type_name(name_span, RefQualifier::NONE, None, None, RefRole::Type);
+        }
         ds.invalid = true;
         ds.type_error = true;
         let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), loc);
@@ -2592,6 +2657,7 @@ impl Parser<'_, '_> {
         let splice_qual = self.at_splice().then_some(qual_loc);
         let (qual, mut qual_failed) = self.parse_tag_qualifier_checked(ds);
         let qualifier = qual.map(|q| q.ctx);
+        let link = if qual.is_some() { self.nns_link } else { RefQualifier::NONE };
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
             && self.parse_ttp_elaborated(ds, kw_loc, ctx)
@@ -2612,6 +2678,7 @@ impl Parser<'_, '_> {
             return;
         }
         let name = self.ident().map(|n| (n, self.bump().span.lo));
+        let name_span = self.tok_at(self.pos().saturating_sub(1)).span;
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);
             ds.invalid = true;
@@ -2678,6 +2745,9 @@ impl Parser<'_, '_> {
             && (self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_class(q.ctx))
         {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
+            if use_ == TagUse::Reference && self.s.records_written_refs() {
+                self.note_type_name(name_span, link, ds.named, None, RefRole::Type);
+            }
             return;
         }
         if qual_failed && use_ != TagUse::Definition {
@@ -2698,7 +2768,18 @@ impl Parser<'_, '_> {
         // template, a partial or explicit specialization, or a member of a
         // class template defined out of line) takes no declarator.
         let templated = !nested && keyword != TagKeyword::Enum && self.s.in_template_declaration();
+        let wmark = self.s.written_ref_mark().filter(|_| self.s.records_written_refs());
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
+        // An elaborated-type-specifier that refers to an existing type
+        // and declares nothing is a type name (spec/ast.md §18.4).
+        if let Some(m) = wmark
+            && use_ == TagUse::Reference
+            && name.is_some()
+            && d.index() <= m.decls
+        {
+            let ty = self.s.elaborated_tag_type(d, keyword);
+            self.note_type_name(name_span, link, Some(ty), None, RefRole::Type);
+        }
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
             self.skip_redefined_tag_body(ds, keyword, kw_loc);

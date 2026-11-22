@@ -1802,7 +1802,10 @@ impl Parser<'_, '_> {
         };
         self.note_wname(nl, link);
         if template_kw {
-            // `e.template f<args>` ([temp.names]/5).
+            // `e.template f<args>` ([temp.names]/5): a template name.
+            if self.s.records_written_refs() {
+                self.wname_role = Some(RefRole::Template);
+            }
             let targs = if self.at(Punct::Less) {
                 let (args, _, _) = self.parse_template_arg_list()?;
                 Some(self.s.ast.types.arg_list(&args))
