@@ -226,6 +226,16 @@ lookup found members uses `(*this)` when available; with no `this`, a
 non-static winner is "call to non-static member function without an object
 argument".
 
+Where a UME is created (`build_member_overload`; the module-image
+importer's `image_ovl_member`) its qualifier, explicit template arguments
+and naming class are written to the `Ast` (`cold.member_overload`,
+spec/ast.md §5.10; WP-2020), and the template-id's arguments when the
+parser reaches them (`set_member_template_args`); they stay after the
+call consumes the set. `ovl.members` holds the whole set (candidates,
+found declarations, object, class) for resolution, with the same three
+values: each write site writes both, so it is a cache of the `Ast`'s
+name facts plus the candidates.
+
 A UME with a member function template whose explicit object expression is
 type-dependent (its type is the current instantiation: a parameter `O o`,
 a capture `[o]`, `p->` with `O *p`) is not resolved by the call: it
@@ -333,7 +343,13 @@ WP-418, `tests/conformance/over.call.object/argument-class-not-completed.cpp`
    WP-201).
 3. **Non-member candidates**: unqualified lookup of `operator@` from the
    expression's context, skipping class scopes (/3.2), plus ADL over all
-   operands.
+   operands. In a template, a dependent operator expression records this
+   lookup (with that of the rewritten forms' names) at the definition in
+   the `Ast` (`note_dependent_oper` → `templates.oper_lookups`,
+   spec/ast.md §8.5; WP-2021), and its instantiation passes the recorded
+   set (`oper_rebuild_set` → `Sema::oper_override`, an `OperCands`: the
+   interned set, or the one function a resolved expression selected) in
+   place of the lookup ([temp.dep.candidate]/1). Sema keeps no copy.
 4. **Built-in candidates** (§6.2), after 2–3; drop any whose
    parameter-type-list equals that of a non-member non-template candidate,
    rewritten ones included (/3.3.4). For built-in `=`/compound assignment

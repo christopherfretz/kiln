@@ -304,6 +304,9 @@ pub struct TemplateTables {
     pub expr_targs: ColdMap<ExprId, ArgListId>,
     /// Nested-name-specifiers of dependent and unresolved names.
     pub expr_nns: ColdMap<ExprId, NnsId>,
+    /// The definition-context lookup sets of dependent operator
+    /// expressions ([temp.dep.candidate]/1; §8.5, WP-2021).
+    pub oper_lookups: crate::oper_lookup::OperLookups,
     /// The first token of a qualified dependent name whose qualifier is
     /// not its own location (clang's `getBeginLoc`).
     pub expr_begin: ColdMap<ExprId, Loc>,
@@ -489,6 +492,7 @@ impl Default for TemplateTables {
             ttp_owner: ColdMap::new("ttp_owner"),
             member_like_friend: ColdMap::new("member_like_friend"),
             expr_nns: ColdMap::new("expr_nns"),
+            oper_lookups: crate::oper_lookup::OperLookups::new(),
             pattern_next: false,
             dependent_depth: 0,
             specs: Vec::new(),
@@ -811,6 +815,7 @@ impl HeapSize for TemplateTables {
         r.push(self.pseudo_dtor_first.mem_row());
         r.push(self.template_kw.mem_row());
         r.push(self.expr_nns.mem_row());
+        self.oper_lookups.mem_rows(&mut r);
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
         r.push(MemRow::of_vec("templ.end_of_tu_defs", &self.end_of_tu_defs));

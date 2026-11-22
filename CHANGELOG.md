@@ -10,6 +10,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- Two facts overload resolution and instantiation read now stay in the
+  `Ast` after the translation unit, for tooling clients (WP-2020,
+  WP-2021): an overloaded member access's qualifier, explicit template
+  arguments and naming class (`Ast::member_access_name`, kept whether or
+  not a call resolves the access), and a dependent operator expression's
+  definition-context lookup set (`Ast::dependent_oper_candidates`, sets
+  interned by content), which sema now reads from there at
+  instantiation (spec/ast.md §5.10, §8.5). PCH snapshot format 122.
 - A written-reference table for tooling clients (WP-1930, stage 1):
   `-fkiln-dump-written-refs` records, for each expression name, member
   name and nested-name-specifier component written in the source, the
@@ -527,6 +535,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   packagers").
 
 ### Fixed
+
+- An imported template's dependent operator expression under
+  `-fkiln-bmi-image` (WP-2021): the declaration image did not carry the
+  operator functions the template's definition found, so the importer's
+  instantiation looked the operator up again and saw the module's
+  operators declared after the definition (choosing a later, better
+  `operator-`, or accepting an operator the definition could not see).
+  The image now carries the set (`IMAGE_VERSION` 56).
 
 - An ordinary unqualified call whose function only argument-dependent
   lookup found (a hidden friend, a function or function template of an

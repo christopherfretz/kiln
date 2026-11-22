@@ -4326,8 +4326,10 @@ cold-annotation bit, type tag or declaration bit is new.
   - *Validation.* There is at least one candidate, as many found
     declarations as candidates, and the first candidate is the slot's.
   - *Reader.* It builds the `MemberExpr` as for kind 40 and inserts the
-    set into `ovl.members` under the new expression. The arrow is the
-    record's `ARROW` bit.
+    set into `ovl.members` under the new expression, and fields 3, 7 and
+    9 into the `Ast`'s `cold.member_overload` (spec/ast.md §5.10,
+    WP-2020: the same record as a source build's, so the record format
+    is unchanged). The arrow is the record's `ARROW` bit.
   - *Members hidden or joined.* The set is lookup's result at the
     definition ([class.member.lookup]): a base member hidden by the
     derived class's is not in it, and one a using-declaration brings in
@@ -4380,6 +4382,29 @@ Tests: `overloaded_member_accesses_are_carried`,
 (kiln_driver `pch_decls`); `kind2_declaration_image_wp1368_forms` (modules_bmi);
 corpus `cpp.include/pch-ovl-members-{run,errors}.cpp` and
 `module.interface/image-ovl-members-{run,errors}.cpp`.
+
+**Definition-context operator sets (WP-2021).** A dependent unary,
+binary or compound-assignment operator expression in a carried body
+keeps the non-member operator functions the unqualified lookup at the
+template's definition found ([temp.dep.candidate]/1; spec/ast.md §8.5).
+Before, the image did not carry them, and the importer's instantiation,
+finding no set, looked the operator up again: it saw the module's
+operators declared after the definition (`a - 1` chose a later, better
+`operator-(S, int)`), and an operator the definition's lookup did not find
+at all was found too (an invalid program accepted). Replay was correct.
+The expression record's cold-annotation mask widens from 16 to 32 bits
+(all 16 were taken), and bit 16, `COLD_OPER`, after `COLD_DESIG`, carries
+the set as two `DL`s of `Dc::Lookup` of one length: the functions, and
+what lookup found for each (the shadow of a `using N::operator+;`). An
+empty set is carried too (an instantiation with ADL only); a missing one
+means "not a dependent operator expression". Only on `UnaryOperator`,
+`BinaryOperator` and `CompoundAssignOperator` records (validation). A
+candidate with no record refuses the body under WP-1360's
+outside-the-image reason, as a candidate of an overloaded member access
+does. The reader interns the set (equal sets of one image share one) and
+records it on the new expression. `IMAGE_VERSION` 56. Test:
+`module.interface/image-oper-lookup-run.cpp` (it fails with the old image
+under `--bmi-image`).
 
 **Forms carried by WP-1369.** The writer's additions are
 `bmi_image/fnsugar.rs`, `predef.rs` and `specbase.rs`, plus `exprs.rs`
@@ -5284,7 +5309,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 52` since WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 56` since WP-2021, whose expression records widen the cold-annotation mask to 32 bits and carry a dependent operator expression's definition-context lookup set (`COLD_OPER`); 52 for WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

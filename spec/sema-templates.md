@@ -1880,9 +1880,12 @@ diagnosed, and the member or built-in form stands
 operator expression built in a template (`act_on_unary`, `act_on_binary`)
 records the unqualified lookup of its operator name, and for `==`, `!=`,
 `<`, `>`, `<=`, `>=` that of its rewritten forms' names too
-([over.match.oper]/3.4), at the definition (`Sema::oper_lookups`, keyed by
-the dependent expression; `=`, `[]`, `()` and `->` have no non-member
-candidates and record nothing). When the substituter rebuilds the
+([over.match.oper]/3.4), at the definition (the `Ast`'s
+`templates.oper_lookups`, keyed by the dependent expression and interned by
+content, spec/ast.md §8.5, WP-2021; `=`, `[]`, `()` and `->` have no
+non-member candidates and record nothing). A module image carries the set
+with the expression (spec/modules.md §11.11), so an importer's
+instantiation uses the module's definition-context set. When the substituter rebuilds the
 expression it passes that set to `oper_set` (`Sema::oper_override`) in
 place of a new unqualified lookup, and ADL runs on the instantiated
 operand types ([temp.dep.candidate]/1, clang's `UnresolvedLookupExpr`

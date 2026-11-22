@@ -119,7 +119,7 @@ pub(super) struct ExprRec {
     pub(super) bits: u8,
     pub(super) aux: u8,
     /// Which cold annotations follow the slots ([`COLD_END`] ...).
-    pub(super) cold: u16,
+    pub(super) cold: u32,
     /// `ExprDeps` bits: type, value and instantiation dependence (S4: a
     /// pattern's body; 0 elsewhere).
     pub(super) deps: u8,
@@ -154,56 +154,65 @@ pub(super) struct Bodies {
 /// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, a fold's
 /// `...` (sema's `fold_ellipsis`, WP-1279), a name's qualifier and
 /// template arguments (WP-1279), in this order after the slots.
-const COLD_END: u16 = 1;
-const COLD_WRITTEN: u16 = 2;
-const COLD_RHS: u16 = 4;
-const COLD_BEGIN: u16 = 8;
-const COLD_OP: u16 = 16;
+const COLD_END: u32 = 1;
+const COLD_WRITTEN: u32 = 2;
+const COLD_RHS: u32 = 4;
+const COLD_BEGIN: u32 = 8;
+const COLD_OP: u32 = 16;
 /// The lifetime-extended copy of a default argument (WP-1149) or default
 /// member initializer (WP-1177, spec/sema.md §7.6a): an expression field,
 /// so the copy is written before its use.
-const COLD_REWRITE: u16 = 32;
-const COLD_ELLIPSIS: u16 = 64;
+const COLD_REWRITE: u32 = 32;
+const COLD_ELLIPSIS: u32 = 64;
 /// A name's written qualifier and explicit template arguments (the
 /// templates' `expr_nns` / `expr_targs`, WP-1279): an [`F::Nns`] and an
 /// [`F::TA`].
-const COLD_LOOKUP: u16 = 128;
+const COLD_LOOKUP: u32 = 128;
 /// The `template` keyword of a dependent member or qualified name
 /// (`t.template get<3>()`, the templates' `template_kw`, WP-1284;
 /// [temp.names]/3): its location. The first bit of the wider field.
-const COLD_TEMPLATE_KW: u16 = 256;
+const COLD_TEMPLATE_KW: u32 = 256;
 /// A default argument or member initializer use whose initializer holds
 /// a source-location builtin (WP-1310): the location and context its
 /// values are for, and whether they include the `__impl` object.
-const COLD_SRCLOC: u16 = 512;
+const COLD_SRCLOC: u32 = 512;
 /// The naming class of an unresolved name that found class members with
 /// no using-shadow among them (sema's `ule_found`, WP-1314): an
 /// [`F::OD`] of [`Dc::Ctx`] (a class), only on `UnresolvedLookupExpr`.
-const COLD_NAMING: u16 = 1024;
+const COLD_NAMING: u32 = 1024;
 /// What an unresolved name found when that is not its declarations
 /// (WP-1342: a using-declaration's shadow in place of the declaration it
 /// names): an [`F::DL`] of [`Dc::Lookup`] as long as the name's, only on
 /// `UnresolvedLookupExpr`.
-const COLD_FOUND: u16 = 2048;
+const COLD_FOUND: u32 = 2048;
 /// A member access's name as written (the `member_extra` of a
 /// `MemberExpr`, WP-1343: `p->Base::f`, `x.template get<0>`, the using
 /// shadow found): an [`F::Nns`], an [`F::OD`] of [`Dc::Found`] and an
 /// [`F::TA`], the fields of [`Side::DeclRef`].
-const COLD_MEMBER: u16 = 4096;
+const COLD_MEMBER: u32 = 4096;
 /// An array type trait's dimension operand and value (`array_trait`,
 /// WP-1343: `__array_rank(T)`, `__array_extent(T, I)`): an [`F::OE`]
 /// and the value's low and high words, only on `ArrayTypeTraitExpr`.
-const COLD_ARRAY: u16 = 8192;
+const COLD_ARRAY: u32 = 8192;
 /// The parameter pack of the `sizeof...` an integer literal was
 /// substituted from (the templates' `size_of_pack_origin`, WP-1343; it
 /// mangles as `sZ`): an [`F::D`] of [`Dc::Pack`], only on
 /// `IntegerLiteral`.
-const COLD_PACK: u16 = 16384;
+const COLD_PACK: u32 = 16384;
 /// A designated initializer-clause's designators (`designators`,
 /// WP-1350: `.a = x` in a template pattern's list): an [`F::Desig`],
 /// only on `DesignatedInitExpr`. On an `InitListExpr`, [`COLD_REWRITE`]
 /// is instead its written form (`syntactic_list`).
-const COLD_DESIG: u16 = 32768;
+const COLD_DESIG: u32 = 32768;
+/// The definition-context operator lookup set of a dependent operator
+/// expression (the templates' `oper_lookups`, WP-2021;
+/// [temp.dep.candidate]/1): the functions and what lookup found for each,
+/// two [`F::DL`]s of [`Dc::Lookup`] of one length, only on
+/// `UnaryOperator`, `BinaryOperator` and `CompoundAssignOperator`. An
+/// empty set (a lookup that found nothing) is carried too: the importer's
+/// instantiation then has argument-dependent lookup only, where a missing
+/// one would look the operator up again.
+const COLD_OPER: u32 = 65536;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -712,7 +721,7 @@ fn stmt_aux_ok(k: StmtKind, aux: u16, nfp: usize) -> bool {
 
 /// The fields of expression record kind `ki`, in order: [`layout`],
 /// then an overloaded member access's set (WP-1368).
-fn rec_layout(ki: u8, bits: u8, cold: u16) -> Vec<F> {
+fn rec_layout(ki: u8, bits: u8, cold: u32) -> Vec<F> {
     let mut v = layout(rec_shape(ki, bits), cold);
     if ki == super::ovlmember::OVL_MEMBER {
         v.extend_from_slice(super::ovlmember::OVL_FIELDS);
@@ -731,7 +740,7 @@ fn rec_shape(ki: u8, bits: u8) -> [Slot; 2] {
 
 /// The fields of a record, in order: both slots, then the cold
 /// annotations named by `cold`.
-fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
+fn layout(shape: [Slot; 2], cold: u32) -> Vec<F> {
     let mut v = Vec::new();
     for s in shape {
         match s {
@@ -764,6 +773,8 @@ fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
         (COLD_ARRAY, F::Raw),
         (COLD_PACK, F::D(Dc::Pack)),
         (COLD_DESIG, F::Desig),
+        (COLD_OPER, F::DL(Dc::Lookup)),
+        (COLD_OPER, F::DL(Dc::Lookup)),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -893,7 +904,7 @@ pub(super) fn encode_bodies(w: &mut Wr, b: &Bodies) {
         for x in [e.kind, e.bits, e.aux] {
             w.u8(x);
         }
-        w.u16(e.cold);
+        w.u32(e.cold);
         w.u8(e.deps);
         w.q(e.ty);
         w.u32(e.loc);
@@ -1003,8 +1014,8 @@ pub(super) fn decode_bodies(r: &mut Rd<'_>) -> Res<Bodies> {
         }
         b.strings.push((enc, bytes));
     }
-    b.exprs = decode_arena(r, 6 + 5 + 4 + 4, |r| {
-        let (kind, bits, aux, cold, deps) = (r.u8()?, r.u8()?, r.u8()?, r.u16()?, r.u8()?);
+    b.exprs = decode_arena(r, 8 + 5 + 4 + 4, |r| {
+        let (kind, bits, aux, cold, deps) = (r.u8()?, r.u8()?, r.u8()?, r.u32()?, r.u8()?);
         let (ty, loc) = (r.q()?, r.u32()?);
         Ok(ExprRec { kind, bits, aux, cold, deps, ty, loc, words: decode_words(r)? })
     })?;
@@ -1590,6 +1601,13 @@ pub(super) fn validate_section(
             || (e.cold & COLD_MEMBER != 0 && k != ExprKind::MemberExpr)
             || (e.cold & COLD_ARRAY != 0 && k != ExprKind::ArrayTypeTraitExpr)
             || (e.cold & COLD_PACK != 0 && k != ExprKind::IntegerLiteral)
+            || (e.cold & COLD_OPER != 0
+                && !matches!(
+                    k,
+                    ExprKind::UnaryOperator
+                        | ExprKind::BinaryOperator
+                        | ExprKind::CompoundAssignOperator
+                ))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
             return bad("bad expression bits");
@@ -1854,6 +1872,10 @@ pub(super) enum Fv {
     /// member access `e` (WP-1368), written as an [`F::DL`] of
     /// [`Dc::Lookup`].
     Ovl(ExprId, bool),
+    /// The functions (false) or what lookup found (true) of the
+    /// definition-context operator lookup set of `e` (WP-2021), written
+    /// as an [`F::DL`] of [`Dc::Lookup`].
+    Oper(ExprId, bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2020,10 +2042,10 @@ impl Writer<'_, '_, '_> {
 
     /// The cold annotations of expression `e` (its mask; the fields go
     /// to `v`, in mask order).
-    fn cold_fields(&self, e: ExprId, v: &mut Vec<Fv>) -> u16 {
+    fn cold_fields(&self, e: ExprId, v: &mut Vec<Fv>) -> u32 {
         let ast = &self.s.ast;
         let (c, t) = (&ast.exprs.cold, &ast.templates);
-        let mut cold = 0u16;
+        let mut cold = 0u32;
         if let Some(&l) = c.end_loc.get(e) {
             cold |= COLD_END;
             v.push(Fv::Loc(l));
@@ -2111,11 +2133,15 @@ impl Writer<'_, '_, '_> {
             cold |= COLD_DESIG;
             v.push(Fv::Desig(e));
         }
+        if t.oper_lookups.set_of(e).is_some() {
+            cold |= COLD_OPER;
+            v.extend([Fv::Oper(e, false), Fv::Oper(e, true)]);
+        }
         cold
     }
 
     /// Header and fields of a node (no translation yet).
-    fn fields(&self, node: Node) -> W<(u8, u8, u16, u16, Vec<Fv>)> {
+    fn fields(&self, node: Node) -> W<(u8, u8, u16, u32, Vec<Fv>)> {
         let ast = &self.s.ast;
         match node {
             Node::E(e) => {
@@ -2420,6 +2446,13 @@ impl Writer<'_, '_, '_> {
                 }
             }
             Fv::Ovl(e, found) => self.ovl_member_words(e, found, out)?,
+            Fv::Oper(e, found) => {
+                let cs = self.s.ast.templates.oper_lookups.of(e).unwrap_or_default().to_vec();
+                out.push(u32::try_from(cs.len()).map_err(|_| "a body too large")?);
+                for c in cs {
+                    out.push(self.dref(if found { c.found } else { c.decl }, Dc::Lookup)?);
+                }
+            }
             Fv::Found(e) => {
                 let ds = self.s.ovl.ule_found.get(&e).map(|f| f.found.clone()).unwrap_or_default();
                 out.push(ds.len() as u32);
@@ -3519,6 +3552,23 @@ impl Sema<'_, '_> {
                 })
                 .collect();
             let _ = self.ast.exprs.cold.designators.insert(id, d);
+        }
+        if e.cold & COLD_OPER != 0 {
+            // The definition's operator lookup set (WP-2021): the importer
+            // has no other.
+            let list = |s: &Self, l: u32| -> Vec<DeclId> {
+                ListId::from_raw(l)
+                    .map(|l| s.ast.lists.iter::<DeclId>(l).collect())
+                    .unwrap_or_default()
+            };
+            let (decls, found) = (list(self, next()), list(self, next()));
+            let cs: Vec<kiln_ast::oper_lookup::OperCandidate> = decls
+                .iter()
+                .zip(&found)
+                .map(|(&decl, &found)| kiln_ast::oper_lookup::OperCandidate { decl, found })
+                .collect();
+            let set = self.ast.templates.oper_lookups.intern(&cs);
+            let _ = self.ast.templates.oper_lookups.set(id, set);
         }
         if let Some(w) = rewrite
             && k == ExprKind::InitListExpr

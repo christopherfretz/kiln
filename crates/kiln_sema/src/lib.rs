@@ -1361,14 +1361,9 @@ pub struct Sema<'a, 'sm> {
     /// splice is the object's type, not a reference ([dcl.type.decltype]/1.4;
     /// `Sema::decltype_of`). Filled only by object splices.
     pub(crate) splice_objects: kiln_source::fx::FxHashSet<ExprId>,
-    /// The non-member operator functions the unqualified lookup of a
-    /// dependent operator expression's operator name found at the
-    /// template's definition ([temp.dep.candidate], [over.match.oper]/3.2;
-    /// clang's `UnresolvedLookupExpr` callee): its instantiation adds only
-    /// argument-dependent lookup. Each `(declaration, found)`.
-    pub(crate) oper_lookups: kiln_source::fx::FxHashMap<ExprId, Box<[(DeclId, DeclId)]>>,
     /// The non-member candidates of the operator expression being rebuilt
-    /// by a substitution ([`Sema::oper_lookups`], or the operator
+    /// by a substitution (its definition-context set,
+    /// `Ast::dependent_oper_candidates`, or the operator
     /// function a non-dependent expression selected at the definition),
     /// taken by the next [`Sema::oper_set`] instead of an unqualified
     /// lookup in the instantiation's context; `true` when
@@ -1849,7 +1844,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             splice_objects: kiln_source::fx::FxHashSet::default(),
-            oper_lookups: kiln_source::fx::FxHashMap::default(),
             oper_override: None,
             elided_ctors: kiln_source::fx::FxHashMap::default(),
             temp_copy_second_step: false,

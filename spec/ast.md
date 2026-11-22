@@ -113,6 +113,8 @@ After a node is created its header and side record are immutable, except:
 | `RedeclGroup.latest/definition` | on each redeclaration / definition | sema |
 | `DeclFlags::{USED, REFERENCED, INVALID}` | monotone set | sema |
 | lookup tables, specialization maps, `layouts`, `virtuals`, `vtables`, `consts`, `types` | insert-only | sema / Oven / `kiln_abi` |
+| cold `member_overload` `template_args` (§5.10) | once, when the parser reaches the template-id after the overloaded access | sema |
+| `templates.oper_lookups` (§8.5) | insert-only; one set per dependent operator expression, at its creation | sema / module-image importer |
 | `WrittenRefs` entries (§18) | append-only; `entity`/`found` of an overloaded name patched once by overload resolution; `enclosing` narrowed by declaration claims | parser / sema |
 
 **Instantiation adds nodes, never rewrites patterns**: substituting a
@@ -650,6 +652,46 @@ needed later). Values of non-constant-context folding (`try_fold`) are
 - Memory: `exprs.lambdas` has its own `MemRow` ("lambdas", captures
   included).
 
+### 5.10 Overloaded member accesses (WP-2020)
+A member access whose lookup found several member functions, a member
+function template or a static data member template ([expr.ref]/7; `x.f`,
+`p->f`, an implicit `this->f`, `p->B::f<int>`) is a `MemberExpr` of type
+`QualType::OVERLOAD` naming the first candidate (kiln's
+`UnresolvedMemberExpr`). Sema keeps the candidate set for overload
+resolution (`ovl.members`, spec/sema-overload.md §2.3) and consumes it
+when a call or a target type resolves the access, to a new expression.
+The facts of the access's name that resolution and instantiation read
+are kept in the `Ast`, for the life of the `Ast` whether or not the
+access is ever resolved, so a reader after the TU (a tooling client;
+sema is gone) sees them in a template pattern:
+
+- `cold.member_overload: ColdMap<ExprId, OverloadedMember>`, one entry
+  per overloaded access (12 bytes): `qualifier: Option<NnsId>` (as
+  written; no virtual dispatch, the lookup is in the qualifier's class),
+  `template_args: Option<ArgListId>` (the explicit template arguments as
+  written, [temp.arg.explicit]/1; recorded when the parser reaches them,
+  `set_member_overload_template_args`; dependent arguments make the
+  access a `CXXDependentScopeMemberExpr`, which holds them in the
+  templates' `expr_nns` / `expr_targs` instead), and `naming_class:
+  DeclId` ([class.access.base]/5: the class access is checked in, the
+  qualifier's class for a qualified name). Written by sema where the
+  access is created (`set_member_overload`) and by the module-image
+  importer (spec/modules.md §11.11); the candidates themselves are not
+  kept (a reader looks the name up again in the naming class). The
+  ordinary `member_extra` of a `MemberExpr` (§5.3) is not used for an
+  overloaded access, so its readers are unchanged.
+- Query `Ast::member_access_name(e) -> Option<MemberAccessName>`
+  (`qualifier`, `template_args`, `naming_class: Option<DeclId>`) for any
+  member access: an overloaded `MemberExpr` gives all three, a resolved
+  one its `member_extra` without a naming class, a
+  `CXXDependentScopeMemberExpr` its qualifier and arguments without a
+  naming class; `None` for an expression that is not a member access.
+  `ExprArena::member_overload(e)` reads the raw record.
+- Snapshots carry the map (§17); memory row `cold.member_overload`.
+
+Tests: `crates/kiln_parse/tests/sema_facts.rs` (a non-dependent object, an
+implicit `this->`, `p->Base::f<int>(x)` and `p->Base::f<T>(x)`).
+
 ## 6. Statements
 ```rust
 struct StmtNode { kind: StmtKind /*u8*/, flags: u8, aux: u16, loc: Loc, a: u32, b: u32 }  // 16 bytes
@@ -754,6 +796,44 @@ lists its specializations in creation order (dump order, ast-dump.md §5).
   AST stores the point of instantiation per specialization (above).
 - Function body instantiation is lazy (end of TU, or on demand when the
   Oven needs a body: `SemaBridge::ensure_body`, §13 Q2).
+
+### 8.5 Definition-context operator lookup sets (WP-2021)
+A unary, binary or compound-assignment operator expression with a
+type-dependent operand, built in a template, keeps the non-member
+operator functions the unqualified lookup of its operator name (and of
+its rewritten forms' names for `==`, `!=`, `<`, `>`, `<=`, `>=`,
+[over.match.oper]/3.4) found at the definition ([temp.dep.candidate]/1,
+[over.match.oper]/3.2; clang's `UnresolvedLookupExpr` callee). Its
+instantiation uses that set plus argument-dependent lookup, never a new
+unqualified lookup (spec/sema-templates.md §3.5 "Operators"). The set is
+`Ast` state, kept for the life of the `Ast`:
+
+- `templates.oper_lookups: kiln_ast::oper_lookup::OperLookups`, insert-
+  only: per expression (`ColdMap<ExprId, OperSetId>`, map name
+  `oper_lookup`) an interned set of `OperCandidate { decl, found }`
+  (`found` is the `UsingShadow` through which lookup found `decl`, else
+  `decl`), in lookup order. Sets are interned by content (one `Vec` of
+  spans into one `Vec` of candidates, and a content-hash index), so the
+  many `os << x` of a header's templates share one set of `operator<<`.
+  An empty set is a lookup that found nothing (the instantiation has
+  ADL only) and differs from no entry (the expression is not a dependent
+  operator expression; `=`, `[]`, `()` and `->` have no non-member
+  candidates and record nothing). A dependent expression that a
+  substitution rebuilds, still dependent (a generic lambda's body),
+  shares the set of its pattern.
+- Query `Ast::dependent_oper_candidates(e) -> Option<&[OperCandidate]>`;
+  `OperLookups::set_of(e)` gives the interned id (equal ids are equal
+  sets).
+- Written by sema at the expression (`note_dependent_oper`,
+  spec/sema-overload.md §2.6) and by the module-image importer, which
+  carries the set with the expression (`COLD_OPER`, spec/modules.md
+  §11.11). Snapshots carry the table; the hash index is rebuilt on the
+  first intern after a read (§17). Memory rows `templ.oper_lookup`,
+  `templ.oper_sets`, `templ.oper_cands`, `templ.oper_index`.
+
+Tests: `crates/kiln_parse/tests/sema_facts.rs`
+(`dependent_operator_definition_set`), `oper_lookup.rs` unit tests,
+`tests/conformance/module.interface/image-oper-lookup-run.cpp`.
 
 ## 9. Constant values
 ### 9.1 `ConstStore` (`kiln_ast::consts`, WP-043)
@@ -1354,7 +1434,8 @@ impls and their classification tables; every other table derives `Snap`.
   template names, nested-name-specifiers, argument lists, profiles) from
   the arenas plus the list of ids that were never interned (reserved
   nodes, VLA types), inserted in id order; the constant store's intern
-  table; the string pool's table. A later intern of existing content
+  table; the string pool's table; the operator lookup sets' content
+  index (§8.5, lazily, at the next intern). A later intern of existing content
   returns the old id, and new content gets the id it would have got in
   the original.
 - **Transient**: `TypeContext.profile_scratch` (reset); `written_refs`

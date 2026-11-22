@@ -145,6 +145,8 @@ impl Sema<'_, '_> {
             implicit: w[7] != 0,
             targs: kiln_ast::ArgListId::from_raw(w[8]),
         };
-        self.ovl.members.insert(id, m);
+        // The importer's fresh access: its name goes to the `Ast` as at
+        // the access's creation (spec/ast.md §5.10, WP-2020).
+        self.record_member_overload(id, m);
     }
 }
