@@ -564,6 +564,11 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- A parenthesised call of `std::min` or `std::max` read for its value,
+  `1ull << (std::min((size_t)31, n))`, no longer stops the Oven with an
+  internal error ("expected a call, found ParenExpr") (WP-2061): the
+  native fast path looked through the parentheses for the arguments and
+  then expected a bare call. Reduced from LLVM 19.
 - An imported template's dependent operator expression under
   `-fkiln-bmi-image` (WP-2021): the declaration image did not carry the
   operator functions the template's definition found, so the importer's
