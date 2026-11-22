@@ -48,7 +48,8 @@ chunked append-only arena (`OnceLock` slots, doubling chunk sizes).
 - `LoadError { Io(io::Error), LocSpaceExhausted }` (non-exhaustive);
   `LocSpaceExhausted` (unit error: clang's "ran out of source locations").
 - `ExpansionKind { Macro { name: Span }, MacroArg }`,
-  `ExpansionInfo { base: Loc, len: u32, spelling: Loc, expansion: Span, kind }`.
+  `ExpansionInfo { base: Loc, len: u32, spelling: Loc, expansion: Span, kind }`
+  (`spelling_range()`), `ExpansionEntry { index, info, parent }`.
 
 ## SourceManager API
 Buffers:
@@ -244,6 +245,105 @@ Macro expansions (modeled on clang's expansion `SLocEntry`s, index-based):
 - Unknown macro locations map to `Loc::INVALID` / `Span::INVALID` / `None`;
   they never panic.
 
+Expansion entries (WP-2150; the read-only listing tooling clients and
+the preprocessing record build on):
+- `expansion_count() -> u32`; `expansion_entries(from: u32) ->
+  ExpansionEntries` (an `ExactSizeIterator`) yields `ExpansionEntry {
+  index: u32, info: ExpansionInfo, parent: Option<u32> }` for the entries
+  with index `from` up to the count at the time of the call (`from`
+  past it: none).
+- **Order and stability**: entries are listed in creation order, which is
+  also `base` order (strictly increasing). The table is append-only, so an
+  entry's index, contents and parent never change, and entries added
+  while iterating are not listed (list again from the old count to read
+  them). The kind, the spelled range (`ExpansionInfo::spelling_range()` =
+  `[spelling, spelling + len)`, a macro range when the spelling is a
+  macro location) and the expansion range are those `expansion_info`
+  reports for every location of the entry.
+- **Parent**: the index of the entry holding `info.expansion.lo`, `None`
+  when that is a file location. For a `Macro` entry it is the expansion
+  the invocation's first token came from; for a `MacroArg` entry the
+  macro body holding the parameter; for a `#` / `##` result the
+  enclosing body. A parent's index is always below the child's (the
+  `add_expansion` rule). An argument is macro-expanded before it is
+  substituted ([cpp.subst]/1), so a macro invoked inside an argument
+  written in the file has no parent, and its tokens reach the body
+  through `MacroArg` entries spelled in its entry.
+- Cost: one entry read per item, and for a parent the last parent is
+  tried before a binary search.
+
+Editable file ranges (WP-2150; clang `Lexer::makeFileCharRange`,
+`Lexer::isAtStartOfMacroExpansion` / `isAtEndOfMacroExpansion`,
+`edit::Commit::canInsert`). The fix-its of spec/sema.md §7.10.1 use
+these queries, so fix-it placement and tooling clients never differ.
+- `file_loc_at_macro_start(loc) -> Option<Loc>`: identity for a file
+  location; for a macro location, when `loc` is the first location of its
+  entry and of every expansion outward (an argument begins its
+  parameter's expansion unless the previous entry continues the same
+  argument use, i.e. has the same `expansion.lo`), the start of the
+  outermost invocation; else `None`.
+- `file_loc_at_macro_end(end) -> Option<Loc>`: the same for an exclusive
+  end: `end` must be the entry's last location (`base + len`) at every
+  level (an argument ends its parameter's expansion unless the next entry
+  continues it); the result is the exclusive end of the outermost
+  invocation.
+- `editable_range(Span) -> Option<Span>` and `editable_file_range(Span)
+  -> Option<(FileId, u32, u32)>` (byte offsets in `text(file)`): the file
+  characters that editing the range edits. **Editable** means every
+  character of the range is written in one buffer and editing that file
+  range edits exactly what the range stands for. The rules, in order:
+  1. Both ends file locations: the range itself.
+  2. A macro begin and a file end: the begin must pass
+     `file_loc_at_macro_start` (the range then starts with a whole
+     invocation); symmetrically a file begin and a macro end must pass
+     `file_loc_at_macro_end`.
+  3. Both ends macro locations: when the begin passes the start rule and
+     the end the end rule, the outermost invocations' file range (the
+     range covers whole invocations).
+  4. Otherwise, when both ends lie in `MacroArg` entries of one use of
+     one parameter (same `expansion.lo`), both ends move to their
+     immediate spelling and the rules apply again (so a range inside an
+     argument written in another macro's body keeps mapping). Anything
+     else is `None`.
+  5. The result must lie in one buffer range (one inclusion of a file)
+     with the begin not after the end, else `None`.
+  An **empty range** is an insertion point: a location that passes the
+  start rule moves to the invocation's start, then a `MacroArg` location
+  moves to its immediate spelling (repeatedly) and the start rule applies
+  again; a location inside a replacement list gives `None`.
+  Invalid and unknown locations give `None`. There is no system-header
+  check (clang's `canInsert` refuses one): that is the client's policy.
+- **Edge cases** (all tested):
+  - *A part of a replacement list* (a range not starting or not ending
+    its expansion, outside any argument): `None`, as is any range that
+    crosses from the file into the middle of an expansion.
+  - *A range wholly inside one argument use* maps to where the argument
+    is written, also when the argument run is split over several entries
+    (an expansion inside the argument splits it): `F(k ONE m)` with `F(x)
+    (x)` gives `k ONE m` for the range from `k` to `m`. When that
+    argument is also the whole expansion (`ID(foo)` with `ID(x) x`), rule
+    3 applies first and the range is the whole invocation, as in clang.
+  - *An argument used twice* (`T(x) x + x`): a range in either use maps to
+    the argument's text (editing it changes both uses); a range from one
+    use to the other maps only when it is the whole expansion (`T(v)`),
+    and with `U(x) (x + x)` it is `None`.
+  - *Begin in one argument, end in another* (`G(p, q)`): two parameters,
+    so `None` unless rule 3 makes it the whole invocation.
+  - *`#` and `##` operands*: the result is one token spelled in a scratch
+    buffer (`<scratch space>`), so the operand's text is never the
+    edited range. The result maps only when it is the whole expansion
+    (`S(abc)` with `S(x) #x` gives `S(abc)`); otherwise `None`, also for a
+    token pasted with a file token (`CAT(foo)` with `CAT(a) a ## _s`: the
+    pasted entry's expansion ends at the start of its last operand, so
+    the end rule fails, a conservative `None`).
+  - *`_Pragma`*: the operand's tokens are spelled in a scratch buffer:
+    every range of them is `None`; tokens of the same replacement list
+    after the `_Pragma` follow the replacement-list rule.
+  - *Across buffers* (a range from an included header into the file),
+    *end before begin*, an invalid end: `None`.
+  - *An empty range*: the insertion rule above (before `F(q)`'s `(`
+    is before `F`; before `q` is at `q`; before `)` is `None`).
+
 Presumed locations ([cpp.line]):
 - `add_line_directive(FileId, at_offset, new_line: u32, new_file_name: Option<&str>)`:
   the line starting at `at_offset` (first byte *after* the directive's
@@ -362,6 +462,13 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 - Presumed locations: name change and inheritance, out-of-order and
   replacing directives, macro locations, saturation.
 - Text borrows survive concurrent appends; sharing across threads.
+- Editable file ranges and expansion entries: hand-built split argument
+  runs and the entry listing (`tests/unit.rs`); end to end over real
+  expansions, every edge case above pinned plus a soundness check of
+  every token pair of macro-heavy sources (the edited text holds a
+  location of each token of the range and no token outside it, other
+  than another use of an argument of the range) in `kiln_pp`
+  `tests/editable_range.rs`.
 - Same-entry fast paths (`entry_bounds`, `same_entry_distance`,
   `spelling_loc`, `span_text`) agree with the slow walk on randomized
   nested expansions.

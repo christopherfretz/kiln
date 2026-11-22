@@ -67,47 +67,13 @@ pub(crate) struct PpInputs {
     pub predefines: String,
 }
 
-/// The dependency callbacks (if any) plus a record of skipped groups.
-struct SkipCallbacks<'a> {
-    deps: Option<DepCallbacks<'a>>,
+/// The record of skipped groups and file-written macro invocations
+/// (an observer next to the dependency callbacks, if any).
+struct SkipCallbacks {
     skipped: SharedSkips,
 }
 
-impl kiln_pp::PpCallbacks for SkipCallbacks<'_> {
-    fn file_changed(&mut self, change: kiln_pp::FileChange) {
-        if let Some(d) = &mut self.deps {
-            d.file_changed(change);
-        }
-    }
-
-    fn inclusion_directive(
-        &mut self,
-        req: &IncludeRequest,
-        result: Option<&kiln_pp::ResolvedInclude>,
-    ) {
-        if let Some(d) = &mut self.deps {
-            d.inclusion_directive(req, result);
-        }
-    }
-
-    fn file_skipped(&mut self, result: &kiln_pp::ResolvedInclude, system: bool) {
-        if let Some(d) = &mut self.deps {
-            d.file_skipped(result, system);
-        }
-    }
-
-    fn module_file_read(&mut self, read: &kiln_pp::ModuleFileRead<'_>) {
-        if let Some(d) = &mut self.deps {
-            d.module_file_read(read);
-        }
-    }
-
-    fn module_unit(&mut self, begin: bool, from_module_file: bool) {
-        if let Some(d) = &mut self.deps {
-            d.module_unit(begin, from_module_file);
-        }
-    }
-
+impl kiln_pp::PpCallbacks for SkipCallbacks {
     fn source_range_skipped(&mut self, range: Span) {
         self.skipped.borrow_mut().skipped.push(range);
     }
@@ -819,13 +785,11 @@ impl Job<'_> {
         } else {
             pp.set_feature_queries(Box::new(features));
         }
-        match (&deps, skipped) {
-            (Some(d), None) => pp.set_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm))),
-            (d, Some(skipped)) => pp.set_callbacks(Box::new(SkipCallbacks {
-                deps: d.as_ref().map(|d| DepCallbacks::new(Rc::clone(d), sm)),
-                skipped,
-            })),
-            (None, None) => {}
+        if let Some(d) = &deps {
+            pp.add_callbacks(Box::new(DepCallbacks::new(Rc::clone(d), sm)));
+        }
+        if let Some(skipped) = skipped {
+            pp.add_callbacks(Box::new(SkipCallbacks { skipped }));
         }
         Some((pp, deps, main))
     }

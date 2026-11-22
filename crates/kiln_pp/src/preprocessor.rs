@@ -10,7 +10,9 @@ use kiln_lex::{Interner, LexOptions, Lexer, Punct, Symbol, TokFlags, TokKind, To
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::builtin::{FeatureQueries, NoFeatures};
-use crate::callbacks::{FileChange, NoCallbacks, PpCallbacks, PragmaIntroducer, PragmaMessageKind};
+use crate::callbacks::{
+    Chain, FileChange, NoCallbacks, PpCallbacks, PragmaIntroducer, PragmaMessageKind,
+};
 use crate::cond::IfEvaluator;
 use crate::ifeval::IfEval;
 use crate::include::{IncludeResolver, NoIncludes};
@@ -304,6 +306,9 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) nested_eval: IfEval,
     pub(crate) features: Box<dyn FeatureQueries + 'd>,
     pub(crate) callbacks: Box<dyn PpCallbacks + 'd>,
+    /// How many observers `callbacks` holds (0: [`NoCallbacks`]; 2 or
+    /// more: a [`Chain`]).
+    pub(crate) observers: u32,
     pub(crate) markers: VecDeque<Marker>,
     /// A token lexed while markers were queued (returned after them).
     pub(crate) pending: Option<Token>,
@@ -447,6 +452,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             nested_eval: IfEval::default(),
             features: Box::new(NoFeatures),
             callbacks: Box::new(NoCallbacks),
+            observers: 0,
             markers: VecDeque::new(),
             pending: None,
             scratch: FxHashMap::default(),
@@ -545,12 +551,28 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
     }
 
-    /// Installs observer callbacks (default: [`NoCallbacks`]).
+    /// Installs observer callbacks (default: [`NoCallbacks`]), replacing
+    /// every observer installed before.
     pub fn set_callbacks(&mut self, c: Box<dyn PpCallbacks + 'd>) {
         self.callbacks = c;
+        self.observers = 1;
     }
 
-    /// The installed callbacks.
+    /// Adds an observer after those installed: every event goes to each
+    /// observer in registration order (spec/pp.md "`PpCallbacks`"). With
+    /// one observer the preprocessor calls it directly, as
+    /// [`Self::set_callbacks`] does.
+    pub fn add_callbacks(&mut self, c: Box<dyn PpCallbacks + 'd>) {
+        self.callbacks = if self.observers == 0 {
+            c
+        } else {
+            let prev = std::mem::replace(&mut self.callbacks, Box::new(NoCallbacks));
+            Box::new(Chain(prev, c))
+        };
+        self.observers += 1;
+    }
+
+    /// The installed callbacks (all observers, called in order).
     pub fn callbacks(&mut self) -> &mut dyn PpCallbacks {
         &mut *self.callbacks
     }

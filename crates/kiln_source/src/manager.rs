@@ -164,6 +164,82 @@ pub struct ExpansionInfo {
     pub kind: ExpansionKind,
 }
 
+impl ExpansionInfo {
+    /// The spelled range `[spelling, spelling + len)`: where the entry's
+    /// characters are written (itself a macro range when `spelling` is a
+    /// macro location).
+    pub fn spelling_range(&self) -> Span {
+        Span::new(self.spelling, self.spelling.with_offset(self.len))
+    }
+}
+
+/// One expansion entry as [`SourceManager::expansion_entries`] lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpansionEntry {
+    /// The entry's position in creation order (0-based). It never changes:
+    /// the table is append-only.
+    pub index: u32,
+    /// The entry: kind, spelled range ([`ExpansionInfo::spelling_range`])
+    /// and expansion range.
+    pub info: ExpansionInfo,
+    /// The entry holding `info.expansion.lo` (the enclosing expansion the
+    /// invocation or parameter token was produced by), by index; `None`
+    /// when that is a file location. Always below `index`.
+    pub parent: Option<u32>,
+}
+
+/// The iterator of [`SourceManager::expansion_entries`].
+#[derive(Debug, Clone)]
+pub struct ExpansionEntries<'a> {
+    sm: &'a SourceManager,
+    next: u32,
+    end: u32,
+    /// Index into `macro_names` of the next macro entry's name.
+    name: u32,
+    /// The last parent found (a hint for the next lookup).
+    hint: u32,
+}
+
+impl Iterator for ExpansionEntries<'_> {
+    type Item = ExpansionEntry;
+
+    fn next(&mut self) -> Option<ExpansionEntry> {
+        if self.next >= self.end {
+            return None;
+        }
+        let index = self.next;
+        let e = self.sm.expansions.get(index)?;
+        self.next += 1;
+        let kind = if e.is_macro_kind() {
+            let &(b, name) = self.sm.macro_names.get(self.name)?;
+            debug_assert_eq!(b, e.base);
+            self.name += 1;
+            ExpansionKind::Macro { name }
+        } else {
+            ExpansionKind::MacroArg
+        };
+        let info = ExpansionInfo {
+            base: e.base,
+            len: e.len(),
+            spelling: e.spelling,
+            expansion: e.expansion,
+            kind,
+        };
+        let parent = self.sm.expansion_index(e.expansion.lo, self.hint);
+        if let Some(p) = parent {
+            self.hint = p;
+        }
+        Some(ExpansionEntry { index, info, parent })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = (self.end - self.next) as usize;
+        (n, Some(n))
+    }
+}
+
+impl ExactSizeIterator for ExpansionEntries<'_> {}
+
 /// Set in [`Entry::len_kind`] for [`ExpansionKind::Macro`] entries.
 /// Free because an entry is shorter than the 2^31-position macro space.
 const MACRO_KIND: u32 = 1 << 31;
@@ -1470,6 +1546,40 @@ impl SourceManager {
             expansion: e.expansion,
             kind,
         })
+    }
+
+    /// The number of expansion entries created so far
+    /// ([`Self::expansion_entries`]).
+    pub fn expansion_count(&self) -> u32 {
+        self.expansions.len()
+    }
+
+    /// The expansion entries with index `from` up to the count at the time
+    /// of the call, in creation order, which is also `base` order
+    /// (spec/source.md "Expansion entries"). Read-only: entries added while
+    /// iterating are not listed (start again from the count to read them).
+    /// An entry's index, contents and parent never change.
+    pub fn expansion_entries(&self, from: u32) -> ExpansionEntries<'_> {
+        let end = self.expansions.len();
+        let from = from.min(end);
+        let name = match self.expansions.get(from) {
+            Some(e) => self.macro_names.partition_point(|&(b, _)| b < e.base),
+            None => self.macro_names.len(),
+        };
+        ExpansionEntries { sm: self, next: from, end, name, hint: from.saturating_sub(1) }
+    }
+
+    /// The index of the expansion entry containing `loc` (trying `hint`
+    /// first); `None` for file, invalid and unknown locations.
+    fn expansion_index(&self, loc: Loc, hint: u32) -> Option<u32> {
+        if !loc.is_macro() {
+            return None;
+        }
+        if self.expansions.get(hint).is_some_and(|e| e.contains(loc)) {
+            return Some(hint);
+        }
+        let i = self.expansions.partition_point(|e| e.base <= loc).checked_sub(1)?;
+        self.expansions.get(i).is_some_and(|e| e.contains(loc)).then_some(i)
     }
 
     /// One step of spelling resolution: where `loc` is spelled according
