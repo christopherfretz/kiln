@@ -441,6 +441,16 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   now costs fewer `-fconstexpr-steps` than in clang: none for the
   wrapper, one per element examined for a bulk operation (spec/oven.md
   "Library fast paths"); user code is counted as before.
+- Fewer constant-evaluation allocations for scalar locals (WP-1908).
+  An argument of `std::move`, `std::forward`, `std::forward_like`,
+  `std::move_if_noexcept` or `std::as_const` no longer forces the local
+  into the Oven's abstract memory. Neither does a scalar declared
+  without an initializer and assigned before any other use. Both now
+  stay in VM registers, and the libc++ `std::sort` bench allocates 55%
+  fewer bytes. Steps, values and diagnostics do not change. The
+  `-fconstexpr-stats` memory counters (`bytes`, `peak-live`,
+  `reclaimed`, `peak-arena`) drop where such locals were in memory
+  (spec/oven.md "Register locals").
 - The bench and status numbers are re-measured (WP-1886): `docs/status/perf.md`
   is now against clang 22.1.8 (it was clang 19), and the new
   `docs/status/perf-gcc.md` holds the same corpus against GCC 16.1

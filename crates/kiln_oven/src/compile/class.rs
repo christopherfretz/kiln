@@ -542,6 +542,7 @@ impl Compiler<'_> {
         let mut s = super::Scan {
             ast,
             mem: &mut self.mem_vars,
+            assigned: &mut self.assigned_vars,
             refl: &mut self.refl_refs,
             cur: None,
             temps: false,
