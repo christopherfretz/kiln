@@ -1,0 +1,79 @@
+Dumping inst_dep:
+FunctionTemplateDecl inst_dep
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl inst_dep 'int (T)'
+| |-ParmVarDecl referenced t 'T'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-BinaryOperator '<dependent type>' '+'
+|       |-CallExpr '<dependent type>'
+|       | |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'plain' empty
+|       | `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|       `-CallExpr '<dependent type>'
+|         |-UnresolvedLookupExpr '<overloaded function type>' lvalue (ADL) = 'tmpl' empty
+|         `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+`-FunctionDecl used inst_dep 'int (N::S)'
+  |-ParmVarDecl used t 'N::S'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-BinaryOperator 'int' '+'
+        |-CallExpr 'int' adl
+        | |-ImplicitCastExpr 'int (*)(S)' <FunctionToPointerDecay>
+        | | `-DeclRefExpr 'int (S)' lvalue Function 'plain' 'int (S)'
+        | `-CXXConstructExpr 'S' 'void (const S &) noexcept'
+        |   `-ImplicitCastExpr 'const S' lvalue <NoOp>
+        |     `-DeclRefExpr 'N::S' lvalue ParmVar 't' 'N::S'
+        `-CallExpr 'int' adl
+          |-ImplicitCastExpr 'int (*)(N::S)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'int (N::S)' lvalue Function 'tmpl' 'int (N::S)' (FunctionTemplate 'tmpl')
+          `-CXXConstructExpr 'N::S' 'void (const S &) noexcept'
+            `-ImplicitCastExpr 'const S' lvalue <NoOp>
+              `-DeclRefExpr 'N::S' lvalue ParmVar 't' 'N::S'
+
+Dumping inst_nondep:
+FunctionTemplateDecl inst_nondep
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl inst_nondep 'int (T)'
+| |-ParmVarDecl 'T'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl referenced s 'N::S' callinit
+|   |   `-CXXConstructExpr 'N::S' 'void () noexcept'
+|   `-ReturnStmt
+|     `-CallExpr 'int' adl
+|       |-ImplicitCastExpr 'int (*)(S)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'int (S)' lvalue Function 'plain' 'int (S)'
+|       `-CXXConstructExpr 'S' 'void (const S &) noexcept'
+|         `-ImplicitCastExpr 'const S' lvalue <NoOp>
+|           `-DeclRefExpr 'N::S' lvalue Var 's' 'N::S'
+`-FunctionDecl used inst_nondep 'int (int)'
+  |-ParmVarDecl 'int'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl used s 'N::S' callinit
+    |   `-CXXConstructExpr 'N::S' 'void () noexcept'
+    `-ReturnStmt
+      `-CallExpr 'int'
+        |-ImplicitCastExpr 'int (*)(S)' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'int (S)' lvalue Function 'plain' 'int (S)'
+        `-CXXConstructExpr 'S' 'void (const S &) noexcept'
+          `-ImplicitCastExpr 'const S' lvalue <NoOp>
+            `-DeclRefExpr 'N::S' lvalue Var 's' 'N::S'
+
+Dumping inst_use:
+FunctionDecl inst_use 'int (N::S)'
+|-ParmVarDecl used s 'N::S'
+`-CompoundStmt
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-CallExpr 'int'
+      | |-ImplicitCastExpr 'int (*)(N::S)' <FunctionToPointerDecay>
+      | | `-DeclRefExpr 'int (N::S)' lvalue Function 'inst_dep' 'int (N::S)' (FunctionTemplate 'inst_dep')
+      | `-CXXConstructExpr 'N::S' 'void (const S &) noexcept'
+      |   `-ImplicitCastExpr 'const S' lvalue <NoOp>
+      |     `-DeclRefExpr 'N::S' lvalue ParmVar 's' 'N::S'
+      `-CallExpr 'int'
+        |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'int (int)' lvalue Function 'inst_nondep' 'int (int)' (FunctionTemplate 'inst_nondep')
+        `-IntegerLiteral 'int' 0
+

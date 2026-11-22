@@ -193,7 +193,25 @@ associated classes, which are visible *only* here (S3C stores them with
 `LookupFlags::ADL_ONLY`; ordinary lookup skips them). Dedup by canonical
 decl. A winner found *only* by ADL sets the `adl` flag on the
 `CallExpr`/`CXXOperatorCallExpr` (clang `IsADLCandidate`; dumped `adl`,
-e.g. the hidden-friend `operator<` of a rewritten `<=>`).
+e.g. the hidden-friend `operator<` of a rewritten `<=>`). For a named
+call, `resolve_unresolved_call` returns with the winner's `DeclRefExpr`
+whether argument-dependent lookup added it (one-candidate path
+included), and `act_on_call` then builds the `CallExpr` with
+`ExprFlags::ADL`: a function, function template, hidden friend, an
+unqualified template-id that names no ordinary template
+([temp.names]/3), a function an associated
+namespace's using-declaration names, and the begin/end and `get<i>` calls
+of range-for and structured bindings, which use ADL alone. A function
+ordinary lookup also found is not `adl` (ADL skips it), nor is a call
+with ADL suppressed (a parenthesized callee). A call with a dependent
+argument is flagged when its instantiation resolves it; a non-dependent
+call is flagged in the template definition, and its instantiation, rebuilt
+from the resolved `DeclRefExpr`, is not (clang's TreeTransform does the
+same). The flag is read only by the AST dump: codegen, the Oven,
+mangling and diagnostics ignore it, and it lives in the expression bits
+the PCH snapshot and the BMI image already carry (WP-1928;
+`basic.lookup.argdep/adl-call-flag-ast.cpp`,
+`basic.lookup.argdep/adl-call-flag-instantiation-ast.cpp`).
 
 ### 2.3 Member calls ([over.match.call]/2)
 `x.f(a)`, `p->f(a)`, implicit `this->f(a)` build a UME when member lookup
@@ -1719,8 +1737,8 @@ Where the code differs from (or details) the design above:
 - **Landed (WP-082).** The built-in `<=>` on scalars
   ([expr.spaceship]) yields the comparison category, or reports
   `sema_cmp_category_not_found` as clang does. The `adl` flag is set on
-  a `CXXOperatorCallExpr` whose operator was found only by ADL (not yet on
-  ordinary calls). A defaulted comparison is kept out of the candidate
+  a `CXXOperatorCallExpr` whose operator was found only by ADL (on
+  ordinary calls since WP-1928, §2.2). A defaulted comparison is kept out of the candidate
   sets of its own subobject comparisons (`OverloadCandidateSet.exclude`).
   Those comparisons use the operator lookups captured at its
   `= default`. Selecting a deleted defaulted comparison reports
