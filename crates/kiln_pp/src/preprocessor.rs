@@ -582,6 +582,13 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         self.predef_file
     }
 
+    /// Whether `file` was entered (lexed as the main file, an `-include`,
+    /// or by an `#include` / `#import` / `import` of a header): a file
+    /// that header search only found, for `__has_include`, was not.
+    pub fn was_entered(&self, file: FileId) -> bool {
+        self.entered.contains(&file)
+    }
+
     /// The main source file, once entered.
     pub fn main_file(&self) -> Option<FileId> {
         self.main_file
