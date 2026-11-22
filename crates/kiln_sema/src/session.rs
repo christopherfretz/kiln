@@ -31,7 +31,7 @@ use crate::lookup::LookupKind;
 use crate::oven_bridge::Bridge;
 pub use crate::session_value::{
     CharUnit, Entity, EnumValue, Field, FieldKind, FloatKind, InfoKind, InfoValue, IntValue,
-    PathStep, PointerBase, PointerValue, RecordValue, RunValue, ValueTree,
+    MemberPointerValue, PathStep, PointerBase, PointerValue, RecordValue, RunValue, ValueTree,
 };
 use crate::templ::stack::{FrameKind, InstFrame};
 

@@ -34,6 +34,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   `-fkiln-dump-pp-record` prints them as `cond`, `inc` and `once` lines,
   and every line in a header names its instance (`in i<n>`). No change
   with recording off (spec/pp.md "Preprocessing record").
+- Evaluation-session results decode classes with virtual bases (each
+  virtual base subobject once, at the most derived object, in
+  `RecordValue::virtual_bases`, in initialization order; a pointer into
+  one has a `PathStep::VirtualBase` step), and a pointer-to-member
+  result gives its conversion path (`MemberPointerValue`: the member,
+  clang's derived flag and the class chain), so `int B::*` and
+  `int D::*` holding one member differ (WP-2210, WP-2212;
+  spec/eval-session.md §4.1).
 - The written-reference table records what each dependent name of a
   template resolves to in every specialization (stage 4, WP-1933;
   spec/ast.md §18.9), in a separate table keyed by (pattern entry,

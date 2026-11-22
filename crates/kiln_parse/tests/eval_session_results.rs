@@ -351,8 +351,9 @@ fn pointers_designators_and_member_pointers() {
                 matches!(&fnp.base, PointerBase::Function(e) if e.display.contains('f') && e.decl.is_some())
             );
             let RunValue::MemberPointer(m) = v.field("mp").unwrap() else { panic!("mp") };
-            assert!(m.display.ends_with('a'), "{}", m.display);
-            assert!(m.decl.is_some());
+            assert!(m.member.display.ends_with('a'), "{}", m.member.display);
+            assert!(m.member.decl.is_some());
+            assert!(!m.derived && m.path.is_empty());
             // A reference member reads as a pointer to what it binds.
             let r = pointer(v.field("ref").unwrap());
             assert_eq!((var(r).as_str(), &*r.path), ("s", &[member("a")][..]));
@@ -398,6 +399,250 @@ fn pointers_into_unions_name_the_member() {
             assert_eq!(s.variable_value_named("tu", cap), Ok(run));
             let pb = s.variable_value_named("pb", cap).expect("pb");
             assert_eq!(&*pointer(&pb.root).path, &[member("b")][..]);
+        },
+    );
+}
+
+fn vnames(v: &RunValue) -> Vec<(FieldKind, String)> {
+    record(v).virtual_bases.iter().map(|f| (f.kind, f.name.to_string())).collect()
+}
+
+fn vbase<'v>(v: &'v RunValue, name: &str) -> &'v RunValue {
+    let r = record(v);
+    match r.virtual_bases.iter().find(|f| &*f.name == name) {
+        Some(f) => &f.value,
+        None => panic!("no virtual base {name} in {r:?}"),
+    }
+}
+
+fn base(n: &str) -> PathStep {
+    PathStep::Base(n.into())
+}
+
+fn vstep(n: &str) -> PathStep {
+    PathStep::VirtualBase(n.into())
+}
+
+/// Runs `entry` twice and checks both runs against the translation
+/// unit's own constant `var` (spec/eval-session.md §4.1 "A variable's
+/// value"); the tree.
+#[track_caller]
+fn same_as_tu(s: &mut EvalSession<'_, '_>, entry: &str, var: &str) -> ValueTree {
+    let cap = RunBudget::PROGRAM.result_bytes;
+    let first = tree(s, entry);
+    for _ in 0..3 {
+        assert_eq!(tree(s, entry), first, "{entry}: run N");
+    }
+    assert_eq!(s.variable_value_named(var, cap), Ok(first.clone()), "{entry} vs {var}");
+    first
+}
+
+#[test]
+fn classes_with_virtual_bases() {
+    // [class.mi], [class.base.init]/13.1 (WP-2210): each virtual base
+    // subobject once, at the most derived object, in initialization order.
+    session(
+        "struct V { int v; constexpr V(int x = 1) : v(x) {} };\n\
+         struct W { int w = 2; };\n\
+         struct N { int n = 3; };\n\
+         struct One : virtual V { int a; constexpr One() : V(10), a(11) {} };\n\
+         struct L : virtual V { int l = 4; };\n\
+         struct Rt : virtual V { int r = 5; };\n\
+         struct Dia : L, Rt { int d; constexpr Dia() : V(20), d(6) {} };\n\
+         struct X : virtual W { int x = 7; };\n\
+         struct Mix : N, X, virtual V { int m = 8; };\n\
+         struct VV : virtual W { int q = 9; };\n\
+         struct Deep : virtual VV, N {};\n\
+         struct Holder { int h = 12; One o; };\n\
+         consteval One one() { return One{}; }\n\
+         consteval Dia dia() { return Dia{}; }\n\
+         consteval Mix mix() { return Mix{}; }\n\
+         consteval Deep deep() { return Deep{}; }\n\
+         consteval Holder holder() { return Holder{}; }\n\
+         constexpr One one_v = one();\n\
+         constexpr Dia dia_v = dia();\n\
+         constexpr Mix mix_v = mix();\n\
+         constexpr Deep deep_v = deep();\n\
+         constexpr Holder holder_v = holder();\n",
+        |s| {
+            let k = |n: &str| (FieldKind::Base, n.to_owned());
+            let m = |n: &str| (FieldKind::Member, n.to_owned());
+            // One virtual base.
+            let one = same_as_tu(s, "one", "one_v").root;
+            assert_eq!(names(&one), [m("a")]);
+            assert_eq!(vnames(&one), [k("V")]);
+            assert_eq!(one.field("a"), Some(&RunValue::Signed(11)));
+            assert_eq!(vbase(&one, "V").field("v"), Some(&RunValue::Signed(10)));
+            assert!(record(vbase(&one, "V")).virtual_bases.is_empty());
+            // A diamond: the shared virtual base once, not in the bases.
+            let dia = same_as_tu(s, "dia", "dia_v").root;
+            assert_eq!(names(&dia), [k("L"), k("Rt"), m("d")]);
+            assert_eq!(vnames(&dia), [k("V")]);
+            assert_eq!(vbase(&dia, "V").field("v"), Some(&RunValue::Signed(20)));
+            let l = dia.field("L").unwrap();
+            assert_eq!(names(l), [m("l")]);
+            assert!(record(l).virtual_bases.is_empty(), "a base subobject holds none");
+            assert_eq!(l.field("l"), Some(&RunValue::Signed(4)));
+            assert_eq!(dia.field("Rt").unwrap().field("r"), Some(&RunValue::Signed(5)));
+            assert_eq!(dia.field("d"), Some(&RunValue::Signed(6)));
+            // Beside non-virtual bases: each direct base's virtual bases,
+            // then the base itself if virtual.
+            let mix = same_as_tu(s, "mix", "mix_v").root;
+            assert_eq!(names(&mix), [k("N"), k("X"), m("m")]);
+            assert_eq!(vnames(&mix), [k("W"), k("V")]);
+            assert_eq!(vbase(&mix, "W").field("w"), Some(&RunValue::Signed(2)));
+            assert_eq!(vbase(&mix, "V").field("v"), Some(&RunValue::Signed(1)));
+            assert_eq!(mix.field("X").unwrap().field("x"), Some(&RunValue::Signed(7)));
+            // A virtual base of a virtual base comes first.
+            let deep = same_as_tu(s, "deep", "deep_v").root;
+            assert_eq!(names(&deep), [k("N")]);
+            assert_eq!(vnames(&deep), [k("W"), k("VV")]);
+            assert_eq!(vbase(&deep, "VV").field("q"), Some(&RunValue::Signed(9)));
+            assert!(record(vbase(&deep, "VV")).virtual_bases.is_empty());
+            // A member is a most derived object: its virtual bases are its
+            // own.
+            let holder = same_as_tu(s, "holder", "holder_v").root;
+            assert!(record(&holder).virtual_bases.is_empty());
+            let o = holder.field("o").unwrap();
+            assert_eq!(vnames(o), [k("V")]);
+            assert_eq!(vbase(o, "V").field("v"), Some(&RunValue::Signed(10)));
+            // A hand-written tree of the simplest.
+            let int = |v: i128| RunValue::Signed(v);
+            let field =
+                |kind, name: &str, value| kiln_parse::Field { kind, name: name.into(), value };
+            let rec = |ty: &str, fields: Vec<kiln_parse::Field>, vb: Vec<kiln_parse::Field>| {
+                RunValue::Record(Box::new(kiln_parse::RecordValue {
+                    ty: kiln_parse::Entity { display: ty.into(), decl: None },
+                    union: false,
+                    fields: fields.into_boxed_slice(),
+                    virtual_bases: vb.into_boxed_slice(),
+                }))
+            };
+            let mut want = rec(
+                "One",
+                vec![field(FieldKind::Member, "a", int(11))],
+                vec![field(
+                    FieldKind::Base,
+                    "V",
+                    rec("V", vec![field(FieldKind::Member, "v", int(10))], vec![]),
+                )],
+            );
+            // `decl` is the translation unit's: copy it over.
+            let decl_of = |v: &RunValue| record(v).ty.decl;
+            if let RunValue::Record(r) = &mut want {
+                r.ty.decl = decl_of(&one);
+                if let RunValue::Record(vr) = &mut r.virtual_bases[0].value {
+                    vr.ty.decl = decl_of(vbase(&one, "V"));
+                }
+            }
+            assert!(decl_of(&one).is_some());
+            assert_eq!(one, want);
+        },
+    );
+}
+
+#[test]
+fn pointers_into_virtual_bases() {
+    // A pointer into a virtual base subobject names it (WP-2210).
+    session(
+        "struct V { int v = 1; int arr[2] = {2, 3}; };\n\
+         struct L : virtual V { int l = 4; };\n\
+         struct Rt : virtual V { int r = 5; };\n\
+         struct Dia : L, Rt { int d = 6; };\n\
+         struct Holder { int h = 7; Dia in; };\n\
+         constexpr Dia dia{};\n\
+         constexpr Holder holder{};\n\
+         struct Ptrs { const int* v; const V* whole; const int* l; const L* lb; \
+           const int* elem; const int* nested; const V* through; const int* past; };\n\
+         consteval Ptrs p() { return {&dia.v, &dia, &dia.l, &dia, &dia.arr[1], \
+           &holder.in.v, static_cast<const L*>(&dia), &dia.v + 1}; }\n\
+         constexpr Ptrs tu = p();\n\
+         constexpr const int* pv = &dia.v;\n",
+        |s| {
+            let run = same_as_tu(s, "p", "tu");
+            let path = |f: &str| pointer(run.root.field(f).unwrap()).path.to_vec();
+            assert_eq!(path("v"), [vstep("V"), member("v")]);
+            assert_eq!(path("whole"), [vstep("V")]);
+            assert_eq!(path("l"), [base("L"), member("l")]);
+            assert_eq!(path("lb"), [base("L")]);
+            assert_eq!(path("elem"), [vstep("V"), member("arr"), PathStep::Index(1)]);
+            assert_eq!(path("nested"), [member("in"), vstep("V"), member("v")]);
+            // `L`'s virtual base is the most derived object's.
+            assert_eq!(path("through"), [vstep("V")]);
+            let past = pointer(run.root.field("past").unwrap());
+            assert_eq!((&*past.path, past.past_end), (&[vstep("V"), member("v")][..], true));
+            for f in ["v", "whole", "l", "elem", "past"] {
+                let p = pointer(run.root.field(f).unwrap());
+                assert!(
+                    matches!(&p.base, PointerBase::Variable(e) if &*e.display == "dia"),
+                    "{f}: {p:?}"
+                );
+            }
+            let cap = RunBudget::PROGRAM.result_bytes;
+            let pv = s.variable_value_named("pv", cap).expect("pv");
+            assert_eq!(&*pointer(&pv.root).path, &[vstep("V"), member("v")][..]);
+        },
+    );
+}
+
+#[test]
+fn member_pointers_give_their_conversion_path() {
+    // [conv.mem]/2, [expr.static.cast]/12, [expr.eq]/4 (WP-2212): the class
+    // chain of clang's `APValue` member pointer path.
+    session(
+        "struct B { int x; int y; constexpr int get() const { return x; } };\n\
+         struct D : B { int z; };\n\
+         struct E : D {};\n\
+         struct MPs { int B::* bx; int D::* dx; int E::* ex; int B::* fromd; int D::* null; \
+           int (B::*bf)() const; int (D::*df)() const; int D::* dz; int B::* back; };\n\
+         consteval MPs mps() { return {&B::x, &B::x, &B::x, static_cast<int B::*>(&D::z), \
+           nullptr, &B::get, &B::get, &D::z, \
+           static_cast<int B::*>(static_cast<int D::*>(&B::x))}; }\n\
+         constexpr MPs tu = mps();\n\
+         constexpr int D::* dx_v = &B::x;\n",
+        |s| {
+            let run = same_as_tu(s, "mps", "tu");
+            let mp = |f: &str| match run.root.field(f).unwrap() {
+                RunValue::MemberPointer(m) => m.as_ref().clone(),
+                other => panic!("{f}: not a member pointer: {other:?}"),
+            };
+            let shape = |m: &kiln_parse::MemberPointerValue| {
+                let path: Vec<String> = m.path.iter().map(|e| e.display.to_string()).collect();
+                (m.member.display.to_string(), m.derived, path)
+            };
+            let none: Vec<String> = Vec::new();
+            let bx = mp("bx");
+            assert!(bx.member.display.ends_with('x'), "{}", bx.member.display);
+            assert!(!bx.derived);
+            assert_eq!(shape(&bx).2, none);
+            // The same member as `int D::*` and `int E::*`: the path tells
+            // them apart.
+            let dx = mp("dx");
+            assert_eq!(dx.member, bx.member);
+            assert_eq!((dx.derived, shape(&dx).2), (false, vec!["D".to_owned()]));
+            assert!(dx.path[0].decl.is_some());
+            assert_ne!(dx, bx);
+            let ex = mp("ex");
+            assert_eq!((ex.derived, shape(&ex).2), (false, vec!["D".to_owned(), "E".to_owned()]));
+            // A derived class's member cast to the base: towards bases.
+            let fromd = mp("fromd");
+            assert!(fromd.member.display.ends_with('z'), "{}", fromd.member.display);
+            assert_eq!((fromd.derived, shape(&fromd).2), (true, vec!["B".to_owned()]));
+            assert_eq!(run.root.field("null"), Some(&RunValue::Null));
+            // A member function through a base.
+            let bf = mp("bf");
+            assert!(bf.member.display.contains("get"), "{}", bf.member.display);
+            assert_eq!((bf.derived, shape(&bf).2), (false, none.clone()));
+            let df = mp("df");
+            assert_eq!(df.member, bf.member);
+            assert_eq!((df.derived, shape(&df).2), (false, vec!["D".to_owned()]));
+            // `D`'s own member, and a conversion there and back.
+            assert_eq!(shape(&mp("dz")).2, none);
+            assert_eq!(mp("back"), bx);
+            // The translation unit's own constant.
+            let cap = RunBudget::PROGRAM.result_bytes;
+            let v = s.variable_value_named("dx_v", cap).expect("dx_v");
+            assert_eq!(v.root, RunValue::MemberPointer(Box::new(dx)));
         },
     );
 }
@@ -548,8 +793,13 @@ fn refused_types() {
          struct RefMember { const int& r; };\n\
          consteval RefMember ok() { return {k}; }\n",
         |s| {
-            for name in ["ref", "hv", "inner", "nonlit", "wide", "vec"] {
+            for name in ["ref", "nonlit", "wide", "vec"] {
                 assert_eq!(s.entry_named(name).unwrap_err(), EntryError::WrongReturnType, "{name}");
+            }
+            // WP-2210: a class with a virtual base is a result type (these
+            // two are only undefined).
+            for name in ["hv", "inner"] {
+                assert_eq!(s.entry_named(name).unwrap_err(), EntryError::Undefined, "{name}");
             }
             assert!(s.entry_named("ok").is_ok());
         },
