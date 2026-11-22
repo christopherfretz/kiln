@@ -5052,6 +5052,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `using name = type-id;` whose type-id `ty` is invalid: it declares
+    /// nothing ([dcl.typedef]/2; clang's `ActOnAliasDeclaration` returns no
+    /// declaration for an invalid type), and what its type-id left pending
+    /// for the alias is dropped; returns whether so. A variable length
+    /// array type-id is not invalid in that sense (clang declares the
+    /// alias and rejects it at its name, the pending diagnostic
+    /// [`Sema::act_on_alias_decl`] reports). A template head around it
+    /// stays untaken, as after a type-id that did not parse.
+    pub fn alias_declares_nothing(&mut self, ty: QualType) -> bool {
+        if !self.is_error_type(ty) || self.pending_alias_vla.is_some() {
+            return false;
+        }
+        self.pending_chunk_loc = Loc::INVALID;
+        true
+    }
+
     /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
     /// the type-id starts and `using_loc` the `using` keyword (each
     /// invalid when not written). The first `own` of `attrs` follow the
@@ -10206,7 +10222,8 @@ impl Sema<'_, '_> {
     /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2);
     /// clang (`CheckEnumUnderlyingType`) takes only the standard integer
     /// types, so a bit-precise one is rejected too (spec/types.md §21).
-    /// An invalid one recovers to `int`, as clang's `ActOnTag` does. The
+    /// An invalid one, or one whose type is invalid, recovers to `int`, as
+    /// clang's `ActOnTag` does. The
     /// parser checks the enum-base at its type (`loc`, as clang); an
     /// instantiated dependent one is checked again in [`Self::act_on_tag`].
     pub fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) -> Option<QualType> {
@@ -10220,10 +10237,16 @@ impl Sema<'_, '_> {
             ) {
                 return Some(QualType::INT);
             }
+            // An enum-base whose type is invalid (its error already
+            // reported) is `int` too: clang's `ActOnTag` ("we failed to
+            // parse the type, default to int"), so the enumeration has an
+            // integral underlying type the constant evaluator can convert
+            // to (WP-2173).
+            if self.is_error_type(f) {
+                return Some(QualType::INT);
+            }
             let bit_int = matches!(self.ast.types.canonical_view(f), TypeView::BitInt { .. });
-            let ok = (self.ast.types.is_integral(f) && !bit_int)
-                || self.is_error_type(f)
-                || self.ast.types.is_dependent(f);
+            let ok = (self.ast.types.is_integral(f) && !bit_int) || self.ast.types.is_dependent(f);
             if !ok {
                 let id = if bit_int {
                     DiagId::sema_enum_bit_int_underlying

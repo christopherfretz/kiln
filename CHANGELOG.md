@@ -754,6 +754,14 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An alias-declaration (or alias template) whose type-id is invalid
+  declares nothing, as clang: later uses of its name are "unknown type
+  name". An enum-base whose type is invalid gives the enumeration the
+  underlying type `int`. Before, an enumeration whose base was such an
+  alias kept the error type, and a constant expression building one of
+  its values (`E{1}`) aborted the constant evaluator with an internal
+  compiler error, a panic through the front-end library entry (WP-2173,
+  WP-2141, spec/sema.md §1.2).
 - Evaluation sessions record a class template specialization's
   instantiation (with its member classes and enumerations), an exception
   specification instantiated or computed outside the Oven's `noexcept`

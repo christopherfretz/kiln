@@ -202,8 +202,25 @@ fn parse_options(host: Option<&Host>) -> ParseOptions {
     }
 }
 
-/// A preprocessor as `parse_tu` configures one, with `host`'s search
-/// list, predefines and feature queries; its main file entered.
+/// The predefined macros of `kiln -std=c++26 --target=x86_64-linux-gnu`
+/// for `opts`, so `__SIZE_TYPE__` and the others are defined as on the
+/// command line (without them a corpus file's `using size_t =
+/// __SIZE_TYPE__;` is invalid, which once made the constant evaluator
+/// panic, WP-2173).
+fn x86_64_predefines(opts: &ParseOptions) -> String {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../resource/predefines/x86_64-unknown-linux-gnu.c++26.txt");
+    let base = std::fs::read_to_string(base).expect("the predefines file");
+    let mut cfg = PredefConfig::new(true);
+    cfg.gnu = opts.gnu;
+    cfg.aarch64 = false;
+    cfg.reflection = opts.reflection;
+    build_predefines(&base, &cfg, &[])
+}
+
+/// A preprocessor as `parse_tu` configures one, with predefines (the
+/// x86-64 ones, or `host`'s) and `host`'s search list and feature
+/// queries; its main file entered.
 fn preprocessor<'a, 'd>(
     sm: &'a SourceManager,
     engine: &'d DiagEngine<'a>,
@@ -213,13 +230,14 @@ fn preprocessor<'a, 'd>(
 ) -> Preprocessor<'a, 'd> {
     let opts = parse_options(host);
     let mut ppo = PpOptions::new(opts.std);
+    ppo.predefines = match host {
+        Some(h) => h.predefines.clone(),
+        None => x86_64_predefines(&opts),
+    };
     ppo.char8 = opts.char8;
     ppo.reflection = opts.reflection;
     ppo.parser_pragmas = true;
     ppo.modules = Some(kiln_pp::ModuleOptions::default());
-    if let Some(h) = host {
-        ppo.predefines.clone_from(&h.predefines);
-    }
     let mut pp = Preprocessor::new(sm, engine, interner, ppo);
     if let Some(h) = host {
         let mut fs = RealFs::new();
@@ -454,17 +472,12 @@ fn account_tu(name: &str, src: &str, host: Option<&Host>) -> Report {
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
     let opts = parse_options(host);
-    let tu = match host {
-        None => {
-            let target = Target::for_arch(Arch::X86_64);
-            parse_tu(&sm, &interner, main, &engine, target, &opts, ConstexprLimits::default())
-        }
-        Some(h) => {
-            let pp = preprocessor(&sm, &engine, &interner, main, host);
-            let limits = ConstexprLimits::default();
-            parse_preprocessed(pp, Arc::clone(&interner), &engine, h.target(), &opts, limits).0
-        }
-    };
+    // Not `parse_tu`: it preprocesses with no predefined macros, and the
+    // test's preprocessor has the target's, as the command line.
+    let pp = preprocessor(&sm, &engine, &interner, main, host);
+    let target = host.map_or_else(|| Target::for_arch(Arch::X86_64), Host::target);
+    let limits = ConstexprLimits::default();
+    let (tu, _) = parse_preprocessed(pp, Arc::clone(&interner), &engine, target, &opts, limits);
     if engine.error_count() > 0 {
         if host.is_some() {
             for d in sink.diagnostics().iter().filter(|d| d.level >= kiln_diag::Level::Error) {
@@ -678,6 +691,36 @@ fn every_identifier_is_accounted_for() {
     let lines: Vec<String> =
         left.iter().map(|(f, at, s, b)| format!("{f}:{at}: '{s}' (after {b})")).collect();
     assert!(lines.is_empty(), "{} identifiers left over:\n{}", lines.len(), lines.join("\n"));
+}
+
+/// WP-2173: two corpus files whose enumeration's underlying type is an
+/// alias of an invalid type ([dcl.typedef]/2, [dcl.enum]/2) made the
+/// constant evaluator panic: `type-aware-direct-call.cpp` only without the
+/// target's predefined macros (its `using size_t = __SIZE_TYPE__;`), as
+/// `parse_tu` preprocesses. Both are diagnosed, not a panic, with and
+/// without them.
+#[test]
+fn invalid_alias_enum_bases_are_diagnosed() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/conformance");
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(move || {
+        for (f, bare) in [
+            ("expr.const/type-aware-direct-call.cpp", 12),
+            ("dcl.enum/invalid-alias-base-constexpr-ice.cpp", 3),
+        ] {
+            let src = std::fs::read_to_string(dir.join(f)).expect("the corpus file");
+            assert!(account(f, &src).skipped, "{f}: diagnosed with the predefined macros");
+            let sm = SourceManager::new();
+            let main = sm.add_virtual(f, src).expect("location space");
+            let interner = Arc::new(Interner::new());
+            let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+            let opts = ParseOptions::default();
+            let target = Target::for_arch(Arch::X86_64);
+            let limits = ConstexprLimits::default();
+            let _ = parse_tu(&sm, &interner, main, &engine, target, &opts, limits);
+            assert_eq!(engine.error_count(), bare, "{f}: diagnosed without them");
+        }
+    });
+    worker.expect("a thread").join().expect("no panic");
 }
 
 /// The same accounting over the `.cpp` files of `KILN_REFS_DIR`.

@@ -590,6 +590,23 @@ translation unit that fails costs about what it costs clang:
   typedef keeps the error type (its specialization is invalid and its
   uses are silent, spec/sema-templates.md §5.5).
   `dcl.typedef/failed-local-typedef-recovers-as-int.cpp`.
+- **An invalid alias-declaration declares nothing** (WP-2173). As
+  written (not instantiated), an alias-declaration or alias template
+  whose type-id is invalid (its error reported: an unknown type name, a
+  qualified name that names no type, `undeclared *`) is not declared
+  (clang `ActOnAliasDeclaration` returns no declaration for an invalid
+  type; `Sema::alias_declares_nothing`), so each later use of the
+  name is "unknown type name" ("no template named" for the template).
+  A variable length array type-id is not invalid in that sense: the
+  alias is declared and rejected at its name, as clang.
+  A typedef with an invalid decl-specifier is still declared, as `int`.
+  An enum-base whose type is invalid gives the enumeration the
+  underlying type `int` (clang `ActOnTag`: "we failed to parse the
+  type, default to int"; `check_enum_fixed_type`), so the constant
+  evaluator converts to and from it as an ordinary `int` enumeration
+  (kiln kept the error type, and the Oven aborted on `E{1}`).
+  `dcl.typedef/invalid-alias-declares-nothing.cpp`,
+  `dcl.enum/invalid-alias-base-constexpr-ice.cpp`.
 - **Recovery by call** (WP-832). clang's `tryToRecoverWithCall`: a
   bound member function or an overload set of non-static member
   functions used where a value is needed ("reference to non-static
