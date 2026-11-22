@@ -144,6 +144,10 @@ pub(super) struct Bodies {
     pub(super) strings: Vec<(u8, Vec<u8>)>,
     pub(super) exprs: Vec<ExprRec>,
     pub(super) stmts: Vec<StmtRec>,
+    /// The FP pragma states of the section's blocks: a `CompoundStmt`
+    /// record's `aux` is 0 for none, `i` for entry `i - 1` (WP-1923,
+    /// [`super::fpstate`]).
+    pub(super) fp: Vec<kiln_ast::fp::FpOverride>,
 }
 
 /// Cold annotations carried: `end_loc`, `cast_written`, `trait_rhs_loc`,
@@ -696,9 +700,12 @@ fn stmt_shape(k: StmtKind) -> [Slot; 2] {
     }
 }
 
-fn stmt_aux_ok(k: StmtKind, aux: u16) -> bool {
+/// `nfp`: the section's FP states, the `aux` a `CompoundStmt` may hold
+/// ([`Bodies::fp`]).
+fn stmt_aux_ok(k: StmtKind, aux: u16, nfp: usize) -> bool {
     match k {
         StmtKind::IfStmt => aux <= 3,
+        StmtKind::CompoundStmt => usize::from(aux) <= nfp,
         _ => aux == 0,
     }
 }
@@ -898,6 +905,10 @@ pub(super) fn encode_bodies(w: &mut Wr, b: &Bodies) {
         w.u32(s.loc);
         words(w, &s.words);
     });
+    w.len(b.fp.len());
+    for o in &b.fp {
+        super::fpstate::encode_fp(w, o);
+    }
 }
 
 fn decode_arena<T>(r: &mut Rd<'_>, min: usize, one: impl Fn(&mut Rd<'_>) -> Res<T>) -> Res<Vec<T>> {
@@ -1000,6 +1011,11 @@ pub(super) fn decode_bodies(r: &mut Rd<'_>) -> Res<Bodies> {
     b.stmts = decode_arena(r, 1 + 2 + 4 + 4, |r| {
         Ok(StmtRec { kind: r.u8()?, aux: r.u16()?, loc: r.u32()?, words: decode_words(r)? })
     })?;
+    let nf = r.count(9)?;
+    b.fp.reserve(nf);
+    for _ in 0..nf {
+        b.fp.push(super::fpstate::decode_fp(r)?);
+    }
     Ok(b)
 }
 
@@ -1531,7 +1547,7 @@ pub(super) fn validate_section(
         let Some(&k) = STMT_KINDS.get(usize::from(s.kind)) else {
             return bad("unknown statement kind");
         };
-        if !stmt_aux_ok(k, s.aux) {
+        if !stmt_aux_ok(k, s.aux, b.fp.len()) {
             return bad("bad statement bits");
         }
         let fields = layout(stmt_shape(k), 0);
@@ -2178,12 +2194,11 @@ impl Writer<'_, '_, '_> {
                 let n = *ast.stmts.get(s);
                 let k = n.kind();
                 let ki = STMT_KINDS.iter().position(|&x| x == k).ok_or(stmt_reason(k))?;
-                if n.flags() != 0 || !stmt_aux_ok(k, n.aux()) {
-                    return Err(if k == StmtKind::CompoundStmt {
-                        "a block under a floating-point pragma"
-                    } else {
-                        "a statement the image does not carry"
-                    });
+                // A block's FP state is carried ([`Bodies::fp`], WP-1923):
+                // `emit` writes its index.
+                let aux_ok = k == StmtKind::CompoundStmt || stmt_aux_ok(k, n.aux(), 0);
+                if n.flags() != 0 || !aux_ok {
+                    return Err("a statement the image does not carry");
                 }
                 let v = self.slots_fv(node, stmt_shape(k), [n.a(), n.b()])?;
                 Ok((ki as u8, 0, n.aux(), 0, v))
@@ -2293,7 +2308,13 @@ impl Writer<'_, '_, '_> {
 
     fn emit(&mut self, node: Node, _fields: &[Fv]) -> W<()> {
         // The header is recomputed (cheap) so a frame holds only fields.
-        let (kind, bits, aux, cold, fields) = self.fields(node)?;
+        let (kind, bits, mut aux, cold, fields) = self.fields(node)?;
+        if let Node::S(s) = node
+            && aux != 0
+            && self.s.ast.stmts.get(s).kind() == StmtKind::CompoundStmt
+        {
+            aux = self.fp_index(self.s.ast.stmts.compound_fp(s))?;
+        }
         let mut words = Vec::with_capacity(fields.len() + 2);
         for f in fields {
             self.word(f, &mut words)?;
@@ -3297,7 +3318,14 @@ impl Sema<'_, '_> {
             }
             let (a, bb, _) = self.image_slots(shape, &vals, Node::S(built.stmt(0)));
             let loc = main.get(s.loc);
-            let id = self.ast.stmts.push(StmtNode::new(k, s.aux, loc, a, bb));
+            // A block's FP state, in this AST's table (WP-1923).
+            let aux = match k {
+                StmtKind::CompoundStmt if s.aux != 0 => {
+                    self.ast.stmts.intern_fp(b.fp[usize::from(s.aux) - 1])
+                }
+                _ => s.aux,
+            };
+            let id = self.ast.stmts.push(StmtNode::new(k, aux, loc, a, bb));
             debug_assert_eq!(id, built.stmt(i as u32));
         }
         built

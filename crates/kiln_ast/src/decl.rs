@@ -1773,10 +1773,12 @@ pub struct ColdDeclData {
     /// global; `AstBuilder::file_scope_compound_literal`, WP-466).
     pub compound_literal: ColdMap<DeclId, ExprId>,
     /// Constructor → the FP pragma state its mem-initializers were
-    /// parsed in; field → its default member initializer's (clang keeps
-    /// an `FPOptionsOverride` on each expression; codegen emits them
-    /// under it, not under the body's scope). Only a state other than
-    /// the command line's ([`crate::fp::FpOverride::NONE`]); WP-1904.
+    /// parsed in; field → its default member initializer's; parameter →
+    /// its default argument's, emitted at a call under it rather than
+    /// the call's (WP-1919; `Ast::default_arg_fp`). clang keeps an
+    /// `FPOptionsOverride` on each expression; codegen emits them under
+    /// it, not under the enclosing scope. Only a state other than the
+    /// command line's ([`crate::fp::FpOverride::NONE`]); WP-1904.
     pub init_fp: ColdMap<DeclId, crate::fp::FpOverride>,
 }
 

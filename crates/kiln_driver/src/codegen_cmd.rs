@@ -606,6 +606,7 @@ impl CodegenJob<'_> {
                 auto_var_init_max_size: a
                     .auto_var_init_max_size
                     .unwrap_or(kiln_codegen::AUTO_VAR_INIT_MAX_SIZE),
+                auto_var_init_implicit: a.auto_var_init.is_none(),
                 visibility: a.visibility.unwrap_or_default(),
                 type_visibility: if a.visibility_ms_compat {
                     Visibility::Default

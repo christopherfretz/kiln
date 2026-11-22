@@ -5,6 +5,8 @@
 //@ stdout: ctor[3] 0
 //@ stdout: padded-init 0
 //@ stdout: vla 0
+//@ stdout: designated-padded 0
+//@ stdout: full-init 0
 // [basic.indet]/1-2 (C++26, P2795R5): storage an initialization leaves
 // unwritten holds the erroneous value too: the member a non-trivial
 // default constructor does not set, the padding of a class initialized
@@ -12,7 +14,9 @@
 // Kiln fills each variable with zero bytes before its initializer runs,
 // as clang's `-ftrivial-auto-var-init=zero` does. Each variable is
 // dirtied by an earlier frame at the same stack slot first, so a missing
-// fill shows. clang 22 has no erroneous values (`oracle: none`).
+// fill shows. An aggregate whose initializer writes every byte gets no
+// fill (WP-1921): the members its list leaves out are still zero. clang
+// 22 has no erroneous values (`oracle: none`).
 extern "C" int printf(const char *, ...);
 struct Ctor {
   Ctor() : set(1) {}
@@ -52,6 +56,19 @@ static int sum(const void *p, unsigned n) {
   Padded p{1, one(), 1};
   return sum(&p, sizeof p) - 3;
 }
+[[gnu::noinline]] int read_designated_padded() {
+  Padded p{.i = one()};
+  return sum(&p, sizeof p) - 1;
+}
+struct Full {
+  int a;
+  int b = 0;
+  long c[3];
+};
+[[gnu::noinline]] int read_full_init() {
+  Full f{one()};
+  return sum(&f, sizeof f) - 1;
+}
 [[gnu::noinline]] int read_vla(int n) {
   int a[n];
   return sum(a, n * sizeof(int));
@@ -65,4 +82,8 @@ int main() {
   printf("padded-init %d\n", read_padded_init());
   dirty();
   printf("vla %d\n", read_vla(16));
+  dirty();
+  printf("designated-padded %d\n", read_designated_padded());
+  dirty();
+  printf("full-init %d\n", read_full_init());
 }

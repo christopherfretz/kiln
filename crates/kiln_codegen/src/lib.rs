@@ -249,6 +249,11 @@ pub struct CodegenOptions {
     /// `-ftrivial-auto-var-init-max-size=`: a variable larger than this
     /// many bytes is not initialized (0: no limit).
     pub auto_var_init_max_size: u64,
+    /// [`Self::auto_var_init`] is the C++26 default, not a written
+    /// `-ftrivial-auto-var-init=`: the fill before an aggregate
+    /// initializer that writes every byte is left out, as clang 22 (which
+    /// has no erroneous values) emits none (WP-1921, spec/codegen.md §7y).
+    pub auto_var_init_implicit: bool,
     /// The visibility of a value (function, variable) that names none
     /// (`-fvisibility=`; clang `LangOptions::ValueVisibilityMode`;
     /// spec/codegen.md "Symbol visibility").
@@ -840,6 +845,7 @@ impl Default for CodegenOptions {
             omit_leaf_frame_pointer: None,
             auto_var_init: AutoVarInit::Uninitialized,
             auto_var_init_max_size: AUTO_VAR_INIT_MAX_SIZE,
+            auto_var_init_implicit: false,
             visibility: Visibility::Default,
             type_visibility: Visibility::Default,
             inlines_hidden: false,

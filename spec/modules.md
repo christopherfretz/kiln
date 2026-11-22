@@ -4475,6 +4475,53 @@ Tests: `functions_declared_through_a_typedef_are_carried`,
 `cpp.include/pch-typedef-fns-{run,errors}.cpp` and
 `module.interface/image-typedef-fns-{run,errors}.cpp`.
 
+**Forms carried by WP-1923 (floating-point pragma states).** Sema keeps
+the FP pragma state in effect (`kiln_ast::fp::FpOverride`, relative to
+the command line; [cfenv.syn], C23 7.6.2, `#pragma clang fp`) in two
+places, and the image carries both (`bmi_image/fpstate.rs`). Before,
+either made the declaration fall back ("a block under a floating-point
+pragma", and the cold-field gate for `init_fp`).
+
+- *A block's state.* A `CompoundStmt`'s `aux` names its state in the
+  AST's override table. In a record it is an index into its body
+  section's own table, `fp`, which follows the section's statements:
+  `u32 n`, then `n` states; `aux` 0 is none and `i` is entry `i - 1`.
+  The validator requires a block's `aux` to be at most `n`; the reader
+  interns each entry into its own table (`StmtArena::intern_fp`).
+- *`init_fp`* (`ColdDeclData::init_fp`): the state of a constructor's
+  mem-initializers and of a field's default member initializer
+  (WP-1904), and of a parameter's default argument (WP-1919). A side
+  section after `mclasses`, `fp_inits`: `u32 n`, then per row `u32
+  rec, u32 param` and a state, ascending by `(rec, param)`. A row names
+  a `Function` record, with `param` the parameter's position or `NONE`
+  (a constructor), or a `Field` record with `param` `NONE`. A
+  parameter's row is under the record of the function declaration that
+  owns it, since each declaration has its own parameters. The reader
+  enters the rows once the records and default arguments are built.
+
+A state is 9 bytes: the override mask (`u16`); the flags (`u16`, from
+bit 0: reassoc, arcp, nnan, ninf, nsz, afn, math-errno, FENV_ACCESS,
+rounding-math, strict function); then one byte each for the
+contraction (off, on, fast), the rounding mode (dynamic, to nearest,
+upward, downward, toward zero, to nearest away), the exception
+behavior (0 none, then ignore, may-trap, strict), the evaluation method
+(source, double, extended) and `CX_LIMITED_RANGE` (0 none, 1 off, 2
+on). Any other value is rejected. Codegen reads the restored states as
+it reads replay's, so the importer's constrained operations carry the
+same rounding and exception metadata.
+
+```
+body    += fp:u32 state*    WP-1923, after stmts (n = 0 in a texprs section)
+fp_inits := n:u32 (rec:u32 param:u32 state)*   after mclasses
+state   := mask:u16 flags:u16 contract:u8 round:u8 except:u8 eval:u8 cx:u8
+```
+
+Tests: `image_carries_fp_pragma_states` (modules_image_fp: an interface
+under `FENV_ROUND` with inline constructors, a block with its own
+pragma, a class template and default arguments is imported from its
+image, and its IR is the replay's and, mangling aside, the non-module
+build's); `states_round_trip`, `bad_states_are_rejected` (kiln_sema).
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -5237,7 +5284,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 51` since WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 52` since WP-1923, which carries floating-point pragma states (a body section's `fp` table and the `fp_inits` section); 51 for WP-1791, whose predefined builtin types grow to 95 with the FP8 types; 48 for WP-1863, whose `no_sanitize` attribute words carry the `coverage` bit (bit 31); 47 for WP-1859, which adds the `nested` section of written function-type parameters; 46 for WP-1824, whose variable records carry thread storage duration (bits 3-4 of the specifier bits); 45 for WP-1806, whose attribute section gains the `xexprs` and `words` runs and whose function types carry Swift parameter ABIs; 44 for WP-1811, whose type records carry an address space (`ExtQual`) and a value-dependent one; 43 for WP-1740, whose builtin template stub kind 12 is `__builtin_common_type`; 42 before it; 41 for WP-1667 (its commit names the bump, not what it covers), 40 for WP-1630 and WP-1631, whose template state records `spec_own_header` and `ctad_class_params`, 39 for WP-1590, WP-1594 and WP-1573, a new expression flag and the Oven snapshot's table, 38 for WP-1517, whose variable specifier bits carry whether `inline` is implied (bit 13), 37 for WP-1505, whose splice expressions record a written `template` keyword, 36 for WP-1426, whose function type bits widen to u32, 35 for WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

@@ -130,3 +130,37 @@ fn flag_values() {
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("invalid integral value 'x'"), "{err}");
 }
+
+/// WP-1921 (§7y, "Redundant pre-fill under the default"): kiln's C++26
+/// default leaves out the pre-fill of an aggregate whose initializer
+/// writes every byte (as clang 22, with no erroneous values, fills
+/// nothing; `basic.indet/ir-default-fill-elided.cpp` compares those), and
+/// keeps it where a byte would otherwise be unwritten or the initializer
+/// reads the variable. A written `-ftrivial-auto-var-init=zero` keeps
+/// every pre-fill, as clang's does.
+const AGG: &str = "void use(void *);\n\
+    struct P { char c; int i; };\n\
+    struct Agg { double a = 1.0; double b; };\n\
+    struct Two { int a; int b; };\n\
+    union U { char c; int i; };\n\
+    struct NT { int a; int b; NT() : a(1) {} };\n\
+    struct Gap { unsigned a : 3; unsigned : 5; unsigned char b; short s; };\n\
+    struct HasP { P p; int i; };\n\
+    extern \"C\" void full(double y) { Agg h{.b = y}; Two t{(int)y}; int a[4] = {(int)y}; use(&h); use(&t); use(a); }\n\
+    extern \"C\" void padded(int y) { P q{.i = y}; HasP r{{1, y}, y}; P arr[2] = {{1, y}}; use(&q); use(&r); use(arr); }\n\
+    extern \"C\" void unnamed_bf(unsigned y) { Gap g{y, 1, 2}; use(&g); }\n\
+    extern \"C\" void kept(int y) { U u{(char)y}; NT n; Two s{y, s.a}; use(&u); use(&n); use(&s); }\n";
+
+#[test]
+fn cxx26_default_skips_redundant_prefill() {
+    let (code, ir, err) = emit("agg", AGG, &["-std=c++26"]);
+    assert_eq!((code, err.as_str()), (Some(0), ""), "{ir}");
+    for (f, n) in [("full", 0), ("padded", 3), ("unnamed_bf", 1), ("kept", 3)] {
+        let b = body(&ir, f);
+        assert_eq!(fills(b), n, "{f}:\n{b}");
+    }
+    let (code, ir, err) = emit("aggzero", AGG, &["-std=c++26", "-ftrivial-auto-var-init=zero"]);
+    assert_eq!((code, err.as_str()), (Some(0), ""), "{ir}");
+    let b = body(&ir, "full");
+    assert_eq!(fills(b), 3, "{b}");
+}

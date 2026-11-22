@@ -17,6 +17,8 @@ use kiln_llvm::{ConstData, GepFlags, IntValue, TypeId as LTy, Value};
 use crate::fold::{is_local, is_static_local};
 use crate::module::{Cg, R, err, gval};
 
+/// What [`Cg::enter_call_default_arg`] replaced.
+pub(crate) type DefaultArgSave = (Option<ExprId>, crate::fp::SavedFp);
 /// What [`Cg::enter_default_init`] replaced.
 pub(crate) type DefaultInitSave =
     (Option<ExprId>, Option<(Option<crate::fir::V>, Option<DeclId>)>, crate::fp::SavedFp);
@@ -409,6 +411,23 @@ impl Cg<'_> {
             self.srcloc = Some(e);
         }
         saved
+    }
+
+    /// [`Self::enter_default_arg`] for the `CXXDefaultArgExpr` `e` at a
+    /// call, emitted under the FP state its parameter's default argument
+    /// was parsed in, not the call's ([`kiln_ast::Ast::default_arg_fp`];
+    /// WP-1919: clang keeps it on each expression). Ended by
+    /// [`Self::exit_call_default_arg`].
+    pub(crate) fn enter_call_default_arg(&mut self, e: ExprId) -> DefaultArgSave {
+        let src = self.enter_default_arg(e);
+        let p = self.ast.exprs.default_arg_param(e);
+        (src, self.enter_fp_override(self.ast.default_arg_fp(p), true))
+    }
+
+    /// Ends [`Self::enter_call_default_arg`].
+    pub(crate) fn exit_call_default_arg(&mut self, s: DefaultArgSave) {
+        self.leave_fp(s.1);
+        self.srcloc = s.0;
     }
 
     /// [`Self::enter_default_arg`] for a `CXXDefaultInitExpr`, whose

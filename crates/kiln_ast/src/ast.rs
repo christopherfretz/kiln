@@ -505,6 +505,36 @@ impl Ast {
         crate::fp::FpOverride::NONE
     }
 
+    /// The FP pragma state parameter `p`'s default argument was parsed
+    /// in ([`crate::decl::ColdDeclData::init_fp`], WP-1919): on `p`, or
+    /// for a default argument inherited from an earlier declaration
+    /// ([dcl.fct.default]/4) on that declaration's parameter, the one
+    /// holding the same expression. An instantiated default argument
+    /// gets its pattern's entry when it is substituted.
+    pub fn default_arg_fp(&self, p: DeclId) -> crate::fp::FpOverride {
+        let m = &self.decls.cold.init_fp;
+        if m.is_empty() {
+            return crate::fp::FpOverride::NONE;
+        }
+        if let Some(&o) = m.get(p) {
+            return o;
+        }
+        let Some(pd) = self.decls.param(p) else { return crate::fp::FpOverride::NONE };
+        let (Some(def), Some(f)) = (pd.default_arg, self.decls.get(p).ctx()) else {
+            return crate::fp::FpOverride::NONE;
+        };
+        let i = usize::from(pd.index);
+        self.redecls_of(f)
+            .find_map(|r| {
+                let rp = self.lists.at::<DeclId>(self.decls.function(r)?.params, i)?;
+                if self.decls.param(rp)?.default_arg != Some(def) {
+                    return None;
+                }
+                m.get(rp).copied()
+            })
+            .unwrap_or(crate::fp::FpOverride::NONE)
+    }
+
     /// CWG 3135 ([dcl.struct.bind]/7, C++26): the holding variable `r`
     /// of a tuple-like structured binding whose initializer (`get<i>`)
     /// is a prvalue is declared `S T_i r = initializer;`, an object of

@@ -687,8 +687,9 @@ impl StmtArena {
         push_side(&mut self.coros, x)
     }
     /// The index of FP override `o` in the table (0 for none; equal
-    /// overrides share an index).
-    pub(crate) fn intern_fp(&mut self, o: crate::fp::FpOverride) -> u16 {
+    /// overrides share an index): a `CompoundStmt`'s `aux` (the builder;
+    /// the module image's loader).
+    pub fn intern_fp(&mut self, o: crate::fp::FpOverride) -> u16 {
         if o.is_empty() {
             return 0;
         }

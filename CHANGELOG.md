@@ -503,6 +503,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   as clang does: kiln used the command line's rounding there, so their
   constrained operations carried `round.tonearest` (WP-1904). PCH
   snapshot format 114.
+- A default argument is now emitted under the FP pragma state it was
+  written in (an in-class member's, an inherited one's and a template's
+  included), as clang does: kiln used the calling function's, so under
+  `#pragma STDC FENV_ROUND` its constrained operations carried the
+  caller's rounding (WP-1919).
+- Under kiln's C++26 default fill, an aggregate local whose initializer
+  writes every byte (no padding, every member given, defaulted or
+  value-initialized: `Agg h{.b = y}`) no longer gets a redundant
+  `llvm.memset` before it, so its IR is clang 22's; padded types, unions,
+  constructors and a written `-ftrivial-auto-var-init=zero` keep the fill
+  (WP-1921).
+- A module interface with blocks or initializers under a floating-point
+  pragma (`FENV_ROUND`, `#pragma clang fp`) is now imported from its
+  declaration image: the image declined those declarations and the
+  importer replayed the module (WP-1923). Image format 52.
 - `C::C<args>` and `C::C` after a non-dependent qualifier naming the
   class `C` (`L::mapping<int>::mapping<long> *p`) are now clang's
   "qualified reference to 'mapping' is a constructor name rather than a
