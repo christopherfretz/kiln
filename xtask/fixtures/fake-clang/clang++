@@ -1,4 +1,6 @@
 #!/bin/sh
+# The deliberate crashes below must not leave core files in the checkout.
+ulimit -c 0 2>/dev/null
 # A stand-in for a crashing clang oracle, for the oracle-retry self-test
 # (`xtask/src/test/tests.rs`, spec/harness.md "Oracle"). It identifies as
 # ${KILN_FAKE_CC:-clang++-19} and acts on a `// fake-clang: <what>` line in

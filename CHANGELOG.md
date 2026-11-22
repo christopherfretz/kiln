@@ -500,6 +500,13 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- An ordinary unqualified call whose function only argument-dependent
+  lookup found (a hidden friend, a function or function template of an
+  associated namespace, an ADL-only template-id) now carries the `adl`
+  flag on its `CallExpr`, dumped `adl` as clang's `IsADLCandidate`; kiln
+  set it only on operator calls and structured-binding `get` calls, so
+  tooling clients reading the flag missed these calls. Codegen, constant
+  evaluation and diagnostics are unchanged (WP-1928).
 - The arguments of an attribute clang knows but kiln does not interpret
   are now parsed and counted as clang does, from a table generated from
   clang 19 and 22 (`scripts/gen-attr-args.py`,

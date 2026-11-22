@@ -69,10 +69,6 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// Resolves the non-dependent call of the overloaded name `callee` (an
-    /// `UnresolvedLookupExpr`, possibly parenthesized) with `args`
-    /// (`braced` the braced-init-list ones): the `DeclRefExpr` naming the
-    /// best viable function, or `None` after diagnosing.
     /// "use of undeclared identifier 'f'" for the callee `name` at `loc`
     /// that no lookup found; clang 22 adds the range of its (first) token.
     pub(crate) fn diagnose_undeclared_call_name(&mut self, name: DeclName, loc: Loc) {
@@ -104,7 +100,8 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(ule).loc();
         let targs = self.ast.templates.expr_targs.get(ule).copied();
         let retry = self.builder().unresolved_lookup(name, &decls, false, None, targs, loc);
-        let (r, stash) = self.capturing(|s| s.resolve_unresolved_call(retry, args, braced));
+        let (r, stash) =
+            self.capturing(|s| s.resolve_unresolved_call(retry, args, braced).map(|(e, _)| e));
         let f = r.filter(|_| !self.stash_has_error(&stash)).and_then(|e| {
             let k = self.ast.exprs.get(e).kind();
             (k == ExprKind::DeclRefExpr).then(|| self.ast.exprs.decl(e))
@@ -238,6 +235,12 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Resolves the non-dependent call of the overloaded name `callee` (an
+    /// `UnresolvedLookupExpr`, possibly parenthesized) with `args`
+    /// (`braced` the braced-init-list ones): the `DeclRefExpr` naming the
+    /// best viable function and whether only argument-dependent lookup
+    /// found it (clang's `IsADLCandidate`, the call's `adl` flag; §2.2),
+    /// or `None` after diagnosing.
     #[allow(
         clippy::too_many_lines,
         reason = "lookup, ADL, the one-candidate path and the candidate set meet here"
@@ -247,7 +250,7 @@ impl Sema<'_, '_> {
         callee: ExprId,
         args: &[ExprId],
         braced: &[Option<InitList>],
-    ) -> Option<ExprId> {
+    ) -> Option<(ExprId, bool)> {
         let ule = self.ignore_parens(callee);
         let n = *self.ast.exprs.get(ule);
         let name = self.ast.unresolved_name(ule);
@@ -271,6 +274,10 @@ impl Sema<'_, '_> {
                 self.module_note_overload_set(&added, n.loc());
             }
         }
+        // The functions only argument-dependent lookup found (it skips
+        // those ordinary lookup found, by canonical declaration): a
+        // winner among them is clang's `IsADLCandidate` (§2.2).
+        let adl_found: Vec<DeclId> = cands[decls.len()..].iter().map(|&(d, _)| d).collect();
         let last = cands.last().copied();
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         // Only invalid functions (already diagnosed) were found: clang's
@@ -306,7 +313,7 @@ impl Sema<'_, '_> {
             && adl
             && let Some(r) = self.two_phase_call(ule, name, args, braced)
         {
-            return Some(r);
+            return Some((r, false));
         }
         if cands.is_empty() {
             self.diagnose_undeclared_call_name(name, n.loc());
@@ -345,19 +352,19 @@ impl Sema<'_, '_> {
                 // `DeclRefExpr` built directly) whose function became
                 // invalid when its definition was instantiated by that
                 // reference: the call is erroneous, undiagnosed.
-                return Some(self.recover_err(&[e], n.loc()));
+                return Some((self.recover_err(&[e], n.loc()), false));
             }
             self.ovl.adl_single = adl.then_some(e);
-            return Some(e);
+            return Some((e, adl_found.contains(&d)));
         }
         if let ControlFlow::Break(r) = self.implicit_object_call(ule, &cands, naming, args, braced)
         {
-            return r;
+            return r.map(|e| (e, false));
         }
         let mut set = self.begin_set(SetKind::Normal, at);
         self.defer_templates(&mut set);
         let base = self.push_call_args(&mut set, args, braced);
-        for (i, &(d, f)) in cands.iter().enumerate() {
+        for &(d, f) in &cands {
             if self.kind_of(d) == DeclKind::FunctionTemplate {
                 if set.two_phase && explicit.is_none() {
                     set.deferred.push(super::defer::Deferred::Template {
@@ -367,7 +374,7 @@ impl Sema<'_, '_> {
                         first_opts: IcsOptions::NONE,
                         loc: at,
                         poi: Some(n.loc()),
-                        adl_only: i >= decls.len(),
+                        adl_only: adl_found.contains(&d),
                     });
                     continue;
                 }
@@ -389,7 +396,7 @@ impl Sema<'_, '_> {
             } else {
                 self.add_candidate(&mut set, d, f, CandidateKind::Function, IcsOptions::NONE);
             }
-            if i >= decls.len()
+            if adl_found.contains(&d)
                 && let Some(c) = set.cands.last_mut()
             {
                 c.adl_only = true;
@@ -706,11 +713,11 @@ impl Sema<'_, '_> {
         naming: Option<DeclId>,
         nns: Option<kiln_ast::NnsId>,
         ule: ExprId,
-    ) -> Option<ExprId> {
+    ) -> Option<(ExprId, bool)> {
         let b = self.call_winner(set, out, name, at, loc, false)?;
         let c = set.cand(b);
-        let (d, f) = (c.func(), c.found);
-        Some(self.finish_overload_ref(d, f, naming, loc, nns, ule, false))
+        let (d, f, adl_only) = (c.func(), c.found, c.adl_only);
+        Some((self.finish_overload_ref(d, f, naming, loc, nns, ule, false), adl_only))
     }
 
     /// The best viable candidate of the call set `set` of the function

@@ -5887,6 +5887,10 @@ impl Sema<'_, '_> {
         // A callee named by a `DeclRefExpr` before the call (clang's
         // non-overloaded name), not resolved by it.
         let direct = self.ast.exprs.get(self.ignore_parens(callee)).kind() == ExprKind::DeclRefExpr;
+        // The winner was found only by argument-dependent lookup: the call
+        // is clang's `IsADLCandidate` (dumped `adl`; spec/sema-overload.md
+        // §2.2).
+        let mut adl_winner = false;
         let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
             == ExprKind::UnresolvedLookupExpr
             && !self.expr_is_type_dependent(callee)
@@ -5895,7 +5899,10 @@ impl Sema<'_, '_> {
             // `(f)(x)`, `(f<A>)(x)`: the parentheses stay around the
             // resolved name (clang's `FixOverloadedFunctionReference`).
             match self.resolve_unresolved_call(callee, args, &braced) {
-                Some(e) if !self.is_err_expr(e) => self.rebuild_parens(callee, e),
+                Some((e, adl)) if !self.is_err_expr(e) => {
+                    adl_winner = adl;
+                    self.rebuild_parens(callee, e)
+                }
                 _ => return self.recover_err(&kids, loc),
             }
         } else if self.member_overload(callee).is_some()
@@ -6152,6 +6159,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_assume_side_effects, self.begin_loc(c));
             self.emit(msg);
             flags = ExprFlags::ASSUME_IGNORED;
+        }
+        if adl_winner {
+            flags = flags.with(ExprFlags::ADL);
         }
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, flags);
         let call = self.maybe_bind_temporary(call);

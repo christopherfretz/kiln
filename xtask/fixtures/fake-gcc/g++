@@ -1,4 +1,6 @@
 #!/bin/sh
+# The deliberate crashes below must not leave core files in the checkout.
+ulimit -c 0 2>/dev/null
 # A stand-in for GCC 16.1, for the GCC-oracle self-tests
 # (`xtask/src/test/tests.rs`, spec/harness.md "GCC oracle"). It identifies
 # as GCC and acts on a `// fake-gcc: <what>` line in the source:
