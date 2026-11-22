@@ -34,7 +34,7 @@ pub mod trace;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{
-    ExpansionInfo, ExpansionKind, FileKind, LazyCopy, LazyFile, LazyOutcome, LineCol, LoadError,
-    LoadReport, LocSpaceExhausted, PresumedLoc, Replacement, SourceManager, SourcePathStyle,
-    read_open_file,
+    ExpansionInfo, ExpansionKind, FileKind, FileOrigin, LazyCopy, LazyFile, LazyOutcome, LineCol,
+    LoadError, LoadReport, LocSpaceExhausted, PresumedLoc, Replacement, SourceManager,
+    SourcePathStyle, read_open_file,
 };

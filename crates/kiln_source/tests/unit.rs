@@ -152,6 +152,45 @@ fn lex_phases_invalid_utf8_replacement_positions() {
     assert!(sm.load_report(g).is_clean());
 }
 
+// [lex.phases]/1 (phase 1 maps the file's bytes): the bytes a buffer was
+// decoded from are given back exactly, for invalid UTF-8 (rebuilt from
+// the replacements), a byte-order mark and valid UTF-8 (borrowed);
+// `file_ids` enumerates every buffer in id order with its origin
+// (spec/source.md "`SourceManager` API").
+#[test]
+fn lex_phases_original_bytes_and_file_enumeration() {
+    use kiln_source::FileOrigin;
+    use std::borrow::Cow;
+    let dir = TempDir::new("original");
+    let cases: [(&str, &[u8]); 4] = [
+        ("bad.cpp", b"ok\xFFx\n\xE2\x82y\xC0\xAFz"),
+        ("bad-end.h", b"int a; \xF0\x9F"),
+        ("bom.h", b"\xEF\xBB\xBFint b;\n"),
+        ("good.h", "int \u{e9};\n".as_bytes()),
+    ];
+    let sm = SourceManager::new();
+    let mut ids = Vec::new();
+    for (name, bytes) in cases {
+        let path = dir.0.join(name);
+        fs::write(&path, bytes).unwrap();
+        let f = sm.load_file(&path).unwrap();
+        assert_eq!(sm.file_origin(f), FileOrigin::Disk);
+        let got = sm.original_bytes(f).unwrap();
+        assert_eq!(&*got, bytes, "{name}");
+        // Valid UTF-8 (the byte-order mark included) is the text itself.
+        assert_eq!(matches!(got, Cow::Borrowed(_)), std::str::from_utf8(bytes).is_ok(), "{name}");
+        ids.push(f);
+    }
+    let v = sm.add_virtual("<built-in>", "#define X 1\n".to_owned()).unwrap();
+    assert_eq!(sm.file_origin(v), FileOrigin::Virtual);
+    assert_eq!(sm.original_bytes(v).as_deref(), Some(&b"#define X 1\n"[..]));
+    ids.push(v);
+    // Loading a file again gives its first buffer: no new id.
+    sm.load_file(&dir.0.join("good.h")).unwrap();
+    assert_eq!(sm.file_ids().collect::<Vec<_>>(), ids);
+    assert_eq!(sm.file_ids().count(), sm.file_count());
+}
+
 // [cpp.include]: file identity is by canonical path; the name is the path
 // as first given.
 #[test]
@@ -854,11 +893,17 @@ fn lazy_file_reads_on_first_use_and_shares_its_id() {
     let LazyFile::Added(id) = sm.add_lazy_file("h.h", &p, text.len() as u32, hash, None) else {
         panic!("not added")
     };
+    // Not read yet: no bytes, and asking does not read it.
+    assert_eq!(sm.file_origin(id), kiln_source::FileOrigin::Lazy);
+    assert_eq!(sm.original_bytes(id), None);
+    assert_eq!(sm.original_bytes(id), None);
     assert_eq!(sm.file_name(id), "h.h");
     assert_eq!(sm.loaded_file(&p), Some(id));
     let lc = sm.line_col(sm.loc(id, 9)).unwrap();
     assert_eq!((lc.line, lc.col), (2, 3));
     assert!(sm.lazy_fallbacks().is_empty());
+    // Read now, from the file.
+    assert_eq!(sm.original_bytes(id).as_deref(), Some(text.as_bytes()));
     // A load of the same file finds the lazy buffer.
     assert_eq!(sm.load_file(&p).unwrap(), id);
     assert!(matches!(
@@ -887,6 +932,8 @@ fn lazy_file_changed_uses_the_copy_or_reports_nothing() {
     };
     assert_eq!(sm.text(id), text);
     assert_eq!(sm.lazy_fallbacks(), vec![(id, LazyOutcome::Copy)]);
+    // The text is the recorded copy, not bytes read from the file.
+    assert_eq!(sm.original_bytes(id), None);
     // The importer's own load of the changed file gets its disk text.
     let other = sm.load_file(&p).unwrap();
     assert_ne!(other, id);
