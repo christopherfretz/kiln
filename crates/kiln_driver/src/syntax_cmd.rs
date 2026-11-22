@@ -19,6 +19,7 @@ use kiln_parse::{ParseOptions, parse_preprocessed};
 use kiln_sema::target::Target;
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
+use crate::front_end::Hooks;
 use crate::pp_cmd::{Job, JobResult, PpInputs};
 use crate::{SharedWriter, make_engine};
 
@@ -104,7 +105,7 @@ impl SyntaxJob<'_> {
         }
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                self.parse(&sm, &engine, &interner, inputs, None, &mut result, None);
+                self.parse(&sm, &engine, &interner, inputs, None, &mut result, None, None);
             }
         });
         engine.flush();
@@ -144,7 +145,16 @@ impl SyntaxJob<'_> {
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
                 let mut restore = Some(restore);
-                self.parse(&sm, &engine, &interner, inputs, None, &mut result, restore.as_mut());
+                self.parse(
+                    &sm,
+                    &engine,
+                    &interner,
+                    inputs,
+                    None,
+                    &mut result,
+                    restore.as_mut(),
+                    None,
+                );
                 crate::pch_snapshot::phase("reports and teardown of the AST");
                 failed = restore.and_then(|r| r.failed);
             }
@@ -451,6 +461,7 @@ impl SyntaxJob<'_> {
                     Some(&v),
                     &mut result,
                     restore.as_mut(),
+                    None,
                 );
                 failed = restore.take().and_then(|r| r.failed);
                 verifier = Some(v);
@@ -502,6 +513,7 @@ impl SyntaxJob<'_> {
         verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
         result: &mut JobResult,
         restore: Option<&mut crate::pch_snapshot::Restore<'_>>,
+        hooks: Option<&mut Hooks<'_>>,
     ) {
         let job = &self.0;
         let a = job.args;
@@ -530,10 +542,13 @@ impl SyntaxJob<'_> {
             restore.timer.mark("continue");
             restore.timer.report();
             crate::pch_snapshot::phase("restore and main file with end of unit");
-            self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
+            let fin = Finish { interner, popts: &popts, verify, dump_opts, hooks };
+            self.after_parse(sm, engine, tu, pp, deps, main_id, &target, result, fin);
             return;
         }
-        let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
+        let pp_hooks = hooks.as_ref().map(|h| &h.pp);
+        let Some((mut pp, deps)) =
+            job.build_preprocessor_with(sm, engine, interner, inputs, true, pp_hooks)
         else {
             return;
         };
@@ -546,11 +561,17 @@ impl SyntaxJob<'_> {
         let main_id = pp.main_file();
         let (tu, pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
-        self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
+        let fin = Finish { interner, popts: &popts, verify, dump_opts, hooks };
+        self.after_parse(sm, engine, tu, pp, deps, main_id, &target, result, fin);
     }
 
     /// The end of [`Self::parse`]: module and PCH output, reports and
-    /// dumps of the parsed unit `tu`.
+    /// dumps of the parsed unit `tu`. With the library entry's hooks
+    /// ([`crate::front_end`]), its closure is called once the AST is final
+    /// and before the preprocessor is dropped, and nothing is written but
+    /// diagnostics and the reports that go to standard error: no module
+    /// file, no `-fconstexpr-report=` or `-fconstexpr-profile` /
+    /// `-fconstexpr-stats`, no dumps.
     #[allow(clippy::too_many_arguments)]
     fn after_parse<'sm>(
         &self,
@@ -560,15 +581,16 @@ impl SyntaxJob<'_> {
         mut pp: kiln_pp::Preprocessor<'sm, '_>,
         deps: Option<crate::pp_cmd::SharedDeps>,
         main_id: Option<FileId>,
-        verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
-        dump_opts: Option<DumpOptions<'sm>>,
         target: &Target,
         result: &mut JobResult,
+        fin: Finish<'_, '_, 'sm>,
     ) {
         let job = &self.0;
         let a = job.args;
+        let Finish { interner, popts, verify, dump_opts, hooks } = fin;
+        let entry = hooks.is_some();
         job.note_image_imports(&pp);
-        if engine.error_count() == 0 {
+        if engine.error_count() == 0 && !entry {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
         if verify.is_some() || deps.is_some() {
@@ -579,12 +601,27 @@ impl SyntaxJob<'_> {
             // output").
             while !pp.next().is_eof() {}
         }
+        if let Some(h) = hooks {
+            let unit = crate::front_end::Unit {
+                sm,
+                interner,
+                engine,
+                tu: &tu,
+                target,
+                lang: &job.std,
+                popts,
+                main: main_id,
+            };
+            h.see(&unit, &mut pp);
+        }
         drop(pp);
         result.dep_list = deps;
         job.write_image_reports(sm, tu.image_census.as_ref(), engine);
-        a.constexpr.write_report(&tu.oven, sm, engine);
-        let mut err = job.stderr.clone();
-        a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);
+        if !entry {
+            a.constexpr.write_report(&tu.oven, sm, engine);
+            let mut err = job.stderr.clone();
+            a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);
+        }
         if !tu.inst_report.is_empty() {
             engine.flush();
             let mut err = job.stderr.clone();
@@ -593,6 +630,11 @@ impl SyntaxJob<'_> {
         if a.memory_report {
             engine.flush();
             crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
+        }
+        if entry {
+            // The output (dumps, the CFG dump) goes to `-o` or standard
+            // output, which the entry does not write.
+            return;
         }
         result.output.push_str(&tu.cfg_dump);
         let ast = tu.ast;
@@ -614,6 +656,52 @@ impl SyntaxJob<'_> {
                 result.output.push_str(&String::from_utf8_lossy(&out));
             }
         }
+    }
+}
+
+/// What [`SyntaxJob::after_parse`] needs besides the parsed unit: the
+/// interner and parser options of the parse, the `-verify` verifier and
+/// the dump options, and the library entry's hooks.
+struct Finish<'f, 'h, 'sm> {
+    interner: &'sm Arc<Interner>,
+    popts: &'f ParseOptions,
+    verify: Option<&'f Rc<RefCell<Verifier<'sm>>>>,
+    dump_opts: Option<DumpOptions<'sm>>,
+    hooks: Option<&'f mut Hooks<'h>>,
+}
+
+impl SyntaxJob<'_> {
+    /// The library entry's job ([`crate::front_end`]): [`Self::run`]
+    /// without its `-verify` and PCH snapshot branches (the entry refuses
+    /// both) and without `crash::catching`, its engine made by `engines`
+    /// (and reported to it when done), `hooks` called at the end of the
+    /// parse. Whatever [`Self::run`] would put in the job's output is
+    /// dropped.
+    pub(crate) fn run_hooked(&self, engines: &dyn crate::Engines, hooks: &mut Hooks<'_>) {
+        let job = &self.0;
+        let sm = SourceManager::new();
+        let interner = Arc::new(Interner::new());
+        let engine = engines.make(&sm, job.diag_opts, None);
+        let mut result = JobResult::default();
+        let x86 = !job.toolchain.target.is_aarch64();
+        let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
+        if invocation.is_empty()
+            && let Some(inputs) = job.pp_inputs(&sm, &engine)
+        {
+            self.parse(&sm, &engine, &interner, inputs, None, &mut result, None, Some(hooks));
+        }
+        for e in &invocation {
+            e.emit(&engine);
+        }
+        engine.flush();
+        if invocation.is_empty()
+            && let Some(s) = engine.summary()
+            && job.diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = job.stderr.clone();
+            let _ = writeln!(err, "{s}");
+        }
+        engines.done(&engine);
     }
 }
 

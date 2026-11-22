@@ -580,8 +580,23 @@ impl Job<'_> {
         inputs: PpInputs,
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
+        self.build_preprocessor_with(sm, engine, interner, inputs, staged, None)
+    }
+
+    /// [`Self::build_preprocessor`] with the library entry's `hooks`
+    /// ([`crate::front_end`]): the lookup log recorded when it asks, and
+    /// the header search's events kept.
+    pub(crate) fn build_preprocessor_with<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        staged: bool,
+        hooks: Option<&crate::front_end::PpHooks>,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let (mut pp, deps, main) =
-            self.configure_preprocessor(sm, engine, interner, inputs, staged)?;
+            self.configure_preprocessor_with(sm, engine, interner, inputs, staged, hooks)?;
         match main {
             MainInput::File(f) => pp.enter_main_file(f),
             MainInput::Capsule(bytes) => {
@@ -669,19 +684,46 @@ impl Job<'_> {
         inputs: PpInputs,
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>, MainInput)> {
+        self.configure_preprocessor_with(sm, engine, interner, inputs, staged, None)
+    }
+
+    /// [`Self::configure_preprocessor`] with the library entry's `hooks`
+    /// ([`Self::build_preprocessor_with`]).
+    pub(crate) fn configure_preprocessor_with<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        staged: bool,
+        hooks: Option<&crate::front_end::PpHooks>,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>, MainInput)> {
         let a = self.args;
         let PpInputs { skipped, list, main, predefines } = inputs;
         // The module cache's key takes the predefines and the search list
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
-        if a.pch.record_lookups {
+        if a.pch.record_lookups || hooks.is_some_and(|h| h.record_lookups) {
             search.record_lookups();
         }
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
-        if let Some(d) = &deps {
-            let d2 = Rc::clone(d);
-            search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
+        let events = hooks.map(|h| Rc::clone(&h.events));
+        match (&deps, events) {
+            (Some(d), None) => {
+                let d2 = Rc::clone(d);
+                search.set_observer(Box::new(move |_, e| on_search_event(&d2, e)));
+            }
+            (d, Some(events)) => {
+                let d2 = d.as_ref().map(Rc::clone);
+                search.set_observer(Box::new(move |_, e| {
+                    if let Some(d2) = &d2 {
+                        on_search_event(d2, e);
+                    }
+                    crate::front_end::on_search_event(&events, e);
+                }));
+            }
+            (None, None) => {}
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;

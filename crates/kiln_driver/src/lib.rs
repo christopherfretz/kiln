@@ -24,6 +24,7 @@ pub mod deps;
 pub mod entry;
 pub mod features;
 pub mod fp_flags;
+pub mod front_end;
 mod help;
 pub mod hod;
 pub mod link;

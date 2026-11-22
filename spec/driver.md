@@ -1639,6 +1639,44 @@ A codegen job (`-c`, `-S`, `-emit-llvm`, a link) writes the
 record-layout, vtable-layout and CFG dumps to standard output after the
 parse, in the order above, before its IR or object (WP-1745).
 
+### Front-end library entry (WP-020 for Slip)
+
+`kiln_driver::front_end::run_front_end(argv0, command_line, options, f)`
+runs one `-fsyntax-only` job as a call and calls `f` with the parsed unit
+(`FrontEnd`: the source manager, interner, job engine, AST, Oven,
+preprocessor, target, standard, parser options, main file, token count,
+consulted paths, lookup log) once the AST is final and before anything
+is dropped, whenever a parse happened (errors or not, a fatal error
+included). The command line goes through the same argument parser,
+checks, toolchain, driver warnings, PCH probe, standard and job
+(`SyntaxJob::run_hooked`, which shares `SyntaxJob::parse` and
+`after_parse` with the executable's job) as `kiln -fsyntax-only`.
+
+- Refused before anything runs: an action other than `-fsyntax-only`,
+  or `--help`, `-###`, a `-print-*` / `-dump*` probe, `-M` / `-MM`, a
+  `-fmodule-header` input not built (`NotSyntaxOnly`); other than one
+  input, `-` or an assembler input (`NotOneInput`).
+- Refused with the driver error `drv_front_end_unsupported` (`'<flag>'
+  is not supported by the front-end library entry`): `-verify` and
+  `-include-pch` (written, or made by the PCH probe of `-include`) and
+  the PCH snapshot consumer.
+- Nothing is written but diagnostics: no `-o`, no dependency file
+  (`-MD` is still lexed to the end, as for `-fsyntax-only`), no module
+  file, no `-fconstexpr-report=` / `-fconstexpr-profile`, no dumps, no
+  statistics log, no `-MJ`, no time trace; `--version` prints nothing
+  (`-v`'s block goes to `options.stderr`).
+- Every engine's sink renders to `options.stderr` (text or JSON, as
+  `make_engine`) when set and keeps the first error or fatal error; the
+  report's totals are the engines' own, `driver_errors` the part
+  reported before the job.
+- `consulted`: `__has_include` / `__has_embed` hits and `#embed`
+  resources (header search's events), in the order first met, each
+  once, without the files the preprocessor entered.
+- A panic of the front end or of `f` is `FrontEndError::Panicked` (the
+  payload's text) with `own_thread` (a scoped thread of
+  `-fkiln-stack-size=`, stack guard installed) or without (caught on
+  the caller's thread); the panic hook is not touched.
+
 ## `-verify`
 
 `-verify` is clang's `-cc1 -verify` (WP-143). The consumer, its
