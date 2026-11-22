@@ -101,6 +101,7 @@ directives are also ERRORs.
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `written-refs: <golden>` | kiln-specific: the compile's written-reference dump (`-fkiln-dump-written-refs`, spec/ast.md §18.6) must equal the golden. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `decl-extents: <golden>` | kiln-specific: the compile's declaration-extent dump (`-fkiln-dump-decl-extents`, spec/ast.md §19.7) must equal the golden. Only `compile-ok`/`compile-fail`, and not with `written-refs:` (both dumps are the standard output). See "kiln-specific tests". |
+| `pp-record: <golden>` | kiln-specific: the test's `-E -fkiln-dump-pp-record` output (spec/pp.md "Preprocessing record") must equal the golden. Only `compile-ok`, `compile-fail` and `pp`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: host-<feature>` | Run only when the CPU the harness runs on has `<feature>` (`sve`; any other value is an ERROR) and the test's effective target (as for `target-`) has the host's architecture. The features are read from the `Features` (or `flags`) line of Linux's `/proc/cpuinfo`, or from the space-separated `KILN_HOST_FEATURES` when set; elsewhere the host has none. Otherwise **SKIP** with the reason `requires host-<feature>; the host CPU lacks <feature>` or `requires host-<feature>; the test targets <arch>, not the host`. Checked before `target-`. For a `run` test whose binary executes instructions of an optional extension (SVE, WP-810); such a test also carries `requires: target-aarch64`. |
@@ -122,7 +123,7 @@ directives are also ERRORs.
 | `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`, and under GCC as the compiler under test (reason `GCC under test: <reason>`, WP-1249); no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `written-refs`, `decl-extents`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, `as-header-unit`, each `module` name, `unit` path and `header-unit` spelling, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `written-refs`, `decl-extents`, `pp-record`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, `as-header-unit`, each `module` name, `unit` path and `header-unit` spelling, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -526,7 +527,7 @@ expectation is GCC 16.1's too. It is not a CI step. It mirrors
   back in; none is needed, since accept/reject and run output are what a
   GCC run is for.
 - **Not run: SKIP**, with the reasons above: kiln-specific tests (`oven:`,
-  `inst-report:`, `written-refs:`, `decl-extents:`), `verify`, `ast`, `cfg`, `layout`, `vtables`, `ir`,
+  `inst-report:`, `written-refs:`, `decl-extents:`, `pp-record:`), `verify`, `ast`, `cfg`, `layout`, `vtables`, `ir`,
   `ice`, `module:`/`header-unit:` and `pch:` tests (a test with only
   `unit:` lines runs, built in two steps, WP-1261; "Test kinds",
   "kiln-specific tests"). So is a test that is itself a module unit or
@@ -948,6 +949,17 @@ one of the two dump directives, not both. The PCH differential checks no
 dump here either (the dump flag is single-pass, spec/ast.md §19.6; the
 extents' own PCH and module-image round trips are Rust tests).
 
+A test with a `pp-record:` directive is kiln-specific too (the SKIP
+reason names `pp-record:`). After the test kind's own checks pass, the
+runner preprocesses the test once more, with the test's own options plus
+`-E -fkiln-dump-pp-record`, and compares the standard output exactly with
+the golden, a path relative to the test's directory: one `tok` line per
+output token at a macro location, then the record's entries
+(spec/pp.md "Preprocessing record"; WP-2110). A crash is a **FAIL**, a
+mismatch is a **FAIL** with a line diff, a missing golden is an
+**ERROR**; `--update` rewrites the golden. The PCH differential and the
+header-differential mode check no dump.
+
 ### Module-file kinds
 
 `--bmi-kind N` (`N` = 1 or 2) checks the module file reader under each
@@ -1009,7 +1021,7 @@ found) twice:
   `-fclang-compat=` and `kiln_meta.h` flags come first, as in the
   consumer: a snapshot is used only when the producer's command line
   is the consumer's, spec/pch.md "Identity"). Neither build passes the report
-  options an `oven:`, `inst-report:`, `written-refs:` or `decl-extents:` test otherwise
+  options an `oven:`, `inst-report:`, `written-refs:`, `decl-extents:` or `pp-record:` test otherwise
   gets: no budget or dump is checked, and the option would be the
   consumer's alone (the written-reference table is not carried in a
   snapshot, spec/ast.md §18.5).

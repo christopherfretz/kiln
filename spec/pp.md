@@ -751,6 +751,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn is_embed_byte(&self, t: &Token) -> bool;
     pub fn macros(&self) -> &MacroTable;
     pub fn attr_macros(&self) -> (u32, &[AttrMacro]); // WP-234, see below
+    pub fn record(&self) -> Option<&PpRecord>;        // WP-2110, see below
     pub fn callbacks(&mut self) -> &mut dyn PpCallbacks;
     pub fn source_manager(&self) -> &'a SourceManager;
     pub fn interner(&self) -> &'a Interner;
@@ -762,7 +763,8 @@ pub enum Marker { Pragma{..}, PragmaMessage{..}, Ident{..}, FileChange(FileChang
                   Module{span, export, import}, Embed{span} }
 pub struct PpOptions { std, trigraphs, dollar_in_identifiers, keep_comments,
     keep_macro_comments, predefines: String, defines, undefines,
-    max_include_depth /* 200 */, reproducible_time, timestamp }
+    max_include_depth /* 200 */, reproducible_time, timestamp,
+    pp_record /* off */ }
 ```
 
 `Token::span` is the expansion location. The spelling and the macro
@@ -873,6 +875,176 @@ spec/modules.md §11.13.
 - **Tests.** `crates/kiln_pp/tests/pp_state.rs` compares replay with
   the installed record on `-E`, `-dM -E` and diagnostics, including
   the whole pp torture corpus.
+
+### Preprocessing record (WP-2110)
+
+`kiln_pp::record` keeps, on request, what macro expansion did, so that a
+tooling client can ask where any token location came from: which
+definition, which expansion, which argument and which body token. It is
+retained by the `Preprocessor` and read after (or during) preprocessing.
+It is not a callback: `macro_expands` fires before an expansion's entry
+exists, and `#pragma pop_macro` and a restored prefix fire nothing.
+
+**Switch.** `PpOptions::pp_record` (default off), read by
+`Preprocessor::new`. `Preprocessor::record()` is then
+`Some(&PpRecord)`; otherwise `None`. Recording off costs one branch per
+site and changes nothing; on or off, the tokens, the diagnostics, the
+`-E` output and every `Loc` are the same (recording makes no
+source-manager entry and no buffer). The driver sets it for
+`-fkiln-pp-record` (record and drop: for measuring) and
+`-fkiln-dump-pp-record` (below). It is independent of every other
+option.
+
+**Data.** Dense indices `DefIx` and `ExpIx` (`index()`), in the order the
+things happened:
+
+- **Definitions** (`defs()`, `def(d)`): every definition made while
+  recording, including the ones later undefined, replaced or popped (the
+  record keeps their `Rc<MacroDef>` alive). Per definition: the
+  `MacroDef`; its `source` (`File`, `Builtin`, `Predefined`: the
+  predefines text; `CommandLine`: the `<command line>` part of the
+  predefines buffer, that is the driver's `-D`/`-U` in command-line order,
+  and `PpOptions::defines`; `Restored`: not seen being defined, below);
+  `hash` and `end`, the directive's `#` and the newline that ends its
+  last line (invalid for builtins and restored ones); `ended`: `Live`,
+  `Undef(at)` (the `#` of the `#undef`, or the `-U`'s line), `Replaced(d)`
+  or `Popped(at)` (the `pop_macro`'s `pragma`). `ended` is the latest
+  event: a `pop_macro` that makes a definition current again sets it back
+  to `Live`, and the definition it restores is the same `DefIx` that was
+  pushed. `param_locs(d)` are the parameter names' locations (the `...`
+  for an unnamed variadic one).
+- **Parameter uses** (`param_uses(d, p)`): each body token naming
+  parameter `p`, as `Use { tok, kind, in_va_opt }` with kind `Plain`,
+  `Stringized` (operand of `#`, or inside `#__VA_OPT__(...)`) or
+  `PasteOperand` (next to a `##` paste operator). The classifier is
+  `expand.rs`'s, by the same rules as substitution (a parameter directly
+  inside `__VA_OPT__( )` is `Plain`; the `##` before a `__VA_OPT__` pastes
+  its first result token).
+- **Expansions** (`exps()`, `exp(e)`): one per expansion, the empty ones
+  and the builtin ones included. Per expansion: `def`; `name`, the name
+  token's location; `end`, the location of the `)` (the name, for an
+  object-like macro; the `)` of a function-like builtin); `entry`, the
+  base of the result's source-manager entry (the replacement list, the
+  single token of a trivial expansion, or the builtin's result; invalid
+  for an empty one); `parent(e)`; `flags(e)` (`IN_DIRECTIVE`,
+  `VA_ELIDED`, `REGROUPED`: error recovery regrouped the arguments, and a
+  client should not edit inside it); `args(e)`. Expansions are in
+  preprocessing order: a function-like invocation is entered after its
+  arguments are collected and before they are pre-expanded, so an outer
+  expansion precedes the ones in its arguments and its result. A builtin
+  is entered when it produces its result (after the expansions in its
+  operands; a `_Pragma` met during argument pre-expansion is entered when
+  it runs).
+- **Parent** is dynamic nesting: the expansion whose result the name token
+  was read from (its replacement list, a substituted argument, or a token
+  made in it), or whose argument was being pre-expanded; `None` for a name
+  read from a file outside any pre-expansion. So in `ID(ID(x))` the inner
+  `ID`, whose name is in the file, has the outer as its parent.
+- **Arguments** (`args(e)`, an `ExactSizeIterator` of `Arg { span, toks }`):
+  one per actual argument, as collected, before pre-expansion: `toks` the
+  locations of its tokens (macro locations when the tokens came from
+  another expansion), `span` from the first token to the end of the last.
+  An empty argument has no tokens and an empty span at the `,` or `)` that
+  ended it. The variadic argument is one argument, commas included. An
+  omitted variadic argument (`F(1)` for `F(a, ...)`) has no entry and sets
+  `VA_ELIDED`.
+- **Undefinitions** (`undefs()`): every `#undef` and `-U`: `hash`,
+  `name_loc`, `name`, `source` and the definition it ended (`None` if the
+  name was not defined).
+- `expansions_of(d)` lists the expansions of a definition (a scan).
+
+**Origin.** `origin(sm, loc) -> Origin` (a binary search; nothing is
+stored per token):
+
+- `File(loc)`: not a macro location.
+- `Body { exp, tok }`: body token `tok` of `exp`'s definition (also the
+  single token of a trivial expansion).
+- `Arg { exp, arg, use_tok, from, index }`: a token of argument `arg` of
+  `exp`, substituted at the body token `use_tok`. `from` is its location
+  before substitution (`sm.immediate_spelling_loc`): a file location in
+  the argument's span, or a macro location to ask about again (a
+  pre-expanded argument's result, a forwarded argument). `index` is its
+  position among the argument's tokens when `from` is one of them, else
+  `None`.
+- `Made { exp, kind, from, body }`: a token spelled in scratch space.
+  `kind` is `Paste`, `Stringize`, `Builtin`, `PragmaText` (a `_Pragma`
+  operand's text), `HeaderName` (a macro-expanded `<...>` glued into a
+  header name; no `exp`) or `InvalidPaste` (the `##` a failed paste's
+  diagnostic points at). `from` is the source-manager entry's expansion
+  range: for `Paste`, from the first operand to the start of the last one
+  in the replacement list; for `Stringize`, the `#` through the parameter
+  (or `#__VA_OPT__` through its `)`); for `Builtin`, the name (or the
+  `)`). `body` is the pair of body token indices `from` covers, when it
+  lies in `exp`'s replacement list (`paste(b0..b2)` for `a ## b`,
+  `str(b0..b1)` for `#x`).
+- `Unknown`: a macro location the record did not see made (see Coverage).
+
+**Keys and stability.** The record stores translation-unit-local `Loc`s
+and indices; it does not compute keys. These are stable: the same input
+with the same options gives the same record, index for index, and
+`__DATE__`, `__TIME__` and `__TIMESTAMP__` are recorded as expansions of
+their builtins, not by value. A file location names (file, byte offset),
+fixed by the file's text; a header entered twice gives entries at the
+same offsets in each inclusion's range. An expansion whose name is in a
+file is keyed by its name's position; any other one by (the key of its
+nearest ancestor whose name is in a file, its ordinal among the
+expansions keyed under that ancestor, from 1, in preprocessing order).
+A definition in a file is keyed by its name's position; a builtin by its
+name; a predefined or command-line one by (source, name, parameters and
+replacement text), never by an offset in `<built-in>`, which shifts
+when an unrelated `-D` changes. Macro locations are never part of a key.
+
+**Dump.** `-fkiln-dump-pp-record` prints one line per entry, with keys as
+`file:offset` (the file's last path component), to standard output:
+after the compile with `-fsyntax-only` (and code generation), or in place
+of the preprocessed text with `-E`, where one `tok <spelling> <origin>`
+line per output token at a macro location comes first. Lines:
+`def <key> <name>[(<params>)] <source> [dir <#>..<end>] = <body>
+[ended ...]`, `param <def> <i> <name> <loc> uses <b3:plain|str|paste[/va-opt]>...`,
+`undef <key> <name> ends <def>|none`, `exp <key> <name> def <def>
+[parent <exp>] end <loc> [flags] [args <a0>...]` and a last line
+`record complete` or `record incomplete: <flags>`. Origins print as
+`<exp>:b<k>` (body token), `<exp>:a<k>@b<use>[<index>]<<from>` (argument,
+then the origin of `from`), `<exp>:<kind>(b<i>..b<j>)` (made) and `?`.
+Builtin, predefined, command-line and restored definitions are printed
+only when an expansion or an `#undef` names them (the driver adds `-D`s
+of its own, which differ between `-fclang-compat=` versions). The harness directive
+`pp-record: <golden>` (spec/harness.md) runs `-E -fkiln-dump-pp-record`
+on the test and compares the output.
+
+**Coverage (stage 1).** Recorded: definitions with their history,
+parameter uses, expansions with argument spans, and the origin of every
+macro location made while recording. Gaps are never silent:
+`gaps()` (`is_complete()`) has `RESTORED` when a PCH snapshot or a
+preprocessor-state record was installed, or a definition was met that
+the record did not see made (registered when first met, source
+`Restored`), `IMPORTED` when a header unit's macros came from a module
+file or image, and `LOC_SPACE_EXHAUSTED` when an expansion or an
+inclusion could not get its own locations (two inclusions may then share
+`Loc`s). Not yet recorded: conditionals (outcome, group range, guard,
+once), inclusions and include contexts, the reads of a condition,
+`__has_include` and feature-query values, `push_macro`/`pop_macro` as
+events, the operand list of a made token, and carriage of the record in
+PCH snapshots and module images (stages 2-4, WP-2111..WP-2113).
+
+**Cost.** Per expansion 24 bytes, per argument 8, per argument token 4,
+per definition 32 plus the retained `MacroDef`, per parameter 4, per
+`#undef` 24, and 8 per source-manager macro entry (checked by a unit
+test in `record.rs`). `bytes()` is the total, including the definitions
+only the record keeps alive. Recording off allocates nothing.
+`-fkiln-memory-report` shows it as the `pp.record` row. Measured at
+WP-2110 (release build, median of 5): `<bits/stdc++.h>` makes 38,780
+expansions and a 5.0 MB record (about 130 bytes per expansion, all
+tables and spare capacity included), peak RSS +3.9 MiB, `-E` time
+unchanged; clang's `SemaExpr.cpp` makes 131,035 expansions and a 17.4 MB
+record, +12.4 MiB. With recording off, time and peak RSS are within
+noise of the build without the record.
+
+**Tests.** `crates/kiln_pp/tests/pp_record.rs` (the parameter-use
+classifier against real expansions, stability, `-E` identity with
+recording on and off, a header's keys equal under two main files, the
+gap flag of an installed state); the dump goldens under
+`tests/conformance/cpp.replace/record`.
 
 ## Behavior (the standard is normative; clang 19 decides what it leaves open)
 

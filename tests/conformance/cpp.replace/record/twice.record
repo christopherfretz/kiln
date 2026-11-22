@@ -1,0 +1,11 @@
+tok L twice.cpp:333:a0@b0[0]<twice.cpp:339
+tok :: twice.cpp:333:a0@b0[1]<twice.cpp:340
+tok v twice.cpp:333:a0@b0[2]<twice.cpp:342
+tok + twice.cpp:333:b1
+tok L twice.cpp:333:a0@b2[0]<twice.cpp:339
+tok :: twice.cpp:333:a0@b2[1]<twice.cpp:340
+tok v twice.cpp:333:a0@b2[2]<twice.cpp:342
+def twice.cpp:310 TWICE(x) file dir twice.cpp:302..twice.cpp:324 = x + x
+param twice.cpp:310 0 x twice.cpp:316 uses b0:plain b2:plain
+exp twice.cpp:333 TWICE def twice.cpp:310 end twice.cpp:343 args a0=twice.cpp:339..twice.cpp:343/3
+record complete

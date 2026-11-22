@@ -664,6 +664,12 @@ impl SyntaxJob<'_> {
             };
             h.see(&unit, &mut pp);
         }
+        let pp_record = if a.dump_pp_record {
+            pp.record().map(|r| r.dump(sm, pp.interner(), &[]))
+        } else {
+            None
+        };
+        let pp_record_row = crate::pp_record_row(&pp);
         drop(pp);
         result.dep_list = deps;
         job.write_image_reports(sm, tu.image_census.as_ref(), engine);
@@ -679,7 +685,9 @@ impl SyntaxJob<'_> {
         }
         if a.memory_report {
             engine.flush();
-            crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
+            let mut m = tu.memory();
+            m.rows.extend(pp_record_row);
+            crate::write_memory_report(&m, &mut job.stderr.clone());
         }
         if entry {
             // The output (dumps, the CFG dump) goes to `-o` or standard
@@ -692,6 +700,9 @@ impl SyntaxJob<'_> {
         }
         if a.dump_decl_extents {
             result.output.push_str(&tu.ast.decl_extents.dump(&tu.ast, sm, main_id));
+        }
+        if let Some(d) = pp_record {
+            result.output.push_str(&d);
         }
         let ast = tu.ast;
         #[cfg(test)]

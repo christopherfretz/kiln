@@ -320,6 +320,10 @@ pub struct TestSpec {
     /// (`-fkiln-dump-decl-extents`, spec/ast.md §19.7), relative to the
     /// test's directory; compared with the compile's standard output.
     pub decl_extents: Option<PathBuf>,
+    /// `pp-record:`: the golden preprocessing-record dump
+    /// (`-E -fkiln-dump-pp-record`, spec/pp.md "Preprocessing record"),
+    /// relative to the test's directory.
+    pub pp_record: Option<PathBuf>,
     /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
     /// `xtask clang-ast --implicit`).
     pub ast_implicit: bool,
@@ -542,6 +546,7 @@ impl TestSpec {
             || self.inst_report.is_some()
             || self.written_refs.is_some()
             || self.decl_extents.is_some()
+            || self.pp_record.is_some()
     }
 }
 
@@ -597,6 +602,8 @@ struct Parser {
     written_refs_line: usize,
     decl_extents: Option<PathBuf>,
     decl_extents_line: usize,
+    pp_record: Option<PathBuf>,
+    pp_record_line: usize,
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
@@ -684,6 +691,8 @@ impl Parser {
             written_refs_line: 0,
             decl_extents: None,
             decl_extents_line: 0,
+            pp_record: None,
+            pp_record_line: 0,
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
@@ -846,6 +855,16 @@ impl Parser {
                 } else {
                     self.decl_extents_line = line;
                     self.decl_extents = Some(PathBuf::from(value));
+                }
+            }
+            "pp-record" => {
+                if self.pp_record.is_some() {
+                    self.err(line, "duplicate `pp-record`");
+                } else if value.is_empty() {
+                    self.err(line, "`pp-record` requires a path");
+                } else {
+                    self.pp_record_line = line;
+                    self.pp_record = Some(PathBuf::from(value));
                 }
             }
             "exit" => {
@@ -1478,6 +1497,15 @@ impl Parser {
                 self.err(line, "`decl-extents` and `written-refs` cannot share a test");
             }
         }
+        if self.pp_record.is_some()
+            && !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::Pp)
+        {
+            let line = self.pp_record_line;
+            self.err(
+                line,
+                "`pp-record` only applies to `compile-ok`, `compile-fail` and `pp` tests",
+            );
+        }
         if self.module_line != 0
             && (verify
                 || !matches!(
@@ -1588,6 +1616,7 @@ impl Parser {
             inst_report: self.inst_report,
             written_refs: self.written_refs,
             decl_extents: self.decl_extents,
+            pp_record: self.pp_record,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,

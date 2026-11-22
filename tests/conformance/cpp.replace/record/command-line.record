@@ -1,0 +1,4 @@
+tok L command-line.cpp:390:b0
+def command-line:NS NS command-line = L
+exp command-line.cpp:390 NS def command-line:NS end command-line.cpp:390
+record complete

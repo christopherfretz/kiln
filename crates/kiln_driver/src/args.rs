@@ -704,6 +704,13 @@ pub struct Args {
     /// `-fkiln-dump-decl-extents` (`-fsyntax-only` and codegen): print the
     /// declaration-extent table (spec/ast.md §19.6).
     pub dump_decl_extents: bool,
+    /// `-fkiln-pp-record`: keep the preprocessing record (spec/pp.md
+    /// "Preprocessing record") and print nothing (to measure it).
+    pub pp_record: bool,
+    /// `-fkiln-dump-pp-record`: keep the preprocessing record and print it
+    /// (with `-E` in place of the preprocessed text, after the origins of
+    /// the output's macro-expanded tokens).
+    pub dump_pp_record: bool,
     /// `-fkiln-cfg-stats` (`-fsyntax-only` and codegen): one line per analysed
     /// function body with its graph's size and build time
     /// (spec/sema.md §7.5.1).
@@ -2052,6 +2059,8 @@ impl Args {
                 self.decl_extents = true;
                 self.dump_decl_extents = true;
             }
+            "-fkiln-pp-record" => self.pp_record = true,
+            "-fkiln-dump-pp-record" => self.dump_pp_record = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
             "-fkiln-bmi-image" => self.bmi_image = true,

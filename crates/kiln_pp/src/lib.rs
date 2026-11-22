@@ -41,6 +41,7 @@ mod predef;
 mod preprocessor;
 pub mod print;
 mod profile;
+mod record;
 mod resolver;
 mod search;
 mod snap;
@@ -75,6 +76,10 @@ pub use predef::{
 };
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
+pub use record::{
+    Arg, DefEnd, DefIx, DefSource, Definition, ExpFlags, ExpIx, Expansion, MadeKind, Origin,
+    ParamUse, PpRecord, RecordFlags, Undef, Use,
+};
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};
 pub use search::{
     Characteristic, DirGroup, HeaderFs, MemoryFs, RealFs, SearchDir, SearchDirSpec, SearchList,

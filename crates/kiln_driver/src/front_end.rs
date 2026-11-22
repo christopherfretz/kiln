@@ -35,9 +35,11 @@ use crate::toolchain::LangStd;
 use crate::{Engines, EntryRules, SharedWriter};
 
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
-/// log, a thread of its own, the PCH probe on, the process environment.
+/// log, a thread of its own, the PCH probe on, the process environment,
+/// no preprocessing record.
 #[non_exhaustive]
 #[derive(Clone)]
+#[allow(clippy::struct_excessive_bools, reason = "independent switches")]
 pub struct FrontEndOptions {
     /// Diagnostics are also rendered here, as text or JSON as the command
     /// line says, followed by the summary line as `kiln` prints it.
@@ -59,6 +61,10 @@ pub struct FrontEndOptions {
     /// process's, or a fixed set ([`Environment::fixed`]), which the
     /// process environment then never adds to.
     pub environment: Environment,
+    /// Keep the preprocessing record (`PpOptions::pp_record`, spec/pp.md
+    /// "Preprocessing record"): the closure reads it as
+    /// `fe.pp.record()`. Off by default (WP-2110).
+    pub pp_record: bool,
 }
 
 impl Default for FrontEndOptions {
@@ -69,6 +75,7 @@ impl Default for FrontEndOptions {
             own_thread: true,
             pch_probe: true,
             environment: Environment::process(),
+            pp_record: false,
         }
     }
 }
@@ -81,6 +88,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("own_thread", &self.own_thread)
             .field("pch_probe", &self.pch_probe)
             .field("environment", &self.environment)
+            .field("pp_record", &self.pp_record)
             .finish()
     }
 }
@@ -312,6 +320,8 @@ fn payload_text(p: &(dyn std::any::Any + Send)) -> String {
 /// whether to record lookups, and where header search's events go.
 pub(crate) struct PpHooks {
     pub(crate) record_lookups: bool,
+    /// `FrontEndOptions::pp_record`.
+    pub(crate) pp_record: bool,
     pub(crate) events: SearchEvents,
 }
 
@@ -562,7 +572,11 @@ fn run_here<R>(
     prepare(&args, rules, &host, &stderr, |job| {
         driver_errors = Some(host.errors.get());
         let events = SearchEvents::default();
-        let pp = PpHooks { record_lookups: options.record_lookups, events };
+        let pp = PpHooks {
+            record_lookups: options.record_lookups,
+            pp_record: options.pp_record,
+            events,
+        };
         let mut hooks = Hooks { pp, see: &mut see };
         SyntaxJob(job).run_hooked(&host, &mut hooks);
     });

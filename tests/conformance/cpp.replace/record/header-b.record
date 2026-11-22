@@ -1,0 +1,30 @@
+tok ( header-b.cpp:263:b0
+tok 1 header-b.cpp:263/1:b0
+tok + header-b.cpp:263:b2
+tok 1 header-b.cpp:263/2:b0
+tok ) header-b.cpp:263:b4
+tok ( shared.h:52:b0
+tok ( shared.h:52:a0@b1<shared.h:59:b0
+tok 2 shared.h:52:a0@b1<shared.h:59:a0@b1[0]<shared.h:66
+tok + shared.h:52:a0@b1<shared.h:59:b2
+tok 1 shared.h:52:a0@b1<shared.h:59:b3
+tok ) shared.h:52:a0@b1<shared.h:59:b4
+tok + shared.h:52:b2
+tok 1 shared.h:52:b3
+tok ) shared.h:52:b4
+tok ( header-b.cpp:306:b0
+tok 0 header-b.cpp:306:a0@b1[0]<header-b.cpp:313
+tok + header-b.cpp:306:b2
+tok 1 header-b.cpp:306:b3
+tok ) header-b.cpp:306:b4
+def header-b.cpp:211 FIRST file dir header-b.cpp:203..header-b.cpp:218 = 1
+def header-b.cpp:227 SECOND file dir header-b.cpp:219..header-b.cpp:249 = ( FIRST + FIRST )
+def shared.h:8 SHARED(x) file dir shared.h:0..shared.h:25 = ( x + 1 )
+param shared.h:8 0 x shared.h:15 uses b1:plain
+exp header-b.cpp:263 SECOND def header-b.cpp:227 end header-b.cpp:263
+exp header-b.cpp:263/1 FIRST def header-b.cpp:211 name header-b.cpp:263:b1 parent header-b.cpp:263 end header-b.cpp:263:b1
+exp header-b.cpp:263/2 FIRST def header-b.cpp:211 name header-b.cpp:263:b3 parent header-b.cpp:263 end header-b.cpp:263:b3
+exp shared.h:52 SHARED def shared.h:8 end shared.h:68 args a0=shared.h:59..shared.h:68/4
+exp shared.h:59 SHARED def shared.h:8 parent shared.h:52 end shared.h:67 args a0=shared.h:66..shared.h:67/1
+exp header-b.cpp:306 SHARED def shared.h:8 end header-b.cpp:314 args a0=header-b.cpp:313..header-b.cpp:314/1
+record complete

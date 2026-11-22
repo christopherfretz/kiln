@@ -1,0 +1,10 @@
+tok 6 builtins.cpp:225:builtin
+tok "builtins.cpp" builtins.cpp:254:builtin
+tok 0 builtins.cpp:278:builtin
+def builtin:__LINE__ __LINE__ builtin
+def builtin:__FILE_NAME__ __FILE_NAME__ builtin
+def builtin:__COUNTER__ __COUNTER__ builtin
+exp builtins.cpp:225 __LINE__ def builtin:__LINE__ end builtins.cpp:225
+exp builtins.cpp:254 __FILE_NAME__ def builtin:__FILE_NAME__ end builtins.cpp:254
+exp builtins.cpp:278 __COUNTER__ def builtin:__COUNTER__ end builtins.cpp:278
+record complete

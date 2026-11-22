@@ -54,9 +54,11 @@ pub struct MacroDef {
     /// (to map body tokens into an expansion entry without a source
     /// manager lookup per token).
     pub(crate) rel: Box<[(u32, u32)]>,
-    /// Start of the definition range: the macro-name token.
+    /// Start of the body range: the first body token (the macro-name
+    /// token when the body is empty).
     pub(crate) def_start: Loc,
-    /// Length of the definition range (name through the last body token).
+    /// Length of the body range, from the start of the first body token to
+    /// the end of the last one (0 for an empty body).
     pub(crate) def_len: u32,
     pub(crate) builtin: Option<Builtin>,
     /// False while the macro is being expanded ([cpp.rescan]/2).

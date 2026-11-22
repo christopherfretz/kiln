@@ -1,0 +1,6 @@
+def empty.cpp:235 EAT(x) file dir empty.cpp:227..empty.cpp:241 =
+param empty.cpp:235 0 x empty.cpp:239 uses none
+def empty.cpp:260 NOTHING file dir empty.cpp:252..empty.cpp:267 =
+exp empty.cpp:242 EAT def empty.cpp:235 end empty.cpp:250 empty args a0=empty.cpp:246..empty.cpp:250/3
+exp empty.cpp:268 NOTHING def empty.cpp:260 end empty.cpp:268 empty
+record complete

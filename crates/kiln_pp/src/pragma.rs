@@ -76,7 +76,13 @@ impl Preprocessor<'_, '_> {
     /// `_Pragma` itself (the pragma is executed when the argument is
     /// rescanned, [cpp.pragma.op] as clang reads it), else `None` (the
     /// pragma ran; lexing continues after the `)`).
-    pub(crate) fn handle_pragma_op(&mut self, t: PpTok) -> Option<PpTok> {
+    /// `rec` is the preprocessing record's pending entry for this builtin
+    /// (entered here when the pragma runs).
+    pub(crate) fn handle_pragma_op(
+        &mut self,
+        t: PpTok,
+        rec: Option<(crate::preprocessor::Def, u32)>,
+    ) -> Option<PpTok> {
         let at = t.tok.span;
         let lp = self.lex();
         if !lp.is_punct(Punct::LParen) {
@@ -121,7 +127,12 @@ impl Preprocessor<'_, '_> {
             return Some(t);
         }
         let text = destringize(&self.spelling(&s.tok));
+        let old = self.rec_cur;
+        if let Some((def, parent)) = rec {
+            self.rec_cur = self.rec_builtin_expansion(&def, at.lo, rp.tok.span.lo, parent);
+        }
         let toks = self.lex_pragma_string(&text, Span::new(at.lo, rp.tok.span.hi), at);
+        self.rec_cur = old;
         self.push_stream(toks, false);
         let depth = self.frames.len();
         let saved = (self.in_directive, self.dir_eod.take());
@@ -160,6 +171,7 @@ impl Preprocessor<'_, '_> {
             return out;
         };
         let base = self.add_exp(loc, len, exp, ExpansionKind::Macro { name });
+        self.rec_entry(base, loc, crate::record::EntryKind::PragmaText, self.rec_cur);
         let mut lx = Lexer::new_in_range(self.sm, self.interner, file, 0..len, base, self.lex_opts);
         lx.set_in_directive(true);
         lx.set_keep_comments(false);
@@ -436,6 +448,12 @@ impl Preprocessor<'_, '_> {
             self.pushed.remove(&name);
         }
         self.note_macro_change(name, def.as_deref(), t.tok.span.lo);
+        if self.record.is_some() {
+            let cur = self.macros.get_rc(name).cloned();
+            if let Some(r) = self.record.as_deref_mut() {
+                r.pop(t.tok.span.lo, def.as_ref(), cur.as_ref());
+            }
+        }
         match def {
             Some(d) => {
                 self.macros.map.insert(name, d);

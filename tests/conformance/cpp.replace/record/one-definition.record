@@ -1,0 +1,24 @@
+tok L one-definition.cpp:423:b0
+tok :: one-definition.cpp:423:b1
+tok log one-definition.cpp:423:b2
+tok ( one-definition.cpp:423:b3
+tok "a" one-definition.cpp:423:a0@b4[0]<one-definition.cpp:427
+tok ) one-definition.cpp:423:b5
+tok L one-definition.cpp:435:b0
+tok :: one-definition.cpp:435:b1
+tok log one-definition.cpp:435:b2
+tok ( one-definition.cpp:435:b3
+tok "b" one-definition.cpp:435:a0@b4[0]<one-definition.cpp:439
+tok ) one-definition.cpp:435:b5
+tok L one-definition.cpp:447:b0
+tok :: one-definition.cpp:447:b1
+tok log one-definition.cpp:447:b2
+tok ( one-definition.cpp:447:b3
+tok "c" one-definition.cpp:447:a0@b4[0]<one-definition.cpp:451
+tok ) one-definition.cpp:447:b5
+def one-definition.cpp:393 LOG(m) file dir one-definition.cpp:385..one-definition.cpp:409 = L :: log ( m )
+param one-definition.cpp:393 0 m one-definition.cpp:397 uses b4:plain
+exp one-definition.cpp:423 LOG def one-definition.cpp:393 end one-definition.cpp:430 args a0=one-definition.cpp:427..one-definition.cpp:430/1
+exp one-definition.cpp:435 LOG def one-definition.cpp:393 end one-definition.cpp:442 args a0=one-definition.cpp:439..one-definition.cpp:442/1
+exp one-definition.cpp:447 LOG def one-definition.cpp:393 end one-definition.cpp:454 args a0=one-definition.cpp:451..one-definition.cpp:454/1
+record complete

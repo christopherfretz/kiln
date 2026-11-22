@@ -1,0 +1,23 @@
+tok f va-opt.cpp:423:b0
+tok ( va-opt.cpp:423:b1
+tok 1 va-opt.cpp:423:a0@b2[0]<va-opt.cpp:425
+tok ) va-opt.cpp:423:b8
+tok f va-opt.cpp:438:b0
+tok ( va-opt.cpp:438:b1
+tok 1 va-opt.cpp:438:a0@b2[0]<va-opt.cpp:440
+tok ) va-opt.cpp:438:b8
+tok f va-opt.cpp:454:b0
+tok ( va-opt.cpp:454:b1
+tok 1 va-opt.cpp:454:a0@b2[0]<va-opt.cpp:456
+tok , va-opt.cpp:454:b5
+tok x va-opt.cpp:454:a1@b7[0]<va-opt.cpp:459
+tok , va-opt.cpp:454:a1@b7[1]<va-opt.cpp:460
+tok y va-opt.cpp:454:a1@b7[2]<va-opt.cpp:462
+tok ) va-opt.cpp:454:b8
+def va-opt.cpp:373 F(a, ...) file dir va-opt.cpp:365..va-opt.cpp:413 = f ( a __VA_OPT__ ( , ) __VA_ARGS__ )
+param va-opt.cpp:373 0 a va-opt.cpp:375 uses b2:plain
+param va-opt.cpp:373 1 __VA_ARGS__ va-opt.cpp:378 uses b7:plain
+exp va-opt.cpp:423 F def va-opt.cpp:373 end va-opt.cpp:426 args a0=va-opt.cpp:425..va-opt.cpp:426/1 elided
+exp va-opt.cpp:438 F def va-opt.cpp:373 end va-opt.cpp:442 args a0=va-opt.cpp:440..va-opt.cpp:441/1 a1=va-opt.cpp:442..va-opt.cpp:442/0
+exp va-opt.cpp:454 F def va-opt.cpp:373 end va-opt.cpp:463 args a0=va-opt.cpp:456..va-opt.cpp:457/1 a1=va-opt.cpp:459..va-opt.cpp:463/3
+record complete

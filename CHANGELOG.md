@@ -32,6 +32,18 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   gives a block-scope `extern` declaration external linkage in
   reflection's `has_external_linkage`). Module images carry the link
   (image format 61); PCH snapshot format 127 (spec/ast.md §4.2, §4.5).
+- A preprocessing record for tooling clients (WP-2110, stage 1 of 4):
+  with `PpOptions::pp_record` (off by default) the preprocessor keeps
+  every macro definition with its history (`#undef`, redefinition,
+  `pop_macro`, `-D`/`-U`), each parameter's uses (plain, `#`, `##`), one
+  entry per expansion with its parent and argument spans, and
+  `PpRecord::origin`, which tells where any macro location came from
+  (body token, argument token, pasted, stringized or builtin). Gaps are
+  flagged, never silent (`record incomplete: restored` after a PCH).
+  `-fkiln-dump-pp-record` prints it (with `-E`, the origin of each
+  token), the library entry keeps it with `FrontEndOptions::pp_record`,
+  and the test directive `pp-record:` checks it (spec/pp.md
+  "Preprocessing record").
 - Two facts overload resolution and instantiation read now stay in the
   `Ast` after the translation unit, for tooling clients (WP-2020,
   WP-2021): an overloaded member access's qualifier, explicit template

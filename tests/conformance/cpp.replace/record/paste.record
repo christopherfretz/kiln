@@ -1,0 +1,7 @@
+tok L_init paste.cpp:314:paste(b0..b2)
+tok ( paste.cpp:314:b3
+tok ) paste.cpp:314:b4
+def paste.cpp:282 INIT(ns) file dir paste.cpp:274..paste.cpp:302 = ns ## _init ( )
+param paste.cpp:282 0 ns paste.cpp:287 uses b0:paste
+exp paste.cpp:314 INIT def paste.cpp:282 end paste.cpp:320 args a0=paste.cpp:319..paste.cpp:320/1
+record complete

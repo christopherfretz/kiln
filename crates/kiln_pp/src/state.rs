@@ -259,6 +259,9 @@ impl Preprocessor<'_, '_> {
     /// Makes `st` this preprocessor's state, as if the header it was
     /// taken after had been read at `at` (spec/pp.md "Preprocessor-state record").
     pub fn install_state(&mut self, st: &PpState, at: Loc) {
+        if let Some(r) = &self.record {
+            r.set_flag(crate::record::RecordFlags::RESTORED);
+        }
         for d in &st.macros {
             self.macros.map.insert(d.name, d.clone());
         }
