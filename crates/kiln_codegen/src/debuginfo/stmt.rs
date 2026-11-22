@@ -12,6 +12,14 @@ use crate::module::Cg;
 use crate::stmt::Scope;
 
 impl Cg<'_> {
+    /// The location of the first token of `e` ([`kiln_ast::Ast::begin_loc`]):
+    /// codegen asks for every node of an expression, so a long chain
+    /// (`x.f().f()...`) goes through [`Cg::begin_memo`], O(N) in all
+    /// (WP-2201).
+    pub(crate) fn begin_loc(&self, e: ExprId) -> Loc {
+        self.ast.begin_loc_memo(e, &mut self.begin_memo.borrow_mut())
+    }
+
     /// clang `Expr::getExprLoc` (`kiln_sema` `expr_loc`).
     pub(crate) fn di_expr_loc(&self, mut e: ExprId) -> Loc {
         use kiln_ast::names::OverloadedOperator as O;
@@ -42,7 +50,7 @@ impl Cg<'_> {
                 {
                     return exprs.get(e).loc();
                 }
-                _ => return ast.begin_loc(e),
+                _ => return self.begin_loc(e),
             }
         }
         exprs.get(e).loc()
@@ -73,7 +81,7 @@ impl Cg<'_> {
     pub(crate) fn di_stmt_begin(&self, s: StmtId) -> Loc {
         let ast = self.ast;
         match ast.stmts.get(s).kind() {
-            StmtKind::ExprStmt => ast.begin_loc(ast.stmts.expr_stmt_expr(s)),
+            StmtKind::ExprStmt => self.begin_loc(ast.stmts.expr_stmt_expr(s)),
             // `CoroutineBodyStmt::getBeginLoc`: its body's.
             StmtKind::CoroutineBodyStmt => self.di_stmt_begin(ast.stmts.coroutine_body(s).body),
             _ => ast.stmts.get(s).loc(),
@@ -161,7 +169,7 @@ impl Cg<'_> {
     /// increment).
     pub(crate) fn dbg_expr_stmt(&mut self, e: ExprId) {
         if self.dbg_on() {
-            let loc = self.ast.begin_loc(e);
+            let loc = self.begin_loc(e);
             self.dbg_stop_point(loc);
         }
     }

@@ -1171,6 +1171,11 @@ pub struct Sema<'a, 'sm> {
     /// The name-classification memo ([`Sema::classify_name`], spec/parse.md
     /// §2.5): results valid while [`Sema::lookup_stamp`] is unchanged.
     pub(crate) classify_memo: std::cell::RefCell<decl::ClassifyMemo>,
+    /// The last few [`Sema::begin_loc`] answers. A call of a chain
+    /// `x.f().f()...` asks for its begin (or its callee's) when built,
+    /// and the walk stops at an answer for the previous call, so the
+    /// chain costs O(N), not O(N^2) (WP-2201).
+    pub(crate) begin_memo: std::cell::Cell<expr::BeginMemo>,
     /// Imported functions (first declarations) whose bodies
     /// [`Sema::note_imported_body_used`] walked: a memo, walking one again
     /// hands nothing new (spec/modules.md §7, WP-1832).
@@ -1812,6 +1817,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             synth_noted: std::cell::Cell::new(0),
             walk_stack: std::cell::RefCell::new(Vec::new()),
             classify_memo: std::cell::RefCell::default(),
+            begin_memo: std::cell::Cell::default(),
             imported_bodies_walked: kiln_source::fx::FxHashSet::default(),
             inst_outer_anchor: None,
             conv_walk_stack: Vec::new(),

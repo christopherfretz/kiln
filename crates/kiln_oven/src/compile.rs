@@ -1308,6 +1308,10 @@ impl Oven {
     }
 }
 
+/// The walk length past which [`Compiler::begin`] memoizes: only a
+/// left-recursive chain is longer.
+const BEGIN_SHALLOW: usize = kiln_ast::ast::BEGIN_SHALLOW;
+
 pub(crate) struct Compiler<'a> {
     pub o: &'a mut Oven,
     pub b: &'a mut dyn SemaBridge,
@@ -1326,6 +1330,9 @@ pub(crate) struct Compiler<'a> {
     /// scope made it (`u32::MAX` before). Empty for a body that reflects
     /// no reference.
     refl_refs: FxHashMap<DeclId, u32>,
+    /// The begins [`Compiler::begin`] found by long walks (every node of a
+    /// left-recursive chain begins where its innermost operand does).
+    begin_memo: std::cell::RefCell<FxHashMap<ExprId, Loc>>,
     /// The parameters the function contract assertions name, paired with
     /// the definition's, when they were written on another declaration.
     contract_aliases: Vec<(DeclId, DeclId)>,
@@ -1476,6 +1483,7 @@ impl<'a> Compiler<'a> {
             mem_vars: FxHashSet::default(),
             assigned_vars: FxHashSet::default(),
             refl_refs: FxHashMap::default(),
+            begin_memo: std::cell::RefCell::default(),
             contract_aliases: Vec::new(),
             pending: Vec::new(),
             rmw_loc: None,
@@ -1596,64 +1604,89 @@ impl<'a> Compiler<'a> {
     /// The begin location of `e` (spec/ast.md: ranges are computed by
     /// walking to the leftmost child). clang reports an lvalue-to-rvalue
     /// conversion's notes at the begin of the converted expression.
+    ///
+    /// A walk longer than [`BEGIN_SHALLOW`] steps is a left-recursive
+    /// chain (`x.f().f()...`, `a[0][0]...`), whose every node the
+    /// compiler asks for in turn: it goes through [`Compiler::begin_memo`],
+    /// so the chain costs O(N), not O(N^2) (WP-2201).
     fn begin(&self, e: ExprId) -> Loc {
-        let ast = self.b.ast();
-        let mut e = e;
-        loop {
-            let n = ast.exprs.get(e);
-            e = match n.kind() {
-                ExprKind::BinaryOperator
-                | ExprKind::CompoundAssignOperator
-                | ExprKind::ArraySubscriptExpr
-                | ExprKind::ConditionalOperator
-                | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => ast.exprs.callee(e),
-                // A prefix unary operator begins at its token.
-                ExprKind::CXXOperatorCallExpr => {
-                    use kiln_ast::names::OverloadedOperator as O;
-                    let args = ast.exprs.call_args(e);
-                    let prefix = ast.lists.get(args).len() == 1
-                        && !matches!(
-                            ast.exprs.operator_call_op(e),
-                            O::Call | O::Subscript | O::Arrow
-                        );
-                    match ast.lists.at::<ExprId>(args, 0) {
-                        Some(a) if !prefix => a,
-                        _ => return n.loc(),
-                    }
-                }
-                ExprKind::CXXRewrittenBinaryOperator => ast.exprs.rewritten_semantic(e),
-                ExprKind::PseudoObjectExpr => ast.exprs.pseudo_syntactic(e, &ast.lists),
-                ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
-                ExprKind::BinaryConditionalOperator => {
-                    ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
-                }
-                ExprKind::ImplicitCastExpr
-                | ExprKind::ConstantExpr
-                | ExprKind::ExtVectorElementExpr => ast.exprs.operand(e),
-                ExprKind::MemberExpr => {
-                    let base = ast.exprs.operand(e);
-                    // An implicit `this` has no source of its own; an
-                    // implicit anonymous-member step does (its base).
-                    if ast.exprs.get(base).kind() == ExprKind::CXXThisExpr
-                        && ast.exprs.this_is_implicit(base)
-                    {
-                        return n.loc();
-                    }
-                    base
-                }
-                ExprKind::UnaryOperator if ast.exprs.unary_op(e).is_postfix() => {
-                    ast.exprs.operand(e)
-                }
-                // A qualified name begins at its qualifier (`::operator
-                // new`, `std::construct_at`; clang's `getBeginLoc`), which
-                // sema records when it is not the name's own location.
-                ExprKind::DeclRefExpr => {
-                    return ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc());
-                }
-                _ => return n.loc(),
-            };
+        let mut x = e;
+        for _ in 0..BEGIN_SHALLOW {
+            match self.begin_step(x) {
+                Ok(next) => x = next,
+                Err(loc) => return loc,
+            }
         }
+        let mut memo = self.begin_memo.borrow_mut();
+        let mut path = Vec::new();
+        let mut x = e;
+        let loc = loop {
+            if let Some(&l) = memo.get(&x) {
+                break l;
+            }
+            path.push(x);
+            match self.begin_step(x) {
+                Ok(next) => x = next,
+                Err(l) => break l,
+            }
+        };
+        memo.extend(path.into_iter().map(|p| (p, loc)));
+        loc
+    }
+
+    /// One step of [`Compiler::begin`]: the operand `e` begins where
+    /// (`Ok`), or where `e` itself begins (`Err`).
+    fn begin_step(&self, e: ExprId) -> Result<ExprId, Loc> {
+        kiln_ast::expr::note_walk_step();
+        let ast = self.b.ast();
+        let n = ast.exprs.get(e);
+        Ok(match n.kind() {
+            ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::ConditionalOperator
+            | ExprKind::MaterializeTemporaryExpr => ExprId::new(n.a()),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => ast.exprs.callee(e),
+            // A prefix unary operator begins at its token.
+            ExprKind::CXXOperatorCallExpr => {
+                use kiln_ast::names::OverloadedOperator as O;
+                let args = ast.exprs.call_args(e);
+                let prefix = ast.lists.get(args).len() == 1
+                    && !matches!(ast.exprs.operator_call_op(e), O::Call | O::Subscript | O::Arrow);
+                match ast.lists.at::<ExprId>(args, 0) {
+                    Some(a) if !prefix => a,
+                    _ => return Err(n.loc()),
+                }
+            }
+            ExprKind::CXXRewrittenBinaryOperator => ast.exprs.rewritten_semantic(e),
+            ExprKind::PseudoObjectExpr => ast.exprs.pseudo_syntactic(e, &ast.lists),
+            ExprKind::CXXBindTemporaryExpr | ExprKind::ExprWithCleanups => ast.exprs.operand(e),
+            ExprKind::BinaryConditionalOperator => {
+                ast.exprs.binary_conditional_operands(e, &ast.lists)[0]
+            }
+            ExprKind::ImplicitCastExpr
+            | ExprKind::ConstantExpr
+            | ExprKind::ExtVectorElementExpr => ast.exprs.operand(e),
+            ExprKind::MemberExpr => {
+                let base = ast.exprs.operand(e);
+                // An implicit `this` has no source of its own; an
+                // implicit anonymous-member step does (its base).
+                if ast.exprs.get(base).kind() == ExprKind::CXXThisExpr
+                    && ast.exprs.this_is_implicit(base)
+                {
+                    return Err(n.loc());
+                }
+                base
+            }
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e).is_postfix() => ast.exprs.operand(e),
+            // A qualified name begins at its qualifier (`::operator
+            // new`, `std::construct_at`; clang's `getBeginLoc`), which
+            // sema records when it is not the name's own location.
+            ExprKind::DeclRefExpr => {
+                return Err(ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc()));
+            }
+            _ => return Err(n.loc()),
+        })
     }
 
     fn emit_loc(&mut self, op: Op, aux: u32, args: &[u32], loc: Loc) -> usize {

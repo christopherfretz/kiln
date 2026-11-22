@@ -1298,7 +1298,7 @@ impl Cg<'_> {
             let z = self.icn(t, 0);
             let p = if self.is_signed(sq) { IntPredicate::Sgt } else { IntPredicate::Ugt };
             let ok = self.icmp(p, size, z);
-            let loc = self.ub_loc(Some(self.ast.begin_loc(se)))?;
+            let loc = self.ub_loc(Some(self.begin_loc(se)))?;
             let desc = self.ub_type(sq)?;
             self.ub_check(
                 &[(ok, San::VLA_BOUND)],
@@ -2562,13 +2562,13 @@ impl Cg<'_> {
                             | O::PlusPlus
                             | O::MinusMinus
                     );
-                    return if begin { Some(ast.begin_loc(e)) } else { self.loc_of(e) };
+                    return if begin { Some(self.begin_loc(e)) } else { self.loc_of(e) };
                 }
                 ExprKind::MemberExpr
                 | ExprKind::BinaryOperator
                 | ExprKind::CompoundAssignOperator
                 | ExprKind::UnaryOperator => return self.loc_of(e),
-                _ => return Some(ast.begin_loc(e)),
+                _ => return Some(self.begin_loc(e)),
             }
         }
     }

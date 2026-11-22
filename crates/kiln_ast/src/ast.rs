@@ -119,6 +119,10 @@ pub struct InstantiationMeter {
     count: u64,
 }
 
+/// The walk length past which [`Ast::begin_loc_memo`] remembers its
+/// answers: only a left-recursive chain is longer.
+pub const BEGIN_SHALLOW: usize = 16;
+
 impl Ast {
     /// The location of the last token of `e` (clang's `getEndLoc`): the
     /// stored closing token (`)`, `}`) when there is one, else the end of
@@ -233,61 +237,127 @@ impl Ast {
     /// The location of the first token of `e` (clang's `getBeginLoc`):
     /// a node whose own location is an operator or a name after its first
     /// operand begins where that operand does.
+    ///
+    /// The walk follows the first operand down, so it costs the depth of
+    /// a left-recursive chain (`x.f().f()...`, `a[0][0]...`): a caller
+    /// that asks for many nodes of one chain uses
+    /// [`Ast::begin_loc_memo`] instead.
     pub fn begin_loc(&self, mut e: ExprId) -> kiln_source::Loc {
         loop {
-            let n = self.exprs.get(e);
-            let first = match n.kind() {
-                ExprKind::ImplicitCastExpr
-                | ExprKind::ConstantExpr
-                | ExprKind::MaterializeTemporaryExpr
-                | ExprKind::CXXBindTemporaryExpr
-                | ExprKind::CXXStdInitializerListExpr
-                | ExprKind::ExprWithCleanups
-                | ExprKind::BinaryOperator
-                | ExprKind::CompoundAssignOperator
-                | ExprKind::ConditionalOperator
-                | ExprKind::BinaryConditionalOperator
-                | ExprKind::ArraySubscriptExpr
-                | ExprKind::CallExpr
-                | ExprKind::CXXMemberCallExpr
-                | ExprKind::CXXPseudoDestructorExpr
-                | ExprKind::DesignatedInitUpdateExpr
-                | ExprKind::ExtVectorElementExpr
-                | ExprKind::MemberExpr => true,
-                ExprKind::UnaryOperator => self.exprs.unary_op(e).is_postfix(),
-                ExprKind::CXXRewrittenBinaryOperator => {
-                    e = self.exprs.rewritten_semantic(e);
-                    continue;
-                }
-                ExprKind::PseudoObjectExpr => {
-                    e = self.exprs.pseudo_syntactic(e, &self.lists);
-                    continue;
-                }
-                // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
-                // prefix unary operator begins at its token, every other
-                // form at its first operand.
-                ExprKind::CXXOperatorCallExpr => {
-                    use crate::names::OverloadedOperator as O;
-                    let op = self.exprs.operator_call_op(e);
-                    let args = self.exprs.call_args(e);
-                    let first = self.lists.at::<ExprId>(args, 0);
-                    let prefix = self.lists.get(args).len() == 1
-                        && !matches!(op, O::Call | O::Subscript | O::Arrow);
-                    match first {
-                        Some(a) if !prefix => {
-                            e = a;
-                            continue;
-                        }
-                        _ => return n.loc(),
-                    }
-                }
-                _ => false,
-            };
-            let kid = if first { self.exprs.first_child(e, &self.lists) } else { None };
-            match kid {
-                Some(k) => e = k,
-                None => return self.templates.expr_begin.get(e).copied().unwrap_or(n.loc()),
+            match self.begin_step(e) {
+                Ok(next) => e = next,
+                Err(loc) => return loc,
             }
+        }
+    }
+
+    /// [`Ast::begin_loc`] given where the expressions of `known` begin:
+    /// the walk stops at the first of them it passes. A node's begin is
+    /// its first operand's, so a chain built one call at a time, whose
+    /// sema asks for the begin of each call (or of its callee) when it
+    /// builds it, finds the previous answer within a few steps: O(1) per
+    /// call instead of O(N) (WP-2201).
+    pub fn begin_loc_known(
+        &self,
+        mut e: ExprId,
+        known: &[(ExprId, kiln_source::Loc)],
+    ) -> kiln_source::Loc {
+        loop {
+            if let Some(&(_, l)) = known.iter().find(|k| k.0 == e) {
+                return l;
+            }
+            match self.begin_step(e) {
+                Ok(next) => e = next,
+                Err(loc) => return loc,
+            }
+        }
+    }
+
+    /// [`Ast::begin_loc`] for a caller that asks for many nodes of one
+    /// expression: a walk longer than [`BEGIN_SHALLOW`] steps (only a
+    /// left-recursive chain is that deep) remembers, in `memo`, the answer
+    /// for every node it passes (they all begin where `e` does), so asking
+    /// for every node of a chain of depth N costs O(N) in all, not
+    /// O(N^2). A shallow walk touches no memo.
+    pub fn begin_loc_memo(
+        &self,
+        e: ExprId,
+        memo: &mut kiln_source::fx::FxHashMap<ExprId, kiln_source::Loc>,
+    ) -> kiln_source::Loc {
+        let mut x = e;
+        for _ in 0..BEGIN_SHALLOW {
+            match self.begin_step(x) {
+                Ok(next) => x = next,
+                Err(loc) => return loc,
+            }
+        }
+        let mut path = Vec::new();
+        let mut x = e;
+        let loc = loop {
+            if let Some(&l) = memo.get(&x) {
+                break l;
+            }
+            path.push(x);
+            match self.begin_step(x) {
+                Ok(next) => x = next,
+                Err(l) => break l,
+            }
+        };
+        memo.extend(path.into_iter().map(|p| (p, loc)));
+        loc
+    }
+
+    /// One step of [`Ast::begin_loc`]: the operand `e` begins where (`Ok`),
+    /// or where `e` itself begins (`Err`).
+    fn begin_step(&self, e: ExprId) -> Result<ExprId, kiln_source::Loc> {
+        crate::expr::note_walk_step();
+        let n = self.exprs.get(e);
+        let first = match n.kind() {
+            ExprKind::ImplicitCastExpr
+            | ExprKind::ConstantExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::ConditionalOperator
+            | ExprKind::BinaryConditionalOperator
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CallExpr
+            | ExprKind::CXXMemberCallExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::DesignatedInitUpdateExpr
+            | ExprKind::ExtVectorElementExpr
+            | ExprKind::MemberExpr => true,
+            ExprKind::UnaryOperator => self.exprs.unary_op(e).is_postfix(),
+            ExprKind::CXXRewrittenBinaryOperator => {
+                return Ok(self.exprs.rewritten_semantic(e));
+            }
+            ExprKind::PseudoObjectExpr => {
+                return Ok(self.exprs.pseudo_syntactic(e, &self.lists));
+            }
+            // clang's `CXXOperatorCallExpr::getSourceRangeImpl`: a
+            // prefix unary operator begins at its token, every other
+            // form at its first operand.
+            ExprKind::CXXOperatorCallExpr => {
+                use crate::names::OverloadedOperator as O;
+                let op = self.exprs.operator_call_op(e);
+                let args = self.exprs.call_args(e);
+                let first = self.lists.at::<ExprId>(args, 0);
+                let prefix = self.lists.get(args).len() == 1
+                    && !matches!(op, O::Call | O::Subscript | O::Arrow);
+                return match first {
+                    Some(a) if !prefix => Ok(a),
+                    _ => Err(n.loc()),
+                };
+            }
+            _ => false,
+        };
+        let kid = if first { self.exprs.first_child(e, &self.lists) } else { None };
+        match kid {
+            Some(k) => Ok(k),
+            None => Err(self.templates.expr_begin.get(e).copied().unwrap_or(n.loc())),
         }
     }
 

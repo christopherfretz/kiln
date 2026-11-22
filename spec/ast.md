@@ -533,6 +533,23 @@ struct ExprNode {        // 20 bytes
 - Source ranges are computed (`begin(e)` walks to the leftmost child;
   kinds ending in a closing token store it in their side record or cold
   map); no stored ranges.
+- The begin walk costs the depth of a left-recursive chain (a chain of
+  N member calls `x.f().f()...`, subscripts, `<<` operators): a client
+  that asks for the begin of many nodes of one chain must not walk it
+  from each (that is O(N^2) for the chain, WP-2201). Every node the walk
+  passes begins where the walk ends, so `Ast::begin_loc_memo` remembers
+  the answer for each node of a walk longer than `BEGIN_SHALLOW` (16)
+  steps (codegen's debug and call locations, the implicit-conversion
+  walk; the Oven's own begin walk does the same), and
+  `Ast::begin_loc_known` stops at a node whose begin the caller already
+  knows (sema keeps its last four answers, so building a chain one call
+  at a time costs O(1) per call; a location needed only for a diagnostic
+  or a default argument is found only then). Neither changes a location. Debug
+  builds count the steps of the expression walks
+  (`kiln_ast::expr::walk_steps`): the chain scaling tests
+  (crates/kiln_parse/tests/chain_scaling.rs,
+  crates/kiln_codegen/tests/chain_scaling.rs) compare the count at N and
+  4N, which a walk repeated per node makes grow 16-fold.
 - **No parent links.** `ParentMap::build(&Ast, root: StmtId)` builds one on
   demand (diagnostics needing context, `-Wparentheses`-style checks).
 

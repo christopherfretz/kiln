@@ -73,6 +73,7 @@
 //! | `inst.limits`, `inst.report.format` (inside the state `inst`) | configuration | `-ftemplate-depth=`, `-ftemplate-backtrace-limit=`, `-fkiln-instantiation-report=`: kept from the consumer's `Sema` |
 //! | `spare_oven` | rebuilt | the placeholder of an Oven loan, allocated on demand |
 //! | `classify_memo` | rebuilt | name classification memo, valid only for one lookup stamp |
+//! | `begin_memo` | rebuilt | the last four `Sema::begin_loc` answers, valid only for one size of `expr_begin` |
 //! | `imported_bodies_walked` | rebuilt | imported bodies already walked for `used` functions; a walk again hands nothing new (the handed ones are in the AST) |
 //! | `cfg_body`, `uninit_scratch` | scratch | the flow graph and analysis buffers of the body being finished |
 //! | `walk_stack`, `conv_walk_stack`, `equiv_scratch`, `cand_scratch`, `deduce_scratch` | scratch | reused walk and deduction buffers |
@@ -194,7 +195,7 @@ macro_rules! sema_fields {
                 temp_copy_second_step, vararg_copying, inst_outer_anchor, eval_replay],
             scratch: [cfg_body, uninit_scratch, walk_stack, conv_walk_stack, equiv_scratch,
                 cand_scratch, deduce_scratch, complex_div_unmet],
-            rebuilt: [spare_oven, classify_memo, imported_bodies_walked],
+            rebuilt: [spare_oven, classify_memo, begin_memo, imported_bodies_walked],
             reference: [diags],
             owned_root: [ast, oven],
         }

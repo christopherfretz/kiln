@@ -104,12 +104,12 @@ impl Cg<'_> {
         let ast = self.ast;
         let n = ast.exprs.get(e);
         match n.kind() {
-            ExprKind::CallExpr => ast.begin_loc(e),
+            ExprKind::CallExpr => self.begin_loc(e),
             ExprKind::CXXMemberCallExpr => {
                 let c = ast.exprs.callee(e);
                 match ast.exprs.get(c).kind() {
                     ExprKind::MemberExpr => ast.exprs.get(c).loc(),
-                    _ => ast.begin_loc(e),
+                    _ => self.begin_loc(e),
                 }
             }
             ExprKind::CXXOperatorCallExpr
@@ -118,7 +118,7 @@ impl Cg<'_> {
                     O::Arrow | O::Call | O::Subscript | O::Coawait | O::PlusPlus | O::MinusMinus
                 ) =>
             {
-                ast.begin_loc(e)
+                self.begin_loc(e)
             }
             _ => n.loc(),
         }

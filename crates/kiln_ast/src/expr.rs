@@ -3338,6 +3338,7 @@ impl ExprArena {
 
     /// [`ExprArena::children`] fed to `v` in order.
     fn children_each(&self, e: ExprId, lists: &IdLists, v: &mut impl Extend<ExprId>) {
+        note_walk_step();
         let n = self.get(e);
         let id = |w: u32| ExprId::from_raw(w);
         match n.kind {
@@ -3745,4 +3746,37 @@ impl ExprArena {
         });
         if ok { Ok(()) } else { Err("cast path out of range") }
     }
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The expression-walk steps this thread took ([`walk_steps`]).
+    static WALK_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one step of an expression walk: a node whose children are
+/// listed ([`ExprArena::children_into`], [`ExprArena::first_child`]) or
+/// one step of a begin-location walk ([`crate::Ast::begin_loc`], the
+/// Oven's). Debug builds only; instrumentation, no semantic state.
+#[inline]
+pub fn note_walk_step() {
+    #[cfg(debug_assertions)]
+    WALK_STEPS.with(|c| c.set(c.get() + 1));
+}
+
+/// The expression-walk steps this thread has taken ([`note_walk_step`]),
+/// `None` in a build without debug assertions. The scaling tests compare
+/// it at N and 4N: a walk repeated per node of a chain (`x.f().f()...`)
+/// makes it grow as N^2 (WP-2201).
+#[cfg(debug_assertions)]
+#[must_use]
+pub fn walk_steps() -> Option<u64> {
+    Some(WALK_STEPS.with(std::cell::Cell::get))
+}
+
+/// [`walk_steps`] in a build without debug assertions: not counted.
+#[cfg(not(debug_assertions))]
+#[must_use]
+pub fn walk_steps() -> Option<u64> {
+    None
 }
