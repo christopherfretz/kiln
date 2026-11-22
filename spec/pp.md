@@ -900,14 +900,17 @@ spec/modules.md §11.13.
   the installed record on `-E`, `-dM -E` and diagnostics, including
   the whole pp torture corpus.
 
-### Preprocessing record (WP-2110, WP-2111)
+### Preprocessing record (WP-2110, WP-2111, WP-2112)
 
 `kiln_pp::record` keeps, on request, what macro expansion did, so that a
 tooling client can ask where any token location came from: which
 definition, which expansion, which argument and which body token; and
 what the conditional and inclusion directives did, so that it can tell
 which text was skipped, which file each instance of a header is, and in
-which include context a location lies. It is
+which include context a location lies; and (stage 3) what each made
+token was made from, what each condition read, what each
+`__has_include` and feature query answered, and each
+`push_macro`/`pop_macro`. It is
 retained by the `Preprocessor` and read after (or during) preprocessing.
 It is not a callback: `macro_expands` fires before an expansion's entry
 exists, and `#pragma pop_macro` and a restored prefix fire nothing.
@@ -935,7 +938,8 @@ things happened:
   `hash` and `end`, the directive's `#` and the newline that ends its
   last line (invalid for builtins and restored ones); `ended`: `Live`,
   `Undef(at)` (the `#` of the `#undef`, or the `-U`'s line), `Replaced(d)`
-  or `Popped(at)` (the `pop_macro`'s `pragma`). `ended` is the latest
+  or `Popped(at)` (the `pop_macro`'s stack event's `at`: its `#`, or the
+  `_Pragma` token that ran it). `ended` is the latest
   event: a `pop_macro` that makes a definition current again sets it back
   to `Live`, and the definition it restores is the same `DefIx` that was
   pushed. `param_locs(d)` are the parameter names' locations (the `...`
@@ -1125,6 +1129,116 @@ the root; `instances_of(file)` lists a file's instances (a scan).
 `FileId` is "this file", `IncIx` "this instance of this file":
 `inc(i).file` gives the first from the second.
 
+**Made tokens** (stage 3). `made(sm, loc) -> Option<Made>` answers for
+any location in a made entry (the ones `Origin::Made` describes):
+`base` (the entry's base, its key), `exp`, `kind`, `from` and `body` as
+`Origin::Made` gives them (for a paste `body.0` is its position in the
+replacement list), and what made it:
+
+- a paste (`Paste`): `operands`, the location of each token joined, left
+  to right, before pasting: `n + 1` locations for a chain of `n` `##`
+  (`a ## b ## c` is one entry with three operands). An operand is the
+  actual token pasted: the substituted argument token (a macro location
+  whose origin is `Arg`, followed to a forwarded argument or to another
+  made token with `origin` and `made` again), the body token, or the
+  token an earlier paste or `#` made. A paste with a placemarker operand
+  ([cpp.concat]/2: an empty argument) makes no token and no row: the
+  survivor keeps its own origin. A paste that forms no valid token (an
+  error) sets `invalid`: its operands are the tokens joined so far and
+  then the one rejected, its text is what was joined so far, and the
+  rejected token is delivered after it with its own origin.
+- a `#x` (`Stringize`): `arg`, the index of the argument stringized
+  (`args(exp)`; derived from the body, nothing is stored). `#__VA_ARGS__`
+  is the variadic argument's index, also when it was omitted.
+- a `#__VA_OPT__( )` (`Stringize`, `va_opt`): `operands`, the tokens
+  stringized, in order (made tokens of its own pastes included); none
+  when the variadic argument was empty.
+- `Builtin`, `PragmaText`, `HeaderName`, `InvalidPaste`: no operands;
+  the origin says all there is.
+
+`mades()` lists every made entry's base in order, `mades_of(e)` those of
+expansion `e`, `made_text(sm, loc)` the spelling of the whole entry, and
+`made_buffer(sm, loc)` the scratch buffer it is spelled in (two made
+tokens of one translation unit have the same text exactly when their
+buffers are equal; `None` for a token not spelled in scratch space).
+Rows are kept only for pastes and `#__VA_OPT__`, keyed by entry base.
+
+**Condition reads** (stage 3). `reads(c)` lists what evaluating
+conditional row `c`'s condition read, in evaluation order; each `Read`
+has `kind()`, `name`, `at` and `def()`, the definition bound at that
+point (`None`: not a macro):
+
+- `Tested`: a macro name tested by `defined X` / `defined(X)` (a
+  short-circuited operand too: `0 && defined(X)` reads `X`), or by
+  `#ifdef`, `#ifndef`, `#elifdef`, `#elifndef`; `at` is the identifier
+  token (a macro location when a macro body produced the `defined`).
+  Each `#ifdef` form has exactly one `Tested` read, or none and the
+  partial flag when its name is missing.
+- `Expanded(e)`: an expansion entered while the condition was evaluated;
+  `at` is its name. Every expansion entered during the evaluation has
+  one, nested ones and builtins (`__has_include`, `__has_cpp_attribute`,
+  `__LINE__`) included, in the order they were entered (a builtin after
+  the macros its operand expanded); these are exactly the `IN_DIRECTIVE`
+  rows whose name's expansion location lies in the directive.
+- `Left`: an identifier left after expansion, which evaluates to 0
+  ([cpp.cond]/13); `at` is the token. A function-like macro name not
+  followed by `(` is such an identifier and carries its definition.
+  `true` and `false` in C++, the C++ alternative operator spellings and
+  the `defined` operator are not reads.
+
+Rows that evaluated nothing have no reads: `NotEvaluated`, `Dead`,
+`#else`, `#endif`, and a condition with no identifier (`#if 1`). A
+condition cut off by an error before the end of its line keeps the
+reads made up to the error and has `reads_partial(c)`; an error found
+at the end of the line (`#if A +`) cut nothing off and leaves the list
+complete. A read list costs 8 bytes plus 16 per read; one bit per read
+is reserved.
+
+**Nesting** (stage 3). `enclosing(c)` is the directive whose group holds
+conditional row `c`'s conditional, in the same instance (`None` at the
+top level of the file); the rows of one conditional share it.
+`cond_at(sm, loc)` is the innermost directive whose group holds `loc`,
+live or skipped: defined for every file location (`None` outside every
+group and on a directive's own line, which is not in its group; a
+nested directive's line is in its parent's group); a macro location is
+resolved through `expansion_loc`; each instance of a header has its own
+rows, so the answer separates instances. Groups form a laminar family
+in location space, so `cond_at` finds the last group starting at or
+before `loc` and walks `enclosing` out to the first that holds it. The
+index it searches is built on the first call (8 bytes per non-`#endif`
+row); `enclosing` is 4 bytes per conditional row.
+
+**Queries** (stage 3). `queries()` lists, in expansion order, every
+`__has_include`, `__has_include_next`, `__has_embed`, `__has_feature`,
+`__has_extension`, `__has_builtin`, `__has_constexpr_builtin`,
+`__has_attribute`, `__has_cpp_attribute`, `__has_c_attribute`,
+`__has_declspec_attribute`,
+`__has_warning`, `__is_identifier`, `__is_target_*` and
+`__building_module` expansion, in a condition or not; `query(e)` is the
+one made by expansion `e`. A `Query` has `exp` (the builtin's expansion:
+its key), `value` (what it produced, a false one included), `operand`
+(the header name with its delimiters after expansion, `scope::name` for
+a scoped attribute, the warning option, the identifier; empty when
+malformed), `name` (the operand's file range; an operand from a macro
+gives the invocation's range, never a macro location), and for a
+header query `file` and `lookup` (the file found and its search-path
+index, as an inclusion's) and `from_macro` (the header name was
+produced by expansion). A query row is 32 bytes plus its operand's
+text.
+
+**Push and pop** (stage 3). `stack_events()` lists every `push_macro`
+and `pop_macro` that named a macro, in order. A `StackEvent` has `at`
+(the directive's `#`; for one run by `_Pragma`, the `_Pragma` token,
+and `exp()` is that `_Pragma`'s expansion), `name`, `kind()`, `def()`
+and `replaced()`: a `Push` saves `def()` (`None`: the name was
+undefined, and the matching pop makes it undefined again); a `Pop`
+makes `def()` current again and ends `replaced()` (whose `ended` is
+`Popped(at)`); a `PopUnmatched` had nothing pushed for the name (kiln
+warns) and changed nothing. `push_of(i)` is the `Push` the `Pop` at
+`stack_events()[i]` undid (`None` when it was pushed before
+recording). Its key is the `#`'s, or the `_Pragma` expansion's key. An
+event is 20 bytes.
+
 **Keys and stability.** The record stores translation-unit-local `Loc`s
 and indices; it does not compute keys. These are stable: the same input
 with the same options gives the same record, index for index, and
@@ -1163,13 +1277,23 @@ line per output token at a macro location comes first. Lines:
 [file <name>] [dir <n>] [guard <def>] [ctx i<n>]`, `cond <key> <kind>
 <outcome> [guard] [unterminated] [open <key>|stray] cond <lo>..<hi>
 [group <lo>..<hi>]` and `once <key>`, and a last line `record complete`
-or `record incomplete: <flags>`. Instances are numbered `i1`, `i2`, ...
+or `record incomplete: <flags>`. Stage 3 adds, after the `undef` lines,
+`push <key> <name> saves <def>|undefined`, `pop <key> <name> restores
+<def>|undefined replaces <def>|undefined [push <key>]` and `pop <key>
+<name> unmatched`; after the `exp` lines, `made <origin> <text> = <op>
+## <op>... [invalid]`, `made <origin> <text> arg <i>` and `made <origin>
+<text> va-opt <op>...`, then `query <exp> <builtin> <operand>|- =
+<value> [name <lo>..<hi>] [macro] [file <name>] [dir <n>]`; and after
+each `cond` line its reads, `read <cond> tested|expanded|left <name>
+<def>|undefined at <loc> [exp <exp>]`, then `reads <cond> partial` when
+cut off. A `def` line's `ended popped` names the pop's key. Instances are numbered `i1`, `i2`, ...
 in row order; the `inc` line that makes one says `ctx i<n>`, and every
 `def`, `undef`, `exp`, `inc`, `cond` and `once` line whose key lies in
-an instance ends with `in i<n>` (none in the main file). The `in` field
+an instance ends with `in i<n>` (none in the main file), as do the
+stage-3 lines. The `in` field
 is translation-unit local: a comparison across two main files drops it
 and compares the keys, or follows the chain through the `inc` lines.
-Conditionals in `<built-in>` are not printed; an `-include`'s written
+Conditionals, queries and stack events in `<built-in>` are not printed; an `-include`'s written
 name is reduced to its last path component. Origins print as
 `<exp>:b<k>` (body token), `<exp>:a<k>@b<use>[<index>]<<from>` (argument,
 then the origin of `from`), `<exp>:<kind>(b<i>..b<j>)` (made) and `?`.
@@ -1196,12 +1320,26 @@ inclusion could not get its own locations (two inclusions may then share
 `Loc`s, and `inclusion_of` cannot tell them apart). Under `RESTORED` the
 conditionals, inclusions and `#pragma once` of the restored prefix are
 absent too, and a skip (`SkippedGuard`, `SkippedOnce`) may come from a
-guard or once mark of the prefix. Not yet recorded: the reads of a
-condition (the macro names tested, the identifiers evaluated to 0),
-`__has_include` and feature-query values, `push_macro`/`pop_macro` as
-events, the operand list of a made token (stage 3, WP-2112); the file
-and search index of an `#embed`; and carriage of the record in PCH
-snapshots and module images (stage 4, WP-2113).
+guard or once mark of the prefix; so are the prefix's condition
+reads, queries and stack events, and a `Pop` of a name pushed in the
+prefix has no `push_of`.
+
+**Coverage (stage 3).** Recorded: the operands of every paste and
+`#__VA_OPT__`, and the argument of every `#x` (derived); the reads of
+every evaluated condition; every `__has_include` and feature query with
+its value; every `push_macro`/`pop_macro`; the enclosing conditional of
+every row. Checked by tests on the acceptance cases and on
+`<bits/stdc++.h>` (and on any file given by `KILN_PP_RECORD_TU`): every
+token spelled in scratch space derives to a made entry with its
+derivation; every evaluated condition has reads, is partial, or is
+literally constant; the `Expanded` reads are exactly the expansions
+entered in the directive; recording on and off give the same `-E`
+output, the same `Loc` and the same `Symbol` for every token; and the
+new tables are counted in `bytes()`. Not yet recorded: the file and
+search index of an `#embed`; carriage of the record in PCH snapshots
+and module images (stage 4, WP-2113). Until then a translation unit
+restored from a snapshot is `RESTORED` for stage 3 as for stages 1
+and 2.
 
 **Cost.** Per expansion 24 bytes, per argument 8, per argument token 4,
 per definition 32 plus the retained `MacroDef`, per parameter 4, per
@@ -1210,7 +1348,11 @@ directive 20, per inclusion directive 72 plus its written name, per
 instance 8 and per `#pragma once` 4 (checked by a unit test in
 `record.rs`). `bytes()` is the total, including the definitions
 only the record keeps alive. Recording off allocates nothing.
-`-fkiln-memory-report` shows it as the `pp.record` row. Measured at
+`-fkiln-memory-report` shows it as the `pp.record` row. Stage 3 adds,
+per made row 8 bytes plus 4 per operand, per evaluated condition that
+read something 8 plus 16 per read, per conditional row 4 (`enclosing`)
+and 8 more once `cond_at` is called, per query 32 plus its operand text,
+per stack event 20. Measured at
 WP-2110 (release build, median of 5): `<bits/stdc++.h>` makes 38,780
 expansions and a 5.0 MB record (about 130 bytes per expansion, all
 tables and spare capacity included), peak RSS +3.9 MiB, `-E` time
@@ -1221,14 +1363,25 @@ build, 14 runs each): `<bits/stdc++.h>` adds 115,915 conditional rows
 (42% of them dead) and 1,970 inclusion rows, and the record grows to
 7.8 MB; peak RSS is +6.2 MiB over recording off, and `-fsyntax-only`
 and `-E` times are within noise. With recording off, time and peak RSS
-are within noise of the build before stage 2.
+are within noise of the build before stage 2. Measured at WP-2112 (harness
+build, three rounds of 9 runs each): on `<bits/stdc++.h>` the record
+grows from 7.8 MB to 9.7 MB (3,342 made rows, 32,950 evaluated
+conditions with 46,880 reads), peak RSS of `-fsyntax-only` is +7.6 MiB
+over recording off, and times are within noise; on clang's
+`SemaExpr.cpp` (`-std=c++17`) the record grows from 20.4 MB to 23.3 MB.
+With recording off, time and peak RSS are within noise of the build
+before stage 3, and the Oven's counters on `bench/oven` are identical.
 
 **Tests.** `crates/kiln_pp/tests/pp_record.rs` (the parameter-use
 classifier against real expansions, stability, `-E` identity with
 recording on and off, a header's keys equal under two main files with
 the `in` field dropped, the gap flag of an installed state, the tiling
 of every conditional, a header's rows per instance and equal across two
-runs, the include contexts); `crates/kiln_driver/tests/modules_bmi.rs`
+runs, the include contexts; stage 3: the completeness checks on the
+acceptance cases and on `<bits/stdc++.h>`, paste operands, the same
+tokens with recording on and off, `cond_at` and `enclosing` across two
+instances, a skipped group and a macro location, push/pop pairs, the
+bytes counted); `crates/kiln_driver/tests/modules_bmi.rs`
 `pp_record_header_unit_import` (an `Imported` row and the gap); the
 dump goldens under `tests/conformance/cpp.replace/record`,
 `cpp.cond/record`, `cpp.include/record` and `cpp.embed/record`.

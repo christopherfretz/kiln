@@ -1,0 +1,16 @@
+def reads-partial.cpp:633 V file dir reads-partial.cpp:625..reads-partial.cpp:636 = 1
+exp reads-partial.cpp:641 V def reads-partial.cpp:633 end reads-partial.cpp:641 in-directive
+exp reads-partial.cpp:658 V def reads-partial.cpp:633 end reads-partial.cpp:658 in-directive
+cond reads-partial.cpp:637 if not-taken cond reads-partial.cpp:640..reads-partial.cpp:646 group reads-partial.cpp:646..reads-partial.cpp:647
+read reads-partial.cpp:637 expanded V reads-partial.cpp:633 at reads-partial.cpp:641 exp reads-partial.cpp:641
+read reads-partial.cpp:637 left W undefined at reads-partial.cpp:643
+reads reads-partial.cpp:637 partial
+cond reads-partial.cpp:647 endif closes open reads-partial.cpp:637 cond reads-partial.cpp:653..reads-partial.cpp:653
+cond reads-partial.cpp:654 if not-taken cond reads-partial.cpp:657..reads-partial.cpp:666 group reads-partial.cpp:666..reads-partial.cpp:667
+read reads-partial.cpp:654 expanded V reads-partial.cpp:633 at reads-partial.cpp:658 exp reads-partial.cpp:658
+read reads-partial.cpp:654 left W undefined at reads-partial.cpp:663
+cond reads-partial.cpp:667 endif closes open reads-partial.cpp:654 cond reads-partial.cpp:673..reads-partial.cpp:673
+cond reads-partial.cpp:674 ifdef not-taken cond reads-partial.cpp:680..reads-partial.cpp:680 group reads-partial.cpp:680..reads-partial.cpp:681
+reads reads-partial.cpp:674 partial
+cond reads-partial.cpp:681 endif closes open reads-partial.cpp:674 cond reads-partial.cpp:687..reads-partial.cpp:687
+record complete

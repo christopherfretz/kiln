@@ -1,0 +1,33 @@
+tok 2 pragma-push.cpp:842:b0
+tok 1 pragma-push.cpp:859:b0
+def pragma-push.cpp:472 PUSH file dir pragma-push.cpp:464..pragma-push.cpp:629 = _Pragma ( "push_macro(\"min\")" ) _Pragma ( "push_macro(\"max\")" ) _Pragma ( "push_macro(\"a\")" ) _Pragma ( "push_macro(\"b\")" ) _Pragma ( "push_macro(\"c\")" )
+def pragma-push.cpp:638 POP file dir pragma-push.cpp:630..pragma-push.cpp:789 = _Pragma ( "pop_macro(\"min\")" ) _Pragma ( "pop_macro(\"max\")" ) _Pragma ( "pop_macro(\"a\")" ) _Pragma ( "pop_macro(\"b\")" ) _Pragma ( "pop_macro(\"c\")" )
+def pragma-push.cpp:798 min file dir pragma-push.cpp:790..pragma-push.cpp:803 = 1
+def builtin:_Pragma _Pragma builtin
+def pragma-push.cpp:828 min file dir pragma-push.cpp:820..pragma-push.cpp:833 = 2 ended popped pragma-push.cpp:847/1
+undef pragma-push.cpp:809 min ends pragma-push.cpp:798
+push pragma-push.cpp:804/1 min saves pragma-push.cpp:798
+push pragma-push.cpp:804/2 max saves undefined
+push pragma-push.cpp:804/3 a saves undefined
+push pragma-push.cpp:804/4 b saves undefined
+push pragma-push.cpp:804/5 c saves undefined
+pop pragma-push.cpp:847/1 min restores pragma-push.cpp:798 replaces pragma-push.cpp:828 push pragma-push.cpp:804/1
+pop pragma-push.cpp:847/2 max restores undefined replaces undefined push pragma-push.cpp:804/2
+pop pragma-push.cpp:847/3 a restores undefined replaces undefined push pragma-push.cpp:804/3
+pop pragma-push.cpp:847/4 b restores undefined replaces undefined push pragma-push.cpp:804/4
+pop pragma-push.cpp:847/5 c restores undefined replaces undefined push pragma-push.cpp:804/5
+exp pragma-push.cpp:804 PUSH def pragma-push.cpp:472 end pragma-push.cpp:804
+exp pragma-push.cpp:804/1 _Pragma def builtin:_Pragma name pragma-push.cpp:804:b0 parent pragma-push.cpp:804 end pragma-push.cpp:804:b3 empty
+exp pragma-push.cpp:804/2 _Pragma def builtin:_Pragma name pragma-push.cpp:804:b4 parent pragma-push.cpp:804 end pragma-push.cpp:804:b7 empty
+exp pragma-push.cpp:804/3 _Pragma def builtin:_Pragma name pragma-push.cpp:804:b8 parent pragma-push.cpp:804 end pragma-push.cpp:804:b11 empty
+exp pragma-push.cpp:804/4 _Pragma def builtin:_Pragma name pragma-push.cpp:804:b12 parent pragma-push.cpp:804 end pragma-push.cpp:804:b15 empty
+exp pragma-push.cpp:804/5 _Pragma def builtin:_Pragma name pragma-push.cpp:804:b16 parent pragma-push.cpp:804 end pragma-push.cpp:804:b19 empty
+exp pragma-push.cpp:842 min def pragma-push.cpp:828 end pragma-push.cpp:842
+exp pragma-push.cpp:847 POP def pragma-push.cpp:638 end pragma-push.cpp:847
+exp pragma-push.cpp:847/1 _Pragma def builtin:_Pragma name pragma-push.cpp:847:b0 parent pragma-push.cpp:847 end pragma-push.cpp:847:b3 empty
+exp pragma-push.cpp:847/2 _Pragma def builtin:_Pragma name pragma-push.cpp:847:b4 parent pragma-push.cpp:847 end pragma-push.cpp:847:b7 empty
+exp pragma-push.cpp:847/3 _Pragma def builtin:_Pragma name pragma-push.cpp:847:b8 parent pragma-push.cpp:847 end pragma-push.cpp:847:b11 empty
+exp pragma-push.cpp:847/4 _Pragma def builtin:_Pragma name pragma-push.cpp:847:b12 parent pragma-push.cpp:847 end pragma-push.cpp:847:b15 empty
+exp pragma-push.cpp:847/5 _Pragma def builtin:_Pragma name pragma-push.cpp:847:b16 parent pragma-push.cpp:847 end pragma-push.cpp:847:b19 empty
+exp pragma-push.cpp:859 min def pragma-push.cpp:798 end pragma-push.cpp:859
+record complete

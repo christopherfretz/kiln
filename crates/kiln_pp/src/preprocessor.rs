@@ -420,6 +420,9 @@ pub struct Preprocessor<'a, 'd> {
     /// While recording: a builtin being expanded and its parent, entered
     /// when it produces its result.
     pub(crate) rec_builtin: Option<(Rc<MacroDef>, u32)>,
+    /// While recording: the `_Pragma` expansion whose pragma runs
+    /// (`u32::MAX`: a `#pragma`, or none).
+    pub(crate) rec_pragma: u32,
     /// The `Eod` location of the directive finished last (its logical
     /// line's newline, or the end of the file).
     pub(crate) dir_end: Loc,
@@ -520,6 +523,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             record: None,
             rec_cur: u32::MAX,
             rec_builtin: None,
+            rec_pragma: u32::MAX,
             dir_end: Loc::INVALID,
             rec_inc: u32::MAX,
             rec_import_at: Loc::INVALID,

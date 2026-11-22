@@ -36,7 +36,7 @@
 //! | `frames`, `markers`, `pending`, `include_depth` | transient, at rest | no file open, nothing queued |
 //! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
-//! | `record`, `rec_cur`, `rec_builtin`, `rec_inc`, `rec_import_at`, `rec_hu` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
+//! | `record`, `rec_cur`, `rec_builtin`, `rec_pragma`, `rec_inc`, `rec_import_at`, `rec_hu` | not carried | the preprocessing record is the consumer's (spec/pp.md "Preprocessing record"); a restore marks it `RESTORED` |
 
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
@@ -313,6 +313,7 @@ impl Preprocessor<'_, '_> {
             record: _,
             rec_cur: _,
             rec_builtin: _,
+            rec_pragma: _,
             dir_end: _,
             rec_inc: _,
             rec_import_at: _,

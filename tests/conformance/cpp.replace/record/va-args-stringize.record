@@ -1,0 +1,15 @@
+tok "a, b" va-args-stringize.cpp:393:str(b0..b1)
+tok "" va-args-stringize.cpp:418:str(b0..b1)
+tok "" va-args-stringize.cpp:439:str(b0..b1)
+def va-args-stringize.cpp:325 S(...) file dir va-args-stringize.cpp:317..va-args-stringize.cpp:344 = # __VA_ARGS__
+param va-args-stringize.cpp:325 0 __VA_ARGS__ va-args-stringize.cpp:327 uses b1:str
+def va-args-stringize.cpp:353 S2(x, ...) file dir va-args-stringize.cpp:345..va-args-stringize.cpp:376 = # __VA_ARGS__
+param va-args-stringize.cpp:353 0 x va-args-stringize.cpp:356 uses none
+param va-args-stringize.cpp:353 1 __VA_ARGS__ va-args-stringize.cpp:359 uses b1:str
+exp va-args-stringize.cpp:393 S def va-args-stringize.cpp:325 end va-args-stringize.cpp:399 args a0=va-args-stringize.cpp:395..va-args-stringize.cpp:399/3
+exp va-args-stringize.cpp:418 S def va-args-stringize.cpp:325 end va-args-stringize.cpp:420 args elided
+exp va-args-stringize.cpp:439 S2 def va-args-stringize.cpp:353 end va-args-stringize.cpp:443 args a0=va-args-stringize.cpp:442..va-args-stringize.cpp:443/1 elided
+made va-args-stringize.cpp:393:str(b0..b1) "a, b" arg 0
+made va-args-stringize.cpp:418:str(b0..b1) "" arg 0
+made va-args-stringize.cpp:439:str(b0..b1) "" arg 1
+record complete

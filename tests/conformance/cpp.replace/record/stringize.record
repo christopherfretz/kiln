@@ -2,4 +2,5 @@ tok "L::T" stringize.cpp:254:str(b0..b1)
 def stringize.cpp:228 STR(x) file dir stringize.cpp:220..stringize.cpp:237 = # x
 param stringize.cpp:228 0 x stringize.cpp:232 uses b1:str
 exp stringize.cpp:254 STR def stringize.cpp:228 end stringize.cpp:262 args a0=stringize.cpp:258..stringize.cpp:262/3
+made stringize.cpp:254:str(b0..b1) "L::T" arg 0
 record complete

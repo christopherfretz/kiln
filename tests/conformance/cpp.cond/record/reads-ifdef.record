@@ -1,0 +1,13 @@
+def reads-ifdef.cpp:271 Z file dir reads-ifdef.cpp:263..reads-ifdef.cpp:274 = 1
+cond reads-ifdef.cpp:275 ifdef not-taken cond reads-ifdef.cpp:281..reads-ifdef.cpp:283 group reads-ifdef.cpp:283..reads-ifdef.cpp:291
+read reads-ifdef.cpp:275 tested X undefined at reads-ifdef.cpp:282
+cond reads-ifdef.cpp:291 elifdef not-taken open reads-ifdef.cpp:275 cond reads-ifdef.cpp:299..reads-ifdef.cpp:301 group reads-ifdef.cpp:301..reads-ifdef.cpp:309
+read reads-ifdef.cpp:291 tested Y undefined at reads-ifdef.cpp:300
+cond reads-ifdef.cpp:309 elifndef not-taken open reads-ifdef.cpp:275 cond reads-ifdef.cpp:318..reads-ifdef.cpp:320 group reads-ifdef.cpp:320..reads-ifdef.cpp:328
+read reads-ifdef.cpp:309 tested Z reads-ifdef.cpp:271 at reads-ifdef.cpp:319
+cond reads-ifdef.cpp:328 else taken open reads-ifdef.cpp:275 cond reads-ifdef.cpp:333..reads-ifdef.cpp:333 group reads-ifdef.cpp:333..reads-ifdef.cpp:345
+cond reads-ifdef.cpp:345 endif closes open reads-ifdef.cpp:275 cond reads-ifdef.cpp:351..reads-ifdef.cpp:351
+cond reads-ifdef.cpp:352 ifndef taken cond reads-ifdef.cpp:359..reads-ifdef.cpp:361 group reads-ifdef.cpp:361..reads-ifdef.cpp:373
+read reads-ifdef.cpp:352 tested X undefined at reads-ifdef.cpp:360
+cond reads-ifdef.cpp:373 endif closes open reads-ifdef.cpp:352 cond reads-ifdef.cpp:379..reads-ifdef.cpp:379
+record complete

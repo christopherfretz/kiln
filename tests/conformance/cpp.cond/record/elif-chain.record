@@ -2,8 +2,11 @@ def elif-chain.cpp:341 TWO file dir elif-chain.cpp:333..elif-chain.cpp:346 = 2
 exp elif-chain.cpp:351 TWO def elif-chain.cpp:341 end elif-chain.cpp:351 in-directive
 exp elif-chain.cpp:400 TWO def elif-chain.cpp:341 end elif-chain.cpp:400 in-directive
 cond elif-chain.cpp:347 if not-taken cond elif-chain.cpp:350..elif-chain.cpp:359 group elif-chain.cpp:359..elif-chain.cpp:370
+read elif-chain.cpp:347 expanded TWO elif-chain.cpp:341 at elif-chain.cpp:351 exp elif-chain.cpp:351
 cond elif-chain.cpp:370 elifdef not-taken open elif-chain.cpp:347 cond elif-chain.cpp:378..elif-chain.cpp:383 group elif-chain.cpp:383..elif-chain.cpp:394
+read elif-chain.cpp:370 tested NOPE undefined at elif-chain.cpp:379
 cond elif-chain.cpp:394 elif taken open elif-chain.cpp:347 cond elif-chain.cpp:399..elif-chain.cpp:408 group elif-chain.cpp:408..elif-chain.cpp:418
+read elif-chain.cpp:394 expanded TWO elif-chain.cpp:341 at elif-chain.cpp:400 exp elif-chain.cpp:400
 cond elif-chain.cpp:418 elif not-evaluated open elif-chain.cpp:347 cond elif-chain.cpp:423..elif-chain.cpp:432 group elif-chain.cpp:432..elif-chain.cpp:444
 cond elif-chain.cpp:444 else not-taken open elif-chain.cpp:347 cond elif-chain.cpp:449..elif-chain.cpp:449 group elif-chain.cpp:449..elif-chain.cpp:461
 cond elif-chain.cpp:461 endif closes open elif-chain.cpp:347 cond elif-chain.cpp:467..elif-chain.cpp:467

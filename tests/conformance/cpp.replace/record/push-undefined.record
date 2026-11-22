@@ -1,0 +1,10 @@
+tok 1 push-undefined.cpp:515:b0
+def push-undefined.cpp:503 U file dir push-undefined.cpp:495..push-undefined.cpp:506 = 1 ended popped push-undefined.cpp:518
+push push-undefined.cpp:471 U saves undefined
+pop push-undefined.cpp:518 U restores undefined replaces push-undefined.cpp:503 push push-undefined.cpp:471
+pop push-undefined.cpp:588 U unmatched
+exp push-undefined.cpp:515 U def push-undefined.cpp:503 end push-undefined.cpp:515
+cond push-undefined.cpp:541 ifdef not-taken cond push-undefined.cpp:547..push-undefined.cpp:549 group push-undefined.cpp:549..push-undefined.cpp:570
+read push-undefined.cpp:541 tested U undefined at push-undefined.cpp:548
+cond push-undefined.cpp:570 endif closes open push-undefined.cpp:541 cond push-undefined.cpp:576..push-undefined.cpp:576
+record complete

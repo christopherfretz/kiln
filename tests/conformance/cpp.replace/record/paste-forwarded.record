@@ -1,0 +1,23 @@
+tok uv paste-forwarded.cpp:653/1:paste(b0..b2)
+tok pqr paste-forwarded.cpp:669/1:paste(b0..b2)
+tok "w"_s paste-forwarded.cpp:698:paste(b0..b3)
+def paste-forwarded.cpp:526 CAT(a, b) file dir paste-forwarded.cpp:518..paste-forwarded.cpp:542 = a ## b
+param paste-forwarded.cpp:526 0 a paste-forwarded.cpp:530 uses b0:paste
+param paste-forwarded.cpp:526 1 b paste-forwarded.cpp:533 uses b2:paste
+def paste-forwarded.cpp:551 XCAT(a, b) file dir paste-forwarded.cpp:543..paste-forwarded.cpp:571 = CAT ( a , b )
+param paste-forwarded.cpp:551 0 a paste-forwarded.cpp:556 uses b2:plain
+param paste-forwarded.cpp:551 1 b paste-forwarded.cpp:559 uses b4:plain
+def paste-forwarded.cpp:580 UDL(x) file dir paste-forwarded.cpp:572..paste-forwarded.cpp:595 = # x ## _s
+param paste-forwarded.cpp:580 0 x paste-forwarded.cpp:584 uses b1:str
+exp paste-forwarded.cpp:653 XCAT def paste-forwarded.cpp:551 end paste-forwarded.cpp:662 args a0=paste-forwarded.cpp:658..paste-forwarded.cpp:659/1 a1=paste-forwarded.cpp:661..paste-forwarded.cpp:662/1
+exp paste-forwarded.cpp:653/1 CAT def paste-forwarded.cpp:526 name paste-forwarded.cpp:653:b0 parent paste-forwarded.cpp:653 end paste-forwarded.cpp:653:b5 args a0=paste-forwarded.cpp:653:a0@b2[0]<paste-forwarded.cpp:658..paste-forwarded.cpp:653:a0@b2<paste-forwarded.cpp:659/1 a1=paste-forwarded.cpp:653:a1@b4[0]<paste-forwarded.cpp:661..paste-forwarded.cpp:653:a1@b4<paste-forwarded.cpp:662/1
+exp paste-forwarded.cpp:669 XCAT def paste-forwarded.cpp:551 end paste-forwarded.cpp:686 args a0=paste-forwarded.cpp:674..paste-forwarded.cpp:683/6 a1=paste-forwarded.cpp:685..paste-forwarded.cpp:686/1
+exp paste-forwarded.cpp:674 CAT def paste-forwarded.cpp:526 parent paste-forwarded.cpp:669 end paste-forwarded.cpp:682 args a0=paste-forwarded.cpp:678..paste-forwarded.cpp:679/1 a1=paste-forwarded.cpp:681..paste-forwarded.cpp:682/1
+exp paste-forwarded.cpp:669/1 CAT def paste-forwarded.cpp:526 name paste-forwarded.cpp:669:b0 parent paste-forwarded.cpp:669 end paste-forwarded.cpp:669:b5 args a0=paste-forwarded.cpp:669:a0@b2<paste-forwarded.cpp:674:paste(b0..b2)..paste-forwarded.cpp:669:a0@b2<paste-forwarded.cpp:674:paste(b0..b2)/1 a1=paste-forwarded.cpp:669:a1@b4[0]<paste-forwarded.cpp:685..paste-forwarded.cpp:669:a1@b4<paste-forwarded.cpp:686/1
+exp paste-forwarded.cpp:698 UDL def paste-forwarded.cpp:580 end paste-forwarded.cpp:703 args a0=paste-forwarded.cpp:702..paste-forwarded.cpp:703/1
+made paste-forwarded.cpp:653/1:paste(b0..b2) uv = paste-forwarded.cpp:653/1:a0@b0[0]<paste-forwarded.cpp:653:a0@b2[0]<paste-forwarded.cpp:658 ## paste-forwarded.cpp:653/1:a1@b2[0]<paste-forwarded.cpp:653:a1@b4[0]<paste-forwarded.cpp:661
+made paste-forwarded.cpp:674:paste(b0..b2) pq = paste-forwarded.cpp:674:a0@b0[0]<paste-forwarded.cpp:678 ## paste-forwarded.cpp:674:a1@b2[0]<paste-forwarded.cpp:681
+made paste-forwarded.cpp:669/1:paste(b0..b2) pqr = paste-forwarded.cpp:669/1:a0@b0[0]<paste-forwarded.cpp:669:a0@b2<paste-forwarded.cpp:674:paste(b0..b2) ## paste-forwarded.cpp:669/1:a1@b2[0]<paste-forwarded.cpp:669:a1@b4[0]<paste-forwarded.cpp:685
+made paste-forwarded.cpp:698:str(b0..b1) "w" arg 0
+made paste-forwarded.cpp:698:paste(b0..b3) "w"_s = paste-forwarded.cpp:698:str(b0..b1) ## paste-forwarded.cpp:698:b3
+record complete
