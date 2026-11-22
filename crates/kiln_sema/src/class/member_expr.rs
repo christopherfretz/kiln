@@ -2430,6 +2430,42 @@ impl Sema<'_, '_> {
         self.materialize_temporary(e, n.ty(), false)
     }
 
+    /// The unnamed object `f` of an anonymous struct or union (an
+    /// injected `IndirectField`'s first link) of the object `base`
+    /// (a pointer for `arrow`) rebuilt by instantiation, which drops the
+    /// pattern's implicit conversions: as for a named member, the
+    /// pointer is converted to a prvalue ([expr.ref]/2, [conv.lval]), a
+    /// prvalue object is materialized ([conv.rval]) and the object is
+    /// converted to the class that declares `f` ([expr.ref]/7.2; clang
+    /// `TreeTransform::RebuildMemberExpr` for an unnamed field:
+    /// `PerformObjectMemberConversion`, `TemporaryMaterializationConversion`).
+    pub(crate) fn anonymous_object_access(
+        &mut self,
+        base: ExprId,
+        f: DeclId,
+        arrow: bool,
+        loc: Loc,
+    ) -> ExprId {
+        let b = if arrow { conv::decay(self, base) } else { self.materialize_object(base) };
+        if self.is_err_expr(b) {
+            return b;
+        }
+        let bt = self.ety(b);
+        let ot = if arrow { self.pointee_sugared(bt).unwrap_or(bt) } else { bt };
+        let q = self.ast.types.effective_quals(ot);
+        let obj_class = self.ast.types.as_record(ot).map(|r| self.ast.definition(r).unwrap_or(r));
+        let b = match (obj_class, self.declaring_class(f)) {
+            (Some(c), Some(target)) => {
+                self.object_to_class(b, arrow, c, q, target, q, CastKind::UncheckedDerivedToBase)
+            }
+            _ => b,
+        };
+        if self.is_err_expr(b) {
+            return b;
+        }
+        self.field_access(b, f, q, arrow, loc)
+    }
+
     /// clang 22 (`PerformObjectMemberConversion`): a field access
     /// qualified by its declaring class casts the object to the
     /// qualifier's type as written, which keeps its own qualifier

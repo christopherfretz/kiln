@@ -522,6 +522,28 @@ impl Sema<'_, '_> {
                 stack.extend(self.ast.default_arg_expr(x));
                 continue;
             }
+            // An array new-expression whose bound does not fold stops
+            // there (clang `VisitCXXNewExpr` returns at the failed
+            // bound): its placement arguments and its bound are
+            // evaluated, its initializer is not. That initializer is no
+            // expression of its own either: an element constructor typed
+            // with the array of unknown bound (`S[]`), which is only
+            // evaluated by the new-expression, per element (WP-2060).
+            if k == ExprKind::CXXNewExpr {
+                let nx = *self.ast.exprs.new_extra(x);
+                if let Some(size) = nx.array_size
+                    && nx.init.is_some()
+                    && self.fold_for_overflow(size).0.is_none()
+                {
+                    stack.push(size);
+                    if let Some(l) = nx.placement {
+                        let mut args: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
+                        args.reverse();
+                        stack.extend(args);
+                    }
+                    continue;
+                }
+            }
             if x != e && self.overflow_call(x) {
                 found = true;
                 let _ = self.overflow_value(x, w, false);
