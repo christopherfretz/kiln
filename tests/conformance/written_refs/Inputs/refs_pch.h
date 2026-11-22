@@ -18,3 +18,5 @@ namespace outer {
 using namespace pch_ns;
 inline int twice(Pt p) { return norm(p) * 2; }
 } // namespace outer
+// A leading `::` and a destructor's `~` are carried (WP-2326).
+inline void lead(pch_ns::Pt *p) { p->::pch_ns::Pt::~Pt(); }

@@ -130,6 +130,81 @@ pub fn dump_to_string(ast: &Ast, opts: &DumpOptions<'_>) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
+/// Calls `f(e, parent)` on every expression `e` of the tree [`dump`]
+/// prints for `opts` (its filter ignored), in dump order, with the
+/// expression it is a child of (`None` under a declaration or a
+/// statement). The trees of template instantiations are left out: an
+/// implicit instantiation, an explicit instantiation (whose members are
+/// instantiations) and an instantiated member of a class template
+/// specialization (an out-of-line member definition's) are not entered,
+/// nor is a defaulted function (its body is synthesized), nor are an
+/// expanded expansion statement's elements (its pattern is), nor are the
+/// field initializer
+/// and the default argument a `CXXDefaultInitExpr` or a
+/// `CXXDefaultArgExpr` stands for (they are walked at their declaration,
+/// or are an instantiation's). What is left is the code as written,
+/// with the implicit expressions sema built for it (spec/ast.md
+/// §18.11.1's join test, WP-2326).
+pub fn for_each_written_expr(
+    ast: &Ast,
+    opts: &DumpOptions<'_>,
+    mut f: impl FnMut(ExprId, Option<ExprId>),
+) {
+    let d = Dumper::new(ast, opts, io::sink());
+    let mut todo = vec![(Node::Decl(ast.tu), None)];
+    let mut seen = std::collections::HashSet::new();
+    let mut kids = Vec::new();
+    while let Some((n, parent)) = todo.pop() {
+        match n {
+            Node::Decl(x) => {
+                let inst = match (ast.spec_info(x), ast.member_spec_info(x)) {
+                    (Some((_, i)), _) => i.kind != SpecKind::ExplicitSpecialization,
+                    (None, Some((_, i))) => i.kind != SpecKind::ExplicitSpecialization,
+                    (None, None) => ast.templates.instantiated_from_map(x).is_some(),
+                };
+                // A defaulted function's body is synthesized.
+                let inst = inst
+                    || ast.decls.function(x).is_some_and(|f| f.spec.defaulted() != Defaulted::No);
+                if !seen.insert(x) || inst {
+                    continue;
+                }
+            }
+            Node::Expr(e) => {
+                f(e, parent);
+                if matches!(
+                    ast.exprs.get(e).kind(),
+                    ExprKind::CXXDefaultInitExpr | ExprKind::CXXDefaultArgExpr
+                ) {
+                    continue;
+                }
+            }
+            // An expanded expansion statement's elements are its
+            // instantiations: its pattern is the code as written.
+            Node::Stmt(s)
+                if ast.stmts.get(s).kind() == StmtKind::CXXExpansionStmt
+                    && ast.stmts.expansion_expanded(s) =>
+            {
+                let x = *ast.stmts.expansion_data(s);
+                let mut parts: Vec<Node> = x.init.map(Node::Stmt).into_iter().collect();
+                parts.push(Node::Decl(x.decl));
+                parts.extend(ast.lists.iter::<ExprId>(x.exprs).map(Node::Expr));
+                parts.extend(x.range_init.map(Node::Expr));
+                parts.push(Node::Stmt(x.body));
+                todo.extend(parts.into_iter().rev().map(|k| (k, None)));
+                continue;
+            }
+            _ => {}
+        }
+        kids.clear();
+        d.children(n, &mut kids);
+        let up = match n {
+            Node::Expr(e) => Some(e),
+            _ => None,
+        };
+        todo.extend(kids.iter().rev().map(|&(k, _)| (k, up)));
+    }
+}
+
 /// A printed node.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Node {

@@ -6,7 +6,7 @@
 //! costs one branch per site.
 
 use kiln_ast::decl::{DeclKind, FriendTarget};
-use kiln_ast::written_refs::{RefMark, RefQualifier, RefRole};
+use kiln_ast::written_refs::{RefMark, RefQualifier, RefRole, WrittenRefId};
 use kiln_ast::{DeclId, QualType};
 use kiln_sema::declspec::{Declarator, SpecialName};
 use kiln_source::{Loc, Span};
@@ -19,7 +19,15 @@ impl Parser<'_, '_> {
     #[inline]
     pub(crate) fn note_wname(&mut self, lo: Loc, q: RefQualifier) {
         if self.s.records_written_refs() {
-            self.wname = Some((Span::new(lo, self.prev_end()), q));
+            self.wname = Some((Span::new(lo, self.prev_end()), q, Loc::INVALID));
+        }
+    }
+
+    /// [`note_wname`](Self::note_wname) for a destructor name `~T`
+    /// whose `~` is at `tilde` and class name at `lo` (spec/ast.md §18.11.2).
+    pub(crate) fn note_wname_dtor(&mut self, tilde: Loc, lo: Loc, q: RefQualifier) {
+        if self.s.records_written_refs() {
+            self.wname = Some((Span::new(lo, self.prev_end()), q, tilde));
         }
     }
 
@@ -36,8 +44,11 @@ impl Parser<'_, '_> {
         let r = f(self);
         let member = role == RefRole::Member;
         let role = self.wname_role.take().unwrap_or(role);
-        if let Some((range, q)) = self.wname.take() {
-            self.s.note_written_name(r, range, role, q, member);
+        if let Some((range, q, tilde)) = self.wname.take()
+            && let Some(id) = self.s.note_written_name(r, range, role, q, member)
+            && tilde.is_valid()
+        {
+            self.s.ast.written_refs.set_tilde(id, tilde);
         }
         self.wname = outer;
         self.wname_role = outer_role;
@@ -122,19 +133,33 @@ impl Parser<'_, '_> {
                 None => return,
             },
         };
+        // The `~` of a destructor's declarator-id (§18.11.2).
+        let tilde = match d.special {
+            Some((SpecialName::Destructor(_), l)) if d.dtor_name.is_valid() => Some(l),
+            _ => None,
+        };
         let qualified = d.id_link != RefQualifier::NONE;
         let friend = d.friend;
         // An explicit instantiation declares nothing; sema says what it
         // named ([temp.explicit]/3).
         if let Some(t) = self.s.ast.written_refs.take_inst_target(d.name_loc()) {
-            self.s.note_written_decl_name(range, Some(t), RefRole::SpecTarget, d.id_link, false);
+            let id = self.s.note_written_decl_name(
+                range,
+                Some(t),
+                RefRole::SpecTarget,
+                d.id_link,
+                false,
+            );
+            self.note_decl_tilde(id, tilde);
             return;
         }
         let Some(decl) = decl else {
             // A qualified declarator-id that named nothing (diagnosed).
             if qualified && !d.dropped {
                 let dep = d.qualifier.is_some_and(|q| self.s.is_dependent_ctx(q));
-                self.s.note_written_decl_name(range, None, RefRole::Redecl, d.id_link, dep);
+                let id =
+                    self.s.note_written_decl_name(range, None, RefRole::Redecl, d.id_link, dep);
+                self.note_decl_tilde(id, tilde);
             }
             return;
         };
@@ -160,6 +185,13 @@ impl Parser<'_, '_> {
             return;
         };
         let dep = entity.is_none() && d.qualifier.is_some_and(|q| self.s.is_dependent_ctx(q));
-        self.s.note_written_decl_name(range, entity, role, d.id_link, dep);
+        let id = self.s.note_written_decl_name(range, entity, role, d.id_link, dep);
+        self.note_decl_tilde(id, tilde);
+    }
+
+    fn note_decl_tilde(&mut self, id: Option<WrittenRefId>, tilde: Option<Loc>) {
+        if let (Some(id), Some(t)) = (id, tilde) {
+            self.s.ast.written_refs.set_tilde(id, t);
+        }
     }
 }

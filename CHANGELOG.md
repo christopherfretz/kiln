@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The written-reference table joins the AST and keeps the tokens
+  outside a name (WP-2326, spec/ast.md §18.11): the location a
+  `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`
+  (the `~` of a destructor, else `range.lo`), with the exceptions listed
+  and a join test over the corpus; the leading `::` of a globally
+  qualified name (`global_colon`, `qualified_lo`, also from a macro or
+  across a comment or line splice) and a destructor's `~` (`tilde`) are
+  recorded at parse in a cold side table, carried by PCH snapshots and
+  module images, and dumped as `q=::L:C` and `tilde=L:C`.
 - The written-reference table's stage-4 gaps are closed (WP-2220..WP-2224,
   WP-2170; spec/ast.md §18.8, §18.9): per-specialization entries name the
   using-directive their lookup went through (`SpecRef::udir`), re-find

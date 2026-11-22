@@ -137,9 +137,10 @@ pub struct Parser<'a, 'sm> {
     pub(crate) expr_invalid: bool,
     /// The written-reference table (spec/ast.md §18): the expression or
     /// member name the innermost id-expression or member access being
-    /// parsed consumed, with its qualifier link, recorded once the
+    /// parsed consumed, with its qualifier link and the `~` of a
+    /// destructor name (`Loc::INVALID` for any other), recorded once the
     /// expression is built ([`crate::written_refs`]).
-    pub(crate) wname: Option<(Span, RefQualifier)>,
+    pub(crate) wname: Option<(Span, RefQualifier, Loc)>,
     /// The role of [`Parser::wname`] when it is not the site's own: a
     /// member named after `.template` is a template name (§18.4).
     pub(crate) wname_role: Option<kiln_ast::written_refs::RefRole>,
@@ -2223,9 +2224,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             link = d.link;
             qual = Some(d.qual.ok_or(())?);
         } else if self.at(Punct::ColonColon) {
-            self.bump();
+            let colon = self.bump().span.lo;
             qual = Some((self.s.ast.tu, self.s.nns_global()));
-            link = RefQualifier::GLOBAL;
+            link = self.s.ast.written_refs.global_link(colon);
         }
         loop {
             // `nns template name<args>::` ([temp.names]/5).

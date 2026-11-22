@@ -69,10 +69,10 @@
 57:10-57:11  expr  'v' -> app::v@56:26 in=app::first@55:43
 61:14-61:17  type  'Int' -> app::Int@60:13 in=p@61:19
 61:24-61:25  expr  'p' -> p@61:19 in=app::destroy@61:6
-61:28-61:31  type  'Int' -> app::Int@60:13 in=app::destroy@61:6
+61:28-61:31  type  'Int' -> app::Int@60:13 tilde=61:27 in=app::destroy@61:6
 62:35-62:36  type  'T' -> T@62:17 in=p@62:38
 62:43-62:44  expr  'p' -> p@62:38 in=app::destroy_t@62:25
-62:47-62:48  type  'T' -> T@62:17 in=app::destroy_t@62:25
+62:47-62:48  type  'T' -> T@62:17 tilde=62:46 in=app::destroy_t@62:25
 66:12-66:15  nns  'lib' -> lib@12:11 in=app::Poly::operator Err@66:3
 66:17-66:20  type  'Err' -> lib::Err@17:8 q=66:12 in=app::Poly::operator Err@66:3
 68:15-68:19  base  'Poly' -> app::Poly@64:8 in=app::Leaf@68:8

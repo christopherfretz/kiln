@@ -544,3 +544,63 @@ fn rename_by_table_across_a_restored_prefix() {
     ];
     assert_eq!(found, want);
 }
+
+const LEADS: &str = "namespace a { struct S { ~S(); static int n; }; int f(); }\n\
+                     #define G ::\n\
+                     int use(a::S *p) {\n\
+                     \x20 p->::a::S::~S();\n\
+                     \x20 return G a::f() + :: /* c */ a::S::n;\n\
+                     }\n";
+
+/// The leading `::` and the destructor's `~` through the API
+/// (spec/ast.md §18.11.2, WP-2326): a globally qualified name's first
+/// component knows its `::` (a macro's at the macro's token), every
+/// component of the name begins its qualified name there, and a
+/// destructor name joins its `MemberExpr` at its `~`.
+#[test]
+fn leading_colons_and_tildes_through_the_api() {
+    use kiln_ast::written_refs::{QualLink, RefQualifier};
+    with_ast(LEADS, |ast, sm| {
+        let t = &ast.written_refs;
+        let globals: Vec<_> =
+            t.iter().filter(|(_, r)| r.qualifier == RefQualifier::GLOBAL).collect();
+        assert_eq!(globals.len(), 3, "a in p->::a, G a and :: a");
+        for &(id, _) in &globals {
+            assert!(t.global_colon(id).is_some(), "every leading `::` is kept");
+        }
+        // `p->::a::S::~S()`.
+        let first = entry_at(t, sm, (4, 8));
+        assert_eq!(line_col(sm, t.global_colon(first).unwrap()), (4, 6));
+        let dtor = entry_at(t, sm, (4, 15));
+        assert_eq!(t.get(dtor).role, RefRole::Member);
+        assert_eq!(line_col(sm, t.tilde(dtor).unwrap()), (4, 14));
+        assert_eq!(line_col(sm, t.name_lo(dtor)), (4, 14));
+        assert_eq!(line_col(sm, t.qualified_lo(dtor)), (4, 6));
+        // `G a::f()`: the `::` is the macro's token, spelled in its body.
+        let call = entry_at(t, sm, (5, 15));
+        let QualLink::Entry(qual) = t.get(call).qualifier.link() else { panic!("a::f") };
+        let colon = t.global_colon(qual).unwrap();
+        assert!(sm.is_macro_loc(colon), "the macro's `::`");
+        assert_eq!(line_col(sm, colon), (2, 11));
+        assert_eq!(t.qualified_lo(call), colon);
+        // `:: /* c */ a::S::n`.
+        let member = entry_at(t, sm, (5, 38));
+        assert_eq!(line_col(sm, t.qualified_lo(member)), (5, 21));
+        assert_eq!(t.name_lo(member), t.get(member).range.lo);
+        // The `MemberExpr` of the destructor is at its `~`.
+        let mut joined = false;
+        for i in 1..=ast.exprs.len() {
+            let expr = kiln_ast::ExprId::new(i as u32);
+            if ast.exprs.get(expr).kind() == kiln_ast::expr::ExprKind::MemberExpr
+                && ast.exprs.get(expr).loc() == t.name_lo(dtor)
+            {
+                assert_eq!(ast.exprs.decl(expr), t.get(dtor).entity.unwrap());
+                joined = true;
+            }
+        }
+        assert!(joined, "the destructor's MemberExpr joins its entry");
+    });
+    run_src(LEADS, false, |t| {
+        assert!(t.is_empty() && t.leads().is_empty());
+    });
+}

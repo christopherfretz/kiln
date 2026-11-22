@@ -10,12 +10,12 @@
 27:10-27:15  nns  'outer' -> outer@8:11 in=qualified@26:5
 27:17-27:22  nns  'inner' -> outer::inner@9:11 q=27:10 in=qualified@26:5
 27:24-27:25  expr  'f' -> outer::inner::f@10:5 q=27:17 in=qualified@26:5
-27:32-27:37  nns  'outer' -> outer@8:11 q=:: in=qualified@26:5
+27:32-27:37  nns  'outer' -> outer@8:11 q=::27:30 in=qualified@26:5
 27:39-27:44  nns  'inner' -> outer::inner@9:11 q=27:32 in=qualified@26:5
 27:46-27:47  expr  'f' -> outer::inner::f@10:5 q=27:39 in=qualified@26:5
 27:52-27:57  nns  'alias' -> alias@20:11 in=qualified@26:5
 27:59-27:60  expr  'f' -> outer::inner::f@10:5 q=27:52 in=qualified@26:5
-27:67-27:73  expr  'global' -> global@22:5 q=:: in=qualified@26:5
+27:67-27:73  expr  'global' -> global@22:5 q=::27:65 in=qualified@26:5
 28:10-28:15  nns  'outer' -> outer@8:11 in=qualified@26:5
 28:17-28:22  nns  'inner' -> outer::inner@9:11 q=28:10 in=qualified@26:5
 28:24-28:25  nns  'S' -> outer::inner::S@11:8 q=28:17 in=qualified@26:5

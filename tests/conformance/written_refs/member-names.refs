@@ -32,7 +32,7 @@
 22:31-22:32  expr  'p' -> p@19:25 in=members@19:5
 22:34-22:36  member  'as' -> Num::as<long>@15:24 found=Num::as@15:24 in=members@19:5
 23:3-23:4  expr  'p' -> p@19:25 in=members@19:5
-23:7-23:10  member  'Num' -> Num::~Num@16:3 in=members@19:5
+23:7-23:10  member  'Num' -> Num::~Num@16:3 tilde=23:6 in=members@19:5
 24:10-24:11  expr  's' -> s@20:7 in=members@19:5
 24:14-24:15  expr  'm' -> m@21:7 in=members@19:5
 24:16-24:19  member  'get' -> Base::get@9:7 found=Num::get@12:15 in=members@19:5

@@ -1166,6 +1166,7 @@ impl Sema<'_, '_> {
             let _ = self.inst.queued.remove(&d);
             self.inst.pending.retain(|p| p.decl != d);
         }
+        self.repoint_written_name(early, r);
         Some(r)
     }
 

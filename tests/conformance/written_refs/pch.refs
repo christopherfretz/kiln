@@ -17,6 +17,12 @@ refs_pch.h:18:17-18:23  using-directive  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=o
 refs_pch.h:19:18-19:20  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 in=p@refs_pch.h:19:21 udir=pch_ns@refs_pch.h:18:1
 refs_pch.h:19:33-19:37  expr  'norm' -> pch_ns::norm@refs_pch.h:10:5 in=outer::twice@refs_pch.h:19:12 how=both udir=pch_ns@refs_pch.h:18:1 adl-ns=pch_ns@refs_pch.h:4:11 adl-cls=pch_ns::Pt@refs_pch.h:6:8
 refs_pch.h:19:38-19:39  expr  'p' -> p@refs_pch.h:19:21 in=outer::twice@refs_pch.h:19:12
+refs_pch.h:22:18-22:24  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=p@refs_pch.h:22:30
+refs_pch.h:22:26-22:28  type  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 q=refs_pch.h:22:18 in=p@refs_pch.h:22:30
+refs_pch.h:22:35-22:36  expr  'p' -> p@refs_pch.h:22:30 in=lead@refs_pch.h:22:13
+refs_pch.h:22:40-22:46  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 q=::refs_pch.h:22:38 in=lead@refs_pch.h:22:13
+refs_pch.h:22:48-22:50  nns  'Pt' -> pch_ns::Pt@refs_pch.h:6:8 q=refs_pch.h:22:40 in=lead@refs_pch.h:22:13
+refs_pch.h:22:53-22:55  member  'Pt' -> pch_ns::Pt::~Pt@refs_pch.h:6:8 q=refs_pch.h:22:48 tilde=refs_pch.h:22:52 in=lead@refs_pch.h:22:13
 10:1-10:7  nns  'pch_ns' -> pch_ns@refs_pch.h:4:11 in=boxed@10:18
 10:9-10:12  template  'Box' -> pch_ns::Box@refs_pch.h:12:27 q=10:1 in=boxed@10:18
 12:10-12:11  expr  'v' -> v@11:19 in=after_pch@11:5

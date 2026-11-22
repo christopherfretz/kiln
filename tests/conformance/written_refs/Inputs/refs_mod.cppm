@@ -16,3 +16,5 @@ export {
 int top(int a, int b = 2);
 int top(int a, int b) { return geo::twice(a) * b; }
 }
+// A leading `::` and a destructor's `~` are carried (WP-2326).
+export inline void lead(geo::Pt *p) { p->::geo::Pt::~Pt(); }
