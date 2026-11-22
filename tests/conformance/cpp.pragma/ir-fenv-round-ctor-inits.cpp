@@ -10,7 +10,7 @@
 // semantics", WP-1904).
 //@ expect: ir
 //@ requires: clang>=22
-//@ args: --target=aarch64-unknown-linux-gnu -std=c++23 -Wno-unknown-pragmas
+//@ args: --target=aarch64-unknown-linux-gnu -Wno-unknown-pragmas
 double gx;
 #pragma STDC FENV_ROUND FE_UPWARD
 struct B {

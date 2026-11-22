@@ -200,9 +200,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultArgExpr => match ast.default_arg_expr(e) {
                 Some(d) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_call_default_arg(e);
                     let r = self.emit_cx(d, ign);
-                    self.srcloc = saved;
+                    self.exit_call_default_arg(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),

@@ -729,7 +729,11 @@ impl Sema<'_, '_> {
     /// Before the delayed default argument of parameter `p` is parsed: a
     /// lambda in it is numbered in the argument's own context (Itanium
     /// ABI §5.1.8, "default arguments appearing in class definitions").
+    /// Its FP pragma state is recorded too (the state at the end of the
+    /// class, which is the declaration's: a pragma cannot appear in a
+    /// member specification; WP-1919).
     pub fn act_on_start_delayed_default_arg(&mut self, p: DeclId) {
+        self.note_init_fp(p);
         self.lambda_mangle.default_arg = Some(p);
     }
 

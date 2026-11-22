@@ -1258,6 +1258,23 @@ Normative detail: spec/landed/codegen/WP-806.md ([expr.pre]/6, C23
   `Ast::init_fp`, an instantiation's being its pattern's), as clang keeps
   `FPOptionsOverride` on each expression (`Cg::enter_fp_override`,
   WP-1904).
+- A default argument (`CXXDefaultArgExpr`) is emitted at each call
+  under the state it was parsed in, not the call's
+  (`Cg::enter_call_default_arg`, WP-1919). Sema records it in the same
+  cold map, keyed by the parameter (`ColdDeclData::init_fp`: the map
+  holds the state of an initializer that belongs to a declaration, and
+  a default argument is its parameter's initializer, so one map serves
+  all three and the module image carries one table): at the parameter's
+  declarator for one written in place, and at the replay for a member
+  function's (the state at the end of the class, the declaration's,
+  since a pragma cannot appear in a member specification). One inherited
+  from an earlier declaration ([dcl.fct.default]/4) is found on that
+  declaration's parameter holding the same expression, and an
+  instantiated one takes its pattern's when it is substituted
+  (`Substituter::default_arg_one`), as clang's `TreeTransform` keeps
+  the pattern's `FPOptionsOverride` (`Ast::default_arg_fp`). In a
+  caller whose own state is not constrained the argument's operations
+  stay plain (no `strictfp`), as in clang.
 - Folding under a constrained scope: a constant initializer
   (static storage, `constexpr`, a `const` integral) is evaluated in a
   constant context, in the default environment ([expr.const]: clang's
@@ -6607,6 +6624,48 @@ or `[[clang::uninitialized]]`.
   reference (`int &r = f();`, the slot only), an `_Atomic` and a vector
   are filled; `int i = g();` is not. Clang's *scalar* and kiln's
   single-store type differ: a vector is not scalar but is one store.
+- **Redundant pre-fill under the default** (WP-1921,
+  `Cg::implicit_fill_redundant`). clang 22 has no erroneous values and
+  without a flag fills nothing. When the fill is kiln's C++26 default
+  rather than a written `-ftrivial-auto-var-init=zero`
+  (`CodegenOptions::auto_var_init_implicit`), the pre-fill of a class or
+  array is left out when the initializer writes every byte of the
+  variable anyway, so the IR there is clang 22's. All of these must
+  hold:
+  - the type has no padding bit (`kiln_abi::padding_mask` of the
+    innermost array element is all zero: no padding byte, unnamed
+    bit-field or unused bit of a bit-field unit);
+  - the initializer does not name the variable;
+  - the initializer writes every subobject (`Cg::writes_every_byte`).
+    That is, looking through `ExprWithCleanups`, parentheses and
+    `ConstantExpr`, it is one of:
+    - a braced or parenthesized aggregate list each of whose elements
+      writes every subobject, with no union member chosen, every base
+      given, and for an array every element or a filler that writes
+      every subobject;
+    - a value-initialization (`ImplicitValueInitExpr`: a member the list
+      leaves out, [dcl.init.aggr]/5);
+    - a default member initializer whose expression writes every
+      subobject;
+    - an expression of a scalar type (builtin, `_BitInt`, pointer,
+      member pointer, enumeration, `_Complex`).
+
+  Everything else keeps the pre-fill: a padded type (`P q{.i = y}` with
+  `struct P { char c; int i; }`, whose padding bytes hold the erroneous
+  value), a union, a constructor call (a user-written or copy
+  constructor may leave bytes unwritten), a string literal, a class
+  object, vector or `_Atomic` as an element, and an initializer that
+  reads the variable (`Two t{y, t.a}` reads the fill). A written
+  `-ftrivial-auto-var-init=zero` keeps every pre-fill, which is clang's
+  IR under that flag. No byte the fill would have set is left
+  unwritten, so the values a program can observe are unchanged. An IR
+  test at C++26 with only such initializers needs no
+  `-ftrivial-auto-var-init=uninitialized` pin
+  (`cpp.pragma/ir-fenv-round-ctor-inits.cpp`).
+  Tests: `basic.indet/ir-default-fill-elided.cpp` (compared with clang
+  22 and 19), `basic.indet/run-erroneous-prefill.cpp` (the elided
+  cases' bytes read back), `cxx26_default_skips_redundant_prefill`
+  (erroneous_init.rs).
 - **Constant initializer.** One that lowers to a constant is stored as
   it was (§3); under a fill mode a non-null constant first has its
   `undef` parts replaced by the fill value and its padding made

@@ -6,6 +6,9 @@
 //! `zero` by default in C++26 (spec/codegen.md §7r, §7y).
 
 use kiln_ast::attr::AttrKind;
+use kiln_ast::decl::TagKind;
+use kiln_ast::expr::ExprKind;
+use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{BinOp, CastOp, Flags, IntPredicate, TypeId as LTy, Value};
@@ -115,7 +118,94 @@ impl Cg<'_> {
         if scalar && !self.init_names(d, init) {
             return;
         }
+        if self.implicit_fill_redundant(d, q, init) {
+            return;
+        }
         self.auto_var_init(d, addr);
+    }
+
+    /// WP-1921 (spec/codegen.md §7y): under the C++26 default fill (no
+    /// `-ftrivial-auto-var-init=` written), the fill before the
+    /// initializer `init` of the aggregate `d` of type `q` is redundant,
+    /// and left out as clang 22 (which has no erroneous values) emits
+    /// none, when every byte of `d` gets a value from `init` anyway: `q`
+    /// has no padding bit, `init` does not name `d`, and it writes every
+    /// subobject ([`Cg::writes_every_byte`]).
+    fn implicit_fill_redundant(&mut self, d: DeclId, q: QualType, init: ExprId) -> bool {
+        if !self.opts.auto_var_init_implicit
+            || self.opts.auto_var_init != AutoVarInit::Zero
+            || !self.is_aggregate(q)
+            || !self.writes_every_byte(init)
+            || self.init_names(d, init)
+        {
+            return false;
+        }
+        // An array's padding is its innermost element's.
+        let ast = self.ast;
+        let mut elem = q;
+        while let TypeView::ConstantArray(a) = ast.types.canonical_view(elem) {
+            elem = a.elem;
+        }
+        kiln_abi::padding_mask(self.tys.layouter(), elem).is_some_and(|m| m.iter().all(|&b| b == 0))
+    }
+
+    /// The initializer `e` of an aggregate writes each byte of its object
+    /// outside padding: a list (or parenthesized list) of a structure or
+    /// array each of whose elements does, with every base given and, for
+    /// an array, every element or a filler that does (the members it does
+    /// not name are value-initialized, [dcl.init.aggr]/5); a
+    /// value-initialization; a default member initializer that does; or an
+    /// expression of a scalar type. Not a union (its other members' bytes),
+    /// a constructor call, a string literal or an object copied whole.
+    fn writes_every_byte(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let x = &ast.exprs;
+        match x.get(e).kind() {
+            ExprKind::ExprWithCleanups | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                self.writes_every_byte(self.sub(e))
+            }
+            ExprKind::ImplicitValueInitExpr => true,
+            ExprKind::CXXDefaultInitExpr => {
+                ast.default_init_expr(e).is_some_and(|i| self.writes_every_byte(i))
+            }
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr => {
+                let q = x.get(e).ty();
+                let (inits, filler, union_field) = crate::expr::agg_init_parts(ast, e);
+                if union_field.is_some() || !inits.iter().all(|&i| self.writes_every_byte(i)) {
+                    return false;
+                }
+                match ast.types.canonical_view(q) {
+                    TypeView::ConstantArray(a) => {
+                        inits.len() as u64 == a.size
+                            || filler.is_some_and(|f| self.writes_every_byte(f))
+                    }
+                    TypeView::Record(_) => {
+                        let Some(rd) = ast.types.as_record(q) else { return false };
+                        let def = ast.definition(rd).unwrap_or(rd);
+                        ast.decls.record(def).is_some_and(|r| r.tag != TagKind::Union)
+                            && inits.len() >= ast.decls.bases(def, &ast.lists).count()
+                    }
+                    _ => self.plain_scalar(q),
+                }
+            }
+            _ => self.plain_scalar(x.get(e).ty()),
+        }
+    }
+
+    /// `q` is a non-void builtin, bit-precise integer, pointer, member
+    /// pointer, enumeration or complex type: an expression of it writes
+    /// its whole value.
+    fn plain_scalar(&self, q: QualType) -> bool {
+        let t = &self.ast.types;
+        match t.canonical_view(q) {
+            TypeView::Builtin(_) => !t.is_void(q),
+            TypeView::BitInt { .. }
+            | TypeView::Pointer(_)
+            | TypeView::MemberPointer { .. }
+            | TypeView::Enum(_)
+            | TypeView::Complex(_) => true,
+            _ => false,
+        }
     }
 
     /// clang `EmitAutoVarInit` for a constant initializer `k` of the
@@ -401,9 +491,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let mut work = vec![e];
         while let Some(x) = work.pop() {
-            if ast.exprs.get(x).kind() == kiln_ast::expr::ExprKind::DeclRefExpr
-                && ast.exprs.decl(x) == d
-            {
+            if ast.exprs.get(x).kind() == ExprKind::DeclRefExpr && ast.exprs.decl(x) == d {
                 return true;
             }
             ast.exprs.children_into(x, &ast.lists, &mut work);

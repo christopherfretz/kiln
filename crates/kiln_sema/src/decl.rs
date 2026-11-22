@@ -6691,9 +6691,14 @@ impl Sema<'_, '_> {
                     self.unparsed_default_args.insert(pd, at);
                 }
                 // A default parsed in place was converted by
-                // `act_on_param_default_init`; `defaults` also holds the
-                // inherited ones ([dcl.fct.default]/4).
+                // `act_on_param_default_init`, under the FP pragma state
+                // now in effect (WP-1919); `defaults` also holds the
+                // inherited ones ([dcl.fct.default]/4, whose state
+                // `Ast::default_arg_fp` finds on the earlier declaration).
                 DefaultArg::None | DefaultArg::Parsed(_) => {
+                    if matches!(p.default_arg, DefaultArg::Parsed(_)) {
+                        self.note_init_fp(pd);
+                    }
                     if let Some(e) = defaults[i] {
                         let _ = self.ast.decls.set_default_arg(pd, e);
                     }

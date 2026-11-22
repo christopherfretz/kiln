@@ -250,9 +250,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_call_default_arg(e);
                     let r = self.emit_scalar_opt(d);
-                    self.srcloc = saved;
+                    self.exit_call_default_arg(saved);
                     return r;
                 }
                 None => return err(self.loc_of(e), "default argument not yet parsed"),
@@ -2953,9 +2953,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_call_default_arg(e);
                     let r = self.emit_lvalue(d);
-                    self.srcloc = saved;
+                    self.exit_call_default_arg(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
@@ -5371,9 +5371,9 @@ impl Cg<'_> {
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
-                    let saved = self.enter_default_arg(e);
+                    let saved = self.enter_call_default_arg(e);
                     let r = self.agg_visit(d, dest, zeroed);
-                    self.srcloc = saved;
+                    self.exit_call_default_arg(saved);
                     r
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),

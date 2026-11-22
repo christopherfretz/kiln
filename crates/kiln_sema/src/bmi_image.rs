@@ -63,6 +63,7 @@ mod explinst;
 mod exprs;
 mod fnspec;
 mod fnsugar;
+mod fpstate;
 mod friend;
 mod lambdas;
 mod latedef;
@@ -99,7 +100,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 51;
+pub(crate) const IMAGE_VERSION: u32 = 52;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -781,6 +782,9 @@ struct Image {
     fsugar: fnsugar::FnSugars,
     /// WP-1369: the member classes of specializations the unit completed.
     mclasses: specbase::MemberClasses,
+    /// WP-1923: the FP pragma states of mem-initializers, default member
+    /// initializers and default arguments ([`fpstate`]).
+    fp_inits: Vec<fpstate::FpInit>,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1564,6 +1568,7 @@ fn encode(img: &Image) -> Vec<u8> {
     psel::encode_partial_sels(&mut w, &img.psels);
     fnsugar::encode_fn_sugars(&mut w, &img.fsugar);
     specbase::encode_member_classes(&mut w, &img.mclasses);
+    fpstate::encode_fp_inits(&mut w, &img.fp_inits);
     w.0
 }
 
@@ -2289,6 +2294,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.psels = psel::decode_partial_sels(&mut r)?;
     img.fsugar = fnsugar::decode_fn_sugars(&mut r)?;
     img.mclasses = specbase::decode_member_classes(&mut r)?;
+    img.fp_inits = fpstate::decode_fp_inits(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -3442,6 +3448,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     written::validate_written(img, &|q| qref_ok(q, nt))?;
     written::validate_nested(img, &|q| qref_ok(q, nt))?;
     exprs::validate_late_nx(img)?;
+    fpstate::validate_fp_inits(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -4376,9 +4383,6 @@ impl Writer<'_, '_, '_> {
             || c.instantiated_from.contains(d)
             || c.injection_point.contains(d)
             || c.conversion_spec_target.contains(d)
-            // The FP state of mem-initializers / a default member
-            // initializer under a pragma (WP-1904).
-            || c.init_fp.contains(d)
         {
             return Err("a declaration with side data the image does not carry");
         }
@@ -4974,6 +4978,7 @@ impl Writer<'_, '_, '_> {
         self.walk_roots()?;
         self.lambda_contexts()?;
         self.written_section();
+        self.fp_inits();
         Ok(())
     }
 
@@ -6385,6 +6390,7 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        self.image_fp_inits(img, &ids);
         self.image_spec_defaults(img, &ids, main);
         self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
@@ -7024,6 +7030,7 @@ mod tests {
                     body::StmtRec { kind: 14, aux: 0, loc: 109, words: vec![2, NONE] },
                     body::StmtRec { kind: 0, aux: 0, loc: 104, words: vec![2, 0, 1, 120] },
                 ],
+                fp: Vec::new(),
             },
             attrs: attrs::Attrs::default(),
             scopes: scope::Scopes::default(),
@@ -7040,6 +7047,7 @@ mod tests {
             psels: psel::PartialSels::default(),
             fsugar: fnsugar::FnSugars::default(),
             mclasses: specbase::MemberClasses::default(),
+            fp_inits: Vec::new(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

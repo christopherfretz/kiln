@@ -1479,10 +1479,17 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Substitutes the default argument of pattern parameter `a` onto `b`.
+    /// It keeps the FP pragma state `a`'s was parsed in, as clang's
+    /// rebuilt expressions keep their pattern's `FPOptionsOverride`
+    /// (WP-1919).
     fn default_arg_one(&mut self, a: DeclId, b: DeclId) {
         let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
             return;
         };
+        let fp = self.sema.ast.default_arg_fp(a);
+        if fp != kiln_ast::fp::FpOverride::NONE {
+            let _ = self.sema.ast.decls.cold.init_fp.insert(b, fp);
+        }
         let e = match self.sema.ast.exprs.get(def).kind() {
             kiln_ast::expr::ExprKind::CXXDefaultArgExpr => return,
             // A deduction guide's placeholder ([`Sema::guide_default_placeholder`]):
