@@ -7,10 +7,16 @@
 21:23-21:26  member  'get' -> (dependent) in=measure@20:24
 21:23-21:26  member  'get' -> List::get@16:7 spec=measure<List>@20:24
 21:23-21:26  member  'get' -> Vec::get@10:7 spec=measure<Vec>@20:24
+21:19-21:20  operator  '+' -> (dependent) in=measure@20:24 def=0+adl
+21:19-21:20  operator  '+' -> (builtin) spec=measure<List>@20:24 how=builtin
+21:19-21:20  operator  '+' -> (builtin) spec=measure<Vec>@20:24 how=builtin
 21:32-21:33  expr  't' -> t@20:41 in=measure@20:24
 21:34-21:39  member  'count' -> (dependent) in=measure@20:24
 21:34-21:39  member  'count' -> List::count@17:7 spec=measure<List>@20:24
 21:34-21:39  member  'count' -> Vec::count@12:7 spec=measure<Vec>@20:24
+21:30-21:31  operator  '+' -> (dependent) in=measure@20:24 def=0+adl
+21:30-21:31  operator  '+' -> (builtin) spec=measure<List>@20:24 how=builtin
+21:30-21:31  operator  '+' -> (builtin) spec=measure<Vec>@20:24 how=builtin
 24:42-24:43  type  'T' -> T@24:17 in=p@24:45
 24:57-24:58  expr  'p' -> p@24:45 in=measure_ptr@24:24
 24:60-24:64  member  'size' -> (dependent) in=measure_ptr@24:24

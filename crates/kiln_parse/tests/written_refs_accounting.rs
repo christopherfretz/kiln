@@ -1220,7 +1220,7 @@ type SetReport = (usize, usize, Vec<(String, String)>);
 /// member of a closure type and a file with errors (`None`) are the
 /// documented exceptions.
 fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
-    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup};
+    use kiln_ast::written_refs::{REF_UNRESOLVED, RefLookup, RefRole, SPEC_BUILTIN};
     let sm = SourceManager::new();
     let main = sm.add_virtual(name, src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
@@ -1245,6 +1245,16 @@ fn definition_sets(name: &str, src: &str) -> Option<SetReport> {
     for (_, r) in refs.specs() {
         let Some(set) = refs.found_at_definition(r.entry) else { continue };
         if set.dependent_base() || set.unresolved_using() || r.flags & REF_UNRESOLVED != 0 {
+            continue;
+        }
+        // A built-in operator selects no declaration, and an operator
+        // function or conversion function chosen as a member is looked up
+        // in the operand's class at instantiation ([over.match.oper]/3.1,
+        // [over.call.object]/2), never in the definition's set (§18.12.4's
+        // exceptions).
+        if r.flags & SPEC_BUILTIN != 0
+            || (r.how == RefLookup::Member && refs.get(r.entry).role == RefRole::Operator)
+        {
             continue;
         }
         checked += 1;

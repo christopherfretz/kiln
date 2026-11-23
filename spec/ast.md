@@ -2077,7 +2077,7 @@ field `Ast::written_refs`. Built in stages:
 | | the join with expressions; the leading `::` and the `~` (§18.11) | WP-2326 |
 | | the found set of a dependent entry: what lookup found at the template definition (§18.12) | WP-2472 |
 | 6 | operator uses and user-defined-literal suffixes outside dependent contexts: roles `operator` and `ud-suffix`, flags `REWRITTEN` and `REVERSED`, the closing token of `[]` and `()` (§18.13) | WP-2820 |
-| 6b | stage: dependent operators, folds, their found sets and per-specialization rows, `SPEC_BUILTIN` rows, dependent `(` (§18.13.6) | WP-2910 |
+| 6b | dependent operators, folds, their found sets and per-specialization rows, `SPEC_BUILTIN` rows, dependent `(` (§18.13.6) | WP-2910 |
 | 6c | stage: `new`, `delete` and `co_await` entries (§18.13.6) | WP-2911 |
 
 ### 18.1 Contract
@@ -3076,7 +3076,7 @@ a separate table: the main table keeps one entry per written name.
   | `found` | `Option<DeclId>` (4) | what lookup found, when it differs from `entity` (the template of a specialization) |
   | `adl` | `Option<AdlSetId>` (4) | a dependent unqualified call's associated set in this specialization (§18.7.4), interned with the main table's sets |
   | `udir` | `Option<DeclId>` (4) | the using-directive ordinary lookup found `entity` (or `found`) through, as §18.7.3's: `None` when lookup found it directly, by argument-dependent lookup only (`how` `Adl`), or by qualified or member lookup |
-  | `flags` | `u8` | `MEMBER` (the entry's), `UNRESOLVED` without an entity; `REWRITTEN` and `REVERSED` for a dependent operator's resolution there, and `SPEC_BUILTIN` (stage: WP-2910) for one that selected a built-in candidate (§18.13.6) |
+  | `flags` | `u8` | `MEMBER` (the entry's), `UNRESOLVED` without an entity; `REWRITTEN` and `REVERSED` for a dependent operator's resolution there, and `SPEC_BUILTIN` for one that selected a built-in candidate or applied no operator (no entity, `how` `builtin`, dumped `(builtin)`; §18.13.6) |
   | `how` | `RefLookup` | §18.7.2's `how` of the instantiation's lookup: `Member`, `Qualified`, `Unqualified`, `Adl`, `Both`, `Builtin`, or `None` without an entity |
 
   Not recorded per specialization: `Injected` (an injected-class-name
@@ -3246,9 +3246,14 @@ building deduction guides, `std::meta::substitute`.
   its name), and `PatternNode::Decl(d)` for a using-declarator with a
   dependent qualifier in a class template (`using T::size;`, `using
   typename T::type;`: `d` is its `UnresolvedUsingValue` or
-  `UnresolvedUsingTypename` member), and for a friend function
+  `UnresolvedUsingTypename` member), for a friend function
   template specialization with dependent arguments or type (`friend
-  void f<>(T);`: `d` is its `FriendDecl`, WP-3008).
+  void f<>(T);`: `d` is its `FriendDecl`, WP-3008), and
+  `PatternNode::Oper(e, slot)`
+  for the operator token of a dependent operator expression `e` (§18.13.6;
+  slot 1 is a binary fold's second token, else 0), apart from
+  `Expr(e)` because a dependent `t->m` is the node of both `->` and
+  `m`.
 - **Expressions.** `Substituter::expr` and `Substituter::callee` look
   the pattern node up after each rebuild. The rebuilt node's target
   (`written_target`, §18.4) gives the row: a declaration, a concept or a
@@ -3920,8 +3925,8 @@ instantiated. The found set is that result.
 | `this->a(t)`, `C::a(t)`, `a(t)` (implicit `this`), `this->mt(t)`, `this->template mt<T>(t)`: members of the current instantiation (`CXXDependentScopeMemberExpr`, or an overloaded member access) | class member lookup in the current instantiation: members of the pattern class and its non-dependent bases | none when the class searched has no dependent base; else `DEPENDENT_BASE`: the instantiation looks the name up again, and a different result is ill-formed ([temp.dep.type]/6; not diagnosed, §18.12.6) |
 | a name a dependent using-declarator introduces (`using B<T>::bm; ... bm(t)`) | the class's lookup result, the `UnresolvedUsingValue` an element | `UNRESOLVED_USING`: what it names exists per specialization only |
 | `T::x`, `B<T>::bm(t)` (a dependent qualifier), `t.m(t)`, `this->bm(t)` naming nothing the class declares in a class with a dependent base (a member of an unknown specialization), `using B<T>::bm;` itself, `typename T::ty`, a dependent nested-name-specifier component | no set (`None`): no lookup runs at the definition; all knowledge is per specialization (§18.9) | |
-| a dependent operator `t + t`, a fold's operator, `co_await t` (stage: WP-2910, WP-2911; no entry until then, §18.13.6) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; the `DependentCoawaitExpr`'s set) | `ADL` |
-| a dependent `t[i]`, `t(x)`, `t->m`, `t = u`, `new T`, `delete p` (stage: WP-2910, WP-2911) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only) | |
+| a dependent operator `t + t`, a fold's operator (§18.13.6), `co_await t` (stage: WP-2911; no entry until then) | the definition-context lookup of `operator@` (`Ast::dependent_oper_candidates`, §8.5; the `DependentCoawaitExpr`'s set) | `ADL` |
+| a dependent `t[i]`, `t(x)`, `t->m`, `t = u` (§18.13.6), `new T`, `delete p` (stage: WP-2911) | no set: no definition-context lookup ([over.match.oper]/3.1: member candidates only) | |
 
 An unqualified name in a class template with a dependent base: the
 dependent base is not examined, at the definition or at instantiation
@@ -3963,7 +3968,13 @@ specialization to its template. A row whose `how` is `Both` is from
 `S` too. Exceptions, each visible to the client: an ill-formed
 specialization (kiln's two-phase recovery selects a declaration found
 after an error, spec/sema-templates.md §3.5), `DEPENDENT_BASE` (a member
-of a dependent base), `UNRESOLVED_USING`, and a member of a closure type
+of a dependent base), `UNRESOLVED_USING`, a `SPEC_BUILTIN` row (a built-in
+operator selects no declaration, §18.13.6), an `operator` row whose `how`
+is `Member` (a member operator function, a function call operator or a
+surrogate's conversion function is looked up in the operand's class at
+instantiation, [over.match.oper]/3.1, [over.call.object]/2, and is never
+in the definition's set, which holds the non-member candidates), and a
+member of a closure type
 (`[&]<int I>() {...}.template operator()<1>()` in a function template:
 the lambda-expression of each specialization defines a new closure type
 ([expr.prim.lambda.closure]/1), and kiln keeps no link from its members
@@ -4199,51 +4210,108 @@ and one with an erroneous operand (`missing + a`) have none.
 
 #### 18.13.6 Templates and later stages
 
-Stage 6 records operators that are not dependent. In a template
-pattern a non-dependent operator (`s + s` with `s` of a non-dependent
-class type) is resolved at the definition ([temp.res.general]/1) and
-recorded once there; nothing is recorded during instantiation. The
-rest is staged:
+In a template pattern a non-dependent operator (`s + s` with `s` of a
+non-dependent class type) is resolved at the definition
+([temp.res.general]/1) and recorded once there; nothing is recorded
+for it during instantiation.
 
-- **Stage 6b (WP-2910).** An operator with a type-dependent operand
-  is a dependent name ([temp.dep.general]/2): a `DEPENDENT` entry at
-  its token, a found set (§18.12.2: `Ast::dependent_oper_candidates`,
-  `ADL`) and per-specialization rows carrying `REWRITTEN` and
-  `REVERSED` (one specialization may select `operator!=` directly and
-  another `operator==` rewritten). A fold-expression's operator tokens
-  get one entry each and one row per distinct resolution of the
-  expansion. A dependent `->` gives one row per `operator->` applied.
-  Every specialization whose instantiation reached the token has at
-  least one row: one that selected a built-in candidate gets a row
-  with flag `SPEC_BUILTIN`, no entity and no `found`, `how=builtin`,
-  dumped `(builtin)`; a discarded `if constexpr` branch is never
-  reached and has none. So for an instantiated specialization a row
-  exists exactly when the token was reached. If those rows measured on
-  `<bits/stdc++.h>` outnumber the new entries, the fallback is one
-  entry flag, `BUILTIN_IN_SOME_SPEC`, instead.
-  A `DEPENDENT` entry at `(` is made when the callee is not a function
-  name (not an `UnresolvedLookupExpr`, `UnresolvedMemberExpr`,
-  `DependentScopeDeclRefExpr`, `CXXDependentScopeMemberExpr`, nor a
-  `DeclRefExpr` or `MemberExpr` naming a function) and the call is
+**Dependent operators (stage 6b, WP-2910).** An operator with a
+type-dependent operand is a dependent name ([temp.dep.general]/2,
+[temp.dep.expr]/1), bound at instantiation ([temp.dep.candidate]/1):
+
+- **Entry.** A `DEPENDENT` entry of role `operator` at its token (the
+  ranges of §18.13.2; `close` for `[]` and `()`), no entity, made when
+  the operator could select an operator function in some
+  specialization: an operand whose type is a class, an enumeration or
+  dependent and not a pointer, array or function type (for `[]`, `=`
+  and `()`: the object or callee only, [over.sub]/1, [over.ass]/1,
+  [over.call]/1), and no operand containing an error. A fold over
+  `int` non-type template parameters, `p + 1` with `p` of type `T *`,
+  `a[i]` with `a` of type `T[3]` have no entry.
+- **Found set** (§18.12.2). For an operator other than `=`, `[]`, `()`
+  and `->`: the non-member candidates unqualified lookup of
+  `operator@` found at the definition (`Ast::dependent_oper_candidates`,
+  [over.match.oper]/3.2), flag `ADL`, `udir=` for a candidate made
+  visible by a using-directive. `=`, `[]`, `()` and `->` have no set:
+  their candidates are members only.
+- **Rows** (§18.9). Each specialization whose instantiation reached the
+  token has rows, keyed by `Ast::written_spec_key()` (a generic
+  lambda's call operator specialization, a concept for a
+  requirement's satisfaction check): the operator function selected,
+  `how=member` for a member (a member operator, `operator[]`,
+  `operator()`, `operator->`, a surrogate's conversion function),
+  `how=adl` when the call's `ADL` flag says argument-dependent lookup
+  alone found it, `udir=` for one the definition's using-directive
+  made visible; a rewritten or reversed candidate
+  ([over.match.oper]/3.4, /8) with `REWRITTEN` and `REVERSED` (one
+  specialization may select `operator!=` directly and another
+  `operator==` rewritten), two rows for `a < b` through `operator<=>`
+  whose result has a user `operator<` (the `<=>`, then the `<`). A
+  specialization that selected a built-in candidate ([over.built]),
+  or called through a pointer to function, gets a row with flag
+  `SPEC_BUILTIN`, no entity and no `found`, `how=builtin`, dumped
+  `(builtin)`. An ill-formed specialization whose operator selects
+  nothing ([over.match.oper]/3 finds no viable function, `->` on a
+  class with no `operator->`) gets an `UNRESOLVED` row; one whose
+  operand failed gets none. A failed substitution in a SFINAE context
+  ([temp.deduct.general]/8) records no row. A specialization in which
+  the operator is still dependent (a generic lambda's pattern inside a
+  specialization) re-keys its rebuilt node (`PatternNode::Oper`,
+  §18.9.4) for the next level.
+- **Reached.** For an instantiated specialization a row exists exactly
+  when the instantiation reached the token. A discarded `if
+  constexpr` branch ([stmt.if]/2) is never reached and has none; a
+  template never instantiated has the entry and its set only.
+- **Folds.** Each operator token of a fold-expression
+  ([expr.prim.fold]/1) is an entry (a binary fold's two tokens, two
+  entries, `PatternNode::Oper` slots 0 and 1). The expansion
+  ([temp.variadic]/11) applies the operator once per element pair;
+  rows are kept once by content (§18.9.1), so a specialization has one
+  row per distinct resolution: `sum(s, 1)` and `sum(s, s, s)` one
+  each, a heterogeneous pack a row per operator function plus a
+  `(builtin)` row for its built-in pairs. An expansion that applies no
+  operator (an empty pack of `&&`, `||` or `,`, [temp.variadic]/12; a
+  single element; an init with an empty pack) still reached the token
+  and gets a `(builtin)` row, so that "a row exists exactly when the
+  token was reached" holds for folds too (the design's "no row" for
+  this case is replaced).
+- **`->` chains.** `t->m` with a type-dependent `t` is an entry at
+  `->`. A specialization whose `t` is a class applies `operator->`
+  repeatedly ([over.ref]/1, [over.match.oper]/2): one row per
+  `operator->`, pushed in application order (the dump sorts them, the
+  API `specs_of` keeps the order). A pointer `t` gets one `(builtin)`
+  row. An erroneous result records nothing.
+- **The `(` rule.** A `DEPENDENT` entry at `(` is made when the callee
+  is not a function name (not an `UnresolvedLookupExpr`,
+  `UnresolvedMemberExpr`, `DependentScopeDeclRefExpr`,
+  `CXXDependentScopeMemberExpr`, nor a `DeclRefExpr` or `MemberExpr`
+  naming a function or function template) and the call is
   type-dependent through the callee or an argument (`Less lt;
-  lt(a, b)`, `std::less<>{}(a, b)` in a template). **Not covered**:
-  `t.f(x)` and `T::f(x)` where `f` turns out to be a data member of
-  class type in a specialization: its name's row names the data
-  member, and the `operator()` it calls has no entry.
-- **Stage 6c (WP-2911).** `new` (range the keyword), `delete` and
-  `delete[]` (one entry over its three tokens), `::new` and `::delete`
-  (qualifier `GLOBAL`, the `::` as lead), naming the allocation or
-  deallocation function the expression selected; a specialization of
-  a dependent one selecting no function gets a `SPEC_BUILTIN` row.
-  The entry of `delete p` names the deallocation function the lookup
-  in the static type's scope selects ([expr.delete]/9-10); under a
-  virtual destructor the call may reach another (the one found at the
-  dynamic type's destructor). `co_await e` names the `operator
-  co_await` applied, if any; the awaiter's and promise's calls have
-  no entry.
+  lt(a, b)`, `less<>{}(a, b)`, `t(1)` in a template). Its rows name
+  the `operator()` selected (a member template's specialization,
+  `found=` the template), a surrogate call's conversion function
+  ([over.call.object]/2), or `(builtin)` for a pointer to function.
+  **Not covered** (WP-3080): `t.f(x)` and `T::f(x)` where `f` turns
+  out to be a data member of class type in a specialization: its name's
+  row names the data member, and the `operator()` it calls has no entry
+  or row.
 
-Until stage 6b lands, a dependent operator has no entry, as before
-WP-2820.
+Measured on `<bits/stdc++.h>` (§18.13.8), the `SPEC_BUILTIN` rows
+(5,984) are fewer than the new entries (17,691), so the rows are kept
+and the design's fallback (one entry flag `BUILTIN_IN_SOME_SPEC`) is
+not used.
+
+**Stage 6c (WP-2911).** `new` (range the keyword), `delete` and
+`delete[]` (one entry over its three tokens), `::new` and `::delete`
+(qualifier `GLOBAL`, the `::` as lead), naming the allocation or
+deallocation function the expression selected; a specialization of a
+dependent one selecting no function gets a `SPEC_BUILTIN` row. The
+entry of `delete p` names the deallocation function the lookup in the
+static type's scope selects ([expr.delete]/9-10); under a virtual
+destructor the call may reach another (the one found at the dynamic
+type's destructor). `co_await e` names the `operator co_await`
+applied, if any; the awaiter's and promise's calls have no entry.
+Until stage 6c lands, these have no entry.
 
 #### 18.13.7 Recording sites, `how` and the operator join
 
@@ -4265,6 +4333,19 @@ WP-2820.
   recovery), a user-defined literal's call. Off, each site is one
   branch on `records_written_refs()` (the subscript and call sites
   build their operand list only when on).
+- **Stage 6b sites.** The same parser sites make a dependent operator's
+  entry (`note_written_operator`, `note_written_arrow`: a type-dependent
+  expression is not resolved, so the entry, its found set from the
+  expression's candidate set, and the pattern node
+  `PatternNode::Oper(e, 0)` are recorded instead), and the two
+  fold-expression sites of `parse_paren_rest_inner` call
+  `note_written_fold` with the fold's operator tokens (slots 0 and 1).
+  The rows are made by
+  `Substituter::expr` and `Substituter::callee` after each rebuild
+  (`note_written_spec_oper`, beside `note_written_spec_expr`) and by
+  the fold expansion (`fold_combine` per application,
+  `fold_applied_none` for an expansion applying none), all behind
+  `has_pattern_nodes()`.
 - **`how`.** `member` when the function is a member (a member
   candidate, [over.match.oper]/3.1; `operator[]`, `operator()`,
   `operator->`, a surrogate's conversion function); `adl` when the
@@ -4307,11 +4388,18 @@ column (`RefLead` 16 to 20 bytes beside WP-2828's `spec`, a row only
 for an entry with a `::`, a `~`, a specifier or a closing token),
 validated to be on an `operator` entry, in the PCH section and as the
 fifth word of the image's leads. PCH `FORMAT_VERSION` 164,
-`IMAGE_VERSION` 88.
+`IMAGE_VERSION` 88. Stage 6b (WP-2910) adds the pattern node
+`PatternNode::Oper(e, slot)` (§18.9.4) to the snapshot's section and as
+the image's node tag 3 (entry, expression, slot; a slot of 2 or more is
+rejected), so a consumer's or importer's instantiations of a dependent
+operator from the PCH or module record their rows: PCH
+`FORMAT_VERSION` 168, `IMAGE_VERSION` 91. The flag `SPEC_BUILTIN` is a
+`SpecRef::flags` bit and needs no new column.
 `Inputs/refs_pch.h` and `Inputs/refs_mod.cppm` end with an overloaded
-`+`, a `[]` with its close and a ud-suffix, so `pch.refs` and
-`module.refs` show them through the snapshot and the image and as
-text.
+`+`, a `[]` with its close and a ud-suffix, then a dependent `t + t`
+and a fold `(t + ...)` the consumer instantiates, so `pch.refs` and
+`module.refs` show them, their found sets and the consumer's rows
+through the snapshot and the image and as text.
 
 **Cost.** Measured on `<bits/stdc++.h>` (`-std=c++26 -fsyntax-only`).
 With the table off nothing is recorded: the parser's sites test
@@ -4329,6 +4417,25 @@ and 0.08% of total live heap (51,615,851 to 51,655,619 bytes); the
 were measured before WP-2828's `spec` column; beside it a row is 20
 bytes, so `close` also costs 4 bytes on each of the header's other
 rows (704 rows, 2,816 bytes).
+
+Stage 6b (WP-2910), measured the same way against its base (WP-2820's
+tip). With the table off nothing new is recorded: the parser's fold
+sites and `note_written_operator` test `records_written_refs()` first
+and the substituter's and fold expansion's hooks test
+`has_pattern_nodes()` (an empty map when off); the memory report is
+byte-identical (total live heap 42,928,549 bytes); the Oven's counters
+(everything but wall time) are identical on all 29 `bench/oven`
+programs (16,612 report lines); CPU time is within run-to-run noise on
+a loaded host (median 12.82 s before, 12.59 s after, 9 interleaved
+rounds, ranges 10.99-16.82 s and 11.15-15.72 s; peak RSS equal at about
+108 MB). With the table on, the header adds 17,691 dependent `operator`
+entries to 211,081 (+8.4%; `=` 2,195, `*` 2,097, `(` 1,917, `==`
+1,283, ...), 7,114 rows from the header's own instantiations (5,984
+`SPEC_BUILTIN`, 1,130 naming a function, none unresolved), 2,083,196
+bytes of live table (8,730,076 to 10,813,272: the entries, their
+pattern nodes, found-set rows and the rows) and 4.0% of total live heap
+(51,658,625 to 53,741,821 bytes). The `SPEC_BUILTIN` rows (5,984) are
+fewer than the new entries (17,691): the rows are kept (§18.13.6).
 
 #### 18.13.9 Tests
 
@@ -4348,6 +4455,28 @@ join; the UDL callee joins its `ud-suffix` entry), and
 `operators-comma.cpp`, `operators-special.cpp`, `udl.cpp`,
 `operators-macros.cpp`, `operators-requires.cpp`,
 `operators-errors.cpp`, and the carriage goldens.
+
+Stage 6b (WP-2910): `crates/kiln_ast/src/written_refs.rs`
+(`operator_nodes_and_builtin_rows`: an operator token's node apart from
+its expression's, both fold slots, a built-in row kept once and apart
+from an unresolved one), `written_refs_carry.rs`
+(`operator_pattern_nodes_and_builtin_rows_round_trip`) and
+`crates/kiln_sema/src/bmi_image/refs.rs` (the image's tag 3 round trips;
+a slot of 2 and an expression past the bodies are rejected),
+`crates/kiln_parse/tests/written_refs.rs`
+(`dependent_operator_entries_through_the_api`: the found set, a
+function row from the set and a built-in row, a `->` chain's rows in
+application order, a binary fold's two entries),
+`written_refs_accounting.rs` (§18.12.4 with the `SPEC_BUILTIN` and
+member-operator exceptions), and `tests/conformance/written_refs/`:
+`operators-dependent.cpp`, `operators-dependent-arrow.cpp`,
+`operators-dependent-call.cpp`, `operators-fold.cpp`,
+`operators-dependent-sfinae.cpp`, `operators-dependent-errors.cpp`
+(each with an instantiation selecting a user operator, one selecting a
+built-in, a template never instantiated and a discarded `if constexpr`
+branch where the form allows), `found-operator.cpp`, and the carriage
+goldens (`Inputs/refs_pch.h`, `Inputs/refs_mod.cppm`: a dependent
+`t + t` and a fold the consumer instantiates).
 
 ## 19. The declaration-extent table (WP-2090)
 

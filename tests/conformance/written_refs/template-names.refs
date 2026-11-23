@@ -56,3 +56,4 @@
 46:21-46:23  template  'as' -> (dependent) in=app::dep@44:24
 46:33-46:34  expr  'w' -> app::w@45:50 in=app::dep@44:24
 46:44-46:46  template  'as' -> (dependent) in=app::dep@44:24
+46:31-46:32  operator  '+' -> (dependent) in=app::dep@44:24 def=0+adl

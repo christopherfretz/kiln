@@ -945,7 +945,7 @@ impl Sema<'_, '_> {
     /// The lookup of entry `r`'s name `name` re-run in its provenance
     /// form (§18.7.1): the scope walk, or the qualified walk in the scope
     /// its qualifier names.
-    fn written_walk(
+    pub(crate) fn written_walk(
         &self,
         r: &WrittenRef,
         name: kiln_ast::names::DeclName,
@@ -968,7 +968,7 @@ impl Sema<'_, '_> {
     /// The using-directive the walk `p` for `name` found `key` (a first
     /// declaration) through (§18.7.3): none when it stopped in a class or
     /// the scope it stopped in declares `key` itself.
-    fn written_udir_of(
+    pub(crate) fn written_udir_of(
         &mut self,
         key: DeclId,
         name: kiln_ast::names::DeclName,
@@ -1004,7 +1004,7 @@ impl Sema<'_, '_> {
     }
 
     /// True when some using-directive exists that a lookup could use.
-    fn any_using_directive(&self) -> bool {
+    pub(crate) fn any_using_directive(&self) -> bool {
         !self.ast.lookup.has_no_using_directives()
             || self.scopes.iter().any(|s| s.is_local() && !s.using_dirs.is_empty())
     }
@@ -1012,7 +1012,7 @@ impl Sema<'_, '_> {
     /// True when `d` is declared in a namespace scope (through linkage
     /// specifications, `export` and unscoped enumerations), where a
     /// using-directive can make it visible.
-    fn in_namespace_scope(&self, d: DeclId) -> bool {
+    pub(crate) fn in_namespace_scope(&self, d: DeclId) -> bool {
         let mut cur = self.ast.decls.get(d).ctx();
         for _ in 0..64 {
             let Some(c) = cur else { return false };

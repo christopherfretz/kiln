@@ -436,6 +436,65 @@ mod tests {
         assert_eq!(back.written_refs.template_args(eg), None);
     }
 
+    /// spec/ast.md §18.13.6: a dependent operator's pattern nodes (both
+    /// slots of a binary fold, apart from the expression's own node) and a
+    /// specialization's built-in row round trip.
+    #[test]
+    fn operator_pattern_nodes_and_builtin_rows_round_trip() {
+        use crate::expr::{ExprDeps, ExprFlags, ExprKind, ExprNode, ObjectKind, ValueCategory};
+        use crate::written_refs::{PatternNode, REF_DEPENDENT, SPEC_BUILTIN, SpecRef};
+        // An AST with the pattern expression the nodes name (ids are
+        // range-checked against the reading AST).
+        let with_expr = || {
+            let mut ast = new_ast();
+            let x = ast.exprs.push(ExprNode::new(
+                ExprKind::IntegerLiteral,
+                ValueCategory::PRValue,
+                ObjectKind::Ordinary,
+                ExprFlags::NONE,
+                ExprDeps::NONE,
+                0,
+                crate::ids::QualType::unqual(crate::ids::TypeId::new(1)),
+                Loc::INVALID,
+                0,
+                0,
+            ));
+            (ast, x)
+        };
+        let (mut ast, x) = with_expr();
+        ast.written_refs.set_on(true);
+        let op = WrittenRef {
+            role: RefRole::Operator,
+            flags: REF_DEPENDENT,
+            ..entry(RefQualifier::NONE)
+        };
+        let first = ast.written_refs.push(op).unwrap();
+        let second = ast.written_refs.push(op).unwrap();
+        ast.written_refs.note_pattern_node(PatternNode::Oper(x, 0), first);
+        ast.written_refs.note_pattern_node(PatternNode::Oper(x, 1), second);
+        let row = SpecRef {
+            entry: first,
+            spec: DeclId::new(ast_tu_index()),
+            entity: None,
+            found: None,
+            adl: None,
+            udir: None,
+            flags: SPEC_BUILTIN,
+            how: RefLookup::Builtin,
+        };
+        ast.written_refs.push_spec(row);
+        let bytes = put(&ast);
+        let (mut back, _) = with_expr();
+        let mut rd = Reader::new(&bytes);
+        back.get_written_refs(&mut rd, true, 0).expect("read");
+        let t = &back.written_refs;
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 0)), Some(first));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 1)), Some(second));
+        assert_eq!(t.pattern_entry(PatternNode::Expr(x)), None);
+        let rows: Vec<_> = t.specs_of(first).map(|(_, r)| *r).collect();
+        assert_eq!(rows, [row]);
+    }
+
     /// WP-2828: `decltype(s)::m`, the specifier's first token round
     /// trips with its `SPECIFIER` qualifier; one on an entry with another
     /// qualifier is rejected.

@@ -6,6 +6,8 @@
 9:52-9:53  expr  'g' -> g@7:5 spec=both<int, int>@9:28 adl-ns=
 9:54-9:56  expr  'ts' -> ts@9:39 in=both@9:28
 9:63-9:65  expr  'ts' -> ts@9:39 in=both@9:28
+9:61-9:62  operator  '+' -> (dependent) in=both@9:28 def=0+adl
+9:61-9:62  operator  '+' -> (builtin) spec=both<int, int>@9:28 how=builtin
 10:34-10:36  type  'Ts' -> Ts@10:20 in=ts@10:40
 11:3-11:5  type  'Ts' -> Ts@10:20 in=x@11:12
 11:16-11:18  expr  'ts' -> ts@10:40 in=x@11:12

@@ -643,6 +643,13 @@ pub enum PatternNode {
     /// (`using T::size;`, `using typename T::type;`): its
     /// `UnresolvedUsingValue` or `UnresolvedUsingTypename` member.
     Decl(DeclId),
+    /// The operator token of a dependent operator expression (spec/ast.md
+    /// §18.13.6): the expression (a dependent operator, subscript, call or
+    /// member access through `->`, a fold-expression) and the token's
+    /// index in it (1 for a binary fold's second operator, else 0). Kept
+    /// apart from [`PatternNode::Expr`]: a dependent `t->m` is the node of
+    /// both the `->` and the member name.
+    Oper(ExprId, u8),
 }
 
 /// The id of a per-specialization entry (index + 1).
@@ -666,6 +673,16 @@ impl SpecRefId {
 /// duplicate); never seen through the read API.
 pub const SPEC_DEAD: u8 = 0x80;
 
+/// [`SpecRef::flags`]: the dependent operator token of the row's entry
+/// selected no function in this specialization: overload resolution chose
+/// a built-in candidate ([over.built]), the operand was a pointer or a
+/// function pointer (`->`, a call), or a fold-expression's expansion
+/// applied no operator (spec/ast.md §18.13.6). No entity, no `found`,
+/// `how` [`RefLookup::Builtin`]; dumped `(builtin)`. Distinguishes a
+/// specialization that reached the token from one that never did (a
+/// discarded `if constexpr` branch has no row).
+pub const SPEC_BUILTIN: u8 = 32;
+
 /// What one dependent name of a template pattern resolved to in one
 /// specialization (spec/ast.md §18.9; 28 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
@@ -684,8 +701,8 @@ pub struct SpecRef {
     /// through at the pattern's definition (§18.7.3, §18.9.1).
     pub udir: Option<DeclId>,
     /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's),
-    /// [`REF_REWRITTEN`], [`REF_REVERSED`] (this specialization's
-    /// resolution, §18.13).
+    /// [`REF_REWRITTEN`], [`REF_REVERSED`], [`SPEC_BUILTIN`] (this
+    /// specialization's resolution of an operator, §18.13.6).
     pub flags: u8,
     /// How lookup found the name (§18.7.2).
     pub how: RefLookup,
@@ -1927,6 +1944,7 @@ impl WrittenRefs {
                 let mut l = head.to_owned();
                 match sr.entity {
                     Some(d) => decl(d, &mut l),
+                    None if sr.flags & SPEC_BUILTIN != 0 => l.push_str("(builtin)"),
                     None => l.push_str("(unresolved)"),
                 }
                 if let Some(f) = sr.found {
@@ -2402,6 +2420,38 @@ mod tests {
         assert_eq!(t.specs().count(), 1);
         assert_eq!(t.specs_naming(DeclId::new(20)).count(), 1);
         assert_eq!(t.specs_of(w).count(), 1);
+    }
+
+    /// spec/ast.md §18.13.6: an operator token is its own pattern node,
+    /// apart from the expression's (a dependent `t->m` is the node of both
+    /// `->` and `m`), one per slot of a binary fold; a built-in row names
+    /// nothing and is kept once, apart from an unresolved one.
+    #[test]
+    fn operator_nodes_and_builtin_rows() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let m = t.push(dependent()).unwrap();
+        let arrow = t.push(WrittenRef { role: RefRole::Operator, ..dependent() }).unwrap();
+        let second = t.push(WrittenRef { role: RefRole::Operator, ..dependent() }).unwrap();
+        let x = ExprId::new(7);
+        t.note_pattern_node(PatternNode::Expr(x), m);
+        t.note_pattern_node(PatternNode::Oper(x, 0), arrow);
+        t.note_pattern_node(PatternNode::Oper(x, 1), second);
+        assert_eq!(t.pattern_entry(PatternNode::Expr(x)), Some(m));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 0)), Some(arrow));
+        assert_eq!(t.pattern_entry(PatternNode::Oper(x, 1)), Some(second));
+        let builtin = SpecRef {
+            entity: None,
+            flags: SPEC_BUILTIN,
+            how: RefLookup::Builtin,
+            ..spec_row(arrow, 10, 1)
+        };
+        let unresolved = SpecRef { flags: REF_UNRESOLVED, how: RefLookup::Unqualified, ..builtin };
+        let a = t.push_spec(builtin);
+        assert_eq!(t.push_spec(builtin), a);
+        assert_ne!(t.push_spec(unresolved), a);
+        assert_eq!(t.specs_of(arrow).count(), 2);
+        assert_eq!(t.specs_of(arrow).filter(|(_, r)| r.flags & SPEC_BUILTIN != 0).count(), 1);
     }
 
     fn el(decl: u32, found: u32) -> FoundDecl {

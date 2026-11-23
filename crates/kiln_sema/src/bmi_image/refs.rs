@@ -85,6 +85,13 @@ pub(super) enum NodeRec {
         entry: u32,
         decl: u32,
     },
+    /// A dependent operator's token in a body expression
+    /// (`PatternNode::Oper`, spec/ast.md §18.13.6).
+    Oper {
+        entry: u32,
+        expr: u32,
+        slot: u8,
+    },
 }
 
 /// A recorded table: argument-dependent sets (namespace and class
@@ -329,6 +336,13 @@ impl Writer<'_, '_, '_> {
                 PatternNode::Decl(d) => {
                     NodeRec::Decl { entry, decl: self.ref_word(d).ok_or(UNCARRIED)? }
                 }
+                PatternNode::Oper(e, slot) => NodeRec::Oper {
+                    entry,
+                    expr: self
+                        .expr_word(e)
+                        .map_err(|_| "a dependent written operator outside the image's bodies")?,
+                    slot,
+                },
             });
         }
         let mut udirs: Vec<((WrittenRefId, DeclId), DeclId)> = t.pattern_udirs().collect();
@@ -396,6 +410,12 @@ pub(super) fn encode_refs(w: &mut Wr, s: &Refs) {
                 b.u8(2);
                 b.u32(entry);
                 b.u32(decl);
+            }
+            NodeRec::Oper { entry, expr, slot } => {
+                b.u8(3);
+                b.u32(entry);
+                b.u32(expr);
+                b.u8(slot);
             }
         }
     }
@@ -473,6 +493,7 @@ pub(super) fn decode_refs(r: &mut Rd, want: bool) -> Res<Refs> {
             0 => NodeRec::Expr { entry: r.u32()?, expr: r.u32()? },
             1 => NodeRec::Type { entry: r.u32()?, ty: r.q()?, loc: r.u32()? },
             2 => NodeRec::Decl { entry: r.u32()?, decl: r.u32()? },
+            3 => NodeRec::Oper { entry: r.u32()?, expr: r.u32()?, slot: r.u8()? },
             _ => return bad("bad written-reference pattern node"),
         });
     }
@@ -543,6 +564,7 @@ pub(super) fn validate_refs(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<
         NodeRec::Expr { entry, expr } => entry < ne && expr < nx,
         NodeRec::Type { entry, ty, .. } => entry < ne && qref_ok(ty),
         NodeRec::Decl { entry, decl } => entry < ne && word_ok(decl),
+        NodeRec::Oper { entry, expr, slot } => entry < ne && expr < nx && slot < 2,
     });
     let ok_udirs = t.udirs.iter().all(|&[entry, d, u]| entry < ne && word_ok(d) && word_ok(u));
     // By entry, once each; a `::` only on an entry after a leading `::`,
@@ -691,6 +713,9 @@ impl Sema<'_, '_> {
                     Some(d) => (entry, PatternNode::Decl(d)),
                     None => continue,
                 },
+                NodeRec::Oper { entry, expr, slot } => {
+                    (entry, PatternNode::Oper(cx.built.expr(expr), slot))
+                }
             };
             self.ast.written_refs.note_pattern_node(node, pushed[entry as usize]);
         }
@@ -761,7 +786,8 @@ mod tests {
     /// `sample` with a table: entry 0 names record 1 (with a type pattern
     /// node), entry 1 the first parameter, qualified by entry 0, with a
     /// set naming record 0, a row for record 7, a using-declarator node
-    /// (record 1) and a using-directive (record 0) for record 1.
+    /// (record 1), an operator token node and a using-directive (record 0)
+    /// for record 1.
     fn with_table() -> Image {
         let mut img = sample();
         let int = QRef { ty: kiln_ast::types::BuiltinType::Int as u32, quals: 0 };
@@ -779,6 +805,8 @@ mod tests {
                 NodeRec::Expr { entry: 1, expr: 0 },
                 NodeRec::Type { entry: 0, ty: int, loc: 5 },
                 NodeRec::Decl { entry: 1, decl: 1 },
+                // A binary fold's second operator token (WP-2910).
+                NodeRec::Oper { entry: 1, expr: 0, slot: 1 },
             ],
             udirs: vec![[1, 1, 0]],
             leads: vec![[1, NONE, 4, NONE, NONE, NONE, NONE], [2, NONE, NONE, 0, NONE, NONE, NONE]],
@@ -817,7 +845,7 @@ mod tests {
     #[test]
     fn written_refs_section_is_validated() {
         type Corrupt = (&'static str, fn(&mut RefsRec));
-        let corrupt: [Corrupt; 23] = [
+        let corrupt: [Corrupt; 25] = [
             ("qualifier after its entry", |t| t.entries[0].words[5] = 0),
             ("unknown role", |t| t.entries[0].role = 99),
             ("unknown lookup", |t| t.entries[1].how = 99),
@@ -830,6 +858,12 @@ mod tests {
             ("node past the expressions", |t| t.nodes[0] = NodeRec::Expr { entry: 1, expr: 9999 }),
             ("row directive past the records", |t| t.specs[0].words[5] = 1000),
             ("directive of no entry", |t| t.udirs[0][0] = 3),
+            ("operator node past the expressions", |t| {
+                t.nodes[3] = NodeRec::Oper { entry: 1, expr: 9999, slot: 0 }
+            }),
+            ("operator node slot past a fold's two", |t| {
+                t.nodes[3] = NodeRec::Oper { entry: 1, expr: 0, slot: 2 }
+            }),
             ("using node past the records", |t| {
                 t.nodes[2] = NodeRec::Decl { entry: 1, decl: 1000 }
             }),

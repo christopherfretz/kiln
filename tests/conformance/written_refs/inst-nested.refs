@@ -13,6 +13,8 @@
 24:56-24:57  expr  'u' -> u@23:55 in=Box::convert@23:38
 24:58-24:63  member  'width' -> (dependent) in=Box::convert@23:38
 24:58-24:63  member  'width' -> Wide::width@18:8 spec=Box<Small>::convert<Wide>@23:38
+24:54-24:55  operator  '+' -> (dependent) in=Box::convert@23:38 def=0+adl
+24:54-24:55  operator  '+' -> (builtin) spec=Box<Small>::convert<Wide>@23:38 how=builtin
 29:7-29:12  type  'Small' -> Small@13:8 in=b@29:14
 29:3-29:6  template  'Box' -> Box@21:27 in=b@29:14
 30:10-30:11  expr  'b' -> b@29:14 in=run@28:5

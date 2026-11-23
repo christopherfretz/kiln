@@ -12,10 +12,14 @@
 26:43-26:44  type  'T' -> T@25:17 in=m@25:24
 26:41-26:42  expr  'w' -> (dependent) q=26:26 in=m@25:24
 26:41-26:42  expr  'w' -> n::D<long>::w@19:43 found=n::D<long>::w@19:43 spec=m<long>@25:24
+26:21-26:22  operator  '+' -> (dependent) in=m@25:24 def=0+adl
+26:21-26:22  operator  '+' -> (builtin) spec=m<long>@25:24 how=builtin
 26:48-26:49  nns  'n' -> n@13:11 in=m@25:24
 26:51-26:52  nns  'D' -> n::D@18:27 q=26:48 in=m@25:24
 26:61-26:62  type  'T' -> T@25:17 in=m@25:24
 26:59-26:60  expr  'w' -> n::D<int>::w@19:43 q=26:51 in=m@25:24
+26:46-26:47  operator  '+' -> (dependent) in=m@25:24 def=0+adl
+26:46-26:47  operator  '+' -> (builtin) spec=m<long>@25:24 how=builtin
 29:9-29:10  nns  'n' -> n@13:11 in=v@29:12
 29:12-29:13  using-decl  'v' -> n::v@14:35 q=29:9 in=v@29:12
 30:12-30:13  type  'T' -> T@28:17 in=never@28:25
@@ -25,5 +29,6 @@
 30:23-30:24  expr  'g' -> (dependent) q=30:20 in=never@28:25 def=1
 30:23-30:24  expr  'g' def=n::g@21:24
 30:28-30:29  type  'T' -> T@28:17 in=never@28:25
+30:17-30:19  operator  '&&' -> (dependent) in=never@28:25 def=0+adl
 32:10-32:11  expr  'k' -> k<int>@24:25 found=k@24:25 in=z@32:6 adl-ns=
 32:22-32:23  expr  'm' -> m<long>@25:24 found=m@25:24 in=z@32:6 adl-ns=

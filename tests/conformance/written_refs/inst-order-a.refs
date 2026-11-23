@@ -8,6 +8,9 @@
 19:12-19:16  member  'size' -> Alpha::size@9:7 spec=measure<Alpha>@17:24
 19:12-19:16  member  'size' -> Beta::size@13:7 spec=measure<Beta>@17:24
 19:38-19:39  expr  'k' -> k@18:20 in=measure@17:24
+19:19-19:20  operator  '+' -> (dependent) in=measure@17:24 def=0+adl
+19:19-19:20  operator  '+' -> (builtin) spec=measure<Alpha>@17:24 how=builtin
+19:19-19:20  operator  '+' -> (builtin) spec=measure<Beta>@17:24 how=builtin
 23:11-23:18  expr  'measure' -> measure<Alpha>@17:24 found=measure@17:24 in=a@23:7 how=both adl-ns=:: adl-cls=Alpha@8:8
 23:19-23:24  type  'Alpha' -> Alpha@8:8 in=a@23:7
 24:11-24:18  expr  'measure' -> measure<Beta>@17:24 found=measure@17:24 in=b@24:7 how=both adl-ns=:: adl-cls=Beta@12:8

@@ -10,10 +10,14 @@
 15:34-15:40  member  'stored' -> Base<int>::stored@9:5 spec=Derived<int>::twice@15:5
 15:49-15:54  member  'fetch' -> (dependent) in=Derived::twice@15:5
 15:49-15:54  member  'fetch' -> Base<int>::fetch@10:5 spec=Derived<int>::twice@15:5
+15:41-15:42  operator  '+' -> (dependent) in=Derived::twice@15:5 def=0+adl
+15:41-15:42  operator  '+' -> (builtin) spec=Derived<int>::twice@15:5 how=builtin
 15:64-15:65  type  'T' -> T@14:17 in=Derived::twice@15:5
 15:59-15:63  nns  'Base' -> Base@8:27 in=Derived::twice@15:5
 15:68-15:72  expr  'zero' -> (dependent) q=15:59 in=Derived::twice@15:5
 15:68-15:72  expr  'zero' -> Base<int>::zero@11:12 spec=Derived<int>::twice@15:5
+15:57-15:58  operator  '+' -> (dependent) in=Derived::twice@15:5 def=0+adl
+15:57-15:58  operator  '+' -> (builtin) spec=Derived<int>::twice@15:5 how=builtin
 19:3-19:10  template  'Derived' -> Derived@14:27 in=d@19:16
 20:10-20:11  expr  'd' -> d@19:16 in=run@18:5
 20:12-20:17  member  'twice' -> Derived<int>::twice@15:5 in=run@18:5

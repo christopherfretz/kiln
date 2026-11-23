@@ -28,3 +28,10 @@ inline Pt operator+(Pt a, Pt b) { return {a.x + b.x, a.y + b.y}; }
 inline int operator""_px(unsigned long long v) { return int(v); }
 inline int cell(Grid g, Pt p) { return g[(p + p).x] + 3_px; }
 } // namespace geo
+// Dependent operators and a fold-expression's operator, their found sets
+// and the rows the importer's instantiations record, are carried
+// (WP-2910).
+export namespace geo {
+template <class T> T doubled(T t) { return t + t; }
+template <class... T> auto summed(T... t) { return (t + ...); }
+} // namespace geo

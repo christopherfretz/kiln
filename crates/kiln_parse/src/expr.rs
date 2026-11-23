@@ -2966,13 +2966,15 @@ impl Parser<'_, '_> {
                 Self::punct_of(self.tok_at(self.pos() + 1)).and_then(binop).and_then(|b| b.1)
         {
             let ellipsis = self.bump().span.lo;
-            self.bump();
+            let op_tok = self.bump().span;
             let Some(rhs) = self.parse_fold_operand(true, None) else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
             let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-            return Some(self.s.act_fold(None, op, Some(rhs), lparen, ellipsis, r));
+            let e = self.s.act_fold(None, op, Some(rhs), lparen, ellipsis, r);
+            self.s.note_written_fold(e, &[op_tok]);
+            return Some(e);
         }
         // clang 19 classifies a leading identifier not followed by `(`,
         // `<` or `::` (`ClassifyName`): an undeclared one is reported
@@ -3018,7 +3020,8 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_paren(e, lparen, r));
         };
         // `( e op ... )` or `( e op ... op e )`.
-        self.bump();
+        let mut op_toks = [self.bump().span; 2];
+        let mut n_toks = 1;
         let ellipsis = self.bump().span.lo;
         let mut rhs = None;
         if !self.at(Punct::RParen) {
@@ -3031,7 +3034,8 @@ impl Parser<'_, '_> {
             if op2 != op {
                 self.error_here(DiagId::parse_fold_operator_mismatch);
             }
-            self.bump();
+            op_toks[1] = self.bump().span;
+            n_toks = 2;
             let Some(r) = self.parse_fold_operand(true, None) else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
@@ -3039,7 +3043,9 @@ impl Parser<'_, '_> {
             rhs = Some(r);
         }
         let r = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-        Some(self.s.act_fold(Some(e), op, rhs, lparen, ellipsis, r))
+        let e = self.s.act_fold(Some(e), op, rhs, lparen, ellipsis, r);
+        self.s.note_written_fold(e, &op_toks[..n_toks]);
+        Some(e)
     }
 
     /// An expression that may be an operand of a fold-expression: a

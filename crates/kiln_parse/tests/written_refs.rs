@@ -987,3 +987,64 @@ fn operator_entries_through_the_api() {
         assert_eq!(name(ne), "O::operator==");
     });
 }
+
+const DEP_OPS: &str = "struct S { int v; };\n\
+                       S operator+(S, S);\n\
+                       struct P { S *operator->(); };\n\
+                       struct Q { P operator->(); };\n\
+                       template <class T> T add(T a, T b) { return a + b; }\n\
+                       template <class T> int get(T t) { return t->v; }\n\
+                       template <class... T> S sum(T... t) { return (S{} + ... + t); }\n\
+                       int run() { S s{}; add(s, s); add(1, 2); sum(s, s); return get(Q{}); }\n";
+
+/// spec/ast.md §18.13.6 through the API: a dependent operator is a
+/// DEPENDENT entry whose found set holds the non-member candidates of the
+/// definition with the ADL flag ([over.match.oper]/3.2,
+/// [temp.dep.candidate]/1); its rows name the operator function each
+/// specialization selected, from that set, or are built-in rows naming
+/// nothing ([over.built]); a `->` chain's rows are in application order
+/// ([over.ref]/1); a binary fold has an entry per token ([expr.prim.fold]/1).
+#[test]
+fn dependent_operator_entries_through_the_api() {
+    use kiln_ast::written_refs::{REF_DEPENDENT, RefLookup, SPEC_BUILTIN};
+    with_ast(DEP_OPS, |ast, sm| {
+        let t = &ast.written_refs;
+        let pos = |d: kiln_ast::DeclId| line_col(sm, ast.decls.get(d).loc());
+        let plus = entry_at(t, sm, (5, 47));
+        assert_eq!(t.get(plus).role, RefRole::Operator);
+        assert_ne!(t.get(plus).flags & REF_DEPENDENT, 0);
+        assert!(t.get(plus).entity.is_none());
+        let set = t.found_at_definition(plus).expect("a set");
+        assert!(set.adl());
+        let [op] = set.decls else { panic!("one candidate") };
+        assert_eq!(pos(op.decl), (2, 3));
+        let rows: Vec<_> = t.specs_of(plus).map(|(_, r)| *r).collect();
+        assert_eq!(rows.len(), 2, "add<S> and add<int>");
+        let user = rows.iter().find(|r| r.entity.is_some()).expect("add<S>");
+        assert_eq!(ast.spec_origin(user), Some(op.decl));
+        assert_eq!(user.flags & SPEC_BUILTIN, 0);
+        let builtin = rows.iter().find(|r| r.entity.is_none()).expect("add<int>");
+        assert_ne!(builtin.flags & SPEC_BUILTIN, 0);
+        assert_eq!(builtin.how, RefLookup::Builtin);
+        assert_ne!(user.spec, builtin.spec);
+        // `t->v` with `T = Q`: `Q::operator->`, then `P::operator->`.
+        let arrow = entry_at(t, sm, (6, 43));
+        assert_eq!(t.get(arrow).role, RefRole::Operator);
+        assert!(t.found_at_definition(arrow).is_none(), "a member only");
+        let chain: Vec<_> = t
+            .specs_of(arrow)
+            .map(|(_, r)| {
+                assert_eq!(r.how, RefLookup::Member);
+                pos(r.entity.expect("an operator->"))
+            })
+            .collect();
+        assert_eq!(chain, [(4, 14), (3, 15)]);
+        // `(S{} + ... + t)`: two tokens, two entries, each with its row.
+        for at in [(7, 51), (7, 57)] {
+            let e = entry_at(t, sm, at);
+            assert_eq!(t.found_at_definition(e).map(|s| s.decls.len()), Some(1));
+            let named: Vec<_> = t.specs_of(e).filter_map(|(_, r)| r.entity).collect();
+            assert_eq!(named.len(), 1, "one distinct resolution at {at:?}");
+        }
+    });
+}

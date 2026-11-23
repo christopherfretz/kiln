@@ -58,8 +58,8 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   entry over the suffix's own bytes, located through line splices,
   which its literal operator's callee joins. PCH snapshots
   (`FORMAT_VERSION` 164) and module images (`IMAGE_VERSION` 88) carry
-  them. Dependent operators, folds, `new`, `delete` and `co_await` are
-  staged (WP-2910, WP-2911).
+  them. Dependent operators and folds follow (WP-2910, below); `new`,
+  `delete` and `co_await` are staged (WP-2911).
 - Written references for friends kept as a function type and for
   variable template-ids (WP-3008, WP-3009, spec/ast.md §18.4, §18.5,
   §18.11.2): a friend function template specialization with dependent
@@ -75,6 +75,26 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   declarator-id name the template the declaration matched, not the
   first of several overloads lookup found. PCH `FORMAT_VERSION` 167,
   `IMAGE_VERSION` 90.
+- The written-reference table records dependent operators (WP-2910,
+  spec/ast.md §18.13.6, [temp.dep.candidate]/1): an operator with a
+  type-dependent operand that could select an operator function is a
+  `DEPENDENT` `operator` entry at its token with the found set of its
+  definition (the non-member candidates of `operator@` and the `ADL`
+  flag; none for `=`, `[]`, `()` and `->`), and each specialization that
+  reached it has rows: the operator function selected (`how` `member`,
+  `adl`, `udir=`), `REWRITTEN` / `REVERSED` for a rewritten or reversed
+  candidate, a row per `operator->` of a dependent `->` chain in
+  application order, and a new `SPEC_BUILTIN` row (dumped `(builtin)`,
+  `how=builtin`) for a built-in candidate or a call through a pointer
+  to function, so a specialization that reached the token is told from
+  one that never did (a discarded `if constexpr` branch). Each operator
+  token of a fold-expression is an entry with one row per distinct
+  resolution of the expansion (an expansion applying no operator gets a
+  `(builtin)` row). A call whose callee is not a function name and which
+  is type-dependent (`lt(a, b)` with a function object) is an entry at
+  `(`; a data member `t.f` called as `t.f(x)` is not covered. PCH
+  snapshots (`FORMAT_VERSION` 168) and module images (`IMAGE_VERSION`
+  91) carry the operator pattern nodes.
 - A refused evaluation session's diagnostics as data (WP-2827,
   spec/eval-session.md §2, spec/diag.md §10.4):
   `SessionRefused::TuHasErrors` and `Stopped` carry `records`

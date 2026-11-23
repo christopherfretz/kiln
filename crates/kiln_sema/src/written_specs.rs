@@ -10,8 +10,8 @@ use kiln_ast::decl::{DeclFlags, DeclKind, FriendTarget};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::Nns;
 use kiln_ast::written_refs::{
-    PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SpecRef,
-    SpecRefId, WrittenRefId,
+    PatternNode, QualLink, REF_DEPENDENT, REF_MEMBER, REF_UNRESOLVED, RefLookup, SPEC_BUILTIN,
+    SpecRef, SpecRefId, WrittenRefId,
 };
 use kiln_ast::{DeclId, ExprId, NnsId, QualType};
 use kiln_source::Loc;
@@ -338,8 +338,30 @@ impl Sema<'_, '_> {
         entity: Option<DeclId>,
         found: Option<DeclId>,
     ) -> SpecRefId {
+        self.push_written_spec_with(w, spec, entity, found, 0, None)
+    }
+
+    /// [`Self::push_written_spec`] with a dependent operator's facts
+    /// (spec/ast.md §18.13.6): `flags` (`REWRITTEN`, `REVERSED`,
+    /// `SPEC_BUILTIN`, which makes the row entity-less and `how`
+    /// `Builtin`) and the `how` its call's facts give (`Member` for a
+    /// member function, `Adl` for a candidate argument-dependent lookup
+    /// alone found; `None`: as for a name).
+    pub(crate) fn push_written_spec_with(
+        &mut self,
+        w: WrittenRefId,
+        spec: DeclId,
+        entity: Option<DeclId>,
+        found: Option<DeclId>,
+        flags: u8,
+        how: Option<RefLookup>,
+    ) -> SpecRefId {
         let r = *self.ast.written_refs.get(w);
-        let flags = (r.flags & REF_MEMBER) | if entity.is_none() { REF_UNRESOLVED } else { 0 };
+        let builtin = flags & SPEC_BUILTIN != 0;
+        let (entity, found) = if builtin { (None, None) } else { (entity, found) };
+        let flags = (r.flags & REF_MEMBER)
+            | flags
+            | if entity.is_none() && !builtin { REF_UNRESOLVED } else { 0 };
         let mut row = SpecRef {
             entry: w,
             spec,
@@ -350,7 +372,12 @@ impl Sema<'_, '_> {
             flags,
             how: RefLookup::None,
         };
-        row.how = row.default_how(&r);
+        row.how = if builtin { RefLookup::Builtin } else { row.default_how(&r) };
+        if let Some(h) = how
+            && entity.is_some()
+        {
+            row.how = h;
+        }
         if let Some(e) = entity
             && self.ast.decls.builtin_id(e).is_some()
             && matches!(row.how, RefLookup::Unqualified | RefLookup::Qualified)

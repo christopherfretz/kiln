@@ -17,6 +17,7 @@
 20:47-20:48  type  'T' -> T@20:17 in=Addable@20:28
 21:5-21:6  expr  'a' -> a@20:49 in=Addable@20:28
 21:9-21:10  expr  'a' -> a@20:49 in=Addable@20:28
+21:7-21:8  operator  '+' -> (dependent) in=Addable@20:28 def=0+adl
 21:16-21:22  nns  'traits' -> traits@7:11 in=Addable@20:28
 21:29-21:30  type  'T' -> T@20:17 in=Addable@20:28
 21:24-21:28  concept  'Same' -> traits::Same@9:37 q=21:16 in=Addable@20:28

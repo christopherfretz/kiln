@@ -6,3 +6,4 @@
 17:44-17:45  expr  't' -> t@17:28 in=g@17:24
 17:49-17:50  nns  'T' -> T@17:17 in=g@17:24
 17:52-17:57  expr  'value' -> (dependent) q=17:49 in=g@17:24
+17:47-17:48  operator  '+' -> (dependent) in=g@17:24 def=0+adl

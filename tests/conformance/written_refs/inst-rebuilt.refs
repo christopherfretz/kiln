@@ -33,7 +33,11 @@
 24:26-24:32  template  'rebind' -> B::rebind@12:56 spec=lam(const A &)::(lambda)::operator()<B>@21:12
 25:18-25:19  expr  'v' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::v@22:22 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
 25:22-25:23  expr  'w' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::w@23:31 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
+25:20-25:21  operator  '+' -> (dependent) in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12 def=0+adl
+25:20-25:21  operator  '+' -> (builtin) spec=lam(const A &)::(lambda)::operator()<B>@21:12 how=builtin
 25:33-25:34  expr  'r' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:21:12)::r@24:36 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12
+25:24-25:25  operator  '+' -> (dependent) in=lam(const type-parameter-0-0 &)::(lambda)::operator()@21:12 def=0+adl
+25:24-25:25  operator  '+' -> (builtin) spec=lam(const A &)::(lambda)::operator()<B>@21:12 how=builtin
 28:23-28:24  expr  'x' -> x@27:20 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
 28:27-28:31  type  'type' -> (dependent) q=specifier:28:14 in=(lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32
 28:27-28:31  type  'type' -> A::type@11:18 spec=lam(const A &)::(lambda)::operator()<A>@27:12
@@ -45,12 +49,25 @@
 29:36-29:42  template  'rebind' -> B::rebind@12:56 spec=lam(const A &)::(lambda)::operator()<B>@27:12
 30:18-30:19  expr  'y' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::y@28:32 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12
 30:29-30:30  expr  'z' -> (lambda at tests/conformance/written_refs/inst-rebuilt.cpp:27:12)::z@29:46 in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12
+30:20-30:21  operator  '+' -> (dependent) in=lam(const type-parameter-0-0 &)::(lambda)::operator()@27:12 def=0+adl
+30:20-30:21  operator  '+' -> (builtin) spec=lam(const A &)::(lambda)::operator()<A>@27:12 how=builtin
+30:20-30:21  operator  '+' -> (builtin) spec=lam(const A &)::(lambda)::operator()<B>@27:12 how=builtin
 32:10-32:11  expr  'f' -> f@21:8 in=lam@20:24
 32:12-32:13  type  'B' -> B@12:8 in=lam@20:24
+32:11-32:12  operator  '(' -> (dependent) close=32:15 in=lam@20:24
+32:11-32:12  operator  '(' -> lam(const A &)::(lambda)::operator()<B>@21:12 found=lam(const A &)::(lambda)::operator()@21:12 spec=lam<A>@20:24 how=member
 32:19-32:20  expr  'g' -> g@27:8 in=lam@20:24
 32:21-32:22  type  'A' -> A@11:8 in=lam@20:24
+32:20-32:21  operator  '(' -> (dependent) close=32:24 in=lam@20:24
+32:20-32:21  operator  '(' -> lam(const A &)::(lambda)::operator()<A>@27:12 found=lam(const A &)::(lambda)::operator()@27:12 spec=lam<A>@20:24 how=member
+32:17-32:18  operator  '+' -> (dependent) in=lam@20:24 def=0+adl
+32:17-32:18  operator  '+' -> (builtin) spec=lam<A>@20:24 how=builtin
 32:28-32:29  expr  'g' -> g@27:8 in=lam@20:24
 32:30-32:31  type  'B' -> B@12:8 in=lam@20:24
+32:29-32:30  operator  '(' -> (dependent) close=32:33 in=lam@20:24
+32:29-32:30  operator  '(' -> lam(const A &)::(lambda)::operator()<B>@27:12 found=lam(const A &)::(lambda)::operator()@27:12 spec=lam<A>@20:24 how=member
+32:26-32:27  operator  '+' -> (dependent) in=lam@20:24 def=0+adl
+32:26-32:27  operator  '+' -> (builtin) spec=lam<A>@20:24 how=builtin
 34:17-34:18  type  'A' -> A@11:8 in=b@34:20
 34:13-34:16  template  'Box' -> Box@14:27 in=b@34:20
 34:35-34:36  expr  'b' -> b@34:20 in=run@34:5

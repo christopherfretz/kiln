@@ -1,0 +1,132 @@
+21:3-21:4  type  'S' -> lib::S@19:8 in=lib::S::operator+=@21:6 how=injected
+22:3-22:4  type  'S' -> lib::S@19:8 in=lib::S::operator++@22:6 how=injected
+23:3-23:4  type  'S' -> lib::S@19:8 in=lib::S::operator++@23:5 how=injected
+25:1-25:2  type  'S' -> lib::S@19:8 in=lib::operator+@25:3
+25:13-25:14  type  'S' -> lib::S@19:8 in=(anonymous)@25:14
+25:16-25:17  type  'S' -> lib::S@19:8 in=(anonymous)@25:17
+26:1-26:2  type  'S' -> lib::S@19:8 in=lib::operator-@26:3
+26:13-26:14  type  'S' -> lib::S@19:8 in=(anonymous)@26:14
+27:17-27:18  type  'S' -> lib::S@19:8 in=(anonymous)@27:18
+27:20-27:21  type  'S' -> lib::S@19:8 in=(anonymous)@27:21
+30:25-30:26  type  'R' -> lib::R@29:8 in=(anonymous)@30:26 how=injected
+33:3-33:4  type  'R' -> lib::R@29:8 in=lib::A::operator<=>@33:5
+33:23-33:24  type  'A' -> lib::A@32:8 in=(anonymous)@33:26 how=injected
+38:17-38:18  type  'B' -> lib::B@35:8 in=(anonymous)@38:18
+42:1-42:4  nns  'lib' -> lib@18:11 in=ops::operator*@42:8
+42:6-42:7  type  'B' -> lib::B@35:8 q=42:1 in=ops::operator*@42:8
+42:18-42:21  nns  'lib' -> lib@18:11 in=(anonymous)@42:24
+42:23-42:24  type  'B' -> lib::B@35:8 q=42:18 in=(anonymous)@42:24
+42:26-42:29  nns  'lib' -> lib@18:11 in=(anonymous)@42:32
+42:31-42:32  type  'B' -> lib::B@35:8 q=42:26 in=(anonymous)@42:32
+44:17-44:20  using-directive  'ops' -> ops@41:11 in=(tu)
+46:20-46:21  type  'T' -> T@46:17 in=add@46:22
+46:26-46:27  type  'T' -> T@46:17 in=a@46:28
+46:31-46:32  type  'T' -> T@46:17 in=b@46:33
+46:45-46:46  expr  'a' -> a@46:28 in=add@46:22
+46:49-46:50  expr  'b' -> b@46:33 in=add@46:22
+46:47-46:48  operator  '+' -> (dependent) in=add@46:22 def=0+adl
+46:47-46:48  operator  '+' -> (builtin) spec=add<int>@46:22 how=builtin
+46:47-46:48  operator  '+' -> lib::operator+@25:3 spec=add<lib::S>@46:22 how=adl
+47:20-47:21  type  'T' -> T@47:17 in=neg@47:22
+47:26-47:27  type  'T' -> T@47:17 in=a@47:28
+47:41-47:42  expr  'a' -> a@47:28 in=neg@47:22
+47:40-47:41  operator  '-' -> (dependent) in=neg@47:22 def=0+adl
+47:40-47:41  operator  '-' -> (builtin) spec=neg<double>@47:22 how=builtin
+47:40-47:41  operator  '-' -> lib::operator-@26:3 spec=neg<lib::S>@47:22 how=adl
+48:30-48:31  type  'T' -> T@48:17 in=a@48:33
+49:3-49:4  expr  'a' -> a@48:33 in=bump@48:25
+49:5-49:7  operator  '+=' -> (dependent) in=bump@48:25 def=0+adl
+49:5-49:7  operator  '+=' -> (builtin) spec=bump<int>@48:25 how=builtin
+49:5-49:7  operator  '+=' -> lib::S::operator+=@21:6 spec=bump<lib::S>@48:25 how=member
+50:5-50:6  expr  'a' -> a@48:33 in=bump@48:25
+50:3-50:5  operator  '++' -> (dependent) in=bump@48:25 def=0+adl
+50:3-50:5  operator  '++' -> (builtin) spec=bump<int>@48:25 how=builtin
+50:3-50:5  operator  '++' -> lib::S::operator++@22:6 spec=bump<lib::S>@48:25 how=member
+51:3-51:4  expr  'a' -> a@48:33 in=bump@48:25
+51:4-51:6  operator  '++' -> (dependent) in=bump@48:25 def=0+adl
+51:4-51:6  operator  '++' -> (builtin) spec=bump<int>@48:25 how=builtin
+51:4-51:6  operator  '++' -> lib::S::operator++@23:5 spec=bump<lib::S>@48:25 how=member
+52:3-52:4  expr  'a' -> a@48:33 in=bump@48:25
+52:7-52:8  expr  'a' -> a@48:33 in=bump@48:25
+52:5-52:6  operator  '=' -> (dependent) in=bump@48:25
+52:5-52:6  operator  '=' -> (builtin) spec=bump<int>@48:25 how=builtin
+52:5-52:6  operator  '=' -> lib::S::operator=@19:8 spec=bump<lib::S>@48:25 how=member
+54:28-54:29  type  'T' -> T@54:17 in=a@54:30
+54:33-54:34  type  'T' -> T@54:17 in=b@54:35
+54:47-54:48  expr  'a' -> a@54:30 in=ne@54:25
+54:52-54:53  expr  'b' -> b@54:35 in=ne@54:25
+54:49-54:51  operator  '!=' -> (dependent) in=ne@54:25 def=0+adl
+54:49-54:51  operator  '!=' -> (builtin) spec=ne<int>@54:25 how=builtin
+54:49-54:51  operator  '!=' -> lib::operator==@27:6 spec=ne<lib::S>@54:25 rewritten how=adl
+55:28-55:29  type  'T' -> T@55:17 in=a@55:30
+55:33-55:34  type  'T' -> T@55:17 in=b@55:35
+55:47-55:48  expr  'a' -> a@55:30 in=lt@55:25
+55:51-55:52  expr  'b' -> b@55:35 in=lt@55:25
+55:49-55:50  operator  '<' -> (dependent) in=lt@55:25 def=0+adl
+55:49-55:50  operator  '<' -> lib::A::operator<=>@33:5 spec=lt<lib::A>@55:25 rewritten how=member
+55:49-55:50  operator  '<' -> lib::operator<@30:15 spec=lt<lib::A>@55:25 rewritten how=adl
+56:29-56:30  type  'T' -> T@56:17 in=a@56:31
+56:48-56:49  expr  'a' -> a@56:31 in=rev@56:25
+56:45-56:47  operator  '==' -> (dependent) in=rev@56:25 def=0+adl
+56:45-56:47  operator  '==' -> lib::operator==@38:6 spec=rev<lib::B>@56:25 rewritten reversed how=adl
+57:20-57:21  type  'T' -> T@57:17 in=mul@57:22
+57:26-57:27  type  'T' -> T@57:17 in=a@57:28
+57:40-57:41  expr  'a' -> a@57:28 in=mul@57:22
+57:44-57:45  expr  'a' -> a@57:28 in=mul@57:22
+57:42-57:43  operator  '*' -> (dependent) in=mul@57:22 def=1+adl
+57:42-57:43  operator  '*' def=ops::operator*@42:8 udir=ops@44:1
+57:42-57:43  operator  '*' -> (builtin) spec=mul<int>@57:22 how=builtin
+57:42-57:43  operator  '*' -> ops::operator*@42:8 spec=mul<lib::B>@57:22 udir=ops@44:1
+58:20-58:21  type  'T' -> T@58:17 in=never@58:22
+58:28-58:29  type  'T' -> T@58:17 in=a@58:30
+58:42-58:43  expr  'a' -> a@58:30 in=never@58:22
+58:46-58:47  expr  'a' -> a@58:30 in=never@58:22
+58:44-58:45  operator  '+' -> (dependent) in=never@58:22 def=0+adl
+59:32-59:33  type  'T' -> T@59:17 in=a@59:34
+60:24-60:25  type  'T' -> T@59:17 in=discard@59:24
+61:12-61:13  expr  'a' -> a@59:34 in=discard@59:24
+61:16-61:17  expr  'a' -> a@59:34 in=discard@59:24
+61:14-61:15  operator  '+' -> (dependent) in=discard@59:24 def=0+adl
+65:29-65:30  type  'T' -> T@65:17 in=t@65:31
+66:11-66:12  expr  't' -> t@65:31 in=gen@65:25
+66:31-66:32  expr  't' -> t@65:31 in=gen(type-parameter-0-0)::(lambda)::operator()@66:10
+66:35-66:36  expr  'u' -> u@66:19 in=gen(type-parameter-0-0)::(lambda)::operator()@66:10
+66:33-66:34  operator  '+' -> (dependent) in=gen(type-parameter-0-0)::(lambda)::operator()@66:10 def=0+adl
+66:33-66:34  operator  '+' -> (builtin) spec=gen(int)::(lambda)::operator()<int>@66:10 how=builtin
+66:33-66:34  operator  '+' -> lib::operator+@25:3 spec=gen(S)::(lambda)::operator()<lib::S>@66:10 how=adl
+70:3-70:6  nns  'lib' -> lib@18:11 in=s@70:10
+70:8-70:9  type  'S' -> lib::S@19:8 q=70:3 in=s@70:10
+71:3-71:6  expr  'add' -> add<lib::S>@46:22 found=add@46:22 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8
+71:7-71:8  expr  's' -> s@70:10 in=run@69:5
+71:10-71:11  expr  's' -> s@70:10 in=run@69:5
+72:3-72:6  expr  'add' -> add<int>@46:22 found=add@46:22 in=run@69:5 adl-ns=
+73:3-73:6  expr  'neg' -> neg<lib::S>@47:22 found=neg@47:22 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8
+73:7-73:8  expr  's' -> s@70:10 in=run@69:5
+74:3-74:6  expr  'neg' -> neg<double>@47:22 found=neg@47:22 in=run@69:5 adl-ns=
+75:3-75:7  expr  'bump' -> bump<lib::S>@48:25 found=bump@48:25 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8
+75:8-75:9  expr  's' -> s@70:10 in=run@69:5
+77:3-77:7  expr  'bump' -> bump<int>@48:25 found=bump@48:25 in=run@69:5 adl-ns=
+77:8-77:9  expr  'i' -> i@76:7 in=run@69:5
+78:3-78:5  expr  'ne' -> ne<lib::S>@54:25 found=ne@54:25 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8
+78:6-78:7  expr  's' -> s@70:10 in=run@69:5
+78:9-78:10  expr  's' -> s@70:10 in=run@69:5
+79:3-79:5  expr  'ne' -> ne<int>@54:25 found=ne@54:25 in=run@69:5 adl-ns=
+80:3-80:6  nns  'lib' -> lib@18:11 in=a@80:10
+80:8-80:9  type  'A' -> lib::A@32:8 q=80:3 in=a@80:10
+81:3-81:5  expr  'lt' -> lt<lib::A>@55:25 found=lt@55:25 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::A@32:8
+81:6-81:7  expr  'a' -> a@80:10 in=run@69:5
+81:9-81:10  expr  'a' -> a@80:10 in=run@69:5
+82:3-82:6  expr  'rev' -> rev<lib::B>@56:25 found=rev@56:25 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::B@35:8
+82:7-82:10  nns  'lib' -> lib@18:11 in=run@69:5
+82:12-82:13  type  'B' -> lib::B@35:8 q=82:7 in=run@69:5
+83:3-83:6  expr  'mul' -> mul<lib::B>@57:22 found=mul@57:22 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::B@35:8
+83:7-83:10  nns  'lib' -> lib@18:11 in=run@69:5
+83:12-83:13  type  'B' -> lib::B@35:8 q=83:7 in=run@69:5
+84:3-84:6  expr  'mul' -> mul<int>@57:22 found=mul@57:22 in=run@69:5 adl-ns=
+85:3-85:6  expr  'gen' -> gen<lib::S>@65:25 found=gen@65:25 in=run@69:5 adl-ns=lib@18:11 adl-cls=lib::S@19:8
+85:7-85:8  expr  's' -> s@70:10 in=run@69:5
+85:10-85:11  expr  's' -> s@70:10 in=run@69:5
+85:9-85:10  operator  '(' -> gen(S)::(lambda)::operator()<lib::S>@66:10 found=gen(S)::(lambda)::operator()@66:10 close=85:11 in=run@69:5 how=member
+86:3-86:6  expr  'gen' -> gen<int>@65:25 found=gen@65:25 in=run@69:5 adl-ns=
+86:9-86:10  operator  '(' -> gen(int)::(lambda)::operator()<int>@66:10 found=gen(int)::(lambda)::operator()@66:10 close=86:11 in=run@69:5 how=member
+87:10-87:17  expr  'discard' -> discard<int>@59:24 found=discard@59:24 in=run@69:5 adl-ns=

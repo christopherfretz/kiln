@@ -8,6 +8,8 @@
 19:12-19:16  member  'size' -> (dependent) in=measure@17:24
 19:12-19:16  member  'size' -> lib::Item::size@11:7 spec=measure<lib::Item>@17:24
 19:38-19:39  expr  'k' -> k@18:20 in=measure@17:24
+19:19-19:20  operator  '+' -> (dependent) in=measure@17:24 def=0+adl
+19:19-19:20  operator  '+' -> (builtin) spec=measure<lib::Item>@17:24 how=builtin
 22:3-22:4  type  'T' -> T@21:17 in=Holder::t@22:5
 23:28-23:29  expr  't' -> Holder::t@22:5 in=Holder::get@23:7
 23:30-23:34  member  'size' -> (dependent) in=Holder::get@23:7

@@ -7,6 +7,8 @@ refs_mod.cppm:10:20-10:21  type  'T' -> T@refs_mod.cppm:10:17 in=geo::twice@refs
 refs_mod.cppm:10:28-10:29  type  'T' -> T@refs_mod.cppm:10:17 in=v@refs_mod.cppm:10:30
 refs_mod.cppm:10:48-10:49  expr  'v' -> v@refs_mod.cppm:10:30 in=geo::twice@refs_mod.cppm:10:22 exp=refs_mod.cppm:10:42
 refs_mod.cppm:10:48-10:49  expr  'v' -> v@refs_mod.cppm:10:30 in=geo::twice@refs_mod.cppm:10:22 exp=refs_mod.cppm:10:42
+refs_mod.cppm:3:23-3:24  operator  '+' -> (dependent) in=geo::twice@refs_mod.cppm:10:22 exp=refs_mod.cppm:10:42 def=0+adl
+refs_mod.cppm:3:23-3:24  operator  '+' -> (builtin) spec=geo::twice<int>@refs_mod.cppm:10:22 how=builtin
 refs_mod.cppm:11:32-11:33  type  'T' -> T@refs_mod.cppm:11:17 in=t@refs_mod.cppm:11:34
 refs_mod.cppm:11:46-11:50  expr  'norm' -> (dependent) in=geo::measure@refs_mod.cppm:11:24 def=1+adl
 refs_mod.cppm:11:46-11:50  expr  'norm' def=geo::norm@refs_mod.cppm:9:5
@@ -15,6 +17,8 @@ refs_mod.cppm:11:51-11:52  expr  't' -> t@refs_mod.cppm:11:34 in=geo::measure@re
 refs_mod.cppm:11:56-11:57  expr  't' -> t@refs_mod.cppm:11:34 in=geo::measure@refs_mod.cppm:11:24
 refs_mod.cppm:11:58-11:61  member  'sum' -> (dependent) in=geo::measure@refs_mod.cppm:11:24
 refs_mod.cppm:11:58-11:61  member  'sum' -> geo::Pt::sum@refs_mod.cppm:7:7 spec=geo::measure<geo::Pt>@refs_mod.cppm:11:24
+refs_mod.cppm:11:54-11:55  operator  '+' -> (dependent) in=geo::measure@refs_mod.cppm:11:24 def=0+adl
+refs_mod.cppm:11:54-11:55  operator  '+' -> (builtin) spec=geo::measure<geo::Pt>@refs_mod.cppm:11:24 how=builtin
 refs_mod.cppm:13:8-13:13  type  'Color' -> geo::Color@refs_mod.cppm:12:12 in=geo::pick@refs_mod.cppm:13:14
 refs_mod.cppm:13:30-13:35  nns  'Color' -> geo::Color@refs_mod.cppm:12:12 in=geo::pick@refs_mod.cppm:13:14
 refs_mod.cppm:13:37-13:42  expr  'green' -> geo::Color::green@refs_mod.cppm:12:25 q=refs_mod.cppm:13:30 in=geo::pick@refs_mod.cppm:13:14
@@ -50,6 +54,18 @@ refs_mod.cppm:29:45-29:46  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 i
 refs_mod.cppm:29:50-29:51  member  'x' -> geo::Pt::x@refs_mod.cppm:6:7 in=geo::cell@refs_mod.cppm:29:12
 refs_mod.cppm:29:41-29:42  operator  '[' -> geo::Grid::operator[]@refs_mod.cppm:25:7 close=refs_mod.cppm:29:51 in=geo::cell@refs_mod.cppm:29:12 how=member
 refs_mod.cppm:29:56-29:59  ud-suffix  '_px' -> geo::operator""_px@refs_mod.cppm:28:12 in=geo::cell@refs_mod.cppm:29:12
+refs_mod.cppm:35:20-35:21  type  'T' -> T@refs_mod.cppm:35:17 in=geo::doubled@refs_mod.cppm:35:22
+refs_mod.cppm:35:30-35:31  type  'T' -> T@refs_mod.cppm:35:17 in=t@refs_mod.cppm:35:32
+refs_mod.cppm:35:44-35:45  expr  't' -> t@refs_mod.cppm:35:32 in=geo::doubled@refs_mod.cppm:35:22
+refs_mod.cppm:35:48-35:49  expr  't' -> t@refs_mod.cppm:35:32 in=geo::doubled@refs_mod.cppm:35:22
+refs_mod.cppm:35:46-35:47  operator  '+' -> (dependent) in=geo::doubled@refs_mod.cppm:35:22 def=1+adl
+refs_mod.cppm:35:46-35:47  operator  '+' def=geo::operator+@refs_mod.cppm:27:11
+refs_mod.cppm:35:46-35:47  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::doubled<geo::Pt>@refs_mod.cppm:35:22
+refs_mod.cppm:36:35-36:36  type  'T' -> T@refs_mod.cppm:36:20 in=t@refs_mod.cppm:36:40
+refs_mod.cppm:36:53-36:54  expr  't' -> t@refs_mod.cppm:36:40 in=geo::summed@refs_mod.cppm:36:28
+refs_mod.cppm:36:55-36:56  operator  '+' -> (dependent) in=geo::summed@refs_mod.cppm:36:28 def=1+adl
+refs_mod.cppm:36:55-36:56  operator  '+' def=geo::operator+@refs_mod.cppm:27:11
+refs_mod.cppm:36:55-36:56  operator  '+' -> geo::operator+@refs_mod.cppm:27:11 spec=geo::summed<geo::Pt, geo::Pt, geo::Pt>@refs_mod.cppm:36:28
 13:20-13:23  nns  'geo' -> geo@refs_mod.cppm:4:18 in=use@13:5
 13:25-13:30  expr  'twice' -> geo::twice<int>@refs_mod.cppm:10:22 found=geo::twice@refs_mod.cppm:10:22 q=13:20 in=use@13:5
 13:36-13:39  expr  'top' -> top@refs_mod.cppm:17:5 in=use@13:5 adl-ns=
@@ -57,3 +73,15 @@ refs_mod.cppm:29:56-29:59  ud-suffix  '_px' -> geo::operator""_px@refs_mod.cppm:
 13:50-13:57  expr  'measure' -> geo::measure<geo::Pt>@refs_mod.cppm:11:24 found=geo::measure@refs_mod.cppm:11:24 q=13:45 in=use@13:5
 13:58-13:61  nns  'geo' -> geo@refs_mod.cppm:4:18 in=use@13:5
 13:63-13:65  type  'Pt' -> geo::Pt@refs_mod.cppm:5:8 q=13:58 in=use@13:5
+14:16-14:19  nns  'geo' -> geo@refs_mod.cppm:4:18 in=p@14:24
+14:21-14:23  type  'Pt' -> geo::Pt@refs_mod.cppm:5:8 q=14:16 in=p@14:24
+14:36-14:39  nns  'geo' -> geo@refs_mod.cppm:4:18 in=doubled_pt@14:5
+14:41-14:48  expr  'doubled' -> geo::doubled<geo::Pt>@refs_mod.cppm:35:22 found=geo::doubled@refs_mod.cppm:35:22 q=14:36 in=doubled_pt@14:5
+14:49-14:50  expr  'p' -> p@14:24 in=doubled_pt@14:5
+14:52-14:53  member  'x' -> geo::Pt::x@refs_mod.cppm:6:7 in=doubled_pt@14:5
+14:56-14:59  nns  'geo' -> geo@refs_mod.cppm:4:18 in=doubled_pt@14:5
+14:61-14:67  expr  'summed' -> geo::summed<Pt, Pt, Pt>@refs_mod.cppm:36:28 found=geo::summed@refs_mod.cppm:36:28 q=14:56 in=doubled_pt@14:5
+14:68-14:69  expr  'p' -> p@14:24 in=doubled_pt@14:5
+14:71-14:72  expr  'p' -> p@14:24 in=doubled_pt@14:5
+14:74-14:75  expr  'p' -> p@14:24 in=doubled_pt@14:5
+14:77-14:78  member  'x' -> geo::Pt::x@refs_mod.cppm:6:7 in=doubled_pt@14:5

@@ -85,7 +85,10 @@ impl Substituter<'_, '_, '_> {
         self.sema.subst_expr_depth -= 1;
         if let Some(errors) = written {
             match r {
-                Ok(r) => self.sema.note_written_spec_expr(e, r),
+                Ok(r) => {
+                    self.sema.note_written_spec_expr(e, r);
+                    self.sema.note_written_spec_oper(e, r);
+                }
                 Err(_) => self.sema.note_written_spec_failed(e, errors),
             }
         }
@@ -2310,7 +2313,11 @@ impl Substituter<'_, '_, '_> {
         let r = self.callee_node(c);
         if let Some(errors) = written {
             match r {
-                Ok(r) => self.sema.note_written_spec_expr(c, r),
+                Ok(r) => {
+                    self.sema.note_written_spec_expr(c, r);
+                    // A dependent `->` in the callee (`t->f(x)`).
+                    self.sema.note_written_spec_oper(c, r);
+                }
                 Err(_) => self.sema.note_written_spec_failed(c, errors),
             }
         }
