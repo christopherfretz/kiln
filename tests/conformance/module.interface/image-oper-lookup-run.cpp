@@ -1,7 +1,7 @@
 // [temp.dep.candidate]/1, [over.match.oper]/3, [temp.res.general]/1,
 // [module.interface], spec/modules.md §11.11: an imported template's
 // dependent operator expressions (binary, unary, a rewritten `!=` from
-// `==`) keep the non-member candidates the unqualified lookup found at
+// `==`, a fold-expression's operator) keep the non-member candidates the unqualified lookup found at
 // the template's definition in the module (operators that are not
 // exported and not in an associated namespace), also when it found none,
 // and do not see the better ones the module declares after the
@@ -24,5 +24,9 @@ int main() {
     return 3;
   if (ne(s))
     return 4;
+  if (fsub(s) != 101)
+    return 6;
+  if (fmul(s) != 11)
+    return 7;
   return mul(s) == 11 ? 0 : 5;
 }

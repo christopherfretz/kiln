@@ -1,9 +1,9 @@
 //@ args: -std=c++26
 // Namespace visibility (spec/codegen.md "Symbol visibility"; clang
-// getLVForNamespaceScopeDecl): a `visibility` attribute on any
-// definition of a namespace applies to every entity declared in it,
-// including in a reopened definition without the attribute and in
-// nested namespaces; an attribute on the entity, or a nested
+// getLVForNamespaceScopeDecl): a `visibility` attribute on a namespace
+// definition applies to the entities declared in that definition and in
+// the namespaces nested in it, not to those of a reopened definition
+// without the attribute (`N::b`); an attribute on the entity, or a nested
 // namespace's own attribute, overrides it.
 namespace __attribute__((visibility("hidden"))) N {
 void a() {}

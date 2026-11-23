@@ -286,11 +286,15 @@ impl Cg<'_> {
         }
     }
 
-    /// The address a constant pointer is based on.
+    /// The address a constant pointer is based on. A constant names the
+    /// first declaration; the global takes the properties of the most
+    /// recent one (clang `ConstantLValueEmitter::tryEmitBase`: "look at
+    /// properties of the most recent declaration at the point of
+    /// emission"; the visibility of a declaration, WP-2726).
     fn ptr_base(&mut self, base: PtrBase) -> R<Value> {
         match base {
-            PtrBase::Decl(d) => self.decl_addr_const(d),
-            PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
+            PtrBase::Decl(d) => self.decl_addr_const(self.ast.latest(d)),
+            PtrBase::Function(d) => Ok(Value::func(self.get_fn(self.ast.latest(d))?)),
             PtrBase::StringLit { lit, origin } => Ok(gval(self.lit_global(lit, origin))),
             PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
             PtrBase::Temporary(t) => {

@@ -211,7 +211,8 @@ const COLD_DESIG: u32 = 32768;
 /// expression (the templates' `oper_lookups`, WP-2021;
 /// [temp.dep.candidate]/1): the functions and what lookup found for each,
 /// two [`F::DL`]s of [`Dc::Lookup`] of one length, only on
-/// `UnaryOperator`, `BinaryOperator` and `CompoundAssignOperator`. An
+/// `UnaryOperator`, `BinaryOperator`, `CompoundAssignOperator` and
+/// `CXXFoldExpr` (the fold's operator, WP-2625). An
 /// empty set (a lookup that found nothing) is carried too: the importer's
 /// instantiation then has argument-dependent lookup only, where a missing
 /// one would look the operator up again.
@@ -1611,6 +1612,7 @@ pub(super) fn validate_section(
                     ExprKind::UnaryOperator
                         | ExprKind::BinaryOperator
                         | ExprKind::CompoundAssignOperator
+                        | ExprKind::CXXFoldExpr
                 ))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {

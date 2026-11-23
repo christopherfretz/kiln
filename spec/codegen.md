@@ -6799,7 +6799,14 @@ include those `#pragma GCC visibility push` gives a declaration.
 **Where it applies.** A definition takes its entity's computed
 visibility; a declaration (and an `available_externally` definition) only
 an explicit one, so an entity defined elsewhere is `hidden` only when
-known hidden (`Cg::decl_visibility(d, definition)`). Functions
+known hidden (`Cg::decl_visibility(d, definition)`). A declaration's
+global takes the visibility of the declaration the use names, the most
+recent one visible there (`get_fn(d)`, `get_gvar(d)`; clang
+`GetOrCreateLLVMFunction(GD)`, WP-2726), and a constant address that of
+the most recent declaration when it is emitted (`ptr_base`; clang
+`ConstantLValueEmitter::tryEmitBase`). As in clang, the global keeps
+what its first use gave it: a use emitted before a later redeclaration
+in a hidden namespace definition leaves it default. Functions
 (`set_decl_attrs`, `set_def_linkage`), variables (`get_gvar`,
 `emit_var_def`), static locals of inline functions and their guard
 variables, thunks (the method's), structor aliases (the destructor's)
@@ -6831,11 +6838,31 @@ only adds explicitness.
   way). A replaceable global allocation or deallocation function
   is default (clang's `-fvisibility-global-new-delete=force-default`).
 - *Namespace scope* (clang `getLVForNamespaceScopeDecl`): explicit
-  visibility, else the nearest enclosing namespace's attribute (any of its
-  definitions; it counts as explicit), else the global mode, then hidden
+  visibility, else the attribute of the nearest enclosing namespace
+  definition that has one (it counts as explicit), else the global mode,
+  then hidden
   for an inline function under `-fvisibility-inlines-hidden`
   (`use_inline_hidden`: a function defined inline, `constexpr` or
-  implicitly inline, not an explicit instantiation). A non-`extern "C"`
+  implicitly inline, not an explicit instantiation). Each `namespace N
+  { }` is a context of its own with its own attributes (clang's
+  `NamespaceDecl`): an attribute on one definition of `N` does not apply
+  to the declarations of another. The walk starts at the namespace
+  definition the declaration belongs to (`parent_ctx`; clang
+  `getDeclContext()`) and goes outwards through the definitions each one
+  is (re)opened in. A declaration belongs to the definition it is written
+  in; a qualified one (`int n::f() {}`, `template <> int n::g<int>()`)
+  to the definition the qualifier's lookup found, the latest of `n` when
+  it is declared (WP-2725); an explicit specialization of a function
+  template to the one it is written in, not its template's (WP-2626);
+  an explicit specialization of a class or variable template to its
+  template's (clang creates it in the template's context). Sema records
+  the cases where that is not the declaration's `ctx` (`ctx` is the first
+  definition of a qualified declaration's namespace and a function
+  specialization's template's) in `DeclArena::written_ns` (spec/ast.md
+  §4.2). A namespace alias as the qualifier gives the latest definition
+  of its namespace (clang: the one lookup found when the alias was
+  declared); a module image does not carry `written_ns` (an imported
+  declaration walks from its `ctx`). A non-`extern "C"`
   variable without explicit visibility merges its type's. A template
   specialization merges its arguments' (`args_lv`, clang
   `getLVForTemplateArgumentList`: a type's `type_lv`; a declaration,
@@ -6844,7 +6871,13 @@ only adds explicitness.
   type, as its template parameter object), when clang's
   `shouldConsiderTemplateVisibility` holds: an implicit instantiation, or
   an explicit specialization or instantiation without its own attribute
-  (for a class, also not merely ignoring explicit visibility).
+  (for a class, also not merely ignoring explicit visibility). Under the
+  same condition a function template specialization (at namespace scope
+  or a member) first merges its template's own visibility
+  (`merge_fn_template`; clang 22 `mergeTemplateLV`), so an explicit
+  specialization in a plain or `visibility("default")` definition of a
+  hidden template's namespace is hidden; clang 19 took only the
+  template's linkage, and `-fclang-compat=19` keeps that (WP-2626).
 - *Class members* (clang `getLVForClassMember`): the member's explicit
   visibility, else `-fvisibility-inlines-hidden`'s hidden; its template
   arguments; then its class's visibility (type visibility for a nested

@@ -1899,7 +1899,13 @@ records the unqualified lookup of its operator name, and for `==`, `!=`,
 ([over.match.oper]/3.4), at the definition (the `Ast`'s
 `templates.oper_lookups`, keyed by the dependent expression and interned by
 content, spec/ast.md §8.5, WP-2021; `=`, `[]`, `()` and `->` have no
-non-member candidates and record nothing). A module image carries the set
+non-member candidates and record nothing). A fold-expression records the
+set of its operator the same way (`act_fold`, WP-2625; clang's
+`CXXFoldExpr` callee): the instantiation combines the elements, and
+rebuilds a fold over an unexpanded slice, with it (`fold_combine`),
+since a fold instantiates to the operator expressions
+([temp.variadic]/11), which take their definition-context candidates. A
+module image carries the set
 with the expression (spec/modules.md §11.11), so an importer's
 instantiation uses the module's definition-context set. When the substituter rebuilds the
 expression it passes that set to `oper_set` (`Sema::oper_override`) in

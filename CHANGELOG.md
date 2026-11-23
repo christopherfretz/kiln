@@ -1062,6 +1062,23 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   (`post (r: ...)`, its result-name-introducer) have rows; range-for,
   exception-declaration, expansion-statement and requires-expression
   parameter rows are pinned by tests (WP-2630).
+- A fold-expression's operator takes the non-member candidates the
+  unqualified lookup at the template's definition found, as a dependent
+  binary operator does (WP-2625; [temp.dep.candidate]/1): an operator
+  declared after the definition outside the operands' associated
+  namespaces is no longer found by an instantiation (clang's "neither
+  visible in the template definition nor found by argument-dependent
+  lookup"), and tooling clients read the fold's set as a binary
+  operator's. Module images carry it.
+- Visibility of a namespace-scope symbol follows the namespace
+  definition its declaration belongs to, as clang's: an explicit
+  specialization of a function template written in another definition
+  of its namespace takes that definition's attribute, and (clang 22) its
+  template's visibility (WP-2626); a qualified definition (`int n::f()
+  {}`) takes the attribute of the definition of `n` its qualifier's
+  lookup found, the latest one, not the first's (WP-2725); an undefined
+  reference takes the visibility of the declaration the use names, the
+  most recent one visible there, not the first's (WP-2726).
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

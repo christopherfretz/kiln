@@ -645,7 +645,10 @@ impl Substituter<'_, '_, '_> {
 
     /// A fold-expression (§7.3, [temp.variadic]/11): the elements of its
     /// pattern combined by `act_on_binary` in a loop (no recursion per
-    /// element, R-WALK), wrapped in a `ParenExpr`.
+    /// element, R-WALK), wrapped in a `ParenExpr`. Each combination, and a
+    /// fold rebuilt over an unexpanded slice, takes the non-member
+    /// candidates the fold's definition found ([`Self::fold_combine`],
+    /// [temp.dep.candidate]/1), not a lookup at the instantiation.
     pub(crate) fn fold(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         let n = *self.sema.ast.exprs.get(e);
         let op = kiln_ast::expr::BinaryOp::from_u8(n.aux()).ok_or(SubstFail)?;
@@ -671,7 +674,7 @@ impl Substituter<'_, '_, '_> {
             Expansion::Elements(v) => v,
             Expansion::Unexpanded(p) => {
                 let (l, r) = if right { (Some(p), init) } else { (init, Some(p)) };
-                return Ok(self.sema.act_fold(l, op, r, loc, ellipsis, end));
+                return Ok(self.fold_combine(e, |s| s.act_fold(l, op, r, loc, ellipsis, end)));
             }
         };
         let rw = self.take_rewrap();
@@ -692,7 +695,7 @@ impl Substituter<'_, '_, '_> {
                 Some((x, false)) => acc = Some(x),
                 Some((x, true)) => {
                     let (l, r) = if right { (Some(x), None) } else { (None, Some(x)) };
-                    acc = Some(self.sema.act_fold(l, op, r, loc, ellipsis, end));
+                    acc = Some(self.fold_combine(e, |s| s.act_fold(l, op, r, loc, ellipsis, end)));
                     folded = true;
                 }
                 None => {}
@@ -716,12 +719,12 @@ impl Substituter<'_, '_, '_> {
         for (x, slice) in it {
             self.check_stack(|_| loc)?;
             folded = slice;
-            acc = match (slice, right) {
-                (true, true) => self.sema.act_fold(Some(x), op, Some(acc), loc, ellipsis, end),
-                (true, false) => self.sema.act_fold(Some(acc), op, Some(x), loc, ellipsis, end),
-                (false, true) => self.sema.act_on_binary(op, x, acc, ellipsis),
-                (false, false) => self.sema.act_on_binary(op, acc, x, ellipsis),
-            };
+            acc = self.fold_combine(e, |s| match (slice, right) {
+                (true, true) => s.act_fold(Some(x), op, Some(acc), loc, ellipsis, end),
+                (true, false) => s.act_fold(Some(acc), op, Some(x), loc, ellipsis, end),
+                (false, true) => s.act_on_binary(op, x, acc, ellipsis),
+                (false, false) => s.act_on_binary(op, acc, x, ellipsis),
+            });
             if self.sema.is_err_expr(acc) {
                 return Err(SubstFail);
             }
@@ -730,6 +733,17 @@ impl Substituter<'_, '_, '_> {
             return Ok(acc);
         }
         Ok(self.sema.act_on_paren(acc, loc, end))
+    }
+
+    /// Runs `f`, one combination of the elements of the fold-expression
+    /// `e` of the pattern, with the operator candidates `e`'s definition
+    /// recorded (`act_fold`, spec/ast.md §8.5) as the override an
+    /// operator expression rebuilt by a substitution uses.
+    fn fold_combine(&mut self, e: ExprId, f: impl FnOnce(&mut Sema) -> ExprId) -> ExprId {
+        self.sema.oper_override = self.sema.oper_rebuild_set(e);
+        let r = f(self.sema);
+        self.sema.oper_override = None;
+        r
     }
 
     /// `pack...[index]` ([expr.prim.pack.index]): the selected element.

@@ -18,6 +18,11 @@ export template <class X> bool ne(X a) { return a != 1; }
 // The definition's lookup finds no `operator*`: the instantiation has
 // argument-dependent lookup only.
 export template <class X> int mul(X a) { return a * 1; }
+// A fold-expression keeps its definition's set as a binary operator does
+// (WP-2625): one found at the definition, and none (argument-dependent
+// lookup only).
+export template <class... X> int fsub(X... a) { return (a - ... - 1); }
+export template <class... X> int fmul(X... a) { return (a * ... * 1); }
 // Declared after the definitions: better matches that the
 // instantiations must not see ([temp.dep.candidate]/1).
 int operator-(on::S a, int) { return a.v + 200; }

@@ -3315,7 +3315,18 @@ impl<'a> Cg<'a> {
                 self.nounwind.insert(f, nothrow);
                 f
             }
-            _ => self.declare_fn(&name, first, &sig)?,
+            _ => {
+                let f = self.declare_fn(&name, first, &sig)?;
+                // clang `GetOrCreateLLVMFunction(GD)`: a declaration takes
+                // the visibility of the declaration the use names, the
+                // most recent one visible there, not the first's
+                // (spec/codegen.md "Symbol visibility", WP-2726).
+                if d != first && self.vis_active {
+                    let vis = self.decl_visibility(d, false);
+                    self.m.func_mut(f).visibility = vis;
+                }
+                f
+            }
         };
         if ast.lang_c && d != first && self.m.func(f).is_declaration() {
             self.c_sig_decl.entry(f).or_insert(d);
@@ -3908,7 +3919,8 @@ impl<'a> Cg<'a> {
         // clang `GetOrCreateLLVMGlobal`: `getDeclAlign(D)`.
         let align = self.var_align(first);
         let constant = constant_storage(ast, ty);
-        let vis = self.decl_visibility(first, false);
+        // The declaration the use names (WP-2726; [`Cg::get_fn`]).
+        let vis = self.decl_visibility(d, false);
         // clang `GetOrCreateLLVMGlobal`: a declaration of a `weak`
         // variable (or a weak imported one) is an `extern_weak` reference.
         let weak = ast.is_weak(first);

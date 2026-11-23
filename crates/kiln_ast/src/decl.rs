@@ -1777,6 +1777,13 @@ pub struct ColdDeclData {
     /// (`Ast::closure_owner`, spec/ast.md §5.9; WP-2023). Independent of
     /// the mangling context (`LambdaMangling`).
     pub closure_owner: ColdMap<DeclId, DeclId>,
+    /// The namespace definition (one opening of `ctx`'s namespace) a
+    /// namespace-scope declaration belongs to when that is not `ctx`
+    /// (`DeclArena::written_ns`, spec/ast.md §4.2; WP-2725): the latest
+    /// opening when a qualified declarator's qualifier named it (`ctx` is
+    /// the first), the opening an explicit specialization of a function
+    /// template is written in (`ctx` is the template's).
+    pub written_ns: ColdMap<DeclId, DeclId>,
 }
 
 impl Default for ColdDeclData {
@@ -1817,14 +1824,16 @@ impl Default for ColdDeclData {
             compound_literal: ColdMap::new("compound_literal"),
             init_fp: ColdMap::new("init_fp"),
             closure_owner: ColdMap::new("closure_owner"),
+            written_ns: ColdMap::new("written_ns"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 35] {
+    fn rows(&self) -> [MemRow; 36] {
         [
             self.lexical_ctx.mem_row(),
+            self.written_ns.mem_row(),
             self.begin_loc.mem_row(),
             self.delete_message.mem_row(),
             self.explicit_expr.mem_row(),
@@ -2566,6 +2575,22 @@ impl DeclArena {
             self.cold.binding_var.insert(b, h)?;
         }
         Ok(())
+    }
+
+    /// The namespace definition `d` belongs to (clang's `getDeclContext()`
+    /// of a namespace-scope declaration, where each `namespace N { }` is
+    /// a context of its own): the opening recorded by
+    /// [`Self::set_written_ns`], else `ctx`.
+    pub fn written_ns(&self, d: DeclId) -> Option<DeclId> {
+        self.cold.written_ns.get(d).copied().or_else(|| self.get(d).ctx())
+    }
+
+    /// Records `ns`, an opening of `d`'s namespace, as the namespace
+    /// definition `d` belongs to, unless it is `d`'s `ctx`.
+    pub fn set_written_ns(&mut self, d: DeclId, ns: DeclId) {
+        if self.get(d).ctx() != Some(ns) {
+            let _ = self.cold.written_ns.insert(d, ns);
+        }
     }
 
     /// Records a lexical context different from the semantic one. Must be

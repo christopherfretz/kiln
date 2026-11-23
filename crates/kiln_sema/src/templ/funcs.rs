@@ -1524,6 +1524,18 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let lexical = self.ctx;
         let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
+        // Its namespace definition is the one it is written in or its
+        // qualifier names, not its template's (clang's `DeclContext` of a
+        // function template specialization; spec/ast.md §4.2
+        // `written_ns`, WP-2626).
+        if d.qualifier.is_some() {
+            self.note_written_ns(f, d.qualifier);
+        } else {
+            let ns = self.ast.redecl_context(lexical);
+            if self.kind_of(ns) == DeclKind::Namespace {
+                self.ast.decls.set_written_ns(f, ns);
+            }
+        }
         let params: Vec<crate::declspec::ParamInfo> =
             d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
         let (defaults, _) = self.merge_default_args(None, false, &params, true);

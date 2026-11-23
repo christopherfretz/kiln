@@ -185,6 +185,17 @@ struct DeclNode {        // 28 bytes
 - The lexical context is stored in a sparse map `lexical_ctx: FxHashMap<
   DeclId, DeclId>` only when it differs from `ctx` (out-of-line member
   definitions, friends, local externs): flag `HAS_LEXICAL_CTX`.
+- The namespace definition a namespace-scope declaration belongs to
+  (clang's `getDeclContext()`, each `namespace N { }` a context of its
+  own) is `ctx` unless the sparse map `written_ns` (memory row
+  `written_ns`; snapshots carry it) says otherwise: for a qualified
+  declarator naming a namespace (`int n::f() {}`), whose `ctx` is the
+  first definition of `n`, the latest one when it is declared (what the
+  qualifier's lookup found); for an explicit specialization of a
+  function template, whose `ctx` is its template's, the definition it is
+  written in or its qualifier names (WP-2725, WP-2626).
+  `DeclArena::written_ns(d)` reads it, `set_written_ns` records it.
+  Codegen's visibility walk starts there (spec/codegen.md §8).
 - Source range: the begin location (decl-specifiers start) is in the
   payload of kinds that need it for diagnostics; the end is computed.
 - Identifier namespace (IDNS: ordinary / tag / member / namespace / label
@@ -1105,7 +1116,8 @@ lists its specializations in creation order (dump order, ast-dump.md §5).
 
 ### 8.5 Definition-context operator lookup sets (WP-2021)
 A unary, binary or compound-assignment operator expression with a
-type-dependent operand, built in a template, keeps the non-member
+type-dependent operand, built in a template, and a fold-expression (its
+operator; WP-2625), keeps the non-member
 operator functions the unqualified lookup of its operator name (and of
 its rewritten forms' names for `==`, `!=`, `<`, `>`, `<=`, `>=`,
 [over.match.oper]/3.4) found at the definition ([temp.dep.candidate]/1,
@@ -1140,7 +1152,8 @@ unqualified lookup (spec/sema-templates.md §3.5 "Operators"). The set is
   `templ.oper_sets`, `templ.oper_cands`, `templ.oper_index`.
 
 Tests: `crates/kiln_parse/tests/sema_facts.rs`
-(`dependent_operator_definition_set`), `oper_lookup.rs` unit tests,
+(`dependent_operator_definition_set`, `fold_operator_definition_set`),
+`oper_lookup.rs` unit tests,
 `tests/conformance/module.interface/image-oper-lookup-run.cpp`.
 
 ## 9. Constant values

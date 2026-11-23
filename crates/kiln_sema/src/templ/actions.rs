@@ -1929,7 +1929,13 @@ impl Sema<'_, '_> {
 
     /// A fold-expression ([expr.prim.fold]): `( ... op e )`, `( e op ... )`
     /// or `( e1 op ... op e2 )`; exactly one operand of a binary fold has
-    /// unexpanded packs ([temp.variadic]/11).
+    /// unexpanded packs ([temp.variadic]/11). Its operator's unqualified
+    /// lookup is done here, at the definition, as for a dependent binary
+    /// operator ([`Sema::note_dependent_oper`], [temp.dep.candidate]/1):
+    /// the instantiation combines the elements with that set plus
+    /// argument-dependent lookup ([temp.variadic]/11; clang's
+    /// `CXXFoldExpr` callee). A fold an instantiation rebuilds, still a
+    /// fold, keeps the set of its pattern (the caller's `oper_override`).
     pub fn act_fold(
         &mut self,
         lhs: Option<ExprId>,
@@ -1953,6 +1959,7 @@ impl Sema<'_, '_> {
         }
         let e = self.builder().fold_expr(lhs, op, rhs, lparen, rparen);
         self.templ.fold_ellipsis.insert(e, ellipsis);
+        self.note_dependent_oper(e, crate::overload::oper::binary_oper(op));
         e
     }
 
