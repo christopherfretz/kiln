@@ -1390,8 +1390,14 @@ clang's spellings (spec/driver.md, "Modules"):
   a capsule of kind 4 (`UnitKind::HeaderUnit`) whose module is `"` plus
   the header's canonical path (`kiln_pp::header_unit_key`), so
   `-fmodule-file=<h.pcm>` (always the nameless form, with no warning)
-  matches every spelling of the import that finds the same file. The
-  importer replays the capsule as a header unit (§3: its macros are
+  matches every spelling of the import that finds the same file. An
+  importer looks for a header unit's module file only when one names a
+  header unit (`-fmodule-file`, or the imports of a module file read so
+  far); otherwise it computes no key (WP-2621). A header from an
+  in-memory buffer (`SourceManager::add_virtual`, `FileOrigin::Virtual`)
+  is keyed by `"` plus its name as given, with no file-system call: its
+  name is not a host path, so no host file of that name, nor a module
+  file built from one, stands for it. The importer replays the capsule as a header unit (§3: its macros are
   exported); the header is not read and the module file, not the header,
   is a dependency. A named module built against one records the module
   file among its imports, so the module's importers find it there.

@@ -233,13 +233,35 @@ used (`list`, `angled_start`):
 - the result (`Found`): `Missing`; `Includer` (found relative to the
   includer; it inherits the includer's characteristic, which an earlier
   lookup fixed); `Dir { dir, characteristic }` (found in that search
-  directory); `Embed { path }` (the path an `#embed` read).
+  directory); `Embed { path }` (the path an `#embed` read); `Absolute`
+  (found at an absolute name, below).
 
 A result is a function of the key, the search list (and the
 `--embed-dir` list) and the file system; the header's characteristic as
 header search last found it (`HeaderFileInfo::DirInfo`) is not part of
-it, because it follows from earlier results. Lookups of absolute names
-are not recorded. `LookupLog::check(list, embed_dirs, fs, known,
+it, because it follows from earlier results.
+
+Lookups of absolute names (WP-2620) are recorded too, found or not, for
+every form (`#include`, `#import`, `#include_next`, `__has_include`,
+`__has_include_next`, `#embed`, `__has_embed`, and `-include`, which is
+an `#include` in the predefines buffer): the name as written, `<...>`
+or not, no includer's directory, the form as above (`Next` with its
+`after` for an `_next` form that continues after a directory: header
+search finds no absolute name there and asks nothing), and the result
+`Missing`, `Absolute` (an include form found the file at the name) or
+`Embed { path }` with the name as the path. As for other entries the
+file found is identified by its path; its content is the PCH record's
+file list's to check. Such a result is a function of the file system
+alone, so every replay asks it again, whatever the trust (one `stat`,
+none for a `known` file): a missing name that now exists, or a found
+one that is gone, is a difference. `LookupLog::check_absolute(fs,
+known)` repeats only these, for a consumer that takes the others as
+recorded (the PCH consumer with the producer's search list). A run
+under an overlay records them as it records any lookup: the name as
+the overlay's view answers it (a created file found, a removed one
+missing).
+
+`LookupLog::check(list, embed_dirs, fs, known,
 trust)` repeats every lookup in order over another list and file
 system and returns the first whose result differs, named for `-v`.
 With `Trust::ProducerMisses { same_cwd }` a directory of the recorded
@@ -254,7 +276,7 @@ records: a log is replayed with `ProducerMisses` only against the view
 it was recorded under (the PCH consumer: the same files but for the
 `known` names); under another overlay, or none after one, with
 `Nothing` and an `OverlayFs` of the consumer's view. Not in the log,
-so not answerable by replay: lookups of absolute names, module lookups
+so not answerable by replay: module lookups
 (prebuilt module files, the module cache), the main input, and a `-I`
 directory the producer dropped as nonexistent that an overlay creates
 (the consumer's own search list, built over its view, covers that

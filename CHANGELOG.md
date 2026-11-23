@@ -993,6 +993,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- The lookup log records every lookup of an absolute name, found or not
+  (`#include`, `#import`, `#include_next`, `__has_include`,
+  `__has_include_next`, `#embed`, `__has_embed`, `-include`), and
+  `LookupLog::check` and the new `LookupLog::check_absolute` ask each
+  again (WP-2620): a failed `__has_include("/abs/x.h")` whose file then
+  appeared was neither in the log nor seen by `check`, and a PCH
+  snapshot was restored with the stale answer, also with the producer's
+  search path, where only the absolute lookups are now repeated.
+- A header unit imported from an in-memory buffer is keyed by the
+  buffer's name as given, with no file-system call (WP-2621): its name
+  was canonicalized against the working directory, so a host file of
+  that name, or a header-unit module file built from one, stood for the
+  buffer. No key is computed when no module file names a header unit.
+- Scratch space (`is_written_in_scratch_space`) is the `<scratch space>`
+  buffer itself, not a presumed name (WP-2622): a file with `#line 1
+  "<scratch space>"` had its own tokens taken for pasted ones.
 - A global `operator new` or `operator delete` declared after a class
   template whose pattern befriends it is one function with the implicit
   declaration and the instantiated friend, before or after the

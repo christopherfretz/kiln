@@ -246,6 +246,50 @@ fn has_include_that_now_succeeds_refuses() {
     assert_eq!(o.code, 0, "{}", o.stderr);
 }
 
+/// WP-2620 (spec/pch.md "Lookup-tolerant search path"): a
+/// `__has_include` of an absolute name that failed in the prefix and now
+/// finds the file refuses, with the producer's search list (the fast
+/// path repeats the absolute lookups) and with another; the replay sees
+/// the file. An absolute header the prefix included that changed is the
+/// PCH's stale-file error, as any input's.
+#[test]
+fn absolute_has_include_that_now_succeeds_refuses() {
+    let d = tree(
+        "absolute",
+        &[
+            ("inc/v.h", "#define V 1\n"),
+            ("abs.h", "#define A 1\n"),
+            ("extra/", ""),
+            ("t.cpp", "static_assert(V == 1 && A == 1 && ABS == 0);\nint main() {}\n"),
+            ("t2.cpp", "static_assert(V == 1 && A == 1 && ABS == 1);\nint main() {}\n"),
+        ],
+    );
+    let (gone, abs) = (d.join("gone.h"), d.join("abs.h"));
+    let (gone, abs) = (gone.to_str().unwrap(), abs.to_str().unwrap());
+    let prefix = format!(
+        "#include <v.h>\n#include \"{abs}\"\n#if __has_include(\"{gone}\")\n#define ABS 1\n#else\n#define ABS 0\n#endif\n"
+    );
+    std::fs::write(d.join("p.h"), prefix).unwrap();
+    let same: &[&str] = &[STD, "-I", "inc"];
+    let other: &[&str] = &[STD, "-I", "extra", "-I", "inc"];
+    produce(&d, same, "p.h");
+    restores(&d, same, false);
+    restores(&d, other, true);
+    std::fs::write(gone, "\n").unwrap();
+    let why =
+        format!("include search path: lookup of \"{gone}\" now finds '{gone}' (was not found)");
+    for flags in [same, other] {
+        let o = refuses(&d, flags, "t2.cpp", &why);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+    }
+    std::fs::remove_file(gone).unwrap();
+    restores(&d, same, false);
+    std::fs::write(abs, "#define A 2\n").unwrap();
+    let s = run(&d, &consumer(same, true, "t.cpp"));
+    let stale = format!("fatal error: file '{abs}' has been modified since the precompiled header");
+    assert!(s.code != 0 && !restored(&s) && s.stderr.contains(&stale), "{}", s.stderr);
+}
+
 /// `#include_next` in the prefix continues after the same directory.
 #[test]
 fn include_next_in_the_prefix() {

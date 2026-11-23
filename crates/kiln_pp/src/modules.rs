@@ -12,7 +12,7 @@ use std::rc::Rc;
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_source::symbol::Symbol;
-use kiln_source::{FileId, Loc, Span};
+use kiln_source::{FileId, FileOrigin, Loc, Span};
 
 use crate::bmi::{
     self, BmiError, Capsule, CapsuleFile, EmbedEntry, EmbedKey, IncludeEntry, IncludeHit,
@@ -1595,12 +1595,29 @@ impl Preprocessor<'_, '_> {
     /// header's canonical path) or recorded by a module file read so far:
     /// that module and the module file's path. Never when scanning or
     /// preprocessing only, which build the unit from its source.
+    ///
+    /// WP-2621: when no module file names a header unit, `None` with no
+    /// key computed (no file-system call). An in-memory buffer
+    /// ([`FileOrigin::Virtual`]) is keyed by `"` plus its name as given,
+    /// never through the host's file system, so no host file of that
+    /// name stands for it.
     fn header_unit_file(&self, file: FileId) -> Option<(String, String)> {
         let m = self.modules.as_ref()?;
         if m.opts.scan || m.opts.text {
             return None;
         }
-        let unit = header_unit_key_in(self.sm.file_name(file), self.sm.work_dir());
+        let names_unit = |n: &String| n.starts_with('"');
+        if !m.opts.module_files.iter().any(|(n, _)| names_unit(n))
+            && !m.replays.iter().any(|r| r.imports.iter().any(|(n, _)| names_unit(n)))
+        {
+            return None;
+        }
+        let name = self.sm.file_name(file);
+        let unit = if self.sm.file_origin(file) == FileOrigin::Virtual {
+            format!("\"{name}")
+        } else {
+            header_unit_key_in(name, self.sm.work_dir())
+        };
         let given = m.opts.module_files.iter().rev().find(|(n, _)| *n == unit);
         if let Some((_, p)) = given {
             return Some((unit, p.display().to_string()));

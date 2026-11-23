@@ -965,6 +965,28 @@ fn file_queries_for_the_image_file_table() {
     assert!(sm.file_kind_marks(sm.loc(v, 0)).is_empty());
 }
 
+/// WP-2622: scratch space is the in-memory `<scratch space>` buffer
+/// itself, not a presumed name: a file whose `#line` names
+/// `<scratch space>` is not scratch space, and a scratch buffer under a
+/// `#line` of another name still is ([cpp.line]/3 changes the presumed
+/// name only).
+#[test]
+fn scratch_space_is_the_buffer_not_the_presumed_name() {
+    let sm = SourceManager::new();
+    let f = sm.add_virtual("t.cpp", "int x;\nint y;\n".into()).unwrap();
+    sm.add_line_directive(f, 7, 1, Some("<scratch space>"));
+    let y = sm.loc(f, 11);
+    assert_eq!(sm.presumed_line_col(y).unwrap().file_name, "<scratch space>");
+    assert!(!sm.is_written_in_scratch_space(y));
+    assert!(!sm.is_written_in_scratch_space(sm.loc(f, 0)));
+    let v = sm.add_virtual("<scratch space>", "ab\n".into()).unwrap();
+    assert!(sm.is_written_in_scratch_space(sm.loc(v, 0)));
+    sm.add_line_directive(v, 0, 3, Some("other.h"));
+    assert_eq!(sm.presumed_line_col(sm.loc(v, 1)).unwrap().file_name, "other.h");
+    assert!(sm.is_written_in_scratch_space(sm.loc(v, 1)));
+    assert!(!sm.is_written_in_scratch_space(Loc::INVALID));
+}
+
 /// `#define ID(x) x` / `#define F(x) (x)` invoked as `ID(a b)` and
 /// `F(a b)` with each argument written as two entries (as the
 /// preprocessor splits a run it cannot cover with one): returns the
