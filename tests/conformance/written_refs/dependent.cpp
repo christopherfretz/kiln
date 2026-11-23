@@ -2,8 +2,8 @@
 // a non-dependent name has its entity and a dependent one has none
 // (`(dependent)`): a call found by argument-dependent lookup at
 // instantiation, a dependent member, a member of a dependent qualifier.
-// Instantiation adds no entries (per-specialization entries are a later
-// stage), so each name below has exactly one entry.
+// Each name has one entry; instantiation adds `spec=` lines (the separate
+// per-specialization table, §18.9) for `pattern<U>` and `Holder<U>`.
 //@ written-refs: dependent.refs
 int helper(int);
 int fixed = 3;

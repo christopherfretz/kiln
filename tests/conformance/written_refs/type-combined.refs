@@ -38,6 +38,7 @@
 44:42-44:43  type  'T' -> T@44:17 in=twice@44:22
 44:44-44:45  expr  't' -> t@44:30 in=twice@44:22
 44:46-44:47  member  'n' -> (dependent) in=twice@44:22
+44:46-44:47  member  'n' -> lib::Rec::n@13:7 spec=twice<Rec>@44:22
 45:20-45:25  expr  'twice' -> twice<Rec>@44:22 found=twice@44:22 in=instantiated@45:5 adl-ns=lib@11:11 adl-cls=lib::Rec@12:8
 45:26-45:29  type  'Rec' -> lib::Rec@12:8 found=Rec@24:12 in=instantiated@45:5
 45:34-45:35  member  'n' -> lib::Rec::n@13:7 in=instantiated@45:5

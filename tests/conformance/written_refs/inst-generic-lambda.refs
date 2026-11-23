@@ -1,0 +1,14 @@
+15:36-15:37  type  'T' -> T@15:17 in=t@15:39
+16:39-16:40  expr  'x' -> x@16:27 in=outer(const type-parameter-0-0 &)::(lambda)::operator()@16:12
+16:41-16:45  member  'size' -> (dependent) in=outer(const type-parameter-0-0 &)::(lambda)::operator()@16:12
+16:41-16:45  member  'size' -> One::size@9:7 spec=outer(const One &)::(lambda)::operator()<One>@16:12
+16:41-16:45  member  'size' -> Two::size@12:7 spec=outer(const One &)::(lambda)::operator()<Two>@16:12
+17:10-17:11  expr  'f' -> f@16:8 in=outer@15:24
+17:12-17:13  expr  't' -> t@15:39 in=outer@15:24
+17:17-17:18  expr  'f' -> f@16:8 in=outer@15:24
+17:19-17:22  type  'Two' -> Two@11:8 in=outer@15:24
+17:28-17:29  expr  't' -> t@15:39 in=outer@15:24
+17:30-17:34  member  'size' -> (dependent) in=outer@15:24
+17:30-17:34  member  'size' -> One::size@9:7 spec=outer<One>@15:24
+20:20-20:25  expr  'outer' -> outer<One>@15:24 found=outer@15:24 in=run@20:5 how=both adl-ns=:: adl-cls=One@8:8
+20:26-20:29  type  'One' -> One@8:8 in=run@20:5

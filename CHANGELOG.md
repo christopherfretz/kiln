@@ -10,6 +10,19 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- The written-reference table records what each dependent name of a
+  template resolves to in every specialization (stage 4, WP-1933;
+  spec/ast.md §18.9), in a separate table keyed by (pattern entry,
+  specialization): member and qualified names, `typename`/`template`
+  names and their dependent qualifier components, dependent bases'
+  members, and unqualified dependent calls with their
+  argument-dependent `how` and set, for function, member, variable and
+  alias template instantiations, explicit instantiations, default
+  arguments and generic lambdas. A substitution failure records
+  nothing; a name an instantiation cannot resolve is `(unresolved)`.
+  `-fkiln-dump-written-refs` prints the rows sorted after their entry
+  (`spec=<specialization>`), and `specs_naming(d)` finds every
+  instantiated use of a declaration for a rename.
 - The written-reference table records declarative names (stage 3,
   WP-1932, WP-2100, WP-2131; spec/ast.md §18.4): using-declarators,
   using-directives, namespace alias targets, the names qualified

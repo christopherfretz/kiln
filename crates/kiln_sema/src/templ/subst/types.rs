@@ -817,6 +817,7 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 }
                 let Some(&d) = found.decls.first() else {
+                    self.note_spec_type(q, loc, None, None, Some(n));
                     let d = match self.enable_if_failure(nns, n, name, ctx) {
                         Some(d) => d,
                         None => self
@@ -848,6 +849,7 @@ impl Substituter<'_, '_, '_> {
                     }
                     self.sema.mark_type_referenced(d);
                     self.sema.check_found_access(&found, loc);
+                    self.note_spec_type(q, loc, Some(d), found.found.first().copied(), Some(n));
                     return Ok(self.sema.ctad_placeholder(d, Some(n), (loc, loc)));
                 }
                 if !matches!(
@@ -875,6 +877,9 @@ impl Substituter<'_, '_, '_> {
                 {
                     self.ctor_name_despite_keyword(n, name, false, loc);
                 }
+                // What the name resolved to in this specialization
+                // (spec/ast.md §18.9).
+                self.note_spec_type(q, loc, Some(d), found.found.first().copied(), Some(n));
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))
@@ -1082,6 +1087,9 @@ impl Substituter<'_, '_, '_> {
                 if !as_nns {
                     self.ctor_name_despite_keyword(n, name, true, loc);
                 }
+                // `T::template X<U>` names the member template `d` in this
+                // specialization (spec/ast.md §18.9).
+                self.note_spec_type(q, loc, Some(d), None, Some(n));
                 let underlying = self.sema.template_name_for(d);
                 let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
                     nns: n,

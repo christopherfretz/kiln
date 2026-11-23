@@ -1,0 +1,17 @@
+22:10-22:11  nns  'T' -> T@21:17 in=read@21:24
+22:13-22:18  expr  'value' -> (dependent) q=22:10 in=read@21:24
+22:13-22:18  expr  'value' -> A::value@9:20 spec=read<A>@21:24
+22:21-22:22  nns  'T' -> T@21:17 in=read@21:24
+22:24-22:29  nns  'inner' -> (dependent) q=22:21 in=read@21:24
+22:24-22:29  nns  'inner' -> A::inner@10:10 spec=read<A>@21:24
+22:31-22:36  expr  'value' -> (dependent) q=22:24 in=read@21:24
+22:31-22:36  expr  'value' -> A::inner::value@11:22 spec=read<A>@21:24
+22:39-22:40  nns  'T' -> T@21:17 in=read@21:24
+22:42-22:46  expr  'make' -> (dependent) q=22:39 in=read@21:24
+22:42-22:46  expr  'make' -> A::make@14:14 spec=read<A>@21:24
+22:58-22:59  type  'T' -> T@21:17 in=read@21:24
+22:54-22:57  nns  'Box' -> Box@17:27 in=read@21:24
+22:62-22:67  expr  'limit' -> (dependent) q=22:54 in=read@21:24
+22:62-22:67  expr  'limit' -> Box<A>::limit@18:20 spec=read<A>@21:24
+25:25-25:26  type  'A' -> A@8:8 in=run@25:5
+25:20-25:24  expr  'read' -> read<A>@21:24 found=read@21:24 in=run@25:5 adl-ns=

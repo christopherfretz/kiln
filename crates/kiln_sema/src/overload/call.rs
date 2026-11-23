@@ -249,12 +249,18 @@ impl Sema<'_, '_> {
     ) -> Option<(ExprId, bool)> {
         // The callee's written name, when recorded (spec/ast.md §18.7.4):
         // its argument-dependent lookup is described once resolved.
-        let wref = self.pending_written_ref(self.ignore_parens(callee));
+        let named = self.ignore_parens(callee);
+        let wref = self.pending_written_ref(named);
+        // In an instantiation, the rebuilt name's per-specialization entry
+        // (stage 4, §18.9.4).
+        let wspec = wref.is_none() && self.pending_written_spec(named).is_some();
         let mut facts = None;
-        let r =
-            self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, wref.is_some());
+        let explain = wref.is_some() || wspec;
+        let r = self.resolve_unresolved_call_inner(callee, args, braced, &mut facts, explain);
         if let Some(w) = wref {
             self.note_written_call_lookup(w, facts);
+        } else if wspec {
+            self.note_written_spec_call(named, facts);
         }
         r
     }

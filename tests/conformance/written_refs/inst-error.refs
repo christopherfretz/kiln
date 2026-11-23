@@ -1,0 +1,20 @@
+18:35-18:36  type  'T' -> T@18:17 in=t@18:38
+19:11-19:12  expr  't' -> t@18:38 in=a@19:7
+19:13-19:17  member  'size' -> (dependent) in=a@19:7
+19:13-19:17  member  'size' -> Bad::size@15:7 spec=both<Bad>@18:24
+19:13-19:17  member  'size' -> Good::size@11:7 spec=both<Good>@18:24
+20:11-20:12  expr  't' -> t@18:38 in=b@20:7
+20:13-20:18  member  'count' -> (dependent) in=b@20:7
+20:13-20:18  member  'count' -> (unresolved) spec=both<Bad>@18:24
+20:13-20:18  member  'count' -> Good::count@12:7 spec=both<Good>@18:24
+21:11-21:12  expr  't' -> t@18:38 in=c@21:7
+21:13-21:17  member  'size' -> (dependent) in=c@21:7
+21:13-21:17  member  'size' -> Bad::size@15:7 spec=both<Bad>@18:24
+21:13-21:17  member  'size' -> Good::size@11:7 spec=both<Good>@18:24
+22:10-22:11  expr  'a' -> a@19:7 in=both@18:24
+22:14-22:15  expr  'b' -> b@20:7 in=both@18:24
+22:18-22:19  expr  'c' -> c@21:7 in=both@18:24
+25:20-25:24  expr  'both' -> both<Good>@18:24 found=both@18:24 in=run@25:5 how=both adl-ns=:: adl-cls=Good@10:8
+25:25-25:29  type  'Good' -> Good@10:8 in=run@25:5
+25:35-25:39  expr  'both' -> both<Bad>@18:24 found=both@18:24 in=run@25:5 how=both adl-ns=:: adl-cls=Bad@14:8
+25:40-25:43  type  'Bad' -> Bad@14:8 in=run@25:5

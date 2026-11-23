@@ -1,0 +1,36 @@
+16:34-16:35  type  'T' -> T@16:17 in=a@16:37
+16:40-16:41  type  'T' -> T@16:17 in=b@16:43
+17:3-17:10  expr  'swap_in' -> (dependent) in=exchange@16:25
+17:3-17:10  expr  'swap_in' -> lib::swap_in@24:6 spec=exchange<lib::Item>@16:25 how=adl adl-ns=lib@20:11 adl-cls=lib::Item@21:8
+17:3-17:10  expr  'swap_in' -> other::swap_in<Item>@29:25 found=other::swap_in@29:25 spec=exchange<other::Thing<lib::Item>>@16:25 how=adl adl-ns=other@27:11,lib@20:11 adl-cls=other::Thing@28:27,lib::Item@21:8
+17:3-17:10  expr  'swap_in' -> swap_in@14:6 spec=exchange<int>@16:25 adl-ns=
+17:11-17:12  expr  'a' -> a@16:37 in=exchange@16:25
+17:14-17:15  expr  'b' -> b@16:43 in=exchange@16:25
+22:21-22:25  type  'Item' -> lib::Item@21:8 in=(anonymous)@22:27 how=injected
+24:14-24:18  type  'Item' -> lib::Item@21:8 in=(anonymous)@24:20
+24:22-24:26  type  'Item' -> lib::Item@21:8 in=(anonymous)@24:28
+29:39-29:40  type  'T' -> T@29:17 in=(anonymous)@29:43
+29:33-29:38  template  'Thing' -> other::Thing@28:27 in=(anonymous)@29:43
+29:51-29:52  type  'T' -> T@29:17 in=(anonymous)@29:55
+29:45-29:50  template  'Thing' -> other::Thing@28:27 in=(anonymous)@29:55
+32:30-32:31  type  'T' -> T@32:17 in=t@32:33
+32:38-32:43  expr  'touch' -> (dependent) in=poke@32:25
+32:38-32:43  expr  'touch' -> lib::touch@22:15 spec=poke<lib::Item>@32:25 how=adl adl-ns=lib@20:11 adl-cls=lib::Item@21:8
+32:44-32:45  expr  't' -> t@32:33 in=poke@32:25
+36:3-36:11  expr  'exchange' -> exchange<int>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=
+36:12-36:13  expr  'i' -> i@35:7 in=run@34:6
+36:15-36:16  expr  'j' -> j@35:14 in=run@34:6
+37:3-37:6  nns  'lib' -> lib@20:11 in=x@37:13
+37:8-37:12  type  'Item' -> lib::Item@21:8 q=37:3 in=x@37:13
+38:3-38:11  expr  'exchange' -> exchange<lib::Item>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=lib@20:11 adl-cls=lib::Item@21:8
+38:12-38:13  expr  'x' -> x@37:13 in=run@34:6
+38:15-38:16  expr  'y' -> y@37:16 in=run@34:6
+39:3-39:8  nns  'other' -> other@27:11 in=s@39:27
+39:16-39:19  nns  'lib' -> lib@20:11 in=s@39:27
+39:21-39:25  type  'Item' -> lib::Item@21:8 q=39:16 in=s@39:27
+39:10-39:15  template  'Thing' -> other::Thing@28:27 q=39:3 in=s@39:27
+40:3-40:11  expr  'exchange' -> exchange<other::Thing<lib::Item>>@16:25 found=exchange@16:25 in=run@34:6 adl-ns=other@27:11,lib@20:11 adl-cls=other::Thing@28:27,lib::Item@21:8
+40:12-40:13  expr  's' -> s@39:27 in=run@34:6
+40:15-40:16  expr  't' -> t@39:30 in=run@34:6
+41:3-41:7  expr  'poke' -> poke<lib::Item>@32:25 found=poke@32:25 in=run@34:6 adl-ns=lib@20:11 adl-cls=lib::Item@21:8
+41:8-41:9  expr  'x' -> x@37:13 in=run@34:6

@@ -1,0 +1,19 @@
+9:3-9:4  type  'T' -> T@8:17 in=Base::stored@9:5
+10:3-10:4  type  'T' -> T@8:17 in=Base::fetch@10:5
+11:10-11:11  type  'T' -> T@8:17 in=Base::zero@11:12
+10:28-10:34  expr  'stored' -> Base::stored@9:5 in=Base::fetch@10:5
+11:28-11:29  type  'T' -> T@8:17 in=Base::zero@11:12
+14:42-14:43  type  'T' -> T@14:17 in=Derived@14:27
+14:37-14:41  base  'Base' -> Base@8:27 in=Derived@14:27
+15:3-15:4  type  'T' -> T@14:17 in=Derived::twice@15:5
+15:34-15:40  member  'stored' -> (dependent) in=Derived::twice@15:5
+15:34-15:40  member  'stored' -> Base<int>::stored@9:5 spec=Derived<int>::twice@15:5
+15:49-15:54  member  'fetch' -> (dependent) in=Derived::twice@15:5
+15:49-15:54  member  'fetch' -> Base<int>::fetch@10:5 spec=Derived<int>::twice@15:5
+15:64-15:65  type  'T' -> T@14:17 in=Derived::twice@15:5
+15:59-15:63  nns  'Base' -> Base@8:27 in=Derived::twice@15:5
+15:68-15:72  expr  'zero' -> (dependent) q=15:59 in=Derived::twice@15:5
+15:68-15:72  expr  'zero' -> Base<int>::zero@11:12 spec=Derived<int>::twice@15:5
+19:3-19:10  template  'Derived' -> Derived@14:27 in=d@19:16
+20:10-20:11  expr  'd' -> d@19:16 in=run@18:5
+20:12-20:17  member  'twice' -> Derived<int>::twice@15:5 in=run@18:5

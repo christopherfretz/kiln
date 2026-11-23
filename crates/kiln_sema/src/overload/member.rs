@@ -492,7 +492,10 @@ impl Sema<'_, '_> {
             (c.func(), c.found)
         });
         self.end_set(set);
-        let (d, f) = won?;
+        let Some((d, f)) = won else {
+            self.fail_written_spec(x);
+            return None;
+        };
         self.resolve_written_ref(x, d, Some(f));
         let e = self.finish_member_winner(&m, d, f, loc);
         self.ovl.resolved_member = Some(e);

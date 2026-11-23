@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
-use crate::ids::{DeclId, ExprId};
+use crate::ids::{DeclId, ExprId, QualType};
 use crate::mem::MemRow;
 use crate::types::TypeNames;
 
@@ -317,6 +317,87 @@ pub struct WrittenRefs {
     /// specialization): sema finds it, the parser records the name
     /// after (§18.4, stage 3).
     inst_target: Option<(Loc, DeclId)>,
+    /// Stage 4 (§18.9): the per-specialization entries, in recording
+    /// order (a dropped one is marked [`SPEC_DEAD`]).
+    specs: Vec<SpecRef>,
+    /// The pattern node of each dependent entry, for the substituter to
+    /// find the entry from the node it rebuilds (§18.9.4).
+    spec_nodes: HashMap<PatternNode, WrittenRefId>,
+    /// Rebuilt overload sets awaiting overload resolution in an
+    /// instantiation: their pattern entry and specialization.
+    spec_pending: HashMap<ExprId, (WrittenRefId, DeclId)>,
+    /// The live per-specialization entries by content, so one resolution
+    /// is kept once (§18.9.1).
+    spec_seen: HashMap<SpecRef, u32>,
+    /// The per-specialization entry the last overload-resolution patch
+    /// made, with the overload set it resolved.
+    spec_last: Option<(ExprId, SpecRefId)>,
+    /// The specialization the frames below depth `.0` stand for while a
+    /// function template specialization's signature is substituted
+    /// (§18.9.2): its declaration exists before its frame's entity says.
+    spec_key: Option<(u32, DeclId)>,
+}
+
+/// A pattern node a dependent entry was made from (spec/ast.md §18.9.4):
+/// an expression, or a dependent type at the location of its name (kiln's
+/// types are interned and carry no location).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PatternNode {
+    /// A dependent name expression (`DependentScopeDeclRefExpr`,
+    /// `CXXDependentScopeMemberExpr`, a dependent overload set).
+    Expr(ExprId),
+    /// A dependent type (`typename T::type`, `T::template X<U>`) written
+    /// with its name at the location.
+    Type(QualType, Loc),
+}
+
+/// The id of a per-specialization entry (index + 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SpecRefId(NonZeroU32);
+
+impl SpecRefId {
+    /// The entry's index in recording order.
+    #[inline]
+    pub const fn index(self) -> usize {
+        (self.0.get() - 1) as usize
+    }
+
+    fn from_index(i: usize) -> Self {
+        let n = u32::try_from(i + 1).expect("per-specialization table exhausted");
+        SpecRefId(NonZeroU32::new(n).expect("index + 1 is never 0"))
+    }
+}
+
+/// [`SpecRef::flags`]: a dropped entry (a SFINAE substitution's, or a
+/// duplicate); never seen through the read API.
+pub const SPEC_DEAD: u8 = 0x80;
+
+/// What one dependent name of a template pattern resolved to in one
+/// specialization (spec/ast.md §18.9; 24 bytes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpecRef {
+    /// The pattern's entry (in the main table, `DEPENDENT`).
+    pub entry: WrittenRefId,
+    /// The specialization whose instantiation ran the lookup (§18.9.2).
+    pub spec: DeclId,
+    /// The declaration the name denotes in `spec`.
+    pub entity: Option<DeclId>,
+    /// What lookup found, when it differs from `entity`.
+    pub found: Option<DeclId>,
+    /// The argument-dependent set of a call's lookup (§18.7.4).
+    pub adl: Option<AdlSetId>,
+    /// [`REF_UNRESOLVED`], [`REF_MEMBER`] (the entry's).
+    pub flags: u8,
+    /// How lookup found the name (§18.7.2).
+    pub how: RefLookup,
+}
+
+impl SpecRef {
+    /// The `how` the dump leaves out (spec/ast.md §18.7.5), with the
+    /// qualifier of the pattern entry `r`.
+    pub fn default_how(&self, r: &WrittenRef) -> RefLookup {
+        WrittenRef { entity: self.entity, flags: self.flags, ..*r }.default_how()
+    }
 }
 
 impl WrittenRefs {
@@ -479,16 +560,227 @@ impl WrittenRefs {
 
     /// Sets the argument-dependent set of entry `id` (§18.7.4), interned.
     pub fn set_adl(&mut self, id: WrittenRefId, set: AdlSet) {
-        let sid = if let Some(&s) = self.adl_index.get(&set) {
-            s
-        } else {
-            let n = u32::try_from(self.adl_sets.len() + 1).expect("ADL sets exhausted");
-            let s = AdlSetId(NonZeroU32::new(n).expect("index + 1 is never 0"));
-            self.adl_sets.push(set.clone());
-            self.adl_index.insert(set, s);
-            s
-        };
+        let sid = self.intern_adl(set);
         self.extra.entry(id).or_default().adl = Some(sid);
+    }
+
+    /// The interned id of `set` (one copy per distinct set, §18.7.1).
+    pub fn intern_adl(&mut self, set: AdlSet) -> AdlSetId {
+        if let Some(&s) = self.adl_index.get(&set) {
+            return s;
+        }
+        let n = u32::try_from(self.adl_sets.len() + 1).expect("ADL sets exhausted");
+        let s = AdlSetId(NonZeroU32::new(n).expect("index + 1 is never 0"));
+        self.adl_sets.push(set.clone());
+        self.adl_index.insert(set, s);
+        s
+    }
+
+    /// The interned set `s`.
+    pub fn adl_set_of(&self, s: AdlSetId) -> &AdlSet {
+        &self.adl_sets[(s.0.get() - 1) as usize]
+    }
+
+    // Stage 4: per-specialization entries (spec/ast.md §18.9).
+
+    /// Remembers that the dependent entry `id` was made from the pattern
+    /// node `n` (§18.9.4); nothing when off.
+    pub fn note_pattern_node(&mut self, n: PatternNode, id: WrittenRefId) {
+        if self.on {
+            self.spec_nodes.insert(n, id);
+        }
+    }
+
+    /// True when some dependent entry has a pattern node: the
+    /// substituter's one branch (§18.9.4).
+    #[inline]
+    pub fn has_pattern_nodes(&self) -> bool {
+        !self.spec_nodes.is_empty()
+    }
+
+    /// The dependent entry made from the pattern node `n`.
+    #[inline]
+    pub fn pattern_entry(&self, n: PatternNode) -> Option<WrittenRefId> {
+        if self.spec_nodes.is_empty() { None } else { self.spec_nodes.get(&n).copied() }
+    }
+
+    /// Records `r`, or returns the live entry with the same content
+    /// (one resolution is kept once, §18.9.1).
+    pub fn push_spec(&mut self, r: SpecRef) -> SpecRefId {
+        let r = SpecRef { flags: r.flags & !SPEC_DEAD, ..r };
+        if let Some(&i) = self.spec_seen.get(&r) {
+            return SpecRefId::from_index(i as usize);
+        }
+        let i = self.specs.len();
+        self.specs.push(r);
+        self.spec_seen.insert(r, i as u32);
+        SpecRefId::from_index(i)
+    }
+
+    /// Changes entry `id` by `f`; when another live entry then has the
+    /// same content, `id` is dropped and that one returned.
+    pub fn update_spec(&mut self, id: SpecRefId, f: impl FnOnce(&mut SpecRef)) -> SpecRefId {
+        let i = id.index();
+        let old = self.specs[i];
+        if old.flags & SPEC_DEAD != 0 {
+            return id;
+        }
+        let mut new = old;
+        f(&mut new);
+        new.flags &= !SPEC_DEAD;
+        if new == old {
+            return id;
+        }
+        if self.spec_seen.get(&old) == Some(&(i as u32)) {
+            self.spec_seen.remove(&old);
+        }
+        if let Some(&j) = self.spec_seen.get(&new) {
+            self.specs[i].flags |= SPEC_DEAD;
+            return SpecRefId::from_index(j as usize);
+        }
+        self.specs[i] = new;
+        self.spec_seen.insert(new, i as u32);
+        id
+    }
+
+    /// The rebuilt overload set `x` of pattern entry `entry` awaits
+    /// overload resolution in specialization `spec`.
+    pub fn defer_spec(&mut self, x: ExprId, entry: WrittenRefId, spec: DeclId) {
+        self.spec_pending.insert(x, (entry, spec));
+    }
+
+    /// True when a rebuilt overload set awaits resolution.
+    #[inline]
+    pub fn has_spec_pending(&self) -> bool {
+        !self.spec_pending.is_empty()
+    }
+
+    /// The pattern entry and specialization of the rebuilt overload set
+    /// `x` while it awaits resolution.
+    pub fn spec_pending_for(&self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
+        self.spec_pending.get(&x).copied()
+    }
+
+    /// Takes the pending resolution of `x` (it is being resolved).
+    pub fn take_spec_pending(&mut self, x: ExprId) -> Option<(WrittenRefId, DeclId)> {
+        if self.spec_pending.is_empty() { None } else { self.spec_pending.remove(&x) }
+    }
+
+    /// The rebuilt overload set `from` goes on as `to`.
+    pub fn retarget_spec(&mut self, from: ExprId, to: ExprId) {
+        if let Some(p) = self.spec_pending.remove(&from) {
+            self.spec_pending.insert(to, p);
+        }
+    }
+
+    /// Remembers that resolving the overload set `x` made entry `id`.
+    pub fn set_spec_last(&mut self, x: ExprId, id: SpecRefId) {
+        self.spec_last = Some((x, id));
+    }
+
+    /// The entry resolving the overload set `x` made, once.
+    pub fn take_spec_last(&mut self, x: ExprId) -> Option<SpecRefId> {
+        match self.spec_last.take() {
+            Some((e, id)) if e == x => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Sets (or clears, returning the previous one) the specialization
+    /// the instantiation frames below depth `depth` stand for (§18.9.2).
+    pub fn set_spec_key(&mut self, k: Option<(u32, DeclId)>) -> Option<(u32, DeclId)> {
+        std::mem::replace(&mut self.spec_key, k)
+    }
+
+    /// The specialization set by [`set_spec_key`](Self::set_spec_key).
+    #[inline]
+    pub fn spec_key(&self) -> Option<(u32, DeclId)> {
+        self.spec_key
+    }
+
+    /// The specializations of the live entries recorded since `mark`.
+    pub fn spec_keys_since(&self, mark: u32) -> Vec<DeclId> {
+        let mut v: Vec<DeclId> = self.specs[(mark as usize).min(self.specs.len())..]
+            .iter()
+            .filter(|r| r.flags & SPEC_DEAD == 0)
+            .map(|r| r.spec)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// The position of the per-specialization table, for
+    /// [`drop_specs_since`](Self::drop_specs_since).
+    #[inline]
+    pub fn spec_mark(&self) -> u32 {
+        self.specs.len() as u32
+    }
+
+    /// Drops the entries recorded since `mark` whose specialization
+    /// `drop` selects (a SFINAE substitution's, §18.9.3).
+    pub fn drop_specs_since(&mut self, mark: u32, drop: impl Fn(DeclId) -> bool) {
+        for i in mark as usize..self.specs.len() {
+            let r = self.specs[i];
+            if r.flags & SPEC_DEAD == 0 && drop(r.spec) {
+                if self.spec_seen.get(&r) == Some(&(i as u32)) {
+                    self.spec_seen.remove(&r);
+                }
+                self.specs[i].flags |= SPEC_DEAD;
+            }
+        }
+    }
+
+    /// Every live per-specialization entry, in recording order.
+    pub fn specs(&self) -> impl Iterator<Item = (SpecRefId, &SpecRef)> + '_ {
+        self.specs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.flags & SPEC_DEAD == 0)
+            .map(|(i, r)| (SpecRefId::from_index(i), r))
+    }
+
+    /// The per-specialization entry `id`.
+    pub fn spec(&self, id: SpecRefId) -> &SpecRef {
+        &self.specs[id.index()]
+    }
+
+    /// The number of live per-specialization entries.
+    pub fn spec_len(&self) -> usize {
+        self.spec_seen.len()
+    }
+
+    /// The per-specialization entries of pattern entry `id`.
+    pub fn specs_of(&self, id: WrittenRefId) -> impl Iterator<Item = (SpecRefId, &SpecRef)> + '_ {
+        self.specs().filter(move |(_, r)| r.entry == id)
+    }
+
+    /// The per-specialization entries of specialization `d`.
+    pub fn specs_for(&self, d: DeclId) -> impl Iterator<Item = (SpecRefId, &SpecRef)> + '_ {
+        self.specs().filter(move |(_, r)| r.spec == d)
+    }
+
+    /// The per-specialization entries that name `d`, as their entity or
+    /// as the declaration lookup found: with the main table's entries
+    /// naming `d`, every written occurrence a rename of `d` changes
+    /// (§18.9.1).
+    pub fn specs_naming(&self, d: DeclId) -> impl Iterator<Item = (SpecRefId, &SpecRef)> + '_ {
+        self.specs().filter(move |(_, r)| r.entity == Some(d) || r.found == Some(d))
+    }
+
+    /// The live per-specialization entries grouped by pattern entry, for
+    /// clients that query many entries (one pass).
+    pub fn specs_by_entry(&self) -> HashMap<WrittenRefId, Vec<SpecRefId>> {
+        let mut m: HashMap<WrittenRefId, Vec<SpecRefId>> = HashMap::new();
+        for (id, r) in self.specs() {
+            m.entry(r.entry).or_default().push(id);
+        }
+        m
+    }
+
+    /// A per-specialization entry's argument-dependent set (§18.7.4).
+    pub fn spec_adl_set(&self, r: &SpecRef) -> Option<&AdlSet> {
+        r.adl.map(|s| self.adl_set_of(s))
     }
 
     /// The using-directive entry `id` was found through (§18.7.3).
@@ -538,6 +830,14 @@ impl WrittenRefs {
         self.pending.retain(|_, id| id.index() < n);
         self.extra.retain(|id, _| id.index() < n);
         self.designators.retain(|_, id| id.index() < n);
+        self.spec_nodes.retain(|_, id| id.index() < n);
+        self.spec_pending.retain(|_, (id, _)| id.index() < n);
+        for r in &mut self.specs {
+            if r.entry.index() >= n {
+                r.flags |= SPEC_DEAD;
+            }
+        }
+        self.spec_seen.retain(|r, _| r.entry.index() < n);
     }
 
     /// Declaration `d`, whose names were parsed after `m`, claims them:
@@ -562,18 +862,41 @@ impl WrittenRefs {
         let pend = (size_of::<(ExprId, WrittenRefId)>() as u64) * 2;
         let desig = (size_of::<(Loc, WrittenRefId)>() as u64) * 2;
         let (prov_live, prov_reserved) = self.provenance_mem();
+        let (spec_live, spec_reserved) = self.spec_mem();
         Some(MemRow::new(
             "written_refs",
             self.entries.len() as u64,
             self.entries.len() as u64 * sz
                 + self.pending.len() as u64 * pend
                 + self.designators.len() as u64 * desig
-                + prov_live,
+                + prov_live
+                + spec_live,
             self.entries.capacity() as u64 * sz
                 + self.pending.capacity() as u64 * pend
                 + self.designators.capacity() as u64 * desig
-                + prov_reserved,
+                + prov_reserved
+                + spec_reserved,
         ))
+    }
+
+    /// The bytes (live, reserved) of stage 4 (§18.9.6): the entries, the
+    /// pattern-node map, the pending overload sets and the content index
+    /// (a hash map slot counted twice its pair, as in
+    /// [`provenance_mem`](Self::provenance_mem)).
+    pub fn spec_mem(&self) -> (u64, u64) {
+        let row = size_of::<SpecRef>() as u64;
+        let node = (size_of::<(PatternNode, WrittenRefId)>() as u64) * 2;
+        let pend = (size_of::<(ExprId, (WrittenRefId, DeclId))>() as u64) * 2;
+        let seen = (size_of::<(SpecRef, u32)>() as u64) * 2;
+        let live = self.specs.len() as u64 * row
+            + self.spec_nodes.len() as u64 * node
+            + self.spec_pending.len() as u64 * pend
+            + self.spec_seen.len() as u64 * seen;
+        let reserved = self.specs.capacity() as u64 * row
+            + self.spec_nodes.capacity() as u64 * node
+            + self.spec_pending.capacity() as u64 * pend
+            + self.spec_seen.capacity() as u64 * seen;
+        (live, reserved)
     }
 
     /// The bytes (live, reserved) of the provenance side tables
@@ -639,6 +962,11 @@ impl WrittenRefs {
             out.push_str(&pos(ast.decls.get(d).loc()));
         };
         let mut out = String::new();
+        // The per-specialization entries of each pattern entry (§18.9.5).
+        let mut by_entry: HashMap<WrittenRefId, Vec<&SpecRef>> = HashMap::new();
+        for (_, r) in self.specs() {
+            by_entry.entry(r.entry).or_default().push(r);
+        }
         for (i, r) in self.entries.iter().enumerate() {
             let id = WrittenRefId::from_index(i);
             let (lf, lo) = pos2(r.range.lo);
@@ -685,8 +1013,78 @@ impl WrittenRefs {
             // The lookup provenance (§18.7.5).
             self.dump_provenance(id, ast, &names, &pos, &decl, &mut out);
             out.push('\n');
+            // Its per-specialization lines, sorted: the order of
+            // instantiation does not show (§18.9.5).
+            if let Some(v) = by_entry.get(&id) {
+                let head = format!("{lo}-{hi}  {}  '{text}' -> ", r.role.spelling());
+                self.dump_specs(r, v, &head, ast, &names, &pos, &decl, &mut out);
+            }
         }
         out
+    }
+
+    /// The per-specialization lines of entry `r` (`rows`), each starting
+    /// with `head` (the entry's positions, role and spelling), sorted and
+    /// without duplicates (§18.9.5).
+    #[allow(clippy::too_many_arguments, reason = "the dump's shared printers")]
+    fn dump_specs(
+        &self,
+        r: &WrittenRef,
+        rows: &[&SpecRef],
+        head: &str,
+        ast: &crate::Ast,
+        names: &crate::diag_names::DiagNames<'_>,
+        pos: &dyn Fn(Loc) -> String,
+        decl: &dyn Fn(DeclId, &mut String),
+        out: &mut String,
+    ) {
+        // A specialization prints with its arguments, a class's and a
+        // variable's too (`Table<Cfg>`, `scale_of<Feet>`).
+        let spec_decl = |d: DeclId, out: &mut String| {
+            let mut s = String::new();
+            names.write_decl_name(d, true, &mut s);
+            if !ast.decls.get(d).kind().is_function()
+                && let Some((_, info)) = ast.spec_info(d)
+            {
+                crate::types::write_arg_list_of(&ast.types, names, d, info.print_args, &mut s);
+            }
+            if s.is_empty() {
+                s.push_str("(anonymous)");
+            }
+            out.push_str(&s);
+            out.push('@');
+            out.push_str(&pos(ast.decls.get(d).loc()));
+        };
+        let mut lines: Vec<String> = rows
+            .iter()
+            .map(|sr| {
+                let mut l = head.to_owned();
+                match sr.entity {
+                    Some(d) => decl(d, &mut l),
+                    None => l.push_str("(unresolved)"),
+                }
+                if let Some(f) = sr.found {
+                    l.push_str(" found=");
+                    decl(f, &mut l);
+                }
+                l.push_str(" spec=");
+                spec_decl(sr.spec, &mut l);
+                if sr.how != sr.default_how(r) {
+                    l.push_str(" how=");
+                    l.push_str(sr.how.spelling());
+                }
+                if let Some(set) = self.spec_adl_set(sr) {
+                    dump_adl(set, ast, pos, decl, &mut l);
+                }
+                l.push('\n');
+                l
+            })
+            .collect();
+        lines.sort();
+        lines.dedup();
+        for l in lines {
+            out.push_str(&l);
+        }
     }
 
     /// The lookup-provenance fields of entry `id`'s dump line (§18.7.5).
@@ -715,33 +1113,45 @@ impl WrittenRefs {
             out.push_str(&pos(ast.decls.get(u).loc()));
         }
         if let Some(set) = self.adl_set(id) {
-            let list = |label: &str, v: &[DeclId], always: bool, out: &mut String| {
-                if v.is_empty() && !always {
-                    return;
-                }
-                out.push(' ');
-                out.push_str(label);
-                for (k, &d) in v.iter().enumerate() {
-                    if k > 0 {
-                        out.push(',');
-                    }
-                    if d == ast.tu {
-                        out.push_str("::");
-                    } else if ast.decls.get(d).name() == crate::names::DeclName::EMPTY {
-                        // An unnamed class or enumeration: its location
-                        // names it, without a path-bearing spelling.
-                        out.push_str("(anonymous)@");
-                        out.push_str(&pos(ast.decls.get(d).loc()));
-                    } else {
-                        decl(d, out);
-                    }
-                }
-            };
-            list("adl-ns=", set.namespaces(), set.is_empty(), out);
-            list("adl-cls=", set.classes(), false, out);
-            list("adl-enum=", set.enums(), false, out);
+            dump_adl(set, ast, pos, decl, out);
         }
     }
+}
+
+/// The `adl-ns=`, `adl-cls=` and `adl-enum=` fields of a dump line
+/// (spec/ast.md §18.7.5).
+fn dump_adl(
+    set: &AdlSet,
+    ast: &crate::Ast,
+    pos: &dyn Fn(Loc) -> String,
+    decl: &dyn Fn(DeclId, &mut String),
+    out: &mut String,
+) {
+    let list = |label: &str, v: &[DeclId], always: bool, out: &mut String| {
+        if v.is_empty() && !always {
+            return;
+        }
+        out.push(' ');
+        out.push_str(label);
+        for (k, &d) in v.iter().enumerate() {
+            if k > 0 {
+                out.push(',');
+            }
+            if d == ast.tu {
+                out.push_str("::");
+            } else if ast.decls.get(d).name() == crate::names::DeclName::EMPTY {
+                // An unnamed class or enumeration: its location
+                // names it, without a path-bearing spelling.
+                out.push_str("(anonymous)@");
+                out.push_str(&pos(ast.decls.get(d).loc()));
+            } else {
+                decl(d, out);
+            }
+        }
+    };
+    list("adl-ns=", set.namespaces(), set.is_empty(), out);
+    list("adl-cls=", set.classes(), false, out);
+    list("adl-enum=", set.enums(), false, out);
 }
 
 #[cfg(test)]
@@ -900,5 +1310,76 @@ mod tests {
         let t = WrittenRefs::default();
         assert_eq!(t.provenance_mem(), (0, 0));
         assert_eq!(t.adl_set_count(), 0);
+    }
+
+    fn spec_row(entry: WrittenRefId, spec: u32, entity: u32) -> SpecRef {
+        SpecRef {
+            entry,
+            spec: DeclId::new(spec),
+            entity: Some(DeclId::new(entity)),
+            found: None,
+            adl: None,
+            flags: 0,
+            how: RefLookup::Member,
+        }
+    }
+
+    #[test]
+    fn spec_row_is_24_bytes() {
+        assert_eq!(size_of::<SpecRef>(), 24);
+        assert_eq!(size_of::<Option<SpecRefId>>(), 4);
+    }
+
+    #[test]
+    fn off_records_no_pattern_nodes() {
+        let mut t = WrittenRefs::default();
+        t.note_pattern_node(PatternNode::Expr(ExprId::new(3)), WrittenRefId::from_index(0));
+        assert!(!t.has_pattern_nodes());
+        assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(3))), None);
+        assert_eq!(t.spec_mem(), (0, 0));
+    }
+
+    #[test]
+    fn spec_rows_are_kept_once() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let w = t.push(entry(None)).expect("on");
+        let a = t.push_spec(spec_row(w, 10, 20));
+        let b = t.push_spec(spec_row(w, 11, 21));
+        // The same resolution again (a second instantiation path).
+        assert_eq!(t.push_spec(spec_row(w, 10, 20)), a);
+        assert_eq!(t.spec_len(), 2);
+        // Updated to equal another row: merged into it.
+        assert_eq!(t.update_spec(b, |r| *r = spec_row(w, 10, 20)), a);
+        assert_eq!(t.spec_len(), 1);
+        assert_eq!(t.specs().count(), 1);
+        assert_eq!(t.specs_naming(DeclId::new(20)).count(), 1);
+        assert_eq!(t.specs_of(w).count(), 1);
+    }
+
+    #[test]
+    fn sfinae_drop_and_truncate() {
+        let mut t = WrittenRefs::default();
+        t.set_on(true);
+        let w0 = t.push(entry(None)).expect("on");
+        let w1 = t.push(entry(None)).expect("on");
+        t.push_spec(spec_row(w0, 10, 20));
+        let mark = t.spec_mark();
+        t.push_spec(spec_row(w0, 11, 21));
+        t.push_spec(spec_row(w1, 12, 22));
+        assert_eq!(t.spec_keys_since(mark), [DeclId::new(11), DeclId::new(12)]);
+        // A failed substitution for 11 drops its rows only.
+        t.drop_specs_since(mark, |k| k == DeclId::new(11));
+        let left: Vec<_> = t.specs().map(|(_, r)| r.spec).collect();
+        assert_eq!(left, [DeclId::new(10), DeclId::new(12)]);
+        // Recorded again after the drop: a new live row.
+        t.push_spec(spec_row(w0, 11, 21));
+        assert_eq!(t.spec_len(), 3);
+        // Rolling the main table back drops the rows of its entries.
+        t.note_pattern_node(PatternNode::Expr(ExprId::new(7)), w1);
+        t.truncate(RefMark { entries: 1, decls: 0 });
+        assert_eq!(t.pattern_entry(PatternNode::Expr(ExprId::new(7))), None);
+        assert!(t.specs().all(|(_, r)| r.entry == w0));
+        assert_eq!(t.spec_len(), 2);
     }
 }

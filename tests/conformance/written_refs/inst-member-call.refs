@@ -1,0 +1,25 @@
+20:38-20:39  type  'T' -> T@20:17 in=t@20:41
+21:10-21:11  expr  't' -> t@20:41 in=measure@20:24
+21:12-21:16  member  'size' -> (dependent) in=measure@20:24
+21:12-21:16  member  'size' -> List::size@15:7 spec=measure<List>@20:24
+21:12-21:16  member  'size' -> Vec::size@9:7 spec=measure<Vec>@20:24
+21:21-21:22  expr  't' -> t@20:41 in=measure@20:24
+21:23-21:26  member  'get' -> (dependent) in=measure@20:24
+21:23-21:26  member  'get' -> List::get@16:7 spec=measure<List>@20:24
+21:23-21:26  member  'get' -> Vec::get@10:7 spec=measure<Vec>@20:24
+21:32-21:33  expr  't' -> t@20:41 in=measure@20:24
+21:34-21:39  member  'count' -> (dependent) in=measure@20:24
+21:34-21:39  member  'count' -> List::count@17:7 spec=measure<List>@20:24
+21:34-21:39  member  'count' -> Vec::count@12:7 spec=measure<Vec>@20:24
+24:42-24:43  type  'T' -> T@24:17 in=p@24:45
+24:57-24:58  expr  'p' -> p@24:45 in=measure_ptr@24:24
+24:60-24:64  member  'size' -> (dependent) in=measure_ptr@24:24
+24:60-24:64  member  'size' -> Vec::size@9:7 spec=measure_ptr<Vec>@24:24
+27:3-27:6  type  'Vec' -> Vec@8:8 in=v@27:7
+28:3-28:7  type  'List' -> List@14:8 in=l@28:8
+29:10-29:17  expr  'measure' -> measure<Vec>@20:24 found=measure@20:24 in=run@26:5 how=both adl-ns=:: adl-cls=Vec@8:8
+29:18-29:19  expr  'v' -> v@27:7 in=run@26:5
+29:23-29:30  expr  'measure' -> measure<List>@20:24 found=measure@20:24 in=run@26:5 how=both adl-ns=:: adl-cls=List@14:8
+29:31-29:32  expr  'l' -> l@28:8 in=run@26:5
+29:36-29:47  expr  'measure_ptr' -> measure_ptr<Vec>@24:24 found=measure_ptr@24:24 in=run@26:5 how=both adl-ns=:: adl-cls=Vec@8:8
+29:49-29:50  expr  'v' -> v@27:7 in=run@26:5

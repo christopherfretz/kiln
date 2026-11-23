@@ -4,7 +4,7 @@
 // call of its specialization, qualifiers before type names and before an
 // out-of-line definition's name. Stages 1 and 2 record expression,
 // member, qualifier, type, template and base names; the using-declaration
-// name is a later stage and has no entry yet.
+// name is a later stage and has no entry yet (`spec=`: stage 4, §18.9).
 //@ written-refs: example.refs
 namespace store {
 namespace disk {
