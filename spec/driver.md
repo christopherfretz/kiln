@@ -1686,6 +1686,8 @@ sequence; the evaluation session (spec/eval-session.md §2) uses it too.
   is not supported by the front-end library entry`): `-verify` and
   `-include-pch` (written, or made by the PCH probe of `-include`). The
   PCH snapshot phase does not run (a snapshot PCH is never consumed).
+  With `drv_front_end_overlay_input`: an `overlay` that replaces an input
+  of a module file of the command line (below).
 - Suppressed, not refused: nothing is written but diagnostics. No
   `-o`, no dependency file (`-MD` is still lexed to the end, as for
   `-fsyntax-only`), no module file, no `-fconstexpr-report=` /
@@ -1762,6 +1764,28 @@ process's. The entry never calls `set_current_dir`, so two runs in two
 directories run at the same time, and a `-working-directory` of the
 command line wins (a relative one relative to `working_directory`).
 `@file`s are read from `working_directory`.
+
+`overlay` (WP-2390, an `Option<Arc<kiln_source::Overlay>>`, default
+`None`, shown by `Debug`) gives the run replacement contents for files
+that exist (spec/source.md "Overlay"): the job's source manager gets it
+before any load (`SourceManager::set_overlay`) and its header search's
+`RealFs` reads `#embed` resources through it. The run sees exactly what
+the same command sees over a copy of the tree in which the overlaid
+files hold the overlay's bytes: the same diagnostics, tokens, AST and
+files read, through every route (the main input, `#include` by any
+spelling or symbolic link, `#include_next`, `-include`, `#embed`,
+`__has_include`, `#pragma once` and include guards); buffers of
+overlaid files are `FileOrigin::Overlay`. An empty overlay is none
+(byte-identical results). The overlay belongs to the run: a later run
+in the same process without it reads the disk. Refused with the driver
+error `drv_front_end_overlay_input` (`the overlay replaces '<f>', an
+input of the module file '<m>'`), one per overlaid input, before the
+job: a module file of the command line (`-fmodule-file=`, named or not,
+or a module-file input) whose file table names an overlaid file; a
+module file found later (`-fprebuilt-module-path=`, the module cache)
+is refused at its import (`pp_module_file_overlaid`). A PCH never meets
+an overlay, since `-include-pch` is refused. There is no command-line
+flag for an overlay.
 
 `front_end::std_config(std, options)` is the configuration the driver
 builds for `kiln++ -fsyntax-only -std=<std>` with no other flag

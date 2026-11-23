@@ -10,6 +10,17 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Added
 
+- A per-run source overlay for tooling clients (WP-2390, spec/source.md
+  "Overlay", stage 1): `kiln_source::Overlay` holds replacement bytes for
+  files that exist, keyed by the identity of the file each path names
+  (another spelling, a symbolic link or a hard link is the same file);
+  `SourceManager::set_overlay` makes every load of an overlaid file take
+  them (`FileOrigin::Overlay`, `original_bytes` the overlay's), `#embed`
+  reads through it, and `FrontEndOptions::overlay` gives one to a
+  front-end run, which then sees what the same command sees over a tree
+  holding those bytes. A module file built from an overlaid file is
+  refused (`drv_front_end_overlay_input` for one the command line names,
+  `pp_module_file_overlaid` at an import).
 - The written-reference table joins the AST and keeps the tokens
   outside a name (WP-2326, spec/ast.md §18.11): the location a
   `DeclRefExpr` or `MemberExpr` stores is its name's entry's `name_lo`

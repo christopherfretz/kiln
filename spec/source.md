@@ -116,10 +116,11 @@ Buffers:
   `file_name(FileId) -> &str`, `load_report(FileId) -> &LoadReport` (empty
   for virtual buffers).
 - `file_ids()` (every buffer, in `FileId` order), `file_origin(FileId) ->
-  FileOrigin` (`Disk`, `Virtual`, `Lazy`), `original_bytes(FileId) ->
+  FileOrigin` (`Disk`, `Virtual`, `Lazy`, `Overlay`: "Overlay" below),
+  `original_bytes(FileId) ->
   Option<Cow<[u8]>>`: the bytes a buffer was decoded from, rebuilt from
   the text and the load report's replacements (borrowed when the file was
-  valid UTF-8; a virtual buffer's text); `None` for a lazy buffer not read
+  valid UTF-8; a virtual buffer's text; an overlaid file's overlay bytes); `None` for a lazy buffer not read
   yet or whose text is not the file's (a copy, or unavailable). None of
   the three reads a lazy buffer (KF1, `kiln_driver::front_end`).
 - `loc(FileId, offset) -> Loc` (panics if `offset > len`; `offset == len`
@@ -371,6 +372,66 @@ Presumed locations ([cpp.line]):
   kiln_pp chooses which location `__LINE__` reports (clang: the expansion
   location of the `__LINE__` token).
 
+## Overlay
+`Overlay` (WP-2390, for tooling clients: a run that parses edited files
+without writing them; prior art clang's remapped file buffers and
+`-ivfsoverlay`) holds replacement contents for files that exist. Stage 1
+replaces the content of existing regular files only: no file is created
+or removed and no directory changes.
+
+- `Overlay::new()`, `replace(&Path, Arc<[u8]>) -> io::Result<()>`,
+  `is_empty()`, `len()`, `contains(&Path)`, `bytes_of(&Path, &Metadata)`,
+  `paths()`. `replace` resolves the path as the operating system does
+  (symbolic links followed; a relative path against the process's
+  directory) and fails unless it names an existing regular file
+  (`InvalidInput` for anything else). A second entry for the same file
+  replaces the first.
+- **Identity.** An entry is keyed by the identity of the file its path
+  names when the entry is added, as `load_file` identifies files: device
+  and inode on Unix. A file reached through another spelling, a `..`
+  path, a symbolic link or a hard link is the overlaid file, as it would
+  be in a tree in which that file held the bytes. Where the platform has
+  no inode number the key is the canonical path, as `load_file`'s
+  (best-effort: two paths the platform does not canonicalize alike are
+  two files). The entry's own path is kept for `paths()` only.
+- `set_overlay(Arc<Overlay>)` on a `SourceManager`, before any load
+  (only the first call has an effect; an empty overlay is none, so that
+  a run with an empty overlay is byte-identical to one without);
+  `overlay() -> Option<&Arc<Overlay>>`. A restored snapshot has none.
+- **Loads.** `load_file` / `load_regular_file` open, `fstat` and
+  identify the file as always (the file must exist and be regular where
+  that is asked); then an overlaid identity's buffer is the overlay's
+  bytes, else the file is read. Decoding, the load report (invalid
+  UTF-8, a byte-order mark kept in the text), the one-buffer-per-identity
+  rule, the location-space limit and the buffer's name (the path as
+  first given: `__FILE__`, diagnostics) are those of the same bytes on
+  disk. `file_origin` is `FileOrigin::Overlay`; `original_bytes` is the
+  overlay's bytes. A file not overlaid is `Disk`, as without an overlay.
+  Cost: with no overlay one branch per load; with one, one map lookup.
+- `load_regular_file_expecting`: for an overlaid identity the caller's
+  expected text (a module file's copy of the disk's) is not used; the
+  overlay's bytes are loaded and the text handed back.
+- `add_lazy_file` of an overlaid identity answers `LazyFile::Changed`:
+  the recorded length and hash are the disk's.
+- **Header search** (`kiln_pp::RealFs`): a header is loaded through the
+  source manager, so through its overlay; `RealFs::with_overlay` (the
+  driver passes the source manager's) makes `read` (`#embed`,
+  `__has_embed`) return an overlaid file's bytes. Directory queries
+  (`dir_identity`, `is_dir`, `is_file`, `list_dir`) never consult it:
+  every overlaid file exists.
+- **Caches that hold a file's content.** A module file records its
+  inputs' text and checks them by size and hash against the disk: an
+  imported module file whose file table names an overlaid file is
+  refused with the fatal `pp_module_file_overlaid` (`module file '<m>'
+  was built from '<f>', which the overlay replaces`), and the front-end
+  entry refuses a module file of the command line up front (spec/driver.md
+  "Front-end library entry"). A PCH is never consumed under the entry.
+  Validating these against the overlay instead is stage 3; files the
+  overlay creates or removes are stage 2.
+- Snapshots: the overlay is configuration, not stored; an overlaid buffer
+  is written with its text inline, as a lazy buffer whose recorded copy
+  was used.
+
 ## Phase-1 decoding
 Files are decoded as UTF-8; each maximal invalid subsequence (as
 `std::str::Utf8Chunks` defines it) becomes one U+FFFD, recorded in
@@ -464,6 +525,12 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 - Invalid UTF-8 replacement positions and original bytes.
 - Identity by device and inode (`..`, `.`, symlink), not-found and
   directory errors; virtual buffers never deduplicated.
+- The overlay (`tests/overlay.rs`): an entry keyed by identity (another
+  spelling, a symbolic link, a hard link), refused for a missing file and
+  a directory; loads take its bytes with `FileOrigin::Overlay` and the
+  load report of the same bytes on disk; `load_regular_file_expecting`
+  and `add_lazy_file` of an overlaid file; an empty overlay is none. The
+  front-end runs over a copied tree: `kiln_driver` `tests/front_end_overlay.rs`.
 - Location partitioning and `offset_of` round trip over many buffers.
 - Expansion/spelling mapping for nested macro expansions (macro body inside
   macro body, macro argument spelled in another expansion, macro name

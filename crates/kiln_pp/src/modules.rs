@@ -976,6 +976,17 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_module_file_config_mismatch, span).arg(path));
             return None;
         }
+        // The module file holds its inputs' text as it was built, which an
+        // overlay of the run replaces (spec/source.md "Overlay", stage 1:
+        // refused, not validated against the overlay).
+        if let Some(o) = self.sm.overlay()
+            && let Some(f) =
+                c.files.iter().find(|f| o.contains(&self.sm.work_dir().join_str(&f.path)))
+        {
+            let d = Diag::new(DiagId::pp_module_file_overlaid, span).arg(path).arg(&f.path);
+            self.emit(d);
+            return None;
+        }
         Some(c)
     }
 

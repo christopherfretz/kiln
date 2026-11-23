@@ -174,7 +174,9 @@ pub fn with_eval_session<R>(
     let host = Host::new(Some(stderr.clone()));
     let opened = panic::catch_unwind(AssertUnwindSafe(|| {
         crate::crash_for_testing(&args);
-        crate::front_end::prepare(&args, rules, &host, &stderr, |job| open(job, &stderr, &mut f))
+        crate::front_end::prepare(&args, rules, None, &host, &stderr, |job| {
+            open(job, &stderr, &mut f)
+        })
     }));
     kiln_source::activity::set_crash_for_testing(None);
     let opened = match opened {

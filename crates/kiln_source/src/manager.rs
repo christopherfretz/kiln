@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::{error, fmt, fs, io};
 
 use kiln_snap::Snap;
@@ -12,6 +12,7 @@ use crate::arena::AppendVec;
 use crate::fx::FxHashMap;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
+use crate::overlay::Overlay;
 use crate::workdir::WorkDir;
 
 mod snap;
@@ -317,6 +318,10 @@ pub enum FileOrigin {
     /// A file a module file or a snapshot recorded, read on first use
     /// ([`SourceManager::add_lazy_file`]).
     Lazy,
+    /// A file on disk whose content the run's [`Overlay`] replaces
+    /// ([`SourceManager::set_overlay`]): the overlay's bytes, loaded as
+    /// [`SourceManager::load_file`] loads a file.
+    Overlay,
 }
 
 /// Where a buffer's text comes from.
@@ -328,6 +333,8 @@ enum Origin {
     /// On disk at `path`, read on first use and checked against the
     /// recorded `hash`; `copy` is the fallback.
     Lazy { path: PathBuf, hash: u64, copy: Option<LazyCopy> },
+    /// A file on disk, its bytes the overlay's ([`SourceManager::set_overlay`]).
+    Overlay,
 }
 
 impl fmt::Debug for Origin {
@@ -336,6 +343,7 @@ impl fmt::Debug for Origin {
             Origin::Disk => f.write_str("Disk"),
             Origin::Virtual => f.write_str("Virtual"),
             Origin::Lazy { path, .. } => write!(f, "Lazy({})", path.display()),
+            Origin::Overlay => f.write_str("Overlay"),
         }
     }
 }
@@ -381,7 +389,7 @@ impl FileEntry {
                 self.check_directives(body)
             }
             // Eager buffers set their body at creation.
-            Origin::Disk | Origin::Virtual => Body {
+            Origin::Disk | Origin::Virtual | Origin::Overlay => Body {
                 text: String::new().into_boxed_str(),
                 report: LoadReport::default(),
                 outcome: LazyOutcome::Unavailable,
@@ -573,6 +581,9 @@ pub struct SourceManager {
     /// The working directory relative paths open against
     /// ([`Self::set_work_dir`]).
     work_dir: OnceLock<WorkDir>,
+    /// Replacement contents of files ([`Self::set_overlay`]); never an
+    /// empty overlay.
+    overlay: OnceLock<Arc<Overlay>>,
 }
 
 /// How the source-location builtins (`__builtin_FILE()`,
@@ -623,7 +634,7 @@ pub fn read_open_file(file: &mut fs::File, meta: &fs::Metadata) -> io::Result<Ve
 
 /// The identity of a file on disk (clang `llvm::sys::fs::UniqueID`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum FileKey {
+pub(crate) enum FileKey {
     /// Device and inode number.
     #[cfg_attr(not(unix), allow(dead_code))]
     Unique(u64, u64),
@@ -635,14 +646,14 @@ enum FileKey {
 /// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
 #[cfg(unix)]
 #[allow(clippy::unnecessary_wraps)] // the non-Unix twin can fail
-fn file_key(_path: &Path, meta: &fs::Metadata) -> io::Result<FileKey> {
+pub(crate) fn file_key(_path: &Path, meta: &fs::Metadata) -> io::Result<FileKey> {
     use std::os::unix::fs::MetadataExt;
     Ok(FileKey::Unique(meta.dev(), meta.ino()))
 }
 
 /// The [`FileKey`] of the file at `path`, whose metadata is `meta`.
 #[cfg(not(unix))]
-fn file_key(path: &Path, _meta: &fs::Metadata) -> io::Result<FileKey> {
+pub(crate) fn file_key(path: &Path, _meta: &fs::Metadata) -> io::Result<FileKey> {
     fs::canonicalize(path).map(FileKey::Canonical)
 }
 
@@ -685,6 +696,7 @@ impl SourceManager {
             source_path_style: OnceLock::new(),
             gcc_names: Mutex::new(FxHashMap::default()),
             work_dir: OnceLock::new(),
+            overlay: OnceLock::new(),
         }
     }
 
@@ -693,6 +705,30 @@ impl SourceManager {
     /// call has an effect. A buffer is still named by the path as given.
     pub fn set_work_dir(&self, dir: WorkDir) {
         let _ = self.work_dir.set(dir);
+    }
+
+    /// Sets the run's [`Overlay`] (spec/source.md "Overlay"): from then on
+    /// a load of a file the overlay names (by identity, through any path)
+    /// takes the overlay's bytes instead of reading the file, as if the
+    /// file held them ([`FileOrigin::Overlay`]); everything else (the
+    /// file's existence, its identity, the buffer's name, decoding, the
+    /// load report) is as for a file on disk. Call it before any load;
+    /// only the first call has an effect, and an empty overlay is none.
+    pub fn set_overlay(&self, overlay: Arc<Overlay>) {
+        if !overlay.is_empty() {
+            let _ = self.overlay.set(overlay);
+        }
+    }
+
+    /// The overlay in effect ([`Self::set_overlay`]), `None` without one
+    /// (or with an empty one).
+    pub fn overlay(&self) -> Option<&Arc<Overlay>> {
+        self.overlay.get()
+    }
+
+    /// The overlay's bytes for the file identified by `key`, if overlaid.
+    fn overlaid(&self, key: &FileKey) -> Option<&Arc<[u8]>> {
+        self.overlay.get().and_then(|o| o.get(key))
     }
 
     /// The working directory in effect ([`Self::set_work_dir`]).
@@ -849,6 +885,13 @@ impl SourceManager {
             Err(e) => return Err((e.into(), text)),
         };
         drop(file);
+        if self.overlaid(&key).is_some() {
+            // The expected text is the disk's, which the overlay replaces.
+            return match self.load(path, true) {
+                Ok(id) => Ok((id, Some(text))),
+                Err(e) => Err((e, text)),
+            };
+        }
         let mut by_path = lock(&self.by_path);
         if let Some(&id) = by_path.get(&key)
             && self.file(id).available_as_disk()
@@ -886,16 +929,20 @@ impl SourceManager {
         {
             return Ok(id);
         }
-        if meta.len() >= FILE_SPACE_END {
-            return Err(LoadError::LocSpaceExhausted);
-        }
-        let bytes = read_open_file(&mut file, &meta)?;
+        let (bytes, origin) = if let Some(b) = self.overlaid(&key) {
+            (b.to_vec(), Origin::Overlay)
+        } else {
+            if meta.len() >= FILE_SPACE_END {
+                return Err(LoadError::LocSpaceExhausted);
+            }
+            (read_open_file(&mut file, &meta)?, Origin::Disk)
+        };
         drop(file);
         if bytes.len() as u64 >= FILE_SPACE_END {
             return Err(LoadError::LocSpaceExhausted);
         }
         let (text, report) = decode_utf8(bytes);
-        let id = self.push_file(path.to_string_lossy().into(), text, report, Origin::Disk)?;
+        let id = self.push_file(path.to_string_lossy().into(), text, report, origin)?;
         by_path.insert(key, id);
         Ok(id)
     }
@@ -932,6 +979,10 @@ impl SourceManager {
             return LazyFile::Missing;
         }
         let Ok(key) = file_key(path, &meta) else { return LazyFile::Missing };
+        if self.overlaid(&key).is_some() {
+            // The recorded text is the disk's, which the overlay replaces.
+            return LazyFile::Changed;
+        }
         let mut by_path = lock(&self.by_path);
         if let Some(&id) = by_path.get(&key) {
             return LazyFile::Loaded(id);
@@ -1260,11 +1311,12 @@ impl SourceManager {
             Origin::Disk => FileOrigin::Disk,
             Origin::Virtual => FileOrigin::Virtual,
             Origin::Lazy { .. } => FileOrigin::Lazy,
+            Origin::Overlay => FileOrigin::Overlay,
         }
     }
 
     /// The bytes the buffer's text was decoded from: for a file read from
-    /// disk, the file's bytes as read, rebuilt from the decoded
+    /// disk, the file's bytes as read (an overlaid file's: the overlay's), rebuilt from the decoded
     /// [`text`](Self::text) and the [`load_report`](Self::load_report)'s
     /// replacements (borrowed from the text when the file was valid UTF-8;
     /// a byte-order mark is part of the text, so it is there too). For a
@@ -1276,7 +1328,7 @@ impl SourceManager {
         let f = self.file(file);
         let body = match f.origin {
             Origin::Lazy { .. } => f.body.get().filter(|b| b.outcome == LazyOutcome::Disk)?,
-            Origin::Disk | Origin::Virtual => f.body(),
+            Origin::Disk | Origin::Virtual | Origin::Overlay => f.body(),
         };
         let text = body.text.as_bytes();
         if body.report.is_clean() {

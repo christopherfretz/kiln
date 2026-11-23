@@ -747,6 +747,11 @@ impl SyntaxJob<'_> {
     pub(crate) fn run_hooked(&self, engines: &dyn crate::Engines, hooks: &mut Hooks<'_>) {
         let job = &self.0;
         let sm = SourceManager::new();
+        // `FrontEndOptions::overlay`, before any load (spec/source.md
+        // "Overlay").
+        if let Some(o) = &hooks.pp.overlay {
+            sm.set_overlay(Arc::clone(o));
+        }
         let interner = Arc::new(Interner::new());
         let engine = engines.make(&sm, job.diag_opts, None);
         let mut result = JobResult::default();

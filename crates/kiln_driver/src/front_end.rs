@@ -23,7 +23,7 @@ use kiln_sema::Oven;
 use kiln_sema::stack_guard::StackGuard;
 use kiln_sema::target::Target;
 use kiln_source::symbol::Interner;
-use kiln_source::{FileId, SourceManager, Span, WorkDir};
+use kiln_source::{FileId, Overlay, SourceManager, Span, WorkDir};
 
 use crate::args::{Action, Args, ModuleHeaderJob};
 use crate::env::Environment;
@@ -35,7 +35,7 @@ use crate::{Engines, EntryRules, SharedWriter};
 /// How one run behaves. `Default` is: diagnostics discarded, no lookup
 /// log, a thread of its own, the PCH probe on, the process environment,
 /// no preprocessing record, no written-reference table, the process's
-/// working directory (read once).
+/// working directory (read once), no overlay.
 #[non_exhaustive]
 #[derive(Clone)]
 #[allow(clippy::struct_excessive_bools, reason = "independent switches")]
@@ -81,6 +81,16 @@ pub struct FrontEndOptions {
     /// line wins, a relative one relative to this one. Names as written
     /// (`__FILE__`, diagnostics, `#line`) stay relative.
     pub working_directory: Option<PathBuf>,
+    /// Replacement contents for files of the run (spec/source.md
+    /// "Overlay", WP-2390): every read of an overlaid file (the main
+    /// input, `#include` by any spelling, `-include`, `#embed`) gets the
+    /// overlay's bytes, the run seeing what the same command sees over a
+    /// tree in which those files hold them. The source manager reports
+    /// such a buffer as `FileOrigin::Overlay`. A run whose overlay
+    /// replaces an input of a module file the command line names is
+    /// refused (`drv_front_end_overlay_input`). `None` (or an empty
+    /// overlay): the disk.
+    pub overlay: Option<Arc<Overlay>>,
 }
 
 impl Default for FrontEndOptions {
@@ -94,6 +104,7 @@ impl Default for FrontEndOptions {
             pp_record: false,
             written_refs: false,
             working_directory: None,
+            overlay: None,
         }
     }
 }
@@ -109,6 +120,7 @@ impl std::fmt::Debug for FrontEndOptions {
             .field("pp_record", &self.pp_record)
             .field("written_refs", &self.written_refs)
             .field("working_directory", &self.working_directory)
+            .field("overlay", &self.overlay)
             .finish()
     }
 }
@@ -296,7 +308,7 @@ impl std::error::Error for FrontEndError {}
 /// command line the driver rejects is not an error: the report says so.
 #[allow(
     clippy::needless_pass_by_value,
-    reason = "the options belong to the call (the entry's signature), so that later ones may own an overlay"
+    reason = "the options belong to the call (the entry's signature): they own the overlay"
 )]
 pub fn run_front_end<R: Send>(
     argv0: &str,
@@ -344,6 +356,8 @@ pub(crate) struct PpHooks {
     /// `FrontEndOptions::pp_record`.
     pub(crate) pp_record: bool,
     pub(crate) events: SearchEvents,
+    /// `FrontEndOptions::overlay`, never an empty one.
+    pub(crate) overlay: Option<Arc<Overlay>>,
 }
 
 /// One of header search's events as the entry keeps it: the kind, the
@@ -608,13 +622,15 @@ fn run_here<R>(
     let stderr = options.stderr.clone().unwrap_or_else(|| SharedWriter::new(std::io::sink()));
     let rules = EntryRules { pch_probe: options.pch_probe };
     let mut driver_errors = None;
-    prepare(&args, rules, &host, &stderr, |job| {
+    let overlay = options.overlay.as_ref().filter(|o| !o.is_empty());
+    prepare(&args, rules, overlay.map(|o| &**o), &host, &stderr, |job| {
         driver_errors = Some(host.errors.get());
         let events = SearchEvents::default();
         let pp = PpHooks {
             record_lookups: options.record_lookups,
             pp_record: options.pp_record,
             events,
+            overlay: overlay.cloned(),
         };
         let mut hooks = Hooks { pp, see: &mut see };
         SyntaxJob(job).run_hooked(&host, &mut hooks);
@@ -638,10 +654,13 @@ fn run_here<R>(
 /// ([`crate::job_std`]) and a header unit's arguments; then `run` with
 /// its job, whose reports go to `stderr`. `None` when the driver stopped
 /// before the job (every error reported through `engines`). `-verify` is
-/// refused with the driver's checks, `-include-pch` with the PCH probe.
+/// refused with the driver's checks, as is an `overlay` that replaces an
+/// input of a module file of the command line; `-include-pch` with the
+/// PCH probe.
 pub(crate) fn prepare<R>(
     args: &Args,
     rules: EntryRules,
+    overlay: Option<&Overlay>,
     engines: &dyn Engines,
     stderr: &SharedWriter,
     run: impl FnOnce(Job<'_>) -> R,
@@ -667,6 +686,9 @@ pub(crate) fn prepare<R>(
         if args.verify.is_some() {
             Diag::new(DiagId::drv_front_end_unsupported, Span::INVALID).arg("-verify").emit(drv);
         }
+        if let Some(o) = overlay {
+            overlaid_module_inputs(args, o, drv);
+        }
     };
     if !crate::input_stage(args, &tc, &inputs, &diag_opts, drv, engines, &refuse) {
         return None;
@@ -688,6 +710,33 @@ pub(crate) fn prepare<R>(
         asm: false,
     };
     Some(run(job))
+}
+
+/// Refuses an `overlay` that replaces an input of a module file of the
+/// command line (spec/driver.md "Front-end library entry", WP-2390):
+/// `-fmodule-file=` (named or not) and a module-file main input. A module
+/// file holds its inputs' text as it was built (and checks them by size
+/// and hash against the disk), which the overlay's bytes are not: one
+/// `drv_front_end_overlay_input` per overlaid input. A module file that
+/// cannot be read is left to the job, which diagnoses it.
+fn overlaid_module_inputs(args: &Args, overlay: &Overlay, drv: &DiagEngine<'_>) {
+    use kiln_pp::bmi;
+    let mains = args
+        .inputs
+        .iter()
+        .map(|i| i.path.as_str())
+        .filter(|p| bmi::sniff(&args.fs_path(p)) == bmi::Sniffed::Kiln);
+    let named = args.module_files.iter().map(|(_, p)| p.as_str());
+    let nameless = args.nameless_module_files.iter().map(String::as_str);
+    for path in mains.chain(named).chain(nameless) {
+        let Ok(c) = bmi::read_file(&args.fs_path(path)) else { continue };
+        for f in c.files.iter().filter(|f| overlay.contains(&args.fs_path(&f.path))) {
+            Diag::new(DiagId::drv_front_end_overlay_input, Span::INVALID)
+                .arg(&f.path)
+                .arg(path)
+                .emit(drv);
+        }
+    }
 }
 
 /// The configuration the driver builds for a `-fsyntax-only` job, for a
