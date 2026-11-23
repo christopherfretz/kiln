@@ -31,6 +31,7 @@ mod expand;
 mod features;
 mod ifeval;
 mod include;
+mod localtime;
 mod lookups;
 mod macros;
 mod modules;

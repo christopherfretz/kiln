@@ -78,26 +78,50 @@ pub enum SessionRefused {
     /// The translation unit reported errors and no fatal error other
     /// than the error limit's (reported on standard error, then
     /// `drv_eval_session_tu_errors`).
+    #[non_exhaustive]
     TuHasErrors {
         /// How many (the error limit's fatal error counts as one).
         errors: u32,
         /// Every diagnostic the unit reported, warnings included, as the
-        /// engine's sink received them (their locations are the unit's
-        /// source manager's, which ends with the call: the rendered text
-        /// is what went to standard error).
+        /// engine's sink received them. Their locations are the unit's
+        /// source manager's, which ends with the call: after it returns,
+        /// use [`SessionRefused::rendered`] (WP-2332).
         diagnostics: Vec<Diagnostic>,
+        /// `diagnostics` rendered as the driver printed them on standard
+        /// error, in the command line's format (text or JSON), without
+        /// the summary line: usable after the call returns (WP-2332).
+        rendered: String,
     },
     /// The front end stopped: a fatal error other than the error limit's
     /// (a header not found, an internal limit such as the include depth),
     /// or no tree was built (reported on standard error).
+    #[non_exhaustive]
     Stopped {
-        /// Every diagnostic the unit reported, the fatal one last.
+        /// Every diagnostic the unit reported, the fatal one last (their
+        /// locations as [`SessionRefused::TuHasErrors`]'s).
         diagnostics: Vec<Diagnostic>,
+        /// `diagnostics` rendered as for [`SessionRefused::TuHasErrors`].
+        rendered: String,
     },
     /// The front end panicked (the payload as text): the panic is caught,
     /// as `run_front_end`'s `FrontEndError::Panicked` is, and the closure
     /// called with this. A panic of the closure itself is not caught.
     Panicked(String),
+}
+
+impl SessionRefused {
+    /// What the refusal reported, as text a client may keep after
+    /// [`with_eval_session`] returns (WP-2332): the rendered diagnostics
+    /// of a unit with errors or a stopped one, the message of a command
+    /// line, the payload of a panic.
+    #[must_use]
+    pub fn rendered(&self) -> &str {
+        match self {
+            SessionRefused::CommandLine { message } | SessionRefused::Panicked(message) => message,
+            SessionRefused::TuHasErrors { rendered, .. }
+            | SessionRefused::Stopped { rendered, .. } => rendered,
+        }
+    }
 }
 
 /// The message of [`SessionRefused::CommandLine`] for a command line
@@ -247,7 +271,8 @@ where
     let Some((sema, main, consulted)) = parsed else {
         summary(&engine);
         let diagnostics = take();
-        return f.take().map(|f| f(Err(SessionRefused::Stopped { diagnostics })));
+        let rendered = kiln_diag::render_diagnostics(&sm, &diag_opts, &diagnostics);
+        return f.take().map(|f| f(Err(SessionRefused::Stopped { diagnostics, rendered })));
     };
     match EvalSession::open(sema) {
         Ok(session) => {
@@ -280,15 +305,18 @@ where
                 .emit(&drv);
             drv.flush();
             let diagnostics = take();
+            // The text the driver printed for them, which outlives `sm`
+            // (WP-2332).
+            let rendered = kiln_diag::render_diagnostics(&sm, &diag_opts, &diagnostics);
             // The error limit's fatal error stops a unit that has errors;
             // any other stops the front end.
             let stopped = diagnostics
                 .iter()
                 .any(|d| d.level == Level::Fatal && d.id != Some(DiagId::diag_too_many_errors));
             let refused = if stopped {
-                SessionRefused::Stopped { diagnostics }
+                SessionRefused::Stopped { diagnostics, rendered }
             } else {
-                SessionRefused::TuHasErrors { errors, diagnostics }
+                SessionRefused::TuHasErrors { errors, diagnostics, rendered }
             };
             f.take().map(|f| f(Err(refused)))
         }

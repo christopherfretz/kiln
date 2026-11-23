@@ -1372,7 +1372,7 @@ impl Preprocessor<'_, '_> {
             Builtin::Timestamp => {
                 self.emit(Diag::new(DiagId::pp_date_time, t.tok.span));
                 kind = TokKind::StringLit(Encoding::Ordinary);
-                let ts = self.opts.timestamp.clone();
+                let ts = self.opts.timestamp.clone().or_else(|| self.file_timestamp());
                 let _ = write!(text, "\"{}\"", ts.as_deref().unwrap_or("??? ??? ?? ??:??:?? ????"));
             }
             Builtin::IncludeLevel => {
@@ -1447,6 +1447,31 @@ impl Preprocessor<'_, '_> {
     }
 
     /// `__DATE__` / `__TIME__` spellings, computed once.
+    /// `__TIMESTAMP__` without a fixed spelling (clang
+    /// `ExpandBuiltinMacro`): the modification time of the file being
+    /// lexed (the innermost file frame, also inside a macro expansion), in
+    /// local time, as `%a %b %e %T %Y`. A buffer that is no file on disk
+    /// (standard input, a client's in-memory buffer) has time 0, as
+    /// clang's virtual file entries; `None` (no file frame, or a file
+    /// whose time cannot be read) is clang's `??? ...` (WP-2331).
+    fn file_timestamp(&mut self) -> Option<String> {
+        let file = self.cur_file_ref()?.file;
+        let secs = if self.sm.is_virtual(file) {
+            0
+        } else {
+            let path = self.sm.work_dir().join_str(self.sm.file_name(file)).into_owned();
+            let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+            match mtime.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => i64::try_from(d.as_secs()).ok()?,
+                Err(e) => -i64::try_from(e.duration().as_secs()).ok()?,
+            }
+        };
+        let tz = self.opts.tz.clone();
+        let zone =
+            self.time_zone.get_or_insert_with(|| crate::localtime::TimeZone::load(tz.as_deref()));
+        Some(crate::builtin::timestamp(secs.saturating_add(i64::from(zone.offset_at(secs)))))
+    }
+
     fn date_time_strings(&mut self) -> (String, String) {
         if self.date_time.is_none() {
             let dt = self.opts.reproducible_time.clone().unwrap_or_else(|| {

@@ -164,7 +164,7 @@ fn a_translation_unit_with_errors_is_refused() {
     let err = Captured::default();
     let cl = ["-std=c++26".to_owned(), d.join("t.cpp").to_string_lossy().into_owned()];
     let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
-    let Some(SessionRefused::TuHasErrors { errors: 1, diagnostics }) = got else {
+    let Some(SessionRefused::TuHasErrors { errors: 1, diagnostics, .. }) = got else {
         panic!("{got:?}")
     };
     let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
@@ -177,6 +177,58 @@ fn a_translation_unit_with_errors_is_refused() {
         ),
         "{text}"
     );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+/// WP-2332 (spec/eval-session.md §2 "Refusal"): a refusal carries its
+/// diagnostics rendered as the driver printed them, which a client may
+/// use after `with_eval_session` returned (the records' locations are the
+/// unit's source manager's, gone by then): a unit with errors (one in an
+/// included header, so the include stack is in the text) and a stopped
+/// one, in the text and the JSON formats.
+#[test]
+fn a_refusal_renders_after_the_call() {
+    let d = scratch(
+        "refused-text",
+        &[
+            ("h.h", "int in_header = ;\n"),
+            ("errors.cpp", "#include \"h.h\"\nint a = ;\n"),
+            ("fatal.cpp", "int a = ;\n#include \"missing.h\"\n"),
+        ],
+    );
+    let path = |n: &str| d.join(n).to_string_lossy().into_owned();
+    let refused = |extra: &[&str], file: &str| {
+        let err = Captured::default();
+        let mut cl: Vec<String> = extra.iter().map(|&s| s.to_owned()).collect();
+        cl.push(path(file));
+        let got = with_eval_session(&kilnpp(), &cl, io(&err), |fe| fe.map(drop).err());
+        (got.expect("refused"), err.text())
+    };
+    // Read after the call: the source manager is gone, the text is not.
+    let (r, text) = refused(&["-std=c++26"], "errors.cpp");
+    assert!(matches!(&r, SessionRefused::TuHasErrors { errors: 2, .. }), "{r:?}");
+    let shown = r.rendered();
+    assert!(shown.starts_with("In file included from "), "{shown}");
+    assert!(shown.contains("h.h:1:17: error: expected expression"), "{shown}");
+    assert!(shown.contains("errors.cpp:2:9: error: expected expression"), "{shown}");
+    assert!(shown.contains("int a = ;\n"), "{shown}");
+    // What the driver printed: the same text, then the summary and the
+    // refusal's own error.
+    assert!(text.starts_with(shown), "{text}\n--- rendered:\n{shown}");
+    assert!(!shown.contains("errors generated"), "{shown}");
+    assert!(!shown.contains("cannot open an evaluation session"), "{shown}");
+    let (r, text) = refused(&["-std=c++26"], "fatal.cpp");
+    assert!(matches!(&r, SessionRefused::Stopped { .. }), "{r:?}");
+    assert!(r.rendered().contains("fatal error: 'missing.h' file not found"), "{}", r.rendered());
+    assert!(text.starts_with(r.rendered()), "{text}");
+    // In the command line's format.
+    let (r, text) = refused(&["-std=c++26", "-fdiagnostics-format=json"], "errors.cpp");
+    assert!(r.rendered().trim_start().starts_with("{\"id\":"), "{}", r.rendered());
+    assert!(r.rendered().contains("expected expression"), "{}", r.rendered());
+    assert!(text.contains(r.rendered().trim()), "{text}");
+    // The other cases' text.
+    let (r, _) = refused(&["-std=c++99x"], "errors.cpp");
+    assert_eq!(r.rendered(), "invalid value 'c++99x' in '-std=c++99x'");
     std::fs::remove_dir_all(&d).unwrap();
 }
 
@@ -226,16 +278,16 @@ fn refusals_say_why() {
     // A unit with errors, and one stopped at the error limit.
     let (r, _) = refused(&[], "errors.cpp");
     assert!(
-        matches!(&r, SessionRefused::TuHasErrors { errors: 3, diagnostics } if diagnostics.len() == 3),
+        matches!(&r, SessionRefused::TuHasErrors { errors: 3, diagnostics, .. } if diagnostics.len() == 3),
         "{r:?}"
     );
     let (r, _) = refused(&["-ferror-limit=2"], "errors.cpp");
-    let SessionRefused::TuHasErrors { errors: 3, diagnostics } = &r else { panic!("{r:?}") };
+    let SessionRefused::TuHasErrors { errors: 3, diagnostics, .. } = &r else { panic!("{r:?}") };
     let last = diagnostics.last().unwrap();
     assert_eq!((last.level, last.id), (Level::Fatal, Some(DiagId::diag_too_many_errors)));
     // A fatal error stops the front end: its records, the fatal one last.
     let (r, text) = refused(&[], "fatal.cpp");
-    let SessionRefused::Stopped { diagnostics } = &r else { panic!("{r:?}") };
+    let SessionRefused::Stopped { diagnostics, .. } = &r else { panic!("{r:?}") };
     let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(messages, ["expected expression", "'missing.h' file not found"]);
     assert_eq!(diagnostics[1].level, Level::Fatal);

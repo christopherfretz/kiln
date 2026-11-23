@@ -278,6 +278,8 @@ impl Job<'_> {
             o.reproducible_time = Some((date, t));
             o.timestamp = Some(stamp);
         }
+        // `__TIMESTAMP__`'s zone, as the C library's `localtime` (WP-2331).
+        o.tz = a.env.var("TZ");
         o
     }
 

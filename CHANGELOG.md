@@ -902,6 +902,28 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- `EvalSession::variable_value` instantiates on demand a static data
+  member's initializer that nothing instantiated (an in-class `constexpr`
+  member of a class template specialization, an out-of-line `const` one),
+  as spec/eval-session.md §4.1 says, instead of answering `NotAConstant`;
+  it checks the calling thread's stack guard, and a later run that
+  reaches an initializer it failed reports that failure as in any session
+  (WP-2420).
+- A `SessionRefused` for a unit with errors or a stopped one carries its
+  diagnostics rendered as the driver printed them (`rendered`, and
+  `SessionRefused::rendered()` for every case), text a client can use
+  after `with_eval_session` returns, when the records' source manager is
+  gone; the two variants are `#[non_exhaustive]` (WP-2332).
+- A read of a `constexpr` variable whose initializer failed at a host
+  call no longer reports a second error, "host call during speculative
+  evaluation", from re-folding the initializer: in a translation unit and
+  in a refused nested host call of an evaluation-session run (WP-2330,
+  spec/host-calls.md §5).
+- `__TIMESTAMP__` without a fixed epoch is the current file's
+  modification time in local time (the C library's zone: `TZ`, else
+  `/etc/localtime`), as clang spells it (`"Sun Nov 22 21:05:00 2026"`),
+  instead of `??? ??? ?? ??:??:?? ????`; standard input has time 0, as in
+  clang (WP-2331, spec/pp.md "Builtin macros").
 - An evaluation-session run on a thread other than the one that
   compiled the session checks that thread's stack guard (WP-2410,
   spec/eval-session.md §9): it failed "stack exhausted" at its first

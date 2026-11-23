@@ -62,6 +62,11 @@ pub(crate) struct VarInfo {
     pub lax: bool,
 }
 
+/// Whether variable `d` is declared `constexpr` (on any declaration).
+fn is_constexpr_var(ast: &Ast, d: DeclId) -> bool {
+    ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_constexpr()))
+}
+
 pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     let mut info = VarInfo {
         usable: false,
@@ -2226,8 +2231,18 @@ impl Oven {
         self.run.contracts_off = false;
         // Computing a variable's value for a read is a hidden, second
         // evaluation of its initializer: a host call there is speculative
-        // (spec/host-calls.md §4).
-        let host = self.host_enter(crate::host::HostMode::Speculative);
+        // (spec/host-calls.md §4). The re-fold of a `constexpr` variable
+        // whose constant initialization failed refuses it silently: that
+        // failure was reported as the variable's own error, whatever the
+        // call did there (refused as speculative, failed, or refused as
+        // nested work of an evaluation session's run, WP-2330), so a read
+        // of the variable reports it once.
+        let mode = if !manifest && is_constexpr_var(b.ast(), d) {
+            crate::host::HostMode::Silent
+        } else {
+            crate::host::HostMode::Speculative
+        };
+        let host = self.host_enter(mode);
         let r = self.unbound(|o| o.eval_at(b, init, Some(d), top));
         self.host_leave(host);
         self.mem.free_heap_of(ctx, &self.types);

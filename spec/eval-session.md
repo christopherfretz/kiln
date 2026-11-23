@@ -120,9 +120,26 @@ drop(session); session.into_sema() -> Sema;
     not touched) and the closure is called with this; a panic of the
     closure itself is not caught and propagates to the caller.
 
-  The records' locations are the unit's source manager's, which ends
-  with the call; their text is also on standard error as the driver
-  printed it. A unit with errors or a stopped one also gets
+  **What outlives the call** (WP-2332). The records' locations (their
+  `span`s and their notes') are the unit's source manager's, which ends
+  with the call: inside the closure, which gets the refusal while it
+  lives, they are what the unit reported, but after `with_eval_session`
+  returns nothing can render or resolve them. So `TuHasErrors` and
+  `Stopped` (each `#[non_exhaustive]`) also carry **`rendered`**: the
+  records rendered as the driver printed them on standard error, by the
+  same renderer (`kiln_diag::render_diagnostics` with the command line's
+  `DiagOptions`: its format, text or JSON, and display settings; the
+  include stack, source lines and carets included), without the summary
+  line (`N errors generated.`) and without `drv_eval_session_tu_errors`,
+  which follow it there. A client keeps `rendered` (and the records'
+  level, id and message text, which hold no location) after the call;
+  `SessionRefused::rendered()` gives the text of every case (the message
+  of `CommandLine`, the payload of `Panicked`). Test:
+  `crates/kiln_driver/tests/eval_session.rs`
+  `a_refusal_renders_after_the_call` (a unit with errors, one in an
+  included header, and a stopped one, read after the call; the text is
+  the start of what standard error got; the JSON format).
+  A unit with errors or a stopped one also gets
   `drv_eval_session_tu_errors` ("cannot open an evaluation session: the
   translation unit has N error(s)") on standard error. Test:
   `crates/kiln_driver/tests/eval_session.rs` `refusals_say_why` (each
@@ -590,19 +607,34 @@ initializer), `WrongType` (not a result type, §3), `TooLarge`,
 `Unreadable` (a value no tree can give: an address that designates no
 object, as a GNU label address). It is
 named apart from `std::meta::constant_of`, which it is not. **On
-demand:** a variable whose initializer has not been evaluated (a
-static data member of a specialization whose initializer was never
-used) has it instantiated and evaluated now, as the translation unit
-would, under its limits and without a handler. That work is the
-translation unit's (§5.1 "Unchanged"), kept, and so not read-only on
-the AST: a later run that reaches it is not charged it, as for work
-before the first run. Its answer is the same before and after any
-runs: the value of an initializer is a function of the translation
-unit (§5.1 rule 1). The tests declare `constexpr R v = f();` beside
-an entry and check `run(f)` against `variable_value(v)`, on run 1
-and run N, fresh and used, and `variable_value(v)` before and after
-runs; each kind also has a hand-written expected tree (both sides
-share the decoder).
+demand** (WP-2420): a variable whose initializer has not been
+instantiated or evaluated (a static data member of a class template
+specialization whose initializer nothing used: an in-class `constexpr`
+one, deferred, or an out-of-line `const` one) has it instantiated and evaluated now, as a reference
+to the variable in a constant expression would ([temp.inst]/4 and /8:
+`note_var_referenced` at the variable's own location, with what that
+instantiates in turn, a function template its initializer calls
+included), under the translation unit's limits, without a handler, and
+on the calling thread's stack (§9). That work is the translation
+unit's (§5.1 "Unchanged"), kept, and so not read-only on the AST. Its
+units (§5.1, `Init(v)`) are recorded as a run's are, so a later run
+that reaches one that failed reports its diagnostics exactly as in a
+session where the run did the work (§7); no run is open to measure it,
+so a later run that reaches it is not charged it, as for work before
+the first run. Its diagnostics are captured and dropped (the answer is
+`NotAConstant`): none reaches the engine's sink. A fatal error it
+reports (a stack exhaustion) ends with the read, as one in a run ends
+with the run (§9). Its answer is the same before and after any runs:
+the value of an initializer is a function of the translation unit
+(§5.1 rule 1). The tests declare `constexpr R v = f();` beside an
+entry and check `run(f)` against `variable_value(v)`, on run 1 and run
+N, fresh and used, and `variable_value(v)` before and after runs; each
+kind also has a hand-written expected tree (both sides share the
+decoder). Tests (WP-2420): `crates/kiln_parse/tests/eval_session_results.rs`
+`variable_values_instantiate_on_demand` (in-class, out-of-line, class
+type, an initializer calling an uninstantiated function template, a
+non-constant one; read before, after and between runs) and
+`a_failed_on_demand_read_fails_later_runs_alike`.
 
 **Kept state.** Reading interns nothing and keeps nothing: the frozen
 values are truncated, the name table is local to the read, and
@@ -849,7 +881,11 @@ used session alike, returns the same `RunError` (`Failed`) and the same
 diagnostics: records equal field by field, so their rendering (§7) is
 the same text. A static member's initializer that makes a host call
 reports its error with that note once, records it, and every run that
-reaches the initializer replays it. Test:
+reaches the initializer replays it. The run's read of the variable
+re-folds the failed initializer without reporting the call again (no
+second `host call during speculative evaluation`, spec/host-calls.md
+§5, WP-2330): the run has the initializer's error and the entry's,
+two errors. Test:
 `crates/kiln_parse/tests/eval_session_nested.rs`
 `every_run_reaching_a_refused_host_call_fails_identically` (five runs,
 the instantiation first reached in run 1, rendered by the public
@@ -1200,7 +1236,11 @@ Test: `crates/kiln_parse/tests/eval_session.rs`
 thread A; a run on B instantiating templates, then one on A; a run on
 a 4 MiB B that exhausts it fails with the stack diagnostic, then runs on
 A and B succeed, the exhausted entry fails alike on A, and a fresh
-session runs it on A).
+session runs it on A) and `a_variable_value_checks_the_stack_of_its_own_thread`
+(WP-2420: the same for `variable_value`'s on-demand instantiation: reads
+on B and A, one exhausting a 4 MiB thread refused and later reads on
+either thread fine, a run reaching the stopped initializer reporting
+the exhaustion, a fresh session reading it on A).
 
 ## 10. Cost
 

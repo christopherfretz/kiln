@@ -3574,10 +3574,13 @@ under the flag and under `SOURCE_DATE_EPOCH`),
 `tests/conformance/cpp.predefined/reproducible-timestamp.cpp`.
 
 Otherwise `__DATE__` and `__TIME__` come from the clock, and
-`__TIMESTAMP__` is `??? ??? ?? ??:??:?? ????` (clang: the current
-file's modification time; a deviation). The test harness does not pin
-the compiler's time: a corpus test that needs it passes
-`-fkiln-reproducible-time` (and skips clang).
+`__TIMESTAMP__` is the current file's modification time in local time,
+as clang's (WP-2331, spec/pp.md "Builtin macros"): the driver passes
+its environment's `TZ` to the preprocessor (`PpOptions::tz`). The test
+harness does not pin the compiler's time: a corpus test that needs it
+passes `-fkiln-reproducible-time` (and skips clang). Tests:
+`crates/kiln_driver/tests/driver.rs` `file_timestamps`,
+`tests/conformance/cpp.predefined/timestamp-file-time.cpp`.
 
 ## Deviations from clang 19
 
