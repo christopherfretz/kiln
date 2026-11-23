@@ -1,0 +1,111 @@
+Dumping HsB:
+CXXRecordDecl referenced struct HsB definition
+|-CXXRecordDecl implicit struct HsB
+|-CXXMethodDecl f 'void ()'
+`-CXXMethodDecl f 'void (int)'
+  `-ParmVarDecl 'int'
+
+Dumping HsD:
+CXXRecordDecl struct HsD definition
+|-public 'HsB'
+|-CXXRecordDecl implicit struct HsD
+|-UsingDecl HsB::f
+|-UsingShadowDecl implicit CXXMethod 'f' 'void (int)'
+| `-CXXMethodDecl f 'void (int)'
+|   `-ParmVarDecl 'int'
+`-CXXMethodDecl f 'void ()'
+
+Dumping HsE:
+CXXRecordDecl struct HsE definition
+|-public 'HsB'
+|-CXXRecordDecl implicit struct HsE
+|-CXXMethodDecl f 'void ()'
+|-UsingDecl HsB::f
+`-UsingShadowDecl implicit CXXMethod 'f' 'void (int)'
+  `-CXXMethodDecl f 'void (int)'
+    `-ParmVarDecl 'int'
+
+Dumping HsX:
+CXXRecordDecl referenced struct HsX
+
+Dumping HsA:
+CXXRecordDecl referenced struct HsA definition
+|-CXXRecordDecl implicit referenced struct HsA
+|-CXXMethodDecl operator= 'HsA &(const HsX &)'
+| `-ParmVarDecl 'const HsX &'
+|-CXXMethodDecl implicit constexpr operator= 'HsA &(const HsA &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const HsA &'
+`-CXXMethodDecl implicit constexpr operator= 'HsA &(HsA &&)' inline default trivial noexcept-unevaluated
+  `-ParmVarDecl 'HsA &&'
+
+Dumping HsX:
+CXXRecordDecl struct HsX definition
+|-public 'HsA'
+|-CXXRecordDecl implicit struct HsX
+|-UsingDecl HsA::operator=
+|-UsingShadowDecl implicit CXXMethod 'operator=' 'HsA &(const HsA &)'
+| `-CXXMethodDecl implicit constexpr operator= 'HsA &(const HsA &)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'const HsA &'
+|-UsingShadowDecl implicit CXXMethod 'operator=' 'HsA &(HsA &&)'
+| `-CXXMethodDecl implicit constexpr operator= 'HsA &(HsA &&)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'HsA &&'
+|-CXXMethodDecl implicit constexpr operator= 'HsX &(const HsX &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const HsX &'
+`-CXXMethodDecl implicit constexpr operator= 'HsX &(HsX &&)' inline default trivial noexcept-unevaluated
+  `-ParmVarDecl 'HsX &&'
+
+Dumping HsC:
+CXXRecordDecl referenced struct HsC definition
+|-CXXRecordDecl implicit struct HsC
+|-CXXConstructorDecl HsC 'void (int)'
+| `-ParmVarDecl 'int'
+|-CXXConstructorDecl HsC 'void (double)'
+| `-ParmVarDecl 'double'
+|-CXXConstructorDecl implicit constexpr HsC 'void (const HsC &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const HsC &'
+|-CXXConstructorDecl implicit constexpr HsC 'void (HsC &&)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'HsC &&'
+`-CXXDestructorDecl implicit constexpr ~HsC 'void ()' inline default trivial noexcept-unevaluated
+
+Dumping HsG:
+CXXRecordDecl struct HsG definition
+|-public 'HsC'
+|-CXXRecordDecl implicit struct HsG
+|-UsingDecl HsC::HsG
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (double)'
+| `-CXXConstructorDecl HsC 'void (double)'
+|   `-ParmVarDecl 'double'
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (const HsC &)'
+| `-CXXConstructorDecl implicit constexpr HsC 'void (const HsC &)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'const HsC &'
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (HsC &&)'
+| `-CXXConstructorDecl implicit constexpr HsC 'void (HsC &&)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'HsC &&'
+|-CXXConstructorDecl HsG 'void (int)'
+| `-ParmVarDecl 'int'
+|-CXXConstructorDecl implicit constexpr HsG 'void (const HsG &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const HsG &'
+`-CXXConstructorDecl implicit constexpr HsG 'void (HsG &&)' inline default trivial noexcept-unevaluated
+  `-ParmVarDecl 'HsG &&'
+
+Dumping HsH:
+CXXRecordDecl struct HsH definition
+|-public 'HsC'
+|-CXXRecordDecl implicit struct HsH
+|-CXXConstructorDecl HsH 'void (int)'
+| `-ParmVarDecl 'int'
+|-UsingDecl HsC::HsH
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (double)'
+| `-CXXConstructorDecl HsC 'void (double)'
+|   `-ParmVarDecl 'double'
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (const HsC &)'
+| `-CXXConstructorDecl implicit constexpr HsC 'void (const HsC &)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'const HsC &'
+|-ConstructorUsingShadowDecl implicit CXXConstructor 'HsC' 'void (HsC &&)'
+| `-CXXConstructorDecl implicit constexpr HsC 'void (HsC &&)' inline default trivial noexcept-unevaluated
+|   `-ParmVarDecl 'HsC &&'
+|-CXXConstructorDecl implicit constexpr HsH 'void (const HsH &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const HsH &'
+`-CXXConstructorDecl implicit constexpr HsH 'void (HsH &&)' inline default trivial noexcept-unevaluated
+  `-ParmVarDecl 'HsH &&'
+

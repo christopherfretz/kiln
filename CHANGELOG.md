@@ -1165,6 +1165,20 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ### Fixed
 
+- Using-declarations: a class's record of the shadows its using-declarators
+  introduce and of which are hidden ([namespace.udecl]/4, /14;
+  `DeclArena::hidden_shadow`, spec/ast.md §4.2) no longer depends on
+  declaration order or on uses elsewhere in the unit, for tooling clients.
+  `void f(); using B::f;` now makes the shadow of `B::f()` and marks it
+  hidden, as `using B::f; void f();` does (WP-3145; the same for an
+  inherited constructor a constructor declared before `using B::B;` hides).
+  `using B::operator=;` sets `HAS_INHERITED_ASSIGN`, so the class declares
+  its implicit copy and move assignment operators at `}` and the shadows
+  they hide are marked then, used or not (WP-3146; before, the mark was set
+  only when some function first used the assignment). Module images carry
+  the hidden marks (`IMAGE_VERSION` 92): an imported class whose member
+  hides a shadow no longer makes a call to that member ambiguous.
+
 - Sema: a friend function definition whose name is qualified (`friend
   void N::f() { }`, `friend void ::g() { }`, a qualified friend
   constructor or destructor, or a decltype qualifier) is now an error,

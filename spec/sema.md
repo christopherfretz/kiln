@@ -5829,18 +5829,34 @@ specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
     using-declared `B& operator=(int)`; clang 19 also hides a template
     differing only in its return type, gcc does not). Otherwise the two
     overload and both are candidates. A member template is compared as
-    the `FunctionTemplate`, not its pattern. Either order works: a member
-    declared after the using-declarator marks the shadow hidden
-    (`check_using_shadow_conflict`, from ordinary member declarators and
-    from special-member ones: `operator=`, conversion functions); one
-    declared before it keeps the shadow from being made
-    (`introduce_shadow`). The implicitly-declared copy or move
-    assignment operator, declared lazily, hides the class's not yet
-    hidden `operator=` shadows it corresponds to when it is declared
-    (`declare_implicit`; clang declares it before building the shadow),
-    so `struct A : B { using B::operator=; }` with a `B::operator=(const
-    A&)` is not ambiguous for `a = a` (WP-1467, test
-    `namespace.udecl/using-assignment-hidden-by-implicit.cpp`). In an instantiated class template
+    the `FunctionTemplate`, not its pattern. Either order gives one
+    record (WP-3145): the shadow is made and marked hidden by the member
+    (`Decls::hidden_shadow`), by a member declared after the
+    using-declarator (`check_using_shadow_conflict`, from ordinary member
+    declarators and from special-member ones: `operator=`, conversion
+    functions) or by one declared before it (`introduce_shadow`, which
+    makes the shadow and marks it at once). clang makes no shadow in the
+    second order and drops it in the first (`HideUsingShadowDecl`), so its
+    dump has none in either; kiln's record keeps the hidden shadow in both
+    (spec/ast.md §4.2) and its dump leaves it out, as clang's
+    (`namespace.udecl/p14-hidden-either-order-run.cpp`,
+    `ast/namespace.udecl/hidden-shadow-either-order.cpp`). The
+    implicitly-declared copy or move assignment operator hides the
+    class's not yet hidden `operator=` shadows it corresponds to when it
+    is declared (`declare_implicit`), so `struct A : B { using
+    B::operator=; }` with a `B::operator=(const A&)` is not ambiguous for
+    `a = a` (WP-1467, test
+    `namespace.udecl/using-assignment-hidden-by-implicit.cpp`). A
+    class-scope `using B::operator=;` sets
+    `DefinitionBits::HAS_INHERITED_ASSIGN` (clang
+    `HasInheritedAssignment`), so the class declares its implicit copy
+    and move assignment operators at `}` (spec/sema-class.md §4.1
+    "Laziness"): the marks are decided when the class is completed, and
+    the class's record does not depend on whether the unit later uses
+    either assignment (WP-3146,
+    `namespace.udecl/p4-implicit-assignment-hides-run.cpp`). The module
+    image does not carry the bit: the implicit records it carries are
+    declared again on import, which marks the imported shadows. In an instantiated class template
     specialization the using-declaration and the members are redone in
     declaration order, so the comparison is between the instantiated
     declarations (`D&` and `Map&` agree once `D` is `Map<T>`; the

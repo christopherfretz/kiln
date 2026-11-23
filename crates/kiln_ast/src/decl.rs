@@ -1744,7 +1744,10 @@ pub struct ColdDeclData {
     /// `getInheritedConstructor().getConstructor()`; WP-146).
     pub inherited_ctor: ColdMap<DeclId, DeclId>,
     /// Using-shadow in a class → the member of the class that hides it
-    /// ([namespace.udecl]/14; recorded at the class's `}`).
+    /// ([namespace.udecl]/4, /14): the same whichever of the two is
+    /// declared first (WP-3145), and set by the class's `}` at the latest,
+    /// where an implicit member that hides one is declared (WP-3146), so it
+    /// never depends on a later use.
     pub hidden_shadow: ColdMap<DeclId, DeclId>,
     /// Using-declaration (a `Using` or `UsingEnum`) → the `UsingShadow`s
     /// (`ConstructorUsingShadow`s for an inheriting-constructor one) it

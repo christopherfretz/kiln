@@ -566,8 +566,9 @@ impl Ast {
     /// whose names were all already introduced, and for a dependent
     /// using-declarator (`UnresolvedUsingValue`/`UnresolvedUsingTypename`),
     /// which introduces nothing until instantiated: the instantiation's
-    /// `Using` has the shadows. A shadow a later member hides
-    /// ([namespace.udecl]/14) stays in the list ([`crate::decl::DeclArena::hidden_shadow`]).
+    /// `Using` has the shadows. A shadow a member of the class hides
+    /// ([namespace.udecl]/14), declared before or after it, stays in the
+    /// list, marked ([`crate::decl::DeclArena::hidden_shadow`]).
     pub fn using_shadows(&self, u: DeclId) -> impl ExactSizeIterator<Item = DeclId> + '_ {
         let list = self.decls.using_shadow_list(u).unwrap_or(crate::ids::ListId::EMPTY);
         self.lists.iter::<DeclId>(list)

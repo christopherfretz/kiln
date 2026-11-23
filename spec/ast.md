@@ -270,13 +270,21 @@ read with `Ast::using_target`/`Ast::using_qualifier`):
   introduced, an `UnresolvedUsingIfExists`'s for `using_if_exists`), an
   inheriting-constructor `using B::B;` (one `ConstructorUsingShadow` per
   constructor of the base, its implicit copy and move constructors
-  included, that no constructor the class declared earlier hides), and `using
+  included, one a constructor of the class hides marked hidden), and `using
   enum E;` (one per enumerator). A dependent using-declarator
   (`UnresolvedUsingValue`, `UnresolvedUsingTypename`) introduces none;
   the `Using` its instantiation makes in the class specialization (or in
   the instantiated function body) has the instantiation's shadows. A
-  shadow hidden later ([namespace.udecl]/14, `hidden_shadow`) stays in
-  the list. The module image carries the link (each shadow record names
+  shadow a member of the class hides ([namespace.udecl]/4, /14) stays in
+  the list, marked: `DeclArena::hidden_shadow(s)` names the member that
+  hides it. The mark is the same whatever the order of the member and
+  the using-declarator (WP-3145: `void f(); using B::f;` makes the shadow
+  and marks it, as `using B::f; void f();` does), and it is decided by
+  the class's `}` at the latest: an implicit member that hides a shadow
+  (the copy or move assignment operator for `using B::operator=;`, the
+  constructors for `using B::B;`) is declared there, so the record does
+  not depend on what the rest of the unit uses (WP-3146). The dump
+  leaves hidden shadows out, as clang's (which has none). The module image carries the link (each shadow record names
   its using-declaration's record, spec/modules.md §11.11 kind 21), and a
   snapshot carries the maps. Cost: a forward-map entry and an 8 B list
   span per using-declaration, 4 B per shadow in the list arena and a

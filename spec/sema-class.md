@@ -1816,11 +1816,16 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   `ConstructorUsingShadow` per constructor of `B`, its own and the ones `B`
   itself inherits (`inheritable_ctors`); `DefinitionBits::HAS_INHERITED_CTOR`
   marks the class. A derived constructor with the same parameter-type-list
-  (and template head) hides a shadow ([namespace.udecl]/14): an earlier one
-  prevents it, a later one (including the implicit ones declared at `}`)
-  is recorded by `hide_inherited_ctors` in `Decls::hidden_shadow`, and a
-  hidden shadow is dropped from lookup and from the dump (clang
-  `HideUsingShadowDecl`). An inherited default constructor makes the class
+  (and template head) hides a shadow ([namespace.udecl]/14), recorded in
+  `Decls::hidden_shadow` in either order (WP-3145): by `inheriting_using`
+  for an earlier one (the shadow is made and marked at once), by
+  `hide_inherited_ctors` at `}` for a later one, including the implicit
+  ones declared there (`HAS_INHERITED_CTOR` declares the default, copy
+  and move constructors eagerly, so the marks never depend on a use). A
+  hidden shadow stays in the record (`Ast::using_shadows`) and is dropped
+  from lookup, from the constructors a further derived class inherits
+  (`ctor_shadows`) and from the dump (clang `HideUsingShadowDecl`; clang
+  makes none for an earlier constructor). An inherited default constructor makes the class
   declare its own implicit default constructor even with user-declared ones
   (clang `HasInheritedDefaultConstructor`).
 - **Dependent bases** ([temp.dep.type], [temp.inst]/3). With a dependent

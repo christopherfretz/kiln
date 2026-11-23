@@ -1320,7 +1320,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-3015 | a constant array bound keeps its written expression after folding (`int arr[f(2)]`, `sizeof(int[f(13)])`, `int (&)[f(19)]`); DESIGN | WP-2623 | open |
 | WP-3016 | a partial specialization's non-type argument keeps its written expression (`PartialSpecInfo::args` holds the value) | WP-2623 | open |
 | WP-3017 | `CXXDefaultArgExpr` records the location of the use (clang `getUsedLocation`); every `Builder::default_arg` caller passes `Loc::INVALID` | WP-2623 | open |
-| WP-3018 | hidden using-shadows depend on declaration order (`using B::f; void f() override;` vs the reverse); DESIGN | WP-2623 | open |
+| WP-3018 | hidden using-shadows depend on declaration order (`using B::f; void f() override;` vs the reverse); DESIGN | WP-2623 | done: duplicate of WP-3145 |
 | WP-3019 | an instantiated using-declaration's shadows link to the pattern's shadows | WP-2623 | open |
 | WP-3020 | check after WP-2720 lands: an array bound naming a member through a dependent qualifier (`Bq<sizeof(sizeof(f(T())))>::value + 1`) keeps its written form; fix what remains | WP-2623 | open |
 | WP-3021 | a dynamic exception specification emits its run-time filter in C++17 too, as clang 19 | WP-2623 | open |
@@ -1337,8 +1337,12 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-3142 | a class-scope explicit specialization keeps its written template arguments (`template <> void h<sizeof(f(T()))>()` in a class template keeps only the converted `SpecInfo.args`) | WP-2623 | open |
 | WP-3143 | written refs `enclosing`: an alias, a typedef, an enumerator, a template (its head) and a `static_assert` claim the names written in them (today attributed to the lexical context) | WP-2623 | open |
 | WP-3144 | written refs `enclosing` of a shared decl-specifier (`S a, b;`): say the name is shared by the declarator group (a mark or the list); DESIGN (small) | WP-2623 | open |
-| WP-3145 | using-declarations: the hidden mark of a using-shadow must not depend on declaration order (`using B::f; void f();` vs `void f(); using B::f;`) | WP-2623 | open |
-| WP-3146 | using-declarations: the hidden mark of a shadow of an implicit member (`using B::operator=;`) is decided when the class is completed, not when the implicit member is first declared on use | WP-2623 | open |
+| WP-3145 | using-declarations: the hidden mark of a using-shadow must not depend on declaration order (`using B::f; void f();` vs `void f(); using B::f;`) | WP-2623 | done: `void f(); using B::f;` makes the shadow and marks it hidden as `using B::f; void f();` does (inherited ctors too); one record in both orders, dump as clang; image carries the mark (IMAGE 92) |
+| WP-3146 | using-declarations: the hidden mark of a shadow of an implicit member (`using B::operator=;`) is decided when the class is completed, not when the implicit member is first declared on use | WP-2623 | done: `using B::operator=;` sets HAS_INHERITED_ASSIGN, so the implicit copy/move assignment are declared at `}` and mark the shadows they hide; the record is the same with or without a use |
+| WP-3180 | AST dump: print a using-shadow's target and declare injected-class-names, so the `tests/conformance/ast/namespace.udecl/hidden-shadow-either-order.cpp` golden passes (xfail today) | WP-3146 | open |
+| WP-3181 | module image: a class whose using-declaration names a base's lazily declared implicit `operator=` is still refused (predates WP-3146) | WP-3146 | open |
+| WP-3182 | module image: carry inheriting constructors (`using B::B;` classes still fall back) | WP-3146 | open |
+| WP-3183 | hidden constructor shadows still counted by `constexpr_ctor` (class/special/implicit.rs ~778) and `inherits_default_ctor` (class/inhctor.rs ~195): skip shadows marked hidden | WP-3146 | open |
 | WP-2000 | host calls: audit lazily evaluated constexpr variable templates (`eval_var_init`) for a missing or duplicated speculative-call error | WP-1990 | open |
 | WP-2001 | host calls: restore the host mode after a contained panic inside an evaluation | WP-1990 | open |
 | WP-2002 | host calls: an integer-only fast builtin, only if a tooling client needs more than ~7M calls/s | WP-1990 | open |
