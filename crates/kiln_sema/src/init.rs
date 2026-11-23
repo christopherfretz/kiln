@@ -260,6 +260,50 @@ impl Sema<'_, '_> {
             .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID))
     }
 
+    /// `init_from_list_at(ty, l, Some(entity))` where a copy of the list's
+    /// single element begins at `begin` (a direct-list-initialized
+    /// variable's name, the type of a `T{...}` temporary) rather than at
+    /// the `{` (`direct_list_entity`, spec/ast.md §21.2).
+    pub(crate) fn init_from_list_begun_at(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Loc,
+        begin: Loc,
+    ) -> ExprId {
+        let saved = self.direct_list_entity.replace((l.lbrace, begin));
+        let e = self.init_from_list_at(ty, l, Some(entity));
+        self.direct_list_entity = saved;
+        e
+    }
+
+    /// Where the construction of the list `l` begins: the
+    /// `direct_list_entity` recorded for it, else its `{`.
+    fn list_copy_begin(&self, l: &InitList) -> Loc {
+        match self.direct_list_entity {
+            Some((lbrace, begin)) if lbrace == l.lbrace => begin,
+            _ => l.lbrace,
+        }
+    }
+
+    /// The copy `e` that the single element `x` of a braced list of its
+    /// class (or a derived class) made ([dcl.init.list]/3.2) is that
+    /// list's construction: list-flagged, from `begin` (the `{`, or a
+    /// direct-list-initialized variable's name) to the `}` `rbrace`, as
+    /// clang's `CXXConstructExpr ... list` (spec/ast.md §21.2, WP-2723).
+    /// Nothing changes when no construction was made (a prvalue of the
+    /// class initializes the object itself, [dcl.init.general]/16.6.1).
+    fn keep_list_copy_braces(&mut self, e: ExprId, x: ExprId, begin: Loc, rbrace: Loc) -> ExprId {
+        let mut c = e;
+        while self.ast.exprs.get(c).kind() == ExprKind::ConstantExpr {
+            c = self.ast.exprs.operand(c);
+        }
+        if c != x && self.ast.exprs.get(c).kind() == ExprKind::CXXConstructExpr {
+            self.ast.exprs.set_construct_list_braces(c, begin, rbrace);
+        }
+        e
+    }
+
     /// List-initialization of a non-aggregate class `ty` by a constructor
     /// ([dcl.init.list]/3.5, /3.7): the elements are the arguments (an
     /// empty list value-initializes). `None` when `ty` is not such a
@@ -326,7 +370,8 @@ impl Sema<'_, '_> {
             } else {
                 ConvCtx::Initialization
             };
-            return Some(self.init_from_expr(ty, *x, ctx, at));
+            let e = self.init_from_expr(ty, *x, ctx, at);
+            return Some(self.keep_list_copy_braces(e, *x, ctor_at, l.rbrace));
         }
         // [dcl.init.list]/3.5-3.6: an empty list value-initializes a class
         // with a default constructor; only an `initializer_list<E>` without
@@ -376,6 +421,12 @@ impl Sema<'_, '_> {
         }
         let mut site = ConstructSite::at(at);
         site.temp_end = temp_end;
+        // The construction ends at the list's `}` (clang's
+        // `CXXConstructExpr ... list` range, spec/ast.md §21.2); a
+        // `T{...}` keeps its own end.
+        if temp_end.is_none() {
+            site.rparen = Some(l.rbrace);
+        }
         site.loc = ctor_at;
         site.sites.access = ctor_at;
         if let Some(n) = param_note {
@@ -757,6 +808,7 @@ impl Sema<'_, '_> {
                 ..ConstructInfo::COMPLETE
             },
             temp_end,
+            rparen: temp_end.is_none().then_some(l.rbrace),
             reject_explicit: style == InitStyle::CopyList,
             ..CtorCall::new(std::slice::from_ref(&arg))
         };
@@ -1001,7 +1053,7 @@ impl Sema<'_, '_> {
                 if let Some(e) = self.list_construct_at(ty, &l, style, loc, None, ctor_at) {
                     return e;
                 }
-                self.init_from_list_at(ty, &l, Some(loc))
+                self.init_from_list_begun_at(ty, &l, loc, ctor_at)
             }
         }
     }
@@ -2085,7 +2137,9 @@ impl Sema<'_, '_> {
                 && let Some(u) = self.ast.types.as_record(self.ety(*x))
                 && self.derived_inclusive(u, r)
             {
-                return self.init_from_expr(ty, *x, ConvCtx::Initialization, l.lbrace);
+                let e = self.init_from_expr(ty, *x, ConvCtx::Initialization, l.lbrace);
+                let begin = self.list_copy_begin(l);
+                return self.keep_list_copy_braces(e, *x, begin, l.rbrace);
             }
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 // clang reports it at the variable (WP-1312).

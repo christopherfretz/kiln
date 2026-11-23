@@ -495,8 +495,10 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.as_record(ty).is_some() && self.is_complete(ty) {
             // An aggregate temporary: the list, destroyed at the end of
-            // the full-expression, then a no-op functional cast.
-            let init = self.init_from_list_at(ty, l, Some(loc));
+            // the full-expression, then a no-op functional cast. A copy
+            // of the list's single element begins at the type, as
+            // clang's `CXXTemporaryObjectExpr` (spec/ast.md §21.2).
+            let init = self.init_from_list_begun_at(ty, l, loc, loc);
             if self.is_err_expr(init) {
                 return self.recover(ty, &[init], loc);
             }

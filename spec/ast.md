@@ -2311,6 +2311,14 @@ stage 1.
   change. What lookup found at the definition, before any
   specialization, is the entry's found set (§18.12). Default arguments
   and default member initializers are entries once, at the written site.
+  The pack's name in a pack-indexing expression (`ts...[0]`,
+  [expr.prim.pack.index]) names the pack (`ts@`), as it does in the
+  expansion `ts...` and as the pack-index-specifier `Ts...[0]` names
+  `Ts`: only the indexing is dependent (WP-2721; clang's
+  `PackIndexingExpr` holds a `DeclRefExpr` to the pack). A member
+  variable template's specialization (`d.twice<7>`) has the template as
+  its found set and keeps its template arguments (the member access's
+  `member_extra`) outside a template as inside one (WP-2724).
 - **PCH and modules.** Stage 5 (§18.10) carries both tables in PCH
   snapshots and module images: a TU restored from a snapshot continues
   the prefix's table, and an importer built from an image merges the
@@ -4233,6 +4241,18 @@ This section is the promise kiln makes, and where it makes none.
   `B::s<1>`); an array `new`'s parenthesized aggregate initialization
   keeps its `(`; and `&this->sf<int>`, resolved to the specialization,
   keeps the template-id's `>`.
+- WP-2721..WP-2724, in the same maps and in one aux bit the node kind
+  already has (no node or image change; the PCH snapshot schema names
+  one more transient sema field, `direct_list_entity`, so
+  `FORMAT_VERSION` is 184): `Ast::begin_loc`
+  begins a qualified member access through an implicit `this`
+  (`Q::f(2)` calling a non-static member of an overload set,
+  `Q::t<int>(4)`) at the qualifier, as the client view already did; a
+  constructor called for a braced list ends at its `}`; the copy a
+  list's single element of the class makes ([dcl.init.list]/3.2) is
+  that list's construction (`ExprArena::set_construct_list_braces`);
+  and a member variable template's template arguments are recorded
+  outside a template too, so `d.twice<7>` ends at its `>` from them.
 
 ### 21.2 Decisions
 
@@ -4285,6 +4305,18 @@ This section is the promise kiln makes, and where it makes none.
   end (the `)`; a C-style cast's operand); an array `new`'s
   (`new int[2](1, 2)`, `new int[](1, 2, 3)`, `new R[2][2]({R(4)})`) from
   its `(`. One whose begin was not recorded is `None`.
+- **List construction** (WP-2723, clang's `CXXConstructExpr ... list`):
+  a constructor called for a braced list (`N m{1}`, `h({1})`, the copy
+  `{x}` of `g({x})` for a parameter of `x`'s class or a base of it)
+  begins at a direct-list-initialized variable's name or, for a
+  copy-list-initialization and an argument, at the `{`, and ends at
+  the `}`; in a `T{x}` temporary the copy begins at `T`, as clang's
+  `CXXTemporaryObjectExpr`. A `T{...}` keeps its own end. Not yet
+  clang's: a reference bound directly to a list's single element
+  (`f({x})` for `const O&`) and a prvalue element of the class
+  (`g({O{x}})`), where clang keeps a transparent `InitListExpr` around
+  the element and kiln has the element only, so the argument is `x`
+  (resp. `O{x}`), not `{x}`.
 - **Substituted template arguments**: a `SubstNonTypeTemplateParmExpr`
   (the value of a non-type template argument in an instantiated
   member's initializer) is the one token of the parameter's name it

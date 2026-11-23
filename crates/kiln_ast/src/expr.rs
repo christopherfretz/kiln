@@ -3253,6 +3253,31 @@ impl ExprArena {
         }
     }
 
+    /// Makes the copy `CXXConstructExpr` `e` that a single-element braced
+    /// list `{x}` of the class (or a derived class) built
+    /// ([dcl.init.list]/3.2) the list-initialization it is: list-flagged,
+    /// at `begin` (the `{`, or the initialized variable's name for a
+    /// direct-list-initialization), ending at the `}` `rbrace`, as clang's
+    /// `CXXConstructExpr ... list` (spec/ast.md §21.2, WP-2723). A
+    /// construction that already keeps a closing token is left alone.
+    ///
+    /// # Panics
+    /// If `e` is not a `CXXConstructExpr`.
+    pub fn set_construct_list_braces(&mut self, e: ExprId, begin: Loc, rbrace: Loc) {
+        if self.end_loc(e).is_some() {
+            return;
+        }
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            n.kind == ExprKind::CXXConstructExpr,
+            "expected CXXConstructExpr, found {:?}",
+            n.kind
+        );
+        n.aux |= 1 << 2;
+        n.loc = begin;
+        let _ = self.cold.end_loc.insert(e, rbrace);
+    }
+
     /// Marks the `ConstantExpr` `e` as a nested immediate invocation
     /// ([`ExprArena::constant_elided`]).
     ///

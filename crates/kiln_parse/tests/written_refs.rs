@@ -740,3 +740,35 @@ fn offsetof_designators_are_entries_support_types_layout_1() {
         assert_eq!(checked, 4, "a, b, c and u");
     });
 }
+
+const PACK_AND_MEMBER: &str = "template <class... Ts> int first(Ts... ts) { return ts...[0]; }\n\
+                               struct V { template <int N> static constexpr int twice = 2 * N; };\n\
+                               int use(V d) { return first(1, 2) + d.twice<7>; }\n";
+
+/// The pack's name in `ts...[0]` names the pack, not a dependent name
+/// (WP-2721, spec/ast.md §18.5); a member variable template's
+/// specialization `d.twice<7>` has the template as its found set and
+/// keeps its template arguments outside a template (WP-2724).
+#[test]
+fn pack_index_and_member_variable_template_names() {
+    use kiln_ast::written_refs::REF_DEPENDENT;
+    with_ast(PACK_AND_MEMBER, |ast, sm| {
+        let t = &ast.written_refs;
+        let at = |lc| t.iter().find(|(_, r)| line_col(sm, r.range.lo) == lc).map(|(_, r)| *r);
+        let ts = at((1, 53)).expect("an entry for `ts` in `ts...[0]`");
+        assert_eq!(ts.role, RefRole::Expr);
+        assert_eq!(ts.flags & REF_DEPENDENT, 0, "only the indexing is dependent");
+        let pack = ts.entity.expect("the pack");
+        let name = ast.decls.get(pack).name().as_ident().map(|s| ast.symbols().as_str(s));
+        assert_eq!(name, Some("ts"));
+        let twice = at((3, 39)).expect("an entry for `twice`");
+        assert_eq!(twice.role, RefRole::Member);
+        assert!(twice.found.is_some(), "the member template is the found set");
+        let targs = kiln_ast::dump::written_exprs(ast)
+            .into_iter()
+            .filter(|&e| ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr)
+            .filter_map(|e| ast.exprs.decl_ref_extra(e).and_then(|x| x.template_args))
+            .count();
+        assert_eq!(targs, 1, "`d.twice<7>` keeps its template arguments");
+    });
+}

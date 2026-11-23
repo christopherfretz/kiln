@@ -428,9 +428,36 @@ impl Ast {
             _ => false,
         };
         let kid = if first { self.exprs.first_child(e, &self.lists) } else { None };
+        // A member access through an implicit `this` (`Q::f` in a member
+        // function) begins at its qualifier's recorded begin, not at the
+        // `this` (made at the member's name): clang's `MemberExpr::
+        // getBeginLoc` of an implicit access (WP-2722, spec/ast.md §21.2).
+        if n.kind() == ExprKind::MemberExpr
+            && let Some(&b) = self.templates.expr_begin.get(e)
+            && kid.is_some_and(|k| self.is_implicit_this(k))
+        {
+            return Err(b);
+        }
         match kid {
             Some(k) => Ok(k),
             None => Err(self.templates.expr_begin.get(e).copied().unwrap_or(n.loc())),
+        }
+    }
+
+    /// Whether `e` is an implicit `this` (under implicit conversions):
+    /// the object of a member access written without one.
+    pub(crate) fn is_implicit_this(&self, mut e: ExprId) -> bool {
+        loop {
+            match self.exprs.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::MaterializeTemporaryExpr => {
+                    match self.exprs.first_child(e, &self.lists) {
+                        Some(x) => e = x,
+                        None => return false,
+                    }
+                }
+                ExprKind::CXXThisExpr => return self.exprs.this_is_implicit(e),
+                _ => return false,
+            }
         }
     }
 

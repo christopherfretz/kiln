@@ -1015,6 +1015,21 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
   failures too. The canonical type is unchanged (the value), so
   redeclarations still match as in clang. PCH snapshots and module
   images (`IMAGE_VERSION` 86) carry both.
+- The pack's name in a pack-indexing expression (`ts...[0]`) is a
+  written reference to the pack, as in `ts...`, not a dependent name
+  (WP-2721).
+- `Ast::begin_loc` begins a qualified call of a non-static member
+  through an implicit `this` (`Q::f(2)`, `Q::t<int>(4)`, the name
+  rebuilt from an overload set) at its qualifier, where it began at the
+  member's name; diagnostics anchored there move with it (WP-2722).
+- A constructor called for a braced list ends at the `}` (`N m{1}`,
+  `h({1})`), and the copy that a list's single element of the class
+  makes (`g({x})`, `O v{x}`, [dcl.init.list]/3.2) is that list's
+  construction, braces included, as in clang's tree (WP-2723; PCH
+  `FORMAT_VERSION` 160, a transient sema field).
+- A member variable template's specialization (`d.twice<7>`) records its
+  template arguments and its found set outside a template too
+  (WP-2724).
 - The lookup log records every lookup of an absolute name, found or not
   (`#include`, `#import`, `#include_next`, `__has_include`,
   `__has_include_next`, `#embed`, `__has_embed`, `-include`), and

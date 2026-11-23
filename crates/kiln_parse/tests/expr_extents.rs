@@ -625,3 +625,86 @@ fn embed_bytes_lead_back_to_their_directive() {
     let (some, _) = extents(&p);
     assert!(some.iter().any(|(k, t)| k == "InitListExpr" && t == "{\n#embed \"d.bin\"\n}"));
 }
+
+/// WP-2722..WP-2724: a qualified name rebuilt from an overload set of
+/// static and non-static members, a single-element braced list argument,
+/// and a member access naming a member variable template's
+/// specialization.
+const LISTS: &str = r"
+struct Q {
+  static int f(const Q&, int);
+  int f(int) const;
+  template <class T> static int t(const Q&, T);
+  template <class T> int t(T) const;
+  int g() const { return Q::f(*this, 1) + Q::f(2) + Q::t<int>(*this, 3) + Q::t<int>(4); }
+};
+struct O { bool a = false; long b = 0; };
+int f(const O&);
+int g(O);
+int use(O x) { O v{x}; return f({x}) + g({x}) + v.a; }
+struct N { N(int); int a; };
+int nuse() { N n{2}; return n.a; }
+struct V { template <int N> static constexpr int twice = 2 * N; };
+int k(int);
+int vuse(V d, V* p) { return k(d.twice<7>) + k(p->twice<2>); }
+";
+
+/// Every expression's `(kind, client extent text, Ast::begin_loc..end_loc
+/// text)` of `src` parsed with the written-reference table `on` or off.
+fn both_views(src: &str, on: bool) -> Vec<(String, Option<String>, Option<String>)> {
+    let sm = SourceManager::new();
+    let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
+    let interner = Arc::new(Interner::new());
+    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    let opts = ParseOptions { written_refs: on, ..ParseOptions::default() };
+    let target = Target::for_arch(Arch::X86_64);
+    let tu = parse_tu(&sm, &interner, file, &engine, target, &opts, ConstexprLimits::default());
+    assert_eq!(engine.error_count(), 0, "the source has errors");
+    drop(engine);
+    let lexo = LexOptions::new(opts.std);
+    let x = ExprExtents::new(&tu.ast, &sm, &interner, lexo);
+    let text = |f, b: u32, e: u32| sm.text(f)[b as usize..e as usize].to_owned();
+    written_exprs(&tu.ast)
+        .into_iter()
+        .map(|e| {
+            let kind = format!("{:?}", tu.ast.exprs.get(e).kind());
+            let client = x.written_range(e).map(|(f, b, end)| text(f, b, end));
+            let (b, end) = (tu.ast.begin_loc(e), tu.ast.end_loc(e));
+            let ast = kiln_lex::token_range(&sm, &interner, b, end, lexo)
+                .map(|(f, lo, hi)| text(f, lo, hi));
+            (kind, client, ast)
+        })
+        .collect()
+}
+
+#[test]
+fn rebuilt_names_lists_and_member_variable_templates_have_their_text() {
+    for on in [false, true] {
+        let v = both_views(LISTS, on);
+        let has = |kind: &str, text: &str| {
+            assert!(
+                v.iter().any(|(k, c, a)| k == kind
+                    && c.as_deref() == Some(text)
+                    && a.as_deref() == Some(text)),
+                "written refs {on}: no {kind} `{text}` among {:?}",
+                v.iter().filter(|(k, _, _)| k == kind).collect::<Vec<_>>()
+            );
+        };
+        // WP-2722: the qualifier begins the name the call resolves to.
+        has("DeclRefExpr", "Q::f");
+        has("CallExpr", "Q::f(*this, 1)");
+        has("MemberExpr", "Q::f");
+        has("CXXMemberCallExpr", "Q::f(2)");
+        has("DeclRefExpr", "Q::t<int>");
+        has("MemberExpr", "Q::t<int>");
+        // WP-2723: a copy from a list's single element is the list's
+        // construction, braces included; a direct-list-initialized
+        // variable's begins at its name.
+        has("CXXConstructExpr", "{x}");
+        has("CXXConstructExpr", "v{x}");
+        has("CXXConstructExpr", "n{2}");
+        // WP-2724: the `>` ends the access.
+        has("MemberExpr", "d.twice<7>");
+        has("MemberExpr", "p->twice<2>");
+    }
+}

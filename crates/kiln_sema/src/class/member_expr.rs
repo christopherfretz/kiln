@@ -722,10 +722,17 @@ impl Sema<'_, '_> {
         let Ok(v) = self.get_var_spec(m.decls[0], &written, &locs, loc) else {
             return self.recover_err(&[m.base], loc);
         };
-        let r = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, None, m.nns, loc);
-        // In a template the access keeps its arguments: substitution names
-        // the member again by its name ([temp.names]/3).
-        if self.in_template() && self.ast.exprs.get(r).kind() == ExprKind::MemberExpr {
+        // The specialization is named through the template lookup found
+        // (or its using-shadow), as a member function template's is
+        // (`finish_member_winner`) and a variable template-id's
+        // `DeclRefExpr` (spec/ast.md §18.4: `found`).
+        let found = m.found.first().copied().unwrap_or(m.decls[0]);
+        let r = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, v, Some(found), m.nns, loc);
+        // The access keeps its arguments as written (WP-2724), as a member
+        // function template's does: in a template, substitution names the
+        // member again by its name ([temp.names]/3); everywhere, clients
+        // read the template-id (clang's `MemberExpr` template arguments).
+        if self.ast.exprs.get(r).kind() == ExprKind::MemberExpr {
             let _ = self.ast.exprs.set_member_template_args(r, targs);
         }
         r
