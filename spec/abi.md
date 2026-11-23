@@ -975,7 +975,16 @@ points, thunks and method indices are clang's.
   of a variable or data member has `<closure-prefix> ::= [ <prefix> ]
   <unqualified-name> M` (a substitution candidate), or `<template-prefix>
   <template-args> M` for a variable template specialization (clang
-  `mangleClosurePrefix`; WP-182: `_ZNK2vtIiEMUliE_clEi`). `decltype(auto)` is
+  `mangleClosurePrefix`; WP-182: `_ZNK2vtIiEMUliE_clEi`). A closure type
+  whose context is a class inside a function (a local class, or the
+  closure type of a lambda in the function: a generic lambda's default
+  template argument, spec/sema-lambda.md §3.5) is no <local-name> but a
+  <nested-name> whose prefix holds the function as a plain
+  <unqualified-name> (clang's lambda exception to its local-class rule,
+  from its 19 ABI on: `_Z2tkIN2a3UlTyvE_UlvE_EEiv`; inside that
+  function's own local names the prefix is a back-reference, `NS_UlvE_E`;
+  `in_local_class_closure`, WP-2628). The closure's members stay local
+  names. `decltype(auto)` is
   `Dc`; an undeduced `auto` / `decltype(auto)` (`Da` / `Dc`) is not a
   substitution candidate (clang `isTypeSubstitutable`; WP-203: a nested
   generic lambda's return is `Da`, not a back-reference).

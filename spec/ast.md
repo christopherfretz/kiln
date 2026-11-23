@@ -919,7 +919,8 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   operator or a local class's member function included, never by a
   block-scope variable; a local class's default member initializer
   belongs to its field); the parameter, for one in its default argument
-  or type; the alias (`using A = ...` / an alias template); the variable
+  or type (a lambda's parameter too, in a function body or not, nested
+  lambdas' innermost; WP-2627); the alias (`using A = ...` / an alias template); the variable
   or field, for one in its initializer or type (a default member
   initializer included); the concept, for one in its
   constraint-expression; else the lexical context (a class, a namespace

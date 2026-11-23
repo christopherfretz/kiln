@@ -1581,7 +1581,13 @@ impl Substituter<'_, '_, '_> {
             if let Some(l) = frame_args.filter(|&l| l != kiln_ast::ids::ArgListId::EMPTY) {
                 self.sema.set_frame_args(l);
             }
+            // A closure type created in it is numbered per parameter `b`
+            // (clang `SubstDefaultArgument`; a lambda's parameter: the
+            // instantiated call operator's `Ed_`), as at a lazy
+            // instantiation (`Sema::instantiate_lazy_default`).
+            let saved = self.sema.lambda_mangle.default_arg.replace(b);
             self.default_arg_one(a, b);
+            self.sema.lambda_mangle.default_arg = saved;
             self.sema.pop_inst_frame();
         }
         for a in pp {

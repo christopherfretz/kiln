@@ -1030,6 +1030,22 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 - A member variable template's specialization (`d.twice<7>`) records its
   template arguments and its found set outside a template too
   (WP-2724).
+- A closure in the default argument (or type) of a lambda's parameter
+  is owned by that parameter (`Ast::closure_owner`, spec/ast.md §5.9),
+  in a function body too, nested lambdas' innermost; its instantiation
+  by the instantiated parameter (WP-2627).
+- Closures in a lambda's parameter-declaration-clause take clang 19's and
+  22's names: numbered in the enclosing function only when it is inline
+  or templated, never in an enclosing variable's, data member's or
+  default argument's context (`inline auto f = [](int x = [] {...}())`'s
+  inner closure is `$_0`); one in a substituted lambda's default argument
+  (a variable or function template, a generic lambda's specialization) is
+  numbered per the instantiated parameter (`...clEiEd_NKUlvE_clEv`)
+  (WP-2627).
+- A lambda in a generic lambda's default template argument is numbered
+  in that lambda's closure type at each use, and a closure type whose
+  context is a class inside a function mangles as a nested name, as in
+  clang 19 and 22 (`_Z2tkIN2a3UlTyvE_UlvE_EEiv`) (WP-2628).
 - The lookup log records every lookup of an absolute name, found or not
   (`#include`, `#import`, `#include_next`, `__has_include`,
   `__has_include_next`, `#embed`, `__has_embed`, `-include`), and
